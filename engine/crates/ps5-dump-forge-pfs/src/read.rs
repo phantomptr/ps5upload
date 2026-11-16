@@ -542,10 +542,12 @@ fn check_path_table(
             "the flat path table does not match the directory tree ({CONSOLE})"
         ))
     };
-    if !problems.is_empty() || want_resolver.is_some() != resolver.is_some() {
+    // A resolver with no collision left must be empty: an in-place delete (`edit.rs`) keeps
+    // the inode, at size 0, so `uroot` keeps its number. (Forge commit 8295556.)
+    if !problems.is_empty() || (want_resolver.is_some() && resolver.is_none()) {
         return Err(mismatch());
     }
-    let resolver = resolver.zip(want_resolver);
+    let resolver = resolver.map(|n| (n, want_resolver.unwrap_or_default()));
     let nodes = [(fpt, want_fpt, "the flat path table")]
         .into_iter()
         .chain(resolver.map(|(n, want)| (n, want, "the collision resolver")));

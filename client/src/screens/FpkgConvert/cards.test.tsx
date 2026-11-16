@@ -353,6 +353,8 @@ describe("GameCard archive source", () => {
       </MemoryRouter>,
     );
     expect(zip).toContain("unpacked into the output folder");
+    // A .zip, .7z or .rar is read in place for an image or a folder.
+    expect(zip).toContain("with nothing unpacked");
     expect(zip).not.toContain('type="password"');
     const folder = renderToStaticMarkup(
       <MemoryRouter>
@@ -515,7 +517,8 @@ describe("queued game choices (#518)", () => {
     const { kindsFor } = await import("./QueueItemOptions");
     expect(kindsFor("/games/Astro Bot")).toEqual(["pkg", "image"]);
     expect(kindsFor("/dl/game.exfat")).toEqual(["pkg", "image", "folder"]);
-    expect(kindsFor("/dl/game.zip")).toEqual(["pkg", "image"]);
+    // A .zip, .7z or .rar becomes a folder too, read in place.
+    expect(kindsFor("/dl/game.zip")).toEqual(["pkg", "image", "folder"]);
     expect(kindsFor("/dl/notes.txt")).toEqual(["pkg"]);
     // A folder with a dotted name, known to be a folder when it was added.
     expect(kindsFor("/games/Some.Game.2024", true)).toEqual(["pkg", "image"]);

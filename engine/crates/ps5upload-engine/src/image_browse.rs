@@ -43,6 +43,9 @@ pub(crate) struct BrowseResp {
     compressed: bool,
     /// An edited copy can be written (every image kind but a package).
     editable: bool,
+    /// Changes can also go into the image itself (`/api/image/edit/check` says whether a given
+    /// set fits): an uncompressed exFAT, UFS2 or PFS image.
+    in_place: bool,
     /// The folder listed, normalized ("" at the root).
     dir: String,
     entries: Vec<BrowseEntry>,
@@ -71,6 +74,8 @@ fn cache() -> &'static Mutex<Option<Cached>> {
 
 /// The listing of the image at `path` (absolute), from the cache when the file is unchanged.
 fn indexed(path: &Path) -> Result<(Arc<Index>, Filesystem, bool, String), String> {
+    // Not while an in-place edit writes it; a journal an interrupted one left is settled first.
+    crate::image_edit_in_place::before_open(path)?;
     let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if !meta.is_file() {
         return Err(format!("{} is not a file", path.display()));
@@ -99,6 +104,14 @@ fn indexed(path: &Path) -> Result<(Arc<Index>, Filesystem, bool, String), String
     Ok((index, opened.filesystem, opened.compressed, label))
 }
 
+/// Drops the cached listing of `path` (an in-place edit changed it).
+pub(crate) fn forget(path: &Path) {
+    let mut g = cache().lock().unwrap_or_else(|e| e.into_inner());
+    if g.as_ref().is_some_and(|c| c.path == path) {
+        *g = None;
+    }
+}
+
 /// Lists folder `dir` of the image at `path`.
 fn browse_blocking(path: &Path, dir: Option<&str>) -> Result<BrowseResp, (StatusCode, String)> {
     let dir = match browse::normalize(dir.unwrap_or("")) {
@@ -122,6 +135,11 @@ fn browse_blocking(path: &Path, dir: Option<&str>) -> Result<BrowseResp, (Status
         filesystem: filesystem.name(),
         compressed,
         editable: filesystem.editable(),
+        in_place: !compressed
+            && matches!(
+                filesystem,
+                Filesystem::Exfat | Filesystem::Ufs2 | Filesystem::Pfs
+            ),
         dir,
         entries: entries
             .into_iter()
@@ -368,8 +386,15 @@ mod tests {
                     path: "data/added".into(),
                     from: added.display().to_string(),
                 },
+                ImageEditReq::Rename {
+                    from: "data/sub/a.bin".into(),
+                    to: "data/moved/hello.bin".into(),
+                },
+                ImageEditReq::Mkdir {
+                    path: "data/made".into(),
+                },
                 ImageEditReq::Delete {
-                    path: "data/sub/a.bin".into(),
+                    path: "data/empty".into(),
                 },
             ];
             let mut edited = open_edited(&image, &edits).unwrap();
@@ -402,8 +427,15 @@ mod tests {
             );
 
             let r = browse_blocking(&copy, Some("data")).unwrap();
-            assert_eq!(names(&r), ["added/ 8", "empty/ 0", "sub/ 0"], "{name}");
+            // The renamed file took its bytes along and left its folder behind, empty; the new
+            // folder is there; the deleted one is not.
+            assert_eq!(
+                names(&r),
+                ["added/ 8", "made/ 0", "moved/ 5", "sub/ 0"],
+                "{name}"
+            );
             let mut tree = ps5upload_fpkg::source::open(&copy).unwrap();
+            assert_eq!(tree.read("data/moved/hello.bin").unwrap(), b"hello");
             assert_eq!(tree.read("eboot.bin").unwrap(), b"patched eboot");
             assert_eq!(tree.read("data/added/deep/new.txt").unwrap(), b"new file");
             assert_eq!(
@@ -418,6 +450,16 @@ mod tests {
         }];
         let err = open_edited(&image, &bad).err().unwrap();
         assert!(err.contains("not in the image"), "{err}");
+        // So is a new name the image's own filesystem cannot hold: exFAT has no ':', UFS2 does.
+        let colon = || {
+            [ImageEditReq::Rename {
+                from: "eboot.bin".into(),
+                to: "e:boot.bin".into(),
+            }]
+        };
+        let err = open_edited(&image, &colon()).err().unwrap();
+        assert!(err.contains("exFAT does not allow"), "{err}");
+        assert!(open_edited(&root.join("1-PPSA99999.ffpkg"), &colon()).is_ok());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

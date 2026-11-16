@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUp, Check, Folder, HardDrive } from "lucide-react";
+import { ArrowUp, Check, File as FileIcon, Folder, HardDrive } from "lucide-react";
 import { isDrive, volumeLabel, type Volume } from "../home/Home";
 import { focusElement } from "../nav";
 import { t } from "../strings";
@@ -9,7 +9,9 @@ import { useDir } from "./useDir";
 
 /**
  * Copy to… / Move to…: drives, then folders; "Here" picks the folder shown.
- * ○ goes up one level, and from the drive list closes the picker.
+ * ○ goes up one level, and from the drive list closes the picker. With
+ * `pickFile`, the files it accepts are listed under the folders and pressing
+ * one picks it (Convert's source: a game folder, or an image file).
  */
 export function PathPicker({
   title,
@@ -18,6 +20,7 @@ export function PathPicker({
   start,
   onPick,
   onCancel,
+  pickFile,
 }: {
   title: string;
   /** What is being copied or moved (a name, or "3 items"). */
@@ -27,12 +30,15 @@ export function PathPicker({
   start: string | null;
   onPick: (dir: string) => void;
   onCancel: () => void;
+  /** Files with a name it accepts are listed too, and picked (their path) when pressed. */
+  pickFile?: (name: string) => boolean;
 }) {
   const [path, setPath] = useState<string | null>(start);
   const dir = useDir(path);
   const list = useRef<HTMLDivElement>(null);
   const drives = volumes.filter((v) => isDrive(v) && v.writable);
   const folders = dir.entries.filter((e) => e.kind === "dir");
+  const files = pickFile ? dir.entries.filter((e) => e.kind === "file" && pickFile(e.name)) : [];
 
   // On open and after a level change, focus the first row (else "Here").
   const moved = useRef(true);
@@ -99,9 +105,24 @@ export function PathPicker({
                   </button>
                 </li>
               ))}
+          {path != null
+            ? files.map((e) => (
+                <li key={`f:${e.name}`}>
+                  <button
+                    type="button"
+                    className="cw-focusable cw-sheet-item"
+                    data-pick-file={e.name}
+                    onClick={() => onPick(joinPath(path, e.name))}
+                  >
+                    <FileIcon aria-hidden />
+                    <span>{e.name}</span>
+                  </button>
+                </li>
+              ))
+            : null}
         </ul>
         {path != null && !dir.loaded ? <p className="cw-dim">{t("cw_home_loading")}</p> : null}
-        {path != null && dir.loaded && !folders.length && !dir.more ? (
+        {path != null && dir.loaded && !folders.length && !files.length && !dir.more ? (
           <p className="cw-dim">
             {t("cw_files_no_folders")} {t("cw_files_no_folders_next")}
           </p>

@@ -1,0 +1,31 @@
+[package]
+name = "ps5upload-convert"
+description = "PS5Upload's converter as a program that runs on the PS5 itself"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# The same code on a computer (tests, `ps5upload-convert inspect <path>`) and, through
+# payload/convert/build.sh, as a PS5 ELF the helper starts. Everything PS5-only is behind
+# `cfg(target_env = "ps5")`, which only that build's target file sets, so the crate builds and
+# tests like any other on every desktop and phone target.
+[[bin]]
+name = "ps5upload-convert"
+path = "src/main.rs"
+
+[dependencies]
+ps5upload-fpkg = { path = "../ps5upload-fpkg" }
+# The build code, the same the engine runs on a computer.
+ps5upload-convert-core = { path = "../ps5upload-convert-core" }
+serde.workspace = true
+serde_json.workspace = true
+
+# The PS5 build checks libc's struct sizes at compile time (main.rs). Already in the tree.
+[target.'cfg(target_env = "ps5")'.dependencies]
+libc = "0.2"
+# The read-back's BLAKE3 hashes on rayon's global pool: kept to the converter's threads there.
+rayon = "1.11"
+
+[lints.rust]
+# payload/convert/x86_64-ps5-freebsd.json sets `env: ps5`.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_env, values("ps5"))'] }

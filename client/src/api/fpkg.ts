@@ -62,6 +62,9 @@ export interface FpkgInspection {
   ampr_packs?: AmprPacksReadiness | null;
   /** A game in zstd packs: the runtime it carries. */
   zstd_runtime?: ZstdRuntimeInfo | null;
+  /** Which asset packs the game's files are in; absent/null for a plain game. A packed game
+   *  can be written out as plain files again (`unpackPacks`). */
+  packs?: "lz4" | "zstd" | null;
   /** How many of its executables are plain ELF files, which a build fake-signs. */
   unsigned_executables?: number;
   /** A PS4 game, update or add-on: it becomes an image or a folder, not a PS5 package. */
@@ -76,6 +79,45 @@ export interface FpkgInspection {
   ps4_addon_data?: boolean | null;
   /** Inspected with an update merged in: what the merge is. */
   ps4_merge?: Ps4Merge | null;
+  /** Present when the game's fakelib holds backport libraries: what "Remove backport
+   *  libraries" would leave out of an image or folder, and why it can't when it can't. */
+  backport?: BackportInfo | null;
+  /** Why this source could not be moved to the Trash after an image or folder is made of it,
+   *  whatever is made (it is on a PS5 or a server, or the engine has no Trash); absent when
+   *  it could. */
+  delete_source_refusal?: string | null;
+}
+
+/** A game's backport, as the check found it (the engine's `remove_backport::BackportReport`). */
+export interface BackportInfo {
+  /** The backport libraries in fakelib / fakelib2, by path. */
+  libraries: string[];
+  /** The emulators beside them, which are kept: `name` is AMPR, DLC, PlayGo or Other. */
+  emulators: { path: string; name: string }[];
+  /** Why they can't be left out whatever is made (the backport lowered eboot.bin's SDK). */
+  blocked?: string | null;
+  /** The game is in asset packs: they can be left out only when new zstd packs are made. */
+  packed?: "lz4" | "zstd" | null;
+}
+
+/** Choices of one image or folder build that are off unless asked for. */
+export interface BuildExtras {
+  /** Leave the backport libraries in the game's fakelib out of what is made. */
+  removeBackport?: boolean;
+  /** Once the output is read back in full and in place, move the source to the Trash. The
+   *  finished job's `commit_ack` says whether it went (`source_removed`, `source_note`). */
+  deleteSource?: boolean;
+  /** A game in asset packs is written as plain files again (not with `lz4`/`zstd`); for a
+   *  folder build the source may then also be a game folder. */
+  unpackPacks?: boolean;
+  /** The AMPR emulator choice that goes with unpacking into a folder (a queued game's own;
+   *  the settings when absent). An image build takes its own `amprEmu` argument. */
+  amprEmu?: { add: boolean; build: AmprEmuBuild };
+  /** A folder build: its files in AMPR LZ4 asset packs (not with zstd packs); the source may
+   *  then also be a game folder. An image build takes its packs as its `lz4` argument. */
+  lz4?: AmprLz4Options;
+  /** The password of a `.rar` source read in place; never stored or logged. */
+  archivePassword?: string;
 }
 
 export type Ps4Kind = "game" | "patch" | "addon";
@@ -97,22 +139,25 @@ export interface AmprPacksReadiness {
   /** Why packs cannot be used for this game; null when they can. */
   refusal?: string | null;
   /** `ok`; `runtime` (installing ampr_emu 0.4.2.1 into the image makes packs possible);
-   *  `no_ampr` (the game does not read through AMPR: .ffpfsc is its compression). */
+   *  `no_ampr` (the game does not read through AMPR: no LZ4 packs; .ffpfsc is its compression,
+   *  or zstd packs, which bring ampr-emu-ng whatever the game imports). */
   kind?: "ok" | "runtime" | "no_ampr";
   /** The game reads through AMPR and ships no emulator: it won't start from an image without one. */
   emulator_missing?: boolean;
 }
 
-/** Pack a game image's files into AMPR LZ4 asset packs first (exFAT images only). */
+/** Pack a game's files into asset packs first: AMPR LZ4 ones, or zstd ones with `zstdLevel`.
+ *  Either goes into any image, compressed into a .ffpfsc or not. */
 export interface AmprLz4Options {
   /** 1 (fastest) to 12 (smallest); the engine uses 9 when absent. */
   level?: number;
-  /** A profile in drakmor's ampr_pack TOML format, in place of the built-in one. */
+  /** A profile in drakmor's ampr_pack TOML format, in place of the built-in one. With zstd
+   *  packs (`zstdLevel`) it only decides which files stay loose. */
   profileToml?: string;
   /** Put ampr_emu 0.4.2.1 into the image when the game's own is missing or too old. */
   installRuntime?: boolean;
-  /** zstd packs at this level in place of LZ4 ones, in a plain image of any format; ampr-emu-ng
-   *  goes in the image. */
+  /** zstd packs at this level in place of LZ4 ones, in an image of any format; ampr-emu-ng goes
+   *  in the image. */
   zstdLevel?: number;
   /** Which ampr-emu-ng goes in with zstd packs; Convert's setting when absent. */
   zstdRuntime?: ZstdRuntime;
@@ -123,12 +168,18 @@ export interface ZstdPacks {
   level: number;
   /** The newest ampr-emu-ng release (checked against GitHub's digest) or the tested one. */
   runtime?: ZstdRuntime;
+  /** A profile in drakmor's ampr_pack TOML format deciding which files stay loose. */
+  profileToml?: string;
 }
 
-/** The engine's `ampr_zstd` body: the level and the runtime choice (Convert's setting unless
- *  given). */
-function amprZstd(level: number, runtime: ZstdRuntime | undefined) {
-  return { level, runtime: runtime ?? useConvertPrefs.getState().zstdRuntime };
+/** The engine's `ampr_zstd` body: the level, the runtime choice (Convert's setting unless
+ *  given) and a pack profile when one was picked. */
+function amprZstd(level: number, runtime: ZstdRuntime | undefined, profileToml?: string) {
+  return {
+    level,
+    runtime: runtime ?? useConvertPrefs.getState().zstdRuntime,
+    profile_toml: profileToml,
+  };
 }
 
 export interface FpkgBuildRequest {
@@ -204,8 +255,8 @@ export const fpkg = {
   /** Write a game folder as one .exfat image for ShadowMountPlus. Starts a job; the image
    *  lands in the output folder, named after the game folder. */
   /** One job: the image is planned, written (straight into a .ffpfsc when `compress`), read
-   *  back and hash-checked. With `lz4`, the game's files are packed into AMPR LZ4 asset packs
-   *  first (exFAT, not compressed). */
+   *  back and hash-checked. With `lz4`, the game's files are packed into asset packs first (any
+   *  format, compressed or not), and read back through them too. */
   buildImage: (
     source: string,
     outputDir?: string,
@@ -230,14 +281,19 @@ export const fpkg = {
     destination?: ImageDestination,
     /** A PS4 update merged into the PS4 game `source`: the image is the game at its version. */
     update?: string,
+    extra?: BuildExtras,
   ) =>
     invoke<{ job_id: string }>("exfat_build", {
+      unpackPacks: extra?.unpackPacks || undefined,
       update,
+      removeBackport: extra?.removeBackport || undefined,
+      deleteSource: extra?.deleteSource || undefined,
+      archivePassword: extra?.archivePassword || undefined,
       source,
       outputDir,
       format,
       compress,
-      amprZstd: lz4?.zstdLevel ? amprZstd(lz4.zstdLevel, lz4.zstdRuntime) : undefined,
+      amprZstd: lz4?.zstdLevel ? amprZstd(lz4.zstdLevel, lz4.zstdRuntime, lz4.profileToml) : undefined,
       amprLz4: lz4 && !lz4.zstdLevel
         ? { level: lz4.level, profile_toml: lz4.profileToml, install_runtime: lz4.installRuntime ?? false }
         : undefined,
@@ -272,9 +328,20 @@ export const fpkg = {
     /** Straight to a folder on a saved server, never stored on this computer; `outputDir`
      *  when absent. */
     destination?: ImageDestination,
+    extra?: BuildExtras,
   ) =>
     invoke<{ job_id: string }>("folder_build", {
+      ...(extra?.unpackPacks
+        ? {
+            unpackPacks: true,
+            addAmprEmu: extra.amprEmu?.add ?? useConvertPrefs.getState().addAmprEmu,
+            amprEmuBuild: extra.amprEmu?.build ?? useConvertPrefs.getState().amprEmuBuild,
+          }
+        : {}),
       update,
+      removeBackport: extra?.removeBackport || undefined,
+      deleteSource: extra?.deleteSource || undefined,
+      archivePassword: extra?.archivePassword || undefined,
       destination,
       source,
       outputDir,
@@ -282,7 +349,14 @@ export const fpkg = {
       fullVerify,
       entry,
       keepBoth,
-      amprZstd: zstd ? amprZstd(zstd.level, zstd.runtime) : undefined,
+      amprZstd: zstd ? amprZstd(zstd.level, zstd.runtime, zstd.profileToml) : undefined,
+      amprLz4: extra?.lz4
+        ? {
+            level: extra.lz4.level,
+            profile_toml: extra.lz4.profileToml,
+            install_runtime: extra.lz4.installRuntime ?? false,
+          }
+        : undefined,
     }),
   /** Write an edited COPY of a game image (#479): the image's files with `edits` applied,
    *  as the same kind of image (.exfat, .ffpkg, .ffpfs or .ffpfsc), read back and checked,
@@ -290,6 +364,15 @@ export const fpkg = {
    *  itself is only read. One job, like an image build. */
   editImage: (source: string, edits: ImageEdit[], outputDir?: string, name?: string, fullVerify = false) =>
     invoke<{ job_id: string }>("exfat_build", { source, outputDir, name, fullVerify, edits }),
+  /** Apply `edits` to the image ITSELF (an uncompressed .exfat, .ffpkg or .ffpfs on this
+   *  computer), with an undo journal beside it so an interrupted change is undone; every changed
+   *  file is read back and any failure restores the image. Refused, with the reason, when the
+   *  changes don't fit the image's free space (it never grows). One job. */
+  editImageInPlace: (source: string, edits: ImageEdit[], fullVerify = false) =>
+    invoke<{ job_id: string }>("exfat_build", { source, fullVerify, edits, inPlace: true }),
+  /** Whether `edits` can go into the image itself, without writing anything. */
+  checkEditInPlace: (path: string, edits: ImageEdit[]) =>
+    invoke<InPlaceCheck>("image_edit_check", { path, edits }),
   /** Rebuild a libSceAmpr game folder's `ampr_emu.index` where it is, on this computer or the
    *  PS5 (`ps5://`), the game's own kept once as `ampr_emu.index.bak` (#621). A job: its stage
    *  is `list`, `check` or `write`; done, `dest` is the index and `commit_ack` the
@@ -318,6 +401,9 @@ export interface ZstdRuntimeInfo {
   version?: string | null;
   /** Missing, drakmor's (no zstd), or ampr-emu-ng older than 0.3.4: a newer one fixes it. */
   outdated: boolean;
+  /** ampr-emu-ng 0.4.0, which refuses very large games (its 48 MiB index cap): 0.4.1 starts
+   *  them. Absent from an engine older than this field. */
+  capped?: boolean;
 }
 
 /** What updating a zstd-packed game's runtime did. */
@@ -362,8 +448,25 @@ export interface AmprIndexOutcome {
   backup?: string | null;
 }
 
-/** One change for an edited copy: delete a file or folder, or put a file (or a folder's
- *  contents) from this computer at `path`, replacing what is there. */
+/** One change for an edited copy: delete a file or folder, put a file (or a folder's
+ *  contents) from this computer at `path`, replacing what is there, rename or move a file or
+ *  folder (`from` and `to` are both paths inside the image; nothing may be at `to`), or make a
+ *  new empty folder. The engine applies them in order. */
+/** What `/api/image/edit/check` says about applying edits to the image itself. */
+export interface InPlaceCheck {
+  in_place: boolean;
+  /** Why not, for the user (when `in_place` is false). */
+  reason?: string;
+  /** The image is in use right now. */
+  busy: boolean;
+  filesystem?: "exfat" | "ufs2" | "pfs";
+  needed_bytes?: number;
+  free_bytes?: number;
+  journal_bytes?: number;
+}
+
 export type ImageEdit =
   | { op: "delete"; path: string }
-  | { op: "put"; path: string; from: string };
+  | { op: "put"; path: string; from: string }
+  | { op: "rename"; from: string; to: string }
+  | { op: "mkdir"; path: string };

@@ -271,6 +271,7 @@ fn the_operation_table_matches_the_schema() {
         (ops::FFPFSC_UNPACK, gen::JOB_OP_FFPFSC_UNPACK),
         (ops::ARCHIVE_EXTRACT, gen::JOB_OP_ARCHIVE_EXTRACT),
         (ops::APP_DUMP, gen::JOB_OP_APP_DUMP),
+        (ops::CONSOLE_CONVERT, gen::JOB_OP_CONSOLE_CONVERT),
     ];
     assert_eq!(want.len(), ops::ALL.len(), "every op is pinned here");
     for (op, id) in want {

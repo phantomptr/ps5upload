@@ -90,7 +90,7 @@ vi.mock("./roster", async (orig) => ({
   useRosterStore: { getState: () => roster },
 }));
 
-import { POLL_MS, archiveStem, pausedSoFar, stagePausedSoFar, useFpkgConversion } from "./fpkgConversion";
+import { POLL_MS, archiveStem, pausedSoFar, sourceNoteOf, stagePausedSoFar, useFpkgConversion } from "./fpkgConversion";
 import { commandTask, taskCapabilities } from "./taskControls";
 import { useTaskStore } from "./tasks";
 
@@ -408,29 +408,43 @@ describe("fpkg pipeline", () => {
 
   // A Discord report (on a build before 7.1.14): a game kept as a .rar could not become a
   // compressed image ("Make compressed image" greyed, the queue said "Skipped: 1"). A .rar is
-  // unpacked first, then written straight into a .ffpfsc named after the archive.
-  it("makes a compressed image from a .rar: unpacked first, named after the archive", async () => {
+  // read in place (nothing unpacked) and written straight into a .ffpfsc named after the
+  // archive; its password and the Trash choice go with the build, which reads the archive itself.
+  it("makes a compressed image from a .rar read in place, named after the archive", async () => {
     const buildImage = vi.fn().mockResolvedValue({ job_id: "i7" });
     const { fpkg } = await import("../api/fpkg");
     (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
-    const game = "/out/.ps5upload-extract-x1/PPSA99999-app";
-    jobStatus
-      .mockResolvedValueOnce({ status: "done", dest: game, bytes_sent: 10 })
-      .mockResolvedValueOnce({ status: "done", dest: "/out/My Game.ffpfsc", bytes_sent: 4 });
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/My Game.ffpfsc", bytes_sent: 4 });
     await useFpkgConversion
       .getState()
-      .buildImage("/dl/My Game.part1.rar", "/out", true, "ffpkg", undefined, undefined, "pw");
-    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "running", stage: "extract" });
-    expect(extract).toHaveBeenCalledWith("/dl/My Game.part1.rar", "/out", "pw");
-    await tick();
-    expect(buildImage).toHaveBeenCalledWith(game, "/out", "ffpkg", true, undefined, 8192, false, "My Game", "balanced", undefined, { add: true, build: "ampr_emu" });
+      .buildImage("/dl/My Game.part1.rar", "/out", true, "ffpkg", undefined, undefined, "pw", undefined, {
+        deleteSource: true,
+      });
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "running", stage: "check" });
+    expect(buildImage).toHaveBeenCalledWith(
+      "/dl/My Game.part1.rar",
+      "/out",
+      "ffpkg",
+      true,
+      undefined,
+      8192,
+      false,
+      "My Game",
+      "balanced",
+      undefined,
+      { add: true, build: "ampr_emu" },
+      undefined,
+      undefined,
+      { deleteSource: true, archivePassword: "pw" },
+    );
+    expect(extract).not.toHaveBeenCalled();
     await tick();
     expect(useFpkgConversion.getState().pipeline).toMatchObject({
       phase: "done",
       mode: "image",
       packagePath: "/out/My Game.ffpfsc",
     });
-    expect(cleanupExtract).toHaveBeenCalledWith(game);
+    expect(cleanupExtract).not.toHaveBeenCalled();
   });
 
   it("makes a game image from a folder, showing the bytes written", async () => {
@@ -486,6 +500,22 @@ describe("fpkg pipeline", () => {
     expect(useFpkgConversion.getState().pipeline).toBe(p);
   });
 
+  it("makes a folder straight from a .rar, its password sent, nothing unpacked", async () => {
+    const buildFolder = vi.fn().mockResolvedValue({ job_id: "f2" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildFolder: unknown }).buildFolder = buildFolder;
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/My Game", bytes_sent: 9 });
+    await useFpkgConversion.getState().buildFolder("/dl/My Game.part1.rar", "/out", false, { password: "pw" });
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "running", mode: "folder", stage: "check" });
+    expect(buildFolder).toHaveBeenCalledWith(
+      "/dl/My Game.part1.rar", "/out", "My Game", false, undefined, false, undefined, undefined, undefined,
+      { archivePassword: "pw" },
+    );
+    expect(extract).not.toHaveBeenCalled();
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done", mode: "folder", packagePath: "/out/My Game" });
+  });
+
   it("sends a PS4 update to merge with the game's folder or image build", async () => {
     const buildFolder = vi.fn().mockResolvedValue({ job_id: "m1" });
     const buildImage = vi.fn().mockResolvedValue({ job_id: "m2" });
@@ -508,6 +538,90 @@ describe("fpkg pipeline", () => {
     jobStatus.mockReset();
   });
 
+  it("asks for the source to go only when ticked, never for an archive, and says what became of it", async () => {
+    const buildFolder = vi.fn().mockResolvedValue({ job_id: "d1" });
+    const buildImage = vi.fn().mockResolvedValue({ job_id: "d2" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildFolder: unknown }).buildFolder = buildFolder;
+    (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
+    jobStatus.mockResolvedValue({
+      status: "done",
+      dest: "/out/G",
+      bytes_sent: 9,
+      commit_ack: { source_removed: true, source_note: "source moved to the Trash: /games/G.exfat" },
+    });
+    await useFpkgConversion.getState().buildFolder("/games/G.exfat", "/out", false, { deleteSource: true });
+    const folderCall = buildFolder.mock.calls[0] ?? [];
+    expect(folderCall[folderCall.length - 1]).toEqual({ deleteSource: true });
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "done",
+      sourceNote: { removed: true, note: "source moved to the Trash: /games/G.exfat" },
+    });
+    useFpkgConversion.getState().reset();
+
+    // A source that was kept says why; a run that never asked says nothing.
+    jobStatus.mockResolvedValue({
+      status: "done",
+      dest: "/out/G.ffpkg",
+      bytes_sent: 9,
+      commit_ack: { source_removed: false, source_note: "source kept: another job is reading it" },
+    });
+    await useFpkgConversion
+      .getState()
+      .buildImage("/games/G-app", "/out", false, "ffpkg", undefined, undefined, undefined, false, {
+        deleteSource: true,
+        removeBackport: true,
+      });
+    const imageCall = buildImage.mock.calls[0] ?? [];
+    expect(imageCall[imageCall.length - 1]).toEqual({ removeBackport: true, deleteSource: true });
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      sourceNote: { removed: false, note: "source kept: another job is reading it" },
+    });
+    useFpkgConversion.getState().reset();
+    jobStatus.mockResolvedValue({ status: "done", dest: "/out/G.ffpkg", bytes_sent: 9, commit_ack: { ampr_runtime: {} } });
+    await useFpkgConversion.getState().buildImage("/games/G-app", "/out", false, "ffpkg");
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).not.toHaveProperty("sourceNote");
+    expect(sourceNoteOf(undefined)).toBeUndefined();
+    expect(sourceNoteOf({ source_removed: "yes" })).toBeUndefined();
+    useFpkgConversion.getState().reset();
+    jobStatus.mockReset();
+  });
+
+  it("asks for the backport to be left out only when that was ticked", async () => {
+    const buildFolder = vi.fn().mockResolvedValue({ job_id: "b1" });
+    const buildImage = vi.fn().mockResolvedValue({ job_id: "b2" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildFolder: unknown }).buildFolder = buildFolder;
+    (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
+    jobStatus.mockResolvedValue({ status: "done", dest: "/out/G", bytes_sent: 9 });
+    await useFpkgConversion.getState().buildFolder("/games/G.exfat", "/out", false, { removeBackport: true });
+    // After the update and the destination, which this build has none of.
+    expect(buildFolder).toHaveBeenCalledWith(
+      "/games/G.exfat", "/out", undefined, false, undefined, false, undefined, undefined, undefined,
+      { removeBackport: true },
+    );
+    await tick();
+    useFpkgConversion.getState().reset();
+    await useFpkgConversion
+      .getState()
+      .buildImage("/games/G-app", "/out", false, "ffpkg", undefined, undefined, undefined, false, { removeBackport: true });
+    const call = buildImage.mock.calls[0] ?? [];
+    expect(call[call.length - 1]).toEqual({ removeBackport: true });
+    await tick();
+    useFpkgConversion.getState().reset();
+    // Not ticked: the call is the one it always was.
+    await useFpkgConversion
+      .getState()
+      .buildImage("/games/G-app", "/out", false, "ffpkg", undefined, undefined, undefined, false, { removeBackport: false });
+    const plain = buildImage.mock.calls[1] ?? [];
+    expect(plain[plain.length - 1]).toEqual({ add: true, build: "ampr_emu" });
+    await tick();
+    jobStatus.mockReset();
+  });
+
   it("sends a PS4 update to merge with the game's package build, which offers install like any package", async () => {
     build.mockResolvedValueOnce({ job_id: "p1" });
     jobStatus.mockResolvedValue({
@@ -524,6 +638,31 @@ describe("fpkg pipeline", () => {
     const p = useFpkgConversion.getState().pipeline;
     expect(p).toMatchObject({ phase: "done", mode: "convert", packagePath: "/out/UP0000-CUSA99990_00-TESTGAME00000000.pkg" });
     useFpkgConversion.getState().reset();
+    jobStatus.mockReset();
+  });
+
+  it("unpacks a packed game's asset packs into a folder, with the emulator choice", async () => {
+    const buildFolder = vi.fn().mockResolvedValue({ job_id: "u1" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildFolder: unknown }).buildFolder = buildFolder;
+    jobStatus.mockResolvedValue({ status: "done", dest: "/out/PPSA1-app", bytes_sent: 9 });
+    await useFpkgConversion
+      .getState()
+      .buildFolder("/games/PPSA1-app", "/out", false, { unpackPacks: true, addAmprEmu: false, amprEmuBuild: "ampr-emu-ng" });
+    // Written straight away (no pack stage), the game's own emulator choice after the unpack flag.
+    expect(buildFolder).toHaveBeenCalledWith(
+      "/games/PPSA1-app",
+      "/out",
+      undefined,
+      false,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      { unpackPacks: true, amprEmu: { add: false, build: "ampr-emu-ng" } },
+    );
+    await tick();
     jobStatus.mockReset();
   });
 
@@ -1106,9 +1245,13 @@ describe("fpkg pipeline", () => {
     expect(build).not.toHaveBeenCalled();
   });
 
-  it("unpacks a .rar before making a compressed image of it, named after the archive", async () => {
-    // Discord report: an archive source could not become an image at all.
-    const buildImage = vi.fn().mockResolvedValue({ job_id: "i7" });
+  it("unpacks a .rar the engine can't read in place, then makes the image, named after the archive", async () => {
+    // Discord report: an archive source could not become an image at all. A game image inside
+    // the archive is not read in place: the engine says so and the run unpacks it first.
+    const buildImage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("archive_needs_unpack: the game in this archive is an image (G.exfat)"))
+      .mockResolvedValue({ job_id: "i7" });
     const { fpkg } = await import("../api/fpkg");
     (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
     const game = "/out/.ps5upload-extract-x1";
@@ -1118,7 +1261,25 @@ describe("fpkg pipeline", () => {
     await useFpkgConversion
       .getState()
       .buildImage("/dl/My Game.part1.rar", "/out", true, "exfat", undefined, undefined, "pw");
-    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "running", mode: "image", stage: "extract" });
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "running", mode: "image", stage: "check" });
+    expect(buildImage).toHaveBeenNthCalledWith(
+      1,
+      "/dl/My Game.part1.rar",
+      "/out",
+      "exfat",
+      true,
+      undefined,
+      8192,
+      false,
+      "My Game",
+      "balanced",
+      undefined,
+      { add: true, build: "ampr_emu" },
+      undefined,
+      undefined,
+      { archivePassword: "pw" },
+    );
+    await tick();
     expect(extract).toHaveBeenCalledWith("/dl/My Game.part1.rar", "/out", "pw");
     await tick();
     expect(buildImage).toHaveBeenCalledWith(game, "/out", "exfat", true, undefined, 8192, false, "My Game", "balanced", undefined, { add: true, build: "ampr_emu" });

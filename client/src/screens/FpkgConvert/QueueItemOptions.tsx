@@ -9,7 +9,7 @@ import { parentDir } from "../../lib/outputPlace";
 import { PLAYGO_LANGUAGES } from "../../lib/playgoLanguages";
 import { useConvertPrefs } from "../../state/convertPrefs";
 import { thenFor, type ConvertBuild, type ConvertItem, type ConvertItemChange, type ConvertThen } from "../../state/convertQueue";
-import { isArchiveSource, isFolderableSource } from "../../state/fpkgConversion";
+import { isArchiveSource, isFolderableSource, isInPlaceArchive } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
 import { CompressionTiles } from "./CompressionTiles";
 import { imageDestFor } from "../../lib/imageDest";
@@ -18,14 +18,14 @@ import { FullVerifyOption, ImageChoice } from "./ImageOptions";
 
 type Kind = ConvertBuild["kind"];
 
-/** What this source can become: a folder only from an image or package; an image from a game
- *  folder, image, package or archive (a file of any other kind cannot). */
+/** What this source can become: a folder from an image, package or `.zip`/`.7z`/`.rar`; an
+ *  image from a game folder, image, package or archive (a file of any other kind cannot). */
 export function kindsFor(source: string, isDir?: boolean): Kind[] {
   // Known to be a folder when added; a name is only a guess (`Some.Game.2024` is a folder).
   const file = !isDir && /\.[a-z0-9]{2,6}$/i.test(source.trim());
   const kinds: Kind[] = ["pkg"];
   if (!file || isFolderableSource(source) || isArchiveSource(source)) kinds.push("image");
-  if (isFolderableSource(source)) kinds.push("folder");
+  if (isFolderableSource(source) || isInPlaceArchive(source)) kinds.push("folder");
   return kinds;
 }
 

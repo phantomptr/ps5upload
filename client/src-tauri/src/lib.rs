@@ -400,6 +400,7 @@ pub fn run() {
             commands::local_image_detach,
             commands::local_image_status,
             commands::image_browse,
+            commands::image_edit_check,
             commands::cheats_list,
             commands::cheats_get,
             commands::cheats_toggle,

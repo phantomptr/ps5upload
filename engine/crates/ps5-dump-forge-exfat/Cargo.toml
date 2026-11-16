@@ -1,0 +1,14 @@
+[package]
+name = "ps5-dump-forge-exfat"
+# From PS5 Dump Forge by quer3q (https://github.com/quer3q/ps5-dump-forge), GPL-3.0-or-later,
+# commit 8295556 (crates/ps5-dump-forge-exfat). Edition 2024 as upstream, so the files stay as
+# they are there. PS5Upload uses its in-place editor (`edit`); Forge's writer comes along
+# because the editor shares its constants and the tests build their images with it.
+edition = "2024"
+license = "GPL-3.0-or-later"
+version.workspace = true
+
+[dependencies]
+ps5-dump-forge-patch = { path = "../ps5-dump-forge-patch" }
+ps5upload-fpkg = { path = "../ps5upload-fpkg" }
+unicode-normalization = "0.1"

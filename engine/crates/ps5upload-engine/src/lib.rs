@@ -20,6 +20,9 @@ mod ampr_index_api;
 mod ampr_trace;
 mod api_errors;
 mod app_dump_api;
+#[cfg(test)]
+mod archive_build_tests;
+mod archive_tree;
 mod ava1_api;
 mod browser_payload;
 mod bundled_payload;
@@ -39,6 +42,8 @@ mod console_snapshot;
 mod console_tasks_api;
 mod console_tools_api;
 mod consoles_api;
+mod convert_cli;
+mod convert_runtime;
 mod convert_source;
 mod diag_api;
 mod disk_usage;
@@ -67,6 +72,7 @@ mod host_guard;
 mod icon_cache;
 mod image_browse;
 mod image_build;
+mod image_edit_in_place;
 mod inspect;
 mod install;
 mod join;
@@ -98,6 +104,7 @@ mod queue_api;
 mod remote;
 mod remote_download;
 mod remote_pkg;
+mod remove_backport;
 mod rp_diag;
 mod rp_golive;
 mod rp_keyboard;
@@ -112,12 +119,14 @@ mod settings_api;
 mod settings_backup;
 mod share;
 mod shared_state;
+mod source_removal;
 mod state_io;
 mod tailnet_api;
 mod tailnet_discover;
 pub(crate) mod tailnet_engine;
 pub(crate) mod tailnet_system;
 mod telemetry;
+mod unpack_packs;
 mod vinput_api;
 mod wake_login_api;
 mod web_pages;
@@ -569,6 +578,7 @@ fn extract_payload_error(err: &anyhow::Error) -> (Option<String>, Option<String>
     (None, None)
 }
 
+pub(crate) use ps5upload_convert_core::lz4_packs;
 /// Sum file sizes recursively under `root`. Used by transfer_dir_handler
 /// to pre-compute `total_bytes` for progress rendering — transfer_dir
 /// itself walks too but doesn't expose the total before sending starts,
@@ -6686,6 +6696,8 @@ async fn ps5_status(
                 "status ok",
             );
             helper_mirror::note_console(&console);
+            // A helper with the converter gets the zstd runtime it needs (background, once).
+            convert_runtime::after_status(console_addr(&console), &json);
             spawn_console_upgrade_cleanup(console);
             (StatusCode::OK, Json(json)).into_response()
         }
@@ -12404,6 +12416,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // clog!/core_debug! lines, with their level and category. The level setting comes off disk
     // first, so a raise made before a restart is still in force (until it runs out).
     ps5upload_core::log::set_leveled_sink(engine_log::core_sink);
+    // The converter's build code (shared with the console program) logs through the same ring.
+    engine_log::install_convert_sink();
     log_levels::load_saved();
     diag_api::mark_started();
     // The bug-report journal: every crate's events (ps5upload_core::events) land on disk here.
@@ -12735,6 +12749,10 @@ fn build_app_and_mcp(
         .route(
             "/api/image/browse",
             post(image_browse::image_browse_handler),
+        )
+        .route(
+            "/api/image/edit/check",
+            post(image_edit_in_place::check_handler),
         )
         .route(
             "/api/collection/settings",
@@ -13099,6 +13117,10 @@ fn build_app_and_mcp(
             post(pldmgr_api::upload).layer(axum::extract::DefaultBodyLimit::max(128 * 1024 * 1024)),
         )
         .route("/api/ps5/elfldr/ensure", post(ps5_elfldr_ensure))
+        .route(
+            "/api/ps5/convert-runtime",
+            post(convert_runtime::put_handler),
+        )
         .route("/api/ps5/process/kill", post(ps5_process_kill))
         .route("/api/ps5/power/control", post(ps5_power_control))
         .route(
@@ -13771,6 +13793,10 @@ pub fn healthcheck() -> i32 {
 }
 
 pub use mcp::stdio::run_cli as run_mcp_bridge;
+
+/// `ps5upload-engine inspect` and `convert` (convert_cli.rs), and the usage `--help` prints.
+pub use convert_cli::run_cli as run_convert_cli;
+pub const CLI_USAGE: &str = convert_cli::USAGE;
 
 pub async fn run_cli() {
     install_panic_logger();

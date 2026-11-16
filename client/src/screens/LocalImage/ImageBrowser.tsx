@@ -6,8 +6,10 @@ import {
   FilePlus,
   Folder,
   FolderOpen,
+  FolderPen,
   FolderPlus,
   FolderSearch,
+  Pencil,
   Replace,
   Save,
   Trash2,
@@ -29,6 +31,7 @@ import { formatBytes } from "../../lib/format";
 import { pickPath } from "../../lib/pickPath";
 import { openLocalPath } from "../../lib/openLocalPath";
 import { useTr } from "../../state/lang";
+import { useConfirm, usePrompt } from "../../components/ConfirmDialog";
 import {
   imageBrowse,
   jobCancel,
@@ -36,22 +39,25 @@ import {
   type ImageBrowseListing,
   type JobStageSnapshot,
 } from "../../api/ps5";
-import { fpkg, type ImageEdit } from "../../api/fpkg";
+import { fpkg, type ImageEdit, type InPlaceCheck } from "../../api/fpkg";
 import { BROWSE_IMAGE_EXTENSIONS } from "./imageTypes";
 import {
   baseName,
   crumbs,
+  editKey,
   folderOf,
   joinPath,
+  nameProblem,
   parentDir,
+  pathAfter,
   pendingState,
   queueEdit,
 } from "./browseEdits";
 
-/** A save or an edited copy the engine is running. */
+/** A save, an edited copy or an in-place edit the engine is running. */
 interface RunningJob {
   id: string;
-  kind: "save" | "edit";
+  kind: "save" | "edit" | "inplace";
   what: string;
   done: number;
   total: number;
@@ -59,8 +65,11 @@ interface RunningJob {
 }
 
 interface Finished {
-  kind: "save" | "edit";
+  kind: "save" | "edit" | "inplace";
   dest: string;
+  /** Done, but with something to say (an in-place edit whose journal removal may not have
+   *  reached the disk: the changes are in the image and checked). */
+  warning?: string;
 }
 
 const FS_LABEL: Record<ImageBrowseListing["filesystem"], string> = {
@@ -93,7 +102,13 @@ export function ImageBrowser({
   const [edits, setEdits] = useState<ImageEdit[]>([]);
   const [job, setJob] = useState<RunningJob | null>(null);
   const [finished, setFinished] = useState<Finished | null>(null);
+  const { prompt, dialog: promptDialog } = usePrompt();
+  const { confirm, dialog: confirmDialog } = useConfirm();
+  // Whether the pending changes can go into the image itself (asked of the engine as they
+  // change); null while unknown or not offered.
+  const [inPlace, setInPlace] = useState<InPlaceCheck | null>(null);
   const alive = useRef(true);
+  const applying = useRef(false);
   useEffect(
     () => () => {
       alive.current = false;
@@ -101,14 +116,17 @@ export function ImageBrowser({
     [],
   );
 
+  // The image shown now: a listing that comes back for another one (a reload after a job on the
+  // image picked before) is dropped, or its rows would be edited under the new image's name.
+  const current = useRef<string | null>(null);
   const load = useCallback(async (path: string, dir: string) => {
     setLoading(true);
     setError(null);
     try {
       const l = await imageBrowse(path, dir);
-      if (alive.current) setListing(l);
+      if (alive.current && current.current === path) setListing(l);
     } catch (e) {
-      if (alive.current) setError(String(e));
+      if (alive.current && current.current === path) setError(String(e));
     } finally {
       if (alive.current) setLoading(false);
     }
@@ -133,6 +151,7 @@ export function ImageBrowser({
         onChoose(picked);
         return;
       }
+      current.current = picked;
       setImage(picked);
       setListing(null);
       setEdits([]);
@@ -158,8 +177,9 @@ export function ImageBrowser({
           const snap = await jobStatus(id);
           if (!alive.current) return;
           if (snap.status === "done") {
-            setFinished({ kind, dest: snap.dest ?? "" });
-            if (kind === "edit") setEdits([]);
+            const warning = snap.commit_ack?.warning;
+            setFinished({ kind, dest: snap.dest ?? "", ...(typeof warning === "string" && warning ? { warning } : {}) });
+            if (kind === "edit" || kind === "inplace") setEdits([]);
             return;
           }
           if (snap.status === "failed") {
@@ -215,6 +235,60 @@ export function ImageBrowser({
     }
   }, [edits, follow, image]);
 
+  // Ask whether the changes fit in place, a moment after they stop changing.
+  const offersInPlace = !!listing?.in_place;
+  const jobRunning = !!job;
+  useEffect(() => {
+    setInPlace(null);
+    if (!image || !offersInPlace || edits.length === 0 || jobRunning) return;
+    let stale = false;
+    const t = setTimeout(() => {
+      fpkg
+        .checkEditInPlace(image, edits)
+        .then((c) => {
+          if (!stale && alive.current) setInPlace(c);
+        })
+        .catch(() => {
+          if (!stale && alive.current) setInPlace(null);
+        });
+    }, 400);
+    return () => {
+      stale = true;
+      clearTimeout(t);
+    };
+  }, [image, edits, offersInPlace, jobRunning]);
+
+  const applyInPlace = useCallback(async () => {
+    if (!image || edits.length === 0 || applying.current) return;
+    const name = baseName(image);
+    // One at a time: a second click while the first is asking or starting does nothing.
+    applying.current = true;
+    const ok = await confirm({
+      title: tr("imgbrowse_inplace_confirm_title", { name }, `Change ${name} itself?`),
+      message: tr(
+        "imgbrowse_inplace_confirm",
+        { name },
+        `The changes are written into ${name} itself; no copy is made. An undo journal is kept beside it while they go in, so if this is interrupted (the app closes, the computer loses power) the image is put back as it was the next time it is opened. Every changed file is read back, and if anything does not check out the image is restored.`,
+      ),
+      confirmLabel: tr("imgbrowse_inplace_apply", undefined, "Apply in place"),
+    });
+    if (!ok) {
+      applying.current = false;
+      return;
+    }
+    setError(null);
+    try {
+      const { job_id } = await fpkg.editImageInPlace(image, edits);
+      await follow(job_id, "inplace", name);
+      if (alive.current) await load(image, listing?.dir ?? "");
+    } catch (e) {
+      // Refused (it didn't fit, the image is in use): the edited copy is still there to use.
+      if (current.current === image) setError(String(e));
+    } finally {
+      applying.current = false;
+    }
+  }, [confirm, edits, follow, image, listing?.dir, load, tr]);
+
   const putFrom = useCallback(
     async (mode: "file" | "folder", at?: string) => {
       const from = await pickPath({
@@ -225,11 +299,79 @@ export function ImageBrowser({
             : tr("imgbrowse_pick_file", undefined, "Choose a file"),
       });
       if (!from || !listing) return;
-      const path = at ?? joinPath(listing.dir, baseName(from));
-      setEdits((cur) => queueEdit(cur, { op: "put", path, from }));
+      // In a folder a queued rename moves, the new file goes where the folder will be.
+      setEdits((cur) =>
+        queueEdit(cur, {
+          op: "put",
+          path: at ?? joinPath(pathAfter(cur, listing.dir), baseName(from)),
+          from,
+        }),
+      );
     },
     [listing, tr],
   );
+
+  /** Asks for one file or folder name; `null` when cancelled or unusable (said as an error).
+   *  What the image's filesystem allows in a name is the engine's to check, when the copy is
+   *  written. */
+  const askName = useCallback(
+    async (title: string, message: string, defaultValue: string): Promise<string | null> => {
+      const typed = await prompt({ title, message, defaultValue });
+      if (typed === null) return null;
+      if (nameProblem(typed)) {
+        setError(
+          tr(
+            "imgbrowse_name_bad",
+            undefined,
+            "A name cannot be empty, and cannot contain / or \\. Nothing was changed.",
+          ),
+        );
+        return null;
+      }
+      return typed.trim();
+    },
+    [prompt, tr],
+  );
+
+  /** Queues a rename of the listed entry `name` (in the folder shown) to a typed name. */
+  const rename = useCallback(
+    async (path: string, name: string) => {
+      const to = await askName(
+        tr("imgbrowse_rename_title", { name }, `Rename ${name}`),
+        tr(
+          "imgbrowse_rename_body",
+          undefined,
+          "The new name, in the same folder. Nothing else in that folder may have it. The image you opened is not changed: the edited copy has the new name.",
+        ),
+        name,
+      );
+      if (!to || to === name) return;
+      setError(null);
+      setEdits((cur) => {
+        // The entry as the changes queued so far leave it: it may sit in a renamed folder.
+        const from = pathAfter(cur, path);
+        return queueEdit(cur, { op: "rename", from, to: joinPath(parentDir(from), to) });
+      });
+    },
+    [askName, tr],
+  );
+
+  /** Queues a new empty folder in the folder shown. */
+  const newFolder = useCallback(async () => {
+    if (!listing) return;
+    const name = await askName(
+      tr("imgbrowse_mkdir_title", undefined, "New folder"),
+      tr(
+        "imgbrowse_mkdir_body",
+        undefined,
+        "The name of a new, empty folder here. It is kept in the edited copy even when nothing is put in it.",
+      ),
+      "",
+    );
+    if (!name) return;
+    setError(null);
+    setEdits((cur) => queueEdit(cur, { op: "mkdir", path: joinPath(pathAfter(cur, listing.dir), name) }));
+  }, [askName, listing, tr]);
 
   const busy = loading || !!job;
   const dir = listing?.dir ?? "";
@@ -279,9 +421,9 @@ export function ImageBrowser({
     >
       <p className="mb-3 text-sm text-[var(--color-muted)]">
         {tr(
-          "imgbrowse_explain",
+          "imgbrowse_explain_v2",
           undefined,
-          "Browse any game image or package ps5upload reads (.exfat, .ffpkg, .ffpfs, .ffpfsc, or a .pkg made with the debug key) on any computer, without mounting it. Save a file or folder to the computer, or change files and write an edited copy: the image you opened is never changed.",
+          "Browse any game image or package ps5upload reads (.exfat, .ffpkg, .ffpfs, .ffpfsc, or a .pkg made with the debug key) on any computer, without mounting it. Save a file or folder to the computer, or change files and write an edited copy. The image you opened changes only if you choose Apply in place.",
         )}
       </p>
 
@@ -298,9 +440,11 @@ export function ImageBrowser({
           title={
             finished.kind === "edit"
               ? tr("imgbrowse_copy_done", undefined, "Edited copy written and checked")
-              : tr("imgbrowse_save_done", undefined, "Saved and checked")
+              : finished.kind === "inplace"
+                ? tr("imgbrowse_inplace_done", undefined, "Changes applied to the image and checked")
+                : tr("imgbrowse_save_done", undefined, "Saved and checked")
           }
-          detail={finished.dest}
+          detail={finished.warning ? `${finished.dest} — ${finished.warning}` : finished.dest}
           onDismiss={() => setFinished(null)}
           action={
             <div className="flex gap-2">
@@ -327,7 +471,9 @@ export function ImageBrowser({
             <span className="truncate">
               {job.kind === "edit"
                 ? tr("imgbrowse_writing_copy", { name: job.what }, `Writing an edited copy of ${job.what}`)
-                : tr("imgbrowse_saving", { name: job.what }, `Saving ${job.what}`)}
+                : job.kind === "inplace"
+                  ? tr("imgbrowse_applying_inplace", { name: job.what }, `Applying the changes to ${job.what}`)
+                  : tr("imgbrowse_saving", { name: job.what }, `Saving ${job.what}`)}
               {job.stage?.id === "verify"
                 ? ` · ${tr("imgbrowse_checking", undefined, "checking")}`
                 : ""}
@@ -448,6 +594,15 @@ export function ImageBrowser({
                 >
                   {tr("imgbrowse_add_folder", undefined, "Add a folder here")}
                 </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  leftIcon={<FolderPen size={13} />}
+                  disabled={busy}
+                  onClick={() => void newFolder()}
+                >
+                  {tr("imgbrowse_new_folder", undefined, "New folder")}
+                </Button>
               </>
             )}
           </div>
@@ -498,6 +653,19 @@ export function ImageBrowser({
                   {state === "deleted" && (
                     <Badge tone="bad">{tr("imgbrowse_deleted", undefined, "will be deleted")}</Badge>
                   )}
+                  {state === "renamed" &&
+                    // Its own name changes, or only a folder above it does.
+                    (baseName(pathAfter(edits, path)) !== e.name ? (
+                      <Badge tone="warn">
+                        {tr(
+                          "imgbrowse_renamed",
+                          { name: baseName(pathAfter(edits, path)) },
+                          `will be renamed to ${baseName(pathAfter(edits, path))}`,
+                        )}
+                      </Badge>
+                    ) : (
+                      <Badge tone="warn">{tr("imgbrowse_moved", undefined, "will be moved")}</Badge>
+                    ))}
                   <span className="w-24 shrink-0 text-end font-mono text-xs text-[var(--color-muted)]">
                     {formatBytes(e.size)}
                   </span>
@@ -512,7 +680,7 @@ export function ImageBrowser({
                     >
                       <Download size={13} />
                     </Button>
-                    {editable && !e.is_dir && (
+                    {editable && !e.is_dir && state !== "renamed" && (
                       <Button
                         size="sm"
                         variant="ghost"
@@ -524,7 +692,21 @@ export function ImageBrowser({
                         <Replace size={13} />
                       </Button>
                     )}
-                    {editable && state !== "deleted" && (
+                    {/* One rename per entry; a deleted or already renamed one is undone in the
+                        list of changes first. */}
+                    {editable && state !== "deleted" && state !== "renamed" && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-label={tr("imgbrowse_rename_item", { name: e.name }, `Rename ${e.name}`)}
+                        title={tr("imgbrowse_rename_item", { name: e.name }, `Rename ${e.name}`)}
+                        disabled={busy}
+                        onClick={() => void rename(path, e.name)}
+                      >
+                        <Pencil size={13} />
+                      </Button>
+                    )}
+                    {editable && state !== "deleted" && state !== "renamed" && (
                       <Button
                         size="sm"
                         variant="ghost"
@@ -551,15 +733,23 @@ export function ImageBrowser({
           </div>
           <ul className="mb-3 space-y-1 text-sm">
             {edits.map((e, i) => (
-              <li key={`${e.op}:${e.path}:${i}`} className="flex items-center gap-2">
+              <li key={editKey(e, i)} className="flex items-center gap-2">
                 <span className="min-w-0 flex-1 truncate">
                   {e.op === "delete"
                     ? tr("imgbrowse_change_delete", { path: e.path }, `Delete ${e.path}`)
-                    : tr(
-                        "imgbrowse_change_put",
-                        { path: e.path, from: baseName(e.from) },
-                        `Put ${baseName(e.from)} at ${e.path}`,
-                      )}
+                    : e.op === "rename"
+                      ? tr(
+                          "imgbrowse_change_rename",
+                          { from: e.from, to: e.to },
+                          `Rename ${e.from} to ${e.to}`,
+                        )
+                      : e.op === "mkdir"
+                        ? tr("imgbrowse_change_mkdir", { path: e.path }, `New folder ${e.path}`)
+                        : tr(
+                            "imgbrowse_change_put",
+                            { path: e.path, from: baseName(e.from) },
+                            `Put ${baseName(e.from)} at ${e.path}`,
+                          )}
                 </span>
                 <Button
                   size="sm"
@@ -591,12 +781,39 @@ export function ImageBrowser({
             >
               {tr("imgbrowse_write_copy", undefined, "Write edited copy")}
             </Button>
+            {inPlace?.in_place && (
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<Pencil size={13} />}
+                disabled={busy}
+                onClick={() => void applyInPlace()}
+                title={tr(
+                  "imgbrowse_inplace_hint",
+                  undefined,
+                  "Write the changes into this image instead of making a copy",
+                )}
+              >
+                {tr("imgbrowse_inplace_apply", undefined, "Apply in place")}
+              </Button>
+            )}
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEdits([])}>
               {tr("imgbrowse_discard", undefined, "Discard changes")}
             </Button>
           </div>
+          {inPlace && !inPlace.in_place && inPlace.reason && (
+            <p className="mt-2 text-xs text-[var(--color-muted)]">
+              {tr(
+                "imgbrowse_inplace_no",
+                { reason: inPlace.reason },
+                `These changes can't be applied to the image itself (${inPlace.reason}); write an edited copy instead.`,
+              )}
+            </p>
+          )}
         </div>
       )}
+      {promptDialog}
+      {confirmDialog}
     </Card>
   );
 }

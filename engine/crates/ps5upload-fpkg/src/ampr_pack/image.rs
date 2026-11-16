@@ -27,7 +27,8 @@ pub struct Readiness {
     pub refusal: Option<String>,
     /// `ok`; `runtime` (the game's ampr_emu is missing or too old: installing
     /// [`RUNTIME_VERSION`] into the image makes packs possible); `no_ampr` (the game does not
-    /// read through AMPR, so nothing could serve packs: .ffpfsc is its compression).
+    /// read through AMPR, so ampr_emu could not serve LZ4 packs: .ffpfsc is its compression,
+    /// or zstd packs, whose ampr-emu-ng is injected whatever the game imports).
     pub kind: &'static str,
     /// The game reads through AMPR and ships no emulator at all: it may not start from an image
     /// or folder without one, packs or not ([`emulator_needed_at`]).
@@ -61,7 +62,7 @@ fn readiness_for_packs(tree: &mut dyn SourceTree) -> Option<Readiness> {
         return Some(Readiness {
             runtime_version: None,
             refusal: Some(
-                "this game does not read its files through AMPR, so nothing could serve \
+                "this game does not read its files through AMPR, so nothing could serve LZ4 \
                  asset packs; compress it into a .ffpfsc instead"
                     .into(),
             ),
@@ -412,6 +413,13 @@ fn generated(path: &str, config: &Config, pack_glob: &str) -> bool {
         || lower == format!("{index}.crc")
         || lower == format!("{index}.runtime")
         || glob::matches_any(path, &[pack_glob])
+}
+
+/// Whether packing by `config` leaves `path` out of the packed game, to be replaced by what it
+/// writes (a fresh `ampr_emu.index`, a new pack set) or dropped (what a run of the game wrote).
+/// Every other file of the source is in the packed game, loose or in the packs.
+pub fn replaced_by_packing(path: &str, config: &Config) -> bool {
+    pack_output_glob(&config.pack_pattern).is_ok_and(|g| generated(path, config, &g))
 }
 
 /// What the image holds instead of the folder.

@@ -172,6 +172,32 @@ export async function minionSet(
   };
 }
 
+/** What the console holds after "Put the zstd runtime on this PS5". */
+export interface ZstdRuntimeOnConsole {
+  version: string;
+  path: string;
+  /** False: that version was already there. */
+  written: boolean;
+}
+
+/** Puts the zstd runtime Convert on the PS5 needs on the console (the engine fetches the release
+ *  it pins on this computer, checks its digest and writes it there). Slow the first time: the
+ *  engine may download it first. */
+export async function putZstdRuntime(host: string): Promise<ZstdRuntimeOnConsole> {
+  const res = await fetch(`${getEngineUrl()}/api/ps5/convert-runtime`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ host: consoleAddr(host) }),
+    signal: AbortSignal.timeout(180_000),
+  });
+  const b = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok)
+    throw new Error(typeof b.error === "string" && b.error ? b.error : `request failed (${res.status})`);
+  if (typeof b.version !== "string" || typeof b.path !== "string" || typeof b.written !== "boolean")
+    throw new Error("Invalid zstd runtime reply");
+  return { version: b.version, path: b.path, written: b.written };
+}
+
 export async function importLocalCheat(
   host: string,
   path: string,

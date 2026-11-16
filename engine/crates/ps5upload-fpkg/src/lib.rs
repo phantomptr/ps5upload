@@ -41,6 +41,7 @@ pub mod keys;
 pub mod kraken;
 pub mod kraken_image;
 pub mod license;
+pub mod lih;
 pub mod module_case;
 pub mod naps;
 pub mod outer;
@@ -52,6 +53,7 @@ pub mod pfsimage;
 pub mod pkg_source;
 pub mod plan;
 pub mod playgo;
+pub mod protected;
 pub mod ps4_merge;
 pub mod ps4_param;
 pub mod ps4_pkg;
@@ -159,6 +161,11 @@ impl PkgFile {
     /// Any seekable bytes of known length.
     pub fn from_reader(file: Box<dyn ReadSeek>, len: u64) -> Self {
         Self { file, len }
+    }
+
+    /// The reader this was made from, back.
+    pub fn into_reader(self) -> Box<dyn ReadSeek> {
+        self.file
     }
 
     pub fn len(&self) -> u64 {

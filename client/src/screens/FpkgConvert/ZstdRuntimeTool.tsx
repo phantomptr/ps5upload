@@ -1,5 +1,5 @@
 // A game in zstd packs is read through ampr-emu-ng in its fakelib. Releases before 0.3.4 hang
-// some games at startup (ASTRO BOT), and drakmor's ampr_emu doesn't read zstd packs at all. This
+// some games at startup (ASTRO BOT), 0.4.0 refuses very large games, and drakmor's ampr_emu doesn't read zstd packs at all. This
 // puts the newest ampr-emu-ng in where the game stands: a folder in place, an image on the PS5
 // through a ShadowMount+ backport. On a PS5 it also says when ShadowMount+'s emulator updates
 // would swap the game's runtime for one that won't run it.
@@ -26,7 +26,8 @@ export function zstdRuntimeOffered(
   inspection: FpkgInspection | null,
 ): boolean {
   const s = source.trim();
-  if (!s || !inspection?.zstd_runtime?.outdated) return false;
+  const r = inspection?.zstd_runtime;
+  if (!s || !(r?.outdated || r?.capped)) return false;
   const onConsole = s.startsWith("ps5://");
   if (!onConsole && isRemotePath(s)) return false;
   return onConsole || !IMAGE.test(s);
@@ -64,6 +65,12 @@ export function runtimeNow(
       "zstd_runtime_old",
       { version: r.version ?? "" },
       "This game's zstd runtime is ampr-emu-ng {version}. Versions before 0.3.4 can hang some games at startup (ASTRO BOT is one).",
+    );
+  if (r.kind === "ampr-emu-ng" && r.capped)
+    return tr(
+      "zstd_runtime_capped",
+      { version: r.version ?? "" },
+      "This game's zstd runtime is ampr-emu-ng {version}. Version 0.4.0 refuses very large games (\"index tables need … MiB, over the 48 MiB\"); 0.4.1 and newer start them.",
     );
   return null;
 }

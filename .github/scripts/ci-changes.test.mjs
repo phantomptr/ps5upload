@@ -43,6 +43,19 @@ test("core and ava1 crates also run the C interop suite", () => {
   assert.deepEqual(on(["engine/crates/ps5upload-core/src/hw.rs"]), ["android", "client", "ctest", "desktop", "engine"]);
 });
 
+test("the console converter and the crates it links also run the payload job, which builds it", () => {
+  for (const p of [
+    "engine/crates/ps5upload-convert/src/job.rs",
+    "engine/crates/ps5upload-fpkg/src/lib.rs",
+    "engine/crates/ps5upload-pkg/src/lib.rs",
+    "engine/crates/ps5upload-convert-core/src/writing.rs",
+    "engine/crates/ps5-dump-forge-pfs/src/lib.rs",
+    "engine/crates/ps5-dump-forge-zstd/Cargo.toml",
+  ]) {
+    assert.deepEqual(on([p]), ["android", "client", "desktop", "engine", "payload"], p);
+  }
+});
+
 test("hub only: its own job, nothing else", () => {
   const r = classify(["engine/crates/ps5upload-hub/src/lib.rs"]);
   assert.deepEqual(on(["engine/crates/ps5upload-hub/src/lib.rs"]), ["hub"]);

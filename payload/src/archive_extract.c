@@ -21,6 +21,7 @@
 #include "archive_name.h"
 #include "ava1_app_gen.h"
 #include "ava1_op.h"
+#include "console_convert.h"
 #include "fs_jobs.h"
 #include "path_policy.h"
 #include "runtime.h"
@@ -49,6 +50,9 @@ extern unsigned int ps5upload_extractor_elf_len;
 #define EXTRACT_KILL_AFTER_MS 10000
 
 static pthread_mutex_t g_busy = PTHREAD_MUTEX_INITIALIZER;
+static int g_running;
+
+int archive_extract_running(void) { return __atomic_load_n(&g_running, __ATOMIC_SEQ_CST); }
 
 static uint64_t now_ms(void) {
     struct timespec ts;
@@ -405,6 +409,16 @@ int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         ava1_op_message(c, "fs_extract_busy");
         return AVA1_ERR_BUSY;
     }
+    /* Not beside a conversion being written: both write a drive hard and hold memory. Our flag
+     * first, then the converter's (both seq_cst; console_convert.c does the same the other way
+     * round): of two that start at once at least one sees the other and backs out. */
+    __atomic_store_n(&g_running, 1, __ATOMIC_SEQ_CST);
+    if (console_convert_building()) {
+        __atomic_store_n(&g_running, 0, __ATOMIC_SEQ_CST);
+        pthread_mutex_unlock(&g_busy);
+        ava1_op_message(c, "fs_extract_busy");
+        return AVA1_ERR_BUSY;
+    }
     password = malloc(1024);
     if (!password) {
         ava1_op_message(c, "fs_extract_no_memory");
@@ -492,6 +506,7 @@ unlock:
         memset(password, 0, 1024);
         free(password);
     }
+    __atomic_store_n(&g_running, 0, __ATOMIC_SEQ_CST);
     pthread_mutex_unlock(&g_busy);
     return status;
 }

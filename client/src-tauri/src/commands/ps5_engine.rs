@@ -1045,6 +1045,17 @@ pub async fn image_browse(path: String, dir: Option<String>) -> Result<JsonValue
     .await
 }
 
+/// Whether edits can go into a game image itself (in place), without writing anything.
+#[tauri::command]
+pub async fn image_edit_check(path: String, edits: Option<JsonValue>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    post_json(
+        &format!("{base}/api/image/edit/check"),
+        &serde_json::json!({ "path": path, "edits": edits.unwrap_or_else(|| serde_json::json!([])) }),
+    )
+    .await
+}
+
 #[tauri::command]
 pub async fn activity_reset(addr: Option<String>) -> Result<JsonValue, String> {
     let url = addr_url("/api/ps5/activity/reset", addr.as_deref());
@@ -2477,7 +2488,7 @@ pub async fn exfat_build(
     name: Option<String>,
     // How hard a .ffpfsc is compressed: fast, balanced or smallest; the engine's default when absent.
     ffpfsc_level: Option<String>,
-    // An edited copy of the image `source`: [{op: "delete"|"put", path, from?}], passed through.
+    // An edited copy of the image `source`: [{op: "delete"|"put"|"rename"|"mkdir", path?, from?, to?}], passed through.
     edits: Option<JsonValue>,
     // A name already taken in the output folder is numbered instead of refused.
     keep_both: Option<bool>,
@@ -2493,6 +2504,16 @@ pub async fn exfat_build(
     destination: Option<JsonValue>,
     // A PS4 update merged into the PS4 game `source`.
     update: Option<String>,
+    // Leave the backport libraries in the game's fakelib out of the image.
+    remove_backport: Option<bool>,
+    // Move `source` to the Trash once the image is read back in full and in place.
+    delete_source: Option<bool>,
+    // A game in asset packs is written as plain files again.
+    unpack_packs: Option<bool>,
+    // With edits: change the image itself instead of writing an edited copy.
+    in_place: Option<bool>,
+    // The password of a .rar source read in place; passed through, never logged.
+    archive_password: Option<String>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/exfat/build");
@@ -2516,6 +2537,11 @@ pub async fn exfat_build(
             "ampr_emu_build": ampr_emu_build,
             "destination": destination,
             "update": update,
+            "remove_backport": remove_backport.unwrap_or(false),
+            "delete_source": delete_source.unwrap_or(false),
+            "unpack_packs": unpack_packs.unwrap_or(false),
+            "in_place": in_place.unwrap_or(false),
+            "archive_password": archive_password,
         }),
     )
     .await
@@ -2535,10 +2561,23 @@ pub async fn folder_build(
     keep_both: Option<bool>,
     // zstd asset packs: {level, runtime}. The source may then also be a game folder.
     ampr_zstd: Option<JsonValue>,
+    // AMPR LZ4 asset packs: {level, profile_toml, install_runtime}. Not with ampr_zstd.
+    ampr_lz4: Option<JsonValue>,
     // A PS4 update merged into the PS4 game `source` (which may then also be a folder).
     update: Option<String>,
     // Where the folder goes: {"kind":"local"} (the default) or {"kind":"server",...}.
     destination: Option<JsonValue>,
+    // Leave the backport libraries in the game's fakelib out of the folder.
+    remove_backport: Option<bool>,
+    // Move `source` to the Trash once the folder is read back in full and in place.
+    delete_source: Option<bool>,
+    // A game in asset packs is written as plain files again; the source may then be a folder.
+    unpack_packs: Option<bool>,
+    // With unpack_packs: the AMPR emulator choice, as an image build takes it.
+    add_ampr_emu: Option<bool>,
+    ampr_emu_build: Option<String>,
+    // The password of a .rar source read in place; passed through, never logged.
+    archive_password: Option<String>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/folder/build");
@@ -2552,8 +2591,15 @@ pub async fn folder_build(
             "entry": entry,
             "keep_both": keep_both.unwrap_or(false),
             "ampr_zstd": ampr_zstd,
+            "ampr_lz4": ampr_lz4,
             "update": update,
             "destination": destination,
+            "remove_backport": remove_backport.unwrap_or(false),
+            "delete_source": delete_source.unwrap_or(false),
+            "unpack_packs": unpack_packs.unwrap_or(false),
+            "add_ampr_emu": add_ampr_emu.unwrap_or(true),
+            "ampr_emu_build": ampr_emu_build,
+            "archive_password": archive_password,
         }),
     )
     .await

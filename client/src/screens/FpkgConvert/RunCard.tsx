@@ -20,7 +20,7 @@ import { displayPath, isRemotePath, parseRemotePath } from "../../lib/remotePath
 import { useConnectionsStore } from "../../state/connections";
 import type { ImageFormat } from "../../api/fpkg";
 import { overallProgress, stageRows, type StageRow } from "./stages";
-import { lz4Active, type Lz4Choice } from "./ImageOptions";
+import type { Lz4Choice } from "./ImageOptions";
 import { GentleToggle } from "./GentleToggle";
 
 export { lz4Active, type Lz4Choice } from "./ImageOptions";
@@ -176,7 +176,6 @@ export function idleRun(
   const c = props.choice;
   const image = c.make === "image";
   const folder = c.make === "folder";
-  const packing = image && lz4Active(c.imageFormat, c.lz4);
   const sends = c.then !== "keep";
   // Save to: PS5 that this image can't do (or with no console) runs nothing; nor does Save to:
   // a server with no folder chosen, or for an image that can't go there.
@@ -190,7 +189,7 @@ export function idleRun(
   const label = folder
     ? tr("fpkg.folder.make", undefined, "Make game folder")
     : image
-      ? c.imageCompress && !packing
+      ? c.imageCompress
         ? tr("fpkg.image.make_compressed", undefined, "Make compressed image")
         : tr("fpkg.image.make", undefined, "Make game image")
       : !sends
@@ -518,6 +517,21 @@ export function RunCard(props: RunCardProps) {
                   ? tr("fpkg.folder.done", undefined, "Game folder written and read back.")
                   : tr("fpkg.done", undefined, "Package written")}
         </div>
+        {/* The run was asked to move its source to the Trash: it went, or it stayed and why. */}
+        {p.sourceNote && (
+          <div
+            className={`text-xs ${p.sourceNote.removed ? "text-[var(--color-muted)]" : "text-[var(--color-warn)]"}`}
+            data-testid="source-note"
+          >
+            {p.sourceNote.removed
+              ? tr("fpkg.delete_source.done", { path: p.source }, "The source was moved to the Trash: {path}")
+              : tr(
+                  "fpkg.delete_source.kept",
+                  { reason: p.sourceNote.note },
+                  "The source was not moved to the Trash, and is still where it was ({reason}).",
+                )}
+          </div>
+        )}
         <div className="text-sm text-[var(--color-muted)]">
           {p.packageBytes > 0 && <span>{prettyBytes(p.packageBytes)}</span>}
           {p.packageBytes > 0 && props.sourceBytes && !folder ? (

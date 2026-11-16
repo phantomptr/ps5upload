@@ -15,7 +15,11 @@ use crate::source::SourceTree;
 pub const ZSTD_INDEX: &str = "ampr_zstd.index";
 
 /// ampr-emu-ng releases: version and the SHA-256 GitHub publishes for its `libSceAmpr.sprx`.
-pub const NG_RELEASES: [(&str, &str); 7] = [
+pub const NG_RELEASES: [(&str, &str); 8] = [
+    (
+        "0.4.1",
+        "9c7c41b3216bc4f877d67e3c2e5c9c8f9ffabdd5065f4f3fe0dd98fa7228386f",
+    ),
     (
         "0.4.0",
         "8320eb65c16565f42031b9d88b15a447039f0fd7e5694faf5f1cb84cafdba218",
@@ -50,6 +54,18 @@ pub const NG_RELEASES: [(&str, &str); 7] = [
 /// startup (ASTRO BOT) start.
 pub const NG_FIXED: &str = "0.3.4";
 
+/// The one ampr-emu-ng release that refuses very large games: it holds its lookup tables to
+/// 48 MiB and leaves the packs unserved past that ("index tables need 64MiB, over the 48 MiB
+/// beside the page cache; packed files not served", `rt/index_memory.rs` `INDEX_LOOKUP_MAX` in
+/// v0.4.0). 0.4.1 has a new file index with no fixed cap.
+pub const NG_CAPPED: &str = "0.4.0";
+
+/// Whether an emulator of `kind` and `version` is the ampr-emu-ng release with the 48 MiB
+/// index cap ([`NG_CAPPED`]).
+pub fn capped(kind: &str, version: Option<&str>) -> bool {
+    kind == "ampr-emu-ng" && version == Some(NG_CAPPED)
+}
+
 /// What runs a zstd-packed game.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ZstdRuntime {
@@ -63,6 +79,9 @@ pub struct ZstdRuntime {
     /// The game won't start or may hang with it: missing, drakmor's, or ampr-emu-ng older than
     /// [`NG_FIXED`]. A newer emulator fixes it.
     pub outdated: bool,
+    /// It is ampr-emu-ng [`NG_CAPPED`], which starts most games and refuses very large ones:
+    /// a newer one is worth offering, though the game may well run as it is.
+    pub capped: bool,
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -131,6 +150,7 @@ pub fn zstd_runtime(tree: &mut dyn SourceTree) -> Option<ZstdRuntime> {
             kind: "missing",
             version: None,
             outdated: true,
+            capped: false,
         });
     };
     let (kind, version, outdated) = match crate::source::read_small(tree, &module, 64 << 20) {
@@ -140,6 +160,7 @@ pub fn zstd_runtime(tree: &mut dyn SourceTree) -> Option<ZstdRuntime> {
     Some(ZstdRuntime {
         module: Some(module),
         kind,
+        capped: capped(kind, version.as_deref()),
         version,
         outdated,
     })
@@ -167,6 +188,16 @@ mod tests {
                 "{v}"
             );
         }
+    }
+
+    /// Only 0.4.0 has the index cap: older releases hang instead, newer ones have no cap.
+    #[test]
+    fn only_the_capped_release_is_capped() {
+        for (v, _) in NG_RELEASES {
+            assert_eq!(capped("ampr-emu-ng", Some(v)), v == "0.4.0", "{v}");
+        }
+        assert!(!capped("ampr_emu", Some("0.4.0")));
+        assert!(!capped("unknown", None));
     }
 
     #[test]

@@ -1,0 +1,32 @@
+[package]
+name = "ps5upload-convert-core"
+description = "PS5Upload's converter build code: game images, folders and asset packs, shared by the engine and the program that runs on the PS5"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# std only: no async, no network, nothing that only builds on a computer. The engine
+# (ps5upload-engine) and the console program (ps5upload-convert) run the same build code from
+# here; logging goes through a sink the caller installs (`log`).
+[dependencies]
+blake3.workspace = true
+ps5upload-fpkg = { path = "../ps5upload-fpkg" }
+ps5upload-pkg = { path = "../ps5upload-pkg" }
+ps5-dump-forge-ufs2 = { path = "../ps5-dump-forge-ufs2" }
+ps5-dump-forge-pfs = { path = "../ps5-dump-forge-pfs" }
+ps5-dump-forge-zstd = { path = "../ps5-dump-forge-zstd" }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.11"
+
+# statfs/statvfs for the destination probe (safe_write::probe). Already in the tree.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+# Unpacks the gzip'd test package the folder tests read. Already in the tree (ps5upload-fpkg).
+flate2 = "1"
+
+[lints.rust]
+# payload/convert/x86_64-ps5-freebsd.json sets `env: ps5`.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_env, values("ps5"))'] }

@@ -109,6 +109,7 @@ ADB ?= $(ANDROID_HOME)/platform-tools/adb
 .PHONY: clean clean-payload clean-engine clean-client
 .PHONY: verify info install-hooks
 .PHONY: test-ava1 test-ava1-sanitize ava1-app-gen ava1-version-check check-no-ftx2
+.PHONY: fuzz-smoke
 .PHONY: run-engine run-client dev start _check-tauri-system-deps
 .PHONY: install-engine uninstall-engine
 .PHONY: dist dist-win dist-win-arm dist-mac dist-mac-x64 dist-linux dist-linux-arm
@@ -168,6 +169,7 @@ help:
 	@echo "  make test-engine      - cargo test --workspace (C interop serial)"
 	@echo "  make test-desktop     - Tauri Rust cargo check/clippy/test"
 	@echo "  make test-ava1        - AVA1 Rust + C conformance and interop tests"
+	@echo "  make fuzz-smoke       - Fuzz every file reader for 20 s each (needs cargo-fuzz + nightly; skips without)"
 	@echo "  make test-payload     - Validate $(PAYLOAD_ELF)"
 	@echo "  make test-client      - Type-check + lint + unit tests + build client UI"
 	@echo ""
@@ -457,6 +459,16 @@ installer: setup-payload
 	@echo "Building PS5Upload installer daemon..."
 	@$(MAKE) -C $(INSTALLER_DIR) -j$(JOBS)
 	@echo "✓ Built $(INSTALLER_ELF)"
+
+# The converter as a program for the PS5 itself (engine/crates/ps5upload-convert), built as a PS5
+# ELF in Docker: Rust's std is compiled for the console there (payload/convert/Dockerfile), so no
+# local PS5 SDK or Rust nightly is needed, only Docker. The script also checks the ELF's shape
+# and that the console exports everything it imports. CONVERT_CHECK=1 only checks a built ELF.
+.PHONY: console-convert
+console-convert:
+	@echo "Building ps5upload-convert for the PS5 (Docker)..."
+	@bash payload/convert/build.sh $(if $(CONVERT_CHECK),--check)
+	@echo "✓ Built payload/convert/ps5upload-convert.elf"
 
 # The patched elfldr the engine sends to replace a console's stock one (see
 # third_party/elfldr/README.md). Its ELF is checked in, so a build without the
@@ -1251,6 +1263,16 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/archive_request_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-archive-request-selftest
 	@echo "✓ a request an extractor never read (it can hold a password) is deleted, one it may still read is kept"
+	@echo "Running console convert self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -DCONSOLE_CONVERT_SELFTEST -DCONVERT_START_MS=1500 \
+		-DCONVERT_KILL_AFTER_MS=1000 -DCONVERT_POWER_TICK_MS=100 \
+		-I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
+		-o $(SELFTEST_DIR)/ps5upload-console-convert-selftest \
+		$(PAYLOAD_DIR)/tests/console_convert_selftest.c $(PAYLOAD_DIR)/src/console_convert.c \
+		$(PAYLOAD_DIR)/src/console_convert_wire.c $(PAYLOAD_DIR)/src/webui_codec.c \
+		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-console-convert-selftest
+	@echo "✓ the converter's request, status (also cut short or garbage), Stop, kill, leftover sweep and zstd runtime"
 	@echo "Running AVA1 in-flight RPC gate self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(AVA1_C) \
 		-o $(SELFTEST_DIR)/ps5upload-ava1-rpc-gate-selftest \
@@ -1779,6 +1801,13 @@ release-post:
 
 promo-post:
 	@node scripts/promo-posts.js $(ARGS)
+
+# Fuzz targets for the engine's file readers (engine/fuzz, its own workspace; see its README):
+# builds every target and runs each for FUZZ_SECONDS (20). Skips with a message when cargo-fuzz
+# or a nightly toolchain is missing. `make fuzz-smoke FUZZ_TARGETS="exfat ufs2"` runs only those.
+FUZZ_SECONDS ?= 20
+fuzz-smoke:
+	@FUZZ_SECONDS=$(FUZZ_SECONDS) bash scripts/fuzz-smoke.sh $(FUZZ_TARGETS)
 
 # The AVA1 protocol library (github.com/phantomptr/ava1) is the third_party/ava1 submodule; its own
 # tests, fuzzers and sanitizer runs live there (`make -C third_party/ava1 test`). Here: ps5upload's

@@ -16,29 +16,30 @@ export type ConvertStatus = "pending" | "running" | "installing" | "handed" | "d
 
 /** What a queued game becomes: an installable package, a game image (compressed into a
  *  .ffpfsc when `compress`), or a plain folder (#469: from a game image or a debug-key
- *  package). `lz4`: pack the game's data into AMPR LZ4 asset packs (an .exfat of a game that
- *  reads through libSceAmpr). A folder's `zstd`: its files in zstd packs (then a game folder
- *  can be the source too). */
+ *  package). An image's `lz4`: pack the game's data into asset packs first (LZ4, or zstd with
+ *  `zstdLevel`), in any format, compressed or not. A folder's `zstd` / `lz4`: its files in zstd
+ *  or LZ4 packs (then a game folder can be the source too). `unpackPacks`: a game in asset
+ *  packs written as plain files again (a game folder can then be a folder's source too). */
 export type ConvertBuild =
   | { kind: "pkg" }
-  | { kind: "image"; format: ImageFormat; compress: boolean; lz4?: AmprLz4Options }
-  | { kind: "folder"; zstd?: ZstdPacks };
+  | { kind: "image"; format: ImageFormat; compress: boolean; lz4?: AmprLz4Options; unpackPacks?: boolean }
+  | { kind: "folder"; zstd?: ZstdPacks; lz4?: AmprLz4Options; unpackPacks?: boolean };
 
 /** The file a build makes, by its extension: what the queue row and the add button say. A
  *  folder has none; its row says "folder". */
 export function buildExtension(build: ConvertBuild | undefined): string {
   if (!build || build.kind === "pkg") return ".pkg";
   if (build.kind === "folder") return "folder";
-  return build.compress && !build.lz4 ? ".ffpfsc" : `.${build.format}`;
+  return build.compress ? ".ffpfsc" : `.${build.format}`;
 }
 
-/** The image as a run makes it: LZ4 asset packs go into a plain image, so a remembered "compress"
- *  does not apply to one (the engine refuses the two together). */
+/** The image as a run makes it, with its asset packs when they are on: packs go into any image,
+ *  compressed into a .ffpfsc or not. */
 export function imageBuildWith(
   build: Extract<ConvertBuild, { kind: "image" }>,
   lz4: AmprLz4Options | undefined,
 ): Extract<ConvertBuild, { kind: "image" }> {
-  return lz4 ? { ...build, compress: false, lz4 } : build;
+  return lz4 ? { ...build, lz4 } : build;
 }
 
 /** What is done after converting, as it can be done: an image is never streamed (it is
@@ -87,6 +88,9 @@ export interface ConvertItem {
   /** Save to a server: the image or folder goes straight to this `remote://<connection>/<folder>`
    *  path, as chosen when the game was added (never kept on this computer). */
   toServer?: string;
+  /** Leave the backport libraries in this game's fakelib out of its image or folder: ticked
+   *  for this game when it was added (never set for a game that was not checked). */
+  removeBackport?: boolean;
   status: ConvertStatus;
   packagePath?: string;
   error?: string;

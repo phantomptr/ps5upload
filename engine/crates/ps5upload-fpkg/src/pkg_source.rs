@@ -25,6 +25,11 @@
 //! Only packages made with the debug key open: a retail package, a native-mode one built with
 //! another passcode and a layout this reader does not know are each refused with the reason in
 //! plain words. A PS4 package is [`crate::ps4_pkg`]'s.
+//!
+//! A patch package (`\x7FLIH`, see [`crate::lih`]) is read as the package it patches, as PS5 Dump
+//! Forge reads one (its `crates/ps5-dump-forge-fpkg/src/lib.rs` and `tree.rs`): it holds only the
+//! outer blocks its update changed, so the tree lists the files it carries whole and leaves out
+//! the rest, which need the base game. [`PkgSource::patch`] says what was left out.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -36,7 +41,7 @@ use crate::kraken_image::{self, DescribedBlock};
 use crate::outer::{self, Dinode, OuterImage};
 use crate::source::{is_junk, SourceFile, SourceTree};
 use crate::xts::{Xts, SIGNED_SECTOR_FLAG};
-use crate::{fih, le16, le32, le64, plan, Error, PkgFile, ReadSeek, Result, BLOCK};
+use crate::{fih, le16, le32, le64, lih, plan, Error, PkgFile, ReadSeek, Result, BLOCK};
 
 /// Why a package with blocks the debug passcode does not open is refused.
 pub const RETAIL_MESSAGE: &str = "this package's files are encrypted with a key this app does not have: it is a retail package, or a fake package made with a passcode other than the default. Only packages made with the default debug passcode can be unpacked";
@@ -316,6 +321,9 @@ enum Location {
     Image { logical: u64, on_disk: u64 },
     /// A container entry, by id — the artwork the image leaves to the container.
     Container(u32),
+    /// A protected container entry (`nptitle.dat`, the `npbind.dat` files), decrypted at open:
+    /// `held[n]`.
+    Held(usize),
 }
 
 /// A debug package's game files.
@@ -328,6 +336,63 @@ pub struct PkgSource {
     locations: Vec<Location>,
     empty_dirs: Vec<String>,
     content_id: String,
+    /// Set for a patch package: what it holds and what it leaves to the base game.
+    patch: Option<PatchInfo>,
+    /// The decrypted protected container entries [`Location::Held`] points into (a few KiB).
+    held: Vec<Vec<u8>>,
+    /// Protected container entries left out, each with why.
+    left_out: Vec<String>,
+}
+
+/// What a patch package holds of the package it patches.
+#[derive(Debug, Clone, Default)]
+pub struct PatchInfo {
+    /// Outer blocks the patch carries, of `outer_blocks` in the patched package.
+    pub carried_blocks: u64,
+    pub outer_blocks: u64,
+    /// Files left out because some of their blocks are the base game's. Sorted.
+    pub partial: Vec<String>,
+    /// Folders and files left out because the patch does not hold their entry in the file
+    /// table: the base game lists them. Sorted.
+    pub in_base: Vec<String>,
+}
+
+/// The package in `reader`: itself, or, for a patch package, the package it patches as far as
+/// the patch holds it, with which of its blocks those are.
+fn package_bytes(
+    mut reader: Box<dyn ReadSeek>,
+    len: u64,
+) -> Result<(PkgFile, Option<lih::Carried>)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut magic = [0u8; 4];
+    if len >= 4 {
+        reader.seek(SeekFrom::Start(0))?;
+        reader.read_exact(&mut magic)?;
+    }
+    if !lih::is_lih(&magic) {
+        return Ok((PkgFile::from_reader(reader, len), None));
+    }
+    let (view, carried) = lih::View::open(reader, len)?;
+    let len = view.len();
+    Ok((PkgFile::from_reader(Box::new(view), len), Some(carried)))
+}
+
+/// ` (a, b, … and N more)` for a list's first ten; empty for none.
+fn first_ten(items: &[String]) -> String {
+    match items.len() {
+        0 => String::new(),
+        n if n <= 10 => format!(" ({})", items.join(", ")),
+        n => format!(
+            " ({} and {} more)",
+            items
+                .iter()
+                .take(10)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", "),
+            n - 10
+        ),
+    }
 }
 
 /// The layout descriptor (`naps_pkg_layout.dat`) of the package at `path`, read through the
@@ -335,7 +400,7 @@ pub struct PkgSource {
 pub fn layout_descriptor(path: &Path, passcode: &str) -> Result<Vec<u8>> {
     let file = std::fs::File::open(path)?;
     let len = file.metadata()?.len();
-    let reader = PkgFile::from_reader(Box::new(file), len);
+    let (reader, _) = package_bytes(Box::new(file), len)?;
     PkgSource::open_outer(reader, passcode).map(|(_, _, naps, _)| naps)
 }
 
@@ -360,10 +425,18 @@ impl PkgSource {
         passcode: &str,
         label: String,
     ) -> Result<Self> {
-        Self::open_inner(PkgFile::from_reader(reader, len), passcode, &label).map_err(|e| match e {
-            Error::Format(msg) => Error::Format(format!("{label}: {msg}")),
-            other => other,
-        })
+        package_bytes(reader, len)
+            .and_then(|(file, carried)| Self::open_inner(file, carried, passcode, &label))
+            .map_err(|e| match e {
+                // The blocks an open cannot do without: the outer image's own tables, the
+                // layout descriptor, the inner superblock.
+                e if lih::in_base(&e) => Error::Format(format!(
+                    "{label}: this patch package does not hold the blocks that list its files \
+                     ({e}), so nothing can be read from it without the base game"
+                )),
+                Error::Format(msg) => Error::Format(format!("{label}: {msg}")),
+                other => other,
+            })
     }
 
     /// The outer image opened down to its two files: the inner image and the layout descriptor
@@ -490,7 +563,12 @@ impl PkgSource {
         Ok((outer, image, naps, content_id))
     }
 
-    fn open_inner(file: PkgFile, passcode: &str, label: &str) -> Result<Self> {
+    fn open_inner(
+        file: PkgFile,
+        carried: Option<lih::Carried>,
+        passcode: &str,
+        label: &str,
+    ) -> Result<Self> {
         let (outer, image, naps, content_id) = Self::open_outer(file, passcode)?;
 
         let mut me = Self {
@@ -504,20 +582,24 @@ impl PkgSource {
             locations: Vec::new(),
             empty_dirs: Vec::new(),
             content_id,
+            patch: None,
+            held: Vec::new(),
+            left_out: Vec::new(),
         };
-        let (meta_base, meta, fidx) = me.read_layout(&naps)?;
-        me.walk_metadata(meta_base, &meta, &fidx)?;
-        me.restore_container_files();
+        let (meta_base, meta, fidx) = me.read_layout(&naps, carried.is_some())?;
+        me.walk_metadata(meta_base, &meta, &fidx, carried.as_ref())?;
+        me.restore_container_files(passcode);
         Ok(me)
     }
 
     /// Decide the layout from the descriptor and expand the metadata region. Returns the
-    /// metadata base, the region's bytes and the descriptor's file starts (afid order).
-    fn read_layout(&mut self, naps: &[u8]) -> Result<(u64, Vec<u8>, Vec<u64>)> {
+    /// metadata base, the region and the descriptor's file starts (afid order). A `patch`'s
+    /// region has holes where the base game holds the metadata.
+    fn read_layout(&mut self, naps: &[u8], patch: bool) -> Result<(u64, Region, Vec<u64>)> {
         // The block layout first: its walk checks every record against the next one's key, so a
         // flat descriptor does not pass for one.
         let block_err = match kraken_image::describe(naps) {
-            Ok(blocks) => return self.block_layout(naps, blocks),
+            Ok(blocks) => return self.block_layout(naps, blocks, patch),
             Err(e) => e,
         };
         let layout = match crate::naps::parse(naps) {
@@ -545,6 +627,7 @@ impl PkgSource {
             .ok_or_else(|| {
                 bad("the package's layout descriptor has an impossible metadata region")
             })?;
+        self.layout = Layout::Flat { codec };
         let meta = match codec {
             MetaCodec::Stored => {
                 if self.image.len != mount {
@@ -554,8 +637,10 @@ impl PkgSource {
                         self.image.len
                     )));
                 }
-                self.image.read(&mut self.outer, meta_base, region)?
+                self.region(meta_base, region, patch)?
             }
+            // One compressed stream: a patch that lacks any block of it has none of it, and
+            // the open says the patch does not hold the blocks that list its files.
             MetaCodec::Zlib => {
                 let tail_len = self
                     .image
@@ -570,10 +655,9 @@ impl PkgSource {
                         "the package's metadata region does not expand to the size its layout gives",
                     ));
                 }
-                plain
+                Region::whole(meta_base, plain)
             }
         };
-        self.layout = Layout::Flat { codec };
         let starts = layout.fidx[..n - 3].iter().map(|(o, _)| *o).collect();
         Ok((meta_base, meta, starts))
     }
@@ -584,7 +668,8 @@ impl PkgSource {
         &mut self,
         naps: &[u8],
         blocks: Vec<DescribedBlock>,
-    ) -> Result<(u64, Vec<u8>, Vec<u64>)> {
+        patch: bool,
+    ) -> Result<(u64, Region, Vec<u64>)> {
         let bounds = block_bounds(naps)?;
         let n = bounds.len();
         if n < 3 {
@@ -617,8 +702,98 @@ impl PkgSource {
             cache: Lru::new(KRAKEN_CACHE),
             compressed,
         };
-        let meta = self.mount_range(meta_base, region)?;
+        let meta = self.region(meta_base, region, patch)?;
         Ok((meta_base, meta, bounds[..n - 3].to_vec()))
+    }
+
+    /// `len` bytes of the stored mount at `at`: through the blocks of the block layout, or
+    /// straight from the image of the flat one (which is its own mount from the metadata base).
+    fn stored_range(&mut self, at: u64, len: u64) -> Result<Vec<u8>> {
+        match self.layout {
+            Layout::Blocks { .. } => self.mount_range(at, len),
+            Layout::Flat { .. } => self.image.read(&mut self.outer, at, len),
+        }
+    }
+
+    /// The metadata region, `len` bytes at `base`. A whole package's is read in one piece. A
+    /// `patch`'s is read a block at a time (a block of the layout, or 64 KiB of a flat image),
+    /// and a block the patch does not carry is left as a hole, never filled in: what is held
+    /// follows the bytes really read.
+    fn region(&mut self, base: u64, len: u64, patch: bool) -> Result<Region> {
+        if !patch {
+            return Ok(Region::whole(base, self.stored_range(base, len)?));
+        }
+        let end = base.checked_add(len).ok_or_else(|| {
+            bad("the package's layout descriptor has an impossible metadata region")
+        })?;
+        let mut segments: Vec<(u64, Vec<u8>)> = Vec::new();
+        // Whether the last segment ends at `pos`, so the next piece continues it.
+        let mut joined = false;
+        let mut pos = base;
+        while pos < end {
+            let piece_end = match &self.layout {
+                Layout::Blocks { blocks, .. } => {
+                    let i = blocks.partition_point(|b| b.logical + b.len <= pos);
+                    blocks
+                        .get(i)
+                        .filter(|b| b.logical <= pos)
+                        // No block here: read to the end, which reports it.
+                        .map_or(end, |b| b.logical + b.len)
+                }
+                Layout::Flat { .. } => (pos / BLOCK + 1).saturating_mul(BLOCK),
+            }
+            .min(end);
+            match self.stored_range(pos, piece_end - pos) {
+                Ok(bytes) => {
+                    match segments.last_mut() {
+                        Some((_, last)) if joined => last.extend_from_slice(&bytes),
+                        _ => segments.push((pos, bytes)),
+                    }
+                    joined = true;
+                }
+                Err(e) if lih::in_base(&e) => joined = false,
+                Err(e) => return Err(e),
+            }
+            pos = piece_end;
+        }
+        Ok(Region {
+            base,
+            end,
+            segments,
+        })
+    }
+
+    /// Whether a patch carries every outer block behind the `size` bytes of the file at `loc`.
+    fn carried(&self, loc: &Location, size: u64, carried: &lih::Carried) -> bool {
+        // Bytes `from..to` of the stored inner image.
+        let image_has = |from: u64, to: u64| {
+            (from / BLOCK..to.div_ceil(BLOCK)).all(|n| {
+                usize::try_from(n)
+                    .ok()
+                    .and_then(|n| self.image.blocks.get(n))
+                    .is_some_and(|block| carried.has(u64::from(*block)))
+            })
+        };
+        match (loc, &self.layout) {
+            (Location::Image { logical, .. }, Layout::Blocks { blocks, .. }) => {
+                let end = logical.saturating_add(size);
+                let first = blocks.partition_point(|b| b.logical + b.len <= *logical);
+                blocks
+                    .get(first..)
+                    .unwrap_or_default()
+                    .iter()
+                    .take_while(|b| b.logical < end)
+                    .all(|b| {
+                        b.stored_len == 0
+                            || image_has(b.stored_at, b.stored_at.saturating_add(b.stored_len))
+                    })
+            }
+            (Location::Image { on_disk, .. }, Layout::Flat { .. }) => {
+                size == 0 || image_has(*on_disk, on_disk.saturating_add(size))
+            }
+            // The container is carried whole.
+            (Location::Container(_) | Location::Held(_), _) => true,
+        }
     }
 
     /// `len` bytes of the mount at `at`, through the block layout.
@@ -670,11 +845,16 @@ impl PkgSource {
 
     /// Walk the inner file system from `uroot`, the way the console does, collecting every file
     /// and every directory with nothing in it.
-    fn walk_metadata(&mut self, meta_base: u64, meta: &[u8], starts: &[u64]) -> Result<()> {
-        let region = Region {
-            base: meta_base,
-            bytes: meta,
-        };
+    ///
+    /// For a patch (`carried` given) the entries whose metadata only the base game holds are
+    /// left out, and so is every file the patch does not carry whole.
+    fn walk_metadata(
+        &mut self,
+        meta_base: u64,
+        region: &Region,
+        starts: &[u64],
+        carried: Option<&lih::Carried>,
+    ) -> Result<()> {
         let sb = region.at(meta_base, 0x400)?;
         if le64(sb, 0) != 2 || le64(sb, 8) != 20_130_315 {
             return Err(bad(
@@ -694,11 +874,12 @@ impl PkgSource {
             0 => meta_base + BLOCK,
             block => block * BLOCK,
         };
-        let table = region.at(table_at, inode_table_len(inode_count as usize))?;
+        region.holds(table_at, inode_table_len(inode_count as usize))?;
         let walk = Walk {
-            region: &region,
-            table,
+            region,
+            table_at,
             count: inode_count as usize,
+            patch: carried.is_some(),
         };
         let mut found: Vec<Found> = Vec::new();
         let mut empty = Vec::new();
@@ -711,7 +892,8 @@ impl PkgSource {
             &mut found,
             &mut empty,
         )?;
-        if found.is_empty() {
+        // A patch may hold none of the file table: what its container carries is still read.
+        if found.is_empty() && carried.is_none() {
             return Err(bad("the package holds no files"));
         }
 
@@ -723,6 +905,11 @@ impl PkgSource {
             // planner's rule (`plan::FILE_ALIGN`). The descriptor's boundary table carries each
             // afid's logical start, which is how this is checked to be that layout.
             Layout::Flat { .. } => {
+                // Every file's place follows from the sizes of the files before it, so a
+                // patch that lacks part of the file table places none of them.
+                if !budget.in_base.is_empty() {
+                    return Err(lih::in_base_error("part of the file table"));
+                }
                 let mut by_afid: Vec<usize> = (0..found.len()).collect();
                 by_afid.sort_by_key(|&i| found[i].afid);
                 let dense = by_afid
@@ -782,6 +969,26 @@ impl PkgSource {
             })
             .collect();
         paired.sort_by(|a, b| a.0.path.cmp(&b.0.path));
+        if let Some(carried) = carried {
+            // A patch lists only the files it carries whole: the rest read the base game's
+            // blocks.
+            let mut partial = Vec::new();
+            paired.retain(|(f, loc)| {
+                let whole = self.carried(loc, f.size, carried);
+                if !whole {
+                    partial.push(f.path.clone());
+                }
+                whole
+            });
+            let mut in_base = std::mem::take(&mut budget.in_base);
+            in_base.sort();
+            self.patch = Some(PatchInfo {
+                carried_blocks: carried.count,
+                outer_blocks: carried.outer_blocks(),
+                partial,
+                in_base,
+            });
+        }
         for (f, loc) in paired {
             // Map every afid before filtering: ignored files still occupy space in a flat
             // package. The visible tree follows the folder and image readers' junk rules.
@@ -797,8 +1004,12 @@ impl PkgSource {
     }
 
     /// The artwork a build moves from the image into the container, put back where the game
-    /// folder had it. Only what the image lacks: a package that kept its own copy wins.
-    fn restore_container_files(&mut self) {
+    /// folder had it, and the title and NP binding files a package can keep only in its
+    /// container (`nptitle.dat`, the `npbind.dat` files: protected, so decrypted here, as PS5
+    /// Dump Forge does in its `lib.rs` `place_entry`). Only what the image lacks: a package
+    /// that kept its own copy wins. A protected entry that can't be decrypted is left out and
+    /// [`SourceTree::notes`] says why.
+    fn restore_container_files(&mut self, passcode: &str) {
         let mut wanted: Vec<(u32, &str)> = vec![
             (cnt::ids::ICON0_PNG, "sce_sys/icon0.png"),
             (cnt::ids::ICON0_DDS, "sce_sys/icon0.dds"),
@@ -808,19 +1019,45 @@ impl PkgSource {
                 wanted.push((id, path));
             }
         }
+        for (id, path, _, _) in crate::cnt_write::PROTECTED {
+            wanted.push((id, path));
+        }
         let mut added = false;
         for (id, path) in wanted {
-            let Some(e) = self.outer.cnt.entry(id) else {
+            let Some(e) = self.outer.cnt.entry(id).copied() else {
                 continue;
             };
             if e.size == 0 || self.files.iter().any(|f| f.path == path) {
                 continue;
             }
+            // A file of the image where the entry needs a folder (`sce_sys` itself a file).
+            if path
+                .match_indices('/')
+                .any(|(at, _)| self.files.iter().any(|f| f.path == path[..at]))
+            {
+                continue;
+            }
+            let location = if crate::protected::is_protected(&e) {
+                match crate::protected::plaintext(&self.outer.cnt, &e, passcode) {
+                    Ok(bytes) => {
+                        self.held.push(bytes);
+                        Location::Held(self.held.len() - 1)
+                    }
+                    Err(why) => {
+                        self.left_out.push(format!(
+                            "{path} was left out: the package keeps it encrypted, and {why}"
+                        ));
+                        continue;
+                    }
+                }
+            } else {
+                Location::Container(id)
+            };
             self.files.push(SourceFile {
                 path: path.to_string(),
                 size: u64::from(e.size),
             });
-            self.locations.push(Location::Container(id));
+            self.locations.push(location);
             added = true;
         }
         if added {
@@ -845,6 +1082,12 @@ impl PkgSource {
     /// The content id the package's container declares.
     pub fn content_id(&self) -> &str {
         &self.content_id
+    }
+
+    /// For a patch package (`\x7FLIH`): what it holds and what it leaves to the base game.
+    /// `None` for a whole package.
+    pub fn patch(&self) -> Option<&PatchInfo> {
+        self.patch.as_ref()
     }
 
     /// Bytes this reader holds for blocks it has read: both caches. Bounded by their sizes,
@@ -879,6 +1122,13 @@ impl PkgSource {
                     .ok_or_else(|| bad("a container entry went missing"))?;
                 Ok(self.outer.cnt.payload(e)[start as usize..end as usize].to_vec())
             }
+            // `size` is the plaintext's length, so the range is inside it.
+            Location::Held(h) => self
+                .held
+                .get(h)
+                .and_then(|b| b.get(start as usize..end as usize))
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| bad("a decrypted container entry went missing")),
             Location::Image { logical, on_disk } => match self.layout {
                 Layout::Blocks { .. } => self.mount_range(logical + start, end - start),
                 Layout::Flat { .. } => {
@@ -909,26 +1159,46 @@ fn block_bounds(blob: &[u8]) -> Result<Vec<u64>> {
         .collect())
 }
 
-/// The metadata region, addressed by absolute mount offset.
-struct Region<'a> {
+/// The metadata region, addressed by absolute mount offset. A whole package's is one segment;
+/// a patch's has a hole wherever the base game holds the metadata.
+struct Region {
     base: u64,
-    bytes: &'a [u8],
+    end: u64,
+    /// `(start, bytes)`, in order, apart from one another.
+    segments: Vec<(u64, Vec<u8>)>,
 }
 
-impl Region<'_> {
+impl Region {
+    fn whole(base: u64, bytes: Vec<u8>) -> Self {
+        Self {
+            base,
+            end: base.saturating_add(bytes.len() as u64),
+            segments: vec![(base, bytes)],
+        }
+    }
+
+    /// `offset..offset + len` lies inside the region (in a segment or a hole).
+    fn holds(&self, offset: u64, len: u64) -> Result<()> {
+        match offset.checked_add(len) {
+            Some(end) if offset >= self.base && end <= self.end => Ok(()),
+            _ => Err(bad(format!(
+                "the package's metadata points at {offset:#x}, outside its metadata region"
+            ))),
+        }
+    }
+
+    /// The bytes at `offset`. In a patch's hole this is an error [`lih::in_base`] recognises.
     fn at(&self, offset: u64, len: u64) -> Result<&[u8]> {
-        offset
-            .checked_sub(self.base)
-            .and_then(|o| {
-                let o = usize::try_from(o).ok()?;
-                self.bytes
-                    .get(o..o.checked_add(usize::try_from(len).ok()?)?)
+        self.holds(offset, len)?;
+        // The segment that starts at or before `offset`.
+        let i = self.segments.partition_point(|(start, _)| *start <= offset);
+        i.checked_sub(1)
+            .and_then(|i| self.segments.get(i))
+            .and_then(|(start, bytes)| {
+                let o = usize::try_from(offset - start).ok()?;
+                bytes.get(o..o.checked_add(usize::try_from(len).ok()?)?)
             })
-            .ok_or_else(|| {
-                bad(format!(
-                    "the package's metadata points at {offset:#x}, outside its metadata region"
-                ))
-            })
+            .ok_or_else(|| lih::in_base_error(format!("the file table at {offset:#x}")))
     }
 }
 
@@ -941,9 +1211,12 @@ struct Found {
 }
 
 struct Walk<'a> {
-    region: &'a Region<'a>,
-    table: &'a [u8],
+    region: &'a Region,
+    /// Where the inode table starts in the region.
+    table_at: u64,
     count: usize,
+    /// A patch package: metadata only the base game holds is skipped, not an error.
+    patch: bool,
 }
 
 /// One inner inode's fields: mode, size, logical offset, afid.
@@ -967,23 +1240,32 @@ struct Budget {
     listed: usize,
     /// Bytes of the paths kept so far, against [`MAX_PATH_BYTES`].
     path_bytes: usize,
+    /// A patch's folders and files left out: their inode or directory block is the base game's.
+    in_base: Vec<String>,
 }
 
 impl Walk<'_> {
     fn inode(&self, i: usize) -> Result<InnerInode> {
-        let raw = (i < self.count)
-            .then(|| {
-                let o = inode_offset(i);
-                self.table.get(o..o + INODE_LEN)
-            })
-            .flatten()
-            .ok_or_else(|| bad(format!("inode {i} is outside the package's inode table")))?;
+        if i >= self.count {
+            return Err(bad(format!(
+                "inode {i} is outside the package's inode table"
+            )));
+        }
+        let raw = self.region.at(
+            self.table_at.saturating_add(inode_offset(i) as u64),
+            INODE_LEN as u64,
+        )?;
         Ok(InnerInode {
             mode: le16(raw, 0),
             size: le64(raw, 8),
             offset: le64(raw, 0x60),
             afid: crate::i32le(raw, 0x68),
         })
+    }
+
+    /// In a patch, a read of metadata only the base game holds: the entry is left out.
+    fn base_only(&self, e: &Error) -> bool {
+        self.patch && lih::in_base(e)
     }
 
     fn dir(
@@ -1003,13 +1285,29 @@ impl Walk<'_> {
                 "the package's directories loop at inode {ino}"
             )));
         }
-        let node = self.inode(ino)?;
+        let shown = |prefix: &str| match prefix.trim_end_matches('/') {
+            "" => "the top folder".to_string(),
+            dir => dir.to_string(),
+        };
+        let node = match self.inode(ino) {
+            Err(e) if self.base_only(&e) => {
+                budget.in_base.push(shown(prefix));
+                return Ok(());
+            }
+            node => node?,
+        };
         if node.mode & 0x4000 == 0 {
             return Err(bad(format!(
                 "inode {ino} is listed as a directory but is not one"
             )));
         }
-        let block = self.region.at(node.offset, node.size.min(MAX_META_BYTES))?;
+        let block = match self.region.at(node.offset, node.size.min(MAX_META_BYTES)) {
+            Err(e) if self.base_only(&e) => {
+                budget.in_base.push(shown(prefix));
+                return Ok(());
+            }
+            block => block?,
+        };
         if !block.is_empty() && !budget.blocks.insert(node.offset) {
             return Err(bad(format!(
                 "the package's directories share the block at {:#x} (inode {ino})",
@@ -1057,7 +1355,13 @@ impl Walk<'_> {
                 }
                 DIRENT_FILE => {
                     children += usize::from(!is_junk(&name));
-                    let f = self.inode(child)?;
+                    let f = match self.inode(child) {
+                        Err(e) if self.base_only(&e) => {
+                            budget.in_base.push(path);
+                            continue;
+                        }
+                        f => f?,
+                    };
                     if f.mode & 0x8000 == 0 {
                         return Err(bad(format!("{path} is listed as a file but is not one")));
                     }
@@ -1116,12 +1420,40 @@ impl SourceTree for PkgSource {
             } => "flat layout, zlib metadata",
             Layout::Flat { .. } => "flat layout",
         };
+        let patch = match &self.patch {
+            Some(p) => format!(
+                ", patch package: {} files left to the base game",
+                p.partial.len() + p.in_base.len()
+            ),
+            None => String::new(),
+        };
         format!(
-            "{} ({}, {layout}, {} files)",
+            "{} ({}, {layout}, {} files{patch})",
             self.label,
             self.content_id,
             self.files.len()
         )
+    }
+
+    fn notes(&self) -> Vec<String> {
+        let mut notes = self.left_out.clone();
+        let Some(p) = &self.patch else {
+            return notes;
+        };
+        notes.push(format!(
+            "this is a patch package: it holds {} of the {} blocks of the package it patches, \
+             so only the {} files it carries whole are here. Left to the base game: {} files \
+             the patch holds only part of{}, and {} folders or files only the base game \
+             lists{}",
+            p.carried_blocks,
+            p.outer_blocks,
+            self.files.len(),
+            p.partial.len(),
+            first_ten(&p.partial),
+            p.in_base.len(),
+            first_ten(&p.in_base)
+        ));
+        notes
     }
 }
 
@@ -1192,7 +1524,10 @@ mod tests {
         send::<PkgSource>();
     }
 
-    /// A crafted inner image for the walk: inodes in one table block, directory blocks after.
+    /// Where [`Crafted`] puts its inode table, far past its directory blocks.
+    const TABLE_AT: u64 = 1 << 32;
+
+    /// A crafted inner image for the walk: inodes in one table block, directory blocks apart.
     struct Crafted {
         table: Vec<u8>,
         region: Vec<u8>,
@@ -1229,19 +1564,34 @@ mod tests {
             (at as u64, (self.region.len() - at) as u64)
         }
 
-        fn walk(&self, count: usize) -> Result<Vec<String>> {
-            let region = Region {
+        /// The directory blocks from offset 0 and the inode table's first block at
+        /// [`TABLE_AT`]. Nothing is between them, and the table's second block is not held:
+        /// holes, as a patch's region has.
+        fn region(&self) -> Region {
+            Region {
                 base: 0,
-                bytes: &self.region,
-            };
+                end: TABLE_AT + 2 * BLOCK,
+                segments: vec![(0, self.region.clone()), (TABLE_AT, self.table.clone())],
+            }
+        }
+
+        fn walk(&self, count: usize) -> Result<Vec<String>> {
+            self.walk_as(count, false).map(|(found, _)| found)
+        }
+
+        /// The files found and, for a `patch`, what was left to the base game.
+        fn walk_as(&self, count: usize, patch: bool) -> Result<(Vec<String>, Vec<String>)> {
+            let region = self.region();
             let walk = Walk {
                 region: &region,
-                table: &self.table,
+                table_at: TABLE_AT,
                 count,
+                patch,
             };
             let (mut found, mut empty) = (Vec::new(), Vec::new());
-            walk.dir(4, "", 0, &mut Budget::default(), &mut found, &mut empty)?;
-            Ok(found.into_iter().map(|f| f.path).collect())
+            let mut budget = Budget::default();
+            walk.dir(4, "", 0, &mut budget, &mut found, &mut empty)?;
+            Ok((found.into_iter().map(|f| f.path).collect(), budget.in_base))
         }
     }
 
@@ -1287,14 +1637,12 @@ mod tests {
         let (root, root_len) = c.dir(&[(4, DIRENT_DIR, "."), (6, DIRENT_FILE, "f")]);
         c.inode(4, 0x4000, root_len, root);
         c.inode(6, 0x8000, 1, 0);
-        let region = Region {
-            base: 0,
-            bytes: &c.region,
-        };
+        let region = c.region();
         let walk = Walk {
             region: &region,
-            table: &c.table,
+            table_at: TABLE_AT,
             count: 8,
+            patch: false,
         };
         let mut budget = Budget {
             listed: MAX_ENTRIES - 1,
@@ -1330,6 +1678,59 @@ mod tests {
         c.region[12..16].copy_from_slice(&24u32.to_le_bytes());
         c.region[24 + 8..24 + 12].copy_from_slice(&u32::MAX.to_le_bytes());
         assert_eq!(c.walk(8).unwrap(), ["f"]);
+    }
+
+    /// A patch's walk leaves out what only the base game lists: a folder whose block the patch
+    /// lacks, and a file whose inode it lacks. The same holes in a whole package are an error.
+    #[test]
+    fn a_patch_walk_leaves_out_what_the_base_game_holds() {
+        let mut c = Crafted::new();
+        // `gone.bin` names inode 395, in the table's second block, which the region lacks.
+        let (root, root_len) = c.dir(&[
+            (5, DIRENT_DIR, "old"),
+            (6, DIRENT_FILE, "new.bin"),
+            (395, DIRENT_FILE, "gone.bin"),
+        ]);
+        c.inode(4, 0x4000, root_len, root);
+        // `old`'s block is in the hole between the directory blocks and the table.
+        c.inode(5, 0x4000, 64, 1 << 20);
+        c.inode(6, 0x8000, 10, 0);
+        let (found, in_base) = c.walk_as(400, true).unwrap();
+        assert_eq!(found, ["new.bin"]);
+        assert_eq!(in_base, ["old", "gone.bin"]);
+        let e = c.walk_as(400, false).unwrap_err();
+        assert!(lih::in_base(&e), "{e}");
+    }
+
+    /// A region with a hole: bytes in a segment read, bytes in the hole are the base game's,
+    /// and bytes outside the region are damage.
+    #[test]
+    fn a_region_tells_a_hole_from_outside() {
+        let r = Region {
+            base: 100,
+            end: 400,
+            segments: vec![(100, vec![1; 50]), (300, vec![2; 100])],
+        };
+        assert_eq!(r.at(100, 50).unwrap(), [1; 50]);
+        assert_eq!(r.at(350, 50).unwrap(), [2; 50]);
+        assert!(r.at(400, 0).unwrap().is_empty());
+        for (offset, len) in [(150, 1), (140, 20), (299, 2), (200, 0)] {
+            let e = r.at(offset, len).unwrap_err();
+            assert!(lih::in_base(&e), "{offset}+{len}: {e}");
+        }
+        for (offset, len) in [(99, 1), (399, 2), (u64::MAX, 2), (500, 0)] {
+            let e = r.at(offset, len).unwrap_err();
+            assert!(e.to_string().contains("outside"), "{offset}+{len}: {e}");
+        }
+    }
+
+    #[test]
+    fn a_long_list_shows_its_first_ten() {
+        let names = |n: usize| (0..n).map(|i| format!("f{i}")).collect::<Vec<_>>();
+        assert_eq!(first_ten(&[]), "");
+        assert_eq!(first_ten(&names(2)), " (f0, f1)");
+        assert!(first_ten(&names(10)).ends_with("f9)"));
+        assert!(first_ten(&names(13)).ends_with("f9 and 3 more)"));
     }
 
     fn table_of(children: &[u32]) -> Vec<u8> {
@@ -1396,5 +1797,90 @@ mod tests {
             &mut Vec::new(),
         );
         assert!(e.is_err());
+    }
+
+    /// A package that keeps `nptitle.dat` and the `npbind.dat` files only in its container
+    /// (a third-party builder's: ours keeps them in the image too) reads them back decrypted,
+    /// byte for byte. Another passcode fails the container's key check: the files are left out
+    /// and a note says why, never garbage passed off as the file.
+    #[test]
+    fn protected_container_entries_read_back_decrypted() {
+        use crate::crypto::DEFAULT_PASSCODE;
+        let dir = std::env::temp_dir().join(format!("fpkg-protected-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (src, out) = (dir.join("src"), dir.join("out"));
+        let put = |path: &str, data: &[u8]| {
+            let full = src.join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, data).unwrap();
+        };
+        put("eboot.bin", &[7u8; 3000]);
+        put(
+            "sce_sys/param.json",
+            br#"{"contentId":"UP0000-PPSA04690_00-PROTECTEDTEST000","contentVersion":"01.000.000","titleId":"PPSA04690","applicationCategoryType":0}"#,
+        );
+        put("sce_sys/icon0.png", &[9u8; 500]);
+        let protected: Vec<(&str, Vec<u8>)> = crate::cnt_write::PROTECTED
+            .iter()
+            .enumerate()
+            .map(|(i, (_, path, _, _))| {
+                (
+                    *path,
+                    (0..100 + 37 * i).map(|k| (k * 13 + i) as u8).collect(),
+                )
+            })
+            .collect();
+        for (path, data) in &protected {
+            put(path, data);
+        }
+        std::fs::create_dir_all(&out).unwrap();
+        let built =
+            crate::build::build(&crate::build::BuildRequest::new(&src, &out), &mut |_| {}).unwrap();
+
+        // The image's copies: what the folder had, served from the image.
+        let mut pkg = open(&built.path, DEFAULT_PASSCODE).unwrap();
+        for (path, data) in &protected {
+            let i = pkg.at(path).unwrap();
+            assert!(matches!(pkg.locations[i], Location::Image { .. }), "{path}");
+            assert_eq!(&pkg.read(path).unwrap(), data, "{path}");
+        }
+
+        // The same package without them in the image: the container's encrypted copies.
+        let drop_image_copies = |pkg: &mut PkgSource| {
+            let keep: Vec<bool> = pkg
+                .files
+                .iter()
+                .map(|f| !protected.iter().any(|(p, _)| f.path == *p))
+                .collect();
+            let mut k = keep.iter();
+            pkg.files.retain(|_| *k.next().unwrap());
+            let mut k = keep.iter();
+            pkg.locations.retain(|_| *k.next().unwrap());
+        };
+        drop_image_copies(&mut pkg);
+        pkg.restore_container_files(DEFAULT_PASSCODE);
+        assert!(pkg.notes().is_empty(), "{:?}", pkg.notes());
+        for (path, data) in &protected {
+            let i = pkg.at(path).unwrap();
+            assert!(matches!(pkg.locations[i], Location::Held(_)), "{path}");
+            assert_eq!(pkg.files[i].size, data.len() as u64, "{path}");
+            assert_eq!(&pkg.read(path).unwrap(), data, "{path}");
+            assert_eq!(pkg.read_range(path, 5, 10).unwrap(), data[5..15], "{path}");
+        }
+
+        drop_image_copies(&mut pkg);
+        pkg.restore_container_files("11111111111111111111111111111111");
+        for (path, _) in &protected {
+            assert!(pkg.at(path).is_err(), "{path}");
+        }
+        let notes = pkg.notes();
+        assert_eq!(notes.len(), protected.len(), "{notes:?}");
+        assert!(
+            notes
+                .iter()
+                .all(|n| n.contains("left out") && n.contains("passcode")),
+            "{notes:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -924,6 +924,11 @@ export async function browserInvoke<T>(
         ampr_emu_build: args["amprEmuBuild"],
         destination: args["destination"],
         update: args["update"],
+        remove_backport: args["removeBackport"] ?? false,
+        delete_source: args["deleteSource"] ?? false,
+        unpack_packs: args["unpackPacks"] ?? false,
+        in_place: args["inPlace"] ?? false,
+        archive_password: args["archivePassword"],
       });
     }
     case "folder_build": {
@@ -935,8 +940,21 @@ export async function browserInvoke<T>(
         entry: args["entry"],
         keep_both: args["keepBoth"] ?? false,
         ampr_zstd: args["amprZstd"],
+        ampr_lz4: args["amprLz4"],
         update: args["update"],
         destination: args["destination"],
+        remove_backport: args["removeBackport"] ?? false,
+        delete_source: args["deleteSource"] ?? false,
+        unpack_packs: args["unpackPacks"] ?? false,
+        add_ampr_emu: args["addAmprEmu"] ?? true,
+        ampr_emu_build: args["amprEmuBuild"],
+        archive_password: args["archivePassword"],
+      });
+    }
+    case "image_edit_check": {
+      return postJson<T>("/api/image/edit/check", {
+        path: args["path"],
+        edits: args["edits"] ?? [],
       });
     }
     case "image_browse": {

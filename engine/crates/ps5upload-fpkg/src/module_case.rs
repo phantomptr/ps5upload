@@ -286,6 +286,10 @@ impl SourceTree for CaseFixed {
             describe(&self.fixes)
         )
     }
+
+    fn notes(&self) -> Vec<String> {
+        self.inner.notes()
+    }
 }
 
 #[cfg(test)]

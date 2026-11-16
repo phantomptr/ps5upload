@@ -544,6 +544,8 @@ adapted file by file), **library** (a dependency the build pulls in), **fetched 
 * [Noto Sans](https://fonts.google.com/noto) (Google, Adobe) — font subsets in `client/src/assets/fonts`
 
 **Ported:**
+* [PS5 Dump Forge](https://github.com/quer3q/ps5-dump-forge) (quer3q) — more of its code, adapted into this repo's crates and files: the PS5 Rust toolchain that builds the on-console converter (`payload/convert/`: target file, std patch, linker wrapper, CPU-count fix, pool allocator), patch-package (`\x7FLIH`) reading (`engine/crates/ps5upload-fpkg/src/lih.rs`), protected container entries (`protected.rs`, including strongt1me's work), the undo journal and in-place image editors, removing backport libraries, zstd packs for games that don't use AMPR, pack rules for zstd, unpacking packs, and keeping `.ini` files out of the packs
+* [ps5-ai-cli](https://github.com/saawant12/ps5-ai-cli) (saawant12) — the syscall shims the on-console converter's toolchain uses, by way of PS5 Dump Forge, in `payload/convert/shim/`
 * [ps5-app-dumper](https://github.com/EchoStretch/ps5-app-dumper) (EchoStretch, slopmaster33) — the on-console game dump: its dumper, package, PFS, decrypt and elf2fself code, adapted into `payload/src/app_dump_*.c`
 * [ps5-self-pager](https://github.com/idlesauce/ps5-self-pager) (idlesauce) — the self-pager SELF decryption and its firmware table, in `payload/src/app_dump_self.c`
 * [elf-arsenal](https://git.etawen.dev/soniciso/elf-arsenal) (soniciso and contributors) — the cheat engine (`payload/src/cheats.c`), the drive sensors (`drive_sensors.c`) and the Remote Play account-id lookup (`remoteplay.c`); the wake watchdog adapts its algorithm, and its launch and jailbreak code was a reference for ours

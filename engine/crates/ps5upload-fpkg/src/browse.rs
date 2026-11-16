@@ -1,6 +1,7 @@
 //! Looking inside a game image or debug package on this computer (#479): what is in one folder
 //! of it, one folder of it as a tree of its own (to save it to the computer), and the image's
-//! tree with files added, replaced or deleted (to write an edited copy).
+//! tree with files added, replaced, renamed or deleted and folders made (to write an edited
+//! copy).
 //!
 //! Nothing here writes to an image. An edit is a tree that a builder writes out as a NEW image,
 //! read back and checked like any Convert output; the image it came from is only ever read.
@@ -323,6 +324,10 @@ impl SourceTree for Subtree {
             None => self.inner.describe(),
         }
     }
+
+    fn notes(&self) -> Vec<String> {
+        self.inner.notes()
+    }
 }
 
 /// One change to an image's tree.
@@ -333,13 +338,52 @@ pub enum Edit {
     /// Put the file `from` (on this computer) at `path`, replacing a file there; or, when
     /// `from` is a folder, everything in it under the folder `path`, merged with what is there.
     Put { path: String, from: PathBuf },
+    /// Rename or move the file or folder `from` to `to`, which must not be there yet. A folder
+    /// takes everything in it along; the folder it left stays, empty or not. (The same four
+    /// changes as ps5-dump-forge's `Op` in `crates/ps5-dump-forge-patch/src/lib.rs`; there they
+    /// patch an image in place, here they shape the tree a new image is written from.)
+    Rename { from: String, to: String },
+    /// A new empty folder at `path`, kept in the copy; the folders above it come with it.
+    Mkdir { path: String },
 }
 
 /// Where a file of an edited tree comes from.
 #[derive(Debug, Clone)]
 enum Origin {
     Image,
+    /// The image's file at this path, renamed.
+    Moved(String),
     Local(PathBuf),
+}
+
+/// Why `name` (one part of a path a rename or a new folder asks for) cannot be stored in an
+/// image holding `filesystem`, checked here so a bad name is refused before anything is
+/// written; the image writers check every name again. `None` (the kind of image is not
+/// known) applies only what every writer refuses.
+fn storable_name(name: &str, filesystem: Option<Filesystem>) -> Result<()> {
+    if filesystem == Some(Filesystem::Exfat) {
+        return crate::exfat_write::check_name(name);
+    }
+    // UFS2 and PFS: a directory entry's name is at most 255 bytes.
+    if name.len() > 255 {
+        return format_err(format!(
+            "\"{name}\" cannot be stored: a name is at most 255 bytes"
+        ));
+    }
+    if name.chars().any(|c| (c as u32) < 0x20) {
+        return format_err(format!(
+            "\"{name}\" cannot be stored: a control character in a name"
+        ));
+    }
+    // As the writers refuse a decomposed name from a Mac: the game looks its files up by the
+    // composed spelling.
+    if !unicode_normalization::is_nfc(name) {
+        return format_err(format!(
+            "\"{name}\" cannot be stored: the name is decomposed (NFD, usually from a Mac), so \
+             the game could not find the file"
+        ));
+    }
+    Ok(())
 }
 
 /// An image's tree with [`Edit`]s applied: what an edited copy is written from.
@@ -348,6 +392,8 @@ pub struct Edited {
     files: Vec<SourceFile>,
     empty_dirs: Vec<String>,
     local: BTreeMap<String, PathBuf>,
+    /// Renamed files that are still the image's own: where each is in the image.
+    moved: BTreeMap<String, String>,
     open: Option<(String, std::fs::File)>,
     changes: usize,
 }
@@ -355,8 +401,27 @@ pub struct Edited {
 impl Edited {
     /// `base` with `edits` applied in order. Each edit is checked against the tree as the edits
     /// before it left it: a delete must name something there, a file cannot go where a folder
-    /// is (or under a file), and every path must be a plain relative one.
+    /// is (or under a file), a rename or a new folder cannot take a name already there, and
+    /// every path must be a plain relative one.
     pub fn new(base: Box<dyn SourceTree>, edits: &[Edit]) -> Result<Self> {
+        Self::with_names(base, edits, None)
+    }
+
+    /// [`Self::new`] for an image holding `filesystem`: a rename's new name and a new folder's
+    /// are also refused when that filesystem cannot hold them.
+    pub fn for_filesystem(
+        base: Box<dyn SourceTree>,
+        edits: &[Edit],
+        filesystem: Filesystem,
+    ) -> Result<Self> {
+        Self::with_names(base, edits, Some(filesystem))
+    }
+
+    fn with_names(
+        base: Box<dyn SourceTree>,
+        edits: &[Edit],
+        filesystem: Option<Filesystem>,
+    ) -> Result<Self> {
         let mut files: BTreeMap<String, (u64, Origin)> = base
             .files()
             .iter()
@@ -390,6 +455,17 @@ impl Edited {
             match normalize(raw) {
                 Some(p) if !p.is_empty() => Ok(p),
                 _ => format_err(format!("{raw:?} is not a path inside the image")),
+            }
+        };
+        // A path that is about to exist: every part a name the image can hold, and no file
+        // where one of its folders has to be.
+        let placeable = |files: &BTreeMap<String, (u64, Origin)>, p: &str| -> Result<()> {
+            for part in p.split('/') {
+                storable_name(part, filesystem)?;
+            }
+            match ancestors(parent(p)).find(|a| !a.is_empty() && files.contains_key(*a)) {
+                Some(file) => format_err(format!("{file} is a file in the image")),
+                None => Ok(()),
             }
         };
         for edit in edits {
@@ -451,6 +527,63 @@ impl Edited {
                     }
                     dirs.extend(put_dirs);
                 }
+                Edit::Rename { from, to } => {
+                    let (from, to) = (checked(from)?, checked(to)?);
+                    let file = files.contains_key(&from);
+                    if !file && !is_dir(&files, &dirs, &from) {
+                        return format_err(format!("{from} is not in the image"));
+                    }
+                    if under(&from, &to) {
+                        return format_err(format!("{from} cannot be moved into itself ({to})"));
+                    }
+                    if files.contains_key(&to) || is_dir(&files, &dirs, &to) {
+                        return format_err(format!("{to} is already in the image"));
+                    }
+                    placeable(&files, &to)?;
+                    // A file that was the image's own remembers where it is in the image; one
+                    // put from this computer, or renamed before, keeps what it had.
+                    let carry = |old: String, origin: Origin| match origin {
+                        Origin::Image => Origin::Moved(old),
+                        other => other,
+                    };
+                    if file {
+                        if let Some((size, origin)) = files.remove(&from) {
+                            files.insert(to.clone(), (size, carry(from.clone(), origin)));
+                        }
+                    } else {
+                        let inside: Vec<String> = files
+                            .range(format!("{from}/")..)
+                            .take_while(|(f, _)| under(&from, f))
+                            .map(|(f, _)| f.clone())
+                            .collect();
+                        for old in inside {
+                            if let Some((size, origin)) = files.remove(&old) {
+                                let new = format!("{to}{}", &old[from.len()..]);
+                                files.insert(new, (size, carry(old, origin)));
+                            }
+                        }
+                        let (gone, kept): (Vec<String>, Vec<String>) = std::mem::take(&mut dirs)
+                            .into_iter()
+                            .partition(|d| *d == from || under(&from, d));
+                        dirs = kept.into_iter().collect();
+                        dirs.extend(gone.iter().map(|d| format!("{to}{}", &d[from.len()..])));
+                        // A folder known only by its files is still a folder once they move.
+                        dirs.insert(to.clone());
+                    }
+                    // The folder it left stays, as on a drive.
+                    let up = parent(&from);
+                    if !up.is_empty() {
+                        dirs.insert(up.to_string());
+                    }
+                }
+                Edit::Mkdir { path } => {
+                    let path = checked(path)?;
+                    if files.contains_key(&path) || is_dir(&files, &dirs, &path) {
+                        return format_err(format!("{path} is already in the image"));
+                    }
+                    placeable(&files, &path)?;
+                    dirs.insert(path);
+                }
             }
         }
         // A folder is listed as empty only when nothing at all is under it.
@@ -470,11 +603,18 @@ impl Edited {
             .cloned()
             .collect();
         let mut local = BTreeMap::new();
+        let mut moved = BTreeMap::new();
         let files = files
             .into_iter()
             .map(|(path, (size, origin))| {
-                if let Origin::Local(from) = origin {
-                    local.insert(path.clone(), from);
+                match origin {
+                    Origin::Image => {}
+                    Origin::Moved(old) => {
+                        moved.insert(path.clone(), old);
+                    }
+                    Origin::Local(from) => {
+                        local.insert(path.clone(), from);
+                    }
                 }
                 SourceFile { path, size }
             })
@@ -484,9 +624,24 @@ impl Edited {
             files,
             empty_dirs,
             local,
+            moved,
             open: None,
             changes: edits.len(),
         })
+    }
+
+    /// The files whose bytes or place the edits change: those put from this computer and the
+    /// image's own files that were renamed or moved. What an in-place edit reads back in full.
+    pub fn changed_files(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .local
+            .keys()
+            .chain(self.moved.keys())
+            .cloned()
+            .collect();
+        out.sort();
+        out.dedup();
+        out
     }
 
     fn size_of(&self, path: &str) -> Result<u64> {
@@ -514,7 +669,9 @@ impl SourceTree for Edited {
 
     fn read_range(&mut self, path: &str, offset: u64, len: usize) -> Result<Vec<u8>> {
         let Some(from) = self.local.get(path) else {
-            return self.base.read_range(path, offset, len);
+            // The image's own file, under the name the image has it by.
+            let in_image = self.moved.get(path).map_or(path, String::as_str);
+            return self.base.read_range(in_image, offset, len);
         };
         if self.open.as_ref().is_none_or(|(p, _)| p != path) {
             let f = std::fs::File::open(from)
@@ -779,6 +936,197 @@ mod tests {
         }
         // A delete sees what the edits before it did.
         assert!(Edited::new(game(), &[del("data"), del("data/a.bin")]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn ren(from: &str, to: &str) -> Edit {
+        Edit::Rename {
+            from: from.into(),
+            to: to.into(),
+        }
+    }
+
+    fn mkdir(path: &str) -> Edit {
+        Edit::Mkdir { path: path.into() }
+    }
+
+    fn del(path: &str) -> Edit {
+        Edit::Delete { path: path.into() }
+    }
+
+    fn refusal(edits: &[Edit], filesystem: Option<Filesystem>) -> String {
+        match Edited::with_names(game(), edits, filesystem) {
+            Ok(_) => panic!("{edits:?} must be refused"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_rename_moves_a_file_or_a_whole_folder() {
+        let edits = [
+            ren("eboot.bin", "sce_sys/boot.bin"),
+            // A folder goes with its files, its folders and its empty folders.
+            ren("data", "assets/main"),
+            ren("hollow", "shell"),
+        ];
+        let mut edited = Edited::new(game(), &edits).unwrap();
+        assert_eq!(
+            all_files(&mut edited),
+            [
+                ("Data2/c.bin".to_string(), b"c".to_vec()),
+                ("assets/main/a.bin".to_string(), b"aaaa".to_vec()),
+                ("assets/main/sub/b.bin".to_string(), b"bb".to_vec()),
+                ("sce_sys/boot.bin".to_string(), b"EBOOT".to_vec()),
+                ("sce_sys/param.json".to_string(), b"{}".to_vec()),
+            ]
+        );
+        assert_eq!(edited.empty_dirs(), ["assets/main/empty", "shell/deeper"]);
+        assert_eq!(edited.read_range("sce_sys/boot.bin", 1, 3).unwrap(), b"BOO");
+        assert!(edited.read("eboot.bin").is_err(), "the old name is gone");
+
+        // The folder a renamed thing left stays, even when that empties it.
+        let edited = Edited::new(game(), &[ren("Data2/c.bin", "c.bin")]).unwrap();
+        assert_eq!(
+            edited.empty_dirs(),
+            ["Data2", "data/empty", "hollow/deeper"]
+        );
+        // An empty folder can be renamed too.
+        let edited = Edited::new(game(), &[ren("data/empty", "data/void")]).unwrap();
+        assert_eq!(edited.empty_dirs(), ["data/void", "hollow/deeper"]);
+        // Renamed twice, a file is still read from where the image has it.
+        let mut edited =
+            Edited::new(game(), &[ren("eboot.bin", "a.bin"), ren("a.bin", "b.bin")]).unwrap();
+        assert_eq!(edited.read("b.bin").unwrap(), b"EBOOT");
+    }
+
+    #[test]
+    fn a_new_folder_is_kept_empty_in_the_copy() {
+        // data/a is new here: data/a.bin is a file of another name.
+        let edited = Edited::new(game(), &[mkdir("mods"), mkdir("data/a/b/c")]).unwrap();
+        assert_eq!(
+            edited.empty_dirs(),
+            ["data/a/b/c", "data/empty", "hollow/deeper", "mods"]
+        );
+        assert_eq!(edited.files().len(), 5, "no file was touched");
+        let index = Index::new(&edited);
+        assert_eq!(index.kind("mods"), Some(Kind::Dir));
+        assert_eq!(index.kind("data/a/b"), Some(Kind::Dir));
+    }
+
+    #[test]
+    fn bad_renames_and_new_folders_are_refused() {
+        for (edits, want) in [
+            (vec![ren("missing.bin", "x.bin")], "not in the image"),
+            (vec![ren("eboot.bin", "data/a.bin")], "already in the image"),
+            (vec![ren("eboot.bin", "data")], "already in the image"),
+            (vec![ren("data", "Data2")], "already in the image"),
+            (vec![ren("eboot.bin", "eboot.bin")], "already in the image"),
+            (vec![ren("data", "data/sub/inner")], "into itself"),
+            (vec![ren("data", "data/new")], "into itself"),
+            (vec![ren("data", "eboot.bin/data")], "eboot.bin is a file"),
+            (vec![ren("eboot.bin", "../eboot.bin")], "not a path"),
+            (vec![ren("eboot.bin", "")], "not a path"),
+            (vec![ren("", "x")], "not a path"),
+            (vec![mkdir("data")], "already in the image"),
+            (vec![mkdir("hollow/deeper")], "already in the image"),
+            (vec![mkdir("eboot.bin")], "already in the image"),
+            (vec![mkdir("eboot.bin/inside")], "eboot.bin is a file"),
+            (vec![mkdir("a\\b")], "not a path"),
+            (vec![mkdir("")], "not a path"),
+            // Names no image writer takes: decomposed (from a Mac), or longer than a name is.
+            (vec![mkdir("cafe\u{301}")], "decomposed"),
+            (vec![ren("eboot.bin", "cafe\u{301}.bin")], "decomposed"),
+            (vec![mkdir(&"n".repeat(256))], "255"),
+        ] {
+            let err = refusal(&edits, None);
+            assert!(err.contains(want), "{edits:?}: {err}");
+        }
+        // What exFAT cannot hold is refused for an exFAT image and for no other.
+        for name in ["what?", "a:b", "star*"] {
+            let err = refusal(&[mkdir(name)], Some(Filesystem::Exfat));
+            assert!(err.contains("exFAT does not allow"), "{name}: {err}");
+            let err = refusal(&[ren("eboot.bin", name)], Some(Filesystem::Exfat));
+            assert!(err.contains("exFAT does not allow"), "{name}: {err}");
+            for fs in [Filesystem::Ufs2, Filesystem::Pfs] {
+                assert!(Edited::for_filesystem(game(), &[mkdir(name)], fs).is_ok());
+            }
+        }
+        assert!(refusal(&[mkdir(&"n".repeat(256))], Some(Filesystem::Exfat)).contains("255"));
+    }
+
+    /// Each edit sees the tree as the ones before it left it.
+    #[test]
+    fn renames_and_new_folders_follow_the_order_of_the_edits() {
+        let dir = scratch("order");
+        std::fs::write(dir.join("new.bin"), b"NEW!").unwrap();
+        let put = |path: &str| Edit::Put {
+            path: path.into(),
+            from: dir.join("new.bin"),
+        };
+
+        // Rename, then put into the new name: the put lands beside the moved files.
+        let mut edited =
+            Edited::new(game(), &[ren("data", "assets"), put("assets/new.bin")]).unwrap();
+        assert_eq!(edited.read("assets/new.bin").unwrap(), b"NEW!");
+        assert_eq!(edited.read("assets/a.bin").unwrap(), b"aaaa");
+        assert!(edited.read("data/a.bin").is_err());
+        // ...and a put at the old name of a renamed file is a new file, the renamed one kept.
+        let mut edited =
+            Edited::new(game(), &[ren("eboot.bin", "eboot.orig"), put("eboot.bin")]).unwrap();
+        assert_eq!(edited.read("eboot.bin").unwrap(), b"NEW!");
+        assert_eq!(edited.read("eboot.orig").unwrap(), b"EBOOT");
+
+        // Delete, then rename onto the freed name; the other way round it is taken.
+        let mut edited = Edited::new(
+            game(),
+            &[del("data/a.bin"), ren("data/sub/b.bin", "data/a.bin")],
+        )
+        .unwrap();
+        assert_eq!(edited.read("data/a.bin").unwrap(), b"bb");
+        assert_eq!(
+            edited.empty_dirs(),
+            ["data/empty", "data/sub", "hollow/deeper"]
+        );
+        let err = refusal(
+            &[ren("data/sub/b.bin", "data/a.bin"), del("data/a.bin")],
+            None,
+        );
+        assert!(err.contains("already in the image"), "{err}");
+        let mut edited = Edited::new(game(), &[del("Data2"), ren("data", "Data2")]).unwrap();
+        assert_eq!(edited.read("Data2/sub/b.bin").unwrap(), b"bb");
+
+        // The old name is gone for the edits after a rename; the new one is there.
+        let err = refusal(&[ren("data", "assets"), del("data/a.bin")], None);
+        assert!(err.contains("not in the image"), "{err}");
+        let err = refusal(&[ren("data", "assets"), ren("data", "other")], None);
+        assert!(err.contains("not in the image"), "{err}");
+        let edited = Edited::new(game(), &[ren("data", "assets"), del("assets/a.bin")]).unwrap();
+        assert!(edited.files().iter().all(|f| f.path != "assets/a.bin"));
+
+        // A file put from this computer and then renamed is still read from this computer.
+        let mut edited =
+            Edited::new(game(), &[put("data/new.bin"), ren("data/new.bin", "n.bin")]).unwrap();
+        assert_eq!(edited.read("n.bin").unwrap(), b"NEW!");
+
+        // A new folder stops being listed as empty once something is put in it, is refused
+        // where a put already made the folder, and can be renamed or deleted like any other.
+        let edited = Edited::new(game(), &[mkdir("mods"), put("mods/new.bin")]).unwrap();
+        assert!(!edited.empty_dirs().contains(&"mods".to_string()));
+        let err = refusal(&[put("mods/new.bin"), mkdir("mods")], None);
+        assert!(err.contains("already in the image"), "{err}");
+        let edited = Edited::new(game(), &[mkdir("mods"), ren("mods", "patches")]).unwrap();
+        assert_eq!(
+            edited.empty_dirs(),
+            ["data/empty", "hollow/deeper", "patches"]
+        );
+        let edited = Edited::new(game(), &[mkdir("mods/deep"), del("mods")]).unwrap();
+        assert_eq!(edited.empty_dirs(), ["data/empty", "hollow/deeper"]);
+        // A folder moved away frees its name for a new one.
+        let edited = Edited::new(game(), &[ren("hollow", "shell"), mkdir("hollow")]).unwrap();
+        assert_eq!(
+            edited.empty_dirs(),
+            ["data/empty", "hollow", "shell/deeper"]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

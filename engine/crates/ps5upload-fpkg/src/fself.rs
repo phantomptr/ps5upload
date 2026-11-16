@@ -503,6 +503,10 @@ impl SourceTree for Signed {
     fn describe(&self) -> String {
         self.inner.describe()
     }
+
+    fn notes(&self) -> Vec<String> {
+        self.inner.notes()
+    }
 }
 
 #[cfg(test)]

@@ -46,50 +46,7 @@ pub(crate) struct InspectReq {
     update: Option<String>,
 }
 
-/// Why a PS4 source can't become what was asked, or `None`: an update alone holds only the
-/// files it changed, so it goes into its game ("Merge into the game"); an add-on becomes a
-/// folder, not an image. A licence-only add-on never opens (`ps4_pkg::LICENCE_ONLY`).
-pub(crate) fn ps4_refusal(
-    source: &Path,
-    tree: &mut dyn ps5upload_fpkg::source::SourceTree,
-    image: bool,
-) -> Option<String> {
-    use ps5upload_fpkg::ps4_pkg::{self, Ps4Kind};
-    let (kind, title, version) = match ps4_pkg::peek_path(source).ok().flatten() {
-        Some(info) => (
-            Some(info.kind),
-            info.title_id(),
-            info.text("APP_VER").unwrap_or_default(),
-        ),
-        None => {
-            let path = tree
-                .files()
-                .iter()
-                .find(|f| f.path.eq_ignore_ascii_case("sce_sys/param.sfo"))
-                .map(|f| f.path.clone())?;
-            let params = ps5upload_pkg::sfo_params(&tree.read(&path).ok()?).ok()?;
-            let text = |k: &str| ps4_pkg::sfo_text(&params, k).unwrap_or_default();
-            (
-                Ps4Kind::of_category(&text("CATEGORY")),
-                text("TITLE_ID"),
-                text("APP_VER"),
-            )
-        }
-    };
-    match kind? {
-        Ps4Kind::Patch => Some(format!(
-            "{} is a PS4 update ({version}) for {title}. It holds only the files the update \
-             changed, so on its own it isn't a game: merge it into the game instead (Convert's \
-             \"Merge into the game\": the game as the source, this as its update)",
-            source.display()
-        )),
-        Ps4Kind::Addon if image => Some(format!(
-            "{} is a PS4 add-on: its files become a folder, not a game image",
-            source.display()
-        )),
-        _ => None,
-    }
-}
+pub(crate) use ps5upload_convert_core::refusal::{patch_refusal, ps4_refusal};
 
 #[derive(Deserialize)]
 pub(crate) struct BuildReq {
@@ -140,7 +97,7 @@ fn language_of(v: Option<String>) -> Option<String> {
 /// this computer" can lower (#632) without touching the shared blocking pool.
 /// The job's thread is inside the engine's runtime, as a blocking task's is: a source on a
 /// saved server opened there (a folder build's read-back reopens it) reaches the server.
-fn spawn_workshop_job(work: impl FnOnce() + Send + 'static) {
+pub(crate) fn spawn_workshop_job(work: impl FnOnce() + Send + 'static) {
     let handle = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
         ps5upload_fpkg::workshop::on_job_thread(move || {
@@ -157,7 +114,7 @@ pub(crate) fn default_output_dir() -> PathBuf {
 /// The user's home folder: `HOME` on Unix, `USERPROFILE` (or `HOMEDRIVE`+`HOMEPATH`) on Windows,
 /// where `HOME` is normally unset. Only when none of them resolves does it fall back to the
 /// temp folder (#364: on Windows that fallback was the *usual* case).
-fn user_home() -> PathBuf {
+pub(crate) fn user_home() -> PathBuf {
     home_from(|k| std::env::var_os(k))
 }
 
@@ -213,11 +170,26 @@ struct InspectResponse {
     #[serde(flatten)]
     inspection: build::Inspection,
     min_firmware: Option<String>,
+    /// Present when the game's `fakelib`/`fakelib2` holds backport libraries: what an image or
+    /// folder build's `remove_backport` would leave out, and why it can't when it can't.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backport: Option<crate::remove_backport::BackportReport>,
+    /// Why an image or folder build could not move this source to the Trash afterwards
+    /// (`delete_source`), whatever it makes: it is on a PS5 or a server, or this engine has no
+    /// Trash. Absent when it could.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delete_source_refusal: Option<String>,
 }
 
 fn min_firmware_of(source: &Path, declared: Option<&str>) -> Option<String> {
     let mut tree = ps5upload_fpkg::source::open(source).ok()?;
     crate::fpkg_firmware::min_firmware(tree.as_mut(), declared)
+}
+
+/// What the source's fakelib holds of a backport, when it holds any.
+fn backport_of(source: &Path) -> Option<crate::remove_backport::BackportReport> {
+    let mut tree = ps5upload_fpkg::source::open(source).ok()?;
+    crate::remove_backport::report(tree.as_mut())
 }
 
 /// POST /api/fpkg/inspect — what the source is, whether it looks convertible, and what it
@@ -275,9 +247,12 @@ pub(crate) async fn fpkg_inspect_handler(
         let inspection = build::inspect_with_update(Path::new(&source), update.as_deref(), &out)?;
         let min_firmware =
             min_firmware_of(Path::new(&source), inspection.required_firmware.as_deref());
+        let backport = backport_of(Path::new(&source));
         Ok::<_, ps5upload_fpkg::Error>(InspectResponse {
             inspection,
             min_firmware,
+            backport,
+            delete_source_refusal: crate::source_removal::source_refusal(Path::new(&source)),
         })
     })
     .await;
@@ -367,6 +342,12 @@ pub(crate) async fn fpkg_build_handler(
         .to_string_lossy()
         .into_owned();
     let source_path = PathBuf::from(&source);
+    // Registered as reading its source from before the inspection reads it to the job's end:
+    // an in-place edit of it can't start meanwhile, nor this while one runs.
+    let reading = match crate::image_edit_in_place::Reading::take(&source_path) {
+        Ok(r) => r,
+        Err(why) => return json_err(StatusCode::CONFLICT, why).into_response(),
+    };
 
     // Look first: a source that cannot convert should fail now, with the reason, rather
     // than as a job the user has to poll to see fail.
@@ -380,6 +361,12 @@ pub(crate) async fn fpkg_build_handler(
         let source_path = source_path.clone();
         let update = update.clone();
         match tokio::task::spawn_blocking(move || {
+            // An image an in-place edit was interrupted in is settled before it is read (here
+            // and by the build after).
+            settle_local_source(&source_path).map_err(ps5upload_fpkg::Error::Format)?;
+            if let Some(why) = patch_refusal(&source_path) {
+                return Err(ps5upload_fpkg::Error::Format(why));
+            }
             build::inspect_with_update(&source_path, update.as_deref(), &out)
         })
         .await
@@ -401,7 +388,7 @@ pub(crate) async fn fpkg_build_handler(
     // A PS4 game (or one with its update merged in) becomes a PS4 package; without param.json
     // there is no PS5 title to package (#596).
     if inspection.ps4_game || inspection.ps4_kind.is_some() || update.is_some() {
-        return ps4_package_build(state, req, out, source_path, update, inspection).await;
+        return ps4_package_build(state, req, out, source_path, update, inspection, reading).await;
     }
     if inspection
         .checks
@@ -435,7 +422,7 @@ pub(crate) async fn fpkg_build_handler(
     };
     let chosen_name = stem.clone().filter(|_| req.keep_both);
     let partial = match stem.map(|stem| out.join(format!("{stem}.pkg.partial"))) {
-        Some(path) => match Writing::claim_off_thread(path.clone()).await {
+        Some(path) => match claim_off_thread(path.clone()).await {
             Some(w) => Some(w),
             None => return already_building(&path),
         },
@@ -517,6 +504,8 @@ pub(crate) async fn fpkg_build_handler(
     let request_source = source_path.clone();
     let ticker = JobTicker(ticker.abort_handle());
     spawn_workshop_job(move || {
+        // Released last: an in-place edit may claim the source once this job is over.
+        let _reading = reading;
         // First in, last out: gone only after everything reading it has been dropped.
         let _scaffold = scaffold;
         // A panic in the work below must not leave the job "running" forever with its
@@ -645,6 +634,7 @@ async fn ps4_package_build(
     source_path: PathBuf,
     update: Option<PathBuf>,
     inspection: build::Inspection,
+    reading: crate::image_edit_in_place::Reading,
 ) -> axum::response::Response {
     use ps5upload_fpkg::ps4_pkg::Ps4Kind;
     use ps5upload_fpkg::ps4_pkg_write as ps4w;
@@ -731,7 +721,7 @@ async fn ps4_package_build(
         .into_response();
     }
     let partial_path = out.join(format!("{stem}.pkg.partial"));
-    let partial = match Writing::claim_off_thread(partial_path.clone()).await {
+    let partial = match claim_off_thread(partial_path.clone()).await {
         Some(w) => w,
         None => return already_building(&partial_path),
     };
@@ -804,6 +794,8 @@ async fn ps4_package_build(
     let ticker = JobTicker(ticker.abort_handle());
     let mut tree = tree;
     spawn_workshop_job(move || {
+        // Released last: an in-place edit may claim the source once this job is over.
+        let _reading = reading;
         let _scaffold = scaffold;
         let mut fail = JobFailOnDropGuard::new(
             state_for_job.jobs.clone(),
@@ -946,24 +938,6 @@ mod path_tests {
     use super::*;
 
     #[test]
-    fn only_our_own_leftovers_at_a_plain_absolute_path_are_cleared() {
-        let root = std::env::temp_dir();
-        let ok = root.join("out").join("Game.exfat.partial");
-        assert_eq!(clearable_leftover(&ok), Some(ok.clone()));
-        assert!(clearable_leftover(&root.join("Game.lz4spool")).is_some());
-        // Not ours, not absolute, or climbing out: never touched.
-        assert!(clearable_leftover(&root.join("Game.exfat")).is_none());
-        assert!(clearable_leftover(Path::new("out/Game.exfat.partial")).is_none());
-        assert!(clearable_leftover(&root.join("..").join("Game.exfat.partial")).is_none());
-        // A `.` inside a path is dropped by `components()` itself, so it names the same file.
-        let dotted = root.join(".").join("Game.exfat.partial");
-        assert_eq!(
-            clearable_leftover(&dotted),
-            Some(root.join("Game.exfat.partial"))
-        );
-    }
-
-    #[test]
     fn a_build_takes_the_language_it_was_asked_for() {
         let req: BuildReq =
             serde_json::from_str(r#"{"source":"/g","language":" fr-FR "}"#).unwrap();
@@ -1019,7 +993,12 @@ mod path_tests {
 
 #[derive(Deserialize)]
 pub(crate) struct ExfatBuildReq {
-    /// A game folder on this computer (one with `sce_sys` in it).
+    /// A game folder (one with `sce_sys` in it) or image, on this computer, a saved server
+    /// (`remote://`) or a console (`ps5://`); or a `.zip`, `.7z` or `.rar` on this computer (a
+    /// multi-part RAR set by its first part) holding one game folder, read straight out of it
+    /// with nothing unpacked. An archive that has to be unpacked first (a game image inside it,
+    /// or an `update` to merge) is refused (400) with `archive_needs_unpack` at the start of
+    /// the reason: `POST /api/fpkg/extract` then unpacks it.
     source: String,
     /// Where the image goes; the converter's output folder by default.
     #[serde(default)]
@@ -1034,7 +1013,8 @@ pub(crate) struct ExfatBuildReq {
     /// How hard a `.ffpfsc` is compressed: `fast`, `balanced` (the default) or `smallest`.
     #[serde(default)]
     ffpfsc_level: Option<String>,
-    /// Pack the game's files into AMPR LZ4 asset packs first (exFAT only, not with `compress`).
+    /// Pack the game's files into AMPR LZ4 asset packs first, in any image, plain or (with
+    /// `compress`) inside a `.ffpfsc`.
     #[serde(default)]
     ampr_lz4: Option<AmprLz4Req>,
     /// How much of a file the read-back check reads per call, in KiB (1024 to 65536); 8192
@@ -1055,6 +1035,15 @@ pub(crate) struct ExfatBuildReq {
     /// otherwise. The source image is only read.
     #[serde(default)]
     edits: Vec<ImageEditReq>,
+    /// With `edits`: change the image `source` itself instead of writing an edited copy. Only
+    /// for an uncompressed `.exfat`, `.ffpkg` or `.ffpfs` on this computer, not in asset packs,
+    /// and only when every change fits the image's free space (it never grows): otherwise
+    /// refused (400) with the reason, before anything is written. An undo journal
+    /// (`<image>.forge-undo`) is written beside it first; every changed file is read back and
+    /// the filesystem checked, and any failure restores the image. `POST /api/image/edit/check`
+    /// says beforehand whether it would be accepted.
+    #[serde(default)]
+    in_place: bool,
     /// When the image's name is taken in the output folder, add ` (2)` (and so on) instead of
     /// refusing (see `BuildReq::keep_both`).
     #[serde(default)]
@@ -1071,22 +1060,52 @@ pub(crate) struct ExfatBuildReq {
     /// Which emulator: `ampr_emu` (the default) or `ampr-emu-ng`.
     #[serde(default)]
     ampr_emu_build: Option<String>,
-    /// Pack the game's files into zstd asset packs for ampr-emu-ng, which goes in the image: a
-    /// plain image of any format, not with LZ4 packs. A game in LZ4 packs is decoded on the way.
+    /// Pack the game's files into zstd asset packs for ampr-emu-ng, which goes in the image: any
+    /// format, plain or (with `compress`) inside a `.ffpfsc`; not with LZ4 packs. A game in LZ4
+    /// packs is decoded on the way.
     #[serde(default)]
     ampr_zstd: Option<AmprZstdReq>,
     /// Where the image goes: `{"kind":"local"}` (the default: `output_dir` on this computer) or
     /// `{"kind":"console","addr":…,"dir":…}`: straight into that PS5's folder `dir` over AVA1,
     /// sent as it is written, so the image is never stored on this computer. The job's `dest` is
     /// then the image's path on the PS5, and the read-back runs there. For `.exfat`, `.ffpkg`
-    /// and `.ffpfs` images, and `.exfat` with `ampr_zstd` packs; a `.ffpfsc` (`compress`), LZ4
-    /// packs and edited copies are refused for it.
+    /// and `.ffpfs` images, with or without `ampr_lz4` or `ampr_zstd` packs (LZ4 packs are made
+    /// into the engine's data folder first, and removed once the image is there); a `.ffpfsc`
+    /// (`compress`) and edited copies are refused for it.
     #[serde(default)]
     destination: Option<ImageDestinationReq>,
     /// A PS4 update (a package, image or folder) merged into the PS4 game `source`: the image
     /// is the game at the update's version (`ps5upload_fpkg::ps4_merge`). Not with `edits`.
     #[serde(default)]
     update: Option<String>,
+    /// Leave the backport libraries in the game's `fakelib`/`fakelib2` out of the image, the
+    /// emulators there kept (the inspection's `backport` lists both). Refused, with the reason,
+    /// when they can't go: the backport lowered `eboot.bin`'s SDK (nothing here restores it),
+    /// or the game stays in asset packs whose own list names them. A game with no backport
+    /// library is converted as it is. Not with `edits`.
+    #[serde(default)]
+    remove_backport: bool,
+    /// Once the image is written, read back in full and given its name, move `source` to this
+    /// computer's Trash or Recycle Bin (never deleted for good). Only for a file or folder on
+    /// this computer made into an image on this computer; refused, with the reason, for a
+    /// source on a PS5 or a server, an output inside the source (or the source inside the
+    /// output), an engine with no Trash (Docker, a headless Linux), `edits`, `update` and a
+    /// `destination` elsewhere. The whole image is read back whatever `full_verify` says.
+    /// The source stays when it changed during the run or another job reads it; the finished
+    /// job's `commit_ack` says which: `source_removed` and `source_note`.
+    #[serde(default)]
+    delete_source: bool,
+    /// For a game in LZ4 or zstd asset packs: write it as plain files again. Every packed file
+    /// goes in under its own name, the pack volumes and their indexes are left out, a fresh
+    /// `ampr_emu.index` lists the files, and a libSceAmpr game whose emulator is ampr-emu-ng,
+    /// an old ampr_emu or unknown gets the one `ampr_emu_build` names (`add_ampr_emu` off
+    /// leaves it). Refused for a game that is not packed, and with `ampr_lz4`, `ampr_zstd` or
+    /// `edits`. Without it a packed game is written as it is, packs and all.
+    #[serde(default)]
+    unpack_packs: bool,
+    /// The password of a `.rar` `source` (an archive read in place); never logged or kept.
+    #[serde(default)]
+    archive_password: Option<String>,
 }
 
 /// Where an image build puts the image.
@@ -1107,14 +1126,9 @@ pub(crate) enum ImageDestinationReq {
 }
 
 /// Why an image build cannot go straight to a server, in a sentence for the user; `None` when
-/// it can. The same images as straight to the console.
-pub(crate) fn server_refusal(
-    format: crate::image_build::ImageFormat,
-    compress: bool,
-    lz4_packs: bool,
-    zstd_packs: bool,
-    edited: bool,
-) -> Option<&'static str> {
+/// it can. The same images as straight to the console: plain `.exfat`, `.ffpkg` and `.ffpfs`,
+/// with or without LZ4 or zstd asset packs.
+pub(crate) fn server_refusal(compress: bool, edited: bool) -> Option<&'static str> {
     if edited {
         return Some(
             "an edited copy of an image is written next to it on this computer, not straight to \
@@ -1125,18 +1139,6 @@ pub(crate) fn server_refusal(
         return Some(
             "a .ffpfsc can't be written straight to a server yet: save it to this computer, or \
              choose a plain .exfat, .ffpkg or .ffpfs image",
-        );
-    }
-    if lz4_packs {
-        return Some(
-            "an image with LZ4 asset packs can't be written straight to a server yet: save it \
-             to this computer, or choose zstd packs",
-        );
-    }
-    if zstd_packs && format != crate::image_build::ImageFormat::Exfat {
-        return Some(
-            "zstd asset packs go straight to a server in an .exfat image only: choose exFAT, or \
-             save it to this computer",
         );
     }
     None
@@ -1153,15 +1155,10 @@ fn server_dest(source_id: &str, dir: &str) -> Result<crate::server_out::ServerDe
 }
 
 /// Why an image build cannot go straight to the console, in a sentence for the user; `None`
-/// when it can. First version: plain `.exfat`, `.ffpkg` and `.ffpfs`, and `.exfat` with zstd
-/// packs.
-pub(crate) fn console_refusal(
-    format: crate::image_build::ImageFormat,
-    compress: bool,
-    lz4_packs: bool,
-    zstd_packs: bool,
-    edited: bool,
-) -> Option<&'static str> {
+/// when it can: plain `.exfat`, `.ffpkg` and `.ffpfs`, with or without LZ4 or zstd asset packs
+/// (as ps5-dump-forge writes packs into an image on another device). A `.ffpfsc` is not
+/// streamed yet, packed or not.
+pub(crate) fn console_refusal(compress: bool, edited: bool) -> Option<&'static str> {
     if edited {
         return Some(
             "an edited copy of an image is written next to it on this computer, not straight to \
@@ -1172,18 +1169,6 @@ pub(crate) fn console_refusal(
         return Some(
             "a .ffpfsc can't be written straight to the PS5 yet: save it to this computer, or \
              choose a plain .exfat, .ffpkg or .ffpfs image",
-        );
-    }
-    if lz4_packs {
-        return Some(
-            "an image with LZ4 asset packs can't be written straight to the PS5 yet: save it to \
-             this computer, or choose zstd packs",
-        );
-    }
-    if zstd_packs && format != crate::image_build::ImageFormat::Exfat {
-        return Some(
-            "zstd asset packs go straight to the PS5 in an .exfat image only: choose exFAT, or \
-             save it to this computer",
         );
     }
     None
@@ -1206,7 +1191,9 @@ fn to_server_job(
     name: &str,
     format: crate::image_build::ImageFormat,
     zstd_level: Option<(u8, crate::zstd_runtime::RuntimeChoice)>,
+    zstd_rules: Option<&crate::zstd_packs::Rules>,
     runtime: &mut Option<crate::zstd_runtime::PackRuntime>,
+    lz4: Option<(&crate::image_build::Lz4Packs, &Path)>,
     tree: &mut dyn ps5upload_fpkg::source::SourceTree,
     mode: ps5upload_fpkg::sample::VerifyMode,
     verify_chunk: u64,
@@ -1235,6 +1222,7 @@ fn to_server_job(
             crate::zstd_packs::stream_to_server(
                 format,
                 level,
+                zstd_rules,
                 runtime.insert(r),
                 tree,
                 stamp,
@@ -1244,6 +1232,54 @@ fn to_server_job(
                 cancel,
                 stage,
             )
+        }
+        // LZ4 packs: made here, streamed, read back there through the packs.
+        None if lz4.is_some() => {
+            let Some((packs, spool)) = lz4 else {
+                return Err("no LZ4 packs".into());
+            };
+            crate::image_build::stream_lz4(
+                packs,
+                tree,
+                stamp,
+                spool,
+                &path,
+                mode,
+                cancel,
+                stage,
+                &mut |t, salt, stage| {
+                    crate::image_build::stream_to_server(
+                        format,
+                        stamp,
+                        salt,
+                        t,
+                        &target,
+                        mode,
+                        verify_chunk,
+                        cancel,
+                        stage,
+                    )
+                    .map_err(anyhow::Error::msg)
+                },
+                &|| {
+                    let files = dest.files().map_err(|e| crate::server_out::said(&e))?;
+                    ps5upload_fpkg::remote_source::open_remote(files, &path)
+                        .map_err(|e| e.to_string())
+                },
+                &|| match dest.fs() {
+                    Ok(fs) => dest.remove(&*fs, &path),
+                    Err(e) => format!(
+                        "removing it from {} failed too ({e}): delete {path} by hand",
+                        dest.label
+                    ),
+                },
+                &dest.label,
+            )
+            .map(|(mut s, line)| {
+                s.built.detail.push_str(&line);
+                s
+            })
+            .map_err(|e| format!("{e:#}"))
         }
         // A libSceAmpr game gets a fresh ampr_emu.index (#449), as a local build does.
         None => match crate::image_build::AmprIndexed::wrap_at(&mut *tree, stamp) {
@@ -1283,7 +1319,9 @@ fn to_console_job(
     path: &str,
     format: crate::image_build::ImageFormat,
     zstd_level: Option<(u8, crate::zstd_runtime::RuntimeChoice)>,
+    zstd_rules: Option<&crate::zstd_packs::Rules>,
     runtime: &mut Option<crate::zstd_runtime::PackRuntime>,
+    lz4: Option<(&crate::image_build::Lz4Packs, &Path)>,
     tree: &mut dyn ps5upload_fpkg::source::SourceTree,
     mode: ps5upload_fpkg::sample::VerifyMode,
     verify_chunk: u64,
@@ -1355,6 +1393,7 @@ fn to_console_job(
             crate::zstd_packs::stream_to_console(
                 format,
                 level,
+                zstd_rules,
                 runtime.insert(r),
                 tree,
                 stamp,
@@ -1365,6 +1404,48 @@ fn to_console_job(
                 stage,
             )
         }
+        // LZ4 packs: made here, streamed, read back on the PS5 through the packs.
+        None if lz4.is_some() => match lz4 {
+            Some((packs, spool)) => crate::image_build::stream_lz4(
+                packs,
+                tree,
+                stamp,
+                spool,
+                path,
+                mode,
+                cancel,
+                stage,
+                &mut |t, salt, stage| {
+                    crate::image_build::stream_to_console(
+                        format,
+                        Some(stamp),
+                        salt,
+                        t,
+                        &target,
+                        mode,
+                        verify_chunk,
+                        cancel,
+                        stage,
+                    )
+                },
+                &|| {
+                    ps5upload_fpkg::remote_source::open_remote(target.files.clone(), &target.path)
+                        .map_err(|e| e.to_string())
+                },
+                &|| match (target.remove)(&target.path) {
+                    Ok(()) => "it was removed from the PS5".to_string(),
+                    Err(r) => {
+                        format!("removing it from the PS5 failed too ({r:#}): delete it by hand")
+                    }
+                },
+                "the PS5",
+            )
+            .map(|(mut s, line)| {
+                s.built.detail.push_str(&line);
+                s
+            }),
+            None => Err(anyhow::anyhow!("no LZ4 packs")),
+        },
         // A libSceAmpr game gets a fresh ampr_emu.index (#449), as a local build does.
         None => match crate::image_build::AmprIndexed::wrap_at(&mut *tree, stamp) {
             Ok(Some(mut indexed)) => crate::image_build::stream_to_console(
@@ -1416,6 +1497,14 @@ pub(crate) struct AmprZstdReq {
     /// `pinned` (the tested release). The job's `commit_ack.ampr_runtime` says which went in.
     #[serde(default)]
     runtime: crate::zstd_runtime::RuntimeChoice,
+    /// A profile in drakmor's `ampr_pack` TOML format (what `ampr_lz4.profile_toml` takes)
+    /// deciding which files stay loose: a file is packed unless its last matching `[[rule]]`,
+    /// or `[pack] default_action` when none matches (`loose` unless set), says `loose`. System
+    /// files and empty files stay loose whatever it says. Its block sizes, `hot`, `layout`,
+    /// groups and LZ4 settings mean nothing to zstd packs and are ignored. Absent or blank:
+    /// every file but the system files is packed.
+    #[serde(default)]
+    profile_toml: Option<String>,
 }
 
 impl AmprZstdReq {
@@ -1426,6 +1515,18 @@ impl AmprZstdReq {
             Ok(level)
         } else {
             Err(format!("zstd level {level} is not 1 to 22"))
+        }
+    }
+
+    /// The profile's rules, `None` without one, or why it is unusable.
+    fn rules(&self) -> Result<Option<Arc<crate::zstd_packs::Rules>>, String> {
+        match self.profile_toml.as_deref() {
+            Some(text) if !text.trim().is_empty() => {
+                ps5upload_fpkg::ampr_pack::Config::from_toml(text, None)
+                    .map(|c| Some(Arc::new(c)))
+                    .map_err(|e| format!("the pack profile: {e}"))
+            }
+            _ => Ok(None),
         }
     }
 }
@@ -1439,18 +1540,51 @@ fn default_add_ampr_emu() -> bool {
     true
 }
 
+/// Opens a game with its asset packs decoded (`unpack_packs`), for a build and for the
+/// read-back that opens the source again: both get the same emulator and the same index.
+type OpenUnpacked = Arc<
+    dyn Fn(
+            Box<dyn ps5upload_fpkg::source::SourceTree>,
+        ) -> Result<Box<dyn ps5upload_fpkg::source::SourceTree>, String>
+        + Send
+        + Sync,
+>;
+
+/// [`OpenUnpacked`] for a request: the emulator `build` names (`add` off: the game's own
+/// stays), fetched at most once, and one time on every record of the new index.
+fn open_unpacked(add: bool, build: Option<String>) -> OpenUnpacked {
+    let mtime = now_ms() as i64 / 1000;
+    let fetched: std::sync::OnceLock<Result<Vec<u8>, String>> = std::sync::OnceLock::new();
+    Arc::new(move |tree| {
+        let fetch = || {
+            fetched
+                .get_or_init(|| crate::ampr_trace::emulator(build.as_deref()))
+                .clone()
+        };
+        let emulator = add.then_some(crate::unpack_packs::Emulator {
+            ng: build.as_deref() == Some("ampr-emu-ng"),
+            fetch: &fetch,
+        });
+        crate::unpack_packs::open(tree, emulator.as_ref(), mtime)
+    })
+}
+
 /// One change for an edited copy of an image: `{"op":"delete","path":…}` removes a file or
 /// folder; `{"op":"put","path":…,"from":…}` puts a file (or a folder's contents) from this
-/// computer at `path`, replacing what is there.
+/// computer at `path`, replacing what is there; `{"op":"rename","from":…,"to":…}` renames or
+/// moves a file or folder to a path nothing is at yet; `{"op":"mkdir","path":…}` makes a new
+/// empty folder. They are applied in order, each seeing what the ones before it did.
 #[derive(Deserialize, Debug)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum ImageEditReq {
     Delete { path: String },
     Put { path: String, from: String },
+    Rename { from: String, to: String },
+    Mkdir { path: String },
 }
 
 impl ImageEditReq {
-    fn edit(&self) -> ps5upload_fpkg::browse::Edit {
+    pub(crate) fn edit(&self) -> ps5upload_fpkg::browse::Edit {
         use ps5upload_fpkg::browse::Edit;
         match self {
             Self::Delete { path } => Edit::Delete { path: path.clone() },
@@ -1458,6 +1592,12 @@ impl ImageEditReq {
                 path: path.clone(),
                 from: resolve_engine_path(from),
             },
+            // Both ends of a rename are paths inside the image, not on this computer.
+            Self::Rename { from, to } => Edit::Rename {
+                from: from.clone(),
+                to: to.clone(),
+            },
+            Self::Mkdir { path } => Edit::Mkdir { path: path.clone() },
         }
     }
 }
@@ -1473,6 +1613,8 @@ pub(crate) struct EditedImage {
 pub(crate) fn open_edited(source: &Path, edits: &[ImageEditReq]) -> Result<EditedImage, String> {
     use crate::image_build::ImageFormat;
     use ps5upload_fpkg::browse::{self, Edited, Filesystem};
+    // An interrupted in-place edit's journal is settled first.
+    crate::image_edit_in_place::before_open(source)?;
     let opened = browse::open(source).map_err(|e| e.to_string())?;
     let format = match opened.filesystem {
         Filesystem::Exfat => ImageFormat::Exfat,
@@ -1487,7 +1629,8 @@ pub(crate) fn open_edited(source: &Path, edits: &[ImageEditReq]) -> Result<Edite
         }
     };
     let edits: Vec<_> = edits.iter().map(ImageEditReq::edit).collect();
-    let tree = Edited::new(opened.tree, &edits).map_err(|e| e.to_string())?;
+    let tree = Edited::for_filesystem(opened.tree, &edits, opened.filesystem)
+        .map_err(|e| e.to_string())?;
     Ok(EditedImage {
         tree: Box::new(tree),
         format,
@@ -1537,6 +1680,66 @@ impl AmprLz4Req {
     }
 }
 
+/// Before a job reads `source`: a file on this computer an interrupted in-place edit left an
+/// undo journal beside is settled first (`image_edit_in_place::before_open`), so the job never
+/// reads a part-edited image. Nothing to do for a folder or a source elsewhere.
+fn settle_local_source(source: &Path) -> Result<(), String> {
+    if ps5upload_fpkg::remote_source::is_remote(source) || !source.is_file() {
+        return Ok(());
+    }
+    crate::image_edit_in_place::before_open(source).map(drop)
+}
+
+/// A build's `delete_source`, checked before the job exists: the plan, or the status and reason
+/// to refuse the request with. The check walks a source folder, so it runs off the request's
+/// thread.
+async fn plan_source_removal(
+    source: &Path,
+    output: &Path,
+) -> Result<crate::source_removal::Plan, (StatusCode, String)> {
+    let (source, output) = (source.to_path_buf(), output.to_path_buf());
+    match tokio::task::spawn_blocking(move || crate::source_removal::plan(&source, &output)).await {
+        Ok(Ok(plan)) => Ok(plan),
+        Ok(Err(why)) => Err((StatusCode::BAD_REQUEST, why)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))),
+    }
+}
+
+/// Whether another Workshop job that is still running reads `source`, something in it, or a
+/// folder it is in. This job (`job_id`) is not counted.
+fn source_in_use(state: &AppState, job_id: Uuid, source: &Path) -> bool {
+    let me = job_id.to_string();
+    let jobs = state.jobs.lock().unwrap_or_else(|e| e.into_inner());
+    crate::workshop_api::live_runs(|id| matches!(jobs.get(&id), Some(JobState::Running { .. })))
+        .iter()
+        .any(|run| {
+            let other = Path::new(&run.source);
+            run.job_id != me && (other.starts_with(source) || source.starts_with(other))
+        })
+}
+
+/// A finished, verified build's planned source removal, done and written to the engine log
+/// (`what` names the build there). `notes` are what the source's reader said it left out (a
+/// patch package's files left to its base game, protected entries it could not decrypt, an
+/// archive's files beside the game folder): any keeps the source, which is more than what was
+/// made from it.
+fn remove_source(
+    plan: &crate::source_removal::Plan,
+    output: &Path,
+    state: &AppState,
+    job_id: Uuid,
+    what: &str,
+    notes: &[String],
+) -> crate::source_removal::Outcome {
+    let busy = source_in_use(state, job_id, plan.source());
+    let outcome = crate::source_removal::finish(plan, output, notes, busy);
+    crate::engine_log::record(
+        if outcome.removed { "info" } else { "warn" },
+        format!("{what}: {}", outcome.note),
+    );
+    outcome
+}
+
 /// POST /api/exfat/build — write a game folder as one `.exfat` or `.ffpkg` image ShadowMountPlus
 /// mounts (`format`).
 /// Runs as a job like a package build: the ticker publishes bytes written, and the job's
@@ -1547,13 +1750,40 @@ pub(crate) async fn exfat_build_handler(
     Json(mut req): Json<ExfatBuildReq>,
 ) -> impl IntoResponse {
     let source = resolve_engine_path(&req.source);
+    if req.in_place && req.edits.is_empty() {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "an in-place edit needs changes (edits)",
+        )
+        .into_response();
+    }
+    // The build reads its source from here (an edited copy's open below included) to its end:
+    // registered first, so an in-place edit of it can't start meanwhile, nor this while one
+    // runs. An in-place edit claims the image itself instead (`image_edit_in_place::start`).
+    let reading = if req.in_place {
+        None
+    } else {
+        match crate::image_edit_in_place::Reading::take(&source) {
+            Ok(r) => Some(r),
+            Err(why) => return json_err(StatusCode::CONFLICT, why).into_response(),
+        }
+    };
     // A game folder on this computer, on a saved server (`remote://`) or on a console
     // (`ps5://`, read through the helper as a package build reads it): the opener below
-    // knows them all. A local path has to be a folder; an image or archive is not written
-    // as another image from here.
+    // knows them all. A local path has to be a folder, an image, or a `.zip`/`.7z`/`.rar`
+    // whose game folder is read in place (`archive_tree`).
     let remote = ps5upload_fpkg::remote_source::is_remote(&source);
     let image_file = crate::image_build::is_image_file(&source);
-    if !remote && !image_file && !tokio::fs::metadata(&source).await.is_ok_and(|m| m.is_dir()) {
+    let archive =
+        crate::archive_tree::reads_in_place(&source).then(|| crate::archive_tree::ArchiveSource {
+            password: req.archive_password.take().filter(|p| !p.is_empty()),
+            cancel: Default::default(),
+        });
+    if !remote
+        && !image_file
+        && archive.is_none()
+        && !tokio::fs::metadata(&source).await.is_ok_and(|m| m.is_dir())
+    {
         return json_err(
             StatusCode::BAD_REQUEST,
             format!("{} is not a game folder or image", source.display()),
@@ -1562,7 +1792,7 @@ pub(crate) async fn exfat_build_handler(
     }
     // A folder on this computer has to be a game: param.json (PS5) or param.sfo (PS4) in its
     // sce_sys (#596). Otherwise any folder became an image that mounts but never launches.
-    if !remote && !image_file && !has_title_param(&source).await {
+    if !remote && !image_file && archive.is_none() && !has_title_param(&source).await {
         return json_err(
             StatusCode::BAD_REQUEST,
             missing_param_message(&source, false),
@@ -1570,6 +1800,17 @@ pub(crate) async fn exfat_build_handler(
         .into_response();
     }
     let update = update_path(req.update.as_deref());
+    // An update is merged into a game read by path: an archive's game is unpacked for it.
+    if archive.is_some() && update.is_some() {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "{}: an update is merged into a game unpacked from its archive first",
+                crate::archive_tree::NEEDS_UNPACK
+            ),
+        )
+        .into_response();
+    }
     // An edited copy (#479): the image on this computer, opened with the changes applied, is
     // written out again as the same kind of image.
     let edited = if req.edits.is_empty() && !req.rebuild_ampr_index {
@@ -1595,6 +1836,26 @@ pub(crate) async fn exfat_build_handler(
                 "an edited copy is written as the image was: LZ4 asset packs are not made here",
             )
             .into_response();
+        }
+        if req.remove_backport {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                "an edited copy does not remove the backport: delete its files instead",
+            )
+            .into_response();
+        }
+        // The changes go into the image itself (image_edit_in_place.rs), or are refused there
+        // with the reason (the UI then offers the edited copy).
+        if req.in_place {
+            if req.rebuild_ampr_index || req.destination.is_some() || req.delete_source {
+                return json_err(
+                    StatusCode::BAD_REQUEST,
+                    "an in-place edit takes only the changes (and full_verify)",
+                )
+                .into_response();
+            }
+            let edits = req.edits.iter().map(ImageEditReq::edit).collect();
+            return crate::image_edit_in_place::start(state, source, edits, req.full_verify).await;
         }
         let (edit_source, edits) = (source.clone(), std::mem::take(&mut req.edits));
         let index_only = req.rebuild_ampr_index && edits.is_empty();
@@ -1632,20 +1893,13 @@ pub(crate) async fn exfat_build_handler(
         Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
     };
     // A fast read-back also covers UFS2's indirect-block seam.
+    // A source that goes afterwards is replaced by this image: every byte of it is read back.
     let mode = ps5upload_fpkg::sample::VerifyMode::from_full(
-        req.full_verify,
+        req.full_verify || req.delete_source,
         format == crate::image_build::ImageFormat::Ffpkg,
     );
     let packs = match &req.ampr_lz4 {
         None => None,
-        Some(_) if format != crate::image_build::ImageFormat::Exfat || compress => {
-            return json_err(
-                StatusCode::BAD_REQUEST,
-                "LZ4 asset packs go into a plain exFAT image: choose exFAT and turn off .ffpfsc \
-                 compression",
-            )
-            .into_response()
-        }
         Some(r) => match r.options() {
             Ok(p) => Some(p),
             Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
@@ -1654,9 +1908,9 @@ pub(crate) async fn exfat_build_handler(
     let zstd_level =
         match &req.ampr_zstd {
             None => None,
-            Some(_) if compress || packs.is_some() || edited.is_some() => return json_err(
+            Some(_) if packs.is_some() || edited.is_some() => return json_err(
                 StatusCode::BAD_REQUEST,
-                "zstd asset packs go into a plain image, without .ffpfsc compression or LZ4 packs",
+                "zstd asset packs are one choice: not with LZ4 packs, and not for an edited copy",
             )
             .into_response(),
             Some(r) => match r.level() {
@@ -1664,19 +1918,30 @@ pub(crate) async fn exfat_build_handler(
                 Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
             },
         };
+    if req.unpack_packs && (packs.is_some() || zstd_level.is_some() || edited.is_some()) {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "unpacking the asset packs writes plain files: not with LZ4 or zstd packs, and not \
+             for an edited copy",
+        )
+        .into_response();
+    }
+    let unpack = req
+        .unpack_packs
+        .then(|| open_unpacked(req.add_ampr_emu, req.ampr_emu_build.clone()));
+    // A zstd pack profile: which files stay loose. Refused here when it does not parse.
+    let zstd_rules = match req.ampr_zstd.as_ref().map(AmprZstdReq::rules) {
+        Some(Ok(r)) => r,
+        Some(Err(e)) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+        None => None,
+    };
     // Straight to a console: (its address, the folder there). Straight to a server: the folder
     // there.
     let mut to_server: Option<crate::server_out::ServerDest> = None;
     let to_console = match req.destination.take() {
         None | Some(ImageDestinationReq::Local) => None,
         Some(ImageDestinationReq::Server { source_id, dir }) => {
-            if let Some(why) = server_refusal(
-                format,
-                compress,
-                packs.is_some(),
-                zstd_level.is_some(),
-                edited.is_some(),
-            ) {
+            if let Some(why) = server_refusal(compress, edited.is_some()) {
                 return json_err(StatusCode::BAD_REQUEST, why).into_response();
             }
             match server_dest(&source_id, &dir) {
@@ -1686,13 +1951,7 @@ pub(crate) async fn exfat_build_handler(
             None
         }
         Some(ImageDestinationReq::Console { addr, dir }) => {
-            if let Some(why) = console_refusal(
-                format,
-                compress,
-                packs.is_some(),
-                zstd_level.is_some(),
-                edited.is_some(),
-            ) {
+            if let Some(why) = console_refusal(compress, edited.is_some()) {
                 return json_err(StatusCode::BAD_REQUEST, why).into_response();
             }
             let dir = match crate::link::valid_console_dir(&dir) {
@@ -1720,6 +1979,8 @@ pub(crate) async fn exfat_build_handler(
         None if edited.is_some() => {
             PathBuf::from(format!("{}-edited", crate::image_build::stem_of(&source)))
         }
+        // An archive's image is named after the archive, without `.zip` or `.partN.rar`.
+        None if archive.is_some() => PathBuf::from(crate::archive_tree::stem(&source)),
         None => source.clone(),
     };
     // An edited copy goes next to its source unless told otherwise.
@@ -1775,6 +2036,38 @@ pub(crate) async fn exfat_build_handler(
         )
         .into_response();
     }
+    // "Move the source to the Trash once the output is verified": refused here, with the
+    // reason, when it could not be honoured, and what the source is now is noted before
+    // anything reads it.
+    let removal = if req.delete_source {
+        let why = if edited.is_some() {
+            Some("an edited copy never removes the image it was made from")
+        } else if straight {
+            Some(
+                "the image goes straight to a PS5 or a server, and a source is only removed \
+                 for an image this computer keeps",
+            )
+        } else if update.is_some() {
+            Some("with an update merged in there are two sources: remove them yourself")
+        } else if archive.is_some() && crate::archive_tree::multi_part(&source) {
+            Some("the archive is one part of a multi-part set: remove its parts yourself")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                format!("the source can't be moved to the Trash: {why}"),
+            )
+            .into_response();
+        }
+        match plan_source_removal(&source, &output).await {
+            Ok(plan) => Some(plan),
+            Err((status, why)) => return json_err(status, why).into_response(),
+        }
+    } else {
+        None
+    };
     let scan_source = source.clone();
     let check_packs = packs.is_some();
     let install_runtime = req.ampr_lz4.as_ref().is_some_and(|r| r.install_runtime);
@@ -1782,16 +2075,31 @@ pub(crate) async fn exfat_build_handler(
     let ampr_emu_build = req.ampr_emu_build.clone();
     let edited_tree = edited.map(|e| e.tree);
     let scan_update = update.clone();
+    let remove_backport = req.remove_backport;
+    let scan_archive = archive.clone();
+    // What the source's reader left out (`SourceTree::notes`): it keeps a source that goes.
+    let source_notes: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    let scan_notes = source_notes.clone();
     let scanned = tokio::task::spawn_blocking(move || {
         // An edited copy keeps the image's own names: only the user's changes are made.
         if let Some(tree) = edited_tree {
             return Ok(tree);
         }
+        if let Some(why) = patch_refusal(&scan_source) {
+            return Err(why);
+        }
+        // An image an in-place edit was interrupted in is settled before it is read.
+        if image_file && !remote {
+            crate::image_edit_in_place::before_open(&scan_source)?;
+        }
         // A UFS2 image (.ffpkg) is case-sensitive like /data: give modules the eboot's spelling.
         // A PS4 update goes into its game here (the merge checks they go together).
         let (mut tree, renamed, signing) =
-            ps5upload_fpkg::module_case::open_with_update(&scan_source, scan_update.as_deref())
-                .map_err(|e| e.to_string())?;
+            open_game(&scan_source, scan_update.as_deref(), scan_archive.as_ref())?;
+        if scan_archive.is_some() {
+            crate::log_at!(Info, "convert", "image build: {}", tree.describe());
+        }
+        *scan_notes.lock().unwrap_or_else(|e| e.into_inner()) = tree.notes();
         match &scan_update {
             Some(_) => crate::log_at!(Info, "convert", "image build: {}", tree.describe()),
             None => {
@@ -1811,6 +2119,10 @@ pub(crate) async fn exfat_build_handler(
         if let Some(line) = signing.describe() {
             crate::log_at!(Info, "convert", "image build: {line}");
         }
+        if let Some(open) = &unpack {
+            // The packs decoded: the image holds the plain game.
+            tree = open(tree)?;
+        }
         if zstd_level.is_some() {
             // A packed game goes straight into the new packs.
             tree = crate::zstd_packs::readable_for_packing(tree)?;
@@ -1820,6 +2132,12 @@ pub(crate) async fn exfat_build_handler(
                 ps5_dump_forge_zstd::reader::unpack(tree)
                     .map_err(|e| format!("reading the game's zstd packs: {e}"))?,
             );
+        }
+        // After any packs were decoded (their own list names the backport's files) and before
+        // an emulator or new packs are added to what is left.
+        if remove_backport {
+            let libs = crate::remove_backport::removable(&mut *tree)?;
+            tree = crate::remove_backport::without(tree, &libs);
         }
         if !check_packs && zstd_level.is_none() && add_ampr_emu {
             // Some libSceAmpr games with no emulator fail to start from an image, and
@@ -1910,14 +2228,20 @@ pub(crate) async fn exfat_build_handler(
         (None, Some(d)) => PathBuf::from(d.url(&d.path_of(&out_name))),
         (None, None) => partial_out.clone(),
     };
-    let Some(writing) = Writing::claim_off_thread(claimed.clone()).await else {
+    let Some(writing) = claim_off_thread(claimed.clone()).await else {
         return already_building(&claimed);
     };
-    let spooling = match straight {
+    // LZ4 packs are spooled beside the image, or, straight to a console or a server, in the
+    // engine's data folder (one spool per destination).
+    let spool = if straight {
+        crate::image_build::stream_spool(&claimed)
+    } else {
+        crate::image_build::lz4_spool(&output)
+    };
+    let spooling = match straight && packs.is_none() {
         true => None,
         false => {
-            let spool = crate::image_build::lz4_spool(&output);
-            let Some(s) = Writing::claim_off_thread(spool.clone()).await else {
+            let Some(s) = claim_off_thread(spool.clone()).await else {
                 return already_building(&spool);
             };
             Some(s)
@@ -1934,6 +2258,10 @@ pub(crate) async fn exfat_build_handler(
     } else {
         register_workshop_job(job_id)
     };
+    // A read waiting on the archive (a long skip through solid data) stops with the job.
+    if let Some(a) = &archive {
+        a.cancel.set(cancel.clone());
+    }
     let bytes = Arc::new(AtomicU64::new(0));
     let started_at_ms = now_ms();
     set_job(
@@ -1988,6 +2316,8 @@ pub(crate) async fn exfat_build_handler(
     let state_for_job = state.clone();
     let ticker = JobTicker(ticker.abort_handle());
     spawn_workshop_job(move || {
+        // Released last: an in-place edit may claim the source once this job is over.
+        let _reading = reading;
         // First in, last out: gone only after everything reading it has been dropped.
         let _scaffold = scaffold;
         // A panic in the work below must not leave the job "running" forever with its
@@ -2000,6 +2330,11 @@ pub(crate) async fn exfat_build_handler(
         );
         if !straight {
             sweep_output_leftovers(&out_dir);
+        } else if packs.is_some() {
+            // What killed builds left in the data folder's spools, none of them running.
+            if let Some(dir) = spool.parent() {
+                sweep_output_leftovers(dir);
+            }
         }
         let mut tree = tree;
         // With LZ4 packs the build packs first; the stage list says so.
@@ -2042,7 +2377,9 @@ pub(crate) async fn exfat_build_handler(
                     &out_name,
                     format,
                     zstd_level,
+                    zstd_rules.as_deref(),
                     &mut runtime,
+                    packs.as_ref().map(|p| (p, spool.as_path())),
                     tree,
                     mode,
                     verify_chunk,
@@ -2057,7 +2394,9 @@ pub(crate) async fn exfat_build_handler(
                 path,
                 format,
                 zstd_level,
+                zstd_rules.as_deref(),
                 &mut runtime,
+                packs.as_ref().map(|p| (p, spool.as_path())),
                 tree,
                 mode,
                 verify_chunk,
@@ -2069,6 +2408,8 @@ pub(crate) async fn exfat_build_handler(
             (source_tree, None) => Ended::Local(match (source_tree, &packs) {
                 (Err(e), _) => Err(e),
                 (Ok(tree), None) if zstd_level.is_some() => {
+                    // The .ffpfsc's own level, before the zstd level takes the name.
+                    let level_ffpfsc = level;
                     let (level, choice) = zstd_level.unwrap_or_default();
                     crate::zstd_runtime::pack_runtime(choice).and_then(|r| {
                         crate::log_at!(
@@ -2080,7 +2421,10 @@ pub(crate) async fn exfat_build_handler(
                         );
                         crate::zstd_packs::build(
                             format,
+                            inner_name.as_deref(),
+                            level_ffpfsc,
                             level,
+                            zstd_rules.as_deref(),
                             runtime.insert(r),
                             tree,
                             &output,
@@ -2093,6 +2437,8 @@ pub(crate) async fn exfat_build_handler(
                 }
                 (Ok(tree), Some(packs)) => crate::image_build::build_packed(
                     format,
+                    inner_name.as_deref(),
+                    level,
                     tree,
                     &output,
                     packs,
@@ -2266,6 +2612,25 @@ pub(crate) async fn exfat_build_handler(
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .insert(output.clone());
+                let removal = match &removal {
+                    Some(plan) => {
+                        // The source's own files are closed before it is moved away. (The
+                        // PS4 wrapper above only borrowed the tree, and is done with it.)
+                        drop(tree);
+                        let notes = std::mem::take(
+                            &mut *source_notes.lock().unwrap_or_else(|e| e.into_inner()),
+                        );
+                        Some(remove_source(
+                            plan,
+                            &output,
+                            &state_for_job,
+                            job_id,
+                            "image",
+                            &notes,
+                        ))
+                    }
+                    None => None,
+                };
                 crate::engine_log::record(
                     "info",
                     format!(
@@ -2295,7 +2660,10 @@ pub(crate) async fn exfat_build_handler(
                         files_sent: built.files,
                         skipped_files: 0,
                         skipped_bytes: 0,
-                        commit_ack: runtime.as_ref().map(runtime_ack),
+                        commit_ack: crate::source_removal::ack(
+                            runtime.as_ref().map(runtime_ack),
+                            removal.as_ref(),
+                        ),
                     },
                 );
             }
@@ -2333,7 +2701,9 @@ pub(crate) async fn exfat_build_handler(
 #[derive(Deserialize)]
 pub(crate) struct FolderBuildReq {
     /// A game image (`.exfat`, `.ffpkg`/`.ufs2`, `.ffpfs`, `.ffpfsc`) or a debug-key `.pkg`,
-    /// on this computer, a saved server (`remote://`) or a console (`ps5://`).
+    /// on this computer, a saved server (`remote://`) or a console (`ps5://`); or a `.zip`,
+    /// `.7z` or `.rar` on this computer holding one game folder, read in place as an image
+    /// build reads it (and refused with `archive_needs_unpack` the same way).
     source: String,
     #[serde(default)]
     output_dir: Option<String>,
@@ -2358,6 +2728,14 @@ pub(crate) struct FolderBuildReq {
     /// this computer, a saved server or a console). Not with `entry`.
     #[serde(default)]
     ampr_zstd: Option<AmprZstdReq>,
+    /// Write the game with its files in AMPR LZ4 asset packs, as an image build's `ampr_lz4`
+    /// does, as a plain folder: the pack volumes, their manifest, the files that stay loose and
+    /// a fresh `ampr_emu.index`. The volumes are packed into `<folder>.lz4spool/` beside it
+    /// first (for a folder on a server, into the engine's data folder), so packing needs that
+    /// room too until the folder is written. The source may then also be a game folder. Not
+    /// with `ampr_zstd`, `unpack_packs` or `entry`.
+    #[serde(default)]
+    ampr_lz4: Option<AmprLz4Req>,
     /// A PS4 update merged into the PS4 game `source`, as an image build's `update`; the game
     /// may then also be a folder. Not with `entry`.
     #[serde(default)]
@@ -2369,6 +2747,30 @@ pub(crate) struct FolderBuildReq {
     /// a console is not a destination here.
     #[serde(default)]
     destination: Option<ImageDestinationReq>,
+    /// Leave the game's backport libraries out of the folder, as an image build's
+    /// `remove_backport` does, with the same refusals. Not with `entry`.
+    #[serde(default)]
+    remove_backport: bool,
+    /// Once the folder is written, read back in full and given its name, move `source` to this
+    /// computer's Trash, as an image build's `delete_source` does and with the same refusals.
+    /// Not with `entry`, `update` or a `destination` elsewhere.
+    #[serde(default)]
+    delete_source: bool,
+    /// For a game in LZ4 or zstd asset packs: write it as plain files again, as an image
+    /// build's `unpack_packs` does. The source may then also be a game folder. Not with
+    /// `ampr_zstd` or `entry`.
+    #[serde(default)]
+    unpack_packs: bool,
+    /// With `unpack_packs`: replace or add the game's AMPR emulator as an image build does.
+    /// On unless turned off.
+    #[serde(default = "default_add_ampr_emu")]
+    add_ampr_emu: bool,
+    /// With `unpack_packs`: which emulator, `ampr_emu` (the default) or `ampr-emu-ng`.
+    #[serde(default)]
+    ampr_emu_build: Option<String>,
+    /// The password of a `.rar` `source` (an archive read in place); never logged or kept.
+    #[serde(default)]
+    archive_password: Option<String>,
 }
 
 /// What a folder build reads: the whole image, one folder of it, or one file.
@@ -2413,16 +2815,43 @@ async fn resolved(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// The game at `source` (a folder, image or package anywhere) read for zstd packs: modules in
-/// the eboot's spelling, as an image or folder build reads it, then
-/// [`crate::zstd_packs::readable_for_packing`]. A packed folder build's read-back opens it the
-/// same way.
+/// The game at `source` with modules in the eboot's spelling and unsigned executables signed
+/// (`module_case::open_with_update`), as every image or folder build and its read-back open it;
+/// for an archive read in place (`archive`), the game folder inside it (an update is never
+/// merged into one: that is refused before).
+type OpenedGame = (
+    Box<dyn ps5upload_fpkg::source::SourceTree>,
+    Vec<ps5upload_fpkg::module_case::CaseFix>,
+    ps5upload_fpkg::fself::Signing,
+);
+
+fn open_game(
+    source: &Path,
+    update: Option<&Path>,
+    archive: Option<&crate::archive_tree::ArchiveSource>,
+) -> Result<OpenedGame, String> {
+    match archive {
+        Some(a) => {
+            let tree = crate::archive_tree::open(source, a.password.as_deref(), &a.cancel)?;
+            Ok(ps5upload_fpkg::module_case::wrap(tree))
+        }
+        None => {
+            ps5upload_fpkg::module_case::open_with_update(source, update).map_err(|e| e.to_string())
+        }
+    }
+}
+
+/// The game at `source` (a folder, image or package anywhere, or an archive read in place)
+/// read for zstd packs: modules in the eboot's spelling, as an image or folder build reads it,
+/// then [`crate::zstd_packs::readable_for_packing`]. A packed folder build's read-back opens it
+/// the same way.
 fn open_for_packing(
     source: &Path,
     update: Option<&Path>,
-) -> Result<Box<dyn ps5upload_fpkg::source::SourceTree>, String> {
-    let (tree, renamed, signing) =
-        ps5upload_fpkg::module_case::open_with_update(source, update).map_err(|e| e.to_string())?;
+    archive: Option<&crate::archive_tree::ArchiveSource>,
+) -> Result<(Box<dyn ps5upload_fpkg::source::SourceTree>, Vec<String>), String> {
+    let (tree, renamed, signing) = open_game(source, update, archive)?;
+    let notes = tree.notes();
     if !renamed.is_empty() {
         crate::log_at!(
             Info,
@@ -2434,20 +2863,88 @@ fn open_for_packing(
     if let Some(line) = signing.describe() {
         crate::log_at!(Info, "convert", "packed folder build: {line}");
     }
-    crate::zstd_packs::readable_for_packing(tree)
+    crate::zstd_packs::readable_for_packing(tree).map(|t| (t, notes))
+}
+
+/// The game at `source` read for LZ4 packs, as an image build reads it: modules in the eboot's
+/// spelling, and a game in zstd packs decoded so the LZ4 packs are made of its files. A packed
+/// folder build's read-back opens it the same way.
+fn open_for_lz4(
+    source: &Path,
+    update: Option<&Path>,
+    archive: Option<&crate::archive_tree::ArchiveSource>,
+) -> Result<(Box<dyn ps5upload_fpkg::source::SourceTree>, Vec<String>), String> {
+    let (tree, renamed, signing) = open_game(source, update, archive)?;
+    let notes = tree.notes();
+    if !renamed.is_empty() {
+        crate::log_at!(
+            Info,
+            "convert",
+            "lz4 folder build: renamed to the eboot's spelling: {}",
+            ps5upload_fpkg::module_case::describe(&renamed)
+        );
+    }
+    if let Some(line) = signing.describe() {
+        crate::log_at!(Info, "convert", "lz4 folder build: {line}");
+    }
+    if ps5_dump_forge_zstd::reader::detect(&*tree) {
+        let unpacked: Box<dyn ps5upload_fpkg::source::SourceTree> = Box::new(
+            ps5_dump_forge_zstd::reader::unpack(tree)
+                .map_err(|e| format!("reading the game's zstd packs: {e}"))?,
+        );
+        return Ok((unpacked, notes));
+    }
+    Ok((tree, notes))
+}
+
+/// `tree` ready for LZ4 packs, or why it can't have them: the release ampr_emu put in when the
+/// game's own is missing or too old and `install_runtime` asks for it (its own kept beside it),
+/// then the game's emulator checked for pack support.
+fn lz4_ready(
+    mut tree: Box<dyn ps5upload_fpkg::source::SourceTree>,
+    install_runtime: bool,
+) -> Result<Box<dyn ps5upload_fpkg::source::SourceTree>, String> {
+    use ps5upload_fpkg::ampr_pack::image as img;
+    if install_runtime {
+        let ready = img::readiness(&mut *tree);
+        match ready.as_ref().map(|r| r.kind) {
+            Some("runtime") => {
+                let bytes = crate::ampr_trace::release_runtime()?;
+                tree =
+                    Box::new(img::RuntimeInstalled::new(tree, bytes).map_err(|e| e.to_string())?);
+            }
+            Some("ok") => {}
+            _ => {
+                return Err(ready
+                    .and_then(|r| r.refusal)
+                    .unwrap_or_else(|| "the game cannot use asset packs".into()))
+            }
+        }
+    }
+    match img::refusal(&mut *tree) {
+        Some(why) => Err(why),
+        None => Ok(tree),
+    }
 }
 
 /// POST /api/folder/build — unpack a game image or a debug-key package into a plain folder
 /// (#469). Runs as a job like an image build: stages `write` and `verify`, the folder written
 /// as `<name>.partial/` and renamed only once it reads back. Done's `dest` is the folder. With
 /// `ampr_zstd` the game's files go into zstd packs (stage `pack` first), from an image,
-/// package or game folder; `commit_ack.ampr_runtime` names the emulator that went in.
+/// package or game folder; `commit_ack.ampr_runtime` names the emulator that went in. With
+/// `ampr_lz4` they go into LZ4 packs the same way, read by the game's own ampr_emu.
 pub(crate) async fn folder_build_handler(
     State(state): State<AppState>,
     Json(mut req): Json<FolderBuildReq>,
 ) -> impl IntoResponse {
     use crate::folder_build;
     let source = resolve_engine_path(&req.source);
+    // Registered as reading its source from before its first read to the job's end: an
+    // in-place edit of it can't start meanwhile, nor this while one runs.
+    let reading = match crate::image_edit_in_place::Reading::take(&source) {
+        Ok(r) => r,
+        Err(why) => return json_err(StatusCode::CONFLICT, why).into_response(),
+    };
     // Straight to a server: the folder there.
     let to_server = match req.destination.take() {
         None | Some(ImageDestinationReq::Local) => None,
@@ -2477,6 +2974,24 @@ pub(crate) async fn folder_build_handler(
         }
     };
     let remote = ps5upload_fpkg::remote_source::is_remote(&source);
+    // A `.zip`, `.7z` or `.rar` on this computer: its game folder read in place.
+    let archive =
+        crate::archive_tree::reads_in_place(&source).then(|| crate::archive_tree::ArchiveSource {
+            password: req.archive_password.take().filter(|p| !p.is_empty()),
+            cancel: Default::default(),
+        });
+    if archive.is_some()
+        && req
+            .entry
+            .as_deref()
+            .is_some_and(|e| !e.trim().trim_matches('/').is_empty())
+    {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "one file or folder is saved from an image, not from an archive",
+        )
+        .into_response();
+    }
     let zstd = match &req.ampr_zstd {
         None => None,
         Some(_)
@@ -2496,7 +3011,60 @@ pub(crate) async fn folder_build_handler(
             Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
         },
     };
+    let zstd_rules = match req.ampr_zstd.as_ref().map(AmprZstdReq::rules) {
+        Some(Ok(r)) => r,
+        Some(Err(e)) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+        None => None,
+    };
+    let has_entry = req
+        .entry
+        .as_deref()
+        .is_some_and(|e| !e.trim().trim_matches('/').is_empty());
+    let lz4 = match &req.ampr_lz4 {
+        None => None,
+        Some(_) if has_entry => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                "LZ4 packs are made of a whole game, not one file or folder of it",
+            )
+            .into_response()
+        }
+        Some(_) if zstd.is_some() || req.unpack_packs => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                "LZ4 packs are one choice: not with zstd packs or unpacking the asset packs",
+            )
+            .into_response()
+        }
+        Some(r) => match r.options() {
+            Ok(p) => Some(p),
+            Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+        },
+    };
+    let install_runtime = req.ampr_lz4.as_ref().is_some_and(|r| r.install_runtime);
+    if req.unpack_packs && (zstd.is_some() || has_entry) {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "unpacking the asset packs writes the whole game as plain files: not with zstd \
+             packs, and not for one file or folder of it",
+        )
+        .into_response();
+    }
+    let unpack = req
+        .unpack_packs
+        .then(|| open_unpacked(req.add_ampr_emu, req.ampr_emu_build.clone()));
     let update = update_path(req.update.as_deref());
+    // An update is merged into a game read by path: an archive's game is unpacked for it.
+    if archive.is_some() && update.is_some() {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "{}: an update is merged into a game unpacked from its archive first",
+                crate::archive_tree::NEEDS_UNPACK
+            ),
+        )
+        .into_response();
+    }
     if update.is_some()
         && req
             .entry
@@ -2509,9 +3077,22 @@ pub(crate) async fn folder_build_handler(
         )
         .into_response();
     }
+    if req.remove_backport
+        && req
+            .entry
+            .as_deref()
+            .is_some_and(|e| !e.trim().trim_matches('/').is_empty())
+    {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "the backport is removed from a whole game, not one file or folder of it",
+        )
+        .into_response();
+    }
+    let remove_backport = req.remove_backport;
     let local_dir = !remote && tokio::fs::metadata(&source).await.is_ok_and(|m| m.is_dir());
-    // A game folder with an update merged in is a new folder.
-    if local_dir && zstd.is_none() && update.is_none() {
+    // A game folder with an update merged in is a new folder, and so is one unpacked.
+    if local_dir && zstd.is_none() && lz4.is_none() && update.is_none() && unpack.is_none() {
         return json_err(
             StatusCode::BAD_REQUEST,
             format!("{} is already a folder", source.display()),
@@ -2532,8 +3113,13 @@ pub(crate) async fn folder_build_handler(
     } else {
         crate::image_build::is_image_file(&source)
     };
-    // Packs are made of a game folder anywhere too, and so is a game with an update merged in.
-    if !named_as_image && !((zstd.is_some() || update.is_some()) && (local_dir || remote)) {
+    // Packs are made of a game folder anywhere too, and so is a game with an update merged in
+    // or its packs unpacked.
+    if !named_as_image
+        && archive.is_none()
+        && !((zstd.is_some() || lz4.is_some() || update.is_some() || unpack.is_some())
+            && (local_dir || remote))
+    {
         return json_err(
             StatusCode::BAD_REQUEST,
             format!("{} is not a game image or package", source.display()),
@@ -2560,6 +3146,8 @@ pub(crate) async fn folder_build_handler(
         Some(n) => (n.to_string(), true),
         None => match &entry {
             Some(e) => (e.rsplit('/').next().unwrap_or(e).to_string(), true),
+            // An archive's folder is named after the archive, without `.zip` or `.partN.rar`.
+            None if archive.is_some() => (crate::archive_tree::stem(&source), false),
             None => (crate::image_build::stem_of(&source), false),
         },
     };
@@ -2626,31 +3214,108 @@ pub(crate) async fn folder_build_handler(
         )
         .into_response();
     }
+    // As for an image: refused here when the source could not go afterwards.
+    let removal = if req.delete_source {
+        let why = if entry.is_some() {
+            Some("saving one file or folder of an image does not remove the image")
+        } else if archive.is_some() && crate::archive_tree::multi_part(&source) {
+            Some("the archive is one part of a multi-part set: remove its parts yourself")
+        } else if to_server.is_some() {
+            Some(
+                "the folder goes straight to a server, and a source is only removed for a \
+                 folder this computer keeps",
+            )
+        } else if update.is_some() {
+            Some("with an update merged in there are two sources: remove them yourself")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                format!("the source can't be moved to the Trash: {why}"),
+            )
+            .into_response();
+        }
+        match plan_source_removal(&source, &target).await {
+            Ok(plan) => Some(plan),
+            Err((status, why)) => return json_err(status, why).into_response(),
+        }
+    } else {
+        None
+    };
     let scan_source = source.clone();
     let scan_entry = entry.clone();
     let scan_update = update.clone();
     let packing = zstd.is_some();
+    let lz4_packing = lz4.is_some();
+    // The backport libraries left out, found once: the read-back leaves the same ones out.
+    let left_out: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    let scan_left_out = left_out.clone();
+    let scan_unpack = unpack.clone();
+    let scan_archive = archive.clone();
+    // What the source's reader left out (`SourceTree::notes`): it keeps a source that goes.
+    let source_notes: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    let scan_notes = source_notes.clone();
     let scanned = tokio::task::spawn_blocking(move || {
+        // An image an in-place edit was interrupted in is settled before it is read.
+        settle_local_source(&scan_source)?;
+        let noted = |tree: &dyn ps5upload_fpkg::source::SourceTree| {
+            *scan_notes.lock().unwrap_or_else(|e| e.into_inner()) = tree.notes();
+        };
         if let Some(entry) = scan_entry {
             // A part of the image is saved as the image spells it, as the browser listed it.
             return open_entry(&scan_source, &entry);
         }
+        // `tree` (packs already decoded when new ones are made) without its backport.
+        let strip = |mut tree: Box<dyn ps5upload_fpkg::source::SourceTree>| {
+            if !remove_backport {
+                return Ok(tree);
+            }
+            let libs = crate::remove_backport::removable(&mut *tree)?;
+            let tree = crate::remove_backport::without(tree, &libs);
+            *scan_left_out.lock().unwrap_or_else(|e| e.into_inner()) = libs;
+            Ok::<_, String>(tree)
+        };
         if packing {
-            let mut tree = open_for_packing(&scan_source, scan_update.as_deref())?;
+            // Packs are made of a whole game.
+            if let Some(why) = patch_refusal(&scan_source) {
+                return Err(why);
+            }
+            let (mut tree, notes) =
+                open_for_packing(&scan_source, scan_update.as_deref(), scan_archive.as_ref())?;
+            *scan_notes.lock().unwrap_or_else(|e| e.into_inner()) = notes;
             if scan_update.is_none() {
                 if let Some(why) = ps4_refusal(&scan_source, &mut *tree, false) {
                     return Err(why);
                 }
             }
-            return Ok(Unpacked::Tree(tree));
+            return Ok(Unpacked::Tree(strip(tree)?));
+        }
+        if lz4_packing {
+            // LZ4 packs too are made of a whole game, with its own ampr_emu (or the release one).
+            if let Some(why) = patch_refusal(&scan_source) {
+                return Err(why);
+            }
+            let (mut tree, notes) =
+                open_for_lz4(&scan_source, scan_update.as_deref(), scan_archive.as_ref())?;
+            *scan_notes.lock().unwrap_or_else(|e| e.into_inner()) = notes;
+            if scan_update.is_none() {
+                if let Some(why) = ps4_refusal(&scan_source, &mut *tree, false) {
+                    return Err(why);
+                }
+            }
+            return Ok(Unpacked::Tree(lz4_ready(strip(tree)?, install_runtime)?));
         }
         // An image ignores letter case and /data does not: a Unity dump whose
         // Il2cppUserAssemblies.prx the eboot loads as Il2CppUserAssemblies.prx plays from the
         // image and crashes a second in from the folder. The folder takes the eboot's spelling.
         // A PS4 update goes into its game here (the merge checks they go together).
         let (mut tree, renamed, signing) =
-            ps5upload_fpkg::module_case::open_with_update(&scan_source, scan_update.as_deref())
-                .map_err(|e| e.to_string())?;
+            open_game(&scan_source, scan_update.as_deref(), scan_archive.as_ref())?;
+        if scan_archive.is_some() {
+            crate::log_at!(Info, "convert", "folder build: {}", tree.describe());
+        }
         match &scan_update {
             Some(_) => crate::log_at!(Info, "convert", "folder build: {}", tree.describe()),
             None => {
@@ -2670,7 +3335,16 @@ pub(crate) async fn folder_build_handler(
         if let Some(line) = signing.describe() {
             crate::log_at!(Info, "convert", "folder build: {line}");
         }
-        Ok::<_, String>(Unpacked::Tree(tree))
+        // A patch package unpacks to the files it carries whole; the log says what it left.
+        for note in tree.notes() {
+            crate::log_at!(Info, "convert", "folder build: {note}");
+        }
+        noted(&*tree);
+        if let Some(open) = &scan_unpack {
+            // The packs decoded: the folder holds the plain game.
+            tree = open(tree)?;
+        }
+        Ok::<_, String>(Unpacked::Tree(strip(tree)?))
     })
     .await;
     let unpacked = match scanned {
@@ -2701,7 +3375,7 @@ pub(crate) async fn folder_build_handler(
     // server, the server's own room is asked once the job starts.
     if let Some(why) = build::free_bytes(&out_dir)
         .and_then(|free| crate::folder_build::shortfall(free, total, &out_dir))
-        .filter(|_| zstd.is_none() && to_server.is_none())
+        .filter(|_| zstd.is_none() && lz4.is_none() && to_server.is_none())
     {
         return json_err(StatusCode::BAD_REQUEST, why).into_response();
     }
@@ -2710,10 +3384,27 @@ pub(crate) async fn folder_build_handler(
         Some(d) => PathBuf::from(d.url(&d.path_of(&name))),
         None => partial.clone(),
     };
-    let Some(writing) = Writing::claim_off_thread(claimed.clone()).await else {
+    let Some(writing) = claim_off_thread(claimed.clone()).await else {
         return already_building(&claimed);
     };
-    let mode = ps5upload_fpkg::sample::VerifyMode::from_full(req.full_verify, false);
+    // LZ4 packs are spooled beside the folder first, or, for a folder on a server, in the
+    // engine's data folder.
+    let spool = match &to_server {
+        Some(_) => crate::image_build::stream_spool(&claimed),
+        None => crate::image_build::lz4_spool(&target),
+    };
+    let spooling = match lz4.is_some() {
+        false => None,
+        true => {
+            let Some(s) = claim_off_thread(spool.clone()).await else {
+                return already_building(&spool);
+            };
+            Some(s)
+        }
+    };
+    // A source that goes afterwards is replaced by this folder: every file is compared in full.
+    let mode =
+        ps5upload_fpkg::sample::VerifyMode::from_full(req.full_verify || req.delete_source, false);
 
     let job_id = Uuid::new_v4();
     crate::workshop_api::note_run(job_id, "folder", &source);
@@ -2724,6 +3415,11 @@ pub(crate) async fn folder_build_handler(
     } else {
         register_workshop_job(job_id)
     };
+    // A read waiting on the archive (a long skip through solid data) stops with the job; the
+    // read-back's own opening of it shares the link.
+    if let Some(a) = &archive {
+        a.cancel.set(cancel.clone());
+    }
     let bytes = Arc::new(AtomicU64::new(0));
     let started_at_ms = now_ms();
     set_job(
@@ -2776,6 +3472,8 @@ pub(crate) async fn folder_build_handler(
     let state_for_job = state.clone();
     let ticker = JobTicker(ticker.abort_handle());
     spawn_workshop_job(move || {
+        // Released last: an in-place edit may claim the source once this job is over.
+        let _reading = reading;
         let mut fail = JobFailOnDropGuard::new(
             state_for_job.jobs.clone(),
             state_for_job.events_tx.clone(),
@@ -2787,9 +3485,14 @@ pub(crate) async fn folder_build_handler(
         let sweep = entry.is_none() && to_server.is_none();
         if sweep {
             sweep_output_leftovers(&out_dir);
+        } else if lz4.is_some() {
+            // What killed builds left in the data folder's spools, none of them running.
+            if let Some(dir) = spool.parent() {
+                sweep_output_leftovers(dir);
+            }
         }
         // Packs are made first: the stage list says so.
-        let stages: &[&str] = if zstd.is_some() {
+        let stages: &[&str] = if zstd.is_some() || lz4.is_some() {
             &["pack", "write", "verify"]
         } else {
             &["write", "verify"]
@@ -2810,20 +3513,42 @@ pub(crate) async fn folder_build_handler(
         let reopen_source = source.clone();
         let reopen_entry = entry.clone();
         let reopen_update = update.clone();
+        // An archive is opened again the same way (its password kept in memory for that).
+        let reopen_archive = archive.clone();
         // Verification reads the source afresh by the folder's names, so with the same renames
         // (or, for a part of the image, the same part; for packs, decoded the same way; with an
         // update, merged the same way).
+        let left_out = std::mem::take(&mut *left_out.lock().unwrap_or_else(|e| e.into_inner()));
         let reopen = move || match &reopen_entry {
             Some(e) => open_entry(&reopen_source, e).map(|u| match u {
                 Unpacked::Tree(t) | Unpacked::File { tree: t, .. } => t,
             }),
-            None if packing => open_for_packing(&reopen_source, reopen_update.as_deref()),
-            None => ps5upload_fpkg::module_case::open_with_update(
+            None if lz4_packing => open_for_lz4(
                 &reopen_source,
                 reopen_update.as_deref(),
+                reopen_archive.as_ref(),
+            )
+            .map(|(t, _)| crate::remove_backport::without(t, &left_out))
+            .and_then(|t| lz4_ready(t, install_runtime)),
+            None if packing => open_for_packing(
+                &reopen_source,
+                reopen_update.as_deref(),
+                reopen_archive.as_ref(),
+            )
+            .map(|(t, _)| crate::remove_backport::without(t, &left_out)),
+            None => open_game(
+                &reopen_source,
+                reopen_update.as_deref(),
+                reopen_archive.as_ref(),
             )
             .map(|(t, _, _)| t)
-            .map_err(|e| e.to_string()),
+            // Unpacked the same way: the same emulator, the same index.
+            .and_then(|t| match &unpack {
+                Some(open) => open(t),
+                None => Ok(t),
+            })
+            // Then the same backport libraries left out.
+            .map(|t| crate::remove_backport::without(t, &left_out)),
         };
         // zstd packs: the emulator that goes in, fetched here (off the request) and recorded.
         let mut runtime = None;
@@ -2841,6 +3566,19 @@ pub(crate) async fn folder_build_handler(
         let shown = out.describe();
         let outcome = match unpacked {
             Unpacked::Tree(mut tree) => match zstd {
+                None if lz4.is_some() => match &lz4 {
+                    Some(packs) => crate::lz4_packs::build_folder_to(
+                        packs,
+                        &mut *tree,
+                        &reopen,
+                        &out,
+                        &spool,
+                        mode,
+                        &cancel,
+                        &mut report,
+                    ),
+                    None => Err("no LZ4 packs".into()),
+                },
                 Some((level, choice)) => crate::zstd_runtime::pack_runtime(choice).and_then(|r| {
                     crate::log_at!(
                         Info,
@@ -2850,6 +3588,7 @@ pub(crate) async fn folder_build_handler(
                     );
                     crate::zstd_packs::build_folder_to(
                         level,
+                        zstd_rules.as_deref(),
                         runtime.insert(r),
                         &mut *tree,
                         &reopen,
@@ -2878,6 +3617,7 @@ pub(crate) async fn folder_build_handler(
             ),
         };
         drop(writing);
+        drop(spooling);
         if outcome.is_err() && sweep {
             sweep_output_leftovers(&out_dir);
         }
@@ -2885,6 +3625,13 @@ pub(crate) async fn folder_build_handler(
         drop(ticker);
         match outcome {
             Ok(built) => {
+                // The trees that read the source are gone by now (the build took them).
+                let removal = removal.as_ref().map(|plan| {
+                    let notes = std::mem::take(
+                        &mut *source_notes.lock().unwrap_or_else(|e| e.into_inner()),
+                    );
+                    remove_source(plan, &target, &state_for_job, job_id, "folder", &notes)
+                });
                 crate::engine_log::record(
                     "info",
                     format!(
@@ -2911,7 +3658,10 @@ pub(crate) async fn folder_build_handler(
                         files_sent: built.files,
                         skipped_files: 0,
                         skipped_bytes: 0,
-                        commit_ack: runtime.as_ref().map(runtime_ack),
+                        commit_ack: crate::source_removal::ack(
+                            runtime.as_ref().map(runtime_ack),
+                            removal.as_ref(),
+                        ),
                     },
                 );
             }
@@ -2995,76 +3745,18 @@ impl Drop for Scaffold {
     }
 }
 
-/// Package files being written by a build in this engine (`<stem>.pkg.partial`).
-fn active_partials() -> &'static std::sync::Mutex<std::collections::HashSet<PathBuf>> {
-    static SET: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
-        std::sync::OnceLock::new();
-    SET.get_or_init(Default::default)
-}
+pub(crate) use ps5upload_convert_core::writing::Writing;
+use ps5upload_convert_core::writing::{
+    active_partials, has_download_sidecar, has_fresh_checkpoint, is_our_partial,
+};
 
-/// Marks a file as being written by a running build, for as long as it lives: the sweep below
-/// leaves it alone, and a second build of the same output is refused.
-pub(crate) struct Writing(PathBuf);
-
-/// A path this engine writes and may clear: a `.partial` output or an `.lz4spool` beside one.
-fn is_own_leftover(path: &std::path::Path) -> bool {
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .map(|n| n.to_ascii_lowercase())
-        .is_some_and(|n| n.ends_with(".partial") || n.ends_with(".lz4spool"))
-}
-
-/// `path` as a leftover `claim` may look at and clear: absolute, with no `..` (or other
-/// non-normal part) after its root, and named like one of our own leftovers. `None` for
-/// anything else, which `claim` then never touches on disk.
-fn clearable_leftover(path: &std::path::Path) -> Option<PathBuf> {
-    use std::path::Component;
-    if !path.is_absolute() || !is_own_leftover(path) {
-        return None;
-    }
-    let mut clean = PathBuf::new();
-    for part in path.components() {
-        match part {
-            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => clean.push(part),
-            Component::CurDir | Component::ParentDir => return None,
-        }
-    }
-    Some(clean)
-}
-
-impl Writing {
-    /// Claims `path` for one build. `None` when another running build already writes it: two
-    /// builds of one output would wreck each other's file. A leftover at `path` from a build
-    /// that is not running any more (the app closed, the engine died) is removed, so the
-    /// rebuild the queue starts is not refused as "output already exists".
-    pub(crate) fn claim(path: PathBuf) -> Option<Writing> {
-        let mut active = active_partials().lock().unwrap_or_else(|e| e.into_inner());
-        if active.contains(&path) {
-            return None;
-        }
-        // Only ever our own leftovers (a `.partial` output or an `.lz4spool`) at an absolute
-        // path with no `..`, whatever path a caller hands in; anything else is never touched.
-        if let Some(leftover) = clearable_leftover(&path) {
-            // A leftover with a checkpoint is what the build goes on from (`image_build`).
-            let checkpointed = crate::image_build::checkpoint_path(&leftover).is_file();
-            if leftover.is_dir() {
-                let _ = std::fs::remove_dir_all(&leftover);
-            } else if leftover.is_file() && !checkpointed {
-                let _ = std::fs::remove_file(&leftover);
-            }
-        }
-        active.insert(path.clone());
-        Some(Writing(path))
-    }
-
-    /// [`Writing::claim`] on a blocking thread: clearing a leftover can mean removing a
-    /// whole pack spool.
-    pub(crate) async fn claim_off_thread(path: PathBuf) -> Option<Writing> {
-        tokio::task::spawn_blocking(move || Writing::claim(path))
-            .await
-            .ok()
-            .flatten()
-    }
+/// [`Writing::claim`] on a blocking thread: clearing a leftover can mean removing a whole pack
+/// spool.
+pub(crate) async fn claim_off_thread(path: PathBuf) -> Option<Writing> {
+    tokio::task::spawn_blocking(move || Writing::claim(path))
+        .await
+        .ok()
+        .flatten()
 }
 
 /// The 409 for a build whose output another running build is writing.
@@ -3074,53 +3766,6 @@ fn already_building(path: &Path) -> axum::response::Response {
         format!("{} is already being built", path.display()),
     )
     .into_response()
-}
-
-impl Drop for Writing {
-    fn drop(&mut self) {
-        active_partials()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.0);
-    }
-}
-
-/// The in-progress files our builds write: `<name>.<kind>.partial`. Nothing else is touched,
-/// since a compression writes next to the user's own image (a browser's `.partial` stays).
-fn is_our_partial(name: &str) -> bool {
-    [
-        ".pkg.partial",
-        ".ffpfsc.partial",
-        ".ffpfs.partial",
-        ".exfat.partial",
-        ".ffpkg.partial",
-    ]
-    .iter()
-    .any(|ext| name.to_ascii_lowercase().ends_with(ext))
-}
-
-/// A `<name>.partial` with `<name>.partial.json` next to it is a link download in progress
-/// (see `remote_download`), kept so it can resume.
-fn has_download_sidecar(partial: &Path) -> bool {
-    let mut name = partial.file_name().unwrap_or_default().to_os_string();
-    name.push(".json");
-    partial.with_file_name(name).is_file()
-}
-
-/// A crashed image build's partial file, kept for a while for the same build to go on from. An old
-/// one goes, with its checkpoint, or a game never built again would hold its space for good.
-fn has_fresh_checkpoint(partial: &Path) -> bool {
-    let checkpoint = crate::image_build::checkpoint_path(partial);
-    let Ok(modified) = std::fs::metadata(&checkpoint).and_then(|m| m.modified()) else {
-        return false;
-    };
-    let fresh = modified
-        .elapsed()
-        .is_ok_and(|age| age < crate::image_build::RESUME_KEPT);
-    if !fresh {
-        crate::image_build::remove_checkpoint(partial);
-    }
-    fresh
 }
 
 /// Removes a file, trying again for a few seconds while something holds it: on Windows an
@@ -3165,10 +3810,10 @@ pub(crate) fn sweep_output_leftovers(out: &Path) {
                             && !has_download_sidecar(&e.path())
                             && !has_fresh_checkpoint(&e.path())
                     }
-                    // An LZ4 image build's pack volumes, `<name>.exfat.lz4spool/`, and a
-                    // folder build's unfinished folder (marked, so a user's own is kept).
+                    // An LZ4 build's pack volumes, `<name>.lz4spool/`, and a folder build's
+                    // unfinished folder (marked, so a user's own is kept).
                     Ok(t) if t.is_dir() => {
-                        name.ends_with(".exfat.lz4spool")
+                        is_our_lz4_spool(&e.path())
                             || crate::folder_build::is_our_partial_dir(&e.path())
                     }
                     _ => false,
@@ -3186,8 +3831,27 @@ pub(crate) fn sweep_output_leftovers(out: &Path) {
     }
 }
 
+/// An LZ4 build's spool, `<image or folder>.lz4spool/`: named so, and holding nothing but pack
+/// volumes (`*.pak`), so a user's own folder that happens to be named like one is kept.
+fn is_our_lz4_spool(dir: &Path) -> bool {
+    let named = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.to_ascii_lowercase().ends_with(".lz4spool"));
+    named
+        && std::fs::read_dir(dir).is_ok_and(|entries| {
+            entries.flatten().all(|e| {
+                e.file_type().is_ok_and(|t| t.is_file())
+                    && e.file_name()
+                        .to_string_lossy()
+                        .to_ascii_lowercase()
+                        .ends_with(".pak")
+            })
+        })
+}
+
 /// Prefix of the folders archives are unpacked into, inside the output folder.
-const EXTRACT_PREFIX: &str = ".ps5upload-extract-";
+pub(crate) const EXTRACT_PREFIX: &str = ".ps5upload-extract-";
 
 /// Unpack folders this engine is still using (a build reads from one until it is cleaned).
 fn active_extracts() -> &'static std::sync::Mutex<std::collections::HashSet<PathBuf>> {
@@ -3211,7 +3875,7 @@ fn extract_shortfall(free: u64, unpacked: u64) -> Option<String> {
 
 /// The unpack folder `path` is in (it or an ancestor named `.ps5upload-extract-*`), or None:
 /// cleanup never deletes anything else.
-fn extract_root_of(path: &Path) -> Option<PathBuf> {
+pub(crate) fn extract_root_of(path: &Path) -> Option<PathBuf> {
     path.ancestors()
         .find(|a| {
             a.file_name()
@@ -3645,29 +4309,13 @@ mod extract_tests {
         let _ = std::fs::remove_dir_all(&out);
     }
 
-    /// Straight to the console: plain .exfat, .ffpkg and .ffpfs, and .exfat with zstd packs.
-    /// Everything else is refused with the reason, before a job exists.
+    /// Straight to the console: plain .exfat, .ffpkg and .ffpfs, packed (LZ4 or zstd) or not.
+    /// A .ffpfsc and an edited copy are refused with the reason, before a job exists.
     #[test]
     fn only_the_formats_that_stream_go_straight_to_the_console() {
-        use crate::image_build::ImageFormat::{Exfat, Ffpfs, Ffpkg};
-        for f in [Exfat, Ffpkg, Ffpfs] {
-            assert_eq!(
-                console_refusal(f, false, false, false, false),
-                None,
-                "{f:?}"
-            );
-            assert!(console_refusal(f, true, false, false, false)
-                .unwrap()
-                .contains(".ffpfsc"));
-            assert!(console_refusal(f, false, false, false, true).is_some());
-        }
-        assert_eq!(console_refusal(Exfat, false, false, true, false), None);
-        assert!(console_refusal(Ffpkg, false, false, true, false)
-            .unwrap()
-            .contains("zstd"));
-        assert!(console_refusal(Exfat, false, true, false, false)
-            .unwrap()
-            .contains("LZ4"));
+        assert_eq!(console_refusal(false, false), None);
+        assert!(console_refusal(true, false).unwrap().contains(".ffpfsc"));
+        assert!(console_refusal(false, true).is_some());
     }
 
     /// The request's `destination`, as the client and the API send it.
@@ -3706,23 +4354,14 @@ mod extract_tests {
     /// The same images go straight to a server as to the console, each refusal in its words.
     #[test]
     fn only_the_formats_that_stream_go_straight_to_a_server() {
-        use crate::image_build::ImageFormat::{Exfat, Ffpfs, Ffpkg};
-        for f in [Exfat, Ffpkg, Ffpfs] {
-            for (compress, lz4, zstd, edited) in [
-                (false, false, false, false),
-                (true, false, false, false),
-                (false, true, false, false),
-                (false, false, true, false),
-                (false, false, false, true),
-            ] {
-                assert_eq!(
-                    server_refusal(f, compress, lz4, zstd, edited).is_some(),
-                    console_refusal(f, compress, lz4, zstd, edited).is_some(),
-                    "{f:?} {compress} {lz4} {zstd} {edited}"
-                );
-                if let Some(why) = server_refusal(f, compress, lz4, zstd, edited) {
-                    assert!(why.contains("a server"), "{why}");
-                }
+        for (compress, edited) in [(false, false), (true, false), (false, true)] {
+            assert_eq!(
+                server_refusal(compress, edited).is_some(),
+                console_refusal(compress, edited).is_some(),
+                "{compress} {edited}"
+            );
+            if let Some(why) = server_refusal(compress, edited) {
+                assert!(why.contains("a server"), "{why}");
             }
         }
     }
@@ -3917,5 +4556,493 @@ mod title_param_tests {
         let msg = missing_param_message(Path::new("/games/Foo"), true);
         assert!(msg.contains("sce_sys/param.json") && msg.contains("eboot.bin"));
         assert!(missing_param_message(Path::new("/x"), false).contains("param.sfo"));
+    }
+}
+
+#[cfg(test)]
+mod source_option_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    type Jobs = Arc<Mutex<HashMap<Uuid, JobState>>>;
+
+    fn state() -> (AppState, Jobs) {
+        let jobs: Jobs = Arc::default();
+        let (events_tx, _rx) = tokio::sync::broadcast::channel(16);
+        let state = AppState {
+            jobs: jobs.clone(),
+            default_ps5_addr: "127.0.0.1".to_string(),
+            events_tx,
+        };
+        (state, jobs)
+    }
+
+    /// A game folder `<root>/PPSA01234` and a small exFAT image of it beside it.
+    fn game(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("fpkg-srcopt-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("PPSA01234");
+        std::fs::create_dir_all(dir.join("sce_sys")).unwrap();
+        std::fs::write(dir.join("eboot.bin"), b"eboot").unwrap();
+        std::fs::write(
+            dir.join("sce_sys/param.json"),
+            br#"{"titleId":"PPSA01234"}"#,
+        )
+        .unwrap();
+        let image = root.join("PPSA01234.exfat");
+        let mut tree = ps5upload_fpkg::source::open(&dir).unwrap();
+        crate::image_build::build(
+            crate::image_build::ImageFormat::Exfat,
+            None,
+            &mut *tree,
+            &image,
+            ps5upload_fpkg::sample::VerifyMode::Full,
+            8 << 20,
+            &std::sync::atomic::AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        (root, dir, image)
+    }
+
+    async fn image(body: serde_json::Value) -> (StatusCode, String, usize) {
+        let (state, jobs) = state();
+        let req: ExfatBuildReq = serde_json::from_value(body).unwrap();
+        let resp = exfat_build_handler(State(state), Json(req))
+            .await
+            .into_response();
+        answer(resp, &jobs).await
+    }
+
+    async fn folder(body: serde_json::Value) -> (StatusCode, String, usize) {
+        let (state, jobs) = state();
+        let req: FolderBuildReq = serde_json::from_value(body).unwrap();
+        let resp = folder_build_handler(State(state), Json(req))
+            .await
+            .into_response();
+        answer(resp, &jobs).await
+    }
+
+    /// The status, the body, and how many jobs the request started.
+    async fn answer(resp: axum::response::Response, jobs: &Jobs) -> (StatusCode, String, usize) {
+        let status = resp.status();
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let started = jobs.lock().unwrap().len();
+        (status, String::from_utf8_lossy(&body).into_owned(), started)
+    }
+
+    /// Every request that asks for the source to go where it never does is refused before a
+    /// job exists, and says why. Nothing here reaches a Trash: a request that could be
+    /// honoured is not sent.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn delete_source_is_refused_where_the_source_never_goes() {
+        let (root, dir, img) = game("delete");
+        let out = root.join("out");
+        let (dir_s, img_s, out_s) = (
+            dir.display().to_string(),
+            img.display().to_string(),
+            out.display().to_string(),
+        );
+        let refused = |(status, body, started): (StatusCode, String, usize), want: &str| {
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert!(
+                body.contains("the source can't be moved to the Trash"),
+                "{body}"
+            );
+            assert!(body.contains(want), "{want}: {body}");
+            assert_eq!(started, 0, "no job may exist: {body}");
+        };
+
+        // An image that goes straight to a PS5 (the address is never dialled: refused first).
+        refused(
+            image(serde_json::json!({
+                "source": dir_s, "output_dir": out_s, "delete_source": true,
+                "destination": { "kind": "console", "addr": "192.0.2.9", "dir": "/data/homebrew" },
+            }))
+            .await,
+            "straight to a PS5 or a server",
+        );
+        // An edited copy.
+        refused(
+            image(serde_json::json!({
+                "source": img_s, "delete_source": true,
+                "edits": [{ "op": "mkdir", "path": "mods" }],
+            }))
+            .await,
+            "an edited copy never removes",
+        );
+        // An update merged in: two sources.
+        refused(
+            image(serde_json::json!({
+                "source": dir_s, "output_dir": out_s, "delete_source": true,
+                "update": root.join("update.pkg").display().to_string(),
+            }))
+            .await,
+            "two sources",
+        );
+        // A source on a server or a PS5, for an image and for a folder.
+        for source in [
+            "remote://nas1/games/PPSA01234.exfat",
+            "ps5://192.0.2.9/data/G.exfat",
+        ] {
+            let body = serde_json::json!({
+                "source": source, "output_dir": out_s, "delete_source": true,
+            });
+            refused(image(body.clone()).await, "on a PS5 or a server");
+            refused(folder(body).await, "on a PS5 or a server");
+        }
+        // The output inside the source folder. (On a machine with no Trash that is the reason
+        // given instead; refused either way.)
+        refused(
+            image(serde_json::json!({
+                "source": dir_s, "delete_source": true,
+                "output_dir": dir.join("made").display().to_string(),
+            }))
+            .await,
+            "",
+        );
+        // One file or folder of an image.
+        refused(
+            folder(serde_json::json!({
+                "source": img_s, "output_dir": out_s, "delete_source": true, "entry": "sce_sys",
+            }))
+            .await,
+            "one file or folder of an image",
+        );
+        // With an update merged in, a folder too.
+        refused(
+            folder(serde_json::json!({
+                "source": img_s, "output_dir": out_s, "delete_source": true,
+                "update": root.join("update.pkg").display().to_string(),
+            }))
+            .await,
+            "two sources",
+        );
+
+        // Nothing was written and both sources are where they were.
+        assert!(dir.join("eboot.bin").is_file() && img.is_file());
+        assert!(!out.join("PPSA01234.exfat").exists() && !out.join("PPSA01234").exists());
+        assert!(!dir.join("made/PPSA01234.exfat").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The backport is left out of a whole conversion only: an edited copy and a part of an
+    /// image refuse the flag.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remove_backport_is_refused_for_an_edited_copy_and_a_part_of_an_image() {
+        let (root, _, img) = game("backport");
+        let img_s = img.display().to_string();
+        let (status, body, started) = image(serde_json::json!({
+            "source": img_s, "remove_backport": true,
+            "edits": [{ "op": "mkdir", "path": "mods" }],
+        }))
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.contains("does not remove the backport"), "{body}");
+        assert_eq!(started, 0);
+        let (status, body, started) = folder(serde_json::json!({
+            "source": img_s, "remove_backport": true, "entry": "sce_sys",
+            "output_dir": root.join("out").display().to_string(),
+        }))
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.contains("from a whole game"), "{body}");
+        assert_eq!(started, 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The job's end: `Ok(dest)` or `Err(error)`, waited for (two minutes at most).
+    async fn ended(jobs: &Jobs) -> Result<String, String> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(120);
+        loop {
+            let end = jobs.lock().unwrap().values().find_map(|j| match j {
+                JobState::Done { dest, .. } => Some(Ok(dest.clone())),
+                JobState::Failed { error, .. } => Some(Err(error.clone())),
+                _ => None,
+            });
+            if let Some(end) = end {
+                return end;
+            }
+            assert!(std::time::Instant::now() < deadline, "the job did not end");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// An image being edited in place refuses every build of it before the build reads it; an
+    /// image a build reads refuses an in-place edit. The build's registration and the edit's
+    /// claim are one decision (`image_edit_in_place::Reading` and `Claim`).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_edit_and_a_build_of_one_image_never_run_together() {
+        let (root, _, img) = game("edit-vs-build");
+        let (img_s, out_s) = (
+            img.display().to_string(),
+            root.join("out").display().to_string(),
+        );
+        let claim = crate::image_edit_in_place::Claim::take(&img).unwrap();
+        let body = serde_json::json!({ "source": img_s, "output_dir": out_s });
+        for (status, body, started) in [image(body.clone()).await, folder(body.clone()).await] {
+            assert_eq!(status, StatusCode::CONFLICT, "{body}");
+            assert!(body.contains("edited in place"), "{body}");
+            assert_eq!(started, 0);
+        }
+        let (st, jobs) = state();
+        let req: BuildReq = serde_json::from_value(body).unwrap();
+        let resp = fpkg_build_handler(State(st), Json(req))
+            .await
+            .into_response();
+        let (status, text, started) = answer(resp, &jobs).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{text}");
+        assert_eq!(started, 0);
+        drop(claim);
+
+        // A build reading it: the edit is refused, the image untouched.
+        let before = std::fs::read(&img).unwrap();
+        let reading = crate::image_edit_in_place::Reading::take(&img).unwrap();
+        let (st, jobs) = state();
+        let resp = crate::image_edit_in_place::start(
+            st,
+            img.clone(),
+            vec![ps5upload_fpkg::browse::Edit::Mkdir {
+                path: "mods".into(),
+            }],
+            false,
+        )
+        .await;
+        let (status, text, started) = answer(resp, &jobs).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{text}");
+        assert!(text.contains("reading"), "{text}");
+        assert_eq!(started, 0);
+        assert!(std::fs::read(&img).unwrap() == before);
+        drop(reading);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A folder build with `delete_source`, run to its end: the job's end and its
+    /// `commit_ack`.
+    async fn folder_removing(
+        source: &Path,
+        out: &Path,
+    ) -> (Result<String, String>, Option<serde_json::Value>) {
+        let (st, jobs) = state();
+        let req: FolderBuildReq = serde_json::from_value(serde_json::json!({
+            "source": source.display().to_string(),
+            "output_dir": out.display().to_string(),
+            "delete_source": true,
+        }))
+        .unwrap();
+        let resp = folder_build_handler(State(st), Json(req))
+            .await
+            .into_response();
+        let (status, body, _) = answer(resp, &jobs).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        let end = ended(&jobs).await;
+        let ack = jobs.lock().unwrap().values().find_map(|j| match j {
+            JobState::Done { commit_ack, .. } => commit_ack.clone(),
+            _ => None,
+        });
+        (end, ack)
+    }
+
+    /// The source was kept, and the job says it was for what the conversion left out.
+    fn kept_for_left_out(source: &Path, ack: Option<serde_json::Value>, want: &str) {
+        let ack = ack.expect("a commit_ack");
+        assert_eq!(ack["source_removed"], false, "{ack}");
+        let note = ack["source_note"].as_str().unwrap_or_default();
+        assert!(note.contains("warning") && note.contains(want), "{note}");
+        assert!(!crate::source_removal::trashed_in_tests(source), "{note}");
+        assert!(source.exists());
+    }
+
+    /// Whatever the conversion leaves out keeps the source a folder build would move to the
+    /// Trash: an archive's files beside the game folder, a patch package's files left to its
+    /// base game. (A package's protected entries it can't decrypt are the same kind of note,
+    /// `SourceTree::notes`, from the same reader: `pkg_source`'s own test covers them.) The
+    /// same archive with the game alone does go.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn delete_source_keeps_a_source_the_conversion_left_something_of() {
+        let root = std::env::temp_dir().join(format!("fpkg-leftout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let root = std::fs::canonicalize(&root).unwrap();
+        let game: Vec<(&str, &[u8])> = vec![
+            ("sce_sys/param.json", br#"{"titleId":"PPSA01234"}"#),
+            ("eboot.bin", b"eboot"),
+        ];
+        let zip = |path: &Path, extra: Option<&str>| {
+            use std::io::Write;
+            let mut zw = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+            let opts = zip::write::SimpleFileOptions::default();
+            for (p, d) in &game {
+                zw.start_file(format!("Game/PPSA01234/{p}"), opts).unwrap();
+                zw.write_all(d).unwrap();
+            }
+            if let Some(extra) = extra {
+                zw.start_file(extra, opts).unwrap();
+                zw.write_all(b"not part of the game").unwrap();
+            }
+            zw.finish().unwrap();
+        };
+        // An archive with an update folder beside the game: kept.
+        let extra = root.join("Extra.zip");
+        zip(&extra, Some("Game/Update/sce_sys/param.json.bak"));
+        let (end, ack) = folder_removing(&extra, &root.join("out1")).await;
+        end.unwrap();
+        kept_for_left_out(&extra, ack, "Game/Update/sce_sys/param.json.bak");
+        // The game alone: it would go (tests record it instead of using the Trash).
+        let alone = root.join("Alone.zip");
+        zip(&alone, None);
+        let (end, ack) = folder_removing(&alone, &root.join("out2")).await;
+        end.unwrap();
+        assert!(
+            crate::source_removal::trashed_in_tests(&alone),
+            "{:?}",
+            ack.map(|a| a["source_note"].clone())
+        );
+
+        // A PS5 patch package (`\x7FLIH`) carrying every block (as `inspect`'s test makes one).
+        let dir = root.join("patch-game");
+        std::fs::create_dir_all(dir.join("sce_sys")).unwrap();
+        std::fs::write(dir.join("eboot.bin"), [7u8; 3000]).unwrap();
+        std::fs::write(
+            dir.join("sce_sys/param.json"),
+            br#"{"contentId":"UP0000-PPSA04321_00-PATCHTEST0000000","contentVersion":"01.002.000","titleId":"PPSA04321","applicationCategoryType":0}"#,
+        )
+        .unwrap();
+        let pkg_out = root.join("pkg-out");
+        std::fs::create_dir_all(&pkg_out).unwrap();
+        let built = ps5upload_fpkg::build::build(
+            &ps5upload_fpkg::build::BuildRequest::new(&dir, &pkg_out),
+            &mut |_| {},
+        )
+        .unwrap();
+        let pkg = std::fs::read(&built.path).unwrap();
+        const B: usize = 0x10000;
+        let le64 = |at: usize| u64::from_le_bytes(pkg[at..at + 8].try_into().unwrap()) as usize;
+        let (pfs_offset, pfs_size, cnt_offset) = (le64(0x10), le64(0x18), le64(0x58));
+        let cnt_end = if cnt_offset < pfs_offset {
+            pfs_offset
+        } else {
+            pkg.len()
+        };
+        let mut patch = vec![0u8; B];
+        patch.extend_from_slice(&pkg[..B]);
+        patch.extend_from_slice(&pkg[pfs_offset..pfs_offset + pfs_size]);
+        let cnt_at = patch.len();
+        patch.extend_from_slice(&pkg[cnt_offset..cnt_end]);
+        patch[..4].copy_from_slice(b"\x7FLIH");
+        for (at, v) in [
+            (0x18, patch.len()),
+            (0x20, B),
+            (0x28, B),
+            (0x30, cnt_at),
+            (0x38, cnt_end - cnt_offset),
+        ] {
+            patch[at..at + 8].copy_from_slice(&(v as u64).to_le_bytes());
+        }
+        let update = root.join("update.pkg");
+        std::fs::write(&update, &patch).unwrap();
+        let (end, ack) = folder_removing(&update, &root.join("out3")).await;
+        end.unwrap();
+        kept_for_left_out(&update, ack, "patch package");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A game image whose in-place edit was cut off before its undo journal went (the image
+    /// holds `extra.bin`, the journal beside it): `(root, image)`.
+    fn interrupted_image(tag: &str) -> (PathBuf, PathBuf) {
+        let (root, _, img) = game(tag);
+        let host = root.join("host-extra.bin");
+        std::fs::write(&host, b"added by an edit that never finished").unwrap();
+        crate::image_edit_in_place::crash_before_commit(
+            &img,
+            &[ps5upload_fpkg::browse::Edit::Put {
+                path: "extra.bin".into(),
+                from: host,
+            }],
+        );
+        (root, img)
+    }
+
+    /// A folder build and a package build of an image an in-place edit was interrupted in
+    /// restore it from its journal first: what they write is the image as it was.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn builds_settle_an_interrupted_in_place_edit_first() {
+        let (root, img) = interrupted_image("settle-folder");
+        let out = root.join("out");
+        let (st, jobs) = state();
+        let req: FolderBuildReq = serde_json::from_value(serde_json::json!({
+            "source": img.display().to_string(),
+            "output_dir": out.display().to_string(),
+        }))
+        .unwrap();
+        let resp = folder_build_handler(State(st), Json(req))
+            .await
+            .into_response();
+        let (status, body, _) = answer(resp, &jobs).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        let folder = PathBuf::from(ended(&jobs).await.unwrap());
+        assert!(folder.join("eboot.bin").is_file());
+        assert!(
+            !folder.join("extra.bin").exists(),
+            "the folder holds the part-edited image's file"
+        );
+        assert!(!ps5_dump_forge_patch::journal_path(&img).exists());
+        let _ = std::fs::remove_dir_all(&root);
+
+        // A package: the image of a game with everything a package needs.
+        let (root, img) = interrupted_image("settle-pkg");
+        let dir = root.join("PPSA01234");
+        std::fs::write(
+            dir.join("sce_sys/param.json"),
+            br#"{"contentId":"UP0000-PPSA01234_00-SETTLETEST000000","contentVersion":"01.000.000","titleId":"PPSA01234","applicationCategoryType":0}"#,
+        )
+        .unwrap();
+        // The image again from the full param.json, then cut off mid-edit as above.
+        std::fs::remove_file(&img).unwrap();
+        std::fs::remove_file(ps5_dump_forge_patch::journal_path(&img)).unwrap();
+        let mut tree = ps5upload_fpkg::source::open(&dir).unwrap();
+        crate::image_build::build(
+            crate::image_build::ImageFormat::Exfat,
+            None,
+            &mut *tree,
+            &img,
+            ps5upload_fpkg::sample::VerifyMode::Full,
+            8 << 20,
+            &std::sync::atomic::AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        drop(tree);
+        crate::image_edit_in_place::crash_before_commit(
+            &img,
+            &[ps5upload_fpkg::browse::Edit::Put {
+                path: "extra.bin".into(),
+                from: root.join("host-extra.bin"),
+            }],
+        );
+        let out = root.join("out");
+        let (st, jobs) = state();
+        let req: BuildReq = serde_json::from_value(serde_json::json!({
+            "source": img.display().to_string(),
+            "output_dir": out.display().to_string(),
+        }))
+        .unwrap();
+        let resp = fpkg_build_handler(State(st), Json(req))
+            .await
+            .into_response();
+        let (status, body, _) = answer(resp, &jobs).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        let pkg = PathBuf::from(ended(&jobs).await.unwrap());
+        let tree = ps5upload_fpkg::source::open(&pkg).unwrap();
+        assert!(tree.files().iter().any(|f| f.path == "eboot.bin"));
+        assert!(
+            !tree.files().iter().any(|f| f.path == "extra.bin"),
+            "the package holds the part-edited image's file"
+        );
+        assert!(!ps5_dump_forge_patch::journal_path(&img).exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
