@@ -43,6 +43,11 @@ A big Convert update: zstd packs for every PS5 game, packs in every image format
 - **zstd on the console:** PS5Upload on your computer puts the zstd runtime on the PS5 when it connects (or with **Put the zstd runtime on this PS5** in Settings › This PS5 › Minion); nothing is downloaded on the PS5.
 - **Tried on both our PS5s (FW 13.60):** every output format from a small game, a 30 GB game made into an `.ffpkg` with every byte checked (about 6½ minutes), a 21 GB game into zstd packs (about 4½ minutes), Stop at 10 %, 50 % and during the check, and the helper being replaced in the middle of a conversion. Not tried yet: starting a game from an image made on the console, a USB drive that is full or FAT32.
 
+**Also**
+- **Convert** shows only the AMPR emulator choice that applies: with zstd asset packs, ampr-emu-ng goes in with the packs and the other emulator options are hidden; "Put ampr_emu 0.4.2.1 into the image" shows only under LZ4 packs; "Rebuild AMPR index" shows only for games that read through AMPR. (#828)
+- **Automatic save backups:** choose how often they run, from every 5 minutes to once a day (10 minutes unless you change it).
+- **Hardware:** the front light buttons (Light off, Light back to normal, Brightness) are removed: they did nothing on the PS5. The beeper stays. (#840)
+
 **Fixes**
 - From a review of everything in this release: a stopped or interrupted conversion no longer leaves a finished-looking but unchecked image behind; a folder you named `X.partial` is never removed by a conversion to `X`; an image left half-edited by a crash is put back before anything reads it; an archive's password is no longer kept in the queue file; and Convert's folder button, the image browser and a `.rar`'s password for folder builds work as they should.
 - A game folder with unusual characters in its `param.json`, or a damaged `eboot.bin`, could crash the engine during conversion. Found by new automated fuzz tests; it now reports the problem instead.
