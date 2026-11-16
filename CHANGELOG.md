@@ -56,6 +56,10 @@ A big Convert update: zstd packs for every PS5 game, packs in every image format
 - **Put on the PS5 to mount** asks before replacing a package with the same name, and stopping a `.pkg` check or a `.zip`/`.7z` look-inside now stops it.
 
 
+## 12.5.0
+
+Withdrawn the day it came out. Everything in it is in 12.5.1.
+
 ## 12.4.23
 
 Fixes from a review of everything changed since 12.4.10. Checked with the automated tests; not tried on a PS5.
