@@ -6,7 +6,7 @@ import {
   FilePlus,
   X,
 } from "lucide-react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { pickPaths } from "../../lib/pickPath";
 import {
   usbListRemovable,
   usbAutoloaderInstall,
@@ -94,11 +94,10 @@ export default function UsbAutoloaderModal({
   }
 
   async function addLocalFiles() {
-    const sel = await openDialog({
-      multiple: true,
+    // pickPaths: real paths on every platform (Android's dialog would hand back content:// URIs).
+    const paths = await pickPaths({
       filters: [{ name: tr("usb_wizard_payload_filter", undefined, "Payload"), extensions: ["elf", "bin"] }],
-    }).catch(() => null);
-    const paths = (Array.isArray(sel) ? sel : sel ? [sel] : []) as string[];
+    }).catch(() => [] as string[]);
     if (paths.length === 0) return;
     setLocalFiles((prev) => [...prev, ...paths.filter((p) => !prev.includes(p))]);
     setResult(null);
