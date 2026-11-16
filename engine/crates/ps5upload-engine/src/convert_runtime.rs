@@ -384,17 +384,47 @@ pub(crate) fn after_status(host: String, status: &serde_json::Value) {
         s.last_try = Some(Instant::now());
     }
     tokio::task::spawn_blocking(move || {
+        // `running` is cleared however this ends (a panic in the put included), else the console
+        // would never be tried again in this engine run.
+        let mut finish = PutFinish {
+            host: host.clone(),
+            done: false,
+        };
+        // The put uses the helper: a Stop or a "Remove PS5Upload" waits for it to end.
+        let _busy = crate::helper_stop::enter(&host);
         let r = ensure(&host);
         if let Err(e) = &r {
             crate::log_warn!(
                 "zstd runtime: could not put it on {host} (tried again later; zstd packs from Convert on the PS5 need it): {e}"
             );
         }
-        let mut map = seen().lock().unwrap_or_else(|e| e.into_inner());
-        let s = map.entry(host).or_default();
-        s.running = false;
-        s.done = r.is_ok();
+        finish.done = r.is_ok();
     });
+}
+
+/// Records how an automatic put ended when dropped: `running` off, `done` as it went.
+struct PutFinish {
+    host: String,
+    done: bool,
+}
+
+impl Drop for PutFinish {
+    fn drop(&mut self) {
+        let mut map = seen().lock().unwrap_or_else(|e| e.into_inner());
+        let s = map.entry(std::mem::take(&mut self.host)).or_default();
+        s.running = false;
+        s.done = self.done;
+    }
+}
+
+/// PS5Upload was removed from the console at `addr` (its folders, the runtime's among them, are
+/// gone): the runtime is put there again once a helper that converts answers.
+pub(crate) fn forget(addr: &str) {
+    let k = crate::helper_stop::console_key(addr);
+    seen()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|host, _| crate::helper_stop::console_key(host) != k);
 }
 
 #[derive(Deserialize)]
@@ -768,6 +798,47 @@ mod tests {
         };
         assert!(!due(&failed, now + Duration::from_secs(60)));
         assert!(due(&failed, now + RETRY_AFTER));
+    }
+
+    #[test]
+    fn a_put_that_panics_still_clears_running_and_a_removal_forgets_the_console() {
+        let host = "192.0.2.77";
+        seen().lock().unwrap().insert(
+            host.into(),
+            Seen {
+                running: true,
+                ..Default::default()
+            },
+        );
+        let r = std::panic::catch_unwind(|| {
+            let _finish = PutFinish {
+                host: host.into(),
+                done: false,
+            };
+            let _busy = crate::helper_stop::enter(host);
+            assert!(crate::helper_stop::is_busy(host));
+            panic!("the put failed hard");
+        });
+        assert!(r.is_err());
+        assert!(
+            !crate::helper_stop::is_busy(host),
+            "the busy mark goes with it"
+        );
+        {
+            let map = seen().lock().unwrap();
+            let s = map.get(host).unwrap();
+            assert!(!s.running && !s.done);
+        }
+        drop(PutFinish {
+            host: host.into(),
+            done: true,
+        });
+        assert!(seen().lock().unwrap().get(host).unwrap().done);
+        forget("192.0.2.77:9113");
+        assert!(
+            seen().lock().unwrap().get(host).is_none(),
+            "put again after a removal"
+        );
     }
 
     #[test]

@@ -141,6 +141,26 @@ describe("Remove PS5Upload from this PS5", () => {
     }
   });
 
+  it("says what the PS5 is busy with, before anything is deleted", async () => {
+    const want: Record<string, RegExp> = {
+      console_installing: /installing a package/,
+      console_converting: /Convert is working/,
+      console_extracting: /extracting an archive/,
+      console_busy: /PS5 is busy/,
+    };
+    for (const [reason, text] of Object.entries(want)) {
+      const { d } = deps({
+        uninstall: vi.fn(async (): Promise<HelperUninstallResult> => ({ state: "refused", reason, error: "", paths: [] })),
+      });
+      const out = await removePs5UploadFlow(HOST, true, d, tr);
+      expect(out.kind).toBe("refused");
+      if (out.kind === "refused") expect(out.message).toMatch(text);
+      expect(d.uninstall).toHaveBeenCalledTimes(1);
+      expect(d.pmDelete).not.toHaveBeenCalled();
+      expect(d.fsDelete).not.toHaveBeenCalled();
+    }
+  });
+
   it("words the result: a hidden tile and icons shown again", () => {
     const text = removedMessage(
       { kind: "removed", copies: 1, result: { ...REMOVED, tile: "hidden", icons_shown: 3 } as never },

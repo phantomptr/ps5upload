@@ -292,8 +292,13 @@ int webui_pkg_install_check(const char *path, int replace, const char **cause) {
     uint64_t size = 0;
     int st = read_pkg(path, norm, sizeof norm, &info, &size, NULL, cause);
     if (st != 200) return st;
-    if (webui_pkg_installing() || console_convert_building()) {
+    if (webui_pkg_installing()) {
         *cause = "pkg_install_busy";
+        return 409;
+    }
+    /* A conversion (or Convert inspecting an archive) holds the drive: say so, not "another install". */
+    if (console_convert_building()) {
+        *cause = "convert_busy";
         return 409;
     }
     return install_guard(&info, replace, cause);
@@ -596,7 +601,7 @@ static int op_pkg_install(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size
     uint64_t size = 0, replace = 0, remove_after = 0;
     const char *cause = NULL;
     const char *install_path;
-    int st, status = AVA1_ERR_IO, delivered = 0, took = 0, rc;
+    int st, status = AVA1_ERR_IO, delivered = 0, took = 0, rc, keep_copy = 0;
     size_t at = 0;
     (void)arg;
     (void)n;
@@ -631,6 +636,7 @@ static int op_pkg_install(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size
         if (!__atomic_compare_exchange_n(&g_installing, &expect, 1, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
             ava1_op_message(c, "pkg_install_busy");
             status = AVA1_ERR_BUSY;
+            keep_copy = 1; /* nothing started: the Library copy stays for the retry */
             goto out;
         }
         took = 1;
@@ -639,8 +645,9 @@ static int op_pkg_install(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size
      * Our flag is set first (seq_cst), then the converter's is read; console_convert.c does the
      * same the other way round, so of two that start at once at least one backs out. */
     if (console_convert_building()) {
-        ava1_op_message(c, "pkg_install_busy");
+        ava1_op_message(c, "convert_busy");
         status = AVA1_ERR_BUSY;
+        keep_copy = 1;
         goto out;
     }
     if (install_guard(&info, replace != 0, &cause) != 200) {
@@ -701,8 +708,9 @@ static int op_pkg_install(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size
 out:
     /* The staging copy goes once Sony has read all of it; on a failure after the daemon took it,
      * it stays for a retry (the PC app's stale sweep of pkg_temp removes it later). A failure before
-     * that (no daemon, a refusal) leaves nothing Sony is reading: remove it. */
-    if (staged && staged[0] && (delivered || !job || !job[0])) (void)unlink(staged);
+     * that (no daemon, a refusal) leaves nothing Sony is reading: remove it. A "busy" refusal started
+     * nothing: the Library's copy is kept so the install can be tried again. */
+    if (staged && staged[0] && !keep_copy && (delivered || !job || !job[0])) (void)unlink(staged);
     if (took) __atomic_store_n(&g_installing, 0, __ATOMIC_SEQ_CST);
     free(src);
     free(norm);

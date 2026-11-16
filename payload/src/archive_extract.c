@@ -416,7 +416,8 @@ int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
     if (console_convert_building()) {
         __atomic_store_n(&g_running, 0, __ATOMIC_SEQ_CST);
         pthread_mutex_unlock(&g_busy);
-        ava1_op_message(c, "fs_extract_busy");
+        /* the conversion is what holds the drive, not another extraction */
+        ava1_op_message(c, "convert_busy");
         return AVA1_ERR_BUSY;
     }
     password = malloc(1024);

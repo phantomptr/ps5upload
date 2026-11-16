@@ -44,6 +44,9 @@
 #include "content_db.h"
 #include "icon_keeper.h"
 #include "helper_uninstall.h"
+#include "webui_pkg.h"
+#include "console_convert.h"
+#include "archive_extract.h"
 #include "webui_codec.h"
 #include "webui_tile.h"
 #include "register.h"
@@ -10260,11 +10263,21 @@ static int handle_node_shutdown(runtime_state_t *state) {
     return rc;
 }
 
+/* What on the console itself is running that removing PS5Upload would cut off (a package install,
+ * a conversion or archive inspection by Convert, an extraction), or NULL. */
+static const char *uninstall_busy_cause(void) {
+    if (webui_pkg_installing()) return "installing";
+    if (console_convert_building()) return "converting";
+    if (archive_extract_running()) return "extracting";
+    return NULL;
+}
+
 /* node.uninstall (AVA1 method 200), "Remove PS5Upload from this PS5" (helper_uninstall.h):
  * {keep_backups, check} -> {ok, tile, icons_shown, keep_backups}, then the helper exits and deletes its
  * folders last thing (main.c). Refused, with nothing changed, while anything is mounted in those
- * folders: {ok:false, err:"uninstall_in_use", paths:[...]}. check:true only answers {ok, check}
- * (or that refusal) and changes nothing. */
+ * folders: {ok:false, err:"uninstall_in_use", paths:[...]}, and while the console runs an install, a
+ * conversion or an extraction: {ok:false, err:"uninstall_busy", cause:"installing"|"converting"|
+ * "extracting"}. check:true only answers {ok, check} (or a refusal) and changes nothing. */
 static int handle_node_uninstall(runtime_state_t *state, const char *body, uint64_t body_len) {
     char reply[1024], mounts[768], minion[512];
     int keep = 1, check = 0, in_use, shown, n, busy = 0, failed = 0;
@@ -10274,6 +10287,14 @@ static int handle_node_uninstall(runtime_state_t *state, const char *body, uint6
         webui_json_bool(body ? body : "", (size_t)body_len, "check", &check) < 0) {
         n = snprintf(reply, sizeof reply, "{\"ok\":false,\"err\":\"bad_request\"}");
         return mgmt_reply(MGMT_FRAME_NODE_UNINSTALL_ACK, reply, (uint64_t)n);
+    }
+    {
+        const char *cause = uninstall_busy_cause();
+        if (cause) {
+            n = snprintf(reply, sizeof reply, "{\"ok\":false,\"err\":\"uninstall_busy\",\"cause\":\"%s\"}", cause);
+            fprintf(stderr, "[uninstall] refused: %s\n", reply);
+            return mgmt_reply(MGMT_FRAME_NODE_UNINSTALL_ACK, reply, (uint64_t)(n > 0 ? n : 0));
+        }
     }
     in_use = hu_mounts_in_use(mounts, sizeof mounts);
     if (in_use != 0) {

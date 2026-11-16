@@ -115,7 +115,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -247,7 +251,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -383,7 +391,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -526,7 +538,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -664,7 +680,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -798,7 +818,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -935,7 +959,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -1071,7 +1099,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -1212,7 +1244,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -1355,7 +1391,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -1498,7 +1538,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -1631,7 +1675,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -1766,7 +1814,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -1904,7 +1956,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -2042,7 +2098,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -2179,7 +2239,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -2316,7 +2380,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -2456,7 +2524,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -2595,7 +2667,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -2728,7 +2804,11 @@
       "usb_wizard_add_files",
       "usb_wizard_remove_file",
       "usb_wizard_local_order",
-      "usb_wizard_step2_hint_v2"
+      "usb_wizard_step2_hint_v2",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [

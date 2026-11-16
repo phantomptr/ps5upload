@@ -4700,7 +4700,8 @@ struct HelperStopReq {
 ///
 /// 200 `{ "state": "stopped" }` once the helper's port went quiet, or `{ "state": "not_running" }`
 /// when nothing answered. 409 `{ "error", "reason": "busy" }` while a job runs; 502
-/// `{ "error", "reason": "refused" | "still_running" }` otherwise.
+/// `{ "error", "reason": "refused" (not paired) | "failed" (the real error) | "still_running" }`
+/// otherwise. Also 409 busy while another stop or removal of that console runs.
 async fn ps5_helper_stop(
     installs: pkg_install::PkgInstallStateHandle,
     req: HelperStopReq,
@@ -4709,8 +4710,16 @@ async fn ps5_helper_stop(
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
-    let busy = helper_stop::is_busy(&addr) || installs.jobs.active_for(&addr);
-    let r = tokio::task::spawn_blocking(move || helper_stop::stop(&addr, busy)).await;
+    // Marked first, then the jobs read: from here until the stop ends the queue starts nothing
+    // on this console (it can take seconds). A second stop or removal of it meanwhile is busy.
+    let stopping = helper_stop::begin_stopping(&addr);
+    let busy =
+        stopping.is_none() || helper_stop::jobs_running(&addr) || installs.jobs.active_for(&addr);
+    let r = tokio::task::spawn_blocking(move || {
+        let _stopping = stopping;
+        helper_stop::stop(&addr, busy)
+    })
+    .await;
     match r {
         Ok(Ok(helper_stop::Stopped::Stopped)) => {
             Json(serde_json::json!({ "state": "stopped" })).into_response()
@@ -4751,7 +4760,9 @@ struct HelperUninstallReq {
 /// PS5": the helper turns Minion off and removes its tile, shows the icons it hid, exits and
 /// deletes its own folders on the console (`node.uninstall`). Refused (409) while this engine
 /// has a job running against the console (`reason: busy`) or while something is mounted in
-/// those folders (`reason: in_use`, `paths`); an older helper answers `reason: old_helper` (501).
+/// those folders (`reason: in_use`, `paths`) or while the console itself installs a package,
+/// converts a game or extracts an archive (`reason: console_installing` | `console_converting` |
+/// `console_extracting`); an older helper answers `reason: old_helper` (501).
 /// Copies of the helper stored in loaders are not touched here: the app removes them first.
 /// After a removal the key pinned for the console is forgotten (`key_forgotten`): its identity
 /// went with the folders.
@@ -4762,11 +4773,17 @@ async fn ps5_helper_uninstall(
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
-    let busy = helper_stop::is_busy(&addr) || installs.jobs.active_for(&addr);
+    // As for a stop: marked before the jobs are read, held for the whole call (up to 240 s).
+    let stopping = helper_stop::begin_stopping(&addr);
+    let busy =
+        stopping.is_none() || helper_stop::jobs_running(&addr) || installs.jobs.active_for(&addr);
     let (keep, check) = (req.keep_backups, req.check);
     let console = addr.clone();
-    let r =
-        tokio::task::spawn_blocking(move || helper_stop::uninstall(&addr, busy, keep, check)).await;
+    let r = tokio::task::spawn_blocking(move || {
+        let _stopping = stopping;
+        helper_stop::uninstall(&addr, busy, keep, check)
+    })
+    .await;
     match r {
         Ok(Ok(mut v)) => {
             v["state"] = if check { "ready" } else { "removed" }.into();
@@ -4778,14 +4795,16 @@ async fn ps5_helper_uninstall(
                     .forget_console_key(&console)
                     .await
                     .into();
+                // The zstd runtime went with the folders: put it again with the next helper.
+                convert_runtime::forget(&console);
             }
             Json(v).into_response()
         }
         Ok(Err(e)) => {
             let code = match e {
-                helper_stop::UninstallError::Busy | helper_stop::UninstallError::InUse(_) => {
-                    StatusCode::CONFLICT
-                }
+                helper_stop::UninstallError::Busy
+                | helper_stop::UninstallError::InUse(_)
+                | helper_stop::UninstallError::ConsoleBusy(_) => StatusCode::CONFLICT,
                 helper_stop::UninstallError::OldHelper => StatusCode::NOT_IMPLEMENTED,
                 _ => StatusCode::BAD_GATEWAY,
             };

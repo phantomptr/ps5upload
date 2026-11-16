@@ -441,6 +441,8 @@ describe("archive extract causes", () => {
     ["fs_extract_open_failed", "err_extract_open_failed"],
     ["fs_extract_path_not_allowed", "err_extract_path"],
     ["fs_extract_bad_dest", "err_extract_path"],
+    // A conversion holds the drive: it is named, not "another extraction".
+    ["convert_busy", "upload_as_image_busy"],
   ];
   for (const [raw, key, vars] of cases) {
     it(raw, () => {

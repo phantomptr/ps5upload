@@ -34671,7 +34671,7 @@
     },
     "/api/ps5/helper/stop": {
       "post": {
-        "description": "POST /api/ps5/helper/stop — Body: `{ addr }`. Asks the console's helper to exit\n(`node.shutdown`), refused while this engine runs a job against that console.\n\n200 `{ \"state\": \"stopped\" }` once the helper's port went quiet, or `{ \"state\": \"not_running\" }`\nwhen nothing answered. 409 `{ \"error\", \"reason\": \"busy\" }` while a job runs; 502\n`{ \"error\", \"reason\": \"refused\" | \"still_running\" }` otherwise.",
+        "description": "POST /api/ps5/helper/stop — Body: `{ addr }`. Asks the console's helper to exit\n(`node.shutdown`), refused while this engine runs a job against that console.\n\n200 `{ \"state\": \"stopped\" }` once the helper's port went quiet, or `{ \"state\": \"not_running\" }`\nwhen nothing answered. 409 `{ \"error\", \"reason\": \"busy\" }` while a job runs; 502\n`{ \"error\", \"reason\": \"refused\" (not paired) | \"failed\" (the real error) | \"still_running\" }`\notherwise. Also 409 busy while another stop or removal of that console runs.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -34818,7 +34818,7 @@
     },
     "/api/ps5/helper/uninstall": {
       "post": {
-        "description": "POST /api/ps5/helper/uninstall — Body: `{ addr, keep_backups, check }`. \"Remove PS5Upload from this\nPS5\": the helper turns Minion off and removes its tile, shows the icons it hid, exits and\ndeletes its own folders on the console (`node.uninstall`). Refused (409) while this engine\nhas a job running against the console (`reason: busy`) or while something is mounted in\nthose folders (`reason: in_use`, `paths`); an older helper answers `reason: old_helper` (501).\nCopies of the helper stored in loaders are not touched here: the app removes them first.\nAfter a removal the key pinned for the console is forgotten (`key_forgotten`): its identity\nwent with the folders.",
+        "description": "POST /api/ps5/helper/uninstall — Body: `{ addr, keep_backups, check }`. \"Remove PS5Upload from this\nPS5\": the helper turns Minion off and removes its tile, shows the icons it hid, exits and\ndeletes its own folders on the console (`node.uninstall`). Refused (409) while this engine\nhas a job running against the console (`reason: busy`) or while something is mounted in\nthose folders (`reason: in_use`, `paths`) or while the console itself installs a package,\nconverts a game or extracts an archive (`reason: console_installing` | `console_converting` |\n`console_extracting`); an older helper answers `reason: old_helper` (501).\nCopies of the helper stored in loaders are not touched here: the app removes them first.\nAfter a removal the key pinned for the console is forgotten (`key_forgotten`): its identity\nwent with the folders.",
         "requestBody": {
           "content": {
             "application/json": {
