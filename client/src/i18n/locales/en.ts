@@ -2484,6 +2484,13 @@ upload_kind_pkg: "PS5 package (.pkg)",
 upload_archive_word: "archive",
 // Pkg-as-queue-item (the upload/install/delete merge).
 upload_pkg_card_title: "Package install",
+// A .pkg on Upload: install it, or copy it as a plain file (Kraken Mount).
+upload_pkg_choice_title: "Package",
+upload_pkg_choice_label: "What to do with the package",
+upload_pkg_choice_install: "Install",
+upload_pkg_choice_copy: "Copy as a file",
+upload_pkg_copy_hint: "Copied, not installed. Kraken Mount only finds packages in the folders it scans, such as /data/homebrew.",
+upload_pkg_copy_kraken: "Copied, not installed. Kraken Mount runs on this PS5, so the folder is set to one it scans.",
 upload_pkg_fw12_note:
   "FW 12+ package support depends on the jailbreak and Sony's AppInst/PlayGo path. ps5upload keeps the staged package and reports a verified result; if the console rejects it, use its Debug Settings Package Installer.",
 queue_will_install: "install after upload",

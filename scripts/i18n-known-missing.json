@@ -1,6 +1,13 @@
 {
   "ar": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -16,7 +23,14 @@
     ]
   },
   "bn": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -36,7 +50,14 @@
     ]
   },
   "de": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -63,7 +84,14 @@
     ]
   },
   "es": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -85,7 +113,14 @@
     ]
   },
   "fa": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -103,7 +138,14 @@
     ]
   },
   "fr": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -124,7 +166,14 @@
     ]
   },
   "hi": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -144,7 +193,14 @@
     ]
   },
   "hu": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -169,7 +225,14 @@
     ]
   },
   "id": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -196,7 +259,14 @@
     ]
   },
   "it": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -223,7 +293,14 @@
     ]
   },
   "ja": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -240,7 +317,14 @@
     ]
   },
   "ko": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -259,7 +343,14 @@
     ]
   },
   "pl": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -281,7 +372,14 @@
     ]
   },
   "pt-BR": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -303,7 +401,14 @@
     ]
   },
   "ru": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -324,7 +429,14 @@
     ]
   },
   "th": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -345,7 +457,14 @@
     ]
   },
   "tr": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -369,7 +488,14 @@
     ]
   },
   "vi": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -392,7 +518,14 @@
     ]
   },
   "zh-CN": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -409,7 +542,14 @@
     ]
   },
   "zh-TW": {
-    "missing": [],
+    "missing": [
+      "upload_pkg_choice_copy",
+      "upload_pkg_choice_install",
+      "upload_pkg_choice_label",
+      "upload_pkg_choice_title",
+      "upload_pkg_copy_hint",
+      "upload_pkg_copy_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",

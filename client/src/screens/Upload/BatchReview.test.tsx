@@ -99,4 +99,31 @@ describe("the Upload review list", () => {
     expect(out).toMatch(/aria-checked="true"[^>]*data-testid="batch-archive-as-is"/);
     expect(out).toContain("Choose: unpack it, or send it as it is");
   });
+
+  it("lets each package be installed or copied as a file, even a refused one", () => {
+    const pkg = (id: string, pkgChoice: "install" | "copy", over: object = {}) =>
+      row(id, {
+        path: `/dl/${id}.pkg`,
+        isDir: false,
+        pkgChoice,
+        source: { kind: pkgChoice === "copy" ? "file" : "pkg", path: `/dl/${id}.pkg`, meta: null, wrappedHint: null, zipInfo: null },
+        ...over,
+      });
+    const out = renderToStaticMarkup(
+      <BatchReview
+        {...props({
+          rows: [
+            pkg("A", "copy"),
+            pkg("B", "install", { status: "error", include: false, source: null, error: "split" }),
+            row("C"),
+          ],
+          onPkgChoice: () => {},
+        })}
+      />,
+    );
+    expect(out.match(/data-testid="pkg-choice-copy"/g)).toHaveLength(2);
+    expect(out).toMatch(/aria-checked="true"[^>]*data-testid="pkg-choice-copy"/);
+    expect(out).toMatch(/aria-checked="true"[^>]*data-testid="pkg-choice-install"/);
+    expect(out).toContain("Copy as a file");
+  });
 });
