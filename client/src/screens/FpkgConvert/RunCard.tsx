@@ -22,6 +22,7 @@ import type { ImageFormat } from "../../api/fpkg";
 import { overallProgress, stageRows, type StageRow } from "./stages";
 import type { Lz4Choice } from "./ImageOptions";
 import { GentleToggle } from "./GentleToggle";
+import { mountablePackage } from "./mountRun";
 
 export { lz4Active, type Lz4Choice } from "./ImageOptions";
 
@@ -494,7 +495,8 @@ export function RunCard(props: RunCardProps) {
               {tr("fpkg.kept", { path: p.packagePath }, "The package was built and kept: {path}")}
             </div>
           )}
-          {p.packagePath && installChoice(true)}
+          {/* Install and mount take a kept .pkg only, never what a failed image build left. */}
+          {mountablePackage(p.packagePath) && installChoice(true)}
           <div className="flex flex-wrap gap-2">
             <Button onClick={props.onAnother}>
               {tr("fpkg.another", undefined, "＋ Convert another game")}

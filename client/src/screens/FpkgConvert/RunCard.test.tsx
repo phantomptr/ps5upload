@@ -549,6 +549,29 @@ describe("RunCard", () => {
     expect(button(out, "Upload & install")).not.toBeNull();
   });
 
+  it("offers mount and install after a failed run only for a kept .pkg, never an image", () => {
+    const failed = (packagePath: string, mode: "convert-install" | "image") =>
+      html(
+        {
+          phase: "failed",
+          mode,
+          source: "/g",
+          host: "10.0.0.2",
+          stage: "install",
+          message: "unreachable",
+          packagePath,
+          stageMs: {},
+          titleId: null,
+        },
+        {},
+        { kraken: true, onMount: noop },
+      );
+    expect(button(failed("/out/a.pkg", "convert-install"), "Put on the PS5 to mount")).not.toBeNull();
+    const image = failed("/out/a.ffpfsc", "image");
+    expect(button(image, "Put on the PS5 to mount")).toBeNull();
+    expect(button(image, "Stream & install")).toBeNull();
+  });
+
   it("offers no retry when the build itself failed", () => {
     const out = html({
       phase: "failed",

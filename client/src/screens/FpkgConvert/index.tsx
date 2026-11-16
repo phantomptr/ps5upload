@@ -88,7 +88,8 @@ import { usePackageViewer } from "../../state/packageViewer";
 import { consoleSwapDeps } from "../../lib/dumpSwapConsole";
 import { amprTrace, titleIdOf } from "../../api/amprTrace";
 import { krakenIsTheMounter } from "../../lib/mounter";
-import { placePkgForMount, type MountPlaceResult } from "../../state/pkgMount";
+import { placePkgForMount } from "../../state/pkgMount";
+import { IDLE_MOUNT_RUN, mountablePackage, mountRunKey, runMount, type MountRun } from "./mountRun";
 import { useSmpState } from "../GameHub/SmpNeeded";
 import { useMountClashAsk } from "../InstallPackage/KrakenMountCard";
 
@@ -144,10 +145,7 @@ export default function WorkshopScreen() {
   // installed (see lib/mounter).
   const mounterProbe = useSmpState(host);
   const kraken = krakenIsTheMounter(mounterProbe.status === "checking" ? null : mounterProbe.status);
-  const [mountRun, setMountRun] = useState<{ busy: boolean; result: MountPlaceResult | null }>({
-    busy: false,
-    result: null,
-  });
+  const [mountRun, setMountRun] = useState<MountRun>(IDLE_MOUNT_RUN);
   const mountClash = useMountClashAsk(host);
   const kernel = useConnectionStore((s) =>
     host ? (s.runtimeByHost[hostOf(host)]?.ps5Kernel ?? null) : null,
@@ -165,7 +163,15 @@ export default function WorkshopScreen() {
 
   const navigate = useNavigate();
   const pipeline = useFpkgConversion((s) => s.pipeline);
-  const start = useFpkgConversion((s) => s.start);
+  // A mount result belongs to one run on one console: cleared when either changes, and a late
+  // answer for an old run is dropped.
+  const mountKey = mountRunKey(host, pipeline);
+  const mountKeyRef = useRef(mountKey);
+  useEffect(() => {
+    mountKeyRef.current = mountKey;
+    setMountRun(IDLE_MOUNT_RUN);
+  }, [mountKey]);
+  const start =useFpkgConversion((s) => s.start);
   const buildImage = useFpkgConversion((s) => s.buildImage);
   const buildFolder = useFpkgConversion((s) => s.buildFolder);
   const retryInstall = useFpkgConversion((s) => s.retryInstall);
@@ -1349,11 +1355,15 @@ export default function WorkshopScreen() {
             onInstall={(method) => void retryInstall(host, method)}
             kraken={kraken}
             onMount={
-              kraken && !ps4 && pipeline.phase !== "idle" && pipeline.packagePath
+              kraken && !ps4 && pipeline.phase !== "idle" && mountablePackage(pipeline.packagePath)
                 ? () => {
                     const path = pipeline.packagePath ?? "";
-                    setMountRun({ busy: true, result: null });
-                    void placePkgForMount(path, host, { onExists: mountClash.onExists }).then((result) => setMountRun({ busy: false, result }));
+                    const key = mountKey;
+                    void runMount(
+                      () => placePkgForMount(path, host, { onExists: mountClash.onExists }),
+                      () => mountKeyRef.current === key,
+                      setMountRun,
+                    );
                   }
                 : undefined
             }
