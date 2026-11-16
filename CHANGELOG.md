@@ -47,10 +47,13 @@ A big Convert update: zstd packs for every PS5 game, packs in every image format
 - **Convert** shows only the AMPR emulator choice that applies: with zstd asset packs, ampr-emu-ng goes in with the packs and the other emulator options are hidden; "Put ampr_emu 0.4.2.1 into the image" shows only under LZ4 packs; "Rebuild AMPR index" shows only for games that read through AMPR. (#828)
 - **Automatic save backups:** choose how often they run, from every 5 minutes to once a day (10 minutes unless you change it).
 - **Hardware:** the front light buttons (Light off, Light back to normal, Brightness) are removed: they did nothing on the PS5. The beeper stays. (#840)
+- **Consoles** shows the PS5 picked at the top of the app. Click another PS5 at the top to see its details.
 
 **Fixes**
 - From a review of everything in this release: a stopped or interrupted conversion no longer leaves a finished-looking but unchecked image behind; a folder you named `X.partial` is never removed by a conversion to `X`; an image left half-edited by a crash is put back before anything reads it; an archive's password is no longer kept in the queue file; and Convert's folder button, the image browser and a `.rar`'s password for folder builds work as they should.
 - A game folder with unusual characters in its `param.json`, or a damaged `eboot.bin`, could crash the engine during conversion. Found by new automated fuzz tests; it now reports the problem instead.
+- The app could offer to add a phone or computer running PS5Upload over Tailscale as a PS5. Only real PS5s are offered now.
+- **Put on the PS5 to mount** asks before replacing a package with the same name, and stopping a `.pkg` check or a `.zip`/`.7z` look-inside now stops it.
 
 
 ## 12.4.23
