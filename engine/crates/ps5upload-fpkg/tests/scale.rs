@@ -594,6 +594,42 @@ fn a_cancelled_build_leaves_nothing_behind() {
         .exists());
 }
 
+/// Stop while the package is read back ends the verify too: cancelled, nothing left behind.
+#[test]
+fn a_stop_during_verify_ends_the_build() {
+    let source = TempDir::new("cancel-verify-source");
+    let out = TempDir::new("cancel-verify-out");
+    write_tree(source.path());
+    for sample in [None, Some(7)] {
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut on_stage = |s: build::Stage| {
+            if s == build::Stage::Verify {
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        };
+        let mut control = build::BuildControl {
+            stage: Some(&mut on_stage),
+            bytes: None,
+            cancel: Some(&cancel),
+            sample,
+        };
+        let error = match build::build_controlled(
+            &request(source.path(), out.path()),
+            &mut |_| {},
+            &mut control,
+        ) {
+            Ok(report) => panic!("expected a cancellation, built {}", report.path.display()),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("cancelled"), "{error}");
+        assert!(!out.path().join(format!("{CONTENT_ID}.pkg")).exists());
+        assert!(!out
+            .path()
+            .join(format!("{CONTENT_ID}.pkg.partial"))
+            .exists());
+    }
+}
+
 /// What a caller sees before building: the source, its readiness, the cost and the room.
 #[test]
 fn inspect_reports_the_source_before_a_build() {

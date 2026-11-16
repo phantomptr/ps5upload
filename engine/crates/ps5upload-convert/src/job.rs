@@ -1345,6 +1345,28 @@ mod tests {
         assert!(!tmp.0.join("g.pkg.pkg.partial").exists());
     }
 
+    /// Stop while a `.pkg` is read back: `convert_cancelled`, and nothing is left.
+    #[test]
+    fn a_stop_during_a_pkg_verify_is_cancelled() {
+        let (tmp, game, _dir) = setup("jobpkgstop");
+        let dest = tmp.0.join("s.pkg");
+        let request: Request = serde_json::from_value(json!({"id": "p", "op": "build",
+            "path": game, "dest": dest, "format": "pkg", "pkg_level": "stored",
+            "verify": "full"}))
+        .unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&cancel);
+        let refusal = build(&request, &cancel, &mut |stage, _, _| {
+            if stage == "verify" {
+                flag.store(true, Ordering::Relaxed);
+            }
+        })
+        .unwrap_err();
+        assert_eq!(refusal.cause, "convert_cancelled", "{refusal}");
+        assert!(!dest.exists());
+        assert!(!tmp.0.join("s.pkg.partial").exists());
+    }
+
     /// zstd packs with the emulator the request names: an image and a folder, each reading
     /// back through its packs.
     #[test]
