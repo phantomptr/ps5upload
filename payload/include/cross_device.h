@@ -56,6 +56,7 @@
  *   src/smb_shares.c      1  dir    saved shares: <file>.tmp -> file
  *   src/files_prefs.c     1  dir    files-prefs.json: tmp -> final
  *   src/fakelib_overlay.c 1  dir    the overlay record left for the next helper: <record>.tmp -> record
+ *   src/console_convert.c 1  dir    the leftover-output record (pending.rec): <file>.tmp -> file
  *   src/mesh.c            1  dir    device list, settings and shared documents: <file>.tmp -> file
  *   src/profile.c         3  dir    PSN sign-in backup: <uid>.txt.tmp -> <uid>.txt (made, or a slot added) and
  *                                   <uid>.txt -> .restored;

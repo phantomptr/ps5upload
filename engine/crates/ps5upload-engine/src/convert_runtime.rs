@@ -834,7 +834,7 @@ mod tests {
             done: true,
         });
         assert!(seen().lock().unwrap().get(host).unwrap().done);
-        forget("192.0.2.77:9113");
+        forget("192.0.2.77:9120");
         assert!(
             seen().lock().unwrap().get(host).is_none(),
             "put again after a removal"

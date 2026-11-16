@@ -592,7 +592,7 @@ mod tests {
         // taken twice fails this test instead of hanging the run) and leaves the first one's mark.
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(begin_stopping("192.0.2.61:9113").is_none());
+            let _ = tx.send(begin_stopping("192.0.2.61:9120").is_none());
         });
         assert_eq!(
             rx.recv_timeout(Duration::from_secs(5)),
