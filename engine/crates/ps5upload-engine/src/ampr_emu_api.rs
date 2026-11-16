@@ -321,6 +321,10 @@ pub(crate) struct ZstdRuntimeOutcome {
     /// It already had exactly this one: nothing was written.
     already: bool,
     rescanned: bool,
+    /// The runtime Kraken Mount puts over every game it mounts, when it runs here with
+    /// `inject_ampr` on: the game starts with that file, not the one written to it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    overridden_by: Option<String>,
 }
 
 fn runtime_label(r: Option<&ps5upload_fpkg::ampr_pack::ng::ZstdRuntime>) -> String {
@@ -406,6 +410,21 @@ fn update_zstd_runtime(source: &str) -> Result<ZstdRuntimeOutcome, String> {
             );
         }
         let addr = crate::console_addr(&host);
+        let kraken = ps5upload_core::kraken::KrakenApi::probe(&addr).is_some();
+        if image && kraken {
+            // Kraken Mount mounts packages and folders, never images, and applies backports to
+            // folder games only (quer3q/kraken-mount 0.2.0 src/scan.rs:175-197, src/main.rs:64-69).
+            return Err(
+                "Kraken Mount is running on this PS5, and it does not mount game images: a \
+                 runtime put beside this image would not be used"
+                    .into(),
+            );
+        }
+        let kraken_override = if kraken {
+            kraken_override(&addr)?
+        } else {
+            None
+        };
         if image {
             // Images are read-only: a ShadowMount+ backport, which it loads ahead of the
             // game's own fakelib (backport fakelib2, backport fakelib, then the game's).
@@ -431,6 +450,7 @@ fn update_zstd_runtime(source: &str) -> Result<ZstdRuntimeOutcome, String> {
                     to,
                     already: true,
                     rescanned: false,
+                    overridden_by: None,
                 });
             }
             let copy = existing_dir
@@ -450,6 +470,7 @@ fn update_zstd_runtime(source: &str) -> Result<ZstdRuntimeOutcome, String> {
                 to,
                 already,
                 rescanned,
+                overridden_by: None,
             });
         }
         let have = console_file(&addr, &format!("{console_path}/{module}"))?;
@@ -464,6 +485,7 @@ fn update_zstd_runtime(source: &str) -> Result<ZstdRuntimeOutcome, String> {
             to,
             already,
             rescanned: false,
+            overridden_by: kraken_override,
         });
     }
 
@@ -487,6 +509,7 @@ fn update_zstd_runtime(source: &str) -> Result<ZstdRuntimeOutcome, String> {
         to,
         already,
         rescanned: false,
+        overridden_by: None,
     })
 }
 
@@ -556,9 +579,59 @@ pub(crate) struct SmpEmulatorCheck {
     /// Games in zstd packs get that file instead of their own, and it won't start them, or may
     /// hang them (drakmor's ampr_emu, or ampr-emu-ng older than 0.3.4).
     breaks_zstd: bool,
+    /// Whose folder this is: `shadowmount` (its emulator updates) or `kraken` (Kraken Mount's
+    /// `ampr/` folder, copied over every game's fakelib while `inject_ampr` is on).
+    mounter: &'static str,
+}
+
+/// Kraken Mount's runtime swap, from its `config.toml` (`None`: it has none) and the file in its
+/// `ampr/` folder (`None`: no file). With `inject_ampr` on (the default) it copies every file of
+/// `/data/krakenmount/ampr/` over each game's fakelib at launch (quer3q/kraken-mount 0.2.0
+/// src/cache.rs:531-571), so that file is the runtime every game it mounts runs with, whatever the
+/// game carries itself.
+fn kraken_emulator_check(config: Option<&str>, file: Option<&[u8]>) -> SmpEmulatorCheck {
+    let settings = ps5upload_core::kraken::parse_config(config.unwrap_or(""));
+    let updates_on = settings.inject_ampr;
+    let Some(bytes) = file else {
+        return SmpEmulatorCheck {
+            updates_on,
+            path: None,
+            kind: None,
+            version: None,
+            breaks_zstd: false,
+            mounter: "kraken",
+        };
+    };
+    let (kind, version, outdated) = ps5upload_fpkg::ampr_pack::ng::classify(bytes);
+    SmpEmulatorCheck {
+        updates_on,
+        path: Some(ps5upload_core::kraken::AMPR_FILE.to_string()),
+        kind: Some(kind),
+        version,
+        breaks_zstd: updates_on && outdated,
+        mounter: "kraken",
+    }
+}
+
+/// The file Kraken Mount puts over every game's runtime on this console, when it does (its
+/// `inject_ampr` on and a `libSceAmpr.sprx` in its `ampr/` folder).
+fn kraken_override(addr: &str) -> Result<Option<String>, String> {
+    let config = console_file(addr, ps5upload_core::kraken::CONFIG_PATH)?
+        .map(|b| String::from_utf8_lossy(&b).into_owned());
+    let file = console_file(addr, ps5upload_core::kraken::AMPR_FILE)?;
+    let check = kraken_emulator_check(config.as_deref(), file.as_deref());
+    Ok(check.path.filter(|_| check.updates_on))
 }
 
 fn smp_emulator_check(addr: &str) -> Result<SmpEmulatorCheck, String> {
+    // Kraken Mount's folder when Kraken Mount runs: its API answering is the proof, and then
+    // ShadowMount+ does not (see ps5upload_core::kraken).
+    if ps5upload_core::kraken::KrakenApi::probe(addr).is_some() {
+        let config = console_file(addr, ps5upload_core::kraken::CONFIG_PATH)?
+            .map(|b| String::from_utf8_lossy(&b).into_owned());
+        let file = console_file(addr, ps5upload_core::kraken::AMPR_FILE)?;
+        return Ok(kraken_emulator_check(config.as_deref(), file.as_deref()));
+    }
     let ini = console_file(addr, "/data/shadowmount/config.ini")?
         .map(|b| String::from_utf8_lossy(&b).into_owned())
         .unwrap_or_default();
@@ -571,6 +644,7 @@ fn smp_emulator_check(addr: &str) -> Result<SmpEmulatorCheck, String> {
             kind: None,
             version: None,
             breaks_zstd: false,
+            mounter: "shadowmount",
         });
     };
     let (kind, version, outdated) = ps5upload_fpkg::ampr_pack::ng::classify(&bytes);
@@ -580,6 +654,7 @@ fn smp_emulator_check(addr: &str) -> Result<SmpEmulatorCheck, String> {
         kind: Some(kind),
         version,
         breaks_zstd: updates_on && outdated,
+        mounter: "shadowmount",
     })
 }
 
@@ -727,6 +802,22 @@ mod tests {
             smp_emulator_updates(smb),
             (true, "/data/shadowmount/emus".to_string())
         );
+    }
+
+    #[test]
+    fn kraken_mounts_runtime_folder_is_what_its_games_run_with() {
+        // No file in its folder: nothing is swapped in.
+        let none = kraken_emulator_check(None, None);
+        assert!(none.updates_on && none.path.is_none() && !none.breaks_zstd);
+        assert_eq!(none.mounter, "kraken");
+        // A file nobody knows by its digest is never called outdated.
+        let own = kraken_emulator_check(None, Some(b"not a known runtime"));
+        assert_eq!(own.path.as_deref(), Some(ps5upload_core::kraken::AMPR_FILE));
+        assert_eq!(own.kind, Some("unknown"));
+        assert!(!own.breaks_zstd);
+        // Switched off in its config.toml: the games keep their own runtime.
+        let off = kraken_emulator_check(Some("inject_ampr = false\n"), Some(b"x"));
+        assert!(!off.updates_on && !off.breaks_zstd);
     }
 
     #[test]

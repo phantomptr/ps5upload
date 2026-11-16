@@ -87,6 +87,12 @@ export function smpWarning(
       : check.kind === "ampr-emu-ng"
         ? `ampr-emu-ng ${check.version ?? ""}`.trim()
         : check.path;
+  if (check.mounter === "kraken")
+    return tr(
+      "zstd_runtime_kraken_swaps",
+      { path: check.path, what },
+      "Kraken Mount puts {path} ({what}) over every game's own runtime, and that one won't start games in zstd packs. Replace that file with ampr-emu-ng 0.3.4 or newer, or set inject_ampr = false in /data/krakenmount/config.toml.",
+    );
   return tr(
     "zstd_runtime_smp_swaps",
     { path: check.path, what },
@@ -195,6 +201,15 @@ export function ZstdRuntimeTool({
                       { from: done.from, to: done.to },
                       "{from} → {to} in the game's folder. Start the game to try it.",
                     )}
+            </p>
+          )}
+          {done?.overridden_by && (
+            <p className="text-[var(--color-warn)]" data-testid="zstd-runtime-kraken-override">
+              {tr(
+                "zstd_runtime_kraken_override",
+                { path: done.overridden_by },
+                "Kraken Mount runs on this PS5 and starts every game with its own runtime, {path}, instead of the game's: that file is the one that has to be new enough.",
+              )}
             </p>
           )}
           {warning && <p className="text-[var(--color-warn)]">{warning}</p>}
