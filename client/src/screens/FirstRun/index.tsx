@@ -12,17 +12,18 @@ import {
   Box,
 } from "lucide-react";
 import {
-  payloadsRelease,
-  payloadsDownload,
+  payloadsCatalog,
   payloadsLocalInventory,
   sendPayload,
   payloadCheck,
   processList,
-  type PayloadReleaseInfo,
+  type PayloadLocalEntry,
 } from "../../api/ps5";
 import { cleanConsoleAddress, hostOf, mgmtAddr } from "../../lib/addr";
 import { checkConsole, closedPortText, payloadManagerReadyText } from "../../lib/consoleCheck";
-import { cachedCopyOfRelease, createRunTokens, settleBusyRows } from "../../lib/firstRunPayloads";
+import { chainFileFor, createRunTokens, settleBusyRows } from "../../lib/firstRunPayloads";
+import { openExternalUrl } from "../../lib/openExternalUrl";
+import { pickPath } from "../../lib/pickPath";
 import { runningChainPayloads, type ChainPayload } from "../../lib/runningChain";
 import { useConnectionStore, PS5_LOADER_PORT } from "../../state/connection";
 import { helperSendFor, useHelperSendStore } from "../../state/helperSend";
@@ -33,7 +34,6 @@ import { PageHeader, Button, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
-import { formatBytes } from "../../lib/format";
 import { humanizeCaught } from "../../lib/humanizeError";
 
 /**
@@ -41,11 +41,13 @@ import { humanizeCaught } from "../../lib/humanizeError";
  *
  * Goal: take a brand-new user from "I just opened the app" to
  * "kstuff + ShadowMount+ + ps5upload all loaded and verified" in
- * one screen, four sections, no manual download juggling.
+ * one screen. The app never downloads payloads: the user gets kstuff and
+ * ShadowMount+ from their projects and picks the files here (a copy an older
+ * version of the app downloaded into its library is used when none is picked).
  *
  * Sections (each gates the next):
  *   1. Connect       — ip + reachability (uses existing portCheck)
- *   2. Install combo — download + send kstuff → SMP, sequenced with the
+ *   2. Install combo — send the chosen kstuff → SMP files, sequenced with the
  *                      catalogue's autoload delays, then the helper through
  *                      sendHelperTo (the one send that joins a send under
  *                      way and opens pairing for an unpaired console)
@@ -89,6 +91,46 @@ export default function FirstRunScreen() {
   const [step3, setStep3] = useState<StepState>("idle");
   const [step3Msg, setStep3Msg] = useState<string>("");
   const [step3Detail, setStep3Detail] = useState<InstallStep[]>([]);
+  // The kstuff and ShadowMount+ files the user picked; the library's copies (from an older
+  // version of the app) stand in for a file not picked.
+  const [picked, setPicked] = useState<Record<string, string>>({});
+  const [inventory, setInventory] = useState<PayloadLocalEntry[]>([]);
+  const [homepages, setHomepages] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (step1 !== "ok") return;
+    let live = true;
+    void payloadsLocalInventory()
+      .then((inv) => live && setInventory(Array.isArray(inv) ? inv : []))
+      .catch(() => {});
+    void payloadsCatalog()
+      .then((cat) => {
+        if (!live) return;
+        const pages: Record<string, string> = {};
+        for (const p of Array.isArray(cat) ? cat : []) if (p.homepage) pages[p.id] = p.homepage;
+        setHomepages(pages);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [step1]);
+  const chainFile = (id: string) => chainFileFor(picked[id], inventory, id);
+  const pickChainFile = async (id: string) => {
+    try {
+      const p = await pickPath({
+        mode: "file",
+        filters: [
+          { name: "Payload", extensions: ["elf", "bin"] },
+          { name: "All files", extensions: ["*"] },
+        ],
+      });
+      if (typeof p === "string" && p) setPicked((prev) => ({ ...prev, [id]: p }));
+    } catch (e) {
+      pushNotification("warning", tr("send_notif_picker_failed", undefined, "Couldn't open file picker"), {
+        body: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
 
   const { guard: guardReplace, dialog: replaceDialog } = useHelperReplaceGuard();
   const { commit: commitAddress, dialog: addressDialog } = useConsoleAddressCommit();
@@ -239,7 +281,7 @@ export default function FirstRunScreen() {
 
     try {
       const running = helperOnly ? new Set<ChainPayload>() : await detectRunningChain();
-      // ── kstuff + SMP: download from catalogue, then send ──────
+      // ── kstuff + SMP: the files the user chose, then send ──────
       for (const id of [kstuffId, SMP_ID]) {
         if (!isCurrent()) return;
         if (helperOnly) {
@@ -260,76 +302,26 @@ export default function FirstRunScreen() {
           });
           continue;
         }
-        updateStep(id, {
-          state: "busy",
-          note: tr("first_run_note_fetching", undefined, "fetching latest release…"),
-        });
-        let release: PayloadReleaseInfo;
-        try {
-          release = await payloadsRelease(id, false);
-        } catch (e) {
-          updateStep(id, {
-            state: "fail",
-            note: tr(
-              "first_run_note_release_failed",
-              { error: String(e) },
-              "release fetch: {error}",
-            ),
-          });
-          throw e;
-        }
-        if (!release.picked_asset_url) {
-          const note = tr(
-            "first_run_note_no_asset",
-            undefined,
-            "no compatible asset in latest release",
-          );
-          updateStep(id, { state: "fail", note });
-          throw new Error(`${id}: ${note}`);
-        }
-
-        // Skip the download if a copy of this release is already in the cache: saves bandwidth
-        // on re-runs. An older copy is not "the latest", so it is replaced.
-        const inventory = await payloadsLocalInventory().catch(() => []);
-        const cached = cachedCopyOfRelease(inventory, id, release.tag);
-        let elfPath: string | null = cached?.path ?? null;
-        let sentVersion = release.tag;
-        let downloadError: string | null = null;
-        if (!elfPath) {
-          if (!isCurrent()) return;
-          updateStep(id, {
-            state: "busy",
-            note: tr(
-              "first_run_note_downloading_v2",
-              { tag: release.tag, size: formatBytes(release.picked_asset_size) },
-              "downloading {tag} ({size})…",
-            ),
-          });
-          try {
-            const local = await payloadsDownload(
-              id,
-              release.picked_asset_url,
-              release.tag,
-            );
-            elfPath = local.path;
-          } catch (e) {
-            // An older copy still gets the console going, as long as the row says which it is.
-            const older = inventory.find((x) => x.payload_id === id);
-            if (!older) throw e;
-            elfPath = older.path;
-            sentVersion = older.version;
-            downloadError = e instanceof Error ? e.message : String(e);
+        // The file the user picked, else the library's copy. ShadowMount+ is optional; kstuff
+        // is not (the Send button waits for it), but a copy can vanish between the two.
+        const file = chainFile(id);
+        if (!file) {
+          if (id === SMP_ID) {
+            updateStep(id, {
+              state: "ok",
+              note: tr("first_run_note_no_file_skipped", undefined, "no file chosen — skipped"),
+            });
+            continue;
           }
-        }
-        if (!elfPath) {
           const note = tr(
-            "first_run_note_no_elf",
+            "first_run_note_no_file",
             undefined,
-            "no local ELF after download",
+            "no file chosen: get it from its project page, then choose the file",
           );
           updateStep(id, { state: "fail", note });
           throw new Error(`${id}: ${note}`);
         }
+        const elfPath = file.path;
 
         if (!isCurrent()) return;
         updateStep(id, {
@@ -343,13 +335,10 @@ export default function FirstRunScreen() {
         await sendPayload(host, elfPath).catch((e: unknown) => {
           throw new Error(loaderHint(e instanceof Error ? e.message : String(e)));
         });
-        const sent = downloadError
-          ? tr(
-              "first_run_note_sent_old",
-              { version: sentVersion, tag: release.tag, error: downloadError },
-              "sent {version}. Could not download {tag}: {error}",
-            )
-          : tr("first_run_note_sent", { tag: sentVersion }, "sent {tag}");
+        const sent =
+          file.from === "library" && file.version
+            ? tr("first_run_note_sent", { tag: file.version }, "sent {tag}")
+            : tr("first_run_note_sent_file", undefined, "sent");
         updateStep(id, { state: "ok", note: sent });
 
         // Wait the catalogue-recommended delay before the next
@@ -512,11 +501,60 @@ export default function FirstRunScreen() {
           >
             <p className="mb-3 text-xs text-[var(--color-muted)]">
               {tr(
-                "first_run_step3_hint",
+                "first_run_step3_hint_files",
                 undefined,
-                "Downloads kstuff + ShadowMount+ from GitHub on first run, then streams them to your PS5 in the right order with the catalogue's recommended delays. Cached locally, so re-running this is fast.",
+                "ps5upload doesn't download payloads. Get kstuff and ShadowMount+ (optional) from their project pages, choose the files here, and they are sent to your PS5 in the right order with the recommended waits, then ps5upload's helper.",
               )}
             </p>
+            <ul className="mb-3 space-y-2">
+              {[
+                { id: KSTUFF_CURRENT, name: "kstuff", optional: false },
+                {
+                  id: SMP_ID,
+                  name: tr("firstrun_shadowmount_label", "ShadowMount+"),
+                  optional: true,
+                },
+              ].map(({ id, name, optional }) => {
+                const file = chainFile(id);
+                return (
+                  <li key={id} className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="font-medium">
+                      {optional
+                        ? tr("first_run_file_optional", { name }, "{name} (optional)")
+                        : name}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-[var(--color-muted)]" title={file?.path}>
+                      {file
+                        ? file.from === "picked"
+                          ? file.path
+                          : tr(
+                              "first_run_file_library",
+                              { version: file.version || "?" },
+                              "the copy in the app ({version})",
+                            )
+                        : tr("first_run_file_none", undefined, "no file chosen")}
+                    </span>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void pickChainFile(id)}
+                      disabled={step3 === "busy"}
+                    >
+                      {tr("first_run_choose_file", undefined, "Choose file…")}
+                    </Button>
+                    {homepages[id] && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void openExternalUrl(homepages[id])}
+                      >
+                        {tr("payloads_project_page", undefined, "Project page")}
+                      </Button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
             <Button
               variant="primary"
               size="md"
@@ -528,17 +566,13 @@ export default function FirstRunScreen() {
                 )
               }
               onClick={() => void handleInstall()}
-              disabled={step3 === "busy"}
+              disabled={step3 === "busy" || !chainFile(KSTUFF_CURRENT)}
             >
               {step3 === "ok"
                 ? tr("first_run_run_again", undefined, "Run again")
                 : step3 === "busy"
                   ? tr("first_run_running", undefined, "Installing…")
-                  : tr(
-                      "first_run_run",
-                      undefined,
-                      "Download + send (kstuff → SMP → ps5upload)",
-                    )}
+                  : tr("first_run_run_files", undefined, "Send (kstuff → ShadowMount+ → ps5upload)")}
             </Button>
             {step3 !== "busy" && (
               <Button

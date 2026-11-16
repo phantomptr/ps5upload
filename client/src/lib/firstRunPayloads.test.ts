@@ -1,26 +1,29 @@
 import { describe, expect, it } from "vitest";
 
 import type { PayloadLocalEntry } from "../api/ps5";
-import { cachedCopyOfRelease, createRunTokens, settleBusyRows } from "./firstRunPayloads";
+import { chainFileFor, createRunTokens, settleBusyRows } from "./firstRunPayloads";
 
 const entry = (payload_id: string, version: string) =>
   ({ payload_id, version, path: `/c/${payload_id}.elf`, size: 1, mtime: 1 }) as PayloadLocalEntry;
 
-describe("the wizard's cached payloads", () => {
-  it("uses a cached copy of the release asked for", () => {
-    expect(cachedCopyOfRelease([entry("kstuff", "v2")], "kstuff", "v2")?.path).toBe("/c/kstuff.elf");
+describe("the wizard's payload files", () => {
+  it("sends the file the user picked over the library's copy", () => {
+    expect(chainFileFor(" /me/kstuff.elf ", [entry("kstuff", "v2")], "kstuff")).toEqual({
+      path: "/me/kstuff.elf",
+      from: "picked",
+    });
   });
 
-  it("does not send an older cached copy as the latest", () => {
-    expect(cachedCopyOfRelease([entry("kstuff", "v1")], "kstuff", "v2")).toBeNull();
+  it("falls back to the copy already in the library", () => {
+    expect(chainFileFor(null, [entry("kstuff", "v1")], "kstuff")).toEqual({
+      path: "/c/kstuff.elf",
+      from: "library",
+      version: "v1",
+    });
   });
 
-  it("does not trust a copy with no recorded version", () => {
-    expect(cachedCopyOfRelease([entry("kstuff", "unknown")], "kstuff", "v2")).toBeNull();
-  });
-
-  it("ignores another payload's copy", () => {
-    expect(cachedCopyOfRelease([entry("smp", "v2")], "kstuff", "v2")).toBeNull();
+  it("has nothing to send when neither is there", () => {
+    expect(chainFileFor("", [entry("smp", "v2")], "kstuff")).toBeNull();
   });
 });
 

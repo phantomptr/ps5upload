@@ -5,7 +5,7 @@
 //!
 //! Two forms. Bytes: `?host&port`, the file as the body, for a browser that has the file and
 //! no socket. JSON: `{host, port?, path | payload_id, release?}`, for a file on the engine's
-//! machine or a payload of the library (downloaded first when it isn't cached).
+//! machine or a payload of the library (its local copy only; nothing is ever downloaded).
 use axum::{
     body::Bytes,
     extract::{DefaultBodyLimit, Query},
@@ -47,7 +47,7 @@ struct SendRequest {
     /// A payload of the library.
     #[serde(default)]
     payload_id: Option<String>,
-    /// With `payload_id`: this release tag. Absent: what is cached, else the latest.
+    /// With `payload_id`: this version of the local copy. Absent: whatever version is here.
     #[serde(default)]
     release: Option<String>,
 }
@@ -281,8 +281,7 @@ async fn send_json(installs: PkgInstallStateHandle, body: &[u8]) -> Response {
             };
             let release = req.release;
             let cached =
-                tokio::task::spawn_blocking(move || lib.ensure_cached(&id, release.as_deref()))
-                    .await;
+                tokio::task::spawn_blocking(move || lib.local_copy(&id, release.as_deref())).await;
             match cached {
                 Ok(Ok(p)) => p.to_string_lossy().into_owned(),
                 Ok(Err(e)) => return crate::payloads_api::library_error(&e),

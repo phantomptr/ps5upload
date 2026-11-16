@@ -1811,31 +1811,6 @@ export async function browserInvoke<T>(
         }),
       );
 
-    case "payloads_download":
-      return postJson<T>(
-        `/api/payloads/${uenc(args["id"] as string)}/download`,
-        { asset_url: args["assetUrl"], version: args["version"] },
-        /*long=*/ true,
-      );
-
-    case "payloads_download_cancel":
-      return (
-        await postJson<{ cancelled: T }>(
-          `/api/payloads/${uenc(args["id"] as string)}/download/cancel`,
-          {},
-        )
-      ).cancelled;
-
-    case "payloads_add_custom_repo":
-      return postJson<T>("/api/payloads/repos", {
-        host: args["host"],
-        owner: args["owner"],
-        name: args["name"],
-        display_name: args["displayName"],
-        asset_hint: args["assetHint"],
-        checksum_file: args["checksumFile"],
-      });
-
     case "payloads_remove_custom_repo": {
       const r = await fetch(
         `${getEngineUrl()}/api/payloads/repos/${uenc(args["id"] as string)}`,
@@ -1847,18 +1822,6 @@ export async function browserInvoke<T>(
 
     case "payloads_sources":
       return (await getJson<{ sources: T }>("/api/payloads/sources")).sources;
-
-    case "payloads_add_source":
-      return postJson<T>("/api/payloads/sources", { url: args["url"] }, /*long=*/ true);
-
-    case "payloads_refresh_sources":
-      return (
-        await postJson<{ sources: T }>(
-          qs("/api/payloads/sources/refresh", { force: args["force"] ? 1 : undefined }),
-          {},
-          /*long=*/ true,
-        )
-      ).sources;
 
     case "payloads_remove_source": {
       const r = await fetch(

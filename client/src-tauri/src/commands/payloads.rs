@@ -1,11 +1,14 @@
 //! Payload Library commands: thin callers of `ps5upload_core::payload_library`, over the app's
 //! own cache folder. The engine's `/api/payloads` routes call the same code over the same folder
 //! (see `library_dir` and `PS5UPLOAD_PAYLOADS_DIR`).
+//!
+//! ps5upload never downloads a payload: these read the catalogue, release information and the
+//! local copies users got earlier. Users get a payload from its project page and send the file.
 
 use std::path::PathBuf;
 
 use ps5upload_core::payload_library::{
-    AddRepo, Library, LibraryError, LocalInventoryEntry, PayloadInfo, ReleaseInfo, SourceInfo,
+    Library, LibraryError, LocalInventoryEntry, PayloadInfo, ReleaseInfo, SourceInfo,
 };
 use tauri::{AppHandle, Manager};
 
@@ -39,30 +42,6 @@ async fn on_library<T: Send + 'static>(
 #[tauri::command]
 pub async fn payloads_catalog(app: AppHandle) -> Result<Vec<PayloadInfo>, String> {
     on_library(&app, |lib| Ok(lib.catalog())).await
-}
-
-/// Add a user's own repo (#93). Adding it again updates its name, hint and checksum list.
-#[tauri::command]
-pub async fn payloads_add_custom_repo(
-    app: AppHandle,
-    host: String,
-    owner: String,
-    name: String,
-    display_name: Option<String>,
-    asset_hint: Option<String>,
-    checksum_file: Option<String>,
-) -> Result<PayloadInfo, String> {
-    on_library(&app, move |lib| {
-        lib.add_custom_repo(&AddRepo {
-            host,
-            owner,
-            name,
-            display_name,
-            asset_hint,
-            checksum_file,
-        })
-    })
-    .await
 }
 
 /// Remove a user's repo and its cached files. False when the id is not one.
@@ -104,24 +83,6 @@ pub async fn payloads_local_inventory(app: AppHandle) -> Result<Vec<LocalInvento
     on_library(&app, |lib| Ok(lib.local_inventory())).await
 }
 
-/// Download a payload asset into the local cache. Only a real ELF is ever cached.
-#[tauri::command]
-pub async fn payloads_download(
-    app: AppHandle,
-    id: String,
-    asset_url: String,
-    version: String,
-) -> Result<LocalInventoryEntry, String> {
-    on_library(&app, move |lib| lib.download(&id, &asset_url, &version)).await
-}
-
-/// Stop a running download of this payload. It ends with `download_cancelled`. False when none
-/// was running.
-#[tauri::command]
-pub async fn payloads_download_cancel(app: AppHandle, id: String) -> Result<bool, String> {
-    Ok(library(&app)?.cancel_download(&id))
-}
-
 /// The cached binary of a payload, if any. An id that isn't a known payload is `None` before
 /// anything touches the file system.
 #[tauri::command]
@@ -140,23 +101,7 @@ pub async fn payloads_sources(app: AppHandle) -> Result<Vec<SourceInfo>, String>
     on_library(&app, |lib| Ok(lib.sources())).await
 }
 
-/// Fetch a payload list and keep it; refused when the address doesn't give one.
-#[tauri::command]
-pub async fn payloads_add_source(app: AppHandle, url: String) -> Result<SourceInfo, String> {
-    on_library(&app, move |lib| lib.add_source(&url)).await
-}
-
-/// Fetch the lists again: those older than an hour, or all with `force`.
-#[tauri::command]
-pub async fn payloads_refresh_sources(
-    app: AppHandle,
-    force: Option<bool>,
-) -> Result<Vec<SourceInfo>, String> {
-    let force = force.unwrap_or(false);
-    on_library(&app, move |lib| Ok(lib.refresh_sources(force))).await
-}
-
-/// Remove a payload list and what was downloaded from it.
+/// Remove a payload list and the local copies of its payloads.
 #[tauri::command]
 pub async fn payloads_remove_source(app: AppHandle, id: String) -> Result<bool, String> {
     on_library(&app, move |lib| lib.remove_source(&id)).await

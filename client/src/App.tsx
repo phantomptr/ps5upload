@@ -464,8 +464,8 @@ function AppRoutes({ location }: { location: Location }) {
         <Route path="/payloads/nanodns" element={<Navigate to={payloadCardLink("nanodns")} replace />} />
         <Route path="/payloads/ports" element={<Navigate to={RUNNING_LINK} replace />} />
         <Route path="/ports" element={<Navigate to={RUNNING_LINK} replace />} />
-        {/* The wizard's whole point is step 2: download the payload ELFs to
-            this machine and send them to the console over a raw socket.
+        {/* The wizard's whole point is step 2: send the payload files the user
+            picked on this machine to the console over a raw socket.
             Neither is possible from a browser (the Payloads screen there has
             no Catalog or Send tab), so guard it rather than stranding
             self-hosted users on a wizard that dies at step 2. */}

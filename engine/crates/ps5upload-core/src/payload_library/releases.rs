@@ -64,7 +64,7 @@ pub struct ReleaseInfo {
     pub body: String,
     pub published_at: String,
     pub html_url: String,
-    /// The asset a download takes. Empty when nothing matched.
+    /// The release's payload file (shown, never downloaded). Empty when nothing matched.
     pub picked_asset_url: String,
     pub picked_asset_name: String,
     pub picked_asset_size: u64,
@@ -141,7 +141,7 @@ pub(super) fn pick_asset(release: &GithubRelease, hint: &str) -> (String, String
         return pack(a);
     }
     // Some payloads ship only a release .zip with the ELF inside (ShadowMount+). A hint match,
-    // then any .zip; the downloader tells a zip by its magic and extracts the ELF.
+    // then any .zip.
     if !hint.is_empty() {
         if let Some(a) = release.assets.iter().find(|a| {
             let n = a.name.to_ascii_lowercase();

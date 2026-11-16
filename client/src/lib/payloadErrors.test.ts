@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   WORDED_ERROR_CODES,
-  isDownloadCancelled,
   payloadErrorText,
   usbSkippedText,
 } from "./payloadErrors";
@@ -15,8 +14,8 @@ const english = (_k: string, _v?: Record<string, string | number>, fallback?: st
 
 describe("payloadErrorText", () => {
   it("words a code it knows", () => {
-    expect(payloadErrorText(tr, new Error('repo_host_is_ip: "1.2.3.4" is an IP'))).toBe(
-      "payloads_err_repo_host_ip",
+    expect(payloadErrorText(tr, new Error("redirect_refused: to http://x"))).toBe(
+      "payloads_err_redirect_refused",
     );
     expect(payloadErrorText(tr, "usb_not_enough_space: The payloads need 5 bytes")).toBe(
       "usb_err_not_enough_space",
@@ -41,24 +40,9 @@ describe("payloadErrorText", () => {
   });
 
   it("every code the Rust side marks is worded here", () => {
-    for (const code of [
-      "repo_host_is_ip",
-      "repo_host_gitlab",
-      "custom_repos_unreadable",
-      "download_cancelled",
-      "redirect_refused",
-      "invalid_checksum_file",
-    ]) {
+    for (const code of ["custom_repos_unreadable", "redirect_refused"]) {
       expect(WORDED_ERROR_CODES.has(code)).toBe(true);
     }
-  });
-});
-
-describe("isDownloadCancelled", () => {
-  it("tells a user's Cancel from a failure", () => {
-    expect(isDownloadCancelled(new Error("download_cancelled: The download was cancelled."))).toBe(true);
-    expect(isDownloadCancelled("Error: download_cancelled: x")).toBe(true);
-    expect(isDownloadCancelled(new Error("read chunk: timed out"))).toBe(false);
   });
 });
 

@@ -401,39 +401,7 @@ describe("Payload Library and console tools in the web UI", () => {
     expect(asked().url).toBe("/api/payloads/k/releases/latest?force=1");
   });
 
-  it("downloads and cancels by id", async () => {
-    answer({ payload_id: "k" });
-    await browserInvoke("payloads_download", { id: "k", assetUrl: "https://x/a.elf", version: "v1" });
-    expect(asked()).toEqual({
-      url: "/api/payloads/k/download",
-      method: "POST",
-      body: { asset_url: "https://x/a.elf", version: "v1" },
-    });
-    fetchMock.mockReset();
-    answer({ cancelled: true });
-    expect(await browserInvoke("payloads_download_cancel", { id: "k" })).toBe(true);
-    expect(asked().url).toBe("/api/payloads/k/download/cancel");
-  });
-
-  it("adds and removes a repo", async () => {
-    answer({ id: "custom-0a" });
-    await browserInvoke("payloads_add_custom_repo", {
-      host: "github.com",
-      owner: "o",
-      name: "n",
-      displayName: null,
-      assetHint: null,
-      checksumFile: "SHA256SUMS",
-    });
-    expect(asked().body).toEqual({
-      host: "github.com",
-      owner: "o",
-      name: "n",
-      display_name: null,
-      asset_hint: null,
-      checksum_file: "SHA256SUMS",
-    });
-    fetchMock.mockReset();
+  it("removes a repo added before (none can be added)", async () => {
     answer({ removed: true });
     expect(await browserInvoke("payloads_remove_custom_repo", { id: "custom-0a" })).toBe(true);
     expect(asked()).toMatchObject({ url: "/api/payloads/repos/custom-0a", method: "DELETE" });
@@ -444,25 +412,16 @@ describe("Payload Library and console tools in the web UI", () => {
     expect(await browserInvoke("payloads_sources", {})).toEqual([{ id: "src-0a" }]);
     expect(asked()).toMatchObject({ url: "/api/payloads/sources" });
     fetchMock.mockReset();
-    answer({ id: "src-0a" });
-    await browserInvoke("payloads_add_source", { url: "https://x.example/p.json" });
-    expect(asked()).toMatchObject({ url: "/api/payloads/sources", method: "POST" });
-    expect(asked().body).toEqual({ url: "https://x.example/p.json" });
-    fetchMock.mockReset();
-    answer({ sources: [] });
-    expect(await browserInvoke("payloads_refresh_sources", { force: true })).toEqual([]);
-    expect(asked()).toMatchObject({ url: "/api/payloads/sources/refresh?force=1", method: "POST" });
-    fetchMock.mockReset();
     answer({ removed: true });
     expect(await browserInvoke("payloads_remove_source", { id: "src-0a" })).toBe(true);
     expect(asked()).toMatchObject({ url: "/api/payloads/sources/src-0a", method: "DELETE" });
   });
 
   it("keeps a worded code in front of the engine's error, and only that", async () => {
-    answer({ error: "1.2.3.4 is an IP", code: "repo_host_is_ip" }, 400);
+    answer({ error: "/d/custom_repos.json", code: "custom_repos_unreadable" }, 500);
     await expect(
-      browserInvoke("payloads_add_custom_repo", { host: "1.2.3.4", owner: "o", name: "n" }),
-    ).rejects.toThrow("repo_host_is_ip: 1.2.3.4 is an IP");
+      browserInvoke("payloads_remove_custom_repo", { id: "custom-0a" }),
+    ).rejects.toThrow("custom_repos_unreadable: /d/custom_repos.json");
     answer({ error: "fetch x: HTTP 404 (Not Found)", code: "fetch_failed" }, 502);
     await expect(browserInvoke("payloads_release", { id: "k" })).rejects.toThrow(
       /^fetch x: HTTP 404/,

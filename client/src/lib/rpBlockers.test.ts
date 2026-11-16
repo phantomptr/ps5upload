@@ -8,6 +8,8 @@ let procs: ProcessInfo[] = [];
 let truncated = false;
 const sent: string[] = [];
 let native = true;
+/** Whether the app's library holds a copy of the payload. */
+let saved = true;
 
 const b64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
 
@@ -34,9 +36,7 @@ vi.mock("../api/ps5", () => ({
   fsPathExists: async (_addr: string, path: string) =>
     [...files.keys()].some((p) => p === path || p.startsWith(`${path}/`)),
   processList: async () => ({ processes: procs, truncated }),
-  payloadsLocalPath: async (id: string) => `/cache/${id}/${id}.elf`,
-  payloadsRelease: async () => ({ picked_asset_url: "", tag: "" }),
-  payloadsDownload: async () => ({ path: "" }),
+  payloadsLocalPath: async (id: string) => (saved ? `/cache/${id}/${id}.elf` : null),
   sendPayload: async (_host: string, path: string) => {
     sent.push(path);
     return { viaPayloadManager: false };
@@ -76,6 +76,7 @@ beforeEach(() => {
   files.clear();
   sent.length = 0;
   native = true;
+  saved = true;
   truncated = false;
   procs = [hushProc, captureProc];
   files.set("/data/hush/config.ini", CONFIG);
@@ -204,6 +205,15 @@ describe("Remote Play blockers", () => {
   it("does not send Hush again when it still runs", async () => {
     files.set("/data/hush/config.ini", CONFIG.replace("enabled=1", "enabled=0"));
     expect(await HUSH_BLOCKER.resume(blockerCtx("192.168.1.99"))).toBe("running");
+    expect(sent).toEqual([]);
+  });
+
+  it("says there is no copy to start, and sends nothing, when none is saved", async () => {
+    saved = false;
+    procs = [];
+    files.set("/data/hush/config.ini", CONFIG.replace("enabled=1", "enabled=0"));
+    expect(await HUSH_BLOCKER.resume(blockerCtx("192.168.1.99"))).toBe("no_copy");
+    expect(files.get("/data/hush/config.ini")).toBe(CONFIG);
     expect(sent).toEqual([]);
   });
 

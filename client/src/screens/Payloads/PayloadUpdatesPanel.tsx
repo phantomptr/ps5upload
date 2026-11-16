@@ -1,18 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import { Download, RefreshCw, RotateCcw, Upload } from "lucide-react";
+import { ExternalLink, FileUp, RefreshCw, RotateCcw, Upload } from "lucide-react";
 
-import { Badge, Button, Callout, Checkbox, Spinner, Toggle } from "../../components";
+import { Badge, Button, Callout, Checkbox, Spinner } from "../../components";
 import {
-  applyPayloadUpdates,
   checkPayloadUpdates,
   payloadUpdatesOverview,
   pmSyncChoice,
   rollbackPayload,
   runPmSync,
-  setPayloadUpdateSettings,
   setPmSyncChoice,
   type PayloadUpdateRow,
-  type PayloadUpdateSettings,
   type PayloadUpdateState,
   type PmChange,
   type PmSyncChoice,
@@ -22,8 +19,10 @@ import { pmOverview } from "../../api/payloadManager";
 import { hostOf } from "../../lib/addr";
 import { relativeAge } from "../../lib/formatDate";
 import { humanizeCaught } from "../../lib/humanizeError";
+import { openExternalUrl } from "../../lib/openExternalUrl";
 import { markPayloadUpdatesSeen } from "../../lib/payloadUpdateNotices";
 import { useTr, type Translator } from "../../state/lang";
+import { useNavigate } from "react-router";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 
@@ -38,7 +37,7 @@ export function pmChangeText(c: PmChange, tr: Translator, nameOf: (id: string) =
     case "skipped": {
       const reason =
         c.code === "not_downloaded"
-          ? tr("pu_skip_not_downloaded", undefined, "not downloaded to this computer yet")
+          ? tr("pu_skip_not_saved", undefined, "not saved on this computer")
           : c.code === "folder_in_use"
             ? tr(
                 "pu_skip_folder",
@@ -72,7 +71,6 @@ export function visibleChanges(r: PmSyncReport): PmChange[] {
 
 export interface PayloadUpdatesViewProps {
   tr: Translator;
-  settings: PayloadUpdateSettings | null;
   state: PayloadUpdateState | null;
   /** The selected console ("" for none). */
   host: string;
@@ -82,17 +80,20 @@ export interface PayloadUpdatesViewProps {
   busy: string | null;
   nowSecs: number;
   onCheck: () => void;
-  onUpdate: (id?: string) => void;
+  /** Open the newer release's page (the app doesn't download payloads). */
+  onOpenPage: (row: PayloadUpdateRow) => void;
+  /** Open the Send payload tab, to send a file the user got themselves. */
+  onSendFile: () => void;
   onRollback: (id: string) => void;
-  onAuto: (on: boolean) => void;
   onChoice: (id: string, keep: boolean, boot: boolean) => void;
   onSync: () => void;
 }
 
-/** "Payload updates" on the Catalog tab: check, update, roll back, and keep Payload Manager in
- *  step. Presentational; `PayloadUpdatesPanel` feeds it. */
+/** "Payload updates" on the Catalog tab: check for newer releases of the saved payloads (each
+ *  links to its release page; the app doesn't download them), roll back, and keep Payload
+ *  Manager in step. Presentational; `PayloadUpdatesPanel` feeds it. */
 export function PayloadUpdatesView(p: PayloadUpdatesViewProps) {
-  const { tr, state, settings, busy, choice } = p;
+  const { tr, state, busy, choice } = p;
   const rows = state?.rows ?? [];
   const available = rows.filter((r) => r.update_available);
   const pmOn = !!p.host && p.pmPresent === true;
@@ -113,7 +114,7 @@ export function PayloadUpdatesView(p: PayloadUpdatesViewProps) {
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium">{r.display_name || r.payload_id}</span>
             <span className="font-mono text-xs text-[var(--color-muted)]">
-              {r.installed_version || tr("pu_not_downloaded", undefined, "not downloaded")}
+              {r.installed_version || tr("pu_no_saved_copy", undefined, "no saved copy")}
             </span>
             {r.update_available && (
               <Badge tone="warn" variant="outline">
@@ -145,15 +146,20 @@ export function PayloadUpdatesView(p: PayloadUpdatesViewProps) {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {r.update_available && (
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={icon(`update:${r.payload_id}`, <Download size={12} />)}
-              disabled={busy !== null}
-              onClick={() => p.onUpdate(r.payload_id)}
-            >
-              {tr("pm_update", undefined, "Update")}
-            </Button>
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<ExternalLink size={12} />}
+                onClick={() => p.onOpenPage(r)}
+                title={r.html_url}
+              >
+                {tr("pu_out_open_page", { version: r.latest_version }, `${r.latest_version} is out — open project page`)}
+              </Button>
+              <Button variant="ghost" size="sm" leftIcon={<FileUp size={12} />} onClick={p.onSendFile}>
+                {tr("payloads_send_file", undefined, "Send a file…")}
+              </Button>
+            </>
           )}
           {r.previous_version && (
             <Button
@@ -186,9 +192,9 @@ export function PayloadUpdatesView(p: PayloadUpdatesViewProps) {
           <p className="text-xs text-[var(--color-muted)]">
             {!state || state.checked_at === 0
               ? tr(
-                  "pu_never_checked",
+                  "pu_never_checked_saved",
                   undefined,
-                  "Not checked yet. A check compares each payload you downloaded with its latest release.",
+                  "Not checked yet. A check compares each payload saved in the app with its latest release. ps5upload doesn't download updates: get a newer one from its project page and send the file.",
                 )
               : available.length > 0
                 ? tr("pu_count", { n: available.length }, `Updates available: ${available.length}`)
@@ -215,33 +221,8 @@ export function PayloadUpdatesView(p: PayloadUpdatesViewProps) {
           >
             {tr("pu_check", undefined, "Check for payload updates")}
           </Button>
-          {available.length > 1 && (
-            <Button
-              variant="primary"
-              size="sm"
-              leftIcon={icon("update:all", <Download size={12} />)}
-              disabled={busy !== null}
-              onClick={() => p.onUpdate()}
-            >
-              {tr("pu_update_all", undefined, "Update all")}
-            </Button>
-          )}
         </div>
       </div>
-
-      {settings && (
-        <Toggle
-          checked={settings.auto_update}
-          disabled={busy !== null}
-          onChange={p.onAuto}
-          label={tr("pu_auto_label", undefined, "Keep payloads up to date")}
-          hint={tr(
-            "pu_auto_hint",
-            undefined,
-            "Checks when the app starts and once a day, and downloads newer releases. The version each update replaces is kept, so you can roll back.",
-          )}
-        />
-      )}
 
       {state?.rate_limited && (
         <p className="text-xs text-[var(--color-warn)]">
@@ -258,9 +239,9 @@ export function PayloadUpdatesView(p: PayloadUpdatesViewProps) {
       {p.host && p.pmPresent === false && (
         <Callout tone="info" title={tr("pm_absent_title", undefined, "Payload Manager isn't running on this PS5")}>
           {tr(
-            "pu_pm_absent",
+            "pu_pm_absent_saved",
             undefined,
-            "Updates go to this computer's payloads only. Start Payload Manager on the PS5 to keep its copies and boot list in step.",
+            "Start Payload Manager on the PS5 to keep its copies and boot list in step with the payloads saved here.",
           )}
         </Callout>
       )}
@@ -290,9 +271,9 @@ export function PayloadUpdatesView(p: PayloadUpdatesViewProps) {
               {!report.present ? (
                 <p className="text-[var(--color-muted)]">
                   {tr(
-                    "pu_pm_absent",
+                    "pu_pm_absent_saved",
                     undefined,
-                    "Updates go to this computer's payloads only. Start Payload Manager on the PS5 to keep its copies and boot list in step.",
+                    "Start Payload Manager on the PS5 to keep its copies and boot list in step with the payloads saved here.",
                   )}
                 </p>
               ) : visibleChanges(report).length === 0 ? (
@@ -327,7 +308,7 @@ export function PayloadUpdatesView(p: PayloadUpdatesViewProps) {
  *  replaced a downloaded file, so the cards below show the new version. */
 export default function PayloadUpdatesPanel({ host, onChanged }: { host: string; onChanged: () => void }) {
   const tr = useTr();
-  const [settings, setSettings] = useState<PayloadUpdateSettings | null>(null);
+  const navigate = useNavigate();
   const [state, setState] = useState<PayloadUpdateState | null>(null);
   const [pmPresent, setPmPresent] = useState<boolean | null>(null);
   const [choice, setChoice] = useState<PmSyncChoice | null>(null);
@@ -344,7 +325,6 @@ export default function PayloadUpdatesPanel({ host, onChanged }: { host: string;
 
   const reload = useCallback(async () => {
     const v = await payloadUpdatesOverview();
-    setSettings(v.settings);
     show(v.state);
   }, [show]);
 
@@ -381,37 +361,9 @@ export default function PayloadUpdatesPanel({ host, onChanged }: { host: string;
   };
 
   const nameOf = (id: string) => state?.rows.find((r) => r.payload_id === id)?.display_name || id;
-  const syncTarget = pmPresent && choice && choice.ids.length > 0 ? host : undefined;
-
-  const onUpdate = (id?: string) =>
-    run(
-      id ? `update:${id}` : "update:all",
-      async () => {
-        const r = await applyPayloadUpdates(id ? [id] : undefined, syncTarget);
-        for (const u of r.updated.filter((u) => u.updated)) {
-          pushNotification(
-            "success",
-            tr("pu_updated", { name: u.display_name || u.payload_id, version: u.to }, `Updated ${u.display_name} to ${u.to}`),
-          );
-        }
-        for (const e of r.errors) {
-          pushNotification("error", tr("pu_update_failed", { name: nameOf(e.payload_id) }, `Couldn't update ${nameOf(e.payload_id)}`), {
-            body: e.error,
-          });
-        }
-        if (r.pm_sync && !r.pm_sync.present) {
-          pushNotification("info", withConsolePrefix(host, tr("pm_absent_title", undefined, "Payload Manager isn't running on this PS5")));
-        }
-        onChanged();
-        await reload();
-      },
-      tr("pu_update_failed", { name: id ? nameOf(id) : "" }, `Couldn't update ${id ? nameOf(id) : ""}`),
-    );
-
   return (
     <PayloadUpdatesView
       tr={tr}
-      settings={settings}
       state={state}
       host={host}
       pmPresent={pmPresent}
@@ -425,7 +377,8 @@ export default function PayloadUpdatesPanel({ host, onChanged }: { host: string;
           tr("pu_check_failed", undefined, "Couldn't check for payload updates"),
         )
       }
-      onUpdate={(id) => void onUpdate(id)}
+      onOpenPage={(r) => void openExternalUrl(r.html_url)}
+      onSendFile={() => navigate("/payloads?tab=send")}
       onRollback={(id) =>
         void run(
           `rollback:${id}`,
@@ -438,14 +391,7 @@ export default function PayloadUpdatesPanel({ host, onChanged }: { host: string;
             onChanged();
             await reload();
           },
-          tr("pu_update_failed", { name: nameOf(id) }, `Couldn't update ${nameOf(id)}`),
-        )
-      }
-      onAuto={(on) =>
-        void run(
-          "auto",
-          async () => setSettings(await setPayloadUpdateSettings({ auto_update: on })),
-          tr("pu_setting_failed", undefined, "Couldn't save the setting"),
+          tr("pu_rollback_failed", { name: nameOf(id) }, `Couldn't roll back ${nameOf(id)}`),
         )
       }
       onChoice={(id, keep, boot) => {

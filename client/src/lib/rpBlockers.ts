@@ -15,9 +15,7 @@ import {
   fsReadPreview,
   fsWriteText,
   fetchHwPower,
-  payloadsDownload,
   payloadsLocalPath,
-  payloadsRelease,
   processList,
   sendPayload,
   type ProcessInfo,
@@ -102,7 +100,9 @@ export type PauseOutcome = "restored" | "timeout";
 
 /** How turning it back on went: running again, or set on but it needs loading (a browser
  *  cannot send payloads, or the send failed). */
-export type ResumeOutcome = "running" | "needs_send";
+/** `no_copy`: it had to be loaded again, and there is no copy of it in the app's library (the
+ *  app doesn't download payloads), so the user sends it themselves. */
+export type ResumeOutcome = "running" | "needs_send" | "no_copy";
 
 export interface RpBlocker {
   /** Its catalogue id. */
@@ -138,18 +138,15 @@ async function writeConsoleText(addr: string, path: string, text: string): Promi
   if (!r.ok) throw new Error(r.err || `could not write ${path}`);
 }
 
-/** Load a catalogue payload on the console again: the cached ELF, else the latest release
- *  (desktop and Android only; a browser cannot send payloads). */
-export async function sendCataloguePayload(host: string, id: string): Promise<boolean> {
-  if (!isTauriEnv()) return false;
-  let path = await payloadsLocalPath(id);
-  if (!path) {
-    const rel = await payloadsRelease(id);
-    if (!rel.picked_asset_url) return false;
-    path = (await payloadsDownload(id, rel.picked_asset_url, rel.tag)).path;
-  }
+/** Load a catalogue payload on the console again from the copy saved in the app's library
+ *  (desktop and Android only). The app never downloads payloads: with no saved copy nothing is
+ *  sent ("no_copy"). */
+export async function sendCataloguePayload(host: string, id: string): Promise<"sent" | "no_copy" | "unsupported"> {
+  if (!isTauriEnv()) return "unsupported";
+  const path = await payloadsLocalPath(id);
+  if (!path) return "no_copy";
   await sendPayload(host, path);
-  return true;
+  return "sent";
 }
 
 const sleepMs = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -278,7 +275,8 @@ export const HUSH_BLOCKER: RpBlocker = {
       .catch(() => false);
     if (running) return "running";
     try {
-      return (await sendCataloguePayload(ctx.host, "hush")) ? "running" : "needs_send";
+      const sent = await sendCataloguePayload(ctx.host, "hush");
+      return sent === "sent" ? "running" : sent === "no_copy" ? "no_copy" : "needs_send";
     } catch {
       return "needs_send";
     }

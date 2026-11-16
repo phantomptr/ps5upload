@@ -243,7 +243,15 @@ export async function resumePaused(host: string, ids?: readonly string[]): Promi
     try {
       const outcome = await b.resume(ctx);
       log.info("remote-play", `turned ${b.name} back on, ${k} (${outcome})`);
-      if (outcome === "needs_send") {
+      if (outcome === "no_copy") {
+        pushNotification(
+          "warning",
+          trStatic(
+            "rp_blocker_resume_no_copy",
+            "{name} is set to on again, but couldn't be started: there's no copy of it in ps5upload, and ps5upload doesn't download payloads. Send the {name} file to the PS5 to start it.",
+          ).replace(/\{name\}/g, b.name),
+        );
+      } else if (outcome === "needs_send") {
         pushNotification(
           "info",
           trStatic("rp_blocker_resume_send", "{name} is set to on again. Send it to the PS5 to start it.").replace(

@@ -1,19 +1,20 @@
-//! Keeping the payloads on this computer up to date ("any way to auto update all elfs?").
+//! New versions of the payloads on this computer ("is there a newer one?").
 //!
 //! - **Check**: every payload in the cache (and any the user keeps in a console's Payload Manager)
-//!   against its source's latest release. The release cache's hour keeps a daily check cheap;
-//!   once the host answers with its rate limit (403/429), the rest of the check reads the cache
-//!   instead of asking again.
-//! - **Update**: the newer release goes through [`Library::download`], so it gets exactly the
-//!   checks every download gets (https on the repo's host, size cap, checksum list, ELF magic).
-//!   The copy it replaces is kept in `<id>/previous/`, so one click puts it back.
-//! - **Roll back**: swaps the current copy and the kept one; rolling back twice is rolling forward.
+//!   against its source's latest release: release information only, never a file. The release
+//!   cache's hour keeps a check cheap; once the host answers with its rate limit (403/429), the
+//!   rest of the check reads the cache instead of asking again. The app never downloads a
+//!   payload: the user gets the new version from the project page and sends the file.
+//! - **Roll back**: earlier versions of the app kept the copy an update replaced in
+//!   `<id>/previous/`; a rollback swaps the current copy and the kept one, so rolling back twice
+//!   is rolling forward.
 //!
 //! Every write goes through a temporary name in the same folder and a rename, so a reader never
 //! sees half a file. These are files on this computer; nothing here renames on a console.
 //!
-//! Files: `<dir>/update-settings.json` (the "Keep payloads up to date" switch),
-//! `<dir>/update-state.json` (the last check, what was applied, the last Payload Manager syncs).
+//! Files: `<dir>/update-state.json` (the last check, what was applied, the last Payload Manager
+//! syncs). An old `<dir>/update-settings.json` (the removed "Keep payloads up to date" switch) is
+//! ignored.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -22,7 +23,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use super::download::remove_other_elfs;
+use super::cache::remove_other_elfs;
 use super::{
     atomic_write, elf_in_dir, is_safe_payload_id, replace_file, unique_suffix, Library,
     LibraryError, ReleaseInfo, TmpFile,
@@ -30,21 +31,11 @@ use super::{
 
 /// The folder in a payload's cache that holds the copy an update replaced.
 pub const PREVIOUS_DIR: &str = "previous";
-const SETTINGS_FILE: &str = "update-settings.json";
 const STATE_FILE: &str = "update-state.json";
 /// How many applied updates the state remembers.
 const APPLIED_CAP: usize = 30;
 /// A staging folder older than this was left by a crash.
 const STALE_STAGING_AGE: Duration = Duration::from_secs(3600);
-
-/// The user's update settings.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UpdateSettings {
-    /// "Keep payloads up to date": check at start and daily, and apply what is newer. Off
-    /// unless the user turns it on.
-    #[serde(default)]
-    pub auto_update: bool,
-}
 
 /// One payload in an update check.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -52,7 +43,7 @@ pub struct UpdateRow {
     pub payload_id: String,
     pub display_name: String,
     pub is_custom: bool,
-    /// The version on this computer; empty when it is not downloaded yet.
+    /// The version on this computer; empty when there is no copy here.
     pub installed_version: String,
     /// The source's latest release; empty when it could not be read.
     pub latest_version: String,
@@ -71,7 +62,7 @@ pub struct UpdateRow {
     pub error: Option<String>,
 }
 
-/// An update that was applied.
+/// An update or rollback that was applied (updates were applied by earlier versions).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppliedUpdate {
     pub payload_id: String,
@@ -107,9 +98,6 @@ pub struct UpdateState {
     /// Grows when an update or a rollback is applied.
     #[serde(default)]
     pub applied_seq: u64,
-    /// When the automatic check last ran.
-    #[serde(default)]
-    pub last_auto_run_at: i64,
     /// The last Payload Manager sync of each console.
     #[serde(default)]
     pub pm_syncs: BTreeMap<String, super::pm_sync::PmSyncReport>,
@@ -122,12 +110,12 @@ impl UpdateState {
     }
 }
 
-/// What an update did.
+/// What a rollback did.
 #[derive(Debug, Clone, Serialize)]
 pub struct UpdateOutcome {
     pub payload_id: String,
     pub display_name: String,
-    /// False when the copy here was already the latest.
+    /// True when the copies were swapped.
     pub updated: bool,
     pub from: String,
     pub to: String,
@@ -268,7 +256,7 @@ fn io_err(what: impl std::fmt::Display) -> LibraryError {
     LibraryError::new("io_failed", what.to_string())
 }
 
-/// Updates and rollbacks of this library run one at a time in this process.
+/// Rollbacks of this library run one at a time in this process.
 fn update_lock() -> MutexGuard<'static, ()> {
     static LOCK: Mutex<()> = Mutex::new(());
     LOCK.lock().unwrap_or_else(|e| e.into_inner())
@@ -309,15 +297,6 @@ pub(crate) fn write_json<T: Serialize>(dir: &Path, path: &Path, v: &T) -> Result
 }
 
 impl Library {
-    pub fn update_settings(&self) -> UpdateSettings {
-        read_json(&self.dir.join(SETTINGS_FILE))
-    }
-
-    pub fn set_update_settings(&self, s: &UpdateSettings) -> Result<UpdateSettings, LibraryError> {
-        write_json(&self.dir, &self.dir.join(SETTINGS_FILE), s)?;
-        Ok(s.clone())
-    }
-
     /// The last check, what was applied, and the last syncs. Never touches the network.
     pub fn update_state(&self) -> UpdateState {
         read_json(&self.dir.join(STATE_FILE))
@@ -432,68 +411,6 @@ impl Library {
             s.checked_at = now_secs();
             s.rate_limited = rate_limited;
             s.clone()
-        })
-    }
-
-    /// Bring one payload to its latest release, keeping the copy it replaces for a rollback.
-    /// A payload not downloaded yet is downloaded. A failed or refused download leaves the copy
-    /// here, and the kept one, as they were.
-    pub fn update_payload(&self, id: &str) -> Result<UpdateOutcome, LibraryError> {
-        let _g = update_lock();
-        self.resolve_entry(id)?;
-        let display_name = self
-            .catalog()
-            .into_iter()
-            .find(|p| p.id == id)
-            .map(|p| p.display_name)
-            .unwrap_or_default();
-        let before = self.local_entry(id);
-        let release = self.release(id, false)?;
-        if release.picked_asset_url.is_empty() {
-            return Err(LibraryError::new(
-                "no_asset",
-                format!("release {} of {id} has no payload file", release.tag),
-            ));
-        }
-        if let Some(b) = &before {
-            if !is_newer(&release.tag, &b.version)
-                && !rebuilt_under_same_tag(&release, &b.version, b.size)
-            {
-                return Ok(UpdateOutcome {
-                    payload_id: id.to_string(),
-                    display_name,
-                    updated: false,
-                    from: b.version.clone(),
-                    to: b.version.clone(),
-                    path: b.path.clone(),
-                });
-            }
-        }
-        let staged = match &before {
-            Some(_) => Some(self.stage_current(id)?),
-            None => None,
-        };
-        let local = self.download(id, &release.picked_asset_url, &release.tag)?;
-        if let Some(staged) = staged {
-            self.promote_previous(id, staged)?;
-        }
-        let from = before.map(|b| b.version).unwrap_or_default();
-        let applied = AppliedUpdate {
-            payload_id: id.to_string(),
-            display_name: display_name.clone(),
-            from: from.clone(),
-            to: local.version.clone(),
-            at: now_secs(),
-            rollback: false,
-        };
-        self.note_applied(applied)?;
-        Ok(UpdateOutcome {
-            payload_id: id.to_string(),
-            display_name,
-            updated: true,
-            from,
-            to: local.version,
-            path: local.path,
         })
     }
 
@@ -643,7 +560,7 @@ fn sweep_stale_staging(dir: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::library;
+    use super::super::test_support::{library, seed};
     use super::*;
 
     const ID: &str = "kstuff-echostretch";
@@ -726,8 +643,7 @@ mod tests {
     #[test]
     fn a_check_finds_the_newer_release_and_counts_it_once() {
         let (_d, http, lib) = library("check");
-        http.ok(&asset("v1"), &elf(1, 64));
-        lib.download(ID, &asset("v1"), "v1").unwrap();
+        seed(&lib, ID, "kstuff.elf", &elf(1, 64), "v1");
         http.ok(LATEST, release_json("v2", 80).as_bytes());
 
         let s = lib.check_updates(true, &[]).unwrap();
@@ -750,8 +666,7 @@ mod tests {
     #[test]
     fn the_current_release_is_not_an_update() {
         let (_d, http, lib) = library("current");
-        http.ok(&asset("v2"), &elf(1, 64));
-        lib.download(ID, &asset("v2"), "v2").unwrap();
+        seed(&lib, ID, "kstuff.elf", &elf(1, 64), "v2");
         http.ok(LATEST, release_json("v2", 64).as_bytes());
         let s = lib.check_updates(true, &[]).unwrap();
         assert!(!s.rows[0].update_available);
@@ -762,8 +677,7 @@ mod tests {
     fn a_rolling_tag_rebuilt_shows_by_its_size() {
         let (_d, http, lib) = library("rolling");
         let url = "https://github.com/EchoStretch/kstuff-lite/releases/download/latest/kstuff.elf";
-        http.ok(url, &elf(1, 64));
-        lib.download(ID, url, "latest").unwrap();
+        seed(&lib, ID, "kstuff.elf", &elf(1, 64), "latest");
         let rel = |size: usize| {
             format!(
                 r#"{{"tag_name":"latest","assets":[{{"name":"kstuff.elf","browser_download_url":"{url}","size":{size}}}]}}"#
@@ -780,18 +694,14 @@ mod tests {
         let (_d, http, lib) = library("ratelimit");
         let smp_latest = "https://api.github.com/repos/drakmor/shadowMountPlus/releases/latest";
         // Two payloads here; both release lists cached from an earlier check.
-        for (id, url, tag) in [
-            (ID, asset("v1"), "v1"),
-            (
-                "shadowmountplus",
-                "https://github.com/drakmor/shadowMountPlus/releases/download/v1/shadowmountplus.elf"
-                    .to_string(),
-                "v1",
-            ),
-        ] {
-            http.ok(&url, &elf(1, 64));
-            lib.download(id, &url, tag).unwrap();
-        }
+        seed(&lib, ID, "kstuff.elf", &elf(1, 64), "v1");
+        seed(
+            &lib,
+            "shadowmountplus",
+            "shadowmountplus.elf",
+            &elf(1, 64),
+            "v1",
+        );
         http.ok(LATEST, release_json("v2", 80).as_bytes());
         http.ok(
             smp_latest,
@@ -822,37 +732,17 @@ mod tests {
     }
 
     #[test]
-    fn an_update_keeps_the_replaced_copy_and_a_rollback_swaps_them() {
-        let (_d, http, lib) = library("update");
+    fn a_rollback_swaps_the_kept_copy_and_back() {
+        let (_d, http, lib) = library("rollback");
         let v1 = elf(1, 64);
         let v2 = elf(2, 80);
-        http.ok(&asset("v1"), &v1);
-        lib.download(ID, &asset("v1"), "v1").unwrap();
-        http.ok(LATEST, release_json("v2", 80).as_bytes());
-        http.ok(&asset("v2"), &v2);
-
-        let out = lib.update_payload(ID).unwrap();
-        assert!(out.updated);
-        assert_eq!((out.from.as_str(), out.to.as_str()), ("v1", "v2"));
-        assert_eq!(std::fs::read(&out.path).unwrap(), v2);
-        assert_eq!(lib.previous_version(ID).as_deref(), Some("v1"));
+        // An earlier version of the app updated v1 to v2 and kept v1.
+        seed(&lib, ID, "kstuff.elf", &v2, "v2");
         let dir = lib.dir().join(ID);
-        assert_eq!(
-            files_in(&dir),
-            ["VERSION", "kstuff.elf", "previous", "release.json"]
-        );
-        assert_eq!(
-            std::fs::read(dir.join(PREVIOUS_DIR).join("kstuff.elf")).unwrap(),
-            v1
-        );
-        let state = lib.update_state();
-        assert_eq!(state.applied_seq, 1);
-        assert_eq!(state.applied[0].to, "v2");
-
-        // Already current: nothing is downloaded and the kept copy stays.
-        let asked = http.asked.lock().unwrap().len();
-        assert!(!lib.update_payload(ID).unwrap().updated);
-        assert_eq!(http.asked.lock().unwrap().len(), asked);
+        std::fs::create_dir_all(dir.join(PREVIOUS_DIR)).unwrap();
+        std::fs::write(dir.join(PREVIOUS_DIR).join("kstuff.elf"), &v1).unwrap();
+        std::fs::write(dir.join(PREVIOUS_DIR).join("VERSION"), "v1").unwrap();
+        assert_eq!(lib.previous_version(ID).as_deref(), Some("v1"));
 
         // One click back, and one click forward again.
         let back = lib.rollback_payload(ID).unwrap();
@@ -863,53 +753,19 @@ mod tests {
         let fwd = lib.rollback_payload(ID).unwrap();
         assert_eq!(fwd.to, "v2");
         assert_eq!(std::fs::read(dir.join("kstuff.elf")).unwrap(), v2);
-        assert!(lib.update_state().applied[0].rollback);
-        // No staging folder or temporary file is left.
-        assert_eq!(
-            files_in(&dir),
-            ["VERSION", "kstuff.elf", "previous", "release.json"]
-        );
-    }
-
-    #[test]
-    fn a_refused_download_leaves_both_copies_as_they_were() {
-        let (_d, http, lib) = library("refused");
-        let v1 = elf(1, 64);
-        http.ok(&asset("v1"), &v1);
-        lib.download(ID, &asset("v1"), "v1").unwrap();
-        http.ok(LATEST, release_json("v2", 80).as_bytes());
-        // An HTML page where the ELF should be: download verification refuses it.
-        http.ok(&asset("v2"), b"<html>not found</html>");
-        let e = lib.update_payload(ID).unwrap_err();
-        assert_eq!(e.code, "asset_not_payload");
-        let dir = lib.dir().join(ID);
-        assert_eq!(std::fs::read(dir.join("kstuff.elf")).unwrap(), v1);
-        assert_eq!(lib.local_entry(ID).unwrap().version, "v1");
-        assert!(lib.previous_version(ID).is_none());
-        assert_eq!(files_in(&dir), ["VERSION", "kstuff.elf", "release.json"]);
-        assert_eq!(lib.update_state().applied_seq, 0);
-    }
-
-    #[test]
-    fn a_size_that_lies_is_refused_too() {
-        let (_d, http, lib) = library("truncated");
-        http.ok(&asset("v1"), &elf(1, 64));
-        lib.download(ID, &asset("v1"), "v1").unwrap();
-        http.ok(LATEST, release_json("v2", 80).as_bytes());
-        http.ok(&asset("v2"), b"\x7FE");
-        assert_eq!(
-            lib.update_payload(ID).unwrap_err().code,
-            "asset_not_payload"
-        );
-        assert_eq!(lib.local_entry(ID).unwrap().version, "v1");
+        let state = lib.update_state();
+        assert!(state.applied[0].rollback);
+        assert_eq!(state.applied_seq, 2);
+        // No staging folder or temporary file is left, and nothing was fetched.
+        assert_eq!(files_in(&dir), ["VERSION", "kstuff.elf", "previous"]);
+        assert!(http.asked.lock().unwrap().is_empty());
     }
 
     #[test]
     fn nothing_to_roll_back_says_so() {
-        let (_d, http, lib) = library("noprev");
+        let (_d, _http, lib) = library("noprev");
         assert_eq!(lib.rollback_payload(ID).unwrap_err().code, "not_downloaded");
-        http.ok(&asset("v1"), &elf(1, 64));
-        lib.download(ID, &asset("v1"), "v1").unwrap();
+        seed(&lib, ID, "kstuff.elf", &elf(1, 64), "v1");
         assert_eq!(lib.rollback_payload(ID).unwrap_err().code, "no_previous");
         assert_eq!(
             lib.rollback_payload("../x").unwrap_err().code,
@@ -918,11 +774,19 @@ mod tests {
     }
 
     #[test]
-    fn settings_default_off_and_round_trip() {
-        let (_d, _h, lib) = library("settings");
-        assert!(!lib.update_settings().auto_update);
-        lib.set_update_settings(&UpdateSettings { auto_update: true })
-            .unwrap();
-        assert!(lib.update_settings().auto_update);
+    fn an_old_settings_file_is_ignored() {
+        let (_d, _h, lib) = library("old-settings");
+        std::fs::create_dir_all(lib.dir()).unwrap();
+        std::fs::write(
+            lib.dir().join("update-settings.json"),
+            br#"{"auto_update":true}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            lib.dir().join("update-state.json"),
+            br#"{"checked_at":5,"last_auto_run_at":7}"#,
+        )
+        .unwrap();
+        assert_eq!(lib.update_state().checked_at, 5);
     }
 }

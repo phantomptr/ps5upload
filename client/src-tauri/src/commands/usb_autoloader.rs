@@ -605,7 +605,7 @@ pub async fn usb_autoloader_install(
                 Some(p) => p,
                 None => {
                     skipped.push(format!(
-                        "{id}: no local cache (download via Payloads tab first)"
+                        "{id}: no copy saved on this computer (ps5upload doesn't download payloads)"
                     ));
                     continue;
                 }

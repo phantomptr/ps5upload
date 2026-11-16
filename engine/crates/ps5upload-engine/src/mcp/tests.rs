@@ -2753,25 +2753,8 @@ async fn the_payload_update_tools_reach_their_routes() {
     let asked = route_of(&server, "payloads_updates_check", json!({"force": true})).await;
     assert_eq!(asked["path"], "/api/payloads/updates/check");
     assert_eq!(asked["body"]["force"], true);
-    let asked = route_of(
-        &server,
-        "payloads_update",
-        json!({"ids": ["kstuff-echostretch"], "sync_console": "1.2.3.4"}),
-    )
-    .await;
-    assert_eq!(asked["path"], "/api/payloads/updates/apply");
-    assert_eq!(asked["body"]["sync_console"], "1.2.3.4");
-    assert_eq!(asked["body"]["ids"], json!(["kstuff-echostretch"]));
     let asked = route_of(&server, "payloads_rollback", json!({"id": "hush"})).await;
     assert_eq!(asked["path"], "/api/payloads/hush/rollback");
-    let asked = route_of(
-        &server,
-        "payloads_update_settings",
-        json!({"auto_update": true}),
-    )
-    .await;
-    assert_eq!(asked["path"], "/api/payloads/updates/settings");
-    assert_eq!(asked["body"]["auto_update"], true);
     let asked = route_of(
         &server,
         "payloads_pm_choice",
@@ -3197,8 +3180,6 @@ async fn the_payload_and_console_tools_reach_their_routes() {
     assert_eq!(asked["query"]["addr"], "den-ps5u");
     let asked = route_of(&server, "payloads_catalog", json!({})).await;
     assert_eq!(asked["path"], "/api/payloads");
-    let asked = route_of(&server, "payloads_download", json!({"id": "kstuff"})).await;
-    assert_eq!(asked["path"], "/api/payloads/kstuff/download");
     let asked = route_of(
         &server,
         "payloads_send",
