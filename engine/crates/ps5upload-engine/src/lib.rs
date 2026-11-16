@@ -5389,22 +5389,39 @@ async fn ps5_fs_write_bytes(
 struct PeripheralReq {
     #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
-    action: ps5upload_core::diagnostics::PeripheralAction,
-    /// The USB port, beep pattern or brightness level the action takes; 0 otherwise.
+    /// `bd_power_off`, `bd_power_on`, `eject_disc`, `usb_port_off`, `usb_port_on` or `beep`.
+    /// The front light's `led_off`, `led_on` and `led_dim` are no longer supported (400).
+    action: String,
+    /// The USB port or beep pattern the action takes; 0 otherwise.
     #[serde(default)]
     port: i32,
+}
+
+/// The action a peripheral request names, or why it is refused.
+fn peripheral_action(name: &str) -> Result<ps5upload_core::diagnostics::PeripheralAction, String> {
+    if ps5upload_core::diagnostics::REMOVED_PERIPHERAL_ACTIONS.contains(&name) {
+        return Err(format!(
+            "{name} is not supported: the PS5's front light can't be controlled"
+        ));
+    }
+    serde_json::from_value(serde_json::Value::String(name.to_string()))
+        .map_err(|_| format!("unknown peripheral action: {name}"))
 }
 
 /// POST /api/ps5/peripheral
 /// Body: `{ "addr": "IP", "action": "beep", "port": 1 }`
 ///
-/// The disc drive, the USB ports, the beeper and the front light. Replies with the
-/// helper's own ack (`ok`, `action`, `code`); a transport failure is a 502.
+/// The disc drive, the USB ports and the beeper. Replies with the helper's own ack (`ok`,
+/// `action`, `code`); a transport failure is a 502, an unknown or removed action a 400.
 async fn ps5_peripheral(Json(q): Json<PeripheralReq>) -> impl IntoResponse {
+    let action = match peripheral_action(q.action.trim()) {
+        Ok(a) => a,
+        Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+    };
     let Some(addr) = required_console_addr(q.addr) else {
         return missing_console_addr();
     };
-    let (action, port) = (q.action, q.port);
+    let port = q.port;
     match tokio::task::spawn_blocking(move || {
         ps5upload_core::diagnostics::peripheral_control(&addr, action, port)
     })
@@ -6804,6 +6821,40 @@ fn status_failure_body(
         body["power"] = p.as_str().into();
     }
     body
+}
+
+#[cfg(test)]
+mod peripheral_tests {
+    use super::*;
+    use ps5upload_core::diagnostics::PeripheralAction;
+
+    #[test]
+    fn the_front_light_is_refused_by_name() {
+        assert!(matches!(
+            peripheral_action("beep"),
+            Ok(PeripheralAction::Beep)
+        ));
+        assert!(matches!(
+            peripheral_action("eject_disc"),
+            Ok(PeripheralAction::EjectDisc)
+        ));
+        for led in ["led_off", "led_on", "led_dim"] {
+            let e = peripheral_action(led).unwrap_err();
+            assert!(e.contains("not supported"), "{e}");
+        }
+        assert!(peripheral_action("disco")
+            .unwrap_err()
+            .contains("unknown peripheral action"));
+    }
+
+    #[tokio::test]
+    async fn an_old_client_asking_for_the_light_gets_a_400() {
+        let req: PeripheralReq =
+            serde_json::from_value(serde_json::json!({ "addr": "192.0.2.7", "action": "led_off" }))
+                .unwrap();
+        let r = ps5_peripheral(Json(req)).await.into_response();
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    }
 }
 
 #[cfg(test)]

@@ -58,13 +58,11 @@ pub enum PeripheralAction {
     UsbPortOn,
     /// Sound the console's beeper once; `port` is the pattern (0-3).
     Beep,
-    /// Turn the front LED off.
-    LedOff,
-    /// Hand the front LED back to the console.
-    LedOn,
-    /// Front LED brightness; `port` is the level (0-2).
-    LedDim,
 }
+
+/// The front light's actions, which earlier versions offered: their calls returned 0 on a PS5
+/// and changed nothing (#840), so they are refused by name.
+pub const REMOVED_PERIPHERAL_ACTIONS: [&str; 3] = ["led_off", "led_on", "led_dim"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeripheralAck {
@@ -98,9 +96,6 @@ pub fn peripheral_control(
             PeripheralAction::UsbPortOff => "usb_port_off",
             PeripheralAction::UsbPortOn => "usb_port_on",
             PeripheralAction::Beep => "beep",
-            PeripheralAction::LedOff => "led_off",
-            PeripheralAction::LedOn => "led_on",
-            PeripheralAction::LedDim => "led_dim",
         },
         "port": port,
     });

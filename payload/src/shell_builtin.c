@@ -396,7 +396,7 @@ static int shell_open_regular(const char *path, const char **why) {
 /* Commands whose arguments are never paths: nothing to check. */
 static int shell_args_not_paths(const char *prog) {
     static const char *const names[] = {"echo", "notify", "sysctl", "date", "kill", "pid", "which",
-                                        "basename", "dirname", "beep", "led", "sleep", "help",
+                                        "basename", "dirname", "beep", "sleep", "help",
                                         "true", "false", "uname", "hostname", "id", "env", "ps",
                                         "mount", "df", "sync", "klog", "pwd", NULL};
     for (int i = 0; names[i]; i++)
@@ -451,7 +451,7 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
     char *out = NULL;
     size_t cap = 0, len = 0;
 
-    /* beep / led: the console's beeper and front LED (indicator.c). */
+    /* beep: the console's beeper (indicator.c). */
     if (indicator_shell(argc, argv, out_text, out_exit)) return 0;
 
     {
@@ -519,7 +519,6 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
             "  klog [-n N]             last N bytes of /dev/klog\n"
             "  notify <msg...>         PS5 toast notification\n"
             "  beep [0-3]              sound the console's beeper once\n"
-            "  led off|on|dim <0-2>    front LED off, back to normal, or brightness\n"
             "\n"
             "Path utils:\n"
             "  basename <path>         strip dir part\n"

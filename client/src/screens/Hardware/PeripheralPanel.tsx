@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import {
   Bell,
   Disc3,
-  Lightbulb,
   Power,
   AlertTriangle,
   CheckCircle2,
@@ -12,8 +11,6 @@ import {
   peripheralBdOff,
   peripheralBdOn,
   peripheralBeep,
-  peripheralLed,
-  peripheralLedDim,
   type PeripheralAck,
 } from "../../api/ps5";
 import { Button, Spinner } from "../../components";
@@ -84,7 +81,7 @@ export default function PeripheralPanel({
     }
   }
 
-  // The beeper and the front light: no notification (the console itself is the feedback),
+  // The beeper: no notification (the console itself is the feedback),
   // only the result line below.
   async function runIndicator(fn: (addr: string) => Promise<PeripheralAck>) {
     setBusy("indicator");
@@ -184,11 +181,12 @@ export default function PeripheralPanel({
         </div>
       )}
       <header className="mb-2 flex items-center gap-2">
-        <Lightbulb size={14} />
+        <Bell size={14} />
         <h3 className="text-sm font-semibold">
-          {tr("peripheral_indicator_title", undefined, "Front light and beeper")}
+          {tr("peripheral_beeper_title", undefined, "Beeper")}
         </h3>
       </header>
+      {/* The front light is not offered: its calls return 0 on a PS5 and change nothing (#840). */}
       <div className="flex flex-wrap items-center gap-2" data-testid="indicator-controls">
         <Button
           variant="secondary"
@@ -199,47 +197,7 @@ export default function PeripheralPanel({
         >
           {tr("peripheral_beep", undefined, "Beep")}
         </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          leftIcon={<Lightbulb size={11} />}
-          onClick={() => runIndicator((a) => peripheralLed(a, false))}
-          disabled={busy !== null}
-        >
-          {tr("peripheral_led_off", undefined, "Light off")}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          leftIcon={<Lightbulb size={11} />}
-          onClick={() => runIndicator((a) => peripheralLed(a, true))}
-          disabled={busy !== null}
-        >
-          {tr("peripheral_led_on", undefined, "Light back to normal")}
-        </Button>
-        {[0, 1, 2].map((level) => (
-          <Button
-            key={level}
-            variant="ghost"
-            size="sm"
-            onClick={() => runIndicator((a) => peripheralLedDim(a, level))}
-            disabled={busy !== null}
-          >
-            {tr(
-              "peripheral_led_dim",
-              { level: level + 1 },
-              `Brightness ${level + 1}`,
-            )}
-          </Button>
-        ))}
       </div>
-      <p className="mt-2 text-xs text-[var(--color-muted)]">
-        {tr(
-          "peripheral_indicator_note",
-          undefined,
-          "Brightness is kept by the console across restarts. The light's colour cannot be changed from here.",
-        )}
-      </p>
       {last && last.ok && !error && (
         <div className="mt-2 flex items-center gap-1 text-xs text-[var(--color-good)]">
           <CheckCircle2 size={11} />
