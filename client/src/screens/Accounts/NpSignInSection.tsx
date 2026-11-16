@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
-import { KeyRound, LogIn, Undo2 } from "lucide-react";
+import { ExternalLink, KeyRound, LogIn, Undo2 } from "lucide-react";
 
 import {
-  payloadsDownload,
-  payloadsRelease,
+  payloadsLocalPath,
   profileNpBackup,
   profileNpRestore,
   profileNpState,
@@ -16,10 +15,13 @@ import { payloadSendRefusalText } from "../../lib/payloadSendRefusal";
 import { Button, Card, ErrorCard, SuccessCard } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { hostOf } from "../../lib/addr";
+import { openExternalUrl } from "../../lib/openExternalUrl";
+import { pickPath } from "../../lib/pickPath";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { useTr } from "../../state/lang";
 import {
   NP_FAKE_SIGNIN_ID,
+  NP_FAKE_SIGNIN_PAGE,
   npBackupTarget,
   npSignInReadiness,
   npUndo,
@@ -28,10 +30,11 @@ import { humanizeCaught } from "../../lib/humanizeError";
 
 /** "Sign in to PlayStation Network (offline)": earthonion's np-fake-signin, run from here.
  *
- *  The app does not carry its own copy (the project ships no license that would allow it):
- *  it fetches the published PS5 build through the Payloads catalogue and sends it, after
- *  checking the one thing the payload checks itself, an activated account for the signed-in
- *  user. */
+ *  The app does not carry its own copy (the project ships no license that would allow it), and
+ *  it doesn't download payloads: the user gets the PS5 build from the project page and picks the
+ *  file (a copy an older version of the app saved in its library is used when there is one). It
+ *  is sent after checking the one thing the payload checks itself, an activated account for the
+ *  signed-in user. */
 export function NpSignInSection({
   addr,
   info,
@@ -106,8 +109,32 @@ export function NpSignInSection({
     }
   }
 
+  /** The np-fake-signin file to send: the library's copy, else one the user picks. */
+  async function signInFile(): Promise<string | null> {
+    const saved = await payloadsLocalPath(NP_FAKE_SIGNIN_ID).catch(() => null);
+    if (saved) return saved;
+    const picked = await pickPath({
+      mode: "file",
+      title: tr("profile.np.pick_title", undefined, "Choose the np-fake-signin file"),
+      filters: [
+        { name: "Payload", extensions: ["elf", "bin"] },
+        { name: "All files", extensions: ["*"] },
+      ],
+    });
+    return typeof picked === "string" && picked ? picked : null;
+  }
+
   async function signIn() {
     if (readiness.kind !== "ready") return;
+    setError(null);
+    let file: string | null;
+    try {
+      file = await signInFile();
+    } catch (e) {
+      setError(humanizeCaught(e));
+      return;
+    }
+    if (!file) return;
     const ok = await confirm({
       title: tr("profile.np.confirm_title", undefined, "Sign this account in?"),
       message: tr(
@@ -154,20 +181,13 @@ export function NpSignInSection({
         (wrapped as Error & { cause?: unknown }).cause = e;
         throw wrapped;
       }
-      setBusy(tr("profile.np.fetching", undefined, "Getting np-fake-signin…"));
-      const rel = await payloadsRelease(NP_FAKE_SIGNIN_ID);
-      const local = await payloadsDownload(
-        NP_FAKE_SIGNIN_ID,
-        rel.picked_asset_url,
-        rel.tag,
-      );
       setBusy(tr("profile.np.sending", undefined, "Sending it to the PS5…"));
-      await sendPayloadChecked(hostOf(addr), local.path);
+      await sendPayloadChecked(hostOf(addr), file);
       setDone(
         tr(
-          "profile.np.sent",
-          { version: rel.tag },
-          "np-fake-signin {version} ran on the PS5. Restart the PS5 to finish; the account then shows as signed in, and Settings > System > Remote Play can be turned on.",
+          "profile.np.sent_file",
+          undefined,
+          "np-fake-signin ran on the PS5. Restart the PS5 to finish; the account then shows as signed in, and Settings > System > Remote Play can be turned on.",
         ),
       );
       await refreshNpState();
@@ -196,9 +216,9 @@ export function NpSignInSection({
       </div>
       <p className="mb-3 text-xs text-[var(--color-muted)]">
         {tr(
-          "profile.np.body",
+          "profile.np.body_file",
           undefined,
-          "Makes the PS5 treat the signed-in account as signed in to PlayStation Network, without contacting Sony. Some console features only open for a signed-in account, Remote Play among them. It uses np-fake-signin by earthonion, fetched from its project page when you press the button.",
+          "Makes the PS5 treat the signed-in account as signed in to PlayStation Network, without contacting Sony. Some console features only open for a signed-in account, Remote Play among them. It uses np-fake-signin by earthonion. ps5upload doesn't download it: get the PS5 build from its project page, then press Sign in and choose the file.",
         )}
       </p>
       <ol className="mb-3 list-decimal space-y-1 ps-5 text-xs text-[var(--color-muted)]">
@@ -302,9 +322,9 @@ export function NpSignInSection({
         ) : (
           <p className="text-xs text-[var(--color-muted)]">
             {tr(
-              "profile.np.browser_v2",
+              "profile.np.browser_file",
               undefined,
-              "Signing in needs the desktop app: it fetches np-fake-signin and sends it to the PS5, which the web UI cannot do.",
+              "Signing in needs the desktop app, which sends np-fake-signin to the PS5.",
             )}
           </p>
         )}
@@ -327,6 +347,15 @@ export function NpSignInSection({
             {tr("profile.np.undo", undefined, "Undo sign-in")}
           </Button>
         )}
+        <Button
+          size="sm"
+          variant="ghost"
+          leftIcon={<ExternalLink size={14} />}
+          onClick={() => void openExternalUrl(NP_FAKE_SIGNIN_PAGE)}
+          title={NP_FAKE_SIGNIN_PAGE}
+        >
+          {tr("payloads_project_page", undefined, "Project page")}
+        </Button>
         {/* Payloads is desktop-only: in the web UI this button led to the Connection screen. */}
         {desktop && (
           <Button

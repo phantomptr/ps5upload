@@ -5,7 +5,6 @@ import {
   ChevronDown,
   ChevronUp,
   Cpu,
-  Download,
   ExternalLink,
   RefreshCw,
   Rocket,
@@ -17,17 +16,13 @@ import { useConfirm } from "../../../components/ConfirmDialog";
 import {
   fsListDir,
   payloadsCatalog,
-  payloadsDownload,
-  payloadsLocalInventory,
   payloadsRelease,
   processKill,
   processList,
-  sendPayloadChecked,
   type PayloadInfo,
   type ProcessInfo,
 } from "../../../api/ps5";
 import { mgmtAddr, withPort } from "../../../lib/addr";
-import { payloadSendRefusalText } from "../../../lib/payloadSendRefusal";
 import { openExternalUrl } from "../../../lib/openExternalUrl";
 import { compareVersions } from "../../../lib/semver";
 import { usePoll, useTransferBusy } from "../../../lib/usePoll";
@@ -35,8 +30,6 @@ import { useDocumentVisible } from "../../../lib/visibility";
 import { useConnectionStore } from "../../../state/connection";
 import { useTr } from "../../../state/lang";
 import { log } from "../../../state/logs";
-import { pushNotification } from "../../../state/notifications";
-import { withConsolePrefix } from "../../../state/roster";
 import { killPrompt } from "../../Processes/killPrompt";
 import NanoDnsScreen from "../../NanoDns";
 import SmpPanel from "./SmpPanel";
@@ -94,7 +87,8 @@ async function findMarkers(addr: string, entries: readonly HubEntry[]): Promise<
 
 /**
  * "On your PS5": one card per payload running or installed on the selected console, with
- * its web page, an update when the catalogue has a newer release, Stop, and (for
+ * its web page, a link to the newer release when the catalogue has one (the app doesn't
+ * download payloads), Stop, and (for
  * ShadowMount+, nanoDNS, Payload Manager and Hush) its own panel under Manage.
  */
 export default function OnPs5Panel() {
@@ -123,11 +117,12 @@ function OnPs5Body() {
   const [markers, setMarkers] = useState<Set<string>>(new Set());
   const [markersLoaded, setMarkersLoaded] = useState(false);
   const [reports, setReports] = useState<Record<string, IntegrationReport>>({});
-  const [latest, setLatest] = useState<Record<string, string>>({});
+  // The newest release of each card: its tag and its page.
+  const [latest, setLatest] = useState<Record<string, { tag: string; url: string }>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const { confirm, dialog } = useConfirm();
-  // Bumped after an Update, so the integrations' summaries read their version again.
-  const [summaryRev, setSummaryRev] = useState(0);
+  // Keys the integrations' summaries, so a remount reads their version again.
+  const [summaryRev] = useState(0);
   // The catalogue has been read (or failed): markers are checked once, against the full list.
   const [catalogDone, setCatalogDone] = useState(false);
 
@@ -224,7 +219,7 @@ function OnPs5Body() {
   }, []);
 
   // The newest stable release of each card whose running version is known, so the card
-  // can offer an update.
+  // can link to a newer one.
   const versionKey = cards
     .map((c) => `${c.id}=${reports[c.id]?.version ?? ""}`)
     .join("|");
@@ -235,7 +230,7 @@ function OnPs5Body() {
       if (!v || c.entryIds.length !== 1 || latest[c.id] !== undefined) continue;
       payloadsRelease(c.id)
         .then((r) => {
-          if (!cancelled && r.picked_asset_url) setLatest((prev) => ({ ...prev, [c.id]: r.tag }));
+          if (!cancelled && r.tag) setLatest((prev) => ({ ...prev, [c.id]: { tag: r.tag, url: r.html_url } }));
         })
         .catch(() => undefined);
     }
@@ -292,41 +287,6 @@ function OnPs5Body() {
     } finally {
       setBusy(null);
       await refreshProcs();
-    }
-  };
-
-  const update = async (card: HubCard, tag: string) => {
-    const ok = await confirm({
-      title: tr("hub_update_confirm_title", { name: card.name, version: tag }, `Update ${card.name} to ${tag}?`),
-      message: tr(
-        "hub_update_confirm_body",
-        { version: tag },
-        `Downloads ${tag} and sends it to the PS5. Check the PS5 for its notification.`,
-      ),
-      confirmLabel: tr("hub_update", { version: tag }, `Update to ${tag}`),
-    });
-    if (!ok) return;
-    setBusy(card.id);
-    try {
-      const rel = await payloadsRelease(card.id);
-      const inv = await payloadsLocalInventory();
-      let local = inv.find((e) => e.payload_id === card.id && e.version === rel.tag);
-      if (!local) local = await payloadsDownload(card.id, rel.picked_asset_url, rel.tag);
-      await sendPayloadChecked(host.trim(), local.path);
-      pushNotification(
-        "success",
-        withConsolePrefix(host, tr("hub_updated", { name: card.name, version: rel.tag }, `Sent ${card.name} ${rel.tag}`)),
-      );
-      setReports((prev) => ({ ...prev, [card.id]: { ...prev[card.id], version: null } }));
-      setSummaryRev((n) => n + 1);
-    } catch (e) {
-      pushNotification(
-        "error",
-        withConsolePrefix(host, tr("hub_update_failed", { name: card.name }, `Couldn't update ${card.name}`)),
-        { body: payloadSendRefusalText(e) },
-      );
-    } finally {
-      setBusy(null);
     }
   };
 
@@ -387,9 +347,9 @@ function OnPs5Body() {
         <ul className="flex flex-col gap-2.5">
           {cards.map((c) => {
             const rep = reports[c.id];
-            const tag = latest[c.id];
+            const rel = latest[c.id];
             const newer =
-              rep?.version && tag && compareVersions(rep.version, tag) === -1 ? tag : null;
+              rep?.version && rel && compareVersions(rep.version, rel.tag) === -1 ? rel : null;
             return (
               <HubCardView
                 key={c.id}
@@ -403,7 +363,6 @@ function OnPs5Body() {
                 expanded={openId === c.id}
                 onToggle={() => setOpen(openId === c.id ? null : c.id)}
                 onStop={() => void stop(c)}
-                onUpdate={(t) => void update(c, t)}
                 summary={
                   c.integration === "hush"
                     ? () => (
@@ -482,7 +441,6 @@ function HubCardView({
   expanded,
   onToggle,
   onStop,
-  onUpdate,
   summary,
   panel,
 }: {
@@ -490,7 +448,8 @@ function HubCardView({
   host: string;
   version: string | null;
   webPort: number | null;
-  newer: string | null;
+  /** A newer release than the one running: its tag and page. */
+  newer: { tag: string; url: string } | null;
   /** The catalogue was read, so "not in the catalogue" can be said (not in the web UI). */
   catalogued: boolean;
   /** Overrides the process-based Stop (an integration with its own clean stop). */
@@ -499,7 +458,6 @@ function HubCardView({
   expanded: boolean;
   onToggle: () => void;
   onStop: () => void;
-  onUpdate: (tag: string) => void;
   summary: ((fallback: ReactNode) => ReactNode) | null;
   panel: ReactNode;
 }) {
@@ -569,15 +527,19 @@ function HubCardView({
               {tr("hub_open_page", undefined, "Open web page")}
             </Button>
           )}
-          {newer && (
+          {newer && newer.url && (
             <Button
               variant="secondary"
               size="sm"
-              leftIcon={<Download size={14} />}
-              disabled={busy}
-              onClick={() => onUpdate(newer)}
+              leftIcon={<ExternalLink size={14} />}
+              onClick={() => void openExternalUrl(newer.url)}
+              title={tr(
+                "hub_newer_page_tooltip",
+                undefined,
+                "ps5upload doesn't download payloads. Get the newer file from its project page, then send it from Send payload.",
+              )}
             >
-              {tr("hub_update", { version: newer }, `Update to ${newer}`)}
+              {tr("pu_out_open_page", { version: newer.tag }, `${newer.tag} is out — open project page`)}
             </Button>
           )}
           {canStop && (

@@ -1,6 +1,7 @@
-// A small notice when payload updates are found and when one is applied. The engine checks (on
-// the button, or daily with "Keep payloads up to date"); its state carries two counters that only
-// grow, and this app remembers the last ones it told the user about.
+// A small notice when newer payload releases are found and when a saved copy changed (a rollback).
+// The engine checks on the Check button; its state carries two counters that only grow, and this
+// app remembers the last ones it told the user about. The app never downloads payloads, so the
+// notice points to the project pages, not to an in-app update.
 
 import type { AppliedPayloadUpdate, PayloadUpdateState } from "../api/payloadUpdates";
 import { payloadUpdatesOverview } from "../api/payloadUpdates";
@@ -60,8 +61,14 @@ function announce(n: PayloadUpdateNotice): void {
   if (n.kind === "available") {
     pushNotification(
       "info",
-      trStatic("pu_notice_available", "Payload updates available: {n}", { n: n.names.length }),
-      { body: n.names.join(", "), link: "/payloads?tab=catalog" },
+      trStatic("pu_notice_newer_out", "New payload releases are out: {n}", { n: n.names.length }),
+      {
+        body: `${n.names.join(", ")}. ${trStatic(
+          "pu_notice_newer_body",
+          "Get them from their project pages, then send the files.",
+        )}`,
+        link: "/payloads?tab=catalog",
+      },
     );
     return;
   }

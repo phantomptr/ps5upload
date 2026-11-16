@@ -7,13 +7,12 @@ import { randomHexId } from "../lib/randomId";
 import {
   payloadPlaylistsLoad,
   payloadPlaylistsSave,
-  payloadsDownload,
   payloadsLocalInventory,
-  payloadsRelease,
   sendPayloadChecked,
 } from "../api/ps5";
 import { payloadSendRefusalText } from "../lib/payloadSendRefusal";
 import { log } from "./logs";
+import { trStatic } from "../lib/trStatic";
 import { importedPlaylists, type PlaylistExport } from "../lib/playlistShare";
 import {
   appendStep,
@@ -26,6 +25,7 @@ import {
   patchPlaylist,
   removePlaylist,
   removeStep,
+  RepoStepNotSaved,
   resolveRepoStepPath,
   type AutoLoaderConfig,
   type Playlist,
@@ -33,13 +33,10 @@ import {
   type PlaylistStep,
 } from "../lib/playlistOps";
 
-/** Catalogue-API deps for `resolveRepoStepPath`, wired to the real Tauri
- *  commands (#93). Extracted so the run loop stays readable. */
+/** The payload library for `resolveRepoStepPath`. Only saved copies: the app never downloads
+ *  payloads. */
 const REPO_RESOLVE_DEPS = {
   localInventory: () => payloadsLocalInventory(),
-  latestRelease: (id: string) => payloadsRelease(id, false),
-  download: (id: string, assetUrl: string, version: string) =>
-    payloadsDownload(id, assetUrl, version),
 };
 
 /**
@@ -348,18 +345,25 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
         });
 
         try {
-          // Repo-sourced step (#129): resolve the payload id to a cached ELF
-          // — using the cached copy if present, else fetching the latest
-          // release + downloading it. This is what lets a playlist reference
-          // repos instead of local files: the user keeps no ELFs on their PC.
-          // A freshly-resolved path is cached back onto the step so a later
-          // OFFLINE run (or the auto-loader on next boot) can still find it.
+          // Repo-sourced step (#129): the copy saved in the app's library. The app doesn't
+          // download payloads, so with none the step fails and says to pick the file (the
+          // Playlists tab offers to turn it into a file step). A resolved path is kept on the
+          // step.
           let sendPath = step.path;
           if (isRepoStep(step)) {
-            sendPath = await resolveRepoStepPath(
-              step.payloadId as string,
-              REPO_RESOLVE_DEPS,
-            );
+            const label = step.payloadLabel || (step.payloadId as string);
+            try {
+              sendPath = await resolveRepoStepPath(step.payloadId as string, REPO_RESOLVE_DEPS, label);
+            } catch (e) {
+              if (!(e instanceof RepoStepNotSaved)) throw e;
+              throw new RepoStepNotSaved(
+                e.payloadId,
+                label,
+                trStatic("playlist_step_not_saved", "{name} isn't on this computer: pick the file", {
+                  name: label,
+                }),
+              );
+            }
             if (isLive() && sendPath && sendPath !== step.path) {
               set((s) => ({
                 playlists: s.playlists.map((p) =>

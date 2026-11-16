@@ -1,19 +1,16 @@
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Send,
-  Download,
   ExternalLink,
-  RefreshCw,
   CheckCircle2,
   HardDrive,
   AlertTriangle,
-  Activity as ActivityIcon,
-  Plus,
   Trash2,
   X,
   PackagePlus,
   ListPlus,
+  FileUp,
 } from "lucide-react";
 import { openExternalUrl as openExternal } from "../../lib/openExternalUrl";
 import { PPR_PATCH_REPO } from "../../lib/fpkgPrereqs";
@@ -22,57 +19,39 @@ import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import {
   payloadsCatalog,
-  payloadsReleases,
   payloadsLocalInventory,
-  payloadsDownload,
-  payloadsDownloadCancel,
-  payloadsAddCustomRepo,
   payloadsRemoveCustomRepo,
   payloadsSources,
-  payloadsAddSource,
-  payloadsRefreshSources,
   payloadsRemoveSource,
   sendPayloadChecked,
   type PayloadSourceInfo,
   type PayloadInfo,
-  type PayloadReleaseInfo,
   type PayloadLocalEntry,
 } from "../../api/ps5";
 import { payloadSendRefusalText } from "../../lib/payloadSendRefusal";
-import {
-  defaultRelease,
-  downloadableReleases,
-  isLatestTag,
-} from "../../lib/payloadVersions";
-import { Button, ErrorCard, Spinner, Badge, Input } from "../../components";
+import { Button, ErrorCard, Badge, Input } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { pmOverview, pmStore } from "../../api/payloadManager";
 import { recordPmStore } from "../../lib/pmUpdates";
 import { hostOf } from "../../lib/addr";
-import { isDownloadCancelled, payloadErrorText } from "../../lib/payloadErrors";
+import { payloadErrorText } from "../../lib/payloadErrors";
 import { isTauriEnv } from "../../lib/tauriEnv";
-import { useLangStore, useTr } from "../../state/lang";
+import { useTr } from "../../state/lang";
 import { catalogText } from "../../lib/payloadCatalogText";
 import UsbAutoloaderModal from "./UsbAutoloaderModal";
 import PayloadUpdatesPanel from "./PayloadUpdatesPanel";
 import { payloadCardLink } from "./payloadTabs";
-import { relativeAge } from "../../lib/formatDate";
 
-/** A file name, the same in every language. */
-const CHECKSUM_LIST_EXAMPLE = "SHA256SUMS";
+/** The Send payload tab: the one place a file from this device is picked and sent. */
+const SEND_TAB = "/payloads?tab=send";
 
 /**
- * Catalog tab of the Payloads screen — curated catalogue of
- * third-party PS5 payloads.
+ * Catalog tab of the Payloads screen: a guide to third-party PS5 payloads.
  *
- * Each row shows: name, role, the latest GitHub release, a Download
- * button (or "up to date" once cached), and a Send button that
- * streams the cached ELF to the connected PS5's :9021 loader.
- *
- * State is split: catalogue + inventory load on mount; per-row release
- * info is fetched lazily as the user expands a row, so the page
- * doesn't fire 9 GitHub requests on every visit (we'd burn through
- * the 60/hr unauth rate limit on a lazy reload-spammer).
+ * ps5upload doesn't download payloads. Each card says what the payload does and links to its
+ * project page, where the user gets the file; "Send a file…" opens the Send payload tab to
+ * send it. A copy an older version of the app downloaded into its library stays usable: it can
+ * still be sent or stored in Payload Manager from its card.
  *
  * Pre-2.12.0 this lived at /payloads as a standalone screen. The
  * Payloads shell now owns the page header + tab strip; this panel
@@ -80,26 +59,16 @@ const CHECKSUM_LIST_EXAMPLE = "SHA256SUMS";
  */
 export default function CatalogPanel() {
   const tr = useTr();
+  const navigate = useNavigate();
   const host = useConnectionStore((s) => s.host);
   const [catalog, setCatalog] = useState<PayloadInfo[] | null>(null);
   const [inventory, setInventory] = useState<PayloadLocalEntry[]>([]);
-  // `releases[id]` is the currently-SELECTED release for each payload (drives
-  // the Download button + info box). `releaseLists[id]` is the full version
-  // history for the picker; `selectedTag[id]` is the user's chosen version.
-  const [releases, setReleases] = useState<Record<string, PayloadReleaseInfo>>(
-    {},
-  );
-  const [releaseLists, setReleaseLists] = useState<
-    Record<string, PayloadReleaseInfo[]>
-  >({});
-  const [selectedTag, setSelectedTag] = useState<Record<string, string>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
-  const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [usbWizardOpen, setUsbWizardOpen] = useState(false);
   const [query, setQuery] = useState("");
   // Whether the console's Payload Manager (:8084) answers: it adds a "Store in Payload
-  // Manager" action to each cached payload. Probed once per console; a miss hides it.
+  // Manager" action to each saved copy. Probed once per console; a miss hides it.
   const [pmPresent, setPmPresent] = useState(false);
   const { confirm: confirmStore, dialog: storeDialog } = useConfirm();
   useEffect(() => {
@@ -136,10 +105,7 @@ export default function CatalogPanel() {
         setErrors((prev) => ({ ...prev, _global: String(e) }));
       });
     refreshInventory();
-    // Mount-once: `refreshInventory` is wrapped in useCallback with
-    // an empty dep array, so it's identity-stable. Depending on it
-    // here is safe but visually noisier than the empty array, and
-    // the actual intent is "fetch on mount, no re-fetch."
+    // Mount-once: `refreshInventory` is identity-stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -160,71 +126,23 @@ export default function CatalogPanel() {
     }
   }, []);
 
-  // ── Payload sources (#829): lists of payloads added by their address ──
+  // ── Payload lists added before (#829): shown so they can be removed; none can be added. ──
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [sources, setSources] = useState<PayloadSourceInfo[]>([]);
-  const [sourceUrl, setSourceUrl] = useState("");
   const [sourceBusy, setSourceBusy] = useState(false);
   const [sourceError, setSourceError] = useState<string | null>(null);
 
-  // The lists on disk at once, then the ones older than an hour fetched again.
   useEffect(() => {
     let cancelled = false;
     payloadsSources()
-      .then(async (list) => {
-        if (cancelled) return;
-        setSources(list);
-        if (list.length === 0) return;
-        const fresh = await payloadsRefreshSources(false);
-        if (cancelled) return;
-        setSources(fresh);
-        setCatalog(await payloadsCatalog());
+      .then((list) => {
+        if (!cancelled) setSources(list);
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
   }, []);
-
-  async function handleAddSource() {
-    setSourceBusy(true);
-    setSourceError(null);
-    try {
-      const info = await payloadsAddSource(sourceUrl.trim());
-      setSources(await payloadsSources());
-      await reloadCatalog();
-      await refreshInventory();
-      setSourceUrl("");
-      pushNotification(
-        "success",
-        tr("payloads_sources_added", { name: info.name }, `Added ${info.name}`),
-        {
-          body: tr(
-            "payloads_sources_added_body",
-            { count: info.payloads },
-            `${info.payloads} payloads from it are now in the list.`,
-          ),
-        },
-      );
-    } catch (e) {
-      setSourceError(payloadErrorText(tr, e));
-    } finally {
-      setSourceBusy(false);
-    }
-  }
-
-  async function handleRefreshSources() {
-    setSourceBusy(true);
-    setSourceError(null);
-    try {
-      setSources(await payloadsRefreshSources(true));
-      await reloadCatalog();
-    } catch (e) {
-      setSourceError(payloadErrorText(tr, e));
-    } finally {
-      setSourceBusy(false);
-    }
-  }
 
   async function handleRemoveSource(s: PayloadSourceInfo) {
     if (sourceBusy) return;
@@ -240,73 +158,6 @@ export default function CatalogPanel() {
       setSourceError(payloadErrorText(tr, e));
     } finally {
       setSourceBusy(false);
-    }
-  }
-
-  // ── Add-a-custom-repo form (#93) ────────────────────────────────────
-  const [addOpen, setAddOpen] = useState(false);
-  const [addRepo, setAddRepo] = useState(""); // "owner/name" or a full URL
-  const [addHost, setAddHost] = useState("github.com");
-  const [addBusy, setAddBusy] = useState(false);
-  const [addError, setAddError] = useState<string | null>(null);
-  const [addChecksum, setAddChecksum] = useState("");
-
-  /** Parse "owner/name", "github.com/owner/name", or a full repo URL into
-   *  { host, owner, name }. Returns null if it doesn't look like a repo ref. */
-  function parseRepoRef(
-    raw: string,
-    fallbackHost: string,
-  ): { host: string; owner: string; name: string } | null {
-    let s = raw.trim();
-    if (!s) return null;
-    s = s.replace(/^https?:\/\//i, "").replace(/\.git$/i, "").replace(/\/+$/, "");
-    const parts = s.split("/").filter(Boolean);
-    if (parts.length >= 3) {
-      // host/owner/name (extra path segments like /releases are ignored)
-      return { host: parts[0].toLowerCase(), owner: parts[1], name: parts[2] };
-    }
-    if (parts.length === 2) {
-      // owner/name — use the chosen host field
-      return { host: fallbackHost.trim().toLowerCase(), owner: parts[0], name: parts[1] };
-    }
-    return null;
-  }
-
-  async function handleAddCustomRepo() {
-    const ref = parseRepoRef(addRepo, addHost);
-    if (!ref) {
-      setAddError(
-        tr(
-          "payloads_custom_parse_error",
-          undefined,
-          "Enter owner/name (e.g. EchoStretch/kstuff-lite) or a full repo URL.",
-        ),
-      );
-      return;
-    }
-    setAddBusy(true);
-    setAddError(null);
-    try {
-      const info = await payloadsAddCustomRepo({
-        host: ref.host,
-        owner: ref.owner,
-        name: ref.name,
-        checksumFile: addChecksum.trim() || undefined,
-      });
-      await reloadCatalog();
-      await refreshInventory();
-      setAddRepo("");
-      setAddChecksum("");
-      setAddOpen(false);
-      pushNotification(
-        "success",
-        tr("payloads_custom_added", { name: info.display_name }, `Added ${info.display_name}`),
-        { body: tr("payloads_custom_added_body", undefined, "Check its releases and send it like any other payload.") },
-      );
-    } catch (e) {
-      setAddError(payloadErrorText(tr, e));
-    } finally {
-      setAddBusy(false);
     }
   }
 
@@ -338,94 +189,6 @@ export default function CatalogPanel() {
       return next;
     });
   };
-
-  const setDownloading = (id: string, on: boolean) => {
-    setDownloadingIds((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  };
-
-  async function handleCheck(id: string, force: boolean) {
-    setBusy(id, true);
-    setErrors((prev) => {
-      const { [id]: _drop, ...rest } = prev;
-      void _drop;
-      return rest;
-    });
-    try {
-      // Fetch the full release history (newest-first) so the user can pick
-      // a version / downgrade — and default the selection to the newest
-      // STABLE build (the latest tag is often a fast-moving pre-release).
-      const list = await payloadsReleases(id, force);
-      setReleaseLists((prev) => ({ ...prev, [id]: list }));
-      const def = defaultRelease(list);
-      const tag = def?.tag ?? list[0]?.tag ?? "";
-      setSelectedTag((prev) => ({ ...prev, [id]: tag }));
-      const sel = list.find((r) => r.tag === tag) ?? list[0];
-      if (sel) setReleases((prev) => ({ ...prev, [id]: sel }));
-    } catch (e) {
-      setErrors((prev) => ({ ...prev, [id]: payloadErrorText(tr, e) }));
-    } finally {
-      setBusy(id, false);
-    }
-  }
-
-  // User picked a specific version in the dropdown — switch the selected
-  // release (drives the Download button + info box).
-  function handleSelectTag(id: string, tag: string) {
-    setSelectedTag((prev) => ({ ...prev, [id]: tag }));
-    const sel = releaseLists[id]?.find((r) => r.tag === tag);
-    if (sel) setReleases((prev) => ({ ...prev, [id]: sel }));
-  }
-
-  async function handleDownload(id: string) {
-    const release = releases[id];
-    if (!release || !release.picked_asset_url) return;
-    setBusy(id, true);
-    setDownloading(id, true);
-    try {
-      const local = await payloadsDownload(
-        id,
-        release.picked_asset_url,
-        release.tag,
-      );
-      await refreshInventory();
-      const kb = (local.size / 1024).toFixed(1);
-      pushNotification(
-        "success",
-        tr("payloads_cached_title", { id, tag: release.tag }, `Cached ${id} ${release.tag}`),
-        {
-          body: tr("payloads_cached_body", { kb }, `${kb} KB downloaded to the local cache.`),
-          link: "/payloads",
-        },
-      );
-    } catch (e) {
-      // The user's own Cancel: nothing to report.
-      if (!isDownloadCancelled(e)) {
-        const text = payloadErrorText(tr, e);
-        setErrors((prev) => ({ ...prev, [id]: text }));
-        pushNotification("error", tr("payloads_download_failed", { id }, `Download failed: ${id}`), {
-          body: text,
-          link: "/payloads",
-        });
-      }
-    } finally {
-      setBusy(id, false);
-      setDownloading(id, false);
-    }
-  }
-
-  /** Stop a running download. On a stalled connection the request ends when its read times
-   *  out, so the button goes straight away and the card is free again then. */
-  function handleCancelDownload(id: string) {
-    setDownloading(id, false);
-    void payloadsDownloadCancel(id).catch((e) => {
-      setErrors((prev) => ({ ...prev, [id]: payloadErrorText(tr, e) }));
-    });
-  }
 
   /** Keep a cached payload on the console, in Payload Manager's own storage, under the
    *  file's name (so it lands in the same folder Payload Manager's repository install would
@@ -543,10 +306,7 @@ export default function CatalogPanel() {
 
   if (!catalog) {
     // Loading vs failure: distinguish so the user isn't stuck on
-    // "Loading catalogue…" forever when payloadsCatalog() rejected
-    // (network down, JSON parse error, missing config). Without
-    // this branch the error banner would only be rendered AFTER
-    // `catalog` populated, which never happens on failure.
+    // "Loading catalogue…" forever when payloadsCatalog() rejected.
     if (errors._global) {
       return (
         <div className="w-full">
@@ -612,13 +372,13 @@ export default function CatalogPanel() {
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
           <div className="text-xs text-[var(--color-muted)]">
             {tr(
-              "payloads_curated_blurb",
+              "payloads_guide_blurb",
               { count: catalog.filter((p) => !p.is_custom && !p.source_id).length },
-              `${catalog.filter((p) => !p.is_custom && !p.source_id).length} curated payloads. Releases are fetched from GitHub on demand and cached for 1 hour.`,
+              `${catalog.filter((p) => !p.is_custom && !p.source_id).length} payloads that work with ps5upload. ps5upload doesn't download them: get a payload from its project page, then send the file with Send a file…`,
             )}
           </div>
           {/* Wraps on a phone: the search box takes its own full-width row
-              instead of being squeezed to nothing beside the two buttons. */}
+              instead of being squeezed to nothing beside the buttons. */}
           <div className="flex flex-wrap items-center gap-2">
             <div className="w-full sm:w-44">
               <Input
@@ -634,28 +394,19 @@ export default function CatalogPanel() {
                 className="text-xs"
               />
             </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={<Plus size={12} />}
-              onClick={() => {
-                setAddOpen((v) => !v);
-                setAddError(null);
-              }}
-            >
-              {tr("payloads_add_repo", undefined, "Add repo")}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={<ListPlus size={12} />}
-              onClick={() => {
-                setSourcesOpen((v) => !v);
-                setSourceError(null);
-              }}
-            >
-              {tr("payloads_sources_button", undefined, "Payload sources")}
-            </Button>
+            {sources.length > 0 && (
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<ListPlus size={12} />}
+                onClick={() => {
+                  setSourcesOpen((v) => !v);
+                  setSourceError(null);
+                }}
+              >
+                {tr("payloads_sources_button", undefined, "Payload sources")}
+              </Button>
+            )}
             {/* It writes to a stick plugged into this computer: not something a browser can do. */}
             {isTauriEnv() && (
               <Button
@@ -674,92 +425,7 @@ export default function CatalogPanel() {
           </div>
         </div>
         <PayloadUpdatesPanel host={host} onChanged={() => void refreshInventory()} />
-        {addOpen && (
-          <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs font-medium text-[var(--color-text)]">
-                {tr("payloads_add_repo_title", undefined, "Track a custom payload repo")}
-              </span>
-              <button
-                type="button"
-                onClick={() => setAddOpen(false)}
-                className="text-[var(--color-muted)] hover:text-[var(--color-text)]"
-                aria-label={tr("close", undefined, "Close")}
-              >
-                <X size={14} />
-              </button>
-            </div>
-            <p className="mb-2 text-xs text-[var(--color-muted)]">
-              {tr(
-                "payloads_add_repo_hint",
-                undefined,
-                "Paste owner/name (e.g. EchoStretch/kstuff-lite) or a full repo URL. Releases are fetched the same way as the curated list; the same ELF/zip checks apply on download. Only add repos you trust — ps5upload doesn't vet what a custom repo ships.",
-              )}
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <Input
-                type="text"
-                value={addRepo}
-                onChange={(e) => setAddRepo(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !addBusy) void handleAddCustomRepo();
-                }}
-                placeholder={tr(
-                  "payloads_add_repo_placeholder",
-                  undefined,
-                  "owner/name or https://github.com/owner/name",
-                )}
-                spellCheck={false}
-                block={false}
-                className="min-w-[260px] flex-1 text-xs"
-              />
-              <label className="flex items-center gap-1 text-xs text-[var(--color-muted)]">
-                {tr("payloads_add_repo_host", undefined, "Host")}
-                <input
-                  type="text"
-                  value={addHost}
-                  onChange={(e) => setAddHost(e.target.value)}
-                  spellCheck={false}
-                  title={tr(
-                    "payloads_add_repo_host_hint",
-                    undefined,
-                    "Used only when you enter a bare owner/name. GitHub or a Gitea/Forgejo host.",
-                  )}
-                  className="w-36 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1.5 text-xs outline-none focus:border-[var(--color-accent)]"
-                />
-              </label>
-              <label className="flex items-center gap-1 text-xs text-[var(--color-muted)]">
-                {tr("payloads_add_repo_checksum", undefined, "Checksum list")}
-                <input
-                  type="text"
-                  value={addChecksum}
-                  onChange={(e) => setAddChecksum(e.target.value)}
-                  spellCheck={false}
-                  placeholder={CHECKSUM_LIST_EXAMPLE}
-                  title={tr(
-                    "payloads_add_repo_checksum_hint",
-                    undefined,
-                    "Optional. The name of a checksum file in each release of this repo. A download that doesn't match it is refused.",
-                  )}
-                  className="w-32 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1.5 text-xs outline-none focus:border-[var(--color-accent)]"
-                />
-              </label>
-              <Button
-                variant="primary"
-                size="sm"
-                loading={addBusy}
-                disabled={addBusy || !addRepo.trim()}
-                onClick={() => void handleAddCustomRepo()}
-              >
-                {tr("payloads_add_repo_submit", undefined, "Add")}
-              </Button>
-            </div>
-            {addError && (
-              <div className="mt-2 text-xs text-[var(--color-bad)]">{addError}</div>
-            )}
-          </div>
-        )}
-        {sourcesOpen && (
+        {sourcesOpen && sources.length > 0 && (
           <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-xs font-medium text-[var(--color-text)]">
@@ -776,86 +442,36 @@ export default function CatalogPanel() {
             </div>
             <p className="mb-2 text-xs text-[var(--color-muted)]">
               {tr(
-                "payloads_sources_hint",
+                "payloads_sources_hint_removed",
                 undefined,
-                "Add a list of payloads by its address, in the format Payload Manager uses for its Payload Sources. Its payloads show up below. A payload is only shown when the list gives its SHA-256, and a download that doesn't match is refused. Only add lists you trust.",
+                "Payload lists you added before. ps5upload no longer reads them or downloads from them, and new ones can't be added. Copies already saved on this computer can still be sent.",
               )}
             </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <Input
-                type="url"
-                value={sourceUrl}
-                onChange={(e) => setSourceUrl(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !sourceBusy && sourceUrl.trim()) void handleAddSource();
-                }}
-                placeholder="https://…/payloads.json"
-                spellCheck={false}
-                block={false}
-                className="min-w-[260px] flex-1 text-xs"
-              />
-              <Button
-                variant="primary"
-                size="sm"
-                loading={sourceBusy}
-                disabled={sourceBusy || !sourceUrl.trim()}
-                onClick={() => void handleAddSource()}
-              >
-                {tr("payloads_add_repo_submit", undefined, "Add")}
-              </Button>
-              {sources.length > 0 && (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  leftIcon={<RefreshCw size={12} />}
-                  disabled={sourceBusy}
-                  onClick={() => void handleRefreshSources()}
-                >
-                  {tr("payloads_sources_refresh", undefined, "Refresh")}
-                </Button>
-              )}
-            </div>
             {sourceError && (
               <div className="mt-2 text-xs text-[var(--color-bad)]">{sourceError}</div>
             )}
-            {sources.length > 0 && (
-              <ul className="mt-3 space-y-2">
-                {sources.map((s) => (
-                  <li
-                    key={s.id}
-                    className="flex flex-wrap items-start justify-between gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] p-2"
+            <ul className="mt-3 space-y-2">
+              {sources.map((s) => (
+                <li
+                  key={s.id}
+                  className="flex flex-wrap items-start justify-between gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] p-2"
+                >
+                  <div className="min-w-0 flex-1 text-xs">
+                    <div className="font-medium text-[var(--color-text)]">{s.name}</div>
+                    <div className="break-all text-[var(--color-muted)]">{s.url}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleRemoveSource(s)}
+                    disabled={sourceBusy}
+                    className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-bad)] disabled:opacity-50"
                   >
-                    <div className="min-w-0 flex-1 text-xs">
-                      <div className="font-medium text-[var(--color-text)]">{s.name}</div>
-                      <div className="break-all text-[var(--color-muted)]">{s.url}</div>
-                      <div className="text-[var(--color-muted)]">
-                        {tr("payloads_sources_count", { count: s.payloads }, `${s.payloads} payloads`)}
-                        {s.skipped > 0 &&
-                          ` · ${tr(
-                            "payloads_sources_skipped",
-                            { count: s.skipped },
-                            `${s.skipped} left out (no SHA-256, or not on GitHub)`,
-                          )}`}
-                      </div>
-                      {s.error && (
-                        <div className="text-[var(--color-bad)]">
-                          {tr("payloads_sources_error", { detail: s.error }, `Couldn't refresh: ${s.error}`)}
-                        </div>
-                      )}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void handleRemoveSource(s)}
-                      disabled={sourceBusy}
-                      className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-bad)] disabled:opacity-50"
-                    >
-                      <Trash2 size={11} />
-                      {tr("payloads_custom_remove_short", undefined, "Remove")}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
+                    <Trash2 size={11} />
+                    {tr("payloads_custom_remove_short", undefined, "Remove")}
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
         {errors._global && (
@@ -869,11 +485,7 @@ export default function CatalogPanel() {
           />
         )}
         {errors._inventory && (
-          // Inventory load failure: without this banner, a corrupted
-          // or unreachable local cache would show every payload as
-          // "not downloaded" — user would re-download and silently
-          // overwrite, or worse, never realise their cached files
-          // weren't being found.
+          // Without this banner an unreadable library would show every saved copy as missing.
           <ErrorCard
             title={tr(
               "payloads_inventory_failed",
@@ -896,18 +508,11 @@ export default function CatalogPanel() {
           <PayloadCard
             key={p.id}
             info={p}
-            release={releases[p.id]}
-            releaseList={releaseLists[p.id]}
-            selectedTag={selectedTag[p.id]}
-            onSelectTag={(tag) => handleSelectTag(p.id, tag)}
             local={inventoryById[p.id]}
             busy={busyIds.has(p.id)}
-            downloading={downloadingIds.has(p.id)}
-            onCancelDownload={() => handleCancelDownload(p.id)}
             error={errors[p.id]}
-            onCheck={(force) => handleCheck(p.id, force)}
-            onDownload={() => handleDownload(p.id)}
             onSend={() => handleSend(p.id)}
+            onSendFile={() => navigate(SEND_TAB)}
             onStore={pmPresent ? () => handleStore(p.id) : undefined}
             onOpenHomepage={() => {
               void openExternal(p.homepage);
@@ -934,36 +539,24 @@ export default function CatalogPanel() {
 
 function PayloadCard({
   info,
-  release,
-  releaseList,
-  selectedTag,
-  onSelectTag,
   local,
   busy,
-  downloading,
-  onCancelDownload,
   error,
-  onCheck,
-  onDownload,
   onSend,
+  onSendFile,
   onStore,
   onOpenHomepage,
   onRemove,
 }: {
   info: PayloadInfo;
-  release: PayloadReleaseInfo | undefined;
-  releaseList: PayloadReleaseInfo[] | undefined;
-  selectedTag: string | undefined;
-  onSelectTag: (tag: string) => void;
+  /** The copy saved in the app's library (downloaded by an older version), if any. */
   local: PayloadLocalEntry | undefined;
   busy: boolean;
-  downloading: boolean;
-  onCancelDownload: () => void;
   error: string | undefined;
-  onCheck: (force: boolean) => void;
-  onDownload: () => void;
   onSend: () => void;
-  /** Present when the console's Payload Manager answers: keep the cached file there. */
+  /** Open the Send payload tab, to send a file the user got themselves. */
+  onSendFile: () => void;
+  /** Present when the console's Payload Manager answers: keep the saved copy there. */
   onStore?: () => void;
   onOpenHomepage: () => void;
   /** Present only for a user-added custom repo (#93) — renders a Remove
@@ -971,26 +564,11 @@ function PayloadCard({
   onRemove?: () => void;
 }) {
   const tr = useTr();
-  const lang = useLangStore((s) => s.lang);
-  // Versions the picker offers (only those with a downloadable asset).
-  const pickable = releaseList ? downloadableReleases(releaseList) : [];
-  const selectedIsPrerelease = !!release?.prerelease;
-  const selectedIsLatest =
-    !!release && isLatestTag(releaseList ?? [], release.tag);
-  const upToDate =
-    !!local && !!release && !!release.tag && local.version === release.tag;
-  const updateAvailable =
-    !!local && !!release && !!release.tag && local.version !== release.tag;
   return (
     <section className="surface-panel p-5">
       <div className="flex flex-wrap items-start gap-3">
-        {/* Floor the text column's min-width to min(100%,16rem). With `flex-1`
-            (basis 0%) + `min-w-0`, the name column shrank to nothing at large
-            Text size while the version-select + Download button held the row
-            on one line — wrapping the name "k/l/o/g/s/r/v" one letter per
-            line. A real min-width makes flex-wrap push the controls onto a
-            new line instead; min(100%,…) keeps a lone column from overflowing
-            a narrow viewport. */}
+        {/* Floor the text column's min-width to min(100%,16rem), so at a large text size the
+            buttons wrap onto a new line instead of squeezing the name to one letter a line. */}
         <div className="min-w-[min(100%,16rem)] flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-semibold">{info.display_name}</h3>
@@ -1004,17 +582,11 @@ function PayloadCard({
                 {tr("payloads_source_badge", { name: info.source_name }, `From ${info.source_name}`)}
               </Badge>
             )}
-            <button
-              type="button"
-              onClick={onOpenHomepage}
-              className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)]"
-              title={info.homepage}
-            >
-              <ExternalLink size={11} />
+            <span className="text-xs text-[var(--color-muted)]" title={info.homepage}>
               {info.repo_owner
                 ? `${info.repo_owner}/${info.repo_name}`
                 : info.homepage.replace(/^https:\/\/(www\.)?/, "").replace(/\/releases\/?$/, "")}
-            </button>
+            </span>
             {onRemove && (
               <button
                 type="button"
@@ -1035,117 +607,43 @@ function PayloadCard({
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">
-          <div className="flex items-center gap-2 text-xs">
-            {local ? (
-              upToDate ? (
-                <span className="inline-flex items-center gap-1 text-[var(--color-good)]">
-                  <CheckCircle2 size={11} />
-                  {tr(
-                    "payloads_up_to_date",
-                    { version: local.version },
-                    `cached ${local.version}`,
-                  )}
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 text-[var(--color-muted)]">
-                  <ActivityIcon size={11} />
-                  {tr(
-                    "payloads_cached_version",
-                    { version: local.version || "—" },
-                    `cached ${local.version || "—"}`,
-                  )}
-                </span>
-              )
-            ) : (
-              <span className="text-[var(--color-muted)]">
-                {tr("payloads_not_cached", undefined, "not downloaded")}
+          {local && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="inline-flex items-center gap-1 text-[var(--color-good)]">
+                <CheckCircle2 size={11} />
+                {tr(
+                  "payloads_saved_copy",
+                  { version: local.version || "—" },
+                  `saved copy ${local.version || "—"}`,
+                )}
               </span>
-            )}
-          </div>
+            </div>
+          )}
           <div className="flex flex-wrap items-center justify-end gap-2">
+            {info.homepage && (
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<ExternalLink size={11} />}
+                onClick={onOpenHomepage}
+                title={info.homepage}
+              >
+                {tr("payloads_project_page", undefined, "Project page")}
+              </Button>
+            )}
             <Button
-              variant="ghost"
+              variant={local ? "secondary" : "primary"}
               size="sm"
-              leftIcon={
-                busy ? (
-                  <Spinner size={12} tone="inherit" />
-                ) : (
-                  <RefreshCw size={11} />
-                )
-              }
-              onClick={() => onCheck(true)}
-              disabled={busy}
+              leftIcon={<FileUp size={11} />}
+              onClick={onSendFile}
               title={tr(
-                "payloads_check_tooltip",
+                "payloads_send_file_tooltip",
                 undefined,
-                "Check the latest GitHub release (force refresh)",
+                "Send a payload file you got from the project page.",
               )}
             >
-              {release
-                ? tr("payloads_refresh", undefined, "Refresh")
-                : tr("payloads_check", undefined, "Check release")}
+              {tr("payloads_send_file", undefined, "Send a file…")}
             </Button>
-            {pickable.length > 1 && selectedTag && (
-              <label className="flex items-center gap-1">
-                <span className="sr-only">
-                  {tr("payloads_version", undefined, "Version")}
-                </span>
-                <select
-                  value={selectedTag}
-                  onChange={(e) => onSelectTag(e.target.value)}
-                  disabled={busy}
-                  className="max-w-[12rem] rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-1.5 py-1 text-xs"
-                  title={tr(
-                    "payloads_version_tooltip",
-                    undefined,
-                    "Pick a version. Older versions let you downgrade if the latest is unstable.",
-                  )}
-                >
-                  {pickable.map((r) => (
-                    <option key={r.tag} value={r.tag}>
-                      {r.tag}
-                      {isLatestTag(releaseList ?? [], r.tag)
-                        ? ` (${tr("payloads_latest", undefined, "latest")})`
-                        : ""}
-                      {r.prerelease
-                        ? ` — ${tr("payloads_prerelease", undefined, "pre-release")}`
-                        : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {release && release.picked_asset_url && (
-              <Button
-                variant={updateAvailable || !local ? "primary" : "secondary"}
-                size="sm"
-                leftIcon={<Download size={11} />}
-                onClick={onDownload}
-                disabled={busy}
-              >
-                {/* Wording: "Update to" only when picking the genuine latest
-                    and it's newer than cached; otherwise neutral "Download"
-                    (covers re-download AND downgrade to an older tag). */}
-                {updateAvailable && selectedIsLatest
-                  ? tr(
-                      "payloads_update",
-                      { version: release.tag },
-                      `Update to ${release.tag}`,
-                    )
-                  : local && local.version === release.tag
-                    ? tr("payloads_redownload", undefined, "Re-download")
-                    : tr(
-                        "payloads_download",
-                        { version: release.tag },
-                        `Download ${release.tag}`,
-                      )}
-              </Button>
-            )}
-            {downloading && (
-              <Button variant="ghost" size="sm" onClick={onCancelDownload}>
-                {tr("cancel", undefined, "Cancel")}
-              </Button>
-            )}
             {local && (
               <Button
                 variant="primary"
@@ -1154,7 +652,7 @@ function PayloadCard({
                 onClick={onSend}
                 disabled={busy}
               >
-                {tr("payloads_send", undefined, "Send to PS5")}
+                {tr("payloads_send_saved", undefined, "Send saved copy")}
               </Button>
             )}
             {local && onStore && (
@@ -1177,94 +675,12 @@ function PayloadCard({
         </div>
       </div>
 
-      {release && (
-        <div className="mt-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[var(--color-muted)]">
-            <span>
-              {tr(
-                "payloads_release_info",
-                { tag: release.tag, when: release.published_at || "—" },
-                `${release.tag} · published ${release.published_at || "—"}`,
-              )}
-            </span>
-            {selectedIsPrerelease && (
-              <Badge tone="warn" variant="outline" icon={AlertTriangle}>
-                {tr(
-                  "payloads_prerelease_warn",
-                  undefined,
-                  "pre-release — may be unstable",
-                )}
-              </Badge>
-            )}
-            {release.picked_asset_name && (
-              <span title={release.picked_asset_url}>
-                {release.picked_asset_name} ·{" "}
-                {(release.picked_asset_size / 1024).toFixed(1)} KB
-              </span>
-            )}
-            {release.cached_age_secs > 0 && (
-              <span>
-                {tr(
-                  "payloads_saved_when",
-                  { when: relativeAge(release.cached_age_secs, lang) },
-                  "saved {when}",
-                )}
-              </span>
-            )}
-          </div>
-          {release.refresh_error && (
-            // Live fetch failed (GitHub down, rate-limited, etc.)
-            // but we have a cached snapshot. Show that explicitly
-            // instead of swallowing it — without this banner the
-            // user has no way to tell live data from N-day-stale
-            // cache, and might wonder why the "latest" version
-            // doesn't match a release they just saw on GitHub.
-            <div className="mt-2 flex items-start gap-1.5 rounded-[var(--radius-card)] border border-[var(--color-warn)] bg-[var(--color-surface)] p-3 text-xs text-[var(--color-warn)]">
-              <AlertTriangle size={11} className="mt-0.5 shrink-0" />
-              <span>
-                {/HTTP 404/.test(release.refresh_error)
-                  ? tr(
-                      "payloads_repo_gone",
-                      undefined,
-                      "This project's GitHub page can't be found any more (it may have been taken down). The last version saved here still works.",
-                    )
-                  : tr(
-                      "payloads_refresh_error_banner",
-                      undefined,
-                      "Couldn't refresh from GitHub — showing cached snapshot. The latest tag on GitHub may be newer than what's shown here.",
-                    )}{" "}
-                <span className="text-[var(--color-muted)]">
-                  ({release.refresh_error})
-                </span>
-              </span>
-            </div>
-          )}
-          {release.body && (
-            <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-[var(--color-text)]">
-              {release.body}
-            </pre>
-          )}
-        </div>
-      )}
-
       {error && (
-        // Muted, NOT alarming red. A source failing to fetch its release list
-        // (a renamed/deleted repo → 404, or a down Forgejo host) is not a
-        // user error — the row stays present and usable later. The loud red
-        // card made users think the payload was "broken" or "removed".
         <div className="mt-3 flex items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs text-[var(--color-muted)]">
           <AlertTriangle size={11} className="mt-0.5 shrink-0" />
-          <span className="min-w-0 break-words">
-            {tr(
-              "payloads_source_unreachable",
-              undefined,
-              "Couldn't reach this source right now — try Refresh later.",
-            )}
-            <span className="mt-0.5 block break-words opacity-70">{error}</span>
-          </span>
+          <span className="min-w-0 break-words">{error}</span>
         </div>
       )}
     </section>
   );
 }
-

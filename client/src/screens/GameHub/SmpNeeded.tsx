@@ -6,6 +6,7 @@ import { Button, Spinner, WarningCard } from "../../components";
 import { hostOf, mgmtAddr } from "../../lib/addr";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { invoke } from "../../lib/invokeLogged";
+import { pickPath } from "../../lib/pickPath";
 import { krakenRuns, useMounterFor, useMounterStore } from "../../lib/mounter";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
@@ -87,15 +88,26 @@ export function SmpNeededWarning({
     setSending(true);
     setMsg(null);
     try {
-      const path = (await invoke("payloads_local_path", {
+      // The copy saved in the app, else a file the user picks: the app doesn't download payloads.
+      const saved = (await invoke("payloads_local_path", {
         id: "shadowmountplus",
       })) as string | null;
+      const path =
+        saved ??
+        (await pickPath({
+          mode: "file",
+          title: tr("installed_smp_pick_title", undefined, "Choose the ShadowMount+ file"),
+          filters: [
+            { name: "Payload", extensions: ["elf", "bin"] },
+            { name: "All files", extensions: ["*"] },
+          ],
+        }));
       if (!path) {
         setMsg(
           tr(
-            "installed_smp_not_downloaded",
+            "installed_smp_no_copy",
             undefined,
-            "ShadowMount+ isn't downloaded yet — grab it from the Payloads tab, then come back and send it.",
+            "ShadowMount+ isn't saved in ps5upload. Get it from its project page, then press Send and choose the file.",
           ),
         );
         return;

@@ -3,6 +3,9 @@ import type { NpState, ProfileInfo, ProfileSlot } from "../../api/ps5";
 /** The Payloads catalogue entry for earthonion's np-fake-signin. */
 export const NP_FAKE_SIGNIN_ID = "np-fake-signin";
 
+/** Its project page (the catalogue's homepage for it), where the user gets the PS5 build. */
+export const NP_FAKE_SIGNIN_PAGE = "https://git.etawen.dev/earthonion/np-fake-signin";
+
 /** Whether np-fake-signin can run for the signed-in user, and why not.
  *
  *  np-fake-signin finds the account slot whose name equals the foreground user's name and

@@ -23,7 +23,7 @@ const state = (over: Partial<PayloadUpdateState> = {}): PayloadUpdateState => ({
       previous_version: "v1.4",
       prerelease: false,
       published_at: "",
-      html_url: "",
+      html_url: "https://github.com/EchoStretch/kstuff-lite/releases/tag/v1.6",
     },
     {
       payload_id: "shadowmountplus",
@@ -41,14 +41,12 @@ const state = (over: Partial<PayloadUpdateState> = {}): PayloadUpdateState => ({
   applied: [],
   available_seq: 1,
   applied_seq: 0,
-  last_auto_run_at: 0,
   pm_syncs: {},
   ...over,
 });
 
 const props = (over: Partial<PayloadUpdatesViewProps> = {}): PayloadUpdatesViewProps => ({
   tr,
-  settings: { auto_update: false },
   state: state(),
   host: "",
   pmPresent: null,
@@ -56,9 +54,9 @@ const props = (over: Partial<PayloadUpdatesViewProps> = {}): PayloadUpdatesViewP
   busy: null,
   nowSecs: NOW,
   onCheck: noop,
-  onUpdate: noop,
+  onOpenPage: noop,
+  onSendFile: noop,
   onRollback: noop,
-  onAuto: noop,
   onChoice: noop,
   onSync: noop,
   ...over,
@@ -67,19 +65,22 @@ const props = (over: Partial<PayloadUpdatesViewProps> = {}): PayloadUpdatesViewP
 const html = (over: Partial<PayloadUpdatesViewProps> = {}) => renderToStaticMarkup(<PayloadUpdatesView {...props(over)} />);
 
 describe("Payload updates section", () => {
-  it("offers the check and the auto-update switch, off by default", () => {
+  it("offers the check, and no switch that downloads updates", () => {
     const out = html({ state: state({ checked_at: 0, rows: [] }) });
     expect(out).toContain("Check for payload updates");
-    expect(out).toContain("Keep payloads up to date");
-    expect(out).toContain('aria-checked="false"');
+    expect(out).not.toContain("Keep payloads up to date");
+    expect(out).not.toContain("aria-checked");
     expect(out).toContain("Not checked yet");
+    expect(out).toContain("doesn&#x27;t download updates");
   });
 
-  it("shows what is newer, with Update and a one-click rollback", () => {
+  it("shows what is newer with its project page, never an in-app update", () => {
     const out = html();
     expect(out).toContain("Updates available: 1");
     expect(out).toContain("v1.6 available");
-    expect(out).toContain("Update");
+    expect(out).toContain("v1.6 is out — open project page");
+    expect(out).toContain("Send a file…");
+    expect(out).not.toMatch(/>Update</);
     expect(out).toContain("Roll back to v1.4");
     // The current one has no update button of its own.
     const smp = out.split('data-testid="pu-row-shadowmountplus"')[1] ?? "";
@@ -94,7 +95,7 @@ describe("Payload updates section", () => {
     const out = html({ state: current });
     expect(out).toContain("Everything is up to date.");
     expect(out).toContain("limit for checks was reached");
-    expect(out).not.toContain("Update all");
+    expect(out).not.toContain("open project page");
   });
 
   it("without a console, has no Payload Manager controls", () => {
@@ -106,7 +107,7 @@ describe("Payload updates section", () => {
   it("says so when Payload Manager isn't running, and offers no sync", () => {
     const out = html({ host: "192.0.2.5", pmPresent: false });
     expect(out).toContain("Payload Manager isn&#x27;t running on this PS5");
-    expect(out).toContain("this computer&#x27;s payloads only");
+    expect(out).toContain("in step with the payloads saved here");
     expect(out).not.toContain("Sync with Payload Manager");
   });
 

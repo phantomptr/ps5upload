@@ -23,7 +23,8 @@ import {
 /**
  * Payloads — URL-routed tabs:
  *
- *   - **catalog**: curated GitHub-released third-party homebrew.
+ *   - **catalog**: a guide to third-party homebrew: what each does and its project page
+ *     (the app doesn't download payloads; the user sends the file they got).
  *   - **send**: arbitrary ELF/BIN/JS/LUA/JAR picker. Includes
  *     playlists and recent-sends history.
  *   - **ps5** ("On your PS5"): a card per payload running or installed on the
@@ -61,9 +62,9 @@ export default function PayloadsScreen() {
       key: "payloads_tab_catalog",
       fallback: "Catalog",
       description: tr(
-        "payloads_description_catalog_v2",
+        "payloads_description_catalog_guide",
         undefined,
-        "Curated third-party PS5 homebrew payloads. Check for the latest release, download once, then send to your PS5 with one click. Versions cache locally so you can also put them on a USB payload stick.",
+        "Third-party PS5 homebrew payloads that work with ps5upload: what each one does and where its project page is. ps5upload doesn't download them: get a payload from its project page, then send the file with Send a file….",
       ),
     },
     {

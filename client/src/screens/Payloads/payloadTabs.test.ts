@@ -17,8 +17,12 @@ const shim = read("../../lib/browserInvoke.ts");
 describe("Payloads in the browser build", () => {
   it("has every tab in every build: the catalogue runs on the engine", () => {
     expect(payloadTabs()).toEqual(["catalog", "send", "ps5", "running"]);
-    for (const cmd of ["payloads_catalog", "payloads_releases", "payloads_download", "payload_send"]) {
+    for (const cmd of ["payloads_catalog", "payloads_releases", "payloads_local_inventory", "payload_send"]) {
       expect(shim).toContain(`case "${cmd}":`);
+    }
+    // The app never downloads payloads, in any build.
+    for (const cmd of ["payloads_download", "payloads_add_custom_repo", "payloads_add_source", "payloads_refresh_sources"]) {
+      expect(shim).not.toContain(`case "${cmd}":`);
     }
   });
 
