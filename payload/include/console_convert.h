@@ -96,6 +96,14 @@ typedef struct {
  * Returns the length, or -1 when it does not fit `cap`. */
 int cc_request_json(char *out, size_t cap, const char *id, const char *op, const char *path, const cc_build_t *b);
 
+/* The page's /api/convert/start body (`json`, `n` bytes) as the op's arguments after "path": the
+ * text `,"action":"build","dest":...,"format":...,"zstd":...,"verify":...` and, when chosen,
+ * "zstd_level" (with zstd), "inner" and "ffpfsc_level" (with "ffpfsc"), "pkg_level" (with "pkg").
+ * `dest` is the route's, already checked. NULL when written, else the refusal's token: bad_format,
+ * bad_verify, bad_zstd, convert_bad_inner, convert_bad_ffpfsc_level, convert_bad_pkg_level, or
+ * bad_path when it does not fit `cap`. An absent or "" word is the converter's default. */
+const char *cc_start_tail(const char *json, size_t n, const char *dest, char *out, size_t cap);
+
 typedef struct {
     char state[16]; /* "running" | "done" | "failed" */
     char op[16];
