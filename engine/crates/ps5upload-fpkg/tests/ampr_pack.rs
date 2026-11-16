@@ -102,6 +102,13 @@ fn our_index_matches_drakmors() {
         })
         .collect();
     assert_eq!(ampr_index::build_entries(&entries).unwrap(), theirs);
+    // It passes ampr-emu-ng's checks, and drakmor's LZ4 manifest joins it record by record.
+    assert!(ampr_index::check(&theirs).unwrap().sorted);
+    for set in ["compress", "store"] {
+        let manifest = std::fs::read(fixture().join(set).join("ampr_assets.index")).unwrap();
+        let manifest = ps5upload_fpkg::ampr_pack::format::Manifest::parse(&manifest).unwrap();
+        ampr_index::check_lz4(&theirs, &manifest.files).unwrap();
+    }
 }
 
 /// Our reader opens drakmor's pack set, checks its headers and CRCs, and decodes every packed

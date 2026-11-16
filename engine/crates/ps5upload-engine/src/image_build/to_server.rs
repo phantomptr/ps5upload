@@ -7,7 +7,8 @@
 //! written as `<name>.partial` on the server through [`crate::server_out::Upload`], read back
 //! there through its own reader (`RemoteFile::read_at`, a sample or every byte), and only then
 //! renamed to its name, never over anything already there. A failure or a cancel removes the
-//! partial file.
+//! partial file. A `.ffpfsc` is compressed once to measure it, then again as it is written
+//! (`ffpfsc_out`).
 //!
 //! Going on. A write that was cut off (the server went away, the engine was stopped) leaves the
 //! partial file and, in the engine's data folder, a record of the plan it was written for and
@@ -27,7 +28,9 @@ use ps5upload_fpkg::ffpfsc_block::Level;
 use ps5upload_fpkg::sample::VerifyMode;
 use ps5upload_fpkg::source::SourceTree;
 
-use super::{resume_key, verify, HashingTree, ImageBuilt, ImageFormat, Planned};
+use super::{
+    resume_key, verify, FfpfscOut, HashingTree, ImageBuilt, ImageFormat, MeasuredFfpfsc, Planned,
+};
 use crate::remote::RemoteError;
 use crate::server_out::{said, ServerDest, Upload};
 
@@ -202,10 +205,13 @@ impl ServerImage<'_> {
 /// back there (`mode`, `verify_chunk` as for a local build) and renames it to its name. `time`
 /// pins a PFS image's inodes and must be the time any generated index in `source` carries
 /// ([`server_stamp`]); `extra` adds what else the bytes depend on to the plan (a zstd build's
-/// level and emulator). `stage` reports `plan`, `write` and `verify`.
+/// level and emulator). `ffpfsc`: the image goes in a `.ffpfsc`, measured first
+/// ([`MeasuredFfpfsc`]). `stage` reports `plan`, `compress` (a `.ffpfsc`'s measure pass), `write`
+/// and `verify`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn stream_to_server(
     format: ImageFormat,
+    ffpfsc: Option<FfpfscOut>,
     time: i64,
     extra: &str,
     source: &mut dyn SourceTree,
@@ -222,7 +228,6 @@ pub(crate) fn stream_to_server(
     let started = std::time::Instant::now();
     stage("plan", 0, 0);
     let planned = Planned::plan(format, &*source, Some(time), cancel)?;
-    let size = planned.image_size();
     let want_sizes: HashMap<String, u64> = source
         .files()
         .iter()
@@ -230,19 +235,9 @@ pub(crate) fn stream_to_server(
         .collect();
     let want_empty: Vec<String> = source.empty_dirs().to_vec();
     let data: u64 = want_sizes.values().sum();
-    let key = format!(
-        "{}\0{extra}",
-        resume_key(
-            format,
-            None,
-            Level::default(),
-            Some(time),
-            &want_sizes,
-            size
-        )
-    );
     let (path, partial) = (target.path(), target.partial());
     let mut fs = dest.fs().map_err(|e| said(&e))?;
+    // Asked before a `.ffpfsc` spends a pass measuring.
     dest.make_dir(&*fs)
         .map_err(|e| format!("making {} on {}: {}", dest.dir, dest.label, said(&e)))?;
     if dest.exists(&*fs, &path).map_err(|e| said(&e))? {
@@ -251,6 +246,34 @@ pub(crate) fn stream_to_server(
             dest.label
         ));
     }
+    let mut hashing = HashingTree::new(source);
+    // A `.ffpfsc`: its size and table are known once it has been compressed once.
+    let wrapped = match ffpfsc {
+        Some(f) => Some(MeasuredFfpfsc::measure(
+            f,
+            &planned,
+            &mut hashing,
+            Some(time),
+            cancel,
+            stage,
+        )?),
+        None => None,
+    };
+    let size = wrapped
+        .as_ref()
+        .map_or(planned.image_size(), MeasuredFfpfsc::image_size);
+    let key = format!(
+        "{}\0{extra}{}",
+        resume_key(
+            format,
+            ffpfsc.map(|f| f.inner),
+            ffpfsc.map_or(Level::default(), |f| f.level),
+            Some(time),
+            &want_sizes,
+            planned.image_size()
+        ),
+        wrapped.as_ref().map_or(String::new(), MeasuredFfpfsc::key)
+    );
     // A partial file is gone on from only when this engine wrote it for this very plan.
     let mut skip = match dest.file_size(&*fs, &partial).map_err(|e| said(&e))? {
         None => 0,
@@ -275,9 +298,14 @@ pub(crate) fn stream_to_server(
     crate::log_at!(
         Info,
         "convert",
-        "to server: {} as {} ({size} bytes, {} files) -> {} {partial}{}",
-        source.describe(),
+        "to server: {} as {}{} ({size} bytes, {} files) -> {} {partial}{}",
+        hashing.describe(),
         format.extension(),
+        if wrapped.is_some() {
+            " in a .ffpfsc"
+        } else {
+            ""
+        },
         want_sizes.len(),
         dest.label,
         if skip > 0 {
@@ -287,7 +315,6 @@ pub(crate) fn stream_to_server(
         }
     );
 
-    let mut hashing = HashingTree::new(source);
     // The source's hashes, once a write has read it all.
     let mut hashes: Option<HashMap<String, Vec<blake3::Hash>>> = None;
     let mut tries = 0usize;
@@ -303,11 +330,15 @@ pub(crate) fn stream_to_server(
                 target.own(time, &key);
             }
             let written = up.map_err(|e| (said(&e), Some(e))).and_then(|mut up| {
-                let n = planned
-                    .write(&mut hashing, &mut up, skip, cancel, &mut |d, t| {
-                        stage("write", d, t)
-                    })
-                    .map_err(|e| (e.to_string(), None))?;
+                let n = match &wrapped {
+                    Some(m) => m.write(&planned, &mut hashing, &mut up, skip, cancel, stage),
+                    None => planned
+                        .write(&mut hashing, &mut up, skip, cancel, &mut |d, t| {
+                            stage("write", d, t)
+                        })
+                        .map_err(|e| e.to_string()),
+                }
+                .map_err(|e| (e, None))?;
                 if n != size || up.position() != size {
                     return Err((
                         format!("the writer made {n} bytes of the planned {size}"),
@@ -379,7 +410,11 @@ pub(crate) fn stream_to_server(
             dest,
             &partial,
             size,
-            format,
+            if wrapped.is_some() {
+                "ffpfsc"
+            } else {
+                format.extension()
+            },
             hashes.as_ref().unwrap_or(&HashMap::new()),
             &want_sizes,
             &want_empty,
@@ -437,8 +472,9 @@ pub(crate) fn stream_to_server(
     crate::engine_log::record(
         "info",
         format!(
-            "image to server: format={} files={} data_bytes={data} image_bytes={size} resumed_from={first_skip} retries={tries} send_ms={} verify_ms={} verify={} dest={}",
+            "image to server: format={}{} files={} data_bytes={data} image_bytes={size} resumed_from={first_skip} retries={tries} send_ms={} verify_ms={} verify={} dest={}",
             format.extension(),
+            if wrapped.is_some() { "+ffpfsc" } else { "" },
             want_sizes.len(),
             sent_at.as_millis(),
             (started.elapsed() - sent_at).as_millis(),
@@ -447,8 +483,11 @@ pub(crate) fn stream_to_server(
         ),
     );
     let mut detail = format!(
-        "{}, {} files, {data} data bytes, written to {}, {}",
+        "{}{}, {} files, {data} data bytes, written to {}, {}",
         format.extension(),
+        wrapped
+            .as_ref()
+            .map_or(String::new(), |m| format!(" {}", m.describe())),
         want_sizes.len(),
         dest.label,
         summary.describe()
@@ -478,7 +517,7 @@ fn read_back(
     dest: &ServerDest,
     partial: &str,
     size: u64,
-    format: ImageFormat,
+    ext: &str,
     hashes: &HashMap<String, Vec<blake3::Hash>>,
     want_sizes: &HashMap<String, u64>,
     want_empty: &[String],
@@ -497,9 +536,8 @@ fn read_back(
             dest.label
         ));
     }
-    let mut image =
-        ps5upload_fpkg::remote_source::open_remote_as(files, partial, size, format.extension())
-            .map_err(|e| format!("the image could not be read back on {}: {e}", dest.label))?;
+    let mut image = ps5upload_fpkg::remote_source::open_remote_as(files, partial, size, ext)
+        .map_err(|e| format!("the image could not be read back on {}: {e}", dest.label))?;
     verify(
         &mut *image,
         hashes,

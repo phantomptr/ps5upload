@@ -101,6 +101,10 @@ pub struct Prepared<'a> {
 }
 
 impl SourceTree for Prepared<'_> {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }
@@ -293,6 +297,15 @@ pub fn measure(
     )
     .map_err(|e| e.to_string())?;
     stage("pack", total, total);
+    // What ampr-emu-ng checks when it mounts the packs: every packed file has its record in
+    // ampr_emu.index at its logical size. Refused here rather than shipped.
+    if let Some(emu) = prepared.generated.get(ampr_index::NAME) {
+        let files = index
+            .files
+            .iter()
+            .map(|f| (f.path.as_str(), f.logical_size));
+        ampr_index::check_zstd(emu, files)?;
+    }
     let stored: u64 = index
         .volume_sizes
         .iter()
@@ -665,6 +678,58 @@ mod tests {
 
     fn runtime() -> Vec<u8> {
         b"EMULATOR".to_vec()
+    }
+
+    /// The measure refuses packs whose files ampr_emu.index does not list at their logical
+    /// size (the runtime would serve none of them), before anything is written; the index
+    /// `prepare` makes always matches.
+    #[test]
+    fn packs_that_disagree_with_ampr_emu_index_are_refused() {
+        let root = std::env::temp_dir().join(format!("ps5upload-zstd-join-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = game(&root);
+        let mut tree = FolderSource::open(&src).unwrap();
+        let cancel = AtomicBool::new(false);
+        let (mut prepared, packed) = prepare(&mut tree, runtime(), 5, None).unwrap();
+        let index = measure(
+            &mut prepared,
+            &packed,
+            1,
+            &root,
+            &cancel,
+            &mut |_, _, _| {},
+            1,
+        );
+        assert!(index.is_ok(), "{:?}", index.err());
+        // The same game, its index listing the packed table at another size.
+        let listed: Vec<(String, u64)> = prepared
+            .files
+            .iter()
+            .filter(|f| f.path != ampr_index::NAME)
+            .map(|f| {
+                let grown = f.path == "data/sub/table.bin";
+                (f.path.clone(), f.size + u64::from(grown))
+            })
+            .collect();
+        let stale = ampr_index::build(&listed, 5).unwrap();
+        prepared
+            .generated
+            .insert(ampr_index::NAME.to_string(), stale);
+        let e = measure(
+            &mut prepared,
+            &packed,
+            1,
+            &root,
+            &cancel,
+            &mut |_, _, _| {},
+            1,
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("data/sub/table.bin") && e.contains("serves no packed file"),
+            "{e}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// zstd packs go into every image, plain and inside a `.ffpfsc`, through [`build_at`]: each

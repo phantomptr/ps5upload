@@ -238,7 +238,7 @@ fn validate_files<S: SourceTree + ?Sized>(source: &S, files: &[SourceFile]) -> R
     let mut chunks = 0u64;
     for file in files {
         if !valid_path(&file.path)
-            || file.path.len() > u16::MAX as usize
+            || file.path.len() >= crate::PATH_LIMIT
             || !paths.insert(file.path.as_str())
             || source_files.get(file.path.as_str()) != Some(&file.size)
         {

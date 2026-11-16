@@ -16,9 +16,22 @@ import { errorText } from "../home/Home";
 import { opCause, opResult, startOp, watchOp, type OpEnd, type OpStatus } from "../files/opJob";
 import { t } from "../strings";
 
-/** What a conversion writes. The helper names the same four (cc_format_ok). */
-export type OutFormat = "exfat" | "ffpkg" | "ffpfs" | "folder";
-export const OUT_FORMATS: OutFormat[] = ["exfat", "ffpkg", "ffpfs", "folder"];
+/** What a conversion writes. The helper names the same six (cc_format_ok). */
+export type OutFormat = "exfat" | "ffpkg" | "ffpfs" | "ffpfsc" | "pkg" | "folder";
+export const OUT_FORMATS: OutFormat[] = ["exfat", "ffpkg", "ffpfs", "ffpfsc", "pkg", "folder"];
+
+/** A .pkg's Kraken level (cc_pkg_level_ok): none, fast (the default) or balanced. */
+export type PkgLevel = "stored" | "fast" | "balanced";
+export const PKG_LEVELS: PkgLevel[] = ["stored", "fast", "balanced"];
+export const DEFAULT_PKG_LEVEL: PkgLevel = "fast";
+
+/** The image a .ffpfsc holds (cc_inner_ok), and how hard it is compressed (cc_ffpfsc_level_ok). */
+export type InnerFormat = "exfat" | "ffpkg" | "ffpfs";
+export const INNER_FORMATS: InnerFormat[] = ["exfat", "ffpkg", "ffpfs"];
+export type FfpfscLevel = "fast" | "balanced" | "smallest";
+export const FFPFSC_LEVELS: FfpfscLevel[] = ["fast", "balanced", "smallest"];
+/** ShadowMountPlus mounts a .ffpfsc whose name is at most this many bytes. */
+export const FFPFSC_NAME_MAX = 63;
 
 /** The zstd levels offered (the PC app's ImageOptions offers the same three). */
 export const ZSTD_LEVELS = [1, 5, 19] as const;
@@ -28,11 +41,25 @@ export const DEFAULT_ZSTD_LEVEL: ZstdLevel = 5;
 export type Verify = "fast" | "full";
 
 /** An image the converter reads (and writes): the console mounts by extension. */
-const IMAGE_EXT = /\.(exfat|ffpkg|ffpfs)$/i;
+const IMAGE_EXT = /\.(exfat|ffpkg|ffpfs|ffpfsc)$/i;
 
-/** Whether a file named `name` can be converted (folders always can be picked). */
+/** An archive whose game folder the converter reads in place (.zip, .7z). A .rar is listed too,
+ *  so the page can say why it is not converted here (convert_rar_unsupported). */
+const ARCHIVE_EXT = /\.(zip|7z|rar)$/i;
+
+/** Whether a file named `name` is a game image (folders always can be picked). */
 export function isConvertImage(name: string): boolean {
   return IMAGE_EXT.test(name);
+}
+
+/** Whether a file named `name` is offered as a source: an image or an archive. */
+export function isConvertSource(name: string): boolean {
+  return IMAGE_EXT.test(name) || ARCHIVE_EXT.test(name);
+}
+
+/** Whether an inspected source is an archive read in place. */
+export function isArchiveFormat(format: string): boolean {
+  return format === "zip" || format === "7z";
 }
 
 /** The last part of a path. */
@@ -47,10 +74,40 @@ export function parentOf(path: string): string {
   return at <= 0 ? "/" : p.slice(0, at);
 }
 
-/** The output's default name: the source's name without an image extension, plus the format's. */
+/** `stem` cut (at a character) so it takes at most `max` bytes of UTF-8. */
+function fitBytes(stem: string, max: number): string {
+  const enc = new TextEncoder();
+  let out = "";
+  for (const ch of stem) {
+    if (enc.encode(out + ch).length > max) break;
+    out += ch;
+  }
+  return out;
+}
+
+/** A .ffpfsc name cut to the bytes ShadowMountPlus mounts (FFPFSC_NAME_MAX, UTF-8): the stem is
+ *  shortened, a Keep both " (n)" and the extension are kept. Any other name is left as it is. */
+export function fitFfpfscName(name: string): string {
+  const m = /^(.*?)( \(\d+\))?(\.ffpfsc)$/i.exec(name);
+  if (!m || new TextEncoder().encode(name).length <= FFPFSC_NAME_MAX) return name;
+  const tail = `${m[2] ?? ""}${m[3]}`;
+  const room = FFPFSC_NAME_MAX - new TextEncoder().encode(tail).length;
+  return `${fitBytes(m[1], room).trim() || "game"}${tail}`;
+}
+
+/** The output's default name: the source's name without an image extension, plus the format's
+ *  (a .ffpfsc's cut to the length ShadowMountPlus mounts). */
 export function outputName(source: string, format: OutFormat): string {
-  const stem = lastPart(source).replace(IMAGE_EXT, "") || "game";
-  return format === "folder" ? stem : `${stem}.${format}`;
+  // An archive's name without its extension or a set's ".partN" (Game.part1.rar -> Game).
+  const stem =
+    lastPart(source)
+      .replace(IMAGE_EXT, "")
+      .replace(ARCHIVE_EXT, "")
+      .replace(/\.part\d+$/i, "")
+      .replace(/[. ]+$/, "") || "game";
+  if (format === "folder") return stem;
+  if (format === "ffpfsc") return `${fitBytes(stem, FFPFSC_NAME_MAX - ".ffpfsc".length).trim() || "game"}.ffpfsc`;
+  return `${stem}.${format}`;
 }
 
 /** What /api/convert/inspect's job answers (engine/crates/ps5upload-convert Inspection). */
@@ -111,6 +168,14 @@ export function formatLabel(format: string): string {
       return t("cw_convert_format_ffpkg");
     case "ffpfs":
       return t("cw_convert_format_ffpfs");
+    case "ffpfsc":
+      return t("cw_convert_format_ffpfsc");
+    case "pkg":
+      return t("cw_convert_format_pkg");
+    case "zip":
+      return t("cw_convert_format_zip");
+    case "7z":
+      return t("cw_convert_format_7z");
   }
   return format;
 }
@@ -137,7 +202,11 @@ export const CONVERT_CAUSES: Record<string, string> = {
   convert_drive_gone: "cw_convert_err_drive_gone",
   convert_build_failed: "cw_convert_err_build_failed",
   convert_source_unreadable: "cw_convert_err_unreadable",
-  convert_unsupported_source: "cw_convert_err_unsupported",
+  convert_unsupported_source: "cw_convert_err_unsupported_source",
+  convert_rar_unsupported: "cw_convert_err_rar",
+  convert_archive_needs_unpack: "cw_convert_err_archive_needs_unpack",
+  convert_archive_no_game: "cw_convert_err_archive_no_game",
+  convert_archive_password: "cw_convert_err_archive_password",
   convert_open_failed: "cw_files_err_read",
   convert_path_not_allowed: "cw_files_err_denied",
   convert_bad_dest: "cw_convert_err_bad_dest",
@@ -154,6 +223,9 @@ export const CONVERT_CAUSES: Record<string, string> = {
   convert_bad_format: "cw_convert_err_bad_request",
   convert_bad_verify: "cw_convert_err_bad_request",
   convert_bad_zstd_level: "cw_convert_err_bad_request",
+  convert_bad_inner: "cw_convert_err_bad_request",
+  convert_bad_ffpfsc_level: "cw_convert_err_bad_request",
+  convert_bad_pkg_level: "cw_convert_err_bad_request",
   convert_bad_request: "cw_convert_err_bad_request",
   bad_format: "cw_convert_err_bad_request",
   bad_verify: "cw_convert_err_bad_request",
@@ -195,28 +267,51 @@ export function stageText(message: string | null | undefined): string | null {
     case "pack":
       return t("cw_convert_stage_pack");
     case "read":
+    case "check":
       return t("cw_convert_stage_read");
     case "write":
       return t("cw_convert_stage_write");
+    case "compress":
+      return t("cw_convert_stage_compress");
     case "verify":
       return t("cw_convert_stage_verify");
   }
   return t("cw_convert_stage_other");
 }
 
-/** What /api/convert/start is sent. The level goes only with zstd. */
+/** What /api/convert/start is sent. The zstd level goes only with zstd, the image inside and its
+ *  compression only with a .ffpfsc, the package's level only with a .pkg (never with zstd). */
 export interface StartBody {
   path: string;
   dest: string;
   format: OutFormat;
   zstd: boolean;
   zstd_level?: number;
+  inner?: InnerFormat;
+  ffpfsc_level?: FfpfscLevel;
+  pkg_level?: PkgLevel;
   verify: Verify;
 }
 
-export function startBody(o: { source: string; dest: string; format: OutFormat; zstd: boolean; level: ZstdLevel; verify: Verify }): StartBody {
-  const body: StartBody = { path: o.source, dest: o.dest, format: o.format, zstd: o.zstd, verify: o.verify };
-  if (o.zstd) body.zstd_level = o.level;
+export function startBody(o: {
+  source: string;
+  dest: string;
+  format: OutFormat;
+  zstd: boolean;
+  level: ZstdLevel;
+  verify: Verify;
+  inner?: InnerFormat;
+  ffpfscLevel?: FfpfscLevel;
+  pkgLevel?: PkgLevel;
+}): StartBody {
+  const zstd = o.zstd && o.format !== "pkg";
+  const body: StartBody = { path: o.source, dest: o.dest, format: o.format, zstd, verify: o.verify };
+  if (zstd) body.zstd_level = o.level;
+  if (o.format === "pkg") body.pkg_level = o.pkgLevel ?? DEFAULT_PKG_LEVEL;
+  if (o.format === "ffpfsc") {
+    body.inner = o.inner ?? "exfat";
+    body.ffpfsc_level = o.ffpfscLevel ?? "balanced";
+  }
   return body;
 }
 

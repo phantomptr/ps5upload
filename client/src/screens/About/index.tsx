@@ -94,7 +94,7 @@ export default function AboutScreen({ embedded = false }: { embedded?: boolean }
           />
           <PrimaryLink
             icon={<DiscordIcon />}
-            label="Discord"
+            label={tr("discord_server_link", undefined, "UndefinedLab on Discord")}
             onClick={() => openExternal(URLS.discord)}
           />
         </div>

@@ -23,20 +23,33 @@ pub async fn smp_status(addr: String) -> Result<SmpStatus, String> {
         .map_err(|e| format!("{e:#}"))
 }
 
-/// Ask ShadowMount+ to scan again now, with its retry counters cleared.
+/// Ask the console's mounter to scan again now: ShadowMount+ (retry counters cleared) or Kraken
+/// Mount. Answers which one was asked.
 #[tauri::command]
-pub async fn smp_rescan(addr: String) -> Result<(), String> {
+pub async fn smp_rescan(addr: String) -> Result<ps5upload_core::kraken::Mounter, String> {
     tokio::task::spawn_blocking(move || {
-        let (api, _) = ps5upload_core::smp_api::SmpApi::probe(&addr).ok_or_else(|| {
-            "ShadowMount+'s API doesn't answer from this computer: it needs ShadowMount+ 1.7 or \
-             later running, with api_enabled on and api_bind_address open to the network in \
-             /data/shadowmount/config.ini"
-                .to_string()
-        })?;
-        api.rescan().map_err(|e| format!("{e:#}"))
+        ps5upload_core::kraken::rescan(&addr).map_err(|e| format!("{e:#}"))
     })
     .await
     .map_err(|e| format!("smp_rescan task: {e}"))?
+}
+
+/// Remove a game Kraken Mount mounts, as its own page does: off the home screen and its source
+/// (`path`: the `.pkg` or game folder it lists for the title) deleted.
+#[tauri::command]
+pub async fn kraken_remove(addr: String, title_id: String, path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let (api, _) = ps5upload_core::kraken::KrakenApi::probe(&addr).ok_or_else(|| {
+            format!(
+                "Kraken Mount doesn't answer from this computer: it needs to be running on the \
+                 PS5 (its page is on port {})",
+                ps5upload_core::kraken::API_PORT
+            )
+        })?;
+        api.remove(&title_id, &path).map_err(|e| format!("{e:#}"))
+    })
+    .await
+    .map_err(|e| format!("kraken_remove task: {e}"))?
 }
 
 // ─── Edit sessions (checkout / check-in) ─────────────────────────────────

@@ -124,18 +124,20 @@ export async function statOrNull(path: string): Promise<Stat | null> {
 
 export { keepBothName };
 
-/** The first free Keep both name for `name` in `dir`. */
+/** The first free Keep both name for `name` in `dir`. `fit` shapes each candidate before it is
+ *  checked (a name that must stay under a length). */
 export async function freeName(
   dir: string,
   name: string,
   isDir: boolean,
   taken: (path: string) => Promise<boolean>,
+  fit: (name: string) => string = (n) => n,
 ): Promise<string> {
   const dot = isDir ? -1 : name.lastIndexOf(".");
   const m = /^(.+) \((\d+)\)$/.exec(dot > 0 ? name.slice(0, dot) : name);
   const start = m ? Math.max(2, parseInt(m[2], 10) + 1) : 2;
   for (let n = start; n < start + KEEP_BOTH_TRIES; n++) {
-    const candidate = keepBothName(name, n, isDir);
+    const candidate = fit(keepBothName(name, n, isDir));
     if (!(await taken(joinPath(dir, candidate)))) return candidate;
   }
   throw new ApiError(409, "exists");

@@ -4,9 +4,9 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## 12.5.0
+## 12.5.1
 
-Convert gets most of what PS5 Dump Forge can do, and a first version of converting on the PS5 itself, from Minion. Checked with the automated tests; what was tried on a PS5 is said below.
+A big Convert update: zstd packs for every PS5 game, packs in every image format, converting straight from archives, editing an image in place, converting on the PS5 itself from Minion, and mounting a debug package with Kraken Mount instead of installing it. Checked with the automated tests; what was tried on a PS5 is said below.
 
 **zstd packs**
 - **Runtime 0.4.1:** new zstd packs get ampr-emu-ng 0.4.1, which starts very large games that 0.4.0 refused with "index tables need … MiB, over the 48 MiB" (Final Fantasy XVI, Demon's Souls, Returnal, God of War Ragnarök and others). A game already packed with 0.4.0 is offered **Update the zstd runtime** in Convert.
@@ -20,6 +20,9 @@ Convert gets most of what PS5 Dump Forge can do, and a first version of converti
 - **Move the source to the Trash once verified:** a new option, off unless you tick it for that one conversion. The source goes to the Trash or Recycle Bin only after every byte of the output has been read back; nothing is ever deleted for good.
 - **Patch packages:** a PS5 update `.pkg` can now be inspected, browsed and unpacked to a folder. Only the files the patch fully contains are shown, and the app says which ones need the base game. A patch can't be made into an image or a package on its own.
 - **Trophy files:** unpacking a package now keeps `nptitle.dat` and `npbind.dat` when the package stores them only in encrypted form.
+- **`.ffpfsc` straight to the PS5 or a server:** a compressed image can now be saved there directly. It takes about twice as long, because it is compressed twice (once to work out its size).
+- **LZ4 packs sent straight to the PS5 or a server** no longer need free space on this computer for the packs.
+- **Packed games' file lists:** a game whose file list the zstd or LZ4 runtime would reject is stopped before it's built, with the reason, and Convert warns about a game that already has one. A package made from a game in zstd packs now keeps its packed files' list, and **Rebuild AMPR index** works on games in zstd packs.
 - **Straight from an archive:** a game image or folder is made straight from a `.zip`, `.7z` or `.rar` (multi-part too), with nothing unpacked first, so no extra disk space is needed. An archive holding a game image, or a build with an update merged in, still unpacks first.
 - **Packs everywhere:** LZ4 packs now go into `.ffpkg`, `.ffpfs` and game folders, not only `.exfat`; LZ4 and zstd packs work inside a compressed `.ffpfsc`; and a packed `.exfat`, `.ffpkg` or `.ffpfs` can be saved straight to the PS5 or a server. Packed images are now also checked by reading every file back through their packs, and they get their final name only after that check.
 - **Command line:** `ps5upload-engine convert <game> --to exfat|ffpkg|ffpfs|ffpfsc|folder|pkg --out <folder>` and `ps5upload-engine inspect <game>`, with `--json` for scripts. On Windows the output shows only when redirected to a file or another program.
@@ -28,16 +31,30 @@ Convert gets most of what PS5 Dump Forge can do, and a first version of converti
 - **Rename and New folder** when you look inside an image and write an edited copy.
 - **Apply in place:** when you look inside an image, your changes can now be written into the `.exfat` or `.ffpkg` itself instead of a copy, when they fit its free space (the image never grows). `.ffpfs` takes deletes, renames and replacements that fit. An undo journal is kept beside the image while the change goes in: if it's interrupted, the image is put back as it was the next time it's opened. Every changed file is read back and the image is restored if anything doesn't match. The edited copy stays the default. Tested on test images only, not yet on your own games, so keep a backup of an image you can't replace.
 
+**Mount a package with Kraken Mount**
+- **Recognised:** PS5Upload now sees whether Kraken Mount or ShadowMount+ runs on your PS5, and offers what that one can do.
+- **Mount instead of install:** with Kraken Mount, a PS5 debug package can be put on the PS5 to mount instead of installed, from Install Package or right after Convert. It goes into the homebrew folder of the package drive, and Kraken Mount puts it on the home screen. PS4, retail, update and add-on packages still install.
+- **Library:** games Kraken Mount mounts show "Mounted by Kraken Mount", and removing one goes through Kraken Mount (the confirm names the file that will be deleted).
+- **Safe together:** PS5Upload no longer starts ShadowMount+ while Kraken Mount runs, and the zstd runtime check also covers Kraken Mount's runtime folder.
+- Not tried on a PS5 with Kraken Mount yet.
+
 **Convert on the PS5 (Minion)**
-- **Convert in Minion:** a new Convert section on the PS5's own Minion page turns a game folder or image already on the console into an `.exfat`, `.ffpkg`, `.ffpfs` or a folder, with zstd packs if you want, without a computer. Progress, Stop and a read-back check work as on the computer, and nothing is left behind when a conversion is stopped.
+- **Convert in Minion:** a new Convert section on the PS5's own Minion page turns a game folder, image or `.zip`/`.7z` already on the console into an `.exfat`, `.ffpkg`, `.ffpfs`, `.ffpfsc`, a debug `.pkg` or a folder, with zstd packs if you want, without a computer. A `.rar` has to be unpacked first there. Progress, Stop and a read-back check work as on the computer, and nothing is left behind when a conversion is stopped.
 - **zstd on the console:** PS5Upload on your computer puts the zstd runtime on the PS5 when it connects (or with **Put the zstd runtime on this PS5** in Settings › This PS5 › Minion); nothing is downloaded on the PS5.
 - **Tried on both our PS5s (FW 13.60):** every output format from a small game, a 30 GB game made into an `.ffpkg` with every byte checked (about 6½ minutes), a 21 GB game into zstd packs (about 4½ minutes), Stop at 10 %, 50 % and during the check, and the helper being replaced in the middle of a conversion. Not tried yet: starting a game from an image made on the console, a USB drive that is full or FAT32.
+
+**Also**
+- **Convert** shows only the AMPR emulator choice that applies: with zstd asset packs, ampr-emu-ng goes in with the packs and the other emulator options are hidden; "Put ampr_emu 0.4.2.1 into the image" shows only under LZ4 packs; "Rebuild AMPR index" shows only for games that read through AMPR. (#828)
+- **Automatic save backups:** choose how often they run, from every 5 minutes to once a day (10 minutes unless you change it).
+- **Hardware:** the front light buttons (Light off, Light back to normal, Brightness) are removed: they did nothing on the PS5. The beeper stays. (#840)
+- **Consoles** shows the PS5 picked at the top of the app. Click another PS5 at the top to see its details.
 
 **Fixes**
 - From a review of everything in this release: a stopped or interrupted conversion no longer leaves a finished-looking but unchecked image behind; a folder you named `X.partial` is never removed by a conversion to `X`; an image left half-edited by a crash is put back before anything reads it; an archive's password is no longer kept in the queue file; and Convert's folder button, the image browser and a `.rar`'s password for folder builds work as they should.
 - A game folder with unusual characters in its `param.json`, or a damaged `eboot.bin`, could crash the engine during conversion. Found by new automated fuzz tests; it now reports the problem instead.
+- The app could offer to add a phone or computer running PS5Upload over Tailscale as a PS5. Only real PS5s are offered now.
+- **Put on the PS5 to mount** asks before replacing a package with the same name, and stopping a `.pkg` check or a `.zip`/`.7z` look-inside now stops it.
 
-Thanks to quer3q's PS5 Dump Forge, whose code most of this release adapts (credited in the README).
 
 ## 12.4.23
 

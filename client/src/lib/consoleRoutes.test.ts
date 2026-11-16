@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { recallRoute, rememberRoute } from "./consoleRoutes";
+import { recallRoute, rememberRoute, staysOnConsoleSwitch } from "./consoleRoutes";
 
 describe("consoleRoutes", () => {
   // The node test environment has no localStorage: a minimal in-memory one.
@@ -36,5 +36,13 @@ describe("consoleRoutes", () => {
     for (let i = 0; i < 40; i++) rememberRoute(`10.0.0.${i}`, `/r${i}`, i);
     expect(recallRoute("10.0.0.0")).toBeNull();
     expect(recallRoute("10.0.0.39")).toBe("/r39");
+  });
+
+  it("stays on the Consoles page when another console is picked: it shows the picked one", () => {
+    expect(staysOnConsoleSwitch("/connection")).toBe(true);
+    expect(staysOnConsoleSwitch("/connection?console=p2&devices=1")).toBe(true);
+    expect(staysOnConsoleSwitch("/connection?tab=devices")).toBe(false);
+    expect(staysOnConsoleSwitch("/connection?tab=health")).toBe(false);
+    expect(staysOnConsoleSwitch("/games")).toBe(false);
   });
 });

@@ -12,6 +12,8 @@ members = [
   "crates/ps5upload-fpkg",
   # The converter's build code, shared by the engine and the console program below.
   "crates/ps5upload-convert-core",
+  # Game archives read in place: the engine's Convert and the console program share it.
+  "crates/ps5upload-archive",
   # The converter as a program for the PS5 itself. A plain std program on every other target;
   # payload/convert/build.sh builds it as a PS5 ELF (profile "console" below).
   "crates/ps5upload-convert",
@@ -30,7 +32,7 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "GPL-3.0-or-later"
-version = "12.5.0"
+version = "12.5.1"
 
 [workspace.dependencies]
 # AVA1 (github.com/phantomptr/ava1): the Rust crate from crates.io; the payload builds the C side

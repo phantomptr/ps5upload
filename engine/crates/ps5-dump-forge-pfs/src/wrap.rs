@@ -18,6 +18,12 @@
 //! (a reader tells the two apart by length alone), else stored raw. The container is kept even
 //! if it does not shrink: a stream cannot be re-read to store the image raw instead.
 //!
+//! A local file gets its header, table and PFS last, with seeks back. A destination that is
+//! written front to back only (a console over AVA1, a server) takes two passes instead:
+//! [`measure`] compresses the inner image once and keeps only each block's stored length, then
+//! [`wrap_measured`] writes the whole file in order, the PFS, header and table first, compressing
+//! each block again; a block that comes out another length stops it.
+//!
 //! [`ffpfsc_block`]: ps5upload_fpkg::ffpfsc_block
 
 use std::collections::BTreeMap;
@@ -276,6 +282,21 @@ fn wrap_with<T>(
     wrap_inner(inner_name, raw_size, out, opts, cancel, encode, None, fill)
 }
 
+/// The checks every build makes before its first byte; answers the time it pins and where the
+/// first block goes in the container.
+fn preflight(inner_name: &str, raw_size: u64, opts: &WrapOptions) -> Result<(i64, u64)> {
+    opts.block().check().map_err(err)?;
+    if raw_size == 0 {
+        return Err(err("the image inside a .ffpfsc cannot be empty"));
+    }
+    let time = opts.time.unwrap_or_else(now);
+    // The worst case must fit the PFS's 32-bit pointers before anything is written.
+    let data_at = data_at(raw_size)?;
+    let max = container_size_max(raw_size)? - FILE_BLOCK * BLOCK;
+    image::single(inner_name, raw_size, max, time)?;
+    Ok((time, data_at))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn wrap_inner<T>(
     inner_name: &str,
@@ -287,16 +308,7 @@ fn wrap_inner<T>(
     resume: Option<&Resume<'_>>,
     fill: impl FnOnce(&mut Stream<'_>) -> Result<T>,
 ) -> Result<(T, WrapReport)> {
-    let block_opts = opts.block();
-    block_opts.check().map_err(err)?;
-    if raw_size == 0 {
-        return Err(err("the image inside a .ffpfsc cannot be empty"));
-    }
-    let time = opts.time.unwrap_or_else(now);
-    // The worst case must fit the PFS's 32-bit pointers before anything is written.
-    let data_at = data_at(raw_size)?;
-    let max = container_size_max(raw_size)? - FILE_BLOCK * BLOCK;
-    image::single(inner_name, raw_size, max, time)?;
+    let (time, data_at) = preflight(inner_name, raw_size, opts)?;
     let base = FILE_BLOCK * BLOCK;
     let skip = resume.map_or(0, |r| r.blocks);
     let offsets = if skip == 0 {
@@ -313,8 +325,99 @@ fn wrap_inner<T>(
     let end = base + offsets.last().copied().unwrap_or(data_at);
     if skip > 0 {
         out.set_len(end)?;
+        out.seek(SeekFrom::Start(end))?;
+    } else {
+        // Zeros where the PFS, the header and the table go at the end, not a hole: on the PS5's
+        // UFS a sparse file is filled at 2-3 MiB/s (PS5 Dump Forge, measured). It is the
+        // console's converter that writes a `.ffpfsc` there; a computer pays a few hundred KiB.
+        let mut sink = Sink::new(&mut *out, cancel);
+        sink.zeros_to(end)?;
+        sink.w.flush()?;
     }
     out.seek(SeekFrom::Start(end))?;
+    let mut sink = FileOut {
+        out: BufWriter::with_capacity(8 << 20, &mut *out),
+        base,
+        resume,
+        // Table entries already in the file (a crashed build's).
+        in_table: if skip > 0 { offsets.len() } else { 0 },
+        since: 0,
+    };
+    let (value, offsets, report) = run(
+        raw_size, skip, opts, cancel, encode, &mut sink, offsets, fill,
+    )?;
+    drop(sink);
+
+    // The container's header and table, then the PFS around it.
+    let stored = offsets.last().copied().unwrap_or(data_at);
+    out.seek(SeekFrom::Start(base))?;
+    let mut sink = Sink::new(&mut *out, cancel);
+    write_container_head(&mut sink, &offsets, data_at, 0)?;
+    sink.w.flush()?;
+    drop(sink);
+
+    let img = image::single(inner_name, raw_size, stored, time)?;
+    out.seek(SeekFrom::Start(0))?;
+    let mut sink = Sink::new(&mut *out, cancel);
+    image::write_meta(&mut sink, &img)?;
+    sink.expect(base)?;
+    sink.w.flush()?;
+    drop(sink);
+    let image_size = img.ndblock * BLOCK;
+    // The zero tail of the container's last block, written (no hole, as at the start); a longer
+    // file (a crashed build's tail past what this one stored) is cut.
+    let len = out.seek(SeekFrom::End(0))?;
+    if len < image_size {
+        let mut sink = Sink::new(&mut *out, cancel);
+        sink.pos = len;
+        sink.zeros_to(image_size)?;
+        sink.w.flush()?;
+    } else {
+        out.set_len(image_size)?;
+    }
+    Ok((
+        value,
+        WrapReport {
+            image_size,
+            stored_size: stored,
+            ..report
+        },
+    ))
+}
+
+/// The container's header and its block table, from the container's start (`at`: where the
+/// sink stands, in the output, when it starts there) up to its first block.
+fn write_container_head<W: Write>(
+    sink: &mut Sink<'_, W>,
+    offsets: &[u64],
+    data_at: u64,
+    at: u64,
+) -> Result<()> {
+    let blocks = offsets.len() as u64 - 1;
+    sink.write(&pfsc_header(blocks, data_at))?;
+    sink.zeros_to(at + PFSC_TABLE_AT)?;
+    for o in offsets {
+        sink.write(&o.to_le_bytes())?;
+    }
+    sink.zeros_to(at + data_at)
+}
+
+/// The inner image cut into blocks, encoded on the workers and handed to `out` in order, with
+/// `offsets` the blocks before the first to come (`skip` of them, stored already) and where it
+/// goes. Answers what `fill` returned, every block's start then the end, and the counts and
+/// times (`image_size` and `stored_size` are the caller's to fill in).
+#[allow(clippy::too_many_arguments)]
+fn run<T>(
+    raw_size: u64,
+    skip: u64,
+    opts: &WrapOptions,
+    cancel: &AtomicBool,
+    encode: &Encode,
+    out: &mut dyn BlockOut,
+    offsets: Vec<u64>,
+    fill: impl FnOnce(&mut Stream<'_>) -> Result<T>,
+) -> Result<(T, Vec<u64>, WrapReport)> {
+    let block_opts = opts.block();
     let threads = opts.worker_threads();
     let depth = threads * DEPTH_PER_WORKER;
     // Every zero block is stored as this.
@@ -346,10 +449,9 @@ fn wrap_inner<T>(
         drop(done);
         let failed = &failed;
         let zero = &zero[..];
-        let sink = BufWriter::with_capacity(8 << 20, &mut *out);
         let writer = s.spawn(move || {
             lane.enter();
-            let r = write_blocks(results, free, sink, offsets, base, resume, zero, cancel);
+            let r = write_blocks(results, free, out, offsets, zero, cancel);
             if r.is_err() {
                 failed.store(true, Ordering::Relaxed);
             }
@@ -420,8 +522,6 @@ fn wrap_inner<T>(
     };
     check_cancel(cancel)?;
     let wall = started.elapsed();
-
-    // The container's header and table, then the PFS around it.
     let blocks = raw_size.div_ceil(BLOCK);
     if offsets.len() as u64 != blocks + 1 {
         return Err(err(format!(
@@ -429,34 +529,11 @@ fn wrap_inner<T>(
             offsets.len().saturating_sub(1)
         )));
     }
-    let stored = offsets.last().copied().unwrap_or(data_at);
-    out.seek(SeekFrom::Start(base))?;
-    let mut sink = Sink::new(&mut *out, cancel);
-    sink.write(&pfsc_header(blocks, data_at))?;
-    sink.zeros_to(PFSC_TABLE_AT)?;
-    for o in &offsets {
-        sink.write(&o.to_le_bytes())?;
-    }
-    sink.zeros_to(data_at)?;
-    sink.w.flush()?;
-    drop(sink);
-
-    let img = image::single(inner_name, raw_size, stored, time)?;
-    out.seek(SeekFrom::Start(0))?;
-    let mut sink = Sink::new(&mut *out, cancel);
-    image::write_meta(&mut sink, &img)?;
-    sink.expect(base)?;
-    sink.w.flush()?;
-    drop(sink);
-    let image_size = img.ndblock * BLOCK;
-    // The zero tail of the container's last block.
-    out.set_len(image_size)?;
     Ok((
         value,
+        offsets,
         WrapReport {
-            image_size,
             raw_size,
-            stored_size: stored,
             blocks,
             threads,
             feed,
@@ -464,6 +541,197 @@ fn wrap_inner<T>(
             encode: encode_time,
             wall,
             ..counts
+        },
+    ))
+}
+
+/// What a measure pass found: where every block of the container goes, so a second pass can
+/// write the whole `.ffpfsc` front to back, its header and table first (see [`measure`]).
+///
+/// Memory: one `u64` per 64 KiB block of the inner image, 16 MiB for a 128 GiB image.
+#[derive(Debug, Clone)]
+pub struct Measured {
+    inner_name: String,
+    raw_size: u64,
+    time: i64,
+    block: BlockOptions,
+    data_at: u64,
+    /// Every block's start in the container, then the container's end.
+    offsets: Vec<u64>,
+    image_size: u64,
+    /// The counts of the measure pass.
+    pub report: WrapReport,
+}
+
+impl Measured {
+    /// The whole `.ffpfsc`'s length.
+    pub fn image_size(&self) -> u64 {
+        self.image_size
+    }
+
+    /// The container's length (header, table, stored blocks).
+    pub fn stored_size(&self) -> u64 {
+        self.offsets.last().copied().unwrap_or(self.data_at)
+    }
+
+    /// The time the PFS carries.
+    pub fn time(&self) -> i64 {
+        self.time
+    }
+
+    /// The inner image's blocks wholly inside the first `held` bytes of the `.ffpfsc`: a write
+    /// that goes on from `held` needs the inner image from `blocks * 64 KiB` on only.
+    pub fn blocks_within(&self, held: u64) -> u64 {
+        let base = FILE_BLOCK * BLOCK;
+        // `offsets[k]` is block k's start, so block k-1 is whole once its end is held.
+        let k = self
+            .offsets
+            .partition_point(|o| base.saturating_add(*o) <= held);
+        k.saturating_sub(1) as u64
+    }
+}
+
+/// The measure pass of a `.ffpfsc` that has to be written front to back, to a place that cannot
+/// go back and patch its header (a console over AVA1, a server): the inner image `fill` writes
+/// is compressed as [`wrap`] would and only the stored length of each block is kept. Then
+/// [`wrap_measured`] compresses it again into the output, header and table first. A block's
+/// stored form is a function of its bytes and the options alone (see [`Resume`]), so the second
+/// pass gives the same lengths; a block that comes out another length (the source changed in
+/// between) stops it with an error instead of a wrong table.
+pub fn measure<T>(
+    inner_name: &str,
+    raw_size: u64,
+    opts: &WrapOptions,
+    cancel: &AtomicBool,
+    fill: impl FnOnce(&mut Stream<'_>) -> Result<T>,
+) -> Result<(T, Measured)> {
+    let encode = |e: &mut BlockEncoder, raw: &[u8]| e.encode(raw);
+    measure_with(inner_name, raw_size, opts, cancel, &encode, fill)
+}
+
+fn measure_with<T>(
+    inner_name: &str,
+    raw_size: u64,
+    opts: &WrapOptions,
+    cancel: &AtomicBool,
+    encode: &Encode,
+    fill: impl FnOnce(&mut Stream<'_>) -> Result<T>,
+) -> Result<(T, Measured)> {
+    let (time, data_at) = preflight(inner_name, raw_size, opts)?;
+    let (value, offsets, report) = run(
+        raw_size,
+        0,
+        opts,
+        cancel,
+        encode,
+        &mut Discard,
+        vec![data_at],
+        fill,
+    )?;
+    let stored = offsets.last().copied().unwrap_or(data_at);
+    let image_size = image::single(inner_name, raw_size, stored, time)?.ndblock * BLOCK;
+    Ok((
+        value,
+        Measured {
+            inner_name: inner_name.to_string(),
+            raw_size,
+            time,
+            block: opts.block(),
+            data_at,
+            offsets,
+            image_size,
+            report: WrapReport {
+                image_size,
+                stored_size: stored,
+                ..report
+            },
+        },
+    ))
+}
+
+/// The second pass of a [`measure`]d `.ffpfsc`: the whole file into `out` front to back (the
+/// PFS, the container's header and table, the blocks, the zero tail), the same bytes [`wrap`]
+/// makes. `out` may be one that drops what its destination holds already: with `held` > 0, the
+/// blocks wholly inside the first `held` bytes are not compressed again ([`Stream`] cuts and
+/// drops them) and `out` is moved past them with a forward seek; `fill` is told the inner-image
+/// byte from which its bytes count (`blocks_within(held) * 64 KiB`, at most the inner image's length). `opts` must be the
+/// measure's (the thread count aside).
+pub fn wrap_measured<T, W: Write + Seek + Send>(
+    measured: &Measured,
+    out: &mut W,
+    held: u64,
+    opts: &WrapOptions,
+    cancel: &AtomicBool,
+    fill: impl FnOnce(&mut Stream<'_>, u64) -> Result<T>,
+) -> Result<(T, WrapReport)> {
+    let encode = |e: &mut BlockEncoder, raw: &[u8]| e.encode(raw);
+    wrap_measured_with(measured, out, held, opts, cancel, &encode, fill)
+}
+
+fn wrap_measured_with<T, W: Write + Seek + Send>(
+    measured: &Measured,
+    out: &mut W,
+    held: u64,
+    opts: &WrapOptions,
+    cancel: &AtomicBool,
+    encode: &Encode,
+    fill: impl FnOnce(&mut Stream<'_>, u64) -> Result<T>,
+) -> Result<(T, WrapReport)> {
+    if opts.block() != measured.block {
+        return Err(err(
+            "internal error: a .ffpfsc is written with other options than it was measured with",
+        ));
+    }
+    let base = FILE_BLOCK * BLOCK;
+    let Measured {
+        inner_name,
+        raw_size,
+        time,
+        data_at,
+        offsets,
+        image_size,
+        ..
+    } = measured;
+    let stored = measured.stored_size();
+    // The PFS, then the container's header and table: everything is known.
+    {
+        let img = image::single(inner_name, *raw_size, stored, *time)?;
+        let mut sink = Sink::new(&mut *out, cancel);
+        image::write_meta(&mut sink, &img)?;
+        sink.expect(base)?;
+        write_container_head(&mut sink, offsets, *data_at, base)?;
+        sink.expect(base + data_at)?;
+        sink.w.flush()?;
+    }
+    let skip = measured.blocks_within(held);
+    let first = usize::try_from(skip).map_err(|_| too_big())?;
+    if skip > 0 {
+        out.seek(SeekFrom::Start(base + offsets[first]))?;
+    }
+    let mut sink = Planned {
+        out: &mut *out,
+        planned: offsets,
+    };
+    let (value, _, report) = run(
+        *raw_size,
+        skip,
+        opts,
+        cancel,
+        encode,
+        &mut sink,
+        offsets[..=first].to_vec(),
+        |s| fill(s, (skip * BLOCK).min(*raw_size)),
+    )?;
+    // The zero tail of the container's last block, written (`out` may not grow on a seek).
+    let tail = image_size.saturating_sub(base + stored);
+    io::copy(&mut io::repeat(0).take(tail), &mut *out)?;
+    out.flush()?;
+    Ok((
+        value,
+        WrapReport {
+            image_size: *image_size,
+            stored_size: stored,
+            ..report
         },
     ))
 }
@@ -476,26 +744,104 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
         .unwrap_or_default()
 }
 
-/// Puts the workers' results back in order and writes them, returning each buffer to the pool
-/// once its block is out, and with `resume` makes a checkpoint every so often. `offsets`: the
-/// blocks before the first to come, and where it goes. Stops at the first failure.
-#[allow(clippy::too_many_arguments)]
+/// Where the stored blocks go, in order, from the writer thread.
+trait BlockOut: Send {
+    /// One more block as stored; `offsets` already ends with its end.
+    fn block(&mut self, bytes: &[u8], offsets: &[u64]) -> io::Result<()>;
+    /// Every block is in.
+    fn done(&mut self) -> io::Result<()>;
+}
+
+/// A local `.ffpfsc`: the blocks into the file from where they start, and with `resume` a
+/// checkpoint every so often.
+struct FileOut<'f, 'r> {
+    out: BufWriter<&'f mut File>,
+    base: u64,
+    resume: Option<&'r Resume<'r>>,
+    /// Table entries already in the file.
+    in_table: usize,
+    /// Bytes since the last checkpoint.
+    since: u64,
+}
+
+impl BlockOut for FileOut<'_, '_> {
+    fn block(&mut self, bytes: &[u8], offsets: &[u64]) -> io::Result<()> {
+        self.out.write_all(bytes)?;
+        self.since += bytes.len() as u64;
+        if let Some(r) = self.resume.filter(|r| self.since >= r.every) {
+            self.since = 0;
+            let blocks = offsets.len() as u64 - 1;
+            checkpoint(
+                &mut self.out,
+                offsets,
+                &mut self.in_table,
+                self.base,
+                r,
+                blocks,
+            )?;
+        }
+        Ok(())
+    }
+    fn done(&mut self) -> io::Result<()> {
+        self.out.flush()
+    }
+}
+
+/// A measure pass: only the lengths count.
+struct Discard;
+
+impl BlockOut for Discard {
+    fn block(&mut self, _: &[u8], _: &[u64]) -> io::Result<()> {
+        Ok(())
+    }
+    fn done(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The second pass of a measured `.ffpfsc`: each block must end where the measure said, or the
+/// table already written is wrong for it.
+struct Planned<'w, W: Write + Send> {
+    out: &'w mut W,
+    planned: &'w [u64],
+}
+
+impl<W: Write + Send> BlockOut for Planned<'_, W> {
+    fn block(&mut self, bytes: &[u8], offsets: &[u64]) -> io::Result<()> {
+        let i = offsets.len() - 1;
+        if self.planned.get(i) != offsets.get(i) {
+            return Err(io::Error::other(format!(
+                "block {} of the .ffpfsc came out {} bytes long, not the {} its measure pass \
+                 found (the source changed while it was written); nothing more is written",
+                i - 1,
+                bytes.len(),
+                self.planned
+                    .get(i)
+                    .zip(self.planned.get(i - 1))
+                    .map_or(0, |(e, s)| e.saturating_sub(*s))
+            )));
+        }
+        self.out.write_all(bytes)
+    }
+    fn done(&mut self) -> io::Result<()> {
+        self.out.flush()
+    }
+}
+
+/// Puts the workers' results back in order and hands them to `out`, returning each buffer to
+/// the pool once its block is out. `offsets`: the blocks before the first to come, and where it
+/// goes. Stops at the first failure.
 fn write_blocks(
     results: Receiver<Done>,
     free: Sender<Vec<u8>>,
-    mut out: BufWriter<&mut File>,
+    out: &mut dyn BlockOut,
     mut offsets: Vec<u64>,
-    base: u64,
-    resume: Option<&Resume<'_>>,
     zero: &[u8],
     cancel: &AtomicBool,
 ) -> std::result::Result<Written, Failure> {
     let mut report = WrapReport::default();
     let mut waiting: BTreeMap<u64, (Vec<u8>, Stored)> = BTreeMap::new();
     let mut next = offsets.len() as u64 - 1;
-    // Table entries already in the file (a crashed build's), and bytes since the last checkpoint.
-    let mut in_table = if next > 0 { offsets.len() } else { 0 };
-    let mut since = 0u64;
     for (seq, buf, result) in results {
         waiting.insert(seq, (buf, result?));
         while let Some((buf, stored)) = waiting.remove(&next) {
@@ -525,20 +871,14 @@ fn write_blocks(
                     bytes
                 }
             };
-            let t = Instant::now();
-            out.write_all(bytes).map_err(Failure::Io)?;
-            report.write += t.elapsed();
             let end = offsets.last().copied().unwrap_or(0) + bytes.len() as u64;
             offsets.push(end);
-            since += bytes.len() as u64;
+            let t = Instant::now();
+            out.block(bytes, &offsets).map_err(Failure::Io)?;
+            report.write += t.elapsed();
             // The stream may be gone already (an error elsewhere): nothing to hand it then.
             let _ = free.send(buf);
             next += 1;
-            if let Some(r) = resume.filter(|r| since >= r.every) {
-                since = 0;
-                checkpoint(&mut out, &offsets, &mut in_table, base, r, next)
-                    .map_err(Failure::Io)?;
-            }
         }
     }
     if !waiting.is_empty() {
@@ -547,10 +887,11 @@ fn write_blocks(
         )));
     }
     let t = Instant::now();
-    out.flush().map_err(Failure::Io)?;
+    out.done().map_err(Failure::Io)?;
     report.write += t.elapsed();
     Ok(Written { offsets, report })
 }
+
 /// Makes the blocks so far durable, puts their table entries in place in the file, and says so.
 fn checkpoint(
     out: &mut BufWriter<&mut File>,
@@ -1065,6 +1406,14 @@ mod tests {
         make(8, &d.join("many"), None).unwrap();
         let want = std::fs::read(d.join("one")).unwrap();
         assert!(std::fs::read(d.join("many")).unwrap() == want);
+        // The PS5 converter's way: synced every so often as it goes, nothing saved to go on from.
+        let synced = Resume {
+            blocks: 0,
+            every: 3 * BLOCK,
+            saved: &|_, _| Ok(()),
+        };
+        make(3, &d.join("synced"), Some(&synced)).unwrap();
+        assert!(std::fs::read(d.join("synced")).unwrap() == want);
 
         // Stopped after a checkpoint, as a crash would; then going on from it.
         let last = Mutex::new((0u64, 0u64));
@@ -1101,5 +1450,253 @@ mod tests {
         };
         assert!(make(4, &path, Some(&damaged)).is_err());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Compressible, random and zero stretches of `n` bytes, so every stored form turns up.
+    fn mixed(n: u64, seed: u32) -> Vec<u8> {
+        let mut x = seed | 1;
+        (0..n)
+            .map(|i| match (i / BLOCK + u64::from(seed)) % 3 {
+                0 => (i % 13) as u8,
+                1 => {
+                    x ^= x << 13;
+                    x ^= x >> 17;
+                    x ^= x << 5;
+                    x as u8
+                }
+                _ => 0,
+            })
+            .collect()
+    }
+
+    fn write_raw(s: &mut Stream<'_>, raw: &[u8], from: u64) -> Result<()> {
+        // What comes before `from` is never compressed: zeros stand in for it.
+        s.seek(SeekFrom::Start(from))?;
+        for c in raw[from as usize..].chunks(10_007) {
+            s.write_all(c)?;
+        }
+        Ok(())
+    }
+
+    /// Takes what a destination already holds (its first `held` bytes) as counted only, as an
+    /// upload that goes on does, and the rest into place.
+    struct GoingOn {
+        buf: Vec<u8>,
+        pos: u64,
+        held: u64,
+    }
+
+    impl Write for GoingOn {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            let (start, end) = (self.pos, self.pos + b.len() as u64);
+            if end > self.held {
+                let from = self.held.max(start);
+                if self.buf.len() < end as usize {
+                    self.buf.resize(end as usize, 0);
+                }
+                self.buf[from as usize..end as usize]
+                    .copy_from_slice(&b[(from - start) as usize..]);
+            }
+            self.pos = end;
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Seek for GoingOn {
+        fn seek(&mut self, to: SeekFrom) -> io::Result<u64> {
+            let SeekFrom::Start(t) = to else {
+                return Err(io::Error::other("only from the start"));
+            };
+            if t < self.pos {
+                return Err(io::Error::other("forward only"));
+            }
+            let n = t - self.pos;
+            io::copy(&mut io::repeat(0).take(n), self)?;
+            Ok(t)
+        }
+    }
+
+    /// Measured, then written front to back: the very bytes `wrap` makes in a file, for several
+    /// sizes and worker counts, and every byte goes out in order.
+    #[test]
+    fn a_measured_ffpfsc_is_the_same_bytes_written_front_to_back() {
+        let d = temp("measured");
+        let cancel = AtomicBool::new(false);
+        for (i, n) in [1u64, 5000, BLOCK, 3 * BLOCK + 1, 40 * BLOCK + 123]
+            .into_iter()
+            .enumerate()
+        {
+            let raw = mixed(n, i as u32 + 7);
+            let path = d.join(format!("{i}.ffpfsc"));
+            let mut file = File::create(&path).unwrap();
+            let (_, local) = wrap("PPSA01234.exfat", n, &mut file, &opts(3), &cancel, |s| {
+                write_raw(s, &raw, 0)
+            })
+            .unwrap();
+            drop(file);
+            let want = std::fs::read(&path).unwrap();
+            for threads in [1, 6] {
+                let ((), m) = measure("PPSA01234.exfat", n, &opts(threads), &cancel, |s| {
+                    write_raw(s, &raw, 0)
+                })
+                .unwrap();
+                assert_eq!(m.image_size(), local.image_size, "{n}");
+                assert_eq!(m.stored_size(), local.stored_size, "{n}");
+                let mut out = GoingOn {
+                    buf: Vec::new(),
+                    pos: 0,
+                    held: 0,
+                };
+                let (from, report) =
+                    wrap_measured(&m, &mut out, 0, &opts(threads), &cancel, |s, from| {
+                        write_raw(s, &raw, from)?;
+                        Ok(from)
+                    })
+                    .unwrap();
+                assert_eq!(from, 0);
+                assert_eq!(report.image_size, local.image_size);
+                assert_eq!(report.compressed_blocks, local.compressed_blocks);
+                assert_eq!(out.pos, local.image_size);
+                assert!(out.buf == want, "{n} bytes, {threads} threads: other bytes");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// An inner image whose table outgrows the container's first block (`data_at` past 64 KiB)
+    /// comes out the same written front to back too.
+    #[test]
+    fn a_measured_ffpfsc_with_a_long_table_is_the_same_bytes() {
+        let d = temp("measured-long");
+        let cancel = AtomicBool::new(false);
+        let n = 9000 * BLOCK + 9;
+        assert!(data_at(n).unwrap() > BLOCK);
+        // Mostly zeros (no deflate), a few bytes here and there.
+        let sparse = |s: &mut Stream<'_>, from: u64| -> Result<()> {
+            for at in (0..n).step_by(777 * BLOCK as usize).chain([n - 1]) {
+                if at >= from {
+                    s.seek(SeekFrom::Start(at))?;
+                    s.write_all(&[(at % 251) as u8 | 1])?;
+                }
+            }
+            Ok(())
+        };
+        let path = d.join("long.ffpfsc");
+        let mut file = File::create(&path).unwrap();
+        wrap("x.exfat", n, &mut file, &opts(4), &cancel, |s| sparse(s, 0)).unwrap();
+        drop(file);
+        let want = std::fs::read(&path).unwrap();
+        let ((), m) = measure("x.exfat", n, &opts(4), &cancel, |s| sparse(s, 0)).unwrap();
+        let mut out = GoingOn {
+            buf: Vec::new(),
+            pos: 0,
+            held: 0,
+        };
+        wrap_measured(&m, &mut out, 0, &opts(4), &cancel, sparse).unwrap();
+        assert!(out.buf == want, "other bytes");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Going on from what a destination holds: the blocks wholly in it are not compressed again,
+    /// and the file that results is the same.
+    #[test]
+    fn a_measured_ffpfsc_goes_on_from_what_is_held() {
+        let cancel = AtomicBool::new(false);
+        let n = 60 * BLOCK + 77;
+        let raw = mixed(n, 3);
+        let ((), m) = measure("x.ffpkg", n, &opts(2), &cancel, |s| write_raw(s, &raw, 0)).unwrap();
+        let mut full = GoingOn {
+            buf: Vec::new(),
+            pos: 0,
+            held: 0,
+        };
+        wrap_measured(&m, &mut full, 0, &opts(2), &cancel, |s, f| {
+            write_raw(s, &raw, f)
+        })
+        .unwrap();
+        let want = full.buf;
+        let base = FILE_BLOCK * BLOCK;
+        for held in [
+            0,
+            100,
+            base + m.data_at - 1,
+            base + m.offsets[17] + 5,
+            base + m.offsets[17],
+            m.image_size() - 3,
+            m.image_size(),
+        ] {
+            let k = m.blocks_within(held);
+            assert!(base + m.offsets[k as usize] <= held.max(base + m.data_at));
+            let encoded = Arc::new(AtomicUsize::new(0));
+            let count = Arc::clone(&encoded);
+            let encode = move |e: &mut BlockEncoder, b: &[u8]| {
+                count.fetch_add(1, Ordering::Relaxed);
+                e.encode(b)
+            };
+            let mut out = GoingOn {
+                buf: want[..held as usize].to_vec(),
+                pos: 0,
+                held,
+            };
+            wrap_measured_with(&m, &mut out, held, &opts(2), &cancel, &encode, |s, f| {
+                assert_eq!(f, (k * BLOCK).min(n));
+                write_raw(s, &raw, f)
+            })
+            .unwrap();
+            assert_eq!(
+                encoded.load(Ordering::Relaxed) as u64,
+                n.div_ceil(BLOCK) - k,
+                "held {held}"
+            );
+            assert!(out.buf == want, "held {held}: other bytes");
+        }
+    }
+
+    /// A block that comes out another length the second time (the source changed) stops the
+    /// write: the table already out would be wrong.
+    #[test]
+    fn a_block_of_another_length_the_second_time_stops_the_write() {
+        let cancel = AtomicBool::new(false);
+        let n = 20 * BLOCK;
+        let raw = mixed(n, 1);
+        let ((), m) = measure("x.exfat", n, &opts(2), &cancel, |s| write_raw(s, &raw, 0)).unwrap();
+        let mut changed = raw.clone();
+        // Block 3 was random: now it compresses.
+        changed[3 * BLOCK as usize..4 * BLOCK as usize].fill(7);
+        let r = bounded(move || {
+            let mut out = GoingOn {
+                buf: Vec::new(),
+                pos: 0,
+                held: 0,
+            };
+            let cancel = AtomicBool::new(false);
+            wrap_measured(&m, &mut out, 0, &opts(2), &cancel, |s, f| {
+                write_raw(s, &changed, f)
+            })
+            .map(|_| out.pos)
+        });
+        let e = r.unwrap_err().to_string();
+        assert!(e.contains("block 3 of the .ffpfsc came out"), "{e}");
+        // Other options than the measure's are refused before anything is written.
+        let ((), m) = measure("x.exfat", n, &opts(2), &cancel, |s| write_raw(s, &raw, 0)).unwrap();
+        let other = WrapOptions {
+            level: 1,
+            ..opts(2)
+        };
+        let mut out = GoingOn {
+            buf: Vec::new(),
+            pos: 0,
+            held: 0,
+        };
+        assert!(
+            wrap_measured(&m, &mut out, 0, &other, &cancel, |s, f| write_raw(
+                s, &raw, f
+            ))
+            .is_err()
+        );
+        assert_eq!(out.pos, 0);
     }
 }

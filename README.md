@@ -16,7 +16,7 @@
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-GPL--3-green" /></a>
   <img alt="platforms" src="https://img.shields.io/badge/platforms-macOS_·_Linux_·_Windows_·_Android_·_iPhone_·_Web-lightgrey" />
   <img alt="firmware" src="https://img.shields.io/badge/PS5_firmware-1.00_–_14.10_supported_•_5.10,_9.60_&_13.60_tested-brightgreen" />
-  <a href="https://discord.gg/fzK3xddtrM"><img alt="discord" src="https://img.shields.io/badge/discord-join-5865F2" /></a>
+  <a href="https://discord.gg/fzK3xddtrM"><img alt="UndefinedLab on Discord" src="https://img.shields.io/badge/discord-UndefinedLab-5865F2" /></a>
 </p>
 
 ---
@@ -572,6 +572,7 @@ adapted file by file), **library** (a dependency the build pulls in), **fetched 
 
 **References:**
 * [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus) (drakmor) — the mount tool that shows our game images on the home screen; the images we write are the ones it mounts
+* [Kraken Mount](https://github.com/quer3q/kraken-mount) ([quer3q](https://github.com/quer3q)) — the mount tool that puts debug packages (`.pkg`) and game folders on the home screen without installing them; PS5Upload recognises it on a console and puts games where it finds them
 * [garlic-savemgr](https://github.com/earthonion/garlic-savemgr) (earthonion) — how a save image is opened on the console: the sealed key unsealed through `/dev/pfsmgr` and the image mounted with `sceFsMountSaveData` from a copy under `/data`, which "Open save" follows
 * cy33hc's [ps5-ezremote-dpi](https://github.com/cy33hc/ps5-ezremote-dpi), etaHEN and elf-arsenal's DPI payloads, and itsPLK's PKG Manager — behavioural references for our installer daemon (no code taken)
 * [LibOrbisPkg](https://github.com/maxton/LibOrbisPkg) — its documentation of the PlayGo chunk format
@@ -629,7 +630,7 @@ Created and maintained by **PhantomPtr**.
 
 If you find this tool useful, consider buying me a coffee!
 
-* Discord server: [https://discord.gg/fzK3xddtrM](https://discord.gg/fzK3xddtrM)
+* Discord server, UndefinedLab: [https://discord.gg/fzK3xddtrM](https://discord.gg/fzK3xddtrM)
 * Support me on Ko-fi: [https://ko-fi.com/B0B81S0WUA](https://ko-fi.com/B0B81S0WUA)
 
 [![Support me on Ko-fi](https://storage.ko-fi.com/cdn/kofi3.png?v=3)](https://ko-fi.com/B0B81S0WUA)

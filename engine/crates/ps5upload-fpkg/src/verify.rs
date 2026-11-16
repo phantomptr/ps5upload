@@ -397,6 +397,18 @@ pub fn verify_streaming_cancellable(
     verify_streaming_inner(path, passcode, None, Some(cancel), progress)
 }
 
+/// [`verify_streaming_sampled`] that also stops with a "cancelled" error once `cancel` is set
+/// (checked between batches of blocks): a build's Stop ends its read-back too.
+pub fn verify_streaming_controlled(
+    path: &Path,
+    passcode: &str,
+    seed: Option<u64>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<Report> {
+    verify_streaming_inner(path, passcode, seed, cancel, progress)
+}
+
 fn verify_streaming_inner(
     path: &Path,
     passcode: &str,
@@ -404,6 +416,10 @@ fn verify_streaming_inner(
     cancel: Option<&std::sync::atomic::AtomicBool>,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<Report> {
+    let cancelled = || cancel.is_some_and(crate::workshop::checkpoint);
+    if cancelled() {
+        return format_err("cancelled");
+    }
     let mut file = PkgFile::open(path)?;
     let fih_block = file.read_at(0, BLOCK as usize)?;
     let fih = fih::parse(&fih_block)?;
@@ -545,6 +561,10 @@ fn verify_streaming_inner(
             }
             progress(done * BLOCK, sweep * BLOCK);
         }
+    }
+    // Every 256 blocks above; a smaller package (or the last few blocks) is checked here.
+    if cancelled() {
+        return format_err("cancelled");
     }
     progress(done * BLOCK, sweep * BLOCK);
     r.push(

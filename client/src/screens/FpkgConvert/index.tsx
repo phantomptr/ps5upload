@@ -87,6 +87,11 @@ import { sourcesForPath, withoutBuilding } from "../../lib/convertQueueSources";
 import { usePackageViewer } from "../../state/packageViewer";
 import { consoleSwapDeps } from "../../lib/dumpSwapConsole";
 import { amprTrace, titleIdOf } from "../../api/amprTrace";
+import { krakenIsTheMounter } from "../../lib/mounter";
+import { placePkgForMount } from "../../state/pkgMount";
+import { IDLE_MOUNT_RUN, mountablePackage, mountRunKey, runMount, type MountRun } from "./mountRun";
+import { useSmpState } from "../GameHub/SmpNeeded";
+import { useMountClashAsk } from "../InstallPackage/KrakenMountCard";
 
 /** Why a source was not queued: the build picked cannot be made from it. */
 type QueueSkip = "not-image" | "not-folder" | "later-part";
@@ -136,6 +141,12 @@ export default function WorkshopScreen() {
   const profiles = useRosterStore((s) => s.profiles);
   const payloadUp = useConnectionStore((s) => s.payloadStatus === "up");
   const canInstall = payloadUp && host.trim() !== "";
+  // Kraken Mount on the console: a package made here can be mounted from a drive instead of
+  // installed (see lib/mounter).
+  const mounterProbe = useSmpState(host);
+  const kraken = krakenIsTheMounter(mounterProbe.status === "checking" ? null : mounterProbe.status);
+  const [mountRun, setMountRun] = useState<MountRun>(IDLE_MOUNT_RUN);
+  const mountClash = useMountClashAsk(host);
   const kernel = useConnectionStore((s) =>
     host ? (s.runtimeByHost[hostOf(host)]?.ps5Kernel ?? null) : null,
   );
@@ -152,7 +163,15 @@ export default function WorkshopScreen() {
 
   const navigate = useNavigate();
   const pipeline = useFpkgConversion((s) => s.pipeline);
-  const start = useFpkgConversion((s) => s.start);
+  // A mount result belongs to one run on one console: cleared when either changes, and a late
+  // answer for an old run is dropped.
+  const mountKey = mountRunKey(host, pipeline);
+  const mountKeyRef = useRef(mountKey);
+  useEffect(() => {
+    mountKeyRef.current = mountKey;
+    setMountRun(IDLE_MOUNT_RUN);
+  }, [mountKey]);
+  const start =useFpkgConversion((s) => s.start);
   const buildImage = useFpkgConversion((s) => s.buildImage);
   const buildFolder = useFpkgConversion((s) => s.buildFolder);
   const retryInstall = useFpkgConversion((s) => s.retryInstall);
@@ -1074,24 +1093,6 @@ export default function WorkshopScreen() {
   }
 
   const idle = pipeline.phase === "idle";
-  // Straight to the PS5: an .exfat, .ffpkg or .ffpfs, with or without asset packs; a .ffpfsc is
-  // not streamed yet, packed or not.
-  const ps5Refusal =
-    build.kind === "image" && build.compress
-      ? tr(
-          "fpkg.save_to_ps5_unsupported_v2",
-          undefined,
-          "Straight to the PS5 works for an .exfat, .ffpkg or .ffpfs image, with or without asset packs, but not yet for a .ffpfsc. Save this one to this computer, or turn off compression above.",
-        )
-      : null;
-  // Straight to a server: the same images as straight to the PS5.
-  const serverRefusal = ps5Refusal
-    ? tr(
-        "fpkg.save_to_server_unsupported_v2",
-        undefined,
-        "Straight to a server works for an .exfat, .ffpkg or .ffpfs image, with or without asset packs, but not yet for a .ffpfsc. Save this one to this computer, or turn off compression above.",
-      )
-    : null;
   const runChoice: RunCardProps["choice"] = {
     make,
     onMake: setMake,
@@ -1115,10 +1116,8 @@ export default function WorkshopScreen() {
     // A folder can't go straight to the PS5: shown as this computer.
     saveTo: make === "folder" && saveTo === "ps5" ? "computer" : saveTo,
     onSaveTo: setSaveTo,
-    ps5Refusal,
     serverFolder,
     onServerFolder: setServerFolder,
-    serverRefusal,
   };
   // "Move the source to the Trash" is for an image or folder made of the game checked; a
   // package is left alone (it has its own steps after the build).
@@ -1204,6 +1203,7 @@ export default function WorkshopScreen() {
             archive={!locked && isArchiveSource(src)}
             forNext={locked}
             ps4={!locked && ps4}
+            kraken={kraken}
           />
 
           <OptionsCard
@@ -1353,6 +1353,21 @@ export default function WorkshopScreen() {
               )
             }
             onInstall={(method) => void retryInstall(host, method)}
+            kraken={kraken}
+            onMount={
+              kraken && !ps4 && pipeline.phase !== "idle" && mountablePackage(pipeline.packagePath)
+                ? () => {
+                    const path = pipeline.packagePath ?? "";
+                    const key = mountKey;
+                    void runMount(
+                      () => placePkgForMount(path, host, { onExists: mountClash.onExists }),
+                      () => mountKeyRef.current === key,
+                      setMountRun,
+                    );
+                  }
+                : undefined
+            }
+            mountRun={mountRun}
             onLaunch={onLaunch}
             targetLabel={
               pipeline.phase === "running" && pipeline.host
@@ -1448,6 +1463,7 @@ export default function WorkshopScreen() {
       />
 
       <LocalDrivesCard drives={drives} quiet />
+      {mountClash.dialog}
 
       <details className="text-sm">
         <summary className="cursor-pointer text-[var(--color-muted)]">

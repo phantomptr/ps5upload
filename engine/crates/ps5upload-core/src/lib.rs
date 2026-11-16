@@ -30,6 +30,7 @@ pub mod host_info;
 pub mod host_names;
 pub mod hw;
 pub mod installer_client;
+pub mod kraken;
 pub mod local_image;
 pub mod log;
 pub mod mesh;

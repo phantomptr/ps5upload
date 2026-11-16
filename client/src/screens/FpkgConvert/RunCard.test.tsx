@@ -266,6 +266,21 @@ describe("RunCard", () => {
       );
     });
 
+    it("sends a .ffpfsc straight to the PS5 or a server, saying it is compressed twice", () => {
+      const img = { make: "image" as const, onSaveTo: noop, onServerFolder: noop, imageCompress: true };
+      const note = 'data-testid="convert-save-to-ffpfsc-note"';
+      const toPs5 = idle({ ...img, saveTo: "ps5" }, { canImage: true });
+      expect(toPs5).toContain(note);
+      expect(toPs5).toContain("compressed twice");
+      expect(button(toPs5, "Make compressed image")?.disabled).toBe(false);
+      const toServer = idle({ ...img, saveTo: "server", serverFolder: "remote://nas1/games" }, { canImage: true });
+      expect(toServer).toContain(note);
+      expect(button(toServer, "Make compressed image")?.disabled).toBe(false);
+      // Not for a plain image, nor for one saved here.
+      expect(idle({ ...img, imageCompress: false, saveTo: "ps5" }, { canImage: true })).not.toContain(note);
+      expect(idle({ ...img, saveTo: "computer" }, { canImage: true })).not.toContain(note);
+    });
+
     it("says a finished image is on a server, with nothing to upload, show or delete", () => {
       const out = html(
         {
@@ -534,6 +549,29 @@ describe("RunCard", () => {
     expect(button(out, "Upload & install")).not.toBeNull();
   });
 
+  it("offers mount and install after a failed run only for a kept .pkg, never an image", () => {
+    const failed = (packagePath: string, mode: "convert-install" | "image") =>
+      html(
+        {
+          phase: "failed",
+          mode,
+          source: "/g",
+          host: "10.0.0.2",
+          stage: "install",
+          message: "unreachable",
+          packagePath,
+          stageMs: {},
+          titleId: null,
+        },
+        {},
+        { kraken: true, onMount: noop },
+      );
+    expect(button(failed("/out/a.pkg", "convert-install"), "Put on the PS5 to mount")).not.toBeNull();
+    const image = failed("/out/a.ffpfsc", "image");
+    expect(button(image, "Put on the PS5 to mount")).toBeNull();
+    expect(button(image, "Stream & install")).toBeNull();
+  });
+
   it("offers no retry when the build itself failed", () => {
     const out = html({
       phase: "failed",
@@ -653,6 +691,44 @@ describe("RunCard", () => {
       expect(idle("exfat", undefined)).not.toContain("AMPR LZ4 asset packs");
     });
 
+    it("turns LZ4 packs off with ampr_emu for a game that needs it, and back on together", () => {
+      const calls: string[] = [];
+      const choice = lz4({
+        on: true,
+        installRuntime: true,
+        readiness: { runtime_version: null, refusal: "none", kind: "runtime" },
+        onToggle: (on) => calls.push(`packs:${on}`),
+        onInstallRuntime: (on) => calls.push(`runtime:${on}`),
+        onKind: () => {},
+      });
+      /** The onChange of the checkbox in the element tree under `testid` (or the first one). */
+      const inputs: { onChange: (e: { target: { checked: boolean } }) => void; testid?: string }[] = [];
+      const walk = (node: unknown, testid?: string) => {
+        if (Array.isArray(node)) return node.forEach((n) => walk(n, testid));
+        if (!node || typeof node !== "object" || !("props" in node)) return;
+        const props = (node as { props: Record<string, unknown> }).props;
+        const id = (props["data-testid"] as string | undefined) ?? testid;
+        if (props.type === "checkbox") inputs.push({ onChange: props.onChange as never, testid: id });
+        walk(props.children, id);
+      };
+      walk(Lz4Option({ lz4: choice }));
+      const runtimeBox = inputs.find((i) => i.testid === "lz4-install-runtime");
+      expect(runtimeBox).toBeDefined();
+      runtimeBox!.onChange({ target: { checked: false } });
+      expect(calls).toEqual(["runtime:false", "packs:false"]);
+
+      calls.length = 0;
+      const packsBox = inputs.find((i) => i.testid === "lz4-option");
+      packsBox!.onChange({ target: { checked: true } });
+      expect(calls).toEqual(["packs:true"]);
+      // With the runtime off, ticking packs puts it back in.
+      calls.length = 0;
+      inputs.length = 0;
+      walk(Lz4Option({ lz4: { ...choice, installRuntime: false } }));
+      inputs.find((i) => i.testid === "lz4-option")!.onChange({ target: { checked: true } });
+      expect(calls).toEqual(["packs:true", "runtime:true"]);
+    });
+
     it("goes with .ffpfsc compression, and offers a profile", () => {
       const on = idle("ffpkg", lz4({ on: true }), true);
       expect(checkbox(on, "Compress it into a .ffpfsc")).toEqual({ checked: true, disabled: false });
@@ -724,11 +800,16 @@ describe("RunCard", () => {
       expect(folderLz4Options(undefined)).toBeUndefined();
       const folderLz4 = renderToStaticMarkup(<Lz4Option lz4={lz4({ on: true })} folder />);
       expect(folderLz4).toContain("Writes the game as a plain folder with its data in LZ4 asset packs");
+      const runtimeReadiness = { runtime_version: null, refusal: "none", kind: "runtime" as const };
       const runtime = renderToStaticMarkup(
-        <Lz4Option lz4={lz4({ readiness: { runtime_version: null, refusal: "none", kind: "runtime" } })} folder />,
+        <Lz4Option lz4={lz4({ on: true, readiness: runtimeReadiness })} folder />,
       );
       expect(runtime).toContain("Put ampr_emu 0.4.2.1 into the folder");
       expect(runtime).toContain("into the folder” above to use packs");
+      // Only under LZ4 packs picked (#828).
+      expect(renderToStaticMarkup(<Lz4Option lz4={lz4({ readiness: runtimeReadiness })} folder />)).not.toContain(
+        "Put ampr_emu 0.4.2.1",
+      );
       const notAmpr = lz4({ kind: "zstd", on: true, readiness: { refusal: "no", kind: "no_ampr" } });
       expect(folderPacks(notAmpr)).toBe(true);
       expect(renderToStaticMarkup(<ZstdOption lz4={notAmpr} folder />)).toContain(
@@ -771,6 +852,34 @@ describe("RunCard", () => {
       expect(plain).not.toContain('data-testid="lz4-option"');
       expect(plain).toContain('data-testid="zstd-option"');
       expect(plain).toContain("LZ4 asset packs: not offered");
+    });
+
+    it("shows only the emulator choice that applies (#828)", () => {
+      // A game that reads through AMPR and ships no emulator: its own can't read LZ4 packs.
+      const readiness = { runtime_version: null, refusal: "no emulator", kind: "runtime" as const, emulator_missing: true };
+      const toggle = 'data-testid="ampr-emu-option"';
+      const putRow = "Put ampr_emu 0.4.2.1 into the image";
+      const ngLine = "The zstd runtime (ampr-emu-ng) goes in with the packs, so no other emulator is needed.";
+      // No packs: the plain-image emulator toggle, said to be for an image without packs.
+      const plain = idle("ffpkg", lz4({ readiness }));
+      expect(plain).toContain(toggle);
+      expect(plain).toContain("For an image without asset packs");
+      expect(plain).not.toContain(putRow);
+      expect(plain).not.toContain(ngLine);
+      // LZ4 can still be picked: it puts ampr_emu 0.4.2.1 in, and that row shows under it.
+      expect(checkbox(plain, "AMPR LZ4 asset packs")).toEqual({ checked: false, disabled: false });
+      const lz4Picked = idle("ffpkg", lz4({ on: true, readiness, installRuntime: true }));
+      expect(lz4Picked).toContain(putRow);
+      expect(checkbox(lz4Picked, "AMPR LZ4 asset packs")?.checked).toBe(true);
+      expect(lz4Picked).not.toContain(toggle);
+      expect(lz4Picked).not.toContain(ngLine);
+      // zstd packs: neither drakmor's toggle nor the LZ4 row, one line on ampr-emu-ng instead.
+      const zstd = idle("ffpkg", lz4({ on: true, kind: "zstd", readiness }));
+      expect(zstd).not.toContain(toggle);
+      expect(zstd).not.toContain(putRow);
+      expect(zstd).toContain(ngLine);
+      expect(renderToStaticMarkup(<ZstdOption lz4={lz4({ on: true, kind: "zstd" })} folder />)).toContain(ngLine);
+      expect(renderToStaticMarkup(<ZstdOption lz4={lz4({ kind: "zstd" })} />)).not.toContain(ngLine);
     });
 
     it("offers to write a packed game as plain files again", () => {
@@ -851,13 +960,15 @@ describe("RunCard", () => {
       expect(usedPacks({ mode: "convert", stageMs: { pack: 1 } })).toBe(false);
     });
 
-    it("says why, and cannot be turned on, when the game's ampr_emu cannot serve packs", () => {
+    it("says why, and doesn't pack, when the game's ampr_emu cannot serve packs and none is put in", () => {
       const refused = lz4({
         on: true,
         readiness: { runtime_version: null, refusal: "the game's ampr_emu does not serve asset packs" },
       });
       const out = idle("exfat", refused);
-      expect(checkbox(out, "AMPR LZ4 asset packs")).toEqual({ checked: false, disabled: true });
+      // Picked, with the row that fixes it right under it (#828).
+      expect(checkbox(out, "AMPR LZ4 asset packs")).toEqual({ checked: true, disabled: false });
+      expect(checkbox(out, "Put ampr_emu 0.4.2.1 into the image")?.checked).toBe(false);
       // The runtime checkbox fixes this refusal, so the line points at it (#449).
       expect(out).toContain("above to use packs: the game&#x27;s ampr_emu does not serve asset packs");
       expect(out).not.toContain("Not available for this game");

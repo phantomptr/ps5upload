@@ -64,12 +64,12 @@ test("rebuilds a game folder's AMPR index", async ({ page }) => {
   const source = main.locator("#fpkg-source");
   const rebuild = main.getByTestId("ampr-index-rebuild");
 
-  // A game that does not read through libSceAmpr: offered off, with why.
+  // A game that does not read through libSceAmpr has no index to rebuild: not offered (#828).
   await source.fill("/games/Astro");
   await source.blur();
   await expect(main.getByText("Astro Bot").first()).toBeVisible();
-  await expect(rebuild).toBeDisabled();
-  await expect(main.getByTestId("ampr-index-status")).toContainText("This one does not.");
+  await expect(rebuild).toHaveCount(0);
+  await expect(main.getByTestId("ampr-index-status")).toHaveCount(0);
 
   // An AMPR game folder: rebuilt in place, the result said, the game checked again.
   await source.fill("/games/Spider");

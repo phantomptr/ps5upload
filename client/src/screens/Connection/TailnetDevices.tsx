@@ -22,13 +22,15 @@ export type DeviceKind = "ps5" | "phone" | "computer";
 const PHONE = /(iphone|ipad|pixel|android|galaxy|phone|oneplus|xiaomi|redmi|huawei|^sm-)/i;
 
 /** What kind of device a tailnet name is: a PS5 (a console PS5Upload knows at that address, or a
- *  "-ps5u" name that names a PS5: every PS5Upload device gets that suffix), a phone, a computer. */
+ *  "-ps5u" name that names a PS5: every PS5Upload device gets that suffix), a phone, a computer.
+ *  A name that reads as a phone is a phone even with "ps5" in it ("yuns-ps5-pixel-ps5u"), so it is
+ *  never offered as a console. */
 export function deviceKind(name: string, isConsole = false): DeviceKind {
   const label = name.split(".")[0].toLowerCase();
   if (isConsole) return "ps5";
   const base = label.replace(/-ps5u(-\d+)?$/, "");
-  if (base !== label && /ps5|playstation/.test(base)) return "ps5";
   if (PHONE.test(base)) return "phone";
+  if (base !== label && /ps5|playstation/.test(base)) return "ps5";
   return "computer";
 }
 

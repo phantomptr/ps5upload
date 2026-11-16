@@ -203,6 +203,94 @@ impl<W: Write + Seek + Durable> Seek for Bounded<W> {
     }
 }
 
+/// A handle [`GrowthSync`] syncs `path` through: with write access (Windows refuses
+/// `FlushFileBuffers` on a read-only handle, PermissionDenied), never creating or truncating the
+/// file the builder writes. `None` while it does not exist yet.
+fn open_for_sync(path: &std::path::Path) -> Option<std::fs::File> {
+    std::fs::OpenOptions::new().write(true).open(path).ok()
+}
+
+/// U5 for a file written by code that keeps its own `File` (the `.pkg` builder): a thread that
+/// looks at the file every `poll` and, each time it has grown by `every` bytes since the last
+/// sync, makes it durable through a handle of its own (a sync covers the file, whichever handle
+/// asks). A failed sync raises `failed` (the job's cancel flag: the build stops) and is what
+/// [`GrowthSync::finish`] returns.
+pub struct GrowthSync {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<io::Result<u64>>>,
+}
+
+impl GrowthSync {
+    /// Starts watching `path` (which may not exist yet).
+    pub fn start(
+        path: std::path::PathBuf,
+        every: u64,
+        poll: Duration,
+        failed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        use std::sync::atomic::Ordering;
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopped = std::sync::Arc::clone(&stop);
+        let thread = std::thread::Builder::new()
+            .name("ps5u-convert".into())
+            .spawn(move || {
+                let mut file: Option<std::fs::File> = None;
+                let (mut synced, mut syncs) = (0u64, 0u64);
+                let mut look = |file: &mut Option<std::fs::File>, last: bool| -> io::Result<()> {
+                    if file.is_none() {
+                        *file = open_for_sync(&path);
+                    }
+                    let Some(f) = file.as_mut() else {
+                        return Ok(());
+                    };
+                    let len = f.metadata()?.len();
+                    if len >= synced.saturating_add(every) || (last && len != synced) {
+                        sync(f)?;
+                        synced = len;
+                        syncs += 1;
+                    }
+                    Ok(())
+                };
+                loop {
+                    let last = stopped.load(Ordering::Relaxed);
+                    if let Err(e) = look(&mut file, last) {
+                        failed.store(true, Ordering::Relaxed);
+                        return Err(e);
+                    }
+                    if last {
+                        return Ok(syncs);
+                    }
+                    std::thread::sleep(poll);
+                }
+            })
+            .expect("a thread to sync the output");
+        Self {
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    /// Stops watching after one last sync of what was written since the last one: the syncs
+    /// made, or the failure of one.
+    pub fn finish(mut self) -> io::Result<u64> {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        match self.thread.take().map(|t| t.join()) {
+            Some(Ok(r)) => r,
+            Some(Err(_)) => Err(io::Error::other("the sync thread panicked")),
+            None => Ok(0),
+        }
+    }
+}
+
+impl Drop for GrowthSync {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
 /// Removes the file at `path` and syncs its folder, so the freed space shows as free.
 pub fn remove_file(path: &Path) -> io::Result<()> {
     std::fs::remove_file(path)?;
@@ -495,6 +583,64 @@ fn statfs_into(_dir: &Path, _p: &mut Probe) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    /// The sync's own handle can write (Windows syncs only such a handle), and opening it neither
+    /// creates the file nor cuts what the builder wrote.
+    #[test]
+    fn the_sync_handle_writes_and_never_creates_or_truncates() {
+        let dir = std::env::temp_dir().join(format!("ps5u-sync-handle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("g.pkg.partial");
+        assert!(open_for_sync(&path).is_none());
+        assert!(!path.exists());
+        std::fs::write(&path, b"written so far").unwrap();
+        let mut f = open_for_sync(&path).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"written so far");
+        // Needs write access on every platform (a read-only handle is refused).
+        f.set_len(14).unwrap();
+        sync(&mut f).unwrap();
+        drop(f);
+        assert_eq!(std::fs::read(&path).unwrap(), b"written so far");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file another writer grows is synced each time it grew by the interval, once more at
+    /// the end, and a file that never appears costs nothing.
+    #[test]
+    fn a_growing_file_is_synced_as_it_grows() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let dir = std::env::temp_dir().join(format!("ps5u-growth-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("g.pkg.partial");
+        let failed = Arc::new(AtomicBool::new(false));
+        let watch = GrowthSync::start(
+            path.clone(),
+            1 << 20,
+            Duration::from_millis(2),
+            Arc::clone(&failed),
+        );
+        let mut f = std::fs::File::create(&path).unwrap();
+        for _ in 0..4 {
+            f.write_all(&vec![7u8; (1 << 20) + 1]).unwrap();
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        f.write_all(b"tail").unwrap();
+        let syncs = watch.finish().unwrap();
+        assert!((4..=5).contains(&syncs), "{syncs}");
+        assert!(!failed.load(Ordering::Relaxed));
+        let none = GrowthSync::start(
+            dir.join("never"),
+            1,
+            Duration::from_millis(1),
+            Arc::clone(&failed),
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        assert_eq!(none.finish().unwrap(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A file in memory that counts syncs and fails them as told.
     struct Mem {

@@ -236,6 +236,15 @@ export function ZstdOption({ lz4, folder }: { lz4: Lz4Choice; folder?: boolean }
           </span>
         </div>
       )}
+      {on && (
+        <div className="ms-6 text-xs text-[var(--color-muted)]" data-testid="zstd-runtime-included">
+          {tr(
+            "fpkg.image.zstd_runtime_included",
+            undefined,
+            "The zstd runtime (ampr-emu-ng) goes in with the packs, so no other emulator is needed.",
+          )}
+        </div>
+      )}
       {on && <PacksWarning />}
       {on && <ZstdRuntimeChoice />}
       {on && <ProfilePicker lz4={lz4} zstd />}
@@ -265,16 +274,23 @@ export function Lz4Option({ lz4, folder }: { lz4: Lz4Choice; folder?: boolean })
   const tr = useTr();
   const refusal = lz4Refused({ ...lz4, kind: "lz4" });
   const kind = lz4.readiness.kind ?? (lz4.readiness.refusal ? "runtime" : "ok");
+  // LZ4 packs are what is picked. "Put ampr_emu 0.4.2.1 into the image" is only about them, so
+  // it shows under them alone (#828).
+  const chosen = lz4.on && lz4.kind === "lz4";
+  // A game whose own emulator can't read packs can still take them, with ampr_emu 0.4.2.1 put in.
+  const fixable = kind === "runtime";
   return (
     <div className="space-y-1" data-testid="lz4-option">
       <label className="flex cursor-pointer items-start gap-2.5 text-xs">
         <input
           type="checkbox"
-          checked={lz4.on && lz4.kind === "lz4" && !refusal}
-          disabled={!!refusal}
+          checked={chosen && (!refusal || fixable)}
+          disabled={!!refusal && !fixable}
           onChange={(e) => {
             lz4.onKind("lz4");
             lz4.onToggle(e.target.checked);
+            // Picking LZ4 for such a game puts in the emulator that reads them (untickable below).
+            if (e.target.checked && fixable && !lz4.installRuntime) lz4.onInstallRuntime(true);
           }}
           className="checkbox mt-px h-4 w-4 shrink-0"
         />
@@ -297,12 +313,17 @@ export function Lz4Option({ lz4, folder }: { lz4: Lz4Choice; folder?: boolean })
           </span>
         </span>
       </label>
-      {kind === "runtime" && (
+      {fixable && chosen && (
         <label className="flex cursor-pointer items-start gap-2.5 text-xs" data-testid="lz4-install-runtime">
           <input
             type="checkbox"
             checked={lz4.installRuntime}
-            onChange={(e) => lz4.onInstallRuntime(e.target.checked)}
+            onChange={(e) => {
+              lz4.onInstallRuntime(e.target.checked);
+              // This game's own emulator can't read packs: without ampr_emu 0.4.2.1 none are
+              // made, so LZ4 packs go off with it (ticking them again puts it back in).
+              if (!e.target.checked) lz4.onToggle(false);
+            }}
             className="checkbox mt-px h-4 w-4 shrink-0"
           />
           <span className="min-w-0">
@@ -327,8 +348,9 @@ export function Lz4Option({ lz4, folder }: { lz4: Lz4Choice; folder?: boolean })
           </span>
         </label>
       )}
-      {refusal && kind === "runtime" ? (
+      {refusal && fixable ? (
         // The checkbox above fixes this one: say so, rather than that packs are unavailable (#449).
+        chosen && (
         <div className="text-xs text-[var(--color-warn)]">
           {folder
             ? tr(
@@ -342,6 +364,7 @@ export function Lz4Option({ lz4, folder }: { lz4: Lz4Choice; folder?: boolean })
                 "Tick “Put ampr_emu 0.4.2.1 into the image” above to use packs: {reason}",
               )}
         </div>
+        )
       ) : refusal ? (
         <div className="text-xs text-[var(--color-warn)]">
           {tr("fpkg.image.lz4_unavailable", { reason: refusal }, "Not available for this game: {reason}")}
@@ -511,7 +534,8 @@ function WhichImageHelp() {
 
 /** Some libSceAmpr games with no emulator fail to start from an image (Alembic's two on a console),
  *  others run (LEGO Horizon Adventures reaches its menu with or without one, on the Pro), and
- *  ShadowMount+ doesn't add one. On by default; packs have their own choice. */
+ *  ShadowMount+ doesn't add one. On by default. Only for an image without packs: the engine
+ *  leaves it out for packs, which bring their own emulator (#828). */
 function AmprEmuOption() {
   const tr = useTr();
   const on = useConvertPrefs((s) => s.addAmprEmu);
@@ -525,9 +549,9 @@ function AmprEmuOption() {
         onChange={set}
         label={tr("fpkg.image.ampr_emu", undefined, "Add the AMPR emulator")}
         hint={tr(
-          "fpkg.image.ampr_emu_body",
+          "fpkg.image.ampr_emu_body_v2",
           undefined,
-          "This game reads its files through AMPR and has no emulator. Some such games won't start from an image without one, and others run fine. Adds drakmor's ampr_emu 0.4.2.1 as fakelib/libSceAmpr.sprx, fetched once from its GitHub release and checked against a known digest.",
+          "For an image without asset packs: this game reads its files through AMPR and has no emulator. Some such games won't start from an image without one, and others run fine. Adds drakmor's ampr_emu 0.4.2.1 as fakelib/libSceAmpr.sprx, fetched once from its GitHub release and checked against a known digest. Asset packs bring their own emulator instead.",
         )}
       />
       {on && <AmprEmuBuildChoice build={build} onBuild={setBuild} />}
@@ -587,6 +611,8 @@ export function ImageChoice({
   const setFormat = (f: ImageFormat) => onChoice(f, compress);
   const setCompress = (c: boolean) => onChoice(format, c);
   const packing = lz4Active(lz4);
+  // zstd packs bring ampr-emu-ng, and the engine ignores the emulator toggle with them.
+  const zstdChosen = !!lz4?.on && lz4.kind === "zstd";
   const options: { id: ImageFormat; label: string; body: string }[] = [
     {
       id: "ffpkg",
@@ -658,7 +684,7 @@ export function ImageChoice({
         </span>
       </label>
       {compress && <FfpfscLevelOption own={level} />}
-      {lz4?.readiness.emulator_missing && !packing && <AmprEmuOption />}
+      {lz4?.readiness.emulator_missing && !packing && !zstdChosen && <AmprEmuOption />}
       {lz4Offered(lz4) && <Lz4Option lz4={lz4} />}
       {zstdOffered(lz4) && <ZstdOption lz4={lz4} />}
       {(lz4 || packsNote) && <PacksNote lz4={lz4} />}

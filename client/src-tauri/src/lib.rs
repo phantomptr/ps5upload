@@ -543,6 +543,7 @@ pub fn run() {
             // commands/smp.rs.
             commands::smp_status,
             commands::smp_rescan,
+            commands::kraken_remove,
             // Edit sessions: check an image out of ShadowMount+ so its
             // contents can be changed, then put it back. See
             // `ps5upload_core::smp_checkout` for why an image has to be moved
@@ -642,8 +643,6 @@ pub fn run() {
             commands::peripheral_bd_off,
             commands::peripheral_bd_on,
             commands::peripheral_beep,
-            commands::peripheral_led,
-            commands::peripheral_led_dim,
             commands::proc_list_get,
             // Shell + CRC32 + app.db query
             commands::shell_run_cmd,

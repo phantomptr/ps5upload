@@ -3,6 +3,7 @@ import { ApiError } from "../api";
 import type { OpEnd, OpStatus } from "../files/opJob";
 import en from "../locales/en.json";
 import { t } from "../strings";
+import { freeName } from "../files/paste";
 import {
   CONVERT_CAUSES,
   convertCauseText,
@@ -11,8 +12,11 @@ import {
   currentConvert,
   dismissConvert,
   endOf,
+  fitFfpfscName,
   inspect,
+  isArchiveFormat,
   isConvertImage,
+  isConvertSource,
   outputName,
   parentOf,
   parseInspection,
@@ -102,8 +106,72 @@ describe("names and requests", () => {
     expect(outputName("/mnt/usb0/Astro.EXFAT/", "ffpfs")).toBe("Astro.ffpfs");
     expect(parentOf("/mnt/usb0/Astro.ffpkg")).toBe("/mnt/usb0");
     expect(isConvertImage("a.ffpfs")).toBe(true);
-    expect(isConvertImage("a.ffpfsc")).toBe(false);
+    expect(isConvertImage("a.ffpfsc")).toBe(true);
     expect(isConvertImage("a.pkg")).toBe(false);
+    // A .ffpfsc's name fits the 63 bytes ShadowMountPlus mounts, cut at a character.
+    expect(outputName("/data/Astro.ffpfsc", "exfat")).toBe("Astro.exfat");
+    expect(outputName("/data/Astro", "ffpfsc")).toBe("Astro.ffpfsc");
+    const long = outputName(`/data/${"é".repeat(40)}`, "ffpfsc");
+    expect(new TextEncoder().encode(long).length).toBeLessThanOrEqual(63);
+    expect(long).toBe(`${"é".repeat(28)}.ffpfsc`);
+  });
+
+  it("keeps a Keep both .ffpfsc name within 63 bytes, cutting the stem", async () => {
+    const bytes = (s: string) => new TextEncoder().encode(s).length;
+    const full = outputName(`/data/${"é".repeat(40)}`, "ffpfsc"); // 63 bytes already
+    const taken = new Set([`/d/${full}`]);
+    const next = await freeName("/d", full, false, async (p) => taken.has(p), fitFfpfscName);
+    expect(bytes(next)).toBeLessThanOrEqual(63);
+    expect(next).toBe(`${"é".repeat(26)} (2).ffpfsc`);
+    // The fitted name is the one checked: a taken "(2)" moves on to "(3)".
+    taken.add(`/d/${next}`);
+    expect(await freeName("/d", full, false, async (p) => taken.has(p), fitFfpfscName)).toBe(
+      `${"é".repeat(26)} (3).ffpfsc`,
+    );
+    // Short names and other formats are left as they are.
+    expect(fitFfpfscName("Astro (2).ffpfsc")).toBe("Astro (2).ffpfsc");
+    const longExfat = `${"a".repeat(70)} (2).exfat`;
+    expect(fitFfpfscName(longExfat)).toBe(longExfat);
+  });
+
+  it("offers archives as sources and names the output after the archive", () => {
+    for (const n of ["g.zip", "G.7Z", "g.part1.rar"]) expect(isConvertSource(n), n).toBe(true);
+    expect(isConvertSource("a.ffpfsc")).toBe(true);
+    expect(isConvertSource("a.tar")).toBe(false);
+    expect(isConvertImage("g.zip")).toBe(false);
+    expect(outputName("/data/Astro Bot.zip", "exfat")).toBe("Astro Bot.exfat");
+    expect(outputName("/data/Astro.part1.rar", "folder")).toBe("Astro");
+    expect(outputName("/data/Astro.7z", "ffpfsc")).toBe("Astro.ffpfsc");
+    expect(isArchiveFormat("7z") && isArchiveFormat("zip") && !isArchiveFormat("folder")).toBe(true);
+    expect(convertCauseText("convert_rar_unsupported")).toBe(t("cw_convert_err_rar"));
+  });
+
+  it("sends a .pkg's level with it, and never zstd", () => {
+    const base = { source: "/data/g", dest: "/data/g.pkg", format: "pkg" as const, level: 5 as const, verify: "fast" as const };
+    expect(startBody({ ...base, zstd: true, pkgLevel: "balanced" })).toEqual({
+      path: "/data/g",
+      dest: "/data/g.pkg",
+      format: "pkg",
+      zstd: false,
+      pkg_level: "balanced",
+      verify: "fast",
+    });
+    expect(startBody({ ...base, zstd: false })).toMatchObject({ pkg_level: "fast" });
+    expect(startBody({ ...base, format: "exfat", zstd: false, pkgLevel: "stored" })).not.toHaveProperty("pkg_level");
+    expect(outputName("/data/Astro", "pkg")).toBe("Astro.pkg");
+  });
+
+  it("sends the image inside and its compression only with a .ffpfsc", () => {
+    const base = { source: "/data/g", dest: "/data/g.ffpfsc", zstd: false, level: 5 as const, verify: "fast" as const };
+    expect(startBody({ ...base, format: "ffpfsc", inner: "ffpkg", ffpfscLevel: "smallest" })).toMatchObject({
+      format: "ffpfsc",
+      inner: "ffpkg",
+      ffpfsc_level: "smallest",
+    });
+    expect(startBody({ ...base, format: "ffpfsc" })).toMatchObject({ inner: "exfat", ffpfsc_level: "balanced" });
+    const plain = startBody({ ...base, format: "exfat", inner: "ffpkg", ffpfscLevel: "fast" });
+    expect(plain).not.toHaveProperty("inner");
+    expect(plain).not.toHaveProperty("ffpfsc_level");
   });
 
   it("sends the zstd level only with zstd", () => {
@@ -154,7 +222,7 @@ describe("jobs", () => {
     const ok = await inspect("/data/g", deps({ end: "done", status: status({ state: "done", result: '{"path":"/data/g","format":"exfat","size":1}' }) }));
     expect(ok).toMatchObject({ ok: true, info: { format: "exfat" } });
     const bad = await inspect("/data/g", deps({ end: "failed", status: status({ state: "failed", message: "convert_unsupported_source" }) }));
-    expect(bad).toEqual({ ok: false, error: t("cw_convert_err_unsupported") });
+    expect(bad).toEqual({ ok: false, error: t("cw_convert_err_unsupported_source") });
   });
 
   it("a conversion: progress, then the not-built-yet ending", async () => {

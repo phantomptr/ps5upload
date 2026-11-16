@@ -22,6 +22,7 @@ import type { ImageFormat } from "../../api/fpkg";
 import { overallProgress, stageRows, type StageRow } from "./stages";
 import type { Lz4Choice } from "./ImageOptions";
 import { GentleToggle } from "./GentleToggle";
+import { mountablePackage } from "./mountRun";
 
 export { lz4Active, type Lz4Choice } from "./ImageOptions";
 
@@ -83,6 +84,12 @@ export interface RunCardProps {
   pipeline: Pipeline;
   /** The stream-install task, while one runs. */
   installTask: Task | null;
+  /** Kraken Mount runs on the console (and ShadowMount+ does not). */
+  kraken?: boolean;
+  /** Put the kept package where Kraken Mount mounts it, instead of installing it. */
+  onMount?: () => void;
+  /** That placement: running, and how it ended. */
+  mountRun?: { busy: boolean; result: { ok: boolean; message: string } | null };
   host: string;
   /** A console is connected and ready for an install. */
   canInstall: boolean;
@@ -355,9 +362,38 @@ export function RunCard(props: RunCardProps) {
   /** The two ways to install the kept package, with what sets them apart. */
   const installChoice = (primary: boolean) => (
     <div className="flex flex-col gap-2">
+      {props.onMount && (
+        <div className="flex flex-col gap-1" data-testid="kraken-mount-choice">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant={primary ? "primary" : undefined}
+              onClick={props.onMount}
+              disabled={!props.canInstall || !!props.mountRun?.busy}
+              loading={!!props.mountRun?.busy}
+            >
+              {tr("fpkg.kraken.mount", undefined, "Put on the PS5 to mount")}
+            </Button>
+          </div>
+          <div className="text-xs text-[var(--color-muted)]">
+            {tr(
+              "fpkg.kraken.mount_help",
+              undefined,
+              "Kraken Mount is running on this PS5: the package is copied into the homebrew folder of the package drive and mounted from there, not installed.",
+            )}
+          </div>
+          {props.mountRun?.result && (
+            <div
+              className={`text-xs ${props.mountRun.result.ok ? "text-[var(--color-good)]" : "text-[var(--color-bad)]"}`}
+              data-testid="kraken-mount-result"
+            >
+              {props.mountRun.result.message}
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex flex-wrap gap-2">
         <Button
-          variant={primary ? "primary" : undefined}
+          variant={primary && !props.onMount ? "primary" : undefined}
           onClick={() => props.onInstall("stream")}
           disabled={!props.canInstall}
         >
@@ -459,7 +495,8 @@ export function RunCard(props: RunCardProps) {
               {tr("fpkg.kept", { path: p.packagePath }, "The package was built and kept: {path}")}
             </div>
           )}
-          {p.packagePath && installChoice(true)}
+          {/* Install and mount take a kept .pkg only, never what a failed image build left. */}
+          {mountablePackage(p.packagePath) && installChoice(true)}
           <div className="flex flex-wrap gap-2">
             <Button onClick={props.onAnother}>
               {tr("fpkg.another", undefined, "＋ Convert another game")}
@@ -562,7 +599,13 @@ export function RunCard(props: RunCardProps) {
         </div>
         {usedPacks(p) && (
           <div className="text-sm text-[var(--color-warn)]" data-testid="packs-mount-note">
-            {folder
+            {folder && props.kraken
+              ? tr(
+                  "fpkg.folder.done_packs_kraken",
+                  undefined,
+                  "Kraken Mount, running on this PS5, mounts this folder from a scan folder (such as a drive's homebrew folder). PS5Upload's own mount can't read its asset packs.",
+                )
+              : folder
               ? tr(
                   "fpkg.folder.done_packs",
                   undefined,
@@ -735,12 +778,12 @@ export interface OutputChoiceProps {
    *  stored here. Offered when `onSaveTo` is given. */
   saveTo?: SaveTo;
   onSaveTo?: (to: SaveTo) => void;
-  /** Why this image can't go straight to the PS5 (a .ffpfsc, LZ4 packs), or null. */
+  /** Why this image can't go straight to the PS5, or null. */
   ps5Refusal?: string | null;
   /** Save to: a server: the folder chosen there (a `remote://` path, "" for none). */
   serverFolder?: string;
   onServerFolder?: (folder: string) => void;
-  /** Why this image can't go straight to a server (a .ffpfsc, LZ4 packs), or null. */
+  /** Why this image can't go straight to a server, or null. */
   serverRefusal?: string | null;
 }
 
@@ -818,6 +861,15 @@ export function OutputChoice(c: OutputChoiceProps) {
                 "fpkg.save_to_server_note",
                 undefined,
                 "Written to the server as it is made, then read back there before it gets its name. Nothing is stored on this computer.",
+              )}
+            </span>
+          )}
+          {((toPs5 && !c.ps5Refusal) || (toServer && image && !c.serverRefusal)) && c.imageCompress && (
+            <span className="text-xs text-[var(--color-muted)]" data-testid="convert-save-to-ffpfsc-note">
+              {tr(
+                "fpkg.save_to_ffpfsc_twice_note",
+                undefined,
+                "A .ffpfsc sent straight there is compressed twice: once to work out its size, then again as it is sent. It takes about twice as long to make as one saved to this computer.",
               )}
             </span>
           )}

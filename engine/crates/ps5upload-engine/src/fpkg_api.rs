@@ -1069,9 +1069,12 @@ pub(crate) struct ExfatBuildReq {
     /// `{"kind":"console","addr":…,"dir":…}`: straight into that PS5's folder `dir` over AVA1,
     /// sent as it is written, so the image is never stored on this computer. The job's `dest` is
     /// then the image's path on the PS5, and the read-back runs there. For `.exfat`, `.ffpkg`
-    /// and `.ffpfs` images, with or without `ampr_lz4` or `ampr_zstd` packs (LZ4 packs are made
-    /// into the engine's data folder first, and removed once the image is there); a `.ffpfsc`
-    /// (`compress`) and edited copies are refused for it.
+    /// and `.ffpfs` images, plain or in a `.ffpfsc` (`compress`: compressed once to measure it,
+    /// then again as it is sent, so it takes about twice the compression time), with or
+    /// without `ampr_lz4` or `ampr_zstd` packs (LZ4 packs are measured, then each volume is made
+    /// again as it is sent, so nothing is stored here; should a volume not come out as measured,
+    /// the packs are made into the engine's data folder first and removed once the image is
+    /// there); edited copies are refused for it.
     #[serde(default)]
     destination: Option<ImageDestinationReq>,
     /// A PS4 update (a package, image or folder) merged into the PS4 game `source`: the image
@@ -1126,22 +1129,13 @@ pub(crate) enum ImageDestinationReq {
 }
 
 /// Why an image build cannot go straight to a server, in a sentence for the user; `None` when
-/// it can. The same images as straight to the console: plain `.exfat`, `.ffpkg` and `.ffpfs`,
-/// with or without LZ4 or zstd asset packs.
-pub(crate) fn server_refusal(compress: bool, edited: bool) -> Option<&'static str> {
-    if edited {
-        return Some(
-            "an edited copy of an image is written next to it on this computer, not straight to \
-             a server",
-        );
-    }
-    if compress {
-        return Some(
-            "a .ffpfsc can't be written straight to a server yet: save it to this computer, or \
-             choose a plain .exfat, .ffpkg or .ffpfs image",
-        );
-    }
-    None
+/// it can. The same images as straight to the console: `.exfat`, `.ffpkg` and `.ffpfs`, plain
+/// or in a `.ffpfsc`, with or without LZ4 or zstd asset packs.
+pub(crate) fn server_refusal(edited: bool) -> Option<&'static str> {
+    edited.then_some(
+        "an edited copy of an image is written next to it on this computer, not straight to a \
+         server",
+    )
 }
 
 /// A request's server destination, checked: the saved connection must exist and `dir` must be
@@ -1155,23 +1149,14 @@ fn server_dest(source_id: &str, dir: &str) -> Result<crate::server_out::ServerDe
 }
 
 /// Why an image build cannot go straight to the console, in a sentence for the user; `None`
-/// when it can: plain `.exfat`, `.ffpkg` and `.ffpfs`, with or without LZ4 or zstd asset packs
-/// (as ps5-dump-forge writes packs into an image on another device). A `.ffpfsc` is not
-/// streamed yet, packed or not.
-pub(crate) fn console_refusal(compress: bool, edited: bool) -> Option<&'static str> {
-    if edited {
-        return Some(
-            "an edited copy of an image is written next to it on this computer, not straight to \
-             the PS5",
-        );
-    }
-    if compress {
-        return Some(
-            "a .ffpfsc can't be written straight to the PS5 yet: save it to this computer, or \
-             choose a plain .exfat, .ffpkg or .ffpfs image",
-        );
-    }
-    None
+/// when it can: `.exfat`, `.ffpkg` and `.ffpfs`, plain or in a `.ffpfsc` (compressed once to
+/// measure it, then again as it is sent), with or without LZ4 or zstd asset packs (as
+/// ps5-dump-forge writes packs into an image on another device).
+pub(crate) fn console_refusal(edited: bool) -> Option<&'static str> {
+    edited.then_some(
+        "an edited copy of an image is written next to it on this computer, not straight to the \
+         PS5",
+    )
 }
 
 /// How an image build ended: on this computer, or streamed to a console.
@@ -1190,6 +1175,7 @@ fn to_server_job(
     dest: &crate::server_out::ServerDest,
     name: &str,
     format: crate::image_build::ImageFormat,
+    ffpfsc: Option<crate::image_build::FfpfscOut>,
     zstd_level: Option<(u8, crate::zstd_runtime::RuntimeChoice)>,
     zstd_rules: Option<&crate::zstd_packs::Rules>,
     runtime: &mut Option<crate::zstd_runtime::PackRuntime>,
@@ -1221,6 +1207,7 @@ fn to_server_job(
             );
             crate::zstd_packs::stream_to_server(
                 format,
+                ffpfsc,
                 level,
                 zstd_rules,
                 runtime.insert(r),
@@ -1250,6 +1237,7 @@ fn to_server_job(
                 &mut |t, salt, stage| {
                     crate::image_build::stream_to_server(
                         format,
+                        ffpfsc,
                         stamp,
                         salt,
                         t,
@@ -1285,6 +1273,7 @@ fn to_server_job(
         None => match crate::image_build::AmprIndexed::wrap_at(&mut *tree, stamp) {
             Ok(Some(mut indexed)) => crate::image_build::stream_to_server(
                 format,
+                ffpfsc,
                 stamp,
                 "",
                 &mut indexed,
@@ -1296,6 +1285,7 @@ fn to_server_job(
             ),
             Ok(None) => crate::image_build::stream_to_server(
                 format,
+                ffpfsc,
                 stamp,
                 "",
                 tree,
@@ -1318,6 +1308,7 @@ fn to_console_job(
     addr: &str,
     path: &str,
     format: crate::image_build::ImageFormat,
+    ffpfsc: Option<crate::image_build::FfpfscOut>,
     zstd_level: Option<(u8, crate::zstd_runtime::RuntimeChoice)>,
     zstd_rules: Option<&crate::zstd_packs::Rules>,
     runtime: &mut Option<crate::zstd_runtime::PackRuntime>,
@@ -1392,6 +1383,7 @@ fn to_console_job(
             );
             crate::zstd_packs::stream_to_console(
                 format,
+                ffpfsc,
                 level,
                 zstd_rules,
                 runtime.insert(r),
@@ -1418,6 +1410,7 @@ fn to_console_job(
                 &mut |t, salt, stage| {
                     crate::image_build::stream_to_console(
                         format,
+                        ffpfsc,
                         Some(stamp),
                         salt,
                         t,
@@ -1450,6 +1443,7 @@ fn to_console_job(
         None => match crate::image_build::AmprIndexed::wrap_at(&mut *tree, stamp) {
             Ok(Some(mut indexed)) => crate::image_build::stream_to_console(
                 format,
+                ffpfsc,
                 Some(stamp),
                 "",
                 &mut indexed,
@@ -1461,6 +1455,7 @@ fn to_console_job(
             ),
             Ok(None) => crate::image_build::stream_to_console(
                 format,
+                ffpfsc,
                 Some(stamp),
                 "",
                 tree,
@@ -1941,7 +1936,7 @@ pub(crate) async fn exfat_build_handler(
     let to_console = match req.destination.take() {
         None | Some(ImageDestinationReq::Local) => None,
         Some(ImageDestinationReq::Server { source_id, dir }) => {
-            if let Some(why) = server_refusal(compress, edited.is_some()) {
+            if let Some(why) = server_refusal(edited.is_some()) {
                 return json_err(StatusCode::BAD_REQUEST, why).into_response();
             }
             match server_dest(&source_id, &dir) {
@@ -1951,7 +1946,7 @@ pub(crate) async fn exfat_build_handler(
             None
         }
         Some(ImageDestinationReq::Console { addr, dir }) => {
-            if let Some(why) = console_refusal(compress, edited.is_some()) {
+            if let Some(why) = console_refusal(edited.is_some()) {
                 return json_err(StatusCode::BAD_REQUEST, why).into_response();
             }
             let dir = match crate::link::valid_console_dir(&dir) {
@@ -2231,8 +2226,8 @@ pub(crate) async fn exfat_build_handler(
     let Some(writing) = claim_off_thread(claimed.clone()).await else {
         return already_building(&claimed);
     };
-    // LZ4 packs are spooled beside the image, or, straight to a console or a server, in the
-    // engine's data folder (one spool per destination).
+    // LZ4 packs are spooled beside the image. Straight to a console or a server they are made
+    // as they are sent; the engine's data folder (one spool per destination) is the fallback.
     let spool = if straight {
         crate::image_build::stream_spool(&claimed)
     } else {
@@ -2337,11 +2332,14 @@ pub(crate) async fn exfat_build_handler(
             }
         }
         let mut tree = tree;
-        // With LZ4 packs the build packs first; the stage list says so.
-        let stages: &[&str] = if packs.is_some() || zstd_level.is_some() {
-            &["pack", "plan", "write", "verify"]
-        } else {
-            &["plan", "write", "verify"]
+        // With LZ4 packs the build packs first; the stage list says so. A `.ffpfsc` straight to
+        // a console or a server is compressed once to measure it before it is written.
+        let measured = straight && compress;
+        let stages: &[&str] = match (packs.is_some() || zstd_level.is_some(), measured) {
+            (true, true) => &["pack", "plan", "compress", "write", "verify"],
+            (true, false) => &["pack", "plan", "write", "verify"],
+            (false, true) => &["plan", "compress", "write", "verify"],
+            (false, false) => &["plan", "write", "verify"],
         };
         let mut report = |id: &str, done: u64, total: u64| {
             if id != "verify" {
@@ -2369,6 +2367,10 @@ pub(crate) async fn exfat_build_handler(
             };
         // zstd packs: the emulator that goes in, fetched here (off the request) and recorded.
         let mut runtime = None;
+        // Straight to a console or a server in a `.ffpfsc`: the image's name inside it.
+        let ffpfsc = inner_name
+            .as_deref()
+            .map(|inner| crate::image_build::FfpfscOut { inner, level });
         // Straight to a console: its own job, failing with the transfer's reasons.
         let ended = match (source_tree, &to_console) {
             (Ok(tree), None) if to_server.is_some() => Ended::Server(match &to_server {
@@ -2376,6 +2378,7 @@ pub(crate) async fn exfat_build_handler(
                     dest,
                     &out_name,
                     format,
+                    ffpfsc,
                     zstd_level,
                     zstd_rules.as_deref(),
                     &mut runtime,
@@ -2393,6 +2396,7 @@ pub(crate) async fn exfat_build_handler(
                 addr,
                 path,
                 format,
+                ffpfsc,
                 zstd_level,
                 zstd_rules.as_deref(),
                 &mut runtime,
@@ -4309,13 +4313,12 @@ mod extract_tests {
         let _ = std::fs::remove_dir_all(&out);
     }
 
-    /// Straight to the console: plain .exfat, .ffpkg and .ffpfs, packed (LZ4 or zstd) or not.
-    /// A .ffpfsc and an edited copy are refused with the reason, before a job exists.
+    /// Straight to the console: .exfat, .ffpkg and .ffpfs, plain or in a .ffpfsc, packed (LZ4
+    /// or zstd) or not. An edited copy is refused with the reason, before a job exists.
     #[test]
     fn only_the_formats_that_stream_go_straight_to_the_console() {
-        assert_eq!(console_refusal(false, false), None);
-        assert!(console_refusal(true, false).unwrap().contains(".ffpfsc"));
-        assert!(console_refusal(false, true).is_some());
+        assert_eq!(console_refusal(false), None);
+        assert!(console_refusal(true).unwrap().contains("edited copy"));
     }
 
     /// The request's `destination`, as the client and the API send it.
@@ -4354,13 +4357,13 @@ mod extract_tests {
     /// The same images go straight to a server as to the console, each refusal in its words.
     #[test]
     fn only_the_formats_that_stream_go_straight_to_a_server() {
-        for (compress, edited) in [(false, false), (true, false), (false, true)] {
+        for edited in [false, true] {
             assert_eq!(
-                server_refusal(compress, edited).is_some(),
-                console_refusal(compress, edited).is_some(),
-                "{compress} {edited}"
+                server_refusal(edited).is_some(),
+                console_refusal(edited).is_some(),
+                "{edited}"
             );
-            if let Some(why) = server_refusal(compress, edited) {
+            if let Some(why) = server_refusal(edited) {
                 assert!(why.contains("a server"), "{why}");
             }
         }

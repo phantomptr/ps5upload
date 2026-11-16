@@ -217,7 +217,7 @@ function buildX() {
     if (g.heading && g !== groups[0]) lines.push({ text: stripMd(g.heading), heading: true });
     for (const text of items) lines.push({ text, heading: false });
   }
-  lines.push({ text: `Full notes: ${releaseUrl}\nHelp & ideas: ${DISCORD_INVITE}\nBugs: ${ISSUES_URL}\n☕ ${COFFEE_URL}`, heading: false });
+  lines.push({ text: `Full notes: ${releaseUrl}\nHelp & ideas (UndefinedLab on Discord): ${DISCORD_INVITE}\nBugs: ${ISSUES_URL}\n☕ ${COFFEE_URL}`, heading: false });
   const replies = [];
   let current = [];
   const fits = (extra) => xLength([...current, ...extra].join("\n")) <= X_LIMIT;
@@ -297,7 +297,7 @@ function buildReddit() {
     `- **Release notes:** [${tag} on GitHub](${releaseUrl})`,
     `- **Docker (web UI):** \`${DOCKER_IMAGE}:${version}\``,
     `- **Bugs:** [open an issue](${ISSUES_URL})`,
-    `- **Help and ideas:** [Discord](${DISCORD_INVITE})`,
+    `- **Help and ideas:** [UndefinedLab on Discord](${DISCORD_INVITE})`,
     "",
     `PS5Upload is free. If it saves you time, [a coffee](${COFFEE_URL}) keeps it going ☕`,
   );

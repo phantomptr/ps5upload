@@ -469,8 +469,11 @@ static const char *check_build(const char *json, const char *src, int src_is_dir
     if (!parent[0] || stat(parent, &st) != 0 || !S_ISDIR(st.st_mode)) return "convert_bad_dest";
     /* An image is named for what it is: the console mounts by extension. */
     by_name = cc_image_format(dest);
-    if (strcmp(format, "folder") == 0 ? by_name != NULL : (!by_name || strcmp(by_name, format) != 0))
+    if (strcmp(format, "pkg") == 0) {
+        if (!cc_pkg_name_ok(dest)) return "convert_bad_dest";
+    } else if (strcmp(format, "folder") == 0 ? by_name != NULL : (!by_name || strcmp(by_name, format) != 0)) {
         return "convert_bad_dest";
+    }
     /* Never over the source, and never a folder written inside the folder being read. */
     if (strcmp(dest, src) == 0 || (src_is_dir && cc_path_within(src, dest))) return "convert_bad_dest";
     /* Nor a source the build's own leftovers are named for: `<dest>.partial` is cleared before the
@@ -488,6 +491,26 @@ static const char *check_build(const char *json, const char *src, int src_is_dir
     b->zstd_level = b->zstd ? (int)level : 0;
     b->full_verify = strcmp(verify, "full") == 0;
     b->zstd_runtime = NULL; /* found by the op, once the build is otherwise acceptable */
+    b->inner[0] = 0;
+    b->ffpfsc_level[0] = 0;
+    b->pkg_level[0] = 0;
+    if (strcmp(format, "pkg") == 0) {
+        /* zstd packs go into an image or a folder; the level is the converter's default when absent. */
+        if (b->zstd) return "convert_bad_format";
+        if (fsj_json_present(json, "pkg_level") &&
+            (!fsj_json_str(json, "pkg_level", b->pkg_level, sizeof b->pkg_level) || !cc_pkg_level_ok(b->pkg_level)))
+            return "convert_bad_pkg_level";
+    }
+    if (strcmp(format, "ffpfsc") == 0) {
+        /* The image inside it and how hard it is compressed: the converter's defaults when absent. */
+        if (fsj_json_present(json, "inner") &&
+            (!fsj_json_str(json, "inner", b->inner, sizeof b->inner) || !cc_inner_ok(b->inner)))
+            return "convert_bad_inner";
+        if (fsj_json_present(json, "ffpfsc_level") &&
+            (!fsj_json_str(json, "ffpfsc_level", b->ffpfsc_level, sizeof b->ffpfsc_level) ||
+             !cc_ffpfsc_level_ok(b->ffpfsc_level)))
+            return "convert_bad_ffpfsc_level";
+    }
     return NULL;
 }
 
@@ -499,7 +522,7 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
     struct stat st;
     cc_runtime_t *rt = NULL; /* on the heap: a job thread's stack is small */
     char *buf = NULL;
-    int status = AVA1_ERR_IO, r, is_dir, never_seen = 0;
+    int status = AVA1_ERR_IO, r, is_dir, never_seen = 0, archive = 0;
     (void)arg;
     (void)n;
     memset(&s, 0, sizeof s);
@@ -525,8 +548,18 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
     }
     is_dir = S_ISDIR(st.st_mode);
     if (!is_dir && !cc_image_format(src)) {
-        ava1_op_message(c, "convert_unsupported_source");
-        return AVA1_ERR_PATH;
+        /* An archive: the game folder in a .zip or .7z is read in place; a .rar is not converted
+         * here (cc_archive_kind), refused before a converter is started. */
+        const char *kind = cc_archive_kind(src);
+        if (kind && strcmp(kind, "rar") == 0) {
+            ava1_op_message(c, "convert_rar_unsupported");
+            return AVA1_ERR_PATH;
+        }
+        if (!kind) {
+            ava1_op_message(c, "convert_unsupported_source");
+            return AVA1_ERR_PATH;
+        }
+        archive = 1;
     }
     if (strcmp(action, "build") == 0) {
         bad = check_build(json, src, is_dir, dest, sizeof dest, format, sizeof format, &build);
@@ -534,7 +567,9 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
             ava1_op_message(c, "%s", bad);
             return strcmp(bad, "convert_destination_exists") == 0 ? AVA1_ERR_EXISTS
                    : strncmp(bad, "convert_missing", 15) == 0 || strncmp(bad, "convert_bad_format", 18) == 0 ||
-                             strcmp(bad, "convert_bad_verify") == 0 || strcmp(bad, "convert_bad_zstd_level") == 0
+                             strcmp(bad, "convert_bad_verify") == 0 || strcmp(bad, "convert_bad_zstd_level") == 0 ||
+                             strcmp(bad, "convert_bad_inner") == 0 || strcmp(bad, "convert_bad_ffpfsc_level") == 0 ||
+                             strcmp(bad, "convert_bad_pkg_level") == 0
                          ? AVA1_ERR_PROTOCOL
                          : AVA1_ERR_PATH;
         }
@@ -565,10 +600,12 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         return AVA1_ERR_BUSY;
     }
     /* A build beside an install or an extraction: all three write a drive hard and hold memory.
-     * An inspection reads a few KiB and may run beside either. Our flag first, then theirs (all
-     * seq_cst; the install and the extraction do the same the other way round): of two that
-     * start at once at least one sees the other and backs out, never neither. */
-    if (b) {
+     * An inspection of a folder or an image reads a few KiB and may run beside either; one of a
+     * .zip or .7z is held like a build (a .7z's param file may be behind a large solid block,
+     * decoded with its dictionary and cache). Our flag first, then theirs (all seq_cst; the
+     * install and the extraction do the same the other way round): of two that start at once at
+     * least one sees the other and backs out, never neither. */
+    if (b || archive) {
         __atomic_store_n(&g_building, 1, __ATOMIC_SEQ_CST);
         if (webui_pkg_installing() || archive_extract_running()) {
             ava1_op_message(c, "convert_busy");

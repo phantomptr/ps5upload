@@ -417,6 +417,9 @@ export interface ZstdRuntimeOutcome {
   to: string;
   already: boolean;
   rescanned: boolean;
+  /** Kraken Mount runs on the console and puts this file over every game's runtime: the game
+   *  starts with it, not with the one written. */
+  overridden_by?: string | null;
 }
 
 /** ShadowMount+'s emulator updates on a console, as they touch zstd-packed games. */
@@ -428,6 +431,9 @@ export interface SmpEmulatorCheck {
   version?: string | null;
   /** zstd-packed games get that file and it won't start them. */
   breaks_zstd: boolean;
+  /** Whose folder: ShadowMount+'s emulators, or Kraken Mount's ampr/ (absent from an older
+   *  engine: ShadowMount+). */
+  mounter?: "shadowmount" | "kraken";
 }
 
 export interface AmprEmuOutcome {

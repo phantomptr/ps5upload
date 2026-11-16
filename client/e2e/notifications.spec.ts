@@ -18,6 +18,12 @@ async function seed(page: Page) {
       read: i >= 3,
     }));
     window.localStorage.setItem("ps5upload.notifications.v1", JSON.stringify(entries));
+    // One PS5 saved: with none, the app opens "Add a PS5" on its own, over the bell.
+    if (!window.localStorage.getItem("ps5upload.roster.v1"))
+      window.localStorage.setItem(
+        "ps5upload.roster.v1",
+        JSON.stringify({ profiles: [{ id: "console-a", name: "PS5", host: "192.168.0.5" }], active_id: "console-a" }),
+      );
   }, LONG);
   await page.route(
     (u) => u.pathname.startsWith("/api/"),

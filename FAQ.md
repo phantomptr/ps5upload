@@ -669,9 +669,11 @@ and folded sections are shared too. Before 7.4.2 the list lived in each browser 
 `PS5UPLOAD_ALLOW_IP` to your own devices.
 
 **Q: How do automatic save backups work, and how do I restore one?**
-Save Data → Automatic backups: choose a folder and how many versions to keep, then turn it on. Every
-ten minutes the engine copies each console's saves that changed since their last backup (a save
-written in the last few minutes waits for the next round). In the desktop app this runs while the
+Save Data → Automatic backups: choose a folder, how often to back up (**Back up every**, from 5
+minutes to a day; 10 minutes unless you change it) and how many versions to keep, then turn it on.
+Each round the engine copies each console's saves that changed since their last backup (a save
+written in the last few minutes waits for the next round); the next round starts that long after
+the last one ends. In the desktop app this runs while the
 app runs; in Docker it runs all the time, with no browser open. Use a folder the container keeps,
 such as `/data/save-backups`, or a NAS share you mount into the container. To restore, close the
 game, then in Save Data press **Restore…** on the game's save (or open its page in PS5Upload and
@@ -1943,7 +1945,7 @@ the copy is read back and checked, and the image you opened is not changed.
 its free space (an image never grows): `.exfat` and `.ffpkg` take any change that fits, `.ffpfs`
 takes deletes, renames and replacements that fit its existing space, and `.ffpfsc`, packages and
 games in asset packs only get an edited copy. While the change goes in, an undo journal sits
-beside the image (`<image>.forge-undo`, the same format PS5 Dump Forge uses): if the app closes
+beside the image (`<image>.forge-undo`): if the app closes
 or the computer loses power, the image is put back as it was the next time anything opens it.
 Every changed file is read back afterwards, and the image is restored if anything doesn't match.
 The image can't be converted or edited by anything else while this runs. Keep a backup of an
@@ -2399,8 +2401,7 @@ name. Tick **Full verification** to re-read every byte of the output instead; it
 
 Nothing is installed. Copy the image to a folder ShadowMount+ watches on the PS5 (for example
 `/data/homebrew`, with **Upload & Install**), and ShadowMount+ mounts it and puts the game on the home
-screen. The `.ffpkg` and `.ffpfs` writers and the streaming `.ffpfsc` container come from quer3q's
-PS5 Dump Forge; the `.exfat` writer is ps5upload's own. On a PS5 on firmware 13.60 with
+screen. On a PS5 on firmware 13.60 with
 ShadowMount+ 1.7, a game image made by the app in each of `.exfat`, `.ffpkg`, `.ffpfs` and a
 compressed `.ffpfsc` mounted, registered and ran its game. A folder that is on the console or on
 a saved server cannot be made into an image from here; copy it to this computer first.
@@ -2488,7 +2489,7 @@ Packages and images Workshop builds always carry a fresh index; **Rebuild AMPR i
 - **A `.ffpfsc`**: compressed and read-only, so it is not edited. **Convert again** makes a fresh
   `.ffpfsc` with a new index.
 
-It is only offered for a game that uses libSceAmpr, and says so otherwise.
+It only shows for a game that uses libSceAmpr.
 
 **Q: Can I install a package that is already on a USB drive?**
 Yes. Plug the drive into the PS5; packages on it show in **Upload & Install → Already on the PS5**

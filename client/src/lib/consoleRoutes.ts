@@ -38,3 +38,14 @@ export function recallRoute(host: string): string | null {
   if (!host) return null;
   return load()[keyOf(host)]?.route ?? null;
 }
+
+/** Whether a switch of console keeps the screen on show instead of going back to where the new
+ *  console was left: the Consoles page (Connection's first tab) shows the console picked at the
+ *  top, so picking another chip there is how another console's card is opened. */
+export function staysOnConsoleSwitch(route: string): boolean {
+  const q = route.indexOf("?");
+  const path = q < 0 ? route : route.slice(0, q);
+  if (path !== "/connection") return false;
+  const tab = new URLSearchParams(q < 0 ? "" : route.slice(q + 1)).get("tab");
+  return tab !== "devices" && tab !== "health";
+}

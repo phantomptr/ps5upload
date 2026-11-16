@@ -222,6 +222,9 @@ pub struct CaseFixed {
     /// New name -> name in `inner`.
     back: HashMap<String, String>,
     fixes: Vec<CaseFix>,
+    /// The game's `ampr_emu.index` (its own name for it, and its bytes) with each renamed
+    /// file's record in the new spelling, when it lists one: what is served for it.
+    index: Option<(String, Vec<u8>)>,
 }
 
 impl CaseFixed {
@@ -250,11 +253,13 @@ impl CaseFixed {
             .iter()
             .map(|c| (c.to.clone(), c.from.clone()))
             .collect();
+        let index = respelled_index(tree.as_mut(), &fixes);
         let wrapped = Self {
             inner: tree,
             files,
             back,
             fixes: fixes.clone(),
+            index,
         };
         (Box::new(wrapped), fixes)
     }
@@ -262,9 +267,40 @@ impl CaseFixed {
     fn source_name<'p>(&'p self, path: &'p str) -> &'p str {
         self.back.get(path).map_or(path, String::as_str)
     }
+
+    /// The respelled index, when `path` names it.
+    fn index_at(&self, path: &str) -> Option<&[u8]> {
+        self.index
+            .as_ref()
+            .filter(|(at, _)| at == path)
+            .map(|(_, bytes)| bytes.as_slice())
+    }
+}
+
+/// The game's `ampr_emu.index` with each renamed file's record in its new spelling, when it
+/// lists any (an index that goes into the build as it is, a packed game's, then names the file
+/// as the build does). A rename changes letter case alone, so the record keeps its length, hash
+/// and place ([`crate::ampr_index::respell`]); the file's size is the same too.
+fn respelled_index(tree: &mut dyn SourceTree, fixes: &[CaseFix]) -> Option<(String, Vec<u8>)> {
+    let at = tree
+        .files()
+        .iter()
+        .find(|f| f.path.eq_ignore_ascii_case(crate::ampr_index::NAME))?
+        .path
+        .clone();
+    let mut bytes = crate::source::read_small(tree, &at, crate::source::MAX_INDEX_BYTES).ok()?;
+    let mut changed = false;
+    for c in fixes {
+        changed |= crate::ampr_index::respell(&mut bytes, &c.from, &c.to);
+    }
+    changed.then_some((at, bytes))
 }
 
 impl SourceTree for CaseFixed {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }
@@ -272,10 +308,20 @@ impl SourceTree for CaseFixed {
         self.inner.empty_dirs()
     }
     fn read(&mut self, path: &str) -> crate::Result<Vec<u8>> {
+        if let Some(bytes) = self.index_at(path) {
+            return Ok(bytes.to_vec());
+        }
         let from = self.source_name(path).to_string();
         self.inner.read(&from)
     }
     fn read_range(&mut self, path: &str, offset: u64, len: usize) -> crate::Result<Vec<u8>> {
+        if let Some(bytes) = self.index_at(path) {
+            let start = usize::try_from(offset)
+                .unwrap_or(usize::MAX)
+                .min(bytes.len());
+            let end = start.saturating_add(len).min(bytes.len());
+            return Ok(bytes[start..end].to_vec());
+        }
         let from = self.source_name(path).to_string();
         self.inner.read_range(&from, offset, len)
     }
@@ -435,6 +481,54 @@ mod tests {
         assert!(fixed
             .describe()
             .contains("Il2cppUserAssemblies.prx -> Il2CppUserAssemblies.prx"));
+    }
+
+    /// An index that goes into the build as it is (a packed game's) names the renamed file in
+    /// its new spelling, byte for byte, and still passes the runtime's checks.
+    #[test]
+    fn the_index_names_a_renamed_file_in_its_new_spelling() {
+        let mut entries = vec![
+            ("eboot.bin", unity_eboot()),
+            ("Media/Modules/Il2cppUserAssemblies.prx", b"module".to_vec()),
+            ("Media/Modules/PS5Util.prx", b"util".to_vec()),
+        ];
+        let listed: Vec<(String, u64)> = entries
+            .iter()
+            .map(|(p, b)| (p.to_string(), b.len() as u64))
+            .collect();
+        let index = crate::ampr_index::build(&listed, 5).unwrap();
+        entries.push((crate::ampr_index::NAME, index.clone()));
+        let tree = Tree {
+            files: entries
+                .iter()
+                .map(|(p, b)| SourceFile {
+                    path: p.to_string(),
+                    size: b.len() as u64,
+                })
+                .collect(),
+            data: entries.into_iter().map(|(_, b)| b).collect(),
+        };
+        let (mut fixed, applied) = CaseFixed::wrap(Box::new(tree));
+        assert_eq!(applied.len(), 1);
+        let served = fixed.read(crate::ampr_index::NAME).unwrap();
+        assert_eq!(served.len(), index.len());
+        assert_eq!(
+            fixed
+                .read_range(crate::ampr_index::NAME, 0, served.len())
+                .unwrap(),
+            served
+        );
+        crate::ampr_index::check(&served).unwrap();
+        let paths: Vec<String> = crate::ampr_index::parse(&served)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        assert!(paths.contains(&"Media/Modules/Il2CppUserAssemblies.prx".to_string()));
+        assert!(!paths.contains(&"Media/Modules/Il2cppUserAssemblies.prx".to_string()));
+        // Only the spelling changed: the same records, hashes and order.
+        let differing = served.iter().zip(&index).filter(|(a, b)| a != b).count();
+        assert_eq!(differing, 1, "only the c of Il2cpp changed");
     }
 }
 

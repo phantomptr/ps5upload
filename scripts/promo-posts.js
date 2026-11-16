@@ -117,7 +117,7 @@ function buildX() {
     ].join("\n"),
   );
   posts.push(
-    [`Website: ${SITE_URL}`, `Source: ${REPO_URL}`, `Help & ideas: ${DISCORD_INVITE}`, `☕ ${COFFEE_URL}`].join("\n"),
+    [`Website: ${SITE_URL}`, `Source: ${REPO_URL}`, `Help & ideas (UndefinedLab on Discord): ${DISCORD_INVITE}`, `☕ ${COFFEE_URL}`].join("\n"),
   );
   return posts;
 }
@@ -177,7 +177,7 @@ function buildReddit() {
     `- **Docker web UI:** \`${DOCKER_IMAGE}:latest\``,
     `- **Source:** [GitHub](${REPO_URL})`,
     `- **Bugs:** [open an issue](${ISSUES_URL})`,
-    `- **Help and ideas:** [Discord](${DISCORD_INVITE})`,
+    `- **Help and ideas:** [UndefinedLab on Discord](${DISCORD_INVITE})`,
     "",
     `It's free. If it saves you time, [a coffee](${COFFEE_URL}) keeps it going ☕`,
     "",

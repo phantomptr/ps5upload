@@ -5146,30 +5146,87 @@ async fn ps5_smp_status(
     }
 }
 
-/// POST /api/ps5/smp/rescan?addr= — ask ShadowMount+ to scan again now, with its retry counters
-/// cleared, so a new image of a game is picked up without deleting the game from the home screen.
+/// POST /api/ps5/smp/rescan?addr= — ask the console's mounter to scan again now: ShadowMount+ with
+/// its retry counters cleared, so a new image of a game is picked up without deleting the game
+/// from the home screen, or Kraken Mount. Answers `{ok, mounter}` with the one asked
+/// (`shadowmount` or `kraken`).
 async fn ps5_smp_rescan(
     State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+    let done = tokio::task::spawn_blocking(move || ps5upload_core::kraken::rescan(&addr))
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r);
+    match done {
+        Ok(m) => Json(serde_json::json!({ "ok": true, "mounter": m })).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct KrakenRemoveReq {
+    #[serde(alias = "console", alias = "host")]
+    addr: Option<String>,
+    title_id: String,
+    /// The source Kraken Mount lists for the title (its `.pkg` or game folder), as shown to the
+    /// user when they confirmed: it refuses when its library has another source for it by now.
+    path: String,
+}
+
+/// POST /api/ps5/kraken/remove `{addr, title_id, path}` — remove a game Kraken Mount mounts, the
+/// way its own page does: off the home screen, and its SOURCE DELETED (the `.pkg` or the game
+/// folder at `path`), then its cache. Answers `{ok: true}`; 409 when Kraken Mount's library,
+/// read just before, no longer lists `title_id` at `path`. Kraken Mount answers once the source
+/// is deleted: the call waits up to 10 minutes, then judges by its library.
+async fn ps5_kraken_remove(
+    State(state): State<AppState>,
+    Json(req): Json<KrakenRemoveReq>,
+) -> impl IntoResponse {
+    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
     let done = tokio::task::spawn_blocking(move || {
-        let (api, _) = ps5upload_core::smp_api::SmpApi::probe(&addr).ok_or_else(|| {
+        let (api, now) = ps5upload_core::kraken::KrakenApi::probe(&addr).ok_or_else(|| {
             anyhow::anyhow!(
-                "ShadowMount+'s API doesn't answer from this computer: it needs ShadowMount+ \
-                 1.7 or later running, with api_enabled on and api_bind_address open to the \
-                 network in /data/shadowmount/config.ini"
+                "Kraken Mount doesn't answer from this computer: it needs to be running on the \
+                 PS5 (its page is on port {})",
+                ps5upload_core::kraken::API_PORT
             )
         })?;
-        api.rescan()
+        // The delete takes the whole source: only the one the user confirmed, as listed now.
+        if let Some(why) = kraken_remove_refusal(&now, &req.title_id, &req.path) {
+            return Ok(Err(why));
+        }
+        api.remove(&req.title_id, &req.path).map(Ok)
     })
     .await
     .map_err(anyhow::Error::from)
     .and_then(|r| r);
     match done {
-        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Ok(Ok(())) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Ok(Err(why)) => json_err(StatusCode::CONFLICT, why).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
+}
+
+/// Why a Kraken Mount remove of `title_id` at `path` is refused before it is sent: its library
+/// (`state`, just read) no longer lists that title at that source. `None` when it does.
+fn kraken_remove_refusal(
+    state: &ps5upload_core::kraken::KrakenState,
+    title_id: &str,
+    path: &str,
+) -> Option<String> {
+    if state
+        .games
+        .iter()
+        .any(|g| g.title_id == title_id && g.path == path)
+    {
+        return None;
+    }
+    Some(format!(
+        "Kraken Mount no longer lists {title_id} at {path}: its library changed. Refresh and \
+         check the game before removing it"
+    ))
 }
 
 /// GET /api/ps5/smp/checkout — what, if anything, is checked out for editing.
@@ -5359,22 +5416,39 @@ async fn ps5_fs_write_bytes(
 struct PeripheralReq {
     #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
-    action: ps5upload_core::diagnostics::PeripheralAction,
-    /// The USB port, beep pattern or brightness level the action takes; 0 otherwise.
+    /// `bd_power_off`, `bd_power_on`, `eject_disc`, `usb_port_off`, `usb_port_on` or `beep`.
+    /// The front light's `led_off`, `led_on` and `led_dim` are no longer supported (400).
+    action: String,
+    /// The USB port or beep pattern the action takes; 0 otherwise.
     #[serde(default)]
     port: i32,
+}
+
+/// The action a peripheral request names, or why it is refused.
+fn peripheral_action(name: &str) -> Result<ps5upload_core::diagnostics::PeripheralAction, String> {
+    if ps5upload_core::diagnostics::REMOVED_PERIPHERAL_ACTIONS.contains(&name) {
+        return Err(format!(
+            "{name} is not supported: the PS5's front light can't be controlled"
+        ));
+    }
+    serde_json::from_value(serde_json::Value::String(name.to_string()))
+        .map_err(|_| format!("unknown peripheral action: {name}"))
 }
 
 /// POST /api/ps5/peripheral
 /// Body: `{ "addr": "IP", "action": "beep", "port": 1 }`
 ///
-/// The disc drive, the USB ports, the beeper and the front light. Replies with the
-/// helper's own ack (`ok`, `action`, `code`); a transport failure is a 502.
+/// The disc drive, the USB ports and the beeper. Replies with the helper's own ack (`ok`,
+/// `action`, `code`); a transport failure is a 502, an unknown or removed action a 400.
 async fn ps5_peripheral(Json(q): Json<PeripheralReq>) -> impl IntoResponse {
+    let action = match peripheral_action(q.action.trim()) {
+        Ok(a) => a,
+        Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+    };
     let Some(addr) = required_console_addr(q.addr) else {
         return missing_console_addr();
     };
-    let (action, port) = (q.action, q.port);
+    let port = q.port;
     match tokio::task::spawn_blocking(move || {
         ps5upload_core::diagnostics::peripheral_control(&addr, action, port)
     })
@@ -6774,6 +6848,73 @@ fn status_failure_body(
         body["power"] = p.as_str().into();
     }
     body
+}
+
+#[cfg(test)]
+mod kraken_remove_tests {
+    use super::*;
+
+    /// A remove goes out only for the title at the source the user confirmed, as Kraken Mount
+    /// lists it now: another source for the title (a duplicate on another drive), another title
+    /// at the source, or a library without it is refused.
+    #[test]
+    fn a_remove_needs_the_title_at_that_source_listed_now() {
+        let state: ps5upload_core::kraken::KrakenState = serde_json::from_str(
+            r#"{"cache":{"path":"/data/krakenmount/caches"},"games":[
+                {"title_id":"PPSA01234","path":"/data/homebrew/Game.pkg"},
+                {"title_id":"PPSA05678","path":"/mnt/usb0/Other"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            kraken_remove_refusal(&state, "PPSA01234", "/data/homebrew/Game.pkg"),
+            None
+        );
+        for (title, path) in [
+            ("PPSA01234", "/mnt/usb0/Game.pkg"),
+            ("PPSA05678", "/data/homebrew/Game.pkg"),
+            ("PPSA09999", "/data/homebrew/Game.pkg"),
+        ] {
+            let why = kraken_remove_refusal(&state, title, path).unwrap();
+            assert!(why.contains("no longer lists"), "{why}");
+        }
+        let empty: ps5upload_core::kraken::KrakenState =
+            serde_json::from_str(r#"{"games":[]}"#).unwrap();
+        assert!(kraken_remove_refusal(&empty, "PPSA01234", "/data/homebrew/Game.pkg").is_some());
+    }
+}
+
+#[cfg(test)]
+mod peripheral_tests {
+    use super::*;
+    use ps5upload_core::diagnostics::PeripheralAction;
+
+    #[test]
+    fn the_front_light_is_refused_by_name() {
+        assert!(matches!(
+            peripheral_action("beep"),
+            Ok(PeripheralAction::Beep)
+        ));
+        assert!(matches!(
+            peripheral_action("eject_disc"),
+            Ok(PeripheralAction::EjectDisc)
+        ));
+        for led in ["led_off", "led_on", "led_dim"] {
+            let e = peripheral_action(led).unwrap_err();
+            assert!(e.contains("not supported"), "{e}");
+        }
+        assert!(peripheral_action("disco")
+            .unwrap_err()
+            .contains("unknown peripheral action"));
+    }
+
+    #[tokio::test]
+    async fn an_old_client_asking_for_the_light_gets_a_400() {
+        let req: PeripheralReq =
+            serde_json::from_value(serde_json::json!({ "addr": "192.0.2.7", "action": "led_off" }))
+                .unwrap();
+        let r = ps5_peripheral(Json(req)).await.into_response();
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    }
 }
 
 #[cfg(test)]
@@ -13355,6 +13496,10 @@ fn build_app_and_mcp(
         .route("/api/ps5/screenshots/list", get(ps5_screenshots_list))
         .route("/api/ps5/videos/list", get(ps5_videos_list))
         .route("/api/ps5/smp/status", get(ps5_smp_status))
+        // The same snapshot by a name that says what it is now: which mounter runs (`mounter`),
+        // ShadowMount+'s state and Kraken Mount's (`kraken`).
+        .route("/api/ps5/mounter/status", get(ps5_smp_status))
+        .route("/api/ps5/kraken/remove", post(ps5_kraken_remove))
         .route(
             "/api/ps5/smp-emulator",
             get(ampr_emu_api::smp_emulator_handler),

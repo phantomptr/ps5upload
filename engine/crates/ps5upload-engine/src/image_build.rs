@@ -4,12 +4,15 @@
 //! The build code (planning, writing, the read-back, checkpoints, LZ4 packs) is
 //! `ps5upload_convert_core::image_build`, shared with the converter that runs on the PS5, and is
 //! re-exported here. What stays in the engine: the streams straight to a console
-//! ([`to_console`], AVA1) and to a saved server ([`to_server`]).
+//! ([`to_console`], AVA1) and to a saved server ([`to_server`]), plain or in a `.ffpfsc`
+//! ([`ffpfsc_out`]).
 
 pub(crate) use ps5upload_convert_core::image_build::*;
 
+mod ffpfsc_out;
 mod to_console;
 mod to_server;
+pub(crate) use ffpfsc_out::{FfpfscOut, MeasuredFfpfsc};
 #[cfg(test)]
 pub(crate) use to_console::tests as to_console_tests;
 pub(crate) use to_console::{
@@ -23,9 +26,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use ps5upload_fpkg::sample::VerifyMode;
 use ps5upload_fpkg::source::SourceTree;
 
-/// Where an LZ4 build that goes straight to a console or a server packs its volumes: in the
-/// engine's data folder (the temp folder without one), one spool per destination, `claimed`
-/// (what the job claimed for it).
+/// Where an LZ4 build that goes straight to a console or a server packs its volumes when they
+/// can't be made as they are sent (see [`stream_lz4`]): in the engine's data folder (the temp
+/// folder without one), one spool per destination, `claimed` (what the job claimed for it).
 pub(crate) fn stream_spool(claimed: &Path) -> PathBuf {
     let base = crate::remote::store::data_dir().unwrap_or_else(std::env::temp_dir);
     let h = blake3::hash(claimed.to_string_lossy().as_bytes()).to_hex();
@@ -37,13 +40,16 @@ pub(crate) type SendPacked<'a, T> =
     dyn FnMut(&mut dyn SourceTree, &str, &mut dyn FnMut(&str, u64, u64)) -> anyhow::Result<T> + 'a;
 
 /// An image with LZ4 packs straight to a console or a server, as ps5-dump-forge writes packs
-/// into an image on another device: the packs made into `spool` on this computer with `mtime`
-/// pinned on the new index, so making them again gives the same bytes (the pack set's build ID
+/// into an image on another device: the packs measured with `mtime` pinned on the new index, and
+/// each volume made again from `source` as it is sent (`lz4_packs::measured`), so nothing is
+/// stored on this computer and making them again gives the same bytes (the pack set's build ID
 /// goes into the job's id through the salt `send` gets); `send` streams the packed game and reads
 /// the image back there against it; then the game is read back through the packs of the copy
 /// there (`reopen`) against `source`. An image that fails that is removed (`remove` says how
-/// that went) from `place`. The spool is removed whatever happens. Returns what `send` did and
-/// the line the job's detail gets.
+/// that went) from `place`. When a volume can't be made again as measured (the source changed,
+/// or a chunk compressed another way), it goes again with the packs made into `spool` on this
+/// computer first, which is removed whatever happens. Returns what `send` did and the line the
+/// job's detail gets.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn stream_lz4<T>(
     packs: &Lz4Packs,
@@ -59,9 +65,58 @@ pub(crate) fn stream_lz4<T>(
     remove: &dyn Fn() -> String,
     place: &str,
 ) -> anyhow::Result<(T, String)> {
-    // Ours (the job claimed it): what a killed engine left there goes first.
+    // Ours (the job claimed it): what a killed engine left there goes.
     let _ = std::fs::remove_dir_all(spool);
-    if let Some(parent) = spool.parent() {
+    let streamed = stream_lz4_once(
+        packs, source, mtime, None, to, mode, cancel, stage, send, reopen, remove, place,
+    );
+    match streamed {
+        Err(e)
+            if !cancel.load(Ordering::Relaxed)
+                && ps5upload_fpkg::ampr_pack::regen::not_made_again(&format!("{e:#}")) =>
+        {
+            crate::log_at!(
+                Warn,
+                "convert",
+                "lz4 packs: {e:#}; packing them on this computer first instead"
+            );
+            stream_lz4_once(
+                packs,
+                source,
+                mtime,
+                Some(spool),
+                to,
+                mode,
+                cancel,
+                stage,
+                send,
+                reopen,
+                remove,
+                place,
+            )
+        }
+        r => r,
+    }
+}
+
+/// [`stream_lz4`]'s one try: the packs measured and made again as they are sent, or (with
+/// `spool`) made into it first.
+#[allow(clippy::too_many_arguments)]
+fn stream_lz4_once<T>(
+    packs: &Lz4Packs,
+    source: &mut dyn SourceTree,
+    mtime: i64,
+    spool: Option<&Path>,
+    to: &str,
+    mode: VerifyMode,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+    send: &mut SendPacked<T>,
+    reopen: &dyn Fn() -> Result<Box<dyn SourceTree>, String>,
+    remove: &dyn Fn() -> String,
+    place: &str,
+) -> anyhow::Result<(T, String)> {
+    if let Some(parent) = spool.and_then(Path::parent) {
         std::fs::create_dir_all(parent)
             .map_err(|e| anyhow::anyhow!("{}: {e}", parent.display()))?;
     }
@@ -70,8 +125,11 @@ pub(crate) fn stream_lz4<T>(
             mut tree,
             report,
             config,
-        } = crate::lz4_packs::spool(source, packs, spool, mtime, to, cancel, stage)
-            .map_err(anyhow::Error::msg)?;
+        } = match spool {
+            Some(spool) => crate::lz4_packs::spool(source, packs, spool, mtime, to, cancel, stage),
+            None => crate::lz4_packs::measured(source, packs, mtime, to, cancel, stage),
+        }
+        .map_err(anyhow::Error::msg)?;
         let salt = crate::lz4_packs::salt(&report);
         let streamed = send(&mut tree, &salt, stage)?;
         drop(tree);
@@ -83,7 +141,15 @@ pub(crate) fn stream_lz4<T>(
         match checked {
             Ok(line) => Ok((
                 streamed,
-                format!(", {line}{}", crate::lz4_packs::detail(&report)),
+                format!(
+                    ", {line}{}{}",
+                    crate::lz4_packs::detail(&report),
+                    if spool.is_some() {
+                        ", packed on this computer first"
+                    } else {
+                        ""
+                    }
+                ),
             )),
             // A Stop leaves nothing: an image not checked through its packs doesn't stay there
             // looking like a good one.
@@ -99,7 +165,9 @@ pub(crate) fn stream_lz4<T>(
             }
         }
     })();
-    let _ = std::fs::remove_dir_all(spool);
+    if let Some(spool) = spool {
+        let _ = std::fs::remove_dir_all(spool);
+    }
     result
 }
 
@@ -223,6 +291,7 @@ mod tests {
                         &mut |tree, salt, stage| {
                             stream_to_console(
                                 format,
+                                None,
                                 Some(7),
                                 salt,
                                 tree,
@@ -301,6 +370,7 @@ mod tests {
                 &mut |tree, salt, stage| {
                     stream_to_server(
                         ImageFormat::Exfat,
+                        None,
                         7,
                         salt,
                         tree,
@@ -328,6 +398,140 @@ mod tests {
         );
         assert!(mem.bytes("/games/ps5/G.exfat.partial").is_none());
         assert!(!spool.exists());
+    }
+
+    /// One LZ4 stream to the console: packed into `spool` first when given, else measured and
+    /// made as it is sent; `before` runs as the packed game starts to go out.
+    fn lz4_to_console(
+        lb: &crate::image_build::to_console_tests::Loopback,
+        src: &Path,
+        name: &str,
+        spool: Option<&Path>,
+        before: &mut dyn FnMut(),
+    ) -> anyhow::Result<String> {
+        let packs = Lz4Packs {
+            profile: Some(ps5upload_fpkg::ampr_pack::default_profile(9, 16)),
+            level: 9,
+            block_shift: 16,
+        };
+        let cancel = AtomicBool::new(false);
+        let c = crate::image_build::to_console_tests::cfg();
+        let mut tree = FolderSource::open(src).unwrap();
+        lb.with_target(&c, name, |t| {
+            let mut send =
+                |tree: &mut dyn SourceTree, salt: &str, stage: &mut dyn FnMut(&str, u64, u64)| {
+                    before();
+                    stream_to_console(
+                        ImageFormat::Exfat,
+                        None,
+                        Some(7),
+                        salt,
+                        tree,
+                        t,
+                        VerifyMode::Full,
+                        DEFAULT_VERIFY_CHUNK,
+                        &cancel,
+                        stage,
+                    )
+                };
+            let reopen = || {
+                ps5upload_fpkg::remote_source::open_remote(t.files.clone(), &t.path)
+                    .map_err(|e| e.to_string())
+            };
+            let remove = || "removed".to_string();
+            match spool {
+                Some(spool) => stream_lz4_once(
+                    &packs,
+                    &mut tree,
+                    7,
+                    Some(spool),
+                    &t.path,
+                    VerifyMode::Full,
+                    &cancel,
+                    &mut |_, _, _| {},
+                    &mut send,
+                    &reopen,
+                    &remove,
+                    "the PS5",
+                ),
+                None => stream_lz4(
+                    &packs,
+                    &mut tree,
+                    7,
+                    &lb.dir.join("fallback.lz4spool"),
+                    &t.path,
+                    VerifyMode::Full,
+                    &cancel,
+                    &mut |_, _, _| {},
+                    &mut send,
+                    &reopen,
+                    &remove,
+                    "the PS5",
+                ),
+            }
+            .map(|(_, line)| line)
+        })
+    }
+
+    /// Streamed with nothing spooled, the image on the console is the one the spool gives, byte
+    /// for byte, and no spool is made.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_lz4_stream_without_a_spool_is_the_spooled_one() {
+        let lb = crate::image_build::to_console_tests::Loopback::start("lz4-nospool", None).await;
+        let src = ampr_game(&lb.dir);
+        let spool = lb.dir.join("one.lz4spool");
+        let (spooled, streamed) = tokio::task::block_in_place(|| {
+            let spooled = lz4_to_console(&lb, &src, "dst/A.exfat", Some(&spool), &mut || {})
+                .unwrap_or_else(|e| panic!("{e:#}"));
+            let fallback = lb.dir.join("fallback.lz4spool");
+            let streamed = lz4_to_console(&lb, &src, "dst/B.exfat", None, &mut || {
+                assert!(!fallback.exists(), "nothing is spooled");
+            })
+            .unwrap_or_else(|e| panic!("{e:#}"));
+            (spooled, streamed)
+        });
+        assert!(
+            spooled.contains("packed on this computer first"),
+            "{spooled}"
+        );
+        assert!(
+            !streamed.contains("packed on this computer first"),
+            "{streamed}"
+        );
+        assert!(!spool.exists());
+        let a = std::fs::read(lb.share().join("dst/A.exfat")).unwrap();
+        let b = std::fs::read(lb.share().join("dst/B.exfat")).unwrap();
+        assert!(
+            a == b,
+            "the image streamed without a spool differs from the spooled one"
+        );
+    }
+
+    /// A packed file that changes after the measure: its volume can't be made as measured, the
+    /// stream stops before sending a wrong chunk, and goes again with the packs spooled here.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_lz4_stream_whose_source_changes_goes_again_with_a_spool() {
+        let lb = crate::image_build::to_console_tests::Loopback::start("lz4-changed", None).await;
+        let src = ampr_game(&lb.dir);
+        let table = src.join("data/only_packed/table.bin");
+        let mut sends = 0;
+        let line = tokio::task::block_in_place(|| {
+            lz4_to_console(&lb, &src, "dst/C.exfat", None, &mut || {
+                sends += 1;
+                if sends == 1 {
+                    // The same size, other bytes.
+                    let mut b = std::fs::read(&table).unwrap();
+                    b[300_000] ^= 0xFF;
+                    std::fs::write(&table, b).unwrap();
+                }
+            })
+        })
+        .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(sends, 2, "sent again after the first stopped");
+        assert!(line.contains("packed on this computer first"), "{line}");
+        assert!(!lb.dir.join("fallback.lz4spool").exists());
+        let image = open_image(&lb.share().join("dst/C.exfat"), ImageFormat::Exfat, false).unwrap();
+        reads_as_the_source(image, &src, "the image sent again");
     }
 
     /// A Stop while the image there is read back through its packs removes it, as a failed

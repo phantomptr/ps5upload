@@ -1859,7 +1859,7 @@ mod tests {
             "https://h/a.pkg?sig=1"
         );
         let stored = serde_json::to_string(&item).unwrap();
-        assert!(!stored.contains("sig=1"), "{stored}");
+        assert!(!stored.contains("sig=1"), "the stored item keeps a secret");
 
         let mut body =
             json!({ "archive_path": "/a.rar", "dest_root": "/d", "password": "hunter2" });
@@ -1868,20 +1868,29 @@ mod tests {
         let item = test_item(ItemKind::UploadRar, body, secrets);
         assert_eq!(with_secrets(&item)["password"], "hunter2");
         let stored = serde_json::to_string(&item).unwrap();
-        assert!(!stored.contains("hunter2"), "{stored}");
+        assert!(
+            !stored.contains("hunter2"),
+            "the stored item keeps a secret"
+        );
 
         // An image or folder build of a `.rar` read in place: its `archive_password`.
         for kind in [ItemKind::ImageBuild, ItemKind::FolderBuild] {
             let mut body = json!({ "source": "/g/Game.rar", "archive_password": "s3cret" });
             let secrets = take_secrets(kind, &mut body);
-            assert!(body.get("archive_password").is_none(), "{body}");
+            assert!(
+                body.get("archive_password").is_none(),
+                "the request body keeps the archive password"
+            );
             let item = test_item(kind, body, secrets);
             assert!(item.secret_in_memory);
             let back = with_secrets(&item);
             assert_eq!(back["archive_password"], "s3cret");
-            assert!(back.get("password").is_none(), "{back}");
+            assert!(
+                back.get("password").is_none(),
+                "an archive build gained a password field"
+            );
             let stored = serde_json::to_string(&item).unwrap();
-            assert!(!stored.contains("s3cret"), "{stored}");
+            assert!(!stored.contains("s3cret"), "the stored item keeps a secret");
         }
     }
 

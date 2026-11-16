@@ -11,6 +11,18 @@
 
 pub mod log;
 
+/// Compression threads on the PS5: three of a payload's five CPUs, the other two left to the
+/// console's own UI and a suspended game.
+pub const CONSOLE_WORKERS: usize = 3;
+/// The worker threads a build's compression starts: [`CONSOLE_WORKERS`] on the PS5, every core
+/// elsewhere (0).
+pub const WORKERS: usize = if safe_write::ON_CONSOLE {
+    CONSOLE_WORKERS
+} else {
+    0
+};
+
+pub mod archive_tree;
 pub mod folder_build;
 pub mod image_build;
 pub mod lz4_packs;

@@ -4752,7 +4752,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-exfat"
-version = "12.5.0"
+version = "12.5.1"
 dependencies = [
  "ps5-dump-forge-patch",
  "ps5upload-fpkg",
@@ -4761,14 +4761,14 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-patch"
-version = "12.5.0"
+version = "12.5.1"
 dependencies = [
  "crc32fast",
 ]
 
 [[package]]
 name = "ps5-dump-forge-pfs"
-version = "12.5.0"
+version = "12.5.1"
 dependencies = [
  "flate2",
  "ps5-dump-forge-patch",
@@ -4777,7 +4777,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-ufs2"
-version = "12.5.0"
+version = "12.5.1"
 dependencies = [
  "ps5-dump-forge-patch",
  "ps5upload-fpkg",
@@ -4786,7 +4786,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-zstd"
-version = "12.5.0"
+version = "12.5.1"
 dependencies = [
  "crc32fast",
  "getrandom 0.4.3",
@@ -4796,8 +4796,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ps5upload-archive"
+version = "12.5.1"
+dependencies = [
+ "anyhow",
+ "crc32fast",
+ "sevenz-rust2",
+ "zip",
+]
+
+[[package]]
 name = "ps5upload-ava1"
-version = "12.5.0"
+version = "12.5.1"
 dependencies = [
  "anyhow",
  "ava1",
@@ -4816,13 +4826,14 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-convert-core"
-version = "12.5.0"
+version = "12.5.1"
 dependencies = [
  "blake3",
  "libc",
  "ps5-dump-forge-pfs",
  "ps5-dump-forge-ufs2",
  "ps5-dump-forge-zstd",
+ "ps5upload-archive",
  "ps5upload-fpkg",
  "ps5upload-pkg",
  "serde",
@@ -4832,7 +4843,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-core"
-version = "12.5.0"
+version = "12.5.1"
 dependencies = [
  "aes 0.9.2",
  "aes-gcm 0.11.0",
@@ -4851,6 +4862,7 @@ dependencies = [
  "libc",
  "lzma-rust2 0.25.0",
  "mdns-sd",
+ "ps5upload-archive",
  "serde",
  "serde_json",
  "sevenz-rust2",
@@ -4865,7 +4877,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-desktop"
-version = "12.5.0"
+version = "12.5.1"
 dependencies = [
  "anyhow",
  "ava1",
@@ -4906,7 +4918,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-engine"
-version = "12.5.0"
+version = "12.5.1"
 dependencies = [
  "aes 0.9.2",
  "aes-gcm 0.11.0",
@@ -4969,7 +4981,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-fpkg"
-version = "12.5.0"
+version = "12.5.1"
 dependencies = [
  "aes 0.9.2",
  "crc32fast",
@@ -4992,7 +5004,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-pkg"
-version = "12.5.0"
+version = "12.5.1"
 dependencies = [
  "aes 0.9.2",
  "blake3",
@@ -5004,7 +5016,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-tailnet"
-version = "12.5.0"
+version = "12.5.1"
 dependencies = [
  "cc",
 ]

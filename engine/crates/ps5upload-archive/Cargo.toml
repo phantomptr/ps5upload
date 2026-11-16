@@ -1,0 +1,27 @@
+[package]
+name = "ps5upload-archive"
+description = "A game archive (.zip, .7z; .rar through the embedder) read in place, shared by the engine and the converter that runs on the PS5"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# Pure Rust and std only (no async, no network, no C), so the PS5 converter
+# (ps5upload-convert, payload/convert/build.sh) links it as the engine does. `.rar` and zip
+# entries compressed with zstd are the embedder's (`stream::Extras`): ps5upload-core adds them
+# for the engine. Never add the `unrar` crate here (LICENSES/UnRAR-exception.md).
+[dependencies]
+anyhow.workspace = true
+# The same pins and features as ps5upload-core's (deflate only; sevenz-rust2's pure-Rust LZMA/
+# LZMA2 alone, patched in the workspace for 32-bit sizes).
+zip = { version = "9", default-features = false, features = ["deflate"] }
+sevenz-rust2 = { version = "0.23", default-features = false }
+# A .7z start header's CRC (already in the tree, through zip and sevenz-rust2).
+crc32fast = "1"
+
+[dev-dependencies]
+# Writes the small .7z archives the reader is tested on.
+sevenz-rust2 = { version = "0.23", default-features = false, features = ["compress"] }
+
+[lints.rust]
+# payload/convert/x86_64-ps5-freebsd.json sets `env: ps5`.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_env, values("ps5"))'] }

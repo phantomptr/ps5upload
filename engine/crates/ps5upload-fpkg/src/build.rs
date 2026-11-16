@@ -497,13 +497,14 @@ fn build_mode(
     // `ampr_index`), and `ampr_emu` trusts its sizes. It is always generated from exactly the
     // files packaged: a dump's own copy lists the folder as it was, before the param.json
     // rewrite, executable repairs, left-out files and the icons the container carries. An
-    // LZ4-packed source's is the exception (`source::lz4_packed`): it goes in byte for byte.
+    // packed source's is the exception (`source::packed_kind`, LZ4 or zstd packs): it lists the
+    // files inside the packs, which are not on disk to list, so it goes in byte for byte.
     let mut generated: std::collections::HashMap<String, Vec<u8>> =
         std::collections::HashMap::new();
     let dump_index = files
         .iter()
         .any(|f| f.path.eq_ignore_ascii_case(AMPR_INDEX));
-    if source::lz4_packed(tree.as_mut())? {
+    if let Some(packs) = source::packed_kind(tree.as_mut())? {
         let at = files
             .iter()
             .find(|f| f.path.eq_ignore_ascii_case(AMPR_INDEX))
@@ -519,13 +520,13 @@ fn build_mode(
         };
         if !readable {
             return format_err(format!(
-                "{} holds LZ4 packs but no readable {AMPR_INDEX}, the one list of the files \
-                 inside them, so a package can't be made from it",
+                "{} holds {packs} packs but no readable {AMPR_INDEX}, the one list of the \
+                 files inside them, so a package can't be made from it",
                 tree.describe()
             ));
         }
         progress(&format!(
-            "keeping the LZ4-packed game's {AMPR_INDEX}: it has to match the packs"
+            "keeping the {packs}-packed game's {AMPR_INDEX}: it has to match the packs"
         ));
     } else if dump_index || source::imports_ampr(tree.as_mut(), "eboot.bin") {
         files.retain(|f| !f.path.eq_ignore_ascii_case(AMPR_INDEX));
@@ -871,10 +872,12 @@ fn build_mode(
             f(done, total);
         }
     };
-    let report = verify::verify_streaming_sampled(
+    // Stop ends the read-back as it does the write (a 155 GB package takes minutes to check).
+    let report = verify::verify_streaming_controlled(
         &partial,
         &request.passcode,
         control.sample,
+        control.cancel,
         &mut verify_bytes,
     )?;
     if !report.ok() {

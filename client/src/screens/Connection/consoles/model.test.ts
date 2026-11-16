@@ -175,10 +175,20 @@ const tsConsole = (patch: Partial<FoundConsole>): FoundConsole => ({
   hosts: [],
   listed: null,
   error: null,
+  kind: "ps5",
   ...patch,
 });
 
 describe("Consoles › Add a PS5 merges what it finds", () => {
+  it("a phone or computer on Tailscale (named …-ps5u like every PS5Upload device) is no console", () => {
+    const phone = tsConsole({ name: "pixel-9", tailnet_name: "pixel-9-ps5u", tailnet_ip: "100.101.4.20", reachable: false, kind: "unknown" });
+    const mac = tsConsole({ name: "yunpengs-mbp", tailnet_name: "yunpengs-mbp-ps5u", tailnet_ip: "100.101.4.21", reachable: false, kind: "device", os: "macOS" });
+    const ps5 = tsConsole({ id: KEY_A, tailnet_ip: "100.101.4.7" });
+    const rows = mergeFound([], [phone, mac, ps5], null, {}, []);
+    expect(rows.map((r) => r.tailnet)).toEqual(["100.101.4.7"]);
+  });
+
+
   it("a console found at home and on Tailscale is one row with both badges", () => {
     const rows = mergeFound(
       [lanHost("192.168.1.100")],

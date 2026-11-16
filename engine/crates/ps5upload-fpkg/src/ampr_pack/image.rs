@@ -4,13 +4,16 @@
 //! [`Overlay`]: the folder minus every packed original, plus a regenerated `ampr_emu.index`
 //! (listing the original files, which is what `ampr_emu` resolves), the manifest and its
 //! sidecars, and the volumes. A folder emptied by packing is kept as an empty folder.
+//! [`prepare_streamed`] gives the same packed game with nothing written: the packs are measured,
+//! and the volumes are made again from the folder as the image writer reads them
+//! ([`super::regen`]).
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use super::config::{pack_output_glob, Config};
-use super::{glob, pack, runtime_support, Control, Output};
+use super::{glob, pack, regen::Regen, runtime_support, Control, Output};
 use crate::ampr_index;
 use crate::source::{SourceFile, SourceTree};
 use crate::{format_err, Error, Result};
@@ -233,6 +236,10 @@ impl Lz4Unpacked {
 }
 
 impl SourceTree for Lz4Unpacked {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }
@@ -356,6 +363,10 @@ impl RuntimeInstalled {
 }
 
 impl SourceTree for RuntimeInstalled {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[crate::source::SourceFile] {
         &self.files
     }
@@ -430,10 +441,16 @@ pub struct Overlay<'a> {
     memory: HashMap<String, Vec<u8>>,
     volumes: HashMap<String, PathBuf>,
     open: Option<(String, std::fs::File)>,
+    /// A measured pack set's volumes, made as they are read.
+    regen: Option<Regen>,
     label: String,
 }
 
 impl SourceTree for Overlay<'_> {
+    fn release(&mut self) {
+        self.source.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }
@@ -465,6 +482,9 @@ impl SourceTree for Overlay<'_> {
             f.by_ref().take(len as u64).read_to_end(&mut buf)?;
             return Ok(buf);
         }
+        if let Some(regen) = self.regen.as_mut().filter(|r| r.has(path)) {
+            return regen.read_range(&mut *self.source, path, offset, len);
+        }
         self.source.read_range(path, offset, len)
     }
 
@@ -487,6 +507,62 @@ pub fn prepare<'a>(
     mtime: i64,
     control: &mut Control,
 ) -> Result<(Overlay<'a>, Output)> {
+    let (entries, index) = entries_for(source, config, mtime)?;
+    // The spool's folder may not exist yet: the engine's data-folder spools (`lz4spool/`) are
+    // made by the first build that needs one. The spool itself must still be new.
+    if let Some(parent) = spool.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::Format(format!("{}: {e}", parent.display())))?;
+    }
+    std::fs::create_dir(spool).map_err(|e| Error::Format(format!("{}: {e}", spool.display())))?;
+    let output = match pack::build(&entries, source, config, spool, control) {
+        Ok(o) => o,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(spool);
+            return Err(e);
+        }
+    };
+    let mut volumes = HashMap::new();
+    let mut sizes = Vec::new();
+    for (name, path) in &output.volumes {
+        sizes.push((name.clone(), std::fs::metadata(path)?.len()));
+        volumes.insert(name.clone(), path.clone());
+    }
+    let overlay = overlay(source, &output, index, sizes, volumes, None)?;
+    Ok((overlay, output))
+}
+
+/// [`prepare`] with nothing written: the packs are measured ([`pack::measure`]), and the
+/// volumes the image writer reads are made again from `source` as it reads them ([`Regen`]),
+/// byte for byte what [`prepare`] would spool, each chunk checked against the measure. Twice the
+/// compression, no room on this computer. A source that changed in between fails the read.
+pub fn prepare_streamed<'a>(
+    source: &'a mut dyn SourceTree,
+    config: &Config,
+    mtime: i64,
+    control: &mut Control,
+) -> Result<(Overlay<'a>, Output)> {
+    let (entries, index) = entries_for(source, config, mtime)?;
+    let output = pack::measure(&entries, source, config, control)?;
+    let regen = Regen::new(&output, config)?;
+    let mut sizes = Vec::new();
+    for (name, _) in &output.volumes {
+        let size = regen
+            .size(name)
+            .ok_or_else(|| Error::Format(format!("{name} is not in the measured manifest")))?;
+        sizes.push((name.clone(), size));
+    }
+    let overlay = overlay(source, &output, index, sizes, HashMap::new(), Some(regen))?;
+    Ok((overlay, output))
+}
+
+/// The packing's entries (every file but what packing replaces, at `mtime`) and the
+/// `ampr_emu.index` that lists them.
+fn entries_for(
+    source: &mut dyn SourceTree,
+    config: &Config,
+    mtime: i64,
+) -> Result<(Vec<ampr_index::Entry>, Vec<u8>)> {
     let pack_glob = pack_output_glob(&config.pack_pattern)?;
     if source.files().iter().any(|f| {
         f.path.eq_ignore_ascii_case(&config.index_name) || glob::matches_any(&f.path, &[&pack_glob])
@@ -509,15 +585,23 @@ pub fn prepare<'a>(
     let index = ampr_index::build_entries(&logical).map_err(Error::Format)?;
     let entries = ampr_index::parse(&index)
         .ok_or_else(|| Error::Format("the generated index does not read back".into()))?;
-    std::fs::create_dir(spool).map_err(|e| Error::Format(format!("{}: {e}", spool.display())))?;
-    let output = match pack::build(&entries, source, config, spool, control) {
-        Ok(o) => o,
-        Err(e) => {
-            let _ = std::fs::remove_dir_all(spool);
-            return Err(e);
-        }
-    };
+    Ok((entries, index))
+}
 
+/// The packed game over `source`: the loose files, the new index, the manifest and sidecars,
+/// and the volumes (`sizes`, read from `volumes` on disk or made by `regen`).
+fn overlay<'a>(
+    source: &'a mut dyn SourceTree,
+    output: &Output,
+    index: Vec<u8>,
+    volume_sizes: Vec<(String, u64)>,
+    volumes: HashMap<String, PathBuf>,
+    regen: Option<Regen>,
+) -> Result<Overlay<'a>> {
+    // What the runtime checks when it mounts the packs: each packed record matches its index
+    // record by place, size and path. A mismatch is never shipped.
+    let manifest = super::format::Manifest::parse(&output.manifest)?;
+    ampr_index::check_lz4(&index, &manifest.files).map_err(Error::Format)?;
     let sizes: HashMap<&str, u64> = source
         .files()
         .iter()
@@ -544,13 +628,8 @@ pub fn prepare<'a>(
         });
         memory.insert(name, bytes.to_vec());
     }
-    let mut volumes = HashMap::new();
-    for (name, path) in &output.volumes {
-        files.push(SourceFile {
-            path: name.clone(),
-            size: std::fs::metadata(path)?.len(),
-        });
-        volumes.insert(name.clone(), path.clone());
+    for (name, size) in volume_sizes {
+        files.push(SourceFile { path: name, size });
     }
 
     // Folders packing emptied stay, as empty folders: only the innermost need naming.
@@ -592,18 +671,16 @@ pub fn prepare<'a>(
         }
     }
     let label = format!("{} with LZ4 asset packs", source.describe());
-    Ok((
-        Overlay {
-            source,
-            files,
-            empty_dirs,
-            memory,
-            volumes,
-            open: None,
-            label,
-        },
-        output,
-    ))
+    Ok(Overlay {
+        source,
+        files,
+        empty_dirs,
+        memory,
+        volumes,
+        open: None,
+        regen,
+        label,
+    })
 }
 
 #[cfg(test)]
@@ -638,7 +715,9 @@ mod tests {
         std::fs::create_dir_all(src.join("d/shaders")).unwrap();
         let mut tree = crate::source::FolderSource::open(&src).unwrap();
         let config = super::super::default_profile(9, 16);
-        let spool = root.join("spool");
+        // Its folder not made yet, as the engine's data-folder `lz4spool/` on a first build.
+        let spool = root.join("lz4spool").join("game.lz4spool");
+        assert!(!spool.parent().unwrap().exists());
         let (mut overlay, out) =
             prepare(&mut tree, &config, &spool, 7, &mut Control::default()).unwrap();
         let mut names: Vec<String> = overlay.files().iter().map(|f| f.path.clone()).collect();
@@ -684,6 +763,101 @@ mod tests {
         .err()
         .unwrap();
         assert!(e.to_string().contains("already carries"), "{e}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The packed game with nothing spooled is the spooled one, file for file and byte for byte;
+    /// a packed file edited after the measure fails the read instead of giving other bytes.
+    #[test]
+    fn a_streamed_packed_game_is_the_spooled_one() {
+        let root = std::env::temp_dir().join(format!(
+            "ampr-streamed-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = root.join("game");
+        let text: Vec<u8> = (0..900_000u32)
+            .flat_map(|i| format!("asset {} ", i % 977).into_bytes())
+            .take(900_000)
+            .collect();
+        let mut x = 0x2545_F491u32;
+        let noise: Vec<u8> = (0..300_000)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                x as u8
+            })
+            .collect();
+        let mut files: Vec<(String, Vec<u8>)> = vec![
+            ("eboot.bin".into(), vec![1u8; 100]),
+            ("d/text.bin".into(), text.clone()),
+            ("d/copy.bin".into(), text[..400_000].to_vec()),
+            ("d/noise.bin".into(), noise),
+            ("d/empty.bin".into(), Vec::new()),
+        ];
+        for i in 0..150 {
+            files.push((
+                format!("s/f{i:03}.bin"),
+                text[i * 97..i * 97 + 500 + i * 37].to_vec(),
+            ));
+        }
+        for (p, d) in &files {
+            let f = src.join(p);
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, d).unwrap();
+        }
+        let config = super::super::default_profile(9, 16);
+        let mut spooled_tree = crate::source::FolderSource::open(&src).unwrap();
+        let (mut spooled, built) = prepare(
+            &mut spooled_tree,
+            &config,
+            &root.join("spool"),
+            7,
+            &mut Control::default(),
+        )
+        .unwrap();
+        let mut streamed_tree = crate::source::FolderSource::open(&src).unwrap();
+        let (mut streamed, measured) =
+            prepare_streamed(&mut streamed_tree, &config, 7, &mut Control::default()).unwrap();
+        assert_eq!(built.build_id, measured.build_id);
+        assert_eq!(built.stats.chunks_shared, measured.stats.chunks_shared);
+        assert!(built.stats.chunks_shared > 0, "the copy shares chunks");
+        assert_eq!(spooled.files(), streamed.files());
+        assert_eq!(spooled.empty_dirs(), streamed.empty_dirs());
+        for f in spooled.files().to_vec() {
+            let want = spooled.read(&f.path).unwrap();
+            assert!(
+                streamed.read(&f.path).unwrap() == want,
+                "{} differs streamed",
+                f.path
+            );
+            // In pieces too, as an image writer reads.
+            let mut at = 0u64;
+            let mut got = Vec::new();
+            while at < f.size {
+                let n = (f.size - at).min(100_003) as usize;
+                got.extend(streamed.read_range(&f.path, at, n).unwrap());
+                at += n as u64;
+            }
+            assert!(got == want, "{} differs read in pieces", f.path);
+        }
+        drop(streamed);
+        drop(spooled);
+
+        // The source edited after the measure: the volume is not made from it.
+        let (mut streamed, _) =
+            prepare_streamed(&mut streamed_tree, &config, 7, &mut Control::default()).unwrap();
+        let mut edited = text.clone();
+        // Past what d/copy.bin shares with it: a chunk of its own.
+        edited[600_000] ^= 0xFF;
+        std::fs::write(src.join("d/text.bin"), edited).unwrap();
+        let e = streamed
+            .read("ampr_assets-000.pak")
+            .map(|b| b.len())
+            .unwrap_err();
+        assert!(e.to_string().contains("changed after"), "{e}");
         let _ = std::fs::remove_dir_all(&root);
     }
 

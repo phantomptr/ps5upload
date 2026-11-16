@@ -4,7 +4,10 @@
 //! * The candidates are this device's tailnet peers (the engine's own node's netmap, and the
 //!   system Tailscale app's list where its CLI can be read: desktop only) that are online and
 //!   named like a PS5Upload console (`…-ps5u`, or `…-ps5u-N` when Tailscale made the name
-//!   unique). `all=1` takes every online peer instead (a console renamed by hand).
+//!   unique). `all=1` takes every online peer instead (a console renamed by hand). The name is
+//!   no proof: the app on a phone or computer names its own node `…-ps5u` too. A peer whose
+//!   Tailscale reports a phone's or computer's OS is left out, and each entry says what the
+//!   probe made of it (`kind`, [`peer_kind`]): only `ps5` is a console.
 //! * Each is confirmed by connecting to its tailnet address on TCP 9120 through the way this
 //!   device has (the node's local mapping, or the address itself through the system app) and
 //!   reading the first two AVA1 handshake messages: the console's key and nothing more. The
@@ -64,12 +67,54 @@ pub fn is_console_name(name: &str) -> bool {
     }
 }
 
+/// The OS a PS5's helper node reports to Tailscale (payload/src/tailnet_node.c).
+const PS5_OS: &str = "ps5";
+
+/// Does the OS a peer's Tailscale reports say it is something other than a PS5 (a phone, a
+/// computer)? False when no OS is known.
+pub fn os_is_not_ps5(os: &str) -> bool {
+    let os = os.trim();
+    !os.is_empty() && !os.eq_ignore_ascii_case(PS5_OS)
+}
+
+/// What a tailnet peer is, from the strongest signal there is:
+///
+/// * `"ps5"`: its PS5Upload helper answered the AVA1 handshake on 9120 as the PS5 (only the
+///   helper serves AVA1 there; the app on a phone or computer does not), or its Tailscale says
+///   its OS is the PS5's.
+/// * `"device"`: its Tailscale says it is another OS (a phone, a computer), or something other
+///   than the helper answered.
+/// * `"unknown"`: no answer and no OS. Every PS5Upload device names its node `…-ps5u`, the app on
+///   a phone or computer as well as the PS5, so a name like a console's is no sign of one.
+pub fn peer_kind(os: &str, p: &Probe) -> &'static str {
+    if p.key.is_some() {
+        let says_ps5 = p
+            .name
+            .as_deref()
+            .is_none_or(|n| n.eq_ignore_ascii_case("PS5"));
+        return if says_ps5 && !os_is_not_ps5(os) {
+            "ps5"
+        } else {
+            "device"
+        };
+    }
+    if os_is_not_ps5(os) {
+        "device"
+    } else if os.trim().eq_ignore_ascii_case(PS5_OS) {
+        "ps5"
+    } else {
+        "unknown"
+    }
+}
+
 /// The peers worth probing: online, named like a console (or any, with `all`), not this device,
-/// one per address, at most [`MAX_PROBES`].
+/// not one whose Tailscale says it is a phone or a computer, one per address, at most
+/// [`MAX_PROBES`].
 pub fn candidates(peers: &[PeerSeen], all: bool, me: Option<Ipv4Addr>) -> Vec<PeerSeen> {
     let mut out: Vec<PeerSeen> = Vec::new();
     for p in peers {
-        if !p.online || Some(p.ip) == me || out.iter().any(|o| o.ip == p.ip) {
+        if !p.online || Some(p.ip) == me || out.iter().any(|o| o.ip == p.ip) || os_is_not_ps5(&p.os)
+        {
             continue;
         }
         if all || is_console_name(&p.name) {
@@ -130,6 +175,8 @@ pub struct Probe {
     pub reachable: bool,
     pub via: Option<&'static str>,
     pub key: Option<[u8; 32]>,
+    /// The name the AVA1 server gave (the PS5's helper says "PS5").
+    pub name: Option<String>,
     pub error: Option<String>,
 }
 
@@ -155,12 +202,14 @@ pub async fn probe_at(dial: &str, via: &'static str) -> Probe {
             reachable: true,
             via: Some(via),
             key: Some(p.key),
+            name: Some(p.name),
             error: None,
         },
         Err(e) => Probe {
             reachable: false,
             via: Some(via),
             key: None,
+            name: None,
             error: Some(probe_error(&e)),
         },
     }
@@ -213,6 +262,8 @@ pub fn entry(peer: &PeerSeen, p: &Probe) -> Value {
         "hosts": hosts,
         "listed": listed,
         "error": p.error,
+        "kind": peer_kind(&peer.os, p),
+        "os": peer.os,
     })
 }
 
@@ -307,6 +358,7 @@ async fn probe_one(addr: &str) -> Result<Value, (StatusCode, Value)> {
                 ip,
                 online: true,
                 source: "typed",
+                os: String::new(),
             })
         })
     })
@@ -336,7 +388,12 @@ async fn probe_one(addr: &str) -> Result<Value, (StatusCode, Value)> {
 
 /// `GET /api/tailnet/consoles[?refresh=1&all=1&addr=]` — the PS5Upload consoles on this device's
 /// Tailscale network: `{ok, backend, can_list, cached, age_ms, consoles: [{name, tailnet_name,
-/// tailnet_ip, lan_host, id, reachable, via, online, paired, hosts, listed, error}]}`.
+/// tailnet_ip, lan_host, id, reachable, via, online, paired, hosts, listed, error, kind, os}]}`.
+///
+/// * `kind` ([`peer_kind`]): `ps5` when its helper answered as the PS5 (or its Tailscale says
+///   its OS is the PS5's), `device` for a phone or computer, `unknown` otherwise. Only `ps5` is
+///   offered as a console: every PS5Upload device's node is named `…-ps5u`. `os`: what its
+///   Tailscale reports, when this device's list carries it.
 ///
 /// * `backend`: how this device is on Tailscale (`builtin`, `system`, `none`). `can_list`: whether
 ///   a peer list could be read (false on a phone with only the system Tailscale app: type the
@@ -437,12 +494,26 @@ pub(crate) struct AddBody {
 /// when back home, Tailscale when away), else at its tailnet address, which becomes the home
 /// one when the console is next reached at home. Either way its tailnet address is remembered
 /// for the router. A console that does not answer is still added (its list may not let this
-/// device in yet: the PS5 then shows "tried to reach this PS5" with Allow).
+/// device in yet: the PS5 then shows "tried to reach this PS5" with Allow). A peer known to be a
+/// phone or a computer ([`peer_kind`] `device`) is refused: 400 `not_a_console`.
 pub(crate) async fn add(Json(req): Json<AddBody>) -> Response {
     let row = match probe_one(&req.addr).await {
         Ok(row) => row,
         Err((code, body)) => return (code, Json(body)).into_response(),
     };
+    // A phone or a computer on the tailnet (the app runs there too) is never put on the console
+    // list.
+    if row["kind"] == "device" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "this is not a PS5: it is a phone or computer on your Tailscale network",
+                "reason": "not_a_console",
+                "found": row,
+            })),
+        )
+            .into_response();
+    }
     let name = req.name.trim().to_string();
     let r = tokio::task::spawn_blocking(move || -> Result<Value, String> {
         let ip_s = row["tailnet_ip"].as_str().unwrap_or("").to_string();
@@ -509,7 +580,80 @@ mod tests {
             ip: Ipv4Addr::from(ip),
             online,
             source: "builtin",
+            os: String::new(),
         }
+    }
+
+    fn with_os(mut p: PeerSeen, os: &str) -> PeerSeen {
+        p.os = os.into();
+        p.source = "system";
+        p
+    }
+
+    fn answered(name: &str) -> Probe {
+        Probe {
+            reachable: true,
+            via: Some("builtin"),
+            key: Some([7; 32]),
+            name: Some(name.into()),
+            error: None,
+        }
+    }
+
+    fn silent() -> Probe {
+        Probe {
+            reachable: false,
+            via: Some("builtin"),
+            key: None,
+            name: None,
+            error: Some("no answer on port 9120".into()),
+        }
+    }
+
+    #[test]
+    fn a_phone_or_a_computer_named_like_a_console_is_a_device_not_a_ps5() {
+        // The PS5: its helper answers AVA1 on 9120 as "PS5", or its Tailscale says "ps5".
+        assert_eq!(peer_kind("", &answered("PS5")), "ps5");
+        assert_eq!(peer_kind("ps5", &answered("PS5")), "ps5");
+        assert_eq!(peer_kind("ps5", &silent()), "ps5");
+        // A phone running PS5Upload: its node is "pixel-9-ps5u", nothing answers on 9120. With
+        // the system app's list its OS says so; with the built-in node nothing is known.
+        assert!(is_console_name("pixel-9-ps5u"));
+        assert_eq!(peer_kind("android", &silent()), "device");
+        assert_eq!(peer_kind("iOS", &silent()), "device");
+        assert_eq!(peer_kind("", &silent()), "unknown");
+        // A computer: the same.
+        assert_eq!(peer_kind("macOS", &silent()), "device");
+        assert_eq!(peer_kind("windows", &silent()), "device");
+        // Something other than the helper answering AVA1, or an OS that is not the PS5's.
+        assert_eq!(peer_kind("", &answered("Pixel 9")), "device");
+        assert_eq!(peer_kind("linux", &answered("PS5")), "device");
+        assert!(!os_is_not_ps5(""));
+        assert!(!os_is_not_ps5("PS5"));
+        assert!(os_is_not_ps5("android"));
+    }
+
+    #[test]
+    fn a_peer_whose_tailscale_says_phone_or_computer_is_never_probed() {
+        let peers = vec![
+            with_os(peer("den-ps5u", [100, 64, 0, 10], true), "ps5"),
+            with_os(peer("pixel-9-ps5u", [100, 64, 0, 11], true), "android"),
+            with_os(peer("yunpengs-mbp-ps5u", [100, 64, 0, 12], true), "macOS"),
+            // The built-in node has no OS for its peers: probed, and the probe decides.
+            peer("galaxy-s24-ps5u", [100, 64, 0, 13], true),
+        ];
+        let ips: Vec<String> = candidates(&peers, false, None)
+            .iter()
+            .map(|p| p.ip.to_string())
+            .collect();
+        assert_eq!(ips, vec!["100.64.0.10", "100.64.0.13"]);
+        assert_eq!(candidates(&peers, true, None).len(), 2);
+        // Its entry says what it is.
+        let row = entry(&peers[3], &silent());
+        assert_eq!(row["kind"], "unknown");
+        let row = entry(&peers[0], &silent());
+        assert_eq!(row["kind"], "ps5");
+        assert_eq!(row["os"], "ps5");
     }
 
     #[test]
@@ -656,6 +800,7 @@ mod tests {
         assert_eq!(row["reachable"], true);
         assert_eq!(row["id"], ava1::hex::encode(&key));
         assert_eq!(row["via"], "builtin");
+        assert_eq!(row["kind"], "ps5", "the helper answered as the PS5");
 
         // Nothing there: not reachable, with a reason.
         let dead = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -666,5 +811,6 @@ mod tests {
         let row = entry(&peer("x-ps5u", [100, 64, 0, 78], true), &p);
         assert_eq!(row["reachable"], false);
         assert!(row["id"].is_null());
+        assert_eq!(row["kind"], "unknown");
     }
 }

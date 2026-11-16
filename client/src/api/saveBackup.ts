@@ -8,6 +8,9 @@ export interface SaveBackupSettings {
   /** A folder the engine can write. */
   dir: string;
   keep: number;
+  /** Minutes from the end of one automatic pass to the next, 5 to 1440. An engine before
+   *  12.5.1 leaves it out (it backs up every 10 minutes). */
+  interval_minutes?: number;
   /** Consoles to back up (bare IPs). */
   hosts: string[];
   /** Backup folders used before `dir`: their backups still list and restore. */

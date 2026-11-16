@@ -31,11 +31,15 @@ const _: () = {
 };
 
 fn main() -> ExitCode {
-    // rayon's global pool (the BLAKE3 hashing) to the job's share of the console's CPUs.
+    // rayon's global pool (the BLAKE3 hashing) to the job's share of the console's CPUs, and
+    // every other worker pool (the `.pkg` builder's Kraken, the `.ffpfsc` encoders) with it.
     #[cfg(target_env = "ps5")]
-    let _ = rayon::ThreadPoolBuilder::new()
-        .num_threads(ps5upload_convert::job::THREADS)
-        .build_global();
+    {
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(ps5upload_convert::job::THREADS)
+            .build_global();
+        ps5upload_fpkg::workshop::set_thread_cap(ps5upload_convert::job::THREADS);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {

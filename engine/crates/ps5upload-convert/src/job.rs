@@ -5,10 +5,14 @@
 //!
 //! - `request.json`: written by the helper, read and deleted here at start.
 //!   `{"id": "<the helper's job id>", "op": "inspect"|"build", "path": "<source>"}`, and for a
-//!   build `"dest"` (the output's full path), `"format"` (`exfat`, `ffpkg`, `ffpfs`, `folder`),
-//!   `"zstd"` (bool), `"verify"` (`fast`, the default, or `full`), and optionally
+//!   build `"dest"` (the output's full path), `"format"` (`exfat`, `ffpkg`, `ffpfs`, `ffpfsc`,
+//!   `folder`), `"zstd"` (bool), `"verify"` (`fast`, the default, or `full`), and optionally
 //!   `"zstd_runtime"` (the path of ampr-emu-ng's `libSceAmpr.sprx` on the console, which zstd
-//!   packs need) and `"zstd_level"` (1 to 22, 5 when absent).
+//!   packs need) and `"zstd_level"` (1 to 22, 5 when absent); a `.ffpfsc` also `"inner"` (the
+//!   image inside it: `exfat`, the default, `ffpkg` or `ffpfs`) and `"ffpfsc_level"` (`fast`,
+//!   `balanced`, the default, or `smallest`), compressed on [`THREADS`] threads; a `.pkg`
+//!   (`"format": "pkg"`, a debug package, written, never installed here) `"pkg_level"` (one of
+//!   [`PKG_LEVELS`], `fast` when absent).
 //! - `status.json`: rewritten here through a temporary file and a rename in the same folder, so
 //!   the helper never reads half of one; at most every [`STATUS_EVERY`] while a job runs.
 //!   `{"id", "pid", "op", "state": "running"|"done"|"failed", "stage"?, "bytes_done"?,
@@ -33,6 +37,7 @@ use std::time::{Duration, Instant};
 use ps5upload_convert_core::folder_build::{self, FolderOut};
 use ps5upload_convert_core::image_build::{self, ImageFormat};
 use ps5upload_convert_core::{safe_write, zstd_packs};
+use ps5upload_fpkg::ffpfsc_block::Level;
 use ps5upload_fpkg::sample::VerifyMode;
 use ps5upload_fpkg::source::SourceTree;
 use serde_json::json;
@@ -54,7 +59,7 @@ const MAX_RUNTIME_BYTES: u64 = 16 << 20;
 const DEFAULT_ZSTD_LEVEL: u8 = 5;
 /// Compression threads: on the PS5 three of the payload's five CPUs, the other two left to the
 /// console's own UI and a suspended game; elsewhere every core (0).
-pub const THREADS: usize = if cfg!(target_env = "ps5") { 3 } else { 0 };
+pub const THREADS: usize = ps5upload_convert_core::WORKERS;
 
 #[derive(Debug, serde::Deserialize)]
 struct Request {
@@ -74,7 +79,25 @@ struct Request {
     zstd_runtime: String,
     #[serde(default)]
     zstd_level: Option<u8>,
+    /// With `format` `ffpfsc`: the image inside it, `exfat` (the default), `ffpkg` or `ffpfs`.
+    #[serde(default)]
+    inner: String,
+    /// With `format` `ffpfsc`: `fast`, `balanced` (the default) or `smallest`.
+    #[serde(default)]
+    ffpfsc_level: String,
+    /// With `format` `pkg`: `stored` (no compression), `fast` (the default) or `balanced`
+    /// ([`PKG_LEVELS`]).
+    #[serde(default)]
+    pkg_level: String,
 }
+
+/// The Kraken levels a `.pkg` is made at on the console. `smallest` is left out: as slow as
+/// `balanced` (hours for a large game on 3 CPUs) for no measured gain over it.
+pub const PKG_LEVELS: [&str; 3] = ["stored", "fast", "balanced"];
+/// A `.pkg`'s level when the request names none: PS5 Dump Forge's choice on the console.
+const DEFAULT_PKG_LEVEL: ps5upload_fpkg::kraken::Level = ps5upload_fpkg::kraken::Level::Fast;
+/// How often the `.pkg` being written is looked at for its growth (U5, [`build_pkg`]).
+const PKG_SYNC_POLL: Duration = Duration::from_millis(100);
 
 /// Writes `status` as `dir/status.json`. The temporary file is in `dir` too: a rename never
 /// leaves the folder (a rename across filesystems panics the PS5's kernel). `durable`: the
@@ -174,9 +197,17 @@ struct Plan {
     dest: PathBuf,
     /// `None`: a folder.
     image: Option<ImageFormat>,
+    /// A `.ffpfsc`: the name of the image inside it and how hard it is compressed.
+    ffpfsc: Option<(String, Level)>,
     mode: VerifyMode,
     /// The emulator's bytes and the level, for zstd packs.
     zstd: Option<(Vec<u8>, u8)>,
+    /// A `.pkg` (`image` is `None`) and its Kraken level.
+    pkg: Option<ps5upload_fpkg::kraken::Level>,
+    /// The source's content id, as its inspection read it.
+    content_id: Option<String>,
+    /// The `.zip` or `.7z` the inspection opened, read by the build rather than opened again.
+    opened: Option<Box<dyn SourceTree>>,
 }
 
 fn bad(detail: String) -> Refusal {
@@ -187,17 +218,47 @@ fn bad(detail: String) -> Refusal {
 }
 
 /// The request checked against the console: the source readable, the destination new and in a
-/// folder that exists, the emulator there when zstd packs are asked for.
-fn plan(request: &Request) -> Result<Plan, Refusal> {
+/// folder that exists, the emulator there when zstd packs are asked for. `cancel` ends an
+/// inspection waiting on an archive.
+fn plan(request: &Request, cancel: &Arc<AtomicBool>) -> Result<Plan, Refusal> {
     if request.dest.is_empty() {
         return Err(bad("a build needs a dest".into()));
     }
-    let image = match request.format.as_str() {
-        "folder" => None,
-        "exfat" => Some(ImageFormat::Exfat),
-        "ffpkg" => Some(ImageFormat::Ffpkg),
-        "ffpfs" => Some(ImageFormat::Ffpfs),
+    let mut pkg = None;
+    let (image, compress) = match request.format.as_str() {
+        "folder" => (None, false),
+        "pkg" => {
+            let level = match request.pkg_level.as_str() {
+                "" => DEFAULT_PKG_LEVEL,
+                l if PKG_LEVELS.contains(&l) => l.parse().map_err(bad)?,
+                other => return Err(bad(format!("unknown .pkg level {other:?}"))),
+            };
+            if request.zstd {
+                return Err(bad(
+                    "zstd packs go into an image or a folder, not a .pkg".into()
+                ));
+            }
+            pkg = Some(level);
+            (None, false)
+        }
+        "exfat" => (Some(ImageFormat::Exfat), false),
+        "ffpkg" => (Some(ImageFormat::Ffpkg), false),
+        "ffpfs" => (Some(ImageFormat::Ffpfs), false),
+        "ffpfsc" => {
+            let inner = match request.inner.as_str() {
+                "" | "exfat" => ImageFormat::Exfat,
+                "ffpkg" => ImageFormat::Ffpkg,
+                "ffpfs" => ImageFormat::Ffpfs,
+                other => return Err(bad(format!("unknown image {other:?} inside a .ffpfsc"))),
+            };
+            (Some(inner), true)
+        }
         other => return Err(bad(format!("unknown format {other:?}"))),
+    };
+    let level = if compress {
+        Level::parse(Some(&request.ffpfsc_level)).map_err(bad)?
+    } else {
+        Level::default()
     };
     let mode = match request.verify.as_str() {
         "" | "fast" => VerifyMode::from_full(false, image == Some(ImageFormat::Ffpkg)),
@@ -216,17 +277,34 @@ fn plan(request: &Request) -> Result<Plan, Refusal> {
     if !dest.is_absolute() || name.is_empty() || name.to_ascii_lowercase().ends_with(".partial") {
         return Err(bad_dest(format!("{} is not an output path", request.dest)));
     }
+    if pkg.is_some() && !name.ends_with(".pkg") {
+        // The package builder names its output `<stem>.pkg`, in this spelling.
+        return Err(bad_dest(format!("{} does not end in .pkg", request.dest)));
+    }
+    let mut ffpfsc = None;
     if let Some(f) = image {
+        let want = if compress { "ffpfsc" } else { f.extension() };
         let ext = dest
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or_default();
-        if !ext.eq_ignore_ascii_case(f.extension()) {
+        if !ext.eq_ignore_ascii_case(want) {
             return Err(bad_dest(format!(
-                "{} does not end in .{}",
-                request.dest,
-                f.extension()
+                "{} does not end in .{want}",
+                request.dest
             )));
+        }
+        if compress {
+            // The names ShadowMountPlus mounts: the container's at most 63 bytes, the image
+            // inside it named after it with its own filesystem's extension.
+            let (outer, inner) = image_build::output_names(&dest, f, true);
+            if !outer.eq_ignore_ascii_case(name) {
+                return Err(bad_dest(format!(
+                    "{name}: a .ffpfsc's name is at most {} bytes, without \" * / : < > ? \\ |",
+                    image_build::PFS_NAME_MAX
+                )));
+            }
+            ffpfsc = inner.map(|inner| (inner, level));
         }
     }
     if dest.symlink_metadata().is_ok() {
@@ -237,7 +315,7 @@ fn plan(request: &Request) -> Result<Plan, Refusal> {
     }
     let source = PathBuf::from(&request.path);
     // What this program reads, and that it opens: the checks an inspection makes.
-    crate::inspect(&source)?;
+    let (inspection, opened) = inspect_stoppable(&source, cancel)?;
     if source == dest || dest.starts_with(&source) {
         return Err(bad_dest(format!(
             "{} is inside the source {}",
@@ -265,8 +343,32 @@ fn plan(request: &Request) -> Result<Plan, Refusal> {
         source,
         dest,
         image,
+        ffpfsc,
         mode,
         zstd,
+        pkg,
+        content_id: inspection.content_id,
+        opened,
+    })
+}
+
+/// [`crate::inspect_keeping`] ended by `cancel` (an archive's param file may be behind a large
+/// solid block): a stopped inspection is `convert_cancelled`, not an unreadable source.
+fn inspect_stoppable(
+    path: &Path,
+    cancel: &Arc<AtomicBool>,
+) -> Result<(crate::Inspection, Option<Box<dyn SourceTree>>), Refusal> {
+    let flag = Arc::clone(cancel);
+    let stop: ps5upload_archive::stream::Stop = Arc::new(move || flag.load(Ordering::Relaxed));
+    crate::inspect_keeping(path, stop).map_err(|refusal| {
+        if cancel.load(Ordering::Relaxed) {
+            Refusal {
+                cause: "convert_cancelled",
+                detail: refusal.detail,
+            }
+        } else {
+            refusal
+        }
     })
 }
 
@@ -309,10 +411,25 @@ fn read_runtime(path: &str) -> Result<Vec<u8>, Refusal> {
 }
 
 /// The source opened as the engine opens it: module names in the eboot's spelling, an unsigned
-/// eboot fake-signed; for packing, any packs it has decoded.
-fn open_source(path: &Path, packing: bool) -> Result<Box<dyn SourceTree>, String> {
-    let (tree, renamed, signing) =
-        ps5upload_fpkg::module_case::open_with_update(path, None).map_err(|e| e.to_string())?;
+/// eboot fake-signed; for packing, any packs it has decoded. A `.zip` or `.7z` is read in place
+/// (`ps5upload_convert_core::archive_tree`), a read waiting on it ended by `cancel`; `opened`,
+/// when given, is that archive already opened (by the plan's inspection).
+fn open_source(
+    path: &Path,
+    packing: bool,
+    cancel: &Arc<AtomicBool>,
+    opened: Option<Box<dyn SourceTree>>,
+) -> Result<Box<dyn SourceTree>, String> {
+    let (tree, renamed, signing) = if let Some(tree) = opened {
+        ps5upload_fpkg::module_case::wrap(tree)
+    } else if is_archive_file(path) {
+        let flag = Arc::clone(cancel);
+        let stop: ps5upload_archive::stream::Stop = Arc::new(move || flag.load(Ordering::Relaxed));
+        let tree = crate::open_archive(path, stop).map_err(|r| r.detail)?;
+        ps5upload_fpkg::module_case::wrap(tree)
+    } else {
+        ps5upload_fpkg::module_case::open_with_update(path, None).map_err(|e| e.to_string())?
+    };
     if !renamed.is_empty() {
         crate::log(format_args!(
             "renamed to the eboot's spelling: {}",
@@ -327,6 +444,16 @@ fn open_source(path: &Path, packing: bool) -> Result<Box<dyn SourceTree>, String
     } else {
         Ok(tree)
     }
+}
+
+/// Whether `path` is a `.zip` or `.7z` file, read in place (a `.rar` never gets this far: the
+/// inspection in [`plan`] refuses it).
+fn is_archive_file(path: &Path) -> bool {
+    path.is_file()
+        && matches!(
+            ps5upload_archive::stream::Kind::of(path),
+            Some(ps5upload_archive::stream::Kind::Zip | ps5upload_archive::stream::Kind::SevenZ)
+        )
 }
 
 /// Removes what a stopped or failed build of `dest` left: the names the helper also cleans up.
@@ -351,7 +478,8 @@ fn failure(detail: String, cancelled: bool, plan: &Plan) -> Refusal {
     } else if !plan.source.exists() || plan.dest.parent().is_some_and(|d| !d.is_dir()) {
         // U7: a pulled drive is named before the raw error.
         "convert_drive_gone"
-    } else if lower.contains("holds files of at most") {
+    } else if lower.contains("holds files of at most") || lower.contains("file too large") {
+        // The second: EFBIG, a `.ffpfsc` (its size known only once written) past FAT32's 4 GiB.
         // The build's own check once the image or pack volume sizes are known
         // (`safe_write::too_big_for`): with zstd packs the size isn't known before.
         "convert_too_big_for_drive"
@@ -370,15 +498,38 @@ fn failure(detail: String, cancelled: bool, plan: &Plan) -> Refusal {
 /// progress; `cancel` stops it.
 fn build(
     request: &Request,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     stage: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<serde_json::Value, Refusal> {
-    let plan = plan(request)?;
+    let mut plan = plan(request, cancel)?;
     let unreadable = |e: String| Refusal {
         cause: "convert_source_unreadable",
         detail: format!("{}: {e}", plan.source.display()),
     };
-    let mut tree = open_source(&plan.source, false).map_err(unreadable)?;
+    if is_archive_file(&plan.source) && plan.pkg.is_some() {
+        // The package builder opens its source by path, as a folder or an image.
+        return Err(Refusal {
+            cause: "convert_archive_needs_unpack",
+            detail: format!(
+                "{}: a .pkg is made from an unpacked game; unpack the archive first",
+                plan.source.display()
+            ),
+        });
+    }
+    if is_archive_file(&plan.source) && plan.image.is_none() && plan.zstd.is_some() {
+        // A folder in zstd packs reads its source again after packing (as the engine refuses it
+        // for an archive): once more through a whole solid archive.
+        return Err(Refusal {
+            cause: "convert_archive_needs_unpack",
+            detail: format!(
+                "{}: a folder with zstd packs is made from an unpacked game; unpack the archive \
+                 first, or make an image",
+                plan.source.display()
+            ),
+        });
+    }
+    let opened = plan.opened.take();
+    let mut tree = open_source(&plan.source, false, cancel, opened).map_err(unreadable)?;
     if let Some(why) =
         ps5upload_convert_core::refusal::ps4_refusal(&plan.source, &mut *tree, plan.image.is_some())
     {
@@ -416,8 +567,18 @@ fn build(
     // drive's own limits are checked for them here. Their size is known once they are measured:
     // the build checks the image and each pack volume against the drive's file size limit then,
     // before writing (`safe_write::too_big_for`, `convert_too_big_for_drive` in `failure`).
-    let need = if plan.zstd.is_some() { 0 } else { data };
-    if let Some(why) = probe.refusal(need, plan.image.is_some(), folder_build::SPARE) {
+    // A `.ffpfsc` is smaller by what compression saves, known only once written; a drive that
+    // fills up ends the build with `convert_no_space`.
+    let compressed = plan
+        .pkg
+        .is_some_and(|l| l != ps5upload_fpkg::kraken::Level::Stored);
+    let need = if plan.zstd.is_some() || plan.ffpfsc.is_some() || compressed {
+        0
+    } else {
+        data
+    };
+    let one_file = plan.image.is_some() || plan.pkg.is_some();
+    if let Some(why) = probe.refusal(need, one_file, folder_build::SPARE) {
         let cause = if probe.read_only {
             "convert_dest_read_only"
         } else if why.contains("at most") {
@@ -455,11 +616,38 @@ fn build(
         plan.mode,
         plan.zstd.as_ref().map(|z| z.1)
     ));
+    if let Some((inner, level)) = &plan.ffpfsc {
+        crate::log(format_args!(
+            ".ffpfsc holding {inner}, {} compression on {} threads",
+            level.name(),
+            THREADS
+        ));
+    }
     let started = Instant::now();
+    if let Some(level) = plan.pkg {
+        let files = tree.files().len() as u64;
+        // The package builder opens the source itself.
+        drop(tree);
+        return build_pkg(&plan, level, files, cancel, stage).map(|(bytes, detail)| {
+            crate::log(format_args!(
+                "built {} in {:.1} s: {detail}",
+                plan.dest.display(),
+                started.elapsed().as_secs_f64()
+            ));
+            json!({
+                "dest": plan.dest,
+                "format": request.format,
+                "files": files,
+                "bytes": bytes,
+                "detail": detail,
+            })
+        });
+    }
     let chunk = image_build::DEFAULT_VERIFY_CHUNK;
     let source = plan.source.clone();
     let packing = plan.zstd.is_some();
-    let reopen = move || open_source(&source, packing);
+    let flag = Arc::clone(cancel);
+    let reopen = move || open_source(&source, packing, &flag, None);
     let built = match (plan.image, &plan.zstd) {
         (Some(format), zstd) => {
             // A PS4 game's image needs the param.json ShadowMount+ reads.
@@ -469,18 +657,35 @@ fn build(
                 Some(p) => p,
                 None => &mut *tree,
             };
+            // A `.ffpfsc`: the image inside it and its compression level.
+            let (inner, compression) = match &plan.ffpfsc {
+                Some((name, level)) => (Some(name.as_str()), *level),
+                None => (None, Level::default()),
+            };
             match zstd {
-                Some((runtime, level)) => zstd_packs::build(
-                    format, *level, None, runtime, tree, &plan.dest, plan.mode, chunk, cancel,
-                    stage, THREADS,
+                Some((runtime, level)) => zstd_packs::build_at(
+                    format,
+                    inner,
+                    compression,
+                    *level,
+                    None,
+                    runtime,
+                    tree,
+                    &plan.dest,
+                    plan.mode,
+                    chunk,
+                    cancel,
+                    stage,
+                    THREADS,
                 ),
                 None => {
                     // A libSceAmpr game gets a fresh ampr_emu.index, as on a computer (#449).
                     let now = zstd_packs::now_secs();
                     match image_build::AmprIndexed::wrap_at(&mut *tree, now) {
-                        Ok(Some(mut indexed)) => image_build::build(
+                        Ok(Some(mut indexed)) => image_build::build_at(
                             format,
-                            None,
+                            inner,
+                            compression,
                             &mut indexed,
                             &plan.dest,
                             plan.mode,
@@ -488,8 +693,16 @@ fn build(
                             cancel,
                             stage,
                         ),
-                        Ok(None) => image_build::build(
-                            format, None, tree, &plan.dest, plan.mode, chunk, cancel, stage,
+                        Ok(None) => image_build::build_at(
+                            format,
+                            inner,
+                            compression,
+                            tree,
+                            &plan.dest,
+                            plan.mode,
+                            chunk,
+                            cancel,
+                            stage,
                         ),
                         Err(e) => Err(format!("ampr_emu.index: {e}")),
                     }
@@ -531,6 +744,101 @@ fn build(
             remove_leftovers(&plan.dest);
             Err(failure(detail, cancel.load(Ordering::Relaxed), &plan))
         }
+    }
+}
+
+/// The stem the package builder is given for `dest`: the name without one `.pkg`, so the
+/// builder's `<stem>.pkg` and `<stem>.pkg.partial` are `dest` and `partial_of(dest)` — the names
+/// the sync, the claim, the cleanup and the helper use (`g.pkg.pkg` stays `g.pkg.pkg`).
+fn pkg_stem(dest: &Path) -> String {
+    let name = dest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    name.strip_suffix(".pkg").unwrap_or(name).to_string()
+}
+
+/// Builds the plan's `.pkg` with `ps5upload-fpkg` (a debug package, the engine's builder; not
+/// installed here): `<dest>.partial` beside `dest`, read back, renamed. Its stages are the
+/// builder's (`check` reads the game's headers, `compress` is Kraken on the converter's
+/// threads, `write`, `verify`). U5: the builder writes through its own file, so a thread syncs
+/// the `.partial` each time it grew by `SYNC_EVERY` ([`safe_write::GrowthSync`]); a failed
+/// sync stops the build. The size and a line for the result, or why it failed.
+fn build_pkg(
+    plan: &Plan,
+    level: ps5upload_fpkg::kraken::Level,
+    files: u64,
+    cancel: &Arc<AtomicBool>,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> Result<(u64, String), Refusal> {
+    use ps5upload_fpkg::build::{BuildControl, BuildRequest, Stage};
+    let dir = plan.dest.parent().unwrap_or(Path::new("/"));
+    let mut request = BuildRequest::new(&plan.source, dir);
+    request.file_name = Some(pkg_stem(&plan.dest));
+    // As the inspection reads it: a dump's param.json may start with a BOM and end in NULs.
+    request.content_id = plan.content_id.clone();
+    request.kraken = true;
+    request.level = level;
+    crate::log(format_args!(
+        ".pkg at Kraken level {level:?} on {} threads ({files} files)",
+        ps5upload_fpkg::workshop::workshop_threads()
+    ));
+    let sync = safe_write::GrowthSync::start(
+        folder_build::partial_of(&plan.dest),
+        safe_write::SYNC_EVERY,
+        PKG_SYNC_POLL,
+        Arc::clone(cancel),
+    );
+    let now = std::cell::Cell::new(Stage::Check);
+    let stage = std::cell::RefCell::new(stage);
+    let mut on_stage = |s: Stage| {
+        now.set(s);
+        (stage.borrow_mut())(s.id(), 0, 0);
+    };
+    let mut on_bytes = |done: u64, total: u64| (stage.borrow_mut())(now.get().id(), done, total);
+    let mut control = BuildControl {
+        cancel: Some(cancel),
+        sample: match plan.mode {
+            VerifyMode::Full => None,
+            VerifyMode::Fast { seed, .. } => Some(seed),
+        },
+        ..BuildControl::default()
+    };
+    control.stage = Some(&mut on_stage);
+    control.bytes = Some(&mut on_bytes);
+    let built = ps5upload_fpkg::build::build_controlled(
+        &request,
+        &mut |line| crate::log(format_args!("pkg: {line}")),
+        &mut control,
+    );
+    let synced = sync.finish();
+    let fail = |detail: String| {
+        remove_leftovers(&plan.dest);
+        failure(detail, cancel.load(Ordering::Relaxed), plan)
+    };
+    match (built, synced) {
+        (Ok(report), Ok(syncs)) => {
+            if report.path != plan.dest {
+                return Err(fail(format!(
+                    "the package was written as {}, not {}",
+                    report.path.display(),
+                    plan.dest.display()
+                )));
+            }
+            Ok((
+                report.size,
+                format!(
+                    "pkg, Kraken {level:?}, {} bytes, content id {}, {syncs} syncs while written, \
+                     verified: {}",
+                    report.size,
+                    report.content_id,
+                    if report.verify.ok() { "ok" } else { "failed" }
+                ),
+            ))
+        }
+        // A sync that failed raised the cancel flag; its error is the cause, not "cancelled".
+        (_, Err(e)) => Err(fail(format!("the drive did not save the package: {e}"))),
+        (Err(e), Ok(_)) => Err(fail(e.to_string())),
     }
 }
 
@@ -606,7 +914,15 @@ fn run_with(dir: &Path, hook: &mut dyn FnMut(&str)) -> std::io::Result<i32> {
     match request.op.as_str() {
         "inspect" => {
             crate::log(format_args!("inspect {}", request.path));
-            match crate::inspect(Path::new(&request.path)) {
+            // Under the cancel watcher, as a build: a `.7z`'s param file may be behind a large
+            // solid block, and Stop ends the wait.
+            let cancel = Arc::new(AtomicBool::new(dir.join("cancel").exists()));
+            let finished = Arc::new(AtomicBool::new(false));
+            let watcher = watch_cancel(dir, Arc::clone(&cancel), Arc::clone(&finished));
+            let inspected = inspect_stoppable(Path::new(&request.path), &cancel);
+            finished.store(true, Ordering::Relaxed);
+            let _ = watcher.join();
+            match inspected.map(|(inspection, _)| inspection) {
                 Ok(inspection) => done(json!(inspection)),
                 Err(refusal) => fail(refusal),
             }
@@ -678,6 +994,24 @@ mod tests {
         assert_eq!(names(&dir), ["status.json"]);
     }
 
+    /// Inspecting a `.7z` (its param file may be behind a large solid block) is ended by Stop:
+    /// `convert_cancelled`, as a build is; the same archive inspects when not stopped.
+    #[test]
+    fn an_archive_inspect_is_ended_by_stop() {
+        let (tmp, game, dir) = setup("jobinspectstop");
+        let archive = tmp.0.join("s.7z");
+        crate::testing::sevenz_of(&game, &archive, true);
+        std::fs::write(dir.join("cancel"), b"").unwrap();
+        ask(&dir, json!({"id": "i", "op": "inspect", "path": archive}));
+        assert_eq!(run(&dir).unwrap(), 1);
+        let s = status(&dir);
+        assert_eq!(s["cause"], "convert_cancelled", "{s}");
+        std::fs::remove_file(dir.join("cancel")).unwrap();
+        ask(&dir, json!({"id": "i", "op": "inspect", "path": archive}));
+        assert_eq!(run(&dir).unwrap(), 0, "{}", status(&dir));
+        assert_eq!(status(&dir)["result"]["format"], "7z");
+    }
+
     #[test]
     fn failures_carry_a_cause() {
         let tmp = TempDir::new("jobfail");
@@ -720,6 +1054,23 @@ mod tests {
             run_with(Some(&r.to_string()))["cause"].clone()
         };
         assert_eq!(build(json!({"format": "iso"})), "convert_bad_request");
+        let ffpfsc = tmp.0.join("out.ffpfsc");
+        assert_eq!(
+            build(json!({"format": "ffpfsc", "dest": ffpfsc, "inner": "iso"})),
+            "convert_bad_request"
+        );
+        assert_eq!(
+            build(json!({"format": "ffpfsc", "dest": ffpfsc, "ffpfsc_level": "max"})),
+            "convert_bad_request"
+        );
+        // Named for what it is, and short enough for ShadowMountPlus to mount.
+        assert_eq!(build(json!({"format": "ffpfsc"})), "convert_bad_dest");
+        assert_eq!(
+            build(
+                json!({"format": "ffpfsc", "dest": tmp.0.join(format!("{}.ffpfsc", "g".repeat(60)))})
+            ),
+            "convert_bad_dest"
+        );
         assert_eq!(build(json!({"verify": "some"})), "convert_bad_request");
         assert_eq!(build(json!({"dest": "relative.exfat"})), "convert_bad_dest");
         assert_eq!(
@@ -808,6 +1159,214 @@ mod tests {
         assert_eq!(names(&out), ["g", "g.exfat", "g.ffpfs", "g.ffpkg"]);
     }
 
+    /// A `.ffpfsc` holding each image, at each level: done, and it reads back as the game (the
+    /// console's reader, through `inspect`).
+    #[test]
+    fn a_build_writes_a_ffpfsc_holding_each_image() {
+        let (tmp, game, dir) = setup("jobffpfsc");
+        // Some data deflate shrinks, some it can't.
+        std::fs::write(game.join("data/text.bin"), "a line of text ".repeat(20_000)).unwrap();
+        let noise: Vec<u8> = (0u32..300_000)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+            .collect();
+        std::fs::write(game.join("data/noise.bin"), noise).unwrap();
+        let want = crate::inspect(&game).unwrap();
+        for (inner, level) in [
+            ("", ""),
+            ("ffpkg", "fast"),
+            ("ffpfs", "smallest"),
+            ("exfat", "balanced"),
+        ] {
+            let dest = tmp.0.join(format!("c{inner}{level}.ffpfsc"));
+            ask(
+                &dir,
+                json!({"id": "f", "op": "build", "path": game, "dest": dest, "format": "ffpfsc",
+                    "inner": inner, "ffpfsc_level": level, "verify": "full"}),
+            );
+            let mut stages: Vec<String> = Vec::new();
+            let code = run_with(&dir, &mut |s| {
+                if stages.last().map(String::as_str) != Some(s) {
+                    stages.push(s.to_string());
+                }
+            })
+            .unwrap();
+            let s = status(&dir);
+            assert_eq!(code, 0, "{inner} {level}: {s}");
+            assert_eq!(s["result"]["format"], "ffpfsc");
+            assert!(stages.contains(&"compress".to_string()), "{stages:?}");
+            let i = crate::inspect(&dest).unwrap();
+            assert_eq!(i.format, "ffpfsc");
+            assert_eq!(i.title.as_deref(), Some("Test Game"), "{inner}");
+            assert_eq!((i.files, i.data_bytes), (want.files, want.data_bytes));
+            // Compressed: smaller than the game it holds.
+            assert!(i.size < want.data_bytes, "{inner} {level}: {}", i.size);
+            assert!(!tmp
+                .0
+                .join(format!("c{inner}{level}.ffpfsc.partial"))
+                .exists());
+        }
+    }
+
+    /// A game read straight from a `.zip` and a `.7z` (solid and not) into an image and a
+    /// folder: done, and the output holds the game; zstd packs in a folder from an archive are
+    /// refused (unpack it first).
+    #[test]
+    fn a_build_reads_the_game_in_an_archive() {
+        let (tmp, game, dir) = setup("jobarchive");
+        let want = crate::inspect(&game).unwrap();
+        for (archive, solid) in [("g.zip", false), ("g.7z", false), ("s.7z", true)] {
+            let path = tmp.0.join(archive);
+            if archive.ends_with(".zip") {
+                crate::testing::zip_of(&game, &path);
+            } else {
+                crate::testing::sevenz_of(&game, &path, solid);
+            }
+            for (format, ext) in [("ffpkg", ".ffpkg"), ("folder", "")] {
+                let dest = tmp
+                    .0
+                    .join(format!("out-{}{ext}", archive.replace('.', "-")));
+                ask(
+                    &dir,
+                    json!({"id": "a", "op": "build", "path": path, "dest": dest,
+                        "format": format, "verify": "full"}),
+                );
+                let code = run_with(&dir, &mut |_| {}).unwrap();
+                assert_eq!(code, 0, "{archive} -> {format}: {}", status(&dir));
+                let i = crate::inspect(&dest).unwrap();
+                assert_eq!(i.title.as_deref(), Some("Test Game"), "{archive} {format}");
+                assert_eq!((i.files, i.data_bytes), (want.files, want.data_bytes));
+                assert_eq!(i.empty_dirs, want.empty_dirs, "{archive} {format}");
+            }
+        }
+        let emu = tmp.0.join("libSceAmpr.sprx");
+        std::fs::write(&emu, b"EMULATOR").unwrap();
+        ask(
+            &dir,
+            json!({"id": "z", "op": "build", "path": tmp.0.join("g.zip"),
+                "dest": tmp.0.join("zf"), "format": "folder", "zstd": true,
+                "zstd_runtime": emu}),
+        );
+        assert_eq!(run_with(&dir, &mut |_| {}).unwrap(), 1);
+        assert_eq!(status(&dir)["cause"], "convert_archive_needs_unpack");
+        assert!(!tmp.0.join("zf").exists());
+    }
+
+    /// A `.pkg` at each level the console offers: done, through the builder's stages, and the
+    /// package reads back as the game; what a `.pkg` is not made from or with is refused.
+    #[test]
+    fn a_build_writes_a_pkg_at_each_level() {
+        let (tmp, game, dir) = setup("jobpkg");
+        let want = crate::inspect(&game).unwrap();
+        for level in ["stored", "fast", "balanced", ""] {
+            let dest = tmp.0.join(format!("p{level}.pkg"));
+            ask(
+                &dir,
+                json!({"id": "p", "op": "build", "path": game, "dest": dest, "format": "pkg",
+                    "pkg_level": level, "verify": if level == "fast" { "fast" } else { "full" }}),
+            );
+            let mut stages: Vec<String> = Vec::new();
+            let code = run_with(&dir, &mut |s| {
+                if stages.last().map(String::as_str) != Some(s) {
+                    stages.push(s.to_string());
+                }
+            })
+            .unwrap();
+            let s = status(&dir);
+            assert_eq!(code, 0, "{level}: {s}");
+            assert_eq!(s["result"]["format"], "pkg");
+            for st in ["compress", "write", "verify"] {
+                assert!(stages.contains(&st.to_string()), "{level}: {stages:?}");
+            }
+            let mut pkg = ps5upload_fpkg::source::open(&dest).unwrap();
+            assert!(
+                pkg.files().iter().any(|f| f.path == "data/level.bin"),
+                "{level}"
+            );
+            assert_eq!(
+                ps5upload_fpkg::source::read_small(pkg.as_mut(), "data/level.bin", 1 << 20)
+                    .unwrap(),
+                vec![7u8; 100_000]
+            );
+            assert!(want.files <= pkg.files().len() as u64);
+            assert!(!tmp.0.join(format!("p{level}.pkg.partial")).exists());
+        }
+        let refused = |extra: serde_json::Value| {
+            let mut r = json!({"id": "r", "op": "build", "path": game,
+                "dest": tmp.0.join("r.pkg"), "format": "pkg"});
+            for (k, v) in extra.as_object().unwrap() {
+                r[k] = v.clone();
+            }
+            ask(&dir, r);
+            assert_eq!(run_with(&dir, &mut |_| {}).unwrap(), 1);
+            status(&dir)["cause"].clone()
+        };
+        assert_eq!(
+            refused(json!({"pkg_level": "smallest"})),
+            "convert_bad_request"
+        );
+        assert_eq!(refused(json!({"zstd": true})), "convert_bad_request");
+        assert_eq!(
+            refused(json!({"dest": tmp.0.join("r.PKG")})),
+            "convert_bad_dest"
+        );
+        let zip = tmp.0.join("g.zip");
+        crate::testing::zip_of(&game, &zip);
+        assert_eq!(
+            refused(json!({"path": zip})),
+            "convert_archive_needs_unpack"
+        );
+        assert!(!tmp.0.join("r.pkg").exists());
+    }
+
+    /// A `.pkg` named `g.pkg.pkg`: the builder writes that name (one `.pkg` taken off for its
+    /// stem, not every one), so the sync, claim and cleanup watch the `.partial` it writes.
+    #[test]
+    fn a_pkg_named_with_two_pkg_extensions_keeps_its_name() {
+        for name in ["g.pkg", "g.pkg.pkg", "a.pkg.pkg.pkg"] {
+            let dest = Path::new("/data/out").join(name);
+            let stem = pkg_stem(&dest);
+            assert_eq!(Path::new("/data/out").join(format!("{stem}.pkg")), dest);
+            assert_eq!(
+                Path::new("/data/out").join(format!("{stem}.pkg.partial")),
+                folder_build::partial_of(&dest)
+            );
+        }
+        let (tmp, game, dir) = setup("jobpkgpkg");
+        let dest = tmp.0.join("g.pkg.pkg");
+        ask(
+            &dir,
+            json!({"id": "p", "op": "build", "path": game, "dest": dest, "format": "pkg",
+                "pkg_level": "stored", "verify": "full"}),
+        );
+        let code = run_with(&dir, &mut |_| {}).unwrap();
+        assert_eq!(code, 0, "{}", status(&dir));
+        assert!(dest.is_file());
+        assert!(!tmp.0.join("g.pkg").exists());
+        assert!(!tmp.0.join("g.pkg.pkg.partial").exists());
+    }
+
+    /// Stop while a `.pkg` is read back: `convert_cancelled`, and nothing is left.
+    #[test]
+    fn a_stop_during_a_pkg_verify_is_cancelled() {
+        let (tmp, game, _dir) = setup("jobpkgstop");
+        let dest = tmp.0.join("s.pkg");
+        let request: Request = serde_json::from_value(json!({"id": "p", "op": "build",
+            "path": game, "dest": dest, "format": "pkg", "pkg_level": "stored",
+            "verify": "full"}))
+        .unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&cancel);
+        let refusal = build(&request, &cancel, &mut |stage, _, _| {
+            if stage == "verify" {
+                flag.store(true, Ordering::Relaxed);
+            }
+        })
+        .unwrap_err();
+        assert_eq!(refusal.cause, "convert_cancelled", "{refusal}");
+        assert!(!dest.exists());
+        assert!(!tmp.0.join("s.pkg.partial").exists());
+    }
+
     /// zstd packs with the emulator the request names: an image and a folder, each reading
     /// back through its packs.
     #[test]
@@ -817,7 +1376,11 @@ mod tests {
         std::fs::write(game.join("data/table.bin"), "asset 7 ".repeat(40_000)).unwrap();
         let emu = tmp.0.join("libSceAmpr.sprx");
         std::fs::write(&emu, b"EMULATOR").unwrap();
-        for (format, name) in [("exfat", "z.exfat"), ("folder", "z")] {
+        for (format, name) in [
+            ("exfat", "z.exfat"),
+            ("ffpfsc", "z.ffpfsc"),
+            ("folder", "z"),
+        ] {
             let dest = tmp.0.join(name);
             ask(
                 &dir,
@@ -851,7 +1414,12 @@ mod tests {
         let (tmp, game, dir) = setup("jobcancel");
         // Large enough that the write stage reports more than once.
         std::fs::write(game.join("data/big.bin"), vec![3u8; 24 << 20]).unwrap();
-        for (format, name) in [("exfat", "c.exfat"), ("folder", "c")] {
+        for (format, name) in [
+            ("exfat", "c.exfat"),
+            ("ffpfsc", "c.ffpfsc"),
+            ("pkg", "c.pkg"),
+            ("folder", "c"),
+        ] {
             let dest = tmp.0.join(name);
             let _ = std::fs::remove_file(dir.join("cancel"));
             ask(
@@ -860,7 +1428,7 @@ mod tests {
             );
             let cancel = dir.join("cancel");
             let code = run_with(&dir, &mut |s| {
-                if s == "write" && !cancel.exists() {
+                if (s == "write" || s == "compress") && !cancel.exists() {
                     std::fs::write(&cancel, b"").unwrap();
                     // Long enough for the watcher to see it.
                     std::thread::sleep(CANCEL_EVERY * 3);
@@ -965,8 +1533,12 @@ mod tests {
             source: std::env::temp_dir(),
             dest: std::env::temp_dir().join("g.exfat"),
             image: Some(ImageFormat::Exfat),
+            ffpfsc: None,
             mode: VerifyMode::Full,
             zstd: None,
+            pkg: None,
+            content_id: None,
+            opened: None,
         };
         let fat = safe_write::Probe {
             fs_type: "msdosfs".into(),

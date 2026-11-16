@@ -101,6 +101,9 @@ pub struct SysPeer {
     pub name: String,
     pub ipv4: Option<Ipv4Addr>,
     pub online: bool,
+    /// The OS its Tailscale reports ("android", "iOS", "macOS", "windows", "linux"; a PS5's
+    /// helper node says "ps5"). Empty when not given.
+    pub os: String,
 }
 
 /// What `tailscale status --json` says: the backend state and the peers.
@@ -149,6 +152,11 @@ pub fn parse_status(text: &str) -> Option<SysStatus> {
                 name: label(p),
                 ipv4: first_v4(p),
                 online: p.get("Online").and_then(Value::as_bool).unwrap_or(false),
+                os: p
+                    .get("OS")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
             });
         }
     }
@@ -372,8 +380,8 @@ mod tests {
     fn reads_the_cli_status() {
         let text = r#"{"BackendState":"Running","Self":{"TailscaleIPs":["100.64.0.2","fd7a:115c:a1e0::2"]},
             "Peer":{"nodekey:a":{"HostName":"Living Room","DNSName":"living-room-ps5u.tail1.ts.net.",
-            "TailscaleIPs":["100.64.0.9"],"Online":true},
-            "nodekey:b":{"HostName":"phone","DNSName":"","TailscaleIPs":["fd7a:115c:a1e0::3"],"Online":false}}}"#;
+            "TailscaleIPs":["100.64.0.9"],"Online":true,"OS":"ps5"},
+            "nodekey:b":{"HostName":"phone","DNSName":"","TailscaleIPs":["fd7a:115c:a1e0::3"],"Online":false,"OS":"android"}}}"#;
         let st = parse_status(text).unwrap();
         assert_eq!(st.state, "Running");
         assert_eq!(st.self_ipv4, Some(Ipv4Addr::new(100, 64, 0, 2)));
@@ -383,6 +391,8 @@ mod tests {
         assert!(st.peers[0].online);
         assert_eq!(st.peers[1].name, "phone");
         assert_eq!(st.peers[1].ipv4, None);
+        assert_eq!(st.peers[0].os, "ps5");
+        assert_eq!(st.peers[1].os, "android");
         assert!(parse_status("not json").is_none());
     }
 }

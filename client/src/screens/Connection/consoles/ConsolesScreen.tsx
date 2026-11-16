@@ -1,9 +1,9 @@
-// The Consoles page (the Connection route, so its links still work): one card per PS5 on this
-// app's list, each saying how it is, how it is reached and who may use it, and one Add a PS5
-// sheet. A console that is not ready shows its setup checklist inside its card; nothing else on
-// the page is setup furniture.
+// The Consoles page (the Connection route, so its links still work): the card of the PS5 picked at
+// the top (the console chips), saying how it is, how it is reached and who may use it, and one Add
+// a PS5 sheet. Another console's card is shown by picking its chip. A console that is not ready
+// shows its setup checklist inside its card; nothing else on the page is setup furniture.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
 import { Cable, Plus, Radar } from "lucide-react";
 
@@ -12,10 +12,28 @@ import { useTr } from "../../../state/lang";
 import { useRosterStore } from "../../../state/roster";
 import { useTailnet } from "../../../state/useTailnet";
 import { getAppVersion } from "../../../lib/appVersion";
-import { ConsoleCard } from "./ConsoleCard";
+import { ConsoleCard, ConsoleMeshPoll } from "./ConsoleCard";
 import { AddConsoleSheet } from "./AddConsoleSheet";
 import { TailnetFound } from "./TailnetFound";
 import { parseInvite } from "./model";
+
+/** A link that opens one console's card (`?console=<id>`, maybe `&devices=1`): the console to pick
+ *  at the top first (null when it is already picked, or not on the list), and the address without
+ *  the parameters once they are used. `devices` stays while a console is being picked, for the
+ *  card that mounts for it. Null when the address has neither. */
+export function openCardLink(
+  params: URLSearchParams,
+  activeId: string | null,
+  ids: readonly string[],
+): { pick: string | null; next: URLSearchParams } | null {
+  const focusId = params.get("console");
+  if (!focusId && !params.has("devices")) return null;
+  const next = new URLSearchParams(params);
+  next.delete("console");
+  const pick = focusId && focusId !== activeId && ids.includes(focusId) ? focusId : null;
+  if (!pick) next.delete("devices");
+  return { pick, next };
+}
 
 /** First run: nothing on the list yet. */
 export function EmptyConsoles({ onAdd }: { onAdd: () => void }) {
@@ -51,10 +69,9 @@ export default function ConsolesScreen() {
   const { status: appTailnet, setPaused: setTailnetPaused, busy: tailnetBusy } = useTailnet();
   const [params, setParams] = useSearchParams();
   const [appVersion, setAppVersion] = useState<string | null>(null);
-  /** This page's own root: another console's hidden copy of the page has the same cards. */
-  const root = useRef<HTMLDivElement>(null);
   const invite = useMemo(() => parseInvite(params.get("invite") ?? ""), [params]);
   const focusId = params.get("console");
+  const wantDevices = params.get("devices") === "1";
   const [addOpen, setAddOpen] = useState(() => profiles.length === 0 || !!invite || params.get("add") === "1");
 
   useEffect(() => {
@@ -69,12 +86,20 @@ export default function ConsolesScreen() {
     if (invite || wantAdd) setAddOpen(true);
   }, [invite, wantAdd]);
 
-  // "Open its card" (the console picker): scroll to it.
+  // "Open its card" (`?console=<id>`, from Manage PS5s): the page shows the console picked at the
+  // top, so the link picks that console first. The parameter is then dropped, or picking another
+  // console at the top would bring this one back. `devices=1` (its device list open) is kept for
+  // the card that mounts for it, and dropped once that card has read it.
   useEffect(() => {
-    if (!focusId) return;
-    const el = root.current?.querySelector(`[data-console="${CSS.escape(focusId)}"]`);
-    el?.scrollIntoView({ block: "start", behavior: "smooth" });
-  }, [focusId, profiles.length]);
+    const link = openCardLink(
+      params,
+      activeId,
+      profiles.map((p) => p.id),
+    );
+    if (!link) return;
+    if (link.pick) setActive(link.pick);
+    setParams(link.next, { replace: true });
+  }, [activeId, profiles, params, setActive, setParams]);
 
   const closeAdd = () => {
     setAddOpen(false);
@@ -89,19 +114,20 @@ export default function ConsolesScreen() {
   const onAdded = useCallback(
     (id: string) => {
       setAddOpen(false);
+      // The new console is picked at the top, so its card is the one on show.
       setActive(id);
-      const next = new URLSearchParams();
-      next.set("console", id);
-      setParams(next, { replace: true });
+      setParams(new URLSearchParams(), { replace: true });
     },
     [setActive, setParams],
   );
 
-  // The selected console first: it is the one the other screens act on.
-  const ordered = [...profiles].sort((a, b) => Number(b.id === activeId) - Number(a.id === activeId));
+  // Only the console picked at the top (the console chips, or the sidebar picker): another
+  // console's card is one click on its chip away. The others' device lists are still read, so a
+  // device asking to use one of them is prompted for here as well.
+  const shown = profiles.find((p) => p.id === activeId) ?? profiles[0] ?? null;
 
   return (
-    <div className="app-page" ref={root}>
+    <div className="app-page">
       <PageHeader
         icon={Cable}
         title={tr("cs_title", undefined, "Consoles")}
@@ -126,16 +152,21 @@ export default function ConsolesScreen() {
           onResume={() => void setTailnetPaused(false)}
           resuming={tailnetBusy}
         />
-        {ordered.map((p) => (
+        {shown ? (
           <ConsoleCard
-            key={p.id}
-            profile={p}
+            // A different console is a new card: nothing opened on one carries over to the next.
+            key={shown.id}
+            profile={shown}
             appTailnet={appTailnet}
             appVersion={appVersion}
-            highlight={p.id === focusId}
-            defaultOpen={p.id === focusId && params.get("devices") === "1"}
+            defaultOpen={wantDevices && (!focusId || focusId === shown.id)}
           />
-        ))}
+        ) : null}
+        {profiles
+          .filter((p) => p.id !== shown?.id)
+          .map((p) => (
+            <ConsoleMeshPoll key={p.id} host={p.host.trim()} />
+          ))}
       </div>
       <AddConsoleSheet
         open={addOpen}

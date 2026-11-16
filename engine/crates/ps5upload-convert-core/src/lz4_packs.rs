@@ -5,10 +5,11 @@
 //! the same packed game to a console or a server.
 //!
 //! The volumes are packed into a spool folder first ([`spool`]), and the output is written from
-//! the packed game that spool gives ([`Overlay`]). Forge makes its LZ4 volumes on demand
-//! instead (a measure pass, then each chunk compressed again as it is written), but its LZ4
-//! writer is its own; this one stores identical blocks once per lane and places chunks by lane
-//! and I/O page, which a second pass would have to reproduce exactly, so the spool stays.
+//! the packed game that spool gives ([`Overlay`]). An image streamed to a console or a server
+//! takes no spool ([`measured`]): as Forge does, a measure pass places every chunk (identical
+//! blocks stored once per lane, chunks placed by lane and I/O page), and the manifest it gives
+//! is that layout, so each chunk is compressed again into its measured place as the volume is
+//! read, checked against the measure (`ampr_pack::regen`).
 //!
 //! Whatever the output, it is read back twice: as written (the image's or folder's own check
 //! against the packed game), then through the packs ([`read_back`]): every file of the game
@@ -78,6 +79,35 @@ pub fn spool<'a>(
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<Spooled<'a>, String> {
+    pack_game(source, packs, Some(spool), mtime, to, cancel, stage)
+}
+
+/// [`spool`] with nothing written on this computer: the packs are measured (stage `pack`), and
+/// the packed game's volumes are made again from `source` as the output reads them
+/// (`ampr_pack::image::prepare_streamed`), the same bytes a spool holds, every chunk checked
+/// against the measure; a read that cannot make one as measured fails
+/// (`ampr_pack::regen::not_made_again` says so). Twice the compression.
+pub fn measured<'a>(
+    source: &'a mut dyn SourceTree,
+    packs: &Lz4Packs,
+    mtime: i64,
+    to: &str,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> Result<Spooled<'a>, String> {
+    pack_game(source, packs, None, mtime, to, cancel, stage)
+}
+
+/// [`spool`] into `spool`, or [`measured`] without one.
+fn pack_game<'a>(
+    source: &'a mut dyn SourceTree,
+    packs: &Lz4Packs,
+    spool: Option<&Path>,
+    mtime: i64,
+    to: &str,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> Result<Spooled<'a>, String> {
     if let Some(why) = ampr_pack::image::refusal(source) {
         return Err(why);
     }
@@ -96,7 +126,10 @@ pub fn spool<'a>(
             progress: Some(&mut progress),
             cancel: Some(cancel),
         };
-        ampr_pack::image::prepare(source, &config, spool, mtime, &mut control)
+        match spool {
+            Some(spool) => ampr_pack::image::prepare(source, &config, spool, mtime, &mut control),
+            None => ampr_pack::image::prepare_streamed(source, &config, mtime, &mut control),
+        }
     };
     let (tree, report) = prepared.map_err(|e| e.to_string())?;
     let s = &report.stats;
@@ -165,6 +198,10 @@ impl<'a> Only<'a> {
 }
 
 impl SourceTree for Only<'_> {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }

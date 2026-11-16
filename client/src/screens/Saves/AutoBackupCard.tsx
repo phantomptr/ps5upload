@@ -5,11 +5,58 @@ import { Button } from "../../components";
 import { pickPath } from "../../lib/pickPath";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { formatDate } from "../../lib/formatDate";
-import { clampKeep, useAutoSaveBackupStore } from "../../state/autoSaveBackup";
+import {
+  DEFAULT_INTERVAL_MINUTES,
+  clampKeep,
+  intervalChoices,
+  useAutoSaveBackupStore,
+} from "../../state/autoSaveBackup";
 import { useTr } from "../../state/lang";
 
-/** The automatic save backup's switch, folder and how many versions it keeps. The engine runs
- *  the backups (with no window open in Docker); this card changes its settings. */
+type Tr = ReturnType<typeof useTr>;
+
+/** "5 min", "1 hour", "6 hours", "1 day" … */
+export function intervalLabel(minutes: number, tr: Tr): string {
+  if (minutes === 1440) return tr("saves_auto_every_day", undefined, "1 day");
+  if (minutes === 60) return tr("saves_auto_every_hour", undefined, "1 hour");
+  if (minutes > 60 && minutes % 60 === 0)
+    return tr("saves_auto_every_hours", { n: minutes / 60 }, "{n} hours");
+  return tr("saves_auto_every_minutes", { n: minutes }, "{n} min");
+}
+
+/** How often the engine backs up, from 5 minutes to a day. */
+export function IntervalChoice({
+  minutes,
+  onChange,
+}: {
+  minutes: number | undefined;
+  onChange: (minutes: number) => void;
+}) {
+  const tr = useTr();
+  return (
+    <>
+      <label htmlFor="saves-auto-every" className="text-xs text-[var(--color-muted)]">
+        {tr("saves_auto_every", undefined, "Back up every")}
+      </label>
+      <select
+        id="saves-auto-every"
+        data-testid="auto-save-backup-every"
+        value={minutes ?? DEFAULT_INTERVAL_MINUTES}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="select w-auto! justify-self-start text-sm sm:justify-self-end"
+      >
+        {intervalChoices(minutes).map((m) => (
+          <option key={m} value={m}>
+            {intervalLabel(m, tr)}
+          </option>
+        ))}
+      </select>
+    </>
+  );
+}
+
+/** The automatic save backup's switch, folder, how often and how many versions it keeps. The
+ *  engine runs the backups (with no window open in Docker); this card changes its settings. */
 export default function AutoBackupCard() {
   const tr = useTr();
   const { settings, status, error, refresh, set, runNow } = useAutoSaveBackupStore();
@@ -64,14 +111,14 @@ export default function AutoBackupCard() {
       <p className="mb-3 text-xs text-[var(--color-muted)]">
         {desktop
           ? tr(
-              "saves_auto_note_engine",
+              "saves_auto_note_engine_v2",
               undefined,
-              "While PS5Upload runs, saves that changed on your consoles are copied to this folder every ten minutes. A save still being written is left for the next round.",
+              "While PS5Upload runs, saves that changed on your consoles are copied to this folder as often as chosen below. A save still being written is left for the next round.",
             )
           : tr(
-              "saves_auto_note_server",
+              "saves_auto_note_server_v2",
               undefined,
-              "The engine copies saves that changed on your consoles to this folder every ten minutes, even with no browser open. In Docker, use a folder inside a mounted volume, such as /data/save-backups.",
+              "The engine copies saves that changed on your consoles to this folder as often as chosen below, even with no browser open. In Docker, use a folder inside a mounted volume, such as /data/save-backups.",
             )}
       </p>
       <div className="grid gap-2 text-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
@@ -115,7 +162,13 @@ export default function AutoBackupCard() {
             </Button>
           </>
         )}
-        <label htmlFor="saves-auto-keep" className="text-xs text-[var(--color-muted)]">
+        <IntervalChoice
+          minutes={settings.interval_minutes}
+          onChange={(interval_minutes) => {
+            if (interval_minutes !== settings.interval_minutes) void set({ interval_minutes });
+          }}
+        />
+        <label htmlFor="saves-auto-keep"className="text-xs text-[var(--color-muted)]">
           {tr("saves_auto_keep", undefined, "Versions to keep")}
         </label>
         <input

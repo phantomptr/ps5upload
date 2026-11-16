@@ -100,6 +100,12 @@ pub trait SourceTree: Send {
     fn notes(&self) -> Vec<String> {
         Vec::new()
     }
+
+    /// Lets go of what reading holds beyond the listing (an archive's decoder and the files it
+    /// kept on the way), before the same source is opened again: a read-back then never holds
+    /// two decoders. A read after it starts over. Nothing for most sources; a tree that wraps
+    /// another passes it on.
+    fn release(&mut self) {}
 }
 
 /// How often [`SourceTree::read_heads`] reports progress (and can be stopped).
@@ -970,12 +976,23 @@ fn scan_for(tree: &mut dyn SourceTree, rel: &str, start: u64, len: u64, needle: 
 /// a stale one is worth saying, even though a package always carries a freshly generated one.
 fn ampr_index_check(tree: &mut dyn SourceTree) -> (bool, String) {
     let name = crate::ampr_index::NAME;
+    let packs = packed_kind(tree).ok().flatten();
     let Some(at) = tree
         .files()
         .iter()
         .find(|f| f.path.eq_ignore_ascii_case(name))
         .map(|f| f.path.clone())
     else {
+        if packs.is_some() {
+            return (
+                false,
+                format!(
+                    "the game is in {} asset packs and has no {name}: the AMPR runtime finds a \
+                     packed file only through its record there, so none would be served",
+                    packs.unwrap_or_default()
+                ),
+            );
+        }
         return (
             true,
             format!(
@@ -984,22 +1001,62 @@ fn ampr_index_check(tree: &mut dyn SourceTree) -> (bool, String) {
             ),
         );
     };
-    let regenerated = "a package or a game image carries one generated from its files \
-                       instead";
-    let Some(listed) = read_small(tree, &at, MAX_INDEX_BYTES)
-        .ok()
-        .and_then(|d| crate::ampr_index::parse(&d))
-    else {
+    // A packed game's index goes into a package or image as it is; anyone else's is made again.
+    let regenerated = if packs.is_some() {
+        "a packed game keeps its index as it is, so convert it again (zstd packs) or rebuild \
+         the index"
+    } else {
+        "a package or a game image carries one generated from its files instead"
+    };
+    let Ok(bytes) = read_small(tree, &at, MAX_INDEX_BYTES) else {
+        return (
+            false,
+            format!("the folder's {name} could not be read: {regenerated}"),
+        );
+    };
+    let Some(listed) = crate::ampr_index::parse(&bytes) else {
         return (
             false,
             format!("the folder's {name} is not a readable AMPRIDX3 index: {regenerated}"),
         );
     };
-    let on_disk: std::collections::HashMap<String, u64> = tree
-        .files()
-        .iter()
-        .filter(|f| !f.path.eq_ignore_ascii_case(name))
-        .map(|f| (f.path.to_ascii_lowercase(), f.size))
+    // The runtime's own checks: one bad record and it refuses the whole file.
+    if let Err(why) = crate::ampr_index::check(&bytes) {
+        return (false, format!("{why}; {regenerated}"));
+    }
+    let joined = match packs {
+        Some("zstd") => crate::ampr_index::zstd_packed(tree).and_then(|packed| {
+            crate::ampr_index::check_zstd(&bytes, packed.iter().map(|(p, s)| (p.as_str(), *s)))?;
+            Ok(Some(crate::ampr_index::zstd_listing_of(
+                tree.files(),
+                packed,
+            )))
+        }),
+        Some(_) => read_small(tree, "ampr_assets.index", MAX_INDEX_BYTES)
+            .map_err(|e| e.to_string())
+            .and_then(|m| crate::ampr_pack::format::Manifest::parse(&m).map_err(|e| e.to_string()))
+            .and_then(|m| crate::ampr_index::check_lz4(&bytes, &m.files))
+            .map(|()| None),
+        None => Ok(Some(crate::ampr_index::listing(tree.files()))),
+    };
+    let expected = match joined {
+        Err(why) => return (false, format!("{why}; {regenerated}")),
+        // The LZ4 manifest matched record by record: nothing more to compare.
+        Ok(None) => {
+            return (
+                true,
+                format!(
+                    "the game's {name} matches its LZ4 packs record by record ({} files)",
+                    listed.len()
+                ),
+            )
+        }
+        Ok(Some(expected)) => expected,
+    };
+    let on_disk: std::collections::HashMap<String, u64> = expected
+        .into_iter()
+        .filter(|(p, _)| !p.eq_ignore_ascii_case(name))
+        .map(|(p, s)| (p.to_ascii_lowercase(), s))
         .collect();
     let mut first: Option<String> = None;
     let (mut gone, mut resized) = (0usize, 0usize);
@@ -1109,7 +1166,8 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Readiness {
     // like a broken package rather than a missing dependency. Say so before the build.
     // Spider-Man 2 built without `ampr_emu.index` exited at startup ("returned from main",
     // CE-108255-1); the same build with the index at the folder root played (FW 5.10).
-    if imports_ampr(tree, "eboot.bin") {
+    // A game in packs is read through its index whatever its eboot imports.
+    if imports_ampr(tree, "eboot.bin") || packed_kind(tree).ok().flatten().is_some() {
         let (ok, detail) = ampr_index_check(tree);
         r.push("ampr_emu.index for a libSceAmpr title", ok, detail);
     }
@@ -1755,6 +1813,59 @@ mod tests {
         std::fs::write(dir.join("ampr_emu.index"), b"AMPRIDX3").unwrap();
         let ampr = check(&dir);
         assert!(!ampr.ok, "{}", ampr.detail);
+
+        // And one that reads but that the AMPR runtime would refuse whole (a slot that holds
+        // another hash), even though it lists the folder.
+        std::fs::write(dir.join("eboot.bin"), &eboot).unwrap();
+        let mut refused = index.clone();
+        let slots_at = u64::from_le_bytes(refused[0x20..0x28].try_into().unwrap()) as usize;
+        let used = (0..4)
+            .find(|s| refused[slots_at + s * 16 + 8] != 0)
+            .unwrap();
+        refused[slots_at + used * 16] ^= 1;
+        std::fs::write(dir.join("ampr_emu.index"), &refused).unwrap();
+        let ampr = check(&dir);
+        assert!(!ampr.ok, "{}", ampr.detail);
+        assert!(
+            ampr.detail.contains("AMPR runtime accepts"),
+            "{}",
+            ampr.detail
+        );
+
+        // A game in zstd packs: its index lists the packed files, which are not on disk, at
+        // the sizes ampr_zstd.index gives them; another size is the runtime refusing the packs.
+        let packed = [("data/big.bin", 1_000_000u64)];
+        std::fs::write(
+            dir.join("ampr_zstd.index"),
+            crate::ampr_index::tests::zstd_index(&packed),
+        )
+        .unwrap();
+        std::fs::write(dir.join("ampr_zstd-000.pak"), [0u8; 64]).unwrap();
+        let with = |size: u64| {
+            let mut l = listed.clone();
+            l.push(("data/big.bin".to_string(), size));
+            crate::ampr_index::build(&l, 0).unwrap()
+        };
+        std::fs::write(dir.join("ampr_emu.index"), with(1_000_000)).unwrap();
+        let ampr = check(&dir);
+        assert!(ampr.ok, "{}", ampr.detail);
+        std::fs::write(dir.join("ampr_emu.index"), with(999)).unwrap();
+        let ampr = check(&dir);
+        assert!(!ampr.ok, "{}", ampr.detail);
+        assert!(
+            ampr.detail.contains("serves no packed file"),
+            "{}",
+            ampr.detail
+        );
+        // Without the packed file listed, it is never served.
+        std::fs::write(dir.join("ampr_emu.index"), &index).unwrap();
+        let ampr = check(&dir);
+        assert!(!ampr.ok, "{}", ampr.detail);
+        assert!(
+            ampr.detail.contains("not in ampr_emu.index"),
+            "{}",
+            ampr.detail
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

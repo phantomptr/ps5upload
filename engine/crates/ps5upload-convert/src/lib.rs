@@ -6,17 +6,31 @@
 //! `request.json`, this program rewrites `status.json`, and a `cancel` file asks it to stop.
 //!
 //! It inspects a source ([`inspect`]) and builds one ([`job`]): a game folder, `.exfat`,
-//! `.ffpkg` or `.ffpfs` on the console into a `.exfat`, `.ffpkg`, `.ffpfs` or a folder, zstd
-//! packs optional, read back before it gets its name. The build code is
-//! `ps5upload-convert-core`, the same the engine runs on a computer.
+//! `.ffpkg`, `.ffpfs` or `.ffpfsc`, or the game folder inside a `.zip` or `.7z` (read in place,
+//! nothing unpacked), on the console into a `.exfat`, `.ffpkg`, `.ffpfs`, a `.ffpfsc` holding one
+//! of those, a folder (zstd packs optional) or a debug `.pkg` (written, not installed), read back
+//! before it gets its name. A `.rar` is refused ([`RAR_REFUSAL`] says why). The build code is
+//! `ps5upload-convert-core` (and `ps5upload-fpkg`'s package builder), the same the engine runs
+//! on a computer.
 
 #[cfg(any(target_env = "ps5", test))]
 pub mod alloc;
 pub mod job;
 
 use std::path::Path;
+use std::sync::Arc;
 
 use ps5upload_fpkg::source::{self, SourceTree};
+
+/// Why a `.rar` is not converted on the console. UnRAR's licence may not be combined with
+/// third-party GPL code that carries no UnRAR exception, and this program links some (the AMPR
+/// emulation port in `ps5upload-fpkg`): the engine keeps UnRAR in a program of its own for that
+/// reason (LICENSES/UnRAR-exception.md), and a PS5 payload can't start a helper program to talk
+/// to over pipes (it can't fork). PS5 Dump Forge links UnRAR into its PS5 program because all of
+/// its own code carries the exception; ours does not.
+pub const RAR_REFUSAL: &str = "a .rar can't be converted on the console: UnRAR may not be linked \
+                               into the converter (its licence), so unpack it first (Files) or \
+                               convert it on a computer";
 
 /// One line to the log (stderr; on the PS5 that is `convert.log` in the job folder). Never
 /// `eprintln!`: that panics when the write fails, and a full drive must not end a job that way.
@@ -29,7 +43,7 @@ pub fn log(line: std::fmt::Arguments<'_>) {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Inspection {
     pub path: String,
-    /// `folder`, `exfat`, `ffpkg` or `ffpfs`.
+    /// `folder`, `exfat`, `ffpkg`, `ffpfs`, `ffpfsc`, `zip` or `7z`.
     pub format: String,
     /// The image file's size, or for a folder the sum of its files.
     pub size: u64,
@@ -64,8 +78,10 @@ impl std::fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
-/// The formats this program reads: a game folder and the images that hold one unencrypted.
-/// A `.pkg`, an archive and a `.ffpfsc` stay with the engine on a computer for now.
+/// The formats this program reads: a game folder, the images that hold one unencrypted (a
+/// `.ffpfsc` too, the read-back of one written here reads it the same way), and a `.zip` or
+/// `.7z` holding a game folder. A `.pkg` stays with the engine on a computer; a `.rar` is
+/// refused ([`RAR_REFUSAL`]).
 fn format_of(path: &Path) -> Result<&'static str, Refusal> {
     let unsupported = |detail: String| Refusal {
         cause: "convert_unsupported_source",
@@ -95,11 +111,54 @@ fn format_of(path: &Path) -> Result<&'static str, Refusal> {
         "exfat" => Ok("exfat"),
         "ffpkg" => Ok("ffpkg"),
         "ffpfs" => Ok("ffpfs"),
+        "ffpfsc" => Ok("ffpfsc"),
+        "zip" => Ok("zip"),
+        "7z" => Ok("7z"),
+        "rar" => Err(Refusal {
+            cause: "convert_rar_unsupported",
+            detail: format!("{}: {RAR_REFUSAL}", path.display()),
+        }),
         _ => Err(unsupported(format!(
-            "{} is neither a game folder nor a .exfat, .ffpkg or .ffpfs image",
+            "{} is neither a game folder, a .exfat, .ffpkg, .ffpfs or .ffpfsc image, nor a .zip \
+             or .7z",
             path.display()
         ))),
     }
+}
+
+/// Whether `format` (as [`format_of`] names it) is an archive read in place.
+pub fn is_archive(format: &str) -> bool {
+    matches!(format, "zip" | "7z")
+}
+
+/// Why an archive could not be opened as a game, as a cause: an image or package inside it (it
+/// has to be unpacked first), no game or more than one, a password, else damaged or unreadable.
+pub fn archive_refusal(path: &Path, detail: String) -> Refusal {
+    let cause = if detail.starts_with(ps5upload_convert_core::archive_tree::NEEDS_UNPACK) {
+        "convert_archive_needs_unpack"
+    } else if detail.starts_with("no game in the archive")
+        || detail.starts_with("more than one game in the archive")
+    {
+        "convert_archive_no_game"
+    } else if detail.contains("password-protected") {
+        "convert_archive_password"
+    } else {
+        "convert_source_unreadable"
+    };
+    Refusal {
+        cause,
+        detail: format!("{}: {detail}", path.display()),
+    }
+}
+
+/// The game folder in the archive at `path`, read in place; `stop` ends a read waiting on it.
+pub fn open_archive(
+    path: &Path,
+    stop: ps5upload_archive::stream::Stop,
+) -> Result<Box<dyn SourceTree>, Refusal> {
+    ps5upload_convert_core::archive_tree::open(path, None, stop, None)
+        .map(|t| Box::new(t) as Box<dyn SourceTree>)
+        .map_err(|detail| archive_refusal(path, detail))
 }
 
 /// A string field of a `param.json`.
@@ -133,12 +192,27 @@ pub fn data_bytes(files: &[source::SourceFile]) -> Result<u64, String> {
 /// Inspects the game folder or image at `path`. Reads the file list and `sce_sys/param.json`;
 /// never the game's data.
 pub fn inspect(path: &Path) -> Result<Inspection, Refusal> {
+    inspect_keeping(path, Arc::new(|| false)).map(|(inspection, _)| inspection)
+}
+
+/// [`inspect`], with `stop` ending a read waiting on an archive (a `.7z`'s param file may sit
+/// behind a large solid block), and handing back the archive it opened (`None` for a folder or
+/// an image) so a build reads it without opening it a second time.
+pub fn inspect_keeping(
+    path: &Path,
+    stop: ps5upload_archive::stream::Stop,
+) -> Result<(Inspection, Option<Box<dyn SourceTree>>), Refusal> {
     let format = format_of(path)?;
     let unreadable = |e: ps5upload_fpkg::Error| Refusal {
         cause: "convert_source_unreadable",
         detail: format!("{}: {e}", path.display()),
     };
-    let mut tree = source::open(path).map_err(unreadable)?;
+    let mut tree = if is_archive(format) {
+        // The listing and the game's param file: never the game's data.
+        open_archive(path, stop)?
+    } else {
+        source::open(path).map_err(unreadable)?
+    };
     let files = tree.files().len() as u64;
     let data_bytes = data_bytes(tree.files()).map_err(|detail| Refusal {
         cause: "convert_source_unreadable",
@@ -164,7 +238,8 @@ pub fn inspect(path: &Path) -> Result<Inspection, Refusal> {
         master_version: None,
         packed: None,
         has_eboot: has(tree.as_ref(), "eboot.bin"),
-        warnings: Vec::new(),
+        // What the conversion leaves out of an archive (files beside its game folder).
+        warnings: tree.notes(),
     };
 
     // A PS4 game folder has a param.sfo instead; reading it comes with the engine's full
@@ -201,7 +276,7 @@ pub fn inspect(path: &Path) -> Result<Inspection, Refusal> {
         Ok(kind) => out.packed = kind.map(str::to_string),
         Err(e) => out.warnings.push(format!("asset pack index: {e}")),
     }
-    Ok(out)
+    Ok((out, is_archive(format).then_some(tree)))
 }
 
 #[cfg(test)]
@@ -244,6 +319,78 @@ pub(crate) mod testing {
         std::fs::write(game.join("eboot.bin"), [0x7F, b'E', b'L', b'F', 0, 0, 0, 0]).unwrap();
         std::fs::write(game.join("data/level.bin"), vec![7u8; 100_000]).unwrap();
         game
+    }
+
+    /// The files under `dir`, as `(path relative to dir, bytes)`, sorted.
+    fn files_of(dir: &Path) -> Vec<(String, Vec<u8>)> {
+        fn walk(root: &Path, at: &Path, out: &mut Vec<(String, Vec<u8>)>) {
+            for e in std::fs::read_dir(at).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    walk(root, &p, out);
+                } else {
+                    let rel = p
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    out.push((rel, std::fs::read(&p).unwrap()));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(dir, dir, &mut out);
+        out.sort();
+        out
+    }
+
+    /// `game` (a folder) as a deflate `.zip` at `path`, inside a folder of its own name (as
+    /// dumps are packed).
+    pub fn zip_of(game: &Path, path: &Path) {
+        use std::io::Write;
+        let name = game.file_name().unwrap().to_string_lossy().into_owned();
+        let mut zw = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (rel, bytes) in files_of(game) {
+            zw.start_file(format!("{name}/{rel}"), opts).unwrap();
+            zw.write_all(&bytes).unwrap();
+        }
+        zw.add_directory(format!("{name}/data/empty/"), opts)
+            .unwrap();
+        zw.finish().unwrap();
+    }
+
+    /// `game` as a `.7z` at `path`, every file in one LZMA2 block (`solid`) or one each.
+    pub fn sevenz_of(game: &Path, path: &Path, solid: bool) {
+        use sevenz_rust2::{ArchiveEntry, ArchiveWriter, SourceReader};
+        let name = game.file_name().unwrap().to_string_lossy().into_owned();
+        let files = files_of(game);
+        let mut w = ArchiveWriter::create(path).unwrap();
+        if solid {
+            let entries: Vec<ArchiveEntry> = (files.iter())
+                .map(|(p, _)| ArchiveEntry::new_file(&format!("{name}/{p}")))
+                .collect();
+            let readers: Vec<SourceReader<std::io::Cursor<Vec<u8>>>> = (files.iter())
+                .map(|(_, d)| SourceReader::new(std::io::Cursor::new(d.clone())))
+                .collect();
+            w.push_archive_entries(entries, readers).unwrap();
+        } else {
+            for (p, d) in &files {
+                w.push_archive_entry(
+                    ArchiveEntry::new_file(&format!("{name}/{p}")),
+                    Some(d.as_slice()),
+                )
+                .unwrap();
+            }
+        }
+        // The empty folder, after the files (a folder inside a solid block is refused).
+        w.push_archive_entry::<&[u8]>(
+            ArchiveEntry::new_directory(&format!("{name}/data/empty")),
+            None,
+        )
+        .unwrap();
+        w.finish().unwrap();
     }
 }
 
@@ -306,6 +453,74 @@ mod tests {
         assert_eq!(from_image.size, std::fs::metadata(&image).unwrap().len());
     }
 
+    /// The game folder inside a `.zip` and a `.7z` (solid and not), read in place: what the
+    /// folder itself says, from the listing and the param file alone.
+    #[test]
+    fn inspects_the_game_in_a_zip_and_a_7z() {
+        let tmp = testing::TempDir::new("inspectarchive");
+        let game = testing::game_folder(&tmp.0);
+        let folder = inspect(&game).unwrap();
+        for (name, solid) in [("g.zip", false), ("g.7z", false), ("s.7z", true)] {
+            let path = tmp.0.join(name);
+            if name.ends_with(".zip") {
+                testing::zip_of(&game, &path);
+            } else {
+                testing::sevenz_of(&game, &path, solid);
+            }
+            let i = inspect(&path).unwrap();
+            assert_eq!(i.format, &name[name.find('.').unwrap() + 1..], "{name}");
+            assert_eq!(i.title.as_deref(), Some("Test Game"), "{name}");
+            assert_eq!((i.files, i.data_bytes), (folder.files, folder.data_bytes));
+            assert_eq!(i.size, std::fs::metadata(&path).unwrap().len());
+            assert!(
+                i.has_eboot && i.warnings.is_empty(),
+                "{name}: {:?}",
+                i.warnings
+            );
+        }
+    }
+
+    /// What the console does not convert from an archive, each with its own cause: a `.rar`, an
+    /// archive cut short, one holding an image (unpack it first), one with no game.
+    #[test]
+    fn refuses_archives_it_cannot_convert_from() {
+        let tmp = testing::TempDir::new("refusearchive");
+        let game = testing::game_folder(&tmp.0);
+        let cause = |p: &Path| inspect(p).unwrap_err().cause;
+        let rar = tmp.0.join("g.rar");
+        std::fs::write(&rar, b"Rar!\x1a\x07\x01\x00").unwrap();
+        assert_eq!(cause(&rar), "convert_rar_unsupported");
+        for name in ["cut.zip", "cut.7z"] {
+            let path = tmp.0.join(name);
+            if name.ends_with(".zip") {
+                testing::zip_of(&game, &path);
+            } else {
+                testing::sevenz_of(&game, &path, true);
+            }
+            let bytes = std::fs::read(&path).unwrap();
+            std::fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
+            assert_eq!(cause(&path), "convert_source_unreadable", "{name}");
+        }
+        let one = |name: &str, entry: &str| {
+            use std::io::Write;
+            let path = tmp.0.join(name);
+            let mut zw = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+            zw.start_file(entry, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zw.write_all(b"x").unwrap();
+            zw.finish().unwrap();
+            path
+        };
+        assert_eq!(
+            cause(&one("image.zip", "dump/Game.exfat")),
+            "convert_archive_needs_unpack"
+        );
+        assert_eq!(
+            cause(&one("notes.zip", "readme.txt")),
+            "convert_archive_no_game"
+        );
+    }
+
     #[test]
     fn a_folder_that_is_not_a_game_is_listed_with_warnings() {
         let tmp = testing::TempDir::new("notgame");
@@ -318,7 +533,7 @@ mod tests {
     #[test]
     fn refuses_what_the_console_version_does_not_read() {
         let tmp = testing::TempDir::new("refuse");
-        for name in ["game.pkg", "game.ffpfsc", "game.7z"] {
+        for name in ["game.pkg", "game.tar"] {
             let path = tmp.0.join(name);
             std::fs::write(&path, b"x").unwrap();
             assert_eq!(

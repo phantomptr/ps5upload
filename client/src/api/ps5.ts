@@ -2208,16 +2208,91 @@ export interface SmpStatus {
   errors: string[];
   /** SMP's own version from its HTTP API (1.7beta8+); absent when the API doesn't answer. */
   version?: string | null;
+  /** Which mounter runs on the console (an engine older than this field leaves it out). */
+  mounter?: Mounter;
+  /** Kraken Mount on the console; absent from an older engine. */
+  kraken?: KrakenStatus;
+}
+
+/** Which mounter runs on a console. `unknown`: the process list could not be read and no
+ *  mounter's API answered. `both`: ShadowMount+ and Kraken Mount at once, which must not be. */
+export type Mounter = "none" | "shadowmount" | "kraken" | "both" | "unknown";
+
+/** One game in Kraken Mount's library. */
+export interface KrakenGame {
+  title_id: string;
+  title_name: string;
+  /** The `.pkg` file or game folder it mounts from. */
+  path: string;
+  /** `pkg` or `folder`. */
+  kind: string;
+  /** A folder's packing: `plain`, `zstd`, `lz4`. */
+  packing?: string | null;
+  /** `pending`, `checking`, `building`, `ready`, `error` or `duplicate`. */
+  status: string;
+  error?: string | null;
+}
+
+export interface KrakenStatus {
+  /** /data/krakenmount exists: it has run on this console. */
+  installed: boolean;
+  running: boolean;
+  /** Its API answers from this computer: rescan and remove work. */
+  api: boolean;
+  version: string | null;
+  /** `kstuff` or `shadowmount` while it waits for one to start or stop. */
+  waiting: string | null;
+  games: KrakenGame[];
+  /** Titles it has put on the home screen. */
+  title_ids: string[];
+  /** Its AMPR runtime: kind `bundled`, `downloaded`, `hand` (the user's own), `missing`. */
+  ampr: { kind: string; version?: string | null } | null;
+  settings: { inject_ampr: boolean; ampr_auto_update: boolean; scan_paths: string[] };
+  /** The folders it scans (one level deep). */
+  scan_roots: string[];
+  errors: string[];
 }
 
 /** SMP status snapshot. `addr` is the management-port address. */
 export async function smpStatus(addr: string): Promise<SmpStatus> {
-  return invoke<SmpStatus>("smp_status", { addr });
+  return normalizeSmpStatus(await invoke<Partial<SmpStatus> | null>("smp_status", { addr }));
 }
 
-/** Ask ShadowMount+ to scan again now, with its retry counters cleared. */
+/** The mounter snapshot with its lists always present: a partial answer (an older engine, a
+ *  proxy, a stand-in) must not crash the game page, which reads `errors` and
+ *  `mounted_images` directly. */
+export function normalizeSmpStatus(s: Partial<SmpStatus> | null | undefined): SmpStatus {
+  const v = s ?? {};
+  return {
+    ...v,
+    installed: v.installed === true,
+    running: v.running === true,
+    config_ini: v.config_ini ?? null,
+    autotune_ini: v.autotune_ini ?? null,
+    debug_log_tail: v.debug_log_tail ?? null,
+    mounted_images: Array.isArray(v.mounted_images) ? v.mounted_images : [],
+    errors: Array.isArray(v.errors) ? v.errors : [],
+    kraken: v.kraken
+      ? {
+          ...v.kraken,
+          games: Array.isArray(v.kraken.games) ? v.kraken.games : [],
+          title_ids: Array.isArray(v.kraken.title_ids) ? v.kraken.title_ids : [],
+        }
+      : v.kraken,
+  };
+}
+
+/** Ask the console's mounter (ShadowMount+, retry counters cleared; or Kraken Mount) to scan
+ *  again now. */
 export async function smpRescan(addr: string): Promise<void> {
   await invoke<unknown>("smp_rescan", { addr });
+}
+
+/** Remove a game Kraken Mount mounts, as its own page does: off the home screen AND its source
+ *  (`path`, the `.pkg` or game folder it lists for the title) deleted. `addr` is the
+ *  management-port address. */
+export async function krakenRemove(addr: string, titleId: string, path: string): Promise<void> {
+  await invoke<unknown>("kraken_remove", { addr, titleId, path });
 }
 
 // ─── ShadowMount+ edit sessions ───────────────────────────────────────
@@ -3098,17 +3173,6 @@ export async function peripheralBdOn(addr: string): Promise<PeripheralAck> {
 export async function peripheralBeep(addr: string, pattern = 1): Promise<PeripheralAck> {
   return invoke<PeripheralAck>("peripheral_beep", { addr, pattern });
 }
-/** Turn the front LED off, or hand it back to the console.
- *  ok-checked-by-caller: PeripheralPanel's run() checks ok once for every action. */
-export async function peripheralLed(addr: string, on: boolean): Promise<PeripheralAck> {
-  return invoke<PeripheralAck>("peripheral_led", { addr, on });
-}
-/** Front LED brightness (0-2); the console keeps it across restarts.
- *  ok-checked-by-caller: PeripheralPanel's run() checks ok once for every action. */
-export async function peripheralLedDim(addr: string, level: number): Promise<PeripheralAck> {
-  return invoke<PeripheralAck>("peripheral_led_dim", { addr, level });
-}
-
 export interface ModuleInfo {
   handle: number;
   name: string;

@@ -106,6 +106,11 @@ pub struct SmpStatus {
     /// SMP's own version (e.g. "1.7beta11") from its HTTP API; `None` when the API does not
     /// answer (older than 1.7beta8, bound to the console only, or switched off).
     pub version: Option<String>,
+    /// Which mounter runs on the console: `shadowmount`, `kraken`, `both`, `none`, or `unknown`
+    /// when the process list could not be read and no mounter's API answered.
+    pub mounter: crate::kraken::Mounter,
+    /// Kraken Mount on the console (see [`crate::kraken`]): all false and empty when it is not.
+    pub kraken: crate::kraken::KrakenStatus,
 }
 
 // HyperHEN embeds SMP as hyperhen_mount.elf (upstream src/main.c PAYLOAD_NAME); its docs call
@@ -185,9 +190,10 @@ pub fn collect_status(addr: &str) -> Result<SmpStatus> {
     // PROC_LIST → look for shadowmountplus process. Match is
     // substring on lowercased name to handle "shadowmountplus.elf"
     // vs "shadowmountplus" depending on how the kernel records it.
+    let mut procs: Option<Vec<crate::hw::ProcEntry>> = None;
     let running = match proc_list(addr) {
         Ok(list) => {
-            list.procs.iter().any(|p| is_mount_process(&p.name)) || {
+            let running = list.procs.iter().any(|p| is_mount_process(&p.name)) || {
                 let marker = fs_read_with_timeout(
                     addr,
                     HYPERHEN_AUTOMOUNT_READY,
@@ -198,7 +204,9 @@ pub fn collect_status(addr: &str) -> Result<SmpStatus> {
                 )
                 .ok();
                 hyperhen_automount_ready(marker.as_deref(), &list.procs)
-            }
+            };
+            procs = Some(list.procs);
+            running
         }
         Err(e) => {
             errors.push(format!("proc list: {e}"));
@@ -257,8 +265,12 @@ pub fn collect_status(addr: &str) -> Result<SmpStatus> {
     // The API answering is proof SMP runs, whatever the process list says.
     let version = crate::smp_api::SmpApi::probe(addr).map(|(_, v)| v.shadowmount_version);
     let running = running || version.is_some();
+    let kraken = crate::kraken::collect(addr, procs.as_deref());
+    let mounter = crate::kraken::active_mounter(running, kraken.running, procs.is_some());
 
     Ok(SmpStatus {
+        mounter,
+        kraken,
         installed,
         running,
         version,

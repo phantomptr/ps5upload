@@ -411,6 +411,10 @@ struct Signed {
 }
 
 impl SourceTree for Signed {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }

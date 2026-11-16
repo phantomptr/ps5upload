@@ -3775,7 +3775,7 @@
                 "type": "null"
               }
             ],
-            "description": "Where the image goes: `{\"kind\":\"local\"}` (the default: `output_dir` on this computer) or\n`{\"kind\":\"console\",\"addr\":…,\"dir\":…}`: straight into that PS5's folder `dir` over AVA1,\nsent as it is written, so the image is never stored on this computer. The job's `dest` is\nthen the image's path on the PS5, and the read-back runs there. For `.exfat`, `.ffpkg`\nand `.ffpfs` images, with or without `ampr_lz4` or `ampr_zstd` packs (LZ4 packs are made\ninto the engine's data folder first, and removed once the image is there); a `.ffpfsc`\n(`compress`) and edited copies are refused for it."
+            "description": "Where the image goes: `{\"kind\":\"local\"}` (the default: `output_dir` on this computer) or\n`{\"kind\":\"console\",\"addr\":…,\"dir\":…}`: straight into that PS5's folder `dir` over AVA1,\nsent as it is written, so the image is never stored on this computer. The job's `dest` is\nthen the image's path on the PS5, and the read-back runs there. For `.exfat`, `.ffpkg`\nand `.ffpfs` images, plain or in a `.ffpfsc` (`compress`: compressed once to measure it,\nthen again as it is sent, so it takes about twice the compression time), with or\nwithout `ampr_lz4` or `ampr_zstd` packs (LZ4 packs are measured, then each volume is made\nagain as it is sent, so nothing is stored here; should a volume not come out as measured,\nthe packs are made into the engine's data folder first and removed once the image is\nthere); edited copies are refused for it."
           },
           "edits": {
             "description": "Write an edited COPY of the image `source` (#479): its files with these changes, as an\nimage of the same kind (format and compression are the source's; `format`/`compress`\nare ignored), named `<name>-edited` and put next to it unless `name`/`output_dir` say\notherwise. The source image is only read.",
@@ -7500,6 +7500,209 @@
         ],
         "type": "object"
       },
+      "KrakenAmpr": {
+        "description": "Its AMPR runtime, as `GET /api/ampr` reports it (src/main.rs:500-513): `bundled`,\n`downloaded`, `hand` (the user's own, which it keeps), `missing` or `error`.",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "version"
+        ],
+        "type": "object"
+      },
+      "KrakenGame": {
+        "description": "One game in Kraken Mount's library, as `GET /api/state` lists it (src/web.rs:110-132).",
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "`pkg` or `folder`.",
+            "type": "string"
+          },
+          "packing": {
+            "description": "A folder's packing: `plain`, `zstd` or `lz4`; none for a package.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The `.pkg` file or game folder it mounts from.",
+            "type": "string"
+          },
+          "status": {
+            "description": "`pending`, `checking`, `building`, `ready`, `error` or `duplicate` (src/web.rs:24).",
+            "type": "string"
+          },
+          "title_id": {
+            "type": "string"
+          },
+          "title_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title_id",
+          "title_name",
+          "path",
+          "kind",
+          "packing",
+          "status",
+          "error"
+        ],
+        "type": "object"
+      },
+      "KrakenRemoveReq": {
+        "properties": {
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "path": {
+            "description": "The source Kraken Mount lists for the title (its `.pkg` or game folder), as shown to the\nuser when they confirmed: it refuses when its library has another source for it by now.",
+            "type": "string"
+          },
+          "title_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title_id",
+          "path"
+        ],
+        "type": "object"
+      },
+      "KrakenSettings": {
+        "description": "The settings this app acts on, from `config.toml` (src/config.rs:7-35).",
+        "properties": {
+          "ampr_auto_update": {
+            "description": "Fetch a newer ampr-emu-ng from GitHub once per start (default on).",
+            "type": "boolean"
+          },
+          "inject_ampr": {
+            "description": "Copy `ampr/*` over every game's fakelib (default on).",
+            "type": "boolean"
+          },
+          "scan_paths": {
+            "description": "`scanpath` lines: they replace the default roots when there are any.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "inject_ampr",
+          "ampr_auto_update",
+          "scan_paths"
+        ],
+        "type": "object"
+      },
+      "KrakenStatus": {
+        "description": "Kraken Mount on one console, for the Library and the Convert page. Every field is empty or\nfalse when it is not there.",
+        "properties": {
+          "ampr": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KrakenAmpr"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its AMPR runtime, when the API answered."
+          },
+          "api": {
+            "description": "Its API answered from this computer: rescan and remove work.",
+            "type": "boolean"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "games": {
+            "description": "Its library, when the API answered.",
+            "items": {
+              "$ref": "#/components/schemas/KrakenGame"
+            },
+            "type": "array"
+          },
+          "installed": {
+            "description": "`/data/krakenmount` exists: it has run on this console at least once.",
+            "type": "boolean"
+          },
+          "running": {
+            "description": "It runs now: its API answered, or a process named like it is listed.",
+            "type": "boolean"
+          },
+          "scan_roots": {
+            "description": "The roots it scans: the `scanpath` lines, else its default list.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/KrakenSettings",
+            "description": "From `config.toml`; the defaults when it has none."
+          },
+          "title_ids": {
+            "description": "The titles it has built: its library's when the API answered, else its cache folders.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "waiting": {
+            "description": "`kstuff` or `shadowmount` while it waits for one to start or stop.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "installed",
+          "running",
+          "api",
+          "version",
+          "waiting",
+          "games",
+          "title_ids",
+          "ampr",
+          "settings",
+          "scan_roots",
+          "errors"
+        ],
+        "type": "object"
+      },
       "LabelReq": {
         "properties": {
           "job_id": {
@@ -8563,6 +8766,17 @@
         ],
         "type": "object"
       },
+      "Mounter": {
+        "description": "Which mounter runs on a console.",
+        "enum": [
+          "none",
+          "shadowmount",
+          "kraken",
+          "both",
+          "unknown"
+        ],
+        "type": "string"
+      },
       "Move": {
         "properties": {
           "confident": {
@@ -9444,24 +9658,11 @@
         ],
         "type": "object"
       },
-      "PeripheralAction": {
-        "enum": [
-          "bd_power_off",
-          "bd_power_on",
-          "eject_disc",
-          "usb_port_off",
-          "usb_port_on",
-          "beep",
-          "led_off",
-          "led_on",
-          "led_dim"
-        ],
-        "type": "string"
-      },
       "PeripheralReq": {
         "properties": {
           "action": {
-            "$ref": "#/components/schemas/PeripheralAction"
+            "description": "`bd_power_off`, `bd_power_on`, `eject_disc`, `usb_port_off`, `usb_port_on` or `beep`.\nThe front light's `led_off`, `led_on` and `led_dim` are no longer supported (400).",
+            "type": "string"
           },
           "addr": {
             "type": [
@@ -9474,7 +9675,7 @@
             ]
           },
           "port": {
-            "description": "The USB port, beep pattern or brightness level the action takes; 0 otherwise.",
+            "description": "The USB port or beep pattern the action takes; 0 otherwise.",
             "type": "integer"
           }
         },
@@ -12900,6 +13101,10 @@
               "null"
             ]
           },
+          "mounter": {
+            "description": "Whose folder this is: `shadowmount` (its emulator updates) or `kraken` (Kraken Mount's\n`ampr/` folder, copied over every game's fakelib while `inject_ampr` is on).",
+            "type": "string"
+          },
           "path": {
             "description": "The `libSceAmpr.sprx` it puts into every game in its place, when there is one.",
             "type": [
@@ -12923,7 +13128,8 @@
           "path",
           "kind",
           "version",
-          "breaks_zstd"
+          "breaks_zstd",
+          "mounter"
         ],
         "type": "object"
       },
@@ -13110,12 +13316,20 @@
             "description": "True when `/data/shadowmount/debug.log` exists. Implies SMP\nhas been loaded at least once on this console.",
             "type": "boolean"
           },
+          "kraken": {
+            "$ref": "#/components/schemas/KrakenStatus",
+            "description": "Kraken Mount on the console (see [`crate::kraken`]): all false and empty when it is not."
+          },
           "mounted_images": {
             "description": "Images currently mounted under /mnt/shadowmnt/. Empty list\nwhen no mounts (or when SMP isn't running). UI shows count.",
             "items": {
               "$ref": "#/components/schemas/SmpMountedImage"
             },
             "type": "array"
+          },
+          "mounter": {
+            "$ref": "#/components/schemas/Mounter",
+            "description": "Which mounter runs on the console: `shadowmount`, `kraken`, `both`, `none`, or `unknown`\nwhen the process list could not be read and no mounter's API answered."
           },
           "running": {
             "description": "True when a process matching `shadowmountplus` is in PROC_LIST.\nIndependent of `installed`: SMP can be installed but not\ncurrently running (e.g. user removed it from autoload).",
@@ -13137,7 +13351,9 @@
           "debug_log_tail",
           "mounted_images",
           "errors",
-          "version"
+          "version",
+          "mounter",
+          "kraken"
         ],
         "type": "object"
       },
@@ -14818,6 +15034,13 @@
             "description": "`folder`: replaced in the game's own folder. `backport`: a backport folder for an image.",
             "type": "string"
           },
+          "overridden_by": {
+            "description": "The runtime Kraken Mount puts over every game it mounts, when it runs here with\n`inject_ampr` on: the game starts with that file, not the one written to it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "rescanned": {
             "type": "boolean"
           },
@@ -15780,6 +16003,14 @@
             },
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "interval_minutes": {
+            "description": "Minutes between automatic passes, 5 to 1440; out of range is refused.",
+            "minimum": 0,
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -35494,6 +35725,70 @@
         }
       }
     },
+    "/api/ps5/kraken/remove": {
+      "post": {
+        "description": "POST /api/ps5/kraken/remove `{addr, title_id, path}` — remove a game Kraken Mount mounts, the\nway its own page does: off the home screen, and its SOURCE DELETED (the `.pkg` or the game\nfolder at `path`), then its cache. Answers `{ok: true}`; 409 when Kraken Mount's library,\nread just before, no longer lists `title_id` at `path`. Kraken Mount answers once the source\nis deleted: the call waits up to 10 minutes, then judges by its library.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KrakenRemoveReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "console-tools"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/ps5/list-dir": {
       "get": {
         "description": "GET /api/ps5/list-dir?path=/data&offset=0&limit=256&addr=IP:PORT",
@@ -35647,6 +35942,69 @@
             "required": true
           },
           "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/ps5/mounter/status": {
+      "get": {
+        "description": "GET /api/ps5/smp/status?addr= — read-only ShadowMount+ snapshot\n(installed/running + config/autotune/debug.log + mounted images).",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmpStatus"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Read-only ShadowMount+ snapshot (installed/running + config/autotune/debug.log + mounted images)",
+        "tags": [
+          "console-tools"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "struct"
         }
       }
     },
@@ -35994,7 +36352,7 @@
     },
     "/api/ps5/peripheral": {
       "post": {
-        "description": "POST /api/ps5/peripheral\nBody: `{ \"addr\": \"IP\", \"action\": \"beep\", \"port\": 1 }`\n\nThe disc drive, the USB ports, the beeper and the front light. Replies with the\nhelper's own ack (`ok`, `action`, `code`); a transport failure is a 502.",
+        "description": "POST /api/ps5/peripheral\nBody: `{ \"addr\": \"IP\", \"action\": \"beep\", \"port\": 1 }`\n\nThe disc drive, the USB ports and the beeper. Replies with the helper's own ack (`ok`,\n`action`, `code`); a transport failure is a 502, an unknown or removed action a 400.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -41247,7 +41605,7 @@
     },
     "/api/ps5/smp/rescan": {
       "post": {
-        "description": "POST /api/ps5/smp/rescan?addr= — ask ShadowMount+ to scan again now, with its retry counters\ncleared, so a new image of a game is picked up without deleting the game from the home screen.",
+        "description": "POST /api/ps5/smp/rescan?addr= — ask the console's mounter to scan again now: ShadowMount+ with\nits retry counters cleared, so a new image of a game is picked up without deleting the game\nfrom the home screen, or Kraken Mount. Answers `{ok, mounter}` with the one asked\n(`shadowmount` or `kraken`).",
         "parameters": [
           {
             "in": "query",
@@ -41271,6 +41629,9 @@
               "application/json": {
                 "schema": {
                   "properties": {
+                    "mounter": {
+                      "$ref": "#/components/schemas/Mounter"
+                    },
                     "ok": {
                       "type": "boolean"
                     }
@@ -41294,7 +41655,6 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "Ask ShadowMount+ to scan again now, with its retry counters cleared, so a new image of a game is picked up without deleting the game from the home screen",
         "tags": [
           "shadowmount"
         ],
@@ -44213,7 +44573,7 @@
         }
       },
       "put": {
-        "description": "`PUT /api/save-backup` — change any of `{enabled, dir, keep, hosts, add_hosts, remove_hosts}`.",
+        "description": "`PUT /api/save-backup` — change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts}`.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -44250,7 +44610,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "Change any of `{enabled, dir, keep, hosts, add_hosts, remove_hosts}`",
+        "summary": "Change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts}`",
         "tags": [
           "saves"
         ],
@@ -47526,7 +47886,7 @@
     },
     "/api/tailnet/consoles": {
       "get": {
-        "description": "`GET /api/tailnet/consoles[?refresh=1&all=1&addr=]` — the PS5Upload consoles on this device's\nTailscale network: `{ok, backend, can_list, cached, age_ms, consoles: [{name, tailnet_name,\ntailnet_ip, lan_host, id, reachable, via, online, paired, hosts, listed, error}]}`.\n\n* `backend`: how this device is on Tailscale (`builtin`, `system`, `none`). `can_list`: whether\n  a peer list could be read (false on a phone with only the system Tailscale app: type the\n  address instead, `addr=`).\n* Each console was asked on TCP 9120 through Tailscale: `reachable` when its helper answered,\n  `id` its AVA1 key (hex, the same at every address), `via` `builtin` or `system`, `error`\n  why not. Nothing is paired or pinned by asking, and no code shows on the PS5.\n* `lan_host`: its home address when this engine knows one; `hosts` every address it was met\n  at; `listed`: the console list's entry for it (`{id, name, host}`) or null; `paired`: this\n  engine is trusted by it already.\n* `addr=` probes that one address now (a 100.x address or a MagicDNS name) and answers\n  `{ok, console: {...}}`; 400 `not_tailnet` when it is neither.\n\nAnswered from the last minute's look unless `refresh=1`; nothing is looked for in the\nbackground.",
+        "description": "`GET /api/tailnet/consoles[?refresh=1&all=1&addr=]` — the PS5Upload consoles on this device's\nTailscale network: `{ok, backend, can_list, cached, age_ms, consoles: [{name, tailnet_name,\ntailnet_ip, lan_host, id, reachable, via, online, paired, hosts, listed, error, kind, os}]}`.\n\n* `kind` ([`peer_kind`]): `ps5` when its helper answered as the PS5 (or its Tailscale says\n  its OS is the PS5's), `device` for a phone or computer, `unknown` otherwise. Only `ps5` is\n  offered as a console: every PS5Upload device's node is named `…-ps5u`. `os`: what its\n  Tailscale reports, when this device's list carries it.\n\n* `backend`: how this device is on Tailscale (`builtin`, `system`, `none`). `can_list`: whether\n  a peer list could be read (false on a phone with only the system Tailscale app: type the\n  address instead, `addr=`).\n* Each console was asked on TCP 9120 through Tailscale: `reachable` when its helper answered,\n  `id` its AVA1 key (hex, the same at every address), `via` `builtin` or `system`, `error`\n  why not. Nothing is paired or pinned by asking, and no code shows on the PS5.\n* `lan_host`: its home address when this engine knows one; `hosts` every address it was met\n  at; `listed`: the console list's entry for it (`{id, name, host}`) or null; `paired`: this\n  engine is trusted by it already.\n* `addr=` probes that one address now (a 100.x address or a MagicDNS name) and answers\n  `{ok, console: {...}}`; 400 `not_tailnet` when it is neither.\n\nAnswered from the last minute's look unless `refresh=1`; nothing is looked for in the\nbackground.",
         "parameters": [
           {
             "description": "One address to probe: a tailnet IPv4 or a MagicDNS name.",
@@ -47681,7 +48041,7 @@
     },
     "/api/tailnet/consoles/add": {
       "post": {
-        "description": "`POST /api/tailnet/consoles/add` `{addr, name?}` — puts a console found on Tailscale (or typed:\na 100.x address or a MagicDNS name) on the console list, probing it first. Answers `{ok,\naction, console: {id, name, host}, found: {...the list entry...}}`; `action` is `added`,\n`linked` (its entry at the tailnet address moved to its home address), `merged` (two entries\nfor it became one) or `exists`.\n\nOne entry per console: at its home address when one is known (so the home network is used\nwhen back home, Tailscale when away), else at its tailnet address, which becomes the home\none when the console is next reached at home. Either way its tailnet address is remembered\nfor the router. A console that does not answer is still added (its list may not let this\ndevice in yet: the PS5 then shows \"tried to reach this PS5\" with Allow).",
+        "description": "`POST /api/tailnet/consoles/add` `{addr, name?}` — puts a console found on Tailscale (or typed:\na 100.x address or a MagicDNS name) on the console list, probing it first. Answers `{ok,\naction, console: {id, name, host}, found: {...the list entry...}}`; `action` is `added`,\n`linked` (its entry at the tailnet address moved to its home address), `merged` (two entries\nfor it became one) or `exists`.\n\nOne entry per console: at its home address when one is known (so the home network is used\nwhen back home, Tailscale when away), else at its tailnet address, which becomes the home\none when the console is next reached at home. Either way its tailnet address is remembered\nfor the router. A console that does not answer is still added (its list may not let this\ndevice in yet: the PS5 then shows \"tried to reach this PS5\" with Allow). A peer known to be a\nphone or a computer ([`peer_kind`] `device`) is refused: 400 `not_a_console`.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -47712,7 +48072,29 @@
             "description": "Success."
           },
           "400": {
-            "$ref": "#/components/responses/Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "found": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
             "description": "Bad request"
           },
           "403": {

@@ -111,7 +111,7 @@ export default function ThanksScreen({ list = supporters as SupporterList }: { l
           className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-surface-raised)]"
         >
           <MessageCircle size={13} aria-hidden />
-          Discord
+          {tr("discord_server_link", undefined, "UndefinedLab on Discord")}
         </button>
       </footer>
     </div>

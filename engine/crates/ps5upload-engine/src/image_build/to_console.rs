@@ -9,7 +9,8 @@
 //! to [`ImageSeq`], a forward-only AVA1 source (`ava1::seq`, the same kind of source an `.lz4`
 //! link is, see `link_lz4`). AVA1 does the rest: the console writes `<name>.ava-part`, checks
 //! the BLAKE3 of the whole file at commit and only then renames it into place, so ShadowMount+
-//! never sees half an image.
+//! never sees half an image. A `.ffpfsc` is compressed once to measure it, then again as it is
+//! sent (`ffpfsc_out`): its size, header and block table are known before its first byte.
 //!
 //! Resume. A dropped connection ends the AVA1 pass; the next session asks for another pass,
 //! the writer runs again from the start (same files, same pinned time: same bytes), and AVA1
@@ -42,7 +43,9 @@ use ps5upload_fpkg::remote_source::RemoteFiles;
 use ps5upload_fpkg::sample::VerifyMode;
 use ps5upload_fpkg::source::SourceTree;
 
-use super::{resume_key, verify, HashingTree, ImageBuilt, ImageFormat, Planned};
+use super::{
+    resume_key, verify, FfpfscOut, HashingTree, ImageBuilt, ImageFormat, MeasuredFfpfsc, Planned,
+};
 
 /// What goes down the pipe at a time; also how often a stop is noticed.
 const PIECE: usize = 1 << 20;
@@ -452,10 +455,13 @@ fn no_room(refusal: ps5upload_ava1::space::SpaceRefusal) -> anyhow::Error {
 /// it back there and compares it with the source (`mode`, `verify_chunk` as for a local build).
 /// `time` pins a PFS image's inode time (and must be the time any generated index in `source`
 /// carries), so every run gives the same bytes; `extra` adds what else the bytes depend on to the
-/// job id (a zstd build's level and emulator). `stage` reports `plan`, `write` and `verify`.
+/// job id (a zstd build's level and emulator). `ffpfsc`: the image goes in a `.ffpfsc`, measured
+/// first ([`MeasuredFfpfsc`]). `stage` reports `plan`, `compress` (a `.ffpfsc`'s measure pass),
+/// `write` and `verify`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn stream_to_console(
     format: ImageFormat,
+    ffpfsc: Option<FfpfscOut>,
     time: Option<i64>,
     extra: &str,
     source: &mut dyn SourceTree,
@@ -471,7 +477,6 @@ pub(crate) fn stream_to_console(
     let started = std::time::Instant::now();
     stage("plan", 0, 0);
     let planned = Planned::plan(format, &*source, time, cancel).map_err(anyhow::Error::msg)?;
-    let size = planned.image_size();
     let want_sizes: HashMap<String, u64> = source
         .files()
         .iter()
@@ -479,6 +484,18 @@ pub(crate) fn stream_to_console(
         .collect();
     let want_empty: Vec<String> = source.empty_dirs().to_vec();
     let data: u64 = want_sizes.values().sum();
+    let mut hashing = HashingTree::new(source);
+    // A `.ffpfsc`: its size and table are known once it has been compressed once.
+    let wrapped = match ffpfsc {
+        Some(f) => Some(
+            MeasuredFfpfsc::measure(f, &planned, &mut hashing, time, cancel, stage)
+                .map_err(anyhow::Error::msg)?,
+        ),
+        None => None,
+    };
+    let size = wrapped
+        .as_ref()
+        .map_or(planned.image_size(), MeasuredFfpfsc::image_size);
     // A part file from an earlier try: AVA1 goes on from it.
     let held = target
         .files
@@ -489,8 +506,16 @@ pub(crate) fn stream_to_console(
         room_check(size, held, room).map_err(no_room)?;
     }
     let key = format!(
-        "{}\0{extra}",
-        resume_key(format, None, Level::default(), time, &want_sizes, size)
+        "{}\0{extra}{}",
+        resume_key(
+            format,
+            ffpfsc.map(|f| f.inner),
+            ffpfsc.map_or(Level::default(), |f| f.level),
+            time,
+            &want_sizes,
+            planned.image_size()
+        ),
+        wrapped.as_ref().map_or(String::new(), MeasuredFfpfsc::key)
     );
     let job = job_id(&target.console, &target.path, &key);
     let name = target
@@ -506,16 +531,20 @@ pub(crate) fn stream_to_console(
     crate::log_at!(
         Info,
         "convert",
-        "to console: {} as {} ({size} bytes, {} files) -> {}:{} job={}",
-        source.describe(),
+        "to console: {} as {}{} ({size} bytes, {} files) -> {}:{} job={}",
+        hashing.describe(),
         format.extension(),
+        if wrapped.is_some() {
+            " in a .ffpfsc"
+        } else {
+            ""
+        },
         want_sizes.len(),
         target.console,
         target.path,
         hex(&job)
     );
 
-    let mut hashing = HashingTree::new(source);
     let sent = std::thread::scope(|s| {
         let up = {
             let seq = seq.clone();
@@ -536,10 +565,11 @@ pub(crate) fn stream_to_console(
                 return Err(anyhow::anyhow!("could not start the upload: {e}"));
             }
         };
-        serve_runs(&runs_rx, &up, size, &mut |w| {
-            planned
+        serve_runs(&runs_rx, &up, size, &mut |w| match &wrapped {
+            Some(m) => m.write(&planned, &mut hashing, w, 0, cancel, stage),
+            None => planned
                 .write(&mut hashing, w, 0, cancel, &mut |d, t| stage("write", d, t))
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string()),
         });
         match up.join() {
             Ok(r) => r,
@@ -603,8 +633,9 @@ pub(crate) fn stream_to_console(
     crate::engine_log::record(
         "info",
         format!(
-            "image to console: format={} files={} data_bytes={data} image_bytes={size} passes={passes} send_ms={} verify_ms={} verify={} job={}",
+            "image to console: format={}{} files={} data_bytes={data} image_bytes={size} passes={passes} send_ms={} verify_ms={} verify={} job={}",
             format.extension(),
+            if wrapped.is_some() { "+ffpfsc" } else { "" },
             want_sizes.len(),
             sent_at.as_millis(),
             (started.elapsed() - sent_at).as_millis(),
@@ -613,8 +644,11 @@ pub(crate) fn stream_to_console(
         ),
     );
     let mut detail = format!(
-        "{}, {} files, {data} data bytes, streamed to the PS5, {}",
+        "{}{}, {} files, {data} data bytes, streamed to the PS5, {}",
         format.extension(),
+        wrapped
+            .as_ref()
+            .map_or(String::new(), |m| format!(" {}", m.describe())),
         want_sizes.len(),
         summary.describe()
     );

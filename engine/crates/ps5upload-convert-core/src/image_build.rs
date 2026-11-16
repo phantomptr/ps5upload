@@ -338,6 +338,10 @@ impl<'a> HashingTree<'a> {
 }
 
 impl SourceTree for HashingTree<'_> {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         self.inner.files()
     }
@@ -658,6 +662,10 @@ impl AmprIndexed<'_> {
 }
 
 impl SourceTree for AmprIndexed<'_> {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }
@@ -1345,6 +1353,8 @@ fn build_once(
         let mut report = |done: u64, total: u64| stage(write_stage, done, total);
         let mut wrap_opts = ps5_dump_forge_pfs::WrapOptions::at(level);
         wrap_opts.time = time;
+        // The console's converter compresses on its share of the CPUs; a computer on every core.
+        wrap_opts.threads = crate::WORKERS;
         let (image_bytes, stored, wrapped) = match (inner_name, checkpoints) {
             (None, Some(c)) => {
                 let mut out = CheckpointWriter {
@@ -1398,6 +1408,28 @@ fn build_once(
                     cancel,
                     &resume,
                     |s| planned.write(&mut hashing, s, inner_skip, cancel, &mut report),
+                )
+                .map_err(|e| e.to_string())?;
+                (n, wrapped.image_size, Some(wrapped))
+            }
+            (Some(name), None) if crate::safe_write::ON_CONSOLE => {
+                // U5 on the PS5: the container's bytes made durable every `SYNC_EVERY` as they
+                // go (dirty pages built up over a multi-GB write panicked the kernel), by the
+                // resumable stream's checkpoints, with nothing saved to go on from.
+                let nothing_saved = |_: u64, _: u64| -> std::io::Result<()> { Ok(()) };
+                let resume = ps5_dump_forge_pfs::Resume {
+                    blocks: 0,
+                    every: crate::safe_write::SYNC_EVERY,
+                    saved: &nothing_saved,
+                };
+                let (n, wrapped) = ps5_dump_forge_pfs::wrap_resumable(
+                    name,
+                    planned.image_size(),
+                    &mut file,
+                    &wrap_opts,
+                    cancel,
+                    &resume,
+                    |s| planned.write(&mut hashing, s, 0, cancel, &mut report),
                 )
                 .map_err(|e| e.to_string())?;
                 (n, wrapped.image_size, Some(wrapped))

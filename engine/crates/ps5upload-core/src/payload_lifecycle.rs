@@ -483,6 +483,11 @@ pub fn send_payload_image(
             ));
         }
         is_helper = is_ps5upload_payload(label, &image[..image.len().min(PAYLOAD_PROBE_WINDOW)]);
+        if !is_helper {
+            refuse_second_mounter(label, image, || {
+                crate::kraken::KrakenApi::probe(host).is_some()
+            })?;
+        }
     }
     let image_kind = if is_helper {
         LoaderImage::Ps5Upload
@@ -533,6 +538,26 @@ pub fn send_payload_image(
     }
 }
 
+/// Refuse to start ShadowMount+ on a console where Kraken Mount runs: the two must never run
+/// together (Kraken Mount looks for ShadowMount+ only when it starts, src/main.rs:534-567 of
+/// quer3q/kraken-mount 0.2.0, so one started after it would run beside it). `kraken_runs` asks the
+/// console; it is only asked for a ShadowMount+ image.
+fn refuse_second_mounter(
+    label: &str,
+    image: &[u8],
+    kraken_runs: impl FnOnce() -> bool,
+) -> Result<(), String> {
+    if crate::kraken::is_shadowmount_image(label, image) && kraken_runs() {
+        return Err(
+            "Kraken Mount is running on this PS5, and ShadowMount+ must not run beside it: \
+             both mount games and register them on the home screen. Stop Kraken Mount (its \
+             page on port 8097, or restart the PS5 without it) before sending ShadowMount+."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// [`send_payload_image`] for a file on this machine.
 pub fn send_payload_file(
     host: &str,
@@ -555,6 +580,22 @@ pub fn send_payload_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shadowmount_is_not_started_beside_kraken_mount() {
+        let smp = b"\x7fELF..shadowmountplus.elf../data/shadowmount/..";
+        let e = refuse_second_mounter("smp.elf", smp, || true).unwrap_err();
+        assert!(e.contains("Kraken Mount is running"), "{e}");
+        assert!(refuse_second_mounter("smp.elf", smp, || false).is_ok());
+        // Anything else goes without asking the console.
+        let asked = std::cell::Cell::new(false);
+        assert!(refuse_second_mounter("kstuff.elf", b"\x7fELF", || {
+            asked.set(true);
+            true
+        })
+        .is_ok());
+        assert!(!asked.get());
+    }
 
     #[test]
     fn a_closed_port_runs_nothing_and_a_refused_one_is_tried_again() {

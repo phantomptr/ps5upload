@@ -13,8 +13,11 @@
  *                 is started: one job across helpers, and the next start's sweep
  *   convert.log   the converter's stdout/stderr (the last run)
  *
- * JOB_OP_CONSOLE_CONVERT {"path":"<game folder or .exfat/.ffpkg/.ffpfs image>"
- *   [,"action":"inspect"|"build"][,"dest":"<output>"][,"format":"exfat"|"ffpkg"|"ffpfs"|"folder"]
+ * JOB_OP_CONSOLE_CONVERT {"path":"<game folder, .exfat/.ffpkg/.ffpfs/.ffpfsc image, or .zip/.7z>"
+ *   [,"action":"inspect"|"build"][,"dest":"<output>"]
+ *   [,"format":"exfat"|"ffpkg"|"ffpfs"|"ffpfsc"|"pkg"|"folder"]
+ *   [,"inner":"exfat"|"ffpkg"|"ffpfs"][,"ffpfsc_level":"fast"|"balanced"|"smallest"]  (ffpfsc)
+ *   [,"pkg_level":"stored"|"fast"|"balanced"]  (pkg: a debug package, written, not installed)
  *   [,"zstd":true[,"zstd_level":1..22]][,"verify":"fast"|"full"]}
  * "inspect" (the default) reads what the source is; the job's result is the converter's answer
  * ({"path","format","size","files","title_id","title",...}) and "zstd_runtime": the version of the
@@ -82,12 +85,24 @@ typedef struct {
     int full_verify;
     int zstd_level; /* 1..22 with zstd; 0: the converter's default */
     const char *zstd_runtime; /* with zstd: the runtime's libSceAmpr.sprx on the console */
+    char inner[8];            /* with "ffpfsc": the image inside it (exfat, ffpkg, ffpfs) */
+    char ffpfsc_level[12];    /* with "ffpfsc": fast, balanced or smallest */
+    char pkg_level[12];       /* with "pkg": stored, fast or balanced */
 } cc_build_t;
 
 /* request.json for job `id`: {"id","op","path"} and, with `b`, {"dest","format","zstd","verify"}
- * (and, with zstd on, "zstd_level" when a level was chosen and "zstd_runtime" when one is set).
+ * (and, with zstd on, "zstd_level" when a level was chosen and "zstd_runtime" when one is set;
+ * with format "ffpfsc", "inner" and "ffpfsc_level" when set; with "pkg", "pkg_level" when set).
  * Returns the length, or -1 when it does not fit `cap`. */
 int cc_request_json(char *out, size_t cap, const char *id, const char *op, const char *path, const cc_build_t *b);
+
+/* The page's /api/convert/start body (`json`, `n` bytes) as the op's arguments after "path": the
+ * text `,"action":"build","dest":...,"format":...,"zstd":...,"verify":...` and, when chosen,
+ * "zstd_level" (with zstd), "inner" and "ffpfsc_level" (with "ffpfsc"), "pkg_level" (with "pkg").
+ * `dest` is the route's, already checked. NULL when written, else the refusal's token: bad_format,
+ * bad_verify, bad_zstd, convert_bad_inner, convert_bad_ffpfsc_level, convert_bad_pkg_level, or
+ * bad_path when it does not fit `cap`. An absent or "" word is the converter's default. */
+const char *cc_start_tail(const char *json, size_t n, const char *dest, char *out, size_t cap);
 
 typedef struct {
     char state[16]; /* "running" | "done" | "failed" */
@@ -123,12 +138,25 @@ int cc_record_format(char *out, size_t cap, unsigned long long xpid, long hpid, 
 int cc_record_parse(const char *buf, unsigned long long *xpid, long *hpid, char *id, size_t id_cap, char *dest,
                     size_t cap);
 
-/* The format an output path's extension stands for ("exfat", "ffpkg", "ffpfs"), or NULL. */
+/* The format an image path's extension stands for ("exfat", "ffpkg", "ffpfs", "ffpfsc"), or NULL. */
 const char *cc_image_format(const char *path);
+/* The archive a path's extension names ("zip", "7z", "rar"), or NULL. The converter reads the game
+ * folder inside a .zip or .7z in place; a .rar is refused (convert_rar_unsupported: UnRAR may not be
+ * linked into the converter, see engine/crates/ps5upload-convert/src/lib.rs RAR_REFUSAL). */
+const char *cc_archive_kind(const char *path);
 /* 1 when `level` is a zstd level a build may be asked for (zstd's own range; the page offers 1, 5, 19). */
 static inline int cc_zstd_level_ok(unsigned long long level) { return level >= 1 && level <= 22; }
 /* 1 when `format` is one a build writes. */
 int cc_format_ok(const char *format);
+/* 1 when `inner` is an image a .ffpfsc may hold (exfat, ffpkg, ffpfs). */
+int cc_inner_ok(const char *inner);
+/* 1 when `level` is a .ffpfsc compression level (fast, balanced, smallest). */
+int cc_ffpfsc_level_ok(const char *level);
+/* 1 when `level` is a .pkg level the console offers (stored, fast, balanced: Kraken's smallest is
+ * left out, as slow as balanced for no measured gain). */
+int cc_pkg_level_ok(const char *level);
+/* 1 when `dest` is named as a .pkg build writes it: ending in ".pkg", in that spelling. */
+int cc_pkg_name_ok(const char *dest);
 /* 1 when `inner` is `outer` itself or below it (both normalised). */
 int cc_path_within(const char *outer, const char *inner);
 /* 1 when a build of `dest` would clear `src`: `src` is one of the names the build writes and an
