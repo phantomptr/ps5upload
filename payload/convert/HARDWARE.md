@@ -33,6 +33,7 @@ converter's imports the helper does not have, and the run that exercises each:
 | `fdopendir` | std's `remove_dir_all` (a stopped folder build's `.partial/`) | run 4 (Stop a folder output) |
 | `sched_yield` | rayon's idle workers (the read-back's BLAKE3) and std's `yield_now` | run 3 |
 | `log2` | the image writers' layout maths (UFS2/PFS) | run 3 with `ffpkg` |
+| `log2f` | the `.pkg` builder's Kraken encoder (its symbol costs), any level but `stored` | run 3d at `fast` |
 
 The exact current list is what `import-diff.sh` prints; if it names a symbol not in this table,
 add it here before the run.
@@ -136,6 +137,25 @@ LZMA2) on `/data`, then from Minion's Convert pick each (the picker lists `.zip`
 
 Proven when all of that holds and `getcwd` raised nothing (a missing import stops the program
 before its first status, see "If it dies").
+
+## Run 3d: a `.pkg`
+
+One import the helper lacks: `log2f` (Kraken's cost model; a `stored` package never calls it).
+`statvfs` is new to the converter (the builder's free-space check) and the helper imports it.
+New on the console: the package builder (`ps5upload-fpkg`, a fake-signed debug package; it is
+written and read back, never installed here), Kraken on 3 threads (the converter caps every
+worker pool at 3), and a thread that syncs the `.pkg.partial` every 32 MiB it grows (U5: the
+builder writes through its own file, so it cannot be wrapped).
+
+`fetch('/api/convert/start',{method:'POST',body:JSON.stringify({path:'/data/homebrew/<id>',dest:'/data/out.pkg',format:'pkg',pkg_level:'stored'})})`
+
+Proven when: the stages go `check` → `plan` → `compress` → `write` → `verify`, it ends `ok`,
+`convert.log` has `.pkg at Kraken level Stored on 3 threads` and `built /data/out.pkg in S s:
+pkg, ... N syncs while written, verified: ok` (N > 0 for anything over 32 MiB), no `.partial` is
+left, and the package installs through the usual debug-package route (outside this program).
+Then `pkg_level` `fast` on the same game (`log2f`; write down the time: the page estimates
+about 15 minutes for 30 GB), then Stop during `compress`: `cancelled` within a second or two,
+nothing left.
 
 ## Run 4: Stop, and a full drive
 

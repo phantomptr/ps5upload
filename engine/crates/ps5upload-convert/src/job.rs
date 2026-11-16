@@ -10,7 +10,9 @@
 //!   `"zstd_runtime"` (the path of ampr-emu-ng's `libSceAmpr.sprx` on the console, which zstd
 //!   packs need) and `"zstd_level"` (1 to 22, 5 when absent); a `.ffpfsc` also `"inner"` (the
 //!   image inside it: `exfat`, the default, `ffpkg` or `ffpfs`) and `"ffpfsc_level"` (`fast`,
-//!   `balanced`, the default, or `smallest`), compressed on [`THREADS`] threads.
+//!   `balanced`, the default, or `smallest`), compressed on [`THREADS`] threads; a `.pkg`
+//!   (`"format": "pkg"`, a debug package, written, never installed here) `"pkg_level"` (one of
+//!   [`PKG_LEVELS`], `fast` when absent).
 //! - `status.json`: rewritten here through a temporary file and a rename in the same folder, so
 //!   the helper never reads half of one; at most every [`STATUS_EVERY`] while a job runs.
 //!   `{"id", "pid", "op", "state": "running"|"done"|"failed", "stage"?, "bytes_done"?,
@@ -83,7 +85,19 @@ struct Request {
     /// With `format` `ffpfsc`: `fast`, `balanced` (the default) or `smallest`.
     #[serde(default)]
     ffpfsc_level: String,
+    /// With `format` `pkg`: `stored` (no compression), `fast` (the default) or `balanced`
+    /// ([`PKG_LEVELS`]).
+    #[serde(default)]
+    pkg_level: String,
 }
+
+/// The Kraken levels a `.pkg` is made at on the console. `smallest` is left out: as slow as
+/// `balanced` (hours for a large game on 3 CPUs) for no measured gain over it.
+pub const PKG_LEVELS: [&str; 3] = ["stored", "fast", "balanced"];
+/// A `.pkg`'s level when the request names none: PS5 Dump Forge's choice on the console.
+const DEFAULT_PKG_LEVEL: ps5upload_fpkg::kraken::Level = ps5upload_fpkg::kraken::Level::Fast;
+/// How often the `.pkg` being written is looked at for its growth (U5, [`build_pkg`]).
+const PKG_SYNC_POLL: Duration = Duration::from_millis(100);
 
 /// Writes `status` as `dir/status.json`. The temporary file is in `dir` too: a rename never
 /// leaves the folder (a rename across filesystems panics the PS5's kernel). `durable`: the
@@ -188,6 +202,8 @@ struct Plan {
     mode: VerifyMode,
     /// The emulator's bytes and the level, for zstd packs.
     zstd: Option<(Vec<u8>, u8)>,
+    /// A `.pkg` (`image` is `None`) and its Kraken level.
+    pkg: Option<ps5upload_fpkg::kraken::Level>,
 }
 
 fn bad(detail: String) -> Refusal {
@@ -203,8 +219,23 @@ fn plan(request: &Request) -> Result<Plan, Refusal> {
     if request.dest.is_empty() {
         return Err(bad("a build needs a dest".into()));
     }
+    let mut pkg = None;
     let (image, compress) = match request.format.as_str() {
         "folder" => (None, false),
+        "pkg" => {
+            let level = match request.pkg_level.as_str() {
+                "" => DEFAULT_PKG_LEVEL,
+                l if PKG_LEVELS.contains(&l) => l.parse().map_err(bad)?,
+                other => return Err(bad(format!("unknown .pkg level {other:?}"))),
+            };
+            if request.zstd {
+                return Err(bad(
+                    "zstd packs go into an image or a folder, not a .pkg".into()
+                ));
+            }
+            pkg = Some(level);
+            (None, false)
+        }
         "exfat" => (Some(ImageFormat::Exfat), false),
         "ffpkg" => (Some(ImageFormat::Ffpkg), false),
         "ffpfs" => (Some(ImageFormat::Ffpfs), false),
@@ -240,6 +271,10 @@ fn plan(request: &Request) -> Result<Plan, Refusal> {
     };
     if !dest.is_absolute() || name.is_empty() || name.to_ascii_lowercase().ends_with(".partial") {
         return Err(bad_dest(format!("{} is not an output path", request.dest)));
+    }
+    if pkg.is_some() && !name.ends_with(".pkg") {
+        // The package builder names its output `<stem>.pkg`, in this spelling.
+        return Err(bad_dest(format!("{} does not end in .pkg", request.dest)));
     }
     let mut ffpfsc = None;
     if let Some(f) = image {
@@ -306,6 +341,7 @@ fn plan(request: &Request) -> Result<Plan, Refusal> {
         ffpfsc,
         mode,
         zstd,
+        pkg,
     })
 }
 
@@ -439,6 +475,16 @@ fn build(
         cause: "convert_source_unreadable",
         detail: format!("{}: {e}", plan.source.display()),
     };
+    if is_archive_file(&plan.source) && plan.pkg.is_some() {
+        // The package builder opens its source by path, as a folder or an image.
+        return Err(Refusal {
+            cause: "convert_archive_needs_unpack",
+            detail: format!(
+                "{}: a .pkg is made from an unpacked game; unpack the archive first",
+                plan.source.display()
+            ),
+        });
+    }
     if is_archive_file(&plan.source) && plan.image.is_none() && plan.zstd.is_some() {
         // A folder in zstd packs reads its source again after packing (as the engine refuses it
         // for an archive): once more through a whole solid archive.
@@ -491,12 +537,16 @@ fn build(
     // before writing (`safe_write::too_big_for`, `convert_too_big_for_drive` in `failure`).
     // A `.ffpfsc` is smaller by what compression saves, known only once written; a drive that
     // fills up ends the build with `convert_no_space`.
-    let need = if plan.zstd.is_some() || plan.ffpfsc.is_some() {
+    let compressed = plan
+        .pkg
+        .is_some_and(|l| l != ps5upload_fpkg::kraken::Level::Stored);
+    let need = if plan.zstd.is_some() || plan.ffpfsc.is_some() || compressed {
         0
     } else {
         data
     };
-    if let Some(why) = probe.refusal(need, plan.image.is_some(), folder_build::SPARE) {
+    let one_file = plan.image.is_some() || plan.pkg.is_some();
+    if let Some(why) = probe.refusal(need, one_file, folder_build::SPARE) {
         let cause = if probe.read_only {
             "convert_dest_read_only"
         } else if why.contains("at most") {
@@ -542,6 +592,25 @@ fn build(
         ));
     }
     let started = Instant::now();
+    if let Some(level) = plan.pkg {
+        let files = tree.files().len() as u64;
+        // The package builder opens the source itself.
+        drop(tree);
+        return build_pkg(&plan, level, files, cancel, stage).map(|(bytes, detail)| {
+            crate::log(format_args!(
+                "built {} in {:.1} s: {detail}",
+                plan.dest.display(),
+                started.elapsed().as_secs_f64()
+            ));
+            json!({
+                "dest": plan.dest,
+                "format": request.format,
+                "files": files,
+                "bytes": bytes,
+                "detail": detail,
+            })
+        });
+    }
     let chunk = image_build::DEFAULT_VERIFY_CHUNK;
     let source = plan.source.clone();
     let packing = plan.zstd.is_some();
@@ -643,6 +712,95 @@ fn build(
             remove_leftovers(&plan.dest);
             Err(failure(detail, cancel.load(Ordering::Relaxed), &plan))
         }
+    }
+}
+
+/// Builds the plan's `.pkg` with `ps5upload-fpkg` (a debug package, the engine's builder; not
+/// installed here): `<dest>.partial` beside `dest`, read back, renamed. Its stages are the
+/// builder's (`check` reads the game's headers, `compress` is Kraken on the converter's
+/// threads, `write`, `verify`). U5: the builder writes through its own file, so a thread syncs
+/// the `.partial` each time it grew by `SYNC_EVERY` ([`safe_write::GrowthSync`]); a failed
+/// sync stops the build. The size and a line for the result, or why it failed.
+fn build_pkg(
+    plan: &Plan,
+    level: ps5upload_fpkg::kraken::Level,
+    files: u64,
+    cancel: &Arc<AtomicBool>,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> Result<(u64, String), Refusal> {
+    use ps5upload_fpkg::build::{BuildControl, BuildRequest, Stage};
+    let dir = plan.dest.parent().unwrap_or(Path::new("/"));
+    let name = plan
+        .dest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let mut request = BuildRequest::new(&plan.source, dir);
+    request.file_name = Some(name.trim_end_matches(".pkg").to_string());
+    // As the inspection reads it: a dump's param.json may start with a BOM and end in NULs.
+    request.content_id = crate::inspect(&plan.source).ok().and_then(|i| i.content_id);
+    request.kraken = true;
+    request.level = level;
+    crate::log(format_args!(
+        ".pkg at Kraken level {level:?} on {} threads ({files} files)",
+        ps5upload_fpkg::workshop::workshop_threads()
+    ));
+    let sync = safe_write::GrowthSync::start(
+        folder_build::partial_of(&plan.dest),
+        safe_write::SYNC_EVERY,
+        PKG_SYNC_POLL,
+        Arc::clone(cancel),
+    );
+    let now = std::cell::Cell::new(Stage::Check);
+    let stage = std::cell::RefCell::new(stage);
+    let mut on_stage = |s: Stage| {
+        now.set(s);
+        (stage.borrow_mut())(s.id(), 0, 0);
+    };
+    let mut on_bytes = |done: u64, total: u64| (stage.borrow_mut())(now.get().id(), done, total);
+    let mut control = BuildControl {
+        cancel: Some(cancel),
+        sample: match plan.mode {
+            VerifyMode::Full => None,
+            VerifyMode::Fast { seed, .. } => Some(seed),
+        },
+        ..BuildControl::default()
+    };
+    control.stage = Some(&mut on_stage);
+    control.bytes = Some(&mut on_bytes);
+    let built = ps5upload_fpkg::build::build_controlled(
+        &request,
+        &mut |line| crate::log(format_args!("pkg: {line}")),
+        &mut control,
+    );
+    let synced = sync.finish();
+    let fail = |detail: String| {
+        remove_leftovers(&plan.dest);
+        failure(detail, cancel.load(Ordering::Relaxed), plan)
+    };
+    match (built, synced) {
+        (Ok(report), Ok(syncs)) => {
+            if report.path != plan.dest {
+                return Err(fail(format!(
+                    "the package was written as {}, not {}",
+                    report.path.display(),
+                    plan.dest.display()
+                )));
+            }
+            Ok((
+                report.size,
+                format!(
+                    "pkg, Kraken {level:?}, {} bytes, content id {}, {syncs} syncs while written, \
+                     verified: {}",
+                    report.size,
+                    report.content_id,
+                    if report.verify.ok() { "ok" } else { "failed" }
+                ),
+            ))
+        }
+        // A sync that failed raised the cancel flag; its error is the cause, not "cancelled".
+        (_, Err(e)) => Err(fail(format!("the drive did not save the package: {e}"))),
+        (Err(e), Ok(_)) => Err(fail(e.to_string())),
     }
 }
 
@@ -1029,6 +1187,73 @@ mod tests {
         assert!(!tmp.0.join("zf").exists());
     }
 
+    /// A `.pkg` at each level the console offers: done, through the builder's stages, and the
+    /// package reads back as the game; what a `.pkg` is not made from or with is refused.
+    #[test]
+    fn a_build_writes_a_pkg_at_each_level() {
+        let (tmp, game, dir) = setup("jobpkg");
+        let want = crate::inspect(&game).unwrap();
+        for level in ["stored", "fast", "balanced", ""] {
+            let dest = tmp.0.join(format!("p{level}.pkg"));
+            ask(
+                &dir,
+                json!({"id": "p", "op": "build", "path": game, "dest": dest, "format": "pkg",
+                    "pkg_level": level, "verify": if level == "fast" { "fast" } else { "full" }}),
+            );
+            let mut stages: Vec<String> = Vec::new();
+            let code = run_with(&dir, &mut |s| {
+                if stages.last().map(String::as_str) != Some(s) {
+                    stages.push(s.to_string());
+                }
+            })
+            .unwrap();
+            let s = status(&dir);
+            assert_eq!(code, 0, "{level}: {s}");
+            assert_eq!(s["result"]["format"], "pkg");
+            for st in ["compress", "write", "verify"] {
+                assert!(stages.contains(&st.to_string()), "{level}: {stages:?}");
+            }
+            let mut pkg = ps5upload_fpkg::source::open(&dest).unwrap();
+            assert!(
+                pkg.files().iter().any(|f| f.path == "data/level.bin"),
+                "{level}"
+            );
+            assert_eq!(
+                ps5upload_fpkg::source::read_small(pkg.as_mut(), "data/level.bin", 1 << 20)
+                    .unwrap(),
+                vec![7u8; 100_000]
+            );
+            assert!(want.files <= pkg.files().len() as u64);
+            assert!(!tmp.0.join(format!("p{level}.pkg.partial")).exists());
+        }
+        let refused = |extra: serde_json::Value| {
+            let mut r = json!({"id": "r", "op": "build", "path": game,
+                "dest": tmp.0.join("r.pkg"), "format": "pkg"});
+            for (k, v) in extra.as_object().unwrap() {
+                r[k] = v.clone();
+            }
+            ask(&dir, r);
+            assert_eq!(run_with(&dir, &mut |_| {}).unwrap(), 1);
+            status(&dir)["cause"].clone()
+        };
+        assert_eq!(
+            refused(json!({"pkg_level": "smallest"})),
+            "convert_bad_request"
+        );
+        assert_eq!(refused(json!({"zstd": true})), "convert_bad_request");
+        assert_eq!(
+            refused(json!({"dest": tmp.0.join("r.PKG")})),
+            "convert_bad_dest"
+        );
+        let zip = tmp.0.join("g.zip");
+        crate::testing::zip_of(&game, &zip);
+        assert_eq!(
+            refused(json!({"path": zip})),
+            "convert_archive_needs_unpack"
+        );
+        assert!(!tmp.0.join("r.pkg").exists());
+    }
+
     /// zstd packs with the emulator the request names: an image and a folder, each reading
     /// back through its packs.
     #[test]
@@ -1079,6 +1304,7 @@ mod tests {
         for (format, name) in [
             ("exfat", "c.exfat"),
             ("ffpfsc", "c.ffpfsc"),
+            ("pkg", "c.pkg"),
             ("folder", "c"),
         ] {
             let dest = tmp.0.join(name);
@@ -1197,6 +1423,7 @@ mod tests {
             ffpfsc: None,
             mode: VerifyMode::Full,
             zstd: None,
+            pkg: None,
         };
         let fat = safe_write::Probe {
             fs_type: "msdosfs".into(),

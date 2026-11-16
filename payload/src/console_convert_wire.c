@@ -48,6 +48,9 @@ int cc_request_json(char *out, size_t cap, const char *id, const char *op, const
         if (b->zstd && b->zstd_runtime && b->zstd_runtime[0] &&
             put_member(out, cap, &at, 1, "zstd_runtime", b->zstd_runtime) != 0)
             return -1;
+        if (strcmp(b->format, "pkg") == 0 && b->pkg_level[0] &&
+            put_member(out, cap, &at, 1, "pkg_level", b->pkg_level) != 0)
+            return -1;
         if (strcmp(b->format, "ffpfsc") == 0) {
             if (b->inner[0] && put_member(out, cap, &at, 1, "inner", b->inner) != 0) return -1;
             if (b->ffpfsc_level[0] && put_member(out, cap, &at, 1, "ffpfsc_level", b->ffpfsc_level) != 0) return -1;
@@ -236,7 +239,18 @@ int cc_inner_ok(const char *inner) {
 }
 
 int cc_format_ok(const char *format) {
-    return cc_inner_ok(format) || strcmp(format, "ffpfsc") == 0 || strcmp(format, "folder") == 0;
+    return cc_inner_ok(format) || strcmp(format, "ffpfsc") == 0 || strcmp(format, "pkg") == 0 ||
+           strcmp(format, "folder") == 0;
+}
+
+int cc_pkg_level_ok(const char *level) {
+    return strcmp(level, "stored") == 0 || strcmp(level, "fast") == 0 || strcmp(level, "balanced") == 0;
+}
+
+int cc_pkg_name_ok(const char *dest) {
+    const char *slash = strrchr(dest, '/'), *name = slash ? slash + 1 : dest;
+    size_t n = strlen(name);
+    return n > 4 && strcmp(name + n - 4, ".pkg") == 0;
 }
 
 int cc_ffpfsc_level_ok(const char *level) {

@@ -34,6 +34,7 @@ function props(over: Partial<ConvertViewProps> = {}): ConvertViewProps {
     level: 5,
     inner: "exfat",
     ffpfscLevel: "balanced",
+    pkgLevel: "fast",
     verify: "fast",
     run: null,
     onPickSource: vi.fn(),
@@ -44,6 +45,7 @@ function props(over: Partial<ConvertViewProps> = {}): ConvertViewProps {
     onLevel: vi.fn(),
     onInner: vi.fn(),
     onFfpfscLevel: vi.fn(),
+    onPkgLevel: vi.fn(),
     onVerify: vi.fn(),
     onStart: vi.fn(),
     onStop: vi.fn(),
@@ -94,9 +96,19 @@ describe("Convert", () => {
     expect(progressLine(run({ message: "convert_stage_compress" }))).toBe(t("cw_convert_stage_compress"));
   });
 
-  it("offers the five outputs, and the zstd levels only with zstd on", () => {
+  it("a .pkg offers its levels, says what it costs, and has no zstd packs", () => {
+    expect(html(props())).not.toContain("data-convert-pkg");
+    const h = html(props({ format: "pkg", dest: "/data/games/PPSA01234.pkg", pkgLevel: "stored", zstd: true }));
+    for (const l of ["stored", "fast", "balanced"]) expect(h).toContain(`data-action="convert-pkg-level-${l}"`);
+    expect(h).toMatch(/aria-pressed="true"[^>]*data-action="convert-pkg-level-stored"/);
+    expect(h).toContain(esc(t("cw_convert_pkg_note")));
+    expect(h).not.toContain('data-action="convert-zstd"');
+    expect(progressLine(run({ message: "convert_stage_check" }))).toBe(t("cw_convert_stage_read"));
+  });
+
+  it("offers the six outputs, and the zstd levels only with zstd on", () => {
     const off = html(props());
-    for (const f of ["exfat", "ffpkg", "ffpfs", "ffpfsc", "folder"]) expect(off).toContain(`data-action="convert-format-${f}"`);
+    for (const f of ["exfat", "ffpkg", "ffpfs", "ffpfsc", "pkg", "folder"]) expect(off).toContain(`data-action="convert-format-${f}"`);
     expect(off).not.toContain("convert-level-19");
     const on = html(props({ zstd: true, level: 19 }));
     expect(on).toMatch(/aria-pressed="true"[^>]*data-action="convert-level-19"/);

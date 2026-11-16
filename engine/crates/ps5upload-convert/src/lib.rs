@@ -8,9 +8,10 @@
 //! It inspects a source ([`inspect`]) and builds one ([`job`]): a game folder, `.exfat`,
 //! `.ffpkg`, `.ffpfs` or `.ffpfsc`, or the game folder inside a `.zip` or `.7z` (read in place,
 //! nothing unpacked), on the console into a `.exfat`, `.ffpkg`, `.ffpfs`, a `.ffpfsc` holding one
-//! of those, or a folder, zstd packs optional, read back before it gets its name. A `.rar` is
-//! refused ([`RAR_REFUSAL`] says why). The build code is
-//! `ps5upload-convert-core`, the same the engine runs on a computer.
+//! of those, a folder (zstd packs optional) or a debug `.pkg` (written, not installed), read back
+//! before it gets its name. A `.rar` is refused ([`RAR_REFUSAL`] says why). The build code is
+//! `ps5upload-convert-core` (and `ps5upload-fpkg`'s package builder), the same the engine runs
+//! on a computer.
 
 #[cfg(any(target_env = "ps5", test))]
 pub mod alloc;

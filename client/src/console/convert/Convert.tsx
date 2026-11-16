@@ -10,6 +10,7 @@ import type { SectionContext } from "../sections";
 import { t } from "../strings";
 import {
   converting,
+  DEFAULT_PKG_LEVEL,
   DEFAULT_ZSTD_LEVEL,
   dismissConvert,
   FFPFSC_LEVELS,
@@ -20,6 +21,7 @@ import {
   isConvertSource,
   lastPart,
   OUT_FORMATS,
+  PKG_LEVELS,
   outputName,
   parentOf,
   stageText,
@@ -33,6 +35,7 @@ import {
   type InnerFormat,
   type Inspection,
   type OutFormat,
+  type PkgLevel,
   type Verify,
   type ZstdLevel,
 } from "./model";
@@ -56,6 +59,8 @@ export interface ConvertViewProps {
   /** With a .ffpfsc: the image inside it and how hard it is compressed. */
   inner: InnerFormat;
   ffpfscLevel: FfpfscLevel;
+  /** With a .pkg: its Kraken level. */
+  pkgLevel: PkgLevel;
   verify: Verify;
   run: ConvertRun | null;
   onPickSource: () => void;
@@ -66,6 +71,7 @@ export interface ConvertViewProps {
   onLevel: (l: ZstdLevel) => void;
   onInner: (f: InnerFormat) => void;
   onFfpfscLevel: (l: FfpfscLevel) => void;
+  onPkgLevel: (l: PkgLevel) => void;
   onVerify: (v: Verify) => void;
   onStart: () => void;
   onStop: () => void;
@@ -75,6 +81,12 @@ const LEVEL_KEYS: Record<ZstdLevel, string> = {
   1: "cw_convert_level_fast",
   5: "cw_convert_level_default",
   19: "cw_convert_level_small",
+};
+
+const PKG_LEVEL_KEYS: Record<PkgLevel, string> = {
+  stored: "cw_convert_pkg_level_stored",
+  fast: "cw_convert_pkg_level_fast",
+  balanced: "cw_convert_pkg_level_balanced",
 };
 
 const FFPFSC_LEVEL_KEYS: Record<FfpfscLevel, string> = {
@@ -233,6 +245,14 @@ export function ConvertView(p: ConvertViewProps) {
               <p className="cw-dim">{t("cw_convert_ffpfsc_note")}</p>
             </div>
           ) : null}
+          {p.format === "pkg" ? (
+            <div data-convert-pkg="">
+              <div className="cw-toolbar" role="group" aria-label={t("cw_convert_pkg_level")}>
+                {PKG_LEVELS.map((l) => choice(p.pkgLevel === l, t(PKG_LEVEL_KEYS[l]), `convert-pkg-level-${l}`, () => p.onPkgLevel(l)))}
+              </div>
+              <p className="cw-dim">{t("cw_convert_pkg_note")}</p>
+            </div>
+          ) : null}
           <dl className="cw-info">
             <div>
               <dt className="cw-dim">{t("cw_convert_dest")}</dt>
@@ -270,28 +290,32 @@ export function ConvertView(p: ConvertViewProps) {
           ) : null}
           {p.free != null && info.dataBytes > p.free ? <p className="cw-dim">{t("cw_convert_space_note")}</p> : null}
 
-          <button
-            type="button"
-            role="switch"
-            aria-checked={zstdOn}
-            className="cw-focusable cw-button"
-            data-action="convert-zstd"
-            disabled={running || !info.zstdRuntime}
-            onClick={p.onZstd}
-          >
-            <span>{t("cw_convert_zstd")}</span>
-            <span className={`cw-tag${zstdOn ? " is-on" : ""}`}>{t(zstdOn ? "cw_settings_on" : "cw_settings_off")}</span>
-          </button>
-          <p className="cw-dim">{t("cw_convert_zstd_note")}</p>
-          {!info.zstdRuntime ? (
-            <p className="cw-dim" data-convert-zstd-runtime="missing">
-              {t("cw_convert_zstd_no_runtime")}
-            </p>
-          ) : null}
-          {zstdOn ? (
-            <div className="cw-toolbar" role="group" aria-label={t("cw_convert_zstd_level")}>
-              {ZSTD_LEVELS.map((l) => choice(p.level === l, t(LEVEL_KEYS[l]), `convert-level-${l}`, () => p.onLevel(l)))}
-            </div>
+          {p.format !== "pkg" ? (
+            <>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={zstdOn}
+                className="cw-focusable cw-button"
+                data-action="convert-zstd"
+                disabled={running || !info.zstdRuntime}
+                onClick={p.onZstd}
+              >
+                <span>{t("cw_convert_zstd")}</span>
+                <span className={`cw-tag${zstdOn ? " is-on" : ""}`}>{t(zstdOn ? "cw_settings_on" : "cw_settings_off")}</span>
+              </button>
+              <p className="cw-dim">{t("cw_convert_zstd_note")}</p>
+              {!info.zstdRuntime ? (
+                <p className="cw-dim" data-convert-zstd-runtime="missing">
+                  {t("cw_convert_zstd_no_runtime")}
+                </p>
+              ) : null}
+              {zstdOn ? (
+                <div className="cw-toolbar" role="group" aria-label={t("cw_convert_zstd_level")}>
+                  {ZSTD_LEVELS.map((l) => choice(p.level === l, t(LEVEL_KEYS[l]), `convert-level-${l}`, () => p.onLevel(l)))}
+                </div>
+              ) : null}
+            </>
           ) : null}
 
           <div className="cw-toolbar" role="group" aria-label={t("cw_convert_verify")}>
@@ -334,6 +358,7 @@ export function Convert({ ctx }: { ctx: SectionContext }) {
   const [level, setLevel] = useState<ZstdLevel>(DEFAULT_ZSTD_LEVEL);
   const [inner, setInner] = useState<InnerFormat>("exfat");
   const [ffpfscLevel, setFfpfscLevel] = useState<FfpfscLevel>("balanced");
+  const [pkgLevel, setPkgLevel] = useState<PkgLevel>(DEFAULT_PKG_LEVEL);
   const [verify, setVerify] = useState<Verify>("fast");
   const [picking, setPicking] = useState<"source" | "dest" | null>(null);
   const [volumes, setVolumes] = useState<Volume[]>([]);
@@ -413,7 +438,7 @@ export function Convert({ ctx }: { ctx: SectionContext }) {
   const zstdOk = inspected?.phase === "done" && inspected.info.zstdRuntime != null;
   const start = () => {
     if (!source || !dest) return;
-    void startConvert(startBody({ source, dest, format, zstd: zstd && zstdOk, level, verify, inner, ffpfscLevel }));
+    void startConvert(startBody({ source, dest, format, zstd: zstd && zstdOk, level, verify, inner, ffpfscLevel, pkgLevel }));
   };
 
   const vol = outParent ? volumeOf(outParent, volumes) : null;
@@ -431,6 +456,7 @@ export function Convert({ ctx }: { ctx: SectionContext }) {
         level={level}
         inner={inner}
         ffpfscLevel={ffpfscLevel}
+        pkgLevel={pkgLevel}
         verify={verify}
         run={run}
         onPickSource={() => setPicking("source")}
@@ -444,6 +470,7 @@ export function Convert({ ctx }: { ctx: SectionContext }) {
         onLevel={setLevel}
         onInner={setInner}
         onFfpfscLevel={setFfpfscLevel}
+        onPkgLevel={setPkgLevel}
         onVerify={setVerify}
         onStart={start}
         onStop={stopConvert}

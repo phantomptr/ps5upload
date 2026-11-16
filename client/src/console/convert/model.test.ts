@@ -126,6 +126,21 @@ describe("names and requests", () => {
     expect(convertCauseText("convert_rar_unsupported")).toBe(t("cw_convert_err_rar"));
   });
 
+  it("sends a .pkg's level with it, and never zstd", () => {
+    const base = { source: "/data/g", dest: "/data/g.pkg", format: "pkg" as const, level: 5 as const, verify: "fast" as const };
+    expect(startBody({ ...base, zstd: true, pkgLevel: "balanced" })).toEqual({
+      path: "/data/g",
+      dest: "/data/g.pkg",
+      format: "pkg",
+      zstd: false,
+      pkg_level: "balanced",
+      verify: "fast",
+    });
+    expect(startBody({ ...base, zstd: false })).toMatchObject({ pkg_level: "fast" });
+    expect(startBody({ ...base, format: "exfat", zstd: false, pkgLevel: "stored" })).not.toHaveProperty("pkg_level");
+    expect(outputName("/data/Astro", "pkg")).toBe("Astro.pkg");
+  });
+
   it("sends the image inside and its compression only with a .ffpfsc", () => {
     const base = { source: "/data/g", dest: "/data/g.ffpfsc", zstd: false, level: 5 as const, verify: "fast" as const };
     expect(startBody({ ...base, format: "ffpfsc", inner: "ffpkg", ffpfscLevel: "smallest" })).toMatchObject({

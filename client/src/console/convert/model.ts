@@ -16,9 +16,14 @@ import { errorText } from "../home/Home";
 import { opCause, opResult, startOp, watchOp, type OpEnd, type OpStatus } from "../files/opJob";
 import { t } from "../strings";
 
-/** What a conversion writes. The helper names the same five (cc_format_ok). */
-export type OutFormat = "exfat" | "ffpkg" | "ffpfs" | "ffpfsc" | "folder";
-export const OUT_FORMATS: OutFormat[] = ["exfat", "ffpkg", "ffpfs", "ffpfsc", "folder"];
+/** What a conversion writes. The helper names the same six (cc_format_ok). */
+export type OutFormat = "exfat" | "ffpkg" | "ffpfs" | "ffpfsc" | "pkg" | "folder";
+export const OUT_FORMATS: OutFormat[] = ["exfat", "ffpkg", "ffpfs", "ffpfsc", "pkg", "folder"];
+
+/** A .pkg's Kraken level (cc_pkg_level_ok): none, fast (the default) or balanced. */
+export type PkgLevel = "stored" | "fast" | "balanced";
+export const PKG_LEVELS: PkgLevel[] = ["stored", "fast", "balanced"];
+export const DEFAULT_PKG_LEVEL: PkgLevel = "fast";
 
 /** The image a .ffpfsc holds (cc_inner_ok), and how hard it is compressed (cc_ffpfsc_level_ok). */
 export type InnerFormat = "exfat" | "ffpkg" | "ffpfs";
@@ -155,6 +160,8 @@ export function formatLabel(format: string): string {
       return t("cw_convert_format_ffpfs");
     case "ffpfsc":
       return t("cw_convert_format_ffpfsc");
+    case "pkg":
+      return t("cw_convert_format_pkg");
     case "zip":
       return t("cw_convert_format_zip");
     case "7z":
@@ -208,6 +215,7 @@ export const CONVERT_CAUSES: Record<string, string> = {
   convert_bad_zstd_level: "cw_convert_err_bad_request",
   convert_bad_inner: "cw_convert_err_bad_request",
   convert_bad_ffpfsc_level: "cw_convert_err_bad_request",
+  convert_bad_pkg_level: "cw_convert_err_bad_request",
   convert_bad_request: "cw_convert_err_bad_request",
   bad_format: "cw_convert_err_bad_request",
   bad_verify: "cw_convert_err_bad_request",
@@ -249,6 +257,7 @@ export function stageText(message: string | null | undefined): string | null {
     case "pack":
       return t("cw_convert_stage_pack");
     case "read":
+    case "check":
       return t("cw_convert_stage_read");
     case "write":
       return t("cw_convert_stage_write");
@@ -261,7 +270,7 @@ export function stageText(message: string | null | undefined): string | null {
 }
 
 /** What /api/convert/start is sent. The zstd level goes only with zstd, the image inside and its
- *  compression only with a .ffpfsc. */
+ *  compression only with a .ffpfsc, the package's level only with a .pkg (never with zstd). */
 export interface StartBody {
   path: string;
   dest: string;
@@ -270,6 +279,7 @@ export interface StartBody {
   zstd_level?: number;
   inner?: InnerFormat;
   ffpfsc_level?: FfpfscLevel;
+  pkg_level?: PkgLevel;
   verify: Verify;
 }
 
@@ -282,9 +292,12 @@ export function startBody(o: {
   verify: Verify;
   inner?: InnerFormat;
   ffpfscLevel?: FfpfscLevel;
+  pkgLevel?: PkgLevel;
 }): StartBody {
-  const body: StartBody = { path: o.source, dest: o.dest, format: o.format, zstd: o.zstd, verify: o.verify };
-  if (o.zstd) body.zstd_level = o.level;
+  const zstd = o.zstd && o.format !== "pkg";
+  const body: StartBody = { path: o.source, dest: o.dest, format: o.format, zstd, verify: o.verify };
+  if (zstd) body.zstd_level = o.level;
+  if (o.format === "pkg") body.pkg_level = o.pkgLevel ?? DEFAULT_PKG_LEVEL;
   if (o.format === "ffpfsc") {
     body.inner = o.inner ?? "exfat";
     body.ffpfsc_level = o.ffpfscLevel ?? "balanced";
