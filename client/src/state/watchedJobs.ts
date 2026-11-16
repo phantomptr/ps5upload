@@ -146,7 +146,9 @@ export async function watchJob(
         return;
       }
       if (snap.status === "failed") {
-        if (stopRequested()) break;
+        // Stopped here, or elsewhere (another window, the API, MCP): the engine says so with
+        // `error_reason: "cancelled"`.
+        if (stopRequested() || snap.error_reason === "cancelled") break;
         throw new Error(snap.error ?? "The job failed.");
       }
       store.put(key, { sent, total });

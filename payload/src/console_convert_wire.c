@@ -232,32 +232,46 @@ static int id_ok(const char *id) {
 }
 
 int cc_record_format(char *out, size_t cap, unsigned long long xpid, long hpid, const char *id, const char *dest) {
+    return cc_record_format_boot(out, cap, xpid, hpid, id, dest, 0);
+}
+
+int cc_record_format_boot(char *out, size_t cap, unsigned long long xpid, long hpid, const char *id, const char *dest,
+                          unsigned long long boot) {
     int w;
     if (strchr(dest, '\n') || !id_ok(id)) return -1; /* the record is line-based */
-    w = snprintf(out, cap, "%llu %ld %s\n%s\n", xpid, hpid, id, dest);
+    w = boot ? snprintf(out, cap, "%llu %ld %s %llu\n%s\n", xpid, hpid, id, boot, dest)
+             : snprintf(out, cap, "%llu %ld %s\n%s\n", xpid, hpid, id, dest);
     return w < 0 || (size_t)w >= cap ? -1 : w;
 }
 
 int cc_record_parse(const char *buf, unsigned long long *xpid, long *hpid, char *id, size_t id_cap, char *dest,
                     size_t cap) {
+    return cc_record_parse_boot(buf, xpid, hpid, id, id_cap, dest, cap, NULL);
+}
+
+int cc_record_parse_boot(const char *buf, unsigned long long *xpid, long *hpid, char *id, size_t id_cap, char *dest,
+                         size_t cap, unsigned long long *boot) {
     const char *nl = strchr(buf, '\n'), *end;
-    char line[32 + CC_JOB_ID_MAX + 8], got[CC_JOB_ID_MAX + 8];
+    char line[32 + CC_JOB_ID_MAX + 32], got[CC_JOB_ID_MAX + 8];
+    unsigned long long at_boot = 0;
     size_t len;
     int n;
     if (cap) dest[0] = 0;
     if (id_cap) id[0] = 0;
+    if (boot) *boot = 0;
     if (!nl || (size_t)(nl - buf) >= sizeof line) return 0;
     /* The first line alone: a record from before job ids has none, and the id is never read
-     * from the line below it. */
+     * from the line below it. One from before boot times has no boot time (0: unknown). */
     memcpy(line, buf, (size_t)(nl - buf));
     line[nl - buf] = 0;
     got[0] = 0;
-    n = sscanf(line, "%llu %ld %47s", xpid, hpid, got);
+    n = sscanf(line, "%llu %ld %47s %llu", xpid, hpid, got, &at_boot);
     if (n < 2) return 0;
-    if (n == 3) {
+    if (n >= 3) {
         if (!id_ok(got) || strlen(got) >= id_cap) return 0;
         memcpy(id, got, strlen(got) + 1);
     }
+    if (n == 4 && boot) *boot = at_boot;
     nl++;
     end = strchr(nl, '\n');
     len = end ? (size_t)(end - nl) : strlen(nl);
@@ -265,6 +279,57 @@ int cc_record_parse(const char *buf, unsigned long long *xpid, long *hpid, char 
     memcpy(dest, nl, len);
     dest[len] = 0;
     return 1;
+}
+
+/* A stage's share of a build's bar: the planning is quick, the passes over the data are what
+ * take the time, and the read-back is about half a pass. */
+static unsigned stage_weight(const char *stage) {
+    if (strcmp(stage, "plan") == 0) return 0;
+    if (strcmp(stage, "check") == 0) return 1;
+    if (strcmp(stage, "verify") == 0) return 2;
+    return 4; /* pack, compress, write */
+}
+
+uint64_t cc_job_progress(const char *format, int zstd, const char *stage, uint64_t done, uint64_t total,
+                         uint64_t job_total) {
+    static const char *const pkg[] = {"check", "plan", "compress", "write", "verify"};
+    static const char *const image[] = {"plan", "write", "verify"};
+    static const char *const image_packed[] = {"pack", "plan", "write", "verify"};
+    static const char *const folder[] = {"write", "verify"};
+    static const char *const folder_packed[] = {"pack", "write", "verify"};
+    const char *const *list;
+    size_t n, i, at;
+    unsigned before = 0, all = 0;
+    double within, share;
+    if (!format || !stage || !stage[0]) {
+        /* No stages (an inspection): its own count. */
+        if (!total) return 0;
+        return (uint64_t)((double)(done < total ? done : total) * ((double)job_total / (double)total));
+    }
+    if (strcmp(format, "pkg") == 0) {
+        list = pkg;
+        n = sizeof pkg / sizeof *pkg;
+    } else if (strcmp(format, "folder") == 0) {
+        list = zstd ? folder_packed : folder;
+        n = zstd ? 3 : 2;
+    } else {
+        list = zstd ? image_packed : image;
+        n = zstd ? 4 : 3;
+        /* A .ffpfsc compresses as it writes: one stage under that name. */
+        if (strcmp(stage, "compress") == 0) stage = "write";
+    }
+    for (at = 0; at < n && strcmp(list[at], stage) != 0; at++) {
+    }
+    if (at == n) return UINT64_MAX;
+    for (i = 0; i < n; i++) {
+        all += stage_weight(list[i]);
+        if (i < at) before += stage_weight(list[i]);
+    }
+    if (!all) return 0;
+    within = total ? (double)(done < total ? done : total) / (double)total : 0.0;
+    share = ((double)before + (double)stage_weight(list[at]) * within) / (double)all;
+    if (share >= 1.0) return job_total;
+    return (uint64_t)((double)job_total * share);
 }
 
 /* The one of `exts` (lowercase) that the last part of `path` ends in after a dot, whatever its

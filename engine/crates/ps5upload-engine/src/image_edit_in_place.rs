@@ -224,7 +224,8 @@ impl Drop for Reading {
 
 /// Why `path` can't be read or written by another job now: an in-place edit of it (or of an
 /// image inside it) runs. `None` when nothing edits it.
-pub(crate) fn busy(path: &Path) -> Option<String> {
+#[cfg(test)]
+fn busy(path: &Path) -> Option<String> {
     let k = key(path);
     let users = lock_users();
     users
@@ -239,10 +240,17 @@ pub(crate) fn busy(path: &Path) -> Option<String> {
 /// (restored, or deleted when it was cut short), and logged. A damaged journal is kept and the
 /// open refused: the image may be part-edited.
 pub(crate) fn before_open(image: &Path) -> Result<Recovery, String> {
-    if let Some(why) = busy(image) {
-        return Err(why);
-    }
-    settle(image)
+    open_for_reading(image).map(|(recovery, _reading)| recovery)
+}
+
+/// [`before_open`] for a job that goes on reading `image` after the open (an upload of it): the
+/// [`Reading`] it returns keeps an edit from starting until it is dropped. The image is
+/// registered as read before its journal is settled, so an edit can't be claimed between the
+/// busy check and the recovery and have its live journal "recovered" under it.
+pub(crate) fn open_for_reading(image: &Path) -> Result<(Recovery, Reading), String> {
+    let reading = Reading::take(image)?;
+    let recovery = settle(image)?;
+    Ok((recovery, reading))
 }
 
 /// Settles a journal left beside `image` ([`patch::recover`]), logged. Only for a file that is
@@ -980,7 +988,21 @@ fn apply_stopping(
         files: &hosts,
         open: None,
     };
-    let mut read_source = |id, offset, buf: &mut [u8]| source.read(id, offset, buf);
+    // The added files' bytes are what take the time: reported as they are read in, at most
+    // every 64 MiB or 250 ms.
+    let total_write = written.max(1);
+    let (mut read_in, mut shown, mut shown_at) = (0u64, 0u64, std::time::Instant::now());
+    let mut read_source = |id, offset, buf: &mut [u8]| {
+        source.read(id, offset, buf)?;
+        read_in = read_in.saturating_add(buf.len() as u64).min(total_write);
+        if read_in - shown >= 64 << 20
+            || shown_at.elapsed() >= std::time::Duration::from_millis(250)
+        {
+            (shown, shown_at) = (read_in, std::time::Instant::now());
+            progress("write", read_in, total_write);
+        }
+        Ok(())
+    };
     let applied = match stop {
         Stop::Never => patch::apply(&mut file, &image, &writes, &mut read_source, cancel, SYNCS),
         #[cfg(test)]
@@ -2049,6 +2071,30 @@ mod tests {
             assert!(Reading::take(&tmp.0).is_err(), "an image in it is edited");
             drop(claim);
             drop(Reading::take(&img).unwrap());
+            assert!(Claim::take(&img).is_ok());
+        });
+    }
+
+    /// An upload (or a browse) opens the image as a reader, registered before its journal is
+    /// settled: an edit can't start in between, nor while the upload goes on; and an open is
+    /// refused while an edit runs.
+    #[test]
+    fn an_open_for_reading_and_an_edit_exclude_each_other() {
+        within(10, || {
+            let tmp = Scratch::new("open-reading");
+            let img = tmp.0.join("game.exfat");
+            std::fs::write(&img, b"x").unwrap();
+            let (recovery, reading) = open_for_reading(&img).unwrap();
+            assert_eq!(recovery, Recovery::Clean);
+            assert!(Claim::take(&img).is_err(), "an upload of it runs");
+            drop(reading);
+            let claim = Claim::take(&img).unwrap();
+            let e = open_for_reading(&img).err().expect("refused while edited");
+            assert!(e.contains("being edited in place"), "{e}");
+            assert!(before_open(&img).is_err());
+            drop(claim);
+            assert_eq!(before_open(&img).unwrap(), Recovery::Clean);
+            // A browse's open leaves no reader behind.
             assert!(Claim::take(&img).is_ok());
         });
     }
