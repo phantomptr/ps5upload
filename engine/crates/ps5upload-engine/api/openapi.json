@@ -14528,6 +14528,10 @@
         ],
         "type": "object"
       },
+      "Users": {
+        "description": "Written by hand in the engine: the source has no field list for this.",
+        "x-rust-type": "Users"
+      },
       "Verdict": {
         "enum": [
           "installed",
@@ -23472,7 +23476,9 @@
                       },
                       "type": "array"
                     },
-                    "users": {}
+                    "users": {
+                      "$ref": "#/components/schemas/Users"
+                    }
                   },
                   "type": "object"
                 }
@@ -44429,7 +44435,9 @@
                       },
                       "type": "array"
                     },
-                    "users": {}
+                    "users": {
+                      "$ref": "#/components/schemas/Users"
+                    }
                   },
                   "type": "object"
                 }

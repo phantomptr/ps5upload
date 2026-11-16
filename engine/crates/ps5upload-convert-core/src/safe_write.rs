@@ -315,14 +315,17 @@ fn rename_excl(from: &Path, to: &Path) -> Option<io::Result<()>> {
     let (a, b) = (c(from)?, c(to)?);
     // SAFETY: two NUL-terminated paths that outlive the call.
     #[cfg(target_os = "linux")]
+    // The system call itself, not libc's wrapper: musl (the Docker engine's Alpine build) has no
+    // `renameat2` function, and an older glibc may not either. A kernel without it says ENOSYS.
     let rc = unsafe {
-        libc::renameat2(
+        libc::syscall(
+            libc::SYS_renameat2,
             libc::AT_FDCWD,
             a.as_ptr(),
             libc::AT_FDCWD,
             b.as_ptr(),
             libc::RENAME_NOREPLACE,
-        )
+        ) as libc::c_int
     };
     // SAFETY: as above.
     #[cfg(target_os = "macos")]
@@ -476,7 +479,10 @@ fn statfs_into(dir: &Path, p: &mut Probe) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     p.free = Some(unsigned(st.f_bavail).saturating_mul(unsigned(st.f_frsize)));
-    p.read_only |= (st.f_flag as u64) & (libc::ST_RDONLY as u64) != 0;
+    // `f_flag` and `ST_RDONLY` are `c_ulong` on some systems and `u64` on others.
+    #[allow(clippy::unnecessary_cast)]
+    let flags = st.f_flag as u64 & libc::ST_RDONLY as u64;
+    p.read_only |= flags != 0;
     Ok(())
 }
 

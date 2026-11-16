@@ -4751,10 +4751,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "ps5-dump-forge-exfat"
+version = "12.5.0"
+dependencies = [
+ "ps5-dump-forge-patch",
+ "ps5upload-fpkg",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "ps5-dump-forge-patch"
+version = "12.5.0"
+dependencies = [
+ "crc32fast",
+]
+
+[[package]]
 name = "ps5-dump-forge-pfs"
 version = "12.5.0"
 dependencies = [
  "flate2",
+ "ps5-dump-forge-patch",
  "ps5upload-fpkg",
 ]
 
@@ -4762,6 +4779,7 @@ dependencies = [
 name = "ps5-dump-forge-ufs2"
 version = "12.5.0"
 dependencies = [
+ "ps5-dump-forge-patch",
  "ps5upload-fpkg",
  "unicode-normalization",
 ]
@@ -4794,6 +4812,22 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "zip",
+]
+
+[[package]]
+name = "ps5upload-convert-core"
+version = "12.5.0"
+dependencies = [
+ "blake3",
+ "libc",
+ "ps5-dump-forge-pfs",
+ "ps5-dump-forge-ufs2",
+ "ps5-dump-forge-zstd",
+ "ps5upload-fpkg",
+ "ps5upload-pkg",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
 ]
 
 [[package]]
@@ -4896,10 +4930,13 @@ dependencies = [
  "lz4_flex",
  "lzma-rust2 0.25.0",
  "md-5",
+ "ps5-dump-forge-exfat",
+ "ps5-dump-forge-patch",
  "ps5-dump-forge-pfs",
  "ps5-dump-forge-ufs2",
  "ps5-dump-forge-zstd",
  "ps5upload-ava1",
+ "ps5upload-convert-core",
  "ps5upload-core",
  "ps5upload-fpkg",
  "ps5upload-pkg",
