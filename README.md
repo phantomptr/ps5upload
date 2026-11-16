@@ -16,7 +16,7 @@
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-GPL--3-green" /></a>
   <img alt="platforms" src="https://img.shields.io/badge/platforms-macOS_·_Linux_·_Windows_·_Android_·_iPhone_·_Web-lightgrey" />
   <img alt="firmware" src="https://img.shields.io/badge/PS5_firmware-1.00_–_14.10_supported_•_5.10,_9.60_&_13.60_tested-brightgreen" />
-  <a href="https://discord.gg/fzK3xddtrM"><img alt="discord" src="https://img.shields.io/badge/discord-join-5865F2" /></a>
+  <a href="https://discord.gg/BqjZE6vZE"><img alt="discord" src="https://img.shields.io/badge/discord-join-5865F2" /></a>
 </p>
 
 ---
@@ -629,7 +629,7 @@ Created and maintained by **PhantomPtr**.
 
 If you find this tool useful, consider buying me a coffee!
 
-* Discord server: [https://discord.gg/fzK3xddtrM](https://discord.gg/fzK3xddtrM)
+* Discord server: [https://discord.gg/BqjZE6vZE](https://discord.gg/BqjZE6vZE)
 * Support me on Ko-fi: [https://ko-fi.com/B0B81S0WUA](https://ko-fi.com/B0B81S0WUA)
 
 [![Support me on Ko-fi](https://storage.ko-fi.com/cdn/kofi3.png?v=3)](https://ko-fi.com/B0B81S0WUA)

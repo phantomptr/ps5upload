@@ -29,7 +29,7 @@ const URLS = {
   changelog: "https://github.com/phantomptr/ps5upload/blob/main/CHANGELOG.md",
   disclaimer: "https://github.com/phantomptr/ps5upload/blob/main/DISCLAIMER.md",
   author: "https://x.com/phantomptr",
-  discord: "https://discord.gg/fzK3xddtrM",
+  discord: "https://discord.gg/BqjZE6vZE",
   coffee: COFFEE_URL,
   email: `mailto:${AUTHOR_EMAIL}`,
 };
