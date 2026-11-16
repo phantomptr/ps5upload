@@ -98,6 +98,20 @@ Then the same with a large game (50+ GB, long enough to see the power tick hold 
 leave the controller alone past the console's auto-rest time): the speed, and the converter's
 memory in the process list (the hash queue holds 4 reads of up to 8 MiB on the console).
 
+## Run 3b: a `.ffpfsc`
+
+No new imports (the ELF imports what it did before `.ffpfsc` output was added). New on the
+console: the deflate encoders (libdeflate, zlib-rs) on 3 worker threads, the PFSC reader in the
+read-back, and the container synced every 32 MiB as it is written.
+
+`fetch('/api/convert/start',{method:'POST',body:JSON.stringify({path:'/data/homebrew/<id>',dest:'/data/out.ffpfsc',format:'ffpfsc',inner:'exfat',ffpfsc_level:'balanced'})})`
+
+Proven when: the stages go `plan` → `compress` → `verify`, `convert.log` has `.ffpfsc holding
+out.exfat, balanced compression on 3 threads` and the `ffpfsc: compression=balanced ... threads=3`
+line (write down `stream_ms` and `raw_bytes`: the console's compression rate), the image mounts
+through ShadowMount+ and the game starts. Then `inner` `ffpkg` at `fast`, and one large game at
+`smallest` (the slow end: the page says 20-40 minutes for 30 GB) with Stop at about 50 %.
+
 ## Run 4: Stop, and a full drive
 
 Start run 3 on a large game and press Stop at about 10 %, then at about 50 %, then during

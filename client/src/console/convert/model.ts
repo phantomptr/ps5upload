@@ -16,9 +16,17 @@ import { errorText } from "../home/Home";
 import { opCause, opResult, startOp, watchOp, type OpEnd, type OpStatus } from "../files/opJob";
 import { t } from "../strings";
 
-/** What a conversion writes. The helper names the same four (cc_format_ok). */
-export type OutFormat = "exfat" | "ffpkg" | "ffpfs" | "folder";
-export const OUT_FORMATS: OutFormat[] = ["exfat", "ffpkg", "ffpfs", "folder"];
+/** What a conversion writes. The helper names the same five (cc_format_ok). */
+export type OutFormat = "exfat" | "ffpkg" | "ffpfs" | "ffpfsc" | "folder";
+export const OUT_FORMATS: OutFormat[] = ["exfat", "ffpkg", "ffpfs", "ffpfsc", "folder"];
+
+/** The image a .ffpfsc holds (cc_inner_ok), and how hard it is compressed (cc_ffpfsc_level_ok). */
+export type InnerFormat = "exfat" | "ffpkg" | "ffpfs";
+export const INNER_FORMATS: InnerFormat[] = ["exfat", "ffpkg", "ffpfs"];
+export type FfpfscLevel = "fast" | "balanced" | "smallest";
+export const FFPFSC_LEVELS: FfpfscLevel[] = ["fast", "balanced", "smallest"];
+/** ShadowMountPlus mounts a .ffpfsc whose name is at most this many bytes. */
+export const FFPFSC_NAME_MAX = 63;
 
 /** The zstd levels offered (the PC app's ImageOptions offers the same three). */
 export const ZSTD_LEVELS = [1, 5, 19] as const;
@@ -28,7 +36,7 @@ export const DEFAULT_ZSTD_LEVEL: ZstdLevel = 5;
 export type Verify = "fast" | "full";
 
 /** An image the converter reads (and writes): the console mounts by extension. */
-const IMAGE_EXT = /\.(exfat|ffpkg|ffpfs)$/i;
+const IMAGE_EXT = /\.(exfat|ffpkg|ffpfs|ffpfsc)$/i;
 
 /** Whether a file named `name` can be converted (folders always can be picked). */
 export function isConvertImage(name: string): boolean {
@@ -47,10 +55,24 @@ export function parentOf(path: string): string {
   return at <= 0 ? "/" : p.slice(0, at);
 }
 
-/** The output's default name: the source's name without an image extension, plus the format's. */
+/** `stem` cut (at a character) so it takes at most `max` bytes of UTF-8. */
+function fitBytes(stem: string, max: number): string {
+  const enc = new TextEncoder();
+  let out = "";
+  for (const ch of stem) {
+    if (enc.encode(out + ch).length > max) break;
+    out += ch;
+  }
+  return out;
+}
+
+/** The output's default name: the source's name without an image extension, plus the format's
+ *  (a .ffpfsc's cut to the length ShadowMountPlus mounts). */
 export function outputName(source: string, format: OutFormat): string {
   const stem = lastPart(source).replace(IMAGE_EXT, "") || "game";
-  return format === "folder" ? stem : `${stem}.${format}`;
+  if (format === "folder") return stem;
+  if (format === "ffpfsc") return `${fitBytes(stem, FFPFSC_NAME_MAX - ".ffpfsc".length).trim() || "game"}.ffpfsc`;
+  return `${stem}.${format}`;
 }
 
 /** What /api/convert/inspect's job answers (engine/crates/ps5upload-convert Inspection). */
@@ -111,6 +133,8 @@ export function formatLabel(format: string): string {
       return t("cw_convert_format_ffpkg");
     case "ffpfs":
       return t("cw_convert_format_ffpfs");
+    case "ffpfsc":
+      return t("cw_convert_format_ffpfsc");
   }
   return format;
 }
@@ -154,6 +178,8 @@ export const CONVERT_CAUSES: Record<string, string> = {
   convert_bad_format: "cw_convert_err_bad_request",
   convert_bad_verify: "cw_convert_err_bad_request",
   convert_bad_zstd_level: "cw_convert_err_bad_request",
+  convert_bad_inner: "cw_convert_err_bad_request",
+  convert_bad_ffpfsc_level: "cw_convert_err_bad_request",
   convert_bad_request: "cw_convert_err_bad_request",
   bad_format: "cw_convert_err_bad_request",
   bad_verify: "cw_convert_err_bad_request",
@@ -198,25 +224,43 @@ export function stageText(message: string | null | undefined): string | null {
       return t("cw_convert_stage_read");
     case "write":
       return t("cw_convert_stage_write");
+    case "compress":
+      return t("cw_convert_stage_compress");
     case "verify":
       return t("cw_convert_stage_verify");
   }
   return t("cw_convert_stage_other");
 }
 
-/** What /api/convert/start is sent. The level goes only with zstd. */
+/** What /api/convert/start is sent. The zstd level goes only with zstd, the image inside and its
+ *  compression only with a .ffpfsc. */
 export interface StartBody {
   path: string;
   dest: string;
   format: OutFormat;
   zstd: boolean;
   zstd_level?: number;
+  inner?: InnerFormat;
+  ffpfsc_level?: FfpfscLevel;
   verify: Verify;
 }
 
-export function startBody(o: { source: string; dest: string; format: OutFormat; zstd: boolean; level: ZstdLevel; verify: Verify }): StartBody {
+export function startBody(o: {
+  source: string;
+  dest: string;
+  format: OutFormat;
+  zstd: boolean;
+  level: ZstdLevel;
+  verify: Verify;
+  inner?: InnerFormat;
+  ffpfscLevel?: FfpfscLevel;
+}): StartBody {
   const body: StartBody = { path: o.source, dest: o.dest, format: o.format, zstd: o.zstd, verify: o.verify };
   if (o.zstd) body.zstd_level = o.level;
+  if (o.format === "ffpfsc") {
+    body.inner = o.inner ?? "exfat";
+    body.ffpfsc_level = o.ffpfscLevel ?? "balanced";
+  }
   return body;
 }
 

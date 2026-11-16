@@ -5,10 +5,12 @@
 //!
 //! - `request.json`: written by the helper, read and deleted here at start.
 //!   `{"id": "<the helper's job id>", "op": "inspect"|"build", "path": "<source>"}`, and for a
-//!   build `"dest"` (the output's full path), `"format"` (`exfat`, `ffpkg`, `ffpfs`, `folder`),
-//!   `"zstd"` (bool), `"verify"` (`fast`, the default, or `full`), and optionally
+//!   build `"dest"` (the output's full path), `"format"` (`exfat`, `ffpkg`, `ffpfs`, `ffpfsc`,
+//!   `folder`), `"zstd"` (bool), `"verify"` (`fast`, the default, or `full`), and optionally
 //!   `"zstd_runtime"` (the path of ampr-emu-ng's `libSceAmpr.sprx` on the console, which zstd
-//!   packs need) and `"zstd_level"` (1 to 22, 5 when absent).
+//!   packs need) and `"zstd_level"` (1 to 22, 5 when absent); a `.ffpfsc` also `"inner"` (the
+//!   image inside it: `exfat`, the default, `ffpkg` or `ffpfs`) and `"ffpfsc_level"` (`fast`,
+//!   `balanced`, the default, or `smallest`), compressed on [`THREADS`] threads.
 //! - `status.json`: rewritten here through a temporary file and a rename in the same folder, so
 //!   the helper never reads half of one; at most every [`STATUS_EVERY`] while a job runs.
 //!   `{"id", "pid", "op", "state": "running"|"done"|"failed", "stage"?, "bytes_done"?,
@@ -33,6 +35,7 @@ use std::time::{Duration, Instant};
 use ps5upload_convert_core::folder_build::{self, FolderOut};
 use ps5upload_convert_core::image_build::{self, ImageFormat};
 use ps5upload_convert_core::{safe_write, zstd_packs};
+use ps5upload_fpkg::ffpfsc_block::Level;
 use ps5upload_fpkg::sample::VerifyMode;
 use ps5upload_fpkg::source::SourceTree;
 use serde_json::json;
@@ -54,7 +57,7 @@ const MAX_RUNTIME_BYTES: u64 = 16 << 20;
 const DEFAULT_ZSTD_LEVEL: u8 = 5;
 /// Compression threads: on the PS5 three of the payload's five CPUs, the other two left to the
 /// console's own UI and a suspended game; elsewhere every core (0).
-pub const THREADS: usize = if cfg!(target_env = "ps5") { 3 } else { 0 };
+pub const THREADS: usize = ps5upload_convert_core::WORKERS;
 
 #[derive(Debug, serde::Deserialize)]
 struct Request {
@@ -74,6 +77,12 @@ struct Request {
     zstd_runtime: String,
     #[serde(default)]
     zstd_level: Option<u8>,
+    /// With `format` `ffpfsc`: the image inside it, `exfat` (the default), `ffpkg` or `ffpfs`.
+    #[serde(default)]
+    inner: String,
+    /// With `format` `ffpfsc`: `fast`, `balanced` (the default) or `smallest`.
+    #[serde(default)]
+    ffpfsc_level: String,
 }
 
 /// Writes `status` as `dir/status.json`. The temporary file is in `dir` too: a rename never
@@ -174,6 +183,8 @@ struct Plan {
     dest: PathBuf,
     /// `None`: a folder.
     image: Option<ImageFormat>,
+    /// A `.ffpfsc`: the name of the image inside it and how hard it is compressed.
+    ffpfsc: Option<(String, Level)>,
     mode: VerifyMode,
     /// The emulator's bytes and the level, for zstd packs.
     zstd: Option<(Vec<u8>, u8)>,
@@ -192,12 +203,26 @@ fn plan(request: &Request) -> Result<Plan, Refusal> {
     if request.dest.is_empty() {
         return Err(bad("a build needs a dest".into()));
     }
-    let image = match request.format.as_str() {
-        "folder" => None,
-        "exfat" => Some(ImageFormat::Exfat),
-        "ffpkg" => Some(ImageFormat::Ffpkg),
-        "ffpfs" => Some(ImageFormat::Ffpfs),
+    let (image, compress) = match request.format.as_str() {
+        "folder" => (None, false),
+        "exfat" => (Some(ImageFormat::Exfat), false),
+        "ffpkg" => (Some(ImageFormat::Ffpkg), false),
+        "ffpfs" => (Some(ImageFormat::Ffpfs), false),
+        "ffpfsc" => {
+            let inner = match request.inner.as_str() {
+                "" | "exfat" => ImageFormat::Exfat,
+                "ffpkg" => ImageFormat::Ffpkg,
+                "ffpfs" => ImageFormat::Ffpfs,
+                other => return Err(bad(format!("unknown image {other:?} inside a .ffpfsc"))),
+            };
+            (Some(inner), true)
+        }
         other => return Err(bad(format!("unknown format {other:?}"))),
+    };
+    let level = if compress {
+        Level::parse(Some(&request.ffpfsc_level)).map_err(bad)?
+    } else {
+        Level::default()
     };
     let mode = match request.verify.as_str() {
         "" | "fast" => VerifyMode::from_full(false, image == Some(ImageFormat::Ffpkg)),
@@ -216,17 +241,30 @@ fn plan(request: &Request) -> Result<Plan, Refusal> {
     if !dest.is_absolute() || name.is_empty() || name.to_ascii_lowercase().ends_with(".partial") {
         return Err(bad_dest(format!("{} is not an output path", request.dest)));
     }
+    let mut ffpfsc = None;
     if let Some(f) = image {
+        let want = if compress { "ffpfsc" } else { f.extension() };
         let ext = dest
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or_default();
-        if !ext.eq_ignore_ascii_case(f.extension()) {
+        if !ext.eq_ignore_ascii_case(want) {
             return Err(bad_dest(format!(
-                "{} does not end in .{}",
-                request.dest,
-                f.extension()
+                "{} does not end in .{want}",
+                request.dest
             )));
+        }
+        if compress {
+            // The names ShadowMountPlus mounts: the container's at most 63 bytes, the image
+            // inside it named after it with its own filesystem's extension.
+            let (outer, inner) = image_build::output_names(&dest, f, true);
+            if !outer.eq_ignore_ascii_case(name) {
+                return Err(bad_dest(format!(
+                    "{name}: a .ffpfsc's name is at most {} bytes, without \" * / : < > ? \\ |",
+                    image_build::PFS_NAME_MAX
+                )));
+            }
+            ffpfsc = inner.map(|inner| (inner, level));
         }
     }
     if dest.symlink_metadata().is_ok() {
@@ -265,6 +303,7 @@ fn plan(request: &Request) -> Result<Plan, Refusal> {
         source,
         dest,
         image,
+        ffpfsc,
         mode,
         zstd,
     })
@@ -351,7 +390,8 @@ fn failure(detail: String, cancelled: bool, plan: &Plan) -> Refusal {
     } else if !plan.source.exists() || plan.dest.parent().is_some_and(|d| !d.is_dir()) {
         // U7: a pulled drive is named before the raw error.
         "convert_drive_gone"
-    } else if lower.contains("holds files of at most") {
+    } else if lower.contains("holds files of at most") || lower.contains("file too large") {
+        // The second: EFBIG, a `.ffpfsc` (its size known only once written) past FAT32's 4 GiB.
         // The build's own check once the image or pack volume sizes are known
         // (`safe_write::too_big_for`): with zstd packs the size isn't known before.
         "convert_too_big_for_drive"
@@ -416,7 +456,13 @@ fn build(
     // drive's own limits are checked for them here. Their size is known once they are measured:
     // the build checks the image and each pack volume against the drive's file size limit then,
     // before writing (`safe_write::too_big_for`, `convert_too_big_for_drive` in `failure`).
-    let need = if plan.zstd.is_some() { 0 } else { data };
+    // A `.ffpfsc` is smaller by what compression saves, known only once written; a drive that
+    // fills up ends the build with `convert_no_space`.
+    let need = if plan.zstd.is_some() || plan.ffpfsc.is_some() {
+        0
+    } else {
+        data
+    };
     if let Some(why) = probe.refusal(need, plan.image.is_some(), folder_build::SPARE) {
         let cause = if probe.read_only {
             "convert_dest_read_only"
@@ -455,6 +501,13 @@ fn build(
         plan.mode,
         plan.zstd.as_ref().map(|z| z.1)
     ));
+    if let Some((inner, level)) = &plan.ffpfsc {
+        crate::log(format_args!(
+            ".ffpfsc holding {inner}, {} compression on {} threads",
+            level.name(),
+            THREADS
+        ));
+    }
     let started = Instant::now();
     let chunk = image_build::DEFAULT_VERIFY_CHUNK;
     let source = plan.source.clone();
@@ -469,18 +522,35 @@ fn build(
                 Some(p) => p,
                 None => &mut *tree,
             };
+            // A `.ffpfsc`: the image inside it and its compression level.
+            let (inner, compression) = match &plan.ffpfsc {
+                Some((name, level)) => (Some(name.as_str()), *level),
+                None => (None, Level::default()),
+            };
             match zstd {
-                Some((runtime, level)) => zstd_packs::build(
-                    format, *level, None, runtime, tree, &plan.dest, plan.mode, chunk, cancel,
-                    stage, THREADS,
+                Some((runtime, level)) => zstd_packs::build_at(
+                    format,
+                    inner,
+                    compression,
+                    *level,
+                    None,
+                    runtime,
+                    tree,
+                    &plan.dest,
+                    plan.mode,
+                    chunk,
+                    cancel,
+                    stage,
+                    THREADS,
                 ),
                 None => {
                     // A libSceAmpr game gets a fresh ampr_emu.index, as on a computer (#449).
                     let now = zstd_packs::now_secs();
                     match image_build::AmprIndexed::wrap_at(&mut *tree, now) {
-                        Ok(Some(mut indexed)) => image_build::build(
+                        Ok(Some(mut indexed)) => image_build::build_at(
                             format,
-                            None,
+                            inner,
+                            compression,
                             &mut indexed,
                             &plan.dest,
                             plan.mode,
@@ -488,8 +558,16 @@ fn build(
                             cancel,
                             stage,
                         ),
-                        Ok(None) => image_build::build(
-                            format, None, tree, &plan.dest, plan.mode, chunk, cancel, stage,
+                        Ok(None) => image_build::build_at(
+                            format,
+                            inner,
+                            compression,
+                            tree,
+                            &plan.dest,
+                            plan.mode,
+                            chunk,
+                            cancel,
+                            stage,
                         ),
                         Err(e) => Err(format!("ampr_emu.index: {e}")),
                     }
@@ -720,6 +798,23 @@ mod tests {
             run_with(Some(&r.to_string()))["cause"].clone()
         };
         assert_eq!(build(json!({"format": "iso"})), "convert_bad_request");
+        let ffpfsc = tmp.0.join("out.ffpfsc");
+        assert_eq!(
+            build(json!({"format": "ffpfsc", "dest": ffpfsc, "inner": "iso"})),
+            "convert_bad_request"
+        );
+        assert_eq!(
+            build(json!({"format": "ffpfsc", "dest": ffpfsc, "ffpfsc_level": "max"})),
+            "convert_bad_request"
+        );
+        // Named for what it is, and short enough for ShadowMountPlus to mount.
+        assert_eq!(build(json!({"format": "ffpfsc"})), "convert_bad_dest");
+        assert_eq!(
+            build(
+                json!({"format": "ffpfsc", "dest": tmp.0.join(format!("{}.ffpfsc", "g".repeat(60)))})
+            ),
+            "convert_bad_dest"
+        );
         assert_eq!(build(json!({"verify": "some"})), "convert_bad_request");
         assert_eq!(build(json!({"dest": "relative.exfat"})), "convert_bad_dest");
         assert_eq!(
@@ -808,6 +903,54 @@ mod tests {
         assert_eq!(names(&out), ["g", "g.exfat", "g.ffpfs", "g.ffpkg"]);
     }
 
+    /// A `.ffpfsc` holding each image, at each level: done, and it reads back as the game (the
+    /// console's reader, through `inspect`).
+    #[test]
+    fn a_build_writes_a_ffpfsc_holding_each_image() {
+        let (tmp, game, dir) = setup("jobffpfsc");
+        // Some data deflate shrinks, some it can't.
+        std::fs::write(game.join("data/text.bin"), "a line of text ".repeat(20_000)).unwrap();
+        let noise: Vec<u8> = (0u32..300_000)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+            .collect();
+        std::fs::write(game.join("data/noise.bin"), noise).unwrap();
+        let want = crate::inspect(&game).unwrap();
+        for (inner, level) in [
+            ("", ""),
+            ("ffpkg", "fast"),
+            ("ffpfs", "smallest"),
+            ("exfat", "balanced"),
+        ] {
+            let dest = tmp.0.join(format!("c{inner}{level}.ffpfsc"));
+            ask(
+                &dir,
+                json!({"id": "f", "op": "build", "path": game, "dest": dest, "format": "ffpfsc",
+                    "inner": inner, "ffpfsc_level": level, "verify": "full"}),
+            );
+            let mut stages: Vec<String> = Vec::new();
+            let code = run_with(&dir, &mut |s| {
+                if stages.last().map(String::as_str) != Some(s) {
+                    stages.push(s.to_string());
+                }
+            })
+            .unwrap();
+            let s = status(&dir);
+            assert_eq!(code, 0, "{inner} {level}: {s}");
+            assert_eq!(s["result"]["format"], "ffpfsc");
+            assert!(stages.contains(&"compress".to_string()), "{stages:?}");
+            let i = crate::inspect(&dest).unwrap();
+            assert_eq!(i.format, "ffpfsc");
+            assert_eq!(i.title.as_deref(), Some("Test Game"), "{inner}");
+            assert_eq!((i.files, i.data_bytes), (want.files, want.data_bytes));
+            // Compressed: smaller than the game it holds.
+            assert!(i.size < want.data_bytes, "{inner} {level}: {}", i.size);
+            assert!(!tmp
+                .0
+                .join(format!("c{inner}{level}.ffpfsc.partial"))
+                .exists());
+        }
+    }
+
     /// zstd packs with the emulator the request names: an image and a folder, each reading
     /// back through its packs.
     #[test]
@@ -817,7 +960,11 @@ mod tests {
         std::fs::write(game.join("data/table.bin"), "asset 7 ".repeat(40_000)).unwrap();
         let emu = tmp.0.join("libSceAmpr.sprx");
         std::fs::write(&emu, b"EMULATOR").unwrap();
-        for (format, name) in [("exfat", "z.exfat"), ("folder", "z")] {
+        for (format, name) in [
+            ("exfat", "z.exfat"),
+            ("ffpfsc", "z.ffpfsc"),
+            ("folder", "z"),
+        ] {
             let dest = tmp.0.join(name);
             ask(
                 &dir,
@@ -851,7 +998,11 @@ mod tests {
         let (tmp, game, dir) = setup("jobcancel");
         // Large enough that the write stage reports more than once.
         std::fs::write(game.join("data/big.bin"), vec![3u8; 24 << 20]).unwrap();
-        for (format, name) in [("exfat", "c.exfat"), ("folder", "c")] {
+        for (format, name) in [
+            ("exfat", "c.exfat"),
+            ("ffpfsc", "c.ffpfsc"),
+            ("folder", "c"),
+        ] {
             let dest = tmp.0.join(name);
             let _ = std::fs::remove_file(dir.join("cancel"));
             ask(
@@ -860,7 +1011,7 @@ mod tests {
             );
             let cancel = dir.join("cancel");
             let code = run_with(&dir, &mut |s| {
-                if s == "write" && !cancel.exists() {
+                if (s == "write" || s == "compress") && !cancel.exists() {
                     std::fs::write(&cancel, b"").unwrap();
                     // Long enough for the watcher to see it.
                     std::thread::sleep(CANCEL_EVERY * 3);
@@ -965,6 +1116,7 @@ mod tests {
             source: std::env::temp_dir(),
             dest: std::env::temp_dir().join("g.exfat"),
             image: Some(ImageFormat::Exfat),
+            ffpfsc: None,
             mode: VerifyMode::Full,
             zstd: None,
         };

@@ -13,8 +13,10 @@
  *                 is started: one job across helpers, and the next start's sweep
  *   convert.log   the converter's stdout/stderr (the last run)
  *
- * JOB_OP_CONSOLE_CONVERT {"path":"<game folder or .exfat/.ffpkg/.ffpfs image>"
- *   [,"action":"inspect"|"build"][,"dest":"<output>"][,"format":"exfat"|"ffpkg"|"ffpfs"|"folder"]
+ * JOB_OP_CONSOLE_CONVERT {"path":"<game folder or .exfat/.ffpkg/.ffpfs/.ffpfsc image>"
+ *   [,"action":"inspect"|"build"][,"dest":"<output>"]
+ *   [,"format":"exfat"|"ffpkg"|"ffpfs"|"ffpfsc"|"folder"]
+ *   [,"inner":"exfat"|"ffpkg"|"ffpfs"][,"ffpfsc_level":"fast"|"balanced"|"smallest"]  (ffpfsc)
  *   [,"zstd":true[,"zstd_level":1..22]][,"verify":"fast"|"full"]}
  * "inspect" (the default) reads what the source is; the job's result is the converter's answer
  * ({"path","format","size","files","title_id","title",...}) and "zstd_runtime": the version of the
@@ -82,10 +84,13 @@ typedef struct {
     int full_verify;
     int zstd_level; /* 1..22 with zstd; 0: the converter's default */
     const char *zstd_runtime; /* with zstd: the runtime's libSceAmpr.sprx on the console */
+    char inner[8];            /* with "ffpfsc": the image inside it (exfat, ffpkg, ffpfs) */
+    char ffpfsc_level[12];    /* with "ffpfsc": fast, balanced or smallest */
 } cc_build_t;
 
 /* request.json for job `id`: {"id","op","path"} and, with `b`, {"dest","format","zstd","verify"}
- * (and, with zstd on, "zstd_level" when a level was chosen and "zstd_runtime" when one is set).
+ * (and, with zstd on, "zstd_level" when a level was chosen and "zstd_runtime" when one is set;
+ * with format "ffpfsc", "inner" and "ffpfsc_level" when set).
  * Returns the length, or -1 when it does not fit `cap`. */
 int cc_request_json(char *out, size_t cap, const char *id, const char *op, const char *path, const cc_build_t *b);
 
@@ -123,12 +128,16 @@ int cc_record_format(char *out, size_t cap, unsigned long long xpid, long hpid, 
 int cc_record_parse(const char *buf, unsigned long long *xpid, long *hpid, char *id, size_t id_cap, char *dest,
                     size_t cap);
 
-/* The format an output path's extension stands for ("exfat", "ffpkg", "ffpfs"), or NULL. */
+/* The format an image path's extension stands for ("exfat", "ffpkg", "ffpfs", "ffpfsc"), or NULL. */
 const char *cc_image_format(const char *path);
 /* 1 when `level` is a zstd level a build may be asked for (zstd's own range; the page offers 1, 5, 19). */
 static inline int cc_zstd_level_ok(unsigned long long level) { return level >= 1 && level <= 22; }
 /* 1 when `format` is one a build writes. */
 int cc_format_ok(const char *format);
+/* 1 when `inner` is an image a .ffpfsc may hold (exfat, ffpkg, ffpfs). */
+int cc_inner_ok(const char *inner);
+/* 1 when `level` is a .ffpfsc compression level (fast, balanced, smallest). */
+int cc_ffpfsc_level_ok(const char *level);
 /* 1 when `inner` is `outer` itself or below it (both normalised). */
 int cc_path_within(const char *outer, const char *inner);
 /* 1 when a build of `dest` would clear `src`: `src` is one of the names the build writes and an

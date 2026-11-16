@@ -32,6 +32,8 @@ function props(over: Partial<ConvertViewProps> = {}): ConvertViewProps {
     naming: false,
     zstd: false,
     level: 5,
+    inner: "exfat",
+    ffpfscLevel: "balanced",
     verify: "fast",
     run: null,
     onPickSource: vi.fn(),
@@ -40,6 +42,8 @@ function props(over: Partial<ConvertViewProps> = {}): ConvertViewProps {
     onKeepBoth: vi.fn(),
     onZstd: vi.fn(),
     onLevel: vi.fn(),
+    onInner: vi.fn(),
+    onFfpfscLevel: vi.fn(),
     onVerify: vi.fn(),
     onStart: vi.fn(),
     onStop: vi.fn(),
@@ -72,9 +76,19 @@ describe("Convert", () => {
     expect(h).toMatch(/data-action="convert-go"(?![^>]*disabled)/);
   });
 
-  it("offers the four outputs, and the zstd levels only with zstd on", () => {
+  it("a .ffpfsc offers the image inside it and its compression, and says what it costs", () => {
+    expect(html(props())).not.toContain("data-convert-ffpfsc");
+    const h = html(props({ format: "ffpfsc", dest: "/data/games/PPSA01234.ffpfsc", inner: "ffpkg", ffpfscLevel: "smallest" }));
+    for (const f of ["exfat", "ffpkg", "ffpfs"]) expect(h).toContain(`data-action="convert-inner-${f}"`);
+    expect(h).toMatch(/aria-pressed="true"[^>]*data-action="convert-inner-ffpkg"/);
+    expect(h).toMatch(/aria-pressed="true"[^>]*data-action="convert-ffpfsc-level-smallest"/);
+    expect(h).toContain(esc(t("cw_convert_ffpfsc_note")));
+    expect(progressLine(run({ message: "convert_stage_compress" }))).toBe(t("cw_convert_stage_compress"));
+  });
+
+  it("offers the five outputs, and the zstd levels only with zstd on", () => {
     const off = html(props());
-    for (const f of ["exfat", "ffpkg", "ffpfs", "folder"]) expect(off).toContain(`data-action="convert-format-${f}"`);
+    for (const f of ["exfat", "ffpkg", "ffpfs", "ffpfsc", "folder"]) expect(off).toContain(`data-action="convert-format-${f}"`);
     expect(off).not.toContain("convert-level-19");
     const on = html(props({ zstd: true, level: 19 }));
     expect(on).toMatch(/aria-pressed="true"[^>]*data-action="convert-level-19"/);

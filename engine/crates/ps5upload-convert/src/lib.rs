@@ -6,8 +6,8 @@
 //! `request.json`, this program rewrites `status.json`, and a `cancel` file asks it to stop.
 //!
 //! It inspects a source ([`inspect`]) and builds one ([`job`]): a game folder, `.exfat`,
-//! `.ffpkg` or `.ffpfs` on the console into a `.exfat`, `.ffpkg`, `.ffpfs` or a folder, zstd
-//! packs optional, read back before it gets its name. The build code is
+//! `.ffpkg`, `.ffpfs` or `.ffpfsc` on the console into a `.exfat`, `.ffpkg`, `.ffpfs`, a `.ffpfsc`
+//! holding one of those, or a folder, zstd packs optional, read back before it gets its name. The build code is
 //! `ps5upload-convert-core`, the same the engine runs on a computer.
 
 #[cfg(any(target_env = "ps5", test))]
@@ -29,7 +29,7 @@ pub fn log(line: std::fmt::Arguments<'_>) {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Inspection {
     pub path: String,
-    /// `folder`, `exfat`, `ffpkg` or `ffpfs`.
+    /// `folder`, `exfat`, `ffpkg`, `ffpfs` or `ffpfsc`.
     pub format: String,
     /// The image file's size, or for a folder the sum of its files.
     pub size: u64,
@@ -64,8 +64,9 @@ impl std::fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
-/// The formats this program reads: a game folder and the images that hold one unencrypted.
-/// A `.pkg`, an archive and a `.ffpfsc` stay with the engine on a computer for now.
+/// The formats this program reads: a game folder and the images that hold one unencrypted
+/// (a `.ffpfsc` too, the read-back of one written here reads it the same way). A `.pkg` and an
+/// archive stay with the engine on a computer for now.
 fn format_of(path: &Path) -> Result<&'static str, Refusal> {
     let unsupported = |detail: String| Refusal {
         cause: "convert_unsupported_source",
@@ -95,8 +96,9 @@ fn format_of(path: &Path) -> Result<&'static str, Refusal> {
         "exfat" => Ok("exfat"),
         "ffpkg" => Ok("ffpkg"),
         "ffpfs" => Ok("ffpfs"),
+        "ffpfsc" => Ok("ffpfsc"),
         _ => Err(unsupported(format!(
-            "{} is neither a game folder nor a .exfat, .ffpkg or .ffpfs image",
+            "{} is neither a game folder nor a .exfat, .ffpkg, .ffpfs or .ffpfsc image",
             path.display()
         ))),
     }
@@ -318,7 +320,7 @@ mod tests {
     #[test]
     fn refuses_what_the_console_version_does_not_read() {
         let tmp = testing::TempDir::new("refuse");
-        for name in ["game.pkg", "game.ffpfsc", "game.7z"] {
+        for name in ["game.pkg", "game.7z"] {
             let path = tmp.0.join(name);
             std::fs::write(&path, b"x").unwrap();
             assert_eq!(

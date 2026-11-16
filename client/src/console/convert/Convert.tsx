@@ -12,7 +12,9 @@ import {
   converting,
   DEFAULT_ZSTD_LEVEL,
   dismissConvert,
+  FFPFSC_LEVELS,
   formatLabel,
+  INNER_FORMATS,
   inspect,
   isConvertImage,
   lastPart,
@@ -26,6 +28,8 @@ import {
   useConvertRun,
   ZSTD_LEVELS,
   type ConvertRun,
+  type FfpfscLevel,
+  type InnerFormat,
   type Inspection,
   type OutFormat,
   type Verify,
@@ -48,6 +52,9 @@ export interface ConvertViewProps {
   naming: boolean;
   zstd: boolean;
   level: ZstdLevel;
+  /** With a .ffpfsc: the image inside it and how hard it is compressed. */
+  inner: InnerFormat;
+  ffpfscLevel: FfpfscLevel;
   verify: Verify;
   run: ConvertRun | null;
   onPickSource: () => void;
@@ -56,6 +63,8 @@ export interface ConvertViewProps {
   onKeepBoth: () => void;
   onZstd: () => void;
   onLevel: (l: ZstdLevel) => void;
+  onInner: (f: InnerFormat) => void;
+  onFfpfscLevel: (l: FfpfscLevel) => void;
   onVerify: (v: Verify) => void;
   onStart: () => void;
   onStop: () => void;
@@ -65,6 +74,12 @@ const LEVEL_KEYS: Record<ZstdLevel, string> = {
   1: "cw_convert_level_fast",
   5: "cw_convert_level_default",
   19: "cw_convert_level_small",
+};
+
+const FFPFSC_LEVEL_KEYS: Record<FfpfscLevel, string> = {
+  fast: "cw_convert_ffpfsc_level_fast",
+  balanced: "cw_convert_ffpfsc_level_balanced",
+  smallest: "cw_convert_ffpfsc_level_smallest",
 };
 
 /** "Writing · 45% · 1.2 GB / 2.6 GB" while a conversion runs. */
@@ -199,6 +214,19 @@ export function ConvertView(p: ConvertViewProps) {
           <div className="cw-toolbar" role="group" aria-label={t("cw_convert_output")}>
             {OUT_FORMATS.map((f) => choice(p.format === f, formatLabel(f), `convert-format-${f}`, () => p.onFormat(f)))}
           </div>
+          {p.format === "ffpfsc" ? (
+            <div data-convert-ffpfsc="">
+              <div className="cw-toolbar" role="group" aria-label={t("cw_convert_ffpfsc_inner")}>
+                {INNER_FORMATS.map((f) => choice(p.inner === f, formatLabel(f), `convert-inner-${f}`, () => p.onInner(f)))}
+              </div>
+              <div className="cw-toolbar" role="group" aria-label={t("cw_convert_ffpfsc_level")}>
+                {FFPFSC_LEVELS.map((l) =>
+                  choice(p.ffpfscLevel === l, t(FFPFSC_LEVEL_KEYS[l]), `convert-ffpfsc-level-${l}`, () => p.onFfpfscLevel(l)),
+                )}
+              </div>
+              <p className="cw-dim">{t("cw_convert_ffpfsc_note")}</p>
+            </div>
+          ) : null}
           <dl className="cw-info">
             <div>
               <dt className="cw-dim">{t("cw_convert_dest")}</dt>
@@ -298,6 +326,8 @@ export function Convert({ ctx }: { ctx: SectionContext }) {
   const [naming, setNaming] = useState(false);
   const [zstd, setZstd] = useState(false);
   const [level, setLevel] = useState<ZstdLevel>(DEFAULT_ZSTD_LEVEL);
+  const [inner, setInner] = useState<InnerFormat>("exfat");
+  const [ffpfscLevel, setFfpfscLevel] = useState<FfpfscLevel>("balanced");
   const [verify, setVerify] = useState<Verify>("fast");
   const [picking, setPicking] = useState<"source" | "dest" | null>(null);
   const [volumes, setVolumes] = useState<Volume[]>([]);
@@ -377,7 +407,7 @@ export function Convert({ ctx }: { ctx: SectionContext }) {
   const zstdOk = inspected?.phase === "done" && inspected.info.zstdRuntime != null;
   const start = () => {
     if (!source || !dest) return;
-    void startConvert(startBody({ source, dest, format, zstd: zstd && zstdOk, level, verify }));
+    void startConvert(startBody({ source, dest, format, zstd: zstd && zstdOk, level, verify, inner, ffpfscLevel }));
   };
 
   const vol = outParent ? volumeOf(outParent, volumes) : null;
@@ -393,6 +423,8 @@ export function Convert({ ctx }: { ctx: SectionContext }) {
         naming={naming}
         zstd={zstd}
         level={level}
+        inner={inner}
+        ffpfscLevel={ffpfscLevel}
         verify={verify}
         run={run}
         onPickSource={() => setPicking("source")}
@@ -404,6 +436,8 @@ export function Convert({ ctx }: { ctx: SectionContext }) {
         onKeepBoth={keepBoth}
         onZstd={() => setZstd((z) => !z)}
         onLevel={setLevel}
+        onInner={setInner}
+        onFfpfscLevel={setFfpfscLevel}
         onVerify={setVerify}
         onStart={start}
         onStop={stopConvert}

@@ -102,8 +102,27 @@ describe("names and requests", () => {
     expect(outputName("/mnt/usb0/Astro.EXFAT/", "ffpfs")).toBe("Astro.ffpfs");
     expect(parentOf("/mnt/usb0/Astro.ffpkg")).toBe("/mnt/usb0");
     expect(isConvertImage("a.ffpfs")).toBe(true);
-    expect(isConvertImage("a.ffpfsc")).toBe(false);
+    expect(isConvertImage("a.ffpfsc")).toBe(true);
     expect(isConvertImage("a.pkg")).toBe(false);
+    // A .ffpfsc's name fits the 63 bytes ShadowMountPlus mounts, cut at a character.
+    expect(outputName("/data/Astro.ffpfsc", "exfat")).toBe("Astro.exfat");
+    expect(outputName("/data/Astro", "ffpfsc")).toBe("Astro.ffpfsc");
+    const long = outputName(`/data/${"é".repeat(40)}`, "ffpfsc");
+    expect(new TextEncoder().encode(long).length).toBeLessThanOrEqual(63);
+    expect(long).toBe(`${"é".repeat(28)}.ffpfsc`);
+  });
+
+  it("sends the image inside and its compression only with a .ffpfsc", () => {
+    const base = { source: "/data/g", dest: "/data/g.ffpfsc", zstd: false, level: 5 as const, verify: "fast" as const };
+    expect(startBody({ ...base, format: "ffpfsc", inner: "ffpkg", ffpfscLevel: "smallest" })).toMatchObject({
+      format: "ffpfsc",
+      inner: "ffpkg",
+      ffpfsc_level: "smallest",
+    });
+    expect(startBody({ ...base, format: "ffpfsc" })).toMatchObject({ inner: "exfat", ffpfsc_level: "balanced" });
+    const plain = startBody({ ...base, format: "exfat", inner: "ffpkg", ffpfscLevel: "fast" });
+    expect(plain).not.toHaveProperty("inner");
+    expect(plain).not.toHaveProperty("ffpfsc_level");
   });
 
   it("sends the zstd level only with zstd", () => {

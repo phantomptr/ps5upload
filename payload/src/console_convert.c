@@ -488,6 +488,18 @@ static const char *check_build(const char *json, const char *src, int src_is_dir
     b->zstd_level = b->zstd ? (int)level : 0;
     b->full_verify = strcmp(verify, "full") == 0;
     b->zstd_runtime = NULL; /* found by the op, once the build is otherwise acceptable */
+    b->inner[0] = 0;
+    b->ffpfsc_level[0] = 0;
+    if (strcmp(format, "ffpfsc") == 0) {
+        /* The image inside it and how hard it is compressed: the converter's defaults when absent. */
+        if (fsj_json_present(json, "inner") &&
+            (!fsj_json_str(json, "inner", b->inner, sizeof b->inner) || !cc_inner_ok(b->inner)))
+            return "convert_bad_inner";
+        if (fsj_json_present(json, "ffpfsc_level") &&
+            (!fsj_json_str(json, "ffpfsc_level", b->ffpfsc_level, sizeof b->ffpfsc_level) ||
+             !cc_ffpfsc_level_ok(b->ffpfsc_level)))
+            return "convert_bad_ffpfsc_level";
+    }
     return NULL;
 }
 
@@ -534,7 +546,8 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
             ava1_op_message(c, "%s", bad);
             return strcmp(bad, "convert_destination_exists") == 0 ? AVA1_ERR_EXISTS
                    : strncmp(bad, "convert_missing", 15) == 0 || strncmp(bad, "convert_bad_format", 18) == 0 ||
-                             strcmp(bad, "convert_bad_verify") == 0 || strcmp(bad, "convert_bad_zstd_level") == 0
+                             strcmp(bad, "convert_bad_verify") == 0 || strcmp(bad, "convert_bad_zstd_level") == 0 ||
+                             strcmp(bad, "convert_bad_inner") == 0 || strcmp(bad, "convert_bad_ffpfsc_level") == 0
                          ? AVA1_ERR_PROTOCOL
                          : AVA1_ERR_PATH;
         }
