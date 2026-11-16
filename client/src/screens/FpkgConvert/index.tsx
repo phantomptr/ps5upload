@@ -1074,24 +1074,6 @@ export default function WorkshopScreen() {
   }
 
   const idle = pipeline.phase === "idle";
-  // Straight to the PS5: an .exfat, .ffpkg or .ffpfs, with or without asset packs; a .ffpfsc is
-  // not streamed yet, packed or not.
-  const ps5Refusal =
-    build.kind === "image" && build.compress
-      ? tr(
-          "fpkg.save_to_ps5_unsupported_v2",
-          undefined,
-          "Straight to the PS5 works for an .exfat, .ffpkg or .ffpfs image, with or without asset packs, but not yet for a .ffpfsc. Save this one to this computer, or turn off compression above.",
-        )
-      : null;
-  // Straight to a server: the same images as straight to the PS5.
-  const serverRefusal = ps5Refusal
-    ? tr(
-        "fpkg.save_to_server_unsupported_v2",
-        undefined,
-        "Straight to a server works for an .exfat, .ffpkg or .ffpfs image, with or without asset packs, but not yet for a .ffpfsc. Save this one to this computer, or turn off compression above.",
-      )
-    : null;
   const runChoice: RunCardProps["choice"] = {
     make,
     onMake: setMake,
@@ -1115,10 +1097,8 @@ export default function WorkshopScreen() {
     // A folder can't go straight to the PS5: shown as this computer.
     saveTo: make === "folder" && saveTo === "ps5" ? "computer" : saveTo,
     onSaveTo: setSaveTo,
-    ps5Refusal,
     serverFolder,
     onServerFolder: setServerFolder,
-    serverRefusal,
   };
   // "Move the source to the Trash" is for an image or folder made of the game checked; a
   // package is left alone (it has its own steps after the build).

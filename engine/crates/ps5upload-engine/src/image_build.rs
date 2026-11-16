@@ -4,12 +4,15 @@
 //! The build code (planning, writing, the read-back, checkpoints, LZ4 packs) is
 //! `ps5upload_convert_core::image_build`, shared with the converter that runs on the PS5, and is
 //! re-exported here. What stays in the engine: the streams straight to a console
-//! ([`to_console`], AVA1) and to a saved server ([`to_server`]).
+//! ([`to_console`], AVA1) and to a saved server ([`to_server`]), plain or in a `.ffpfsc`
+//! ([`ffpfsc_out`]).
 
 pub(crate) use ps5upload_convert_core::image_build::*;
 
+mod ffpfsc_out;
 mod to_console;
 mod to_server;
+pub(crate) use ffpfsc_out::{FfpfscOut, MeasuredFfpfsc};
 #[cfg(test)]
 pub(crate) use to_console::tests as to_console_tests;
 pub(crate) use to_console::{
@@ -223,6 +226,7 @@ mod tests {
                         &mut |tree, salt, stage| {
                             stream_to_console(
                                 format,
+                                None,
                                 Some(7),
                                 salt,
                                 tree,
@@ -301,6 +305,7 @@ mod tests {
                 &mut |tree, salt, stage| {
                     stream_to_server(
                         ImageFormat::Exfat,
+                        None,
                         7,
                         salt,
                         tree,

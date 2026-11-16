@@ -134,6 +134,7 @@ pub(crate) fn build_folder_to(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn stream_to_console(
     format: ImageFormat,
+    ffpfsc: Option<crate::image_build::FfpfscOut>,
     level: u8,
     rules: Option<&Rules>,
     runtime: &PackRuntime,
@@ -157,6 +158,7 @@ pub(crate) fn stream_to_console(
         &mut |tree, salt, stage| {
             crate::image_build::stream_to_console(
                 format,
+                ffpfsc,
                 Some(mtime),
                 salt,
                 tree,
@@ -184,6 +186,7 @@ pub(crate) fn stream_to_console(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn stream_to_server(
     format: ImageFormat,
+    ffpfsc: Option<crate::image_build::FfpfscOut>,
     level: u8,
     rules: Option<&Rules>,
     runtime: &PackRuntime,
@@ -209,6 +212,7 @@ pub(crate) fn stream_to_server(
         &mut |tree, salt, stage| {
             crate::image_build::stream_to_server(
                 format,
+                ffpfsc,
                 mtime,
                 salt,
                 tree,
@@ -380,6 +384,7 @@ mod tests {
                 lb.with_target(&c, &on_console, |t| {
                     stream_to_console(
                         format,
+                        None,
                         5,
                         None,
                         &runtime(),
@@ -409,6 +414,7 @@ mod tests {
                 let mut tree = FolderSource::open(&src).unwrap();
                 stream_to_server(
                     format,
+                    None,
                     5,
                     None,
                     &runtime(),
@@ -479,6 +485,7 @@ mod tests {
             lb.with_target(&c, "dst/G.exfat", |t| {
                 stream_to_console(
                     ImageFormat::Exfat,
+                    None,
                     5,
                     None,
                     &runtime(),
@@ -535,6 +542,7 @@ mod tests {
             let mut tree = FolderSource::open(&src).unwrap();
             stream_to_server(
                 ImageFormat::Exfat,
+                None,
                 5,
                 None,
                 &runtime(),
