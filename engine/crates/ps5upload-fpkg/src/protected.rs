@@ -38,10 +38,9 @@ pub fn decrypt_entry(row: &[u8; 32], entry_key: &[u8; 32], data: &mut [u8]) {
     pre.extend_from_slice(row);
     pre.extend_from_slice(entry_key);
     let iv_key = sha3(&pre);
-    let mut key = [0u8; 16];
-    let mut iv = [0u8; 16];
-    key.copy_from_slice(&iv_key[16..]);
-    iv.copy_from_slice(&iv_key[..16]);
+    // The digest's first half is the IV, its second half the key.
+    let key: [u8; 16] = std::array::from_fn(|i| iv_key[16 + i]);
+    let iv: [u8; 16] = std::array::from_fn(|i| iv_key[i]);
     aes128_cbc_decrypt(&key, iv, data);
 }
 
