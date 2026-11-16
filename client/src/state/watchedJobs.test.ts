@@ -109,6 +109,14 @@ describe("watchJob", () => {
     expect(useTaskStore.getState().tasks[0].status).toBe("failed");
   });
 
+  it("ends stopped when the engine says the job was stopped elsewhere", async () => {
+    const e = engine([
+      { status: "failed", error: "cancelled; nothing was written", error_reason: "cancelled" } as Snap,
+    ]);
+    await watchJob(INIT, async () => "job-9", e.deps);
+    expect(state()?.phase).toBe("stopped");
+  });
+
   it("ends failed when the job cannot be started", async () => {
     const e = engine([]);
     await watchJob(

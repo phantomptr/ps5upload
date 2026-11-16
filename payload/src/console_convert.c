@@ -14,6 +14,8 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -62,13 +64,26 @@ static int g_building;
 const char *console_convert_test_dir;
 int (*console_convert_test_launch)(void);
 const char *console_convert_test_runtime_dir;
+unsigned long long console_convert_test_boot;
 #endif
 
-typedef enum { CF_REQUEST, CF_STATUS, CF_CANCEL, CF_RECORD } cfile_t;
+typedef enum { CF_REQUEST, CF_STATUS, CF_CANCEL, CF_RECORD, CF_PENDING } cfile_t;
+
+/* When the console started (kern.boottime, wall-clock seconds), or 0 when unknown. */
+static unsigned long long boot_time(void) {
+    struct timeval bt;
+    size_t len = sizeof bt;
+    int mib[2] = {CTL_KERN, KERN_BOOTTIME};
+#ifdef CONSOLE_CONVERT_SELFTEST
+    if (console_convert_test_boot) return console_convert_test_boot;
+#endif
+    if (sysctl(mib, 2, &bt, &len, NULL, 0) != 0 || len < sizeof bt || bt.tv_sec <= 0) return 0;
+    return (unsigned long long)bt.tv_sec;
+}
 
 /* A file of the job folder. */
 static const char *cpath(cfile_t f, char *out, size_t cap) {
-    static const char *const names[] = {"request.json", "status.json", "cancel", "job.rec"};
+    static const char *const names[] = {"request.json", "status.json", "cancel", "job.rec", "pending.rec"};
     const char *dir = CONVERT_DIR;
 #ifdef CONSOLE_CONVERT_SELFTEST
     if (console_convert_test_dir) dir = console_convert_test_dir;
@@ -221,13 +236,22 @@ static int pid_alive(uint64_t pid) {
 
 /* What an unfinished build of `dest` leaves beside it: `<dest>.partial` (a file, or a folder for
  * a folder output) and the builder's two small files next to it. Only these names are removed,
- * never `dest` itself: it appears by a rename when the build is complete. */
-static void remove_partial(const char *dest) {
+ * never `dest` itself: it appears by a rename when the build is complete. 1 when settled (removed,
+ * or never ours to remove), 0 when the folder it is in is not there (a drive not mounted yet):
+ * nothing can be said about it now. */
+static int remove_partial(const char *dest) {
     static const char *const tails[] = {".partial", ".partial.resume", ".partial.stamp"};
     char path[1100];
+    const char *slash = strrchr(dest, '/');
     struct stat st;
     size_t i;
-    if (dest[0] != '/' || !may_write_here(dest)) return;
+    if (dest[0] != '/' || !slash) return 1;
+    if (slash > dest && (size_t)(slash - dest) < sizeof path) {
+        memcpy(path, dest, (size_t)(slash - dest));
+        path[slash - dest] = 0;
+        if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) return 0;
+    }
+    if (!may_write_here(dest)) return 1;
     fprintf(stderr, "convert: removing what an unfinished conversion left beside %s\n", dest);
     for (i = 0; i < sizeof tails / sizeof *tails; i++) {
         if ((size_t)snprintf(path, sizeof path, "%s%s", dest, tails[i]) >= sizeof path) continue;
@@ -235,6 +259,57 @@ static void remove_partial(const char *dest) {
         if (S_ISDIR(st.st_mode)) (void)fsj_rm_rf(path, 0, NULL);
         else if (S_ISREG(st.st_mode)) (void)unlink(path);
     }
+    return 1;
+}
+
+#define CC_PENDING_MAX 16
+#define CC_PENDING_LINE 1100
+
+/* Tries again each unfinished output pending.rec keeps, and keeps `add` (one just found that could
+ * not be cleared): what stays is what still can't be (its folder still missing). */
+static void sweep_pending(const char *add) {
+    char file[160], tmp[176];
+    size_t cap = CC_PENDING_MAX * (CC_PENDING_LINE + 1) + 1, at = 0, kept = 0;
+    char *buf = malloc(cap), *out = malloc(cap), *line, *next;
+    struct stat st;
+    int len, fd;
+    if (!buf || !out) goto out;
+    cpath(CF_PENDING, file, sizeof file);
+    if (lstat(file, &st) != 0 && !add) goto out;
+    len = read_small(file, buf, cap);
+    if (len < 0) len = 0;
+    buf[len] = 0;
+    out[0] = 0;
+    for (line = buf; line && *line; line = next) {
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        if (!line[0] || strlen(line) >= CC_PENDING_LINE || (add && strcmp(line, add) == 0)) continue;
+        if (remove_partial(line) || kept >= CC_PENDING_MAX) continue;
+        at += (size_t)snprintf(out + at, cap - at, "%s\n", line);
+        kept++;
+    }
+    if (add && add[0] == '/' && strlen(add) < CC_PENDING_LINE && kept < CC_PENDING_MAX) {
+        fprintf(stderr, "convert: the folder of %s is not there; its unfinished output is removed once it is\n", add);
+        at += (size_t)snprintf(out + at, cap - at, "%s\n", add);
+        kept++;
+    }
+    if (!kept) {
+        (void)unlink(file);
+        goto out;
+    }
+    snprintf(tmp, sizeof tmp, "%s.tmp", file);
+    fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) goto out;
+    if (write(fd, out, at) == (ssize_t)at) {
+        close(fd);
+        (void)rename(tmp, file);
+    } else {
+        close(fd);
+        (void)unlink(tmp);
+    }
+out:
+    free(buf);
+    free(out);
 }
 
 static int record_is(const char *id);
@@ -243,7 +318,7 @@ static int record_is(const char *id);
  * O_EXCL; only its owner removes it, but a sweep elsewhere may have judged it stale). */
 static void write_record(uint64_t xpid, const char *id, const char *dest) {
     char file[160], *rec = malloc(1200);
-    int len = rec ? cc_record_format(rec, 1200, (unsigned long long)xpid, (long)getpid(), id, dest) : -1;
+    int len = rec ? cc_record_format_boot(rec, 1200, (unsigned long long)xpid, (long)getpid(), id, dest, boot_time()) : -1;
     FILE *f;
     if (len > 0 && record_is(id) && (f = fopen(cpath(CF_RECORD, file, sizeof file), "w")) != NULL) {
         fwrite(rec, 1, (size_t)len, f);
@@ -297,7 +372,7 @@ static int take_record(const char *id, const char *dest) {
             rc = 0;
             break;
         }
-        len = cc_record_format(rec, 1200, 0, (long)getpid(), id, dest);
+        len = cc_record_format_boot(rec, 1200, 0, (long)getpid(), id, dest, boot_time());
         rc = len > 0 && write(fd, rec, (size_t)len) == (ssize_t)len ? 1 : -1;
         close(fd);
         if (rc < 0) (void)unlink(file);
@@ -320,21 +395,28 @@ void console_convert_sweep(void) {
     char file[160], rid[CC_JOB_ID_MAX];
     /* On the heap: this also runs on a job thread, whose stack is small. */
     char *buf = malloc(1400), *dest = malloc(1100);
-    unsigned long long xpid = 0;
+    unsigned long long xpid = 0, rboot = 0;
     long hpid = 0;
+    int earlier_boot;
     struct stat st;
     sweep_request();
+    sweep_pending(NULL);
     if (!buf || !dest) goto out;
     cpath(CF_RECORD, file, sizeof file);
     if (lstat(file, &st) != 0) goto out;
-    if (read_small(file, buf, 1400) <= 0 || !cc_record_parse(buf, &xpid, &hpid, rid, sizeof rid, dest, 1100)) {
+    if (read_small(file, buf, 1400) <= 0 ||
+        !cc_record_parse_boot(buf, &xpid, &hpid, rid, sizeof rid, dest, 1100, &rboot)) {
         /* Empty or cut: one may be being written this moment (a helper creates it, then writes
          * it). Only an old one is not. */
         if (console_convert_request_stale(st.st_mtime, time(NULL))) (void)unlink(file);
         goto out;
     }
-    /* The helper that wrote it, or its converter, still runs (a takeover lets the old one finish). */
-    if ((hpid != (long)getpid() && pid_alive((uint64_t)hpid)) || pid_alive(xpid)) goto out;
+    /* The helper that wrote it, or its converter, still runs (a takeover lets the old one finish).
+     * Not when it is from an earlier boot (a power cut): both are gone, and a pid it names may be
+     * another process's now (one we may not signal reads as alive), which kept Convert "busy" for
+     * good. */
+    earlier_boot = cc_from_earlier_boot(rboot, boot_time());
+    if (!earlier_boot && ((hpid != (long)getpid() && pid_alive((uint64_t)hpid)) || pid_alive(xpid))) goto out;
     if (xpid == 0) {
         /* Its converter was never seen: it may still start late. It is told to stop before it
          * writes anything, and its request goes; nothing of it is removed (there is nothing of
@@ -343,8 +425,10 @@ void console_convert_sweep(void) {
         int fd = open(cpath(CF_CANCEL, other, sizeof other), O_WRONLY | O_CREAT, 0600);
         if (fd >= 0) close(fd);
         if (rid[0] && file_is_job(CF_REQUEST, rid)) (void)unlink(cpath(CF_REQUEST, other, sizeof other));
-    } else if (dest[0]) {
-        remove_partial(dest); /* says so in the log only for a place it may write */
+    } else if (dest[0] && !remove_partial(dest)) {
+        /* Its folder is not there yet (a drive mounted later after a restart): kept to try again,
+         * not forgotten with the record. */
+        sweep_pending(dest);
     }
     (void)unlink(file);
 out:
@@ -363,14 +447,14 @@ static void power_tick(void) {
 /* Follows the started converter until it ends. 1 done, 0 failed (s says why), -1 it never started
  * or died, -2 it had to be killed (the job's message is set for both). `buf` holds the last status
  * read. */
-static int follow(ava1_op_ctx_t *c, const char *id, const char *dest, int build, char *buf, size_t cap, cc_status_t *s) {
-    uint64_t started = now_ms(), cancel_at = 0, bytes_seen = 0, total = 0, rec_pid = 0, tick_at = 0;
-    /* The converter counts each stage (pack, write, verify) from 0 against that stage's own total,
-     * while a job's counters only go up: a stage's bytes go on top of what the stages before it
-     * counted (`base`), so done never passes total and the bar moves through every stage. */
-    uint64_t base = 0;
-    char stage_now[sizeof(((cc_status_t *)0)->stage)] = "";
-    int have = 0, cancel_sent = 0;
+static int follow(ava1_op_ctx_t *c, const char *id, const char *dest, const cc_build_t *b, char *buf, size_t cap,
+                  cc_status_t *s) {
+    uint64_t started = now_ms(), cancel_at = 0, total = 0, shown = 0, rec_pid = 0, tick_at = 0;
+    /* The converter counts each stage (pack, plan, write, verify) from 0 against that stage's own
+     * total, while a job has one bar: its total is fixed at the first stage total seen (about the
+     * game's size), and each stage moves it through that stage's fixed share (cc_job_progress), so
+     * it never falls back as a stage starts, nor passes its total. */
+    int build = b != NULL, have = 0, cancel_sent = 0;
     char *cur_buf = malloc(cap);
     if (!cur_buf) {
         ava1_op_message(c, "convert_no_memory");
@@ -388,20 +472,18 @@ static int follow(ava1_op_ctx_t *c, const char *id, const char *dest, int build,
             memcpy(buf, cur_buf, cap);
             *s = cur;
             if (cur.result) s->result = buf + (cur.result - cur_buf);
-            if (cur.stage[0] && strcmp(cur.stage, stage_now) != 0) {
-                /* A new stage: what the last one counted stays counted. */
-                snprintf(stage_now, sizeof stage_now, "%s", cur.stage);
-                base += bytes_seen;
-                bytes_seen = 0;
-            }
             /* A final status may carry no counts: the last total stands. */
-            if (cur.bytes_total && base + cur.bytes_total != total) {
-                total = base + cur.bytes_total;
+            if (!total && cur.bytes_total) {
+                total = cur.bytes_total;
                 ava1_op_set_total(c, 0, total);
             }
-            if (cur.bytes_done > bytes_seen) {
-                ava1_op_add(c, 0, cur.bytes_done - bytes_seen);
-                bytes_seen = cur.bytes_done;
+            if (total) {
+                uint64_t at = cc_job_progress(b ? b->format : NULL, b && b->zstd, cur.stage, cur.bytes_done,
+                                              cur.bytes_total, total);
+                if (at != UINT64_MAX && at > shown) {
+                    ava1_op_add(c, 0, at - shown);
+                    shown = at;
+                }
             }
             if (strcmp(cur.state, "running") != 0) {
                 free(cur_buf);
@@ -645,7 +727,11 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         uint64_t old = 0;
         char state[16];
         int len = read_small(cpath(CF_STATUS, file, sizeof file), buf, CONVERT_STATUS_MAX);
-        if (len > 0 && fsj_json_str(buf, "state", state, sizeof state) && strcmp(state, "running") == 0 &&
+        struct stat sst;
+        /* A "running" written before this boot is a converter a power cut ended: its pid may be
+         * another process's now. */
+        int stale = stat(file, &sst) == 0 && cc_from_earlier_boot((unsigned long long)sst.st_mtime, boot_time());
+        if (len > 0 && !stale && fsj_json_str(buf, "state", state, sizeof state) && strcmp(state, "running") == 0 &&
             fsj_json_u64(buf, "pid", &old) && pid_alive(old)) {
             ava1_op_message(c, "convert_busy");
             status = AVA1_ERR_BUSY;
@@ -665,7 +751,7 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         ava1_op_message(c, "convert_loader_unreachable");
         goto cleanup;
     }
-    r = follow(c, id, dest, b != NULL, buf, CONVERT_STATUS_MAX, &s);
+    r = follow(c, id, dest, b, buf, CONVERT_STATUS_MAX, &s);
     /* No status ever seen: the converter may still start late, and may already have read the
      * request. The cancel file goes first and stays (the next job's start removes it), so a late
      * one stops before it writes anything; then the request, so none starts it later. */

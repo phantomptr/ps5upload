@@ -227,7 +227,7 @@ static void *fake_main(void *arg) {
         unsigned done = 0;
         while (!exists(cancel)) {
             done += 1000;
-            put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"running\",\"stage\":\"read\","
+            put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"running\",\"stage\":\"write\","
                        "\"bytes_done\":%u,\"bytes_total\":1000000}\n",
                        id, (long)g_alive, done);
             usleep(100 * 1000);
@@ -449,7 +449,43 @@ static void test_wire(void) {
         CHECK(RPARSE("12 x\n/a\n", sizeof dest) == 0);
         CHECK(RPARSE("1 2 not-hex\n/a\n", sizeof dest) == 0);
         CHECK(RPARSE("1 2\n/a/very/long/destination\n", 8) == 0);
+        /* The boot it was written in; one without reads as unknown (0). */
+        {
+            unsigned long long boot = 9;
+            len = cc_record_format_boot(buf, sizeof buf, 3, 4, "ab", "/data/x", 1700000000ULL);
+            CHECK(len > 0 && cc_record_parse_boot(buf, &xpid, &hpid, rid, sizeof rid, dest, sizeof dest, &boot) == 1);
+            CHECK(boot == 1700000000ULL && xpid == 3 && hpid == 4 && strcmp(rid, "ab") == 0 && strcmp(dest, "/data/x") == 0);
+            CHECK(RPARSE(buf, sizeof dest) == 1 && strcmp(rid, "ab") == 0); /* an older reader */
+            CHECK(cc_record_parse_boot("1 2 ab\n/d\n", &xpid, &hpid, rid, sizeof rid, dest, sizeof dest, &boot) == 1 &&
+                  boot == 0);
+            CHECK(cc_from_earlier_boot(1000, 5000) && !cc_from_earlier_boot(4990, 5000));
+            CHECK(!cc_from_earlier_boot(0, 5000) && !cc_from_earlier_boot(1000, 0) && !cc_from_earlier_boot(6000, 5000));
+        }
 #undef RPARSE
+    }
+
+    /* One bar for a build: fixed shares per stage, never back, never past the total. */
+    {
+        uint64_t prev = 0, at;
+        static const struct { const char *stage; uint64_t done, total; } image[] = {
+            {"pack", 0, 50}, {"pack", 50, 50}, {"plan", 0, 0}, {"write", 1, 400}, {"write", 400, 400},
+            {"verify", 0, 0}, {"verify", 9, 10}, {"verify", 10, 10},
+        };
+        size_t i;
+        for (i = 0; i < sizeof image / sizeof *image; i++) {
+            at = cc_job_progress("ffpkg", 1, image[i].stage, image[i].done, image[i].total, 1000);
+            CHECK(at != UINT64_MAX && at >= prev && at <= 1000);
+            prev = at;
+        }
+        CHECK(prev == 1000);
+        CHECK(cc_job_progress("ffpkg", 1, "pack", 50, 50, 1000) == 400);
+        CHECK(cc_job_progress("exfat", 0, "write", 0, 10, 1000) == 0);
+        CHECK(cc_job_progress("ffpfsc", 0, "compress", 5, 10, 600) == 200);
+        CHECK(cc_job_progress("folder", 0, "verify", 0, 10, 600) == 400);
+        CHECK(cc_job_progress("pkg", 0, "check", 10, 10, 1100) == 100);
+        CHECK(cc_job_progress("pkg", 0, "verify", 99, 10, 1500) == 1500);
+        CHECK(cc_job_progress("folder", 0, "pack", 1, 2, 600) == UINT64_MAX);
+        CHECK(cc_job_progress(NULL, 0, "", 5, 10, 600) == 300);
     }
 
     CHECK(strcmp(cc_image_format("/data/a.b/Game.ExFAT"), "exfat") == 0);
@@ -809,7 +845,7 @@ static void test_op(void) {
     CHECK(st == AVA1_ERR_CANCELLED && strcmp(c->message, "convert_cancelled") == 0);
     /* The final status carries no byte counts: the total the job showed stays. The helper polls
      * slower than the stand-in writes, so it may not see every step. */
-    CHECK(c->total == 1000000 && c->done >= 1000);
+    CHECK(c->total == 1000000 && c->done >= 400000 && c->done < c->total);
     CHECK(g_ticks >= 1);
     {
         char p[400];
@@ -817,10 +853,11 @@ static void test_op(void) {
         CHECK(!exists(p)); /* removed with the rest of the job's files */
     }
 
-    /* Stages count on top of each other: done never passes total, and both end at the sum. */
+    /* One bar through every stage: its total is the first stage's, each stage moves it through
+     * its share, it never passes the total and ends full. */
     st = run_op(FAKE_STAGES, args, c);
     CHECK(st == 0);
-    CHECK(c->total == 330 && c->done == 330);
+    CHECK(c->total == 100 && c->done == 100);
 
     /* A converter that ignores Stop is killed, and what it was writing is removed. */
     put_file(partial, "half an image");
@@ -897,6 +934,27 @@ static void test_op(void) {
         CHECK(exists(text));
         unlink(rec);
         unlink(text);
+    }
+
+    /* A "running" status naming a live process: busy in this boot, but one written before a
+     * restart (a power cut) is dropped, whatever its pid names now. */
+    {
+        char status[400];
+        struct timeval old[2] = {{1000, 0}, {1000, 0}};
+        char text[200];
+        path_in(status, sizeof status, "status.json");
+        snprintf(text, sizeof text, "{\"id\":\"old\",\"pid\":%ld,\"op\":\"build\",\"state\":\"running\"}\n",
+                 (long)getppid());
+        put_file(status, text);
+        st = run_op(FAKE_NEVER, args, c);
+        CHECK(st == AVA1_ERR_BUSY && strcmp(c->message, "convert_busy") == 0);
+        put_file(status, text);
+        utimes(status, old);
+        console_convert_test_boot = (unsigned long long)time(NULL) - 5;
+        st = run_op(FAKE_FAILS, args, c);
+        CHECK(st == AVA1_ERR_IO && strcmp(c->message, "convert_build_failed") == 0);
+        console_convert_test_boot = 0;
+        unlink(status);
     }
 
     /* One that never reports. It may still start late: the cancel file is left for it (so it
@@ -985,6 +1043,47 @@ static void test_sweep(void) {
         unlink(req);
         unlink(cancel);
         unlink(partial);
+    }
+
+    /* A record from before a restart (a power cut): whatever its pids name now (here a live
+     * process), it is dead, and its unfinished output goes. */
+    snprintf(dest, sizeof dest, "%s/rebooted.exfat", g_root);
+    snprintf(partial, sizeof partial, "%s.partial", dest);
+    put_file(partial, "half");
+    console_convert_test_boot = 1700000000ULL;
+    cc_record_format_boot(text, sizeof text, (unsigned long long)getppid(), (long)getppid(), "ab", dest, 1600000000ULL);
+    put_file(rec, text);
+    console_convert_sweep();
+    CHECK(!exists(rec) && !exists(partial));
+    /* The same boot: its live helper keeps it. */
+    put_file(partial, "half");
+    cc_record_format_boot(text, sizeof text, (unsigned long long)dead, (long)getppid(), "ab", dest, 1700000000ULL);
+    put_file(rec, text);
+    console_convert_sweep();
+    CHECK(exists(rec) && exists(partial));
+    unlink(rec);
+    unlink(partial);
+    console_convert_test_boot = 0;
+
+    /* Its destination's folder is not there yet (a drive mounted later): the record goes, the
+     * unfinished output is kept in pending.rec and removed by a later sweep once it is there. */
+    {
+        char pending[400], away[340], away_dest[380], away_partial[400];
+        path_in(pending, sizeof pending, "pending.rec");
+        snprintf(away, sizeof away, "%s/later", g_root);
+        snprintf(away_dest, sizeof away_dest, "%s/g.exfat", away);
+        snprintf(away_partial, sizeof away_partial, "%s.partial", away_dest);
+        cc_record_format(text, sizeof text, (unsigned long long)dead, (long)dead, "ab", away_dest);
+        put_file(rec, text);
+        console_convert_sweep();
+        CHECK(!exists(rec) && exists(pending));
+        console_convert_sweep(); /* still not there: kept */
+        CHECK(exists(pending));
+        mkdir(away, 0700);
+        put_file(away_partial, "half");
+        console_convert_sweep();
+        CHECK(!exists(away_partial) && !exists(pending));
+        rmdir(away);
     }
 
     /* A destination outside the allowed roots is never acted on; an inspection has none. */

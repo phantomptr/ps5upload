@@ -1753,11 +1753,93 @@ fn signal_transfer_cancel(job_id: Uuid) -> bool {
                 flag.store(true, Ordering::Relaxed);
                 // A paused Workshop job wakes to see it.
                 ps5upload_fpkg::workshop::wake(&flag);
+                stopped_jobs()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(job_id);
                 true
             }
             None => false,
         },
         None => false,
+    }
+}
+
+/// Jobs a Stop was sent to and that have not ended yet: their failure is a stop, said on the wire
+/// as `error_reason: "cancelled"` ([`stopped_reason`]).
+fn stopped_jobs() -> &'static Mutex<std::collections::HashSet<Uuid>> {
+    static SET: OnceLock<Mutex<std::collections::HashSet<Uuid>>> = OnceLock::new();
+    SET.get_or_init(Default::default)
+}
+
+/// A job that ends failed after the user stopped it ends with `error_reason: "cancelled"`, unless
+/// it already names a reason (a transfer's own `transfer_cancelled`): there is no "stopped" job
+/// state, and a builder's "cancelled; nothing was written" read as a failure in Tasks, the API
+/// and MCP. A terminal state takes the job off the stopped list.
+fn stopped_reason(job_id: Uuid, state: &mut JobState) {
+    if !matches!(state, JobState::Done { .. } | JobState::Failed { .. }) {
+        return;
+    }
+    let stopped = stopped_jobs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&job_id);
+    if let JobState::Failed { error_reason, .. } = state {
+        if stopped && error_reason.is_none() {
+            *error_reason = Some("cancelled".into());
+        }
+    }
+}
+
+#[cfg(test)]
+mod stopped_tests {
+    use super::*;
+
+    fn failed(reason: Option<&str>) -> JobState {
+        JobState::Failed {
+            started_at_ms: 1,
+            completed_at_ms: 2,
+            elapsed_ms: 1,
+            error: "cancelled; nothing was written".into(),
+            error_reason: reason.map(str::to_string),
+            error_detail: None,
+            error_console: None,
+            error_space: None,
+        }
+    }
+
+    fn reason(s: &JobState) -> Option<String> {
+        match s {
+            JobState::Failed { error_reason, .. } => error_reason.clone(),
+            _ => None,
+        }
+    }
+
+    /// A job the user stopped ends with `error_reason: "cancelled"` (Tasks, the API and MCP say
+    /// Stopped); one nobody stopped, or one that names its own reason, keeps what it had.
+    #[test]
+    fn a_stopped_job_says_so_on_the_wire() {
+        let id = Uuid::new_v4();
+        let flag = register_workshop_job(id);
+        assert!(signal_transfer_cancel(id));
+        let mut s = failed(None);
+        stopped_reason(id, &mut s);
+        assert_eq!(reason(&s).as_deref(), Some("cancelled"));
+        // Once: the job is off the list after its end.
+        let mut again = failed(None);
+        stopped_reason(id, &mut again);
+        assert_eq!(reason(&again), None);
+        drop(flag);
+
+        let other = Uuid::new_v4();
+        let _flag = register_transfer_cancel(other);
+        let mut s = failed(None);
+        stopped_reason(other, &mut s);
+        assert_eq!(reason(&s), None, "nobody stopped it");
+        assert!(signal_transfer_cancel(other));
+        let mut s = failed(Some("transfer_cancelled"));
+        stopped_reason(other, &mut s);
+        assert_eq!(reason(&s).as_deref(), Some("transfer_cancelled"));
     }
 }
 
@@ -1804,8 +1886,9 @@ pub(crate) fn set_job(
     jobs: &Arc<Mutex<HashMap<Uuid, JobState>>>,
     events_tx: &broadcast::Sender<String>,
     job_id: Uuid,
-    state: JobState,
+    mut state: JobState,
 ) {
+    stopped_reason(job_id, &mut state);
     // Serialized before the move into the map, so the (possibly long) file
     // list is never cloned; it serializes as a count.
     let terminal = matches!(state, JobState::Done { .. } | JobState::Failed { .. });
@@ -7471,6 +7554,26 @@ async fn transfer_file_handler(
             return json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
         }
     };
+    // A file on this computer is read until the upload ends: an in-place edit of it is refused
+    // meanwhile (and this upload while one runs), and an undo journal an interrupted edit left
+    // beside it is settled first, so the console gets the image as it is, not half-edited.
+    let reading = if source_fs.is_none() {
+        let src = src_path.clone();
+        match tokio::task::spawn_blocking(move || {
+            crate::image_edit_in_place::open_for_reading(&src)
+        })
+        .await
+        {
+            Ok(Ok((_, reading))) => Some(reading),
+            Ok(Err(why)) => return json_err(StatusCode::CONFLICT, why).into_response(),
+            Err(e) => {
+                return json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))
+                    .into_response()
+            }
+        }
+    } else {
+        None
+    };
     let src_basename = src_path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -7534,6 +7637,8 @@ async fn transfer_file_handler(
     // Registered before the task so a cancel that arrives before the transfer starts is kept.
     let cancel = register_transfer_cancel(job_id);
     tokio::task::spawn_blocking(move || {
+        // Held for the whole upload (see above).
+        let _reading = reading;
         // Marks the console busy for the job: a helper stop is refused meanwhile.
         let _busy = helper_stop::enter(&addr);
         // Drops at closure end (success OR panic), stopping the
