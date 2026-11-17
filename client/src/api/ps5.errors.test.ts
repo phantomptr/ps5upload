@@ -355,6 +355,6 @@ describe("humanizeJobErrorReason i18n", () => {
     // Regression: the payload used to report `direct_rename_failed` with an
     // empty source path for this case, which sent users chasing a rename bug.
     const msg = humanizeJobErrorReason("direct_staged_file_missing");
-    expect(msg).toMatch(/Override/i);
+    expect(msg).toMatch(/choose Replace/);
   });
 });

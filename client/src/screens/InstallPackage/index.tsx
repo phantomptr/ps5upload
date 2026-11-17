@@ -1319,9 +1319,9 @@ export default function InstallPackageScreen({
             "This update might not apply",
           ),
           message: tr(
-            "pkglib.updateBaseUnknown.body",
+            "pkglib.updateBaseUnknown.body_v2",
             { id: entry.titleId },
-            `${entry.titleId} is installed, but not from a base package ps5upload installed — so the PS5 may not be able to match this update to it. When that happens the console reports success and silently changes nothing. If the game stays on its old version afterwards, install the matching base package through ps5upload (choose Override), then apply this update again.`,
+            `${entry.titleId} is installed, but not from a base package ps5upload installed — so the PS5 may not be able to match this update to it. When that happens the console reports success and silently changes nothing. If the game stays on its old version afterwards, install the matching base package through ps5upload, then apply this update again.`,
           ),
           confirmLabel: tr(
             "pkglib.updateBaseUnknown.installAnyway",

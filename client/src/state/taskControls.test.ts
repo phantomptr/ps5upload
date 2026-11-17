@@ -79,6 +79,14 @@ describe("real task controls", () => {
     expect(owners.queue.startHost).toHaveBeenCalledWith("ps5", { onlyIds: ["row"] });
   });
 
+  it("offers no retry for a row whose destination is taken (its row asks Replace or elsewhere)", () => {
+    owners.queue.items = [
+      { id: "row", status: "failed", sourceKind: "folder", errorReason: "ava1_commit_exists" } as never,
+    ];
+    const current = task({ owner: "upload-queue", host: "ps5", itemId: "row" }, "failed");
+    expect(taskCapabilities(current).canRetry).toBe(false);
+  });
+
   it("does not start a queue when retry was rejected by its owner", async () => {
     owners.queue.retryItem.mockReturnValue(false);
     const current = task({

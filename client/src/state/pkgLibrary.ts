@@ -337,7 +337,7 @@ export function statusToOutcome(st: InstallStatus): PkgInstallOutcome {
       errMessage = trStatic("pkg.patch_regressed", PKG_PATCH_REGRESSED_HINT);
     } else if (st.patch_verdict === "did_not_apply") {
       errMessage = trStatic(
-        "pkg.patch_did_not_apply",
+        "pkg.patch_did_not_apply_v2",
         PKG_PATCH_DID_NOT_APPLY_HINT,
       );
     } else {
@@ -1472,7 +1472,7 @@ const DPI_VERIFY_MAX_MS = 4 * 60 * 60 * 1000;
 /** Shown when an update was accepted and then silently discarded. The
  *  workaround is not guessable, so it has to be in the message. */
 export const PKG_PATCH_DID_NOT_APPLY_HINT =
-  "The PS5 accepted this update and then did nothing with it — the game is still on its previous version. This means the console could not match the update to the base game you have installed. Re-install the base game through ps5upload from the base package that goes with this update (choose Override), then apply the update again.";
+  "The PS5 accepted this update and then did nothing with it — the game is still on its previous version. This means the console could not match the update to the base game you have installed. Re-install the base game through ps5upload from the base package that goes with this update, then apply the update again.";
 
 /** Shown when re-applying an already-installed update removed it. */
 export const PKG_PATCH_REGRESSED_HINT =

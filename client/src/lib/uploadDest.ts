@@ -84,3 +84,25 @@ export function resolveUploadDest(
   const dest = name ? `${destRoot}/${name}` : destRoot;
   return { destRoot, dest };
 }
+
+/** A folder on the PS5 as the Upload screen's destination: the drive it is on (the longest
+ *  volume that contains it) and the path below that drive. A folder on no listed drive is its
+ *  own "volume" with no subpath, which resolveUploadDest joins back to the same folder. Pure. */
+export function splitUploadFolder(
+  folder: string,
+  volumes: readonly string[],
+): { volume: string; subpath: string } {
+  const f = folder.replace(/\/+$/, "") || "/";
+  let best: string | null = null;
+  for (const raw of volumes) {
+    const v = raw.replace(/\/+$/, "");
+    if (!v) continue;
+    if ((f === v || f.startsWith(`${v}/`)) && (best === null || v.length > best.length)) best = v;
+  }
+  if (best === null) {
+    // Nothing listed yet: the internal drive's own root still splits the usual way.
+    if (f === "/data" || f.startsWith("/data/")) best = "/data";
+    else return { volume: f, subpath: "" };
+  }
+  return { volume: best, subpath: f.slice(best.length).replace(/^\/+/, "") };
+}
