@@ -64,7 +64,8 @@ if have npm; then
     fi
     # Everything, development tools included: an advisory with no fix yet can be allowed for a
     # while in scripts/npm-audit-allow.json (with a reason and an expiry).
-    if ! (cd "$dir" && npm audit --omit=optional --json 2>/dev/null) | node scripts/npm-audit-filter.mjs; then
+    # npm exits non-zero whenever it finds anything (allowed or not); the filter decides.
+    if ! { (cd "$dir" && npm audit --omit=optional --json 2>/dev/null) || true; } | node scripts/npm-audit-filter.mjs; then
       failed+=("npm audit ($dir)")
     fi
   done
