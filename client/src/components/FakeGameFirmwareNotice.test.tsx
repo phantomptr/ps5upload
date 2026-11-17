@@ -20,9 +20,11 @@ const html = (kernel: string | null, id: string | null, compact = false) =>
 describe("FakeGameFirmwareNotice", () => {
   it("says it installs but isn't playable, for a PS5 game on 13.60", () => {
     const out = html(K("13.60"), PS5_GAME);
-    expect(out).toContain("can be installed but not played on FW 13.60");
-    expect(out).toContain("It will install, but PS5 fake game packages can&#x27;t be played on firmware above 11.60");
-    expect(out).toContain("PS4 packages are fine");
+    expect(out).toContain("Installed, this PS5 game won&#x27;t start on FW 13.60");
+    expect(out).toContain("PS5 fake packages install on firmware above 11.60 but don&#x27;t start");
+    expect(out).toContain("Kraken Mount");
+    expect(out).toContain("A53");
+    expect(out).toContain("PS4 packages and PS5 homebrew apps are fine");
   });
   it("renders the one-line form for a list row", () => {
     expect(html(K("11.61"), PS5_GAME, true)).toContain("above 11.60");

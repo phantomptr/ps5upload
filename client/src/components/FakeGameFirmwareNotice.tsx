@@ -6,8 +6,8 @@ import { useTr } from "../state/lang";
 import { Callout } from "./Callout";
 
 /**
- * A fake PS5 game package on firmware above 11.60 installs but cannot be
- * played. Renders nothing for a PS4 package, for PS5 homebrew (IV…/ITEM…), for
+ * A fake PS5 game package on firmware above 11.60 installs but does not start: Kraken Mount
+ * mounts it instead, and support for installed packages there (the A53 patches) is coming. Renders nothing for a PS4 package, for PS5 homebrew (IV…/ITEM…), for
  * 11.60 and older, or when the firmware can't be read: the warning needs a
  * PS5 game id AND a known firmware above the line.
  */
@@ -30,9 +30,9 @@ export function FakeGameFirmwareNotice({
   const fw = ps5FakeGameUnplayableFirmware(kernel, contentId);
   if (!fw) return null;
   const body = tr(
-    "fakegame.fw.body",
+    "fakegame.fw.body_v2",
     { fw, last: LAST_PS5_FAKE_GAME_FIRMWARE },
-    `It will install, but PS5 fake game packages can't be played on firmware above ${LAST_PS5_FAKE_GAME_FIRMWARE}. PS4 packages are fine, and PS5 homebrew apps launch normally.`,
+    `PS5 fake packages install on firmware above ${LAST_PS5_FAKE_GAME_FIRMWARE} but don't start. Mount the package with Kraken Mount instead: the game plays straight from the .pkg, nothing installed. Full support for installed packages on newer firmware (through the A53 patches) is coming. PS4 packages and PS5 homebrew apps are fine.`,
   );
   const help = inRouter ? (
     <Link
@@ -55,9 +55,9 @@ export function FakeGameFirmwareNotice({
       tone="warn"
       className={className}
       title={tr(
-        "fakegame.fw.title",
+        "fakegame.fw.title_v2",
         { fw },
-        `This PS5 game can be installed but not played on FW ${fw}`,
+        `Installed, this PS5 game won't start on FW ${fw}`,
       )}
     >
       {body}
