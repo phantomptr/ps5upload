@@ -296,6 +296,14 @@ jobs:
       # cache it cannot reach is a miss (SCCACHE_IGNORE_SERVER_IO_ERROR), and a server that
       # does not start leaves cargo without the wrapper. Same three steps in release-cache.yml
       # and ci's engine-target job (where they were measured).
+      # The registry key is the locks' registry/git crates only (.github/scripts/cargo-cache.mjs),
+      # so the release's version bump, which lives on the tag and not on main, still hits the
+      # entry release-cache saved on main.
+      - name: Cargo registry cache key
+        id: cache-key
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs key engine/Cargo.lock client/src-tauri/Cargo.lock >> "$GITHUB_OUTPUT"
+
       - name: Restore cargo registry
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -303,7 +311,7 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('engine/Cargo.lock', 'client/src-tauri/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ steps.cache-key.outputs.deps }}
           restore-keys: ${{ runner.os }}-cargo-registry-
 
       - name: Install sccache
@@ -761,17 +769,21 @@ jobs:
       # exposure that failed CI on v5.4.5: Maven Central answered 403
       # for kotlin-stdlib and Gradle could not configure the project.
       # That run happened to succeed here; caching removes the luck.
-      # Restore only: a tag run can read main's caches (CI's android job saves this one on every
-      # version, since the key follows tauri.conf.json), but what a tag run saves is visible to
+      # Restore only: a tag run can read main's caches (CI's android job saves this one once per
+      # Tauri CLI version, the same key as here), but what a tag run saves is visible to
       # that tag alone. Saving here put a ~650 MB cache nobody could use into the shared 10 GiB on
       # every release and pushed CI's cargo caches out (the same reason this job has no cargo cache).
+      - name: Gradle cache key
+        id: gradle-key
+        run: node .github/scripts/cargo-cache.mjs tauri-cli client/package-lock.json >> "$GITHUB_OUTPUT"
+
       - name: Restore Gradle dependencies
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-android-gradle-${{ hashFiles('client/src-tauri/tauri.conf.json') }}
+          key: ${{ runner.os }}-android-gradle-${{ steps.gradle-key.outputs.key }}
           restore-keys: ${{ runner.os }}-android-gradle-
 
       - name: Setup Rust + Android targets

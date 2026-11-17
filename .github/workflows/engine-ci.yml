@@ -162,19 +162,25 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
 
-      # Restored on every run; saved (under a new key per run, so it stays current) only from
-      # main, where later runs can restore it. A PR's own cache would be visible to that PR only.
+      # Keyed by what it holds: rustc and the locked registry/git crates (a release's version bump
+      # keeps the key). Restored on every run; saved only by a push to main whose exact key
+      # missed, without our own crates' output (.github/scripts/cargo-cache.mjs; RELEASING.md
+      # "CI caches"). A PR reads main's and saves nothing.
+      - name: Cargo cache key
+        id: cache-key
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs key engine/Cargo.lock >> "$GITHUB_OUTPUT"
+
       - name: Restore cargo cache
+        id: cargo-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             engine/target
-          key: ${{ runner.os }}-engine-lint-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
-          restore-keys: |
-            ${{ runner.os }}-engine-lint-${{ hashFiles('engine/Cargo.lock') }}-
-            ${{ runner.os }}-engine-lint-
+          key: ${{ runner.os }}-engine-lint-${{ steps.cache-key.outputs.key }}
+          restore-keys: ${{ runner.os }}-engine-lint-${{ steps.cache-key.outputs.rust }}-
 
       - name: cargo fmt
         working-directory: engine
@@ -235,15 +241,20 @@ jobs:
         working-directory: engine
         run: cargo check -p ps5upload-engine --features webui
 
+      - name: Drop our own crates' build output before caching
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs prune engine/Cargo.lock engine/target
+
       - name: Save cargo cache
-        if: github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             engine/target
-          key: ${{ runner.os }}-engine-lint-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # The workspace's tests, in two legs that run side by side: the engine crate (and the
   # integration suite built on it) is about half of the time, everything else the other half.
@@ -273,19 +284,25 @@ jobs:
         with:
           toolchain: stable
 
-      # Restored on every run; saved (under a new key per run, so it stays current) only from
-      # main, where later runs can restore it. A PR's own cache would be visible to that PR only.
+      # Keyed by what it holds: rustc and the locked registry/git crates (a release's version bump
+      # keeps the key). Restored on every run; saved only by a push to main whose exact key
+      # missed, without our own crates' output (.github/scripts/cargo-cache.mjs; RELEASING.md
+      # "CI caches"). A PR reads main's and saves nothing.
+      - name: Cargo cache key
+        id: cache-key
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs key engine/Cargo.lock >> "$GITHUB_OUTPUT"
+
       - name: Restore cargo cache
+        id: cargo-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             engine/target
-          key: ${{ runner.os }}-engine-test-${{ matrix.part }}-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
-          restore-keys: |
-            ${{ runner.os }}-engine-test-${{ matrix.part }}-${{ hashFiles('engine/Cargo.lock') }}-
-            ${{ runner.os }}-engine-test-${{ matrix.part }}-
+          key: ${{ runner.os }}-engine-test-${{ matrix.part }}-${{ steps.cache-key.outputs.key }}
+          restore-keys: ${{ runner.os }}-engine-test-${{ matrix.part }}-${{ steps.cache-key.outputs.rust }}-
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2
@@ -376,20 +393,22 @@ jobs:
       # target/tmp is CARGO_TARGET_TMPDIR, test scratch space, not build output. The UFS2 writer
       # tests leave sparse images there, one of them 68 GB apparent (lastcg.ffpkg): tar stored it
       # as 68 GB of zeros and every restore wrote them all back, 200-400 s of the libs job's
-      # restore (the download itself took 14 s). The tests recreate what they need.
-      - name: Drop test scratch files before caching
-        if: github.ref == 'refs/heads/main'
-        run: rm -rf engine/target/tmp
+      # restore (the download itself took 14 s). The tests recreate what they need. The prune
+      # drops it, and our own crates' test binaries (most of the old 3.3 GB engine cache).
+      - name: Drop test scratch files and our own crates' build output before caching
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs prune engine/Cargo.lock engine/target
 
       - name: Save cargo cache
-        if: github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             engine/target
-          key: ${{ runner.os }}-engine-test-${{ matrix.part }}-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # Go live and the live feed against a real ffmpeg: the run loop's reconnects, a site failing
   # beside another, the stream endpoint read over HTTP. `#[ignore]`d elsewhere because they need
@@ -412,17 +431,21 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Cargo cache key
+        id: cache-key
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs key engine/Cargo.lock >> "$GITHUB_OUTPUT"
+
       - name: Restore cargo cache
+        id: cargo-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             engine/target
-          key: ${{ runner.os }}-engine-test-engine-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
-          restore-keys: |
-            ${{ runner.os }}-engine-test-engine-${{ hashFiles('engine/Cargo.lock') }}-
-            ${{ runner.os }}-engine-test-engine-
+          key: ${{ runner.os }}-engine-test-engine-${{ steps.cache-key.outputs.key }}
+          restore-keys: ${{ runner.os }}-engine-test-engine-${{ steps.cache-key.outputs.rust }}-
 
       # The build the app itself downloads (ffmpeg_tool.rs PINS, linux x86_64): apt's 6.1.1 reports
       # differently, and what ships is what must pass.
@@ -469,17 +492,21 @@ jobs:
           components: rustfmt, clippy
 
       # The libs test leg's cache, read only: it already holds the hub's dependencies.
+      - name: Cargo cache key
+        id: cache-key
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs key engine/Cargo.lock >> "$GITHUB_OUTPUT"
+
       - name: Restore cargo cache
+        id: cargo-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             engine/target
-          key: ${{ runner.os }}-engine-test-libs-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
-          restore-keys: |
-            ${{ runner.os }}-engine-test-libs-${{ hashFiles('engine/Cargo.lock') }}-
-            ${{ runner.os }}-engine-test-libs-
+          key: ${{ runner.os }}-engine-test-libs-${{ steps.cache-key.outputs.key }}
+          restore-keys: ${{ runner.os }}-engine-test-libs-${{ steps.cache-key.outputs.rust }}-
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2
@@ -545,19 +572,25 @@ jobs:
         with:
           toolchain: stable
 
-      # Restored on every run; saved (under a new key per run, so it stays current) only from
-      # main, where later runs can restore it. A PR's own cache would be visible to that PR only.
+      # Keyed by what it holds: rustc and the locked registry/git crates (a release's version bump
+      # keeps the key). Restored on every run; saved only by a push to main whose exact key
+      # missed, without our own crates' output (.github/scripts/cargo-cache.mjs; RELEASING.md
+      # "CI caches"). A PR reads main's and saves nothing.
+      - name: Cargo cache key
+        id: cache-key
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs key engine/Cargo.lock >> "$GITHUB_OUTPUT"
+
       - name: Restore cargo cache
+        id: cargo-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             engine/target
-          key: ${{ runner.os }}-engine-ctest-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
-          restore-keys: |
-            ${{ runner.os }}-engine-ctest-${{ hashFiles('engine/Cargo.lock') }}-
-            ${{ runner.os }}-engine-ctest-
+          key: ${{ runner.os }}-engine-ctest-${{ steps.cache-key.outputs.key }}
+          restore-keys: ${{ runner.os }}-engine-ctest-${{ steps.cache-key.outputs.rust }}-
 
       - name: cargo test (payload C over AVA1, serial)
         working-directory: engine
@@ -573,15 +606,21 @@ jobs:
           mapfile -t args <<< "$args"
           cargo test -p ps5upload-ctest "${args[@]}" -- --test-threads=1
 
+      # Shard 1 saves: both shards build the same set under the same key.
+      - name: Drop our own crates' build output before caching
+        if: matrix.shard == 1 &&github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs prune engine/Cargo.lock engine/target
+
       - name: Save cargo cache
-        if: github.ref == 'refs/heads/main'
+        if: matrix.shard == 1 && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             engine/target
-          key: ${{ runner.os }}-engine-ctest-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # ─────────────────────────────────────────────────────────────────────
   # AVA1 itself (the protocol library, its fuzzers and its own C interop suite) is tested in
@@ -644,19 +683,25 @@ jobs:
         timeout-minutes: 20
         run: bash scripts/ci-apt.sh clang libclang-rt-18-dev
 
-      # Restored on every run; saved (under a new key per run, so it stays current) only from
-      # main, where later runs can restore it. A PR's own cache would be visible to that PR only.
+      # Keyed by what it holds: rustc and the locked registry/git crates (a release's version bump
+      # keeps the key). Restored on every run; saved only by a push to main whose exact key
+      # missed, without our own crates' output (.github/scripts/cargo-cache.mjs; RELEASING.md
+      # "CI caches"). A PR reads main's and saves nothing.
+      - name: Cargo cache key
+        id: cache-key
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs key engine/Cargo.lock >> "$GITHUB_OUTPUT"
+
       - name: Restore cargo cache
+        id: cargo-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             engine/target
-          key: ${{ runner.os }}-ava1-san-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
-          restore-keys: |
-            ${{ runner.os }}-ava1-san-${{ hashFiles('engine/Cargo.lock') }}-
-            ${{ runner.os }}-ava1-san-
+          key: ${{ runner.os }}-ava1-san-${{ steps.cache-key.outputs.key }}
+          restore-keys: ${{ runner.os }}-ava1-san-${{ steps.cache-key.outputs.rust }}-
 
       - name: cargo test -p ps5upload-ctest (sanitized, serial)
         working-directory: engine
@@ -673,15 +718,21 @@ jobs:
           mapfile -t args <<< "$args"
           cargo test -p ps5upload-ctest "${args[@]}" -- --test-threads=1
 
+      # Shard 1 saves: both shards build the same set under the same key.
+      - name: Drop our own crates' build output before caching
+        if: matrix.shard == 1 &&github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs prune engine/Cargo.lock engine/target
+
       - name: Save cargo cache
-        if: github.ref == 'refs/heads/main'
+        if: matrix.shard == 1 && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             engine/target
-          key: ${{ runner.os }}-ava1-san-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # ─────────────────────────────────────────────────────────────────────
   # Engine/core target portability. This is intentionally separate from
@@ -858,19 +909,25 @@ jobs:
             clang \
             libclang-dev
 
-      # Restored on every run; saved (under a new key per run, so it stays current) only from
-      # main, where later runs can restore it. A PR's own cache would be visible to that PR only.
+      # Keyed by what it holds: rustc and the locked registry/git crates (a release's version bump
+      # keeps the key). Restored on every run; saved only by a push to main whose exact key
+      # missed, without our own crates' output (.github/scripts/cargo-cache.mjs; RELEASING.md
+      # "CI caches"). A PR reads main's and saves nothing.
+      - name: Cargo cache key
+        id: cache-key
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs key client/src-tauri/Cargo.lock >> "$GITHUB_OUTPUT"
+
       - name: Restore cargo cache
+        id: cargo-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             client/src-tauri/target
-          key: ${{ runner.os }}-desktop-${{ matrix.os }}-${{ hashFiles('client/src-tauri/Cargo.lock') }}-${{ github.run_id }}
-          restore-keys: |
-            ${{ runner.os }}-desktop-${{ matrix.os }}-${{ hashFiles('client/src-tauri/Cargo.lock') }}-
-            ${{ runner.os }}-desktop-${{ matrix.os }}-
+          key: ${{ runner.os }}-desktop-${{ matrix.os }}-${{ steps.cache-key.outputs.key }}
+          restore-keys: ${{ runner.os }}-desktop-${{ matrix.os }}-${{ steps.cache-key.outputs.rust }}-
 
       # tauri.conf.json bundles two out-of-tree resources: the PS5
       # payload (ps5upload.elf.gz) and the engine sidecar binary.
@@ -930,15 +987,20 @@ jobs:
           RUST_BACKTRACE: 1
         run: cargo test
 
+      - name: Drop our own crates' build output before caching
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs prune client/src-tauri/Cargo.lock client/src-tauri/target
+
       - name: Save cargo cache
-        if: github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             client/src-tauri/target
-          key: ${{ runner.os }}-desktop-${{ matrix.os }}-${{ hashFiles('client/src-tauri/Cargo.lock') }}-${{ github.run_id }}
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # ─────────────────────────────────────────────────────────────────────
   # Client frontend — TypeScript typecheck, ESLint, Vitest, Vite build.
@@ -1353,11 +1415,11 @@ jobs:
         run: make console-convert
 
       - name: Write the converter's toolchain image for the cache
-        if: github.ref == 'refs/heads/main' && steps.convert-image.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.convert-image.outputs.cache-hit != 'true'
         run: docker save -o "$RUNNER_TEMP/convert-toolchain.tar" "$(bash payload/convert/build.sh --image)"
 
       - name: Save the converter's toolchain image
-        if: github.ref == 'refs/heads/main' && steps.convert-image.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.convert-image.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ runner.temp }}/convert-toolchain.tar
@@ -1499,19 +1561,25 @@ jobs:
           toolchain: stable
           targets: aarch64-linux-android,armv7-linux-androideabi
 
-      # Restored on every run; saved (under a new key per run, so it stays current) only from
-      # main, where later runs can restore it. A PR's own cache would be visible to that PR only.
+      # Keyed by what it holds: rustc and the locked registry/git crates (a release's version bump
+      # keeps the key). Restored on every run; saved only by a push to main whose exact key
+      # missed, without our own crates' output (.github/scripts/cargo-cache.mjs; RELEASING.md
+      # "CI caches"). A PR reads main's and saves nothing.
+      - name: Cargo cache key
+        id: cache-key
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs key client/src-tauri/Cargo.lock >> "$GITHUB_OUTPUT"
+
       - name: Restore cargo cache
+        id: cargo-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             client/src-tauri/target
-          key: ${{ runner.os }}-android-${{ hashFiles('client/src-tauri/Cargo.lock') }}-${{ github.run_id }}
-          restore-keys: |
-            ${{ runner.os }}-android-${{ hashFiles('client/src-tauri/Cargo.lock') }}-
-            ${{ runner.os }}-android-
+          key: ${{ runner.os }}-android-${{ steps.cache-key.outputs.key }}
+          restore-keys: ${{ runner.os }}-android-${{ steps.cache-key.outputs.rust }}-
 
       # Gradle's dependency cache.
       #
@@ -1526,10 +1594,15 @@ jobs:
       # cached. With the artifacts already local, a transient Maven
       # outage stops being a build failure.
       #
-      # Keyed loosely on purpose: the generated project pins its own
-      # versions, so any recent cache is a useful starting point and a
-      # miss only costs a download. Saved from main only, at the end of the job, as the cargo
-      # caches are: a PR's copy (~650 MB) is visible to that PR alone and evicts the others.
+      # Keyed by the Tauri CLI version, which writes the generated project and so pins its
+      # Gradle and plugin versions (it was tauri.conf.json, whose version field made a new
+      # ~560 MB entry on every release). Any older cache is a useful start (restore-keys) and a
+      # miss only costs a download. Saved by a push to main whose exact key missed, at the end
+      # of the job, as the cargo caches are: a PR's copy is visible to that PR alone.
+      - name: Gradle cache key
+        id: gradle-key
+        run: node .github/scripts/cargo-cache.mjs tauri-cli client/package-lock.json >> "$GITHUB_OUTPUT"
+
       - name: Restore Gradle dependencies
         id: gradle-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -1537,7 +1610,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-android-gradle-${{ hashFiles('client/src-tauri/tauri.conf.json') }}
+          key: ${{ runner.os }}-android-gradle-${{ steps.gradle-key.outputs.key }}
           restore-keys: ${{ runner.os }}-android-gradle-
 
       - name: Install client deps
@@ -1615,24 +1688,29 @@ jobs:
           test "${#apks[@]}" -gt 0
           python3 scripts/release/verify-android-apk.py "${apks[@]}"
 
+      - name: Drop our own crates' build output before caching
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs prune client/src-tauri/Cargo.lock client/src-tauri/target
+
       - name: Save cargo cache
-        if: github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             client/src-tauri/target
-          key: ${{ runner.os }}-android-${{ hashFiles('client/src-tauri/Cargo.lock') }}-${{ github.run_id }}
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
       - name: Save Gradle dependencies
-        if: github.ref == 'refs/heads/main' && steps.gradle-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.gradle-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-android-gradle-${{ hashFiles('client/src-tauri/tauri.conf.json') }}
+          key: ${{ steps.gradle-cache.outputs.cache-primary-key }}
 
   # ─────────────────────────────────────────────────────────────────────
   # Aggregate gate. One stable check that turns green only when every

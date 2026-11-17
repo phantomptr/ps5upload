@@ -50,19 +50,29 @@ jobs:
 
       # Main's caches, read only (this workflow saves none): the engine test leg's for the hub
       # and engine sets, the Linux desktop job's for agent_mcp.
+      - name: Cargo cache key (engine/Cargo.lock)
+        id: engine-key
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs key engine/Cargo.lock >> "$GITHUB_OUTPUT"
+
       - name: Restore the engine cache
+        id: cargo-cache-engine
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             engine/target
-          key: ${{ runner.os }}-engine-test-engine-${{ hashFiles('engine/Cargo.lock') }}-flake
-          restore-keys: |
-            ${{ runner.os }}-engine-test-engine-${{ hashFiles('engine/Cargo.lock') }}-
-            ${{ runner.os }}-engine-test-engine-
+          key: ${{ runner.os }}-engine-test-engine-${{ steps.engine-key.outputs.key }}
+          restore-keys: ${{ runner.os }}-engine-test-engine-${{ steps.engine-key.outputs.rust }}-
+
+      - name: Cargo cache key (client/src-tauri/Cargo.lock)
+        id: desktop-key
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs key client/src-tauri/Cargo.lock >> "$GITHUB_OUTPUT"
 
       - name: Restore the desktop cache
+        id: cargo-cache-desktop
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           # The same path list the desktop job saves with: a cache entry only restores into the
@@ -71,10 +81,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             client/src-tauri/target
-          key: ${{ runner.os }}-desktop-ubuntu-24.04-${{ hashFiles('client/src-tauri/Cargo.lock') }}-flake
-          restore-keys: |
-            ${{ runner.os }}-desktop-ubuntu-24.04-${{ hashFiles('client/src-tauri/Cargo.lock') }}-
-            ${{ runner.os }}-desktop-ubuntu-24.04-
+          key: ${{ runner.os }}-desktop-ubuntu-24.04-${{ steps.desktop-key.outputs.key }}
+          restore-keys: ${{ runner.os }}-desktop-ubuntu-24.04-${{ steps.desktop-key.outputs.rust }}-
 
       - name: Install Tauri Linux deps (agent_mcp)
         timeout-minutes: 20

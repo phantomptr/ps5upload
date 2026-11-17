@@ -13,7 +13,7 @@ name: release-cache
 # own bump commit lives on its tag, not main: its first-party crates, whose version changed,
 # compile fresh, their dependencies still hit), weekly (a new stable rustc
 # changes every key), by hand, and on a PR that changes this workflow or the build script
-# (its own entries then live in that PR's scope).
+# (that run reads main's entries and writes none: a PR's would be visible to that PR alone).
 #
 # Size: sccache stores one cache entry per object and GitHub evicts the least recently used
 # entries above the repository's 10 GiB. Read the entries' total with
@@ -25,7 +25,9 @@ name: release-cache
 # 0 %, because ci's per-run caches push the pool past 10 GiB on every main push and evict the
 # previous warm, and most of its writes fail with HTTP 429 (the cache service rate-limits ~1000
 # entries a job). So it is a small help, not a guarantee, and release-tag.yml cancels a run still
-# going when it dispatches publish, so the release gets its macOS and Linux runners.
+# going when it dispatches publish, so the release gets its macOS and Linux runners. ci now keys
+# its caches by content and saves one only when that key is new (RELEASING.md "CI caches"), so
+# a main push no longer writes ~10 GB of fresh entries and evicts this run's.
 #
 # No Windows legs: sccache is off on Windows (see "Start sccache"), so they compiled for ~16 min
 # each and stored nothing, holding two Windows runners while ci and publish queued for them.
@@ -102,14 +104,23 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.rust_target }}
 
-      - name: Cargo registry (restored by publish.yml)
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      # Restored by publish.yml under the same key: the locks' registry/git crates only
+      # (.github/scripts/cargo-cache.mjs), so a release's version bump keeps it. Saved below, from
+      # main only and only when the exact key missed.
+      - name: Cargo registry cache key
+        id: cache-key
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs key engine/Cargo.lock client/src-tauri/Cargo.lock >> "$GITHUB_OUTPUT"
+
+      - name: Restore cargo registry
+        id: registry
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('engine/Cargo.lock', 'client/src-tauri/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ steps.cache-key.outputs.deps }}
           restore-keys: ${{ runner.os }}-cargo-registry-
 
       - name: Install sccache
@@ -117,8 +128,12 @@ jobs:
         with:
           tool: sccache@0.18.0
 
+      # Writes from main only: a PR run (one that changes this workflow) checks the build and
+      # reads main's entries, but what it wrote would be visible to that PR alone.
       - name: Point sccache at the Actions cache
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          RW_MODE: ${{ github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}
         with:
           script: |
             core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
@@ -129,7 +144,7 @@ jobs:
             core.exportVariable('SCCACHE_ERROR_LOG', `${process.env.RUNNER_TEMP}/sccache.log`);
             core.exportVariable('SCCACHE_LOG', 'warn');
             core.exportVariable('SCCACHE_GHA_ENABLED', 'true');
-            core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_WRITE');
+            core.exportVariable('SCCACHE_GHA_RW_MODE', process.env.RW_MODE);
             core.exportVariable('SCCACHE_IGNORE_SERVER_IO_ERROR', '1');
             core.exportVariable('SCCACHE_IDLE_TIMEOUT', '0');
 
@@ -181,6 +196,16 @@ jobs:
         env:
           RUST_TARGET: ${{ matrix.rust_target }}
         run: scripts/release/build-engine-release.sh
+
+      - name: Save cargo registry
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.registry.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ steps.registry.outputs.cache-primary-key }}
 
       - name: Compile cache stats
         if: always()
