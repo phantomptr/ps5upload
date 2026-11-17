@@ -11,8 +11,8 @@
 #      tree is clean, the branch contains origin/main, and vX.Y.Z does not exist yet.
 #   2. Catches the branch up with the last release (RELEASING.md §5) when nobody did: version files
 #      to that release, CHANGELOG.md from its tag with this branch's "## Unreleased" text on top.
-#   3. Bare checks, a few minutes at most, on what the branch changed: i18n coverage, no
-#      FTX2/9113, the embedded guest/pad pages (rebuilt and committed when stale), the C rename
+#   3. Bare checks, a few minutes at most, on what the branch changed: i18n coverage, the
+#      old-protocol check, the embedded guest/pad pages (rebuilt and committed when stale), the C rename
 #      audit when payload C changed, engine fmt when Rust changed, client typecheck + lint when
 #      the client changed.
 #   4. Pushes, opens a PR and squash-merges it with --admin at once (no CI wait).

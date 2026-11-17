@@ -13,7 +13,7 @@ make fast-release V=12.6.2      # or scripts/release/fast-release.sh 12.6.2
 ```
 
 It catches the branch up with the last release (§5) if nobody did, runs bare checks on what the
-branch changed (i18n coverage, no FTX2/9113, the embedded guest/pad pages, the C rename audit,
+branch changed (i18n coverage, no old-protocol names or ports (make check-no-ftx2), the embedded guest/pad pages, the C rename audit,
 engine fmt, client typecheck and lint), merges the PR with `--admin` at once, dispatches
 `release-tag` with `prerelease=true force=true`, waits for publish and runs `verify-release.sh`.
 It is always a pre-release; promote it after a console test as usual. CI still runs on the PR and
