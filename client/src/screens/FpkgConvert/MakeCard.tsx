@@ -92,9 +92,9 @@ export function MakeCard({
                 "Kraken Mount, running on this PS5, mounts it from a drive's homebrew folder and shows it on the home screen: nothing is installed, and it plays where an installed PS5 package does not. It can still be installed instead.",
               )
             : tr(
-                "fpkg.make.pkg_body",
+                "fpkg.make.pkg_body_v2",
                 undefined,
-                "Installs on the PS5 like a game from the store, streamed from here or uploaded first. PS4 games play on any firmware; PS5 games on 11.60 and below.",
+                "Installs on the PS5 like a game from the store, streamed from here or uploaded first. PS4 games play on any firmware. An installed PS5 game plays on 11.60 and below; on newer firmware mount it with Kraken Mount (support for installing there is coming).",
               ),
         },
     {

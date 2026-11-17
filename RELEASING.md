@@ -3,6 +3,23 @@
 A release is one batch PR and one workflow run. There is no version-bump PR: the version comes
 from the input to `release-tag`, which tags a bump commit that never goes to `main`.
 
+## Fast release (a small change, now)
+
+For a small, low-risk change (wording, docs, a UI tweak) that should go out without waiting for
+CI: commit it on a branch with its notes under `## Unreleased` in CHANGELOG.md, then
+
+```sh
+make fast-release V=12.6.2      # or scripts/release/fast-release.sh 12.6.2
+```
+
+It catches the branch up with the last release (§5) if nobody did, runs bare checks on what the
+branch changed (i18n coverage, no old-protocol names or ports (make check-no-ftx2), the embedded guest/pad pages, the C rename audit,
+engine fmt, client typecheck and lint), merges the PR with `--admin` at once, dispatches
+`release-tag` with `prerelease=true force=true`, waits for publish and runs `verify-release.sh`.
+It is always a pre-release; promote it after a console test as usual. CI still runs on the PR and
+on `main`; it just doesn't hold the release. Anything touching the helper, installs or transfers
+takes the normal path above.
+
 ## 1. The batch PR
 
 - Put the release's changes in one PR.

@@ -105,7 +105,7 @@ ADB ?= $(ANDROID_HOME)/platform-tools/adb
 .PHONY: build payload installer engine client _engine-release _payload-if-ready _android-build-if-ready
 .PHONY: test test-root test-engine test-engine-coverage test-desktop test-payload test-client test-client-coverage
 .PHONY: lint lint-scripts lint-client audit-scripts coverage coverage-engine coverage-client
-.PHONY: quality quality-full quality-hardware ci ci-full release-check
+.PHONY: quality quality-full quality-hardware ci ci-full release-check fast-release
 .PHONY: clean clean-payload clean-engine clean-client
 .PHONY: verify info install-hooks
 .PHONY: test-ava1 test-ava1-sanitize ava1-app-gen ava1-version-check check-no-ftx2
@@ -162,6 +162,7 @@ help:
 	@echo "  make quality-full     - quality + payload validation"
 	@echo "  make quality-hardware - quality + live PS5 validate"
 	@echo "  make release-check    - Before a release: quality, then Playwright e2e, then"
+	@echo "  make fast-release V=X.Y.Z - A small change out now as a pre-release: bare checks, no CI wait"
 	@echo "                          test-payload (BUILD_LOCK=<file> serializes the heavy builds)"
 	@echo "  make coverage         - Rust + frontend coverage reports"
 	@echo "  make coverage-engine  - Rust coverage report only"
@@ -578,7 +579,7 @@ CHECK_NO_FTX2_SCOPE := .
 CHECK_NO_FTX2_EXCEPT := \
 	':!engine/crates/ps5upload-ctest/tests/payload_cutover.rs' \
 	':!CHANGELOG.md' ':!site/releases.json' \
-	':!CONTRIBUTING.md' ':!TESTING.md' \
+	':!CONTRIBUTING.md' ':!TESTING.md' ':!RELEASING.md' ':!scripts/release/fast-release.sh' \
 	':!protocol/ps5upload-ava1' ':!third_party/ava1' \
 	':!Makefile' \
 	':!.github/workflows/engine-ci.yml' \
@@ -887,6 +888,12 @@ quality-full:
 # quality, then the e2e suite, then test-payload; see scripts/release/release-check.sh.
 release-check:
 	@bash scripts/release/release-check.sh
+
+# A small change, shipped at once as a pre-release: bare checks, PR merged without waiting for
+# CI, tagged with force. See scripts/release/fast-release.sh and RELEASING.md.
+fast-release:
+	@test -n "$(V)" || { echo "usage: make fast-release V=X.Y.Z"; exit 2; }
+	@bash scripts/release/fast-release.sh "$(V)"
 
 quality-hardware:
 	@npm run validate:hardware

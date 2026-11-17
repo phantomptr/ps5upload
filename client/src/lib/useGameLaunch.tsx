@@ -91,9 +91,9 @@ export function useGameLaunch(
       const fw = ps5FakeGameUnplayableFirmware(kernel, titleId);
       if (!fw) return body;
       return `${body} ${tr(
-        "fakegame.fw.launch",
+        "fakegame.fw.launch_v2",
         { fw, last: LAST_PS5_FAKE_GAME_FIRMWARE },
-        `PS5 fake game packages can't be played on firmware above ${LAST_PS5_FAKE_GAME_FIRMWARE} (this console is on ${fw}). If this game was installed from a fake package, that is why it won't start. PS4 packages are fine.`,
+        `On firmware above ${LAST_PS5_FAKE_GAME_FIRMWARE} (this console is on ${fw}) a PS5 game installed from a fake package doesn't start. Mount the package with Kraken Mount instead; support for installed packages on newer firmware is coming. PS4 packages are fine.`,
       )}`;
     },
     [tr],

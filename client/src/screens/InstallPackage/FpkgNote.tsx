@@ -26,8 +26,8 @@ export function FpkgNote({ className = "mb-4" }: { className?: string }) {
           </span>
           <span>
             {tr(
-              "pkglib.fpkgsupport.firmware",
-              "PS5 fake packages (PS5 FPKG) are not supported yet on firmware later than 11.60: they install, but the game does not start. PS4 fake packages are fine.",
+              "pkglib.fpkgsupport.firmware_v2",
+              "PS5 fake packages install on firmware above 11.60 but don't start yet. Mount them with Kraken Mount instead; full support for installing them there (through the A53 patches) is coming. PS4 fake packages are fine.",
             )}
           </span>
         </span>
