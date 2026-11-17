@@ -202,6 +202,51 @@ Outside the lanes:
   their `.dockerignore`, `scripts/docker-smoke.sh`, the workflow or the engine's Cargo
   manifests change. Tag pushes and tagged dispatches publish exactly as before.
 
+## CI caches
+
+GitHub keeps 10 GiB of Actions cache for the repository and drops the least recently used
+entries above that. Until 12.6.4 every push to `main` saved a new set of `ci` caches (the key
+held the run id: Android ~1.8 GB, desktop 3 x ~1 GB, the test legs 1.3-3.3 GB), which pushed
+out everything else within hours, so `release-cache`'s compile cache rarely reached `publish`.
+
+The rules now:
+
+- A cache key names what the cache holds, never the run. Cargo caches:
+  `<OS>-<job>-rust<version>-<commit>-<deps>`, where `<deps>` hashes only the registry and git
+  crates in `Cargo.lock` (`.github/scripts/cargo-cache.mjs key`), so a release's version bump
+  keeps the key. Gradle: the `@tauri-apps/cli` version. The converter image: its Dockerfile and
+  SDK pin. `restore-keys` fall back to the same compiler with other dependencies, never to an
+  older compiler (those objects are useless and would only grow the cache).
+- Only a push to `main` saves, and only when the exact key missed. PRs, the merge queue and tag
+  runs restore and save nothing (a tag's or PR's cache is visible to that ref alone).
+  `release-cache` saves the registry and, through sccache, the release build's objects, from
+  `main` only. BuildKit's `type=gha` cache in `docker-engine` is written from `main` only.
+- Before a save, `cargo-cache.mjs prune` removes our own crates' build output (test binaries
+  included) and `target/tmp`. Cargo rebuilds path crates on every CI run anyway, so the cache
+  holds dependencies only.
+- `rust-ctest` and the sanitizer job save from shard 1 only.
+
+See the pool with:
+
+```sh
+gh api repos/phantomptr/ps5upload/actions/cache/usage
+gh cache list --limit 200 --sort size_in_bytes
+```
+
+One-time clean-up after this change is on `main`: delete the old run-keyed and lockfile-hash
+entries (they can no longer be hit by an exact key and only hold space). The filter keeps
+sccache, Node, BuildKit and the converter image:
+
+```sh
+gh cache list --limit 5000 --json id,key \
+  --jq '.[] | select((.key | test("^(Linux|macOS|Windows)-.*-[0-9a-f]{64}(-[0-9]+)?$"))
+                     and (.key | test("convert-toolchain") | not)) | .id' \
+  | xargs -n1 gh cache delete
+```
+
+Dropping every entry (`gh cache delete --all`) also works; the next push to `main` and the next
+`release-cache` run fill it again.
+
 ## Nightly flake report
 
 `flake-hunter.yml` runs nightly and repeats the timing-sensitive tests: the hub, `join_net` and
