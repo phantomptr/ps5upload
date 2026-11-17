@@ -36,8 +36,14 @@ import { log } from "../../../state/logs";
 import { killPrompt } from "../../Processes/killPrompt";
 import NanoDnsScreen from "../../NanoDns";
 import SmpPanel from "./SmpPanel";
-import PayloadManagerPanel from "../PayloadManagerPanel";
+import PayloadManagerPanel, { type PmRunning } from "../PayloadManagerPanel";
 import { PmSummary, SmpSummary } from "./summaries";
+import { pmOverview, type PmOverview } from "../../../api/payloadManager";
+import { storedHelper } from "../../../lib/helperAtBoot";
+import { ourElfldrPid } from "../../../lib/elfldrGuard";
+import { RUNNING_LINK } from "../payloadTabs";
+import { groupCards, matchSavedToCards, originOf, type Origin } from "./pmMerge";
+import { usePmView, usePmViewStore } from "./pmViewStore";
 import { HushPanel, HushSummary, useHush, useHushActions } from "../../Hush";
 import {
   detectHubCards,
@@ -158,6 +164,24 @@ function OnPs5Body() {
     setError(null);
   }, [addr]);
 
+  // Payload Manager's saved list, read with each refresh while its card is on screen (open or
+  // not), so a running payload it keeps shows on its row instead of as a second card. Read
+  // apart from the process list: a slow answer from :8084 doesn't hold that up.
+  const pmWanted = useRef(false);
+  const pmInFlight = useRef(false);
+  const refreshPm = useCallback(async () => {
+    if (!online || pmInFlight.current) return;
+    pmInFlight.current = true;
+    try {
+      usePmViewStore.getState().put(addr, await pmOverview(addr));
+    } catch {
+      // Unread: nothing is merged until it reads again.
+      usePmViewStore.getState().put(addr, null);
+    } finally {
+      pmInFlight.current = false;
+    }
+  }, [addr, online]);
+
   const inFlight = useRef(false);
   const refreshProcs = useCallback(async () => {
     if (!online || inFlight.current) return;
@@ -168,6 +192,7 @@ function OnPs5Body() {
       if (gen !== genRef.current) return;
       setProcs(r.processes);
       setError(null);
+      if (pmWanted.current) void refreshPm();
       // The mounter snapshot, once per refresh: whether Kraken Mount answers (it may run as
       // payload.elf) and ShadowMount+'s mounted images, for the cards' lines.
       try {
@@ -183,7 +208,7 @@ function OnPs5Body() {
       inFlight.current = false;
       if (gen === genRef.current) setProcsLoaded(true);
     }
-  }, [addr, online]);
+  }, [addr, online, refreshPm]);
   usePoll(refreshProcs, REFRESH_MS, { host: addr, enabled: online && windowVisible });
 
   // Marker checks list folders on the console: like the pollers, they stand aside while a
@@ -214,7 +239,8 @@ function OnPs5Body() {
   const mounter = useMounterFor(addr);
   const krakenUp = !!(mounter?.kraken?.api || mounter?.kraken?.running);
   const krakenInstalled = !!mounter?.kraken?.installed;
-  const pmAnswered = reports["payload-manager"] !== undefined;
+  const pmView = usePmView(addr);
+  const pmAnswered = reports["payload-manager"] !== undefined || !!pmView?.present;
   const cards = useMemo(() => {
     const answering = new Set<string>();
     if (krakenUp) answering.add("kraken-mount");
@@ -231,6 +257,51 @@ function OnPs5Body() {
       forceShow: openId,
     });
   }, [entries, procs, markers, openId, hushPid, krakenUp, krakenInstalled, pmAnswered]);
+
+  const pmCardShown = cards.some((c) => c.id === "payload-manager");
+  useEffect(() => {
+    pmWanted.current = pmCardShown;
+    if (pmCardShown) void refreshPm();
+  }, [pmCardShown, refreshPm]);
+
+  // The saved list against the running cards. Only with a list read in full and the process
+  // list in: otherwise every card shows as it always has.
+  const pmList = pmView?.present && !pmView.payloadsError && procsLoaded ? pmView.payloads : null;
+  const matched = useMemo(
+    () => (pmList ? matchSavedToCards(pmList, cards, entries) : null),
+    [pmList, cards, entries],
+  );
+  const groups = useMemo(() => (matched ? groupCards(cards, matched) : null), [cards, matched]);
+  const matchedIds = useMemo(
+    () => new Set([...(matched?.values() ?? [])].map((c) => c.id)),
+    [matched],
+  );
+  const loaderPid = ourElfldrPid(addr);
+  const originText = (c: HubCard): string | null => {
+    const o: Origin | null = originOf(c, matchedIds.has(c.id), loaderPid);
+    switch (o) {
+      case "pm":
+        return tr("pm_origin_list", undefined, "From your Payload Manager list");
+      case "ours":
+        return tr("hub_origin_ours", undefined, "PS5Upload's own helper");
+      case "loader-ours":
+        return tr(
+          "hub_origin_loader_ours",
+          undefined,
+          "Payload loader. PS5Upload swapped in its patched build so a dropped send can't jam it.",
+        );
+      case "loader":
+        return tr("hub_origin_loader", undefined, "Payload loader, started by your jailbreak or Payload Manager.");
+      case "console":
+        return tr(
+          "hub_origin_console",
+          undefined,
+          "Started outside Payload Manager: by your jailbreak, an autoloader, or a file you sent.",
+        );
+      default:
+        return null;
+    }
+  };
 
   const report = useCallback((id: string, r: IntegrationReport) => {
     setReports((prev) => {
@@ -264,9 +335,11 @@ function OnPs5Body() {
   // A link that opened a card (an old tab's URL, a notification) scrolls to it once.
   // Any id of a card standing for several entries (kstuff's builds) finds that card.
   const scrolledTo = useRef<string | null>(null);
-  const openCard = openId
+  // A card shown on Payload Manager's saved row instead opens Payload Manager's card.
+  const linked = openId
     ? (cards.find((c) => c.id === openId) ?? cards.find((c) => c.entryIds.includes(openId)))?.id ?? null
     : null;
+  const openCard = linked && groups?.hidden.has(linked) && pmCardShown ? "payload-manager" : linked;
   useEffect(() => {
     if (!openId || !openCard || scrolledTo.current === openId) return;
     scrolledTo.current = openId;
@@ -330,6 +403,102 @@ function OnPs5Body() {
     }
   };
 
+  // What each saved row that is running shows: its pid, Stop (the card's flow), and the card's
+  // lines (kstuff's builds, Kraken Mount's update note).
+  const pmRunning = ((): Record<string, PmRunning> | null => {
+    if (!matched || !pmList) return null;
+    const out: Record<string, PmRunning> = {};
+    for (const [path, c] of matched) {
+      const p = c.processes[0];
+      if (!p) continue;
+      const port = reports[c.id]?.webPort ?? c.webPort;
+      out[path] = {
+        pid: p.pid,
+        memoryMib: p.memory_mib,
+        ours: false,
+        canStop: killPrompt(p) !== null,
+        busy: busy === c.id,
+        onStop: () => void stop(c),
+        variants: c.variants,
+        webUrl: port ? `http://${withPort(host.trim(), port)}/` : null,
+        note: c.id === "kraken-mount" ? <KrakenUpdateNote kraken={mounter?.kraken} /> : undefined,
+      };
+    }
+    // The helper's own copy in the list: it is the helper this app is talking to.
+    const helper = storedHelper(pmList);
+    const self = procs.find((p) => p.is_self);
+    if (helper && self && !out[helper.path]) {
+      out[helper.path] = {
+        pid: self.pid,
+        memoryMib: self.memory_mib,
+        ours: true,
+        canStop: false,
+        busy: false,
+        onStop: () => undefined,
+        variants: [],
+        webUrl: null,
+      };
+    }
+    return out;
+  })();
+  const pmRunningCount = pmRunning ? Object.keys(pmRunning).length : null;
+
+  const renderCard = (c: HubCard) => {
+    const rep = reports[c.id];
+    const rel = latest[c.id];
+    const newer =
+      rep?.version && rel && compareVersions(rep.version, rel.tag) === -1 ? rel : null;
+    return (
+      <HubCardView
+        key={c.id}
+        card={c}
+        host={host}
+        version={rep?.version ?? null}
+        webPort={rep?.webPort ?? c.webPort}
+        newer={newer}
+        catalogued={catalog !== null}
+        busy={busy === c.id}
+        expanded={openCard === c.id}
+        onToggle={() => setOpen(openCard === c.id ? null : c.id)}
+        onStop={() => void stop(c)}
+        origin={originText(c)}
+        summary={
+          c.integration === "hush"
+            ? () => (
+                <HushSummary
+                  view={hush.view}
+                  running={c.state === "running"}
+                  busy={hushActions.busy}
+                  onResume={() => void hushActions.run(true, hush.view?.configText ?? null)}
+                />
+              )
+            : c.integration
+              ? (fallback) => (
+                  <Summary
+                    key={summaryRev}
+                    id={c.integration!}
+                    host={host}
+                    running={c.state === "running"}
+                    pm={{ view: pmView, running: pmRunningCount }}
+                    onReport={report}
+                    fallback={fallback}
+                  />
+                )
+              : c.id === "kraken-mount"
+                ? (fallback) => <KrakenSummary host={host} fallback={fallback} />
+                : null
+        }
+        panel={
+          c.integration === "hush" ? (
+            <HushPanel host={host} view={hush.view} procs={procs} refresh={hush.refresh} />
+          ) : c.integration ? (
+            <IntegrationPanel id={c.integration} host={host} pmRunning={pmRunning ?? undefined} />
+          ) : null
+        }
+      />
+    );
+  };
+
   const loading = !procsLoaded || !markersLoaded;
 
   return (
@@ -383,62 +552,36 @@ function OnPs5Body() {
             </div>
           }
         />
+      ) : groups ? (
+        <>
+          {groups.top.length > 0 && <ul className="flex flex-col gap-2.5">{groups.top.map(renderCard)}</ul>}
+          {groups.also.length > 0 && (
+            <section className="flex flex-col gap-2" data-testid="hub-also-running">
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+                  {tr("hub_also_running", undefined, "Also running")}
+                </h3>
+                <p className="mt-0.5 text-xs text-[var(--color-muted)]">
+                  {tr(
+                    "hub_also_running_body",
+                    undefined,
+                    "Not in your Payload Manager list. Payloads above run from your own list.",
+                  )}{" "}
+                  <button
+                    type="button"
+                    className="underline underline-offset-2 hover:text-[var(--color-text)]"
+                    onClick={() => navigate(RUNNING_LINK)}
+                  >
+                    {tr("hub_also_running_link", undefined, "Every process is on the Running tab.")}
+                  </button>
+                </p>
+              </div>
+              <ul className="flex flex-col gap-2.5">{groups.also.map(renderCard)}</ul>
+            </section>
+          )}
+        </>
       ) : (
-        <ul className="flex flex-col gap-2.5">
-          {cards.map((c) => {
-            const rep = reports[c.id];
-            const rel = latest[c.id];
-            const newer =
-              rep?.version && rel && compareVersions(rep.version, rel.tag) === -1 ? rel : null;
-            return (
-              <HubCardView
-                key={c.id}
-                card={c}
-                host={host}
-                version={rep?.version ?? null}
-                webPort={rep?.webPort ?? c.webPort}
-                newer={newer}
-                catalogued={catalog !== null}
-                busy={busy === c.id}
-                expanded={openCard === c.id}
-                onToggle={() => setOpen(openId === c.id ? null : c.id)}
-                onStop={() => void stop(c)}
-                summary={
-                  c.integration === "hush"
-                    ? () => (
-                        <HushSummary
-                          view={hush.view}
-                          running={c.state === "running"}
-                          busy={hushActions.busy}
-                          onResume={() => void hushActions.run(true, hush.view?.configText ?? null)}
-                        />
-                      )
-                    : c.integration
-                      ? (fallback) => (
-                          <Summary
-                            key={summaryRev}
-                            id={c.integration!}
-                            host={host}
-                            running={c.state === "running"}
-                            onReport={report}
-                            fallback={fallback}
-                          />
-                        )
-                      : c.id === "kraken-mount"
-                        ? (fallback) => <KrakenSummary host={host} fallback={fallback} />
-                        : null
-                }
-                panel={
-                  c.integration === "hush" ? (
-                    <HushPanel host={host} view={hush.view} procs={procs} refresh={hush.refresh} />
-                  ) : c.integration ? (
-                    <IntegrationPanel id={c.integration} host={host} />
-                  ) : null
-                }
-              />
-            );
-          })}
-        </ul>
+        <ul className="flex flex-col gap-2.5">{cards.map(renderCard)}</ul>
       )}
       {dialog}
     </div>
@@ -461,25 +604,38 @@ function Summary({
   id,
   host,
   running,
+  pm,
   onReport,
   fallback,
 }: {
   id: IntegrationId;
   host: string;
   running: boolean;
+  /** Payload Manager's overview and how many of its saved payloads run (null: not matched). */
+  pm: { view: PmOverview | null | undefined; running: number | null };
   onReport: (id: string, r: IntegrationReport) => void;
   fallback: ReactNode;
 }) {
   if (id === "payload-manager") {
-    return <PmSummary host={host} onReport={(r) => onReport(id, r)} fallback={fallback} />;
+    return (
+      <PmSummary view={pm.view} running={pm.running} onReport={(r) => onReport(id, r)} fallback={fallback} />
+    );
   }
   if (id === "shadowmountplus") return <SmpSummary host={host} running={running} fallback={fallback} />;
   return <>{fallback}</>;
 }
 
 /** The integration's own panel, as its tab showed it before. */
-function IntegrationPanel({ id, host }: { id: IntegrationId; host: string }) {
-  if (id === "payload-manager") return <PayloadManagerPanel />;
+function IntegrationPanel({
+  id,
+  host,
+  pmRunning,
+}: {
+  id: IntegrationId;
+  host: string;
+  pmRunning?: Record<string, PmRunning>;
+}) {
+  if (id === "payload-manager") return <PayloadManagerPanel running={pmRunning} />;
   if (id === "shadowmountplus") return <SmpPanel mgmtAddr={host.trim() ? mgmtAddr(host.trim()) : null} />;
   if (id === "nanodns") return <NanoDnsScreen />;
   return null;
@@ -497,6 +653,7 @@ function HubCardView({
   expanded,
   onToggle,
   onStop,
+  origin,
   summary,
   panel,
 }: {
@@ -514,6 +671,8 @@ function HubCardView({
   expanded: boolean;
   onToggle: () => void;
   onStop: () => void;
+  /** Who started it, for a running card: one line, so nobody reads it as PS5Upload's doing. */
+  origin: string | null;
   summary: ((fallback: ReactNode) => ReactNode) | null;
   panel: ReactNode;
 }) {
@@ -570,6 +729,11 @@ function HubCardView({
             )}
           </div>
           <div className="mt-0.5 text-xs text-[var(--color-muted)]">{summary ? summary(detail) : detail}</div>
+          {origin && (
+            <div className="mt-0.5 text-xs text-[var(--color-muted)]" data-testid="hub-origin">
+              {origin}
+            </div>
+          )}
           {card.variants.length > 1 && (
             <div className="mt-0.5 text-xs text-[var(--color-muted)]">
               {tr(

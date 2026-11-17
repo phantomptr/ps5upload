@@ -10,6 +10,7 @@
 //                   patched one (it leaves any other loader alone).
 
 import { elfldrEnsure, elfldrHealth } from "../api/ps5";
+import { hostOf } from "./addr";
 import { log } from "../state/logs";
 import { runStatusForHost, usePayloadPlaylistsStore } from "../state/payloadPlaylists";
 
@@ -76,9 +77,26 @@ function playlistRunsOn(host: string): boolean {
   return kind === "running" || kind === "sleeping";
 }
 
+/** The elfldr pid the engine reported as its patched build, per console (this app session). */
+const ourLoader = new Map<string, number>();
+const loaderKey = (host: string) => hostOf(host.trim()).toLowerCase();
+
+/** The pid of the patched elfldr PS5Upload put in place (or found in place) on `host`, from the
+ *  last swap's outcome in this session; null when it doesn't know one. */
+export function ourElfldrPid(host: string): number | null {
+  return ourLoader.get(loaderKey(host)) ?? null;
+}
+
+function noteOutcome(host: string, outcome: unknown): void {
+  const o = outcome as { action?: unknown; pid?: unknown } | null;
+  const ours = o?.action === "upgraded" || o?.action === "recovered" || o?.action === "current";
+  if (ours && typeof o?.pid === "number") ourLoader.set(loaderKey(host), o.pid);
+}
+
 /** Test hook. */
 export function resetElfldrGuard(): void {
   lastAsked.clear();
+  ourLoader.clear();
 }
 
 /** Have the engine put the patched elfldr in place on `host`: at most once per console every
@@ -114,6 +132,7 @@ export async function guardElfldr(
     for (let attempt = 0; ; attempt++) {
       const outcome = await deps.ensure(host);
       log.info("connection", `elfldr on ${host}: ${JSON.stringify(outcome)}`);
+      noteOutcome(host, outcome);
       const settling = (outcome as { reason?: unknown } | null)?.reason === "console_settling";
       if (!settling) break;
       if (attempt >= SETTLE_RETRIES) {

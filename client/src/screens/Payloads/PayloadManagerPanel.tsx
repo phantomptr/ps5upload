@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, ExternalLink, Play, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { ArrowDown, ArrowUp, ExternalLink, Play, Plus, RefreshCw, Skull, Trash2, Upload } from "lucide-react";
 
 import { Badge, Button, Callout, ErrorCard, Select, Spinner, Toggle } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
@@ -44,6 +44,7 @@ import { withConsolePrefix } from "../../state/roster";
 import { humanizeCaught } from "../../lib/humanizeError";
 import { listsHelper, loadBootRecord, storedHelper } from "../../lib/helperAtBoot";
 import { turnOffHelperAtBoot, turnOnHelperAtBoot } from "../../state/helperAtBootRuntime";
+import { usePmView, usePmViewStore } from "./hub/pmViewStore";
 
 /** Move `name` within an autoload list, keeping pauses (`!ms`) where they are. */
 export function moveEntry(list: string[], name: string, dir: -1 | 1): string[] {
@@ -59,9 +60,28 @@ export function moveEntry(list: string[], name: string, dir: -1 | 1): string[] {
   return out;
 }
 
+/** A saved payload that is running right now, as "On your PS5" matched it to its process. */
+export interface PmRunning {
+  pid: number;
+  memoryMib: number;
+  /** PS5Upload's own helper (it can't be stopped from here). */
+  ours: boolean;
+  /** Stop offered (the card's flow: confirm, then kill). */
+  canStop: boolean;
+  busy: boolean;
+  onStop: () => void;
+  /** What the console can't tell apart (kstuff's builds), as the card listed them. */
+  variants: string[];
+  /** Its web page, when it serves one. */
+  webUrl: string | null;
+  /** Anything else the card showed under its line (Kraken Mount's update note). */
+  note?: ReactNode;
+}
+
 /** The payloads stored in the console's Payload Manager (:8084): launch, delete, and the
- *  boot autoload list. Storing into it is on the Catalog tab's cards. */
-export default function PayloadManagerPanel() {
+ *  boot autoload list. Storing into it is on the Catalog tab's cards. `running` (by stored
+ *  path) marks the ones running now, with their pid and Stop. */
+export default function PayloadManagerPanel({ running }: { running?: Readonly<Record<string, PmRunning>> } = {}) {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const { confirm, dialog } = useConfirm();
@@ -91,7 +111,10 @@ export default function PayloadManagerPanel() {
     setError(null);
     try {
       const v = await pmOverview(h);
-      if (gen === genRef.current) setView(v);
+      if (gen === genRef.current) {
+        setView(v);
+        usePmViewStore.getState().put(h, v);
+      }
     } catch (e) {
       if (gen === genRef.current) setError(humanizeCaught(e));
     } finally {
@@ -106,6 +129,12 @@ export default function PayloadManagerPanel() {
     asked.current.clear();
     void refresh();
   }, [refresh]);
+
+  // "On your PS5" reads the same overview on each refresh: a newer one replaces this.
+  const shared = usePmView(host);
+  useEffect(() => {
+    if (shared) setView((cur) => (cur === shared ? cur : shared));
+  }, [shared]);
 
   const present = !!view?.present;
   useEffect(() => {
@@ -386,6 +415,7 @@ export default function PayloadManagerPanel() {
     // The helper's own entry goes through "Load the PS5Upload helper at boot", so taking it
     // out here is the switch turned off, not something the next connection undoes.
     const isHelper = !!helperCopy && p.path === helperCopy.path;
+    const live = running?.[p.path];
     return (
       <li
         key={p.path}
@@ -414,7 +444,36 @@ export default function PayloadManagerPanel() {
                 {tr("pm_autoload_badge", { n: pos + 1 }, `boot #${pos + 1}`)}
               </Badge>
             )}
+            {live && (
+              <Badge tone="good" dot>
+                {tr("pm_running_badge", { pid: live.pid }, `Running · PID ${live.pid}`)}
+              </Badge>
+            )}
           </div>
+          {live && (
+            <div className="mt-0.5 text-xs text-[var(--color-muted)]" data-testid="pm-running-origin">
+              {live.ours
+                ? tr("hub_origin_ours", undefined, "PS5Upload's own helper")
+                : listed && autoload
+                  ? tr(
+                      "pm_origin_list_boot",
+                      { n: pos + 1 },
+                      `From your Payload Manager list, starts at boot #${pos + 1}`,
+                    )
+                  : tr("pm_origin_list", undefined, "From your Payload Manager list")}
+              {` · ${live.memoryMib.toFixed(1)} MB`}
+            </div>
+          )}
+          {live && live.variants.length > 1 && (
+            <div className="text-xs text-[var(--color-muted)]">
+              {tr(
+                "hub_variants",
+                { names: live.variants.join(", ") },
+                `One of: ${live.variants.join(", ")} — the console can't tell which.`,
+              )}
+            </div>
+          )}
+          {live?.note}
           <div className="mt-0.5 truncate font-mono text-xs text-[var(--color-muted)]" title={p.path}>
             {p.path}
           </div>
@@ -425,6 +484,17 @@ export default function PayloadManagerPanel() {
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {live?.webUrl && (
+            <Button
+              variant="ghost"
+              size="sm"
+              leftIcon={<ExternalLink size={12} />}
+              onClick={() => void openExternalUrl(live.webUrl!)}
+              title={live.webUrl}
+            >
+              {tr("hub_open_page", undefined, "Open web page")}
+            </Button>
+          )}
           {autoload && (
             <>
               <Button
@@ -497,6 +567,17 @@ export default function PayloadManagerPanel() {
           >
             {tr("pm_launch", undefined, "Launch")}
           </Button>
+          {live?.canStop && (
+            <Button
+              variant="ghost"
+              size="sm"
+              leftIcon={<Skull size={12} />}
+              disabled={live.busy}
+              onClick={live.onStop}
+            >
+              {tr("hub_stop", undefined, "Stop")}
+            </Button>
+          )}
           {p.path.startsWith("/data/pldmgr/") && (
             <Button
               variant="ghost"
