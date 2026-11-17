@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -9,6 +9,9 @@ import test from "node:test";
 import { buildsDone, listFiles, newArtifacts } from "./scan-artifacts.mjs";
 
 const script = new URL("./scan-artifacts.mjs", import.meta.url).pathname;
+// The end-to-end tests build artifact zips with the `zip` command; Windows runners have none (the
+// scanner itself only runs on Linux, in publish).
+const noZip = spawnSync("zip", ["-v"]).status === 0 ? false : "no zip command on this machine";
 const sha = (buf) => createHash("sha256").update(buf).digest("hex");
 
 test("newArtifacts: build outputs not yet seen, not expired", () => {
@@ -134,7 +137,7 @@ function fakeRun(t, { infected = false } = {}) {
   );
 }
 
-test("scans each artifact as it arrives and records what scanned clean", async (t) => {
+test("scans each artifact as it arrives and records what scanned clean", { skip: noZip }, async (t) => {
   const { root, run } = await fakeRun(t);
   const r = await run();
   assert.equal(r.code, 0, r.stderr + r.stdout);
@@ -143,7 +146,7 @@ test("scans each artifact as it arrives and records what scanned clean", async (
   assert.match(r.stdout, /scanned clean: 4 file\(s\) from 2 artifact\(s\)/);
 });
 
-test("a hit fails and marks nothing scanned", async (t) => {
+test("a hit fails and marks nothing scanned", { skip: noZip }, async (t) => {
   const { root, run } = await fakeRun(t, { infected: true });
   const r = await run();
   assert.equal(r.code, 1);
