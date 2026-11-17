@@ -11,6 +11,10 @@
 # and on a pull request only when it changes code in one of the four languages analysed here; a
 # PR of docs, templates or the website has nothing for it to read. Results still upload to the
 # Security tab, and open alerts still stop scripts/release.sh.
+#
+# On a pull request the Rust analysis (the slowest of the four) runs only when the PR changes Rust
+# (`*.rs`, a Cargo.toml or Cargo.lock), the CodeQL config or this workflow; the `languages` job
+# picks the list. Pushes to main, the weekly run and manual runs analyse all four.
 name: codeql
 
 on:
@@ -49,8 +53,51 @@ permissions:
   contents: read
 
 jobs:
+  # The languages this run analyses: all four, except a pull request that changes no Rust.
+  languages:
+    name: codeql languages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      list: ${{ steps.pick.outputs.list }}
+      count: ${{ steps.pick.outputs.count }}
+    steps:
+      # A PR run checks out the PR's merge commit: HEAD^1..HEAD is exactly what the PR changes.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+          sparse-checkout: .github/codeql
+      - name: Pick the languages
+        id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          rust=true
+          if [ "$EVENT" = pull_request ]; then
+            # An unreadable diff keeps Rust in.
+            if files="$(git diff --no-renames --name-only HEAD^1 HEAD)"; then
+              printf '%s\n' "$files" | sed 's/^/changed: /'
+              # A here-string, not a pipe: grep -q stops reading at the first match, and under
+              # pipefail the writer's SIGPIPE would read as "no Rust".
+              if ! grep -Eq '(^|/)(Cargo\.toml|Cargo\.lock)$|\.rs$|^\.github/codeql/|^\.github/workflows/codeql\.yml$' <<< "$files"; then
+                rust=false
+              fi
+            fi
+          fi
+          if [ "$rust" = true ]; then
+            list='["actions","javascript-typescript","python","rust"]'
+          else
+            list='["actions","javascript-typescript","python"]'
+          fi
+          echo "languages: $list"
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+          echo "count=$(printf '%s' "$list" | jq length)" >> "$GITHUB_OUTPUT"
+
   analyze:
     name: codeql (${{ matrix.language }})
+    needs: languages
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -59,7 +106,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [actions, javascript-typescript, python, rust]
+        language: ${{ fromJSON(needs.languages.outputs.list) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -79,7 +126,7 @@ jobs:
   # don't count. Push and same-repo pull requests only (a fork's token cannot read the alerts).
   gate:
     name: codeql gate
-    needs: analyze
+    needs: [languages, analyze]
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -96,19 +143,21 @@ jobs:
           # commit: the event's merge_commit_sha can still be the previous push's when two
           # pushes land close together, and then no analysis ever matches it.
           SHA: ${{ github.sha }}
+          # How many languages the analyze job ran (the languages job).
+          WANT: ${{ needs.languages.outputs.count }}
         run: |
           set -euo pipefail
           # The uploads just made turn into analyses, then alerts, after a short delay: wait
-          # until all four languages' analyses of this commit are in.
+          # until every analysed language's analysis of this commit is in.
           for _ in $(seq 1 30); do
             n="$(gh api "repos/$REPO/code-scanning/analyses?ref=$REF&per_page=100" \
               --jq "[.[] | select(.commit_sha == \"$SHA\")] | map(.category) | unique | length")"
-            [ "$n" -ge 4 ] && break
+            [ "$n" -ge "$WANT" ] && break
             sleep 20
           done
-          # Fewer than four and the alert query below would pass on part of the picture.
-          if [ "$n" -lt 4 ]; then
-            echo "::error::only $n of 4 CodeQL analyses of $SHA arrived in time: re-run this job"
+          # Fewer and the alert query below would pass on part of the picture.
+          if [ "$n" -lt "$WANT" ]; then
+            echo "::error::only $n of $WANT CodeQL analyses of $SHA arrived in time: re-run this job"
             exit 1
           fi
           sleep 20

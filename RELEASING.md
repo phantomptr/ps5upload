@@ -141,9 +141,10 @@ On a PR or queue entry, the `changes` job maps the changed paths to lanes
 | --- | --- | --- |
 | engine | rust (engine workspace), rust tests, go live, engine targets, ava1 | `engine/**`, `tailnet/**`, `payload/include/**`, API/AUTOMATION/MCP.md |
 | hub | rust hub, only when the engine lane is off | `engine/crates/ps5upload-hub/**` |
-| ctest | payload C over AVA1, sanitized ctest | `payload/**`, core, ava1, ctest crates |
+| ctest | payload C over AVA1, sanitized ctest (2 shards each) | `payload/**`, core, ava1, ctest crates |
 | payload | payload ELF, host self-tests | `payload/**`, `tailnet/**`, `client/**` (console page) |
-| client | client (ts + vite) | `client/**` (src-tauri too), engine sources, `CHANGELOG.md`, `FAQ.md`, `site/join`, `site/pad` |
+| client | client (ts + vite), client browser tests (Playwright, 3 shards) | `client/**` (src-tauri too), engine sources, `site/join`, `site/pad` |
+| docs | docs: the vitest files that read the FAQ and changelog, and `e2e/bundled-docs.spec.ts`; only when the client lane is off | `CHANGELOG.md`, `FAQ.md` |
 | desktop, android | rust desktop, android | `client/src-tauri/**`, engine, `tailnet/**` (android also `client/**`) |
 | scripts | repo scripts on macOS and Windows | `scripts/**`, any `.js/.mjs/.sh/.py/.ps1` |
 
@@ -154,13 +155,27 @@ These run every lane: workflows, `.github/scripts`, lockfiles, `package.json`, `
 `VERSION`, submodules, `protocol/**`, and any path without a rule.
 
 A docs-only change (`*.md`, `site/**`, issue templates) runs only the jobs that always run.
-The exceptions are Markdown that the app or engine reads. `CHANGELOG.md` and `FAQ.md` also run
-the client job, because its tests read them. `API.md`, `AUTOMATION.md` and `MCP.md` are built
-into the engine.
+The exceptions are Markdown that the app or engine reads. `CHANGELOG.md` and `FAQ.md` run the
+small `docs` job: only the tests that read them. A PR that also changes client code runs the
+full client lane instead, which includes those tests. `API.md`, `AUTOMATION.md` and `MCP.md`
+are built into the engine.
 
 Pushes to `main` and manual runs always run every lane. `PR gate` fails if a job whose lane
 was on did not succeed, if a job was skipped while its lane was on, or if it finds a job it
 does not know.
+
+Outside the lanes:
+
+- Coverage reports run nightly (the `ci` workflow's schedule) and on a manual run, not on every
+  push to `main`. The nightly run makes the reports and runs nothing else; the release check
+  (`release-ci-verdict.mjs`) ignores it.
+- CodeQL analyses Rust on a PR only when the PR changes `*.rs`, a `Cargo.toml`/`Cargo.lock`,
+  the CodeQL config or its workflow. Pushes to `main`, the weekly run and manual runs analyse
+  all four languages.
+- The Docker image smoke-check (`docker-engine.yml`: verify, verify-webui) runs on every push to
+  `main`, nightly, and on a manual run with no tag. On a PR it runs only when the Dockerfiles,
+  their `.dockerignore`, `scripts/docker-smoke.sh`, the workflow or the engine's Cargo
+  manifests change. Tag pushes and tagged dispatches publish exactly as before.
 
 ## Nightly flake report
 

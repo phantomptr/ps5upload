@@ -9,8 +9,11 @@ name: docker-engine
 #     build embeds the output.
 #
 # Tag pushes (v*) publish multi-arch (amd64 + arm64) manifests for both
-# images, in lockstep — one release cuts both. PRs that touch engine/ or
-# client/ get a build-only smoke-check of both Dockerfiles (no push).
+# images, in lockstep — one release cuts both. The build-only smoke-check of
+# both Dockerfiles (verify, verify-webui; no push) runs on every push to main,
+# nightly, on a dispatch without a tag, and on a PR only when it changes the
+# Dockerfiles, their .dockerignore, the smoke script, this workflow or the
+# engine's Cargo manifests. Main's push run catches the rest the next commit.
 #
 # Image tags follow the release policy: every release is cut as a PRE-RELEASE
 # and promoted to a full release by hand on GitHub once it has run on a
@@ -31,16 +34,35 @@ name: docker-engine
 #
 # Manual re-run (e.g. after an Actions outage wedges a tag-push run):
 #   gh workflow run docker-engine.yml -f tag=v3.3.16
+# Manual smoke-check only (no tag: builds and tests both images, publishes nothing):
+#   gh workflow run docker-engine.yml
+#
+# A run publishes only on a tag push or a dispatch with a tag: `resolve` runs for those (and
+# for `release`) only, and every publishing job needs it.
 on:
   push:
+    # A push to main runs the smoke-check only (resolve, and with it every
+    # publishing job, is off for a branch push).
+    branches: [main]
     tags: ['v*']
   pull_request:
-    paths: ['engine/**', 'client/**', 'payload/**', 'scripts/docker-smoke.sh', '.github/workflows/docker-engine.yml']
+    paths:
+      - 'engine/Dockerfile*'
+      - 'engine/.dockerignore'
+      - '.dockerignore'
+      - 'engine/Cargo.lock'
+      - 'engine/Cargo.toml'
+      - 'scripts/docker-smoke.sh'
+      - '.github/workflows/docker-engine.yml'
+  schedule:
+    # Nightly smoke-check of both images.
+    - cron: "23 5 * * *"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to publish (e.g. v3.3.16). Must already exist."
-        required: true
+        description: "Release tag to publish (e.g. v3.3.16). Must already exist. Empty: only build and smoke-test both images."
+        required: false
+        default: ""
       # release-tag.yml sets this when it publishes a release as the latest at once: that release
       # is created with GITHUB_TOKEN, which fires no `release` event, so `promote` runs here,
       # after this run's images are pushed.
@@ -68,9 +90,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── PR gate: build amd64, no push ──────────────────────────────────────────
+  # ── Smoke-check: build amd64, no push ──────────────────────────────────────
   verify:
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request' || github.event_name == 'schedule' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.tag == '')
     runs-on: ubuntu-24.04
     # A full engine (and, for the web UI, client) build: ~7-10 min on a good
     # runner, so 10 cancelled ordinary runs (PR #338).
@@ -110,9 +135,12 @@ jobs:
       - name: Smoke-test the image
         run: scripts/docker-smoke.sh ps5upload-engine:smoke
 
-  # ── PR gate for the webui image: same idea, root context + Dockerfile.webui ─
+  # ── Smoke-check of the webui image: same idea, root context + Dockerfile.webui ─
   verify-webui:
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request' || github.event_name == 'schedule' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.tag == '')
     runs-on: ubuntu-24.04
     # A full engine (and, for the web UI, client) build: ~7-10 min on a good
     # runner, so 10 cancelled ordinary runs (PR #338).
@@ -164,7 +192,12 @@ jobs:
   # and the lowercased image names are computed once via the safe env pattern
   # instead of interpolating ${{ github.repository_owner }} into shell.
   resolve:
-    if: github.event_name != 'pull_request'
+    # A tag push, a dispatch with a tag, or a promotion: never a branch push, the schedule, or
+    # a smoke-check dispatch (the jobs that publish all need this one, so they are off too).
+    if: >-
+      github.event_name == 'release' ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:

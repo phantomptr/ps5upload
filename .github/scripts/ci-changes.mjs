@@ -19,7 +19,8 @@ export const LANES = {
   hub: "rust hub (only when the engine lane is off; that lane tests the hub too)",
   ctest: "payload C over AVA1, and its sanitized run",
   payload: "payload ELF and its host self-tests",
-  client: "client (ts + vite)",
+  client: "client (ts + vite), client browser tests (3 shards)",
+  docs: "docs: the tests that read the bundled FAQ and changelog (only when the client lane is off)",
   desktop: "rust desktop (3 OS)",
   android: "android (apk build)",
   scripts: "repo scripts on macOS and Windows (Ubuntu always runs)",
@@ -99,11 +100,13 @@ export const RULES = [
   { pattern: "client/src-tauri/**", lanes: ["desktop", "android", "client"] },
   // The front end. Android bundles it; the payload embeds the console page built from it.
   { pattern: "client/**", lanes: ["client", "android", "payload"] },
-  // Bundled into the app (What's new, FAQ) and read by the client's tests: FAQ.md's grammar
-  // (MarkdownView.test.tsx), and the What's new screen in the browser tests
-  // (e2e/bundled-docs.spec.ts looks for a version heading among the newest 20 sections).
-  { pattern: "FAQ.md", lanes: ["client"] },
-  { pattern: "CHANGELOG.md", lanes: ["client"] },
+  // Bundled into the app (What's new, FAQ) and read by a few client tests: FAQ.md's grammar and
+  // anchors (MarkdownView, faqDoc, faqSiteParity, installErrorDoc tests), the changelog's
+  // (changelogDoc.test.ts), and the What's new screen in the browser tests
+  // (e2e/bundled-docs.spec.ts looks for a version heading among the newest 20 sections). The
+  // `docs` job runs exactly those; a change to code as well turns on the full client lane.
+  { pattern: "FAQ.md", lanes: ["docs"] },
+  { pattern: "CHANGELOG.md", lanes: ["docs"] },
   // The site's guest and pad pages are the engine's, byte for byte (check-embedded-pages.mjs).
   { pattern: "site/join/**", lanes: ["client"] },
   { pattern: "site/pad/**", lanes: ["client"] },
@@ -175,6 +178,8 @@ export function outputLines({ lanes, all }) {
   const out = ALL.map((l) => `${l}=${lanes[l]}`);
   // The hub has its own short job only when the engine lane, which tests it too, is off.
   out.push(`hub_only=${lanes.hub && !lanes.engine}`);
+  // The docs job runs a subset of the client lane's tests: only when that lane is off.
+  out.push(`docs_only=${lanes.docs && !lanes.client}`);
   out.push(`all=${all}`);
   return out;
 }
