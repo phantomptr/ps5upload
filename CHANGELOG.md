@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.3
 
 A clear way to replace a game that's already on the PS5, and faster checks behind the scenes.
 
