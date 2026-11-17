@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ProcessInfo } from "../../api/ps5";
-import { killPrompt } from "./killPrompt";
+import { killChecked, killPrompt } from "./killPrompt";
 
 const proc = (p: Partial<ProcessInfo>): ProcessInfo => ({
   pid: 1,
@@ -27,5 +27,29 @@ describe("killPrompt", () => {
 
   it("never offers to kill the helper itself", () => {
     expect(killPrompt(proc({ kind: "payload", is_self: true }))).toBeNull();
+  });
+});
+
+describe("killChecked", () => {
+  // The helper answers a refused or failed kill with ok:false (HTTP 200): the Running tab
+  // used to log that as "killed" and show nothing.
+  it("throws the helper's reason when the kill didn't happen", async () => {
+    const kill = async (_a: string, pid: number) => ({ ok: false, pid, err: "ESRCH" });
+    await expect(killChecked("ps5", 102, kill)).rejects.toThrow("ESRCH");
+  });
+
+  it("throws without a reason too, naming the pid", async () => {
+    const kill = async (_a: string, pid: number) => ({ ok: false, pid });
+    await expect(killChecked("ps5", 102, kill)).rejects.toThrow("102");
+  });
+
+  it("resolves when the helper killed it, asking for that pid on that console", async () => {
+    const asked: Array<[string, number]> = [];
+    const kill = async (a: string, pid: number) => {
+      asked.push([a, pid]);
+      return { ok: true, pid };
+    };
+    await expect(killChecked("192.168.0.5:9114", 102, kill)).resolves.toBeUndefined();
+    expect(asked).toEqual([["192.168.0.5:9114", 102]]);
   });
 });

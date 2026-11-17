@@ -30,7 +30,8 @@ export function PmSummary({
   useEffect(() => {
     if (version !== undefined) reportRef.current({ version });
   }, [version]);
-  if (!view?.present) return <>{fallback}</>;
+  // A list that couldn't be read is not an empty one ("0 saved").
+  if (!view?.present || view.payloadsError) return <>{fallback}</>;
   const n = view.payloads.length;
   if (running === null) return <>{tr("hub_pm_summary", { n }, `Payloads stored: ${n}`)}</>;
   return <>{tr("hub_pm_summary_running", { n, running }, `${n} saved · ${running} running`)}</>;

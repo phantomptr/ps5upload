@@ -30,18 +30,20 @@ export default function BrowserSendPanel() {
         method: "POST", body: file, headers: { "content-type": "application/octet-stream" },
         signal: AbortSignal.timeout(120_000),
       });
-      const body = await response.json() as { bytes_sent?: number; error?: string };
+      // A proxy's HTML error page is not JSON: say the status, not a parse error.
+      const body = (await response.json().catch(() => ({}))) as { bytes_sent?: number; error?: string };
       // A refusal comes as a reason the app can say in the user's language.
       if (response.status === 409) throw new PayloadSendRefused(body.error ?? "loader_busy");
       if (!response.ok) throw new Error(body.error || `engine HTTP ${response.status}`);
       if (typeof body.bytes_sent !== "number") throw new Error("Invalid send response");
       setSent(body.bytes_sent);
-    } catch (e) { setError(e instanceof PayloadSendRefused ? payloadSendRefusalText(e) : String(e)); }
+    } catch (e) { setError(e instanceof PayloadSendRefused ? payloadSendRefusalText(e) : e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   }
   return <div className="space-y-4">
     <label className="block text-sm">{tr("browserPayload.file", "Payload file")}
-      <input type="file" accept=".elf" disabled={busy} className="block mt-2" onChange={(e) => {
+      {/* .bin payloads are ELF files under another name (the engine checks the bytes). */}
+      <input type="file" accept=".elf,.bin" disabled={busy} className="block mt-2" onChange={(e) => {
         setFile(e.currentTarget.files?.[0] ?? null); setSent(null); setError(null);
       }} />
     </label>

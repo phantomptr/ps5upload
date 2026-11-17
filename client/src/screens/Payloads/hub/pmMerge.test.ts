@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PayloadInfo, ProcessInfo } from "../../../api/ps5";
-import { groupCards, isOurProcess, matchSavedToCards, originOf, savedKey } from "./pmMerge";
+import { groupCards, isOurProcess, matchDetail, matchSavedToCards, originOf, savedKey } from "./pmMerge";
 import { detectHubCards, hubEntries, type HubCard } from "./registry";
 
 const proc = (pid: number, comm: string, extra: Partial<ProcessInfo> = {}): ProcessInfo => ({
@@ -153,14 +153,42 @@ describe("cards once the saved list is known", () => {
     const ids = new Set([...m.values()].map((c) => c.id));
     const origin = (id: string, loader: number | null = null) => {
       const c = cards.find((x) => x.id === id)!;
-      return originOf(c, ids.has(c.id), loader);
+      return originOf(c, ids.has(c.id) ? "matched" : "not-in-list", loader);
     };
     expect(origin("kstuff-echostretch")).toBe("pm");
-    expect(origin("payload-manager")).toBe("console");
+    // Payload Manager is never "started outside Payload Manager".
+    expect(origin("payload-manager")).toBe("manager");
     expect(origin("proc:elfldr")).toBe("loader");
     expect(origin("proc:elfldr", 106)).toBe("loader-ours");
     expect(origin("proc:elfldr", 999)).toBe("loader");
     expect(origin("proc:ps5u-convert")).toBe("ours");
+  });
+
+  it("never says 'outside Payload Manager' while its list is unknown or ambiguous", () => {
+    const cards = cardsFor([proc(102, "kstuff.elf"), proc(150, "nanodns.elf"), proc(90, "pldmgr.elf")]);
+    const kstuff = cards.find((c) => c.id === "kstuff-echostretch")!;
+    expect(originOf(kstuff, "unknown", null)).toBe("any");
+    expect(originOf(kstuff, "maybe", null)).toBe("pm-maybe");
+    expect(originOf(kstuff, "not-in-list", null)).toBe("console");
+  });
+
+  it("keeps a card two saved files could be at the top, naming both, not under Also running", () => {
+    const cards = cardsFor([proc(102, "kstuff.elf"), proc(150, "elfldr.elf"), proc(90, "pldmgr.elf")], false);
+    const two = [saved("kstuff-1.13.elf"), saved("kstuff-lite-fpkg.elf"), saved("AnyPad.elf")];
+    const d = matchDetail(two, cards, ENTRIES);
+    expect(d.matched.size).toBe(0);
+    expect(Object.fromEntries(d.ambiguous)).toEqual({
+      "kstuff-echostretch": ["kstuff-1.13.elf", "kstuff-lite-fpkg.elf"],
+    });
+    const g = groupCards(cards, d.matched, d.ambiguous);
+    expect(g.top.map((c) => c.id)).toEqual(["payload-manager", "kstuff-echostretch"]);
+    expect(g.also.map((c) => c.id)).toEqual(["proc:elfldr"]);
+  });
+
+  it("matches .bin and upper-case file names, and a renamed file not at all", () => {
+    const cards = cardsFor([proc(102, "kstuff.elf"), proc(96, "nanodns.elf")]);
+    const m = matchSavedToCards([saved("KSTUFF.BIN"), saved("dns-helper.elf")], cards, ENTRIES);
+    expect(byFile(m)).toEqual({ "KSTUFF.BIN": ["kstuff-echostretch", 102] });
   });
 
   it("knows PS5Upload's own processes", () => {
