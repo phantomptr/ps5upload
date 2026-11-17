@@ -6,6 +6,11 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Changed**
+- **PS5 fake packages on firmware above 11.60:** an installed PS5 fake package still doesn't start there, and the app now says what to do instead: mount the package with **Kraken Mount**, and the game plays straight from the `.pkg` with nothing installed. Full support for installed packages on that firmware, through the A53 patches, is coming. The Install, Convert and launch messages, the README and the FAQ all say so.
+
+## 12.6.1
+
 Every disk in the file browser, a note when Kraken Mount needs an update, and the frame rate on older firmware.
 
 **Changed**
