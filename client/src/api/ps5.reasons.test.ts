@@ -63,8 +63,12 @@ describe("every engine reason is humanized", () => {
 
   it("names the row's own choices for an existing destination, never a control not in view", () => {
     for (const r of ["ava1_exists", "ava1_commit_exists"]) {
-      expect(humanizeJobErrorReason(r)).toMatch(/Replace it, or upload somewhere else/);
-      expect(humanizeJobErrorReason(r)).not.toMatch(/Override/);
+      const withActions = humanizeJobErrorReason(r, { conflictActions: true });
+      expect(withActions).toMatch(/Replace it, or upload somewhere else/);
+      expect(withActions).not.toMatch(/Override/);
+      // Without those buttons (an install row, the activity list): no promise of them.
+      expect(humanizeJobErrorReason(r)).toMatch(/already in that folder on the PS5/);
+      expect(humanizeJobErrorReason(r)).not.toMatch(/Replace|somewhere else/);
     }
   });
 

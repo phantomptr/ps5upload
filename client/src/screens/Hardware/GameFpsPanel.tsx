@@ -45,9 +45,9 @@ function stateText(tr: Translator, state: FpsState): string {
       );
     case "no_count":
       return tr(
-        "game_fps_state_no_count",
+        "game_fps_state_no_count2",
         undefined,
-        "This console answers, but its frame count doesn't move, so the frame rate can't be read on its firmware. It works on firmware 13.60.",
+        "This console answers, but its frame count doesn't move, so the frame rate can't be read here.",
       );
     case "offline":
       return tr("game_fps_state_offline", undefined, "The console did not answer.");

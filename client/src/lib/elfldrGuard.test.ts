@@ -136,6 +136,51 @@ describe("the elfldr swap and a running playlist", () => {
     await guardElfldr("10.0.0.2", false, { ...deps, playlistRuns: () => false });
     expect(swaps).toBe(1);
   });
+
+  it("waits again for a playlist that started while the console settled", async () => {
+    const order: string[] = [];
+    const answers: unknown[] = [{ action: "skipped", reason: "console_settling" }, { action: "current" }];
+    let running = 0;
+    await guardElfldr("10.0.0.2", true, {
+      ensure: async () => {
+        order.push("swap");
+        // A playlist starts during the 30 s wait and runs for two polls.
+        if (answers.length === 2) running = 2;
+        return answers.shift();
+      },
+      playlistRuns: () => {
+        if (running <= 0) return false;
+        running--;
+        order.push("playlist");
+        return true;
+      },
+      ...clock,
+    });
+    expect(order).toEqual(["swap", "playlist", "playlist", "swap"]);
+  });
+
+  it("one swap per console at a time: a second call while one waits does nothing", async () => {
+    let swaps = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const deps = {
+      ensure: async () => {
+        swaps++;
+        await gate;
+        return { action: "current" };
+      },
+      ...clock,
+    };
+    const first = guardElfldr("10.0.0.2", true, deps);
+    await Promise.resolve();
+    await guardElfldr("10.0.0.2", true, deps);
+    expect(swaps).toBe(1);
+    release();
+    await first;
+    // Done: a fresh send asks again.
+    await guardElfldr("10.0.0.2", true, deps);
+    expect(swaps).toBe(2);
+  });
 });
 
 describe("which elfldr is PS5Upload's", () => {

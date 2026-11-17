@@ -6,7 +6,7 @@ import { Button, Spinner, WarningCard } from "../../components";
 import { hostOf, mgmtAddr } from "../../lib/addr";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { invoke } from "../../lib/invokeLogged";
-import { pickPath } from "../../lib/pickPath";
+import { usePayloadCopy } from "../../lib/payloadCopy";
 import { krakenRuns, useMounterFor, useMounterStore } from "../../lib/mounter";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
@@ -65,6 +65,14 @@ export function SmpNeededWarning({
   const mounter = useMounterFor(host);
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  // The copy saved in the app, else a file the user picks: the app doesn't download payloads.
+  const { copy, choose } = usePayloadCopy("shadowmountplus", {
+    title: tr("installed_smp_pick_title", undefined, "Choose the ShadowMount+ file"),
+    filters: [
+      { name: "Payload", extensions: ["elf", "bin"] },
+      { name: "All files", extensions: ["*"] },
+    ],
+  });
   // Kraken Mount runs: it mounts no disk images, and ShadowMount+ must not be started beside it
   // (the engine refuses that send too), so there is nothing to send here.
   if (krakenRuns(mounter)) {
@@ -88,30 +96,9 @@ export function SmpNeededWarning({
     setSending(true);
     setMsg(null);
     try {
-      // The copy saved in the app, else a file the user picks: the app doesn't download payloads.
-      const saved = (await invoke("payloads_local_path", {
-        id: "shadowmountplus",
-      })) as string | null;
-      const path =
-        saved ??
-        (await pickPath({
-          mode: "file",
-          title: tr("installed_smp_pick_title", undefined, "Choose the ShadowMount+ file"),
-          filters: [
-            { name: "Payload", extensions: ["elf", "bin"] },
-            { name: "All files", extensions: ["*"] },
-          ],
-        }));
-      if (!path) {
-        setMsg(
-          tr(
-            "installed_smp_no_copy",
-            undefined,
-            "ShadowMount+ isn't saved in ps5upload. Get it from its project page, then press Send and choose the file.",
-          ),
-        );
-        return;
-      }
+      // A cancelled picker sends nothing and says nothing.
+      const path = (copy ?? (await choose()))?.path;
+      if (!path) return;
       const res = (await invoke("payload_send", {
         ip: hostOf(host),
         path,
@@ -160,6 +147,20 @@ export function SmpNeededWarning({
             {sending ? <Spinner size={14} /> : <Download size={14} />}
             {tr("installed_smp_send", undefined, "Send ShadowMount+")}
           </Button>
+          <Button variant="ghost" size="sm" disabled={sending} onClick={() => void choose()}>
+            {tr("first_run_choose_file", undefined, "Choose file…")}
+          </Button>
+          <span className="text-xs text-[var(--color-muted)]" data-testid="smp-send-copy">
+            {copy
+              ? copy.picked
+                ? tr("payload_copy_picked", { name: copy.label }, "Sends {name}")
+                : tr("payload_copy_saved", { name: copy.label }, "Sends the saved copy: {name}")
+              : tr(
+                  "installed_smp_no_copy",
+                  undefined,
+                  "ShadowMount+ isn't saved in ps5upload. Get it from its project page, then press Send and choose the file.",
+                )}
+          </span>
           {msg ? (
             <span className="text-xs text-[var(--color-muted)]">{msg}</span>
           ) : null}

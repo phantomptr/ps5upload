@@ -100,8 +100,10 @@ export function splitUploadFolder(
     if ((f === v || f.startsWith(`${v}/`)) && (best === null || v.length > best.length)) best = v;
   }
   if (best === null) {
-    // Nothing listed yet: the internal drive's own root still splits the usual way.
-    if (f === "/data" || f.startsWith("/data/")) best = "/data";
+    // Not on a listed drive (the list may not have loaded yet): split on the console's known
+    // mount roots, so a picked folder never becomes a drive of its own.
+    const root = /^\/(?:data|user|mnt\/(?:ext|usb)\d+)(?=\/|$)/.exec(f);
+    if (root) best = root[0];
     else return { volume: f, subpath: "" };
   }
   return { volume: best, subpath: f.slice(best.length).replace(/^\/+/, "") };

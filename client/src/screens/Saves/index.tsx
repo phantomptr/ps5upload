@@ -1174,7 +1174,7 @@ export default function SavesScreen() {
       <ConnectionGate require="payload">
         <AutoBackupCard />
         <ServerBackupCard owners={owners} />
-        {hasOtherConsole && host?.trim() ? <SaveSyncCard host={host.trim()} /> : null}
+        {hasOtherConsole && host?.trim() ? <SaveSyncCard key={host.trim()} host={host.trim()} /> : null}
         <MoveFromPs4 />
         {error && (
           <div className="mb-4">

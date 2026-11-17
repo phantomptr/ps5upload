@@ -35,8 +35,10 @@ export function offersConflictActions(it: ConflictRow): boolean {
   return destinationConflictOf(it.errorReason) !== null;
 }
 
-/** Where the row goes in `folder`: the folder plus the name it had. Pure. */
-export function destInFolder(oldDest: string, folder: string): string {
+/** Where the row goes in `folder`: the folder plus the name it had. `flat` (an archive
+ *  extracted straight into its destination): the destination is the folder itself. Pure. */
+export function destInFolder(oldDest: string, folder: string, flat = false): string {
+  if (flat) return folder.replace(/\/+$/, "") || "/";
   const name = oldDest.replace(/\/+$/, "").split("/").pop() ?? "";
   const dir = folder.replace(/\/+$/, "") || "";
   return `${dir}/${name}`;

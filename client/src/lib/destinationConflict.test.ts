@@ -32,6 +32,12 @@ describe("which failures offer Replace / Upload somewhere else", () => {
     expect(destInFolder("/data/pkg/a.pkg", "/data/other/")).toBe("/data/other/a.pkg");
     expect(destInFolder("/data/Game", "/")).toBe("/Game");
   });
+
+  it("is the folder itself for an archive extracted straight into it", () => {
+    expect(destInFolder("/data/homebrew/Game", "/data/homebrew", true)).toBe("/data/homebrew");
+    expect(destInFolder("/data/homebrew/Game", "/mnt/ext1/games/", true)).toBe("/mnt/ext1/games");
+    expect(destInFolder("/data/homebrew", "/", true)).toBe("/");
+  });
 });
 
 /** A console holding `paths` (folders end in `/`). */

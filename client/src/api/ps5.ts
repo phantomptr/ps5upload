@@ -4703,6 +4703,9 @@ export class UploadJobError extends Error {
  *  in the UI with the raw `error_detail` for diagnostic depth. */
 export function humanizeJobErrorReason(
   reason: string | undefined,
+  /** The text sits next to Replace / Upload somewhere else (a failed upload row in the queue),
+   *  so it may name them. Everywhere else the neutral wording is used. */
+  opts?: { conflictActions?: boolean },
 ): string | null {
   if (!reason) return null;
   // Mid-transfer write failure from the payload's direct-write path. The
@@ -4890,15 +4893,25 @@ export function humanizeJobErrorReason(
         "A folder inside the download folder on this computer is a shortcut (a symbolic link) or a file, so PS5Upload won't write through it. Pick a different folder, then click Retry.",
       );
     case "ava1_exists":
-      return trStatic(
-        "joberr.ava1_exists_v2",
-        "Something with this name is already in that folder on the PS5, so nothing was sent. Replace it, or upload somewhere else.",
-      );
+      return opts?.conflictActions
+        ? trStatic(
+            "joberr.ava1_exists_v2",
+            "Something with this name is already in that folder on the PS5, so nothing was sent. Replace it, or upload somewhere else.",
+          )
+        : trStatic(
+            "joberr.ava1_exists_plain",
+            "Something with this name is already in that folder on the PS5, so nothing was sent.",
+          );
     case "ava1_commit_exists":
-      return trStatic(
-        "joberr.ava1_commit_exists_v2",
-        "Everything was sent, but a copy with this name is already in that folder on the PS5, so this one wasn't put in place. Replace it, or upload somewhere else.",
-      );
+      return opts?.conflictActions
+        ? trStatic(
+            "joberr.ava1_commit_exists_v2",
+            "Everything was sent, but a copy with this name is already in that folder on the PS5, so this one wasn't put in place. Replace it, or upload somewhere else.",
+          )
+        : trStatic(
+            "joberr.ava1_commit_exists_plain",
+            "Everything was sent, but a copy with this name is already in that folder on the PS5, so this one wasn't put in place.",
+          );
     case "ava1_cross_device":
     case "ava1_commit_cross_device":
       return trStatic(

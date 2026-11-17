@@ -2227,7 +2227,16 @@ export function DestinationConflictActions({
           onCancel={() => setPicking(false)}
           onPick={(folder) => {
             setPicking(false);
-            useUploadQueueStore.getState().uploadElsewhere(id, folder);
+            // false: the row is no longer the failed one (already re-run or gone).
+            if (!useUploadQueueStore.getState().uploadElsewhere(id, folder)) {
+              setFailed(
+                tr(
+                  "queue_conflict_elsewhere_stale",
+                  undefined,
+                  "This item already started again; check it in the queue.",
+                ),
+              );
+            }
           }}
         />
       )}
@@ -2249,7 +2258,8 @@ function FailedRowErrorCard({
   conflict?: { id: string; addr: string; dest: string };
 }) {
   const tr = useTr();
-  const humanized = humanizeJobErrorReason(reason ?? undefined);
+  // Names Replace / Upload somewhere else only where those buttons are shown.
+  const humanized = humanizeJobErrorReason(reason ?? undefined, { conflictActions: !!conflict });
   // Without a reason code the raw error is still said for a person first.
   const plain = humanized ? null : humanizePs5Error(rawError);
   return (
