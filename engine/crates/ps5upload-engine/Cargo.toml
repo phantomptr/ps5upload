@@ -13,6 +13,10 @@ name = "ps5upload-engine"
 path = "src/main.rs"
 
 [features]
+## Builds the live test binaries (tests/live_*.rs and the like): every test in them is
+## `#[ignore]`d and needs a real console, disk image or network, so without this feature they are
+## not built or listed at all. Run them with `cargo test -p ps5upload-engine --features live -- --ignored`.
+live = []
 ## Embed the Vite-built React bundle so the engine serves the full web UI
 ## when accessed from a browser. Build requires a pre-populated `webui/`
 ## directory next to this Cargo.toml (populated from `client/dist` by the
@@ -124,3 +128,11 @@ sevenz-rust2 = { version = "0.23", default-features = false, features = ["compre
 tokio = { workspace = true, features = ["test-util"] }
 # Cuts an in-place edit at every journal step (image_edit_in_place.rs tests).
 ps5-dump-forge-patch = { path = "../ps5-dump-forge-patch", features = ["fault-injection"] }
+
+[[test]]
+name = "live_pkg_meta"
+required-features = ["live"]
+
+[[test]]
+name = "live_scan_external"
+required-features = ["live"]

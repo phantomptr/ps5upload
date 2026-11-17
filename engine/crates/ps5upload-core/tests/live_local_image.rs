@@ -4,7 +4,7 @@
 //! is `#[ignore]`d. Point it at a real image and run:
 //!
 //!   PS5UPLOAD_TEST_IMAGE=/path/to.exfat \
-//!     cargo test -p ps5upload-core --test live_local_image -- --ignored --nocapture
+//!     cargo test -p ps5upload-core --test live_local_image --features live -- --ignored --nocapture
 //!
 //! The parsing is unit-tested; what this proves is the part unit tests
 //! cannot: that the commands we build actually attach a real image, that

@@ -304,8 +304,10 @@ fn patch_of(pkg: &[u8], omit: &[usize]) -> Vec<u8> {
     out
 }
 
-/// A package re-wrapped as a patch package that lacks one outer block, for every block in
-/// turn and every layout the builder writes. Whichever block is missing, the patch either opens
+/// A package re-wrapped as a patch package that lacks one outer block, for a spread of blocks
+/// (all of them where there are few, else the first, the last and every k-th from an offset seeded
+/// by the layout: about two dozen; `PS5UPLOAD_TEST_ALL_BLOCKS=1` sweeps every one) and every layout
+/// the builder writes. Whichever block is missing, the patch either opens
 /// as the files it carries whole, each reading back byte for byte, with every other file
 /// accounted for as left to the base game, or is refused as not holding its own file table.
 /// It never opens with bad bytes and never fails any other way.
@@ -340,7 +342,19 @@ fn a_patch_package_reads_as_the_files_it_carries_whole() {
         assert_eq!(info.outer_blocks, outer_blocks as u64, "{name}");
 
         let (mut opened, mut refused, mut without_big) = (0, 0, 0);
-        for omit in 0..outer_blocks {
+        // Each block left out costs a full open (most of this test's time: 98 opens for the
+        // stored layout). Blocks of one kind behave alike, so a spread keeps every outcome: the
+        // big file's blocks sit at the start and the blocks that list the files at the end, and
+        // the last block is always one of those.
+        let every = std::env::var_os("PS5UPLOAD_TEST_ALL_BLOCKS").is_some();
+        let k = if every { 1 } else { (outer_blocks / 24).max(1) };
+        let seed = name
+            .bytes()
+            .fold(0usize, |h, b| h.wrapping_mul(31).wrapping_add(b as usize))
+            % k;
+        let sample =
+            (0..outer_blocks).filter(|&i| i == 0 || i + 1 == outer_blocks || i % k == seed);
+        for omit in sample {
             std::fs::write(&path, patch_of(&pkg, &[omit])).unwrap();
             let mut patch = match pkg_source::open(&path, DEFAULT_PASSCODE) {
                 Ok(p) => p,

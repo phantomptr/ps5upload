@@ -322,6 +322,9 @@ async fn a_dropped_connection_goes_on_and_gives_the_same_bytes() {
             std::thread::sleep(Duration::from_millis(2));
         }
         proxy.kill_all();
+        // The drop landed mid-stream, which is all the cap was for: the pass after the
+        // reconnect goes at full speed.
+        proxy.set_bytes_per_sec(None);
     });
     let path = "dst/G.ffpkg";
     let r = tokio::task::block_in_place(|| {
@@ -383,6 +386,8 @@ async fn starting_again_goes_on_from_what_the_console_holds() {
     stopper.join().unwrap();
     assert!(e.is_err(), "the first try was meant to stop partway");
     assert!(!lb.share().join(path).exists());
+    // Only the first try had to be slow (so it stops partway); the second goes at full speed.
+    lb.proxy.as_ref().unwrap().set_bytes_per_sec(None);
 
     let second = cfg();
     let r = tokio::task::block_in_place(|| {
@@ -601,6 +606,9 @@ async fn a_ffpfsc_goes_on_after_a_dropped_connection() {
             std::thread::sleep(Duration::from_millis(2));
         }
         proxy.kill_all();
+        // The drop landed mid-stream, which is all the cap was for: the pass after the
+        // reconnect goes at full speed.
+        proxy.set_bytes_per_sec(None);
     });
     let path = "dst/G.ffpfsc";
     let mut stages: Vec<String> = Vec::new();

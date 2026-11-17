@@ -113,6 +113,17 @@ curl -X POST http://127.0.0.1:19113/api/ps5/cleanup \
   -d '{"addr":"'"$PS5_HOST"'","path":"/data/ps5upload/tests/manual"}'
 ```
 
+The engine's live Rust tests (`ps5upload-core/tests/live_*.rs`,
+`ps5upload-engine/tests/live_*.rs`, `ps5upload-tests/tests/ava1_live.rs`) need a console, a
+disk image or the network. They are built only with the crate's `live` feature, so the normal
+test run neither compiles nor lists them:
+
+```sh
+( cd engine && cargo test -p ps5upload-tests --test ava1_live --features live -- --ignored --nocapture )
+```
+
+Each file's header names the environment it needs.
+
 **Use a live console when touching:** the payload C runtime, AVA1
 (`third_party/ava1/c/`), transfer/reconcile/resume, storage, mount, cleanup, the file
 browser, volume commands, or anything performance-sensitive.

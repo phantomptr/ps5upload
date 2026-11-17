@@ -4,7 +4,7 @@
 //!
 //!   PS5UPLOAD_LIVE_IP=192.0.2.100 \
 //!   PS5UPLOAD_LIVE_PKGPATH=/user/data/ps5upload/pkg_temp/PPSA01650.pkg \
-//!     cargo test -p ps5upload-engine --test live_pkg_meta -- --nocapture --ignored
+//!     cargo test -p ps5upload-engine --test live_pkg_meta --features live -- --nocapture --ignored
 
 use ps5upload_core::diagnostics::pkg_direct_mount;
 use ps5upload_core::fs_ops::fs_read;

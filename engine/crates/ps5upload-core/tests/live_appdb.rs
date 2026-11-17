@@ -4,7 +4,7 @@
 //! runs in normal CI — a real, payload-loaded PS5 must be on the LAN. Run:
 //!
 //!   PS5UPLOAD_LIVE_ADDR=192.0.2.100 \
-//!     cargo test -p ps5upload-core --test live_appdb -- --nocapture --ignored
+//!     cargo test -p ps5upload-core --test live_appdb --features live -- --nocapture --ignored
 //!
 //! It answers the FW-9.60 crux: does the dlsym-only `AppDbQuery` actually
 //! read app.db on this firmware (→ verification is live), or degrade to

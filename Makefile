@@ -995,7 +995,7 @@ test-payload: payload
 	@echo "✓ Main payload and PS5Upload installer are PS5 ELFs with gzip resources"
 	@mkdir -p $(SELFTEST_DIR)
 	@echo "Running the archive extractor's tests (host build)..."
-	@$(MAKE) -C $(PAYLOAD_DIR)/extractor host-test
+	@$(MAKE) -j$(JOBS) -C $(PAYLOAD_DIR)/extractor host-test
 	@echo "Running paged answer keep self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include -o $(SELFTEST_DIR)/ps5upload-mgmt-page-keep-selftest \
 		$(PAYLOAD_DIR)/tests/mgmt_page_keep_selftest.c -lpthread
@@ -1073,8 +1073,11 @@ test-payload: payload
 		-o $(SELFTEST_DIR)/ps5upload-webui-auth-selftest \
 		$(PAYLOAD_DIR)/tests/webui_auth_selftest.c $(PAYLOAD_DIR)/src/webui_auth.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-webui-auth-selftest
-	@echo "Running webui server self-test (host build, ~25 s)..."
-	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include -I$(AVA1_C) \
+	@# A 2 s connection deadline and a 1 s listener watch instead of the helper's 5 s each: the
+	@# same timeout paths, a fraction of the wait.
+	@echo "Running webui server self-test (host build, ~15 s)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -DWEBUI_CONN_MS=2000u -DWEBUI_WATCH_MS=1000u \
+		-I$(PAYLOAD_DIR)/include -I$(AVA1_C) \
 		-o $(SELFTEST_DIR)/ps5upload-webui-server-selftest \
 		$(PAYLOAD_DIR)/tests/webui_server_selftest.c $(PAYLOAD_DIR)/src/webui_server.c \
 		$(PAYLOAD_DIR)/src/webui_http.c $(PAYLOAD_DIR)/src/webui_auth.c
@@ -1153,8 +1156,8 @@ test-payload: payload
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-mesh-selftest
 	@echo "✓ devices connect (or ask, and are allowed or declined), are listed, renamed, blocked and pruned; locks lapse; shared documents keep their revision"
 	@echo "Running the tailnet core's unit tests (host build, ASan + UBSan)..."
-	@$(MAKE) -s -C tailnet test
-	@$(MAKE) -s -C tailnet SAN=1 lib
+	@$(MAKE) -j$(JOBS) -s -C tailnet test
+	@$(MAKE) -j$(JOBS) -s -C tailnet SAN=1 lib
 	@echo "Running the tailnet node self-test (host build, ASan + UBSan)..."
 	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror -pthread \
 		-I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen -Itailnet/include \
@@ -1166,10 +1169,10 @@ test-payload: payload
 	@echo "✓ tailnet: on/off/sign-out, rename, renew, the allow-list, rest/wake cycles in every state, settings on disk (no auth key stored), status JSON; core crypto, WireGuard, disco, STUN, IP"
 	@echo "Running console page tasks self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
-		-o /tmp/ps5upload-console-tasks-selftest \
+		-o $(SELFTEST_DIR)/ps5upload-console-tasks-selftest \
 		$(PAYLOAD_DIR)/tests/console_tasks_selftest.c $(PAYLOAD_DIR)/src/console_tasks.c $(PAYLOAD_DIR)/src/webui_codec.c \
 		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
-	@$(RUN_LIMITED) /tmp/ps5upload-console-tasks-selftest
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-console-tasks-selftest
 	@echo "✓ the apps see what the page started, how it ended and that it was cancelled, and nothing a PC started"
 	@echo "Running helper log levels self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
@@ -1192,7 +1195,7 @@ test-payload: payload
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-vinput-selftest
 	@echo "✓ the stub says not supported; sessions open, hand over and close; a missed heartbeat or a stop lets go of every key"
 	@echo "Running the keyboard & mouse companion + relay self-test (host build)..."
-	@cc -O2 -Wall -Wextra -Werror -pthread -DVWIRE_DIR='"/tmp"' -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
+	@cc -O2 -Wall -Wextra -Werror -pthread -DVWIRE_DIR='"/tmp"' -DFRESH_ASK_MS=700 -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
 		-o $(SELFTEST_DIR)/ps5upload-vinput-relay-selftest \
 		$(PAYLOAD_DIR)/tests/vinput_relay_selftest.c $(PAYLOAD_DIR)/src/vinput_relay.c $(PAYLOAD_DIR)/src/vinput_companion.c \
 		$(PAYLOAD_DIR)/src/vinput_wire.c $(PAYLOAD_DIR)/src/vinput.c \

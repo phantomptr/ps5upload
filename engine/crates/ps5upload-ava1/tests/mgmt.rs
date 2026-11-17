@@ -1100,7 +1100,13 @@ async fn a_clamped_log_tail_is_led_by_a_note_and_a_whole_one_is_not() {
 /// A management call carries its caller's bound all the way down: the session's own default
 /// (`RPC_TIMEOUT`, for callers that name none) must not cut a call the caller allowed longer.
 /// It did: `ava1-calibrate` on a console's internal drive (about 90 s) failed at 60 s.
+///
+/// Ignored by default: it has to outlast `RPC_TIMEOUT` (60 s, a constant in the ava1 crate with
+/// no knob), so it alone would add a minute to every run. Run it by hand after touching the
+/// call-bound plumbing:
+/// `cargo test -p ps5upload-ava1 --test mgmt -- --ignored a_call_longer_than_the_session_default`.
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "waits out ava1::session::RPC_TIMEOUT (60 s); run by hand with --ignored"]
 async fn a_call_longer_than_the_session_default_gets_its_callers_bound() {
     let held = ava1::session::RPC_TIMEOUT + Duration::from_secs(3);
     let (t, _p, c) = console(

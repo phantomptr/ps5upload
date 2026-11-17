@@ -27,6 +27,12 @@
 #include "vinput_relay.h"
 #include "vinput_wire.h"
 
+/* vinput_relay.c's "fresh open" gap: the Makefile builds both with a shorter one (-DFRESH_ASK_MS)
+ * so the waits below, measured from it, stay short. 2 s is the helper's. */
+#ifndef FRESH_ASK_MS
+#define FRESH_ASK_MS 2000
+#endif
+
 static int failures = 0;
 #define CHECK(expr)                                                 \
     do {                                                            \
@@ -1084,9 +1090,9 @@ static void test_relay_init_failure_not_retried(void) {
     CHECK(launches() == 1);
     CHECK(kills() == 1); /* the one in Init was ended by its pid */
 
-    /* a fresh open (asks stopped for > 2 s), while the stuck one still lives: not started */
+    /* a fresh open (asks stopped for > FRESH_ASK_MS), while the stuck one still lives: not started */
     __atomic_store_n(&f_stuck_alive, 1, __ATOMIC_RELEASE);
-    nap(2100);
+    nap(FRESH_ASK_MS + 100);
     session("{\"op\":\"open\",\"id\":8,\"mouse\":true,\"keyboard\":true}");
     CHECK(has("\"err\":\"vinput_companion_failed\""));
     nap(300);
@@ -1094,7 +1100,7 @@ static void test_relay_init_failure_not_retried(void) {
 
     /* it is gone: the next fresh open tries once more (and only once) */
     __atomic_store_n(&f_stuck_alive, 0, __ATOMIC_RELEASE);
-    nap(2100);
+    nap(FRESH_ASK_MS + 100);
     session("{\"op\":\"open\",\"id\":9,\"mouse\":true,\"keyboard\":true}");
     CHECK(has("vinput_starting"));
     until = now_ms() + 3000;
@@ -1110,7 +1116,7 @@ static void test_relay_init_failure_not_retried(void) {
     pthread_mutex_lock(&l_mu);
     l_mode = 0;
     pthread_mutex_unlock(&l_mu);
-    nap(2100);
+    nap(FRESH_ASK_MS + 100); /* a fresh open again */
     CHECK(open_until_ok(3000, NULL));
     CHECK(launches() == 3);
     session("{\"op\":\"close\",\"id\":9}");

@@ -30,8 +30,11 @@
  * died before listening). */
 #define START_INIT_FAILED (-3)
 /* After an Init failure, only an open that comes this long after the one before it (the user
- * turning the mode on again, not the engine's 300 ms "starting" re-asks) tries once more. */
+ * turning the mode on again, not the engine's 300 ms "starting" re-asks) tries once more. The host
+ * self-test builds with a shorter one (-DFRESH_ASK_MS); the helper always uses 2 s. */
+#ifndef FRESH_ASK_MS
 #define FRESH_ASK_MS 2000
+#endif
 
 enum { ST_IDLE, ST_STARTING, ST_RUNNING, ST_STOPPED, ST_UNAVAILABLE };
 static const char *const ST_NAME[] = {"idle", "starting", "running", "stopped", "unavailable"};
