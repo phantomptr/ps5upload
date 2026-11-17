@@ -1059,20 +1059,49 @@ pub(crate) fn mem_pair() -> (MemSocket, MemLink) {
     let (a_tx, a_rx) = tokio::sync::mpsc::channel(64);
     let (b_tx, b_rx) = tokio::sync::mpsc::channel(64);
     (
-        MemSocket { tx: a_tx, rx: b_rx },
+        MemSocket {
+            tx: a_tx,
+            rx: b_rx,
+            hold: None,
+            binaries: 0,
+        },
         MemLink { tx: b_tx, rx: a_rx },
     )
+}
+
+/// A pair whose sender side stops before its `after + 1`th data piece until the returned
+/// `Notify` is told to go on: a test that must act while a transfer is under way (a cancel)
+/// does it then, however fast the machine copies.
+#[cfg(test)]
+pub(crate) fn mem_pair_held(
+    after: usize,
+) -> (MemSocket, MemLink, std::sync::Arc<tokio::sync::Notify>) {
+    let (mut sock, link) = mem_pair();
+    let go = std::sync::Arc::new(tokio::sync::Notify::new());
+    sock.hold = Some((after, go.clone()));
+    (sock, link, go)
 }
 
 #[cfg(test)]
 pub(crate) struct MemSocket {
     tx: tokio::sync::mpsc::Sender<Message>,
     rx: tokio::sync::mpsc::Receiver<Message>,
+    hold: Option<(usize, std::sync::Arc<tokio::sync::Notify>)>,
+    binaries: usize,
 }
 
 #[cfg(test)]
 impl GuestSocket for MemSocket {
     async fn send(&mut self, m: Message) -> Result<(), ()> {
+        if matches!(m, Message::Binary(_)) {
+            if let Some((after, go)) = &self.hold {
+                if self.binaries >= *after {
+                    go.notified().await;
+                    self.hold = None;
+                }
+            }
+            self.binaries += 1;
+        }
         self.tx.send(m).await.map_err(|_| ())
     }
     async fn recv(&mut self) -> Option<Result<Message, ()>> {
