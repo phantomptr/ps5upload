@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.2
 
 Clearer Payloads › On your PS5, and what to do with PS5 fake packages on newer firmware.
 
