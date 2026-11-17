@@ -8,13 +8,14 @@ const cancelled = { status: "completed", conclusion: "cancelled" };
 const running = { status: "in_progress", conclusion: null };
 
 // A little history: commits with a tree, a parent and the PR that produced them.
-function world({ commits, runs = {}, prs = {}, ancestors = [] }) {
+function world({ commits, runs = {}, prs = {}, ancestors = [], full = [] }) {
   return {
     runs: (sha) => runs[sha] ?? [],
     mergedPrs: (sha) => prs[sha] ?? [],
     tree: (sha) => commits[sha].tree,
     parent: (sha) => commits[sha]?.parent ?? null,
     isAncestor: (a, b) => ancestors.some(([x, y]) => x === a && y === b),
+    everyLane: (base, head) => full.some(([x, y]) => x === base && y === head),
   };
 }
 
@@ -127,4 +128,33 @@ test("the chain of stand-ins is bounded", () => {
   }
   commits.C20 = { tree: "t20", parent: null };
   assert.equal(verdict("C0", world({ commits, runs, prs, ancestors })).verdict, "cancelled");
+});
+
+test("a PR run with every lane on vouches for the tree whatever the parent's run said", () => {
+  // v12.6.3: the batch PR changed workflows (every lane), its run passed, main's previous
+  // commit had a red run. release-tag waited 16 min for main's own run of the merge.
+  const w = world({
+    commits: { P: { tree: "t2", parent: "M" }, M: { tree: "t1" }, H: { tree: "t2" } },
+    runs: { P: [running], M: [bad], H: [ok] },
+    prs: { P: [{ number: 7, head: "H" }] },
+    ancestors: [["M", "H"]],
+    full: [["M", "P"]],
+  });
+  const v = verdict("P", w);
+  assert.equal(v.verdict, "pass");
+  assert.match(v.reason, /every lane/);
+});
+
+test("every lane on does not excuse a PR that was behind, a failed head or a failed own run", () => {
+  const base = {
+    commits: { P: { tree: "t2", parent: "M" }, M: { tree: "t1" }, H: { tree: "t2" } },
+    prs: { P: [{ number: 7, head: "H" }] },
+    full: [["M", "P"]],
+  };
+  const behind = world({ ...base, runs: { P: [running], M: [bad], H: [ok] }, ancestors: [] });
+  assert.equal(verdict("P", behind).verdict, "pending");
+  const headFailed = world({ ...base, runs: { P: [running], M: [ok], H: [bad] }, ancestors: [["M", "H"]] });
+  assert.equal(verdict("P", headFailed).verdict, "pending");
+  const ownFailed = world({ ...base, runs: { P: [bad], M: [ok], H: [ok] }, ancestors: [["M", "H"]] });
+  assert.equal(verdict("P", ownFailed).verdict, "fail");
 });

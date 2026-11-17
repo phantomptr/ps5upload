@@ -420,6 +420,17 @@ jobs:
             echo "WARNING: no host libclang found; jpegxr/bindgen may fail" >&2
           fi
 
+      # The desktop app's dependencies start compiling now, in the background, instead of with
+      # the engine below: npm ci and the wait for the payload ELF left the CPU idle for 2-4 min
+      # (Windows ARM64, the last leg, v12.6.3: 2.6 min). They read nothing from the payload; the
+      # engine step picks this build up and waits for it (build-engine-release.sh). After the
+      # Linux packages and LIBCLANG_PATH, which their build scripts need.
+      - name: Start compiling the desktop app's dependencies
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: scripts/release/build-engine-release.sh --start-desktop-deps
+
       - name: Install client deps
         working-directory: client
         run: npm ci --no-audit --no-fund
@@ -963,6 +974,83 @@ jobs:
         run: |
           echo "::warning::iOS IPA build failed — release will ship without an iPhone artifact. Check the build-ios job logs."
 
+  # The release files' virus scan, beside the builds instead of after them: ClamAV and today's
+  # signatures go in while the builds run, and each build's artifact is scanned as soon as it is
+  # uploaded (scripts/release/scan-artifacts.mjs), so when the last build ends only its own files
+  # are left. create-release took 6 min after the last build, 4.5 of them this scan (v12.6.3).
+  # It hands create-release the SHA-256 of every file that scanned clean; create-release scans
+  # every release file whose hash is not in that list (all of them if this job failed or found
+  # something), so nothing ships unscanned whatever happens here. continue-on-error for the same
+  # reason, with step timeouts under the job's so a hang is a failed step, not a cancelled job
+  # (create-release needs this job, and a cancelled one would skip it).
+  virus-scan:
+    name: virus-scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    continue-on-error: true
+    steps:
+      # Only the LICENSE (create-release ships the repo's copy) and the scan scripts.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          sparse-checkout: |
+            /LICENSE
+            scripts/ci-apt.sh
+            scripts/release/clamscan-parallel.sh
+            scripts/release/scan-artifacts.mjs
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          check-latest: true
+
+      - name: Install ClamAV
+        timeout-minutes: 20
+        run: bash scripts/ci-apt.sh clamav
+
+      # The same rule as create-release: no scan with stale signatures.
+      - name: Fetch current ClamAV signatures
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          sudo systemctl stop clamav-freshclam 2>/dev/null || true
+          fresh=0
+          for attempt in 1 2 3; do
+            if sudo freshclam --quiet; then
+              fresh=1
+              break
+            fi
+            echo "freshclam attempt $attempt failed" >&2
+            sleep 20
+          done
+          if [ "$fresh" -ne 1 ]; then
+            echo "::error::freshclam failed 3 times: no current virus signatures"
+            exit 1
+          fi
+          for db in main daily; do
+            if ! compgen -G "/var/lib/clamav/$db.c?d" >/dev/null; then
+              echo "::error::/var/lib/clamav has no $db.cvd or $db.cld after freshclam"
+              exit 1
+            fi
+          done
+
+      # Ends when every build-* job has finished (builds can queue and run up to their 75-min
+      # timeout), or at its own 100-min limit with what it has.
+      - name: Scan each build's files as they arrive
+        timeout-minutes: 110
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PS5UPLOAD_SCAN_MINUTES: "100"
+        run: node scripts/release/scan-artifacts.mjs "$RUNNER_TEMP/clamav-scanned" LICENSE
+
+      - name: Upload the list of files scanned clean
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: clamav-scanned
+          path: ${{ runner.temp }}/clamav-scanned/scanned.sha256
+          if-no-files-found: error
+
   create-release:
     name: create-release
     needs:
@@ -970,6 +1058,7 @@ jobs:
       - build-client
       - build-android
       - build-ios
+      - virus-scan
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -1150,13 +1239,40 @@ jobs:
       # and inside archives and installers too. A hit stops the release: nothing we ship should
       # match a known-malware signature. This only catches known signatures; a heuristic flag
       # from one vendor (#506) is a false positive to report to that vendor.
+      # The virus-scan job has scanned the builds' files as they came; what it vouches for is
+      # the exact bytes (SHA-256). Anything else here, or everything when that job failed, is
+      # scanned below as before.
+      - name: Files the virus-scan job did not cover
+        id: unscanned
+        run: |
+          set -euo pipefail
+          list="artifacts/clamav-scanned/scanned.sha256"
+          [ -s "$list" ] || echo "::warning::no list from virus-scan: scanning every release file here"
+          : > "$RUNNER_TEMP/unscanned"
+          total=0
+          left=0
+          while IFS= read -r -d '' f; do
+            total=$((total + 1))
+            h="$(sha256sum "$f" | cut -d' ' -f1)"
+            if [ -s "$list" ] && grep -qxF "$h" "$list"; then
+              continue
+            fi
+            printf '%s\0' "$f" >> "$RUNNER_TEMP/unscanned"
+            echo "not scanned yet: $f"
+            left=$((left + 1))
+          done < <(find release -type f -print0)
+          echo "$((total - left)) of $total release files were scanned by virus-scan; $left left"
+          echo "count=$left" >> "$GITHUB_OUTPUT"
+
       - name: Install ClamAV
+        if: steps.unscanned.outputs.count != '0'
         timeout-minutes: 20
         run: bash scripts/ci-apt.sh clamav
 
       # A scan with no signatures, or with whatever the package happened to ship, passes
       # everything: the release stops here unless today's signatures are in place.
       - name: Fetch current ClamAV signatures
+        if: steps.unscanned.outputs.count != '0'
         timeout-minutes: 10
         run: |
           set -euo pipefail
@@ -1184,31 +1300,12 @@ jobs:
           ls -la /var/lib/clamav
 
       - name: Virus scan the release files (ClamAV)
+        if: steps.unscanned.outputs.count != '0'
         timeout-minutes: 20
         run: |
           set -euo pipefail
           clamscan --version
-          # One clamscan per core over a size-balanced share of the files: a single clamscan is
-          # single-threaded and took 5 of create-release's 6 min (28 files, 2.6 GiB, v9.4.1).
-          # Each process loads the signatures (~10 s, ~1.5 GB), so it is one per core, not one
-          # per file. Any hit or error (exit 1 or 2) in any share still fails the step.
-          n="$(nproc)"
-          shares="$(mktemp -d)"
-          i=0
-          find release -type f -exec du -k {} + | sort -rn | cut -f2- | while IFS= read -r f; do
-            printf '%s\0' "$f" >> "$shares/$((i % n))"
-            i=$((i + 1))
-          done
-          pids=()
-          for share in "$shares"/*; do
-            xargs -0 clamscan --infected --scan-archive=yes --max-filesize=4000M \
-              --max-scansize=4000M < "$share" > "$share.log" 2>&1 &
-            pids+=("$!")
-          done
-          rc=0
-          for pid in "${pids[@]}"; do wait "$pid" || rc=1; done
-          cat "$shares"/*.log
-          exit "$rc"
+          scripts/release/clamscan-parallel.sh < "$RUNNER_TEMP/unscanned"
 
       # The release body is the CHANGELOG section for this version. The old
       # "See CHANGELOG.md" placeholder shipped whenever the entry was missing

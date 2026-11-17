@@ -55,12 +55,16 @@ default it is a pre-release, and you promote it by hand after testing it on a co
    still resolve with `--locked`.
 4. Waits for `ci` on the `main` commit it builds on. It does not wait when that commit's tree is
    the tree of the merged PR's head, the PR was up to date with `main`, and the PR's `ci`
-   passed (`.github/scripts/release-ci-verdict.mjs`). After an up-to-date batch PR, that is
-   immediate. In an emergency, `-f force=true` skips the wait.
+   passed (`.github/scripts/release-ci-verdict.mjs`). If the PR's change turned every lane on
+   (a batch PR always does: it syncs `VERSION` and the lockfiles), that is enough on its own;
+   otherwise the previous `main` commit must have passed too. After an up-to-date batch PR, the
+   wait is immediate. In an emergency, `-f force=true` skips the wait.
 5. Commits `12.1.0` as `github-actions[bot]`, tags it `v12.1.0`, and pushes only the tag. The
    main ruleset lets only an admin update `main`, so the bump commit lives on the tag.
 6. Dispatches `publish` and `docker-engine` at the tag. Both build the tagged commit, so the
    app, the engine, `latest.json` and the images all say `12.1.0`.
+7. Cancels a `release-cache` run that is still going on `main`. The merge started it, and it
+   would hold two macOS and two Linux runners that `publish` needs.
 
 ## 3. Watch
 
@@ -70,8 +74,29 @@ gh run list --workflow docker-engine.yml --limit 1
 gh run watch <id>
 ```
 
-`publish` takes about 25 minutes. Windows ARM64 is usually the last job to finish.
-A failed `publish` run re-runs its failed jobs up to twice (its `retry-failed` job, through `rerun-failed`).
+`publish` took 31 minutes for v12.6.3 when it had the runners to itself, and 37 to 45 minutes
+when it started while `ci`, CodeQL and `release-cache` were still running for the merge. The
+changes of 2026-11-17 should bring the first case to about 25 minutes. A failed `publish` run
+re-runs its failed jobs up to twice (its `retry-failed` job, through `rerun-failed`).
+
+What runs where, in `publish`:
+
+| Job | Runner | Time (v12.6.3) | Notes |
+| --- | --- | --- | --- |
+| build-payload | ubuntu-24.04 | 4 min | The PS5 payload and the converter. Every other build starts at the same time and waits for its ELFs only where it needs them. |
+| build-client (6 legs) | macOS 15 (x2), Ubuntu x64 and arm64, Windows x64 and arm64 | 17-25 min | The engine sidecar, then the Tauri app. The desktop app's dependencies start compiling before the payload wait. Windows is last: it has no compile cache, because sccache breaks on Windows with Rust 1.100. |
+| build-android | ubuntu-24.04 | 20 min | Not a gate. |
+| build-ios | xcode-27 (macOS) | 19 min | Not a gate. |
+| virus-scan | ubuntu-24.04 | Ends about 1 min after the last build | Scans each build's files with ClamAV as they are uploaded, and gives create-release the hashes of the files that scanned clean. |
+| create-release | ubuntu-24.04 | about 2 min after the last build | Scans any file that virus-scan did not cover, then makes the manifests, the attestations and the release. Before the change this was 6 min, with 4.5 min of it scanning. |
+
+The repository has free runners: 20 Linux or Windows jobs and 5 macOS jobs can run at once.
+`publish` uses three of the macOS slots, and the `ci` run for the merge uses four, so a release
+cut right after a merge can wait for macOS runners.
+
+`release-cache` runs on `main` and fills the compile cache that `publish` reads. When it
+finished before the release, `publish` had 45-68 % Rust cache hits. When the two ran at the same
+time, it had 0-20 %. It has no Windows legs, because sccache is off on Windows.
 
 ## 4. Verify
 
