@@ -4766,8 +4766,8 @@ export function humanizeJobErrorReason(
       );
     case "direct_staged_file_missing":
       return trStatic(
-        "joberr.direct_staged_file_missing",
-        "This upload had already finished, so there was nothing left to publish — and the file on the PS5 is now missing or the wrong size. Upload it again and choose Override rather than Resume.",
+        "joberr.direct_staged_file_missing_v2",
+        "This upload had already finished, so there was nothing left to publish — and the file on the PS5 is now missing or the wrong size. Upload it again and choose Replace rather than Resume.",
       );
     case "direct_writer_io_error":
       return trStatic(
@@ -4788,8 +4788,8 @@ export function humanizeJobErrorReason(
     case "shards_incomplete":
     case "spool_apply_failed":
       return trStatic(
-        "joberr.size_mismatch",
-        "The transfer didn't finish before being interrupted — a file on the PS5 is incomplete, so it wasn't published (your old copy, if any, is untouched). This usually means the PS5 went into rest mode or lost power mid-upload. Keep the console awake (Settings → System → Power Saving → Set Time Until PS5 Turns Off), then re-run this item — Resume now re-sends only the missing files, or choose Override for a clean copy.",
+        "joberr.size_mismatch_v2",
+        "The transfer didn't finish before being interrupted — a file on the PS5 is incomplete, so it wasn't published (your old copy, if any, is untouched). This usually means the PS5 went into rest mode or lost power mid-upload. Keep the console awake (Settings → System → Power Saving → Set Time Until PS5 Turns Off), then re-run this item — Resume now re-sends only the missing files, or choose Replace for a clean copy.",
       );
     case "ava1_stalled":
       return trStatic(
@@ -4891,13 +4891,13 @@ export function humanizeJobErrorReason(
       );
     case "ava1_exists":
       return trStatic(
-        "joberr.ava1_exists",
-        "The destination already exists on the PS5. Choose Override to replace it, or pick a different destination.",
+        "joberr.ava1_exists_v2",
+        "Something with this name is already in that folder on the PS5, so nothing was sent. Replace it, or upload somewhere else.",
       );
     case "ava1_commit_exists":
       return trStatic(
-        "joberr.ava1_commit_exists",
-        "The file was uploaded but could not be published because the destination already exists. Choose Override to replace it, or pick a different destination.",
+        "joberr.ava1_commit_exists_v2",
+        "Everything was sent, but a copy with this name is already in that folder on the PS5, so this one wasn't put in place. Replace it, or upload somewhere else.",
       );
     case "ava1_cross_device":
     case "ava1_commit_cross_device":

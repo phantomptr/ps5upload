@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { basename, resolveUploadDest } from "./uploadDest";
+import { basename, resolveUploadDest, splitUploadFolder } from "./uploadDest";
 
 describe("basename", () => {
   it("returns the final path segment for POSIX paths", () => {
@@ -256,5 +256,19 @@ describe("multi-part sets share one destination", () => {
       );
       expect(dest).toBe("/data/homebrew/Game");
     }
+  });
+});
+
+describe("splitUploadFolder", () => {
+  const vols = ["/data", "/mnt/ext1", "/mnt/ext1/mounted"];
+  it("splits on the deepest drive that holds the folder", () => {
+    expect(splitUploadFolder("/mnt/ext1/homebrew/", vols)).toEqual({ volume: "/mnt/ext1", subpath: "homebrew" });
+    expect(splitUploadFolder("/mnt/ext1/mounted/a/b", vols)).toEqual({ volume: "/mnt/ext1/mounted", subpath: "a/b" });
+    expect(splitUploadFolder("/data", vols)).toEqual({ volume: "/data", subpath: "" });
+  });
+  it("a folder on no listed drive resolves back to itself", () => {
+    const { volume, subpath } = splitUploadFolder("/user/stuff", vols);
+    expect(resolveUploadDest(volume, subpath, "/src/Game").dest).toBe("/user/stuff/Game");
+    expect(splitUploadFolder("/data/homebrew", [])).toEqual({ volume: "/data", subpath: "homebrew" });
   });
 });

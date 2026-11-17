@@ -778,9 +778,9 @@ function AppSettingsTab() {
                 </span>
               }
               hint={tr(
-                "always_overwrite_hint_v2",
+                "always_overwrite_hint_v3",
                 undefined,
-                "Skip the confirmation when the destination of an upload already has files. Leave off to see the Override / Resume / Cancel prompt.",
+                "Skip the question when the destination of an upload already has files. Leave off to be asked each time: Resume, Replace, Another folder or Cancel.",
               )}
             />
 
