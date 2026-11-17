@@ -581,8 +581,9 @@ export default function PayloadManagerPanel({
               {tr("pu_out_open_page", { version: to.tag }, `${to.tag} is out — open project page`)}
             </Button>
           )}
+          {/* Running already: launching starts a second copy, so it is not the row's main action. */}
           <Button
-            variant="primary"
+            variant={live ? "ghost" : "primary"}
             size="sm"
             leftIcon={busy === `launch:${p.path}` ? <Spinner size={12} tone="inherit" /> : <Play size={12} />}
             disabled={busy !== null || !!live?.busy}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PayloadInfo, ProcessInfo } from "../../../api/ps5";
-import { groupCards, isOurProcess, matchDetail, matchSavedToCards, originOf, savedKey } from "./pmMerge";
+import { groupCards, isOurProcess, matchDetail, matchSavedToCards, originOf, payloadCount, savedKey } from "./pmMerge";
 import { detectHubCards, hubEntries, type HubCard } from "./registry";
 
 const proc = (pid: number, comm: string, extra: Partial<ProcessInfo> = {}): ProcessInfo => ({
@@ -133,18 +133,24 @@ describe("Payload Manager saved rows ↔ running cards", () => {
 describe("cards once the saved list is known", () => {
   it("hides matched cards, keeps the rest under Also running", () => {
     const cards = cardsFor(PROCS);
-    const g = groupCards(cards, matchSavedToCards(SAVED, cards, ENTRIES));
+    const m = matchSavedToCards(SAVED, cards, ENTRIES);
+    const g = groupCards(cards, m);
     expect([...g.hidden].sort()).toEqual(["kraken-mount", "kstuff-echostretch", "proc:syslang"]);
     expect(g.top.map((c) => c.id)).toEqual(["payload-manager"]);
     expect(g.also.map((c) => c.id)).toEqual(["proc:elfldr"]);
+    // Payload Manager, its four saved payloads and elfldr: what the tab shows, each once.
+    expect(payloadCount(g, SAVED.length, m)).toBe(6);
   });
 
   it("keeps a matched card that has its own panel at the top", () => {
     const cards = cardsFor([proc(129, "shadowmountplus.elf"), proc(90, "pldmgr.elf")], false);
-    const g = groupCards(cards, matchSavedToCards([saved("shadowmountplus.elf")], cards, ENTRIES));
+    const m = matchSavedToCards([saved("shadowmountplus.elf")], cards, ENTRIES);
+    const g = groupCards(cards, m);
     expect(g.hidden.size).toBe(0);
     expect(g.top.map((c) => c.id)).toEqual(["payload-manager", "shadowmountplus"]);
     expect(g.also).toEqual([]);
+    // ShadowMount+ shows on its row and its card: counted once.
+    expect(payloadCount(g, 1, m)).toBe(2);
   });
 
   it("says who started each running card", () => {

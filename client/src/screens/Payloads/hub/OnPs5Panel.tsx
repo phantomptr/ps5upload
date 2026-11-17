@@ -41,7 +41,7 @@ import { pmOverview, type PmOverview } from "../../../api/payloadManager";
 import { storedHelper } from "../../../lib/helperAtBoot";
 import { ourElfldrPid } from "../../../lib/elfldrGuard";
 import { RUNNING_LINK } from "../payloadTabs";
-import { groupCards, matchDetail, originOf, type ListState, type Origin } from "./pmMerge";
+import { groupCards, matchDetail, originOf, payloadCount, type ListState, type Origin } from "./pmMerge";
 import { usePmView, usePmViewStore } from "./pmViewStore";
 import { runGate } from "./runGate";
 import { HushPanel, HushSummary, useHush, useHushActions } from "../../Hush";
@@ -565,6 +565,7 @@ function OnPs5Body() {
   };
 
   const loading = !procsLoaded || !markersLoaded;
+  const count = groups && pmList && matched ? payloadCount(groups, pmList.length, matched) : cards.length;
 
   return (
     <div className="flex flex-col gap-3">
@@ -572,7 +573,7 @@ function OnPs5Body() {
         <span className="text-sm text-[var(--color-muted)]">
           {loading
             ? tr("hub_checking", undefined, "Checking what is on this PS5…")
-            : tr("hub_count", { n: cards.length }, `${cards.length} on this PS5`)}
+            : tr("hub_count", { n: count }, `${count} on this PS5`)}
         </span>
         <Button
           variant="secondary"
