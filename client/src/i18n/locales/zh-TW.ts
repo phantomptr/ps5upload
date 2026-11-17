@@ -8729,6 +8729,7 @@ rp_users_add_hint: "若也想以其他使用者遊玩，請在 PS5 上登入該�
 "game_fps_unit": "FPS（取樣）",
 "game_fps_state_starting": "正在測量…",
 "game_fps_state_no_game": "沒有可計數的遊戲畫面。啟動遊戲即可查看幀率。",
+"game_fps_state_no_count": "此主機有回應，但幀數不會變動，因此無法在其韌體上讀取幀率。韌體 13.60 上可用。",
 "game_fps_state_unsupported": "此主機上的助手版本太舊，不支援此功能。請在「連線」中重新傳送助手。",
 "game_fps_state_offline": "主機沒有回應。",
 "game_fps_state_failed": "此主機沒有提供幀數。",

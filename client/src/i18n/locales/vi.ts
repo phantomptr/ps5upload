@@ -8778,6 +8778,7 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "game_fps_unit": "FPS (lấy mẫu)",
 "game_fps_state_starting": "Đang đo…",
 "game_fps_state_no_game": "Không có hình ảnh game để đếm. Hãy mở một game để xem tốc độ khung hình.",
+"game_fps_state_no_count": "Máy này có trả lời, nhưng số khung hình không thay đổi, nên không đọc được tốc độ khung hình trên firmware của nó. Tính năng này hoạt động trên firmware 13.60.",
 "game_fps_state_unsupported": "Trình trợ giúp trên máy này quá cũ cho tính năng này. Hãy gửi lại trình trợ giúp từ Kết nối.",
 "game_fps_state_offline": "Máy không trả lời.",
 "game_fps_state_failed": "Máy này không cho biết số khung hình.",

@@ -9013,6 +9013,7 @@ rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim 
 "game_fps_unit": "FPS (próbkowane)",
 "game_fps_state_starting": "Pomiar…",
 "game_fps_state_no_game": "Brak obrazu gry do zliczania. Uruchom grę, aby zobaczyć jej liczbę klatek.",
+"game_fps_state_no_count": "Ta konsola odpowiada, ale jej licznik klatek się nie zmienia, więc na jej firmware nie da się odczytać liczby klatek na sekundę. Działa na firmware 13.60.",
 "game_fps_state_unsupported": "Pomocnik na tej konsoli jest na to za stary. Wyślij pomocnika ponownie z ekranu Połączenie.",
 "game_fps_state_offline": "Konsola nie odpowiedziała.",
 "game_fps_state_failed": "Ta konsola nie podała liczby klatek.",

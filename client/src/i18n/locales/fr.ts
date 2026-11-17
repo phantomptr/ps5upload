@@ -8792,6 +8792,7 @@ rp_users_add_hint: "Pour jouer aussi avec un autre utilisateur, connectez-vous �
 "game_fps_unit": "FPS (échantillonné)",
 "game_fps_state_starting": "Mesure en cours…",
 "game_fps_state_no_game": "Aucune image de jeu à compter. Lancez un jeu pour voir sa fréquence d'images.",
+"game_fps_state_no_count": "Cette console répond, mais son nombre d'images ne bouge pas : la fréquence d'images ne peut pas être lue avec son firmware. Cela fonctionne avec le firmware 13.60.",
 "game_fps_state_unsupported": "L'assistant de cette console est trop ancien pour cela. Renvoyez l'assistant depuis Connexion.",
 "game_fps_state_offline": "La console n'a pas répondu.",
 "game_fps_state_failed": "Cette console n'a pas donné de nombre d'images.",

@@ -8735,6 +8735,7 @@ rp_users_add_hint: "若也想以其他用户游玩，请在 PS5 上登录该用�
 "game_fps_unit": "FPS（采样）",
 "game_fps_state_starting": "正在测量…",
 "game_fps_state_no_game": "没有可计数的游戏画面。启动游戏即可查看帧率。",
+"game_fps_state_no_count": "此主机有响应，但帧数不变，因此无法在其固件上读取帧率。固件 13.60 上可用。",
 "game_fps_state_unsupported": "此主机上的助手版本太旧，不支持此功能。请在“连接”中重新发送助手。",
 "game_fps_state_offline": "主机没有响应。",
 "game_fps_state_failed": "此主机没有提供帧数。",

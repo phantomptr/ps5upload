@@ -8795,6 +8795,7 @@ rp_users_add_hint: "別のユーザーでもプレイするには、PS5 でそ�
 "game_fps_unit": "FPS（サンプリング）",
 "game_fps_state_starting": "測定中…",
 "game_fps_state_no_game": "数えるゲーム画面がありません。ゲームを起動するとフレームレートが表示されます。",
+"game_fps_state_no_count": "このコンソールは応答しますが、フレーム数が増えないため、このファームウェアではフレームレートを読み取れません。ファームウェア 13.60 では動作します。",
 "game_fps_state_unsupported": "このコンソールのヘルパーは古すぎて対応していません。接続画面からヘルパーをもう一度送信してください。",
 "game_fps_state_offline": "コンソールが応答しませんでした。",
 "game_fps_state_failed": "このコンソールからフレーム数を取得できませんでした。",

@@ -8783,6 +8783,7 @@ rp_users_add_hint: "Başka bir kullanıcıyla da oynamak için PS5'te o kullanı
 "game_fps_unit": "FPS (örneklenmiş)",
 "game_fps_state_starting": "Ölçülüyor…",
 "game_fps_state_no_game": "Sayılacak oyun görüntüsü yok. Kare hızını görmek için bir oyun başlatın.",
+"game_fps_state_no_count": "Bu konsol yanıt veriyor ama kare sayısı değişmiyor, bu yüzden kare hızı bu yazılım sürümünde okunamıyor. 13.60 yazılımında çalışıyor.",
 "game_fps_state_unsupported": "Bu konsoldaki yardımcı bunun için çok eski. Yardımcıyı Bağlantı ekranından yeniden gönderin.",
 "game_fps_state_offline": "Konsol yanıt vermedi.",
 "game_fps_state_failed": "Bu konsol kare sayısı vermedi.",

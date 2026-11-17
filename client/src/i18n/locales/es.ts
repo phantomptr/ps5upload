@@ -8729,6 +8729,7 @@ rp_users_add_hint: "Para jugar también como otro usuario, inicia sesión con es
 "game_fps_unit": "FPS (muestreo)",
 "game_fps_state_starting": "Midiendo…",
 "game_fps_state_no_game": "No hay imagen de juego que contar. Inicia un juego para ver su tasa de fotogramas.",
+"game_fps_state_no_count": "Esta consola responde, pero su contador de fotogramas no avanza, así que la tasa de fotogramas no se puede leer con su firmware. Funciona con el firmware 13.60.",
 "game_fps_state_unsupported": "El ayudante de esta consola es demasiado antiguo para esto. Vuelve a enviar el ayudante desde Conexión.",
 "game_fps_state_offline": "La consola no respondió.",
 "game_fps_state_failed": "Esta consola no dio un recuento de fotogramas.",

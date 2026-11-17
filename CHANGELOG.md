@@ -6,6 +6,11 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Fixes**
+- **Game frame rate on older firmware:** on some consoles (seen on firmware 4.x) the PS5 answers the frame count request but the count never moves, so the frame rate always read 0 and a capture filled up with zeros. It now says the frame rate can't be read on that console's firmware, and keeps no rows of zeros. A game that really stalls after showing frames is still recorded as 0. (#848)
+
+## 12.6.0
+
 Keep saves in step between two PS5s, copy a `.pkg` instead of installing it, and payloads now come from you: the app no longer downloads them. Checked with the automated tests; not yet tried on a PS5 unless it says so.
 
 **New**

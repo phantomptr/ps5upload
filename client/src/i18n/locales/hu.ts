@@ -9068,6 +9068,7 @@ rp_users_add_hint: "Ha másik felhasználóként is játszanál, jelentkezz be a
 "game_fps_unit": "FPS (mintavételezett)",
 "game_fps_state_starting": "Mérés…",
 "game_fps_state_no_game": "Nincs számolható játékkép. Indíts el egy játékot a képkockasebesség megtekintéséhez.",
+"game_fps_state_no_count": "Ez a konzol válaszol, de a képkockaszámlálója nem mozdul, ezért a képkockasebesség ezen a firmware-en nem olvasható ki. A 13.60-as firmware-en működik.",
 "game_fps_state_unsupported": "A konzolon lévő segédprogram ehhez túl régi. Küldd el újra a segédprogramot a Kapcsolat képernyőről.",
 "game_fps_state_offline": "A konzol nem válaszolt.",
 "game_fps_state_failed": "Ez a konzol nem adott képkockaszámot.",

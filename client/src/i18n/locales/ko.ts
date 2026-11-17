@@ -8793,6 +8793,7 @@ rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사�
 "game_fps_unit": "FPS(샘플링)",
 "game_fps_state_starting": "측정 중…",
 "game_fps_state_no_game": "셀 게임 화면이 없습니다. 게임을 시작하면 프레임 레이트가 표시됩니다.",
+"game_fps_state_no_count": "이 콘솔은 응답하지만 프레임 수가 변하지 않아 이 펌웨어에서는 프레임 레이트를 읽을 수 없습니다. 펌웨어 13.60에서는 작동합니다.",
 "game_fps_state_unsupported": "이 콘솔의 헬퍼가 너무 오래되어 지원하지 않습니다. 연결 화면에서 헬퍼를 다시 전송하세요.",
 "game_fps_state_offline": "콘솔이 응답하지 않았습니다.",
 "game_fps_state_failed": "이 콘솔이 프레임 수를 알려주지 않았습니다.",

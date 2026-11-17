@@ -8729,6 +8729,7 @@ rp_users_add_hint: "Per giocare anche come un altro utente, accedi con quell’u
 "game_fps_unit": "FPS (campionati)",
 "game_fps_state_starting": "Misurazione…",
 "game_fps_state_no_game": "Nessuna immagine di gioco da contare. Avvia un gioco per vederne il frame rate.",
+"game_fps_state_no_count": "Questa console risponde, ma il suo conteggio dei fotogrammi non si muove, quindi la frequenza dei fotogrammi non si può leggere con il suo firmware. Funziona con il firmware 13.60.",
 "game_fps_state_unsupported": "L'helper su questa console è troppo vecchio per questo. Invia di nuovo l'helper da Connessione.",
 "game_fps_state_offline": "La console non ha risposto.",
 "game_fps_state_failed": "Questa console non ha fornito un conteggio dei fotogrammi.",

@@ -8784,6 +8784,7 @@ rp_users_add_hint: "Um auch als anderer Benutzer zu spielen, melde dich auf der 
 "game_fps_unit": "FPS (Stichprobe)",
 "game_fps_state_starting": "Wird gemessen…",
 "game_fps_state_no_game": "Kein Spielbild zum Zählen. Starte ein Spiel, um seine Bildrate zu sehen.",
+"game_fps_state_no_count": "Diese Konsole antwortet, aber ihre Bildzahl bewegt sich nicht, daher lässt sich die Bildrate mit ihrer Firmware nicht lesen. Mit Firmware 13.60 funktioniert es.",
 "game_fps_state_unsupported": "Der Helfer auf dieser Konsole ist dafür zu alt. Sende den Helfer erneut über Verbindung.",
 "game_fps_state_offline": "Die Konsole hat nicht geantwortet.",
 "game_fps_state_failed": "Diese Konsole hat keine Bildzahl geliefert.",

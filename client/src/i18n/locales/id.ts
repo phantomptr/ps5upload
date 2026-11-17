@@ -8785,6 +8785,7 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "game_fps_unit": "FPS (sampel)",
 "game_fps_state_starting": "Mengukur…",
 "game_fps_state_no_game": "Tidak ada gambar game untuk dihitung. Mulai game untuk melihat frame rate-nya.",
+"game_fps_state_no_count": "Konsol ini menjawab, tetapi hitungan bingkainya tidak bergerak, jadi frame rate tidak bisa dibaca di firmware-nya. Ini berfungsi di firmware 13.60.",
 "game_fps_state_unsupported": "Helper di konsol ini terlalu lama untuk ini. Kirim helper lagi dari Koneksi.",
 "game_fps_state_offline": "Konsol tidak menjawab.",
 "game_fps_state_failed": "Konsol ini tidak memberikan jumlah frame.",

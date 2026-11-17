@@ -8791,6 +8791,7 @@ rp_users_add_hint: "Para jogar também como outro usuário, entre com esse usuá
 "game_fps_unit": "FPS (amostrado)",
 "game_fps_state_starting": "Medindo…",
 "game_fps_state_no_game": "Nenhuma imagem de jogo para contar. Inicie um jogo para ver a taxa de quadros dele.",
+"game_fps_state_no_count": "Este console responde, mas a contagem de quadros não avança, então a taxa de quadros não pode ser lida no firmware dele. Funciona no firmware 13.60.",
 "game_fps_state_unsupported": "O auxiliar neste console é antigo demais para isso. Envie o auxiliar de novo em Conexão.",
 "game_fps_state_offline": "O console não respondeu.",
 "game_fps_state_failed": "Este console não informou uma contagem de quadros.",
