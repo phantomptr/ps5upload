@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.4
 
 Trophies after offline activation, a cleaner Payloads page, and fixes from an audit.
 

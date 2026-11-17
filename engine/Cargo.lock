@@ -2570,7 +2570,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-exfat"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "ps5-dump-forge-patch",
  "ps5upload-fpkg",
@@ -2579,14 +2579,14 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-patch"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "crc32fast",
 ]
 
 [[package]]
 name = "ps5-dump-forge-pfs"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "flate2",
  "ps5-dump-forge-patch",
@@ -2596,7 +2596,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-ufs2"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "ps5-dump-forge-patch",
  "ps5upload-fpkg",
@@ -2606,7 +2606,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-zstd"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "crc32fast",
  "getrandom 0.4.3",
@@ -2617,7 +2617,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-apidoc"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2627,7 +2627,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-archive"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "anyhow",
  "crc32fast",
@@ -2637,7 +2637,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-ava1"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2660,7 +2660,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-convert"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "libc",
  "ps5upload-archive",
@@ -2675,7 +2675,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-convert-core"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "blake3",
  "flate2",
@@ -2695,7 +2695,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-core"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "aes 0.9.4",
  "aes-gcm 0.11.1",
@@ -2729,7 +2729,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-ctest"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2745,7 +2745,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-engine"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "aes 0.9.4",
  "aes-gcm 0.11.1",
@@ -2812,7 +2812,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-fpkg"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "aes 0.9.4",
  "blake3",
@@ -2836,7 +2836,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-hub"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -2851,7 +2851,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-lab"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2869,7 +2869,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-pkg"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "aes 0.9.4",
  "blake3",
@@ -2881,14 +2881,14 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-tailnet"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "ps5upload-tests"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2906,7 +2906,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-unrar"
-version = "12.6.3"
+version = "12.6.4"
 dependencies = [
  "serde",
  "serde_json",
