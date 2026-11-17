@@ -31,6 +31,18 @@ beforeEach(() => {
   resetEnsurePayloadState();
 });
 
+/** Runs `run` on a fake clock, so the helper's boot wait (1.5 s, then 1 s polls) passes at once. */
+async function onFakeClock<T>(run: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    const p = run();
+    await vi.advanceTimersByTimeAsync(1_600);
+    return await p;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe("the helper and the console's elfldr", () => {
   it("does not send into a loader that stays stuck, and says why", async () => {
     payloadCheckMock.mockResolvedValue({ reachable: false });
@@ -45,7 +57,7 @@ describe("the helper and the console's elfldr", () => {
       .mockResolvedValueOnce({ reachable: false })
       .mockResolvedValue({ reachable: true, payloadVersion: "5.37.1" });
     waitMock.mockResolvedValue("healthy");
-    expect(await ensurePayloadCurrent("10.0.0.5", undefined, true)).toBe("pushed");
+    expect(await onFakeClock(() => ensurePayloadCurrent("10.0.0.5", undefined, true))).toBe("pushed");
     expect(restoreMock).toHaveBeenCalledTimes(1);
     expect(guardMock).toHaveBeenCalledWith("10.0.0.5", true);
   });
@@ -62,7 +74,7 @@ describe("the helper and the console's elfldr", () => {
       .mockResolvedValueOnce({ reachable: false })
       .mockResolvedValue({ reachable: true, payloadVersion: "5.37.1" });
     waitMock.mockResolvedValue("unknown");
-    expect(await ensurePayloadCurrent("10.0.0.5", undefined, true)).toBe("pushed");
+    expect(await onFakeClock(() => ensurePayloadCurrent("10.0.0.5", undefined, true))).toBe("pushed");
     expect(restoreMock).toHaveBeenCalledTimes(1);
   });
 });

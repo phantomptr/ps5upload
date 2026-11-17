@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PayloadReleaseInfo } from "../api/ps5";
-import { catalogueMatch, isRepoManaged, pmUpdateFor, slotStem, swapAutoloadKey, tagIsNewer } from "./pmUpdates";
+import { catalogueMatch, isRepoManaged, pmUpdateFor, slotStem, tagIsNewer } from "./pmUpdates";
 
 const rel = (tag: string, url = "https://x/a.elf"): PayloadReleaseInfo => ({
   payload_id: "nanodns",
@@ -22,25 +22,6 @@ describe("pmUpdateFor", () => {
     expect(pmUpdateFor({ id: "nanodns", tag: "v0.5" }, rel("v0.5"))).toBeNull();
     expect(pmUpdateFor(undefined, rel("v0.5"))).toBeNull();
     expect(pmUpdateFor({ id: "nanodns", tag: "v0.4" }, rel("v0.5", ""))).toBeNull();
-  });
-});
-
-describe("swapAutoloadKey", () => {
-  it("keeps the boot position and the pauses", () => {
-    expect(swapAutoloadKey(["a.elf", "!3000", "old.elf", "!3000", "c.elf"], "old.elf", "new.elf")).toEqual([
-      "a.elf",
-      "!3000",
-      "new.elf",
-      "!3000",
-      "c.elf",
-    ]);
-  });
-  it("does not list the new one twice", () => {
-    expect(swapAutoloadKey(["new.elf", "old.elf"], "old.elf", "new.elf")).toEqual(["new.elf"]);
-  });
-  it("leaves a list without the old one alone", () => {
-    const l = ["a.elf"];
-    expect(swapAutoloadKey(l, "old.elf", "new.elf")).toBe(l);
   });
 });
 

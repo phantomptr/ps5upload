@@ -40,16 +40,30 @@ beforeEach(() => {
   resetEnsurePayloadState();
 });
 
+/** Runs `run` on a fake clock, so the helper's boot wait (1.5 s, then 1 s polls) passes at once. */
+async function onFakeClock<T>(run: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    const p = run();
+    await vi.advanceTimersByTimeAsync(1_600);
+    return await p;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe("sending the helper", () => {
   it("shares one check between callers that arrive together", async () => {
     // First probe: nothing running. After the send: the new helper answers.
     payloadCheckMock
       .mockResolvedValueOnce({ reachable: false })
       .mockResolvedValue({ reachable: true, payloadVersion: "5.33.3" });
-    const [a, b] = await Promise.all([
-      ensurePayloadCurrent("10.0.0.5", undefined, true),
-      ensurePayloadCurrent("10.0.0.5", undefined, true),
-    ]);
+    const [a, b] = await onFakeClock(() =>
+      Promise.all([
+        ensurePayloadCurrent("10.0.0.5", undefined, true),
+        ensurePayloadCurrent("10.0.0.5", undefined, true),
+      ]),
+    );
     expect(a).toBe("pushed");
     expect(b).toBe("pushed");
     expect(restoreMock).toHaveBeenCalledTimes(1);
@@ -78,10 +92,12 @@ describe("sending the helper", () => {
       .mockResolvedValueOnce({ reachable: false })
       .mockResolvedValueOnce({ reachable: false })
       .mockResolvedValue({ reachable: true, payloadVersion: "5.33.3" });
-    await Promise.all([
-      ensurePayloadCurrent("10.0.0.5", undefined, true),
-      ensurePayloadCurrent("10.0.0.6", undefined, true),
-    ]);
+    await onFakeClock(() =>
+      Promise.all([
+        ensurePayloadCurrent("10.0.0.5", undefined, true),
+        ensurePayloadCurrent("10.0.0.6", undefined, true),
+      ]),
+    );
     expect(restoreMock).toHaveBeenCalledTimes(2);
   });
 });

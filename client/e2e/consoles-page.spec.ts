@@ -3,8 +3,8 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 // The Consoles page (Connection's console tab) against a mocked engine: no consoles (the Add
 // sheet opens), one ready, one needing the helper, one away on Tailscale, the Add sheet with what
 // the home and Tailscale scans found merged into one row, an invite's QR code, and a device asking
-// to connect (Allow / Decline over every screen). Each state at 1280 px and 390 px, light and dark,
-// with no sideways scroll. CONSOLES_SHOTS_DIR=<dir> also keeps a screenshot of each.
+// to connect (Allow / Decline over every screen). Each state at 1280 px and 390 px, light,
+// with no sideways scroll. CONSOLES_SHOTS_DIR=<dir> also runs dark and keeps a screenshot of each.
 
 const SHOTS = process.env.CONSOLES_SHOTS_DIR;
 const HOST = "192.168.1.100";
@@ -141,8 +141,11 @@ async function shot(page: Page, name: string) {
   await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: false });
 }
 
+// Dark only changes colours, which nothing here asserts: it runs only when screenshots are kept.
+const THEMES = SHOTS ? (["light", "dark"] as const) : (["light"] as const);
+
 for (const width of [1280, 390]) {
-  for (const theme of ["light", "dark"] as const) {
+  for (const theme of THEMES) {
     const tag = `${width}-${theme}`;
     test.describe(`Consoles at ${tag}`, () => {
       test.beforeEach(async ({ page }) => {

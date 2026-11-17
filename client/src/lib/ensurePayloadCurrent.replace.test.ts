@@ -55,6 +55,18 @@ beforeEach(() => {
   resetEnsurePayloadState();
 });
 
+/** Runs `run` on a fake clock, so the helper's boot wait (1.5 s, then 1 s polls) passes at once. */
+async function onFakeClock<T>(run: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    const p = run();
+    await vi.advanceTimersByTimeAsync(1_600);
+    return await p;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe("replacing a running helper unasked", () => {
   it.each([[false], [true]])("never puts this app's helper over a newer one (force=%s)", async (force) => {
     answers("6.0.0");
@@ -90,7 +102,7 @@ describe("replacing a running helper unasked", () => {
     const order: string[] = [];
     announceMock.mockImplementation(async () => (order.push("announce"), true));
     restoreMock.mockImplementation(async () => void order.push("send"));
-    expect(await ensurePayloadCurrent(H)).toBe("pushed");
+    expect(await onFakeClock(() => ensurePayloadCurrent(H))).toBe("pushed");
     expect(order).toEqual(["announce", "send"]);
     expect(announceMock.mock.calls[0].slice(0, 2)).toEqual([H, "restart"]);
   });
@@ -100,7 +112,7 @@ describe("replacing a running helper unasked", () => {
       .mockResolvedValueOnce({ reachable: false })
       .mockResolvedValue({ reachable: true, payloadVersion: "5.37.1" });
     meshState[H] = { state: { busy: [{ device: {}, items: [{}] }] } };
-    expect(await ensurePayloadCurrent(H, undefined, true)).toBe("pushed");
+    expect(await onFakeClock(() => ensurePayloadCurrent(H, undefined, true))).toBe("pushed");
     expect(announceMock).not.toHaveBeenCalled();
   });
 });
@@ -110,7 +122,7 @@ describe("the copies the PS5 starts at boot", () => {
     payloadCheckMock
       .mockResolvedValueOnce({ reachable: false })
       .mockResolvedValue({ reachable: true, payloadVersion: "5.37.1" });
-    expect(await ensurePayloadCurrent(H, undefined, true)).toBe("pushed");
+    expect(await onFakeClock(() => ensurePayloadCurrent(H, undefined, true))).toBe("pushed");
     expect(copiesMock).toHaveBeenCalledTimes(1);
     expect(copiesMock.mock.calls[0][0]).toBe(H);
   });

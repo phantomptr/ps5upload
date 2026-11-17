@@ -1,10 +1,29 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RemotePlayStream } from "../lib/remotePlayStream";
 import { useRemotePlayStore } from "./remotePlay";
 import { useRpQualityStore, wasOffered } from "./rpQuality";
 
 const target = { host: "192.168.1.100", name: "Living room", registKey: "00", rpKey: "00" };
+// A fake clock: the PS5's busy answers are waited out (a second or more each, checked every
+// 100 ms) without the test waiting. `settle` moves the clock on until a wait is over.
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+async function settle<T>(p: Promise<T>): Promise<T> {
+  let done = false;
+  p.then(
+    () => (done = true),
+    () => (done = true),
+  );
+  for (let ms = 0; ms < 120_000 && !done; ms += 100) await vi.advanceTimersByTimeAsync(100);
+  return p;
+}
+
 const fakeStream = () => ({ setVolume() {}, setAudioBuffer() {}, setFit() {}, setReplay() {}, setPicture() {} }) as unknown as RemotePlayStream;
 
 describe("a restart with other settings", () => {
@@ -27,7 +46,7 @@ describe("a restart with other settings", () => {
       stop: userStop,
       stopForRestart: restartStop,
     });
-    await useRpQualityStore.getState().restartWith({ codec: "h264" });
+    await settle(useRpQualityStore.getState().restartWith({ codec: "h264" }));
     expect(restartStop).toHaveBeenCalledTimes(1);
     expect(userStop).not.toHaveBeenCalled();
     expect(start).toHaveBeenCalledTimes(1);
@@ -49,7 +68,7 @@ describe("a restart with other settings", () => {
     expect(useRemotePlayStore.getState().error).toBeNull();
     expect(useRpQualityStore.getState().switching?.kind).toBe("wait");
     expect(useRpQualityStore.getState().switching?.retryAt).toBeTruthy();
-    await run;
+    await settle(run);
     expect(start).toHaveBeenCalledTimes(1);
     expect(useRpQualityStore.getState().switching).toBeNull();
   }, 10_000);
@@ -63,7 +82,7 @@ describe("a restart with other settings", () => {
       useRemotePlayStore.setState({ stream: null, phase: "ended", error: { code, retryS: code === "busy" ? 0 : undefined, detail: "" } });
     });
     useRemotePlayStore.setState({ stream: null, target, phase: "ended", error: { code: "busy", retryS: 0, detail: "" }, start });
-    await useRpQualityStore.getState().startWhenFree(target);
+    await settle(useRpQualityStore.getState().startWhenFree(target));
     expect(start).toHaveBeenCalledTimes(3);
     // Held is shown (with Start), not waited out for ever.
     expect(useRemotePlayStore.getState().error?.code).toBe("held");
@@ -75,7 +94,7 @@ describe("a restart with other settings", () => {
       useRemotePlayStore.setState({ stream: null, phase: "ended", error: { code: "in_use", retryS: 30, detail: "" } });
     });
     useRemotePlayStore.setState({ stream: null, target, phase: "ended", error: { code: "busy", retryS: 0, detail: "" }, start });
-    await useRpQualityStore.getState().startWhenFree(target);
+    await settle(useRpQualityStore.getState().startWhenFree(target));
     expect(start).toHaveBeenCalledTimes(1);
     expect(useRemotePlayStore.getState().error?.code).toBe("in_use");
     expect(useRpQualityStore.getState().switching).toBeNull();
@@ -118,7 +137,7 @@ describe("the 720p offer and switch", () => {
       start,
       stopForRestart: stop,
     });
-    await useRpQualityStore.getState().switchTo720();
+    await settle(useRpQualityStore.getState().switchTo720());
     expect(stop).toHaveBeenCalledTimes(1);
     expect(start).toHaveBeenCalledTimes(2);
     // For this session only: the setting stays what the user chose.
@@ -147,7 +166,7 @@ describe("the 720p offer and switch", () => {
       start,
       stop,
     });
-    await useRpQualityStore.getState().restartWith({ codec: "h264", bitrateKbps: 6000 });
+    await settle(useRpQualityStore.getState().restartWith({ codec: "h264", bitrateKbps: 6000 }));
     expect(start).toHaveBeenCalledWith(target, { quality: { res: "1280x720", codec: "h264", bitrateKbps: 6000 } });
     expect(useRemotePlayStore.getState().prefs).toEqual(prefs);
   }, 10_000);
@@ -168,7 +187,7 @@ describe("the 720p offer and switch", () => {
       start,
       stopForRestart: () => useRemotePlayStore.setState({ stream: null, phase: "ended" }),
     });
-    await useRpQualityStore.getState().restartWith({ res: "1280x720" });
+    await settle(useRpQualityStore.getState().restartWith({ res: "1280x720" }));
     expect(start).toHaveBeenCalledWith(target, { quality: { codec: "h264", res: "1280x720" } });
   }, 10_000);
 
@@ -186,7 +205,7 @@ describe("the 720p offer and switch", () => {
     const run = useRpQualityStore.getState().switchTo720();
     await vi.waitFor(() => expect(useRpQualityStore.getState().switching?.retryAt).toBeTruthy());
     useRpQualityStore.getState().cancelSwitch();
-    await run;
+    await settle(run);
     expect(start).toHaveBeenCalledTimes(1);
   }, 10_000);
 });

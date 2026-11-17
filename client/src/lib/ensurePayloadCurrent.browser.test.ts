@@ -40,6 +40,18 @@ beforeEach(() => {
   resetHelperSendGate();
 });
 
+/** Runs `run` on a fake clock, so the helper's boot wait (1.5 s, then 1 s polls) passes at once. */
+async function onFakeClock<T>(run: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    const p = run();
+    await vi.advanceTimersByTimeAsync(1_600);
+    return await p;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe("ensurePayloadCurrent in a browser", () => {
   it("reads the version from the engine instead of throwing", async () => {
     // Tauri's getVersion() needs __TAURI_INTERNALS__ and throws in a browser.
@@ -54,7 +66,7 @@ describe("ensurePayloadCurrent in a browser", () => {
     payloadCheckMock
       .mockResolvedValueOnce({ reachable: true, payloadVersion: "5.16.0" })
       .mockResolvedValue({ reachable: true, payloadVersion: "5.17.7" });
-    const r = await ensurePayloadCurrent("10.0.0.5");
+    const r = await onFakeClock(() => ensurePayloadCurrent("10.0.0.5"));
     expect(r).toBe("pushed");
     expect(restoreMock).toHaveBeenCalledWith("10.0.0.5");
     expect(bundledPathMock).not.toHaveBeenCalled();
