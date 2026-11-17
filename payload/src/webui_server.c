@@ -47,7 +47,11 @@
 #define WEBUI_QUEUE_DEPTH    32
 #define WEBUI_WAITING_MAX    32      /* connections waiting for their first bytes */
 #define WEBUI_PER_SOURCE_MAX 16      /* one address's connections anywhere in the server: a browser opens 6 */
+/* The host self-test builds with shorter connection and watch times (-D on its compile line) so it
+ * exercises the same timeout paths in a fraction of the time; the helper always uses these. */
+#ifndef WEBUI_CONN_MS
 #define WEBUI_CONN_MS        5000u   /* read timeout / idle-connection drop */
+#endif
 #define WEBUI_BIND_RETRY_MS  5000u
 #define WEBUI_STOP_MS        2000u
 #define WEBUI_SLICE_MS       200
@@ -55,7 +59,9 @@
 #define WEBUI_DRAIN_MS       250u
 #define WEBUI_STACK          AVA1_MGMT_STACK  /* routes run mgmt handlers sized for 512 KiB */
 #define WEBUI_MAX_ADDRS      8
+#ifndef WEBUI_WATCH_MS
 #define WEBUI_WATCH_MS       5000u   /* the accept thread's listener check (resume, IP change) */
+#endif
 #define WEBUI_BROKEN_MS      5000u   /* a listener failing this long is rebound */
 #define WEBUI_RESUME_GAP_MS  10000u  /* a clock gap this long between checks = a resume */
 #define WEBUI_THREAD_NAME    "ps5upload-web"

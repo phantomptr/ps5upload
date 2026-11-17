@@ -9,6 +9,7 @@ import { isTerminal, type Task } from "./tasks";
 import { invoke } from "../lib/invokeLogged";
 import { trStatic } from "../lib/trStatic";
 import { useToastStore } from "./toasts";
+import { offersConflictActions } from "../lib/destinationConflict";
 
 export type TaskCommand = "cancel" | "retry";
 
@@ -70,7 +71,8 @@ export function taskCapabilities(task: Task): TaskCapabilities {
   return {
     ...none,
     canCancel: item.status === "running" || item.status === "pending",
-    canRetry: item.status === "failed",
+    // A taken destination fails the same way again: its queue row asks Replace or elsewhere.
+    canRetry: item.status === "failed" && !offersConflictActions(item),
   };
 }
 

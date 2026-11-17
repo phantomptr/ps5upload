@@ -24,12 +24,18 @@ on:
   # queue waits for `PR gate` on the commit it is about to put on main.
   merge_group:
   workflow_dispatch:
+  # Nightly: the coverage reports, and nothing else (every other job, the PR gate included, is
+  # off on `schedule`). release-ci-verdict.mjs ignores these runs: a run that only made a report
+  # says nothing about the commit.
+  schedule:
+    - cron: "41 6 * * *"
 
 # One concurrency group per ref: if you push twice in a row (e.g.
 # CHANGELOG typo fix on main), the first run cancels instead of
-# keeping two redundant jobs alive.
+# keeping two redundant jobs alive. The nightly coverage run has its own group, so it neither
+# cancels nor is cancelled by main's push runs.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}${{ github.event_name == 'schedule' && '-nightly' || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -53,6 +59,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   changes:
     name: changes (which jobs this change needs)
+    # Off on the nightly schedule, and with it every job that needs it.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -62,6 +70,8 @@ jobs:
       ctest: ${{ steps.lanes.outputs.ctest }}
       payload: ${{ steps.lanes.outputs.payload }}
       client: ${{ steps.lanes.outputs.client }}
+      docs: ${{ steps.lanes.outputs.docs }}
+      docs_only: ${{ steps.lanes.outputs.docs_only }}
       desktop: ${{ steps.lanes.outputs.desktop }}
       android: ${{ steps.lanes.outputs.android }}
       scripts: ${{ steps.lanes.outputs.scripts }}
@@ -114,6 +124,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   version-sync:
     name: version sync (VERSION is canonical)
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -281,10 +292,26 @@ jobs:
         with:
           tool: cargo-nextest
 
+      # The RAR tests (ps5upload-core, ps5upload-ava1, ps5upload-tests) start the separate
+      # ps5upload-unrar program from target/debug; the `engine` leg does not select it.
+      - name: Build the RAR helper (ps5upload-unrar)
+        working-directory: engine
+        run: cargo build -p ps5upload-unrar
+
       # nextest runs the test binaries side by side (cargo test runs them one at a time, and most
       # of these sit in network sleeps); doctests, which nextest does not run, follow separately.
       # Timing-sensitive binaries are serialized by engine/.config/nextest.toml.
       # Bounded per step: a hung test fails here in minutes instead of holding the job.
+      - name: cargo nextest
+        working-directory: engine
+        timeout-minutes: 25
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo nextest run --profile ci ${{ matrix.select }}
+
+      # After the main run and with its exact package set (matrix.select), so nothing recompiles:
+      # a `cargo test -p ps5upload-engine` here first built the engine a second time. --no-capture
+      # also lifts nextest's slow-test timeout, as the old --nocapture run had none.
       - name: Check SMB moves against a writable Samba share
         if: matrix.part == 'engine'
         working-directory: engine
@@ -335,24 +362,11 @@ jobs:
             sudo cat "$share/samba.log" || true
             exit 1
           fi
-          if ! cargo test -p ps5upload-engine smb_meets_the_remote_contract -- --ignored --nocapture; then
+          if ! cargo nextest run --profile ci ${{ matrix.select }} --run-ignored only --no-capture -E 'test(smb_meets_the_remote_contract)'; then
             sudo find "$share/data" -maxdepth 3 -printf '%M %u %g %p\n'
             sudo tail -n 250 "$share/samba.log"
             exit 1
           fi
-
-      # The RAR tests (ps5upload-core, ps5upload-ava1, ps5upload-tests) start the separate
-      # ps5upload-unrar program from target/debug; the `engine` leg does not select it.
-      - name: Build the RAR helper (ps5upload-unrar)
-        working-directory: engine
-        run: cargo build -p ps5upload-unrar
-
-      - name: cargo nextest
-        working-directory: engine
-        timeout-minutes: 25
-        env:
-          RUST_BACKTRACE: 1
-        run: cargo nextest run --profile ci ${{ matrix.select }}
 
       - name: cargo test --doc
         working-directory: engine
@@ -505,12 +519,14 @@ jobs:
       # one would show only at deploy. Built, never pushed.
       - name: Build the hub image
         timeout-minutes: 15
-        run: docker build -t ps5upload-hub:ci engine/crates/ps5upload-hub The C server and the data layer are process-wide singletons, so the
+        run: docker build -t ps5upload-hub:ci engine/crates/ps5upload-hub
+
+  # The C interop suite. The C server and the data layer are process-wide singletons, so the
   # suite runs one test at a time: a test that holds the server cannot starve the others. That
-  # rule holds inside one machine, so the test files are dealt across four machines, each still
+  # rule holds inside one machine, so the test files are dealt across two machines, each still
   # running its share one at a time.
   rust-ctest:
-    name: rust (payload C over AVA1 ${{ matrix.shard }}/4)
+    name: rust (payload C over AVA1 ${{ matrix.shard }}/2)
     needs: changes
     if: needs.changes.outputs.ctest == 'true'
     runs-on: ubuntu-24.04
@@ -518,7 +534,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -550,10 +566,10 @@ jobs:
           RUST_BACKTRACE: 1
           SHARD: ${{ matrix.shard }}
         run: |
-          # Every test file is dealt to one of the four shards, longest first by measured time
+          # Every test file is dealt to one of the two shards, longest first by measured time
           # (.github/scripts/ctest-shard.py; round-robin by name left one shard ~70 s longer than
-          # the rest). A file added later is picked up by one of the four without being listed.
-          args=$(python3 ../.github/scripts/ctest-shard.py "$SHARD" 4) || exit 1
+          # the rest). A file added later is picked up by one of the two without being listed.
+          args=$(python3 ../.github/scripts/ctest-shard.py "$SHARD" 2) || exit 1
           mapfile -t args <<< "$args"
           cargo test -p ps5upload-ctest "${args[@]}" -- --test-threads=1
 
@@ -608,12 +624,12 @@ jobs:
     if: needs.changes.outputs.ctest == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    # Four shards, test files dealt exactly like rust-ctest (by measured time): the serial
+    # Two shards, test files dealt exactly like rust-ctest (by measured time): the serial
     # sanitized run was ~15 min on one runner.
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -653,7 +669,7 @@ jobs:
           RUST_BACKTRACE: 1
           SHARD: ${{ matrix.shard }}
         run: |
-          args=$(python3 ../.github/scripts/ctest-shard.py "$SHARD" 4) || exit 1
+          args=$(python3 ../.github/scripts/ctest-shard.py "$SHARD" 2) || exit 1
           mapfile -t args <<< "$args"
           cargo test -p ps5upload-ctest "${args[@]}" -- --test-threads=1
 
@@ -932,8 +948,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-24.04
-    # Typecheck, lint, ~4900 unit tests, the build and ~200 browser tests: 15 min ran out in 11.0.1.
-    timeout-minutes: 25
+    # Typecheck, lint, ~4900 unit tests and the build (the browser tests are client-e2e below).
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -980,6 +996,43 @@ jobs:
       - name: Embedded guest and pad pages (and the site's guest page) match their sources
         run: node scripts/check-embedded-pages.mjs
 
+  # ─────────────────────────────────────────────────────────────────────
+  # Client browser tests (Playwright), split three ways so they run beside the job above instead
+  # of after it. Same lane; each shard builds what the suite serves (the production build for the
+  # app-csp project, the console page for its own test).
+  # ─────────────────────────────────────────────────────────────────────
+  client-e2e:
+    name: client browser tests (${{ matrix.shard }}/3)
+    needs: changes
+    if: needs.changes.outputs.client == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: true
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          # Always the newest 22.x (security releases; the runner image can lag).
+          check-latest: true
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install deps
+        working-directory: client
+        run: npm ci --no-audit --no-fund
+
+      # The app-csp project serves the production build (e2e/fixtures/serve-dist-csp.mjs).
+      - name: Vite production build
+        working-directory: client
+        run: npm run build:vite
+
       - name: Install Playwright Chromium
         working-directory: client
         run: npx playwright install --with-deps chromium
@@ -990,14 +1043,79 @@ jobs:
 
       - name: Browser workflow smoke test
         working-directory: client
-        run: npm run test:e2e
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: npx playwright test --shard="$SHARD/3"
 
       # What it takes to see why a browser test failed on a runner: traces and screenshots.
       - name: Upload Playwright results
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: playwright-results
+          name: playwright-results-${{ matrix.shard }}
+          path: output/playwright/
+          retention-days: 14
+
+  # ─────────────────────────────────────────────────────────────────────
+  # A change to FAQ.md or CHANGELOG.md alone: only the tests that read them (the client lane runs
+  # the same tests, so this job is off whenever that lane is on; ci-changes.mjs: docs_only).
+  # ─────────────────────────────────────────────────────────────────────
+  docs:
+    name: docs (bundled FAQ and changelog)
+    needs: changes
+    if: needs.changes.outputs.docs_only == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: true
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          # Always the newest 22.x (security releases; the runner image can lag).
+          check-latest: true
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install deps
+        working-directory: client
+        run: npm ci --no-audit --no-fund
+
+      # Every test that imports virtual:doc/faq or virtual:doc/changelog, and the What's new logic
+      # built on the changelog.
+      - name: Vitest (the tests that read FAQ.md and CHANGELOG.md)
+        working-directory: client
+        run: >-
+          npx vitest run
+          src/components/MarkdownView.test.tsx
+          src/lib/faqDoc.test.ts
+          src/lib/faqSiteParity.test.ts
+          src/lib/installErrorDoc.test.ts
+          src/lib/changelogDoc.test.ts
+          src/lib/releaseNotes.test.ts
+          src/lib/whatsNew.test.ts
+          src/screens/Home/WhatsNewCard.test.ts
+
+      # Bundles both documents, and the browser suite's app-csp server needs the build to start.
+      - name: Vite production build
+        working-directory: client
+        run: npm run build:vite
+
+      - name: Install Playwright Chromium
+        working-directory: client
+        run: npx playwright install --with-deps chromium
+
+      - name: The What's new and FAQ screens in the browser
+        working-directory: client
+        run: npx playwright test e2e/bundled-docs.spec.ts
+
+      - name: Upload Playwright results
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: playwright-results-docs
           path: output/playwright/
           retention-days: 14
 
@@ -1008,6 +1126,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   security-scan:
     name: security scan
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -1085,8 +1204,9 @@ jobs:
   coverage:
     name: coverage reports
     # A report, not a gate (pr-gate does not need it): ~35 min of instrumented tests is not worth
-    # holding a runner on every PR or queue entry. Pushes to main and manual runs still produce it.
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    # holding a runner on every PR, queue entry or push to main. Nightly (the schedule above) and
+    # on a manual run.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     # `continue-on-error` below does NOT cover the timeout: a job that hits
     # `timeout-minutes` is reported as *cancelled*, which cancels the whole
@@ -1532,10 +1652,12 @@ jobs:
   # Lanes: a job may be skipped only when the `changes` job said its lane was off.
   # .github/scripts/pr-gate.mjs holds each job's lane and fails on a job it does not know, so a
   # job added here without a lane fails the gate instead of passing it unchecked.
+  #
+  # Off on the nightly schedule: that run makes the coverage reports and nothing else.
   # ─────────────────────────────────────────────────────────────────────
   pr-gate:
     name: PR gate
-    if: always()
+    if: always() && github.event_name != 'schedule'
     needs:
       - changes
       - version-sync
@@ -1549,6 +1671,8 @@ jobs:
       - rust-engine-targets
       - rust-desktop
       - client-frontend
+      - client-e2e
+      - docs
       - repo-scripts
       - security-scan
       - payload

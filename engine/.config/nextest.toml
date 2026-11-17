@@ -4,6 +4,11 @@
 # tests that needed this too moved with the AVA1 library to third_party/ava1.)
 [test-groups]
 alone = { max-threads = 1 }
+# ps5upload-tests: the throughput gates, the CPU-heavy tests and the transfers through a
+# rate-limited proxy take turns through a static lock (`HEAVY_TURN` in tests/ava1_common). That
+# lock is per process, and nextest runs every test in its own process, so here it serializes
+# nothing: this group is what keeps them from running at the same time.
+heavy-turn = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = "binary(download_fds)"
@@ -12,6 +17,14 @@ test-group = "alone"
 [[profile.ci.overrides]]
 filter = "binary(download_fds)"
 test-group = "alone"
+
+[[profile.default.overrides]]
+filter = "package(ps5upload-tests) & ((binary(ava1_transfer_integration) & (test(=upload_dir_byte_exact_100x) | test(=cancelling_a_split_file_list_stops_all_of_it) | test(=cancelling_an_upload_stops_it_and_leaves_no_partial_file) | test(=an_interrupted_upload_resumes_under_the_same_job_id) | test(=upload_file_resumes_after_a_mid_stream_drop) | test(=a_file_list_upload_resumes_after_an_interruption) | test(=a_reused_job_id_with_changed_bytes_never_splices) | test(=ci_throughput_gate_single_file_32mib) | test(=ci_throughput_gate_dir_16x2mib))) | (binary(ava1_zip_integration) & test(=upload_zip_resumes_after_an_interruption)))"
+test-group = "heavy-turn"
+
+[[profile.ci.overrides]]
+filter = "package(ps5upload-tests) & ((binary(ava1_transfer_integration) & (test(=upload_dir_byte_exact_100x) | test(=cancelling_a_split_file_list_stops_all_of_it) | test(=cancelling_an_upload_stops_it_and_leaves_no_partial_file) | test(=an_interrupted_upload_resumes_under_the_same_job_id) | test(=upload_file_resumes_after_a_mid_stream_drop) | test(=a_file_list_upload_resumes_after_an_interruption) | test(=a_reused_job_id_with_changed_bytes_never_splices) | test(=ci_throughput_gate_single_file_32mib) | test(=ci_throughput_gate_dir_16x2mib))) | (binary(ava1_zip_integration) & test(=upload_zip_resumes_after_an_interruption)))"
+test-group = "heavy-turn"
 
 [profile.default]
 # A hung test is a failure, not a stalled gate.

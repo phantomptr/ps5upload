@@ -93,13 +93,15 @@ export function realDeps(repo, workflowFile = "engine-ci.yml") {
     fetched.add(sha);
   };
   return {
+    // Not the nightly `schedule` runs: they only make the coverage reports (every gating job is
+    // off), so their success says nothing about the commit.
     runs: (sha) =>
       JSON.parse(
         sh("gh", [
           "api",
           `repos/${repo}/actions/workflows/${workflowFile}/runs?head_sha=${sha}&per_page=100`,
           "--jq",
-          "[.workflow_runs[] | {status, conclusion}]",
+          '[.workflow_runs[] | select(.event != "schedule") | {status, conclusion}]',
         ]),
       ),
     mergedPrs: (sha) => {

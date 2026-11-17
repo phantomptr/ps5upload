@@ -6,6 +6,13 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+A clear way to replace a game that's already on the PS5, and faster checks behind the scenes.
+
+**Changed**
+- **Already on the PS5? Replace it right there.** When an upload finds its game already in that folder on the PS5, the failed row now has **Replace** (it asks first, naming what gets deleted) and **Upload somewhere else**, instead of a message telling you to "choose Override" with no button to press. When the whole folder had already arrived, Replace puts it in place without sending it again. Before an upload, the question now reads "Already on the PS5: … in …" with **Replace**, **Resume**, **Another folder** and Cancel. The word "Override" is gone from the app.
+
+## 12.6.2
+
 Clearer Payloads › On your PS5, and what to do with PS5 fake packages on newer firmware.
 
 **Changed**

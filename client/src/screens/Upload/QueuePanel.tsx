@@ -23,6 +23,7 @@ import {
   Pause,
   Send,
   AlertTriangle,
+  FolderInput,
 } from "lucide-react";
 
 import {
@@ -94,6 +95,8 @@ import { WhySlowPanel } from "./WhySlow";
 import { RarPasswordPrompt } from "./RarPasswordPrompt";
 import { rarPasswordProblem } from "../../lib/rarPassword";
 import { partialUploadPath } from "../../lib/partialUpload";
+import { offersConflictActions } from "../../lib/destinationConflict";
+import { UploadElsewhereDialog } from "./UploadElsewhereDialog";
 import { isStreamUnreachableError } from "../../lib/networkFix";
 import { streamInstallFailHelp } from "../../lib/streamInstallHint";
 import { convertFirstState, type WorkshopHandOver } from "../../lib/convertFirst";
@@ -1707,6 +1710,12 @@ export function QueueRow({
           rawError={item.error}
           reason={item.errorReason}
           detail={item.errorDetail}
+          // The destination is taken: Retry would fail the same way, so Replace / somewhere else.
+          conflict={
+            offersConflictActions(item)
+              ? { id: item.id, addr: item.addr, dest: item.resolvedDest }
+              : undefined
+          }
           // An install has its own retry choices below; an upload re-runs from here.
           onRetry={
             isInstall
@@ -2142,16 +2151,102 @@ export function DoneStats({
   );
 }
 
+/** Replace / Upload somewhere else, on a row whose destination is taken. */
+export function DestinationConflictActions({
+  id,
+  addr,
+  dest,
+}: {
+  id: string;
+  addr: string;
+  dest: string;
+}) {
+  const tr = useTr();
+  const { confirm, dialog } = useConfirm();
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  const replace = async () => {
+    const ok = await confirm({
+      title: tr("queue_conflict_replace_title", undefined, "Replace it on the PS5?"),
+      message: tr(
+        "queue_conflict_replace_body",
+        { path: dest },
+        "Replace {path} on the PS5? The copy there is deleted.",
+      ),
+      confirmLabel: tr("queue_conflict_replace", undefined, "Replace"),
+      destructive: true,
+    });
+    if (!ok) return;
+    setBusy(true);
+    setFailed(null);
+    try {
+      await useUploadQueueStore.getState().replaceDestination(id);
+    } catch (e) {
+      setFailed(
+        tr(
+          "queue_conflict_replace_failed",
+          { error: humanizeCaught(e) },
+          "Couldn't delete the copy on the PS5: {error}",
+        ),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex min-w-0 flex-col items-start gap-1.5" data-testid="queue-conflict-actions">
+      {dialog}
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="danger"
+          size="sm"
+          loading={busy}
+          onClick={() => void replace()}
+          data-testid="queue-conflict-replace"
+        >
+          {tr("queue_conflict_replace", undefined, "Replace")}
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          leftIcon={<FolderInput size={12} />}
+          disabled={busy}
+          onClick={() => setPicking(true)}
+          data-testid="queue-conflict-elsewhere"
+        >
+          {tr("queue_conflict_elsewhere", undefined, "Upload somewhere else")}
+        </Button>
+      </div>
+      {failed && <p className="text-xs text-[var(--color-bad)]">{failed}</p>}
+      {picking && (
+        <UploadElsewhereDialog
+          open
+          addr={addr}
+          dest={dest}
+          onCancel={() => setPicking(false)}
+          onPick={(folder) => {
+            setPicking(false);
+            useUploadQueueStore.getState().uploadElsewhere(id, folder);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 function FailedRowErrorCard({
   rawError,
   reason,
   detail,
   onRetry,
+  conflict,
 }: {
   rawError: string;
   reason: string | null;
   detail: string | null;
   onRetry?: () => void;
+  conflict?: { id: string; addr: string; dest: string };
 }) {
   const tr = useTr();
   const humanized = humanizeJobErrorReason(reason ?? undefined);
@@ -2164,7 +2259,9 @@ function FailedRowErrorCard({
           humanized ?? tr("queue_upload_failed", undefined, "Didn't finish")
         }
         action={
-          onRetry && (
+          conflict ? (
+            <DestinationConflictActions {...conflict} />
+          ) : onRetry && (
             <Button
               variant="secondary"
               size="sm"

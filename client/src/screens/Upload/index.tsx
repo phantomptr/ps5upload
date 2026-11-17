@@ -1,4 +1,6 @@
 import BrowserFilePicker from "./BrowserFilePicker";
+import { UploadElsewhereDialog } from "./UploadElsewhereDialog";
+import { splitUploadFolder } from "../../lib/uploadDest";
 import { OPEN_FOLD } from "../Send/sendEvents";
 import { consoleAddr } from "../../lib/addr";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -589,6 +591,10 @@ export default function UploadScreen({
   // because otherwise a "preflight failed for /old/path" banner sticks
   // around after the user picks a fresh source — misleading.
   const [preflightError, setPreflightError] = useState<string | null>(null);
+  // "Another folder" in the already-on-the-PS5 question: the picker, then the same check again
+  // for the new place once the destination has changed.
+  const [elsewhereFrom, setElsewhereFrom] = useState<{ dest: string; addr: string } | null>(null);
+  const recheckAfterMove = useRef(false);
 
   // Clear preflight error whenever the source changes (new file/folder
   // pick, or source cleared). The error is tied to the OLD source's
@@ -685,6 +691,27 @@ export default function UploadScreen({
     const id = handleAddToQueue(strategy);
     if (id && host) queueStartAdded(host, [id]);
   };
+
+  const pickAnotherFolder = (folder: string) => {
+    setElsewhereFrom(null);
+    const { volume, subpath } = splitUploadFolder(
+      folder,
+      availableVolumes.map((v) => v.path),
+    );
+    if (volume === (destinationVolume ?? "/data") && subpath === destinationSubpath.replace(/^\/+|\/+$/g, "")) {
+      void handleUpload();
+      return;
+    }
+    recheckAfterMove.current = true;
+    setDestination(volume, subpath);
+  };
+  useEffect(() => {
+    if (!recheckAfterMove.current) return;
+    recheckAfterMove.current = false;
+    void handleUpload();
+    // Runs once the picked folder is the destination; handleUpload reads it from this render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [destinationVolume, destinationSubpath]);
 
   const beginUpload = (strategy: UploadStrategy) => {
     if (!source || !pending) return;
@@ -944,7 +971,20 @@ export default function UploadScreen({
           isFolder={pending.isFolder}
           onOverride={() => beginUpload("overwrite")}
           onResume={() => beginUpload("resume")}
+          onElsewhere={() => {
+            setElsewhereFrom({ dest: pending.dest, addr: pending.addr });
+            setPending(null);
+          }}
           onCancel={() => setPending(null)}
+        />
+      )}
+      {elsewhereFrom && (
+        <UploadElsewhereDialog
+          open
+          addr={elsewhereFrom.addr}
+          dest={elsewhereFrom.dest}
+          onCancel={() => setElsewhereFrom(null)}
+          onPick={pickAnotherFolder}
         />
       )}
       {!embedded && (
@@ -2264,6 +2304,7 @@ function ExistingDestinationDialog({
   isFolder,
   onOverride,
   onResume,
+  onElsewhere,
   onCancel,
 }: {
   entryCount: number;
@@ -2272,6 +2313,8 @@ function ExistingDestinationDialog({
   isFolder: boolean;
   onOverride: () => void;
   onResume: () => void;
+  /** Pick another folder on the PS5 (offered when something is already there). */
+  onElsewhere?: () => void;
   onCancel: () => void;
 }) {
   const tr = useTr();
@@ -2282,11 +2325,17 @@ function ExistingDestinationDialog({
   const hasExisting = entryCount > 0;
   const canResume = hasExisting && isFolder;
 
+  const trimmed = dest.replace(/\/+$/, "");
+  const cut = trimmed.lastIndexOf("/");
+  const name = trimmed.slice(cut + 1);
+  const folder = cut > 0 ? trimmed.slice(0, cut) : "/";
   const title = !hasExisting
     ? tr("upload_dialog_title_start", undefined, "Start upload?")
-    : isFolder
-      ? tr("upload_dialog_title_folder_exists", undefined, "Folder already has files")
-      : tr("upload_dialog_title_file_exists", undefined, "File already exists");
+    : tr(
+        "upload_dialog_title_already_on_ps5",
+        { name, folder },
+        "Already on the PS5: {name} in {folder}",
+      );
 
   const subtitle = !hasExisting ? (
     <>
@@ -2345,7 +2394,7 @@ function ExistingDestinationDialog({
           >
             <span className="font-medium">
               {hasExisting
-                ? tr("upload_override", "Override")
+                ? tr("upload_replace", "Replace")
                 : tr("upload_start_upload", "Start upload")}
             </span>
             <span
@@ -2362,6 +2411,25 @@ function ExistingDestinationDialog({
                 : tr("upload_start_desc", "Send all files to the PS5.")}
             </span>
           </button>
+          {hasExisting && onElsewhere && (
+            <button
+              type="button"
+              onClick={onElsewhere}
+              className={`${DIALOG_OPTION} ${DIALOG_PLAIN}`}
+              data-testid="upload-dialog-another-folder"
+            >
+              <span className="font-medium">
+                {tr("upload_dialog_another_folder", undefined, "Another folder")}
+              </span>
+              <span className="text-xs text-[var(--color-muted)]">
+                {tr(
+                  "upload_dialog_another_folder_desc",
+                  undefined,
+                  "Pick a different folder on the PS5 for this upload.",
+                )}
+              </span>
+            </button>
+          )}
           <button
             type="button"
             onClick={onCancel}

@@ -1488,8 +1488,10 @@ describe("install items", () => {
           gate.set(key, resolve);
         }),
     );
-    // Earlier blocks leave fake timers, live drain loops and mocks behind.
+    // Earlier blocks leave fake timers, live drain loops and mocks behind. Fake timers here: the
+    // queue's 1.5 s settle between jobs and its 500 ms polls pass at once (waitFor moves the clock).
     vi.useRealTimers();
+    vi.useFakeTimers();
     useUploadQueueStore.getState().stop();
     mockedEnsurePayload.mockReset().mockResolvedValue(undefined as never);
     useUploadQueueStore.setState({
@@ -1504,10 +1506,12 @@ describe("install items", () => {
   afterEach(() => {
     useUploadQueueStore.getState().stop();
     useUploadSettingsStore.setState({ queueAutoStart: true });
+    vi.useRealTimers();
   });
 
+  // Up to 4 s of queue time, in 10 ms steps.
   const waitFor = async (cond: () => boolean) => {
-    for (let i = 0; i < 400 && !cond(); i++) await new Promise((r) => setTimeout(r, 5));
+    for (let i = 0; i < 400 && !cond(); i++) await vi.advanceTimersByTimeAsync(10);
     expect(cond()).toBe(true);
   };
 
@@ -1620,13 +1624,8 @@ describe("install items", () => {
     useUploadQueueStore.setState((st) => ({
       items: st.items.map((i) => (i.id === q.id ? { ...i, installJobId: "job-9" } : i)),
     }));
-    vi.useFakeTimers();
-    try {
-      useUploadQueueStore.getState().cancelItem(q.id);
-      await vi.advanceTimersByTimeAsync(31_000);
-    } finally {
-      vi.useRealTimers();
-    }
+    useUploadQueueStore.getState().cancelItem(q.id);
+    await vi.advanceTimersByTimeAsync(31_000);
     const row = useUploadQueueStore.getState().items.find((i) => i.id === q.id);
     expect(row).toMatchObject({ status: "running", stopping: false });
     expect(row?.installNote).toMatch(/still running/);
@@ -1672,8 +1671,9 @@ describe("install items", () => {
     mountReadOnly: false,
     registerAfterUpload: false,
   });
+  // Up to 12 s of queue time, in 10 ms steps.
   const slowWaitFor = async (cond: () => boolean) => {
-    for (let i = 0; i < 1200 && !cond(); i++) await new Promise((r) => setTimeout(r, 5));
+    for (let i = 0; i < 1200 && !cond(); i++) await vi.advanceTimersByTimeAsync(10);
     expect(cond()).toBe(true);
   };
   /** Every upload finishes on its first poll; `order` records what started, in order. */
@@ -1735,7 +1735,7 @@ describe("install items", () => {
     s.add(folder("GameA"));
     const q = s.enqueueInstall({ host, request: { via: "stream", source: "/ps4.pkg" }, displayName: "P" });
     pkgQueue().add({ ...folder("Up.pkg"), sourceKind: "pkg", installAfterUpload: false });
-    await new Promise((r) => setTimeout(r, 100));
+    await vi.advanceTimersByTimeAsync(100);
     expect(useUploadQueueStore.getState().runningHosts[host]).toBeFalsy();
     expect(order).toEqual([]);
     expect(calls).toEqual([]);
@@ -1771,7 +1771,7 @@ describe("install items", () => {
     await slowWaitFor(() => statusOf("/src/GameA") === "running");
     // Auto-start is off, but a running queue still takes what is added, after what is ahead.
     const q = s.enqueueInstall({ host, request: { via: "stream", source: "/late.pkg" }, displayName: "L" });
-    await new Promise((r) => setTimeout(r, 100));
+    await vi.advanceTimersByTimeAsync(100);
     expect(calls).toEqual([]);
     release = () => undefined;
     await slowWaitFor(() => calls.length === 1);
@@ -2205,12 +2205,19 @@ describe("review fixes", () => {
     registerInstallExecutor(async (req) =>
       req.via === "library" && req.path === "/f1.pkg" ? { ok: false, message: "x" } : { ok: true },
     );
-    const s = useUploadQueueStore.getState();
-    const a = s.enqueueInstall({ host, request: { via: "library", path: "/f1.pkg" }, displayName: "F1" });
-    const b = s.enqueueInstall({ host, request: { via: "library", path: "/f2.pkg" }, displayName: "F2" });
-    await a.done;
-    await expect(b.done).resolves.toEqual({ ok: true });
-  }, 10_000);
+    // Fake timers: the 1.5 s settle between the two installs passes at once.
+    vi.useFakeTimers();
+    try {
+      const s = useUploadQueueStore.getState();
+      const a = s.enqueueInstall({ host, request: { via: "library", path: "/f1.pkg" }, displayName: "F1" });
+      const b = s.enqueueInstall({ host, request: { via: "library", path: "/f2.pkg" }, displayName: "F2" });
+      await vi.advanceTimersByTimeAsync(2_000);
+      await a.done;
+      await expect(b.done).resolves.toEqual({ ok: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("Retry via upload keeps the old dialog's options and removes the row only once accepted", async () => {
     registerInstallExecutor(async () => ({ ok: false, stagedFallbackRecommended: true }));

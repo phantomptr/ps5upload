@@ -8,7 +8,7 @@ Prints `--test <name>` argument pairs, one token per line, for cargo test.
 Used by the rust-ctest and ps5upload-ctest-sanitize jobs in .github/workflows/engine-ci.yml. Both used
 to deal the files round-robin by name, which left shard 3 with ~300 s of tests against ~170-240 s
 on the others, so the slowest shard set the PR gate's time. Here the files are dealt longest
-first, each to the shard with the least time so far (the classic LPT schedule), so the four
+first, each to the shard with the least time so far (the classic LPT schedule), so the
 shards come out within a few seconds of each other.
 
 Every shard computes the same assignment from the same sorted file list, so the shards together
@@ -21,22 +21,16 @@ import sys
 
 # Seconds per test binary (link + run) under `cargo test -- --test-threads=1`, the mean of the
 # plain and the ASan + UBSan runs on ubuntu-24.04, measured from CI runs 40079393365,
-# 40082659548 and 40084135077 (2026-10-24).
+# 40082659548 and 40084135077 (2026-10-24). Pruned 2026-11-16 to the files still in
+# engine/crates/ps5upload-ctest/tests (the protocol-level ones moved to third_party/ava1).
+# readback and smp_meta came later and are not measured yet: listed at DEFAULT_WEIGHT.
 WEIGHTS = {
-    "admission": 0, "aead": 3, "apply": 18, "apply_perf": 23, "apply_timing": 1, "b3": 13,
-    "c2c": 25, "conformance": 1, "copy": 23, "data_hooks": 1, "diag": 3, "download": 59,
-    "download_trust": 0, "fan_map": 0, "fdlimit": 59, "firmware": 0, "fix_round": 18,
-    "fix_round2": 2, "frame_budget": 40, "frame_pool": 0, "governor": 69, "job_run": 16,
-    "job_run_trust": 0, "jobs_any_owner": 13, "journal": 0, "lane_sockbuf": 0,
-    "lf_slots_wedge": 91, "lifecycle": 1, "live_notes": 2, "log_small": 10,
-    "log_small_engine": 2, "log_small_fail": 31, "log_small_settle": 4, "log_small_upload": 1,
-    "manifest": 0, "many_jobs_one_session": 13, "mgmt": 4, "mgmt_fs": 9, "mgmt_t6": 6,
-    "mgmt_t7": 6, "nas_policy": 0, "nas_skip": 6, "noise": 1, "pairing": 4,
-    "payload_cutover": 0, "perf_upload": 0, "periodic_kill": 6, "ranges": 0, "recv": 16,
-    "resume_after_cancel": 50, "rp_pair": 0, "scaling": 26, "send": 4, "send_timing": 0,
-    "server": 39, "sevenz": 6, "shutdown": 9, "single_instance": 1, "soak": 10,
-    "space_resume": 49, "stall": 18, "torn_sweep": 53, "trust": 0, "tune": 0, "upload": 77,
-    "wire_upload": 16,
+    "c2c": 25, "conformance": 1, "diag": 3, "download_trust": 0, "fan_map": 0, "firmware": 0,
+    "job_run": 16, "job_run_trust": 0, "jobs_any_owner": 13, "lifecycle": 1, "live_notes": 2,
+    "many_jobs_one_session": 13, "mgmt": 4, "mgmt_fs": 9, "mgmt_t6": 6, "mgmt_t7": 6,
+    "nas_policy": 0, "nas_skip": 6, "pairing": 4, "payload_cutover": 0, "periodic_kill": 6,
+    "readback": 15, "resume_after_cancel": 50, "rp_pair": 0, "sevenz": 6, "shutdown": 9,
+    "single_instance": 1, "smp_meta": 15, "soak": 10, "space_resume": 49,
 }
 DEFAULT_WEIGHT = 15
 # Each file is also its own test binary to compile and link before anything runs, which the

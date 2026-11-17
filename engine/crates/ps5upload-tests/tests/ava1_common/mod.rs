@@ -81,6 +81,8 @@ pub async fn heavy() -> tokio::sync::MutexGuard<'static, ()> {
 }
 
 /// The rate-limited consoles take turns (see `Console::_turn`); so do the CPU-heavy tests (`heavy`).
+/// Per process only: under nextest (one process per test) the `heavy-turn` test group in
+/// engine/.config/nextest.toml does this instead, so a new test that takes the turn goes there too.
 static HEAVY_TURN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub async fn console() -> Console {
@@ -297,6 +299,12 @@ pub async fn cancel_midway<T: Send + 'static>(
     }
 }
 
+/// The cap of a rate-limited console's link, per connection. A cancel waits for the first durable
+/// group (2 MiB), so this sets how long every cancel/resume test crawls before it acts: at
+/// 256 KiB/s that was ~4.6 s each. At 1 MiB/s it is ~1.2 s and a 12-16 MiB source still has
+/// seconds left when the cancel or kill lands (`cancel_midway` panics if it ever does not).
+pub const SLOW_LINK: u64 = 1 << 20;
+
 /// A source big enough, written slowly enough through a capped proxy, that a cancel lands
 /// mid-transfer. Returns the console behind a rate-limited proxy.
 pub async fn slow_console() -> (Console, Arc<ChaosProxy>) {
@@ -309,7 +317,7 @@ pub async fn slow_console() -> (Console, Arc<ChaosProxy>) {
             ChaosConfig {
                 // per connection, and an upload spreads over several lanes: slow enough that a 12 MiB
                 // upload takes seconds, so a cancel or a kill lands mid-transfer.
-                bytes_per_sec: Some(256 << 10),
+                bytes_per_sec: Some(SLOW_LINK),
                 ..Default::default()
             },
         )
@@ -449,7 +457,7 @@ pub async fn abs_console(slow: bool) -> AbsConsole {
             ChaosProxy::start(
                 addr.parse().unwrap(),
                 ChaosConfig {
-                    bytes_per_sec: Some(256 << 10),
+                    bytes_per_sec: Some(SLOW_LINK),
                     ..Default::default()
                 },
             )

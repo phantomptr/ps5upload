@@ -27,6 +27,8 @@ export const JOB_LANES = {
   "rust-desktop": "desktop",
   android: "android",
   "client-frontend": "client",
+  "client-e2e": "client",
+  docs: "docs_only",
 };
 
 /**

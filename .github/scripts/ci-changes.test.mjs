@@ -17,9 +17,16 @@ test("docs only: no lane runs (version-sync, security scan and repo scripts on U
   );
 });
 
-test("CHANGELOG.md and FAQ.md: the client job, whose tests read them", () => {
-  assert.deepEqual(on(["CHANGELOG.md"]), ["client"]);
-  assert.deepEqual(on(["FAQ.md"]), ["client"]);
+test("CHANGELOG.md and FAQ.md: only the docs job, which runs the tests that read them", () => {
+  assert.deepEqual(on(["CHANGELOG.md"]), ["docs"]);
+  assert.deepEqual(on(["FAQ.md"]), ["docs"]);
+  assert.ok(outputLines(classify(["CHANGELOG.md", "FAQ.md"])).includes("docs_only=true"));
+});
+
+test("CHANGELOG.md with code: the full client lane, and no separate docs job", () => {
+  const r = classify(["CHANGELOG.md", "client/src/App.tsx"]);
+  assert.ok(r.lanes.client);
+  assert.ok(outputLines(r).includes("docs_only=false"));
 });
 
 test("client only: client, android, and the payload that embeds the console page", () => {

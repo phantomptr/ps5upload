@@ -108,6 +108,41 @@ CHANGED="$(git diff --name-only origin/main...HEAD)"
 has() { printf '%s\n' "$CHANGED" | grep -qE "$1"; }
 check i18n node scripts/i18n-coverage.mjs
 check no-ftx2 make check-no-ftx2
+if has '^client/src/i18n/locales/en\.ts$'; then
+  # English this branch removed or changed, still expected by a test (12.6.2 shipped a red e2e
+  # spec this way: the fast path skips e2e). Seconds, not a test run.
+  check old-strings-in-tests python3 - <<'EOF'
+import re, subprocess, sys
+diff = subprocess.run(["git", "diff", "origin/main...HEAD", "--", "client/src/i18n/locales/en.ts"],
+                      capture_output=True, text=True).stdout
+pat = re.compile(r'^\s*"?[\w.\-]+"?:\s*"(.*)",?\s*$')
+removed = {m.group(1) for l in diff.splitlines() if l.startswith("-") and not l.startswith("---")
+           for m in [pat.match(l[1:])] if m}
+added = {m.group(1) for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++")
+         for m in [pat.match(l[1:])] if m}
+gone = [v for v in removed - added if len(v) >= 16]
+files = subprocess.run(["git", "ls-files", "client/e2e", "client/src"], capture_output=True, text=True).stdout.split()
+tests = [f for f in files if f.startswith("client/e2e/") or re.search(r"\.test\.(ts|tsx)$", f)]
+# Pieces of the old text no current string still has: a test quoting one expects the old text.
+current = open("client/src/i18n/locales/en.ts", encoding="utf-8").read()
+pieces = set()
+for v in gone:
+    for part in re.split(r"\{\w+\}", v):
+        for i in range(0, max(1, len(part) - 27), 6):
+            w = part[i:i + 28]
+            if len(w) == 28 and w not in current:
+                pieces.add(w)
+bad = []
+for f in tests:
+    text = open(f, encoding="utf-8", errors="replace").read().replace("\\'", "'").replace("&#x27;", "'")
+    hit = next((w for w in pieces if w in text), None)
+    if hit:
+        bad.append(f"{f}: still expects \"{hit}\"")
+if bad:
+    print("\n".join(bad)); sys.exit(1)
+print(f"{len(gone)} changed string(s), none expected by a test")
+EOF
+fi
 if has '^client/'; then
   # Rebuilds the pages; when they were stale the rebuilt ones are committed below and checked again.
   timeout 900 node scripts/check-embedded-pages.mjs >/dev/null 2>&1 || true

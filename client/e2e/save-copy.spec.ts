@@ -55,7 +55,15 @@ function mockEngine() {
         });
       case "/api/ps5/saves/open": {
         const body = req.postDataJSON() as { image: string };
-        if (!body.image) return json({ mounted: false, image: "", mount_point: "", kind: "" });
+        // An empty image asks what is open: like the helper, answer with the save opened last.
+        const open = calls.open.at(-1);
+        if (!body.image) {
+          return json(
+            open
+              ? { mounted: true, image: open, mount_point: "/data/ps5upload/save_mount", kind: "ps5" }
+              : { mounted: false, image: "", mount_point: "", kind: "" },
+          );
+        }
         calls.open.push(body.image);
         return json({ mounted: true, image: body.image, mount_point: "/data/ps5upload/save_mount", kind: "ps5" });
       }
@@ -171,7 +179,11 @@ test("Open names the save's parts and never offers the console's backup copies",
   // Picking one opens it (it did nothing before).
   await picker.getByRole("button", { name: /STARBOARD/ }).click();
   await expect.poll(() => calls.open).toEqual([`${folder(ANN)}/sdimg_STARBOARD`]);
-  await expect(page.getByTestId("save-open-banner")).toBeVisible();
+  // Opening goes to Files at the save's mount point; back on Save data, the banner says it is open.
+  await expect(page).toHaveURL(/\/files/);
+  await page.getByRole("link", { name: "Save Data" }).first().click();
+  await expect(page).toHaveURL(/\/saves/);
+  await expect(page.locator("[data-scroll-root]:visible").getByTestId("save-open-banner")).toBeVisible();
 });
 
 test("a single-user console offers no Copy to another user", async ({ page }) => {

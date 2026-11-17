@@ -1,7 +1,8 @@
 //! Opt-in checks against a REAL console (all `#[ignore]`d). They replace the live tests of
 //! `transfer_integration.rs`, `hw_rar_stream.rs` and `real_archive_stream.rs`. Set
-//! `REAL_PS5_ADDR=<host>` (a bare host; there is one port now) and run with `-- --ignored
-//! --nocapture`. The first run of an engine on a new console needs it paired: launch the helper
+//! `REAL_PS5_ADDR=<host>` (a bare host; there is one port now) and run with
+//! `cargo test -p ps5upload-tests --test ava1_live --features live -- --ignored --nocapture`
+//! (without the `live` feature this file is not built at all). The first run of an engine on a new console needs it paired: launch the helper
 //! from the app (a launched helper pairs with no code) or pair from the Connection screen; this
 //! process uses the same identity directory as the app (`PS5UPLOAD_DATA_DIR`, else
 //! `~/.ps5upload`), so it must NOT run while the engine is connected to the same console (one

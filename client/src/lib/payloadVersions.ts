@@ -27,12 +27,3 @@ export function defaultRelease(
   if (usable.length === 0) return null;
   return usable.find((r) => !r.prerelease) ?? usable[0];
 }
-
-/** True when `tag` is the newest tag overall (index 0 of the raw,
- *  newest-first list) — drives the "latest" chip in the picker. */
-export function isLatestTag(
-  releases: PayloadReleaseInfo[],
-  tag: string,
-): boolean {
-  return releases.length > 0 && releases[0].tag === tag;
-}

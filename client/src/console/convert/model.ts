@@ -47,11 +47,6 @@ const IMAGE_EXT = /\.(exfat|ffpkg|ffpfs|ffpfsc)$/i;
  *  so the page can say why it is not converted here (convert_rar_unsupported). */
 const ARCHIVE_EXT = /\.(zip|7z|rar)$/i;
 
-/** Whether a file named `name` is a game image (folders always can be picked). */
-export function isConvertImage(name: string): boolean {
-  return IMAGE_EXT.test(name);
-}
-
 /** Whether a file named `name` is offered as a source: an image or an archive. */
 export function isConvertSource(name: string): boolean {
   return IMAGE_EXT.test(name) || ARCHIVE_EXT.test(name);

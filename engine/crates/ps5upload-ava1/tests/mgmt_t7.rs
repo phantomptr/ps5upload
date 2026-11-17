@@ -343,10 +343,15 @@ async fn a_lost_reply_to_reboot_or_shutdown_is_success_and_a_refusal_or_a_lost_t
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_shell_call_is_bounded_to_ten_seconds() {
+    // The console holds the call well past the 10 s bound (up to 15 s) and is released as soon
+    // as the bound has been proven: the runtime waits for the handler's thread on shutdown, so
+    // a fixed 15 s sleep held the test for 15 s although the answer was known at 10.
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let held = Mutex::new(held);
     let (t, c) = console(
         "shell",
-        Box::new(|_m, _b| {
-            std::thread::sleep(Duration::from_secs(15));
+        Box::new(move |_m, _b| {
+            let _ = held.lock().unwrap().recv_timeout(Duration::from_secs(15));
             RpcReply {
                 status: gen::STATUS_OK,
                 body: vec![],
@@ -362,6 +367,7 @@ async fn the_shell_call_is_bounded_to_ten_seconds() {
     assert!(r.is_err());
     assert!(t0.elapsed() < Duration::from_secs(13), "{:?}", t0.elapsed());
     assert_eq!(diagnostics::SHELL_MAX_SECS, 10);
+    let _ = release.send(());
 }
 
 // ---- accounts, backups, cheats, mods, notices, activity, Remote Play ----

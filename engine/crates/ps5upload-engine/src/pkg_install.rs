@@ -4264,14 +4264,20 @@ mod loader_route_tests {
     #[test]
     fn loader_send_reports_an_unreachable_port_with_the_connect_prefix() {
         use ps5upload_core::payload_lifecycle as pl;
-        // RFC 5737 TEST-NET-2: nothing answers, so this is a connect failure.
+        // A loopback port that was just free: the connect is refused at once, so this is a
+        // connect failure without waiting out a timeout or depending on the network.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
         let err = pl::send_elf_to_loader(
-            "198.51.100.1",
-            pl::PS5_LOADER_PORT,
+            "127.0.0.1",
+            port,
             b"\x7FELF-not-a-real-image",
             pl::LoaderImage::Companion,
         )
-        .expect_err("nothing is listening on TEST-NET-2");
+        .expect_err("nothing is listening on the closed port");
         assert!(err.starts_with("connect "), "{err}");
         assert_eq!(
             dpi_send_failure_reason(&err),

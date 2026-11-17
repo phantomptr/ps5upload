@@ -8,6 +8,7 @@ import {
   fsMount,
   fsDelete,
   fsListDir,
+  fsMove,
   fsMkdir,
   appRegister,
   generateTxIdHex,
@@ -77,6 +78,7 @@ import { isRemotePath } from "../lib/remotePath";
 import { partialUploadPath } from "../lib/partialUpload";
 import { resumableTxId } from "../lib/resumeGuard";
 import { discardUploadLeftovers } from "../lib/uploadLeftovers";
+import { clearForReplace, destInFolder, offersConflictActions } from "../lib/destinationConflict";
 import { existingCopyOf, materializeRemote, releaseCopy } from "../lib/materialize";
 import { staticTranslator as tx } from "../lib/trStatic";
 
@@ -524,6 +526,13 @@ interface QueueState {
   /** Deletes the partial file a single-file upload left when the drive filled up, and gives
    *  the row a new job id so its next attempt starts fresh. Throws with the console's reason. */
   discardPartial: (id: string) => Promise<void>;
+  /** A row that failed because its destination is taken (`offersConflictActions`): deletes what
+   *  is there and runs the row again. A folder whose files all arrived is moved into place and
+   *  checked rather than sent again. Throws with the console's reason when the delete fails. */
+  replaceDestination: (id: string) => Promise<void>;
+  /** The same row, sent into `folder` on the PS5 instead (under the name it had). What the
+   *  failed attempt left in the old place is removed. False when the row is not such a row. */
+  uploadElsewhere: (id: string, folder: string) => boolean;
   /** Re-drive one console's uploads that FAILED on a recoverable
    *  (connection-class) error, then restart that console's drain loop.
    *  This is the "slept past the in-loop recovery budget" case: a standby
@@ -3230,6 +3239,52 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       scheduleSave();
     },
 
+    async replaceDestination(id) {
+      const item = get().items.find((candidate) => candidate.id === id);
+      if (!item || !offersConflictActions(item)) return;
+      const { placed } = await clearForReplace(item, {
+        listDir: (addr, path) => fsListDir(addr, path),
+        remove: (addr, path) => fsDelete(addr, path),
+        move: (addr, from, to) => fsMove(addr, from, to),
+        forgetResumeId: (host, src, dest) => resumeTxidForget(host, src, dest),
+      });
+      // A new job either way: the old one ended refused and answers the same if asked again.
+      // Placed: a Resume finds every file there and only runs what comes after the upload.
+      set((s) => ({
+        items: s.items.map((candidate) =>
+          candidate.id === id
+            ? {
+                ...candidate,
+                ...retryPatch(candidate),
+                strategy: placed ? "resume" : "overwrite",
+                txIdHex: generateTxIdHex(),
+              }
+            : candidate,
+        ),
+      }));
+      scheduleSave();
+      void get().startHost(hostOf(item.addr), { onlyIds: [id] });
+    },
+
+    uploadElsewhere(id, folder) {
+      const item = get().items.find((candidate) => candidate.id === id);
+      if (!item || !offersConflictActions(item) || !folder.trim()) return false;
+      const resolvedDest = destInFolder(item.resolvedDest, folder);
+      if (resolvedDest === item.resolvedDest) return false;
+      set((s) => ({
+        items: s.items.map((candidate) =>
+          candidate.id === id
+            ? { ...candidate, ...retryPatch(candidate), resolvedDest, txIdHex: generateTxIdHex() }
+            : candidate,
+        ),
+      }));
+      scheduleSave();
+      // The part the refused attempt left (a whole finished folder after ava1_commit_exists).
+      void discardUploadLeftovers(item, () => get().items);
+      void get().startHost(hostOf(item.addr), { onlyIds: [id] });
+      return true;
+    },
+
     async resumeFailedRecoverable(host) {
       if (!useUploadSettingsStore.getState().autoResume) return 0;
       const h = hostOf(host);
@@ -3533,6 +3588,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
     sendNow: () => undefined,
     retryWithPassword: () => false,
     discardPartial: () => Promise.resolve(),
+    replaceDestination: () => Promise.resolve(),
+    uploadElsewhere: () => false,
     resumeFailedRecoverable: () => Promise.resolve(0),
     setContinueOnFailure: () => undefined,
     start: () => Promise.resolve(),
