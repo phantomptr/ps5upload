@@ -8,7 +8,9 @@
 //!
 //! * `GET  /api/ps5/hw/fps?addr=` -> `{ok, state, fps, frames, interval_ms, at_ms, error?,
 //!   capture}`. Starts the sampler: the first answer may be `state: "starting"` with no `fps`.
-//!   `state` is the helper's (`ok`, `no_game`, `no_device`, `failed`), or `unsupported` (an
+//!   `state` is the helper's (`ok`, `no_game`, `no_device`, `failed`), `no_count` (it answers
+//!   but the count never moved: some firmware, #848; `raw` then has the helper's count and reply
+//!   size), or `unsupported` (an
 //!   older helper) or `offline` (no answer; `error` says why). `capture` is
 //!   `{active, started_ms, stopped_ms, stop_reason, samples, stats}`.
 //! * `POST /api/ps5/hw/fps/capture/start {addr}` -> the same, with a new, empty capture.
@@ -75,7 +77,16 @@ struct Session {
     capture: Option<Capture>,
     temps: Option<(i32, i32, Instant)>,
     temps_read_at: Option<Instant>,
+    /// Samples in a row with no frames, and whether the count ever moved this session (#848: on
+    /// some firmware the request answers but the count never moves).
+    still: u32,
+    moved: bool,
+    /// The helper's last raw read, for diagnostics: the count and how many bytes it wrote.
+    raw: Option<(u64, u32)>,
 }
+
+/// One-second samples in a row with a count that never moved before this is "no_count".
+const STILL_SAMPLES: u32 = 5;
 
 impl Session {
     fn new(now: Instant) -> Self {
@@ -89,6 +100,9 @@ impl Session {
             capture: None,
             temps: None,
             temps_read_at: None,
+            still: 0,
+            moved: false,
+            raw: None,
         }
     }
 
@@ -114,12 +128,33 @@ impl Session {
         };
         self.error = None;
         self.state = r.state.clone();
+        self.raw = r.is_ok().then_some((r.flips, r.bytes));
         let Some(s) = self.meter.push(&r) else {
             if !r.is_ok() {
                 self.last = None;
+                self.still = 0;
+            } else if self.still >= STILL_SAMPLES {
+                self.state = "no_count".into();
             }
             return;
         };
+        // A count that has never moved: this firmware answers the request without a running
+        // count. Say so instead of a frame rate of 0, and record nothing.
+        if s.frames == 0 {
+            self.still = self.still.saturating_add(1);
+        } else {
+            self.still = 0;
+            self.moved = true;
+        }
+        if !self.moved && self.still >= STILL_SAMPLES {
+            self.state = "no_count".into();
+            self.last = None;
+            // Every row so far was a 0 from a count that never moved: not a measurement.
+            if let Some(c) = self.capture.as_mut().filter(|c| c.active()) {
+                c.samples.clear();
+            }
+            return;
+        }
         self.last = Some((s, now_ms));
         let temps = self
             .temps
@@ -185,6 +220,9 @@ impl Session {
         }
         if let Some(e) = &self.error {
             v["error"] = json!(e);
+        }
+        if let Some((flips, bytes)) = self.raw {
+            v["raw"] = json!({ "flips": flips, "bytes": bytes });
         }
         v
     }
@@ -420,6 +458,52 @@ mod tests {
             ..Capture::default()
         });
         s
+    }
+
+    #[test]
+    fn a_count_that_never_moves_is_no_count_not_zero_fps() {
+        // #848: firmware 4.x answered `ok` with the same count every second.
+        let now = Instant::now();
+        let mut s = capturing(now);
+        for i in 0..=STILL_SAMPLES as u64 {
+            s.apply(ok(42, 1_000_000 * (i + 1)), now, 2_000 + 1_000 * i as i64);
+        }
+        let v = s.snapshot();
+        assert_eq!(v["state"], json!("no_count"));
+        assert_eq!(v["fps"], Value::Null, "no rate is shown");
+        assert_eq!(v["raw"], json!({ "flips": 42, "bytes": 0 }));
+        assert_eq!(
+            s.capture.as_ref().unwrap().samples.len(),
+            0,
+            "no rows of zeros kept"
+        );
+        // It stays so while the count stays still.
+        s.apply(ok(42, 9_000_000), now, 10_000);
+        assert_eq!(s.snapshot()["state"], json!("no_count"));
+        // A count that starts moving is measured again.
+        s.apply(ok(102, 10_000_000), now, 11_000);
+        let v = s.snapshot();
+        assert_eq!(v["state"], json!("ok"));
+        assert_eq!(v["fps"], json!(60.0));
+    }
+
+    #[test]
+    fn a_real_stall_after_frames_is_still_recorded_as_zero() {
+        let now = Instant::now();
+        let mut s = capturing(now);
+        s.apply(ok(100, 1_000_000), now, 2_000);
+        s.apply(ok(160, 2_000_000), now, 3_000);
+        for i in 0..8u64 {
+            s.apply(
+                ok(160, 3_000_000 + 1_000_000 * i),
+                now,
+                4_000 + 1_000 * i as i64,
+            );
+        }
+        let v = s.snapshot();
+        assert_eq!(v["state"], json!("ok"));
+        assert_eq!(v["fps"], json!(0.0));
+        assert_eq!(s.capture.as_ref().unwrap().samples.len(), 9);
     }
 
     #[test]
