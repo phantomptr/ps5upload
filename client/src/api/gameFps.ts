@@ -8,7 +8,15 @@ import { getEngineUrl } from "../state/engine";
 
 /** ok: a game is counted. starting: no rate yet. no_game: nothing to count. unsupported: an older
  *  helper. offline: no answer. no_device / failed: the console gave no count. */
-export type FpsState = "ok" | "starting" | "no_game" | "unsupported" | "offline" | "no_device" | "failed";
+export type FpsState =
+  | "ok"
+  | "starting"
+  | "no_game"
+  | "no_count"
+  | "unsupported"
+  | "offline"
+  | "no_device"
+  | "failed";
 
 export interface FpsStats {
   samples: number;
@@ -62,7 +70,7 @@ export interface FpsCapture {
   samples: FpsSample[];
 }
 
-const STATES: FpsState[] = ["ok", "starting", "no_game", "unsupported", "offline", "no_device", "failed"];
+const STATES: FpsState[] = ["ok", "starting", "no_game", "no_count", "unsupported", "offline", "no_device", "failed"];
 
 /** Reads a live reply, however odd: an unknown state is "failed", a missing rate is none. */
 export function parseFpsLive(body: unknown): FpsLive {

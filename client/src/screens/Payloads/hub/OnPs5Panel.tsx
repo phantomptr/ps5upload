@@ -26,6 +26,7 @@ import {
 import { mgmtAddr, withPort } from "../../../lib/addr";
 import { openExternalUrl } from "../../../lib/openExternalUrl";
 import { useMounterFor, useMounterStore } from "../../../lib/mounter";
+import { KrakenUpdateNote } from "../../InstallPackage/KrakenUpdateNote";
 import { compareVersions } from "../../../lib/semver";
 import { usePoll, useTransferBusy } from "../../../lib/usePoll";
 import { useDocumentVisible } from "../../../lib/visibility";
@@ -423,7 +424,9 @@ function OnPs5Body() {
                             fallback={fallback}
                           />
                         )
-                      : null
+                      : c.id === "kraken-mount"
+                        ? (fallback) => <KrakenSummary host={host} fallback={fallback} />
+                        : null
                 }
                 panel={
                   c.integration === "hush" ? (
@@ -439,6 +442,17 @@ function OnPs5Body() {
       )}
       {dialog}
     </div>
+  );
+}
+
+/** Kraken Mount's card line, with the update note when it is older than it should be. */
+function KrakenSummary({ host, fallback }: { host: string; fallback: ReactNode }) {
+  const mounter = useMounterFor(host);
+  return (
+    <>
+      {fallback}
+      <KrakenUpdateNote kraken={mounter?.kraken} />
+    </>
   );
 }
 

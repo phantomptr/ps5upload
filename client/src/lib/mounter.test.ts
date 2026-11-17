@@ -126,3 +126,18 @@ describe("what Kraken Mount refuses, from the header", () => {
     expect(krakenRefusal({ platform: "ps5", parts: 3 })).toBe("split");
   });
 });
+
+describe("Kraken Mount older than 0.2.1", () => {
+  const k = (version: string | null) => ({ version }) as unknown as import("../api/ps5").KrakenStatus;
+  it("is flagged with its version", async () => {
+    const { krakenOutdated } = await import("./mounter");
+    expect(krakenOutdated(k("0.2.0"))).toBe("0.2.0");
+    expect(krakenOutdated(k("v0.1.9"))).toBe("0.1.9");
+    expect(krakenOutdated(k("0.0.1-beta"))).toBe("0.0.1-beta");
+  });
+  it("is quiet for 0.2.1 and newer, or a version it can't read", async () => {
+    const { krakenOutdated } = await import("./mounter");
+    for (const v of ["0.2.1", "0.3.0", "1.0.0", null, "", "dev"]) expect(krakenOutdated(k(v))).toBeNull();
+    expect(krakenOutdated(null)).toBeNull();
+  });
+});

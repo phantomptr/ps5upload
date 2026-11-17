@@ -125,7 +125,136 @@ pub fn storage_roots() -> Vec<String> {
     if cfg!(target_os = "ios") {
         return vec![format!("{}/Documents", home.trim_end_matches('/'))];
     }
-    vec![home]
+    // Home first, then every other disk this machine has mounted: a second internal disk, a USB
+    // drive, a NAS share. Without them the in-app browser (web UI, Docker, a phone using this
+    // engine) could only reach the home folder.
+    let mut roots = vec![home];
+    if !cfg!(target_os = "android") {
+        for d in mounted_disks() {
+            if !roots.contains(&d) {
+                roots.push(d);
+            }
+        }
+    }
+    roots
+}
+
+/// The disks this machine has mounted, as browse roots (readable folders only).
+fn mounted_disks() -> Vec<String> {
+    let found: Vec<String> = if cfg!(target_os = "linux") {
+        std::fs::read_to_string("/proc/self/mountinfo")
+            .map(|t| linux_disk_mounts(&t))
+            .unwrap_or_default()
+    } else if cfg!(target_os = "macos") {
+        macos_volumes()
+    } else if cfg!(windows) {
+        (b'C'..=b'Z').map(|c| format!("{}:\\", c as char)).collect()
+    } else {
+        Vec::new()
+    };
+    found
+        .into_iter()
+        .filter(|p| std::fs::read_dir(p).is_ok())
+        .collect()
+}
+
+/// File systems that hold people's files (disks, USB drives, network shares); anything else in
+/// the mount table (proc, tmpfs, overlay, squashfs snaps, cgroups...) is the system's own.
+const DISK_FS: &[&str] = &[
+    "ext2", "ext3", "ext4", "btrfs", "xfs", "f2fs", "zfs", "jfs", "reiserfs", "vfat", "exfat",
+    "ntfs", "ntfs3", "fuseblk", "hfsplus", "apfs", "nfs", "nfs4", "cifs", "smb3", "9p", "virtiofs",
+];
+
+/// Mount points under these hold the system, not files to send.
+const SYSTEM_MOUNTS: &[&str] = &[
+    "/boot",
+    "/efi",
+    "/snap",
+    "/proc",
+    "/sys",
+    "/dev",
+    "/run",
+    "/var/lib",
+    "/var/snap",
+    "/var/log",
+    "/usr",
+    "/etc",
+    "/opt",
+    "/nix",
+    "/tmp",
+    "/var/tmp",
+];
+
+/// The disk mount points in a Linux `mountinfo` table, in table order, without `/` (home is
+/// already the first root) and without the system's own mounts. `/run/media/<user>/<disk>` (where
+/// desktops mount USB drives) is kept although `/run` is not.
+fn linux_disk_mounts(mountinfo: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in mountinfo.lines() {
+        // "<id> <parent> <maj:min> <root> <mount point> <options> [optional...] - <fstype> <source> <super options>"
+        let Some((left, right)) = line.split_once(" - ") else {
+            continue;
+        };
+        let fstype = right.split_whitespace().next().unwrap_or("");
+        let Some(point) = left.split_whitespace().nth(4) else {
+            continue;
+        };
+        let point = unescape_mount(point);
+        if !DISK_FS.contains(&fstype) || point == "/" {
+            continue;
+        }
+        let system = SYSTEM_MOUNTS
+            .iter()
+            .any(|s| point == *s || point.starts_with(&format!("{s}/")));
+        if system && !point.starts_with("/run/media/") {
+            continue;
+        }
+        if !out.contains(&point) {
+            out.push(point);
+        }
+    }
+    out
+}
+
+/// `mountinfo` writes a space, tab, newline and backslash in a path as `\040`, `\011`, `\012`
+/// and `\134`.
+fn unescape_mount(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\\'
+            && i + 3 < b.len()
+            && b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c))
+        {
+            let v = (b[i + 1] - b'0') * 64 + (b[i + 2] - b'0') * 8 + (b[i + 3] - b'0');
+            out.push(v);
+            i += 4;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The disks under `/Volumes`, less the link back to the start-up disk (`/Volumes/Macintosh HD`
+/// points at `/`).
+fn macos_volumes() -> Vec<String> {
+    let Ok(rd) = std::fs::read_dir("/Volumes") else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = rd
+        .flatten()
+        .filter(|e| {
+            e.file_type()
+                .map(|t| t.is_dir() && !t.is_symlink())
+                .unwrap_or(false)
+        })
+        .map(|e| e.path().to_string_lossy().into_owned())
+        .collect();
+    out.sort();
+    out
 }
 
 #[cfg(test)]
@@ -194,10 +323,50 @@ mod tests {
     }
 
     #[test]
-    fn browse_roots_unset_falls_back_to_home() {
+    fn linux_mount_table_gives_the_disks_not_the_system() {
+        let table = "\
+22 1 259:2 / / rw,relatime shared:1 - ext4 /dev/nvme0n1p2 rw
+23 22 0:5 / /proc rw - proc proc rw
+24 22 259:1 / /boot/efi rw - vfat /dev/nvme0n1p1 rw
+25 22 8:1 / /mnt/data rw - ext4 /dev/sda1 rw
+26 22 8:17 / /run/media/alice/MY\\040STICK rw - exfat /dev/sdb1 rw
+27 22 0:40 / /run/user/1000 rw - tmpfs tmpfs rw
+28 22 7:3 / /snap/core/123 ro - squashfs /dev/loop3 ro
+29 22 0:50 / /srv/nas rw - cifs //nas/share rw
+30 22 0:51 / /var/lib/docker/overlay2/x/merged rw - overlay overlay rw
+31 22 8:1 / /mnt/data rw - ext4 /dev/sda1 rw
+32 22 0:52 / /home/alice/games rw - btrfs /dev/sdc1 rw
+";
+        assert_eq!(
+            linux_disk_mounts(table),
+            vec![
+                "/mnt/data".to_string(),
+                "/run/media/alice/MY STICK".to_string(),
+                "/srv/nas".to_string(),
+                "/home/alice/games".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn mount_paths_are_unescaped() {
+        assert_eq!(unescape_mount("/a\\040b\\134c"), "/a b\\c");
+        assert_eq!(unescape_mount("/plain"), "/plain");
+        assert_eq!(unescape_mount("/end\\04"), "/end\\04");
+    }
+
+    #[test]
+    fn browse_roots_unset_starts_at_home() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("PS5UPLOAD_BROWSE_ROOTS");
-        assert_eq!(storage_roots(), home_default());
+        let roots = storage_roots();
+        assert_eq!(
+            roots.first(),
+            home_default().first(),
+            "home is the first root"
+        );
+        let unique: std::collections::HashSet<&String> = roots.iter().collect();
+        assert_eq!(unique.len(), roots.len(), "each root once");
     }
 
     #[test]
@@ -206,7 +375,7 @@ mod tests {
         std::env::set_var("PS5UPLOAD_BROWSE_ROOTS", "   ");
         let roots = storage_roots();
         std::env::remove_var("PS5UPLOAD_BROWSE_ROOTS");
-        assert_eq!(roots, home_default());
+        assert_eq!(roots.first(), home_default().first());
     }
 
     #[test]

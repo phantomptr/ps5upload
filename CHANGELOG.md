@@ -6,6 +6,17 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Every disk in the file browser, a note when Kraken Mount needs an update, and the frame rate on older firmware.
+
+**Changed**
+- **Every disk in the file browser:** when the app browses the computer the engine runs on (the web UI, Docker, or a phone using a PC), it now lists every mounted disk next to the home folder: other internal disks, USB drives and network shares on Linux, the disks in /Volumes on a Mac, and every drive letter on Windows. Before, only the home folder was there.
+- **Kraken Mount older than 0.2.1:** the Kraken Mount cards (Install package, and Payloads › On your PS5) now say when it should be updated. Kraken Mount 0.2.1 gives a mounted package the save data image, artwork and trophy files a package keeps only inside it, so saves and trophies work for packages Convert makes.
+
+**Fixes**
+- **Game frame rate on older firmware:** on some consoles (seen on firmware 4.x) the PS5 answers the frame count request but the count never moves, so the frame rate always read 0 and a capture filled up with zeros. It now says the frame rate can't be read on that console's firmware, and keeps no rows of zeros. A game that really stalls after showing frames is still recorded as 0. (#848)
+
+## 12.6.0
+
 Keep saves in step between two PS5s, copy a `.pkg` instead of installing it, and payloads now come from you: the app no longer downloads them. Checked with the automated tests; not yet tried on a PS5 unless it says so.
 
 **New**

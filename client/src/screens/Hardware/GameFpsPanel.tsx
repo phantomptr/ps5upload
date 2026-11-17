@@ -43,6 +43,12 @@ function stateText(tr: Translator, state: FpsState): string {
         undefined,
         "The helper on this console is too old for this. Send the helper again from Connection.",
       );
+    case "no_count":
+      return tr(
+        "game_fps_state_no_count",
+        undefined,
+        "This console answers, but its frame count doesn't move, so the frame rate can't be read on its firmware. It works on firmware 13.60.",
+      );
     case "offline":
       return tr("game_fps_state_offline", undefined, "The console did not answer.");
     case "no_device":

@@ -10,6 +10,7 @@ import { isTauriEnv } from "../../lib/tauriEnv";
 import { useTr } from "../../state/lang";
 import { placePkgForMount, type MountNameClash } from "../../state/pkgMount";
 import { useConflictAsk } from "../FileSystem/ConflictAsk";
+import { KrakenUpdateNote } from "./KrakenUpdateNote";
 import { useSmpState } from "../GameHub/SmpNeeded";
 
 /** Asks Replace / Keep both (Skip and Cancel stop) when the scan folder already holds the name,
@@ -105,6 +106,7 @@ export function KrakenMountCard({ host }: { host: string }) {
               "ShadowMount+ is running too. The two must not run together: restart the PS5 with only one of them before mounting a package.",
             )}
       </p>
+      <KrakenUpdateNote kraken={snapshot?.kraken} />
       {alone && isTauriEnv() && (
         <Button
           variant="secondary"

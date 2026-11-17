@@ -87,3 +87,12 @@ describe("game frame rate panel helpers", () => {
     expect(parseFpsLive(null).state).toBe("failed");
   });
 });
+
+describe("a count that never moves (#848)", () => {
+  it("is its own state, with no rate", async () => {
+    const { parseFpsLive } = await import("../../api/gameFps");
+    const live = parseFpsLive({ ok: true, state: "no_count", fps: null, raw: { flips: 42, bytes: 128 } });
+    expect(live.state).toBe("no_count");
+    expect(live.fps).toBeNull();
+  });
+});
