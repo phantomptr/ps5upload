@@ -20,6 +20,12 @@ test("docs-only: the skipped jobs were skipped on purpose", () => {
   assert.deepEqual(gateProblems(needsFor(["README.md"])), []);
 });
 
+test("changelog-only: the docs job must run, the client jobs may be skipped", () => {
+  assert.deepEqual(gateProblems(needsFor(["CHANGELOG.md"])), []);
+  assert.equal(gateProblems(needsFor(["CHANGELOG.md"], { docs: "skipped" })).length, 1);
+  assert.equal(gateProblems(needsFor(["CHANGELOG.md", "client/src/App.tsx"], { "client-e2e": "failure" })).length, 1);
+});
+
 test("client-only, engine-only, payload-only, hub-only and a workflow change all pass when green", () => {
   for (const f of [
     "client/src/App.tsx",
