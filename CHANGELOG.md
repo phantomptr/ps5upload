@@ -6,7 +6,10 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Clearer Payloads › On your PS5, and what to do with PS5 fake packages on newer firmware.
+
 **Changed**
+- **Payloads › On your PS5 shows each payload once, and says who started it.** A payload saved in your Payload Manager list that is running now shows on its own row ("● Running · PID", where it came from, Stop) instead of a second card below. What's left below sits under **Also running**, and every running payload says where it came from: your Payload Manager list, PS5Upload's own helper, the payload loader, or started outside Payload Manager (your jailbreak, an autoloader or a file you sent). The Payload Manager card reads "4 saved · 2 running" when closed, and each Payloads tab says what it's for: On your PS5 is your payloads, Running is every process on the PS5. (#846)
 - **PS5 fake packages on firmware above 11.60:** an installed PS5 fake package still doesn't start there, and the app now says what to do instead: mount the package with **Kraken Mount**, and the game plays straight from the `.pkg` with nothing installed. Full support for installed packages on that firmware, through the A53 patches, is coming. The Install, Convert and launch messages, the README and the FAQ all say so.
 
 ## 12.6.1
