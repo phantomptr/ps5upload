@@ -447,7 +447,9 @@ async fn the_sender_cancels_mid_transfer_and_the_receiver_stops() {
     .unwrap();
     std::fs::write(big.join("huge.bin"), vec![1u8; 64 * 1024 * 1024]).unwrap();
     let (id, room) = share_of(json!([{"kind": "app", "path": big}]), true).await;
-    let (sock, link) = wire::mem_pair();
+    // The sender stops after two pieces until the cancel below is in: on a fast machine the
+    // whole 64 MiB used to arrive before the cancel did.
+    let (sock, link, go) = wire::mem_pair_held(2);
     tokio::spawn(wire::sender_session(sock, Arc::new(Registry), None));
     let sh = Arc::new(Mutex::new(RxShared::default()));
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -464,6 +466,7 @@ async fn the_sender_cancels_mid_transfer_and_the_receiver_stops() {
     decide_on(&id, rid, true).await;
     until_rx(&sh, "receiving").await;
     let _ = cancel(axum::extract::Path(id.clone())).await;
+    go.notify_one();
     let end = tokio::time::timeout(Duration::from_secs(10), t)
         .await
         .unwrap()

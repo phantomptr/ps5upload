@@ -15,10 +15,20 @@ async function setUp(page: Page) {
     },
     [A, B] as const,
   );
-  // No engine here: every engine route answers with nothing.
+  // No engine here: every engine route answers with nothing. The console list's and the devices'
+  // sync routes answer "not here", as an engine without them does: an empty object from them was
+  // taken for a list to merge in the background while this test clicked, which now and then put
+  // the stored values back on CI.
+  const SYNC = ["/api/consoles", "/api/mesh/", "/api/shared/"];
   await page.route(
     (u) => u.pathname.startsWith("/api/"),
-    (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }),
+    (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (SYNC.some((p) => path.startsWith(p))) {
+        return route.fulfill({ status: 404, contentType: "application/json", body: '{"error":"not found"}' });
+      }
+      return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    },
   );
 }
 
@@ -73,6 +83,14 @@ for (const width of [1280, 412]) {
         { timeout: 10_000 },
       )
       .toEqual([false, true]);
+
+    // What a person sees after coming back: each console's own value, read from the switch.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    const again = main(page).getByTestId("settings-ps5-picker");
+    await again.selectOption(A.id);
+    await expect(restSwitch(page)).toHaveAttribute("aria-checked", "false");
+    await again.selectOption(B.id);
+    await expect(restSwitch(page)).toHaveAttribute("aria-checked", "true");
 
     // No sideways scroll on a phone.
     const overflow = await main(page).evaluate((el) => el.scrollWidth - el.clientWidth);
