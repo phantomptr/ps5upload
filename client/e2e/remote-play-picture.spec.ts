@@ -528,31 +528,25 @@ for (const noWebGl of [false, true])
   });
 
 // The picture tools draw through the GPU pass: the whole picture still shows, at Windows'
-// usual 125% and 150% scaling, in every picture size, sharpened or upscaled. Every scaling meets
-// every picture size; each size is sharpened at one scaling and upscaled at the other (pairwise,
-// so each tool also meets each scaling and each size).
-const SHARPENED = ["sharpened", { enhance: "sharpen", sharpen: 40 }] as const;
-const UPSCALED = ["upscaled", { enhance: "fsr" }] as const;
-for (const [dpr, fit, [name, picture]] of [
-  [1.25, "fit", SHARPENED],
-  [1.5, "fit", UPSCALED],
-  [1.25, "fill", UPSCALED],
-  [1.5, "fill", SHARPENED],
-  [1.25, "stretch", SHARPENED],
-  [1.5, "stretch", UPSCALED],
-] as const)
-  test(`Remote Play shows the whole ${name} picture at ${dpr * 100}%, ${fit}`, async ({
-    browser,
-  }) => {
-    await startAndCheck(browser, {
-      dpr,
-      size: "1920x1080",
-      h264: true,
-      fit,
-      picture,
-      anySize: true,
-    });
-  });
+// usual 125% and 150% scaling, in every picture size, sharpened or upscaled.
+for (const dpr of [1.25, 1.5])
+  for (const fit of ["fit", "fill", "stretch"] as const)
+    for (const [name, picture] of [
+      ["sharpened", { enhance: "sharpen", sharpen: 40 }],
+      ["upscaled", { enhance: "fsr" }],
+    ] as const)
+      test(`Remote Play shows the whole ${name} picture at ${dpr * 100}%, ${fit}`, async ({
+        browser,
+      }) => {
+        await startAndCheck(browser, {
+          dpr,
+          size: "1920x1080",
+          h264: true,
+          fit,
+          picture,
+          anySize: true,
+        });
+      });
 
 // #538/#575 on Windows: Edge's hardware HEVC decoder says each 1920x1080 frame shows only its
 // top-left 1280x720, so that part was drawn enlarged and cut off in every picture size. The
