@@ -588,6 +588,11 @@ value = 199
 name = "METHOD_NODE_UNINSTALL"
 ty = "u16"
 value = 200
+# Trophy files that still name an old account id (payload/src/trophy_fix.c; MGMT_METHODS.md)
+[[const]]
+name = "METHOD_TROPHY_FIX"
+ty = "u16"
+value = 201
 [[const]]
 name = "JOB_OP_DELETE"
 ty = "u8"

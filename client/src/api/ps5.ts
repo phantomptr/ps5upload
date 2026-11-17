@@ -266,14 +266,88 @@ export async function profileActivate(
   slot: number,
   id?: string | null,
   addr?: string,
-): Promise<{ ok: boolean; id: string }> {
-  const resp = await invoke<{ ok: boolean; id: string; error?: string | null }>(
-    "profile_activate",
-    {
-      req: { addr: addr ?? null, slot, id: id ?? null },
-    },
-  );
+  uid?: number | null,
+): Promise<ProfileActivated> {
+  const resp = await invoke<ProfileActivated & { error?: string | null }>("profile_activate", {
+    req: { addr: addr ?? null, slot, id: id ?? null, uid: uid ?? null },
+  });
   return assertOk(resp, "Activate profile");
+}
+
+/** What an activation did to the user's trophy files (#853), when a user goes with the slot and
+ *  its account id changed: `null` when nothing was asked of them. */
+export interface ActivationTrophies {
+  changed?: number;
+  failed?: number;
+  left?: number;
+  backup?: string;
+  /** "game_running": a game was open, so the files were not touched. */
+  skipped?: string;
+  title_id?: string;
+  error?: string;
+}
+
+export interface ProfileActivated {
+  ok: boolean;
+  id: string;
+  old_id?: string | null;
+  trophies?: ActivationTrophies | null;
+}
+
+/** One trophy file the fix looked at. */
+export interface TrophyFile {
+  path: string;
+  /** would_change, changed, already, other_id, other_user, bad_hash, unknown_format,
+   *  changed_meanwhile, backup_failed, write_failed */
+  state: string;
+  from: string;
+  anchor: boolean;
+  extra: number;
+}
+
+export interface TrophyFixResult {
+  ok: boolean;
+  uid: number;
+  dry_run: boolean;
+  old: string | null;
+  new: string;
+  files: TrophyFile[];
+  more: boolean;
+  backup: string;
+  scanned: number;
+  changed: number;
+  already: number;
+  left: number;
+  failed: number;
+}
+
+/** Puts the account id of `slot` into user `uid`'s trophy files that name another one (#853).
+ *  `dryRun` (the default) changes nothing and says what would change. */
+export async function profileTrophiesFix(
+  uid: number,
+  slot: number,
+  dryRun: boolean,
+  addr: string,
+): Promise<TrophyFixResult> {
+  const resp = await invoke<TrophyFixResult & { error?: string | null }>("profile_trophies_fix", {
+    req: { addr, uid, slot, dry_run: dryRun },
+  });
+  return assertOk(resp, dryRun ? "Check trophy files" : "Repair trophy files");
+}
+
+/** Puts a trophy backup the fix kept on the console back. */
+export async function profileTrophiesRestore(
+  uid: number,
+  backup: string,
+  addr: string,
+): Promise<{ ok: boolean; restored: number; failed: number }> {
+  const resp = await invoke<{
+    ok: boolean;
+    restored: number;
+    failed: number;
+    error?: string | null;
+  }>("profile_trophies_restore", { req: { addr, uid, backup } });
+  return assertOk(resp, "Undo the trophy repair");
 }
 
 /** What the console says about a user's PlayStation Network sign-in (np-fake-signin): whether

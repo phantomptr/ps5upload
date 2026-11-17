@@ -99,6 +99,7 @@
 #include "mesh.h"
 #include "tailnet_node.h"
 #include "save_owner.h"
+#include "trophy_fix.h"
 #include "game_fps.h"
 #include "ava1_server.h"
 
@@ -386,6 +387,9 @@
 /* "Remove PS5Upload from this PS5" (helper_uninstall.c) */
 #define MGMT_FRAME_NODE_UNINSTALL 370u
 #define MGMT_FRAME_NODE_UNINSTALL_ACK 371u
+/* trophy files that still name an old account id (trophy_fix.c, #853) */
+#define MGMT_FRAME_TROPHY_FIX 374u
+#define MGMT_FRAME_TROPHY_FIX_ACK 375u
 #define MGMT_FRAME_SDK_SCAN 214u
 #define MGMT_FRAME_SDK_SCAN_ACK 215u
 #define MGMT_FRAME_SDK_PATCH 216u
@@ -9788,18 +9792,20 @@ static int handle_profile_activate(const char *body) {
         }
     }
     int rc = -1;
-    uint64_t actual = 0;
+    uint64_t actual = 0, before = 0;
     if (slot >= 1 && slot <= PROFILE_SLOT_COUNT) {
         pthread_mutex_lock(&sony_api_lock);
+        /* The id it had: trophy files made before still name it (#853), and the engine fixes them. */
+        profile_slot_get_id(slot, &before, NULL);
         rc = profile_slot_activate(slot, id);
         profile_slot_get_id(slot, &actual, NULL);
         usleep(SONY_API_POST_SLEEP_US);
         pthread_mutex_unlock(&sony_api_lock);
     }
-    char resp[160];
+    char resp[200];
     int len = snprintf(resp, sizeof(resp),
-        "{\"ok\":%s,\"slot\":%d,\"id\":\"0x%016llx\"}",
-        rc == 0 ? "true" : "false", slot, (unsigned long long)actual);
+        "{\"ok\":%s,\"slot\":%d,\"id\":\"0x%016llx\",\"old_id\":\"0x%016llx\"}",
+        rc == 0 ? "true" : "false", slot, (unsigned long long)actual, (unsigned long long)before);
     return mgmt_reply(MGMT_FRAME_PROFILE_ACTIVATE_ACK, resp, (uint64_t)len);
 }
 
@@ -9873,6 +9879,63 @@ static int handle_profile_np_restore(const char *body) {
                        : rc != 0 ? ",\"err\":\"np_restore_incomplete\""
                                  : "");
     return mgmt_reply(MGMT_FRAME_PROFILE_NP_RESTORE_ACK, resp, (uint64_t)len);
+}
+
+/* trophy.fix (trophy_fix.c, #853). Body {"op":"fix"|"backups"|"restore","uid":u,"old":"0x..","new":"0x..",
+ * "dry_run":b,"backup":"<name>"}. "old" absent: the account field is set whatever it holds (Repair).
+ * Plain file reads and writes, no Sony call: no sony_api_lock. The engine refuses a change while a game
+ * runs (process list) before it asks. */
+static uint64_t trophy_hex_field(const char *body, const char *field, int *present) {
+    char s[32] = {0};
+    extract_json_string_field(body, field, s, sizeof(s));
+    *present = s[0] != '\0';
+    if (!s[0]) return 0;
+    const char *p = (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) ? s + 2 : s;
+    char *end = NULL;
+    errno = 0;
+    uint64_t v = strtoull(p, &end, 16);
+    if (errno || !end || *end || end == p) *present = -1;
+    return v;
+}
+
+#define TROPHY_FIX_OUT_MAX (48u * 1024u)
+static int handle_trophy_fix(const char *body) {
+    char op[16] = {0}, name[48] = {0};
+    extract_json_string_field(body, "op", op, sizeof(op));
+    extract_json_string_field(body, "backup", name, sizeof(name));
+    uint32_t uid = (uint32_t)extract_json_uint64_field(body, "uid");
+    int have_old = 0, have_new = 0, dry = 1;
+    uint64_t old_id = trophy_hex_field(body, "old", &have_old);
+    uint64_t new_id = trophy_hex_field(body, "new", &have_new);
+    if (extract_json_bool_field(body, "dry_run", &dry) != 0) dry = 1; /* only an explicit false writes */
+    char *out = malloc(TROPHY_FIX_OUT_MAX);
+    if (!out) {
+        static const char oom[] = "{\"ok\":false,\"err\":\"no_memory\"}";
+        return mgmt_reply(MGMT_FRAME_TROPHY_FIX_ACK, oom, sizeof(oom) - 1);
+    }
+    int n = -1;
+    if (!op[0] || !strcmp(op, "fix")) {
+        if (have_old < 0 || have_new != 1) {
+            n = snprintf(out, TROPHY_FIX_OUT_MAX, "{\"ok\":false,\"err\":\"bad_request\"}");
+        } else {
+            char stamp[32];
+            time_t now = time(NULL);
+            struct tm tmv;
+            if (!gmtime_r(&now, &tmv)) memset(&tmv, 0, sizeof(tmv));
+            strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tmv);
+            n = trophy_fix_run(NULL, uid, old_id, have_old == 1, new_id, dry, stamp, out, TROPHY_FIX_OUT_MAX);
+        }
+    } else if (!strcmp(op, "backups")) {
+        n = trophy_fix_backups_json(NULL, uid, out, TROPHY_FIX_OUT_MAX);
+    } else if (!strcmp(op, "restore")) {
+        n = trophy_fix_restore(NULL, uid, name, out, TROPHY_FIX_OUT_MAX);
+    } else {
+        n = snprintf(out, TROPHY_FIX_OUT_MAX, "{\"ok\":false,\"err\":\"bad_request\"}");
+    }
+    if (n < 0) n = snprintf(out, TROPHY_FIX_OUT_MAX, "{\"ok\":false,\"err\":\"reply_too_large\"}");
+    int rc = mgmt_reply(MGMT_FRAME_TROPHY_FIX_ACK, out, (uint64_t)n);
+    free(out);
+    return rc;
 }
 
 static int handle_profile_apply_avatar(const char *body) {
@@ -10206,6 +10269,11 @@ static int mgmt_w_profile_np_restore(runtime_state_t *st, const char *b, uint64_
     (void)st;
     (void)l;
     return handle_profile_np_restore(b);
+}
+static int mgmt_w_trophy_fix(runtime_state_t *st, const char *b, uint64_t l) {
+    (void)st;
+    (void)l;
+    return handle_trophy_fix(b);
 }
 static int mgmt_w_profile_activate(runtime_state_t *st, const char *b, uint64_t l) {
     (void)st;
