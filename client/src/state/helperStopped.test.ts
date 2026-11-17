@@ -56,6 +56,18 @@ beforeEach(() => {
   payloadCheckMock.mockReset();
   restoreMock.mockReset();
 });
+
+/** Runs `run` on a fake clock, so the helper's boot wait (1.5 s, then 1 s polls) passes at once. */
+async function onFakeClock<T>(run: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    const p = run();
+    await vi.advanceTimersByTimeAsync(1_600);
+    return await p;
+  } finally {
+    vi.useRealTimers();
+  }
+}
 afterEach(() => vi.useRealTimers());
 
 describe("the reconnect loop", () => {
@@ -84,7 +96,7 @@ describe("ensurePayloadCurrent", () => {
     payloadCheckMock
       .mockResolvedValueOnce({ reachable: false })
       .mockResolvedValue({ reachable: true, payloadVersion: "7.0.29" });
-    expect(await ensurePayloadCurrent(H, undefined, false, "explicit")).toBe("pushed");
+    expect(await onFakeClock(() => ensurePayloadCurrent(H, undefined, false, "explicit"))).toBe("pushed");
     expect(restoreMock).toHaveBeenCalledTimes(1);
     expect(isHelperStopped(H)).toBe(false);
   });

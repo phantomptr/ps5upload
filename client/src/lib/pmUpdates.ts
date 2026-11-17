@@ -134,14 +134,6 @@ export function pmUpdateFor(
   return tagIsNewer(latest.tag, rec.tag) ? latest : null;
 }
 
-/** `list` with `oldKey` replaced by `newKey` in the same place (pauses kept). When `newKey` is
- *  already listed elsewhere, `oldKey` just goes. */
-export function swapAutoloadKey(list: string[], oldKey: string, newKey: string): string[] {
-  if (oldKey === newKey || !list.includes(oldKey)) return list;
-  if (list.includes(newKey)) return list.filter((e) => e !== oldKey);
-  return list.map((e) => (e === oldKey ? newKey : e));
-}
-
 /** For a payload stored by hand (not by this app, not from Payload Manager's repository): the
  *  catalogue payload whose downloaded file has the same name, so the tab can offer to replace
  *  it with the catalogue's release. Payload Manager records no version for these, so whether

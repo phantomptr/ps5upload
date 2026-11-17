@@ -15,7 +15,6 @@ import {
   fitFfpfscName,
   inspect,
   isArchiveFormat,
-  isConvertImage,
   isConvertSource,
   outputName,
   parentOf,
@@ -105,9 +104,9 @@ describe("names and requests", () => {
     expect(outputName("/mnt/usb0/Astro.ffpkg", "folder")).toBe("Astro");
     expect(outputName("/mnt/usb0/Astro.EXFAT/", "ffpfs")).toBe("Astro.ffpfs");
     expect(parentOf("/mnt/usb0/Astro.ffpkg")).toBe("/mnt/usb0");
-    expect(isConvertImage("a.ffpfs")).toBe(true);
-    expect(isConvertImage("a.ffpfsc")).toBe(true);
-    expect(isConvertImage("a.pkg")).toBe(false);
+    expect(isConvertSource("a.ffpfs")).toBe(true);
+    expect(isConvertSource("a.ffpfsc")).toBe(true);
+    expect(isConvertSource("a.pkg")).toBe(false);
     // A .ffpfsc's name fits the 63 bytes ShadowMountPlus mounts, cut at a character.
     expect(outputName("/data/Astro.ffpfsc", "exfat")).toBe("Astro.exfat");
     expect(outputName("/data/Astro", "ffpfsc")).toBe("Astro.ffpfsc");
@@ -138,7 +137,6 @@ describe("names and requests", () => {
     for (const n of ["g.zip", "G.7Z", "g.part1.rar"]) expect(isConvertSource(n), n).toBe(true);
     expect(isConvertSource("a.ffpfsc")).toBe(true);
     expect(isConvertSource("a.tar")).toBe(false);
-    expect(isConvertImage("g.zip")).toBe(false);
     expect(outputName("/data/Astro Bot.zip", "exfat")).toBe("Astro Bot.exfat");
     expect(outputName("/data/Astro.part1.rar", "folder")).toBe("Astro");
     expect(outputName("/data/Astro.7z", "ffpfsc")).toBe("Astro.ffpfsc");

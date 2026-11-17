@@ -136,6 +136,24 @@ import {
 } from "./pkgLibrary";
 import { useTaskStore } from "./tasks";
 
+/** Runs `run` on a fake clock moved on until it settles (60 s of fake time at most), so the
+ *  queue's 1.5 s settle between installs and the 800 ms waits after an upload pass at once. */
+async function onFakeClock<T>(run: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    let settled = false;
+    const p = run();
+    p.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    for (let ms = 0; ms < 60_000 && !settled; ms += 50) await vi.advanceTimersByTimeAsync(50);
+    return await p;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe("link install input", () => {
   it("rejects unsafe URLs before contacting the console", async () => {
     vi.mocked(invoke).mockClear();
@@ -1797,7 +1815,7 @@ describe("installAll as one activity row", () => {
   it("registers one install-batch task that ends done with its count", async () => {
     seed([entry({ name: "A.pkg" }), entry({ name: "B.pkg" })]);
     stubInstall(() => true);
-    await pkgLibraryStore(HOST).getState().installAll(HOST);
+    await onFakeClock(() => pkgLibraryStore(HOST).getState().installAll(HOST));
     expect(batch()).toHaveLength(1);
     expect(batch()[0]).toMatchObject({
       status: "done",
@@ -1809,7 +1827,7 @@ describe("installAll as one activity row", () => {
   it("ends failed and says how many did not install", async () => {
     seed([entry({ name: "A.pkg" }), entry({ name: "B.pkg" })]);
     stubInstall((path) => path.endsWith("A.pkg"));
-    await pkgLibraryStore(HOST).getState().installAll(HOST);
+    await onFakeClock(() => pkgLibraryStore(HOST).getState().installAll(HOST));
     expect(batch()[0]).toMatchObject({
       status: "failed",
       lastError: { message: "1 of 2 failed" },
@@ -1825,7 +1843,7 @@ describe("installAll as one activity row", () => {
     );
     const { useNotificationsStore } = await import("./notifications");
     useNotificationsStore.setState({ entries: [] });
-    await pkgLibraryStore(HOST).getState().installAll(HOST);
+    await onFakeClock(() => pkgLibraryStore(HOST).getState().installAll(HOST));
     expect(batch()[0]).toMatchObject({ status: "done" });
     const summary = useNotificationsStore.getState().entries.find((n) => n.title === "Installed: 1");
     expect(summary).toMatchObject({ level: "warning" });
@@ -1915,9 +1933,11 @@ describe("uploadInstall (Convert's Upload & install)", () => {
   it("reports the install as done even when auto-remove drops the row", async () => {
     mockSuccessfulInstall();
     let dest = "";
-    const r = await pkgLibraryStore(host)
-      .getState()
-      .uploadInstall(localPath, host, { onDest: (d) => (dest = d) });
+    const r = await onFakeClock(() =>
+      pkgLibraryStore(host)
+        .getState()
+        .uploadInstall(localPath, host, { onDest: (d) => (dest = d) }),
+    );
     expect(r).toEqual({ ok: true });
     expect(vi.mocked(pkgInstall)).toHaveBeenCalled();
     expect(
@@ -1925,16 +1945,18 @@ describe("uploadInstall (Convert's Upload & install)", () => {
         .getState()
         .entries.some((e) => e.path === dest),
     ).toBe(false);
-  }, 15_000);
+  });
 
   it("install() resolves with that install's own result", async () => {
     mockSuccessfulInstall();
     const store = pkgLibraryStore(host).getState();
     let dest = "";
-    await store.addAndUpload(localPath, host, {
-      installAfterUpload: false,
-      onDest: (d) => (dest = d),
-    });
+    await onFakeClock(() =>
+      store.addAndUpload(localPath, host, {
+        installAfterUpload: false,
+        onDest: (d) => (dest = d),
+      }),
+    );
     // A stale failure on the row must not leak into the new install's result.
     pkgLibraryStore(host).setState({
       entries: pkgLibraryStore(host)
@@ -1943,9 +1965,9 @@ describe("uploadInstall (Convert's Upload & install)", () => {
           e.path === dest ? { ...e, lastResult: { ok: false, message: "old", at: 0 } as never } : e,
         ),
     });
-    const r = await pkgLibraryStore(host).getState().install(dest, host);
+    const r = await onFakeClock(() => pkgLibraryStore(host).getState().install(dest, host));
     expect(r).toMatchObject({ ok: true });
-  }, 15_000);
+  });
 
   it("refuses while another install holds the lock, without uploading", async () => {
     pkgLibraryStore(host).setState({ installing: true });
@@ -2084,10 +2106,12 @@ describe("installs go through the console queue", () => {
         "pending",
       ]),
     );
-    release();
-    const r = await stream;
+    // The queue's 1.5 s settle before the second install passes on a fake clock.
+    const [r] = await onFakeClock(async () => {
+      release();
+      return Promise.all([stream, lib]);
+    });
     expect(r.message ?? "").not.toMatch(/Another install is in progress/);
-    await lib;
     await vi.waitFor(() =>
       expect(useUploadQueueStore.getState().items.every((i) => i.status !== "pending")).toBe(true),
     );
@@ -2155,10 +2179,9 @@ describe("installs go through the console queue", () => {
       order.push(JSON.stringify(req.source));
       return { ok: true, job: "j" };
     });
-    await pkgLibraryStore(HOST).getState().installAll(HOST);
+    await onFakeClock(() => pkgLibraryStore(HOST).getState().installAll(HOST));
     expect(order.map((o) => o.match(/([BUD])\.pkg/)?.[1])).toEqual(["B", "U", "D"]);
-    // Three installs with the queue's 1.5 s settle between them.
-  }, 15_000);
+  });
 });
 
 describe("Install Package uploads use the console queue", () => {
@@ -2186,13 +2209,13 @@ describe("Install Package uploads use the console queue", () => {
 
   it("uploads through one queue item, then queues the install", async () => {
     script({ parts: ["/g/a.pkg"], total_size: 8192, head: { content_id: cid, title: "T", category: "gd" } });
-    await pkgLibraryStore(host).getState().addAndUpload("/g/a.pkg", host);
+    await onFakeClock(() => pkgLibraryStore(host).getState().addAndUpload("/g/a.pkg", host));
     const items = useUploadQueueStore.getState().items;
     expect(items.map((i) => i.sourceKind)).toEqual(["pkg", "install"]);
     expect(items[0]).toMatchObject({ sourcePath: "/g/a.pkg", installAfterUpload: false, status: "done" });
     expect(items[1].install).toMatchObject({ via: "library" });
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === "transfer_file")).toHaveLength(1);
-  }, 15_000);
+  });
 
   it("a split .pkg set is rejected before anything is queued", async () => {
     script({ parts: [{}, {}], total_size: 200, head: {} });

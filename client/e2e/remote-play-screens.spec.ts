@@ -3,7 +3,14 @@ import { routeEngine, seedConsole } from "./fixtures/engine";
 
 // The on-screen controller and dialogs on phones and tablets. An iPhone Duo has a column of system
 // icons down one side, reported as a safe-area inset on that side only (sizes and insets read off
-// a real one, #675); the rest are common sizes, with the insets simulated.
+// a real one, #675); the rest are common sizes, with the insets simulated. RP_SCREENS_SHOTS=<dir>
+// also saves a screenshot of each.
+
+const SHOTS = process.env.RP_SCREENS_SHOTS ?? "";
+
+async function shot(page: Page, name: string) {
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png` });
+}
 
 async function insets(page: Page, i: { top: number; right: number; bottom: number; left: number }) {
   const cdp = await page.context().newCDPSession(page);
@@ -126,7 +133,7 @@ for (const screen of [...SCREENS, ...SCREENS.map(sideways)]) {
         expect(p.x, `${p.name}`).toBeGreaterThanOrEqual(screen.i.left - turned);
         expect(p.bottom, `${p.name}`).toBeLessThanOrEqual(screen.height + 1);
       }
-      await page.screenshot({ path: `../output/playwright/rp-screens/${screen.name}.png` });
+      await shot(page, screen.name);
     });
   });
 }
@@ -159,7 +166,7 @@ test.describe("a dialog and the notifications, folded", () => {
     expect(box.x + box.width).toBeLessThanOrEqual(466 - 93);
     const stop = (await banner.getByRole("button", { name: "Stop" }).boundingBox())!;
     expect(stop.x + stop.width).toBeLessThanOrEqual(466 - 93);
-    await page.screenshot({ path: "../output/playwright/rp-screens/Duo folded banner.png" });
+    await shot(page, "Duo folded banner");
   });
 });
 
@@ -196,7 +203,7 @@ test.describe("the tabs on a folded Duo", () => {
     const tabs = await nav.locator("a").all();
     expect(tabs.length).toBe(6);
     for (const t of tabs) expect((await t.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-    await page.screenshot({ path: "../output/playwright/rp-screens/Duo folded tabs.png" });
+    await shot(page, "Duo folded tabs");
   });
 
   test("stay along the bottom on a phone with no column", async ({ page }) => {

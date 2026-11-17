@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   defaultRelease,
   downloadableReleases,
-  isLatestTag,
 } from "./payloadVersions";
 import type { PayloadReleaseInfo } from "../api/ps5";
 
@@ -62,14 +61,5 @@ describe("defaultRelease", () => {
   it("returns null when nothing is downloadable", () => {
     expect(defaultRelease([])).toBeNull();
     expect(defaultRelease([rel("v1", { asset: false })])).toBeNull();
-  });
-});
-
-describe("isLatestTag", () => {
-  it("is true only for the newest tag", () => {
-    const list = [rel("v3"), rel("v2"), rel("v1")];
-    expect(isLatestTag(list, "v3")).toBe(true);
-    expect(isLatestTag(list, "v2")).toBe(false);
-    expect(isLatestTag([], "v3")).toBe(false);
   });
 });

@@ -3,8 +3,8 @@ import { routeEngine } from "./fixtures/engine";
 
 // Share, both sides, with a fake engine: the choices (homebrew app, save, screenshots, cheats,
 // controls), the link with a friend asking and one receiving, and Receive's offer, progress and
-// done. At desktop and phone width, light and dark, nothing is cut by the panel's edges and the
-// primary button stays inside it. SHARE_SHOTS=<dir> also saves a screenshot of each state.
+// done. At desktop and phone width, nothing is cut by the panel's edges and the primary button
+// stays inside it. SHARE_SHOTS=<dir> also runs dark and saves a screenshot of each state.
 
 const ID = "FAKE77031";
 const HOST = "192.168.1.100";
@@ -164,8 +164,11 @@ async function shot(page: Page, name: string) {
   if (shots) await page.screenshot({ path: `${shots}/${name}.png` });
 }
 
+// Dark only changes colours, which nothing here asserts: it runs only when screenshots are kept.
+const themes = shots ? ["light", "dark"] : ["light"];
+
 for (const width of [1280, 390]) {
-  for (const theme of ["light", "dark"]) {
+  for (const theme of themes) {
     test(`Share: pick, link, requests (${width}px, ${theme})`, async ({ page }) => {
       const state = await setup(page, width, theme);
       await page.goto(`/games/${ID}`, { waitUntil: "domcontentloaded" });

@@ -36,11 +36,6 @@ export const useInstallPathFallbackStore = create<InstallPathFallbackState>((set
   },
 }));
 
-/** The install options the switch adds: nothing while it is off. */
-export function installPathFallbackOptions(): { console_path_fallback?: true } {
-  return useInstallPathFallbackStore.getState().enabled ? { console_path_fallback: true } : {};
-}
-
 // A change synced from another device shows at once (lib/liveSettings).
 registerSettingReload(["ps5upload.install_path_fallback"], () =>
   useInstallPathFallbackStore.setState({ enabled: loadPersisted() }),
