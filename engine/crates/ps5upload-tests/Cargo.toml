@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+## Builds the live test binaries (tests/live_*.rs and the like): every test in them is
+## `#[ignore]`d and needs a real console, disk image or network, so without this feature they are
+## not built or listed at all. Run them with `cargo test -p ps5upload-tests --features live -- --ignored`.
+live = []
+
 [dev-dependencies]
 anyhow.workspace = true
 blake3.workspace = true
@@ -22,3 +28,7 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 # production engine crate pins sevenz-rust2 with default-features=false.
 sevenz-rust2 = { version = "0.23", features = ["compress"] }
 crc32fast = "1"
+
+[[test]]
+name = "ava1_live"
+required-features = ["live"]

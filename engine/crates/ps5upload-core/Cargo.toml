@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 
 [features]
+## Builds the live test binaries (tests/live_*.rs and the like): every test in them is
+## `#[ignore]`d and needs a real console, disk image or network, so without this feature they are
+## not built or listed at all. Run them with `cargo test -p ps5upload-core --features live -- --ignored`.
+live = []
 ## mDNS in console discovery (discover.rs). The desktop app and desktop engines turn it on; a
 ## standalone Android engine leaves it out and sweeps only.
 mdns = ["dep:mdns-sd"]
@@ -94,3 +98,15 @@ lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "x
 # Writes the small .7z archives the in-place archive reader is tested on (archive_stream.rs).
 # The same crate and version as above, with its encoder.
 sevenz-rust2 = { version = "0.23", default-features = false, features = ["compress"] }
+
+[[test]]
+name = "live_appdb"
+required-features = ["live"]
+
+[[test]]
+name = "live_cheat_repos"
+required-features = ["live"]
+
+[[test]]
+name = "live_local_image"
+required-features = ["live"]

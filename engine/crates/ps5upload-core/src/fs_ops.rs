@@ -1589,6 +1589,12 @@ const STATUS_BUSY: u16 = 8;
 /// silent "unverified, must re-send" (which would re-upload everything while the console is merely
 /// working). Any other failure is the inner `Err`, which the caller treats as unverified.
 fn hash_remote_waiting_out_busy(addr: &str, remote_path: &str) -> Result<Result<HashResult>> {
+    // The unit tests drive all 60 attempts against a console that stays busy; they prove the
+    // count and the verdict, not the pause, so they do not sit out 15 s of real time.
+    #[cfg(not(test))]
+    const BUSY_PAUSE: std::time::Duration = std::time::Duration::from_millis(250);
+    #[cfg(test)]
+    const BUSY_PAUSE: std::time::Duration = std::time::Duration::from_millis(1);
     for attempt in 0..60 {
         match fs_hash_with_timeout(addr, remote_path, Some(std::time::Duration::from_secs(10))) {
             Err(e)
@@ -1598,7 +1604,7 @@ fn hash_remote_waiting_out_busy(addr: &str, remote_path: &str) -> Result<Result<
                 if attempt == 59 {
                     return Err(e.context("reconcile: the console stayed busy"));
                 }
-                std::thread::sleep(std::time::Duration::from_millis(250));
+                std::thread::sleep(BUSY_PAUSE);
             }
             r => return Ok(r),
         }

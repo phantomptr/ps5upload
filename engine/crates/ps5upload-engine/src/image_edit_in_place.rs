@@ -1787,8 +1787,9 @@ mod tests {
         }
     }
 
-    /// The apply cut at every journal step (the journal half written, after the free-space
-    /// writes, after each live write, all written but the journal not deleted): the next open
+    /// The apply cut at every kind of journal step (the journal half written, after the
+    /// free-space writes, after the first, the last and a spread of the live writes between, all
+    /// written but the journal not deleted): the next open
     /// settles the journal and the image reads back exactly as it was, consistent; the same
     /// edit run whole reads back fully new.
     #[test]
@@ -1811,7 +1812,16 @@ mod tests {
                 Stop::At(patch::Step::Free),
                 Stop::At(patch::Step::LiveHalf),
             ];
-            stops.extend((0..=live).map(|n| Stop::At(patch::Step::LiveAfter(n))));
+            // The first and the last live write always, and a fixed spread in between (every
+            // k-th from a seeded offset, about a dozen): each cut costs a full restore and check,
+            // and every cut between two live writes takes the same restore path.
+            let k = (live / 12).max(1);
+            let seed = 0x5eed_u64.wrapping_mul(live as u64 + 1) as usize % k;
+            stops.extend(
+                (0..=live)
+                    .filter(|&n| n == 0 || n == live || n % k == seed)
+                    .map(|n| Stop::At(patch::Step::LiveAfter(n))),
+            );
             stops.push(Stop::BeforeCommit);
             let bytes = std::fs::read(&pristine).unwrap();
             let ext = pristine.extension().unwrap().to_str().unwrap();

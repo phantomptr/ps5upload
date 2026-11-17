@@ -33,18 +33,22 @@ async fn a_dead_destination_session_wakes_readers_parked_on_a_slow_source() {
     write_pattern(&a.join("share/src/big"), 8, BIG);
     let (addr_a, addr_b) = (host(&a, key).await, host(&b, key).await);
     // A is slow: B's readers are almost always waiting for data.
-    let slow = ChaosProxy::start(
-        addr_a.parse().unwrap(),
-        ChaosConfig {
-            bytes_per_sec: Some(1 << 20),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    let to_b = ChaosProxy::start(addr_b.parse().unwrap(), ChaosConfig::default())
+    let slow = Arc::new(
+        ChaosProxy::start(
+            addr_a.parse().unwrap(),
+            ChaosConfig {
+                bytes_per_sec: Some(1 << 20),
+                ..Default::default()
+            },
+        )
         .await
-        .unwrap();
+        .unwrap(),
+    );
+    let to_b = Arc::new(
+        ChaosProxy::start(addr_b.parse().unwrap(), ChaosConfig::default())
+            .await
+            .unwrap(),
+    );
     let pa = Pool::new(ava.clone()).with_addr(slow.addr.to_string());
     let pb = Pool::new(ava).with_addr(to_b.addr.to_string());
     let progress = Arc::new(Progress::default());
@@ -70,12 +74,26 @@ async fn a_dead_destination_session_wakes_readers_parked_on_a_slow_source() {
     .await
     .expect("no bytes reached the destination");
     to_b.kill_all();
+    // Only the attempt B died under needs the slow source. Once the relay has noticed and
+    // opened a new connection to B (which takes the wake this test is about: with A still
+    // slow, the parked readers would otherwise sit out the bound), the rest runs at full
+    // speed instead of crawling through the remaining megabytes at 1 MiB/s.
+    let unthrottle = {
+        let (slow, to_b) = (slow.clone(), to_b.clone());
+        tokio::spawn(async move {
+            while to_b.connections() == 0 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            slow.set_bytes_per_sec(None);
+        })
+    };
     // Far below the 120 s no-progress bound.
     let report = tokio::time::timeout(Duration::from_secs(60), run)
         .await
         .expect("the relay waited out the no-progress bound after the destination died")
         .unwrap()
         .unwrap();
+    unthrottle.abort();
     assert_eq!(report.status, gen::STATUS_OK);
     assert_pattern(&b.join("share/dst/big"), 8, BIG);
 }

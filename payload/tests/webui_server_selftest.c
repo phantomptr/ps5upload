@@ -16,6 +16,18 @@
 
 #include "webui_server.h"
 
+/* The server's connection deadline and listener-watch period. The Makefile builds this test and
+ * webui_server.c with shorter ones (-DWEBUI_CONN_MS / -DWEBUI_WATCH_MS) so the timeout paths run in
+ * a fraction of the time; every wait below is measured from them. The defaults are the helper's. */
+#ifndef WEBUI_CONN_MS
+#define WEBUI_CONN_MS 5000u
+#endif
+#ifndef WEBUI_WATCH_MS
+#define WEBUI_WATCH_MS 5000u
+#endif
+#define CONN_MS ((int)WEBUI_CONN_MS)
+#define CONN_S (CONN_MS / 1000.0)
+
 static int failures = 0;
 
 #define CHECK(expr)                                                     \
@@ -198,9 +210,9 @@ static void too_big_413(void) {
     CHECK(status == 413);
 }
 
-/* A streamed route takes a body far over the 64 KiB cap, and past the 5 s header deadline when the
- * client sends slowly; without the token it is refused before any body byte is read. A request that
- * is not streamed still gets 413 for the same length (too_big_413). */
+/* A streamed route takes a body far over the 64 KiB cap, and past the header deadline (5 s in the
+ * helper) when the client sends slowly; without the token it is refused before any body byte is
+ * read. A request that is not streamed still gets 413 for the same length (too_big_413). */
 static void streamed_body(void) {
     static char chunk[65536];
     char req[512], resp[2048];
@@ -220,7 +232,7 @@ static void streamed_body(void) {
         if (w <= 0) break;
         sent += (size_t)w;
     }
-    sleep_ms(6000); /* past the connection's 5 s deadline */
+    sleep_ms(CONN_MS + 1000); /* past the connection's deadline */
     while (sent < total) {
         size_t k = total - sent < sizeof chunk ? total - sent : sizeof chunk;
         ssize_t w = send(s, chunk, k, 0);
@@ -270,14 +282,14 @@ static void idle_connection_closed_at_deadline(void) {
     double t0 = now_s();
     CHECK(s >= 0);
     if (s < 0) return;
-    n = read_all(s, buf, sizeof buf, 7000);
+    n = read_all(s, buf, sizeof buf, CONN_MS + 2000);
     CHECK(n == 0);                  /* closed, with nothing said */
-    CHECK(now_s() - t0 > 4.0 && now_s() - t0 < 6.5);
+    CHECK(now_s() - t0 > CONN_S - 1.0 && now_s() - t0 < CONN_S + 1.5);
     close(s);
 }
 
 /* Four half-sent requests do occupy every worker (they said something); a request behind them is still
- * served once their 5 s deadline drops them. */
+ * served once their deadline (5 s in the helper) drops them. */
 static void silent_client_dropped_and_next_served(void) {
     int idle[4], i, st;
     char resp[2048];
@@ -292,7 +304,7 @@ static void silent_client_dropped_and_next_served(void) {
     sleep_ms(1000);
     st = request("/api/x", webui_token(), resp, sizeof resp);
     CHECK(st == 200);
-    CHECK(now_s() - t0 < 7.5);
+    CHECK(now_s() - t0 < CONN_S + 2.5);
     for (i = 0; i < 4; i++)
         if (idle[i] >= 0) close(idle[i]);
 }
@@ -367,22 +379,22 @@ static void half_request_dropped_within_timeout(void) {
     CHECK(s >= 0);
     if (s < 0) return;
     CHECK(send(s, "GET /api/x HTTP/1.1\r\nHost: 127.0.0.1", 36, 0) == 36);
-    n = read_all(s, buf, sizeof buf, 7000);
-    CHECK(n >= 0);              /* closed (EOF), not still open at 7 s */
-    CHECK(now_s() - t0 < 7.0);
+    n = read_all(s, buf, sizeof buf, CONN_MS + 2000);
+    CHECK(n >= 0);              /* closed (EOF), not still open 2 s past the deadline */
+    CHECK(now_s() - t0 < CONN_S + 2.0);
     close(s);
 }
 
 /* 40 idle connections: more than queue depth + workers. The overflow is
  * closed at once and a fresh request retried once per second is answered
- * within 7 s; the accept thread never blocks on the full queue. */
+ * within the deadline + 2 s; the accept thread never blocks on the full queue. */
 static void queue_overflow_closes_not_blocks(void) {
     int idle[40], i, ok = 0;
     char resp[2048];
     double t0 = now_s();
     for (i = 0; i < 40; i++) idle[i] = dial();
     for (i = 0; i < 40; i++) CHECK(idle[i] >= 0);
-    while (now_s() - t0 < 7.0) {
+    while (now_s() - t0 < CONN_S + 2.0) {
         double t1 = now_s();
         int s = dial();
         if (s >= 0) {
@@ -399,7 +411,7 @@ static void queue_overflow_closes_not_blocks(void) {
         if (now_s() - t1 < 1.0) sleep_ms((int)((1.0 - (now_s() - t1)) * 1000.0));
     }
     CHECK(ok);
-    CHECK(now_s() - t0 < 7.5);
+    CHECK(now_s() - t0 < CONN_S + 2.5);
     for (i = 0; i < 40; i++)
         if (idle[i] >= 0) close(idle[i]);
 }
@@ -484,11 +496,11 @@ static void watch_decisions(void) {
     CHECK(webui_pick_lan_addr((const char (*)[INET_ADDRSTRLEN])f, 2, out) == 1 && strcmp(out, "172.20.1.2") == 0);
 }
 
-/* The watch runs on the accept thread every 5 s: across a check the server keeps serving (loopback:
- * nothing to rebind), and LAN mode off means no address for a phone. */
+/* The watch runs on the accept thread every WEBUI_WATCH_MS (5 s in the helper): across a check the
+ * server keeps serving (loopback: nothing to rebind), and LAN mode off means no address for a phone. */
 static void watch_cycle_keeps_serving(void) {
     char resp[2048], addr[INET_ADDRSTRLEN];
-    sleep_ms(5600);
+    sleep_ms((int)WEBUI_WATCH_MS + 600);
     CHECK(request("/api/x", webui_token(), resp, sizeof resp) == 200);
     CHECK(webui_lan_addr(addr) == 0 && addr[0] == '\0');
 }

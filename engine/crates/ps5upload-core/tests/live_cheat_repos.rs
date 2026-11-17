@@ -3,7 +3,7 @@
 //! Hits GitHub over the network, so it is `#[ignore]`d and never runs in
 //! normal CI. Run:
 //!
-//!   cargo test -p ps5upload-core --test live_cheat_repos -- --nocapture --ignored
+//!   cargo test -p ps5upload-core --test live_cheat_repos --features live -- --nocapture --ignored
 //!
 //! It guards the failure mode that silently emptied the repo browser:
 //! a catalogue entry whose branch, content root, or enumeration strategy

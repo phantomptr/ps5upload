@@ -624,6 +624,13 @@ struct Keys<'a> {
     counter_local: &'a mut u64,
 }
 
+/// The grace held after the console confirms a sign-in (see `hold_control_session`). The unit
+/// tests' fake consoles need no commit time, so they hold a short one instead of 3 s per sign-in.
+#[cfg(not(test))]
+const SIGN_IN_GRACE: Duration = Duration::from_secs(3);
+#[cfg(test)]
+const SIGN_IN_GRACE: Duration = Duration::from_millis(300);
+
 /// Keep the control session alive for `hold`, answering heartbeats, and
 /// confirm the sign-in.
 ///
@@ -663,7 +670,7 @@ fn hold_control_session(
     // Once the console reports success, hold a short grace answering heartbeats
     // so the sign-in commits and sticks after we disconnect, then stop — no
     // need to wait out the full timeout.
-    let grace_after_login = Duration::from_secs(3);
+    let grace_after_login = SIGN_IN_GRACE;
     let mut login_at: Option<std::time::Instant> = None;
     // Either signal means the console took the session: LOGIN is it announcing
     // a sign-in transition, SESSION_ID is it declaring the session live. A
@@ -997,7 +1004,9 @@ mod tests {
                 ambassador: &AMB,
                 counter_local: &mut ours,
             },
-            Duration::from_secs(5),
+            // Long enough for any fake console here, which answers at once: a test that waits
+            // for no verdict waits this out.
+            Duration::from_secs(2),
             user.map(|u| u as &mut dyn PasscodePrompt),
             passcode_wait,
         );
@@ -1042,7 +1051,9 @@ mod tests {
     fn a_session_id_before_the_passcode_ask_is_not_a_sign_in() {
         // The console declares the session live, then asks for the passcode. The user types
         // for longer than the sign-in grace: we must keep asking, not report "signed in".
-        let mut answers: Vec<Option<Passcode>> = (0..16).map(|_| None).collect();
+        // Each empty answer is one 250 ms read timeout: twice the grace, and then some.
+        let typing = 2 * SIGN_IN_GRACE.as_millis() as usize / 250 + 2;
+        let mut answers: Vec<Option<Passcode>> = (0..typing).map(|_| None).collect();
         answers.push(Some(Passcode::Digits("2468".into())));
         let mut user = Typist::new(answers);
         let (r, ours) = sign_in_against(Some(&mut user), PASSCODE_WAIT, |mut c| {
@@ -1205,6 +1216,23 @@ mod tests {
         )
     }
 
+    /// The console keeps its side open until the client closes (or `most` passes): a client
+    /// that waited for the console to close first would wait the whole `most`.
+    fn hold_until_client_leaves(c: &mut TcpStream, most: Duration) {
+        let until = std::time::Instant::now() + most;
+        let mut b = [0u8; 64];
+        while let Some(left) = until.checked_duration_since(std::time::Instant::now()) {
+            if left.is_zero() {
+                break;
+            }
+            c.set_read_timeout(Some(left)).unwrap();
+            match c.read(&mut b) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+    }
+
     /// Whether the client has closed its side (a FIN is waiting), looked at without blocking.
     fn client_left(c: &mut TcpStream) -> bool {
         c.set_nonblocking(true).unwrap();
@@ -1226,8 +1254,9 @@ mod tests {
                 return; // closed with no answer
             }
             c.write_all(nonce_reply().as_bytes()).unwrap();
-            // Connection: close is ours to act on: the console need not close first.
-            std::thread::sleep(Duration::from_secs(3));
+            // Connection: close is ours to act on: the console need not close first. It holds
+            // on (up to 3 s) until we have left.
+            hold_until_client_leaves(c, Duration::from_secs(3));
         });
         let t0 = std::time::Instant::now();
         let nonce = session_init_at("ps5.test", addr, &[0x5a; KEY_SIZE]).unwrap();
@@ -1299,7 +1328,7 @@ mod tests {
             c.write_all(b"\r\nab").unwrap();
             std::thread::sleep(Duration::from_millis(50));
             c.write_all(b"cd").unwrap();
-            std::thread::sleep(Duration::from_secs(2));
+            hold_until_client_leaves(c, Duration::from_secs(2));
         });
         let t0 = std::time::Instant::now();
         assert_eq!(

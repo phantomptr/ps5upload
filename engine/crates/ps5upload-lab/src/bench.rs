@@ -2874,13 +2874,13 @@ mod tests {
             sa.listen(16).unwrap();
             std::thread::sleep(Duration::from_millis(400));
             sb.listen(16).unwrap();
-            std::thread::sleep(Duration::from_secs(2));
-            drop((sa, sb));
+            // Handed back still listening: they close at the join, after the wait is over.
+            (sa, sb)
         });
         let waited =
             wait_for_ports(&[a, b], Duration::from_secs(10), Duration::from_millis(50)).unwrap();
         assert!(waited >= Duration::from_millis(700), "{waited:?}");
-        t.join().unwrap();
+        drop(t.join().unwrap());
     }
 
     #[test]
