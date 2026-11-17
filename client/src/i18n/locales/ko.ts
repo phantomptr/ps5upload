@@ -8834,6 +8834,8 @@ rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사�
 "install.kraken.title": "이 PS5에서 Kraken Mount가 실행 중입니다",
 "install.kraken.body": "디버그 키로 만든 PS5 패키지(변환으로 만드는 패키지는 모두 해당)는 설치하는 대신 마운트할 수 있습니다. PS5Upload가 패키지 드라이브의 homebrew 폴더에 복사하고, Kraken Mount가 홈 화면에 올립니다. 아무것도 설치되지 않으며, 나중에 제거하면 그 파일만 삭제됩니다. PS4 패키지, 리테일 패키지, 업데이트, 추가 콘텐츠는 그대로 설치됩니다.",
 "install.kraken.both": "ShadowMount+도 실행 중입니다. 두 가지를 함께 실행하면 안 됩니다. 패키지를 마운트하기 전에 둘 중 하나만 실행되도록 PS5를 다시 시작하세요.",
+"kraken_update_note": "Kraken Mount {version}은(는) 마운트한 패키지의 세이브 데이터와 트로피를 빠뜨릴 수 있습니다. 프로젝트 페이지에서 {min} 이상으로 업데이트하세요.",
+"kraken_update_open": "프로젝트 페이지",
 "install.kraken.pick": "마운트할 패키지를 PS5에 넣기",
 "fpkg.kraken.mount": "PS5에 넣어 마운트",
 "fpkg.kraken.mount_help": "이 PS5에서 Kraken Mount가 실행 중입니다. 패키지는 패키지 드라이브의 homebrew 폴더에 복사되어 설치되지 않고 그곳에서 마운트됩니다.",

@@ -10,6 +10,7 @@ import { create } from "zustand";
 
 import type { KrakenGame, KrakenStatus, Mounter, SmpStatus } from "../api/ps5";
 import { hostOf } from "./addr";
+import { compareVersions } from "./semver";
 
 /** The mounter a snapshot names; an engine older than the field gives only ShadowMount+'s state. */
 export function mounterOf(s: SmpStatus | null | undefined): Mounter | null {
@@ -107,4 +108,17 @@ export const useMounterStore = create<{
 /** The last snapshot for `host`, or null before one was read. */
 export function useMounterFor(host: string | null | undefined): SmpStatus | null {
   return useMounterStore((st) => (host ? (st.byHost[hostOf(host)] ?? null) : null));
+}
+
+/** The first Kraken Mount that gives a game the sce_sys files a package keeps only inside it
+ *  (save_data.png, the artwork, the trophy and NP files): before it, a game mounted from a
+ *  package Convert made (they keep those files there, as every debug package does) could lose
+ *  its save data and trophies. */
+export const KRAKEN_MIN_VERSION = "0.2.1";
+
+/** Its version when it is older than KRAKEN_MIN_VERSION, else null (newer, or not known). */
+export function krakenOutdated(kraken: KrakenStatus | null | undefined): string | null {
+  const v = kraken?.version?.trim().replace(/^v/i, "");
+  if (!v) return null;
+  return compareVersions(v, KRAKEN_MIN_VERSION) === -1 ? v : null;
 }

@@ -8836,6 +8836,8 @@ rp_users_add_hint: "別のユーザーでもプレイするには、PS5 でそ�
 "install.kraken.title": "この PS5 で Kraken Mount が実行中です",
 "install.kraken.body": "デバッグキーで作られた PS5 パッケージ（「変換」で作るパッケージはすべてこれです）は、インストールの代わりにマウントできます。PS5Upload がパッケージ保存先ドライブの homebrew フォルダーにコピーし、Kraken Mount がホーム画面に表示します。何もインストールされず、後で削除するときもそのファイルを消すだけです。PS4 パッケージ、リテールパッケージ、アップデート、追加コンテンツは引き続きインストールされます。",
 "install.kraken.both": "ShadowMount+ も実行中です。この 2 つは同時に実行できません。パッケージをマウントする前に、どちらか一方だけで PS5 を再起動してください。",
+"kraken_update_note": "Kraken Mount {version} では、マウントしたパッケージのセーブデータとトロフィーが抜けることがあります。プロジェクトページから {min} 以降に更新してください。",
+"kraken_update_open": "プロジェクトページ",
 "install.kraken.pick": "マウントするパッケージを PS5 に置く",
 "fpkg.kraken.mount": "PS5 に置いてマウント",
 "fpkg.kraken.mount_help": "この PS5 では Kraken Mount が実行中です。パッケージはパッケージ保存先ドライブの homebrew フォルダーにコピーされ、インストールではなくそこからマウントされます。",

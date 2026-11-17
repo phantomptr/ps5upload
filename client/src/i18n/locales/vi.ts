@@ -8819,6 +8819,8 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "install.kraken.title": "Kraken Mount đang chạy trên PS5 này",
 "install.kraken.body": "Gói PS5 được tạo bằng khóa debug (mọi gói do Chuyển đổi tạo ra đều thuộc loại này) có thể được gắn thay vì cài: PS5Upload sao chép nó vào thư mục homebrew của ổ lưu gói, và Kraken Mount đưa nó lên màn hình chính. Không có gì được cài, và khi gỡ sau này chỉ xóa đúng tệp đó. Gói PS4, gói bán lẻ, bản cập nhật và nội dung bổ sung vẫn được cài như thường.",
 "install.kraken.both": "ShadowMount+ cũng đang chạy. Hai thứ này không được chạy cùng lúc: hãy khởi động lại PS5 chỉ với một trong hai trước khi gắn gói.",
+"kraken_update_note": "Kraken Mount {version} có thể bỏ sót dữ liệu lưu và cúp của gói đã gắn. Hãy cập nhật lên {min} trở lên từ trang dự án.",
+"kraken_update_open": "Trang dự án",
 "install.kraken.pick": "Đặt gói lên PS5 để gắn",
 "fpkg.kraken.mount": "Đặt lên PS5 để gắn",
 "fpkg.kraken.mount_help": "Kraken Mount đang chạy trên PS5 này: gói được sao chép vào thư mục homebrew của ổ lưu gói và gắn từ đó, không cài.",
