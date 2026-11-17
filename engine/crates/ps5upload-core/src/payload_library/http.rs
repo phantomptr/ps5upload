@@ -12,28 +12,17 @@ use super::{LibraryError, ResolvedEntry};
 
 /// Release metadata: small JSON, so a whole-request deadline fits.
 const METADATA_TIMEOUT: Duration = Duration::from_secs(15);
-/// A connection that sends nothing for this long is dead. An asset has no whole-request
-/// deadline: 120 s made anything over ~50 MB on a 2-4 Mbit/s link fail every time.
-const ASSET_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
-const ASSET_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-
-/// GitHub answers a release asset with a redirect to one of these.
-const GITHUB_ASSET_HOSTS: &[&str] = &[
-    "objects.githubusercontent.com",
-    "release-assets.githubusercontent.com",
-    "github-releases.githubusercontent.com",
-];
 
 const MAX_REDIRECTS: usize = 5;
 
 /// GitHub requires a user agent, and uses it to spot abuse: the version pinpoints a release.
 const HTTP_USER_AGENT: &str = concat!("ps5upload/", env!("CARGO_PKG_VERSION"), " (payloads)");
 
-/// Which timeouts a request runs under.
+/// Which timeouts a request runs under. Only release metadata is fetched now: payload files are
+/// never downloaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FetchKind {
     Metadata,
-    Asset,
 }
 
 /// One answer, redirects not followed.
@@ -53,7 +42,6 @@ pub trait HttpClient: Send + Sync {
 /// The real client. ureq reads `HTTPS_PROXY` and friends from the environment, as before.
 pub struct UreqClient {
     metadata: ureq::Agent,
-    asset: ureq::Agent,
 }
 
 impl UreqClient {
@@ -64,17 +52,8 @@ impl UreqClient {
             .max_redirects(0)
             .timeout_global(Some(METADATA_TIMEOUT))
             .build();
-        let asset = ureq::Agent::config_builder()
-            .user_agent(HTTP_USER_AGENT)
-            .http_status_as_error(false)
-            .max_redirects(0)
-            .timeout_connect(Some(ASSET_CONNECT_TIMEOUT))
-            .timeout_recv_response(Some(ASSET_IDLE_TIMEOUT))
-            .timeout_per_read(Some(ASSET_IDLE_TIMEOUT))
-            .build();
         Self {
             metadata: ureq::Agent::new_with_config(metadata),
-            asset: ureq::Agent::new_with_config(asset),
         }
     }
 }
@@ -94,7 +73,6 @@ impl HttpClient for UreqClient {
     ) -> Result<HttpResponse, String> {
         let agent = match kind {
             FetchKind::Metadata => &self.metadata,
-            FetchKind::Asset => &self.asset,
         };
         let mut req = agent.get(url);
         if let Some(a) = accept {
@@ -148,10 +126,9 @@ pub(crate) fn is_local_name(host: &str) -> bool {
 /// May a request for this entry land on `url`?
 ///
 /// Always https on the default port, and never an address or a LAN name. Beyond that: the
-/// entry's host and its subdomains, GitHub's asset CDNs for a GitHub repo, and for a user's own
-/// Gitea or Forgejo server any public name, because such a server may hand files out from object
-/// storage on another host. The user chose to trust that server, and the certificate still has
-/// to match the name.
+/// entry's host and its subdomains, and for a user's own Gitea or Forgejo server any public name,
+/// because such a server may answer from another host. The user chose to trust that server, and
+/// the certificate still has to match the name. A GitHub repo stays on GitHub.
 pub(crate) fn hop_allowed(entry: &ResolvedEntry, url: &str) -> bool {
     let Some((scheme, host, port)) = scheme_and_host(url) else {
         return false;
@@ -163,10 +140,7 @@ pub(crate) fn hop_allowed(entry: &ResolvedEntry, url: &str) -> bool {
     if host == entry_host || host.ends_with(&format!(".{entry_host}")) {
         return true;
     }
-    if entry_host == "github.com" {
-        return GITHUB_ASSET_HOSTS.contains(&host.as_str());
-    }
-    entry.is_custom
+    entry.is_custom && entry_host != "github.com"
 }
 
 /// Where a redirect points, as an absolute URL. `None` for a form we do not follow.
@@ -249,13 +223,11 @@ mod tests {
     }
 
     #[test]
-    fn a_github_repo_may_reach_github_and_its_asset_cdns_only() {
+    fn a_github_repo_may_reach_github_only() {
         let e = entry("github.com", false);
         for ok in [
-            "https://github.com/o/n/releases/download/v1/a.elf",
+            "https://github.com/o/n/releases/latest",
             "https://api.github.com/repos/o/n/releases",
-            "https://release-assets.githubusercontent.com/x?sig=1",
-            "https://objects.githubusercontent.com/x",
         ] {
             assert!(hop_allowed(&e, ok), "{ok}");
         }
@@ -263,6 +235,8 @@ mod tests {
             "http://github.com/o/n",
             "https://evil.example/x",
             "https://github.com.evil.example/x",
+            "https://release-assets.githubusercontent.com/x?sig=1",
+            "https://objects.githubusercontent.com/x",
             "https://notgithub.com/x",
             "https://user@127.0.0.1:19113/api/jobs",
             "http://127.0.0.1:19113/api/jobs",
@@ -321,17 +295,17 @@ mod tests {
     #[test]
     fn every_hop_is_checked_not_only_the_first() {
         let http = Scripted::default();
-        let start = "https://github.com/o/n/releases/download/v1/a.elf";
-        let cdn = "https://release-assets.githubusercontent.com/a";
-        http.redirect(start, cdn);
-        http.ok(cdn, b"\x7FELF");
+        let start = "https://github.com/o/n/releases/latest";
+        let api = "https://api.github.com/repos/o/n/releases/latest";
+        http.redirect(start, api);
+        http.ok(api, b"{}");
         let e = entry("github.com", false);
-        let resp = fetch(&http, &e, start, None, FetchKind::Asset).unwrap();
+        let resp = fetch(&http, &e, start, None, FetchKind::Metadata).unwrap();
         assert_eq!(resp.status, 200);
 
         // A later hop to loopback is refused before any request goes there.
-        http.redirect(cdn, "http://127.0.0.1:19113/api/jobs");
-        let err = fetch(&http, &e, start, None, FetchKind::Asset)
+        http.redirect(api, "http://127.0.0.1:19113/api/jobs");
+        let err = fetch(&http, &e, start, None, FetchKind::Metadata)
             .err()
             .unwrap();
         assert_eq!(err.code, "redirect_refused");
@@ -355,7 +329,7 @@ mod tests {
             &entry("github.com", false),
             a,
             None,
-            FetchKind::Asset,
+            FetchKind::Metadata,
         )
         .err()
         .unwrap();

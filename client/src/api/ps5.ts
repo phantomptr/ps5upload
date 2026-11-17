@@ -2564,7 +2564,8 @@ export async function powerShutdown(addr: string): Promise<PowerControlAck> {
 
 /** What a helper stop ended with (#471): `stopped` (its port went quiet), `not_running`
  *  (nothing answered), or `refused` with the engine's reason — `busy` while a transfer, install
- *  or console file operation runs against that console, `refused` / `still_running` otherwise. */
+ *  or console file operation runs against that console, `stopping` while another stop or removal
+ *  of it runs, `refused` / `still_running` otherwise. */
 export type HelperStopResult =
   | { state: "stopped" | "not_running" }
   | { state: "refused"; reason: string; error: string };

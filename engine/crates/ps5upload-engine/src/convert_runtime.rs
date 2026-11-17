@@ -374,6 +374,11 @@ pub(crate) fn after_status(host: String, status: &serde_json::Value) {
     if crate::helper_stop::is_busy(&host) || crate::helper_mirror::engine_busy() {
         return;
     }
+    // The put uses the helper: counted busy from here (a Stop or a "Remove PS5Upload" waits for
+    // it to end), and none starts while one of those runs (checked with the count, under one lock).
+    let Some(busy) = crate::helper_stop::try_enter(&host) else {
+        return;
+    };
     {
         let mut map = seen().lock().unwrap_or_else(|e| e.into_inner());
         let s = map.entry(host.clone()).or_default();
@@ -390,8 +395,7 @@ pub(crate) fn after_status(host: String, status: &serde_json::Value) {
             host: host.clone(),
             done: false,
         };
-        // The put uses the helper: a Stop or a "Remove PS5Upload" waits for it to end.
-        let _busy = crate::helper_stop::enter(&host);
+        let _busy = busy;
         let r = ensure(&host);
         if let Err(e) = &r {
             crate::log_warn!(

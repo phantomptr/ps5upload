@@ -3244,6 +3244,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       if (!item || !offersConflictActions(item)) return;
       const { placed } = await clearForReplace(item, {
         listDir: (addr, path) => fsListDir(addr, path),
+        lastJob: (jobId) => jobStatus(jobId).catch(() => null),
         remove: (addr, path) => fsDelete(addr, path),
         move: (addr, from, to) => fsMove(addr, from, to),
         forgetResumeId: (host, src, dest) => resumeTxidForget(host, src, dest),

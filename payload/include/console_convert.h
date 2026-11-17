@@ -42,6 +42,10 @@
 
 /* payload/convert/entry.c names the same folder for the converter. */
 #define CONVERT_DIR "/data/ps5upload/convert"
+/* The converter's process name (payload/convert/entry.c names itself this). */
+#ifndef CONVERT_PROC_NAME
+#define CONVERT_PROC_NAME "ps5u-convert"
+#endif
 /* The zstd runtime (ampr-emu-ng's libSceAmpr.sprx) the desktop app puts on the console, one
  * folder per release: <this>/ampr-emu-ng-<version>/libSceAmpr.sprx (the engine's
  * convert_runtime.rs writes it; nothing is downloaded on the console). */
@@ -150,7 +154,10 @@ int cc_record_parse_boot(const char *buf, unsigned long long *xpid, long *hpid, 
 /* 1 when something dated `then` (a record's boot time, a file's mtime: wall-clock seconds) is from
  * before the boot at `boot` (kern.boottime): the console was restarted (a power cut, a crash) since,
  * and every process named in it is gone; a pid in it may be another process's now. 0 when either
- * is unknown (0). A minute of slack: the boot time moves with the clock, which is set after boot. */
+ * is unknown (0). A minute of slack: the boot time moves with the clock, which is set after boot.
+ * It moves by any forward step of the clock too, so it only ever discounts a pid that cannot be
+ * shown to be ours: a live process named as our converter or helper is live whatever this says
+ * (console_convert.c pid_still_ours). */
 #define CC_BOOT_SLACK_S 60
 static inline int cc_from_earlier_boot(unsigned long long then, unsigned long long boot) {
     return then && boot && then + CC_BOOT_SLACK_S < boot;
@@ -222,6 +229,8 @@ extern int (*console_convert_test_launch)(void);
 extern const char *console_convert_test_runtime_dir;
 /* Stands in for kern.boottime when set. */
 extern unsigned long long console_convert_test_boot;
+/* Stands in for proc_name_by_pid when set (unset: no name can be read). */
+extern int (*console_convert_test_proc_name)(int pid, char *out, size_t cap);
 #endif
 
 #endif

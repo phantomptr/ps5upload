@@ -76,6 +76,16 @@ describe("Stop helper", () => {
     expect(d.onStopped).not.toHaveBeenCalled();
   });
 
+  it("says a stop is already running, not to wait for transfers, when one is", async () => {
+    const d = deps({
+      stop: vi.fn(async () => ({ state: "refused" as const, reason: "stopping", error: "x" })),
+    });
+    const out = await stopHelperFlow("h", d, tr);
+    expect(out.kind === "refused" && out.message).toContain("A stop is already running");
+    expect(out.kind === "refused" && out.message).not.toContain("transfers");
+    expect(d.onStopped).not.toHaveBeenCalled();
+  });
+
   it("passes any other refusal or failure on, unmarked", async () => {
     const refused = deps({
       stop: vi.fn(async () => ({

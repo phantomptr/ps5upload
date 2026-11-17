@@ -5444,6 +5444,7 @@ c2c_test_deep_bad: "4 KiB 테스트 전송이 도착하지 않았습니다: {det
 "helper_stop_confirm_title": "헬퍼를 중지할까요?",
 "helper_stop_confirm_body": "업로드, 설치, 콘솔 페이지에는 헬퍼가 필요합니다. 필요할 때 여기서 다시 보내세요.",
 "helper_stop_busy": "헬퍼가 사용 중입니다. 이 콘솔의 전송과 설치가 끝난 뒤 중지하세요.",
+"helper_stop_already_running": "이 콘솔에서 이미 중지가 진행 중입니다. 끝날 때까지 기다린 후 다시 시도하세요.",
 "helper_stop_failed": "헬퍼를 중지하지 못했습니다: {error}",
 "gate_helper_stopped_title": "헬퍼를 중지했습니다",
 "joberr.console_rest_mode": "PS5가 휴식 모드입니다. 깨우면 전송이 멈춘 곳부터 이어집니다.",
