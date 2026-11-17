@@ -22,7 +22,11 @@
 # the lockfiles resolving with --locked after the bump, and `ci` on the commit the bump goes on.
 # That commit's own run (a push to main runs every lane) is not waited for when its tree is the
 # tree a passing run already tested: the merged PR's head, up to date with main
-# (.github/scripts/release-ci-verdict.mjs). The bump itself is version strings and the
+# (.github/scripts/release-ci-verdict.mjs). When that PR's change turned every lane on (a batch
+# PR always does: it syncs VERSION and the lockfiles), its run counts on its own, so a red or
+# unfinished run on main's previous commit no longer holds the tag (v12.6.3 waited 16 min for
+# main's run of the merge commit while the PR's full run had already passed on the same tree).
+# The bump itself is version strings and the
 # CHANGELOG heading: checked here by update-version.js --check, the file list below and cargo's
 # --locked resolution, not by a second full ci run.
 #
@@ -135,7 +139,8 @@ jobs:
 
       # The bump goes on GITHUB_SHA (main's head when dispatched); ci must vouch for that commit.
       # A pass on any run of it counts, and so does a pass on the merged PR's head when its tree is
-      # this commit's tree (release-ci-verdict.mjs). A failure is not final at once:
+      # this commit's tree and either every lane ran on the PR or the parent passes too
+      # (release-ci-verdict.mjs). A failure is not final at once:
       # ci-runner-retry may still re-run the jobs GitHub never gave a runner.
       - name: Wait for ci to pass on the commit the bump goes on
         if: ${{ !inputs.force }}
@@ -227,3 +232,24 @@ jobs:
             gh workflow run docker-engine.yml --ref "$TAG" -f tag="$TAG" -f promote=true
           fi
           echo "- publish and docker-engine dispatched (pre-release: $PRERELEASE)" >> "$GITHUB_STEP_SUMMARY"
+
+      # The merge this release is cut from started release-cache.yml on main, and it holds two
+      # macOS and two Linux runners for ~20 min, with publish's 3 macOS jobs needing the free
+      # repository's 5 (v12.6.0 and v12.6.2 queued their macOS builds 5-16 min). Started together
+      # it warms little for this release (its header has the numbers), so it makes room. A
+      # cancelled warm costs nothing: the next push to main runs it again. Never fails the release.
+      - name: Make room for publish (cancel a release-cache warm still running)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          for status in queued in_progress; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-cache.yml/runs?branch=main&status=$status&per_page=20" \
+              --jq '.workflow_runs[].id' || true
+          done | sort -u | while read -r id; do
+            [ -n "$id" ] || continue
+            if gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/cancel" >/dev/null; then
+              echo "cancelled release-cache run $id"
+            fi
+          done
+          exit 0
