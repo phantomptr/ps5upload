@@ -24152,6 +24152,29 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -24685,6 +24708,10 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
           },
           "default": {
             "$ref": "#/components/responses/Error",
@@ -29397,6 +29424,29 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "502": {
             "$ref": "#/components/responses/Error",
             "description": "The console or remote end failed"
@@ -32299,7 +32349,26 @@
             "description": "Refused by the engine's address, Origin or Host guards."
           },
           "409": {
-            "$ref": "#/components/responses/Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
             "description": "Conflict"
           },
           "502": {
@@ -32905,6 +32974,29 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "502": {
             "$ref": "#/components/responses/Error",
             "description": "The console or remote end failed"
@@ -32970,7 +33062,26 @@
             "description": "Refused by the engine's address, Origin or Host guards."
           },
           "409": {
-            "$ref": "#/components/responses/Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
             "description": "Conflict"
           },
           "502": {
@@ -33038,7 +33149,26 @@
             "description": "Refused by the engine's address, Origin or Host guards."
           },
           "409": {
-            "$ref": "#/components/responses/Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
             "description": "Conflict"
           },
           "502": {
@@ -33114,7 +33244,26 @@
             "description": "Refused by the engine's address, Origin or Host guards."
           },
           "409": {
-            "$ref": "#/components/responses/Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
             "description": "Conflict"
           },
           "502": {
@@ -33368,6 +33517,29 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "502": {
             "$ref": "#/components/responses/Error",
             "description": "The console or remote end failed"
@@ -33433,7 +33605,26 @@
             "description": "Refused by the engine's address, Origin or Host guards."
           },
           "409": {
-            "$ref": "#/components/responses/Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
             "description": "Conflict"
           },
           "502": {
@@ -33839,7 +34030,26 @@
             "description": "Refused by the engine's address, Origin or Host guards."
           },
           "409": {
-            "$ref": "#/components/responses/Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
             "description": "Conflict"
           },
           "502": {
@@ -34671,7 +34881,7 @@
     },
     "/api/ps5/helper/stop": {
       "post": {
-        "description": "POST /api/ps5/helper/stop — Body: `{ addr }`. Asks the console's helper to exit\n(`node.shutdown`), refused while this engine runs a job against that console.\n\n200 `{ \"state\": \"stopped\" }` once the helper's port went quiet, or `{ \"state\": \"not_running\" }`\nwhen nothing answered. 409 `{ \"error\", \"reason\": \"busy\" }` while a job runs; 502\n`{ \"error\", \"reason\": \"refused\" (not paired) | \"failed\" (the real error) | \"still_running\" }`\notherwise. Also 409 busy while another stop or removal of that console runs.",
+        "description": "POST /api/ps5/helper/stop — Body: `{ addr }`. Asks the console's helper to exit\n(`node.shutdown`), refused while this engine runs a job against that console.\n\n200 `{ \"state\": \"stopped\" }` once the helper's port went quiet, or `{ \"state\": \"not_running\" }`\nwhen nothing answered. 409 `{ \"error\", \"reason\": \"busy\" }` while a job runs; 502\n`{ \"error\", \"reason\": \"refused\" (not paired) | \"failed\" (the real error) | \"still_running\" }`\notherwise. 409 `reason: \"stopping\"` while another stop or removal of that console runs.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -34707,7 +34917,24 @@
             "description": "Refused by the engine's address, Origin or Host guards."
           },
           "409": {
-            "$ref": "#/components/responses/Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
             "description": "Conflict"
           },
           "500": {
@@ -34847,7 +35074,27 @@
             "description": "Refused by the engine's address, Origin or Host guards."
           },
           "409": {
-            "$ref": "#/components/responses/Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "paths": {
+                          "type": "array"
+                        },
+                        "reason": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
             "description": "Conflict"
           },
           "500": {
@@ -40600,6 +40847,29 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "502": {
             "$ref": "#/components/responses/Error",
             "description": "The console or remote end failed"
@@ -40734,6 +41004,29 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "502": {
             "$ref": "#/components/responses/Error",
             "description": "The console or remote end failed"
@@ -40791,6 +41084,29 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "502": {
             "$ref": "#/components/responses/Error",
@@ -48865,6 +49181,29 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "500": {
             "$ref": "#/components/responses/Error",
             "description": "Engine error"
@@ -48929,6 +49268,29 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "default": {
             "$ref": "#/components/responses/Error",
@@ -49093,6 +49455,29 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "default": {
             "$ref": "#/components/responses/Error",
             "description": "Any other failure, in the same shape."
@@ -49153,6 +49538,29 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -49241,6 +49649,15 @@
                         }
                       },
                       "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
                     }
                   ]
                 }
@@ -49314,7 +49731,26 @@
             "description": "Refused by the engine's address, Origin or Host guards."
           },
           "409": {
-            "$ref": "#/components/responses/Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
             "description": "Conflict"
           },
           "500": {
@@ -49378,6 +49814,29 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "500": {
             "$ref": "#/components/responses/Error",
             "description": "Engine error"
@@ -49436,6 +49895,29 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "default": {
             "$ref": "#/components/responses/Error",
@@ -49603,6 +50085,29 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "500": {
             "$ref": "#/components/responses/Error",
             "description": "Engine error"
@@ -49668,6 +50173,29 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "default": {
             "$ref": "#/components/responses/Error",
             "description": "Any other failure, in the same shape."
@@ -49728,6 +50256,29 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "500": {
             "$ref": "#/components/responses/Error",

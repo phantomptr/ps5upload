@@ -228,21 +228,63 @@ fn state_dir() -> Option<PathBuf> {
 
 pub(crate) fn load<T: for<'de> Deserialize<'de> + Default>(name: &str) -> T {
     state_dir()
-        .and_then(|d| std::fs::read(d.join(name)).ok())
-        .and_then(|b| serde_json::from_slice(&b).ok())
+        .map(|d| load_from(&d.join(name)))
         .unwrap_or_default()
+}
+
+/// The settings or records in `path`: the defaults when there is none. One that cannot be read as
+/// what it should hold is not dropped in silence (the next save would write the defaults over
+/// it): it is logged and kept beside as `<file>.bad`, and the defaults are used.
+pub(crate) fn load_from<T: for<'de> Deserialize<'de> + Default>(path: &std::path::Path) -> T {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return T::default(),
+        Err(e) => {
+            crate::log_warn!("could not read {}: {e}; using the defaults", path.display());
+            return T::default();
+        }
+    };
+    match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            let mut bad = path.as_os_str().to_owned();
+            bad.push(".bad");
+            let bad = std::path::PathBuf::from(bad);
+            let kept = std::fs::rename(path, &bad);
+            crate::log_warn!(
+                "{} could not be read ({e}); {}; starting from the defaults",
+                path.display(),
+                match kept {
+                    Ok(()) => format!("kept as {}", bad.display()),
+                    Err(re) => format!("it could not be kept aside ({re})"),
+                }
+            );
+            T::default()
+        }
+    }
 }
 
 pub(crate) fn save<T: Serialize>(name: &str, value: &T) -> std::io::Result<()> {
     let Some(dir) = state_dir() else {
         return Ok(());
     };
-    let path = dir.join(name);
+    save_to(&dir.join(name), value)
+}
+
+/// Writes `value` to `path` through a temporary file; an error names the file.
+pub(crate) fn save_to<T: Serialize>(path: &std::path::Path, value: &T) -> std::io::Result<()> {
     let tmp = path.with_extension("json.tmp");
-    let bytes = serde_json::to_vec_pretty(value).map_err(std::io::Error::other)?;
+    let what = format!(
+        "save {}",
+        path.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    );
+    let bytes = serde_json::to_vec_pretty(value)
+        .map_err(|e| std::io::Error::other(format!("{what}: {e}")))?;
     std::fs::write(&tmp, bytes)
-        .and_then(|_| std::fs::rename(&tmp, &path))
-        .map_err(|e| crate::state_io::io_error("save backup settings", &path, e))
+        .and_then(|_| std::fs::rename(&tmp, path))
+        .map_err(|e| crate::state_io::io_error(&what, path, e))
 }
 
 const SETTINGS_FILE: &str = "save-backup.json";
@@ -2033,6 +2075,37 @@ pub async fn get_note(Query(q): Query<NoteQuery>) -> Response {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_kept_aside_not_emptied() {
+        let dir = std::env::temp_dir().join(format!("ps5u-state-load-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("save-sync.json");
+        // None there: the defaults, and nothing made.
+        let v: Vec<u32> = super::load_from(&path);
+        assert!(v.is_empty() && !path.exists());
+        super::save_to(&path, &vec![1u32, 2]).unwrap();
+        assert_eq!(super::load_from::<Vec<u32>>(&path), vec![1, 2]);
+        std::fs::write(&path, b"{ not json").unwrap();
+        let v: Vec<u32> = super::load_from(&path);
+        assert!(v.is_empty());
+        assert!(!path.exists(), "moved aside");
+        assert_eq!(
+            std::fs::read(dir.join("save-sync.json.bad")).unwrap(),
+            b"{ not json"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_save_that_fails_names_its_file() {
+        let path = std::env::temp_dir()
+            .join(format!("ps5u-no-such-dir-{}", std::process::id()))
+            .join("save-sync-state.json");
+        let e = super::save_to(&path, &1u32).unwrap_err().to_string();
+        assert!(e.contains("save-sync-state.json"), "{e}");
+    }
 
     #[test]
     fn switching_on_or_adding_a_console_starts_a_pass_at_once() {

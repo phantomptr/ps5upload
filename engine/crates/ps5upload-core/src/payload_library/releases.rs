@@ -351,21 +351,11 @@ impl Library {
     /// The latest release of a payload. On a failed fetch with any cache, the cached release with
     /// `refresh_error` set, so the UI says the data may be old instead of showing nothing.
     pub fn release(&self, id: &str, force_refresh: bool) -> Result<ReleaseInfo, LibraryError> {
-        let mut entry = self.resolve_entry(id)?;
+        let entry = self.resolve_entry(id)?;
         if entry.list_payload.is_some() {
-            // A source's payload has one release: what its list names now.
-            let mut why = None;
-            if force_refresh {
-                let source = entry
-                    .list_payload
-                    .as_ref()
-                    .map(|p| p.source_id.clone())
-                    .unwrap_or_default();
-                why = self.refresh_source(&source, 30);
-                // Gone from its list now: the release already in hand is the answer.
-                entry = self.resolve_entry(id).unwrap_or(entry);
-            }
-            return Ok(list_release(&entry, why));
+            // A source's payload has one release: what its saved list names. Lists are never
+            // fetched again, so a refresh reads the same copy.
+            return Ok(list_release(&entry, None));
         }
         let cache_path = self.cache_path(&entry.id, "release.json");
         if !force_refresh {

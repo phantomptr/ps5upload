@@ -13,9 +13,8 @@
 //! out too, so it is not shown twice.
 //!
 //! New lists can no longer be added, and the app never downloads a payload from one: lists added
-//! by earlier versions still show their payloads, and a local copy got earlier stays usable. A
-//! check for updates reads a list again (release information only); a failed read keeps the last
-//! copy.
+//! by earlier versions still show their payloads, and a local copy got earlier stays usable. Lists
+//! are never fetched again: a check for updates reads the copy saved on disk.
 
 use std::time::SystemTime;
 
@@ -23,14 +22,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::catalogue::CATALOGUE;
-use super::http::{fetch, is_local_name, FetchKind};
+use super::http::is_local_name;
 use super::repos::{is_plausible_repo_host, CUSTOM_AUTOLOAD_DELAY_MS, CUSTOM_AUTOLOAD_PRIORITY};
 use super::{atomic_write, Library, LibraryError, PayloadInfo, ResolvedEntry};
 
 const SOURCES_FILE: &str = "payload-sources.json";
 const SOURCES_CACHE_DIR: &str = "sources";
-/// Payload Manager's own list is ~25 KB; this leaves room for big lists and stops a huge answer.
-const LIST_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const URL_MAX_CHARS: usize = 2000;
 const TEXT_MAX_CHARS: usize = 400;
 const NAME_MAX_CHARS: usize = 80;
@@ -357,54 +354,6 @@ impl Library {
         Some((parsed, age))
     }
 
-    /// Fetch a list now and keep it when it parses. The error text on failure.
-    fn fetch_list(&self, src: &PayloadSource) -> Result<Parsed, LibraryError> {
-        use std::io::Read;
-        let host = https_host(&src.url).unwrap_or_default();
-        let entry = ResolvedEntry {
-            id: src.id.clone(),
-            repo_host: host,
-            repo_owner: String::new(),
-            repo_name: String::new(),
-            asset_name_hint: String::new(),
-            is_custom: false,
-            list_payload: None,
-        };
-        let resp = fetch(
-            self.http.as_ref(),
-            &entry,
-            &src.url,
-            Some("application/json"),
-            FetchKind::Metadata,
-        )?;
-        if !(200..300).contains(&resp.status) {
-            return Err(LibraryError::new(
-                "source_fetch_failed",
-                format!("fetch {}: HTTP {}", src.url, resp.status),
-            ));
-        }
-        let mut body = Vec::new();
-        resp.body
-            .take(LIST_MAX_BYTES + 1)
-            .read_to_end(&mut body)
-            .map_err(|e| LibraryError::new("source_fetch_failed", format!("read list: {e}")))?;
-        if body.len() as u64 > LIST_MAX_BYTES {
-            return Err(LibraryError::new(
-                "source_not_a_list",
-                format!("the list is larger than {LIST_MAX_BYTES} bytes"),
-            ));
-        }
-        let parsed =
-            parse_list(src, &body).map_err(|e| LibraryError::new("source_not_a_list", e))?;
-        let dir = self.dir.join(SOURCES_CACHE_DIR);
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| LibraryError::new("io_failed", format!("mkdir {}: {e}", dir.display())))?;
-        atomic_write(&self.list_cache_path(&src.id), &body)
-            .map_err(|e| LibraryError::new("io_failed", format!("write list: {e}")))?;
-        let _ = std::fs::remove_file(self.list_error_path(&src.id));
-        Ok(parsed)
-    }
-
     fn source_info(&self, src: &PayloadSource) -> SourceInfo {
         let error = std::fs::read_to_string(self.list_error_path(&src.id))
             .ok()
@@ -439,35 +388,6 @@ impl Library {
             .iter()
             .map(|s| self.source_info(s))
             .collect()
-    }
-
-    /// Fetch one list again unless its copy is younger than `younger_than` seconds, and give that
-    /// list's own fetch error. A check for updates asks once per payload: the lists it shares
-    /// with others are fetched once, and one list's failure is not shown on another's payloads.
-    pub(super) fn refresh_source(&self, id: &str, younger_than: u64) -> Option<String> {
-        self.refresh_lists(Some(id), younger_than);
-        self.sources()
-            .into_iter()
-            .find(|s| s.id == id)
-            .and_then(|s| s.error)
-    }
-
-    fn refresh_lists(&self, only: Option<&str>, younger_than: u64) {
-        for src in self.read_sources() {
-            if only.is_some_and(|id| id != src.id) {
-                continue;
-            }
-            let fresh = self
-                .cached_list(&src)
-                .is_some_and(|(_, age)| age < younger_than);
-            if fresh {
-                continue;
-            }
-            if let Err(e) = self.fetch_list(&src) {
-                let _ = std::fs::create_dir_all(self.dir.join(SOURCES_CACHE_DIR));
-                let _ = atomic_write(&self.list_error_path(&src.id), e.message.as_bytes());
-            }
-        }
     }
 
     /// Remove a list, its copy and the local copies of its payloads. `false` for an unknown id.
@@ -560,13 +480,15 @@ mod tests {
         .to_string()
     }
 
-    /// A list as an earlier version of the app added it.
-    fn add(lib: &Library, url: &str) -> Result<SourceInfo, LibraryError> {
+    /// A list as an earlier version of the app added it: saved, with its copy on disk.
+    fn add(lib: &Library, url: &str, body: &[u8]) -> Result<SourceInfo, LibraryError> {
         let src = PayloadSource {
             id: format!("src-{}", fnv12(url)),
             url: normalize_url(url)?,
         };
-        lib.fetch_list(&src)?;
+        parse_list(&src, body).map_err(|e| LibraryError::new("source_not_a_list", e))?;
+        std::fs::create_dir_all(lib.dir.join(SOURCES_CACHE_DIR)).unwrap();
+        atomic_write(&lib.list_cache_path(&src.id), body).unwrap();
         lib.save_sources(std::slice::from_ref(&src))?;
         Ok(lib.source_info(&src))
     }
@@ -581,10 +503,9 @@ mod tests {
 
     #[test]
     fn a_list_shows_its_usable_payloads_in_the_catalogue() {
-        let (_d, http, lib) = library("src-add");
+        let (_d, _http, lib) = library("src-add");
         let elf = elf_bytes();
-        http.ok(LIST_URL, list_body(&sha(&elf)).as_bytes());
-        let info = add(&lib, LIST_URL).unwrap();
+        let info = add(&lib, LIST_URL, list_body(&sha(&elf)).as_bytes()).unwrap();
         assert_eq!(info.name, "Some suite");
         assert_eq!(info.payloads, 1);
         assert_eq!(info.skipped, 3, "no checksum, another host, plain http");
@@ -604,8 +525,7 @@ mod tests {
     fn a_listed_payload_is_sent_only_from_a_local_copy() {
         let (_d, http, lib) = library("src-local");
         let elf = elf_bytes();
-        http.ok(LIST_URL, list_body(&sha(&elf)).as_bytes());
-        add(&lib, LIST_URL).unwrap();
+        add(&lib, LIST_URL, list_body(&sha(&elf)).as_bytes()).unwrap();
         let id = tool_id(&lib);
         let rel = lib.release(&id, false).unwrap();
         assert_eq!(rel.tag, "v1");
@@ -623,38 +543,46 @@ mod tests {
 
     #[test]
     fn bad_addresses_and_non_lists_are_refused() {
-        let (_d, http, lib) = library("src-bad");
+        let (_d, _http, lib) = library("src-bad");
+        let body = list_body(&sha(&elf_bytes()));
         for url in [
             "http://lists.example.org/p.json",
             "https://192.168.1.2/p.json",
             "https://user@lists.example.org/p.json",
             "not a url",
         ] {
-            assert_eq!(add(&lib, url).unwrap_err().code, "source_url_invalid");
+            assert_eq!(
+                add(&lib, url, body.as_bytes()).unwrap_err().code,
+                "source_url_invalid"
+            );
         }
-        http.ok(LIST_URL, b"<html>hello</html>");
-        assert_eq!(add(&lib, LIST_URL).unwrap_err().code, "source_not_a_list");
+        assert_eq!(
+            add(&lib, LIST_URL, b"<html>hello</html>").unwrap_err().code,
+            "source_not_a_list"
+        );
         assert!(lib.sources().is_empty());
     }
 
     #[test]
-    fn a_failed_refresh_keeps_the_last_copy_and_says_why() {
+    fn a_check_for_updates_reads_the_saved_list_and_never_fetches_it() {
         let (_d, http, lib) = library("src-refresh");
-        http.ok(LIST_URL, list_body(&sha(&elf_bytes())).as_bytes());
-        let src = add(&lib, LIST_URL).unwrap();
+        let elf = elf_bytes();
+        add(&lib, LIST_URL, list_body(&sha(&elf)).as_bytes()).unwrap();
+        // Whatever the list's site would answer now is never asked.
         http.status(LIST_URL, 503);
-        assert!(lib.refresh_source(&src.id, 0).unwrap().contains("503"));
+        let id = tool_id(&lib);
+        let rel = lib.release(&id, true).unwrap();
+        assert_eq!(rel.tag, "v1");
+        assert!(rel.refresh_error.is_none());
+        assert!(http.asked.lock().unwrap().is_empty());
         assert_eq!(lib.sources()[0].payloads, 1);
-        http.ok(LIST_URL, list_body(&sha(&elf_bytes())).as_bytes());
-        assert!(lib.refresh_source(&src.id, 0).is_none());
     }
 
     #[test]
     fn removing_a_source_removes_its_payloads_and_their_files() {
-        let (_d, http, lib) = library("src-rm");
+        let (_d, _http, lib) = library("src-rm");
         let elf = elf_bytes();
-        http.ok(LIST_URL, list_body(&sha(&elf)).as_bytes());
-        let src = add(&lib, LIST_URL).unwrap();
+        let src = add(&lib, LIST_URL, list_body(&sha(&elf)).as_bytes()).unwrap();
         let id = tool_id(&lib);
         seed(&lib, &id, "tool.elf", &elf, "v1");
         assert!(lib.remove_source(&src.id).unwrap());

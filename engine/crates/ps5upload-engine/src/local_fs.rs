@@ -139,30 +139,131 @@ pub fn storage_roots() -> Vec<String> {
     roots
 }
 
-/// The disks this machine has mounted, as browse roots (readable folders only).
+/// How long one disk is given to show it can be read before it is left out. Every disk is tried
+/// at once, so the whole list waits about this long at most, whatever hangs.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// The disks this machine has mounted, as browse roots: local disks that can be read (each tried
+/// on its own thread, at once, for [`PROBE_TIMEOUT`]); network shares unprobed (reading a share
+/// whose server is gone can hang for minutes, and listing it later says what is wrong).
 fn mounted_disks() -> Vec<String> {
-    let found: Vec<String> = if cfg!(target_os = "linux") {
+    let found: Vec<(String, bool)> = if cfg!(target_os = "linux") {
         std::fs::read_to_string("/proc/self/mountinfo")
-            .map(|t| linux_disk_mounts(&t))
+            .map(|t| linux_disk_mounts_kinds(&t))
             .unwrap_or_default()
     } else if cfg!(target_os = "macos") {
-        macos_volumes()
+        macos_volumes().into_iter().map(|p| (p, false)).collect()
     } else if cfg!(windows) {
-        (b'C'..=b'Z').map(|c| format!("{}:\\", c as char)).collect()
+        // A drive letter can be a mapped network drive: every one is tried with the timeout.
+        (b'C'..=b'Z')
+            .map(|c| (format!("{}:\\", c as char), false))
+            .collect()
     } else {
         Vec::new()
     };
+    let readable = probe_readable(
+        found
+            .iter()
+            .filter(|(_, network)| !network)
+            .map(|(p, _)| p.clone())
+            .collect(),
+        PROBE_TIMEOUT,
+    );
     found
         .into_iter()
-        .filter(|p| std::fs::read_dir(p).is_ok())
+        .filter(|(p, network)| *network || readable.contains(p))
+        .map(|(p, _)| p)
+        .collect()
+}
+
+/// The folders of `paths` that could be read within `timeout`, all tried at once on threads of
+/// their own. One that has not answered by then is left out (its thread is left to finish).
+fn probe_readable(paths: Vec<String>, timeout: std::time::Duration) -> Vec<String> {
+    probe_with(paths, timeout, |p| std::fs::read_dir(p).is_ok())
+}
+
+fn probe_with(
+    paths: Vec<String>,
+    timeout: std::time::Duration,
+    probe: impl Fn(&str) -> bool + Send + Sync + Clone + 'static,
+) -> Vec<String> {
+    let (tx, rx) = std::sync::mpsc::channel::<(usize, bool)>();
+    let mut started = 0usize;
+    for (i, p) in paths.iter().enumerate() {
+        let (tx, p, probe) = (tx.clone(), p.clone(), probe.clone());
+        let spawned = std::thread::Builder::new()
+            .name("disk-probe".into())
+            .spawn(move || {
+                let _ = tx.send((i, probe(&p)));
+            });
+        if spawned.is_ok() {
+            started += 1;
+        }
+    }
+    drop(tx);
+    let deadline = std::time::Instant::now() + timeout;
+    let mut ok = vec![false; paths.len()];
+    for _ in 0..started {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match rx.recv_timeout(left) {
+            Ok((i, readable)) => ok[i] = readable,
+            Err(_) => break,
+        }
+    }
+    paths
+        .into_iter()
+        .zip(ok)
+        .filter_map(|(p, ok)| ok.then_some(p))
         .collect()
 }
 
 /// File systems that hold people's files (disks, USB drives, network shares); anything else in
 /// the mount table (proc, tmpfs, overlay, squashfs snaps, cgroups...) is the system's own.
 const DISK_FS: &[&str] = &[
-    "ext2", "ext3", "ext4", "btrfs", "xfs", "f2fs", "zfs", "jfs", "reiserfs", "vfat", "exfat",
-    "ntfs", "ntfs3", "fuseblk", "hfsplus", "apfs", "nfs", "nfs4", "cifs", "smb3", "9p", "virtiofs",
+    "ext2",
+    "ext3",
+    "ext4",
+    "btrfs",
+    "xfs",
+    "f2fs",
+    "zfs",
+    "jfs",
+    "reiserfs",
+    "vfat",
+    "exfat",
+    "ntfs",
+    "ntfs3",
+    "fuseblk",
+    "hfsplus",
+    "apfs",
+    "nfs",
+    "nfs4",
+    "cifs",
+    "smb3",
+    "9p",
+    "virtiofs",
+    "fuse.sshfs",
+    "fuse.rclone",
+    "smbfs",
+    "afpfs",
+    "davfs",
+    "fuse.davfs2",
+];
+
+/// The network file systems of [`DISK_FS`]: listed without being read first (a share whose
+/// server is gone can hang a read for minutes).
+const NETWORK_FS: &[&str] = &[
+    "nfs",
+    "nfs4",
+    "cifs",
+    "smb3",
+    "9p",
+    "fuse.sshfs",
+    "fuse.rclone",
+    "smbfs",
+    "afpfs",
+    "davfs",
+    "fuse.davfs2",
 ];
 
 /// Mount points under these hold the system, not files to send.
@@ -188,8 +289,17 @@ const SYSTEM_MOUNTS: &[&str] = &[
 /// The disk mount points in a Linux `mountinfo` table, in table order, without `/` (home is
 /// already the first root) and without the system's own mounts. `/run/media/<user>/<disk>` (where
 /// desktops mount USB drives) is kept although `/run` is not.
+#[cfg(test)]
 fn linux_disk_mounts(mountinfo: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+    linux_disk_mounts_kinds(mountinfo)
+        .into_iter()
+        .map(|(p, _)| p)
+        .collect()
+}
+
+/// [`linux_disk_mounts`] with whether each is a network share ([`NETWORK_FS`]).
+fn linux_disk_mounts_kinds(mountinfo: &str) -> Vec<(String, bool)> {
+    let mut out: Vec<(String, bool)> = Vec::new();
     for line in mountinfo.lines() {
         // "<id> <parent> <maj:min> <root> <mount point> <options> [optional...] - <fstype> <source> <super options>"
         let Some((left, right)) = line.split_once(" - ") else {
@@ -209,8 +319,8 @@ fn linux_disk_mounts(mountinfo: &str) -> Vec<String> {
         if system && !point.starts_with("/run/media/") {
             continue;
         }
-        if !out.contains(&point) {
-            out.push(point);
+        if !out.iter().any(|(p, _)| *p == point) {
+            out.push((point, NETWORK_FS.contains(&fstype)));
         }
     }
     out
@@ -345,6 +455,51 @@ mod tests {
                 "/srv/nas".to_string(),
                 "/home/alice/games".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn network_shares_are_told_apart() {
+        let table = "\
+25 22 8:1 / /mnt/data rw - ext4 /dev/sda1 rw
+29 22 0:50 / /srv/nas rw - cifs //nas/share rw
+30 22 0:51 / /mnt/nfs rw - nfs4 nas:/x rw
+31 22 0:52 / /home/a/remote rw - fuse.sshfs a@b:/ rw
+";
+        assert_eq!(
+            linux_disk_mounts_kinds(table),
+            vec![
+                ("/mnt/data".to_string(), false),
+                ("/srv/nas".to_string(), true),
+                ("/mnt/nfs".to_string(), true),
+                ("/home/a/remote".to_string(), true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_disk_that_hangs_is_left_out_without_holding_the_others() {
+        let t0 = std::time::Instant::now();
+        let got = probe_with(
+            vec![
+                "fast".into(),
+                "hangs".into(),
+                "unreadable".into(),
+                "also".into(),
+            ],
+            std::time::Duration::from_millis(200),
+            |p| {
+                if p == "hangs" {
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                }
+                p != "unreadable"
+            },
+        );
+        assert_eq!(got, vec!["fast".to_string(), "also".to_string()]);
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            t0.elapsed()
         );
     }
 

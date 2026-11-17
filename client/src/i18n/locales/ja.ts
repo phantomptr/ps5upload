@@ -5419,6 +5419,7 @@ c2c_test_deep_bad: "4 KiB のテスト送信が届きませんでした: {detail
 "helper_stop_confirm_title": "ヘルパーを停止しますか？",
 "helper_stop_confirm_body": "アップロード、インストール、本体のページにはヘルパーが必要です。必要なときにここから再送してください。",
 "helper_stop_busy": "ヘルパーは使用中です。この本体での転送とインストールが終わってから停止してください。",
+"helper_stop_already_running": "このコンソールではすでに停止の処理が進行中です。終わるまで待ってから、もう一度お試しください。",
 "helper_stop_failed": "ヘルパーを停止できませんでした: {error}",
 "gate_helper_stopped_title": "ヘルパーを停止しました",
 "joberr.console_rest_mode": "PS5はレストモード中です。起動すると、転送は止まったところから続きます。",

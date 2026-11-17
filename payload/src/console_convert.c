@@ -23,6 +23,7 @@
 #include "ava1_app_gen.h"
 #include "ava1_op.h"
 #include "fs_jobs.h"
+#include "proc_identity.h"
 #include "sony_api_lock.h"
 #include "webui_codec.h"
 
@@ -32,6 +33,8 @@ int is_path_allowed(const char *p);
 int path_tree_op_refused(const char *p);
 int webui_pkg_installing(void);
 extern int sceSystemServicePowerTick(void);
+/* proc_list.c: the process's name (its thread name, kinfo_proc). 0 read, non-zero gone or unread. */
+int proc_name_by_pid(int pid, char *out, size_t cap);
 
 /* The converter ELF, embedded by payload/Makefile (xxd of payload/convert/ps5upload-convert.elf).
  * Length 0 in a helper built without it (the ELF needs Docker to build: `make console-convert`). */
@@ -65,6 +68,7 @@ const char *console_convert_test_dir;
 int (*console_convert_test_launch)(void);
 const char *console_convert_test_runtime_dir;
 unsigned long long console_convert_test_boot;
+int (*console_convert_test_proc_name)(int pid, char *out, size_t cap);
 #endif
 
 typedef enum { CF_REQUEST, CF_STATUS, CF_CANCEL, CF_RECORD, CF_PENDING } cfile_t;
@@ -234,11 +238,53 @@ static int pid_alive(uint64_t pid) {
     return pid_signallable(pid) && (kill((pid_t)pid, 0) == 0 || errno == EPERM);
 }
 
+/* 1 when live process `pid` is shown to be ours by its name: the converter ("ps5u-convert",
+ * payload/convert/entry.c) or, when `helper_too`, a helper ("ps5upload..."). 0 when it is another's
+ * or its name cannot be read. */
+static int pid_is_ours(uint64_t pid, int helper_too) {
+    char name[64];
+    int rc;
+    if (!pid_signallable(pid)) return 0;
+#ifdef CONSOLE_CONVERT_SELFTEST
+    rc = console_convert_test_proc_name ? console_convert_test_proc_name((int)pid, name, sizeof name) : -1;
+#else
+    rc = proc_name_by_pid((int)pid, name, sizeof name);
+#endif
+    if (rc != 0) return 0;
+    return strcmp(name, CONVERT_PROC_NAME) == 0 || (helper_too && proc_name_is_ours(name));
+}
+
+/* 1 when `pid` (from a file written at wall-clock `then`, or with boot time `then`) still runs a
+ * job of ours. A live process named as ours always does, whatever the boot test says: kern.boottime
+ * moves when the clock is set forward, so a job of this boot can read as from an earlier one. The
+ * boot test only discounts a live pid it cannot show is ours (after a restart, a pid may be another
+ * process's now). */
+static int pid_still_ours(uint64_t pid, int helper_too, int earlier_boot) {
+    if (!pid_alive(pid)) return 0;
+    return !earlier_boot || pid_is_ours(pid, helper_too);
+}
+
+/* 1 when `dest` is under a drive's mount point (/mnt/<name>/...) and nothing is mounted there: the
+ * folder the console keeps for an unmounted drive is still there, empty, on the device that holds
+ * /mnt itself. 0 otherwise (mounted, not under /mnt, or it cannot be told). */
+static int mount_point_empty(const char *dest) {
+    char mp[256];
+    const char *end;
+    struct stat mst, pst;
+    if (strncmp(dest, "/mnt/", 5) != 0) return 0;
+    end = strchr(dest + 5, '/');
+    if (!end || end == dest + 5 || (size_t)(end - dest) >= sizeof mp) return 0;
+    memcpy(mp, dest, (size_t)(end - dest));
+    mp[end - dest] = 0;
+    if (stat(mp, &mst) != 0 || stat("/mnt", &pst) != 0) return 0;
+    return mst.st_dev == pst.st_dev;
+}
+
 /* What an unfinished build of `dest` leaves beside it: `<dest>.partial` (a file, or a folder for
  * a folder output) and the builder's two small files next to it. Only these names are removed,
  * never `dest` itself: it appears by a rename when the build is complete. 1 when settled (removed,
- * or never ours to remove), 0 when the folder it is in is not there (a drive not mounted yet):
- * nothing can be said about it now. */
+ * or never ours to remove), 0 when the folder it is in is not there or its drive is not mounted
+ * (mount_point_empty): nothing can be said about it now. */
 static int remove_partial(const char *dest) {
     static const char *const tails[] = {".partial", ".partial.resume", ".partial.stamp"};
     char path[1100];
@@ -251,6 +297,8 @@ static int remove_partial(const char *dest) {
         path[slash - dest] = 0;
         if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) return 0;
     }
+    /* A drive not mounted yet whose mount point's empty folder is there is just as missing. */
+    if (mount_point_empty(dest)) return 0;
     if (!may_write_here(dest)) return 1;
     fprintf(stderr, "convert: removing what an unfinished conversion left beside %s\n", dest);
     for (i = 0; i < sizeof tails / sizeof *tails; i++) {
@@ -265,10 +313,22 @@ static int remove_partial(const char *dest) {
 #define CC_PENDING_MAX 16
 #define CC_PENDING_LINE 1100
 
+/* One sweep of pending.rec at a time in this helper; a helper being replaced may run one at the same
+ * time, so the file is written through a temporary name of this process's and this sweep's own. */
+static pthread_mutex_t g_pending_lock = PTHREAD_MUTEX_INITIALIZER;
+static unsigned g_pending_seq;
+
 /* Tries again each unfinished output pending.rec keeps, and keeps `add` (one just found that could
  * not be cleared): what stays is what still can't be (its folder still missing). */
+static void sweep_pending_locked(const char *add);
 static void sweep_pending(const char *add) {
-    char file[160], tmp[176];
+    pthread_mutex_lock(&g_pending_lock);
+    sweep_pending_locked(add);
+    pthread_mutex_unlock(&g_pending_lock);
+}
+
+static void sweep_pending_locked(const char *add) {
+    char file[160], tmp[200];
     size_t cap = CC_PENDING_MAX * (CC_PENDING_LINE + 1) + 1, at = 0, kept = 0;
     char *buf = malloc(cap), *out = malloc(cap), *line, *next;
     struct stat st;
@@ -297,7 +357,7 @@ static void sweep_pending(const char *add) {
         (void)unlink(file);
         goto out;
     }
-    snprintf(tmp, sizeof tmp, "%s.tmp", file);
+    snprintf(tmp, sizeof tmp, "%s.%ld.%u.tmp", file, (long)getpid(), ++g_pending_seq);
     fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) goto out;
     if (write(fd, out, at) == (ssize_t)at) {
@@ -412,11 +472,14 @@ void console_convert_sweep(void) {
         goto out;
     }
     /* The helper that wrote it, or its converter, still runs (a takeover lets the old one finish).
-     * Not when it is from an earlier boot (a power cut): both are gone, and a pid it names may be
-     * another process's now (one we may not signal reads as alive), which kept Convert "busy" for
-     * good. */
+     * From an earlier boot (a power cut) both are gone, and a pid it names may be another
+     * process's now (one we may not signal reads as alive), which kept Convert "busy" for good: then
+     * only a live process shown to be ours by its name keeps it (pid_still_ours: the boot time
+     * moves when the clock is set forward, and a live job must never lose its output). */
     earlier_boot = cc_from_earlier_boot(rboot, boot_time());
-    if (!earlier_boot && ((hpid != (long)getpid() && pid_alive((uint64_t)hpid)) || pid_alive(xpid))) goto out;
+    if ((hpid != (long)getpid() && pid_still_ours((uint64_t)hpid, 1, earlier_boot)) ||
+        pid_still_ours(xpid, 0, earlier_boot))
+        goto out;
     if (xpid == 0) {
         /* Its converter was never seen: it may still start late. It is told to stop before it
          * writes anything, and its request goes; nothing of it is removed (there is nothing of
@@ -451,9 +514,11 @@ static int follow(ava1_op_ctx_t *c, const char *id, const char *dest, const cc_b
                   cc_status_t *s) {
     uint64_t started = now_ms(), cancel_at = 0, total = 0, shown = 0, rec_pid = 0, tick_at = 0;
     /* The converter counts each stage (pack, plan, write, verify) from 0 against that stage's own
-     * total, while a job has one bar: its total is fixed at the first stage total seen (about the
-     * game's size), and each stage moves it through that stage's fixed share (cc_job_progress), so
-     * it never falls back as a stage starts, nor passes its total. */
+     * total, while a job has one bar: its total is the largest stage total seen (a first stage can
+     * count something small, a .pkg's check, a plan's files: the write's total is about the game's
+     * size), and each stage moves it through that stage's fixed share (cc_job_progress). The share
+     * only grows, and the bar is moved only forward, so it never falls back as a stage starts or
+     * the total grows, nor passes its total. */
     int build = b != NULL, have = 0, cancel_sent = 0;
     char *cur_buf = malloc(cap);
     if (!cur_buf) {
@@ -473,7 +538,7 @@ static int follow(ava1_op_ctx_t *c, const char *id, const char *dest, const cc_b
             *s = cur;
             if (cur.result) s->result = buf + (cur.result - cur_buf);
             /* A final status may carry no counts: the last total stands. */
-            if (!total && cur.bytes_total) {
+            if (cur.bytes_total > total) {
                 total = cur.bytes_total;
                 ava1_op_set_total(c, 0, total);
             }
@@ -731,8 +796,8 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         /* A "running" written before this boot is a converter a power cut ended: its pid may be
          * another process's now. */
         int stale = stat(file, &sst) == 0 && cc_from_earlier_boot((unsigned long long)sst.st_mtime, boot_time());
-        if (len > 0 && !stale && fsj_json_str(buf, "state", state, sizeof state) && strcmp(state, "running") == 0 &&
-            fsj_json_u64(buf, "pid", &old) && pid_alive(old)) {
+        if (len > 0 && fsj_json_str(buf, "state", state, sizeof state) && strcmp(state, "running") == 0 &&
+            fsj_json_u64(buf, "pid", &old) && pid_still_ours(old, 0, stale)) {
             ava1_op_message(c, "convert_busy");
             status = AVA1_ERR_BUSY;
             (void)unlink(cpath(CF_RECORD, file, sizeof file)); /* ours: taken just above */

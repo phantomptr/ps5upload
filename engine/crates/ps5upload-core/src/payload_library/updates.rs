@@ -426,7 +426,10 @@ impl Library {
             .map(|p| p.display_name)
             .unwrap_or_default();
         let current = self.local_entry(id).ok_or_else(|| {
-            LibraryError::new("not_downloaded", format!("{id} is not downloaded"))
+            LibraryError::new(
+                super::cache::NOT_ON_THIS_COMPUTER,
+                format!("{id} is not on this computer"),
+            )
         })?;
         let prev_dir = self.dir.join(id).join(PREVIOUS_DIR);
         let prev_elf = elf_in_dir(&prev_dir).ok_or_else(|| {
@@ -499,7 +502,10 @@ impl Library {
         let dir = self.dir.join(id);
         sweep_stale_staging(&dir);
         let current = super::elf_in_dir(&dir).ok_or_else(|| {
-            LibraryError::new("not_downloaded", format!("{id} is not downloaded"))
+            LibraryError::new(
+                super::cache::NOT_ON_THIS_COMPUTER,
+                format!("{id} is not on this computer"),
+            )
         })?;
         let staging = StagingDir(dir.join(format!("{PREVIOUS_DIR}.{}.tmp", unique_suffix())));
         std::fs::create_dir_all(&staging.0)
@@ -764,7 +770,10 @@ mod tests {
     #[test]
     fn nothing_to_roll_back_says_so() {
         let (_d, _http, lib) = library("noprev");
-        assert_eq!(lib.rollback_payload(ID).unwrap_err().code, "not_downloaded");
+        assert_eq!(
+            lib.rollback_payload(ID).unwrap_err().code,
+            "not_on_this_computer"
+        );
         seed(&lib, ID, "kstuff.elf", &elf(1, 64), "v1");
         assert_eq!(lib.rollback_payload(ID).unwrap_err().code, "no_previous");
         assert_eq!(

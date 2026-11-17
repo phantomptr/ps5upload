@@ -57,6 +57,13 @@ function refusedMessage(r: Extract<HelperUninstallResult, { state: "refused" }>,
         undefined,
         "The helper is in use. Wait for the transfers and installs on this console to finish, then stop it.",
       );
+    // Another stop or removal of this console's helper is running.
+    case "stopping":
+      return tr(
+        "helper_stop_already_running",
+        undefined,
+        "A stop is already running on this console. Wait for it to finish, then try again.",
+      );
     case "in_use":
       return tr(
         "remove_ps5u_in_use",

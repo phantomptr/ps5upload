@@ -909,15 +909,8 @@ mod tests {
     fn a_new_file_name_takes_over_the_old_entry_and_the_old_copy_goes() {
         let (_d, _h, lib) = library("pm-rename");
         // A custom repo whose asset name carries its version.
-        let id = lib
-            .add_custom_repo(&super::super::AddRepo {
-                host: "github.com".into(),
-                owner: "me".into(),
-                name: "thing".into(),
-                ..Default::default()
-            })
-            .unwrap()
-            .id;
+        let id =
+            super::super::repos::test_repos::save_custom_repo(&lib, "me", "thing", "me/thing").id;
         let id = id.as_str();
         cache(&lib, id, "thing_v1.elf", "v1", &elf(1, 32));
         lib.set_pm_sync_choice(HOST, &ids(&[id]), &ids(&[id]))
