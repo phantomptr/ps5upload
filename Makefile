@@ -579,7 +579,7 @@ CHECK_NO_FTX2_SCOPE := .
 CHECK_NO_FTX2_EXCEPT := \
 	':!engine/crates/ps5upload-ctest/tests/payload_cutover.rs' \
 	':!CHANGELOG.md' ':!site/releases.json' \
-	':!CONTRIBUTING.md' ':!TESTING.md' \
+	':!CONTRIBUTING.md' ':!TESTING.md' ':!RELEASING.md' ':!scripts/release/fast-release.sh' \
 	':!protocol/ps5upload-ava1' ':!third_party/ava1' \
 	':!Makefile' \
 	':!.github/workflows/engine-ci.yml' \
