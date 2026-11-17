@@ -1,48 +1,39 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
-import { pmOverview } from "../../../api/payloadManager";
+import type { PmOverview } from "../../../api/payloadManager";
 import { mgmtAddr } from "../../../lib/addr";
 import { useMounterFor } from "../../../lib/mounter";
 import { useTr } from "../../../state/lang";
 import type { IntegrationReport } from "./registry";
 
-/** Payload Manager's card line: its version and how many payloads it keeps. Read once per
- *  console; its own panel (Manage) has the live view. */
+/** Payload Manager's card line: how many payloads it keeps and, once "On your PS5" has matched
+ *  them to what runs, how many of those are running (they show on its rows, not as cards of
+ *  their own, so the line says so with the card closed). The overview is read by the panel. */
 export function PmSummary({
-  host,
+  view,
+  running,
   onReport,
   fallback,
 }: {
-  host: string;
+  view: PmOverview | null | undefined;
+  /** Saved payloads running now; null while that isn't known. */
+  running: number | null;
   onReport: (r: IntegrationReport) => void;
   fallback: ReactNode;
 }) {
   const tr = useTr();
-  const [line, setLine] = useState<string | null>(null);
   const reportRef = useRef(onReport);
   useEffect(() => {
     reportRef.current = onReport;
   });
+  const version = view?.present ? view.version || null : undefined;
   useEffect(() => {
-    let cancelled = false;
-    setLine(null);
-    if (!host.trim()) return;
-    pmOverview(host)
-      .then((v) => {
-        if (cancelled || !v.present) return;
-        reportRef.current({ version: v.version || null });
-        setLine(
-          tr("hub_pm_summary", { n: v.payloads.length }, `Payloads stored: ${v.payloads.length}`),
-        );
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-    // tr is stable per language; re-reading on a language switch is not needed.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [host]);
-  return <>{line ?? fallback}</>;
+    if (version !== undefined) reportRef.current({ version });
+  }, [version]);
+  if (!view?.present) return <>{fallback}</>;
+  const n = view.payloads.length;
+  if (running === null) return <>{tr("hub_pm_summary", { n }, `Payloads stored: ${n}`)}</>;
+  return <>{tr("hub_pm_summary_running", { n, running }, `${n} saved · ${running} running`)}</>;
 }
 
 /** ShadowMount+'s card line: how many game images it has mounted, while it runs. Reads the
