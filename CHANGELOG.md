@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.1
 
 Every disk in the file browser, a note when Kraken Mount needs an update, and the frame rate on older firmware.
 
