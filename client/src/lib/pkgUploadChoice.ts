@@ -55,3 +55,39 @@ export function krakenCopyDestination(
   if (!d) return null;
   return { volume: d, subpath: root.slice(d.length).replace(/^\/+|\/+$/g, "") };
 }
+
+type Dest = { volume: string | null; subpath: string };
+/** The destination a Kraken Mount prefill replaced, and on which console. */
+export type KrakenReplaced = Dest & { host: string };
+
+/**
+ * One step of the Kraken Mount prefill on the Upload screen. While a package is copied as a file
+ * and the user has not chosen a destination themselves, the destination becomes Kraken Mount's
+ * folder (`target`); the one it replaced is kept and put back once no copied package remains
+ * (unless the user picked one since). `set`: the destination to set now, if any. Pure.
+ */
+export function krakenPrefillStep(s: {
+  host: string;
+  copying: boolean;
+  userChose: boolean;
+  current: Dest;
+  target: { volume: string; subpath: string } | null;
+  replaced: KrakenReplaced | null;
+}): { set: Dest | null; replaced: KrakenReplaced | null } {
+  const { host, current, target, replaced } = s;
+  if (!s.copying) {
+    const back = !!replaced && replaced.host === host && !s.userChose;
+    return {
+      set: back ? { volume: replaced.volume, subpath: replaced.subpath } : null,
+      replaced: null,
+    };
+  }
+  if (s.userChose || !target) return { set: null, replaced };
+  const trim = (p: string) => p.replace(/^\/+|\/+$/g, "");
+  if (target.volume === (current.volume ?? "/data") && target.subpath === trim(current.subpath))
+    return { set: null, replaced };
+  return {
+    set: target,
+    replaced: replaced?.host === host ? replaced : { host, ...current },
+  };
+}

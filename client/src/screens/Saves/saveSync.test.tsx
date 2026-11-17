@@ -4,11 +4,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { SyncPair, SyncRow, SyncSuggestion } from "../../api/saveSync";
 import {
   applyItems,
+  canKeepInStep,
   canSync,
   defaultDirection,
   directionsFor,
   initialSelection,
   needsFirstStart,
+  pickOther,
   promptFor,
   sortRows,
   suggestionId,
@@ -136,6 +138,26 @@ describe("save sync: the prompt after a game closes", () => {
     const conflict = view(suggestion({ state: "conflict" }));
     expect(conflict).toContain("changed on both PS5s");
     expect(conflict).not.toContain('data-testid="save-sync-send"');
+  });
+});
+
+describe("save sync: setting up a pair", () => {
+  it("the other PS5 is one still offered, else the first (the list can load late)", () => {
+    expect(pickOther("10.0.0.3", ["10.0.0.2", "10.0.0.3"])).toBe("10.0.0.3");
+    expect(pickOther("", ["10.0.0.2"])).toBe("10.0.0.2");
+    // The console shown now was the other one before switching.
+    expect(pickOther("10.0.0.1", ["10.0.0.2"])).toBe("10.0.0.2");
+    expect(pickOther("10.0.0.2", [])).toBe("");
+  });
+
+  it("Keep in step needs a user on each side and never pairs a console with itself", () => {
+    const ok = { host: "10.0.0.1", here: "1", other: "10.0.0.2", there: "2" };
+    expect(canKeepInStep(ok)).toBe(true);
+    expect(canKeepInStep({ ...ok, other: "10.0.0.1" })).toBe(false);
+    expect(canKeepInStep({ ...ok, host: "10.0.0.2:9113" })).toBe(false);
+    expect(canKeepInStep({ ...ok, there: "" })).toBe(false);
+    expect(canKeepInStep({ ...ok, here: "" })).toBe(false);
+    expect(canKeepInStep({ ...ok, other: "" })).toBe(false);
   });
 });
 

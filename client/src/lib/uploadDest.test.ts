@@ -271,4 +271,10 @@ describe("splitUploadFolder", () => {
     expect(resolveUploadDest(volume, subpath, "/src/Game").dest).toBe("/user/stuff/Game");
     expect(splitUploadFolder("/data/homebrew", [])).toEqual({ volume: "/data", subpath: "homebrew" });
   });
+  it("before the drives load, splits on the console's known mount roots", () => {
+    expect(splitUploadFolder("/mnt/ext1/homebrew/games", [])).toEqual({ volume: "/mnt/ext1", subpath: "homebrew/games" });
+    expect(splitUploadFolder("/mnt/usb0", [])).toEqual({ volume: "/mnt/usb0", subpath: "" });
+    expect(splitUploadFolder("/user/stuff", [])).toEqual({ volume: "/user", subpath: "stuff" });
+    expect(splitUploadFolder("/database/x", [])).toEqual({ volume: "/database/x", subpath: "" });
+  });
 });

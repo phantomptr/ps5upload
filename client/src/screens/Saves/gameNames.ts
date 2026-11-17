@@ -2,6 +2,7 @@ import { createContext, useContext } from "react";
 
 import type { InstalledTitle } from "../../api/ps5";
 import { iconTitleId } from "../../lib/titleId";
+import { fetchTitleInfo } from "../../lib/titleDetails";
 import { useTitleInfo } from "../../lib/useTitleInfo";
 
 /** Title ID (upper case) → the name the console's app.db gives it, as Games shows it. */
@@ -31,6 +32,17 @@ export function saveGameName(
 }
 
 export const ConsoleNamesContext = createContext<ConsoleNames>(new Map());
+
+/** A save folder's game name outside a component (a notification): as `useSaveGameName` finds
+ *  it, else the title ID itself. Never throws. */
+export async function saveGameNameNow(
+  folder: string,
+  names: ConsoleNames,
+  lookup: (titleId: string) => Promise<{ title?: string | null } | null> = fetchTitleInfo,
+): Promise<string> {
+  const info = await lookup(iconTitleId(folder) ?? folder).catch(() => null);
+  return saveGameName(folder, names, info?.title) ?? folder;
+}
 
 /** The game's name for a save folder, or null while neither the console nor the online lookup
  *  knows it. */

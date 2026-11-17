@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ArrowLeftRight, RefreshCw, Trash2 } from "lucide-react";
 
 import { Badge, Button, Checkbox, Select } from "../../components";
+import { useConfirm } from "../../components/ConfirmDialog";
 import { profileInfo, type ProfileUser } from "../../api/ps5";
 import {
   saveSyncApi,
@@ -23,6 +24,7 @@ import { useSaveGameName } from "./gameNames";
 import { userHex } from "./saveUsers";
 import {
   applyItems,
+  canKeepInStep,
   canSync,
   consoleName,
   defaultDirection,
@@ -30,6 +32,7 @@ import {
   initialSelection,
   needsFirstStart,
   needsPick,
+  pickOther,
   sortRows,
   statusTone,
 } from "./saveSync";
@@ -154,7 +157,11 @@ function SyncRowView({
           )}
         </p>
       )}
-      {result && !result.ok && <p className="text-xs text-[var(--color-bad)]">{result.error}</p>}
+      {result && !result.ok && (
+        <p className="text-xs text-[var(--color-bad)]">
+          {result.error || tr("saves_sync_failed", undefined, "Couldn't send this save.")}
+        </p>
+      )}
       {result?.ok && (
         <p className="text-xs text-[var(--color-good)]">{tr("saves_sync_sent", undefined, "Sent.")}</p>
       )}
@@ -209,6 +216,7 @@ function PairView({ pair, onRemoved }: { pair: SyncPair; onRemoved: () => void }
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [picks, setPicks] = useState<Record<string, SyncDirection | undefined>>({});
   const [results, setResults] = useState<Record<string, { ok: boolean; error?: string }>>({});
+  const { confirm, dialog } = useConfirm();
   const a = consoleName(current.a.host, profiles);
   const b = consoleName(current.b.host, profiles);
 
@@ -227,6 +235,11 @@ function PairView({ pair, onRemoved }: { pair: SyncPair; onRemoved: () => void }
       setChecking(false);
     }
   }, [current.id]);
+
+  // Checked once when shown, so the saves are listed without a click.
+  useEffect(() => {
+    void check();
+  }, [check]);
 
   const sync = async () => {
     if (!rows) return;
@@ -261,6 +274,17 @@ function PairView({ pair, onRemoved }: { pair: SyncPair; onRemoved: () => void }
   };
 
   const remove = async () => {
+    const ok = await confirm({
+      title: tr("saves_sync_stop_title", undefined, "Stop save sync?"),
+      message: tr(
+        "saves_sync_stop_body",
+        { a, b },
+        "{a} and {b} are no longer kept in step. The saves on both PS5s stay as they are.",
+      ),
+      confirmLabel: tr("saves_sync_stop", undefined, "Stop"),
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await saveSyncApi.removePair(current.id);
       onRemoved();
@@ -272,6 +296,7 @@ function PairView({ pair, onRemoved }: { pair: SyncPair; onRemoved: () => void }
   const count = rows ? applyItems(rows, selected, picks).length : 0;
   return (
     <div className="flex flex-col gap-2 rounded-[var(--radius-field)] border border-[var(--color-border)] p-3" data-testid="save-sync-pair">
+      {dialog}
       <div className="flex flex-wrap items-center gap-2">
         <ArrowLeftRight size={14} aria-hidden className="shrink-0" />
         <span className="min-w-0 flex-1 basis-[10rem] text-sm font-medium">
@@ -360,13 +385,26 @@ function userLabel(u: ProfileUser): string {
 }
 
 /** "Keep in step with another PS5": this console's user, the other console and its user. */
-function PairSetup({ host, onAdded }: { host: string; onAdded: () => void }) {
+function PairSetup({
+  host,
+  onAdded,
+  onCancel,
+}: {
+  host: string;
+  onAdded: () => void;
+  /** Shown as Cancel when the form was opened from "Add another". */
+  onCancel?: () => void;
+}) {
   const tr = useTr();
   const profiles = useRosterStore((s) => s.profiles);
   const others = profiles.filter((p) => hostOf(p.host) !== hostOf(host));
   const [hereUsers, setHereUsers] = useState<ProfileUser[]>([]);
   const [here, setHere] = useState("");
-  const [other, setOther] = useState(others[0] ? hostOf(others[0].host) : "");
+  const [picked, setOther] = useState(others[0] ? hostOf(others[0].host) : "");
+  const other = pickOther(
+    picked,
+    others.map((p) => hostOf(p.host)),
+  );
   const [thereUsers, setThereUsers] = useState<ProfileUser[] | null>(null);
   const [there, setThere] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -393,6 +431,8 @@ function PairSetup({ host, onAdded }: { host: string; onAdded: () => void }) {
     if (!other) return;
     let live = true;
     setThereUsers(null);
+    // The user picked on the console before is not one on this console.
+    setThere("");
     setOtherDown(false);
     profileInfo(consoleAddr(other))
       .then((p) => {
@@ -475,12 +515,17 @@ function PairSetup({ host, onAdded }: { host: string; onAdded: () => void }) {
         </p>
       )}
       {error && <p className="text-xs text-[var(--color-bad)]">{error}</p>}
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        {onCancel && (
+          <Button variant="ghost" size="sm" disabled={saving} onClick={onCancel}>
+            {tr("cancel", undefined, "Cancel")}
+          </Button>
+        )}
         <Button
           variant="secondary"
           size="sm"
           loading={saving}
-          disabled={!here || !there || !other}
+          disabled={!canKeepInStep({ host, here, other, there })}
           onClick={() => void add()}
         >
           {tr("saves_sync_add", undefined, "Keep in step")}
@@ -540,6 +585,7 @@ export default function SaveSyncCard({ host }: { host: string }) {
               setSetup(false);
               void load();
             }}
+            onCancel={mine.length > 0 ? () => setSetup(false) : undefined}
           />
         )}
       </div>

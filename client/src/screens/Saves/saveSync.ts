@@ -137,3 +137,14 @@ export function promptFor(
 export function suggestionId(s: SyncSuggestion): string {
   return `${s.pair}|${s.key}|${s.state}|${s.at_ms}`;
 }
+
+/** The other PS5 picked in the setup: the one picked while it is still offered, else the first
+ *  one offered (the console list can load after the form, or change under it). */
+export function pickOther(picked: string, offered: readonly string[]): string {
+  return offered.includes(picked) ? picked : (offered[0] ?? "");
+}
+
+/** Whether "Keep in step" can go: a user on each side and another console (never this one). */
+export function canKeepInStep(s: { host: string; here: string; other: string; there: string }): boolean {
+  return !!s.here && !!s.there && !!s.other && hostOf(s.other) !== hostOf(s.host);
+}
