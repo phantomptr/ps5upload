@@ -127,6 +127,7 @@ mod tailnet_discover;
 pub(crate) mod tailnet_engine;
 pub(crate) mod tailnet_system;
 mod telemetry;
+mod trophy_fix_routes;
 mod unpack_packs;
 mod vinput_api;
 mod wake_login_api;
@@ -8762,6 +8763,10 @@ struct ProfileActivateReq {
     /// any older caller.
     #[serde(default)]
     id: Option<AccountIdInput>,
+    /// The console user this slot goes with: when the id changes, their trophy files are given
+    /// the new one (#853). Absent: nothing else is touched.
+    #[serde(default)]
+    uid: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -8967,16 +8972,25 @@ async fn profile_activate_handler(
             }
         },
     };
+    let uid = req.uid;
     let r = tokio::task::spawn_blocking(move || {
-        ps5upload_core::profile::profile_activate(&addr, slot, id)
+        let a = ps5upload_core::profile::profile_activate_detail(&addr, slot, id)?;
+        // The user's trophy files still name the id the slot had (#853).
+        let trophies = trophy_fix_routes::after_activation(&addr, uid, a.old_id.as_deref(), &a.id);
+        Ok::<_, anyhow::Error>((a, trophies))
     })
     .await
     .map_err(anyhow::Error::from)
     .and_then(|r| r);
     match r {
-        Ok(id) => (
+        Ok((a, trophies)) => (
             StatusCode::OK,
-            Json(serde_json::json!({ "ok": true, "id": id })),
+            Json(serde_json::json!({
+                "ok": true,
+                "id": a.id,
+                "old_id": a.old_id,
+                "trophies": trophies,
+            })),
         )
             .into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
@@ -13729,6 +13743,22 @@ fn build_app_and_mcp(
         .route("/api/profile/np/state", post(profile_np_state_handler))
         .route("/api/profile/np/backup", post(profile_np_backup_handler))
         .route("/api/profile/np/restore", post(profile_np_restore_handler))
+        .route(
+            "/api/profile/trophies/fix",
+            post(trophy_fix_routes::trophy_fix_handler),
+        )
+        .route(
+            "/api/profile/trophies/check",
+            post(trophy_fix_routes::trophy_check_handler),
+        )
+        .route(
+            "/api/profile/trophies/backups",
+            post(trophy_fix_routes::trophy_backups_handler),
+        )
+        .route(
+            "/api/profile/trophies/restore",
+            post(trophy_fix_routes::trophy_restore_handler),
+        )
         .route(
             "/api/profile/avatar",
             post(profile_avatar_handler)

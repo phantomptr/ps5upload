@@ -538,6 +538,16 @@ struct ActivateResult {
     ok: bool,
     #[serde(default)]
     id: String,
+    /// The id the slot had before; absent from an older helper.
+    #[serde(default)]
+    old_id: Option<String>,
+}
+
+/// What an activation did: the id the slot has now and, from a helper that says, the one it had.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Activated {
+    pub id: String,
+    pub old_id: Option<String>,
 }
 
 /// Rename a local console user (the active profile's display name) via
@@ -566,6 +576,11 @@ pub fn profile_set_local_username(addr: &str, uid: u32, name: &str) -> Result<()
 /// Activate a slot: set its id (derived from the name when `id` is None),
 /// type "np", and the default flags. Returns the resulting id string.
 pub fn profile_activate(addr: &str, slot: i32, id: Option<u64>) -> Result<String> {
+    Ok(profile_activate_detail(addr, slot, id)?.id)
+}
+
+/// [`profile_activate`], with the id the slot had before (trophy files still name it, #853).
+pub fn profile_activate_detail(addr: &str, slot: i32, id: Option<u64>) -> Result<Activated> {
     let mut req = serde_json::json!({ "slot": slot });
     if let Some(id) = id {
         req["id"] = serde_json::Value::String(format!("0x{id:016x}"));
@@ -576,7 +591,193 @@ pub fn profile_activate(addr: &str, slot: i32, id: Option<u64>) -> Result<String
     if !r.ok {
         bail!("slot activation rejected by the console");
     }
-    Ok(r.id)
+    Ok(Activated {
+        id: r.id,
+        old_id: r.old_id,
+    })
+}
+
+/// An account id as the helper and the app write it: "0x" and hex, or plain hex. None for
+/// anything else.
+pub fn parse_account_hex(s: &str) -> Option<u64> {
+    let t = s.trim();
+    let hex = t
+        .strip_prefix("0x")
+        .or_else(|| t.strip_prefix("0X"))
+        .unwrap_or(t);
+    if hex.is_empty() || hex.len() > 16 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    u64::from_str_radix(hex, 16).ok()
+}
+
+// ─── Trophy files that still name an old account id (#853) ─────────────────
+
+/// One trophy file the helper looked at. `state`: would_change / changed / already / other_id
+/// (names a third id, left alone) / other_user / bad_hash / unknown_format (not a TRPTITLE.DAT,
+/// holds the old id, only reported) / changed_meanwhile / backup_failed / write_failed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrophyFile {
+    pub path: String,
+    pub state: String,
+    /// The id the file's account field held.
+    #[serde(default)]
+    pub from: String,
+    /// The account field is (or would be) changed.
+    #[serde(default)]
+    pub anchor: bool,
+    /// Other places in the file the old id was found.
+    #[serde(default)]
+    pub extra: i32,
+}
+
+/// The answer of a trophy fix (`dry_run`: what it would do).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct TrophyFix {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub uid: u32,
+    #[serde(default)]
+    pub dry_run: bool,
+    /// The old id looked for; None: the account field is set whatever it holds (Repair).
+    #[serde(default)]
+    pub old: Option<String>,
+    #[serde(default)]
+    pub new: String,
+    #[serde(default)]
+    pub files: Vec<TrophyFile>,
+    /// More files than the list holds.
+    #[serde(default)]
+    pub more: bool,
+    /// The backup folder's name ("" when nothing was changed).
+    #[serde(default)]
+    pub backup: String,
+    #[serde(default)]
+    pub scanned: u32,
+    #[serde(default)]
+    pub changed: u32,
+    #[serde(default)]
+    pub already: u32,
+    #[serde(default)]
+    pub left: u32,
+    #[serde(default)]
+    pub failed: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub err: Option<String>,
+}
+
+/// One backup the trophy fix kept on the console.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrophyBackup {
+    pub name: String,
+    #[serde(default)]
+    pub files: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TrophyBackups {
+    #[serde(default)]
+    ok: bool,
+    #[serde(default)]
+    backups: Vec<TrophyBackup>,
+    #[serde(default)]
+    err: Option<String>,
+}
+
+/// What putting a trophy backup back did.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrophyRestore {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub backup: String,
+    #[serde(default)]
+    pub restored: u32,
+    #[serde(default)]
+    pub failed: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub err: Option<String>,
+}
+
+/// The body TROPHY_FIX is sent for a fix (`old` None: whatever the account field holds).
+pub fn trophy_fix_body(uid: u32, old: Option<u64>, new: u64, dry_run: bool) -> serde_json::Value {
+    let mut req = serde_json::json!({
+        "op": "fix",
+        "uid": uid,
+        "new": format!("0x{new:016x}"),
+        "dry_run": dry_run,
+    });
+    if let Some(old) = old {
+        req["old"] = serde_json::Value::String(format!("0x{old:016x}"));
+    }
+    req
+}
+
+fn trophy_call(addr: &str, body: &serde_json::Value) -> Result<Vec<u8>> {
+    let bytes = serde_json::to_vec(body)?;
+    round_trip_body(addr, m::TROPHY_FIX, &bytes, "TROPHY_FIX").map_err(|e| {
+        if crate::console_files::is_unsupported(&e) {
+            anyhow::anyhow!(
+                "trophy_fix_unsupported: the PS5 helper is an older version; send the helper again"
+            )
+        } else {
+            e
+        }
+    })
+}
+
+/// Puts `new` into `uid`'s trophy files that name `old` (or, with `old` None, any other id), each
+/// kept first in a backup on the console. `dry_run`: only says what it would change.
+pub fn trophy_fix(
+    addr: &str,
+    uid: u32,
+    old: Option<u64>,
+    new: u64,
+    dry_run: bool,
+) -> Result<TrophyFix> {
+    if uid == 0 || new == 0 {
+        bail!("bad_request: a user and a non-zero account id are needed");
+    }
+    let resp = trophy_call(addr, &trophy_fix_body(uid, old, new, dry_run))?;
+    let r: TrophyFix = serde_json::from_slice(&resp).context("parse TROPHY_FIX ack")?;
+    if !r.ok {
+        bail!(
+            "{}",
+            r.err
+                .as_deref()
+                .unwrap_or("trophy fix refused by the console")
+        );
+    }
+    Ok(r)
+}
+
+/// The trophy backups kept on the console for `uid`, newest first.
+pub fn trophy_backups(addr: &str, uid: u32) -> Result<Vec<TrophyBackup>> {
+    let resp = trophy_call(addr, &serde_json::json!({ "op": "backups", "uid": uid }))?;
+    let r: TrophyBackups = serde_json::from_slice(&resp).context("parse TROPHY_FIX ack")?;
+    if !r.ok {
+        bail!(
+            "{}",
+            r.err
+                .as_deref()
+                .unwrap_or("could not list the trophy backups")
+        );
+    }
+    Ok(r.backups)
+}
+
+/// Puts the files of trophy backup `name` back.
+pub fn trophy_restore(addr: &str, uid: u32, name: &str) -> Result<TrophyRestore> {
+    let resp = trophy_call(
+        addr,
+        &serde_json::json!({ "op": "restore", "uid": uid, "backup": name }),
+    )?;
+    let r: TrophyRestore = serde_json::from_slice(&resp).context("parse TROPHY_FIX ack")?;
+    if let Some(err) = r.err.as_deref() {
+        bail!("{err}");
+    }
+    Ok(r)
 }
 
 /// Clear a slot's id + flags (de-activate, keep name + type).
@@ -887,6 +1088,44 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&j).unwrap();
         assert_eq!(v["firstName"], "Daisy");
         assert_eq!(v["isOfficiallyVerified"], "true");
+    }
+
+    #[test]
+    fn account_hex_parses_only_hex() {
+        assert_eq!(parse_account_hex("0x00000000000000ff"), Some(255));
+        assert_eq!(parse_account_hex(" 0XAbC "), Some(0xabc));
+        assert_eq!(
+            parse_account_hex("1122334455667788"),
+            Some(0x1122334455667788)
+        );
+        assert_eq!(parse_account_hex("0x"), None);
+        assert_eq!(parse_account_hex("0x11223344556677889"), None);
+        assert_eq!(parse_account_hex("12z"), None);
+        assert_eq!(parse_account_hex("-1"), None);
+    }
+
+    #[test]
+    fn trophy_fix_body_names_old_only_when_known() {
+        let b = trophy_fix_body(0x1ea2f4da, Some(0), 0x99aabbccddeeff01, true);
+        assert_eq!(b["op"], "fix");
+        assert_eq!(b["uid"], 0x1ea2f4da_u32);
+        assert_eq!(b["old"], "0x0000000000000000");
+        assert_eq!(b["new"], "0x99aabbccddeeff01");
+        assert_eq!(b["dry_run"], true);
+        let b = trophy_fix_body(7, None, 1, false);
+        assert!(b.get("old").is_none());
+        assert_eq!(b["dry_run"], false);
+    }
+
+    #[test]
+    fn trophy_fix_answer_parses() {
+        let j = r#"{"ok":true,"uid":514,"dry_run":true,"old":null,"new":"0x0000000000000001","files":[{"path":"trophy2/nobackup/data/NPWR00001_00/TRPTITLE.DAT","state":"would_change","from":"0x0000000000000000","anchor":true,"extra":0}],"more":false,"backup":"","scanned":3,"changed":1,"already":1,"left":0,"failed":0}"#;
+        let r: TrophyFix = serde_json::from_str(j).unwrap();
+        assert!(r.ok && r.dry_run && r.old.is_none());
+        assert_eq!(r.files.len(), 1);
+        assert_eq!(r.files[0].state, "would_change");
+        assert!(r.files[0].anchor);
+        assert_eq!((r.scanned, r.changed, r.already), (3, 1, 1));
     }
 
     #[test]

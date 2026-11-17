@@ -206,6 +206,7 @@ methods! {
     (TAILNET, 198, "TAILNET"),
     (SAVE_OWNER, 199, "SAVE_OWNER"),
     (NODE_UNINSTALL, 200, "NODE_UNINSTALL"),
+    (TROPHY_FIX, 201, "TROPHY_FIX"),
 }
 
 /// A management call the payload refused.

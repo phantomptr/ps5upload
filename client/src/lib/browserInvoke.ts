@@ -796,13 +796,37 @@ export async function browserInvoke<T>(
     }
 
     case "profile_activate": {
-      const { addr, slot, id } = args["req"] as {
+      const { addr, slot, id, uid } = args["req"] as {
         addr?: string | null;
         slot: number;
         // "0x…" or decimal: a 64-bit id does not fit a JS number.
         id?: string | null;
+        uid?: number | null;
       };
-      return postJson<T>("/api/profile/activate", { addr, slot, id });
+      return postJson<T>("/api/profile/activate", { addr, slot, id, uid });
+    }
+
+    case "profile_trophies_fix": {
+      const { addr, uid, slot, dry_run } = args["req"] as {
+        addr?: string | null;
+        uid: number;
+        slot?: number | null;
+        dry_run?: boolean;
+      };
+      // Only an explicit false writes; the route's own default is a dry run.
+      const dry = dry_run === false ? "false" : "true";
+      return postJson<T>(`/api/profile/trophies/fix?dry_run=${dry}`, { addr, uid, slot });
+    }
+
+    case "profile_trophies_backups":
+    case "profile_trophies_restore": {
+      const { addr, uid, backup } = args["req"] as {
+        addr?: string | null;
+        uid: number;
+        backup?: string | null;
+      };
+      const route = cmd.slice("profile_trophies_".length);
+      return postJson<T>(`/api/profile/trophies/${route}`, { addr, uid, backup });
     }
 
     case "profile_np_state":

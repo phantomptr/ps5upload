@@ -30,6 +30,8 @@ import { accountIdToB64, formatAccountId, parseAccountId } from "./accountId";
 import { UserInfoBackup } from "./UserInfoBackup";
 import { userDeleteRefusal } from "./userDelete";
 import { userSlots } from "./userSlots";
+import { TrophyRepair } from "./TrophyRepair";
+import { activationTrophyNote, type ActivationTrophyNote } from "./trophyRepairFlow";
 import { RemotePlaySection } from "./RemotePlaySection";
 import { useConnectionStore } from "../../state/connection";
 import { mgmtAddr } from "../../lib/addr";
@@ -762,7 +764,17 @@ function UserRow({
         />
       )}
       {slot && (
-        <AccountIdLine addr={addr} slot={slot.slot} accountId={slot.id} onChanged={onChanged} />
+        <AccountIdLine
+          addr={addr}
+          slot={slot.slot}
+          uid={uid}
+          accountId={slot.id}
+          onChanged={onChanged}
+        />
+      )}
+      {/* Trophy files made before the account ID changed still have the old one (#853). */}
+      {slot && formatAccountId(slot.id) !== "—" && (
+        <TrophyRepair addr={addr} uid={uid} slot={slot.slot} />
       )}
       {error && <p className="mt-1 text-xs text-[var(--color-bad)]">{error}</p>}
       {savedOk && (
@@ -815,11 +827,14 @@ function CopyableId({
 function AccountIdLine({
   addr,
   slot,
+  uid,
   accountId,
   onChanged,
 }: {
   addr: string;
   slot: number;
+  /** The console user this slot goes with, when one does. */
+  uid?: number;
   accountId: string;
   onChanged: () => void;
 }) {
@@ -827,6 +842,7 @@ function AccountIdLine({
   const { confirm, dialog: confirmDialog } = useConfirm();
   const [error, setError] = useState<string | null>(null);
   const [savedOk, setSavedOk] = useState(false);
+  const [trophyNote, setTrophyNote] = useState<ActivationTrophyNote>(null);
   const [editingId, setEditingId] = useState(false);
   const [idDraft, setIdDraft] = useState("");
   const [idBusy, setIdBusy] = useState(false);
@@ -867,7 +883,9 @@ function AccountIdLine({
       // the same path offact uses. Passing an explicit id skips the
       // derive-from-name behaviour. Sent as a hex STRING: Number() would
       // round any id above 2^53 and activate a different account.
-      await profileActivate(slot, next, addr);
+      // With the user, the engine also gives their trophy files the new id (#853).
+      const r = await profileActivate(slot, next, addr, uid ?? null);
+      setTrophyNote(activationTrophyNote(r.trophies));
       setEditingId(false);
       setSavedOk(true);
       onChanged();
@@ -961,6 +979,37 @@ function AccountIdLine({
           {tr(
             "profile.reboot_notice",
             "Restart the PS5 to see this change — avatar and username updates only show on the console after a reboot.",
+          )}
+        </p>
+      )}
+      {trophyNote?.kind === "updated" && (
+        <p
+          className={`mt-1 text-xs ${trophyNote.failed ? "text-[var(--color-warn)]" : "text-[var(--color-good)]"}`}
+        >
+          {tr(
+            "profile.trophies.updated",
+            { n: trophyNote.changed },
+            `Trophy files updated: ${trophyNote.changed}.`,
+          )}
+          {trophyNote.failed > 0 &&
+            ` ${tr("profile.trophies.failed", { n: trophyNote.failed }, `${trophyNote.failed} could not be updated.`)}`}
+        </p>
+      )}
+      {trophyNote?.kind === "game_running" && (
+        <p className="mt-1 text-xs text-[var(--color-warn)]">
+          {tr(
+            "profile.trophies.activation_game_running",
+            undefined,
+            "A game was open, so the trophy files were not updated. Close it, then use Repair trophies.",
+          )}
+        </p>
+      )}
+      {trophyNote?.kind === "error" && (
+        <p className="mt-1 text-xs text-[var(--color-warn)]">
+          {tr(
+            "profile.trophies.activation_error",
+            { error: trophyNote.message },
+            `The trophy files were not updated (${trophyNote.message}). Use Repair trophies to try again.`,
           )}
         </p>
       )}
