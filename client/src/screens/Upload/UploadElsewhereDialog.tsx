@@ -20,6 +20,7 @@ export function UploadElsewhereDialog({
   open,
   addr,
   dest,
+  flat = false,
   onCancel,
   onPick,
 }: {
@@ -28,11 +29,14 @@ export function UploadElsewhereDialog({
   addr: string;
   /** Where the upload goes now: its folder is where browsing starts. */
   dest: string;
+  /** An archive extracted straight into `dest`: the picked folder is where it goes, and
+   *  browsing starts in `dest` itself. */
+  flat?: boolean;
   onCancel: () => void;
   onPick: (folder: string) => void;
 }) {
   const tr = useTr();
-  const start = consoleParentDir(dest) || "/data";
+  const start = (flat ? dest.replace(/\/+$/, "") : consoleParentDir(dest)) || "/data";
   const [folder, setFolder] = useState(start);
   const [listError, setListError] = useState<string | null>(null);
   const [volumes, setVolumes] = useState<Volume[]>([]);
@@ -54,8 +58,8 @@ export function UploadElsewhereDialog({
   }, [open, addr]);
 
   const quick = useMemo(() => quickDestinations(volumes), [volumes]);
-  const lands = destInFolder(dest, folder);
-  const same = lands === dest.replace(/\/+$/, "");
+  const lands = destInFolder(dest, folder, flat);
+  const same = lands === (dest.replace(/\/+$/, "") || "/");
   const blocked = same || !!listError;
 
   return (

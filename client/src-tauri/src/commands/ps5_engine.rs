@@ -712,6 +712,9 @@ pub struct ProfileActivateReq {
     /// validates both forms (`AccountIdInput`).
     #[serde(default)]
     pub id: Option<JsonValue>,
+    /// The console user the slot goes with: their trophy files get the new id (#853).
+    #[serde(default)]
+    pub uid: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -840,7 +843,53 @@ pub async fn profile_rename_user(req: ProfileLocalUsernameReq) -> Result<JsonVal
 pub async fn profile_activate(req: ProfileActivateReq) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/profile/activate");
-    let body = serde_json::json!({ "addr": req.addr, "slot": req.slot, "id": req.id });
+    let body = serde_json::json!({
+        "addr": req.addr,
+        "slot": req.slot,
+        "id": req.id,
+        "uid": req.uid,
+    });
+    post_json(&url, &body).await
+}
+
+/// Trophy files that still name an old account id (#853): the user, their account slot and, for
+/// a restore, the backup's name.
+#[derive(Debug, Deserialize)]
+pub struct ProfileTrophiesReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub uid: u32,
+    #[serde(default)]
+    pub slot: Option<i32>,
+    #[serde(default)]
+    pub dry_run: Option<bool>,
+    #[serde(default)]
+    pub backup: Option<String>,
+}
+
+/// What the trophy fix would change (`dry_run`, the default) or the fix itself. Proxies
+/// `/api/profile/trophies/fix?dry_run=…`.
+#[tauri::command]
+pub async fn profile_trophies_fix(req: ProfileTrophiesReq) -> Result<JsonValue, String> {
+    let dry = req.dry_run.unwrap_or(true);
+    let url = format!("{}/api/profile/trophies/fix?dry_run={dry}", engine::url());
+    let body = serde_json::json!({ "addr": req.addr, "uid": req.uid, "slot": req.slot });
+    post_json(&url, &body).await
+}
+
+/// The trophy backups kept on the console. Proxies `/api/profile/trophies/backups`.
+#[tauri::command]
+pub async fn profile_trophies_backups(req: ProfileTrophiesReq) -> Result<JsonValue, String> {
+    let url = format!("{}/api/profile/trophies/backups", engine::url());
+    let body = serde_json::json!({ "addr": req.addr, "uid": req.uid });
+    post_json(&url, &body).await
+}
+
+/// Puts a trophy backup back. Proxies `/api/profile/trophies/restore`.
+#[tauri::command]
+pub async fn profile_trophies_restore(req: ProfileTrophiesReq) -> Result<JsonValue, String> {
+    let url = format!("{}/api/profile/trophies/restore", engine::url());
+    let body = serde_json::json!({ "addr": req.addr, "uid": req.uid, "backup": req.backup });
     post_json(&url, &body).await
 }
 

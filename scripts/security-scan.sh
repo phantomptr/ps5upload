@@ -57,7 +57,15 @@ section "npm audit"
 if have npm; then
   for dir in client .; do
     echo "-- $dir"
-    if ! (cd "$dir" && npm audit --audit-level=high --omit=optional); then
+    # What the app ships: no allowances at all.
+    if ! (cd "$dir" && npm audit --audit-level=high --omit=optional --omit=dev >/dev/null); then
+      (cd "$dir" && npm audit --audit-level=high --omit=optional --omit=dev) || true
+      failed+=("npm audit, shipped dependencies ($dir)")
+    fi
+    # Everything, development tools included: an advisory with no fix yet can be allowed for a
+    # while in scripts/npm-audit-allow.json (with a reason and an expiry).
+    # npm exits non-zero whenever it finds anything (allowed or not); the filter decides.
+    if ! { (cd "$dir" && npm audit --omit=optional --json 2>/dev/null) || true; } | node scripts/npm-audit-filter.mjs; then
       failed+=("npm audit ($dir)")
     fi
   done

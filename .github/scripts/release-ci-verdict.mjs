@@ -13,11 +13,17 @@
 //     run tested exactly this tree: its merge commit was the head itself), and
 //   - the parent passes too, by the same rule. A PR run only runs the lanes its change touches
 //     (ci-changes.mjs), so it vouches for the change on top of a parent that was already good.
+//     Not needed when the PR's change turned every lane on (a workflow, a lockfile, VERSION: every
+//     batch PR after a release): that run ran exactly the jobs main's own run runs, on this
+//     tree, so it vouches for the whole tree whatever the parent's run said. The lanes come from
+//     the same classifier the PR run used (ci-changes.mjs) over the parent..commit diff, which
+//     is the PR run's own diff (an up-to-date PR's merge commit has the parent as its base).
 // A commit whose own run finished and failed does not pass on a PR's result.
 //
 // Main's own run of the merge commit still runs every lane afterwards.
 
 import { execFileSync } from "node:child_process";
+import { classify } from "./ci-changes.mjs";
 
 const MAX_DEPTH = 8;
 
@@ -36,7 +42,7 @@ export function ownVerdict(runs) {
 
 /**
  * deps: {runs(sha), mergedPrs(sha) -> [{number, head}], tree(sha), parent(sha) -> sha|null,
- *        isAncestor(a, b)}
+ *        isAncestor(a, b), everyLane(base, head) -> did a PR run of base..head run every lane}
  */
 export function verdict(sha, deps, depth = MAX_DEPTH) {
   const own = ownVerdict(deps.runs(sha));
@@ -59,6 +65,12 @@ export function verdict(sha, deps, depth = MAX_DEPTH) {
       if (head !== "pass") {
         notes.push(`${tag}: ci ${head}`);
         continue;
+      }
+      if (deps.everyLane?.(parent, sha)) {
+        return {
+          verdict: "pass",
+          reason: `${sha} has the tree of ${tag}, whose ci passed with every lane on (the parent's run is not needed)`,
+        };
       }
       const up = verdict(parent, deps, depth - 1);
       if (up.verdict === "pass") {
@@ -124,6 +136,10 @@ export function realDeps(repo, workflowFile = "engine-ci.yml") {
         return null;
       }
     },
+    // The rules are the checked-out tree's: the commit being tagged, so for it they are exactly
+    // the ones its PR run used (for an ancestor further up, possibly newer ones).
+    everyLane: (base, head) =>
+      classify(sh("git", ["diff", "--no-renames", "--name-only", base, head]).split("\n")).all,
     isAncestor: (a, b) => {
       try {
         sh("git", ["merge-base", "--is-ancestor", a, b]);

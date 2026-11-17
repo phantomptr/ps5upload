@@ -25,14 +25,13 @@ import { platformForTitleId } from "../../lib/titleDetails";
 import { useTr } from "../../state/lang";
 import {
   appLaunch,
-  processKill,
   processList,
   type ProcessInfo,
 } from "../../api/ps5";
 import { log } from "../../state/logs";
 // Direct import to avoid the barrel's circular-dep warning at build.
 import { useConfirm } from "../../components/ConfirmDialog";
-import { killPrompt } from "./killPrompt";
+import { killChecked, killPrompt } from "./killPrompt";
 
 /**
  * Process manager — a live task-manager for the connected PS5, the "Processes" tab of
@@ -154,7 +153,7 @@ export function ProcessesPanel({ onCount }: { onCount: (n: number | undefined) =
     async (p: ProcessInfo) => {
       setBusyPid(p.pid);
       try {
-        await processKill(addr, p.pid);
+        await killChecked(addr, p.pid);
         log.info("process", `killed ${p.comm || p.name} (pid ${p.pid})`);
         await refresh();
       } catch (e) {
@@ -209,7 +208,7 @@ export function ProcessesPanel({ onCount }: { onCount: (n: number | undefined) =
       if (!p.title_id) return;
       setBusyPid(p.pid);
       try {
-        await processKill(addr, p.pid);
+        await killChecked(addr, p.pid);
         log.info(
           "process",
           `restart: killed ${p.comm || p.name} (pid ${p.pid}), relaunching ${p.title_id}`,

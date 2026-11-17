@@ -99,5 +99,29 @@ pub(super) fn tools() -> Vec<ToolDef> {
                 done: "Restored the save.",
             ),
         },
+        ToolDef {
+            name: "trophies_account_check",
+            title: "Trophy files with an old account ID",
+            description: "Which of a console user's trophy files (TRPTITLE.DAT) still name \
+                          another account ID than theirs, as after an offline activation that \
+                          changed it: each file's `path`, `state` (would_change, already, \
+                          other_user, bad_hash, unknown_format) and the id it holds (`from`). \
+                          Changes nothing; the Accounts screen's Repair trophies applies it.",
+            kind: Kind::Read,
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "uid": whole("The console user's id (`uid` from /api/profile/info)."),
+                    "slot": whole("The account slot that goes with the user: its account ID is the one the files should name."),
+                    "old": text("Only files naming this account ID (\"0x\" and 16 hex digits). Left out: any other ID."),
+                }),
+                &["console", "uid", "slot"],
+            ),
+            run: route!(
+                method: "POST",
+                path: "/api/profile/trophies/check",
+                done: "What the trophy fix would change.",
+            ),
+        },
     ]
 }

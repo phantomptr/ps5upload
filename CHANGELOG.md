@@ -6,6 +6,31 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Trophies after offline activation, a cleaner Payloads page, and fixes from an audit.
+
+**Fixes**
+- **Trophies stop after offline activation (#853).** Activation gives the user a new account, but the trophy files of games they already played kept the old one, so the PS5 stopped recording trophies for them. Activation now updates those files too, after backing them up (to `/data/ps5upload/backup/trophy/`). Users activated before this get **Repair trophies** on the Accounts screen: it shows what would change first, applies it, and can be undone. It won't run while a game is open. Not yet tried on a PS5: restart the console after a repair, and tell us if trophies don't come back.
+- **Payloads › On your PS5 and the Running tab:**
+  - **Stop:** a stop the PS5 refused was shown as done, and Restart then relaunched anyway. A failed Stop now says so.
+  - **Lists that lagged behind:** after Stop, Launch, Delete or a boot-list change, and after switching consoles, the lists now update at once.
+  - **Payload Manager card:** boot-list entries whose file is gone show up so you can remove them, and "starts at boot" shows only while the boot list is on. Launch on a payload that's already running is no longer the main button.
+  - **Where each payload came from** is said correctly in every case.
+- **Upload:**
+  - Before an upload, a folder that's already on the PS5 offers **Merge into it** (files with the same name are replaced, others stay). **Replace** now always means the old copy is deleted first.
+  - **Replace** on a failed upload no longer risks putting a leftover from an older, abandoned upload in place.
+  - **Another folder** works for archives that unpack straight into a folder.
+  - The Kraken Mount folder suggestion no longer sticks to the whole batch.
+- **Save sync:** a console can no longer be paired with itself after switching consoles; Stop asks first; removed pairs and "Not now" stay that way.
+- **Convert on the PS5:** a running conversion's files are no longer cleaned up after a clock change and a helper update; its progress no longer jumps around.
+- **Stop or Remove PS5Upload** now holds back new transfers and file actions until it's done, and says when a stop is already running.
+- **The file browser** no longer stalls on a network share that doesn't answer.
+- **ShadowMount+ and np-fake-signin:** the screen shows which copy will be sent, with **Choose file…** to send another.
+- Smaller: plain messages instead of codes, a frame-rate fix after a game pause, hints that don't name firmware versions.
+
+**Faster releases:** a release no longer waits for `main`'s CI when its PR already passed on the same code, the virus scan runs while builds finish, and CI caches stop wiping each other out.
+
+## 12.6.3
+
 A clear way to replace a game that's already on the PS5, and faster checks behind the scenes.
 
 **Changed**

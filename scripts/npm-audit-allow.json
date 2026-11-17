@@ -1,0 +1,11 @@
+{
+  "_doc": "npm advisories the security scan lets through: only ones with NO fixed version yet, only in development tools (never in what the app ships: `npm audit --omit=dev` must stay clean), each with a reason and an expiry. Past `until` the scan fails again so it gets looked at. scripts/npm-audit-filter.mjs reads this.",
+  "allow": [
+    {
+      "id": "GHSA-fc5q-39xc-vjpf",
+      "package": "picomatch",
+      "reason": "ReDoS on crafted extglob patterns; every picomatch version, no fix released. Only via vite/vitest/eslint (dev tools, our own glob patterns); the shipped app has no picomatch.",
+      "until": "2026-12-17"
+    }
+  ]
+}

@@ -83,6 +83,53 @@ pub(super) fn remove_other_elfs(dir: &Path, keep: &str) {
     }
 }
 
+/// A local copy must be a payload before it is sent: an `.elf` starts with the ELF magic, and a
+/// `.bin` (or any other name) is not empty. An HTML error page saved under the payload's name
+/// would otherwise be sent to the console.
+fn check_is_payload(path: &Path) -> Result<(), LibraryError> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    let mut head = [0u8; 4];
+    let mut f = std::fs::File::open(path)
+        .map_err(|e| LibraryError::new("io_failed", format!("open {}: {e}", path.display())))?;
+    let mut got = 0;
+    while got < head.len() {
+        match f.read(&mut head[got..]) {
+            Ok(0) => break,
+            Ok(n) => got += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => {
+                return Err(LibraryError::new(
+                    "io_failed",
+                    format!("read {}: {e}", path.display()),
+                ))
+            }
+        }
+    }
+    let is_elf = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("elf"));
+    if is_elf && head[..got] != *b"\x7FELF" {
+        return Err(LibraryError::new(
+            "asset_not_payload",
+            format!(
+                "the copy of {name} on this computer is not a payload (not an ELF file); get it \
+                 again"
+            ),
+        ));
+    }
+    if got == 0 {
+        return Err(LibraryError::new(
+            "asset_not_payload",
+            format!("the copy of {name} on this computer is empty, so it is not a payload; get it again"),
+        ));
+    }
+    Ok(())
+}
+
 impl Library {
     /// A payload's file ready to send: the local copy, when it is the version asked for (or when
     /// no version was asked for). Nothing is ever downloaded: without a copy the error says where
@@ -92,7 +139,9 @@ impl Library {
         let local = self.local_entry(id);
         if let Some(local) = &local {
             if tag.is_none() || tag == Some(local.version.as_str()) {
-                return Ok(PathBuf::from(&local.path));
+                let path = PathBuf::from(&local.path);
+                check_is_payload(&path)?;
+                return Ok(path);
             }
         }
         let info = self.catalog().into_iter().find(|p| p.id == id);
@@ -200,6 +249,35 @@ mod tests {
             http.asked.lock().unwrap().is_empty(),
             "never asks the network"
         );
+    }
+
+    #[test]
+    fn a_local_copy_that_is_not_a_payload_is_refused() {
+        let (_d, _http, lib) = library("local-copy-not-payload");
+        seed(
+            &lib,
+            KSTUFF_ID,
+            "kstuff.elf",
+            b"<html>Not Found</html>",
+            "v1",
+        );
+        let e = lib.local_copy(KSTUFF_ID, None).unwrap_err();
+        assert_eq!(e.code, "asset_not_payload");
+        assert!(
+            e.message
+                .contains("the copy of kstuff.elf on this computer is not a payload"),
+            "{e}"
+        );
+
+        // Local copies are .elf today; a .bin only has to be non-empty.
+        let d = TempDir::new("payload-bin");
+        let bin = d.0.join("kstuff.bin");
+        std::fs::write(&bin, b"").unwrap();
+        let e = check_is_payload(&bin).unwrap_err();
+        assert_eq!(e.code, "asset_not_payload");
+        assert!(e.message.contains("kstuff.bin"), "{e}");
+        std::fs::write(&bin, b"\x01\x02").unwrap();
+        assert!(check_is_payload(&bin).is_ok());
     }
 
     #[test]

@@ -38,7 +38,7 @@ import {
 } from "../../lib/pmUpdates";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { useConnectionStore } from "../../state/connection";
-import { useTr } from "../../state/lang";
+import { useTr, type Translator } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { humanizeCaught } from "../../lib/humanizeError";
@@ -78,10 +78,38 @@ export interface PmRunning {
   note?: ReactNode;
 }
 
+/** Boot-list entries that name no payload Payload Manager lists (a file deleted since, or one
+ *  on a USB stick that isn't plugged in), with their place in the boot order (1-based, pauses
+ *  not counted). Without this they would be invisible, and still take a boot number. */
+export function unmatchedBootEntries(
+  list: readonly string[],
+  payloads: ReadonlyArray<Pick<PmStoredPayload, "slot" | "filename" | "path">>,
+): Array<{ entry: string; n: number }> {
+  const known = new Set(payloads.flatMap((p) => autoloadKeys(p)));
+  return list
+    .filter((e) => !e.startsWith("!"))
+    .map((entry, i) => ({ entry, n: i + 1 }))
+    .filter(({ entry }) => !known.has(entry));
+}
+
+/** A running saved row's origin line. `bootN`: its place in the boot list when that list is
+ *  on (a list turned off starts nothing at boot, so no number is promised). */
+export function runningOrigin(tr: Translator, ours: boolean, bootN: number | null): string {
+  if (ours) return tr("hub_origin_ours", undefined, "PS5Upload's own helper");
+  if (bootN !== null) {
+    return tr("pm_origin_list_boot", { n: bootN }, `From your Payload Manager list, starts at boot #${bootN}`);
+  }
+  return tr("pm_origin_list", undefined, "From your Payload Manager list");
+}
+
 /** The payloads stored in the console's Payload Manager (:8084): launch, delete, and the
  *  boot autoload list. Storing into it is on the Catalog tab's cards. `running` (by stored
- *  path) marks the ones running now, with their pid and Stop. */
-export default function PayloadManagerPanel({ running }: { running?: Readonly<Record<string, PmRunning>> } = {}) {
+ *  path) marks the ones running now, with their pid and Stop. `onChanged` runs after a
+ *  change here (launch, delete, store, boot list), so what runs is read again. */
+export default function PayloadManagerPanel({
+  running,
+  onChanged,
+}: { running?: Readonly<Record<string, PmRunning>>; onChanged?: () => void } = {}) {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const { confirm, dialog } = useConfirm();
@@ -171,6 +199,7 @@ export default function PayloadManagerPanel({ running }: { running?: Readonly<Re
     try {
       await work();
       await refresh();
+      onChanged?.();
     } catch (e) {
       pushNotification("error", withConsolePrefix(host, failTitle), {
         body: humanizeCaught(e),
@@ -198,9 +227,9 @@ export default function PayloadManagerPanel({ running }: { running?: Readonly<Re
     const ok = await confirm({
       title: tr("pm_delete_confirm_title", { name: p.filename }, `Delete ${p.filename} from Payload Manager?`),
       message: tr(
-        "pm_delete_confirm_body",
+        "pm_delete_confirm_body_v2",
         undefined,
-        "The stored file and its details are removed from the console. A copy downloaded to this computer stays.",
+        "The stored file and its details are removed from the console. Files on this computer aren't touched.",
       ),
       confirmLabel: tr("delete", undefined, "Delete"),
       destructive: true,
@@ -368,9 +397,9 @@ export default function PayloadManagerPanel({ running }: { running?: Readonly<Re
     return (
       <Callout tone="info" title={tr("pm_absent_title", undefined, "Payload Manager isn't running on this PS5")}>
         {tr(
-          "pm_absent_body",
+          "pm_absent_body_v2",
           undefined,
-          "Payload Manager (itsPLK) keeps payloads on the console and can load them at boot. Send it from the Catalog tab, or start it on the PS5, then come back here.",
+          "Payload Manager (itsPLK) keeps payloads on the console and can load them at boot. Get it from its project page (on the Catalog tab) and send it with Send payload, or start it on the PS5, then come back here.",
         )}
         <p className="mt-1">
           {tr(
@@ -392,6 +421,8 @@ export default function PayloadManagerPanel({ running }: { running?: Readonly<Re
   const inList = (p: PmStoredPayload) => listedEntry(autoload?.list, p) !== null;
   const stored = view.payloads.filter((p) => p.path.startsWith("/data/pldmgr/"));
   const onUsb = view.payloads.filter((p) => !p.path.startsWith("/data/pldmgr/"));
+  // Only against a list read in full: otherwise every entry would look like it names nothing.
+  const unmatched = autoload && !view.payloadsError ? unmatchedBootEntries(autoload.list, view.payloads) : [];
 
   const records = pmRecords(hostOf(host));
   const nameOf = (id: string) => catalog.find((c) => c.id === id)?.display_name ?? id;
@@ -452,15 +483,7 @@ export default function PayloadManagerPanel({ running }: { running?: Readonly<Re
           </div>
           {live && (
             <div className="mt-0.5 text-xs text-[var(--color-muted)]" data-testid="pm-running-origin">
-              {live.ours
-                ? tr("hub_origin_ours", undefined, "PS5Upload's own helper")
-                : listed && autoload
-                  ? tr(
-                      "pm_origin_list_boot",
-                      { n: pos + 1 },
-                      `From your Payload Manager list, starts at boot #${pos + 1}`,
-                    )
-                  : tr("pm_origin_list", undefined, "From your Payload Manager list")}
+              {runningOrigin(tr, live.ours, listed && autoload?.enabled ? pos + 1 : null)}
               {` · ${live.memoryMib.toFixed(1)} MB`}
             </div>
           )}
@@ -558,11 +581,12 @@ export default function PayloadManagerPanel({ running }: { running?: Readonly<Re
               {tr("pu_out_open_page", { version: to.tag }, `${to.tag} is out — open project page`)}
             </Button>
           )}
+          {/* Running already: launching starts a second copy, so it is not the row's main action. */}
           <Button
-            variant="primary"
+            variant={live ? "ghost" : "primary"}
             size="sm"
             leftIcon={busy === `launch:${p.path}` ? <Spinner size={12} tone="inherit" /> : <Play size={12} />}
-            disabled={busy !== null}
+            disabled={busy !== null || !!live?.busy}
             onClick={() => void launch(p)}
           >
             {tr("pm_launch", undefined, "Launch")}
@@ -583,7 +607,7 @@ export default function PayloadManagerPanel({ running }: { running?: Readonly<Re
               variant="ghost"
               size="sm"
               leftIcon={<Trash2 size={12} />}
-              disabled={busy !== null}
+              disabled={busy !== null || !!live?.busy}
               onClick={() => void remove(p)}
             >
               {tr("delete", undefined, "Delete")}
@@ -775,9 +799,9 @@ export default function PayloadManagerPanel({ running }: { running?: Readonly<Re
         {stored.length === 0 ? (
           <p className="text-sm text-[var(--color-muted)]">
             {tr(
-              "pm_stored_empty",
+              "pm_stored_empty_v2",
               undefined,
-              "Nothing stored yet. On the Catalog tab, “Store in Payload Manager” keeps a payload on the console.",
+              "Nothing stored yet. “From this computer…” above keeps a payload file on the console.",
             )}
           </p>
         ) : (
@@ -791,6 +815,47 @@ export default function PayloadManagerPanel({ running }: { running?: Readonly<Re
             {tr("pm_usb_header", { n: onUsb.length }, `On USB · ${onUsb.length}`)}
           </header>
           <ul className="grid gap-1.5">{onUsb.map(row)}</ul>
+        </section>
+      )}
+
+      {autoload && unmatched.length > 0 && (
+        <section data-testid="pm-boot-unmatched">
+          <header className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+            {tr("pm_boot_unmatched_header", { n: unmatched.length }, `In the boot list, not found · ${unmatched.length}`)}
+          </header>
+          <p className="mb-2 text-xs text-[var(--color-muted)]">
+            {tr(
+              "pm_boot_unmatched_hint",
+              undefined,
+              "These boot-list entries name no payload listed above: a file deleted since, or one on a USB stick that isn't plugged in.",
+            )}
+          </p>
+          <ul className="grid gap-1.5">
+            {unmatched.map(({ entry, n }) => (
+              <li
+                key={`${n}:${entry}`}
+                className="flex flex-wrap items-center gap-3 rounded-[var(--radius-card)] border border-dashed border-[var(--glass-edge)] px-3.5 py-2 text-sm"
+              >
+                <span className="min-w-0 flex-1 break-all font-mono text-xs">{entry}</span>
+                <Badge tone="neutral" variant="outline">
+                  {tr("pm_autoload_badge", { n }, `boot #${n}`)}
+                </Badge>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy !== null}
+                  onClick={() =>
+                    void setAutoload(
+                      autoload.enabled,
+                      autoload.list.filter((e) => e !== entry),
+                    )
+                  }
+                >
+                  {tr("pm_autoload_remove", undefined, "Don't load at boot")}
+                </Button>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
     </div>

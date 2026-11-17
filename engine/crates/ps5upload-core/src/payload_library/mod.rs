@@ -40,7 +40,6 @@ use catalogue::{CatalogueEntry, CATALOGUE};
 pub use http::{FetchKind, HttpClient, HttpResponse, UreqClient};
 pub use pm_sync::{HttpPm, PmChange, PmConsole, PmStoredRecord, PmSyncChoice, PmSyncReport};
 pub use releases::ReleaseInfo;
-pub use repos::AddRepo;
 use repos::CustomRepo;
 use sources::ListPayload;
 pub use sources::SourceInfo;

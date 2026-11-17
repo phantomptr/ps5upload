@@ -1,7 +1,7 @@
 // "Send <game>'s save to <other console>?" after a game closes (engine save_sync.rs): the engine
 // keeps the suggestion, this shows it over every screen. Send copies that one save; Not now puts
 // it away until the game closes with a change again. Nothing is ever copied without Send.
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { ArrowLeftRight, X } from "lucide-react";
 
@@ -11,7 +11,7 @@ import { humanizeCaught } from "../../lib/humanizeError";
 import { pushNotification } from "../../state/notifications";
 import { useRosterStore } from "../../state/roster";
 import { useTr } from "../../state/lang";
-import { useSaveGameName } from "./gameNames";
+import { ConsoleNamesContext, saveGameNameNow, useSaveGameName } from "./gameNames";
 import { promptFor, suggestionId, type Prompt } from "./saveSync";
 
 /** How often the engine is asked for suggestions; it looks at the consoles once a minute. */
@@ -111,6 +111,7 @@ export function SaveSyncPrompt() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const told = useRef<Set<string>>(new Set());
+  const names = useContext(ConsoleNamesContext);
 
   useEffect(() => {
     let live = true;
@@ -134,20 +135,25 @@ export function SaveSyncPrompt() {
 
   const prompt = view ? promptFor(view.suggestions, view.pairs, profiles, later) : null;
   const id = prompt ? suggestionId(prompt.suggestion) : null;
-  // The inbox keeps a line of each new suggestion, for when the app was in the background.
+  // A message from the save before is not about this one.
+  useEffect(() => {
+    setError(null);
+    setBusy(false);
+  }, [id]);
+  // The inbox keeps a line of each new suggestion, for when the app was in the background. It
+  // names the game the way the prompt does (the console's name, then the online one).
   useEffect(() => {
     if (!prompt || !id || told.current.has(id) || prompt.suggestion.state !== "ready") return;
     told.current.add(id);
-    pushNotification(
-      "info",
-      tr(
-        "saves_sync_prompt_send",
-        { game: prompt.suggestion.title_id, console: prompt.to },
-        "Send {game}'s save to {console}?",
+    const to = prompt.to;
+    void saveGameNameNow(prompt.suggestion.title_id, names).then((game) =>
+      pushNotification(
+        "info",
+        tr("saves_sync_prompt_send", { game, console: to }, "Send {game}'s save to {console}?"),
+        { link: "/saves" },
       ),
-      { link: "/saves" },
     );
-  }, [prompt, id, tr]);
+  }, [prompt, id, tr, names]);
 
   if (!prompt || !id) return null;
   const { suggestion: s } = prompt;
@@ -164,7 +170,8 @@ export function SaveSyncPrompt() {
     try {
       const r = await saveSyncApi.apply(s.pair, [{ key: s.key, direction: s.direction }]);
       const res = r.results[0];
-      if (res && !res.ok) setError(res.error ?? null);
+      if (res && !res.ok)
+        setError(res.error || tr("saves_sync_failed", undefined, "Couldn't send this save."));
       else await refresh();
     } catch (e) {
       setError(humanizeCaught(e));

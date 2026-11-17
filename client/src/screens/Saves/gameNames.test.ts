@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { InstalledTitle } from "../../api/ps5";
-import { consoleNames, saveGameName } from "./gameNames";
+import { consoleNames, saveGameName, saveGameNameNow } from "./gameNames";
 
 const title = (titleId: string, titleName: string): InstalledTitle => ({
   titleId,
@@ -33,5 +33,17 @@ describe("Save Data game names", () => {
     expect(saveGameName("PPSA00001", names, "Online name")).toBe("Online name");
     expect(saveGameName("PPSA00001", names, "  ")).toBeNull();
     expect(saveGameName("PPSA00001", consoleNames(null))).toBeNull();
+  });
+
+  it("names a notification's game like the prompt, else its title ID", async () => {
+    const names = new Map([["PPSA00002", "Console name"]]);
+    const online = async (id: string) => (id === "PPSA00001" ? { title: "Online name" } : null);
+    expect(await saveGameNameNow("PPSA00001", names, online)).toBe("Online name");
+    expect(await saveGameNameNow("PPSA00002", names, online)).toBe("Console name");
+    expect(await saveGameNameNow("PPSA00003", names, online)).toBe("PPSA00003");
+    const down = async () => {
+      throw new Error("offline");
+    };
+    expect(await saveGameNameNow("PPSA00003", names, down)).toBe("PPSA00003");
   });
 });

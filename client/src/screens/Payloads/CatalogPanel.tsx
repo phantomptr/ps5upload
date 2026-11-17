@@ -424,7 +424,12 @@ export default function CatalogPanel() {
             )}
           </div>
         </div>
-        <PayloadUpdatesPanel host={host} onChanged={() => void refreshInventory()} />
+        {/* Updates are checked for copies saved in the app's library, which only an older
+            version filled (the app no longer downloads payloads): with none, there is nothing
+            to check, sync or roll back. */}
+        {inventory.length > 0 && (
+          <PayloadUpdatesPanel host={host} onChanged={() => void refreshInventory()} />
+        )}
         {sourcesOpen && sources.length > 0 && (
           <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
             <div className="mb-2 flex items-center justify-between">

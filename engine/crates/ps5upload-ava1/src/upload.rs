@@ -558,6 +558,13 @@ impl SessionGate {
     }
 }
 
+/// A JobOpen refused because the destination is taken: before any data moved (`ava1_exists`),
+/// never a [`PostCommitError`] (whose `ava1_commit_exists` says this job's finished tree waits in
+/// `<dest>.ava-part`).
+pub(crate) fn open_exists(message: String) -> anyhow::Error {
+    refusal(gen::ERR_EXISTS, message).into()
+}
+
 pub(crate) fn refusal(status: u16, message: String) -> UploadFailure {
     // The protocol has one code for any write failure; EFBIG (a file past FAT32's 4 GiB) cannot
     // be fixed by trying again, so it is told apart by the console's words.
@@ -1094,8 +1101,12 @@ pub fn upload_with_seq_in(
                     )
                     .await;
                 }
+                // The JobOpen itself refused: the destination was taken before any data moved
+                // (`ava1_exists`), unlike a refused commit (`ava1_commit_exists`, above), which
+                // leaves this job's finished tree in `<dest>.ava-part`. Told apart so Replace
+                // never moves a `.ava-part` this job did not write into place.
                 Err(SendError::Refused { status, message }) if status == gen::ERR_EXISTS => {
-                    return Err(PostCommitError::new(PostCommitKind::Exists, Some(message)).into());
+                    return Err(open_exists(message));
                 }
                 Err(SendError::Refused { status, message }) if status == gen::ERR_CROSS_DEVICE => {
                     return Err(
@@ -1858,7 +1869,10 @@ mod list_destination_tests {
 
 #[cfg(test)]
 mod failure_reason_tests {
-    use super::{refusal, refusal_reason, terminal_connection_reason};
+    use super::{
+        open_exists, refusal, refusal_reason, terminal_connection_reason, PostCommitError,
+        UploadFailure,
+    };
     use crate::gen;
     use ava1::Ava1Error;
     use std::io;
@@ -1895,6 +1909,13 @@ mod failure_reason_tests {
             "ava1_not_allowed"
         );
         assert_eq!(refusal_reason(gen::ERR_EXISTS), "ava1_exists");
+        // Refused at the open: not post-commit, so the app never looks for a staged tree.
+        let e = open_exists("the destination already exists".into());
+        assert!(e.downcast_ref::<PostCommitError>().is_none());
+        assert_eq!(
+            e.downcast_ref::<UploadFailure>().map(|f| f.reason.as_str()),
+            Some("ava1_exists")
+        );
         assert_eq!(refusal_reason(gen::ERR_CROSS_DEVICE), "ava1_cross_device");
         assert_eq!(refusal_reason(gen::ERR_STALLED), "ava1_stalled");
         let f = refusal(

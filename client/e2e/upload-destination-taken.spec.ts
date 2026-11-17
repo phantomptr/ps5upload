@@ -152,7 +152,8 @@ test("Upload asks up front when the file is already there, and Another folder se
   await upload.click();
 
   const ask = page.getByRole("alertdialog");
-  await expect(ask).toContainText(/Already on the PS5: notes\.txt in \//);
+  await expect(ask.getByRole("heading", { name: "Already on the PS5" })).toBeVisible();
+  await expect(ask).toContainText("/notes.txt");
   await expect(ask.getByRole("button", { name: /^Replace/ })).toBeVisible();
   await expect(ask.getByRole("button", { name: /^Cancel/ })).toBeVisible();
   // A single file has nothing to resume.

@@ -551,6 +551,23 @@ static void test_wire(void) {
     }
 }
 
+static int test_name_as(const char *name, char *out, size_t cap) {
+    snprintf(out, cap, "%s", name);
+    return 0;
+}
+static int test_name_converter(int pid, char *out, size_t cap) {
+    (void)pid;
+    return test_name_as(CONVERT_PROC_NAME, out, cap);
+}
+static int test_name_helper(int pid, char *out, size_t cap) {
+    (void)pid;
+    return test_name_as("ps5upload.elf", out, cap);
+}
+static int test_name_other(int pid, char *out, size_t cap) {
+    (void)pid;
+    return test_name_as("payload.elf", out, cap);
+}
+
 static void test_op(void) {
     char args[2048], game[300], image[300], dest[300], partial[320], other[300];
     ava1_op_ctx_t *c = malloc(sizeof *c);
@@ -853,11 +870,12 @@ static void test_op(void) {
         CHECK(!exists(p)); /* removed with the rest of the job's files */
     }
 
-    /* One bar through every stage: its total is the first stage's, each stage moves it through
-     * its share, it never passes the total and ends full. */
+    /* One bar through every stage: its total is the largest stage total seen (the write's 200,
+     * not the first stage's 100), each stage moves it through its share, it never passes the total
+     * and ends full. */
     st = run_op(FAKE_STAGES, args, c);
     CHECK(st == 0);
-    CHECK(c->total == 100 && c->done == 100);
+    CHECK(c->total == 200 && c->done == 200);
 
     /* A converter that ignores Stop is killed, and what it was writing is removed. */
     put_file(partial, "half an image");
@@ -951,6 +969,13 @@ static void test_op(void) {
         put_file(status, text);
         utimes(status, old);
         console_convert_test_boot = (unsigned long long)time(NULL) - 5;
+        /* Unless that live pid is our converter: the clock was set forward, it still runs. */
+        console_convert_test_proc_name = test_name_converter;
+        st = run_op(FAKE_NEVER, args, c);
+        CHECK(st == AVA1_ERR_BUSY && strcmp(c->message, "convert_busy") == 0);
+        console_convert_test_proc_name = NULL;
+        put_file(status, text);
+        utimes(status, old);
         st = run_op(FAKE_FAILS, args, c);
         CHECK(st == AVA1_ERR_IO && strcmp(c->message, "convert_build_failed") == 0);
         console_convert_test_boot = 0;
@@ -1061,6 +1086,27 @@ static void test_sweep(void) {
     put_file(rec, text);
     console_convert_sweep();
     CHECK(exists(rec) && exists(partial));
+    /* The clock was set forward by more than the slack (kern.boottime moved with it): the record
+     * reads as from an earlier boot, but its converter is alive and named as ours, so the job is
+     * live and nothing of it goes. */
+    console_convert_test_proc_name = test_name_converter;
+    cc_record_format_boot(text, sizeof text, (unsigned long long)getppid(), (long)dead, "ab", dest, 1600000000ULL);
+    put_file(rec, text);
+    console_convert_sweep();
+    CHECK(exists(rec) && exists(partial));
+    /* The same for its live helper. */
+    console_convert_test_proc_name = test_name_helper;
+    cc_record_format_boot(text, sizeof text, (unsigned long long)dead, (long)getppid(), "ab", dest, 1600000000ULL);
+    put_file(rec, text);
+    console_convert_sweep();
+    CHECK(exists(rec) && exists(partial));
+    /* A live pid named as someone else's: from an earlier boot, not ours, cleared. */
+    console_convert_test_proc_name = test_name_other;
+    cc_record_format_boot(text, sizeof text, (unsigned long long)getppid(), (long)getppid(), "ab", dest, 1600000000ULL);
+    put_file(rec, text);
+    console_convert_sweep();
+    CHECK(!exists(rec) && !exists(partial));
+    console_convert_test_proc_name = NULL;
     unlink(rec);
     unlink(partial);
     console_convert_test_boot = 0;

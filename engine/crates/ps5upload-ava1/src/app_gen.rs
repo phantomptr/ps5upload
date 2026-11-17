@@ -150,6 +150,7 @@ pub const METHOD_LOG_LEVEL: u16 = 197;
 pub const METHOD_TAILNET: u16 = 198;
 pub const METHOD_SAVE_OWNER: u16 = 199;
 pub const METHOD_NODE_UNINSTALL: u16 = 200;
+pub const METHOD_TROPHY_FIX: u16 = 201;
 pub const JOB_OP_DELETE: u8 = 1;
 pub const JOB_OP_CHMOD_R: u8 = 2;
 pub const JOB_OP_HASH: u8 = 3;

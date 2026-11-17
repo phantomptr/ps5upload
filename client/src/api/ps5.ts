@@ -266,14 +266,88 @@ export async function profileActivate(
   slot: number,
   id?: string | null,
   addr?: string,
-): Promise<{ ok: boolean; id: string }> {
-  const resp = await invoke<{ ok: boolean; id: string; error?: string | null }>(
-    "profile_activate",
-    {
-      req: { addr: addr ?? null, slot, id: id ?? null },
-    },
-  );
+  uid?: number | null,
+): Promise<ProfileActivated> {
+  const resp = await invoke<ProfileActivated & { error?: string | null }>("profile_activate", {
+    req: { addr: addr ?? null, slot, id: id ?? null, uid: uid ?? null },
+  });
   return assertOk(resp, "Activate profile");
+}
+
+/** What an activation did to the user's trophy files (#853), when a user goes with the slot and
+ *  its account id changed: `null` when nothing was asked of them. */
+export interface ActivationTrophies {
+  changed?: number;
+  failed?: number;
+  left?: number;
+  backup?: string;
+  /** "game_running": a game was open, so the files were not touched. */
+  skipped?: string;
+  title_id?: string;
+  error?: string;
+}
+
+export interface ProfileActivated {
+  ok: boolean;
+  id: string;
+  old_id?: string | null;
+  trophies?: ActivationTrophies | null;
+}
+
+/** One trophy file the fix looked at. */
+export interface TrophyFile {
+  path: string;
+  /** would_change, changed, already, other_id, other_user, bad_hash, unknown_format,
+   *  changed_meanwhile, backup_failed, write_failed */
+  state: string;
+  from: string;
+  anchor: boolean;
+  extra: number;
+}
+
+export interface TrophyFixResult {
+  ok: boolean;
+  uid: number;
+  dry_run: boolean;
+  old: string | null;
+  new: string;
+  files: TrophyFile[];
+  more: boolean;
+  backup: string;
+  scanned: number;
+  changed: number;
+  already: number;
+  left: number;
+  failed: number;
+}
+
+/** Puts the account id of `slot` into user `uid`'s trophy files that name another one (#853).
+ *  `dryRun` (the default) changes nothing and says what would change. */
+export async function profileTrophiesFix(
+  uid: number,
+  slot: number,
+  dryRun: boolean,
+  addr: string,
+): Promise<TrophyFixResult> {
+  const resp = await invoke<TrophyFixResult & { error?: string | null }>("profile_trophies_fix", {
+    req: { addr, uid, slot, dry_run: dryRun },
+  });
+  return assertOk(resp, dryRun ? "Check trophy files" : "Repair trophy files");
+}
+
+/** Puts a trophy backup the fix kept on the console back. */
+export async function profileTrophiesRestore(
+  uid: number,
+  backup: string,
+  addr: string,
+): Promise<{ ok: boolean; restored: number; failed: number }> {
+  const resp = await invoke<{
+    ok: boolean;
+    restored: number;
+    failed: number;
+    error?: string | null;
+  }>("profile_trophies_restore", { req: { addr, uid, backup } });
+  return assertOk(resp, "Undo the trophy repair");
 }
 
 /** What the console says about a user's PlayStation Network sign-in (np-fake-signin): whether
@@ -2490,7 +2564,8 @@ export async function powerShutdown(addr: string): Promise<PowerControlAck> {
 
 /** What a helper stop ended with (#471): `stopped` (its port went quiet), `not_running`
  *  (nothing answered), or `refused` with the engine's reason — `busy` while a transfer, install
- *  or console file operation runs against that console, `refused` / `still_running` otherwise. */
+ *  or console file operation runs against that console, `stopping` while another stop or removal
+ *  of it runs, `refused` / `still_running` otherwise. */
 export type HelperStopResult =
   | { state: "stopped" | "not_running" }
   | { state: "refused"; reason: string; error: string };
@@ -4703,6 +4778,9 @@ export class UploadJobError extends Error {
  *  in the UI with the raw `error_detail` for diagnostic depth. */
 export function humanizeJobErrorReason(
   reason: string | undefined,
+  /** The text sits next to Replace / Upload somewhere else (a failed upload row in the queue),
+   *  so it may name them. Everywhere else the neutral wording is used. */
+  opts?: { conflictActions?: boolean },
 ): string | null {
   if (!reason) return null;
   // Mid-transfer write failure from the payload's direct-write path. The
@@ -4890,15 +4968,25 @@ export function humanizeJobErrorReason(
         "A folder inside the download folder on this computer is a shortcut (a symbolic link) or a file, so PS5Upload won't write through it. Pick a different folder, then click Retry.",
       );
     case "ava1_exists":
-      return trStatic(
-        "joberr.ava1_exists_v2",
-        "Something with this name is already in that folder on the PS5, so nothing was sent. Replace it, or upload somewhere else.",
-      );
+      return opts?.conflictActions
+        ? trStatic(
+            "joberr.ava1_exists_v2",
+            "Something with this name is already in that folder on the PS5, so nothing was sent. Replace it, or upload somewhere else.",
+          )
+        : trStatic(
+            "joberr.ava1_exists_plain",
+            "Something with this name is already in that folder on the PS5, so nothing was sent.",
+          );
     case "ava1_commit_exists":
-      return trStatic(
-        "joberr.ava1_commit_exists_v2",
-        "Everything was sent, but a copy with this name is already in that folder on the PS5, so this one wasn't put in place. Replace it, or upload somewhere else.",
-      );
+      return opts?.conflictActions
+        ? trStatic(
+            "joberr.ava1_commit_exists_v2",
+            "Everything was sent, but a copy with this name is already in that folder on the PS5, so this one wasn't put in place. Replace it, or upload somewhere else.",
+          )
+        : trStatic(
+            "joberr.ava1_commit_exists_plain",
+            "Everything was sent, but a copy with this name is already in that folder on the PS5, so this one wasn't put in place.",
+          );
     case "ava1_cross_device":
     case "ava1_commit_cross_device":
       return trStatic(

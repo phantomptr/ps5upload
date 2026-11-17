@@ -508,13 +508,8 @@ pub(crate) async fn fpkg_build_handler(
                         total: of,
                     });
                     if let Some(s) = STAGES.get(at as usize) {
-                        let overall = overall_progress(
-                            job_total,
-                            s.index().saturating_sub(0),
-                            build::STAGE_COUNT,
-                            done,
-                            of,
-                        );
+                        let overall =
+                            overall_progress(job_total, s.index(), build::STAGE_COUNT, done, of);
                         *bytes_sent = (*bytes_sent).max(overall);
                     }
                     *total_bytes = job_total;
@@ -1374,7 +1369,10 @@ fn to_console_job(
     stage: &mut dyn FnMut(&str, u64, u64),
 ) -> anyhow::Result<crate::image_build::Streamed> {
     use ps5upload_core::fs_ops;
-    let _busy = crate::helper_stop::enter(addr);
+    // None starts while the helper there is being stopped or removed.
+    let Some(_busy) = crate::helper_stop::try_enter(addr) else {
+        anyhow::bail!("{}", crate::helper_stop::STOPPING_MESSAGE);
+    };
     ps5upload_ava1::console::require_ava1(addr)
         .map_err(|f| anyhow::Error::from(ps5upload_ava1::upload::ConsoleFailure::on(addr, f)))?;
     match fs_ops::fs_stat(addr, path) {

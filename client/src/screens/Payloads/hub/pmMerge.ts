@@ -99,6 +99,24 @@ export function matchSavedToCards(
   cards: readonly HubCard[],
   entries: readonly HubEntry[],
 ): Map<string, HubCard> {
+  return matchDetail(saved, cards, entries).matched;
+}
+
+const exactTest = (key: string, n: CardNames) => n.exact.has(key);
+const familyTest = (key: string, n: CardNames) => {
+  if (n.parts.some((p) => key.includes(p))) return true;
+  const words = key.split(/[^a-z0-9]+/);
+  return n.words.some((w) => words.includes(w));
+};
+
+/** `matchSavedToCards`, plus the running cards left unpaired because more than one saved
+ *  file could be theirs (two kstuff builds saved): card id → those files' names. Such a card
+ *  may well have been started from the list, so nothing may say it wasn't. */
+export function matchDetail(
+  saved: ReadonlyArray<Pick<PmStoredPayload, "path" | "filename">>,
+  cards: readonly HubCard[],
+  entries: readonly HubEntry[],
+): { matched: Map<string, HubCard>; ambiguous: Map<string, string[]> } {
   const out = new Map<string, HubCard>();
   const pool = candidates(cards).map((card) => ({ card, names: namesOf(card, entries) }));
   const keys = saved.map((s) => savedKey(s.filename));
@@ -118,13 +136,17 @@ export function matchSavedToCards(
       out.set(saved[r].path, card);
     }
   };
-  step((key, n) => n.exact.has(key));
-  step((key, n) => {
-    if (n.parts.some((p) => key.includes(p))) return true;
-    const words = key.split(/[^a-z0-9]+/);
-    return n.words.some((w) => words.includes(w));
-  });
-  return out;
+  step(exactTest);
+  step(familyTest);
+  const ambiguous = new Map<string, string[]>();
+  for (const { card, names } of pool) {
+    if (takenCards.has(card)) continue;
+    const files = saved
+      .filter((_, r) => !takenRows.has(r) && !!keys[r] && (exactTest(keys[r], names) || familyTest(keys[r], names)))
+      .map((s) => s.filename);
+    if (files.length > 0) ambiguous.set(card.id, files);
+  }
+  return { matched: out, ambiguous };
 }
 
 export interface CardGroups {
@@ -139,8 +161,14 @@ export interface CardGroups {
 }
 
 /** Splits the cards once the Payload Manager list is known (`matched` from
- *  `matchSavedToCards`). Without a list nothing is merged: call it only with one. */
-export function groupCards(cards: readonly HubCard[], matched: ReadonlyMap<string, HubCard>): CardGroups {
+ *  `matchSavedToCards`). Without a list nothing is merged: call it only with one. A card in
+ *  `ambiguous` (more than one saved file could be it) stays at the top: it can't be put on a
+ *  row, nor under "Also running", which says "not in your list". */
+export function groupCards(
+  cards: readonly HubCard[],
+  matched: ReadonlyMap<string, HubCard>,
+  ambiguous: ReadonlyMap<string, readonly string[]> = new Map(),
+): CardGroups {
   const matchedIds = new Set([...matched.values()].map((c) => c.id));
   const top: HubCard[] = [];
   const also: HubCard[] = [];
@@ -149,13 +177,25 @@ export function groupCards(cards: readonly HubCard[], matched: ReadonlyMap<strin
     if (matchedIds.has(c.id)) {
       if (c.integration) top.push(c);
       else hidden.add(c.id);
-    } else if (c.id === "payload-manager" || c.state !== "running") {
+    } else if (c.id === "payload-manager" || c.state !== "running" || ambiguous.has(c.id)) {
       top.push(c);
     } else {
       also.push(c);
     }
   }
   return { top, also, hidden };
+}
+
+/** How many payloads "On your PS5" shows once the saved list is merged: the cards left, plus
+ *  each saved row, less the rows whose card is also shown (an integration such as ShadowMount+
+ *  keeps its card). A matched card hidden on its row counts once, as its row. */
+export function payloadCount(
+  groups: CardGroups,
+  savedRows: number,
+  matched: ReadonlyMap<string, HubCard>,
+): number {
+  const shownTwice = new Set([...matched.values()].filter((c) => !groups.hidden.has(c.id)).map((c) => c.id));
+  return groups.top.length + groups.also.length + savedRows - shownTwice.size;
 }
 
 /** Who started a running payload, as the card's one line says it. */
@@ -168,8 +208,14 @@ export type Origin =
   | "loader-ours"
   /** elfldr as the jailbreak or Payload Manager started it. */
   | "loader"
-  /** Anything else running, Payload Manager itself included. */
-  | "console";
+  /** One of several saved files could be it (two kstuff builds saved). */
+  | "pm-maybe"
+  /** Payload Manager itself. */
+  | "manager"
+  /** Anything else running, with Payload Manager's list read (or no Payload Manager). */
+  | "console"
+  /** Anything else running while Payload Manager's list isn't known: it may be in it. */
+  | "any";
 
 /** PS5Upload's own processes: the helper (`ps5upload.elf`), its installer daemon, and pieces it
  *  starts under `ps5u-` names (the converter, the extractor, the keyboard companion). */
@@ -181,15 +227,22 @@ export function isOurProcess(p: Pick<ProcessInfo, "comm" | "name" | "is_self">):
   });
 }
 
+/** What is known of a card against Payload Manager's list: on a saved row ("matched"), could
+ *  be one of several rows ("maybe"), on no row of a list read in full or with no Payload
+ *  Manager at all ("not-in-list"), or the list isn't known ("unknown"). */
+export type ListState = "matched" | "maybe" | "not-in-list" | "unknown";
+
 /** Where a running card's payload came from. `ourLoaderPid` is the elfldr pid PS5Upload put
  *  in place on this console, when it knows one. */
-export function originOf(card: HubCard, matched: boolean, ourLoaderPid: number | null): Origin | null {
+export function originOf(card: HubCard, list: ListState, ourLoaderPid: number | null): Origin | null {
   if (card.state !== "running") return null;
-  if (matched) return "pm";
+  if (list === "matched") return "pm";
+  if (card.id === "payload-manager") return "manager";
   const procs = card.processes;
   if (procs.length > 0 && procs.every(isOurProcess)) return "ours";
   if (procs.length > 0 && procs.every((p) => normProcName(p.comm || p.name) === "elfldr")) {
     return ourLoaderPid !== null && procs.some((p) => p.pid === ourLoaderPid) ? "loader-ours" : "loader";
   }
-  return "console";
+  if (list === "maybe") return "pm-maybe";
+  return list === "unknown" ? "any" : "console";
 }

@@ -253,10 +253,38 @@ pub(crate) fn open_for_reading(image: &Path) -> Result<(Recovery, Reading), Stri
     Ok((recovery, reading))
 }
 
-/// Settles a journal left beside `image` ([`patch::recover`]), logged. Only for a file that is
-/// no image being edited in place right now (the caller checks, or holds the [`Claim`]).
+/// The lock one image's journal is settled under: two jobs opening the same image at once (two
+/// readers may) would otherwise both replay its undo journal. Held only while settling, never
+/// with the users lock.
+fn settle_lock(image: &Path) -> std::sync::Arc<Mutex<()>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Weak};
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let k = key(image);
+    if let Some(l) = locks.get(&k).and_then(Weak::upgrade) {
+        return l;
+    }
+    locks.retain(|_, w| w.strong_count() > 0);
+    let l = Arc::new(Mutex::new(()));
+    locks.insert(k, Arc::downgrade(&l));
+    l
+}
+
+/// Settles a journal left beside `image` ([`patch::recover`]), logged, under the image's
+/// [`settle_lock`]. Only for a file that is no image being edited in place right now (the caller
+/// checks, or holds the [`Claim`]).
 fn settle(image: &Path) -> Result<Recovery, String> {
     let journal = patch::journal_path(image);
+    if std::fs::symlink_metadata(&journal).is_err() {
+        return Ok(Recovery::Clean);
+    }
+    let lock = settle_lock(image);
+    let _settling = lock.lock().unwrap_or_else(|e| e.into_inner());
+    // Another job may have settled it while this one waited.
     if std::fs::symlink_metadata(&journal).is_err() {
         return Ok(Recovery::Clean);
     }
@@ -1683,6 +1711,22 @@ mod tests {
         assert_eq!(got, want);
         let got_dirs: Vec<&str> = dirs.iter().map(String::as_str).collect();
         assert_eq!(got_dirs, ["data/added/hollow", "data/made", "data/sub"]);
+    }
+
+    #[test]
+    fn one_image_is_settled_by_one_job_at_a_time() {
+        let a = settle_lock(Path::new("/no/such/settle-a.exfat"));
+        let a2 = settle_lock(Path::new("/no/such/settle-a.exfat"));
+        let b = settle_lock(Path::new("/no/such/settle-b.exfat"));
+        assert!(std::sync::Arc::ptr_eq(&a, &a2), "one lock per image");
+        assert!(
+            !std::sync::Arc::ptr_eq(&a, &b),
+            "other images are not held up"
+        );
+        let held = a.lock().unwrap();
+        assert!(a2.try_lock().is_err(), "a second settle of the image waits");
+        assert!(b.try_lock().is_ok());
+        drop(held);
     }
 
     /// exFAT (PS5Upload's own writer) and UFS2: every kind of change goes in, reads back, and

@@ -76,7 +76,13 @@ export async function stopHelperFlow(
       message:
         r.reason === "busy"
           ? busyMessage
-          : tr("helper_stop_failed", { error: r.error }, "Couldn't stop the helper: {error}"),
+          : r.reason === "stopping"
+            ? tr(
+                "helper_stop_already_running",
+                undefined,
+                "A stop is already running on this console. Wait for it to finish, then try again.",
+              )
+            : tr("helper_stop_failed", { error: r.error }, "Couldn't stop the helper: {error}"),
     };
   }
   deps.onStopped(target);

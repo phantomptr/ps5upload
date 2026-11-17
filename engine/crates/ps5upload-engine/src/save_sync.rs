@@ -867,8 +867,10 @@ struct Shared {
     settings: Settings,
     state: State,
     watch: Watch,
-    /// The console pairs with an apply running (sorted hosts).
+    /// The console pairs with an apply running (sorted hosts), or held by the background look.
     applying: BTreeSet<String>,
+    /// Those of `applying` the background look holds (not an apply).
+    looking: BTreeSet<String>,
 }
 
 fn shared() -> &'static Mutex<Shared> {
@@ -879,6 +881,7 @@ fn shared() -> &'static Mutex<Shared> {
             state: local::load(STATE_FILE),
             watch: Watch::default(),
             applying: BTreeSet::new(),
+            looking: BTreeSet::new(),
         })
     })
 }
@@ -899,12 +902,22 @@ fn hosts_key(p: &SyncPair) -> String {
     format!("{}|{}", h[0], h[1])
 }
 
-/// Holds a pair of consoles for one apply; released when dropped.
+/// Holds a pair of consoles for one apply (or the background look); released when dropped.
 struct Applying(String);
 
 impl Applying {
     fn begin(k: String) -> Option<Self> {
         lock().applying.insert(k.clone()).then_some(Self(k))
+    }
+
+    /// [`Self::begin`] for the background look: an apply refused meanwhile says so.
+    fn begin_look(k: String) -> Option<Self> {
+        let mut g = lock();
+        if !g.applying.insert(k.clone()) {
+            return None;
+        }
+        g.looking.insert(k.clone());
+        Some(Self(k))
     }
 
     /// [`Self::begin`] for `p`'s consoles, waiting up to `wait` for an after-close look (a few
@@ -925,7 +938,9 @@ impl Applying {
 
 impl Drop for Applying {
     fn drop(&mut self) {
-        lock().applying.remove(&self.0);
+        let mut g = lock();
+        g.applying.remove(&self.0);
+        g.looking.remove(&self.0);
     }
 }
 
@@ -946,33 +961,76 @@ fn settle_now(h: &str) -> bool {
 /// Runs a check over the shared state without holding the lock over the console work.
 fn checked(pair: &SyncPair, only: &dyn Fn(&str, &[String]) -> bool) -> Vec<SyncRow> {
     let mut state = lock().state.clone();
+    let base = state.suggestions.clone();
     let rows = check(&Live, pair, &mut state, now_ms(), only, &settle_now);
     let mut g = lock();
-    merge_items(&mut g.state, state, &pair.id, false);
+    merge_shared(&mut g, state, &base, &pair.id, false);
     persist_state(&g.state);
     rows
 }
 
+/// [`merge_items`] into the shared state, unless the pair was removed meanwhile (its records went
+/// with it and must not come back).
+fn merge_shared(
+    g: &mut Shared,
+    from: State,
+    base: &[SyncSuggestion],
+    pair: &str,
+    suggestions: bool,
+) {
+    if !g.settings.pairs.iter().any(|p| p.id == pair) {
+        return;
+    }
+    merge_items(&mut g.state, from, base, pair, suggestions);
+}
+
+fn synced_at(i: &SyncItemState) -> Option<u64> {
+    i.synced.as_ref().map(|s| s.at_ms)
+}
+
 /// Takes `from`'s records of `pair` into `into` (other pairs' records stay as `into` has them).
-/// The newer of the two last copies is kept, so a check that ran beside an apply never puts an
-/// older one back. `suggestions`: `from`'s suggestions of the pair replace `into`'s.
-fn merge_items(into: &mut State, from: State, pair: &str, suggestions: bool) {
+/// A record whose last copy is newer in `into` stays as `into` has it, both sides' fingerprints
+/// with it: a check that ran beside an apply never puts an older copy, or the sides seen before
+/// it, back. `suggestions`: `from`'s suggestions of the pair replace `into`'s, except those
+/// dismissed meanwhile: in `base` (what `from` started from) and gone from `into`, and not newer
+/// in `from` than in `base` (one made again since comes back, as a dismissal intends).
+fn merge_items(
+    into: &mut State,
+    from: State,
+    base: &[SyncSuggestion],
+    pair: &str,
+    suggestions: bool,
+) {
     let prefix = format!("{pair}|");
-    for (k, mut v) in from.items {
+    for (k, v) in from.items {
         if !k.starts_with(&prefix) {
             continue;
         }
-        if let Some(old) = into.items.get(&k).and_then(|o| o.synced.clone()) {
-            if v.synced.as_ref().is_none_or(|n| n.at_ms < old.at_ms) {
-                v.synced = Some(old);
-            }
+        if into
+            .items
+            .get(&k)
+            .is_some_and(|old| synced_at(old) > synced_at(&v))
+        {
+            continue;
         }
         into.items.insert(k, v);
     }
     if suggestions {
+        let dismissed = |s: &SyncSuggestion| {
+            base.iter()
+                .any(|b| b.pair == s.pair && b.key == s.key && s.at_ms <= b.at_ms)
+                && !into
+                    .suggestions
+                    .iter()
+                    .any(|i| i.pair == s.pair && i.key == s.key)
+        };
+        let kept: Vec<SyncSuggestion> = from
+            .suggestions
+            .into_iter()
+            .filter(|s| s.pair == pair && !dismissed(s))
+            .collect();
         into.suggestions.retain(|s| s.pair != pair);
-        into.suggestions
-            .extend(from.suggestions.into_iter().filter(|s| s.pair == pair));
+        into.suggestions.extend(kept);
     }
 }
 
@@ -986,7 +1044,7 @@ pub fn tick() {
     let keys: BTreeSet<String> = settings.pairs.iter().map(hosts_key).collect();
     let mut holds = Vec::new();
     for k in keys {
-        match Applying::begin(k) {
+        match Applying::begin_look(k) {
             Some(h) => holds.push(h),
             None => return,
         }
@@ -995,6 +1053,7 @@ pub fn tick() {
         let mut g = lock();
         (g.state.clone(), std::mem::take(&mut g.watch))
     };
+    let base = state.suggestions.clone();
     watch_once(
         &Live,
         &settings,
@@ -1006,7 +1065,7 @@ pub fn tick() {
     let mut g = lock();
     g.watch = watch;
     for p in &settings.pairs {
-        merge_items(&mut g.state, state.clone(), &p.id, true);
+        merge_shared(&mut g, state.clone(), &base, &p.id, true);
     }
     persist_state(&g.state);
     drop(g);
@@ -1158,11 +1217,13 @@ pub async fn post_apply(Json(b): Json<SyncApplyBody>) -> Response {
     let Some(pair) = find_pair(&b.pair) else {
         return no_pair();
     };
+    let key = hosts_key(&pair);
     let r = tokio::task::spawn_blocking(move || {
         let _hold = Applying::begin_within(&pair, Duration::from_secs(30))?;
         let mut out: Vec<Value> = Vec::new();
         for item in &b.items {
             let mut state = lock().state.clone();
+            let base = state.suggestions.clone();
             let r = apply(
                 &Live,
                 &pair,
@@ -1174,7 +1235,7 @@ pub async fn post_apply(Json(b): Json<SyncApplyBody>) -> Response {
             );
             {
                 let mut g = lock();
-                merge_items(&mut g.state, state, &pair.id, true);
+                merge_shared(&mut g, state, &base, &pair.id, true);
                 persist_state(&g.state);
             }
             out.push(match r {
@@ -1187,6 +1248,12 @@ pub async fn post_apply(Json(b): Json<SyncApplyBody>) -> Response {
     .await;
     match r {
         Ok(Some(v)) => Json(v).into_response(),
+        // Held by the background look (it reads both consoles after a game closes) rather than
+        // another apply: say so, it ends on its own.
+        Ok(None) if lock().looking.contains(&key) => json_error(
+            StatusCode::CONFLICT,
+            "Save sync is checking these consoles right now. Try again in a moment.",
+        ),
         Ok(None) => json_error(
             StatusCode::CONFLICT,
             "A sync between these consoles is already running.",
@@ -1730,5 +1797,125 @@ mod tests {
         assert_ne!(one, digest(&[("sdimg_b".into(), 10, 5)]));
         assert!(settling_phase(1) && settling_phase(2));
         assert!(!settling_phase(0) && !settling_phase(3));
+    }
+
+    fn suggestion(pair: &str, key: &str, at_ms: u64) -> SyncSuggestion {
+        SyncSuggestion {
+            pair: pair.into(),
+            key: key.into(),
+            title_id: key.into(),
+            kind: "ps5".into(),
+            direction: SyncDirection::AToB,
+            state: SyncSuggestionState::Ready,
+            at_ms,
+        }
+    }
+
+    fn seen(fp: &str) -> Option<SyncSeen> {
+        Some(SyncSeen {
+            fp: fp.into(),
+            size: 1,
+            changed_ms: None,
+        })
+    }
+
+    #[test]
+    fn a_dismissal_made_during_a_look_stays_dismissed() {
+        // The look started from a state with the suggestion; "Not now" removed it meanwhile.
+        let base = vec![suggestion("p", "A", 10), suggestion("p", "B", 10)];
+        let mut into = State {
+            suggestions: vec![suggestion("p", "B", 10)],
+            ..Default::default()
+        };
+        let from = State {
+            suggestions: vec![
+                suggestion("p", "A", 10),
+                suggestion("p", "B", 10),
+                suggestion("p", "C", 20),
+            ],
+            ..Default::default()
+        };
+        merge_items(&mut into, from, &base, "p", true);
+        let keys: Vec<&str> = into.suggestions.iter().map(|s| s.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec!["B", "C"],
+            "A stays dismissed, a new one is taken"
+        );
+
+        // One made again since (the game closed with a change once more) comes back.
+        let mut into = State::default();
+        let from = State {
+            suggestions: vec![suggestion("p", "A", 30)],
+            ..Default::default()
+        };
+        merge_items(&mut into, from, &base, "p", true);
+        assert_eq!(into.suggestions.len(), 1);
+    }
+
+    #[test]
+    fn a_check_beside_an_apply_keeps_the_newer_sides() {
+        let k = item_key("p", "A");
+        let applied = SyncItemState {
+            synced: Some(SyncRecord {
+                a: "new".into(),
+                b: "new".into(),
+                at_ms: 50,
+            }),
+            a: seen("new"),
+            b: seen("new"),
+            last_error: None,
+        };
+        let mut into = State::default();
+        into.items.insert(k.clone(), applied.clone());
+        // The check read the sides before the copy.
+        let mut from = State::default();
+        from.items.insert(
+            k.clone(),
+            SyncItemState {
+                synced: Some(SyncRecord {
+                    a: "old".into(),
+                    b: "x".into(),
+                    at_ms: 10,
+                }),
+                a: seen("old"),
+                b: seen("x"),
+                last_error: None,
+            },
+        );
+        merge_items(&mut into, from, &[], "p", false);
+        assert_eq!(into.items[&k], applied);
+    }
+
+    #[test]
+    fn a_removed_pair_does_not_come_back_with_a_merge() {
+        let mut g = Shared {
+            settings: Settings::default(),
+            state: State::default(),
+            watch: Watch::default(),
+            applying: BTreeSet::new(),
+            looking: BTreeSet::new(),
+        };
+        let mut from = State::default();
+        from.items
+            .insert(item_key("gone", "A"), SyncItemState::default());
+        from.suggestions.push(suggestion("gone", "A", 1));
+        merge_shared(&mut g, from.clone(), &[], "gone", true);
+        assert!(g.state.items.is_empty() && g.state.suggestions.is_empty());
+        g.settings.pairs.push(SyncPair {
+            id: "gone".into(),
+            a: SyncSide {
+                host: "h1".into(),
+                user_id: 1,
+            },
+            b: SyncSide {
+                host: "h2".into(),
+                user_id: 2,
+            },
+            excluded: Vec::new(),
+        });
+        merge_shared(&mut g, from, &[], "gone", true);
+        assert_eq!(g.state.items.len(), 1);
+        assert_eq!(g.state.suggestions.len(), 1);
     }
 }

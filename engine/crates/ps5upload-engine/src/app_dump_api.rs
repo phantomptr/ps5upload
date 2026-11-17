@@ -88,6 +88,10 @@ pub async fn dump(Json(req): Json<DumpReq>) -> Response {
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
+    // Counted busy from here: a stop or removal of the helper running now refuses this.
+    let Some(busy) = helper_stop::try_enter(&addr) else {
+        return helper_stop::stopping_refusal();
+    };
     if !valid_title_id(&req.title_id) {
         return json_err(StatusCode::BAD_REQUEST, "dump_bad_title_id").into_response();
     }
@@ -114,7 +118,7 @@ pub async fn dump(Json(req): Json<DumpReq>) -> Response {
     let title = x.title_id.clone();
     match tokio::task::spawn_blocking(move || {
         // Marks the console busy for the job: a helper stop is refused meanwhile.
-        let _busy = helper_stop::enter(&addr);
+        let _busy = busy;
         ensure_running(&addr, &x.title_id)?;
         // It was mounted a moment ago: a refusal now means the game closed (some apps exit
         // on their own) rather than that it never started.

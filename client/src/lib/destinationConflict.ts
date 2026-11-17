@@ -8,7 +8,10 @@
 // After `ava1_commit_exists` a folder's finished tree is still in `<dest>.ava-part` (AVA1
 // SPEC.md §15.5). Replace then deletes what is in the way and moves that tree into place, and the
 // row runs again as a Resume, which finds every file already there and sends nothing: a big game
-// is not sent twice. Anything else (a single file, an archive, no tree left) is sent again.
+// is not sent twice. Only a tree shown to be this row's own job's is moved (the engine still knows
+// the job, it failed at its commit, under the row's job id, with every byte sent): a
+// `<dest>.ava-part` left by an abandoned job could hold an older copy. Anything else (a single
+// file, an archive, no tree left, a tree not shown to be this job's) is sent again.
 
 import type { QueueItem } from "../state/uploadQueue";
 import { hostOf } from "./addr";
@@ -35,16 +38,44 @@ export function offersConflictActions(it: ConflictRow): boolean {
   return destinationConflictOf(it.errorReason) !== null;
 }
 
-/** Where the row goes in `folder`: the folder plus the name it had. Pure. */
-export function destInFolder(oldDest: string, folder: string): string {
+/** Where the row goes in `folder`: the folder plus the name it had. `flat` (an archive
+ *  extracted straight into its destination): the destination is the folder itself. Pure. */
+export function destInFolder(oldDest: string, folder: string, flat = false): string {
+  if (flat) return folder.replace(/\/+$/, "") || "/";
   const name = oldDest.replace(/\/+$/, "").split("/").pop() ?? "";
   const dir = folder.replace(/\/+$/, "") || "";
   return `${dir}/${name}`;
 }
 
+/** What the engine still knows of the row's last job (its job snapshot), or null when it does
+ *  not know it any more (an engine restart). */
+export interface LastJob {
+  status: string;
+  error_reason?: string;
+  tx_id_hex?: string;
+  bytes_sent?: number;
+  total_bytes?: number;
+}
+
+/** Whether `<dest>.ava-part` is the row's own job's finished tree: the job the row ran (its
+ *  job id) failed at its commit because the destination is taken, under the row's job id, with
+ *  every byte it planned sent (when the engine said how many). Pure. */
+export function stagedTreeIsThisJobs(row: Pick<QueueItem, "txIdHex">, job: LastJob | null): boolean {
+  if (!job || job.status !== "failed" || job.error_reason !== "ava1_commit_exists") return false;
+  if (job.tx_id_hex && row.txIdHex && job.tx_id_hex.toLowerCase() !== row.txIdHex.toLowerCase()) {
+    return false;
+  }
+  if (typeof job.total_bytes === "number" && typeof job.bytes_sent === "number") {
+    return job.total_bytes > 0 && job.bytes_sent >= job.total_bytes;
+  }
+  return true;
+}
+
 export interface ReplaceDeps {
   /** Throws unless `path` is a folder on the console. */
   listDir: (addr: string, path: string) => Promise<{ name: string }[]>;
+  /** The engine's snapshot of job `jobId`, or null when it no longer knows it. */
+  lastJob: (jobId: string) => Promise<LastJob | null>;
   remove: (addr: string, path: string) => Promise<void>;
   move: (addr: string, from: string, to: string) => Promise<void>;
   forgetResumeId: (host: string, src: string, dest: string) => Promise<void>;
@@ -52,7 +83,7 @@ export interface ReplaceDeps {
 
 type ReplaceRow = Pick<
   QueueItem,
-  "addr" | "sourceKind" | "sourcePath" | "resolvedDest" | "errorReason"
+  "addr" | "sourceKind" | "sourcePath" | "resolvedDest" | "errorReason" | "jobId" | "txIdHex"
 >;
 
 /**
@@ -78,6 +109,8 @@ export async function clearForReplace(
     folder &&
     destinationConflictOf(it.errorReason) === "after" &&
     names.has(`${name}.ava-part`) &&
+    !!it.jobId &&
+    stagedTreeIsThisJobs(it, await deps.lastJob(it.jobId).catch(() => null)) &&
     (await deps.listDir(it.addr, part).then(
       () => true,
       () => false,

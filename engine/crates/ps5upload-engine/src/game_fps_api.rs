@@ -128,12 +128,19 @@ impl Session {
         };
         self.error = None;
         self.state = r.state.clone();
+        let before = self.raw;
         self.raw = r.is_ok().then_some((r.flips, r.bytes));
+        // The count went back: another game (or a restarted helper). Whether it moves is asked
+        // again, so a game whose count never moves still reads as "no_count" after one that did.
+        if r.is_ok() && before.is_some_and(|(flips, _)| r.flips < flips) {
+            self.moved = false;
+            self.still = 0;
+        }
         let Some(s) = self.meter.push(&r) else {
             if !r.is_ok() {
                 self.last = None;
                 self.still = 0;
-            } else if self.still >= STILL_SAMPLES {
+            } else if !self.moved && self.still >= STILL_SAMPLES {
                 self.state = "no_count".into();
             }
             return;
@@ -485,6 +492,36 @@ mod tests {
         let v = s.snapshot();
         assert_eq!(v["state"], json!("ok"));
         assert_eq!(v["fps"], json!(60.0));
+    }
+
+    #[test]
+    fn a_count_that_moved_is_never_no_count_while_a_sample_is_skipped() {
+        let now = Instant::now();
+        let mut s = capturing(now);
+        s.apply(ok(100, 1_000_000), now, 2_000);
+        s.apply(ok(160, 2_000_000), now, 3_000);
+        s.still = STILL_SAMPLES; // as after a long stall
+                                 // A read too soon after the last one gives no sample: still a moving count.
+        s.apply(ok(161, 2_000_001), now, 3_001);
+        assert_ne!(s.snapshot()["state"], json!("no_count"));
+    }
+
+    #[test]
+    fn a_new_game_whose_count_never_moves_is_no_count_again() {
+        let now = Instant::now();
+        let mut s = capturing(now);
+        s.apply(ok(1_000, 1_000_000), now, 2_000);
+        s.apply(ok(1_060, 2_000_000), now, 3_000);
+        assert!(s.moved);
+        // Another game: its count starts over and never moves.
+        let mut t = 3_000_000u64;
+        s.apply(ok(5, t), now, 4_000);
+        assert!(!s.moved, "the count went back");
+        for i in 0..=STILL_SAMPLES as i64 {
+            t += 1_000_000;
+            s.apply(ok(5, t), now, 5_000 + 1_000 * i);
+        }
+        assert_eq!(s.snapshot()["state"], json!("no_count"));
     }
 
     #[test]

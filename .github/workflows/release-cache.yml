@@ -13,11 +13,24 @@ name: release-cache
 # own bump commit lives on its tag, not main: its first-party crates, whose version changed,
 # compile fresh, their dependencies still hit), weekly (a new stable rustc
 # changes every key), by hand, and on a PR that changes this workflow or the build script
-# (its own entries then live in that PR's scope).
+# (that run reads main's entries and writes none: a PR's would be visible to that PR alone).
 #
 # Size: sccache stores one cache entry per object and GitHub evicts the least recently used
 # entries above the repository's 10 GiB. Read the entries' total with
 #   gh api repos/phantomptr/ps5upload/actions/cache/usage
+#
+# What it is worth (measured 2026-11-17 over v12.6.0..v12.6.3): publish's Rust hit rate was
+# 45-68 % when this run had finished before the release, 0-20 % when it ran alongside it (the
+# usual case: the release is cut right after the merge that started this). Its own Linux legs hit
+# 0 %, because ci's per-run caches push the pool past 10 GiB on every main push and evict the
+# previous warm, and most of its writes fail with HTTP 429 (the cache service rate-limits ~1000
+# entries a job). So it is a small help, not a guarantee, and release-tag.yml cancels a run still
+# going when it dispatches publish, so the release gets its macOS and Linux runners. ci now keys
+# its caches by content and saves one only when that key is new (RELEASING.md "CI caches"), so
+# a main push no longer writes ~10 GB of fresh entries and evicts this run's.
+#
+# No Windows legs: sccache is off on Windows (see "Start sccache"), so they compiled for ~16 min
+# each and stored nothing, holding two Windows runners while ci and publish queued for them.
 
 on:
   push:
@@ -54,7 +67,7 @@ jobs:
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      # publish.yml's build-client matrix: same runners, same targets.
+      # publish.yml's build-client matrix: same runners, same targets, but not Windows (above).
       matrix:
         include:
           - os: macos-15
@@ -73,14 +86,6 @@ jobs:
             platform: linux
             arch: arm64
             rust_target: aarch64-unknown-linux-gnu
-          - os: windows-2022
-            platform: windows
-            arch: x64
-            rust_target: x86_64-pc-windows-msvc
-          - os: windows-11-arm
-            platform: windows
-            arch: arm64
-            rust_target: aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -99,14 +104,23 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.rust_target }}
 
-      - name: Cargo registry (restored by publish.yml)
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      # Restored by publish.yml under the same key: the locks' registry/git crates only
+      # (.github/scripts/cargo-cache.mjs), so a release's version bump keeps it. Saved below, from
+      # main only and only when the exact key missed.
+      - name: Cargo registry cache key
+        id: cache-key
+        shell: bash
+        run: node .github/scripts/cargo-cache.mjs key engine/Cargo.lock client/src-tauri/Cargo.lock >> "$GITHUB_OUTPUT"
+
+      - name: Restore cargo registry
+        id: registry
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('engine/Cargo.lock', 'client/src-tauri/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ steps.cache-key.outputs.deps }}
           restore-keys: ${{ runner.os }}-cargo-registry-
 
       - name: Install sccache
@@ -114,8 +128,12 @@ jobs:
         with:
           tool: sccache@0.18.0
 
+      # Writes from main only: a PR run (one that changes this workflow) checks the build and
+      # reads main's entries, but what it wrote would be visible to that PR alone.
       - name: Point sccache at the Actions cache
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          RW_MODE: ${{ github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}
         with:
           script: |
             core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
@@ -126,19 +144,18 @@ jobs:
             core.exportVariable('SCCACHE_ERROR_LOG', `${process.env.RUNNER_TEMP}/sccache.log`);
             core.exportVariable('SCCACHE_LOG', 'warn');
             core.exportVariable('SCCACHE_GHA_ENABLED', 'true');
-            core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_WRITE');
+            core.exportVariable('SCCACHE_GHA_RW_MODE', process.env.RW_MODE);
             core.exportVariable('SCCACHE_IGNORE_SERVER_IO_ERROR', '1');
             core.exportVariable('SCCACHE_IDLE_TIMEOUT', '0');
 
+      # Not on Windows (no Windows legs here): since Rust 1.100's build-dir layout rustc gets one
+      # -L per dependency, and sccache 0.18 starts rustc with the whole line, past Windows' limit
+      # (os error 206). Cargo alone passes it in a response file. Bring the Windows legs back
+      # (publish.yml's matrix, with its libclang step) once sccache does the same.
       - name: Start sccache
         shell: bash
-        # Not on Windows: since Rust 1.100's build-dir layout rustc gets one -L per dependency,
-        # and sccache 0.18 starts rustc with the whole line, past Windows' limit (os error 206).
-        # Cargo alone passes it in a response file. Turn back on once sccache does the same.
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            echo "::notice::sccache is off on Windows (Rust 1.100 command lines are too long for it)"
-          elif sccache --start-server; then
+          if sccache --start-server; then
             echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
           else
             echo "::warning::sccache did not start; building without the compile cache"
@@ -174,51 +191,21 @@ jobs:
             gstreamer1.0-libav \
             gstreamer1.0-gl
 
-      - name: Ensure libclang for bindgen (Windows)
-        if: matrix.platform == 'windows'
-        shell: bash
-        env:
-          ARCH: ${{ matrix.arch }}
-        run: |
-          # jpegxr's build runs bindgen, which loads libclang.dll into the
-          # HOST build process. windows-2022 ships LLVM; the leaner
-          # windows-11-arm image may not. Locate a host-arch libclang and
-          # pin LIBCLANG_PATH so clang-sys resolves it deterministically.
-          # Non-destructive: when a usable LLVM is already present we only
-          # export the path — a runner that already builds keeps working.
-          set -u
-          find_libclang() {
-            for d in \
-              "/c/Program Files/LLVM/bin" \
-              "/c/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/Llvm/ARM64/bin" \
-              "/c/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/Llvm/bin" \
-              "/c/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/ARM64/bin" \
-              "/c/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/bin"; do
-              if [ -f "$d/libclang.dll" ]; then echo "$d"; return 0; fi
-            done
-            return 1
-          }
-          dir="$(find_libclang || true)"
-          # Only auto-install on x64: choco's llvm is an x64 build and an
-          # x64 libclang.dll can't load into an arm64 host process, so on
-          # arm64 we rely on the image's preinstalled (arm64) LLVM above.
-          if [ -z "$dir" ] && [ "$ARCH" = "x64" ]; then
-            choco install llvm -y --no-progress
-            dir="$(find_libclang || true)"
-          fi
-          if [ -n "$dir" ]; then
-            win="$(cygpath -w "$dir")"
-            echo "LIBCLANG_PATH=$win" >> "$GITHUB_ENV"
-            echo "Using libclang at: $win"
-          else
-            echo "WARNING: no host libclang found; jpegxr/bindgen may fail" >&2
-          fi
-
       - name: Build engine + desktop dependencies (as publish.yml)
         shell: bash
         env:
           RUST_TARGET: ${{ matrix.rust_target }}
         run: scripts/release/build-engine-release.sh
+
+      - name: Save cargo registry
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.registry.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ steps.registry.outputs.cache-primary-key }}
 
       - name: Compile cache stats
         if: always()

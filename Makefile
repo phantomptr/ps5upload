@@ -1333,6 +1333,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/src/webui_codec.c $(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-app-dump-selftest
 	@echo "✓ a running title dumps with its package entries, appmeta, trophy and DLC; a stop leaves dump-incomplete.txt; decryption failures are counted, an unknown firmware keeps the plain copy"
+	@echo "Running trophy account fix self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-trophy-fix-selftest \
+		$(PAYLOAD_DIR)/tests/trophy_fix_selftest.c $(PAYLOAD_DIR)/src/trophy_fix.c $(PAYLOAD_DIR)/src/app_dump_sha256.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-trophy-fix-selftest
+	@echo "✓ trophy files: only the exact old account id is replaced (both byte orders, hashes written again), links never followed, a dry run changes nothing, a backup is kept first and puts the file back"
 	@echo "Running console clean-up rules self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-cleanup-rules-selftest \

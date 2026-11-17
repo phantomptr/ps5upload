@@ -3,7 +3,6 @@ import { useNavigate } from "react-router";
 import { ExternalLink, KeyRound, LogIn, Undo2 } from "lucide-react";
 
 import {
-  payloadsLocalPath,
   profileNpBackup,
   profileNpRestore,
   profileNpState,
@@ -16,7 +15,7 @@ import { Button, Card, ErrorCard, SuccessCard } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { hostOf } from "../../lib/addr";
 import { openExternalUrl } from "../../lib/openExternalUrl";
-import { pickPath } from "../../lib/pickPath";
+import { usePayloadCopy } from "../../lib/payloadCopy";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { useTr } from "../../state/lang";
 import {
@@ -55,6 +54,14 @@ export function NpSignInSection({
   // (Sign out) can be greyed out. So the helper keeps a copy of everything it overwrites
   // before it runs, and Undo puts that copy back.
   const target = npBackupTarget(info);
+  // The library's copy, else one the user picks.
+  const { copy, choose } = usePayloadCopy(NP_FAKE_SIGNIN_ID, {
+    title: tr("profile.np.pick_title", undefined, "Choose the np-fake-signin file"),
+    filters: [
+      { name: "Payload", extensions: ["elf", "bin"] },
+      { name: "All files", extensions: ["*"] },
+    ],
+  });
   const [npState, setNpState] = useState<NpState | null>(null);
   const refreshNpState = useCallback(async () => {
     if (!target) {
@@ -109,19 +116,9 @@ export function NpSignInSection({
     }
   }
 
-  /** The np-fake-signin file to send: the library's copy, else one the user picks. */
+  /** The np-fake-signin file to send: the copy shown, else one the user picks (null: cancelled). */
   async function signInFile(): Promise<string | null> {
-    const saved = await payloadsLocalPath(NP_FAKE_SIGNIN_ID).catch(() => null);
-    if (saved) return saved;
-    const picked = await pickPath({
-      mode: "file",
-      title: tr("profile.np.pick_title", undefined, "Choose the np-fake-signin file"),
-      filters: [
-        { name: "Payload", extensions: ["elf", "bin"] },
-        { name: "All files", extensions: ["*"] },
-      ],
-    });
-    return typeof picked === "string" && picked ? picked : null;
+    return (copy ?? (await choose()))?.path ?? null;
   }
 
   async function signIn() {
@@ -319,7 +316,20 @@ export function NpSignInSection({
           >
             {busy ?? tr("profile.np.sign_in", undefined, "Sign in")}
           </Button>
-        ) : (
+        ) : null}
+        {desktop && (
+          <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void choose().catch(() => null)}>
+            {tr("first_run_choose_file", undefined, "Choose file…")}
+          </Button>
+        )}
+        {desktop && copy && (
+          <span className="text-xs text-[var(--color-muted)]" data-testid="profile-np-copy">
+            {copy.picked
+              ? tr("payload_copy_picked", { name: copy.label }, "Sends {name}")
+              : tr("payload_copy_saved", { name: copy.label }, "Sends the saved copy: {name}")}
+          </span>
+        )}
+        {desktop ? null : (
           <p className="text-xs text-[var(--color-muted)]">
             {tr(
               "profile.np.browser_file",

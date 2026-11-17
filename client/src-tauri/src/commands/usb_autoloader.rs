@@ -821,18 +821,18 @@ mod tests {
         // A ticked custom repo was silently left off the stick: "wrote N files" without it.
         let t = Temp::new("order-custom");
         let lib = library(&t);
-        let added = lib
-            .add_custom_repo(&ps5upload_core::payload_library::AddRepo {
-                host: "github.com".into(),
-                owner: "me".into(),
-                name: "thing".into(),
-                ..Default::default()
-            })
-            .unwrap();
-        let (ord, unknown) = ordered_payloads(&lib, &ids(&[&added.id, "kstuff-echostretch"]), true);
+        // A repo an earlier version added (the app no longer adds them; saved ones still load).
+        std::fs::create_dir_all(lib.dir()).unwrap();
+        std::fs::write(
+            lib.dir().join("custom-repos.json"),
+            r#"[{"id":"custom-0a","display_name":"thing","repo_host":"github.com","repo_owner":"me","repo_name":"thing"}]"#,
+        )
+        .unwrap();
+        let added_id = "custom-0a";
+        let (ord, unknown) = ordered_payloads(&lib, &ids(&[added_id, "kstuff-echostretch"]), true);
         assert!(unknown.is_empty());
         let got: Vec<&str> = ord.iter().map(|(id, _, _)| id.as_str()).collect();
-        assert_eq!(got, ["kstuff-echostretch", added.id.as_str(), "ps5upload"]);
+        assert_eq!(got, ["kstuff-echostretch", added_id, "ps5upload"]);
         assert_eq!(ord[1].2, 200);
     }
 

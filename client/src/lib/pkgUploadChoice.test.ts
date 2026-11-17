@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { KrakenStatus } from "../api/ps5";
 import {
   krakenCopyDestination,
+  krakenPrefillStep,
   loadPkgChoice,
   PKG_CHOICE_KEY,
   pkgChoiceOf,
@@ -130,5 +131,45 @@ describe("krakenCopyDestination", () => {
     // None of its roots is on a connected drive.
     const away = kraken(["/mnt/ext1/games"], ["/mnt/ext1/games"]);
     expect(krakenCopyDestination("/data", away, ["/data"])).toBeNull();
+  });
+});
+
+describe("krakenPrefillStep", () => {
+  const target = { volume: "/data", subpath: "homebrew" };
+  const mine = { volume: "/mnt/ext1", subpath: "games" };
+  const base = { host: "10.0.0.2", userChose: false, current: mine, target, replaced: null };
+
+  it("fills in Kraken Mount's folder and puts the old destination back when no copied package remains", () => {
+    const on = krakenPrefillStep({ ...base, copying: true });
+    expect(on.set).toEqual(target);
+    expect(on.replaced).toEqual({ host: "10.0.0.2", ...mine });
+    const off = krakenPrefillStep({ ...base, copying: false, current: target, replaced: on.replaced });
+    expect(off.set).toEqual(mine);
+    expect(off.replaced).toBeNull();
+  });
+
+  it("never overrides a destination the user chose", () => {
+    expect(krakenPrefillStep({ ...base, copying: true, userChose: true }).set).toBeNull();
+    // Chosen after the prefill: not put back either.
+    const replaced = { host: "10.0.0.2", ...mine };
+    expect(krakenPrefillStep({ ...base, copying: false, userChose: true, replaced }).set).toBeNull();
+  });
+
+  it("keeps the first destination it replaced, and only for that console", () => {
+    const replaced = { host: "10.0.0.2", ...mine };
+    const again = krakenPrefillStep({
+      ...base,
+      copying: true,
+      current: { volume: "/mnt/usb0", subpath: "x" },
+      replaced,
+    });
+    expect(again.replaced).toBe(replaced);
+    expect(krakenPrefillStep({ ...base, copying: false, host: "10.0.0.3", replaced }).set).toBeNull();
+  });
+
+  it("does nothing when already there or Kraken Mount's folder is unknown", () => {
+    expect(krakenPrefillStep({ ...base, copying: true, current: target }).set).toBeNull();
+    expect(krakenPrefillStep({ ...base, copying: true, target: null }).set).toBeNull();
+    expect(krakenPrefillStep({ ...base, copying: false }).set).toBeNull();
   });
 });

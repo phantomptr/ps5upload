@@ -40,11 +40,14 @@ fn status_of(code: &str) -> StatusCode {
         "unknown_payload"
         | "unknown_release"
         | "no_previous"
+        // `not_downloaded`: the older name of `not_on_this_computer`, still accepted.
         | "not_downloaded"
         | "not_on_this_computer" => StatusCode::NOT_FOUND,
         "repo_host_is_ip" | "repo_host_gitlab" | "repo_host_invalid" | "repo_owner_invalid"
         | "repo_name_invalid" | "no_asset" | "bad_host" => StatusCode::BAD_REQUEST,
         "custom_repos_unreadable" => StatusCode::CONFLICT,
+        // A file that is not a payload: what was sent, not a server further on.
+        "asset_not_payload" => StatusCode::UNPROCESSABLE_ENTITY,
         "io_failed" => StatusCode::INTERNAL_SERVER_ERROR,
         _ => StatusCode::BAD_GATEWAY,
     }
@@ -248,6 +251,16 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
+    #[test]
+    fn a_file_that_is_not_a_payload_is_the_requests_fault_not_a_gateways() {
+        assert_eq!(
+            status_of("asset_not_payload"),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(status_of("not_on_this_computer"), StatusCode::NOT_FOUND);
+        assert_eq!(status_of("not_downloaded"), StatusCode::NOT_FOUND);
+    }
+
     fn read_body(r: &mut ureq::http::Response<ureq::Body>) -> Value {
         let text = r.body_mut().read_to_string().unwrap_or_default();
         serde_json::from_str(&text).unwrap_or(Value::Null)
@@ -333,19 +346,29 @@ mod tests {
         assert!(v.get("custom_repos_error").is_none());
 
         // A repo an earlier version added stays listed and can be removed.
-        let added = Library::new(h.dir.join("payloads"))
-            .add_custom_repo(&ps5upload_core::payload_library::AddRepo {
-                host: "github.com".into(),
-                owner: "Me".into(),
-                name: "thing".into(),
-                ..Default::default()
-            })
-            .unwrap();
+        let id = "custom-0a1b2c3d4e5f";
+        std::fs::create_dir_all(h.dir.join("payloads")).unwrap();
+        std::fs::write(
+            h.dir.join("payloads").join("custom-repos.json"),
+            json!([{
+                "id": id,
+                "display_name": "Me/thing",
+                "repo_host": "github.com",
+                "repo_owner": "Me",
+                "repo_name": "thing",
+            }])
+            .to_string(),
+        )
+        .unwrap();
         let (_, v) = h.get("/api/payloads").await;
-        assert_eq!(v["payloads"].as_array().unwrap().len(), curated + 1);
-        let (status, gone) = h.delete(&format!("/api/payloads/repos/{}", added.id)).await;
+        let payloads = v["payloads"].as_array().unwrap();
+        assert_eq!(payloads.len(), curated + 1);
+        assert!(payloads.iter().any(|p| p["id"] == id));
+        let (status, gone) = h.delete(&format!("/api/payloads/repos/{id}")).await;
         assert_eq!((status, gone["removed"].clone()), (200, json!(true)));
-        let (_, gone) = h.delete(&format!("/api/payloads/repos/{}", added.id)).await;
+        let (_, v) = h.get("/api/payloads").await;
+        assert_eq!(v["payloads"].as_array().unwrap().len(), curated);
+        let (_, gone) = h.delete(&format!("/api/payloads/repos/{id}")).await;
         assert_eq!(gone["removed"], false);
     }
 

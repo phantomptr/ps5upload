@@ -12,10 +12,22 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// Jobs running per console (case-folded host, no port).
-fn busy_counts() -> &'static Mutex<HashMap<String, usize>> {
-    static M: std::sync::OnceLock<Mutex<HashMap<String, usize>>> = std::sync::OnceLock::new();
-    M.get_or_init(|| Mutex::new(HashMap::new()))
+/// Jobs running per console and the consoles whose helper is being stopped or removed, under
+/// one lock: a job is let in ([`try_enter`]) and a stop marked ([`begin_stopping`]) atomically
+/// with respect to each other, so no job starts after a stop has read the console as idle.
+#[derive(Default)]
+struct Consoles {
+    /// Jobs running per console (case-folded host, no port).
+    busy: HashMap<String, usize>,
+    /// Consoles whose helper is being stopped or removed right now (a call that can take minutes).
+    stopping: std::collections::HashSet<String>,
+}
+
+fn consoles() -> std::sync::MutexGuard<'static, Consoles> {
+    static M: std::sync::OnceLock<Mutex<Consoles>> = std::sync::OnceLock::new();
+    M.get_or_init(|| Mutex::new(Consoles::default()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 fn key(addr: &str) -> String {
@@ -27,15 +39,14 @@ pub(crate) fn console_key(addr: &str) -> String {
     key(addr)
 }
 
-/// Consoles whose helper is being stopped or removed right now (a call that can take minutes).
-fn stopping_set() -> &'static Mutex<std::collections::HashSet<String>> {
-    static M: std::sync::OnceLock<Mutex<std::collections::HashSet<String>>> =
-        std::sync::OnceLock::new();
-    M.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
-}
+/// What a job started while the console's helper is being stopped or removed is told.
+pub(crate) const STOPPING_MESSAGE: &str = "PS5Upload is being stopped or removed on this console";
+
+/// What a second stop or removal of a console is told while one runs.
+pub(crate) const ALREADY_STOPPING_MESSAGE: &str = "a stop is already running on this console";
 
 /// Marks a console's helper as being stopped or removed until dropped: [`is_busy`] says so, so
-/// the queue starts nothing there meanwhile.
+/// the queue starts nothing there meanwhile, and [`try_enter`] lets no job in.
 pub(crate) struct StoppingGuard(String);
 
 /// Mark `addr` as being stopped, or None when a stop or removal of it already runs.
@@ -44,10 +55,7 @@ pub(crate) fn begin_stopping(addr: &str) -> Option<StoppingGuard> {
     // The lock is released before any guard exists: a guard built and dropped while it is held
     // (`then_some` builds its value eagerly) would lock it again in Drop and deadlock, and would
     // clear the marker of the stop already running.
-    let inserted = stopping_set()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(k.clone());
+    let inserted = consoles().stopping.insert(k.clone());
     if inserted {
         Some(StoppingGuard(k))
     } else {
@@ -57,43 +65,63 @@ pub(crate) fn begin_stopping(addr: &str) -> Option<StoppingGuard> {
 
 impl Drop for StoppingGuard {
     fn drop(&mut self) {
-        stopping_set()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.0);
+        consoles().stopping.remove(&self.0);
     }
 }
 
 /// Whether a job holding a [`BusyGuard`] runs against `addr` (a stop in progress not counted).
 pub(crate) fn jobs_running(addr: &str) -> bool {
-    busy_counts()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&key(addr))
-        .is_some_and(|n| *n > 0)
+    consoles().busy.get(&key(addr)).is_some_and(|n| *n > 0)
 }
 
 /// Marks a console busy until dropped (a panic unwinding the job drops it too).
 pub(crate) struct BusyGuard(String);
 
-/// Mark `addr` busy for the life of the returned guard.
+fn add_job(c: &mut Consoles, k: &str) {
+    *c.busy.entry(k.to_string()).or_insert(0) += 1;
+}
+
+/// Mark `addr` busy for the life of the returned guard, whether or not a stop runs (tests stand
+/// in for a running job with it). A request that starts a job takes [`try_enter`].
+#[cfg(test)]
 pub(crate) fn enter(addr: &str) -> BusyGuard {
     let k = key(addr);
-    *busy_counts()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .entry(k.clone())
-        .or_insert(0) += 1;
+    add_job(&mut consoles(), &k);
     BusyGuard(k)
+}
+
+/// Mark `addr` busy for the life of the returned guard, or None while its helper is being
+/// stopped or removed (checked and counted under one lock). Taken before a handler's first await,
+/// so nothing slips in between a stop's check and the job's start.
+pub(crate) fn try_enter(addr: &str) -> Option<BusyGuard> {
+    let k = key(addr);
+    {
+        let mut c = consoles();
+        if c.stopping.contains(&k) {
+            return None;
+        }
+        add_job(&mut c, &k);
+    }
+    Some(BusyGuard(k))
+}
+
+/// The answer to a request refused by [`try_enter`]: 409 `{ error, reason: "stopping" }`.
+pub(crate) fn stopping_refusal() -> axum::response::Response {
+    use axum::response::IntoResponse;
+    (
+        axum::http::StatusCode::CONFLICT,
+        axum::Json(serde_json::json!({ "error": STOPPING_MESSAGE, "reason": "stopping" })),
+    )
+        .into_response()
 }
 
 impl Drop for BusyGuard {
     fn drop(&mut self) {
-        let mut g = busy_counts().lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(n) = g.get_mut(&self.0) {
+        let mut c = consoles();
+        if let Some(n) = c.busy.get_mut(&self.0) {
             *n = n.saturating_sub(1);
             if *n == 0 {
-                g.remove(&self.0);
+                c.busy.remove(&self.0);
             }
         }
     }
@@ -102,11 +130,9 @@ impl Drop for BusyGuard {
 /// Whether a job holding a [`BusyGuard`] is running against `addr`, or its helper is being
 /// stopped or removed.
 pub(crate) fn is_busy(addr: &str) -> bool {
-    jobs_running(addr)
-        || stopping_set()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains(&key(addr))
+    let k = key(addr);
+    let c = consoles();
+    c.busy.get(&k).is_some_and(|n| *n > 0) || c.stopping.contains(&k)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -121,6 +147,8 @@ pub(crate) enum Stopped {
 pub(crate) enum StopError {
     /// A job of this engine is using the console.
     Busy,
+    /// Another stop or removal of this console's helper is running.
+    AlreadyStopping,
     /// The helper refused the stop because this app is not paired with it.
     NotPaired,
     /// Something answers on the helper's port but the stop failed (a timeout, a lost session).
@@ -133,6 +161,7 @@ impl StopError {
     pub(crate) fn reason(&self) -> &'static str {
         match self {
             StopError::Busy => "busy",
+            StopError::AlreadyStopping => "stopping",
             StopError::NotPaired => "refused",
             StopError::Failed(_) => "failed",
             StopError::StillRunning => "still_running",
@@ -144,6 +173,7 @@ impl StopError {
             StopError::Busy => {
                 "the helper is in use: wait for the transfers and installs on this console to finish, then stop it".into()
             }
+            StopError::AlreadyStopping => ALREADY_STOPPING_MESSAGE.into(),
             StopError::NotPaired => {
                 "the helper did not accept the stop request; pair with this console and try again".into()
             }
@@ -239,6 +269,8 @@ pub(crate) fn stop(addr: &str, busy: bool) -> Result<Stopped, StopError> {
 pub(crate) enum UninstallError {
     /// A job of this engine is using the console.
     Busy,
+    /// Another stop or removal of this console's helper is running.
+    AlreadyStopping,
     /// Something is mounted in the helper's folders (an image, a share, a save): unmount first.
     InUse(Vec<String>),
     /// The console itself runs something the removal would cut off: `installing` (a package),
@@ -256,6 +288,7 @@ impl UninstallError {
     pub(crate) fn reason(&self) -> &'static str {
         match self {
             UninstallError::Busy => "busy",
+            UninstallError::AlreadyStopping => "stopping",
             UninstallError::InUse(_) => "in_use",
             UninstallError::ConsoleBusy(cause) => match cause.as_str() {
                 "installing" => "console_installing",
@@ -272,6 +305,7 @@ impl UninstallError {
     pub(crate) fn message(&self) -> String {
         match self {
             UninstallError::Busy => "the helper is in use: wait for the transfers and installs on this console to finish, then try again".into(),
+            UninstallError::AlreadyStopping => ALREADY_STOPPING_MESSAGE.into(),
             UninstallError::ConsoleBusy(cause) => format!("the PS5 is busy ({cause}): wait for it to finish, then try again"),
             UninstallError::InUse(p) => format!("something is still mounted in PS5Upload's folders on the console; unmount it first: {}", p.join(", ")),
             UninstallError::OldHelper => "this helper is too old to remove itself; send this app's helper, then try again".into(),
@@ -302,6 +336,16 @@ fn refusal(cause: &str) -> Option<(String, Vec<String>, String)> {
     Some((err, paths, why))
 }
 
+/// Plain words for a refusal token the helper answers `node.uninstall` with (any other token is
+/// passed on as it came).
+fn refusal_words(err: &str) -> String {
+    match err {
+        "uninstall_mounts_unreadable" => "it could not read what is mounted on the console, so nothing was removed; try again in a moment".into(),
+        "bad_request" => "it did not understand the request; update this app and the helper, then try again".into(),
+        other => other.to_string(),
+    }
+}
+
 /// The decision, with the console calls passed in. `call` sends `node.uninstall`; after an
 /// answer the helper's port is polled until it goes quiet (it exits right after answering) or
 /// `wait` passes. Ok carries the helper's answer plus `"exited"`. `check` only asks whether the
@@ -328,7 +372,7 @@ pub(crate) fn uninstall_with(
                     return Err(match err.as_str() {
                         "uninstall_in_use" => UninstallError::InUse(paths),
                         "uninstall_busy" => UninstallError::ConsoleBusy(why),
-                        _ => UninstallError::Failed(err),
+                        _ => UninstallError::Failed(refusal_words(&err)),
                     });
                 }
             }
@@ -343,7 +387,7 @@ pub(crate) fn uninstall_with(
         .map_err(|_| UninstallError::Failed("the helper's answer is not JSON".into()))?;
     if v.get("ok").and_then(|o| o.as_bool()) != Some(true) {
         let err = v.get("err").and_then(|e| e.as_str()).unwrap_or("refused");
-        return Err(UninstallError::Failed(err.to_string()));
+        return Err(UninstallError::Failed(refusal_words(err)));
     }
     if check {
         v["exited"] = false.into();
@@ -449,6 +493,34 @@ mod tests {
         );
         assert_eq!(e.reason(), "in_use");
         assert!(e.message().contains("/data/ps5upload/mounts/a"));
+    }
+
+    #[test]
+    fn unreadable_mounts_are_said_in_words() {
+        let r = uninstall_with(
+            false,
+            false,
+            || {
+                Err(refused(
+                    r#"{"ok":false,"err":"uninstall_mounts_unreadable"}"#,
+                ))
+            },
+            || true,
+            NO_WAIT,
+            NO_WAIT,
+        );
+        let m = r.unwrap_err().message();
+        assert!(!m.contains("uninstall_mounts_unreadable"), "{m}");
+        assert!(m.contains("could not read what is mounted"), "{m}");
+        let r = uninstall_with(
+            false,
+            false,
+            || Ok(br#"{"ok":false,"err":"uninstall_mounts_unreadable"}"#.to_vec()),
+            || true,
+            NO_WAIT,
+            NO_WAIT,
+        );
+        assert!(!r.unwrap_err().message().contains("uninstall_mounts"));
     }
 
     #[test]
@@ -603,6 +675,52 @@ mod tests {
         drop(g);
         assert!(!is_busy(addr));
         assert!(begin_stopping(addr).is_some());
+    }
+
+    #[test]
+    fn no_job_is_let_in_while_a_stop_runs() {
+        let addr = "192.0.2.62";
+        let job = try_enter(addr).expect("free console");
+        assert!(jobs_running(addr));
+        drop(job);
+        let stop = begin_stopping(addr).expect("first stop");
+        assert!(try_enter(addr).is_none(), "a stop running refuses new jobs");
+        assert!(try_enter("192.0.2.62:9021").is_none(), "whatever the port");
+        assert!(!jobs_running(addr), "a refused job is not counted");
+        assert!(
+            try_enter("192.0.2.63").is_some(),
+            "other consoles stay free"
+        );
+        assert_eq!(
+            stopping_refusal().status(),
+            axum::http::StatusCode::CONFLICT
+        );
+        drop(stop);
+        assert!(try_enter(addr).is_some());
+    }
+
+    #[test]
+    fn a_second_stop_says_one_is_running() {
+        assert_eq!(StopError::AlreadyStopping.reason(), "stopping");
+        assert!(StopError::AlreadyStopping
+            .message()
+            .contains("already running"));
+        assert!(!StopError::AlreadyStopping.message().contains("transfers"));
+        assert_eq!(UninstallError::AlreadyStopping.reason(), "stopping");
+        assert!(UninstallError::AlreadyStopping
+            .message()
+            .contains("already running"));
+    }
+
+    #[tokio::test]
+    async fn the_route_tells_a_second_stop_one_is_running() {
+        let installs = std::sync::Arc::new(crate::pkg_install::PkgInstallState::default());
+        let first = begin_stopping("192.0.2.64").expect("first stop");
+        let (status, body) = call(installs, Some("192.0.2.64")).await;
+        assert_eq!(status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(body["reason"], "stopping");
+        assert!(body["error"].as_str().unwrap().contains("already running"));
+        drop(first);
     }
 
     #[test]

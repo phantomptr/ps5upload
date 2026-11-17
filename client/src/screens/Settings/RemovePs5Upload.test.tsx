@@ -147,6 +147,7 @@ describe("Remove PS5Upload from this PS5", () => {
       console_converting: /Convert is working/,
       console_extracting: /extracting an archive/,
       console_busy: /PS5 is busy/,
+      stopping: /A stop is already running/,
     };
     for (const [reason, text] of Object.entries(want)) {
       const { d } = deps({

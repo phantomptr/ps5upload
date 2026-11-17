@@ -63,6 +63,9 @@ export default function UsbAutoloaderModal({
   // clear "use the desktop app" empty state instead. UA-based and
   // stable for the session, so the unconditional hooks above are safe.
   const mobile = isMobile();
+  // The catalogue payloads with a copy in the app's library (an older version downloaded them;
+  // this one doesn't): the only ones that can be ticked, so the only ones listed.
+  const library = catalog.filter((p) => !!inventoryById[p.id]);
 
   useEffect(() => {
     if (mobile) return;
@@ -240,11 +243,17 @@ export default function UsbAutoloaderModal({
                   )}
                 />
                 <p className="mb-2 text-xs text-[var(--color-muted)]">
-                  {tr(
-                    "usb_wizard_step2_hint_v2",
-                    undefined,
-                    "Tick copies already in the app's library, or add payload files from this computer.",
-                  )}
+                  {library.length > 0
+                    ? tr(
+                        "usb_wizard_step2_hint_v2",
+                        undefined,
+                        "Tick copies already in the app's library, or add payload files from this computer.",
+                      )
+                    : tr(
+                        "usb_wizard_step2_hint_files",
+                        undefined,
+                        "Add the payload files you want on the stick from this computer, in the order they should load.",
+                      )}
                 </p>
                 <div className="mb-3">
                   <Button
@@ -279,60 +288,47 @@ export default function UsbAutoloaderModal({
                       ))}
                     </ul>
                   )}
-                  <p className="mt-1 text-xs text-[var(--color-muted)]">
-                    {tr(
-                      "usb_wizard_local_order",
-                      undefined,
-                      "Your files load after the library's payloads, in the order added.",
-                    )}
-                  </p>
+                  {library.length > 0 && (
+                    <p className="mt-1 text-xs text-[var(--color-muted)]">
+                      {tr(
+                        "usb_wizard_local_order",
+                        undefined,
+                        "Your files load after the library's payloads, in the order added.",
+                      )}
+                    </p>
+                  )}
                 </div>
-                <ul className="space-y-1">
-                  {catalog.map((p) => {
-                    const cached = !!inventoryById[p.id];
-                    const checked = pickedIds.has(p.id);
-                    return (
-                      <li
-                        key={p.id}
-                        className={`flex items-center gap-3 rounded-[var(--radius-field)] border p-2 text-xs ${
-                          cached
-                            ? checked
+                {library.length > 0 && (
+                  <ul className="space-y-1">
+                    {library.map((p) => {
+                      const checked = pickedIds.has(p.id);
+                      return (
+                        <li
+                          key={p.id}
+                          className={`flex items-center gap-3 rounded-[var(--radius-field)] border p-2 text-xs ${
+                            checked
                               ? "border-[var(--color-accent)] bg-[var(--color-surface)]"
                               : "border-[var(--color-border)]"
-                            : "border-dashed border-[var(--color-border)] opacity-60"
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => togglePayload(p.id)}
-                          disabled={!cached}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <div className="font-medium">{p.display_name}</div>
-                          <div className="text-xs text-[var(--color-muted)]">
-                            {catalogText(tr, p).role} {tr("usbmodal_priority", "· priority")}{" "}
-                            {p.autoload_priority}
+                          }`}
+                        >
+                          <input type="checkbox" checked={checked} onChange={() => togglePayload(p.id)} />
+                          <div className="min-w-0 flex-1">
+                            <div className="font-medium">{p.display_name}</div>
+                            <div className="text-xs text-[var(--color-muted)]">
+                              {catalogText(tr, p).role} {tr("usbmodal_priority", "· priority")}{" "}
+                              {p.autoload_priority}
+                            </div>
                           </div>
-                        </div>
-                        {cached && inventoryById[p.id]?.version && (
-                          <span className="text-xs text-[var(--color-muted)]">
-                            {inventoryById[p.id].version}
-                          </span>
-                        )}
-                        {!cached && (
-                          <span className="text-xs text-[var(--color-muted)]">
-                            {tr(
-                              "usb_wizard_not_cached",
-                              undefined,
-                              "not cached",
-                            )}
-                          </span>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
+                          {inventoryById[p.id]?.version && (
+                            <span className="text-xs text-[var(--color-muted)]">
+                              {inventoryById[p.id].version}
+                            </span>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
                 <Toggle
                   checked={includeUs}
                   onChange={(checked) => setIncludeUs(checked)}

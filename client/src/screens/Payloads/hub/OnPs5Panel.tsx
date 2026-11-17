@@ -17,7 +17,6 @@ import {
   fsListDir,
   payloadsCatalog,
   payloadsRelease,
-  processKill,
   processList,
   smpStatus,
   type PayloadInfo,
@@ -33,7 +32,7 @@ import { useDocumentVisible } from "../../../lib/visibility";
 import { useConnectionStore } from "../../../state/connection";
 import { useTr } from "../../../state/lang";
 import { log } from "../../../state/logs";
-import { killPrompt } from "../../Processes/killPrompt";
+import { killChecked, killPrompt } from "../../Processes/killPrompt";
 import NanoDnsScreen from "../../NanoDns";
 import SmpPanel from "./SmpPanel";
 import PayloadManagerPanel, { type PmRunning } from "../PayloadManagerPanel";
@@ -42,8 +41,9 @@ import { pmOverview, type PmOverview } from "../../../api/payloadManager";
 import { storedHelper } from "../../../lib/helperAtBoot";
 import { ourElfldrPid } from "../../../lib/elfldrGuard";
 import { RUNNING_LINK } from "../payloadTabs";
-import { groupCards, matchSavedToCards, originOf, type Origin } from "./pmMerge";
+import { groupCards, matchDetail, originOf, payloadCount, type ListState, type Origin } from "./pmMerge";
 import { usePmView, usePmViewStore } from "./pmViewStore";
+import { runGate } from "./runGate";
 import { HushPanel, HushSummary, useHush, useHushActions } from "../../Hush";
 import {
   detectHubCards,
@@ -59,6 +59,8 @@ import { humanizeCaught } from "../../../lib/humanizeError";
 /** The process list is re-read this often while the tab is open. Slower than Processes'
  *  3 s: cards change state rarely, and this shares the helper with everything else. */
 const REFRESH_MS = 10_000;
+/** After a change in Payload Manager's panel the process list is read again this much later. */
+const PM_SETTLE_MS = 3_000;
 
 /** Which marker files exist. A folder is listed once; a folder whose parent listing lacks
  *  it is not asked for at all (most consoles have none of these). */
@@ -129,6 +131,8 @@ function OnPs5Body() {
   // The newest release of each card: its tag and its page.
   const [latest, setLatest] = useState<Record<string, { tag: string; url: string }>>({});
   const [busy, setBusy] = useState<string | null>(null);
+  // A Stop that failed: apart from `error`, which the next process-list read clears.
+  const [stopError, setStopError] = useState<{ name: string; detail: string } | null>(null);
   const { confirm, dialog } = useConfirm();
   // Keys the integrations' summaries, so a remount reads their version again.
   const [summaryRev] = useState(0);
@@ -162,30 +166,41 @@ function OnPs5Body() {
     setMarkersLoaded(false);
     setReports({});
     setError(null);
+    setStopError(null);
+    setBusy(null);
   }, [addr]);
 
   // Payload Manager's saved list, read with each refresh while its card is on screen (open or
   // not), so a running payload it keeps shows on its row instead of as a second card. Read
-  // apart from the process list: a slow answer from :8084 doesn't hold that up.
+  // apart from the process list: a slow answer from :8084 doesn't hold that up. One read per
+  // console at a time; one asked for meanwhile runs when it ends (a read that began before a
+  // change must not be the last word).
   const pmWanted = useRef(false);
-  const pmInFlight = useRef(false);
+  const [pmGate] = useState(runGate);
+  const refreshPmRef = useRef<() => Promise<void>>(async () => undefined);
   const refreshPm = useCallback(async () => {
-    if (!online || pmInFlight.current) return;
-    pmInFlight.current = true;
+    if (!online || !pmGate.enter(addr)) return;
     try {
       usePmViewStore.getState().put(addr, await pmOverview(addr));
     } catch {
       // Unread: nothing is merged until it reads again.
       usePmViewStore.getState().put(addr, null);
     } finally {
-      pmInFlight.current = false;
+      if (pmGate.leave(addr)) void refreshPmRef.current();
     }
-  }, [addr, online]);
+  }, [addr, online, pmGate]);
+  useEffect(() => {
+    refreshPmRef.current = refreshPm;
+  }, [refreshPm]);
 
-  const inFlight = useRef(false);
+  // Likewise one process-list read at a time: a Stop or a launch that asks while a poll is
+  // in flight gets a read of its own once that one ends, not the poll's older answer.
+  const [procsGate] = useState(runGate);
+  const refreshProcsRef = useRef<() => Promise<void>>(async () => undefined);
   const refreshProcs = useCallback(async () => {
-    if (!online || inFlight.current) return;
-    inFlight.current = true;
+    // One key for every console: the helper link is shared, and a read for the console left
+    // behind is dropped by `gen` anyway.
+    if (!online || !procsGate.enter("procs")) return;
     const gen = genRef.current;
     try {
       const r = await processList(addr);
@@ -205,11 +220,24 @@ function OnPs5Body() {
       if (gen !== genRef.current) return;
       setError(humanizeCaught(e));
     } finally {
-      inFlight.current = false;
       if (gen === genRef.current) setProcsLoaded(true);
+      if (procsGate.leave("procs")) void refreshProcsRef.current();
     }
-  }, [addr, online, refreshPm]);
+  }, [addr, online, refreshPm, procsGate]);
+  useEffect(() => {
+    refreshProcsRef.current = refreshProcs;
+  }, [refreshProcs]);
   usePoll(refreshProcs, REFRESH_MS, { host: addr, enabled: online && windowVisible });
+
+  // After Launch, Delete or a store in Payload Manager's panel: read what runs now, and again
+  // a moment later (a payload starts after its launch is acknowledged).
+  const soonTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(soonTimer.current), []);
+  const afterPmChange = useCallback(() => {
+    void refreshProcs();
+    window.clearTimeout(soonTimer.current);
+    soonTimer.current = window.setTimeout(() => void refreshProcsRef.current(), PM_SETTLE_MS);
+  }, [refreshProcs]);
 
   // Marker checks list folders on the console: like the pollers, they stand aside while a
   // transfer to this console runs, and catch up when it ends.
@@ -267,21 +295,51 @@ function OnPs5Body() {
   // The saved list against the running cards. Only with a list read in full and the process
   // list in: otherwise every card shows as it always has.
   const pmList = pmView?.present && !pmView.payloadsError && procsLoaded ? pmView.payloads : null;
-  const matched = useMemo(
-    () => (pmList ? matchSavedToCards(pmList, cards, entries) : null),
+  const detail = useMemo(
+    () => (pmList ? matchDetail(pmList, cards, entries) : null),
     [pmList, cards, entries],
   );
-  const groups = useMemo(() => (matched ? groupCards(cards, matched) : null), [cards, matched]);
+  const matched = detail?.matched ?? null;
+  const groups = useMemo(
+    () => (detail ? groupCards(cards, detail.matched, detail.ambiguous) : null),
+    [cards, detail],
+  );
   const matchedIds = useMemo(
     () => new Set([...(matched?.values() ?? [])].map((c) => c.id)),
     [matched],
   );
+  // With no Payload Manager on the console, nothing running is in its list.
+  const noPm = !pmCardShown || pmView?.present === false;
+  const listState = (c: HubCard): ListState =>
+    matchedIds.has(c.id)
+      ? "matched"
+      : detail?.ambiguous.has(c.id)
+        ? "maybe"
+        : detail || noPm
+          ? "not-in-list"
+          : "unknown";
   const loaderPid = ourElfldrPid(addr);
   const originText = (c: HubCard): string | null => {
-    const o: Origin | null = originOf(c, matchedIds.has(c.id), loaderPid);
+    const o: Origin | null = originOf(c, listState(c), loaderPid);
     switch (o) {
       case "pm":
         return tr("pm_origin_list", undefined, "From your Payload Manager list");
+      case "pm-maybe": {
+        const files = detail?.ambiguous.get(c.id)?.join(", ") ?? "";
+        return tr(
+          "hub_origin_pm_maybe",
+          { files },
+          `Could be any of ${files} from your Payload Manager list: the PS5 shows them under one name.`,
+        );
+      }
+      case "manager":
+        return tr("hub_origin_manager", undefined, "Started by your jailbreak or an autoloader.");
+      case "any":
+        return tr(
+          "hub_origin_any",
+          undefined,
+          "Started by your jailbreak, an autoloader, Payload Manager or a file you sent.",
+        );
       case "ours":
         return tr("hub_origin_ours", undefined, "PS5Upload's own helper");
       case "loader-ours":
@@ -389,14 +447,16 @@ function OnPs5Body() {
     );
     if (!ok) return;
     setBusy(card.id);
+    setStopError(null);
     try {
       for (const proc of card.byPid ? [p] : card.processes) {
-        const ack = await processKill(addr, proc.pid);
-        if (!ack.ok) throw new Error(ack.err || `pid ${proc.pid}`);
+        await killChecked(addr, proc.pid);
       }
       log.info("payloads", `stopped ${card.name}`);
     } catch (e) {
-      setError(humanizeCaught(e));
+      const why = humanizeCaught(e);
+      log.warn("payloads", `stop ${card.name} failed: ${why}`);
+      setStopError({ name: card.name, detail: why });
     } finally {
       setBusy(null);
       await refreshProcs();
@@ -492,7 +552,12 @@ function OnPs5Body() {
           c.integration === "hush" ? (
             <HushPanel host={host} view={hush.view} procs={procs} refresh={hush.refresh} />
           ) : c.integration ? (
-            <IntegrationPanel id={c.integration} host={host} pmRunning={pmRunning ?? undefined} />
+            <IntegrationPanel
+              id={c.integration}
+              host={host}
+              pmRunning={pmRunning ?? undefined}
+              onPmChanged={afterPmChange}
+            />
           ) : null
         }
       />
@@ -500,6 +565,7 @@ function OnPs5Body() {
   };
 
   const loading = !procsLoaded || !markersLoaded;
+  const count = groups && pmList && matched ? payloadCount(groups, pmList.length, matched) : cards.length;
 
   return (
     <div className="flex flex-col gap-3">
@@ -507,7 +573,7 @@ function OnPs5Body() {
         <span className="text-sm text-[var(--color-muted)]">
           {loading
             ? tr("hub_checking", undefined, "Checking what is on this PS5…")
-            : tr("hub_count", { n: cards.length }, `${cards.length} on this PS5`)}
+            : tr("hub_count", { n: count }, `${count} on this PS5`)}
         </span>
         <Button
           variant="secondary"
@@ -529,6 +595,13 @@ function OnPs5Body() {
           onDismiss={() => setError(null)}
         />
       )}
+      {stopError && (
+        <ErrorCard
+          title={tr("hub_stop_failed", { name: stopError.name }, `Couldn't stop ${stopError.name}`)}
+          detail={stopError.detail}
+          onDismiss={() => setStopError(null)}
+        />
+      )}
 
       {loading && cards.length === 0 ? (
         <SkeletonRows rows={3} />
@@ -537,9 +610,9 @@ function OnPs5Body() {
           icon={Boxes}
           title={tr("hub_empty_title", undefined, "Nothing found on this PS5")}
           message={tr(
-            "hub_empty_body",
+            "hub_empty_body_v2",
             undefined,
-            "No payload from the catalogue is running or installed on this console. Catalog has them, and Send loads any payload file.",
+            "No payload from the catalogue is running or installed on this console. Catalog links to each one's project page, and Send payload sends a file you have.",
           )}
           action={
             <div className="flex flex-wrap justify-center gap-2">
@@ -562,11 +635,7 @@ function OnPs5Body() {
                   {tr("hub_also_running", undefined, "Also running")}
                 </h3>
                 <p className="mt-0.5 text-xs text-[var(--color-muted)]">
-                  {tr(
-                    "hub_also_running_body",
-                    undefined,
-                    "Not in your Payload Manager list. Payloads above run from your own list.",
-                  )}{" "}
+                  {tr("hub_also_running_body_v2", undefined, "Not in your Payload Manager list.")}{" "}
                   <button
                     type="button"
                     className="underline underline-offset-2 hover:text-[var(--color-text)]"
@@ -630,12 +699,14 @@ function IntegrationPanel({
   id,
   host,
   pmRunning,
+  onPmChanged,
 }: {
   id: IntegrationId;
   host: string;
   pmRunning?: Record<string, PmRunning>;
+  onPmChanged?: () => void;
 }) {
-  if (id === "payload-manager") return <PayloadManagerPanel running={pmRunning} />;
+  if (id === "payload-manager") return <PayloadManagerPanel running={pmRunning} onChanged={onPmChanged} />;
   if (id === "shadowmountplus") return <SmpPanel mgmtAddr={host.trim() ? mgmtAddr(host.trim()) : null} />;
   if (id === "nanodns") return <NanoDnsScreen />;
   return null;
