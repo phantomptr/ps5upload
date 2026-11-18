@@ -985,7 +985,15 @@ jobs:
         working-directory: client/src-tauri
         shell: bash
         run: |
-          if cargo tree --locked --target all -e normal,build | grep -E ' unrar(_sys)? v'; then
+          set -euo pipefail
+          # The tree first: inside `if cargo tree | grep`, a cargo tree that failed just made the
+          # condition false (pipefail does not apply to an `if`), and the check passed unread.
+          tree="$(cargo tree --locked --target all -e normal,build)"
+          if ! grep -q 'ps5upload-core v' <<< "$tree"; then
+            echo "::error::cargo tree did not print the desktop app's tree (no ps5upload-core in it)"
+            exit 1
+          fi
+          if grep -E ' unrar(_sys)? v' <<< "$tree"; then
             echo "::error::the desktop app links unrar; RAR must go through ps5upload-unrar"
             exit 1
           fi
