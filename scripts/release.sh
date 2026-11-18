@@ -38,8 +38,9 @@
 #
 # Around it (scripts/release/)
 #   before:  make release-check               quality, then e2e, then test-payload
-#            release-check is local; for a PR, wait on the merge gate only:
-#            scripts/release/wait-pr-gate.sh <pr>   ("PR gate"; CodeQL is not waited for,
+#            release-check is local; for a PR, wait on the merge gate only and merge with
+#            scripts/release/merge-when-green.sh <pr>   (waits for "PR gate" and merges only on a
+#            pass; scripts/release/wait-pr-gate.sh <pr> only waits. CodeQL is not waited for,
 #            its open alerts still block step 1 below)
 #   after:   scripts/release/verify-release.sh vX.Y.Z            every asset there, none empty
 #            scripts/release/verify-release.sh vX.Y.Z --promote  then mark it the latest

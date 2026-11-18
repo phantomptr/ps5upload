@@ -20,21 +20,41 @@ It is always a pre-release; promote it after a console test as usual. CI still r
 on `main`; it just doesn't hold the release. Anything touching the helper, installs or transfers
 takes the normal path above.
 
+`scripts/release/fast-release.sh 12.6.2 --gate` (`make fast-release V=12.6.2 GATE=1`) is the
+same run with the PR gate in it: the merge goes through `merge-when-green.sh` (§1), so nothing is
+merged or tagged unless the gate passed, and `release-tag` runs without `force`.
+
 ## 1. The batch PR
 
 - Put the release's changes in one PR.
 - Write the CHANGELOG entry in the same PR under `## Unreleased`, at the top of
   `CHANGELOG.md` (above the last release's `## X.Y.Z`, with the usual `---` between sections).
   Do not edit `VERSION` or the version files.
-- Wait for `PR gate`. It is the only check that matters for merging. CodeQL runs beside it
-  and reports to the Security tab, but nothing waits for it.
-- Merge with the admin bypass. Read the checks first and merge only when the read is non-empty,
-  shows `pass` and has no `pending` or `fail`, because `--admin` does not wait:
+- Check that `release-tag` will accept the CHANGELOG, from the PR's branch. `--check` reads
+  only; without it the same command rewrites `CHANGELOG.md` in place (it is what `release-tag`
+  runs to rename the heading), so never run it bare in a checkout:
 
   ```sh
-  gh pr checks <n>
-  gh pr merge <n> --squash --admin
+  node scripts/release/changelog-release.mjs 12.1.0 --previous 12.0.0 --check
   ```
+
+- Wait for `PR gate` and merge, in one command. `PR gate` is the only check that matters for
+  merging. CodeQL runs beside it and reports to the Security tab, but nothing waits for it.
+
+  ```sh
+  scripts/release/merge-when-green.sh <n>
+  ```
+
+  It waits for the gate and squash-merges with the admin bypass only when the gate passed, for
+  the commit it checked. When the gate fails on something outside the change (no runner, apt
+  mirrors, the payload wait, a simulator crash, a Playwright flaky-only result) it re-runs the
+  failed jobs once and waits again; a real failure, or a second failure, ends it with
+  `NOT MERGED` and a non-zero exit. `--no-merge` stops after the verdict.
+
+  Do not put the wait and the merge together by hand. `gh pr merge --admin` does not look at
+  any check, and a pipe hides the wait's exit status: `wait-pr-gate.sh <n> | tail -3 && gh pr
+  merge <n> --squash --admin` merged a release PR whose gate had failed, because `&&` saw
+  `tail` succeed. `wait-pr-gate.sh` alone is for watching a PR you are not about to merge.
 
 ## 2. Tag it
 
@@ -78,6 +98,17 @@ gh run watch <id>
 when it started while `ci`, CodeQL and `release-cache` were still running for the merge. The
 changes of 2026-11-17 should bring the first case to about 25 minutes. A failed `publish` run
 re-runs its failed jobs up to twice (its `retry-failed` job, through `rerun-failed`).
+
+If it still ends failed, read why before anything else:
+`node scripts/release/gate-failures.mjs <run id>` says, job by job, whether the failure came from
+outside the release (runner, apt mirror, payload wait, simulator) or from the build. A tag cannot
+be moved, but an unpublished one is not lost:
+
+- The apt steps run `main`'s `scripts/ci-apt.sh`, not the tag's (`scripts/ci-apt-latest.sh`),
+  so a mirror fix merged to `main` reaches the tag's next attempt: `gh run rerun <id> --failed`.
+- For a fix in the workflow itself, dispatch `publish` from `main` for the existing tag. The
+  workflow file is then `main`'s, and every job still checks out and builds the tag:
+  `gh workflow run publish.yml --ref main -f tag=v12.1.0`.
 
 What runs where, in `publish`:
 

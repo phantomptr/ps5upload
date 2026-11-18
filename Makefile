@@ -893,7 +893,7 @@ release-check:
 # CI, tagged with force. See scripts/release/fast-release.sh and RELEASING.md.
 fast-release:
 	@test -n "$(V)" || { echo "usage: make fast-release V=X.Y.Z"; exit 2; }
-	@bash scripts/release/fast-release.sh "$(V)"
+	@bash scripts/release/fast-release.sh "$(V)" $(if $(GATE),--gate)
 
 quality-hardware:
 	@npm run validate:hardware

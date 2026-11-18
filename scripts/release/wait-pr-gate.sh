@@ -12,6 +12,11 @@
 # Exits 0 when the gate passes, 1 when it fails or is cancelled (the failing jobs are
 # printed), 2 on bad usage or when the timeout (default 60 min) runs out. A network or TLS
 # error from gh is retried, never taken as a verdict.
+#
+# This only waits and reports. To wait AND merge, use scripts/release/merge-when-green.sh <pr>.
+# Never chain this to `gh pr merge` yourself, and never through a pipe: in
+# `wait-pr-gate.sh N | tail -3 && gh pr merge N --admin` the `&&` sees tail's exit status, and
+# that merged a release PR whose gate had FAILED. The verdict is this script's own exit status.
 
 set -uo pipefail
 
@@ -57,6 +62,7 @@ while :; do
         echo "$gate did not pass on PR #$pr ($bucket). Failed or cancelled jobs:" >&2
         printf '%s' "$out" | jq -r '.[] | select(.bucket == "fail" or .bucket == "cancel")
           | "  [\(.workflow)] \(.name): \(.state)  \(.link)"' >&2
+        echo "NOT passed: do not merge PR #$pr (exit 1)." >&2
         exit 1
         ;;
       missing) status="$gate not started yet" ;;

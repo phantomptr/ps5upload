@@ -148,8 +148,11 @@ jobs:
           # Add LLVM apt repo for llvm-22 (not in Ubuntu 24.04 default repos)
           sudo bash scripts/install-llvm-apt.sh 22
           # See the note on the Tauri prerequisites step: bounded and retried,
-          # so a stalled mirror cannot hold the job (scripts/ci-apt.sh).
-          bash scripts/ci-apt.sh clang-22 llvm-22-dev lld-22 unzip python3
+          # so a stalled mirror cannot hold the job (scripts/ci-apt.sh). Through
+          # ci-apt-latest.sh, here and in every apt step of this workflow: it runs main's copy
+          # of ci-apt.sh, so a mirror fix made after this tag was cut reaches a re-run of it
+          # (v12.6.6 was tagged and could never be published: its own copy kept failing).
+          bash scripts/ci-apt-latest.sh clang-22 llvm-22-dev lld-22 unzip python3
 
       - name: Install pinned PS5 Payload SDK
         run: sudo env PS5_SDK_INSTALL_DIR=/opt/ps5-payload-sdk bash scripts/install-ps5-sdk.sh
@@ -225,7 +228,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     # The Intel macOS runner took ~33 min for v5.35/5.36 and ran past 45 on
     # v5.37.0, cancelling the whole release (create-release needs every build).
-    timeout-minutes: 75
+    # 100 = the 75 a build may take plus the 25 minutes the payload wait gained (20 -> 45,
+    # scripts/release/wait-for-artifact.mjs): a wait for a queued build-payload must not eat
+    # the build's own time.
+    timeout-minutes: 100
     env:
       # "true" once the Azure Artifact Signing secrets are set (scripts/release/azure-sign.ps1).
       # A step cannot read secrets in its `if`, so the switch is here.
@@ -365,7 +371,7 @@ jobs:
         timeout-minutes: 20
         run: |
           set -euo pipefail
-          bash scripts/ci-apt.sh \
+          bash scripts/ci-apt-latest.sh \
             libgtk-3-dev \
             libwebkit2gtk-4.1-dev \
             libasound2-dev \
@@ -725,7 +731,9 @@ jobs:
     name: build-android
     # Starts with build-payload and waits for its ELFs (see build-client).
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    # Above the payload wait (45, wait-for-artifact.mjs) plus the timed steps below (5 + 25)
+    # and ~10 of setup, so neither a long runner queue nor a hang cancels the job.
+    timeout-minutes: 90
     # The Android port is newer than the desktop builds, and the desktop
     # bundles are the shipped product. If the Android pipeline flakes (NDK
     # rotation, Gradle, signing), the release must still go out — create-
@@ -903,7 +911,9 @@ jobs:
     name: build-ios
     # Starts with build-payload and waits for its ELFs (see build-client).
     runs-on: xcode-27
-    timeout-minutes: 55
+    # Above the payload wait (45, wait-for-artifact.mjs) plus the timed steps below (10 + 40)
+    # and ~10 of setup.
+    timeout-minutes: 110
     # Same reasoning as build-android: continue-on-error covers a failed job,
     # and the long steps carry their own timeouts so a hang fails a step
     # instead of cancelling the release.
@@ -1023,6 +1033,7 @@ jobs:
           sparse-checkout: |
             /LICENSE
             scripts/ci-apt.sh
+            scripts/ci-apt-latest.sh
             scripts/release/clamscan-parallel.sh
             scripts/release/scan-artifacts.mjs
           sparse-checkout-cone-mode: false
@@ -1034,7 +1045,7 @@ jobs:
 
       - name: Install ClamAV
         timeout-minutes: 20
-        run: bash scripts/ci-apt.sh clamav
+        run: bash scripts/ci-apt-latest.sh clamav
 
       # The same rule as create-release: no scan with stale signatures.
       - name: Fetch current ClamAV signatures
@@ -1294,7 +1305,7 @@ jobs:
       - name: Install ClamAV
         if: steps.unscanned.outputs.count != '0'
         timeout-minutes: 20
-        run: bash scripts/ci-apt.sh clamav
+        run: bash scripts/ci-apt-latest.sh clamav
 
       # A scan with no signatures, or with whatever the package happened to ship, passes
       # everything: the release stops here unless today's signatures are in place.
