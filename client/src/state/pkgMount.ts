@@ -84,6 +84,48 @@ async function consoleKindOf(host: string, path: string): Promise<string | null>
 
 const uploadFailed = () => trStatic("pkg_mount_upload_failed", "The upload failed.");
 
+/** After a package was queued as a plain file into a folder Kraken Mount scans (the game page's
+ *  Send to PS5): once every queue item is done, ask it to scan now and say where the package went.
+ *  A failed or removed item ends the watch quietly: the queue shows that itself. */
+export function afterKrakenSend(
+  ids: string[],
+  host: string,
+  folder: string,
+  done: (message: string) => void,
+): void {
+  const left = new Set(ids.filter(Boolean));
+  if (left.size === 0) return;
+  const unsubs: (() => void)[] = [];
+  let over = false;
+  const end = () => {
+    over = true;
+    unsubs.splice(0).forEach((u) => u());
+  };
+  for (const id of [...left]) {
+    const unsub = pkgQueue().watch(id, (q) => {
+      if (over) return;
+      if (!q || q.status === "failed") return end();
+      if (q.status !== "done") return;
+      left.delete(id);
+      if (left.size > 0) return;
+      end();
+      // Best effort: it scans every 10 s by itself anyway.
+      void smpRescan(mgmtAddr(host))
+        .catch(() => {})
+        .then(() =>
+          done(
+            trStatic(
+              "pkg_mount_done",
+              "Put in {root}. Kraken Mount adds it to the home screen on its next scan; nothing was installed.",
+            ).replace("{root}", folder),
+          ),
+        );
+    });
+    if (over) unsub();
+    else unsubs.push(unsub);
+  }
+}
+
 /** Upload `localPath` (a `.pkg` on this computer) into Kraken Mount's scan root on the chosen
  *  package drive of `host`, wait for the upload, and ask Kraken Mount to scan.
  *

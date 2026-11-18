@@ -126,6 +126,8 @@ export default function GameHubScreen() {
   const [installedTitles, setInstalledTitles] = useState<InstalledTitle[]>([]);
   const gv = useGameView(title_id ?? "");
   const [sendHost, setSendHost] = useState<string | null>(null);
+  // The copy a row's Send picked (a package is sent only when picked); null: the best one.
+  const [sendPick, setSendPick] = useState<string | null>(null);
   const profiles = useRosterStore((s) => s.profiles);
   const names = useMemo(
     () =>
@@ -535,7 +537,10 @@ export default function GameHubScreen() {
               connectedHost={connectedHost}
               consoleName={names[connectedHost] ?? connectedHost}
               consoles={profiles.length}
-              onSend={() => setSendHost(connectedHost || null)}
+              onSend={() => {
+                setSendPick(null);
+                setSendHost(connectedHost || null);
+              }}
             />
           </div>
           <div className="grid min-w-0 gap-4">
@@ -555,7 +560,11 @@ export default function GameHubScreen() {
               onStop={() => void handleStop()}
               stopping={stopping}
               sendHost={sendHost}
-              setSendHost={setSendHost}
+              sendPick={sendPick}
+              setSendHost={(h) => {
+                setSendPick(null);
+                setSendHost(h);
+              }}
               playBlocked={
                 disc && smp.absent
                   ? tr(
@@ -586,7 +595,10 @@ export default function GameHubScreen() {
             <DrivesCard
               view={gv.view}
               connectedHost={connectedHost}
-              onSend={() => setSendHost(connectedHost || null)}
+              onSend={(path) => {
+                setSendPick(path);
+                setSendHost(connectedHost || null);
+              }}
               onChanged={() => void gv.reload()}
             />
             <ConvertBuildsCard view={gv.view} connectedHost={connectedHost} />

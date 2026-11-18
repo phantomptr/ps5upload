@@ -11,6 +11,7 @@ import { useCollectionStore } from "../../state/collection";
 import { useTr } from "../../state/lang";
 import { trashCopies } from "../Collection/trashCopies";
 import { CopyRow } from "./CopyRow";
+import { useSmpState } from "./SmpNeeded";
 import { firmwareShortfall } from "../../lib/collectionInsights";
 import { parsePS5Firmware } from "../../lib/ps5Firmware";
 import { useConnectionStore } from "../../state/connection";
@@ -27,8 +28,8 @@ export function DrivesCard({
   view: GameView | null;
   /** The connected console when its helper answers; "" otherwise. */
   connectedHost: string;
-  /** Opens the connected console's send panel. */
-  onSend: () => void;
+  /** Opens the connected console's send panel with that copy picked. */
+  onSend: (path: string) => void;
   /** After copies moved to the Trash. */
   onChanged: () => void;
 }) {
@@ -39,6 +40,8 @@ export function DrivesCard({
   const canTrash =
     settings?.trash_available !== false || !!settings?.allow_permanent_delete;
   const copies = view?.copies ?? [];
+  // A package row's button depends on whether Kraken Mount runs there: read it once.
+  useSmpState(connectedHost && copies.some((l) => l.type === "pkg") ? connectedHost : "");
   const trash = (paths: string[]) =>
     void trashCopies(paths, confirm, tr).then(onChanged);
   const extra = extraCopies({ locations: copies }).filter(
@@ -165,7 +168,7 @@ export function DrivesCard({
                   titleId: view?.title_id ?? "",
                 }}
                 onTrash={canTrash ? trash : undefined}
-                onSend={onSend}
+                onSend={() => onSend(l.absolute_path)}
               />
             ))}
           </ul>

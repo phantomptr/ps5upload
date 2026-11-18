@@ -40,7 +40,8 @@ vi.mock("./consoleQueueBridge", () => ({
   }),
 }));
 
-import { placePkgForMount } from "./pkgMount";
+import { smpRescan } from "../api/ps5";
+import { afterKrakenSend, placePkgForMount } from "./pkgMount";
 
 describe("placePkgForMount name clash", () => {
   beforeEach(() => {
@@ -102,5 +103,27 @@ describe("placePkgForMount name clash", () => {
     ];
     const r = await placePkgForMount("/pc/Game.pkg", "10.0.0.2", { drive: "/data" });
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("afterKrakenSend", () => {
+  beforeEach(() => vi.mocked(smpRescan).mockClear());
+
+  it("asks Kraken Mount to scan and says where the package went once the upload is done", async () => {
+    queueSteps = [{ status: "pending" }, { status: "running" }, { status: "done" }];
+    const told: string[] = [];
+    afterKrakenSend(["q1"], "10.0.0.2", "/data/homebrew", (m) => told.push(m));
+    await vi.waitFor(() => expect(told).toHaveLength(1));
+    expect(smpRescan).toHaveBeenCalledTimes(1);
+    expect(told[0]).toContain("/data/homebrew");
+  });
+
+  it("says nothing when the upload failed (the queue shows that)", async () => {
+    queueSteps = [{ status: "running" }, { status: "failed" }];
+    const told: string[] = [];
+    afterKrakenSend(["q1"], "10.0.0.2", "/data/homebrew", (m) => told.push(m));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(told).toEqual([]);
+    expect(smpRescan).not.toHaveBeenCalled();
   });
 });
