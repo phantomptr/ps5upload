@@ -7,7 +7,8 @@
 //!   left out; off drops the raise.
 //! * `GET  /api/diag/features` -> what each feature is doing now, as counts and states: Play
 //!   Together, phone controllers and the watch party, Go live, Remote Play (the running session
-//!   and the last one's start and end), saved remote connections, the mesh. Built to be posted in
+//!   and the last one's start and end), saved remote connections, the mesh, the game frame rate
+//!   reader (what the console's frame count answered, #865). Built to be posted in
 //!   public: never a stream, pairing, invite or resume key, a passcode, a password, a user name,
 //!   or the full address of a stream destination.
 
@@ -220,6 +221,7 @@ pub(crate) fn features_json() -> Value {
         "go_live": crate::rp_golive::diag_summary(),
         "remote_connections": crate::remote::api::diag_summary(),
         "mesh": crate::mesh_api::diag_summary(),
+        "game_fps": crate::game_fps_api::diag_summary(),
     })
 }
 
@@ -312,6 +314,7 @@ mod tests {
             "go_live",
             "remote_connections",
             "mesh",
+            "game_fps",
             "log_levels",
             "host",
         ] {

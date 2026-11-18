@@ -72,6 +72,7 @@ int game_fps_read(const game_fps_ops_t *ops, int *fd, unsigned char *block, game
     }
     memcpy(&out->flips, block + GAME_FPS_COUNT_OFFSET, sizeof out->flips);
     out->bytes = n;
+    memcpy(out->head, block, n < GAME_FPS_HEAD_BYTES ? n : GAME_FPS_HEAD_BYTES);
     out->state = GAME_FPS_OK;
     return out->state;
 }
@@ -79,8 +80,17 @@ int game_fps_read(const game_fps_ops_t *ops, int *fd, unsigned char *block, game
 int game_fps_json(const game_fps_sample_t *s, char *out, size_t cap) {
     int n;
     if (s->state == GAME_FPS_OK) {
-        n = snprintf(out, cap, "{\"ok\":true,\"state\":\"ok\",\"flips\":%llu,\"mono_us\":%llu,\"bytes\":%u}",
-                     (unsigned long long)s->flips, (unsigned long long)s->mono_us, (unsigned)s->bytes);
+        static const char digits[] = "0123456789abcdef";
+        char hex[GAME_FPS_HEAD_BYTES * 2 + 1];
+        size_t h = s->bytes < GAME_FPS_HEAD_BYTES ? s->bytes : GAME_FPS_HEAD_BYTES;
+        for (size_t i = 0; i < h; i++) {
+            hex[2 * i] = digits[s->head[i] >> 4];
+            hex[2 * i + 1] = digits[s->head[i] & 15];
+        }
+        hex[2 * h] = 0;
+        n = snprintf(out, cap,
+                     "{\"ok\":true,\"state\":\"ok\",\"flips\":%llu,\"mono_us\":%llu,\"bytes\":%u,\"head\":\"%s\"}",
+                     (unsigned long long)s->flips, (unsigned long long)s->mono_us, (unsigned)s->bytes, hex);
     } else {
         n = snprintf(out, cap, "{\"ok\":true,\"state\":\"%s\",\"mono_us\":%llu,\"errno\":%d}",
                      game_fps_state_name(s->state), (unsigned long long)s->mono_us, s->err);
