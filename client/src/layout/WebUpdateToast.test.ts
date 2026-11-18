@@ -18,7 +18,8 @@ describe("shouldShowWebUpdate", () => {
 
 describe("DOCKER_UPDATE_COMMAND", () => {
   it("removes the replaced image, and only this app's", () => {
-    const prune = DOCKER_UPDATE_COMMAND.split(" && ").at(-1);
+    const steps = DOCKER_UPDATE_COMMAND.split(" && ");
+    const prune = steps[steps.length - 1];
     expect(prune).toBe(
       "docker image prune -af --filter label=org.opencontainers.image.source=https://github.com/phantomptr/ps5upload",
     );
