@@ -148,6 +148,10 @@ const runningJobByHost = new Map<string, string>();
  *  can still report `running` for a moment: a restart of its item waits for it to end instead of
  *  adopting a job that is about to die (see `liveJobFor`). */
 const cancelledJobs = new Set<string>();
+/** Rows whose copy on the PS5 is being deleted for a Replace (`replaceDestination`). Deleting a
+ *  big folder takes minutes and the row stays "failed" meanwhile: nothing else may run it or
+ *  delete for it again until that is over. */
+const replacingRows = new Set<string>();
 function cancelEngineJob(jobId: string): Promise<void> {
   cancelledJobs.add(jobId);
   return jobCancel(jobId);
@@ -3173,7 +3177,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       const mine = (it: QueueItem) => h === null || hostOf(it.addr) === h;
       set((s) => ({
         items: s.items.map((it) => {
-          if (!mine(it) || it.status !== "failed") return it;
+          if (!mine(it) || it.status !== "failed" || replacingRows.has(it.id)) return it;
           return retryFailedRow(it);
         }),
       }));
@@ -3201,7 +3205,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
 
     retryItem(id) {
       const item = get().items.find((candidate) => candidate.id === id);
-      if (!item || item.status !== "failed") return false;
+      if (!item || item.status !== "failed" || replacingRows.has(id)) return false;
       set((s) => ({
         items: s.items.map((candidate) =>
           candidate.id === id ? { ...candidate, ...retryPatch(candidate) } : candidate,
@@ -3241,14 +3245,26 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
 
     async replaceDestination(id) {
       const item = get().items.find((candidate) => candidate.id === id);
-      if (!item || !offersConflictActions(item)) return;
-      const { placed } = await clearForReplace(item, {
-        listDir: (addr, path) => fsListDir(addr, path),
-        lastJob: (jobId) => jobStatus(jobId).catch(() => null),
-        remove: (addr, path) => fsDelete(addr, path),
-        move: (addr, from, to) => fsMove(addr, from, to),
-        forgetResumeId: (host, src, dest) => resumeTxidForget(host, src, dest),
-      });
+      if (!item || !offersConflictActions(item) || replacingRows.has(id)) return;
+      // One delete per row at a time (the button's own busy mark is gone after a look at another
+      // screen): a second one deleted the destination under the upload the first had started.
+      replacingRows.add(id);
+      let placed: boolean;
+      try {
+        ({ placed } = await clearForReplace(item, {
+          listDir: (addr, path) => fsListDir(addr, path),
+          lastJob: (jobId) => jobStatus(jobId).catch(() => null),
+          remove: (addr, path) => fsDelete(addr, path),
+          move: (addr, from, to) => fsMove(addr, from, to),
+          forgetResumeId: (host, src, dest) => resumeTxidForget(host, src, dest),
+        }));
+      } finally {
+        replacingRows.delete(id);
+      }
+      // The delete can take minutes: only the row it was for is run again, never one that was
+      // removed or is no longer that failed attempt.
+      const now = get().items.find((candidate) => candidate.id === id);
+      if (!now || now.jobId !== item.jobId || !offersConflictActions(now)) return;
       // A new job either way: the old one ended refused and answers the same if asked again.
       // Placed: a Resume finds every file there and only runs what comes after the upload.
       set((s) => ({
@@ -3269,7 +3285,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
 
     uploadElsewhere(id, folder) {
       const item = get().items.find((candidate) => candidate.id === id);
-      if (!item || !offersConflictActions(item) || !folder.trim()) return false;
+      if (!item || !offersConflictActions(item) || !folder.trim() || replacingRows.has(id)) return false;
       const resolvedDest = destInFolder(item.resolvedDest, folder);
       if (resolvedDest === item.resolvedDest) return false;
       set((s) => ({

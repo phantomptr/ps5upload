@@ -13,6 +13,7 @@ import { Button, Checkbox, Select } from "../../components";
 import { consoleAddr } from "../../lib/addr";
 import {
   DEFAULT_SEND_SUBPATH,
+  addToQueue,
   collectionSendItem,
   packageSendItems,
   sendDestination,
@@ -32,7 +33,7 @@ import { useUploadQueueStore } from "../../state/uploadQueue";
 import { imageDrive, imageDriveChoices } from "../../lib/imageUpload";
 import { destinationVolumeFor } from "../../state/upload";
 import { ActivityLine } from "./ActivityLine";
-import { useCopyActivity } from "../../state/copyActivity";
+import { useCopyActivity, wholeCopyActivity } from "../../state/copyActivity";
 import { useConnectionStore } from "../../state/connection";
 import { queueLinkFor } from "../../lib/gamePage";
 import { spacePlanLink } from "../../lib/spacePlan";
@@ -65,6 +66,10 @@ export function SendToPs5({
   // the PS5, and ShadowMount+ mounts it. It is built on this computer first.
   const canImage = kind === "folder" && !isRemotePath(loc.absolute_path);
   const [how, setHow] = useState<How>("as-is");
+  // Only for a copy that can be one: the choice stays picked when another copy is chosen in the
+  // list above, and an archive or a package then went to Convert's image build instead of the
+  // queue ("Build and send" on a .pkg).
+  const asImage = canImage && how === "image";
   const radioName = useId();
   const [volumes, setVolumes] = useState<Volume[] | null>(null);
   // Picked here or on the Upload screen; none: this console's drive for packages (#673).
@@ -72,7 +77,9 @@ export function SendToPs5({
   const [subpath, setSubpath] = useState(DEFAULT_SEND_SUBPATH);
   const [register, setRegister] = useState(true);
   const pipelineBusy = useFpkgConversion((s) => s.pipeline.phase === "running");
-  const [activity] = useCopyActivity([loc.absolute_path], host);
+  // A split package is all its parts: busy until the last one is there (Send came back, and
+  // queued them a second time, as soon as the first part was done).
+  const activity = wholeCopyActivity(useCopyActivity([loc.absolute_path, ...(loc.parts ?? [])], host));
   const connectedHost = useConnectionStore((s) => s.host ?? "");
   const isPkg = loc.type === "pkg";
   // Which mounter runs, read once a package is picked (the copy rows may have read it already).
@@ -110,7 +117,7 @@ export function SendToPs5({
   }, [krakenDest?.volume, krakenDest?.subpath]); // eslint-disable-line react-hooks/exhaustive-deps
   const vol = volumes?.find((v) => v.path === volume);
   // Only a certain shortfall blocks; the PS5's write-time reserve only warns.
-  const needed = how === "image" ? Math.round(loc.size_bytes * 0.8) : loc.size_bytes;
+  const needed = asImage ? Math.round(loc.size_bytes * 0.8) : loc.size_bytes;
   const fits: "yes" | "tight" | "no" | "unknown" = !vol
     ? "unknown"
     : needed > volumeAllocatableBytes(vol)
@@ -133,8 +140,14 @@ export function SendToPs5({
     krakenDest.volume === volume &&
     krakenDest.subpath === subpath.replace(/^\/+|\/+$/g, "");
 
+  // Another tab of this browser runs the queue: nothing was added (the button did nothing at all).
+  const notQueued = () =>
+    pushNotification(
+      "warning",
+      tr("queue_other_tab", undefined, "The queue is running in another tab of this browser. Use that tab to change it."),
+    );
   const send = () => {
-    if (how === "image") {
+    if (asImage) {
       void useFpkgConversion
         .getState()
         .buildImage(loc.absolute_path, undefined, true, "ffpkg", {
@@ -148,8 +161,8 @@ export function SendToPs5({
     const q = useUploadQueueStore.getState();
     if (isPkg) {
       // As Upload's "Copy as a file": plain files, no install, no staging, nothing deleted.
-      const ids = packageSendItems(game, loc, plan).map((it) => q.add(it)).filter(Boolean);
-      q.startAdded(host, ids);
+      const ids = addToQueue(q, host, packageSendItems(game, loc, plan));
+      if (!ids) return notQueued();
       // Once it is there: Kraken Mount is asked to scan now, and the user is told where it went.
       if (inKrakenFolder) {
         const folder = dest.replace(/\/[^/]*$/, "");
@@ -157,8 +170,7 @@ export function SendToPs5({
       }
       return;
     }
-    const id = q.add(collectionSendItem(game, loc, plan));
-    q.startAdded(host, [id]);
+    if (!addToQueue(q, host, [collectionSendItem(game, loc, plan)])) notQueued();
   };
 
   return (
@@ -242,7 +254,7 @@ export function SendToPs5({
           />
         </label>
       </div>
-      {kind === "folder" && how === "as-is" && (
+      {kind === "folder" && !asImage && (
         <Checkbox
           className="mt-2"
           checked={register}
@@ -292,7 +304,7 @@ export function SendToPs5({
           </Link>
         </p>
       )}
-      {how === "image" && pipelineBusy && !busy && (
+      {asImage && pipelineBusy && !busy && (
         <p className="mt-1 text-xs text-[var(--color-warn)]">
           {tr(
             "collection.send_convert_busy",
@@ -305,11 +317,11 @@ export function SendToPs5({
         <Button
           size="sm"
           variant="primary"
-          leftIcon={how === "image" ? <Layers size={13} /> : <Upload size={13} />}
-          disabled={busy || volumes === null || fits === "no" || (how === "image" && pipelineBusy)}
+          leftIcon={asImage ? <Layers size={13} /> : <Upload size={13} />}
+          disabled={busy || volumes === null || fits === "no" || (asImage && pipelineBusy)}
           onClick={send}
         >
-          {how === "image"
+          {asImage
             ? tr("collection.send_go_image", undefined, "Build and send")
             : tr("collection.send_submit", undefined, "Send")}
         </Button>
@@ -317,7 +329,7 @@ export function SendToPs5({
           activity={activity}
           onOpen={() =>
             navigate(
-              how === "image" && activity?.phase === "building"
+              asImage && activity?.phase === "building"
                 ? "/workshop"
                 : queueLinkFor(host, connectedHost),
             )

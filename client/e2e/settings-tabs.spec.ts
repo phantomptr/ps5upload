@@ -36,6 +36,19 @@ const main = (page: Page) => page.locator("[data-scroll-root]:visible");
 const restSwitch = (page: Page) =>
   main(page).getByRole("switch", { name: /Put the PS5 in rest mode after uploads finish/ });
 
+/**
+ * Picks a console and waits until its settings are the ones on screen. Picking changes the address,
+ * and the router draws the new console in a transition, a moment later: until then the picker goes
+ * back to the console still shown, and its switches are still that console's. A click in that
+ * moment changed the wrong console (both switches read "on", so the check before it passed), which
+ * is how this test failed on a busy CI machine.
+ */
+async function pick(page: Page, id: string) {
+  const picker = main(page).getByTestId("settings-ps5-picker");
+  await picker.selectOption(id);
+  await expect(picker).toHaveValue(id);
+}
+
 for (const width of [1280, 412]) {
   test(`App and This PS5 tabs, each console its own (${width}px)`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
@@ -54,16 +67,16 @@ for (const width of [1280, 412]) {
     await expect(restSwitch(page)).toHaveAttribute("aria-checked", "true");
 
     // Office has no value of its own: the default (off). Turning it on leaves Living room alone.
-    await picker.selectOption(B.id);
+    await pick(page, B.id);
     await expect(page).toHaveURL(new RegExp(`console=${B.id}`));
     await expect(restSwitch(page)).toHaveAttribute("aria-checked", "false");
     await restSwitch(page).click();
     await expect(restSwitch(page)).toHaveAttribute("aria-checked", "true");
-    await picker.selectOption(A.id);
+    await pick(page, A.id);
     await expect(restSwitch(page)).toHaveAttribute("aria-checked", "true");
     await restSwitch(page).click();
     await expect(restSwitch(page)).toHaveAttribute("aria-checked", "false");
-    await picker.selectOption(B.id);
+    await pick(page, B.id);
     await expect(restSwitch(page)).toHaveAttribute("aria-checked", "true");
 
     // Kept with each console's profile. Saving can land a moment after the click (CI failed reading
@@ -86,10 +99,9 @@ for (const width of [1280, 412]) {
 
     // What a person sees after coming back: each console's own value, read from the switch.
     await page.reload({ waitUntil: "domcontentloaded" });
-    const again = main(page).getByTestId("settings-ps5-picker");
-    await again.selectOption(A.id);
+    await pick(page, A.id);
     await expect(restSwitch(page)).toHaveAttribute("aria-checked", "false");
-    await again.selectOption(B.id);
+    await pick(page, B.id);
     await expect(restSwitch(page)).toHaveAttribute("aria-checked", "true");
 
     // No sideways scroll on a phone.

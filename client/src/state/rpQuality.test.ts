@@ -209,3 +209,60 @@ describe("the 720p offer and switch", () => {
     expect(start).toHaveBeenCalledTimes(1);
   }, 10_000);
 });
+
+describe("the bitrate fallback inside a wait or a restart", () => {
+  beforeEach(() => {
+    useRpQualityStore.setState({ offerFor: null, switching: null });
+  });
+
+  // The store's onError keeps a refusal at a high bitrate to itself and asks for one more start
+  // at Auto (startAgain). While a wait or a restart was running, that call returned at once and
+  // the loop ended with no error: the notice said "starts again" and nothing started.
+  it("a Start that waited out busy, then was refused at its bitrate, starts again at Auto", async () => {
+    const start = vi.fn(async (_t: unknown, opts?: { quality?: { bitrateKbps?: number } | null }) => {
+      if (opts?.quality?.bitrateKbps === 0) {
+        useRemotePlayStore.setState({ stream: fakeStream(), phase: "playing", error: null });
+        return;
+      }
+      // Connecting, then the PS5 refuses: what remotePlay's onError does (no error set), and the
+      // stream ends.
+      useRemotePlayStore.setState({ stream: fakeStream(), phase: "connecting", error: null });
+      setTimeout(() => {
+        void useRpQualityStore.getState().startAgain(target, { bitrateKbps: 0 });
+        useRemotePlayStore.setState({ stream: null, phase: "ended" });
+      }, 300);
+    });
+    useRemotePlayStore.setState({
+      stream: null,
+      target,
+      phase: "ended",
+      error: { code: "busy", retryS: 1, detail: "" },
+      start,
+    });
+    await settle(useRpQualityStore.getState().startWhenFree(target));
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(start).toHaveBeenLastCalledWith(target, { quality: { bitrateKbps: 0 } });
+    expect(useRemotePlayStore.getState().phase).toBe("playing");
+    expect(useRpQualityStore.getState().switching).toBeNull();
+  }, 10_000);
+
+  it("a fallback asked for and then cancelled does not start later", async () => {
+    const start = vi.fn(async () => {
+      useRemotePlayStore.setState({ stream: fakeStream(), phase: "connecting", error: null });
+      setTimeout(() => {
+        void useRpQualityStore.getState().startAgain(target, { bitrateKbps: 0 });
+        useRpQualityStore.getState().cancelSwitch();
+        useRemotePlayStore.setState({ stream: null, phase: "ended" });
+      }, 300);
+    });
+    useRemotePlayStore.setState({
+      stream: null,
+      target,
+      phase: "ended",
+      error: { code: "busy", retryS: 1, detail: "" },
+      start,
+    });
+    await settle(useRpQualityStore.getState().startWhenFree(target));
+    expect(start).toHaveBeenCalledTimes(1);
+  }, 10_000);
+});

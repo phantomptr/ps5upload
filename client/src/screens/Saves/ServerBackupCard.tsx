@@ -10,7 +10,7 @@ import { formatBytes } from "../../lib/format";
 import { hostOf } from "../../lib/addr";
 import { useConnectionsStore } from "../../state/connections";
 import { useRosterStore } from "../../state/roster";
-import { clampKeep } from "../../state/autoSaveBackup";
+import { clampKeep, numberBoxLeft } from "../../state/autoSaveBackup";
 import { clampHours, isChosen, toggleChosen, useServerBackupStore } from "../../state/serverSaveBackup";
 import { useTr } from "../../state/lang";
 import { userHex } from "./saveUsers";
@@ -154,8 +154,9 @@ export default function ServerBackupCard({
                   defaultValue={settings.every_hours}
                   key={settings.every_hours}
                   onBlur={(e) => {
-                    const h = clampHours(Number(e.target.value));
-                    if (h !== settings.every_hours) void set({ every_hours: h });
+                    const left = numberBoxLeft(e.target.value, settings.every_hours, clampHours);
+                    e.target.value = left.show;
+                    if (left.save !== null) void set({ every_hours: left.save });
                   }}
                   className="mt-1 block w-24 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-sm text-[var(--color-text)]"
                 />
@@ -170,8 +171,9 @@ export default function ServerBackupCard({
                 defaultValue={settings.keep}
                 key={settings.keep}
                 onBlur={(e) => {
-                  const keep = clampKeep(Number(e.target.value));
-                  if (keep !== settings.keep) void set({ keep });
+                  const left = numberBoxLeft(e.target.value, settings.keep, clampKeep);
+                  e.target.value = left.show;
+                  if (left.save !== null) void set({ keep: left.save });
                 }}
                 className="mt-1 block w-24 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-sm text-[var(--color-text)]"
               />

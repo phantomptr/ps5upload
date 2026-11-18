@@ -2328,6 +2328,10 @@ export class RemotePlayStream {
       case "error":
         this.engineEnded = true;
         this.endReason ??= `error ${s.code ?? "other"}${s.error ? `: ${s.error}` : ""}`;
+        // As with "ended": a stream the player stopped has nothing to say (the reason is in the
+        // logs). The store read a start that failed in that moment as the PS5 refusing a high
+        // bitrate, and started the stream again after the Stop.
+        if (this.stopping) break;
         this.o.onError({
           code: s.code ?? "other",
           retryS: s.retry_s ?? undefined,

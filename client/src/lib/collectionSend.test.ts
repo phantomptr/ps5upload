@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CollectionLocation } from "../api/collection";
 import type { KrakenStatus } from "../api/ps5";
 import {
+  addToQueue,
   bestSendable,
   collectionSendItem,
   copyActions,
@@ -25,6 +26,27 @@ const loc = (type: string, path: string, size: number, extra: Partial<Collection
   }) as CollectionLocation;
 
 const plan = { host: "10.0.0.5", volume: "/mnt/ext0", subpath: "homebrew", register: true };
+
+describe("addToQueue", () => {
+  const items = () => packageSendItems({ title: "Game" }, loc("pkg", "/g/a.pkg", 10, { parts: ["/g/a_1.pkg"] }), plan);
+
+  it("adds every item and starts exactly those", () => {
+    let n = 0;
+    const started: Array<[string, string[]]> = [];
+    const q = { add: () => `id${++n}`, startAdded: (h: string, ids: string[]) => void started.push([h, ids]) };
+    expect(addToQueue(q, "10.0.0.5", items())).toEqual(["id1", "id2"]);
+    expect(started).toEqual([["10.0.0.5", ["id1", "id2"]]]);
+  });
+
+  // The web UI in two tabs: the one that does not run the queue adds nothing (add answers with
+  // no id). Send then did nothing and said nothing; a folder's Send started "undefined".
+  it("says so (null) when another tab runs the queue and nothing was added", () => {
+    const started: unknown[] = [];
+    const q = { add: () => undefined, startAdded: (...a: unknown[]) => void started.push(a) };
+    expect(addToQueue(q, "10.0.0.5", items())).toBeNull();
+    expect(started).toEqual([]);
+  });
+});
 
 describe("sendKind", () => {
   it("sends folders, images and archives, never packages", () => {

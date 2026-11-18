@@ -75,7 +75,30 @@ describe("Repair trophies", () => {
     const restore = vi.fn(async () => ({ restored: 2, failed: 0 }));
     const step = await undoTrophies(api(vi.fn(), restore), "20261117-120000");
     expect(restore).toHaveBeenCalledWith("20261117-120000");
-    expect(step).toEqual({ kind: "undone", restored: 2 });
+    expect(step).toEqual({ kind: "undone", restored: 2, failed: 0 });
+  });
+
+  // Update, start a game to see whether trophies work, then Undo: the PS5 refuses while the game
+  // is open. The error kept no backup name and offered only Back, to a check that finds nothing
+  // to change: the undo could not be made at all.
+  it("an undo that was refused keeps its backup, so it can be made again", async () => {
+    const restore = vi
+      .fn<TrophyRepairApi["restore"]>()
+      .mockRejectedValueOnce(new Error("game_running: close PPSA01922 on the PS5 first"))
+      .mockResolvedValueOnce({ restored: 2, failed: 0 });
+    const a = api(vi.fn(), restore);
+    const refused = await undoTrophies(a, "20261117-120000");
+    expect(refused).toMatchObject({ kind: "error", gameRunning: true, backup: "20261117-120000" });
+    const again = await undoTrophies(a, (refused as { backup: string }).backup);
+    expect(again).toEqual({ kind: "undone", restored: 2, failed: 0 });
+    // An error of the check or the update has no undo to offer.
+    const other = await applyTrophies(api(async () => Promise.reject(new Error("no_such_user"))));
+    expect((other as { backup?: string }).backup).toBeUndefined();
+  });
+
+  it("an undo that left files behind says so and can be made again", async () => {
+    const step = await undoTrophies(api(vi.fn(), async () => ({ restored: 1, failed: 2 })), "b1");
+    expect(step).toEqual({ kind: "undone", restored: 1, failed: 2, backup: "b1" });
   });
 
   it("tells a running game apart from other errors", async () => {

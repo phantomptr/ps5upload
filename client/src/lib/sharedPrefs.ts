@@ -285,28 +285,33 @@ function writeLocal(entries: Entries, meta: Meta): string[] {
 /** One sync round: take what is newer on the engine, send what is newer here. Retries a few times
  *  when another browser saves in between. Returns the keys written here. */
 export async function syncOnce(api: PrefsApi, signal?: AbortSignal): Promise<string[]> {
-  const meta = loadMeta();
   let doc = await api.get(signal);
   const written: string[] = [];
   for (let attempt = 0; attempt < 4; attempt++) {
+    // The times are read after every wait, never before, and saved before the next one: a
+    // setting changed while a request is out is stamped then (startSharedPrefs). Times read
+    // before the wait made that change look as old as the engine's value, and saving them back
+    // erased its stamp, so it was never sent.
+    const meta = loadMeta();
     const remote = doc.value?.keys ?? {};
     const { apply, send } = plan(localEntries(safeGetItem, meta.at, SHARED_KEY_SET), remote, Date.now(), SHARED_KEY_SET);
     written.push(...writeLocal(apply, meta));
     meta.rev = doc.rev;
-    if (!send) {
-      saveMeta(meta);
-      return written;
-    }
+    saveMeta(meta);
+    if (!send) return written;
     const r = await api.put(doc.rev, send);
     if ("rev" in r) {
-      for (const [k, e] of Object.entries(send)) if (SHARED_KEY_SET.has(k)) meta.at[k] = e.at;
-      meta.rev = r.rev;
-      saveMeta(meta);
+      const now = loadMeta();
+      for (const [k, e] of Object.entries(send)) {
+        // A key changed again while the save was out keeps its newer time, for the next sync.
+        if (SHARED_KEY_SET.has(k) && (now.at[k] ?? 0) === (meta.at[k] ?? 0)) now.at[k] = e.at;
+      }
+      now.rev = r.rev;
+      saveMeta(now);
       return written;
     }
     doc = r.conflict;
   }
-  saveMeta(meta);
   return written;
 }
 

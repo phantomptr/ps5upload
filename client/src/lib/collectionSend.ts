@@ -136,3 +136,17 @@ export function packageSendItems(
     estimatedBytes: files.length > 1 ? undefined : loc.size_bytes,
   }));
 }
+
+/** Adds `items` to the upload queue and starts them. Null when the queue took none: another tab
+ *  of this browser runs it, and this one changes nothing there (`add` answers with no id), so
+ *  the caller has something to say instead of a button that did nothing. */
+export function addToQueue(
+  q: { add(item: AddQueueItem): string | undefined; startAdded(host: string, ids: string[]): void },
+  host: string,
+  items: AddQueueItem[],
+): string[] | null {
+  const ids = items.map((it) => q.add(it)).filter((id): id is string => !!id);
+  if (ids.length === 0) return null;
+  q.startAdded(host, ids);
+  return ids;
+}

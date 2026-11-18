@@ -92,6 +92,66 @@ describe("Replace", () => {
     expect(clear).not.toHaveBeenCalled();
     expect(item().status).toBe("failed");
   });
+
+  // Deleting a big game folder takes minutes, and the row stays "failed" meanwhile. Its busy
+  // mark was the button's own, gone after a look at another screen: a second Replace deleted the
+  // destination again under the upload the first one had started, and Retry failed re-ran the
+  // row into the folder being deleted.
+  describe("while the copy on the PS5 is being deleted", () => {
+    const slowDelete = () => {
+      let done!: (v: { placed: boolean }) => void;
+      clear.mockReturnValue(new Promise((r) => (done = r)));
+      return () => done({ placed: false });
+    };
+
+    it("a second Replace does nothing", async () => {
+      const finish = slowDelete();
+      useUploadQueueStore.setState({ items: [row()] });
+      const first = useUploadQueueStore.getState().replaceDestination("r");
+      const second = useUploadQueueStore.getState().replaceDestination("r");
+      finish();
+      await Promise.all([first, second]);
+      expect(clear).toHaveBeenCalledOnce();
+      expect(startHost).toHaveBeenCalledOnce();
+    });
+
+    it("Retry failed and Upload somewhere else leave the row to it", async () => {
+      const finish = slowDelete();
+      useUploadQueueStore.setState({ items: [row()] });
+      const replacing = useUploadQueueStore.getState().replaceDestination("r");
+      useUploadQueueStore.getState().retryFailed(HOST);
+      expect(item()).toMatchObject({ status: "failed", txIdHex: OLD_TX });
+      expect(useUploadQueueStore.getState().uploadElsewhere("r", "/mnt/ext1/homebrew")).toBe(false);
+      expect(item().resolvedDest).toBe("/data/homebrew/Game");
+      finish();
+      await replacing;
+      expect(item()).toMatchObject({ status: "pending", strategy: "overwrite" });
+      expect(startHost).toHaveBeenCalledWith(HOST, { onlyIds: ["r"] });
+      // And once it is over, the row is like any other again.
+      expect(clear).toHaveBeenCalledOnce();
+    });
+
+    it("a row that is no longer the failed one when the delete ends is left as it is", async () => {
+      const finish = slowDelete();
+      useUploadQueueStore.setState({ items: [row()] });
+      const replacing = useUploadQueueStore.getState().replaceDestination("r");
+      // Started again some other way meanwhile (another device's change synced in, a restart).
+      useUploadQueueStore.setState({ items: [row({ status: "running", errorReason: null, error: null })] });
+      finish();
+      await replacing;
+      expect(item()).toMatchObject({ status: "running", txIdHex: OLD_TX });
+      expect(startHost).not.toHaveBeenCalled();
+    });
+
+    it("a delete that failed can be tried again", async () => {
+      clear.mockRejectedValueOnce(new Error("fs_delete_failed"));
+      useUploadQueueStore.setState({ items: [row()] });
+      await expect(useUploadQueueStore.getState().replaceDestination("r")).rejects.toThrow();
+      clear.mockResolvedValue({ placed: false });
+      await useUploadQueueStore.getState().replaceDestination("r");
+      expect(item().status).toBe("pending");
+    });
+  });
 });
 
 describe("Upload somewhere else", () => {
