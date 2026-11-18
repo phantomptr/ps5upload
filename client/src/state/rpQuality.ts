@@ -28,6 +28,7 @@ interface QualityState {
   dismiss: () => void;
   switchTo720: () => Promise<void>;
   restartWith: (quality: SessionQuality, kind?: SwitchKind) => Promise<void>;
+  startAgain: (t: RpTarget, quality: SessionQuality) => Promise<void>;
   startWhenFree: (t: RpTarget) => Promise<void>;
   cancelSwitch: () => void;
 }
@@ -110,7 +111,16 @@ export const useRpQualityStore = create<QualityState>((set, get) => {
       await startAndWait(t, kind, quality);
     },
 
-    /** A Start the engine answered "busy" (the error is still up): wait it out and start. */
+    /** The session that is ending did not start (the PS5 would not take its bitrate): once it
+     *  is gone, start `t` again with `quality`, waiting out the PS5's slot as a restart does. */
+    async startAgain(t, quality) {
+      if (get().switching) return;
+      set({ switching: { kind: "restart", retryAt: null } });
+      await until(() => !useRemotePlayStore.getState().stream, 10_000);
+      await startAndWait(t, "restart", quality);
+    },
+
+        /** A Start the engine answered "busy" (the error is still up): wait it out and start. */
     async startWhenFree(t) {
       if (get().switching) return;
       const retryS = useRemotePlayStore.getState().error?.retryS ?? 5;

@@ -18,7 +18,23 @@ import {
   nextRtt,
   isPasscode,
   streamRefusal,
+  ps5SendMbps,
 } from "./remotePlayStream";
+
+describe("ps5SendMbps", () => {
+  it("is the PS5's own target first (bit/s, as a 15000 kbit/s session reported 14563000)", () => {
+    expect(ps5SendMbps({ quality: { target_bitrate: 14_563_000 }, video_bytes: 500_000 })).toBeCloseTo(14.563);
+    // A small value reads as kbit/s.
+    expect(ps5SendMbps({ quality: { target_bitrate: 9000 } })).toBe(9);
+  });
+
+  it("is what reached the engine without a report, and nothing before either", () => {
+    expect(ps5SendMbps({ video_bytes: 2_500_000 })).toBe(20);
+    expect(ps5SendMbps({ quality: { target_bitrate: 0 }, video_bytes: 0 })).toBeNull();
+    expect(ps5SendMbps(null)).toBeNull();
+    expect(ps5SendMbps({ quality: "odd" })).toBeNull();
+  });
+});
 
 describe("rebind", () => {
   it("moves an action to a new key and frees the old one", () => {

@@ -1878,6 +1878,28 @@ async fn close(socket: &mut WebSocket, reason: &'static str) {
     .await;
 }
 
+/// The lowest and highest video bitrate a page may ask the console for, kbit/s. The console
+/// gets it as the launch spec's `network.bwKbpsSent`, a plain JSON number with no documented
+/// limit; its encoder then aims at it, or lower (the stream report's `target_bitrate`). Below
+/// 2 Mbps a 720p picture falls apart; above 50 Mbps is untried, and a home network that carries
+/// it is rare, so a value outside is pulled in (and logged) rather than sent on.
+const MIN_BITRATE_KBPS: u32 = 2_000;
+const MAX_BITRATE_KBPS: u32 = 50_000;
+
+/// Auto: what a session is asked for when the page names no bitrate.
+fn auto_bitrate_kbps(height: u32) -> u32 {
+    if height >= 1080 {
+        15_000
+    } else {
+        10_000
+    }
+}
+
+/// A page's bitrate, inside MIN_BITRATE_KBPS..=MAX_BITRATE_KBPS.
+fn clamp_bitrate_kbps(kbps: u32) -> u32 {
+    kbps.clamp(MIN_BITRATE_KBPS, MAX_BITRATE_KBPS)
+}
+
 /// Start the session `start` asks for on a new worker thread.
 fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> Arc<Live> {
     let mut cfg = StreamConfig::default();
@@ -1889,13 +1911,22 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         let (w, h) = if h > 1080 { (1920, 1080) } else { (w, h) };
         cfg.width = w;
         cfg.height = h;
-        cfg.bitrate_kbps = if h >= 1080 { 15000 } else { 10000 };
+        cfg.bitrate_kbps = auto_bitrate_kbps(h);
     }
     if let Some(f) = start.fps {
         cfg.fps = f;
     }
     if let Some(b) = start.bitrate_kbps {
-        cfg.bitrate_kbps = b;
+        let kept = clamp_bitrate_kbps(b);
+        if kept != b {
+            crate::log_at!(
+                Warn,
+                "rp",
+                "rp_stream: {}: bitrate {b} kbit/s asked, outside {MIN_BITRATE_KBPS}..={MAX_BITRATE_KBPS}: using {kept}",
+                start.host
+            );
+        }
+        cfg.bitrate_kbps = kept;
     }
     if let Some(c) = start.codec.as_deref().and_then(Codec::from_name) {
         cfg.codec = c;
@@ -2421,6 +2452,20 @@ mod slot_held_tests {
         let other = "10.250.7.21";
         let e = anyhow::Error::new(ps5upload_core::rp_stream::guard::closed_answer(other));
         assert_eq!(slot_held_status(other, &e).unwrap()["code"], "in_use");
+    }
+
+    #[test]
+    fn rp_stream_bitrate_is_auto_or_clamped() {
+        assert_eq!(auto_bitrate_kbps(1080), 15_000);
+        assert_eq!(auto_bitrate_kbps(720), 10_000);
+        // The Settings choices pass as they are.
+        for b in [3_000, 15_000, 20_000, 30_000, 40_000, 50_000] {
+            assert_eq!(clamp_bitrate_kbps(b), b);
+        }
+        assert_eq!(clamp_bitrate_kbps(0), MIN_BITRATE_KBPS);
+        assert_eq!(clamp_bitrate_kbps(500), MIN_BITRATE_KBPS);
+        assert_eq!(clamp_bitrate_kbps(80_000), MAX_BITRATE_KBPS);
+        assert_eq!(clamp_bitrate_kbps(u32::MAX), MAX_BITRATE_KBPS);
     }
 
     #[test]

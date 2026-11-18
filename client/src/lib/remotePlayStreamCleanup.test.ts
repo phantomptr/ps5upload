@@ -332,6 +332,22 @@ describe("RemotePlayStream at its end", () => {
     await flush();
   });
 
+  it("asks the engine for the chosen bitrate, and for nothing on Auto", async () => {
+    const startOf = async (bitrateKbps?: number) => {
+      const s = new RemotePlayStream({ ...options(), bitrateKbps });
+      await s.start();
+      const ws = sockets[sockets.length - 1] as unknown as { send: (m: string) => void; onopen?: () => void };
+      const sent: string[] = [];
+      ws.send = (m) => sent.push(m);
+      ws.onopen?.();
+      s.stop();
+      await flush();
+      return JSON.parse(sent[0]) as Record<string, unknown>;
+    };
+    expect((await startOf(30000)).bitrate_kbps).toBe(30000);
+    expect(await startOf(undefined)).not.toHaveProperty("bitrate_kbps");
+  });
+
   it("sends what is held again on a new socket: the engine let go when the old one left", async () => {
     const sent: string[] = [];
     const o = options();
