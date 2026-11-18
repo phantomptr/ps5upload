@@ -11,6 +11,7 @@ import { formatBytes } from "../lib/format";
 import type { ActivitySummary, FinishedRow, ActivityRow, QueuedRow } from "../state/activitySummary";
 import { routeForTask, shortLabel, shortLabelKey } from "../state/activitySummary";
 import { useTr } from "../state/lang";
+import { useUploadSettingsStore } from "../state/uploadSettings";
 import type { Task, TaskKind } from "../state/tasks";
 import { formatDuration } from "../lib/formatDate";
 
@@ -24,9 +25,19 @@ export function shownEta(eta: number | undefined | null): eta is number {
   return eta != null && eta > 0 && Number.isFinite(eta) && eta < 30 * 86_400;
 }
 
+/** "limit 1.5 MiB/s" after an upload's speed while the upload speed limit is on (`cap` MiB/s), so
+ *  a limit set by accident is seen where the speed is (a mouse wheel over the Settings box set
+ *  1.5 on a Windows PC, and nothing said so). */
+function capFigure(task: Task, tr: Tr, cap: number): string | null {
+  if (!(cap > 0) || !task.kind.startsWith("upload-")) return null;
+  const n = Number.isInteger(cap) ? String(cap) : cap.toFixed(1);
+  return tr("activity_speed_limit", { cap: n }, "limit {cap} MiB/s");
+}
+
 /** What a running job says about itself, in order: its step, how far, how fast, how long. A
- *  job that has gone quiet says only that. `long` adds the byte counts (the panel has room). */
-export function rowFigures(row: ActivityRow, tr: Tr, long = false): string[] {
+ *  job that has gone quiet says only that. `long` adds the byte counts (the panel has room).
+ *  `cap`: the upload speed limit in MiB/s (0 = none), said after an upload's speed. */
+export function rowFigures(row: ActivityRow, tr: Tr, long = false, cap = 0): string[] {
   const { task, pct, staleMin } = row;
   if (staleMin != null) return [tr("activity_stale", { min: staleMin }, `No update for ${staleMin} min`)];
   const out: string[] = [];
@@ -48,7 +59,11 @@ export function rowFigures(row: ActivityRow, tr: Tr, long = false): string[] {
       );
     }
   }
-  if (task.rate && task.rate.bytesPerSec >= 1) out.push(`${formatBytes(task.rate.bytesPerSec)}/s`);
+  if (task.rate && task.rate.bytesPerSec >= 1) {
+    out.push(`${formatBytes(task.rate.bytesPerSec)}/s`);
+    const c = capFigure(task, tr, cap);
+    if (c) out.push(c);
+  }
   if (shownEta(task.eta)) {
     const time = formatDuration(task.eta);
     out.push(tr("activity_left", { time }, `${time} left`));
@@ -58,14 +73,17 @@ export function rowFigures(row: ActivityRow, tr: Tr, long = false): string[] {
 
 /** The strip's short version: how far, how fast, how long; the step only when it says more than
  *  a percentage would (no percentage, or all bytes sent and the console finishing). */
-export function lineFigures(row: ActivityRow, tr: Tr): string[] {
+export function lineFigures(row: ActivityRow, tr: Tr, cap = 0): string[] {
   const { task, pct, staleMin } = row;
   if (staleMin != null) return [tr("activity_stale", { min: staleMin }, `No update for ${staleMin} min`)];
   const out: string[] = [];
   if (pct != null) out.push(`${Math.floor(pct)}%`);
   if (task.stage && (pct == null || pct >= 100)) out.push(task.stage);
-  if (task.rate && task.rate.bytesPerSec >= 1 && (pct == null || pct < 100))
+  if (task.rate && task.rate.bytesPerSec >= 1 && (pct == null || pct < 100)) {
     out.push(`${formatBytes(task.rate.bytesPerSec)}/s`);
+    const c = capFigure(task, tr, cap);
+    if (c) out.push(c);
+  }
   if (shownEta(task.eta)) {
     const time = formatDuration(task.eta);
     out.push(tr("activity_left", { time }, `${time} left`));
@@ -116,15 +134,16 @@ export function ActivitySummaryLine({
   variant?: "strip" | "pill";
 }) {
   const tr = useTr();
+  const cap = useUploadSettingsStore((s) => s.bandwidthCapMbps);
   const primary = summary.primary;
   let body;
   let spoken: string;
   if (primary) {
-    const all = lineFigures(primary, tr);
+    const all = lineFigures(primary, tr, cap);
     // The phone pill has room for how far and how long only.
     const figures = variant === "pill" && all.length > 2 ? [all[0], all[all.length - 1]] : all;
     const name = kindName(tr, primary.task.kind);
-    spoken = [name, primary.task.label, ...rowFigures(primary, tr, true)].join(", ");
+    spoken = [name, primary.task.label, ...rowFigures(primary, tr, true, cap)].join(", ");
     body = (
       <>
         {primary.staleMin != null ? (
@@ -352,7 +371,8 @@ function RunningRow({ row, onOpen, onCancel, canCancel, consoleOf }: { row: Acti
   const tr = useTr();
   const { task, pct, staleMin } = row;
   const where = consoleOf?.(task);
-  const figures = rowFigures(row, tr, true);
+  const cap = useUploadSettingsStore((s) => s.bandwidthCapMbps);
+  const figures = rowFigures(row, tr, true, cap);
   return (
     <li data-testid="activity-running-row">
       <div className="flex min-w-0 items-center gap-2">

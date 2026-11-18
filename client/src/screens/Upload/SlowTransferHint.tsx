@@ -44,6 +44,7 @@ export function SlowTransferHint({
     return st?.phase === "done" ? st.uploadBps : null;
   });
   const cap = useUploadSettingsStore((s) => s.bandwidthCapMbps);
+  const setCap = useUploadSettingsStore((s) => s.setBandwidthCapMbps);
   const [dismissed, setDismissed] = useState(dismissedNow);
   const [since, setSince] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -61,7 +62,7 @@ export function SlowTransferHint({
     setSince((s) => (slow ? (s ?? t) : null));
   }, [slow, bytesPerSec]);
 
-  if (dismissed || !host) return null;
+  if (!host) return null;
   const hint = slowTransferHint({
     bytesPerSec,
     bottleneck,
@@ -69,7 +70,9 @@ export function SlowTransferHint({
     speedTestUploadBps: tested,
     bandwidthCapMbps: cap,
   });
-  if (!hint) return null;
+  // Dismissing quiets the network advice; a speed limit holding the upload back is always
+  // said, with the way to remove it (one set by accident went unseen otherwise).
+  if (!hint || (dismissed && hint.cause !== "cap")) return null;
 
   const speed = rate(bytesPerSec);
   const expected = hint.expectedBps ? rate(hint.expectedBps) : null;
@@ -119,9 +122,9 @@ export function SlowTransferHint({
                 "The PS5 is still writing what it received, not waiting on the network. With many small files each one costs time of its own; a game image (.ffpkg or .exfat) goes as one file.",
               )
             : tr(
-                "netdoctor.hint.cause_cap",
+                "netdoctor.hint.cause_cap_v2",
                 { cap: bandwidthCapFor(cap) },
-                "The upload speed limit (about {cap} MiB/s, on this screen and in Settings) is what holds it back. Set it to 0 to remove it.",
+                "The upload speed limit (about {cap} MiB/s, set in Settings › Uploads › Speed) is what holds it back.",
               );
   return (
     <div
@@ -138,6 +141,16 @@ export function SlowTransferHint({
       <span className="min-w-0 flex-[1_1_14rem] text-[var(--color-muted)]">
         {lead ? `${lead} ${because}` : because}
       </span>
+      {hint.cause === "cap" && (
+        <button
+          type="button"
+          className="font-medium text-[var(--color-accent)] hover:underline"
+          onClick={() => setCap(0)}
+          data-testid="slow-transfer-hint-remove-cap"
+        >
+          {tr("bandwidth_cap_clear", undefined, "remove limit")}
+        </button>
+      )}
       <button
         type="button"
         className="font-medium text-[var(--color-accent)] hover:underline"

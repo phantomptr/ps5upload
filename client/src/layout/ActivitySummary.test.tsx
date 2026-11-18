@@ -13,7 +13,7 @@ vi.mock("../state/lang", () => ({
 
 import { summarize, type ActivitySummary, type QueuedRow } from "../state/activitySummary";
 import type { Task } from "../state/tasks";
-import { ActivityPanelView, ActivitySummaryLine } from "./ActivitySummary";
+import { ActivityPanelView, ActivitySummaryLine, lineFigures, rowFigures } from "./ActivitySummary";
 
 // No DOM here: render to markup and check what a user would see and could press.
 const NOW = 1_000_000_000;
@@ -234,5 +234,24 @@ describe("shownEta", () => {
     expect(shownEta(Infinity)).toBe(false);
     expect(shownEta(0)).toBe(false);
     expect(shownEta(undefined)).toBe(false);
+  });
+});
+
+describe("the upload speed limit beside an upload's speed", () => {
+  const tr = (_k: string, vars?: Record<string, string | number>, fallback?: string) => {
+    let s = fallback ?? _k;
+    for (const [k, v] of Object.entries(vars ?? {})) s = s.replace(`{${k}}`, String(v));
+    return s;
+  };
+  const row = (kind: Task["kind"]) =>
+    sum([task({ kind, rate: { bytesPerSec: 1.5 * 1024 * 1024 }, progress: { current: 10, total: 100, unit: "bytes" } } as Partial<Task>)])
+      .running[0];
+  it("is said while a limit is on, for uploads", () => {
+    expect(lineFigures(row("upload-file"), tr as never, 1.5)).toContain("limit 1.5 MiB/s");
+    expect(rowFigures(row("upload-dir"), tr as never, true, 2)).toContain("limit 2 MiB/s");
+  });
+  it("is not said with no limit, or for other jobs", () => {
+    expect(lineFigures(row("upload-file"), tr as never, 0).join(" ")).not.toContain("limit");
+    expect(lineFigures(row("fpkg-convert"), tr as never, 1.5).join(" ")).not.toContain("limit");
   });
 });
