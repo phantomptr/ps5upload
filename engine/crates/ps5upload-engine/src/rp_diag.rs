@@ -332,26 +332,53 @@ fn host_key(host: &str) -> String {
 }
 
 /// The console answered a readiness check: kept (its switches and how a user was found, never the
-/// account id) for the next pairing try's record.
+/// account id) for the next pairing try's record, and logged when it says something new about the
+/// console's user, so a bug report shows what Play's setup was reading (#864).
 pub(crate) fn readiness_seen(addr: &str, r: &ps5upload_core::remoteplay::RemotePlayReadiness) {
-    let v = json!({
-        "remote_play_on": r.service_enabled != 0,
-        "user_allowed": r.user_enabled != 0,
-        "user_found": r.account_uid >= 0,
-        "user_in_front": r.foreground_uid >= 0,
-        "user_found_via": r.account_via,
-        "account_type": r.account_type,
-        "registry_readable": r.registry_err == 0,
-    });
-    if let Ok(mut g) = READINESS.lock() {
+    let v = readiness_json(r);
+    let changed = if let Ok(mut g) = READINESS.lock() {
+        let key = host_key(addr);
+        let changed = g.get(&key).map(|c| c.v != v).unwrap_or(true);
         g.insert(
-            host_key(addr),
+            key,
             ConsoleSeen {
                 at_unix_ms: unix_ms(),
-                v,
+                v: v.clone(),
             },
         );
+        changed
+    } else {
+        false
+    };
+    if changed {
+        crate::log_at!(Info, "rp", "readiness: {addr}: {v}");
     }
+}
+
+/// What a readiness answer says about the user and Remote Play, with the helper's raw codes and
+/// never the account id. `user_found` is the user pairing would use (one with an account id);
+/// `user_signed_in` is anyone signed in at all.
+fn readiness_json(r: &ps5upload_core::remoteplay::RemotePlayReadiness) -> Value {
+    let hex = |c: Option<u32>| c.map(|c| format!("0x{c:08x}"));
+    json!({
+        "remote_play_on": r.service_enabled != 0,
+        "user_allowed": r.user_enabled != 0,
+        "user_signed_in": r.user_signed_in(),
+        "user_found": r.account_uid > 0,
+        "user_in_front": r.foreground_uid > 0,
+        "user_found_via": r.account_via,
+        "account_type": r.account_type,
+        "has_account_id": r.account_id_raw != 0,
+        "foreground_uid": format!("0x{:08x}", r.foreground_uid as u32),
+        "account_uid": format!("0x{:08x}", r.account_uid as u32),
+        "user_slot": r.user_slot,
+        "signed_in_slot": r.signed_in_slot,
+        "login_count": r.login_count,
+        "fg_rc": hex(r.fg_rc),
+        "login_rc": hex(r.login_rc),
+        "registry_readable": r.registry_err == 0,
+        "registry_err": format!("0x{:08x}", r.registry_err),
+    })
 }
 
 /// `text` with anything that could be a PIN or a key taken out: runs of 6 or more digits, and of
@@ -594,6 +621,48 @@ mod tests {
             attempt_record("192.0.2.78", "pin", None)["console"],
             Value::Null
         );
+    }
+
+    #[test]
+    fn a_signed_in_user_without_an_account_id_reads_as_signed_in() {
+        // #864: an offline user with no account id yet. The helper finds no account to pair
+        // with (account_uid 0), but the user is signed in and in front.
+        let r: ps5upload_core::remoteplay::RemotePlayReadiness = serde_json::from_value(json!({
+            "foreground_uid": 0x1000_0001,
+            "account_uid": 0,
+            "account_via": "none",
+            "user_slot": -1,
+            "fg_rc": 0,
+            "login_rc": 0,
+            "login_count": 1,
+            "signed_in_slot": 1,
+        }))
+        .unwrap();
+        let v = readiness_json(&r);
+        assert_eq!(v["user_signed_in"], true);
+        assert_eq!(v["user_found"], false);
+        assert_eq!(v["user_in_front"], true);
+        assert_eq!(v["foreground_uid"], "0x10000001");
+        assert_eq!(v["fg_rc"], "0x00000000");
+        // An error from the console is kept as its code, not read as nobody.
+        let r: ps5upload_core::remoteplay::RemotePlayReadiness = serde_json::from_value(json!({
+            "foreground_uid": -1,
+            "account_uid": 0,
+            "fg_rc": 0x8096_0002u32,
+            "login_rc": 0x8096_0002u32,
+            "login_count": -1,
+        }))
+        .unwrap();
+        let v = readiness_json(&r);
+        assert_eq!(v["user_signed_in"], false);
+        assert_eq!(v["fg_rc"], "0x80960002");
+        assert_eq!(v["foreground_uid"], "0xffffffff");
+        // An older helper: no codes, nothing claimed.
+        let r: ps5upload_core::remoteplay::RemotePlayReadiness =
+            serde_json::from_value(json!({ "foreground_uid": -1, "account_uid": 0 })).unwrap();
+        let v = readiness_json(&r);
+        assert_eq!(v["fg_rc"], Value::Null);
+        assert_eq!(v["login_count"], Value::Null);
     }
 
     #[test]

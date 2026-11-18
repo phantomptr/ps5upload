@@ -365,7 +365,30 @@ static int rp_readiness_json_locked(char *out, size_t out_size) {
     const char *acct_via = "none";
     int slot = rp_resolve_account_slot(&uid, &acct_via);
     int fg_uid = -1;
-    if (sceUserServiceGetForegroundUser(&fg_uid) != 0) fg_uid = -1;
+    int fg_rc = sceUserServiceGetForegroundUser(&fg_uid);
+    if (fg_rc != 0) fg_uid = -1;
+
+    /* Who is signed in at all, account or not (#864). account_uid above is
+     * only set for a user whose registry slot holds an activated account id,
+     * so a signed-in offline user with no id yet read as "nobody signed in"
+     * and Play's setup stuck on its sign-in step. login_count says a user is
+     * there; signed_in_slot says whether the registry knows that user (the
+     * slot the account id would be read from). The raw return codes go out
+     * too, so a console that answers with an error shows it rather than
+     * looking like one with nobody signed in. */
+    int login_ids[RP_MAX_LOGIN_USERS];
+    for (int i = 0; i < RP_MAX_LOGIN_USERS; i++) login_ids[i] = -1;
+    int login_rc = sceUserServiceGetLoginUserIdList(login_ids);
+    int login_count = 0;
+    int first_login = 0;
+    if (login_rc == 0) {
+        for (int i = 0; i < RP_MAX_LOGIN_USERS; i++) {
+            if (login_ids[i] <= 0) continue;
+            if (!first_login) first_login = login_ids[i];
+            login_count++;
+        }
+    }
+    int signed_in_slot = rp_slot_for_user(fg_uid > 0 ? fg_uid : first_login);
 
     if (slot > 0) {
         uint8_t raw[8] = {0};
@@ -403,10 +426,14 @@ static int rp_readiness_json_locked(char *out, size_t out_size) {
                     "\"account_via\":\"%s\",\"user_slot\":%d,"
                     "\"account_id_b64\":\"%s\",\"account_id_raw\":%llu,"
                     "\"account_type\":\"%s\",\"service_enabled\":%d,"
-                    "\"user_enabled\":%d,\"symbols_ok\":%d,\"registry_err\":%u}",
+                    "\"user_enabled\":%d,\"symbols_ok\":%d,\"registry_err\":%u,"
+                    "\"fg_rc\":%u,\"login_rc\":%u,\"login_count\":%d,"
+                    "\"signed_in_slot\":%d}",
                     fw, has_per_user, fg_uid, uid, acct_via, slot, acct_b64,
                     (unsigned long long)acct_raw, acct_type_esc,
-                    svc ? 1 : 0, usr ? 1 : 0, g_resolved ? 1 : 0, svc_ec);
+                    svc ? 1 : 0, usr ? 1 : 0, g_resolved ? 1 : 0, svc_ec,
+                    (unsigned)fg_rc, (unsigned)login_rc,
+                    login_rc == 0 ? login_count : -1, signed_in_slot);
 }
 
 static void rp_json_escape(const char *src, char *dst, size_t dst_cap) {

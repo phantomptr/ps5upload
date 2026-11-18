@@ -5726,6 +5726,15 @@ export interface RemotePlayReadiness {
   user_enabled: number;
   symbols_ok: number;
   registry_err: number;
+  /** What the console answered when asked for the foreground user (0 = answered). An older
+   *  helper sends none of these four. */
+  fg_rc?: number;
+  /** What the console answered when asked for the signed-in users (0 = answered). */
+  login_rc?: number;
+  /** Users signed in, with an account ID or not; -1 when the list could not be read. */
+  login_count?: number;
+  /** The registry slot of the signed-in user, account ID or not; -1 when there is none. */
+  signed_in_slot?: number;
 }
 
 /** ── Console health check ──────────────────────────────────────────

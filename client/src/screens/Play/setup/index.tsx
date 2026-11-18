@@ -14,7 +14,7 @@ import { payloadCardLink } from "../../Payloads/payloadTabs";
 import { NpSignInSection } from "../../Accounts/NpSignInSection";
 import { PairedUsers } from "./PairedUsers";
 import { PinPairForm } from "./PinPairForm";
-import { SETUP_ORDER, type SetupKey, type SetupState } from "./playSetup";
+import { SETUP_ORDER, userFacts, userWait, type SetupKey, type SetupState } from "./playSetup";
 import { usePlaySetup } from "./usePlaySetup";
 
 /**
@@ -62,6 +62,7 @@ export default function PlaySetupScreen() {
 
   const r = s.readiness;
   const serviceOff = !!r && r.service_enabled === 0;
+  const userWaitNow = userWait(r);
   const steps: Record<SetupKey, { title: string; body: string; act?: ReactNode; always?: ReactNode }> = {
     connect: {
       title: tr("play_setup_connect_title", undefined, "Connect to your PS5"),
@@ -83,6 +84,29 @@ export default function PlaySetupScreen() {
         undefined,
         "On the console, pick the user you will play as. Nobody has to stay on screen, but the user must be signed in. If the user has a login passcode, Play asks for it when you press Start.",
       ),
+      // What the helper answered, in words and raw: a step that stays open says why (#864).
+      act: userWaitNow ? (
+        <div className="space-y-1" data-testid="play-setup-user-why">
+          <p>
+            {userWaitNow.why === "error"
+              ? tr(
+                  "play_setup_user_why_error",
+                  { code: userWaitNow.code },
+                  `The PS5 did not say who is signed in: it answered with the code ${userWaitNow.code}. Send the helper again from Connection. If this step stays open, send a bug report from the Bug Report page.`,
+                )
+              : tr(
+                  "play_setup_user_why_none",
+                  undefined,
+                  "The helper asked the PS5 who is signed in, and it answered: nobody. Choose a user on the console's own screen with its controller. This step checks again every few seconds. If a user is already signed in and this step stays open, send the helper again from Connection, then send a bug report from the Bug Report page.",
+                )}
+          </p>
+          {r && (
+            <p className="break-all font-mono text-xs">
+              {tr("play_setup_user_seen", { facts: userFacts(r) }, `What the PS5 said: ${userFacts(r)}`)}
+            </p>
+          )}
+        </div>
+      ) : undefined,
     },
     account: {
       title: tr("rpg_account_title", undefined, "Give that user an account ID"),
