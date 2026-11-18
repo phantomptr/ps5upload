@@ -132,12 +132,15 @@ export function TrophyRepair({ addr, uid, slot }: { addr: string; uid: number; s
         </p>
       )}
       {step.kind === "undone" && (
-        <p className="text-[var(--color-good)]">
+        <p className={step.failed ? "text-[var(--color-warn)]" : "text-[var(--color-good)]"}>
           {tr(
             "profile.trophies.undone",
             { n: step.restored },
             `Trophy files put back: ${step.restored}.`,
-          )}
+          )}{" "}
+          {step.failed > 0 &&
+            tr("profile.trophies.failed", { n: step.failed }, `${step.failed} could not be updated.`)}{" "}
+          {step.backup && <UndoLink onClick={() => void undo(step.backup!)} />}
         </p>
       )}
       {step.kind === "error" && (
@@ -149,15 +152,30 @@ export function TrophyRepair({ addr, uid, slot }: { addr: string; uid: number; s
                 "Close the game on the PS5 first, then try again.",
               )
             : step.message}{" "}
-          <button
-            type="button"
-            className="text-[var(--color-accent)] hover:underline"
-            onClick={() => setStep({ kind: "idle" })}
-          >
-            {tr("profile.trophies.back", undefined, "Back")}
-          </button>
+          {step.backup ? (
+            // An undo that failed: the copy is still on the PS5, so Undo again, not Back (which
+            // led to a check that finds nothing to change, and no undo).
+            <UndoLink onClick={() => void undo(step.backup!)} />
+          ) : (
+            <button
+              type="button"
+              className="text-[var(--color-accent)] hover:underline"
+              onClick={() => setStep({ kind: "idle" })}
+            >
+              {tr("profile.trophies.back", undefined, "Back")}
+            </button>
+          )}
         </p>
       )}
     </div>
+  );
+}
+
+function UndoLink({ onClick }: { onClick: () => void }) {
+  const tr = useTr();
+  return (
+    <button type="button" className="text-[var(--color-accent)] hover:underline" onClick={onClick}>
+      {tr("profile.trophies.undo", undefined, "Undo")}
+    </button>
   );
 }

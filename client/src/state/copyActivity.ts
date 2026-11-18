@@ -87,6 +87,17 @@ export function activityFor(
   return null;
 }
 
+/** One activity for a copy made of several files (a split package's parts, each its own queue
+ *  row): whatever is still under way, else a failure, else the first file's. */
+export function wholeCopyActivity(parts: readonly (CopyActivity | null)[]): CopyActivity | null {
+  return (
+    parts.find((a) => a && a.phase !== "done" && a.phase !== "failed") ??
+    parts.find((a) => a?.phase === "failed") ??
+    parts[0] ??
+    null
+  );
+}
+
 /** Live activity on console `host` for each of `paths` (same order). */
 export function useCopyActivity(paths: string[], host: string): (CopyActivity | null)[] {
   const items = useUploadQueueStore(useShallow((s) => s.items));

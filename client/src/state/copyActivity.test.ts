@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { activityFor } from "./copyActivity";
+import { activityFor, wholeCopyActivity } from "./copyActivity";
 import type { QueueItem } from "./uploadQueue";
 
 const game = "/games/Astro Bot";
@@ -18,6 +18,25 @@ function sending(addr: string): QueueItem {
     estimatedBytes: 0,
   } as unknown as QueueItem;
 }
+
+describe("wholeCopyActivity (a split package's parts)", () => {
+  const done = { phase: "done", installing: false } as const;
+  const going = { phase: "sending", pct: 40, installing: false } as const;
+  const failed = { phase: "failed", message: "x" } as const;
+
+  // Send was offered again once part 1 was there, with parts 2 and 3 still going: a second
+  // click queued every part again.
+  it("is busy while any part is still waiting or going", () => {
+    expect(wholeCopyActivity([done, going, { phase: "queued" }])).toBe(going);
+    expect(wholeCopyActivity([done, null, { phase: "queued" }])).toEqual({ phase: "queued" });
+  });
+  it("then a failed part, then the first part's", () => {
+    expect(wholeCopyActivity([done, failed])).toBe(failed);
+    expect(wholeCopyActivity([done, done])).toBe(done);
+    expect(wholeCopyActivity([null])).toBeNull();
+    expect(wholeCopyActivity([])).toBeNull();
+  });
+});
 
 describe("activityFor", () => {
   it("is busy on the console the game is going to", () => {

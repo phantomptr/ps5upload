@@ -3912,23 +3912,26 @@ function FolderDiffSlot({
 /** The upload speed limit, the same stored value and wording as the
  *  control in Settings → Uploads. 0 = no limit. The engine holds every lane
  *  of a job to it together. */
-function BandwidthCard() {
+export function BandwidthCard() {
   const tr = useTr();
   const cap = useUploadSettingsStore((s) => s.bandwidthCapMbps);
   const setCap = useUploadSettingsStore((s) => s.setBandwidthCapMbps);
   return (
     <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-3 p-4">
       <div className="flex items-center gap-2">
-        <label className="text-sm font-medium">
+        <label htmlFor="upload-bw-cap" className="text-sm font-medium">
           {tr("bandwidth_cap_label", undefined, "Upload speed limit")}
         </label>
         <Input
+          id="upload-bw-cap"
           type="number"
           block={false}
           className="w-20"
           min={0}
           step={0.5}
-          value={cap}
+          // Empty for no limit, as in Settings: with "0" here React put a 0 back into a box
+          // being typed in (a "." alone reads as empty), so ".5" over a limit became "05": 5.
+          value={cap || ""}
           inputMode="decimal"
           onChange={(e) => {
             const n = parseFloat(e.target.value);

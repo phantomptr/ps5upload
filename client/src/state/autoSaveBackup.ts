@@ -25,6 +25,24 @@ export function clampKeep(n: unknown): number {
   return Math.max(1, Math.min(50, v));
 }
 
+/**
+ * A number box left (blur): what to save and what the box shows. A box left empty, or holding no
+ * number, is not a choice: nothing is saved and it goes back to `current`. An emptied "Versions
+ * to keep" was read as 0 and saved as 1, and the next backup kept one version of every save.
+ * A number out of range is saved as the nearest allowed one, and the box shows that.
+ */
+export function numberBoxLeft(
+  text: string,
+  current: number,
+  clamp: (n: number) => number,
+): { save: number | null; show: string } {
+  const t = text.trim();
+  const n = t ? Number(t) : Number.NaN;
+  if (!Number.isFinite(n)) return { save: null, show: String(current) };
+  const v = clamp(n);
+  return { save: v === current ? null : v, show: String(v) };
+}
+
 /** How often the engine backs up when nothing else is chosen, in minutes. */
 export const DEFAULT_INTERVAL_MINUTES = 10;
 /** The intervals offered: 5 min, 10 min, 30 min, 1 hour, 6 hours, 1 day. */

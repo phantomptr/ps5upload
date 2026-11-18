@@ -221,7 +221,42 @@ export class PlaneReader {
       for (let i = 0; i < row.len; i++) if (this.buf[row.at + i] !== endMark(i)) return true;
       return false;
     });
-    return { format, w, h, vis, complete, data: this.buf, layout, colorSpace: frame.colorSpace };
+    const planes: Planes = { format, w, h, vis, complete, data: this.buf, layout, colorSpace: frame.colorSpace };
+    if (coded && complete) repeatChromaEdges(planes);
+    return planes;
+  }
+}
+
+/** A coded copy's chroma next to the picture, made the picture's own edge. The colour pass reads
+ *  luma and chroma at one coordinate with linear filtering, so the picture's last luma row reads
+ *  a quarter of its chroma from the row after the picture's last: padding in a coded copy
+ *  (zeros there are a green line along the edge), where a visible copy ends and the texture's
+ *  edge repeats. The same on each side the picture does not reach. */
+function repeatChromaEdges(p: Planes): void {
+  const cw = Math.ceil(p.w / 2);
+  const ch = Math.ceil(p.h / 2);
+  const x0 = Math.floor(p.vis.x / 2);
+  const y0 = Math.floor(p.vis.y / 2);
+  const x1 = Math.min(cw, Math.ceil((p.vis.x + p.vis.w) / 2)) - 1;
+  const y1 = Math.min(ch, Math.ceil((p.vis.y + p.vis.h) / 2)) - 1;
+  if (x1 < x0 || y1 < y0) return;
+  const px = p.format === "NV12" ? 2 : 1;
+  const d = p.data;
+  for (let i = 1; i < p.layout.length; i++) {
+    const { offset, stride } = p.layout[i];
+    if (x0 > 0 || x1 + 1 < cw) {
+      for (let y = y0; y <= y1; y++) {
+        const row = offset + y * stride;
+        for (let b = 0; b < px; b++) {
+          if (x1 + 1 < cw) d[row + (x1 + 1) * px + b] = d[row + x1 * px + b];
+          if (x0 > 0) d[row + (x0 - 1) * px + b] = d[row + x0 * px + b];
+        }
+      }
+    }
+    // Whole rows, the columns just written with them.
+    const len = cw * px;
+    if (y1 + 1 < ch) d.copyWithin(offset + (y1 + 1) * stride, offset + y1 * stride, offset + y1 * stride + len);
+    if (y0 > 0) d.copyWithin(offset + (y0 - 1) * stride, offset + y0 * stride, offset + y0 * stride + len);
   }
 }
 
