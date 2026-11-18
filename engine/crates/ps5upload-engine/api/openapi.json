@@ -1799,6 +1799,10 @@
               "$ref": "#/components/schemas/CheatMod"
             },
             "type": "array"
+          },
+          "truncated": {
+            "description": "The title has more cheats than one reply holds: `mods` ends at the last whole one. A\nhelper before this field cut the reply mid-cheat instead, which did not parse at all.",
+            "type": "boolean"
           }
         },
         "required": [

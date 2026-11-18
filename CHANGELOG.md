@@ -6,6 +6,47 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+A full check of the app, the engine and the PS5 helper, with the fixes it turned up, plus three reports from users.
+
+**Fixes**
+- **Uploads stuck at 1.5 MiB/s on Windows.** Scrolling the mouse wheel over the upload speed limit box changed it, so scrolling through Settings could set a limit without you noticing. The wheel no longer changes any number box. While a limit is on, every upload now shows it next to its speed ("limit 1.5 MiB/s"), and a slow upload held back by the limit says so with a **remove limit** button. If your uploads are slow, look at Settings › Uploads › Speed and set it to 0.
+- **Set up Play: step 2 stayed red for a signed-in user (#864).** The step only turned green when the user already had an account ID, so a signed-in user who was not activated yet could never reach step 3, the step that gives them one. Step 2 now accepts any signed-in user, and while it stays open it says what the PS5 answered. Not yet tried on a PS5.
+- **Game frame rate on firmware 4.x (#865): not fixed yet, but the next report will tell us why.** The bug report did not record what the console answers. It does now, so if frame rate shows nothing on your PS5, please send a new report from the Bug Report page after updating.
+- **Save backups**
+  - No backups were made when the computer had a system proxy set, with nothing in the status to say so.
+  - Backups could not be switched off, or their settings changed, while the backup disk was unplugged.
+  - With the backup server off (a NAS overnight), a failed backup was tried again every minute, copying the whole save each time. It now waits 30 minutes.
+  - A backup on a server could become impossible to restore after a dropped connection, and a backup could be uploaded twice.
+  - Clearing "Versions to keep" to retype it saved 1 straight away.
+- **Remote Play**
+  - Bitrate above 15 Mbps: when the PS5 refused it during a restart, the app said it would start again on Auto and then did nothing. Pressing Stop while connecting could also restart the stream.
+  - Linux app at 1080p: a thin green line could show at the bottom edge with the new way of drawing the picture.
+- **Cheats**
+  - Games with a great many cheats could not be listed at all.
+  - A damaged cheat file could make the helper read past the end of it.
+  - Switching a cheat on without saying which one switched on the first.
+- **One file or game with an unusual name could empty a whole list** (saves, screenshots, videos, search, drives, installed games): names in older Japanese or Western encodings broke the helper's answer. Such characters now show as "?".
+- **Files and drives on the PS5**
+  - A game image named like the console's own data drive could make that drive look like one of our mounts, with Unmount offered for it.
+  - A save could show as open when it was not.
+  - After a helper crash during an archive extract, the clean-up could remove the wrong folder for a destination with a line break in its name. Such destinations are now refused.
+- **Upload & Install**
+  - Pressing Replace twice on a big folder, or Retry while a Replace was deleting, could run two deletes or an upload over a delete.
+  - Typing ".5" over a speed limit of 0 on the Upload screen set 5.
+- **Send to PS5 from a game's page**
+  - Choosing "As one compressed image" and then picking a package or an archive tried to build an image from it.
+  - A package in several parts could be queued twice.
+  - Send did nothing when the web page was open in two tabs; it now says which tab runs the queue.
+- **Trophy repair:** when the PS5 refused Undo (a game was open), there was no way to try Undo again.
+- **Settings shared between devices:** a setting changed while the app was syncing could be lost or overwritten by an older value.
+- **A shared save from someone else could write outside its own folder on Windows.** Now refused.
+
+**Behind the scenes**
+- Releases: a pull request can no longer be merged while its checks are failing, a slow package server no longer stops a release (and a fix for one now reaches a release that is already tagged), and builds wait for the PS5 helper build instead of giving up while it is still queued.
+- A test that failed now and then for no reason (the Settings tabs on a phone-width screen) was a race in the test and is fixed.
+
+## 12.6.8
+
 **Fixes**
 - **Remote Play on Linux: no more green band under the picture at 1080p.** On some PCs the bottom of the picture came out as a solid green strip covering part of the PS5's menu. The app now checks that each frame came through whole, and if it didn't, it switches to a way of drawing the picture that does. Not yet tried on an affected PC: if you still see the band, please send a bug report from the Bug Report page.
 
