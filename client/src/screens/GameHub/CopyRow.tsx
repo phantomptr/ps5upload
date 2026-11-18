@@ -18,7 +18,11 @@ import { useCollectionStore } from "../../state/collection";
 import { useConnectionStore } from "../../state/connection";
 import { useCopyActivity } from "../../state/copyActivity";
 import { useTr } from "../../state/lang";
-import { sendKind } from "../../lib/collectionSend";
+import { copyActions } from "../../lib/collectionSend";
+import { krakenRuns, useMounterFor } from "../../lib/mounter";
+import { krakenCopyDestination } from "../../lib/pkgUploadChoice";
+import { imageDrive } from "../../lib/imageUpload";
+import { destinationVolumeFor } from "../../state/upload";
 import { hostOf } from "../../lib/addr";
 import { gamePath } from "../../lib/gamePage";
 import { installOffers } from "./collectionInstall";
@@ -63,7 +67,9 @@ export function CopyRow({
   const [linkBusy, setLinkBusy] = useState(false);
   const check = useCopyCheck(loc.absolute_path);
   const checking = check?.state === "queued" || check?.state === "running";
-  const sendable = !!sendKind(loc) && loc.pkg?.complete !== false && !loc.pkg?.error;
+  const mounter = useMounterFor(host);
+  const kraken = krakenRuns(mounter) ? (mounter?.kraken ?? null) : null;
+  const actions = copyActions(loc, { host: !!host, kraken: !!kraken });
   const noTrash = useCollectionStore(
     (s) => s.settings?.trash_available === false,
   );
@@ -124,14 +130,59 @@ export function CopyRow({
     }
   };
 
-  // The one thing most people want from this copy: send a folder or image, install a package.
+  // Where Kraken Mount would mount a package from, by default: its folder on the drive the send
+  // panel opens with.
+  const krakenFolder = (() => {
+    if (!kraken || loc.type !== "pkg") return null;
+    const d = krakenCopyDestination(imageDrive(host, destinationVolumeFor(host), null).volume, kraken, []);
+    return d ? (d.subpath ? `${d.volume}/${d.subpath}` : d.volume) : null;
+  })();
+  const sendLabel = tr("collection.send_go", undefined, "Send to PS5");
+  const installLabel = tr("game_install", undefined, "Install");
+  // The one thing most people want from this copy: send a folder or image, install a package
+  // (or, while Kraken Mount runs, send the package to the folder it mounts it from).
   const primary =
-    host && sendable
-      ? { icon: <Upload size={12} />, label: tr("collection.send_go", undefined, "Send to PS5"), run: onSend }
-      : host && usable
-        ? { icon: <Download size={12} />, label: tr("game_install", undefined, "Install"), run: install }
+    actions.primary === "send"
+      ? {
+          icon: <Upload size={12} />,
+          label: sendLabel,
+          run: onSend,
+          title:
+            loc.type === "pkg"
+              ? krakenFolder
+                ? tr(
+                    "collection.send_pkg_kraken_title",
+                    { folder: krakenFolder },
+                    "Kraken Mount mounts it from {folder}",
+                  )
+                : tr(
+                    "collection.send_pkg_kraken_title_any",
+                    undefined,
+                    "Kraken Mount mounts it from a folder it scans",
+                  )
+              : undefined,
+        }
+      : actions.primary === "install"
+        ? { icon: <Download size={12} />, label: installLabel, run: install, title: undefined }
         : null;
   const more: OverflowMenuItem[] = [
+    ...(actions.menuInstall
+      ? [{ icon: <Download size={12} />, label: installLabel, onSelect: install }]
+      : []),
+    ...(actions.menuSendFile
+      ? [
+          {
+            icon: <Upload size={12} />,
+            label: tr("collection.send_pkg_file", undefined, "Send to PS5 as a file"),
+            onSelect: onSend,
+            title: tr(
+              "collection.send_pkg_file_title",
+              undefined,
+              "Copy the package to a folder on the PS5 without installing it, for a mounter that reads packages where they sit (Kraken Mount).",
+            ),
+          },
+        ]
+      : []),
     {
       icon: <Copy size={12} />,
       label: tr("collection.copy_path", undefined, "Copy path"),
@@ -243,15 +294,16 @@ export function CopyRow({
             }
           />
         )}
-        <span className="ms-auto flex items-center gap-1">
+        <span className="ms-auto flex min-w-0 max-w-full items-center gap-1">
           {primary && (
             <button
               type="button"
               onClick={primary.run}
-              className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-[var(--color-accent)] px-3 py-1 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-accent-soft)]"
+              title={primary.title}
+              className="inline-flex min-h-8 min-w-0 items-center gap-1.5 rounded-full border border-[var(--color-accent)] px-3 py-1 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-accent-soft)]"
             >
               {primary.icon}
-              {primary.label}
+              <span className="truncate">{primary.label}</span>
             </button>
           )}
           <OverflowMenu
