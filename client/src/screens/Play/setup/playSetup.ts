@@ -58,7 +58,7 @@ export function setupStates(i: SetupInput): Record<SetupKey, SetupState> {
     prev !== "ok" || ok === undefined ? "wait" : ok ? "ok" : "todo";
 
   const connect: SetupState = i.connected ? "ok" : "todo";
-  const user = after(connect, r ? r.account_uid > 0 : undefined);
+  const user = after(connect, r ? userSignedIn(r) : undefined);
   const account = after(user, r ? r.account_id_raw !== 0 && r.account_type === "np" : undefined);
   // Signed in: np-fake-signin (or PSN) left an online id and its auth file; a console whose
   // Remote Play service is already on got past this step some other way.
@@ -75,6 +75,45 @@ export function setupStates(i: SetupInput): Record<SetupKey, SetupState> {
   const blockers: SetupState = !i.connected || i.blockers == null ? "wait" : i.blockers.length ? "todo" : "ok";
   const play: SetupState = i.played ? "ok" : pair === "ok" ? "todo" : "wait";
   return { connect, user, account, signin, service, rest, pair, blockers, play };
+}
+
+/** A user is signed in on the console, with an account ID or not. `account_uid` is only the
+ *  user pairing would use, one with an account ID: an offline user without one yet is signed
+ *  in all the same, and giving it an ID is the next step (#864). `login_count` comes from a
+ *  newer helper; with an older one, the foreground user says so. */
+export function userSignedIn(r: RemotePlayReadiness): boolean {
+  return r.account_uid > 0 || r.foreground_uid > 0 || (r.login_count ?? 0) > 0;
+}
+
+/** Why the sign-in step is not done, from the helper's answer: the console said nobody is
+ *  signed in, or it answered the question with an error code (shown as hex). */
+export type UserWait = { why: "none" } | { why: "error"; code: string };
+
+export function userWait(r: RemotePlayReadiness | null): UserWait | null {
+  if (!r || userSignedIn(r)) return null;
+  // The signed-in list is the answer that counts; the foreground one only when there is no list.
+  const rc = r.login_rc !== undefined ? r.login_rc : (r.fg_rc ?? 0);
+  return rc ? { why: "error", code: hexCode(rc) } : { why: "none" };
+}
+
+/** The helper's raw answer about the console's user, for the screen and a bug report: never the
+ *  account ID. */
+export function userFacts(r: RemotePlayReadiness): string {
+  const parts = [
+    `foreground_uid=${hexCode(r.foreground_uid)}`,
+    `account_uid=${hexCode(r.account_uid)}`,
+    `account_via=${r.account_via || "?"}`,
+    `user_slot=${r.user_slot}`,
+  ];
+  if (r.login_count !== undefined) parts.push(`login_count=${r.login_count}`);
+  if (r.signed_in_slot !== undefined) parts.push(`signed_in_slot=${r.signed_in_slot}`);
+  if (r.fg_rc !== undefined) parts.push(`fg_rc=${hexCode(r.fg_rc)}`);
+  if (r.login_rc !== undefined) parts.push(`login_rc=${hexCode(r.login_rc)}`);
+  return parts.join(" ");
+}
+
+function hexCode(n: number): string {
+  return `0x${(n >>> 0).toString(16).padStart(8, "0")}`;
 }
 
 /** The step to open: the first one that is not done (a manual one counts as not done, an

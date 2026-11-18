@@ -5450,7 +5450,8 @@ static int handle_remoteplay_cancel(runtime_state_t *state) {
  * (remoteplay.c "Sony-API serialization"), and the reply is sent after they return. */
 static int handle_remoteplay_readiness(runtime_state_t *state) {
     (void)state;
-    char body[640];
+    /* 1 KiB: the signed-in facts (#864) took the longest answer close to 640. */
+    char body[1024];
     int n = remoteplay_readiness_json(body, sizeof(body));
     if (n < 0 || (size_t)n >= sizeof(body)) {
         return mgmt_reply(MGMT_FRAME_ERROR, "readiness_overflow", 18);
@@ -5462,7 +5463,7 @@ static int handle_remoteplay_enable(runtime_state_t *state, const char *request_
     (void)state;
     char scope[16] = "";
     extract_json_string_field(request_body, "scope", scope, sizeof(scope));
-    char body[640];
+    char body[1024];
     int n = remoteplay_enable(strcmp(scope, "user") == 0, body, sizeof(body));
     if (n == -2) {
         return mgmt_reply(MGMT_FRAME_ERROR, "rp_enable_unsupported_fw", 24);

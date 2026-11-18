@@ -11197,6 +11197,14 @@
             "description": "How `account_uid` was chosen: `foreground`, `login-list`, `none`.",
             "type": "string"
           },
+          "fg_rc": {
+            "description": "What `sceUserServiceGetForegroundUser` returned (0 = answered). None from an older\nhelper, which does not send it (nor the three below).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "foreground_uid": {
             "description": "The user in the foreground, or -1 when there is none. Reported\nliterally — a console can sit signed in with nobody in front.",
             "type": "integer"
@@ -11209,6 +11217,21 @@
             "minimum": 0,
             "type": "integer"
           },
+          "login_count": {
+            "description": "Users signed in on the console, with an account id or not; -1 when the list could\nnot be read. `account_uid` is only set for a user with an activated account, so this is\nwhat says a user is signed in at all (#864).",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "login_rc": {
+            "description": "What `sceUserServiceGetLoginUserIdList` returned (0 = answered).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "registry_err": {
             "description": "Non-zero means the registry could not be READ — which is very\ndifferent from \"the setting is off\". Everything else in this struct\nis meaningless when it is set.",
             "minimum": 0,
@@ -11217,6 +11240,13 @@
           "service_enabled": {
             "minimum": 0,
             "type": "integer"
+          },
+          "signed_in_slot": {
+            "description": "The registry slot of the signed-in user (foreground first), account or not; -1 when the\nregistry has no slot for that user.",
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "symbols_ok": {
             "minimum": 0,

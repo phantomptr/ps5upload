@@ -234,6 +234,22 @@ pub struct RemotePlayReadiness {
     /// is meaningless when it is set.
     #[serde(default)]
     pub registry_err: u32,
+    /// What `sceUserServiceGetForegroundUser` returned (0 = answered). None from an older
+    /// helper, which does not send it (nor the three below).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fg_rc: Option<u32>,
+    /// What `sceUserServiceGetLoginUserIdList` returned (0 = answered).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_rc: Option<u32>,
+    /// Users signed in on the console, with an account id or not; -1 when the list could
+    /// not be read. `account_uid` is only set for a user with an activated account, so this is
+    /// what says a user is signed in at all (#864).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_count: Option<i32>,
+    /// The registry slot of the signed-in user (foreground first), account or not; -1 when the
+    /// registry has no slot for that user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_in_slot: Option<i32>,
 }
 
 impl RemotePlayReadiness {
@@ -265,6 +281,11 @@ impl RemotePlayReadiness {
     }
     pub fn needs_per_user(&self) -> bool {
         self.has_per_user != 0
+    }
+    /// A user is signed in on the console, whether or not it has an account id yet. An older
+    /// helper does not send `login_count`; then only the foreground or account user says so.
+    pub fn user_signed_in(&self) -> bool {
+        self.account_uid > 0 || self.foreground_uid > 0 || self.login_count.unwrap_or(0) > 0
     }
     /// An account exists and has been activated.
     pub fn activated(&self) -> bool {
@@ -312,6 +333,10 @@ mod firmware_tests {
             user_enabled: 0,
             symbols_ok: 0,
             registry_err: 0,
+            fg_rc: None,
+            login_rc: None,
+            login_count: None,
+            signed_in_slot: None,
         }
     }
 
