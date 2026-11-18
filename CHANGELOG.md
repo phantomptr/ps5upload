@@ -4,7 +4,6 @@ What's new in ps5upload, written for humans.
 
 ---
 
-
 ## Unreleased
 
 **New**
