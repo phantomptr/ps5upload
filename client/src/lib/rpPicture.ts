@@ -118,6 +118,20 @@ export function readPicture(v: unknown): PictureTools {
   };
 }
 
+/** The part of the input texture the colour pass reads, as (x, y, width, height) in 0..1: the
+ *  picture's rows (`crop`, in rows of an `h`-row picture), within the planes' `vis` when the
+ *  planes are a coded copy larger than the picture. */
+export function srcRect(
+  frame: TexImageSource | Planes,
+  h: number,
+  crop: { y: number; h: number },
+): [number, number, number, number] {
+  if (!isPlanes(frame)) return [0, crop.y / h, 1, crop.h / h];
+  const v = frame.vis;
+  const sy = v.h / h;
+  return [v.x / frame.w, (v.y + crop.y * sy) / frame.h, v.w / frame.w, (crop.h * sy) / frame.h];
+}
+
 /** A decoded frame's pixels as YUV planes in memory (VideoFrame.copyTo), drawn by the colour
  *  pass itself: WebKitGTK hands the stream's frames over as NV12 in system memory and converts
  *  them on the CPU when they are given to texImage2D, which costs it a 1080p frame's whole time
@@ -126,9 +140,14 @@ export type PlaneFormat = "NV12" | "I420";
 
 export interface Planes {
   format: PlaneFormat;
-  /** Visible size in pixels (the planes are this, the chroma ones half of it rounded up). */
+  /** The planes' size in pixels (the chroma ones half of it rounded up): the visible picture,
+   *  or the decoder's whole coded frame when PlaneReader copies that (`vis` is then within it). */
   w: number;
   h: number;
+  /** Where the picture is in the planes: all of them, or the visible part of a coded copy. */
+  vis: { x: number; y: number; w: number; h: number };
+  /** Whether the copy wrote the planes' last rows (PlaneReader's end marks were overwritten). */
+  complete: boolean;
   data: Uint8Array;
   layout: ReadonlyArray<{ offset: number; stride: number }>;
   colorSpace: { matrix?: string | null; fullRange?: boolean | null } | null;
@@ -156,24 +175,70 @@ export function planeLayout(
   };
 }
 
+/** The byte a copy must overwrite at `i` of a row PlaneReader marks: a sequence no decoded
+ *  row matches. */
+function endMark(i: number): number {
+  return (i * 73 + 41) & 255;
+}
+
 /** Copies frames' planes out (VideoFrame.copyTo) into one buffer kept between frames, so a
  *  stream allocates nothing per frame. One copy at a time: read() again only after the last
- *  one's planes were drawn. */
+ *  one's planes were drawn.
+ *
+ *  Each copy's last luma row and last row of the last chroma plane are marked first, so a copy
+ *  that stops short is seen (`complete` false) instead of drawn: a Linux app's 1080p stream
+ *  came back with its bottom ~67 rows never written, a green band under the picture (all-zero
+ *  YUV). `mode` "coded" copies the decoder's whole coded frame (1920×1088 for 1080p H.264) and
+ *  leaves the visible part to the drawing, for a copy-out that only goes wrong on a visible
+ *  rect smaller than the coded one. */
 export class PlaneReader {
   private buf = new Uint8Array(0);
+  mode: "visible" | "coded" = "visible";
 
-  /** The frame's visible pixels as planes, or null when it is not NV12/I420. */
+  /** Whether the coded frame is larger than the visible one, so "coded" would copy otherwise. */
+  static codedDiffers(frame: VideoFrame): boolean {
+    const r = frame.visibleRect;
+    return !!r && (r.x !== 0 || r.y !== 0 || r.width !== frame.codedWidth || r.height !== frame.codedHeight);
+  }
+
+  /** The frame's pixels as planes, or null when it is not NV12/I420. */
   async read(frame: VideoFrame): Promise<Planes | null> {
     const format = frame.format;
     if (!isPlaneFormat(format)) return null;
     const r = frame.visibleRect;
-    const w = r?.width ?? frame.codedWidth;
-    const h = r?.height ?? frame.codedHeight;
+    const visible = { x: r?.x ?? 0, y: r?.y ?? 0, w: r?.width ?? frame.codedWidth, h: r?.height ?? frame.codedHeight };
+    const coded = this.mode === "coded";
+    const w = coded ? frame.codedWidth : visible.w;
+    const h = coded ? frame.codedHeight : visible.h;
+    const vis = coded ? visible : { x: 0, y: 0, w, h };
     const { layout, size } = planeLayout(format, w, h);
     if (this.buf.byteLength < size) this.buf = new Uint8Array(size);
-    await frame.copyTo(this.buf, { layout });
-    return { format, w, h, data: this.buf, layout, colorSpace: frame.colorSpace };
+    const rows = endRows(format, w, h, layout);
+    for (const row of rows) for (let i = 0; i < row.len; i++) this.buf[row.at + i] = endMark(i);
+    const rect = coded ? { x: 0, y: 0, width: w, height: h } : { x: visible.x, y: visible.y, width: w, height: h };
+    await frame.copyTo(this.buf, { rect, layout });
+    const complete = rows.every((row) => {
+      for (let i = 0; i < row.len; i++) if (this.buf[row.at + i] !== endMark(i)) return true;
+      return false;
+    });
+    return { format, w, h, vis, complete, data: this.buf, layout, colorSpace: frame.colorSpace };
   }
+}
+
+/** The rows PlaneReader marks: the luma plane's last and the last chroma plane's last. */
+function endRows(
+  format: PlaneFormat,
+  w: number,
+  h: number,
+  layout: ReadonlyArray<{ offset: number; stride: number }>,
+): Array<{ at: number; len: number }> {
+  const cw = Math.ceil(w / 2);
+  const ch = Math.ceil(h / 2);
+  const last = layout[layout.length - 1];
+  return [
+    { at: layout[0].offset + (h - 1) * layout[0].stride, len: w },
+    { at: last.offset + (ch - 1) * last.stride, len: format === "NV12" ? cw * 2 : cw },
+  ];
 }
 
 /** Whether a copy came back empty: every sampled chroma byte 0, which draws as solid green.
@@ -632,7 +697,8 @@ export class PicturePass {
       gl.bindTexture(gl.TEXTURE_2D, this.tex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
     }
-    gl.uniform4f(u.src, 0, crop.y / h, 1, crop.h / h);
+    const src = srcRect(frame, h, crop);
+    gl.uniform4f(u.src, src[0], src[1], src[2], src[3]);
     gl.uniform1f(u.bright, p.brightness / 100);
     gl.uniform1f(u.contr, 1 + p.contrast / 100);
     gl.uniform1f(u.satur, 1 + p.saturation / 50);
