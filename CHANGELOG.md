@@ -6,6 +6,11 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Fixes**
+- **Docker updates no longer pile up old images.** `docker compose pull` kept every replaced image (about 170 MB a release) until someone deleted it by hand. The update command the web UI shows, and the one in the FAQ, now ends by removing the ps5upload images no container uses; other images are left alone. Thanks to kh-mitya (#857).
+
+## 12.6.4
+
 Trophies after offline activation, a cleaner Payloads page, and fixes from an audit.
 
 **Fixes**
@@ -22,7 +27,6 @@ Trophies after offline activation, a cleaner Payloads page, and fixes from an au
   - The Kraken Mount folder suggestion no longer sticks to the whole batch.
 - **Save sync:** a console can no longer be paired with itself after switching consoles; Stop asks first; removed pairs and "Not now" stay that way.
 - **Convert on the PS5:** a running conversion's files are no longer cleaned up after a clock change and a helper update; its progress no longer jumps around.
-- **Docker updates no longer pile up old images.** `docker compose pull` kept every replaced image (about 170 MB a release) until someone deleted it by hand. The update command the web UI shows, and the one in the FAQ, now ends by removing the ps5upload images no container uses; other images are left alone.
 - **Stop or Remove PS5Upload** now holds back new transfers and file actions until it's done, and says when a stop is already running.
 - **The file browser** no longer stalls on a network share that doesn't answer.
 - **ShadowMount+ and np-fake-signin:** the screen shows which copy will be sent, with **Choose file…** to send another.
