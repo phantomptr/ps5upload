@@ -4,6 +4,12 @@ What's new in ps5upload, written for humans.
 
 ---
 
+
+## Unreleased
+
+**New**
+- **Send a package to the PS5 as a file.** On a game's page, a package now has **Send to PS5** too, for Kraken Mount users who mount packages instead of installing them. When Kraken Mount runs on the PS5 and can mount that package (a PS5 game in one file), Send to PS5 is the main button and puts it straight into Kraken Mount's folder, and Install moves to the **…** menu. Otherwise Install stays first and **…** › **Send to PS5 as a file** is there. Nothing is installed; Kraken Mount picks it up on its next scan. Packages on a server or NAS work the same way.
+
 ## 12.6.5
 
 Save backups on a PS5 drive, a higher Remote Play bitrate, Files remembers where you were, and a fix for Android with three or more consoles.
