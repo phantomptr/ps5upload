@@ -95,7 +95,16 @@ int main(void) {
     CHECK(s.flips == 123456 && s.bytes == 128 && s.mono_us == 5000000 && s.err == 0);
     CHECK(fd == 7 && f.opens == 1 && f.closes == 0 && f.bad_arg == 0);
     CHECK(game_fps_json(&s, json, sizeof json) > 0);
-    CHECK(strcmp(json, "{\"ok\":true,\"state\":\"ok\",\"flips\":123456,\"mono_us\":5000000,\"bytes\":128}") == 0);
+    /* the block's first 64 bytes ride along as hex (#865): 8 zero bytes, the count, zeros */
+    CHECK(strcmp(json, "{\"ok\":true,\"state\":\"ok\",\"flips\":123456,\"mono_us\":5000000,\"bytes\":128,"
+                       "\"head\":\"000000000000000040e2010000000000000000000000000000000000000000000000"
+                       "000000000000000000000000000000000000000000000000000000000000\"}") == 0);
+    /* a block shorter than 64 bytes sends only what was written */
+    f.write_len = 16;
+    CHECK(game_fps_read(&ops, &fd, block, &s) == GAME_FPS_OK && s.bytes == 16);
+    CHECK(game_fps_json(&s, json, sizeof json) > 0);
+    CHECK(strstr(json, "\"head\":\"000000000000000040e2010000000000\"}") != NULL);
+    f.write_len = 128;
     f.count = 123516;
     f.now = 6000000;
     CHECK(game_fps_read(&ops, &fd, block, &s) == GAME_FPS_OK && s.flips == 123516);

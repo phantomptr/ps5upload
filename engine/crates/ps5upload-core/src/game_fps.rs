@@ -52,6 +52,35 @@ pub struct FlipRead {
     pub bytes: u32,
     #[serde(default)]
     pub errno: i32,
+    /// The first bytes the driver wrote, as hex (diagnostics, #865; empty from an older helper).
+    #[serde(default)]
+    pub head: String,
+}
+
+/// The byte offsets of the 8-byte words that differ between two `head`s (#865): where a firmware
+/// keeps a moving count. Words past the shorter one, or a head that is not hex, give nothing.
+pub fn moving_words(a: &str, b: &str) -> Vec<usize> {
+    let (Some(a), Some(b)) = (unhex(a), unhex(b)) else {
+        return Vec::new();
+    };
+    let (a, _) = a.as_chunks::<8>();
+    let (b, _) = b.as_chunks::<8>();
+    a.iter()
+        .zip(b)
+        .enumerate()
+        .filter(|(_, (x, y))| x != y)
+        .map(|(i, _)| i * 8)
+        .collect()
+}
+
+fn unhex(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .collect()
 }
 
 impl FlipRead {
@@ -244,8 +273,11 @@ mod tests {
     use super::*;
 
     // The literals payload/tests/game_fps_selftest.c checks game_fps_json() against.
-    const OK_BODY: &str =
-        "{\"ok\":true,\"state\":\"ok\",\"flips\":123456,\"mono_us\":5000000,\"bytes\":128}";
+    const HEAD: &str = "000000000000000040e2010000000000000000000000000000000000000000000000\
+                        000000000000000000000000000000000000000000000000000000000000";
+    const OK_BODY: &str = "{\"ok\":true,\"state\":\"ok\",\"flips\":123456,\"mono_us\":5000000,\"bytes\":128,\
+                           \"head\":\"000000000000000040e2010000000000000000000000000000000000000000000000\
+                           000000000000000000000000000000000000000000000000000000000000\"}";
     const NO_GAME_BODY: &str =
         "{\"ok\":true,\"state\":\"no_game\",\"mono_us\":7000000,\"errno\":2}";
 
@@ -268,13 +300,28 @@ mod tests {
                 flips: 123_456,
                 mono_us: 5_000_000,
                 bytes: 128,
-                errno: 0
+                errno: 0,
+                head: HEAD.into(),
             }
         );
+        // an older helper's reply, without the head, still parses
+        let old = "{\"ok\":true,\"state\":\"ok\",\"flips\":1,\"mono_us\":2,\"bytes\":128}";
+        assert_eq!(parse_flip_read(old.as_bytes()).unwrap().head, "");
         let r = parse_flip_read(NO_GAME_BODY.as_bytes()).unwrap();
         assert_eq!((r.state.as_str(), r.errno, r.flips), ("no_game", 2, 0));
         assert!(parse_flip_read(b"{}").is_err());
         assert!(parse_flip_read(b"nope").is_err());
+    }
+
+    #[test]
+    fn moving_words_name_the_offsets_that_changed() {
+        let a = "00000000000000000a000000000000000100000000000000";
+        let b = "00000000000000000a000000000000004000000000000000";
+        assert_eq!(moving_words(a, b), vec![16]);
+        assert_eq!(moving_words(a, a), Vec::<usize>::new());
+        assert_eq!(moving_words("", b), Vec::<usize>::new());
+        assert_eq!(moving_words("zz", "00"), Vec::<usize>::new());
+        assert_eq!(moving_words("abc", "abc"), Vec::<usize>::new());
     }
 
     #[test]
