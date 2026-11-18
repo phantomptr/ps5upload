@@ -5,7 +5,16 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import nodeTest from "node:test";
+
+// The fake `gh` is a bash script on PATH. On Windows, node (gate-failures.mjs) starts the real
+// gh.exe instead of it, so these tests would ask GitHub. The script is run from macOS or Linux
+// (a release is cut there); on Windows the tests are skipped, like the other repo script tests
+// that need Unix tools.
+const test =
+  process.platform === "win32"
+    ? (name, fn) => nodeTest(name, { skip: "needs a POSIX shell's fake gh" }, fn)
+    : nodeTest;
 
 const script = path.join(import.meta.dirname, "merge-when-green.sh");
 const SHA = "a".repeat(40);
