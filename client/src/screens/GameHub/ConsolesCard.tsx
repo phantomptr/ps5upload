@@ -5,7 +5,7 @@ import { Download, FolderOpen, Monitor, MonitorPlay, Play, RefreshCw, Search, Sq
 import type { CollectionLocation } from "../../api/collection";
 import type { ConsoleEntry, GameView } from "../../api/games";
 import { Badge, Button, Card, Spinner } from "../../components";
-import { bestSendable, sendKind } from "../../lib/collectionSend";
+import { bestSendable, packageUsable, sendKind } from "../../lib/collectionSend";
 import {
   ageLabel,
   gamePath,
@@ -45,6 +45,7 @@ export function ConsolesCard({
   onStop,
   stopping = false,
   sendHost,
+  sendPick = null,
   setSendHost,
   playBlocked,
 }: {
@@ -65,6 +66,8 @@ export function ConsolesCard({
   stopping?: boolean;
   /** The console whose send panel is open, or null. */
   sendHost: string | null;
+  /** The copy a copy row's Send picked (a package is offered only so); null: the best one. */
+  sendPick?: string | null;
   setSendHost: (host: string | null) => void;
   /** Why the connected console cannot start it now (a disk image while ShadowMount+ is not
    *  running): Play is held, and says so. */
@@ -114,6 +117,7 @@ export function ConsolesCard({
               onStop={onStop}
               stopping={stopping}
               sending={sendHost === h}
+              sendPick={sendPick}
               setSending={(on) => setSendHost(on ? h : null)}
               playBlocked={h === connected ? playBlocked : undefined}
             />
@@ -140,6 +144,7 @@ function ConsoleRow({
   onStop,
   stopping,
   sending,
+  sendPick,
   setSending,
   playBlocked,
 }: {
@@ -158,6 +163,7 @@ function ConsoleRow({
   onStop?: () => void;
   stopping: boolean;
   sending: boolean;
+  sendPick?: string | null;
   setSending: (on: boolean) => void;
   playBlocked?: string;
 }) {
@@ -173,11 +179,15 @@ function ConsoleRow({
 
   const actions = rowActions(entry, copies, connected);
   const sendables = copies.filter((l) => sendKind(l) && l.pkg?.complete !== false && !l.pkg?.error);
+  // A package picked on its row goes too (as a plain file), listed first.
+  const picked = sendPick ? copies.find((l) => l.absolute_path === sendPick) : undefined;
+  const sendChoices =
+    picked && packageUsable(picked) ? [picked, ...sendables] : sendables;
   const offerPaths = [
     ...(entry?.base ? [entry.base.path] : []),
     ...(entry?.update ? [entry.update.path] : []),
     ...(entry?.dlc_missing ?? []).map((d) => d.path),
-    ...sendables.map((l) => l.absolute_path),
+    ...sendChoices.map((l) => l.absolute_path),
   ];
   const activities = useCopyActivity(offerPaths, host);
   const activity =
@@ -337,7 +347,8 @@ function ConsoleRow({
     }
   };
 
-  const best = bestSendable(copies);
+  const best =
+    (picked && sendChoices.includes(picked) ? picked : null) ?? bestSendable(copies);
   // Where the connected console runs the game from, to open in Files: a folder, or the folder
   // holding its image. A ShadowMount+ mount names only the image, not where it is.
   const from = entry?.registered_from ?? "";
@@ -409,7 +420,13 @@ function ConsoleRow({
         </p>
       )}
       {sending && best && (
-        <SendToPs5 key={host} game={{ title }} host={host} copies={sendables} initial={best} />
+        <SendToPs5
+          key={`${host}|${best.absolute_path}`}
+          game={{ title }}
+          host={host}
+          copies={sendChoices}
+          initial={best}
+        />
       )}
       {activity && !sending && (
         <div className="mt-2">

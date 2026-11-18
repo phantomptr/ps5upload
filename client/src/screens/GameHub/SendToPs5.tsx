@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { Layers, Upload } from "lucide-react";
 
@@ -14,10 +14,16 @@ import { consoleAddr } from "../../lib/addr";
 import {
   DEFAULT_SEND_SUBPATH,
   collectionSendItem,
+  packageSendItems,
   sendDestination,
   sendKind,
   type SendPlan,
 } from "../../lib/collectionSend";
+import { krakenRuns, useMounterFor } from "../../lib/mounter";
+import { krakenCopyDestination } from "../../lib/pkgUploadChoice";
+import { pushNotification } from "../../state/notifications";
+import { afterKrakenSend } from "../../state/pkgMount";
+import { useSmpState } from "./SmpNeeded";
 import { formatCollectionBytes, locationKind } from "../../lib/collectionView";
 import { isRemotePath } from "../../lib/remotePath";
 import { useFpkgConversion } from "../../state/fpkgConversion";
@@ -34,7 +40,9 @@ import { spacePlanLink } from "../../lib/spacePlan";
 type How = "as-is" | "image";
 
 /** Send a game folder, image or archive from the collection to the PS5 in one click: it goes
- *  straight into the Upload queue and starts (only it: other queued uploads keep waiting). */
+ *  straight into the Upload queue and starts (only it: other queued uploads keep waiting). A
+ *  package goes as a plain file (nothing installs it), by default into the folder Kraken Mount
+ *  scans when it runs on the console. */
 export function SendToPs5({
   game,
   host,
@@ -43,7 +51,7 @@ export function SendToPs5({
 }: {
   game: Pick<CollectionGame, "title">;
   host: string;
-  /** The copies that can be sent (folders, images, archives). */
+  /** The copies that can be sent (folders, images, archives, and a package picked to send). */
   copies: CollectionLocation[];
   initial: CollectionLocation;
 }) {
@@ -66,6 +74,14 @@ export function SendToPs5({
   const pipelineBusy = useFpkgConversion((s) => s.pipeline.phase === "running");
   const [activity] = useCopyActivity([loc.absolute_path], host);
   const connectedHost = useConnectionStore((s) => s.host ?? "");
+  const isPkg = loc.type === "pkg";
+  // Which mounter runs, read once a package is picked (the copy rows may have read it already).
+  useSmpState(isPkg ? host : "");
+  const mounter = useMounterFor(host);
+  const kraken = krakenRuns(mounter) ? (mounter?.kraken ?? null) : null;
+  // A drive or folder the user set here is never replaced by Kraken Mount's folder.
+  const driveTouched = useRef(false);
+  const folderTouched = useRef(false);
 
   useEffect(() => {
     let live = true;
@@ -78,6 +94,20 @@ export function SendToPs5({
   }, [host]);
 
   const volume = imageDrive(host, picked, volumes).volume;
+  // A package goes where Kraken Mount finds it: its folder on the chosen drive, else its first
+  // folder on a drive this console has.
+  const krakenDest =
+    isPkg && kraken
+      ? krakenCopyDestination(volume, kraken, (volumes ?? []).map((v) => v.path))
+      : null;
+  useEffect(() => {
+    if (!krakenDest || folderTouched.current) return;
+    if (krakenDest.volume !== volume) {
+      if (driveTouched.current) return;
+      setVolume(krakenDest.volume);
+    }
+    setSubpath(krakenDest.subpath);
+  }, [krakenDest?.volume, krakenDest?.subpath]); // eslint-disable-line react-hooks/exhaustive-deps
   const vol = volumes?.find((v) => v.path === volume);
   // Only a certain shortfall blocks; the PS5's write-time reserve only warns.
   const needed = how === "image" ? Math.round(loc.size_bytes * 0.8) : loc.size_bytes;
@@ -97,6 +127,11 @@ export function SendToPs5({
   });
   const dest = useMemo(() => sendDestination(loc, plan), [loc, volume, subpath]); // eslint-disable-line react-hooks/exhaustive-deps
   const busy = !!activity && activity.phase !== "done" && activity.phase !== "failed";
+  // The package lands in a folder Kraken Mount scans (it scans one level deep).
+  const inKrakenFolder =
+    !!krakenDest &&
+    krakenDest.volume === volume &&
+    krakenDest.subpath === subpath.replace(/^\/+|\/+$/g, "");
 
   const send = () => {
     if (how === "image") {
@@ -111,6 +146,17 @@ export function SendToPs5({
       return;
     }
     const q = useUploadQueueStore.getState();
+    if (isPkg) {
+      // As Upload's "Copy as a file": plain files, no install, no staging, nothing deleted.
+      const ids = packageSendItems(game, loc, plan).map((it) => q.add(it)).filter(Boolean);
+      q.startAdded(host, ids);
+      // Once it is there: Kraken Mount is asked to scan now, and the user is told where it went.
+      if (inKrakenFolder) {
+        const folder = dest.replace(/\/[^/]*$/, "");
+        afterKrakenSend(ids, host, folder, (message) => pushNotification("info", message));
+      }
+      return;
+    }
     const id = q.add(collectionSendItem(game, loc, plan));
     q.startAdded(host, [id]);
   };
@@ -170,7 +216,10 @@ export function SendToPs5({
           block={false}
           label={tr("collection.send_drive", undefined, "Drive")}
           value={volume}
-          onChange={(e) => setVolume(e.target.value)}
+          onChange={(e) => {
+            driveTouched.current = true;
+            setVolume(e.target.value);
+          }}
           options={(volumes && volumes.length > 0
             ? volumes
             : [{ path: "/data", free_bytes: 0 } as Volume]
@@ -185,7 +234,10 @@ export function SendToPs5({
           {tr("collection.send_folder", undefined, "Folder")}
           <input
             value={subpath}
-            onChange={(e) => setSubpath(e.target.value)}
+            onChange={(e) => {
+              folderTouched.current = true;
+              setSubpath(e.target.value);
+            }}
             className="w-36 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 py-1.5 font-mono text-sm text-[var(--color-text)]"
           />
         </label>
@@ -201,6 +253,21 @@ export function SendToPs5({
       <p className="mt-2 break-all font-mono text-[0.6875rem] text-[var(--color-muted)]">
         {tr("collection.send_to", { dest }, "To {dest}")}
       </p>
+      {isPkg && (
+        <p className="mt-1 text-xs text-[var(--color-muted)]">
+          {inKrakenFolder
+            ? tr(
+                "collection.send_pkg_kraken_hint",
+                undefined,
+                "Goes as a plain file, nothing is installed. Kraken Mount mounts it from this folder.",
+              )
+            : tr(
+                "collection.send_pkg_file_hint",
+                undefined,
+                "Goes as a plain file, nothing is installed.",
+              )}
+        </p>
+      )}
       {fits === "no" && (
         <p className="mt-1 text-xs text-[var(--color-bad)]">
           {tr("collection.send_no_room", undefined, "Not enough room on that drive.")}{" "}
