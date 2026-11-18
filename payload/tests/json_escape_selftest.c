@@ -31,6 +31,18 @@ int main(void) {
                   "FreeBSD 11.0 \\\"releases/13.60\\\" C:\\\\build"));
     CHECK(escaped("line\nbreak\ttab", "line?break?tab"));
     CHECK(escaped("caf\xC3\xA9", "caf\xC3\xA9")); /* UTF-8 passes as it is */
+    /* What is not UTF-8 never reaches the engine (serde drops the whole reply for one such byte):
+     * a Latin-1 or Shift-JIS file name, a name cut inside a character, overlong and surrogate forms. */
+    CHECK(escaped("caf\xE9.sav", "caf?.sav"));
+    CHECK(escaped("\x83\x51\x81\x5B\x83\x80", "?Q?[??"));
+    CHECK(escaped("ab\xE3\x82", "ab??"));
+    CHECK(escaped("\xC0\xAF", "??") && escaped("\xED\xA0\x80", "???") && escaped("\xF5\x80\x80\x80", "????"));
+    CHECK(escaped("\xE3\x82\xB2\xE3\x83\xBC\xE3\x83\xA0 \xF0\x9F\x8E\xAE", "\xE3\x82\xB2\xE3\x83\xBC\xE3\x83\xA0 \xF0\x9F\x8E\xAE"));
+    {
+        /* Cut by the buffer in the middle of a character: the bytes of it that fitted read '?'. */
+        char cut[6];
+        CHECK(json_escape_into("ab\xE3\x82\xB2", cut, sizeof cut) == 4 && strcmp(cut, "ab??") == 0);
+    }
 
     /* Cut at the buffer, never half an escape, always terminated. */
     CHECK(json_escape_into("abcdef", tiny, sizeof tiny) == 2 && strcmp(tiny, "ab") == 0);

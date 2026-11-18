@@ -62,6 +62,21 @@ int main(void) {
     CHECK(!image_mount_from_is_unit("/dev/lvd") && !image_mount_from_is_unit("/dev/md"));
     CHECK(!image_mount_from_is_unit("/dev/lvdx") && !image_mount_from_is_unit("/dev/mdctl"));
 
+    /* A tracker file is believed outside /mnt/ps5upload/ only for an image unit: "data.src" is
+     * the tracker of /mnt/ps5upload/data AND of /data, and must never make /data ours. */
+    CHECK(image_mount_tracker_trusted("/mnt/ps5upload/data", "/dev/lvd3"));
+    CHECK(image_mount_tracker_trusted("/mnt/ps5upload/data", "anything"));
+    CHECK(image_mount_tracker_trusted("/data/homebrew/PPSA17599", "/dev/lvd3"));
+    CHECK(image_mount_tracker_trusted("/mnt/ext1/games/foo", "/dev/md0"));
+    CHECK(!image_mount_tracker_trusted("/data", "/dev/ssd0.user"));
+    CHECK(!image_mount_tracker_trusted("/user", "/dev/ssd0.user"));
+    CHECK(!image_mount_tracker_trusted("/mnt/ext1", "/dev/nvme1"));
+    CHECK(!image_mount_tracker_trusted("/mnt/usb0", "/dev/da1p1"));
+    CHECK(!image_mount_tracker_trusted("/data", "/data"));
+    CHECK(!image_mount_tracker_trusted("/mnt/ps5upload/", "/dev/ssd0.user"));
+    CHECK(!image_mount_tracker_trusted("/mnt/ps5upload", "/dev/ssd0.user"));
+    CHECK(!image_mount_tracker_trusted("/data", NULL) && !image_mount_tracker_trusted(NULL, "/dev/lvd1"));
+
     CHECK(image_mount_kind("exfatfs", "/dev/lvd2") == IMAGE_MOUNT_YES);
     CHECK(image_mount_kind("ufs", "/dev/md3") == IMAGE_MOUNT_YES);
     CHECK(image_mount_kind("nullfs", "/mnt/shadowmnt/G_ca51a0d7") == IMAGE_MOUNT_YES);

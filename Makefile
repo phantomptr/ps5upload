@@ -1301,6 +1301,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/cheats_json_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-cheats-json-selftest
 	@echo "✓ a cheat's name is never taken for the game's; escapes decode; slips in a file do not lose its fields"
+	@echo "Running cheat reply self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-cheats-reply-selftest \
+		$(PAYLOAD_DIR)/tests/cheats_reply_selftest.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-cheats-reply-selftest
+	@echo "✓ an XML attribute is never read past its tag; a cheat list too long for its reply ends at a whole cheat"
 	@echo "Running cheat apply-plan self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-cheats-plan-selftest \

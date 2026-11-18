@@ -47,6 +47,23 @@ static inline int archive_extract_request_stale(time_t mtime, time_t now) {
     return now < mtime || now - mtime >= EXTRACT_REQUEST_STALE_S;
 }
 
+/* job.rec keeps the destination on a line of its own ("<extractor pid> <helper pid> <created>\n
+ * <dest>\n") for the sweep after a helper died mid-extraction, which removes the folder the
+ * extraction made. A destination with a line break in it read back as its first line only: for
+ * "/data/homebrew\nx" the sweep removed /data/homebrew. So a destination with any control byte
+ * is refused before anything starts (the converter's record has the same rule). */
+static inline int archive_extract_dest_ok(const char *dest) {
+    const unsigned char *p = (const unsigned char *)dest;
+    if (!p || p[0] != '/') return 0;
+    for (; *p; p++)
+        if (*p < 0x20 || *p == 0x7f) return 0;
+    return 1;
+}
+
+/* A process id read from a file (status.json, job.rec) that may be signalled: a real one. The
+ * cast to pid_t of a larger number wraps: 4294967295 is -1, and kill(-1) is every process. */
+static inline int archive_extract_pid_ok(unsigned long long pid) { return pid > 1 && pid <= 0x7FFFFFFFull; }
+
 /* Deletes a request left behind (archive_extract_request_stale). Run at the start, by archive_extract_sweep,
  * and again a minute later for one too young to judge then. */
 void archive_extract_sweep_request(void);

@@ -975,10 +975,22 @@ int content_db_hidden_json(char *buf, size_t cap, size_t *written) {
     /* One query over every user's table; UNION removes the duplicates. */
     char sql[CDB_MAX_ICON_TABLES * 140];
     size_t o = 0;
-    for (int i = 0; i < nt; i++)
-        o += (size_t)snprintf(sql + o, sizeof sql - o,
-                              "%sSELECT titleId FROM \"%s\" WHERE visible = 0",
-                              i ? " UNION " : "", tables[i]);
+    for (int i = 0; i < nt; i++) {
+        /* Checked: a table name comes from app.db, and an unchecked `o` past the buffer made the
+         * next size wrap (16 names of 95 bytes wrote past `sql`). A table that does not fit is
+         * left out. */
+        int k = snprintf(sql + o, sizeof sql - o, "%sSELECT titleId FROM \"%s\" WHERE visible = 0",
+                         o ? " UNION " : "", tables[i]);
+        if (k < 0 || (size_t)k + 16 >= sizeof sql - o) {
+            sql[o] = '\0';
+            break;
+        }
+        o += (size_t)k;
+    }
+    if (o == 0) {
+        sqlite3_close(db);
+        return cdb_emit_err(buf, cap, written, "app.db has an unexpected schema");
+    }
     snprintf(sql + o, sizeof sql - o, " ORDER BY 1");
     sqlite3_stmt *st = NULL;
     if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK) {
