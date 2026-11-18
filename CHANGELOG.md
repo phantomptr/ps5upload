@@ -7,6 +7,7 @@ What's new in ps5upload, written for humans.
 ## Unreleased
 
 **Fixes**
+- **Android: the app squeezed into a corner (#856).** With three or more PS5s saved, the console strip at the top scrolls sideways, and hidden labels for screen readers in it sat past the right edge of the screen. Android then laid the whole app out wider than the phone, which pushed the tab bar off the screen and, on some phones, shrank the app into the top-left corner. Those labels now stay inside the strip, and nothing on any screen can widen the page that way again.
 - **Docker updates no longer pile up old images.** `docker compose pull` kept every replaced image (about 170 MB a release) until someone deleted it by hand. The update command the web UI shows, and the one in the FAQ, now ends by removing the ps5upload images no container uses; other images are left alone. Thanks to kh-mitya (#857).
 
 ## 12.6.4
