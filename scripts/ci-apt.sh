@@ -12,8 +12,10 @@
 # So the network half runs first and on a clock: `apt-get update` and `apt-get install
 # --download-only` together get CI_APT_ATTEMPT_TIMEOUT seconds (240), three times at most. Killing
 # a download is safe (nothing is unpacked yet; apt resumes the partial files). After a failed try
-# the Azure mirror is taken out of the runner's mirror list, so the next one reads
-# archive.ubuntu.com. Only then does the real install run, from the downloaded files
+# the runner's mirror list is pointed at the next mirror in FALLBACK_MIRRORS: whichever mirror the
+# runner image picked (Azure's, or an AWS one like us-east-2.ec2.archive.ubuntu.com, which trickled
+# 13 MB in 4 minutes on 2026-11-18 and failed all three tries of a release build), the next try
+# reads another one. Only then does the real install run, from the downloaded files
 # (`--no-download`) and with no clock: dpkg must never be killed halfway.
 #
 # A step that calls this needs a timeout above 3 x 250 s plus the install itself: 20 minutes.
@@ -51,16 +53,23 @@ case "$ATTEMPT_TIMEOUT" in
   ""|*[!0-9]*) echo "ci-apt: CI_APT_ATTEMPT_TIMEOUT must be a number of seconds" >&2; exit 2 ;;
 esac
 
-# Takes the Azure mirror out of the runner's list, unless it is the only one there.
-drop_azure_mirror() {
+# Mirrors to move to after a failed try, in order. Plain http like the runner's own list (apt
+# checks the signed Release files, not the transport).
+FALLBACK_MIRRORS=(
+  "http://archive.ubuntu.com/ubuntu/"
+  "http://mirrors.edge.kernel.org/ubuntu/"
+)
+
+# Points the runner's mirror list at the mirror for try number $1 (2, 3, ...). apt reads the list
+# top-down and only moves on when a mirror errors, not when it is slow, so the list becomes that
+# one mirror. A runner without the list (sources.list instead of mirror+file) is left alone.
+use_next_mirror() {
+  local next_try="$1"
   [ -f "$MIRRORS_FILE" ] || return 0
-  grep -q 'azure\.archive\.ubuntu\.com' "$MIRRORS_FILE" || return 0
-  if ! grep -v 'azure\.archive\.ubuntu\.com' "$MIRRORS_FILE" | grep -q '[^[:space:]]'; then
-    echo "ci-apt: $MIRRORS_FILE lists no other mirror; leaving it alone" >&2
-    return 0
-  fi
-  echo "ci-apt: taking azure.archive.ubuntu.com out of $MIRRORS_FILE" >&2
-  as_root sed -i '/azure\.archive\.ubuntu\.com/d' "$MIRRORS_FILE" || true
+  local idx=$(( (next_try - 2) % ${#FALLBACK_MIRRORS[@]} ))
+  local mirror="${FALLBACK_MIRRORS[$idx]}"
+  echo "ci-apt: next try reads $mirror (was: $(head -n1 "$MIRRORS_FILE" | cut -f1))" >&2
+  printf '%s\tpriority:1\n' "$mirror" | as_root tee "$MIRRORS_FILE" >/dev/null || true
 }
 
 self="${BASH_SOURCE[0]}"
@@ -77,8 +86,8 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
   else
     echo "ci-apt: attempt $attempt/$ATTEMPTS failed (exit $rc)" >&2
   fi
-  drop_azure_mirror
   if [ "$attempt" -lt "$ATTEMPTS" ]; then
+    use_next_mirror $((attempt + 1))
     sleep $((attempt * 10))
   fi
 done

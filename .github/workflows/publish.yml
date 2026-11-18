@@ -903,7 +903,7 @@ jobs:
     name: build-ios
     # Starts with build-payload and waits for its ELFs (see build-client).
     runs-on: xcode-27
-    timeout-minutes: 45
+    timeout-minutes: 55
     # Same reasoning as build-android: continue-on-error covers a failed job,
     # and the long steps carry their own timeouts so a hang fails a step
     # instead of cancelling the release.
@@ -965,10 +965,25 @@ jobs:
       - name: PS5Upload icons into the Xcode project
         run: bash scripts/release/ios-postinit-patch.sh
 
+      # One retry when the runner's simulator service crashes under ibtool/actool (storyboard and
+      # asset catalog compiles need it even for a device build): "Command CompileStoryboard failed"
+      # with a CoreSimulator backtrace failed v12.6.6's first try. The service is restarted first;
+      # any other failure is not retried.
       - name: Build unsigned IPA (arm64)
         working-directory: client
-        timeout-minutes: 30
-        run: npx tauri ios build --ci --target aarch64 --no-sign
+        timeout-minutes: 40
+        run: |
+          set -o pipefail
+          if npx tauri ios build --ci --target aarch64 --no-sign 2>&1 | tee "$RUNNER_TEMP/ios-build.log"; then
+            exit 0
+          fi
+          if ! grep -qE 'CoreSimulator|Command Compile(Storyboard|AssetCatalog[A-Za-z]*) failed' "$RUNNER_TEMP/ios-build.log"; then
+            exit 1
+          fi
+          echo "::warning::the simulator service crashed during the iOS build; restarting it and trying once more"
+          killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
+          xcrun simctl list devices >/dev/null 2>&1 || true
+          npx tauri ios build --ci --target aarch64 --no-sign
 
       - name: Check the IPA
         run: TAG_VERSION="$(tr -d '[:space:]' < VERSION)" python3 scripts/release/verify-ios-ipa.py PS5Upload-ios-unsigned.ipa
