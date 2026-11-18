@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## 12.6.7
+## Unreleased
 
 The same as 12.6.6, which could not be published.
 
