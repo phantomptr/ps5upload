@@ -36,6 +36,7 @@ import { DEFAULT_BUTTON_MAP, readButtonMap, remapPad, type ButtonMap } from "../
 import type { CodecPref } from "../lib/rpHdr";
 import { nextKeyboard, type RpKeyboardState } from "../lib/rpKeyboard";
 import { pushNotification } from "./notifications";
+import { log } from "./logs";
 import { trStatic } from "../lib/trStatic";
 import { currentControls, rpControls } from "./gameControls";
 import { useKbmStore } from "./kbm";
@@ -164,8 +165,24 @@ export function audioBufferFor(p: Pick<RpPrefs, "lowLatency" | "audioBufferMs">)
 
 const PREFS_KEY = "ps5upload.rp_prefs.v1";
 
-/** The bitrates Settings › Picture offers (kbit/s; 0 = Auto). */
-export const RP_BITRATES: readonly number[] = [0, 15000, 12000, 10000, 8000, 6000, 4500, 3000];
+/** The bitrates Settings › Picture offers (kbit/s; 0 = Auto), highest first. The engine takes
+ *  2000..=50000 (rp_stream_api.rs MAX_BITRATE_KBPS). */
+export const RP_BITRATES: readonly number[] = [0, 50000, 40000, 30000, 20000, 15000, 12000, 10000, 8000, 6000, 4500, 3000];
+
+/** The most Auto asks for (1080p); above it a session is one the PS5 may never have been asked
+ *  for by its own app. */
+export const AUTO_MAX_KBPS = 15000;
+
+/** A session asked above Auto ended before its first picture with an error that can be the PS5
+ *  not taking that bitrate (the video side would not start, or the console just ended it): worth
+ *  one more try at Auto. Errors that say what else went wrong (busy, asleep, keys, …) are not. */
+export function refusedAtBitrate(code: string, askedKbps: number, played: boolean): boolean {
+  return (
+    !played &&
+    askedKbps > AUTO_MAX_KBPS &&
+    ["video_refused", "console_ended", "lost", "other"].includes(code)
+  );
+}
 
 export function loadRpPrefs(): RpPrefs {
   try {
@@ -388,6 +405,9 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       : undefined;
     // A page joining a running session takes what the session has (the engine says).
     const pictureHere = opts?.attach ? undefined : (quality?.pictureHere ?? prefs.pictureHere);
+    // A page joining a running session asks for nothing: the session has its bitrate.
+    const askedKbps = opts?.attach ? 0 : (quality?.bitrateKbps ?? prefs.bitrateKbps) || 0;
+    let played = false;
     const stream: RemotePlayStream = new RemotePlayStream({
       pictureHere,
       onPictureHere: (on) => {
@@ -453,6 +473,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       rumble: () => get().prefs.rumble,
       onPhase: (p) => {
         if (get().stream !== stream) return;
+        if (p === "playing") played = true;
         set({ phase: p });
         if (p === "ended") {
           dualSense?.stop();
@@ -461,7 +482,28 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
         }
       },
       onStats: (st) => get().stream === stream && set({ stats: st }),
-      onError: (e) => get().stream === stream && set({ error: e }),
+      onError: (e) => {
+        if (get().stream !== stream) return;
+        if (refusedAtBitrate(e.code, askedKbps, played)) {
+          // Once: the next try is at Auto, which never comes back here.
+          played = true;
+          if (get().prefs.bitrateKbps === askedKbps) get().setPrefs({ bitrateKbps: 0 });
+          pushNotification(
+            "warning",
+            trStatic(
+              "rp_bitrate_fell_back",
+              "The PS5 did not start the stream at {mbps} Mbps, so Bitrate is back to Auto and the stream starts again.",
+              { mbps: String(askedKbps / 1000) },
+            ),
+          );
+          log.warn("remote-play", `no picture at ${askedKbps} kbit/s (${e.code}: ${e.detail}); starting again at Auto`);
+          void import("./rpQuality")
+            .then(({ useRpQualityStore }) => useRpQualityStore.getState().startAgain(t, { ...(quality ?? {}), bitrateKbps: 0 }))
+            .catch(() => {});
+          return;
+        }
+        set({ error: e });
+      },
       onLight: (rgb) => get().stream === stream && set({ light: rgb }),
       onHidden: () => {
         if (get().stream !== stream) return;

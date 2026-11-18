@@ -9,7 +9,7 @@ import { androidPipAvailable } from "../../lib/androidPip";
 import { appSavesToPhotos } from "../../lib/rpCapture";
 import { gameModeKind } from "../../lib/gameMode";
 import { keysFor, mseAvailable, rebind, PAD_ACTIONS, type KeyAction } from "../../lib/remotePlayStream";
-import { RP_BITRATES, useRemotePlayStore, type RpPrefs, padsCannotVibrate } from "../../state/remotePlay";
+import { AUTO_MAX_KBPS, RP_BITRATES, useRemotePlayStore, type RpPrefs, padsCannotVibrate } from "../../state/remotePlay";
 import { askMotion, motionAvailable } from "../../lib/motion";
 import { dualSenseBlocked, dualSenseCapable } from "../../lib/dualSense";
 import { connectWebHidTouchpad, webHidTouchpadAvailable, webHidTouchpadConnected } from "../../lib/padTouchpad";
@@ -259,6 +259,36 @@ function Section({ title, children }: { title?: string; children: React.ReactNod
   );
 }
 
+/** "~14.6 Mbps" or "~31 Mbps": what the PS5 sends, as rough as it is. */
+function mbpsLabel(mbps: number): string {
+  return mbps >= 10 ? String(Math.round(mbps)) : mbps.toFixed(1);
+}
+
+/** Under Bitrate: what a high one needs, and while streaming what the PS5 actually sends (its
+ *  encoder's aim from its stream report), so a choice it does not honour shows. */
+function BitrateNote({ chosenKbps }: { chosenKbps: number }) {
+  const tr = useTr();
+  const ps5Mbps = useRemotePlayStore((s) => (s.stream ? (s.stats?.ps5Mbps ?? null) : null));
+  return (
+    <>
+      {chosenKbps > AUTO_MAX_KBPS && (
+        <Hint>
+          {tr(
+            "rp_bitrate_high_hint",
+            undefined,
+            "Higher needs a fast, wired network. The PS5 may send less than you pick.",
+          )}
+        </Hint>
+      )}
+      {ps5Mbps != null && ps5Mbps > 0 && (
+        <p className="text-xs text-[var(--color-muted)]" data-testid="rp-bitrate-now">
+          {tr("rp_bitrate_now", { mbps: mbpsLabel(ps5Mbps) }, "The PS5 is sending ~{mbps} Mbps.")}
+        </p>
+      )}
+    </>
+  );
+}
+
 function Hint({ children }: { children: React.ReactNode }) {
   return <p className="text-xs text-[var(--color-muted)]">{children}</p>;
 }
@@ -387,6 +417,7 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
                 : tr("rp_bitrate_auto", undefined, "Auto (15 Mbps at 1080p)"),
             }))}
           />
+          <BitrateNote chosenKbps={prefs.bitrateKbps} />
           <Hint>
             {tr(
               "rp_decoding_hint",
