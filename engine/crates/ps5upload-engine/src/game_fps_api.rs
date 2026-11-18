@@ -97,6 +97,8 @@ struct Session {
     moving: BTreeSet<usize>,
     reads: u64,
     read_state: Option<String>,
+    /// The last count came from the block's first word (firmware 4.x, #865).
+    count_at_start: bool,
 }
 
 /// One-second samples in a row with a count that never moved before this is "no_count".
@@ -123,6 +125,7 @@ impl Session {
             moving: BTreeSet::new(),
             reads: 0,
             read_state: None,
+            count_at_start: false,
         }
     }
 
@@ -151,6 +154,9 @@ impl Session {
     fn note_read(&mut self, r: &FlipRead) {
         self.reads = self.reads.saturating_add(1);
         self.read_state = Some(r.state.clone());
+        if r.is_ok() {
+            self.count_at_start = r.count_at_start;
+        }
         self.errno = (!r.is_ok() && r.errno != 0).then_some(r.errno);
         if r.is_ok() && !r.head.is_empty() {
             if let Some(prev) = &self.head {
@@ -168,6 +174,9 @@ impl Session {
         let mut out = format!("reads {}", self.reads);
         if let Some((flips, bytes)) = self.raw {
             out.push_str(&format!(", count {flips}, {bytes} bytes written"));
+            if self.count_at_start {
+                out.push_str(", count from the first word");
+            }
         }
         if let Some(e) = self.errno {
             out.push_str(&format!(", errno {e}"));
@@ -191,6 +200,7 @@ impl Session {
             "read_state": self.read_state,
             "reads": self.reads,
             "moved": self.moved,
+            "count_at_start": self.count_at_start,
             "still": self.still,
             "raw": self.raw.map(|(flips, bytes)| json!({ "flips": flips, "bytes": bytes })),
             "errno": self.errno,

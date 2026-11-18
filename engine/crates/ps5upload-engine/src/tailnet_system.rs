@@ -190,13 +190,18 @@ fn run_cli() -> Option<String> {
         if (exe.starts_with('/') || exe.contains('\\')) && !std::path::Path::new(exe).exists() {
             continue;
         }
-        let Ok(mut child) = std::process::Command::new(exe)
-            .args(["status", "--json"])
+        let mut cmd = std::process::Command::new(exe);
+        cmd.args(["status", "--json"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        else {
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            // No console window flashing up every time the status is polled.
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        let Ok(mut child) = cmd.spawn() else {
             continue;
         };
         let t0 = Instant::now();

@@ -4120,7 +4120,9 @@ export default function FileSystemScreen() {
                   </span>
                 </div>
               ))}
-              {uploadQueue.paused && !uploadStopped && (
+              {/* Only when it would start something: a pick paused by itself has its own Resume,
+                  and a second "Resume" under it did nothing (#794). */}
+              {uploadQueue.paused && !uploadStopped && uploadQueue.items.some((i) => !i.paused) && (
                 <Button size="sm" onClick={() => resumeFsUploadQueue(host, fsUploadDeps)}>{tr("queue_resume", undefined, "Resume")}</Button>
               )}
             </div>
@@ -4861,27 +4863,33 @@ function BulkOpBanner({
 
   return (
     <div className="mb-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] p-3 text-xs">
-      <div className="mb-2 flex items-center gap-2">
+      {/* Wraps: on a phone the figures go below the verb and the button, which used to squeeze the
+          verb to a few letters a line ("Mo/vin/g"); each figure stays whole, so a speed is never
+          split from its unit (#794). */}
+      <div className="mb-2 flex flex-wrap items-center gap-2" data-testid="fs-bulk-head">
         <Spinner size={14} tone="accent" />
-        <span className="font-semibold">{verb}</span>
-        <span className="text-[var(--color-muted)]">
-          {tr(
-            "fs_bulk_progress",
-            { done: done + 1, total },
-            "{done} of {total}",
-          )}
-          {" · "}
-          {formatDuration(elapsedSec)}
-          {!finishing && itemSpeed > 0 && ` · ${formatBytes(itemSpeed)}/s`}
-          {!finishing &&
-            itemEta !== null &&
-            ` · ${tr(
-              "fs_progress_eta",
-              { time: formatEtaSeconds(itemEta) },
-              `about ${formatEtaSeconds(itemEta)} left`,
-            )}`}
-          {finishing &&
-            ` · ${tr("upload_phase_settling", undefined, "Finishing on the console…")}`}
+        <span className="shrink-0 whitespace-nowrap font-semibold" data-testid="fs-bulk-verb">{verb}</span>
+        <span className="min-w-0 text-[var(--color-muted)]" data-testid="fs-bulk-figures">
+          {[
+            tr("fs_bulk_progress", { done: done + 1, total }, "{done} of {total}"),
+            formatDuration(elapsedSec),
+            !finishing && itemSpeed > 0 ? `${formatBytes(itemSpeed)}/s` : null,
+            !finishing && itemEta !== null
+              ? tr(
+                  "fs_progress_eta",
+                  { time: formatEtaSeconds(itemEta) },
+                  `about ${formatEtaSeconds(itemEta)} left`,
+                )
+              : null,
+            finishing ? tr("upload_phase_settling", undefined, "Finishing on the console…") : null,
+          ]
+            .filter((f): f is string => !!f)
+            .map((f, i) => (
+              <span key={i} className="inline-block whitespace-nowrap" data-testid="fs-bulk-figure">
+                {i > 0 && <span aria-hidden="true">{"\u00a0· "}</span>}
+                {f}
+              </span>
+            ))}
         </span>
         {/* Cancel drives a real cancel: the loop asks the engine to end the console's
             copy job (job.cancel), which stops within a moment however big the file is, and
@@ -4892,7 +4900,7 @@ function BulkOpBanner({
           onClick={() => useFsBulkOpStore.getState().requestCancel(host)}
           disabled={cancelRequested}
           data-testid="fs-bulk-cancel"
-          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ms-auto px-3 py-1 text-xs disabled:opacity-50"
+          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ms-auto shrink-0 whitespace-nowrap px-3 py-1 text-xs disabled:opacity-50"
           title={
             op === "delete"
               ? tr(

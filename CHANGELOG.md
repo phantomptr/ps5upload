@@ -6,6 +6,15 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Three fixes from reports.
+
+**Fixes**
+- **Game frame rate on firmware 4.x (#865).** It said the console gave no frame count. A bug report from a 4.03 console showed that this firmware keeps the count in a different place, and the app now reads it there. Checked against that report's numbers (60 in a 60 FPS game), not yet on a 4.x console of our own: if it still shows nothing, please send another report.
+- **Phone: the "Moving" line in Files is readable (#794).** While a move or copy ran, "Moving" was squeezed to a few letters a line beside its figures, and the speed was split from its unit ("252" on one line, "MiB/s" on the next). The figures now go below when they don't fit, and each one stays whole. The Files queue also showed a second **Resume** button under a paused item that did nothing; it only shows now when it would start something.
+- **Windows: no more command window flashing up every 30 seconds.** With Tailscale installed, a black window briefly popped up on screen each time the app checked Tailscale for consoles. It now checks in the background without opening a window. Thanks to Giiy0 for the fix (#866).
+
+## 12.6.9
+
 A full check of the app, the engine and the PS5 helper, with the fixes it turned up, plus three reports from users.
 
 **Fixes**
