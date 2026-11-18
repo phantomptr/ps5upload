@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.8
 
 **Fixes**
 - **Remote Play on Linux: no more green band under the picture at 1080p.** On some PCs the bottom of the picture came out as a solid green strip covering part of the PS5's menu. The app now checks that each frame came through whole, and if it didn't, it switches to a way of drawing the picture that does. Not yet tried on an affected PC: if you still see the band, please send a bug report from the Bug Report page.
