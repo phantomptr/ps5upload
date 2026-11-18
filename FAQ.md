@@ -828,8 +828,11 @@ Ethernet**) → **Details** → **TCP/IP**, or run `ipconfig getifaddr en0` in T
 `PS5UPLOAD_PKG_HOST_IP`. Give the computer and the PS5 fixed addresses in your router if you can,
 so they don't change.
 
-**4. Start it.** In that folder run `docker compose up -d`. `docker compose pull` followed by
-`docker compose up -d` updates it later.
+**4. Start it.** In that folder run `docker compose up -d`. To update it later, run
+`docker compose pull && docker compose up -d`, then
+`docker image prune -af --filter label=org.opencontainers.image.source=https://github.com/phantomptr/ps5upload`.
+A pull keeps the replaced image (about 170 MB each release); the last command deletes the
+ps5upload images no container uses, and nothing else.
 
 **5. Open it on your phone.** On the same Wi-Fi, open `http://<computer's IP>:19113/` in Safari
 (or any browser), for example `http://192.168.1.10:19113/`. On an iPhone, tap **Share → Add to
