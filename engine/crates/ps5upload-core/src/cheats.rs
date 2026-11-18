@@ -91,6 +91,10 @@ pub struct CheatsGetResponse {
     pub mods: Vec<CheatMod>,
     #[serde(default)]
     pub error: Option<String>,
+    /// The title has more cheats than one reply holds: `mods` ends at the last whole one. A
+    /// helper before this field cut the reply mid-cheat instead, which did not parse at all.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1161,6 +1165,23 @@ mod tests {
         assert!(resp.mods[0].on);
         assert!(!resp.mods[1].on);
         assert!(resp.error.is_none());
+    }
+
+    #[test]
+    fn cheats_get_reads_a_list_cut_at_a_whole_cheat() {
+        let json = r#"{"title_id":"CUSA00001","mods":[
+            {"index":0,"name":"A","desc":"","type":"checkbox","on":false}
+        ],"truncated":true}"#;
+        let resp: CheatsGetResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.mods.len(), 1);
+        assert!(resp.truncated);
+        assert!(serde_json::to_string(&resp)
+            .unwrap()
+            .contains("\"truncated\":true"));
+        // An older helper, and a list that fits, send no such field.
+        let whole: CheatsGetResponse = serde_json::from_str(r#"{"mods":[]}"#).unwrap();
+        assert!(!whole.truncated);
+        assert!(!serde_json::to_string(&whole).unwrap().contains("truncated"));
     }
 
     #[test]

@@ -183,7 +183,9 @@ static int read_status(const char *id, xstatus_t *s) {
     return 1;
 }
 
-static int pid_alive(uint64_t pid) { return pid > 1 && (kill((pid_t)pid, 0) == 0 || errno == EPERM); }
+static int pid_alive(uint64_t pid) {
+    return archive_extract_pid_ok(pid) && (kill((pid_t)pid, 0) == 0 || errno == EPERM);
+}
 
 /* The extractor's temporary files (".ps5u-x-<pid>-*.part") left in `dir` when it was killed. */
 static void sweep_parts(const char *dir, uint64_t pid, int depth) {
@@ -230,7 +232,7 @@ void archive_extract_sweep(void) {
         return;
     }
     /* The helper that wrote it, or its extractor, still runs (a takeover lets the old one finish). */
-    if ((hpid != (long)getpid() && pid_alive((uint64_t)hpid)) || pid_alive(xpid)) return;
+    if ((hpid > 1 && hpid != (long)getpid() && pid_alive((uint64_t)hpid)) || pid_alive(xpid)) return;
     if (dest[0] == '/' && may_write_here(dest)) {
         if (created && !fsj_path_is_root(dest)) {
             fprintf(stderr, "extract: a helper died mid-extraction; removing the folder it made: %s\n", dest);
@@ -334,7 +336,8 @@ static int follow(ava1_op_ctx_t *c, const char *id, xstatus_t *s, const char *de
             return -1;
         } else if (cancel_sent && now_ms() - cancel_at > EXTRACT_KILL_AFTER_MS) {
             fprintf(stderr, "extract: the extractor (pid %llu) did not stop; killing it\n", (unsigned long long)s->pid);
-            (void)kill((pid_t)s->pid, SIGKILL);
+            /* pid_alive passed just above, so it is a real pid; never this helper's own. */
+            if (archive_extract_pid_ok(s->pid) && (pid_t)s->pid != getpid()) (void)kill((pid_t)s->pid, SIGKILL);
             sleep_ms(500);
             sweep_parts(dest, s->pid, 0);
             ava1_op_message(c, "fs_extract_cancelled");
@@ -382,8 +385,8 @@ int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         /* The destination: allowed, not a drive's root, inside a folder that exists. */
         char parent[1024];
         const char *ps;
-        if (fsj_normalize_path(dest) != 0 || !may_write_here(dest) || fsj_path_is_root(dest) ||
-            strncmp(dest, "/mnt/shadowmnt/", 15) == 0) {
+        if (fsj_normalize_path(dest) != 0 || !archive_extract_dest_ok(dest) || !may_write_here(dest) ||
+            fsj_path_is_root(dest) || strncmp(dest, "/mnt/shadowmnt/", 15) == 0) {
             ava1_op_message(c, "fs_extract_path_not_allowed");
             return AVA1_ERR_PATH;
         }

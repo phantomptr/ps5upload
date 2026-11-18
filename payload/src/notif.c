@@ -162,6 +162,24 @@ void notif_init(void) {
     fclose(f);
 }
 
+/* The length of the whole, valid UTF-8 character at `p` (2-4), or 0: a stray or cut byte, an
+ * overlong form, an encoded surrogate, a code point past U+10FFFF. The NUL ends every check. */
+static size_t notif_utf8_len(const unsigned char *p) {
+    unsigned char c = p[0];
+    if (c >= 0xC2 && c <= 0xDF) return (p[1] & 0xC0) == 0x80 ? 2 : 0;
+    if (c >= 0xE0 && c <= 0xEF) {
+        if ((p[1] & 0xC0) != 0x80 || (p[2] & 0xC0) != 0x80) return 0;
+        if ((c == 0xE0 && p[1] < 0xA0) || (c == 0xED && p[1] >= 0xA0)) return 0;
+        return 3;
+    }
+    if (c >= 0xF0 && c <= 0xF4) {
+        if ((p[1] & 0xC0) != 0x80 || (p[2] & 0xC0) != 0x80 || (p[3] & 0xC0) != 0x80) return 0;
+        if ((c == 0xF0 && p[1] < 0x90) || (c == 0xF4 && p[1] >= 0x90)) return 0;
+        return 4;
+    }
+    return 0;
+}
+
 static size_t json_escape_append(char *buf, size_t cap, size_t off,
                                  const char *src) {
     for (size_t i = 0; src[i] != '\0'; i++) {
@@ -169,6 +187,23 @@ static size_t json_escape_append(char *buf, size_t cap, size_t off,
         char tmp[8];
         const char *esc;
         size_t esc_len;
+
+        /* A message can name a cheat from a Latin-1 or Shift-JIS file, and is cut at 255 bytes:
+         * a byte that is not part of a whole UTF-8 character reads '?'. Sent as it was, the
+         * engine could not parse the list at all, and the message stays in the saved store. */
+        if ((unsigned char)c >= 0x80) {
+            size_t k = notif_utf8_len((const unsigned char *)src + i);
+            if (k == 0) {
+                if (off + 2 >= cap) return off;
+                buf[off++] = '?';
+                continue;
+            }
+            if (off + k + 1 >= cap) return off;
+            memcpy(buf + off, src + i, k);
+            off += k;
+            i += k - 1;
+            continue;
+        }
 
         switch (c) {
             case '"':  esc = "\\\""; esc_len = 2; break;
