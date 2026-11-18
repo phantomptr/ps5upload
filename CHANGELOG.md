@@ -6,6 +6,20 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Save backups on a PS5 drive, a higher Remote Play bitrate, Files remembers where you were, and a fix for Android with three or more consoles.
+
+**New**
+- **Save backups on a PS5 drive.** Save Data › Automatic backups › **Also keep a copy on a PS5 drive**: pick the M.2 or a USB drive, and every backup is copied there too (checked against the original), so resetting the internal drive doesn't take your saves with it. The copies show in each game's backups, marked "On the PS5", and restore like any other. Not yet tried on a PS5.
+- **Remote Play bitrate up to 50 Mbps.** Play › Picture › Bitrate now goes past 15 Mbps, and while streaming it shows what the PS5 is actually sending. Higher needs a fast, wired network, and the PS5 may send less than you pick; if it won't start the stream at that rate, Play goes back to Auto once and says so. Not yet tried on a PS5 above 15 Mbps.
+- **Files: back to where you were.** Going back out of a folder highlights the folder you came from, scrolls to it and puts the cursor on it, so Enter opens it again (also in Minion's Files and the folder pickers). Arrow keys move between rows.
+- **Windows: the engine on its own explains itself.** Double-clicking `ps5upload-engine-…-windows-…exe` (the engine for servers) now says what it is and points to the app installer, instead of seeming to do nothing. The release page lists which file to download.
+
+**Fixes**
+- **Android: the app squeezed into a corner (#856).** With three or more PS5s saved, the console strip at the top scrolls sideways, and hidden labels for screen readers in it sat past the right edge of the screen. Android then laid the whole app out wider than the phone, which pushed the tab bar off the screen and, on some phones, shrank the app into the top-left corner. Those labels now stay inside the strip, and nothing on any screen can widen the page that way again.
+- **Docker updates no longer pile up old images.** `docker compose pull` kept every replaced image (about 170 MB a release) until someone deleted it by hand. The update command the web UI shows, and the one in the FAQ, now ends by removing the ps5upload images no container uses; other images are left alone. Thanks to kh-mitya (#857).
+
+## 12.6.4
+
 Trophies after offline activation, a cleaner Payloads page, and fixes from an audit.
 
 **Fixes**

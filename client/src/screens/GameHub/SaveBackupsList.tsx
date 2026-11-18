@@ -24,15 +24,36 @@ export function stampLabel(stamp: string): string {
   return m ? `${m[1]} ${m[2]}:${m[3]} UTC` : stamp;
 }
 
-/** A backup in this computer's backup folder, or on the network share (#592). */
-export type ListedBackup = SaveBackupFile & { server?: boolean };
+/** A backup in this computer's backup folder, on the network share (#592), or the copy on the
+ *  PS5's own M.2 (`ext`) or USB drive (`console`). */
+export type ListedBackup = SaveBackupFile & { server?: boolean; console?: "ext" | "usb" };
 
-/** Local and server backups as one list, newest first (a stamp sorts in time order). */
-export function mergeBackups(local: SaveBackupFile[], server: SaveBackupFile[]): ListedBackup[] {
-  const all: ListedBackup[] = [...local, ...server.map((b) => ({ ...b, server: true }))];
+/** Where a backup is, for its key and for sorting equal stamps: here first, then the server,
+ *  then the PS5 drive. */
+function placeRank(b: ListedBackup): number {
+  return b.server ? 1 : b.console ? 2 : 0;
+}
+
+/** Local, server and PS5-drive backups as one list, newest first (a stamp sorts in time order). */
+export function mergeBackups(
+  local: SaveBackupFile[],
+  server: SaveBackupFile[],
+  onConsole: SaveBackupFile[] = [],
+  consoleKind: "ext" | "usb" = "ext",
+): ListedBackup[] {
+  const all: ListedBackup[] = [
+    ...local,
+    ...server.map((b) => ({ ...b, server: true })),
+    ...onConsole.map((b) => ({ ...b, console: consoleKind })),
+  ];
   return all.sort((a, b) =>
-    a.stamp < b.stamp ? 1 : a.stamp > b.stamp ? -1 : a.server ? 1 : -1,
+    a.stamp < b.stamp ? 1 : a.stamp > b.stamp ? -1 : placeRank(a) - placeRank(b),
   );
+}
+
+/** Where a backup is, as the list's key prefix. */
+export function backupPlace(b: ListedBackup): string {
+  return b.server ? "server" : b.console ? "console" : "local";
 }
 
 /** Whether a backup of `user` shows under `save`: its own user's, or (a PS5 save) a user this
@@ -98,6 +119,9 @@ export function SaveBackupsList({
   // Backups in a folder used before the current one still list (the engine reads them all).
   const readsLocal = !!settings?.dir.trim() || (settings?.old_dirs?.length ?? 0) > 0;
   const target = serverSettings?.target ?? "";
+  // The copies on the PS5's own drive, when one is chosen.
+  const consoleDrive = settings?.console_drive ?? "";
+  const addr = hostOf(host);
   // By value: a new array of the same users each render must not list again.
   const userIds = users.map((u) => u.uid >>> 0).join(",");
   const { title_id: titleId, user_id: userId, kind } = save;
@@ -106,12 +130,22 @@ export function SaveBackupsList({
     const mine = (b: SaveBackupFile) => shownUnder({ user_id: userId, kind }, known, b.user_id);
     // A server that can't be reached leaves its backups out; the local ones still show.
     const none: SaveBackupFile[] = [];
-    const [local, server] = await Promise.all([
+    const [local, server, onConsole] = await Promise.all([
       readsLocal ? saveBackupApi.list(titleId).catch(() => none) : none,
       target ? serverBackupApi.list(titleId).catch(() => none) : none,
+      consoleDrive && addr
+        ? saveBackupApi.consoleList(addr, titleId).catch(() => ({ kind: "", backups: none }))
+        : { kind: "", backups: none },
     ]);
-    setBackups(mergeBackups(local.filter(mine), server.filter(mine)));
-  }, [readsLocal, target, titleId, userId, kind, userIds]);
+    setBackups(
+      mergeBackups(
+        local.filter(mine),
+        server.filter(mine),
+        onConsole.backups.filter(mine),
+        onConsole.kind === "usb" ? "usb" : "ext",
+      ),
+    );
+  }, [readsLocal, target, consoleDrive, addr, titleId, userId, kind, userIds]);
   useEffect(() => {
     void load();
   }, [load, reload]);
@@ -119,7 +153,7 @@ export function SaveBackupsList({
   if (backups.length === 0) return <>{empty}</>;
   const shown = all ? backups : backups.slice(0, SHOWN);
 
-  const key = (b: ListedBackup) => `${b.server ? "server" : "local"}:${b.file}`;
+  const key = (b: ListedBackup) => `${backupPlace(b)}:${b.file}`;
 
   async function restore(b: ListedBackup) {
     const ok = await confirm({
@@ -145,13 +179,16 @@ export function SaveBackupsList({
     setBusy(key(b));
     setFailed(null);
     try {
-      await (b.server ? serverBackupApi : saveBackupApi).restore({
+      const req = {
         addr: hostOf(host),
         title_id: save.title_id,
         file: b.file,
         save_path: save.path,
         user_id: save.user_id >>> 0,
-      });
+      };
+      await (b.console
+        ? saveBackupApi.consoleRestore(req)
+        : (b.server ? serverBackupApi : saveBackupApi).restore(req));
       pushNotification(
         "success",
         tr("save_backup_restored", { title: save.title_id, when: stampLabel(b.stamp) }, "Restored {title} from {when}"),
@@ -186,6 +223,13 @@ export function SaveBackupsList({
               {b.server && (
                 <span className="ms-2 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] text-[var(--color-muted)]" data-testid="save-backup-server">
                   {tr("save_backup_on_server", undefined, "On the server")}
+                </span>
+              )}
+              {b.console && (
+                <span className="ms-2 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] text-[var(--color-muted)]" data-testid="save-backup-console">
+                  {b.console === "usb"
+                    ? tr("save_backup_on_console_usb", undefined, "On the PS5 (USB)")
+                    : tr("save_backup_on_console_ext", undefined, "On the PS5 (M.2)")}
                 </span>
               )}
               {b.tag === "beforerestore" && (
@@ -270,6 +314,8 @@ export function SaveBackupsList({
                 file: toUser.file,
                 to_user: t.uid,
                 server: toUser.server ?? false,
+                // Only for a copy on a PS5 drive: an older engine has no such field.
+                ...(toUser.console ? { on_console: true } : {}),
               });
             } catch (e) {
               if (e instanceof SaveCopyError && e.missing.length > 0) {

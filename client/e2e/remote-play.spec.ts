@@ -1104,3 +1104,57 @@ test("Remote Play: the game's sound plays through the worklet, decoded in a work
     clearInterval(timer);
   }
 });
+
+// Settings › Picture › Bitrate above Auto: the start asks the engine for it, and while streaming
+// the drawer says what the PS5 sends (its stream report's target).
+test("Remote Play asks for a high bitrate and shows what the PS5 sends", async ({ page }) => {
+  await rpPage(page, { bitrateKbps: 30000 });
+  const engine = await rpEngine(page, (ws, n, repeat) => {
+    if (n === 0) {
+      const stats = JSON.stringify({
+        stage: "stats",
+        stats: { frames: 60, video_bytes: 3e6, units: 1000, units_lost: 0, quality: { target_bitrate: 28_700_000 } },
+      });
+      repeat(() => ws.send(stats), 500);
+    }
+  });
+  await page.goto("/play", { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "Play", exact: true })).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId("rp-start").click();
+  await expect.poll(() => engine.starts.length).toBe(1);
+  expect(engine.starts[0]).toMatchObject({ height: 1080, bitrate_kbps: 30000 });
+  const toolbar = page.getByTestId("rp-toolbar");
+  await expect(toolbar).toBeVisible({ timeout: 20_000 });
+  await toolbar.hover();
+  await toolbar.getByTestId("rp-settings-button").click();
+  await expect(page.getByTestId("rp-bitrate")).toHaveValue("30000");
+  await expect(page.getByText("Higher needs a fast, wired network.")).toBeVisible();
+  await expect(page.getByTestId("rp-bitrate-now")).toHaveText("The PS5 is sending ~29 Mbps.", { timeout: 10_000 });
+});
+
+// A high bitrate the PS5 does not start at: once more at Auto, said, and Auto is kept.
+test("Remote Play falls back to Auto once when the PS5 does not start at a high bitrate", async ({ page }) => {
+  test.setTimeout(60_000);
+  await rpPage(page, { bitrateKbps: 50000 });
+  const engine = await rpEngine(page, (ws, n) => {
+    if (n === 0) {
+      ws.send(JSON.stringify({ stage: "error", code: "video_refused", error: "Nagare did not init! AvCap failed" }));
+      void ws.close({ code: 1000, reason: "error" });
+      return true;
+    }
+  });
+  await page.goto("/play", { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "Play", exact: true })).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId("rp-start").click();
+  await expect.poll(() => engine.starts.length, { timeout: 20_000 }).toBe(2);
+  expect(engine.starts[0]).toMatchObject({ bitrate_kbps: 50000 });
+  expect(engine.starts[1]).not.toHaveProperty("bitrate_kbps");
+  await expect(page.getByTestId("rp-toolbar")).toContainText("Living room", { timeout: 20_000 });
+  // No error for the first try: the notification says what happened.
+  await expect(page.locator("[role=alert]").filter({ hasText: /Nagare|did not/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "Open notifications" }).locator("visible=true").click();
+  await expect(page.getByText(/did not start the stream at 50 Mbps/).first()).toBeVisible();
+  expect(
+    await page.evaluate(() => JSON.parse(localStorage.getItem("ps5upload.rp_prefs.v1") ?? "{}").bitrateKbps),
+  ).toBe(0);
+});

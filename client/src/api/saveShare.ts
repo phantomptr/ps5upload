@@ -113,7 +113,7 @@ export function copySaveToConsole(req: {
 /** Put a backup of one user's save into another user's save of the game (#612). */
 export function restoreBackupToUser(
   addr: string,
-  req: { title_id: string; file: string; to_user: number; server?: boolean },
+  req: { title_id: string; file: string; to_user: number; server?: boolean; on_console?: boolean },
 ): Promise<CopyDone> {
   return postJson("/api/save-backup/restore-to-user", { addr, ...req, to_user: req.to_user >>> 0 });
 }

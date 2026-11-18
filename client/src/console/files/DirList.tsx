@@ -59,6 +59,7 @@ export function DirList({
   limit = Infinity,
   onMoreRows,
   uploading,
+  revealed,
 }: {
   entries: Entry[];
   selecting: boolean;
@@ -72,6 +73,8 @@ export function DirList({
   onMoreRows?: () => void;
   /** Entries a running PC upload is writing into: an "Uploading" badge. */
   uploading?: ReadonlySet<string>;
+  /** The folder just come back out of: lit for a moment (lib/revealChild.ts). */
+  revealed?: string | null;
 }) {
   const marked = new Set(selected);
   const drawn = entries.length > limit ? entries.slice(0, limit) : entries;
@@ -81,7 +84,12 @@ export function DirList({
         const Icon = ICONS[iconKind(e)];
         const on = marked.has(e.name);
         return (
-          <li key={e.name} className={`cw-file${on ? " is-selected" : ""}`} data-nav-item data-entry={e.name}>
+          <li
+            key={e.name}
+            className={`cw-file${on ? " is-selected" : ""}${revealed === e.name ? " is-revealed" : ""}`}
+            data-nav-item
+            data-entry={e.name}
+          >
             <button
               type="button"
               className="cw-focusable cw-file-main"

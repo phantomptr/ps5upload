@@ -3405,6 +3405,34 @@
         ],
         "type": "object"
       },
+      "DriveChoice": {
+        "description": "One drive the copies can go to.",
+        "properties": {
+          "free_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "`ext` (M.2 / extended storage) or `usb`.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The mount, such as `/mnt/ext0`.",
+            "type": "string"
+          },
+          "total_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "kind",
+          "total_bytes",
+          "free_bytes"
+        ],
+        "type": "object"
+      },
       "DriveSensor": {
         "description": "One physical disk discovered on `/dev/daN`. Temp and usage fields are\noptional because not all drives support LOG SENSE and not all are\nmounted. `access_denied` is surfaced when the device node exists but\nthe payload can't open it (rare, only seen on very locked-down FW).",
         "properties": {
@@ -11513,6 +11541,10 @@
             "description": "The backup's file name (`<title>_user<8 hex>_<stamp>.zip`).",
             "type": "string"
           },
+          "on_console": {
+            "description": "The backup is the copy on the PS5's own drive (`save_backup_console`).",
+            "type": "boolean"
+          },
           "server": {
             "description": "The backup is on the network share (#592), not in the backup folder.",
             "type": "boolean"
@@ -16268,6 +16300,13 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "console_drive": {
+            "description": "The PS5 drive that also gets a copy of each backup (`/mnt/ext<N>`, `/mnt/usb<N>`); \"\" for\nnone.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "dir": {
             "type": [
@@ -45449,7 +45488,7 @@
         }
       },
       "put": {
-        "description": "`PUT /api/save-backup` — change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts}`.",
+        "description": "`PUT /api/save-backup` — change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts, console_drive}`.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -45486,13 +45525,256 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "Change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts}`",
+        "summary": "Change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts, console_drive}`",
         "tags": [
           "saves"
         ],
         "x-ps5upload": {
           "access": "loopback",
           "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/save-backup/console/drives": {
+      "get": {
+        "description": "`GET /api/save-backup/console/drives?addr=` — `{drives: [{path, kind, total_bytes,\nfree_bytes}]}`, the console's M.2 and USB drives a copy of each save backup can go to (never\nthe internal storage).",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "drives": {
+                      "items": {
+                        "$ref": "#/components/schemas/DriveChoice"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "`{drives: [{path, kind, total_bytes, free_bytes}]}`, the console's M.2 and USB drives a copy of each save backup can go to (never the internal storage)",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-backup/console/list": {
+      "get": {
+        "description": "`GET /api/save-backup/console/list?addr=&title_id=` — `{drive, kind, backups}`: that game's\nbackup copies on the chosen PS5 drive of that console, newest first (none when no drive is\nchosen, or it holds none).",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          {
+            "in": "query",
+            "name": "title_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "backups": {
+                          "type": "array"
+                        },
+                        "drive": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "backups": {
+                          "items": {
+                            "$ref": "#/components/schemas/BackupFile"
+                          },
+                          "type": "array"
+                        },
+                        "drive": {},
+                        "kind": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "`{drive, kind, backups}`: that game's backup copies on the chosen PS5 drive of that console, newest first (none when no drive is chosen, or it holds none)",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-backup/console/restore": {
+      "post": {
+        "description": "`POST /api/save-backup/console/restore` `{addr, title_id, file, save_path, user_id}` — puts a\nbackup copy on the chosen PS5 drive back, with the refusals and the backup first of `restore`.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/engine.save_backup.RestoreBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Puts a backup copy on the chosen PS5 drive back, with the refusals and the backup first of `restore`",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
         }
       }
     },
@@ -46217,7 +46499,7 @@
     },
     "/api/save-backup/restore-to-user": {
       "post": {
-        "description": "`POST /api/save-backup/restore-to-user` `{addr, title_id, file, to_user, server?}`: a backup\nof one user's save into another user's save of the game.",
+        "description": "`POST /api/save-backup/restore-to-user` `{addr, title_id, file, to_user, server?, on_console?}`: a backup\nof one user's save into another user's save of the game.",
         "requestBody": {
           "content": {
             "application/json": {

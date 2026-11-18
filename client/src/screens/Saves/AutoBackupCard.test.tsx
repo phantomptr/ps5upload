@@ -7,8 +7,84 @@ vi.mock("zustand", async (orig) => {
   return liveZustand(await orig<typeof import("zustand")>());
 });
 
-import AutoBackupCard, { IntervalChoice } from "./AutoBackupCard";
-import { intervalChoices, intervalSupported, useAutoSaveBackupStore } from "../../state/autoSaveBackup";
+import AutoBackupCard, { ConsoleCopyChoice, IntervalChoice, firstConsoleDrive } from "./AutoBackupCard";
+import {
+  consoleCopySupported,
+  intervalChoices,
+  intervalSupported,
+  useAutoSaveBackupStore,
+} from "../../state/autoSaveBackup";
+import type { ConsoleDrive } from "../../api/saveBackup";
+
+describe("automatic backups: a copy on a PS5 drive", () => {
+  const m2: ConsoleDrive = { path: "/mnt/ext0", kind: "ext", total_bytes: 1, free_bytes: 1 };
+  const usb: ConsoleDrive = { path: "/mnt/usb0", kind: "usb", total_bytes: 1, free_bytes: 1 };
+  const render = (p: Partial<Parameters<typeof ConsoleCopyChoice>[0]>) =>
+    renderToStaticMarkup(
+      <ConsoleCopyChoice
+        drive=""
+        drives={[m2, usb]}
+        connected
+        loadError={null}
+        status={null}
+        onChange={noop}
+        {...p}
+      />,
+    );
+
+  it("is offered only by an engine that can make the copy", () => {
+    const base = { enabled: false, dir: "/data/save-backups", keep: 5, hosts: [] };
+    expect(consoleCopySupported({ console_drive: "" })).toBe(true);
+    expect(consoleCopySupported({})).toBe(false);
+    useAutoSaveBackupStore.setState({ settings: { ...base, console_drive: "" } });
+    expect(renderToStaticMarkup(<AutoBackupCard />)).toContain("Also keep a copy on a PS5 drive");
+    useAutoSaveBackupStore.setState({ settings: base });
+    expect(renderToStaticMarkup(<AutoBackupCard />)).not.toContain("auto-save-backup-console");
+    useAutoSaveBackupStore.setState({ settings: null, status: null, error: null });
+  });
+
+  it("starts on the M.2 drive, else a USB one", () => {
+    expect(firstConsoleDrive([usb, m2])).toBe("/mnt/ext0");
+    expect(firstConsoleDrive([usb])).toBe("/mnt/usb0");
+    expect(firstConsoleDrive([])).toBeNull();
+  });
+
+  it("is off with no drive picker until switched on", () => {
+    const html = render({});
+    expect(html).toContain("Also keep a copy on a PS5 drive");
+    expect(html).toContain("ps5upload/save-backups");
+    expect(html).not.toContain("auto-save-backup-console-drive");
+    expect(html).not.toMatch(/checked=""/);
+  });
+
+  it("lists the PS5's M.2 and USB drives with the chosen one selected", () => {
+    const html = render({ drive: "/mnt/usb0" });
+    expect(html).toMatch(/checked=""/);
+    expect(html).toContain(">M.2 drive (/mnt/ext0)</option>");
+    expect(html).toMatch(/<option value="\/mnt\/usb0" selected="">USB drive \(\/mnt\/usb0\)<\/option>/);
+  });
+
+  it("keeps a chosen drive that is not plugged in, marked so", () => {
+    const html = render({ drive: "/mnt/ext1", drives: [usb] });
+    expect(html).toMatch(/<option value="\/mnt\/ext1" selected="">\/mnt\/ext1 \(not plugged in\)<\/option>/);
+  });
+
+  it("can't be switched on with no drive, and says why", () => {
+    const html = render({ drives: [] });
+    expect(html).toContain("auto-save-backup-console-none");
+    expect(html).toMatch(/<input type="checkbox" disabled=""/);
+    expect(render({ connected: false, drives: null })).toContain("Connect to a PS5 to choose its drive.");
+  });
+
+  it("shows the last copy result", () => {
+    const html = render({
+      drive: "/mnt/ext0",
+      status: { at: 1_700_000_000_000, drive: "/mnt/ext0", copied: 2, skipped: 1, failed: 0, note: "/mnt/ext0 is not plugged in or not mounted" },
+    });
+    expect(html).toContain("2 copied, 1 skipped, 0 failed.");
+    expect(html).toContain("/mnt/ext0 is not plugged in or not mounted");
+  });
+});
 
 const noop = () => {};
 

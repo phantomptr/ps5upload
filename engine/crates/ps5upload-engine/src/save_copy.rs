@@ -1871,9 +1871,12 @@ pub struct RestoreToUserBody {
     /// The backup is on the network share (#592), not in the backup folder.
     #[serde(default)]
     pub server: bool,
+    /// The backup is the copy on the PS5's own drive (`save_backup_console`).
+    #[serde(default)]
+    pub on_console: bool,
 }
 
-/// `POST /api/save-backup/restore-to-user` `{addr, title_id, file, to_user, server?}`: a backup
+/// `POST /api/save-backup/restore-to-user` `{addr, title_id, file, to_user, server?, on_console?}`: a backup
 /// of one user's save into another user's save of the game.
 pub async fn post_restore_to_user(Json(b): Json<RestoreToUserBody>) -> Response {
     blocking(
@@ -1885,10 +1888,15 @@ pub async fn post_restore_to_user(Json(b): Json<RestoreToUserBody>) -> Response 
             }
             let host = b.addr.trim().to_string();
             let live = Live::new(&host);
-            let d = if b.server {
+            let d = if b.server || b.on_console {
                 let tmp = make_temp_dir(&title_id)?;
                 let zip = tmp.join("restore.zip");
-                let r = crate::save_backup_server::fetch_to(&title_id, &file, &zip)
+                let fetched = if b.on_console {
+                    crate::save_backup_console::fetch_to(&host, &title_id, &file, &zip)
+                } else {
+                    crate::save_backup_server::fetch_to(&title_id, &file, &zip)
+                };
+                let r = fetched
                     .map_err(Failed::from)
                     .and_then(|()| restore_to_user(&live, &title_id, &file, &zip, b.to_user));
                 let _ = cleanup_temp_dir(&tmp.to_string_lossy());

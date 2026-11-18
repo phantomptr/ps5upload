@@ -334,6 +334,16 @@ body,
   overflow: hidden;
 }
 
+/* Nothing may stick out past the page (#856). An absolutely placed element with no placed
+ * ancestor (a screen-reader-only label in a sideways-scrolling row of chips, say) is measured
+ * from the page itself, so one sitting past the right edge made the document wider than the
+ * screen. Android's WebView then grows its viewport to fit it: the floating tab bar went off
+ * the bottom of the screen and the app was drawn shrunk into the top-left corner. Placed, the
+ * body holds such elements and its overflow: hidden cuts them off instead. */
+body {
+  position: relative;
+}
+
 /* The atmosphere: painted once on <html> and fixed, so every glass surface
  * above it frosts the same wash. */
 html {
@@ -946,6 +956,30 @@ body {
   88% { transform: scale(1.14); }
 }
 :root[data-motion="none"] .support-heart { animation: none; }
+
+/* Files: the folder just come back out of, for a moment (lib/revealChild.ts). Without motion it
+ * stays lit until the class goes; with motion it fades out over the same time. */
+.fs-reveal {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
+  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--color-accent) 16%, transparent);
+}
+@keyframes fs-reveal {
+  0%,
+  45% {
+    outline-color: var(--color-accent);
+    box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--color-accent) 16%, transparent);
+  }
+  100% {
+    outline-color: transparent;
+    box-shadow: inset 0 0 0 999px transparent;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion="none"]) .fs-reveal {
+    animation: fs-reveal 2s ease-out forwards;
+  }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .anim-scrim,

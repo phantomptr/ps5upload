@@ -551,6 +551,20 @@ export function rateLimitedLine(gapMs: number, now: () => number = () => perform
 /** Seconds of picture with no sound before the stream says so. */
 export const SOUND_MISSING_AFTER_S = 6;
 
+/** What the PS5 sends, Mbps, from the engine's once-a-second stats: the console's own report of
+ *  the bitrate its encoder aims at (`quality.target_bitrate`), else the video bytes the engine
+ *  took in that second; null when neither is there yet. The report's unit is undocumented: a
+ *  1080p session asked for 15000 kbit/s reported 14563000, so it reads as bit/s; a small value
+ *  (under 100000) is taken as kbit/s instead. */
+export function ps5SendMbps(st: { quality?: unknown; video_bytes?: unknown } | null | undefined): number | null {
+  const q = st?.quality as { target_bitrate?: unknown } | null | undefined;
+  const t = q && typeof q === "object" ? q.target_bitrate : undefined;
+  if (typeof t === "number" && Number.isFinite(t) && t > 0) return t >= 100_000 ? t / 1e6 : t / 1e3;
+  const b = st?.video_bytes;
+  if (typeof b === "number" && Number.isFinite(b) && b > 0) return (b * 8) / 1e6;
+  return null;
+}
+
 /** Whether the engine's stats say no sound reaches this device, and why. Engines before 11.5
  *  don't report it (no audio_frames_total), and then nothing is said. */
 export function soundMissingFrom(
@@ -576,6 +590,9 @@ export interface StreamStats {
   soundMissing?: "none" | "format" | "device";
   fps: number;
   mbps: number;
+  /** What the PS5 sends, Mbps (ps5SendMbps): its encoder's target, else what reached the engine.
+   *  null until the engine reported it (or an older engine). */
+  ps5Mbps?: number | null;
   /** null: not measured (the system's media player decodes, Settings › Video decoding). */
   decodeMs: number | null;
   codec: string;
@@ -910,6 +927,7 @@ export class RemotePlayStream {
   private statsTimer = 0;
   private lastLoss = { lossPct: 0, rebuilt: 0, lost: 0 };
   private consoleRttMs: number | null = null;
+  private ps5Mbps: number | null = null;
   /** The console's last connection-quality report, raw (engine rp_stream proto.rs), for logs. */
   private quality: unknown = null;
   private rttMs: number | null = null;
@@ -1474,6 +1492,7 @@ export class RemotePlayStream {
         audio: this.currentAudioHealth(),
         rttMs: this.rttMs,
         consoleRttMs: this.consoleRttMs,
+        ps5Mbps: this.ps5Mbps,
         stages: this.stages.summary(performance.now()),
         decoderRestarts: this.decoderRestarts,
         ...this.lastLoss,
@@ -2277,6 +2296,7 @@ export class RemotePlayStream {
         };
         this.consoleRttMs = typeof st.console_rtt_ms === "number" && Number.isFinite(st.console_rtt_ms) ? st.console_rtt_ms : null;
         if (st.quality && typeof st.quality === "object") this.quality = st.quality;
+        this.ps5Mbps = ps5SendMbps(st);
         if (this.audioMs > 0) this.soundEverPlayed = true;
         const silent = num(st.audio_frames_total) === 0 || !this.soundEverPlayed;
         this.silentSeconds = num(st.frames) > 0 && silent && this.pictureOn ? this.silentSeconds + 1 : 0;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldShowWebUpdate } from "./WebUpdateToast";
+import { DOCKER_UPDATE_COMMAND, shouldShowWebUpdate } from "./WebUpdateToast";
 
 describe("shouldShowWebUpdate", () => {
   const u = { current: "10.1.0", latest: "10.2.0", available: true, docker: true };
@@ -13,5 +13,15 @@ describe("shouldShowWebUpdate", () => {
   it("shows nothing without an update", () => {
     expect(shouldShowWebUpdate(null, null)).toBe(false);
     expect(shouldShowWebUpdate({ ...u, available: false }, null)).toBe(false);
+  });
+});
+
+describe("DOCKER_UPDATE_COMMAND", () => {
+  it("removes the replaced image, and only this app's", () => {
+    const steps = DOCKER_UPDATE_COMMAND.split(" && ");
+    const prune = steps[steps.length - 1];
+    expect(prune).toBe(
+      "docker image prune -af --filter label=org.opencontainers.image.source=https://github.com/phantomptr/ps5upload",
+    );
   });
 });

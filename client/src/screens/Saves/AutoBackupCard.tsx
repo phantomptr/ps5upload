@@ -2,16 +2,20 @@ import { useEffect, useState } from "react";
 import { FolderOpen, History, Play } from "lucide-react";
 
 import { Button } from "../../components";
+import { saveBackupApi, type ConsoleCopyStatus, type ConsoleDrive } from "../../api/saveBackup";
+import { hostOf } from "../../lib/addr";
 import { pickPath } from "../../lib/pickPath";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { formatDate } from "../../lib/formatDate";
 import {
   DEFAULT_INTERVAL_MINUTES,
   clampKeep,
+  consoleCopySupported,
   intervalChoices,
   intervalSupported,
   useAutoSaveBackupStore,
 } from "../../state/autoSaveBackup";
+import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
 
 type Tr = ReturnType<typeof useTr>;
@@ -56,6 +60,141 @@ export function IntervalChoice({
   );
 }
 
+/** "M.2 drive (/mnt/ext0)", "USB drive (/mnt/usb0)". */
+export function consoleDriveLabel(path: string, tr: Tr): string {
+  return path.startsWith("/mnt/usb")
+    ? tr("saves_auto_console_drive_usb", { path }, "USB drive ({path})")
+    : tr("saves_auto_console_drive_ext", { path }, "M.2 drive ({path})");
+}
+
+/** The drive to start with when the copy is switched on: the first M.2, else the first USB. */
+export function firstConsoleDrive(drives: readonly ConsoleDrive[]): string | null {
+  return (drives.find((d) => d.kind === "ext") ?? drives[0])?.path ?? null;
+}
+
+/** "Also keep a copy on a PS5 drive": each backup is copied to the console's M.2 or USB drive
+ *  too, so saves outlive a reset of its internal storage. `drives` is null while it is asked
+ *  (or with no console connected); `drive` is the engine's setting ("" for off). */
+export function ConsoleCopyChoice({
+  drive,
+  drives,
+  connected,
+  loadError,
+  status,
+  onChange,
+}: {
+  drive: string;
+  drives: readonly ConsoleDrive[] | null;
+  connected: boolean;
+  loadError: string | null;
+  status: ConsoleCopyStatus | null | undefined;
+  onChange: (drive: string) => void;
+}) {
+  const tr = useTr();
+  const on = drive.trim() !== "";
+  const first = drives ? firstConsoleDrive(drives) : null;
+  const listed = drives?.some((d) => d.path === drive) ?? false;
+  return (
+    <div className="mt-3 border-t border-[var(--color-border)] pt-3 text-sm" data-testid="auto-save-backup-console">
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={on}
+          disabled={!on && !first}
+          onChange={(e) => onChange(e.target.checked ? (first ?? "") : "")}
+          data-testid="auto-save-backup-console-toggle"
+        />
+        {tr("saves_auto_console_copy", undefined, "Also keep a copy on a PS5 drive")}
+      </label>
+      <p className="mt-1 text-xs text-[var(--color-muted)]">
+        {tr(
+          "saves_auto_console_note",
+          undefined,
+          "Each backup is also copied to ps5upload/save-backups on the PS5's M.2 or USB drive, so your saves survive a reset that wipes the internal storage.",
+        )}
+      </p>
+      {!connected ? (
+        <p className="mt-1 text-xs text-[var(--color-muted)]" data-testid="auto-save-backup-console-no-console">
+          {tr("saves_auto_console_no_console", undefined, "Connect to a PS5 to choose its drive.")}
+        </p>
+      ) : loadError ? (
+        <p className="mt-1 text-xs text-[var(--color-bad)]">{loadError}</p>
+      ) : drives && drives.length === 0 ? (
+        <p className="mt-1 text-xs text-[var(--color-muted)]" data-testid="auto-save-backup-console-none">
+          {tr("saves_auto_console_no_drive", undefined, "This PS5 has no M.2 or USB drive to copy to.")}
+        </p>
+      ) : null}
+      {on && (
+        <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+          <label htmlFor="saves-auto-console-drive" className="text-xs text-[var(--color-muted)]">
+            {tr("saves_auto_console_drive_label", undefined, "PS5 drive")}
+          </label>
+          <select
+            id="saves-auto-console-drive"
+            data-testid="auto-save-backup-console-drive"
+            value={drive}
+            onChange={(e) => onChange(e.target.value)}
+            className="select w-auto! justify-self-start text-sm sm:justify-self-end"
+          >
+            {!listed && (
+              <option value={drive}>
+                {tr("saves_auto_console_drive_missing", { path: drive }, "{path} (not plugged in)")}
+              </option>
+            )}
+            {(drives ?? []).map((d) => (
+              <option key={d.path} value={d.path}>
+                {consoleDriveLabel(d.path, tr)}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {status && status.at > 0 && (
+        <p className="mt-2 text-xs text-[var(--color-muted)]" data-testid="auto-save-backup-console-status">
+          {tr(
+            "saves_auto_console_last",
+            {
+              when: formatDate(new Date(status.at)),
+              ok: status.copied,
+              skipped: status.skipped,
+              failed: status.failed,
+            },
+            "Last copy to the PS5 drive ({when}): {ok} copied, {skipped} skipped, {failed} failed.",
+          )}
+          {status.note ? ` ${status.note}` : ""}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The console's drives for the copy, asked while the engine can make one and a console is
+ *  connected. */
+function useConsoleDrives(enabled: boolean) {
+  const host = useConnectionStore((s) => s.host);
+  const addr = host?.trim() ? hostOf(host.trim()) : "";
+  const [drives, setDrives] = useState<ConsoleDrive[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setDrives(null);
+    setError(null);
+    if (!enabled || !addr) return;
+    let live = true;
+    saveBackupApi.consoleDrives(addr).then(
+      (d) => {
+        if (live) setDrives(d);
+      },
+      (e) => {
+        if (live) setError(e instanceof Error ? e.message : String(e));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [enabled, addr]);
+  return { drives, error, connected: !!addr };
+}
+
 /** The automatic save backup's switch, folder, how often and how many versions it keeps. The
  *  engine runs the backups (with no window open in Docker); this card changes its settings. */
 export default function AutoBackupCard() {
@@ -63,6 +202,8 @@ export default function AutoBackupCard() {
   const { settings, status, error, refresh, set, runNow } = useAutoSaveBackupStore();
   const [dirDraft, setDirDraft] = useState("");
   const desktop = isTauriEnv();
+  const copySupported = consoleCopySupported(settings);
+  const consoleDrives = useConsoleDrives(copySupported);
 
   useEffect(() => {
     void refresh();
@@ -233,6 +374,18 @@ export default function AutoBackupCard() {
         />
         {tr("saves_auto_enable", undefined, "Back up changed saves automatically")}
       </label>
+      {copySupported && (
+        <ConsoleCopyChoice
+          drive={settings.console_drive ?? ""}
+          drives={consoleDrives.drives}
+          connected={consoleDrives.connected}
+          loadError={consoleDrives.error}
+          status={status?.console_copy}
+          onChange={(console_drive) => {
+            if (console_drive !== settings.console_drive) void set({ console_drive });
+          }}
+        />
+      )}
       {error && <p className="mt-2 text-xs text-[var(--color-bad)]">{error}</p>}
       {(running || (status && status.last_at > 0)) && (
         <p className="mt-2 text-xs text-[var(--color-muted)]">

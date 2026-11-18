@@ -669,6 +669,27 @@ button {
   border-color: var(--color-accent);
   background: var(--color-accent-soft);
 }
+/* The folder just come back out of, for a moment (lib/revealChild.ts): fades with motion on. */
+.cw-file.is-revealed {
+  border-color: var(--color-accent);
+  box-shadow: inset 0 0 0 999px var(--color-accent-soft);
+}
+@keyframes cw-file-reveal {
+  0%,
+  45% {
+    border-color: var(--color-accent);
+    box-shadow: inset 0 0 0 999px var(--color-accent-soft);
+  }
+  100% {
+    border-color: var(--color-border);
+    box-shadow: inset 0 0 0 999px transparent;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .cw-file.is-revealed {
+    animation: cw-file-reveal 2s ease-out forwards;
+  }
+}
 .cw-file-main {
   flex: 1;
   min-width: 0;
