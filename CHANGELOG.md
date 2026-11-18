@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.5
 
 Save backups on a PS5 drive, a higher Remote Play bitrate, Files remembers where you were, and a fix for Android with three or more consoles.
 
