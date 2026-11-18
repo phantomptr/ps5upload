@@ -39,7 +39,10 @@ pub enum Health {
 
 /// Ask the loader on `ip:port` the harmless request and classify what comes back.
 pub fn probe(ip: &str, port: u16, connect_timeout: Duration, reply_timeout: Duration) -> Health {
-    let Ok(targets) = join_host_port(ip, port).to_socket_addrs() else {
+    // A console given with the helper's port (`<ip>:<port>`, as the other routes take it)
+    // is still that console: joined as it was, it named no host and read as "absent".
+    let ip = crate::install::console_id(ip);
+    let Ok(targets) = join_host_port(&ip, port).to_socket_addrs() else {
         return Health::Absent;
     };
     let Some(mut c) = targets
@@ -259,6 +262,8 @@ fn settling(phase: u8) -> bool {
 /// Make sure `host` runs the patched elfldr. Needs the helper up (it reads the process list).
 pub fn ensure(host: &str) -> Result<Outcome, String> {
     let mgmt = crate::console_addr(host);
+    // One spelling per console for the loader lock, the probe and what is remembered of it.
+    let host = &crate::install::console_id(host);
     // #842: a swap kills a process and starts another; not while the console goes to rest or in
     // the minute after a wake (the helper's power phase). Answered at once, before the loader
     // lock (sends must not wait on it), and the app asks again a little later.
@@ -408,6 +413,20 @@ mod tests {
         });
         let (c, r) = short();
         assert_eq!(probe("127.0.0.1", port, c, r), Health::Healthy);
+    }
+
+    #[test]
+    fn a_console_named_with_the_helpers_port_is_probed_on_the_loaders() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut c, _) = l.accept().unwrap();
+            let mut buf = [0u8; 512];
+            let _ = c.read(&mut buf);
+            let _ = c.write_all(b"HTTP/1.1 200 OK\r\n\r\n");
+        });
+        let (c, r) = short();
+        assert_eq!(probe("127.0.0.1:1", port, c, r), Health::Healthy);
     }
 
     #[test]

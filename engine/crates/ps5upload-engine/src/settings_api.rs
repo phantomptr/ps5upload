@@ -7,7 +7,8 @@
 //!
 //! * `GET /api/settings`: `{rev, settings: {name: value}, set: [names set explicitly], schema}`.
 //! * `PATCH /api/settings` `{settings: {name: value}}`: all of it or nothing (400 names what is
-//!   wrong). `null` goes back to the default. A later change wins per setting, as between browsers;
+//!   wrong; 413 when the stored settings would pass the shared document's size limit; 503 when
+//!   the engine has nowhere to save them). `null` goes back to the default. A later change wins per setting, as between browsers;
 //!   an open app applies it on its next look (within a minute, or when its window gets focus).
 //!
 //! These settings drive what the app does: its upload queue reads them, not the engine. Settings
@@ -649,12 +650,30 @@ pub async fn patch(Json(body): Json<PatchBody>) -> Response {
         Err(v) => return (StatusCode::BAD_REQUEST, Json(v)).into_response(),
     };
     let done = tokio::task::spawn_blocking(move || {
-        shared_state::update(DOC, |value| apply_patch(value, plan, now_ms()))
+        shared_state::update_checked(DOC, |value| apply_patch(value, plan, now_ms()))
     })
     .await;
+    use shared_state::UpdateError;
     match done {
         Ok(Ok(doc)) => Json(answer(&doc)).into_response(),
-        Ok(Err(m)) => (
+        // As `PUT /api/shared/prefs` answers: not "saved" when a restart would lose it.
+        Ok(Err(UpdateError::Nowhere(why))) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": why, "code": "save_failed"})),
+        )
+            .into_response(),
+        Ok(Err(UpdateError::TooLarge(size))) => (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({
+                "error": format!(
+                    "the settings would be {size} bytes, over {}; nothing was changed",
+                    shared_state::MAX_BYTES
+                ),
+                "code": "too_large",
+            })),
+        )
+            .into_response(),
+        Ok(Err(UpdateError::Failed(m))) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": m, "code": "save_failed"})),
         )
@@ -810,5 +829,33 @@ mod tests {
         let keys: std::collections::HashSet<_> = SETTINGS.iter().map(|s| s.key).collect();
         assert_eq!(keys.len(), SETTINGS.len());
         assert!(LEGACY_KEYS.iter().all(|k| !keys.contains(k)));
+    }
+
+    /// A value that would take the shared document past its limit is refused whole: stored, it
+    /// made every browser's whole-document save answer 413 from then on.
+    #[tokio::test]
+    async fn a_patch_past_the_documents_size_limit_changes_nothing() {
+        let status = |v: Value| async move {
+            let body: PatchBody = serde_json::from_value(json!({ "settings": v })).unwrap();
+            patch(Json(body)).await.status()
+        };
+        let stored = || {
+            let doc = shared_state::read(DOC);
+            typed(&entries_of(doc.value.as_ref())).0["convert_output_dir"].clone()
+        };
+        assert_eq!(
+            status(json!({ "convert_output_dir": "/out" })).await,
+            StatusCode::OK
+        );
+        let huge = "x".repeat(shared_state::MAX_BYTES + 1);
+        assert_eq!(
+            status(json!({ "convert_output_dir": huge, "auto_resume": false })).await,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+        assert_eq!(stored(), json!("/out"));
+        assert_eq!(
+            status(json!({ "convert_output_dir": null })).await,
+            StatusCode::OK
+        );
     }
 }

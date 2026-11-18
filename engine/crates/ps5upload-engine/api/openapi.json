@@ -47598,6 +47598,31 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Too large"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -47631,6 +47656,29 @@
               }
             },
             "description": "Engine error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "error": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Unavailable"
           },
           "default": {
             "$ref": "#/components/responses/Error",
