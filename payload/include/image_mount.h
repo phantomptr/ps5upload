@@ -44,6 +44,23 @@ static inline int image_mount_from_is_unit(const char *from) {
     return 0;
 }
 
+/* Whether a mount tracker file may be believed for what is mounted on `mount_point` from `from`.
+ *
+ * A tracker's file name is made from the mount point, in two forms that can meet: the bare leaf
+ * for /mnt/ps5upload/<leaf>, and the path without its first slash (other bytes hex-escaped) for
+ * any other mount point. So the tracker of an image mounted as /mnt/ps5upload/data ("data.src",
+ * what an image called data.exfat gets) is also the tracker of /data, and "user" of /user. With
+ * the file alone as proof, fs.volumes listed the console's own /data as a mounted image and
+ * fs.unmount accepted it, going on to unmount(MNT_FORCE). Trackers also outlive a restart.
+ *
+ * Outside /mnt/ps5upload/ a tracker therefore counts only while an image unit is mounted there:
+ * every mount fs.mount makes is one (/dev/lvd<N> or /dev/md<N>), a drive or system folder never. */
+static inline int image_mount_tracker_trusted(const char *mount_point, const char *from) {
+    if (!mount_point) return 0;
+    if (strncmp(mount_point, "/mnt/ps5upload/", 15) == 0 && mount_point[15] != '\0') return 1;
+    return image_mount_from_is_unit(from);
+}
+
 /* What statfs says about the mount holding `path`: its f_fstypename and f_mntfromname copied into
  * `fstype` and `from` (NUL-terminated). Non-zero when statfs failed. */
 typedef int (*image_mount_look_fn)(const char *path, char *fstype, size_t fstype_n, char *from,

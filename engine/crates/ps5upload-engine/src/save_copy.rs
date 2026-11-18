@@ -462,11 +462,13 @@ pub struct Part {
     pub old: bool,
 }
 
-/// An image name a shared save may carry: one folder, not a backup copy.
+/// An image name a shared save may carry: one folder, not a backup copy. No `:` either: on
+/// Windows `D:name` joined to the unpack folder is a folder on drive D, not one under it (and
+/// `name:x` is a stream of another file), and the name comes from a file someone else made.
 fn image_name_ok(n: &str) -> bool {
     !n.is_empty()
         && !n.starts_with('.')
-        && !n.contains(['/', '\\'])
+        && !n.contains(['/', '\\', ':'])
         && !n.ends_with(".bin")
         && !is_console_backup_image(n)
 }
@@ -1946,6 +1948,34 @@ mod tests {
     use std::collections::BTreeMap;
 
     const T: &str = "PPSA01650";
+
+    /// A shared save is a file from someone else: an image named `D:x` would, on Windows, be
+    /// looked for (and its `sce_sys` deleted) on drive D instead of under the unpack folder.
+    #[test]
+    fn a_shared_save_cannot_name_an_image_outside_its_folder() {
+        for bad in [
+            "D:PPSA01650",
+            "C:",
+            "a:b",
+            "x/y",
+            "x\\y",
+            "..",
+            ".hidden",
+            "",
+        ] {
+            assert!(!image_name_ok(bad), "{bad}");
+        }
+        assert!(image_name_ok("PPSA01650"));
+        assert!(image_name_ok("sdimg_SAVEDATA00"));
+        let tmp = make_temp_dir("odd-part-test").unwrap();
+        let dir = tmp.join(T);
+        std::fs::create_dir_all(&dir).unwrap();
+        let manifest = json!({ "title_id": T, "kind": SHARE_KIND, "images": ["D:PPSA01650"] });
+        std::fs::write(dir.join(SHARE_MANIFEST), manifest.to_string()).unwrap();
+        let e = shared_parts(&tmp, T).unwrap_err();
+        assert!(e.contains("odd part"), "{e}");
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
     const A: u32 = 0x1111_1111;
     const B: u32 = 0x2222_2222;
     const MAIN: &str = "sdimg_sce_sdmemory";

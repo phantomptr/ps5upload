@@ -40,6 +40,16 @@ async function until(done: () => boolean, ms: number): Promise<void> {
   for (const end = Date.now() + ms; !done() && Date.now() < end; ) await sleep(100);
 }
 
+/** A start at Auto asked for while a wait or a restart was running (startAgain). */
+type Again = { t: RpTarget; quality: SessionQuality };
+const asked: { again: Again | null } = { again: null };
+/** Takes what was asked for, if anything (set from startAgain while the loop waits). */
+function takeAgain(): Again | null {
+  const a = asked.again;
+  asked.again = null;
+  return a;
+}
+
 export const useRpQualityStore = create<QualityState>((set, get) => {
   /** Start `t` and go on trying while the engine answers "busy, try in N s" (it does so without
    *  asking the console). */
@@ -48,12 +58,23 @@ export const useRpQualityStore = create<QualityState>((set, get) => {
     while (get().switching && Date.now() < deadline) {
       if (useRemotePlayStore.getState().stream) break; // started again by hand
       useRemotePlayStore.setState({ error: null });
+      asked.again = null;
       await useRemotePlayStore.getState().start(t, { quality });
       await until(() => {
         const s = useRemotePlayStore.getState();
         return s.phase === "playing" || !s.stream || !!s.error;
       }, 60_000);
       const err = useRemotePlayStore.getState().error;
+      // The start this loop made was refused at its bitrate (startAgain, below): that is no error
+      // to show, and the one more try at Auto is this loop's to make.
+      const next = takeAgain();
+      if (next && !err && get().switching) {
+        t = next.t;
+        quality = next.quality;
+        kind = "restart";
+        await until(() => !useRemotePlayStore.getState().stream, 10_000);
+        continue;
+      }
       // After a stop of our own, "in use" is that session still leaving too.
       if (err?.code !== "busy" && !(kind !== "wait" && err?.code === "in_use")) break;
       // Not an error to show: the wait is the plan.
@@ -114,7 +135,12 @@ export const useRpQualityStore = create<QualityState>((set, get) => {
     /** The session that is ending did not start (the PS5 would not take its bitrate): once it
      *  is gone, start `t` again with `quality`, waiting out the PS5's slot as a restart does. */
     async startAgain(t, quality) {
-      if (get().switching) return;
+      if (get().switching) {
+        // A wait or a restart is running and made that start: its loop starts again (it returned
+        // here before, and the notice "the stream starts again" was followed by nothing).
+        asked.again = { t, quality };
+        return;
+      }
       set({ switching: { kind: "restart", retryAt: null } });
       await until(() => !useRemotePlayStore.getState().stream, 10_000);
       await startAndWait(t, "restart", quality);

@@ -2034,9 +2034,11 @@ static int handle_fs_list_volumes(runtime_state_t *state) {
          * saw it, and the scanner only found games inside it via the
          * /data recursive walk (which can be cut off by the entry cap
          * on populated drives). */
+        /* The tracker is believed only for an image unit (image_mount_tracker_trusted): the
+         * tracker of /mnt/ps5upload/data is also /data's by name. */
         const int is_ours =
             (strncmp(mnt_on, "/mnt/ps5upload/", 15) == 0) ||
-            mount_tracker_exists(mnt_on);
+            (mount_tracker_exists(mnt_on) && image_mount_tracker_trusted(mnt_on, mnt_from));
         if (!is_ours) {
             if (!is_user_storage_path(mnt_on)) continue;
             /* Real-device gate for the /mnt/ext* and /mnt/usb* slots:
@@ -2059,7 +2061,7 @@ static int handle_fs_list_volumes(runtime_state_t *state) {
 
         char path_esc[256];
         char from_esc[128];
-        char source_esc[512] = "";
+        char source_esc[1100] = "";
         json_escape_into(mnt_on,   path_esc, sizeof(path_esc));
         json_escape_into(mnt_from, from_esc, sizeof(from_esc));
 
@@ -2068,7 +2070,9 @@ static int handle_fs_list_volumes(runtime_state_t *state) {
          * mount_tracker_read accepts the full mount_point and handles
          * both legacy /mnt/ps5upload/<name> and user-chosen paths. */
         if (is_ours) {
-            char src_raw[256];
+            /* An image path is up to 511 bytes (fs_mount_find_existing reads it whole): 256 cut
+             * a long one, and the Library no longer matched it to its mount. */
+            char src_raw[512];
             if (mount_tracker_read(mnt_on, src_raw, sizeof(src_raw))) {
                 json_escape_into(src_raw, source_esc, sizeof(source_esc));
             }
@@ -3209,7 +3213,10 @@ static int fs_mount_request(runtime_state_t *state, const char *request_body,
      * paths with a trailing slash so unmount's exact-string match
      * stays well-defined. */
     if (mount_point[0] != '\0') {
-        if (!is_path_allowed(mount_point)) {
+        /* path_tree_op_refused: not over the trust store's own folder or one above it either
+         * (/data/ps5upload, /data). An image mounted there hides the helper's identity, pairings
+         * and mount trackers, or puts its own in their place. fs.rename refuses the same way. */
+        if (!is_path_allowed(mount_point) || path_tree_op_refused(mount_point)) {
             return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_path_not_allowed", 25);
         }
         size_t mp_len = strlen(mount_point);
@@ -3595,6 +3602,16 @@ static int fs_unmount_request(runtime_state_t *state, const char *request_body,
     if (path_has_dotdot_component(mount_point) ||
         (!legacy_match && !sandbox_overlay && !mount_tracker_exists(mount_point))) {
         return mgmt_reply(MGMT_FRAME_ERROR, "fs_unmount_not_our_mount", 24);
+    }
+    /* A tracker alone is not enough outside /mnt/ps5upload/: its file name can be another
+     * mount's (image_mount_tracker_trusted), and the first unmount pass below does not look at
+     * what it takes off. Whatever is mounted here must be an image unit. Nothing mounted (a
+     * tracker left by a restart) goes on: the unmount finds nothing and the tracker is removed. */
+    if (!legacy_match && !sandbox_overlay) {
+        struct statfs on;
+        if (fs_mounted_on(mount_point, &on) && !image_mount_tracker_trusted(mount_point, on.f_mntfromname)) {
+            return mgmt_reply(MGMT_FRAME_ERROR, "fs_unmount_not_our_mount", 24);
+        }
     }
 
     /* Backend detection: match the mount's f_mntfromname against
@@ -5450,7 +5467,8 @@ static int handle_remoteplay_cancel(runtime_state_t *state) {
  * (remoteplay.c "Sony-API serialization"), and the reply is sent after they return. */
 static int handle_remoteplay_readiness(runtime_state_t *state) {
     (void)state;
-    char body[640];
+    /* 1 KiB: the signed-in facts (#864) took the longest answer close to 640. */
+    char body[1024];
     int n = remoteplay_readiness_json(body, sizeof(body));
     if (n < 0 || (size_t)n >= sizeof(body)) {
         return mgmt_reply(MGMT_FRAME_ERROR, "readiness_overflow", 18);
@@ -5462,7 +5480,7 @@ static int handle_remoteplay_enable(runtime_state_t *state, const char *request_
     (void)state;
     char scope[16] = "";
     extract_json_string_field(request_body, "scope", scope, sizeof(scope));
-    char body[640];
+    char body[1024];
     int n = remoteplay_enable(strcmp(scope, "user") == 0, body, sizeof(body));
     if (n == -2) {
         return mgmt_reply(MGMT_FRAME_ERROR, "rp_enable_unsupported_fw", 24);
@@ -5622,7 +5640,14 @@ static int handle_cheats_toggle(runtime_state_t *state, const char *body) {
     char title_id[CHEATS_TITLE_ID_LEN] = {0};
     extract_json_string_field(body, "title_id",
                               title_id, sizeof(title_id));
-    int mod_index = (int)extract_json_uint64_field(body, "index");
+    /* The index must be there and be one: a body without it (or with one past INT_MAX, which
+     * the cast wrapped) read as 0 and switched the title's FIRST cheat on in the running game. */
+    uint64_t index_raw = extract_json_uint64_field(body, "index");
+    if (strstr(body, "\"index\"") == NULL || index_raw > (uint64_t)INT_MAX) {
+        const char *e = "{\"ok\":false,\"err\":\"bad_index\"}";
+        return mgmt_reply(MGMT_FRAME_CHEATS_TOGGLE_ACK, e, strlen(e));
+    }
+    int mod_index = (int)index_raw;
     int turn_on = 1;
     /* Check for "on": true/false first, fall back to "turn_on" */
     int bval = 0;
@@ -5645,14 +5670,10 @@ static int handle_cheats_toggle(runtime_state_t *state, const char *body) {
                        "\"on\":%s}",
                        tid_esc, mod_index, turn_on ? "true" : "false");
     } else {
-        char err_esc[300];
-        size_t ei = 0;
-        for (const char *s = err; *s && ei + 2 < sizeof(err_esc); s++) {
-            if (*s == '"' || *s == '\\') { err_esc[ei++]='\\'; err_esc[ei++]=*s; }
-            else if (*s == '\n') { err_esc[ei++]='\\'; err_esc[ei++]='n'; }
-            else err_esc[ei++] = *s;
-        }
-        err_esc[ei] = '\0';
+        /* The reason quotes the cheat file's own text (a bad offset, a module name): a tab or a
+         * stray byte in it made the refusal unreadable to the engine, which then showed none. */
+        char err_esc[2 * sizeof(err) + 2];
+        json_escape_into(err, err_esc, sizeof(err_esc));
         len = snprintf(resp, sizeof(resp),
                        "{\"ok\":false,\"err\":\"%s\"}", err_esc);
     }
@@ -7949,15 +7970,21 @@ static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps
     return 0;
 }
 
+/* Whether the save is open for use: mounted, and not already taken off the mount point with its
+ * write-back still owed (save_do_unmount's -2). In that state the mount point is an empty folder:
+ * reporting it as the open save sent edits into a folder the next mount hides. */
+static int save_is_open(void) { return g_save_mounted && !g_save_unmounted; }
+
 static int save_status_json(char *resp, size_t sz, const char *extra) {
     char esc[2100];
+    int open_now = save_is_open();
     json_escape_into(g_save_image, esc, sizeof esc);
     return snprintf(resp, sz,
                     "{\"ok\":true,\"err\":null,\"mounted\":%s,\"image\":\"%s\","
                     "\"mount_point\":\"%s\",\"kind\":\"%s\"%s}",
-                    g_save_mounted ? "true" : "false", g_save_mounted ? esc : "",
-                    g_save_mounted ? SAVE_MOUNT_POINT : "",
-                    g_save_mounted ? (g_save_is_ps4 ? "ps4" : "ps5") : "",
+                    open_now ? "true" : "false", open_now ? esc : "",
+                    open_now ? SAVE_MOUNT_POINT : "",
+                    open_now ? (g_save_is_ps4 ? "ps4" : "ps5") : "",
                     extra ? extra : "");
 }
 
@@ -7972,7 +7999,8 @@ static int handle_save_mount(runtime_state_t *state, const char *body, uint64_t 
     pthread_mutex_lock(&g_save_mtx);
     if (image[0] == 0) {
         n = save_status_json(resp, sizeof resp, NULL);
-    } else if (g_save_mounted && strcmp(image, g_save_image) == 0) {
+    } else if (save_is_open() && strcmp(image, g_save_image) == 0) {
+        /* (With the write-back still owed it falls through: written back, then opened again.) */
         n = save_status_json(resp, sizeof resp, NULL);
     } else {
         char err[512] = {0};

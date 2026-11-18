@@ -10,7 +10,8 @@
 //!   capture}`. Starts the sampler: the first answer may be `state: "starting"` with no `fps`.
 //!   `state` is the helper's (`ok`, `no_game`, `no_device`, `failed`), `no_count` (it answers
 //!   but the count never moved: some firmware, #848; `raw` then has the helper's count and reply
-//!   size), or `unsupported` (an
+//!   size, and from a newer helper the block's first bytes (`head`) and the offsets of the words
+//!   that moved, #865; `errno` is a failed read's), or `unsupported` (an
 //!   older helper) or `offline` (no answer; `error` says why). `capture` is
 //!   `{active, started_ms, stopped_ms, stop_reason, samples, stats}`.
 //! * `POST /api/ps5/hw/fps/capture/start {addr}` -> the same, with a new, empty capture.
@@ -31,8 +32,11 @@ use axum::extract::{Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use std::collections::BTreeSet;
+
 use ps5upload_core::game_fps::{
-    capture_csv, capture_stats, read_flips, CaptureSample, FlipRead, FpsMeter, FpsSample,
+    capture_csv, capture_stats, moving_words, read_flips, CaptureSample, FlipRead, FpsMeter,
+    FpsSample,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -83,6 +87,16 @@ struct Session {
     moved: bool,
     /// The helper's last raw read, for diagnostics: the count and how many bytes it wrote.
     raw: Option<(u64, u32)>,
+    /// What the bug report needs when the rate cannot be read (#865): the errno of the last read
+    /// that was not `ok`, the first and latest block heads the helper sent, the byte offsets of the
+    /// 8-byte words that changed between reads (where a moving count lives on that firmware), how
+    /// many reads were made, and the state the last read gave (kept when the sampler stops).
+    errno: Option<i32>,
+    first_head: Option<String>,
+    head: Option<String>,
+    moving: BTreeSet<usize>,
+    reads: u64,
+    read_state: Option<String>,
 }
 
 /// One-second samples in a row with a count that never moved before this is "no_count".
@@ -103,6 +117,12 @@ impl Session {
             still: 0,
             moved: false,
             raw: None,
+            errno: None,
+            first_head: None,
+            head: None,
+            moving: BTreeSet::new(),
+            reads: 0,
+            read_state: None,
         }
     }
 
@@ -114,8 +134,74 @@ impl Session {
         self.watch_until > now || self.capturing()
     }
 
-    /// One read's outcome: the state, the rate, and a capture row when there is one.
+    /// One read's outcome: the state, the rate, and a capture row when there is one. A change of
+    /// state is logged with what the helper answered, so a bug report shows it (#865).
     fn apply(&mut self, read: Result<FlipRead, String>, now: Instant, now_ms: i64) {
+        let before = self.state.clone();
+        if let Ok(r) = &read {
+            self.note_read(r);
+        }
+        self.apply_read(read, now, now_ms);
+        if self.state != before {
+            crate::log_info!("game_fps: {before} -> {}; {}", self.state, self.diag_line());
+        }
+    }
+
+    /// Keeps the diagnostics of one answer from the helper.
+    fn note_read(&mut self, r: &FlipRead) {
+        self.reads = self.reads.saturating_add(1);
+        self.read_state = Some(r.state.clone());
+        self.errno = (!r.is_ok() && r.errno != 0).then_some(r.errno);
+        if r.is_ok() && !r.head.is_empty() {
+            if let Some(prev) = &self.head {
+                self.moving.extend(moving_words(prev, &r.head));
+            }
+            if self.first_head.is_none() {
+                self.first_head = Some(r.head.clone());
+            }
+            self.head = Some(r.head.clone());
+        }
+    }
+
+    /// One line for the log: what the helper last answered.
+    fn diag_line(&self) -> String {
+        let mut out = format!("reads {}", self.reads);
+        if let Some((flips, bytes)) = self.raw {
+            out.push_str(&format!(", count {flips}, {bytes} bytes written"));
+        }
+        if let Some(e) = self.errno {
+            out.push_str(&format!(", errno {e}"));
+        }
+        if self.head.is_some() {
+            out.push_str(&format!(", moving words {:?}", self.moving));
+        }
+        if let Some(h) = &self.head {
+            out.push_str(&format!(", head {h}"));
+        }
+        if let Some(e) = &self.error {
+            out.push_str(&format!(", error {e}"));
+        }
+        out
+    }
+
+    /// The summary a bug report carries (`/api/diag/features`), no address in it.
+    fn diag_json(&self) -> Value {
+        json!({
+            "state": self.state,
+            "read_state": self.read_state,
+            "reads": self.reads,
+            "moved": self.moved,
+            "still": self.still,
+            "raw": self.raw.map(|(flips, bytes)| json!({ "flips": flips, "bytes": bytes })),
+            "errno": self.errno,
+            "first_head": self.first_head,
+            "head": self.head,
+            "moving_words": self.moving.iter().collect::<Vec<_>>(),
+            "capture_samples": self.capture.as_ref().map(|c| c.samples.len()),
+        })
+    }
+
+    fn apply_read(&mut self, read: Result<FlipRead, String>, now: Instant, now_ms: i64) {
         let r = match read {
             Ok(r) => r,
             Err(e) => {
@@ -230,9 +316,23 @@ impl Session {
         }
         if let Some((flips, bytes)) = self.raw {
             v["raw"] = json!({ "flips": flips, "bytes": bytes });
+            if let Some(h) = &self.head {
+                v["raw"]["head"] = json!(h);
+                v["raw"]["moving_words"] = json!(self.moving.iter().collect::<Vec<_>>());
+            }
+        }
+        if let Some(e) = self.errno {
+            v["errno"] = json!(e);
         }
         v
     }
+}
+
+/// The frame-rate readers of this engine run, for the bug report's feature summary: one entry per
+/// console looked at, without its address.
+pub(crate) fn diag_summary() -> Value {
+    let map = sessions().lock().unwrap_or_else(|e| e.into_inner());
+    json!({ "consoles": map.values().map(Session::diag_json).collect::<Vec<_>>() })
 }
 
 fn sessions() -> &'static Mutex<HashMap<String, Session>> {
@@ -492,6 +592,62 @@ mod tests {
         let v = s.snapshot();
         assert_eq!(v["state"], json!("ok"));
         assert_eq!(v["fps"], json!(60.0));
+    }
+
+    /// #865: a bug report could not tell what a 4.x console answered. The reads, the errno, the
+    /// block heads and the words that moved are kept for the feature summary and the reply.
+    #[test]
+    fn what_the_helper_answered_is_kept_for_the_bug_report() {
+        let now = Instant::now();
+        let mut s = capturing(now);
+        let read = |flips: u64, mono_us: u64, head: &str| {
+            Ok(FlipRead {
+                state: "ok".into(),
+                flips,
+                mono_us,
+                bytes: 128,
+                head: head.into(),
+                ..FlipRead::default()
+            })
+        };
+        // the word at offset 8 stays, the one at 16 moves
+        let h1 = "000000000000000007000000000000000100000000000000";
+        let h2 = "000000000000000007000000000000004100000000000000";
+        s.apply(read(7, 1_000_000, h1), now, 2_000);
+        s.apply(read(7, 2_000_000, h2), now, 3_000);
+        let d = s.diag_json();
+        assert_eq!(d["reads"], json!(2));
+        assert_eq!(d["read_state"], json!("ok"));
+        assert_eq!(d["first_head"], json!(h1));
+        assert_eq!(d["head"], json!(h2));
+        assert_eq!(d["moving_words"], json!([16]));
+        assert_eq!(d["raw"], json!({ "flips": 7, "bytes": 128 }));
+        assert_eq!(s.snapshot()["raw"]["moving_words"], json!([16]));
+        assert!(
+            s.diag_line().contains("moving words {16}"),
+            "{}",
+            s.diag_line()
+        );
+        // a failed read keeps its errno; the heads stay
+        s.apply(
+            Ok(FlipRead {
+                state: "failed".into(),
+                errno: 22,
+                ..FlipRead::default()
+            }),
+            now,
+            4_000,
+        );
+        let d = s.diag_json();
+        assert_eq!(
+            (d["state"].as_str(), d["errno"].as_i64()),
+            (Some("failed"), Some(22))
+        );
+        assert_eq!(s.snapshot()["errno"], json!(22));
+        assert_eq!(d["head"], json!(h2));
+        // the summary names no console
+        with_session("192.0.2.91", |_| ());
+        assert!(!diag_summary().to_string().contains("192.0.2.91"));
     }
 
     #[test]

@@ -31,6 +31,7 @@
 #include <unistd.h>
 
 #include "ava1_op.h"
+#include "cheats_list.h" /* cheats_utf8_char_len */
 #include "cleanup_rules.h"
 #include "content_db.h"
 #include "fs_jobs.h"
@@ -155,7 +156,9 @@ static void jb_f(jb_t *j, const char *fmt, ...) {
     }
     j->len += (size_t)k;
 }
-/* "s" with JSON escapes (bytes >= 0x80 pass through: app.db names are UTF-8). */
+/* "s" with JSON escapes. Whole UTF-8 characters pass through (app.db names are UTF-8); a byte
+ * that is not part of one reads '?': a file's path is whatever bytes its name has (Latin-1,
+ * Shift-JIS on a USB drive), and one of them made the engine drop the whole clean-up reply. */
 static void jb_str(jb_t *j, const char *s) {
     char tmp[8];
     jb_raw(j, "\"", 1);
@@ -167,8 +170,16 @@ static void jb_str(jb_t *j, const char *s) {
         } else if (*p < 0x20) {
             snprintf(tmp, sizeof tmp, "\\u%04x", *p);
             jb_raw(j, tmp, 6);
-        } else {
+        } else if (*p < 0x80) {
             jb_raw(j, (const char *)p, 1);
+        } else {
+            int k = cheats_utf8_char_len((const char *)p);
+            if (k <= 0) {
+                jb_raw(j, "?", 1);
+            } else {
+                jb_raw(j, (const char *)p, (size_t)k);
+                p += k - 1;
+            }
         }
     }
     jb_raw(j, "\"", 1);

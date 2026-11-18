@@ -4,7 +4,7 @@
 //   node .github/scripts/release-ci-verdict.mjs <sha>       prints {"verdict", "reason"} as JSON
 //
 // Verdicts: pass, pending (a run is still going), absent (no run yet), cancelled (every run was
-// cancelled), fail.
+// cancelled or skipped: none of them tested anything), fail.
 //
 // A commit passes when a `ci` run on it succeeded, or when its tree is the tree a passing run
 // already tested: the merged pull request's head, provided
@@ -36,9 +36,17 @@ export function ownVerdict(runs) {
   if (runs.some((r) => r.conclusion === "success")) return "pass";
   if (runs.some((r) => r.status !== "completed")) return "pending";
   if (runs.length === 0) return "absent";
-  if (runs.every((r) => r.conclusion === "cancelled")) return "cancelled";
+  if (runs.every((r) => NO_VERDICT.has(r.conclusion))) return "cancelled";
   return "fail";
 }
+
+/**
+ * Conclusions of a finished run that tested nothing: cancelled (the next push to main), skipped
+ * (every job's `if` was off), stale and neutral. Like a cancel, they neither pass the commit nor
+ * count as its failure, so a pull request's result may still stand in. Anything else that is
+ * not `success` (failure, timed_out, startup_failure, action_required) is a failure.
+ */
+export const NO_VERDICT = new Set(["cancelled", "skipped", "stale", "neutral"]);
 
 /**
  * deps: {runs(sha), mergedPrs(sha) -> [{number, head}], tree(sha), parent(sha) -> sha|null,

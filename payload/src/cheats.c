@@ -27,6 +27,8 @@
 #include "cheats.h"
 #include "cheats_list.h"
 #include "cheats_json.h"
+#include "cheats_jbuf.h"
+#include "cheats_xml_attr.h"
 #include "notif.h"
 
 #include <ps5/kernel.h>
@@ -201,71 +203,7 @@ static int json_bool(const char *json, const char *key, int *out) {
     return -1;
 }
 
-/* ── JSON string buffer (for building output) ────────────────────── */
-
-typedef struct {
-    char  *buf;
-    size_t cap;
-    size_t off;
-} jbuf_t;
-
-static void jb_init(jbuf_t *jb, char *buf, size_t cap) {
-    jb->buf = buf;
-    jb->cap = cap;
-    jb->off = 0;
-    if (cap > 0) buf[0] = '\0';
-}
-
-static void jb_str(jbuf_t *jb, const char *s) {
-    if (!s) return;
-    while (*s && jb->off + 2 < jb->cap) {
-        char c = *s;
-        if (c == '"' || c == '\\') {
-            if (jb->off + 3 >= jb->cap) break;
-            jb->buf[jb->off++] = '\\';
-            jb->buf[jb->off++] = c;
-            s++;
-        } else if (c == '\n') {
-            if (jb->off + 3 >= jb->cap) break;
-            jb->buf[jb->off++] = '\\';
-            jb->buf[jb->off++] = 'n';
-            s++;
-        } else if ((unsigned char)c < 0x20) {
-            s++;
-        } else if ((unsigned char)c < 0x80) {
-            jb->buf[jb->off++] = c;
-            s++;
-        } else {
-            /* A non-ASCII byte must start a valid UTF-8 character, or the whole reply fails to
-             * parse on the engine (Latin-1 / Shift-JIS names; a name cut mid-character). */
-            int n = cheats_utf8_char_len(s);
-            if (n == 0) {
-                jb->buf[jb->off++] = '?';
-                s++;
-            } else {
-                if (jb->off + (size_t)n + 2 >= jb->cap) break;
-                memcpy(jb->buf + jb->off, s, (size_t)n);
-                jb->off += (size_t)n;
-                s += n;
-            }
-        }
-    }
-    jb->buf[jb->off] = '\0';
-}
-
-static void jb_raw(jbuf_t *jb, const char *s) {
-    size_t len = strlen(s);
-    if (jb->off + len >= jb->cap) len = jb->cap - jb->off - 1;
-    memcpy(jb->buf + jb->off, s, len);
-    jb->off += len;
-    jb->buf[jb->off] = '\0';
-}
-
-#define JB_PRINTF(jb, ...) do { \
-    char _tmp[512]; \
-    int _n = snprintf(_tmp, sizeof(_tmp), __VA_ARGS__); \
-    if (_n > 0) jb_raw((jb), _tmp); \
-} while(0)
+/* ── JSON string buffer (for building output): include/cheats_jbuf.h ── */
 
 /* ── Running-game detection ──────────────────────────────────────── */
 
@@ -804,31 +742,9 @@ static int parse_json_file(const char *json, size_t json_len,
 
 /* ── SHN (XML) parser ────────────────────────────────────────────── */
 
-/* Tiny XML attribute extractor. Finds attr="value" in tag. */
-static int xml_attr(const char *tag, const char *attr,
-                    char *out, size_t cap) {
-    if (!tag || !attr || !out || cap == 0) return -1;
-    out[0] = '\0';
-    size_t alen = strlen(attr);
-    const char *p = tag;
-    while ((p = strstr(p, attr))) {
-        /* A whole attribute name only: "Text" must not match inside "ContextText". */
-        if (p == tag || p[-1] == ' ' || p[-1] == '\t' || p[-1] == '\n' || p[-1] == '\r') {
-            p += alen;
-            while (*p == ' ' || *p == '\t' || *p == '=') p++;
-            if (*p == '"') {
-                p++;
-                size_t i = 0;
-                while (*p && *p != '"' && i + 1 < cap) {
-                    out[i++] = *p++;
-                }
-                out[i] = '\0';
-                return 0;
-            }
-        }
-        p += alen;
-    }
-    return -1;
+/* Tiny XML attribute extractor (include/cheats_xml_attr.h). Finds attr="value" in tag. */
+static int xml_attr(const char *tag, const char *attr, char *out, size_t cap) {
+    return cheats_xml_attr(tag, attr, out, cap);
 }
 
 /* The opening tag [start, end) alone, NUL-terminated, cut at `cap`. xml_attr is then searched
@@ -3142,8 +3058,13 @@ int cheats_list_mods(const char *title_id, char *buf, size_t cap,
         return 0;
     }
 
+    /* Room kept for the tail, so a list that outgrows the buffer still ends as valid JSON: a
+     * mod that does not fit whole is taken back out and the reply says "truncated":true. It
+     * used to be cut where the buffer ended, which the engine could not parse at all. */
+    if (cap < 256 + CHEATS_MODS_TAIL_ROOM) return -1;
+    int truncated = 0;
     jbuf_t jb;
-    jb_init(&jb, buf, cap);
+    jb_init(&jb, buf, cap - CHEATS_MODS_TAIL_ROOM);
     jb_raw(&jb, "{\"title_id\":\"");
     jb_str(&jb, title_id);
     jb_raw(&jb, "\",\"mods\":[");
@@ -3169,7 +3090,7 @@ int cheats_list_mods(const char *title_id, char *buf, size_t cap,
         pthread_mutex_unlock(&g_sess_lock);
     }
 
-    for (int fi = 0; fi < n; fi++) {
+    for (int fi = 0; fi < n && !truncated; fi++) {
         cheat_file_t *cf = cheat_file_new();
         if (!cf) continue;
         if (load_cheat_file(files[fi].path, files[fi].format, cf) != 0) {
@@ -3180,8 +3101,8 @@ int cheats_list_mods(const char *title_id, char *buf, size_t cap,
 
         for (int mi = 0; mi < cf->mod_count; mi++) {
             cheat_mod_t *m = &cf->mods[mi];
+            size_t mark = jb.off;
             if (!first) jb_raw(&jb, ",");
-            first = 0;
 
             JB_PRINTF(&jb, "{\"index\":%d,\"name\":\"", flat);
             jb_str(&jb, m->name);
@@ -3197,8 +3118,10 @@ int cheats_list_mods(const char *title_id, char *buf, size_t cap,
                 }
                 other = (gv.content[0] || gv.app[0]) && !gp_version_ok(m->xml_ver, gv.content, gv.app);
             }
-            JB_PRINTF(&jb, "\",\"type\":\"%s\",\"on\":%s%s%s",
-                      m->type,
+            /* The type is the file's own text too: escaped like the name. */
+            jb_raw(&jb, "\",\"type\":\"");
+            jb_str(&jb, m->type);
+            JB_PRINTF(&jb, "\",\"on\":%s%s%s",
                       m->enabled ? "true" : "false",
                       m->xml_path[0] ? ",\"format\":\"xml\"" : "",
                       other ? ",\"other_version\":true" : "");
@@ -3221,12 +3144,19 @@ int cheats_list_mods(const char *title_id, char *buf, size_t cap,
                 if (snap[k].timed && snap[k].late) jb_raw(&jb, ",\"applied_late\":true");
             }
             jb_raw(&jb, "}");
+            if (jb.over) {
+                jb_rollback(&jb, mark);
+                truncated = 1;
+                break;
+            }
+            first = 0;
             flat++;
         }
         cheat_file_free(cf);
     }
 
-    jb_raw(&jb, "]}");
+    jb.cap = cap; /* the tail's room */
+    jb_raw(&jb, truncated ? "],\"truncated\":true}" : "]}");
     free(snap);
 
     if (written) *written = jb.off;

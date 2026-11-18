@@ -186,6 +186,38 @@ static void test_long_message(void) {
     CHECK(strlen(s_ring[0].message) == NOTIF_MSG_MAX - 1);
 }
 
+/* A message that is not UTF-8 (a cheat's name from a Latin-1 file, or one cut at 255 bytes inside a
+ * character) lists as valid UTF-8: the engine drops a whole reply for one such byte. */
+static void test_bad_utf8_lists_clean(void) {
+    wipe();
+    notif_send("Cheat on: Vie infinie \xE9t\xE9", NOTIF_LEVEL_INFO);
+    notif_send("\xE3\x82\xB2\xE3\x83\xBC\xE3\x83\xA0 ok", NOTIF_LEVEL_INFO);
+    char big[1024];
+    for (size_t i = 0; i + 3 < sizeof(big); i += 3) memcpy(big + i, "\xE3\x82\xB2", 3);
+    big[1023] = 0; /* 3-byte characters: the cut at 255 bytes is at a whole one, at 256+ it is not */
+    big[0] = 'x';
+    big[1] = 'y'; /* shift the grid so byte 255 falls inside a character */
+    big[2] = '\xE3';
+    big[3] = '\x82';
+    big[4] = '\xB2';
+    notif_send(big + 1, NOTIF_LEVEL_INFO);
+    const char *l = list_since(0);
+    CHECK(strstr(l, "Vie infinie ?t?") != NULL);
+    CHECK(strstr(l, "\xE3\x82\xB2\xE3\x83\xBC\xE3\x83\xA0 ok") != NULL);
+    for (const unsigned char *p = (const unsigned char *)l; *p;) {
+        if (*p < 0x80) {
+            p++;
+            continue;
+        }
+        size_t k = notif_utf8_len(p);
+        CHECK(k != 0);
+        if (k == 0) break;
+        p += k;
+    }
+    restart();
+    CHECK(strstr(list_since(0), "Vie infinie ?t?") != NULL);
+}
+
 /* A list reply never runs past its buffer, however small. */
 static void test_small_buffers(void) {
     wipe();
@@ -304,6 +336,7 @@ int main(void) {
     test_kept_differs_from_shown();
     test_ring_wraps();
     test_long_message();
+    test_bad_utf8_lists_clean();
     test_small_buffers();
     test_truncated_anywhere();
     test_damaged();

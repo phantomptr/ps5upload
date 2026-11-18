@@ -6,7 +6,7 @@ vi.mock("../api/saveBackup", async (importOriginal) => ({
   saveBackupApi: { set: (...a: unknown[]) => set(...a), view: vi.fn() },
 }));
 
-import { backupHosts, clampKeep, legacySettings, startSaveBackupSync } from "./autoSaveBackup";
+import { backupHosts, clampKeep, legacySettings, numberBoxLeft, startSaveBackupSync } from "./autoSaveBackup";
 import { useRosterStore } from "./roster";
 import { stampLabel } from "../screens/GameHub/SaveBackupsList";
 
@@ -33,6 +33,20 @@ describe("automatic save backup (engine-run)", () => {
     expect(clampKeep(0)).toBe(1);
     expect(clampKeep(80)).toBe(50);
     expect(clampKeep("x")).toBe(5);
+  });
+
+  it("an emptied Versions to keep box saves nothing and goes back, where it saved 1", () => {
+    // Selected to retype, deleted, then a click elsewhere.
+    expect(numberBoxLeft("", 5, clampKeep)).toEqual({ save: null, show: "5" });
+    expect(numberBoxLeft("  ", 5, clampKeep)).toEqual({ save: null, show: "5" });
+    expect(numberBoxLeft("abc", 5, clampKeep)).toEqual({ save: null, show: "5" });
+    // A real choice is saved; the same number is not sent again.
+    expect(numberBoxLeft("3", 5, clampKeep)).toEqual({ save: 3, show: "3" });
+    expect(numberBoxLeft("5", 5, clampKeep)).toEqual({ save: null, show: "5" });
+    // Out of range: the nearest allowed, and the box says so (999 stayed on screen at 50).
+    expect(numberBoxLeft("999", 50, clampKeep)).toEqual({ save: null, show: "50" });
+    expect(numberBoxLeft("999", 5, clampKeep)).toEqual({ save: 50, show: "50" });
+    expect(numberBoxLeft("0", 5, clampKeep)).toEqual({ save: 1, show: "1" });
   });
 
   it("labels a backup's time in UTC", () => {

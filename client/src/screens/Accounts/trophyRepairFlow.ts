@@ -14,8 +14,12 @@ export type TrophyRepairStep =
   | { kind: "applying" }
   | { kind: "done"; changed: number; failed: number; backup: string }
   | { kind: "undoing"; backup: string }
-  | { kind: "undone"; restored: number }
-  | { kind: "error"; message: string; gameRunning: boolean };
+  /** `failed`: files the undo could not put back (`backup` is then still there to try again). */
+  | { kind: "undone"; restored: number; failed: number; backup?: string }
+  /** `backup`: the error is an undo's, and the copy is still on the PS5: Undo is offered again.
+   *  Without it the only way on was Back, to a check that finds nothing to change, so an undo
+   *  refused once (a game was open) could never be made. */
+  | { kind: "error"; message: string; gameRunning: boolean; backup?: string };
 
 /** The calls the flow makes, bound to one user and console. */
 export interface TrophyRepairApi {
@@ -33,8 +37,13 @@ export function isGameRunning(e: unknown): boolean {
   return /game_running/.test(String(e));
 }
 
-function failed(e: unknown): TrophyRepairStep {
-  return { kind: "error", message: String(e).replace(/^Error: /, ""), gameRunning: isGameRunning(e) };
+function failed(e: unknown, backup?: string): TrophyRepairStep {
+  return {
+    kind: "error",
+    message: String(e).replace(/^Error: /, ""),
+    gameRunning: isGameRunning(e),
+    ...(backup ? { backup } : {}),
+  };
 }
 
 /** The check: changes nothing. */
@@ -63,9 +72,10 @@ export async function applyTrophies(api: TrophyRepairApi): Promise<TrophyRepairS
 export async function undoTrophies(api: TrophyRepairApi, backup: string): Promise<TrophyRepairStep> {
   try {
     const r = await api.restore(backup);
-    return { kind: "undone", restored: r.restored };
+    const bad = r.failed ?? 0;
+    return { kind: "undone", restored: r.restored, failed: bad, ...(bad > 0 ? { backup } : {}) };
   } catch (e) {
-    return failed(e);
+    return failed(e, backup);
   }
 }
 

@@ -144,4 +144,64 @@ describe("syncOnce", () => {
     expect(engine.doc.value?.keys).toEqual({ [PIN]: { v: "b", at: 30 }, [CAP]: { v: "15", at: 20 } });
     expect(store.get(PIN)).toBe("b");
   });
+
+  // A setting changed while a request is out (an app's first sync waits for its engine to start;
+  // a slow link). The change is stamped as it is made (startSharedPrefs); the sync used the
+  // stamps it read before the request and saved them back over the new one, so the change never
+  // reached the engine: the next sync saw nothing newer here.
+  const META = "ps5upload.shared_prefs.meta.v1";
+  /** What startSharedPrefs does on a write here. */
+  const changeHere = (key: string, v: string, at: number) => {
+    store.set(key, v);
+    const m = JSON.parse(store.get(META) ?? '{"rev":0,"at":{}}') as { rev: number; at: Record<string, number> };
+    m.at[key] = at;
+    store.set(META, JSON.stringify(m));
+  };
+
+  it("a change made while the engine's settings are being read is sent, not forgotten", async () => {
+    const engine = fakeEngine({ rev: 3, value: { keys: { [CAP]: { v: "10", at: 100 } } } });
+    store.set(CAP, "10");
+    store.set(META, JSON.stringify({ rev: 3, at: { [CAP]: 100 } }));
+    const realGet = engine.get;
+    engine.get = async () => {
+      const d = await realGet();
+      changeHere(CAP, "5", 200);
+      return d;
+    };
+    await syncOnce(engine);
+    expect(engine.doc.value?.keys?.[CAP]).toEqual({ v: "5", at: 200 });
+    expect(store.get(CAP)).toBe("5");
+  });
+
+  it("a change made during the read wins over an older one the engine holds", async () => {
+    const engine = fakeEngine({ rev: 3, value: { keys: { [CAP]: { v: "20", at: 150 } } } });
+    store.set(CAP, "10");
+    store.set(META, JSON.stringify({ rev: 2, at: { [CAP]: 100 } }));
+    const realGet = engine.get;
+    engine.get = async () => {
+      const d = await realGet();
+      changeHere(CAP, "5", 200);
+      return d;
+    };
+    await syncOnce(engine);
+    expect(store.get(CAP)).toBe("5");
+    expect(engine.doc.value?.keys?.[CAP]).toEqual({ v: "5", at: 200 });
+  });
+
+  it("a change made while a save is out keeps its time and goes with the next sync", async () => {
+    const engine = fakeEngine({ rev: 3, value: { keys: { [CAP]: { v: "10", at: 100 }, [PIN]: { v: "a", at: 100 } } } });
+    store.set(CAP, "10");
+    store.set(PIN, "b");
+    store.set(META, JSON.stringify({ rev: 3, at: { [CAP]: 100, [PIN]: 150 } }));
+    const realPut = engine.put;
+    engine.put = async (rev, keys) => {
+      const r = await realPut(rev, keys);
+      if (engine.puts === 1) changeHere(CAP, "5", 200);
+      return r;
+    };
+    await syncOnce(engine);
+    expect(engine.doc.value?.keys?.[PIN]?.v).toBe("b");
+    await syncOnce(engine);
+    expect(engine.doc.value?.keys?.[CAP]).toEqual({ v: "5", at: 200 });
+  });
 });

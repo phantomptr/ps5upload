@@ -290,6 +290,11 @@ pub(crate) fn save_to<T: Serialize>(path: &std::path::Path, value: &T) -> std::i
     );
     let bytes = serde_json::to_vec_pretty(value)
         .map_err(|e| std::io::Error::other(format!("{what}: {e}")))?;
+    // One writer at a time: two at once shared the temporary file, so one's rename failed (a
+    // settings change answered as an error though it applied) or a file of mixed halves was
+    // moved into place and read as damaged at the next start.
+    static WRITING: Mutex<()> = Mutex::new(());
+    let _one = WRITING.lock().unwrap_or_else(|e| e.into_inner());
     std::fs::write(&tmp, bytes)
         .and_then(|_| std::fs::rename(&tmp, path))
         .map_err(|e| crate::state_io::io_error(&what, path, e))
@@ -368,6 +373,10 @@ fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(120)))
         .http_status_as_error(false)
+        // The engine is on this computer. An `http_proxy` / `ALL_PROXY` in the environment would
+        // otherwise take 127.0.0.1 to the proxy: every pass then found no console and made no
+        // backup, with nothing in the status.
+        .proxy(None)
         .build()
         .into()
 }
@@ -1139,8 +1148,11 @@ pub fn parse_backup_name(title_id: &str, file: &str) -> Option<(u32, String)> {
     (!stamp.is_empty()).then(|| (user, stamp.to_string()))
 }
 
+/// A title id or a backup's file name that is one path component and nothing else. `.` is not
+/// one: `<saves>/.` is the folder of every game's saves, and a restore deletes what it names.
 pub(crate) fn plain(s: &str) -> bool {
     !s.is_empty()
+        && s != "."
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
         && !s.contains("..")
@@ -1918,6 +1930,7 @@ pub(crate) fn writable(dir: &str) -> Result<(), String> {
 pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
     let before = settings();
     let mut next = before.clone();
+    let dir_named = patch.dir.is_some();
     if let Some(d) = patch.dir {
         // Backups already in the folder left behind still list and restore.
         next.move_to(&d);
@@ -1963,7 +1976,7 @@ pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
             "choose a folder for the backups first",
         );
     }
-    if !next.dir.is_empty() {
+    if dir_check_due(&before, &next, dir_named) {
         let dir = next.dir.clone();
         match tokio::task::spawn_blocking(move || writable(&dir)).await {
             Ok(Ok(())) => {}
@@ -1985,6 +1998,14 @@ pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
         });
     }
     Json(view()).into_response()
+}
+
+/// Whether a settings change must find the backup folder writable: when the change names the
+/// folder, or switches the backups on. Any other change (switching them off, another interval,
+/// a console added) goes through with the folder away: a backup disk that is unplugged must not
+/// stop the person from turning the backups off.
+fn dir_check_due(before: &Settings, next: &Settings, dir_named: bool) -> bool {
+    !next.dir.is_empty() && (dir_named || (next.enabled && !before.enabled))
 }
 
 /// True when a settings change should start a backup pass at once: backups were just switched
@@ -3028,6 +3049,93 @@ mod tests {
             wait_left(Duration::from_secs(400), Duration::from_secs(300)),
             None
         );
+    }
+
+    #[test]
+    fn a_plain_name_is_one_path_component_below_the_folder() {
+        for bad in ["", ".", "..", "a..b", "a/b", "a\\b", "C:x", "a b"] {
+            assert!(!plain(bad), "{bad}");
+        }
+        for good in [
+            "PPSA01650",
+            ".hack",
+            "CUSA00001_user1000000a_2026-01-01_000000.zip",
+        ] {
+            assert!(plain(good), "{good}");
+        }
+        // The folder of every game's saves is not one game's save folder.
+        assert_eq!(
+            ps5_save_image("/user/home/1000000a/savedata_prospero/./x"),
+            None
+        );
+        assert_eq!(
+            title_of_save_image("/user/home/1000000a/savedata/./x"),
+            None
+        );
+    }
+
+    /// Two clients change the settings at once (each sends its consoles at start), or a pass
+    /// and a restore both note what is done: every save must land whole.
+    #[test]
+    fn saves_of_one_file_at_once_all_land_whole() {
+        let dir = make_temp_dir("save-to-test").unwrap();
+        let path = dir.join("state.json");
+        let threads: Vec<_> = (0..8usize)
+            .map(|t| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    for i in 0..50usize {
+                        let v: Vec<String> = vec!["x".repeat(t * 400 + i); 4];
+                        save_to(&path, &v).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        let back: Vec<String> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(back.len(), 4);
+        let _ = cleanup_temp_dir(&dir.to_string_lossy());
+    }
+
+    #[test]
+    fn only_a_new_folder_or_switching_on_needs_the_folder_writable() {
+        let on = Settings {
+            enabled: true,
+            dir: "/backups".into(),
+            ..Settings::default()
+        };
+        let off = Settings {
+            enabled: false,
+            ..on.clone()
+        };
+        // Switching off, or any other change, with the folder away (an unplugged disk).
+        assert!(!dir_check_due(&on, &off, false));
+        assert!(!dir_check_due(&on, &on, false));
+        assert!(!dir_check_due(&off, &off, false));
+        // Naming the folder, or switching on.
+        assert!(dir_check_due(&on, &on, true));
+        assert!(dir_check_due(&off, &on, false));
+        // No folder: nothing to check (switching on without one is refused before).
+        assert!(!dir_check_due(
+            &Settings::default(),
+            &Settings::default(),
+            true
+        ));
+    }
+
+    #[test]
+    fn the_engines_own_routes_are_never_asked_through_a_proxy() {
+        // Set only while the agent is built, and put back at once.
+        let was = std::env::var_os("ALL_PROXY");
+        std::env::set_var("ALL_PROXY", "http://127.0.0.1:9");
+        let a = agent();
+        match was {
+            Some(v) => std::env::set_var("ALL_PROXY", v),
+            None => std::env::remove_var("ALL_PROXY"),
+        }
+        assert!(a.config().proxy().is_none());
     }
 
     #[tokio::test]

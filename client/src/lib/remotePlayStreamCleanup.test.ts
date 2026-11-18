@@ -332,6 +332,17 @@ describe("RemotePlayStream at its end", () => {
     await flush();
   });
 
+  // Stop while connecting at a high bitrate, and the engine's start failing in that moment: the
+  // error went to the store, which took it for the PS5 refusing the bitrate, set Bitrate back to
+  // Auto and started the stream again after the Stop.
+  it("says nothing about a start that failed after the player stopped it", async () => {
+    const a = await opened();
+    a.s.stop();
+    a.ws.onmessage?.({ data: JSON.stringify({ stage: "error", code: "other", error: "handshake failed" }) });
+    expect(a.errors).toEqual([]);
+    await flush();
+  });
+
   it("asks the engine for the chosen bitrate, and for nothing on Auto", async () => {
     const startOf = async (bitrateKbps?: number) => {
       const s = new RemotePlayStream({ ...options(), bitrateKbps });

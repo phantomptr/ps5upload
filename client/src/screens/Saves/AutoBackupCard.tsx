@@ -13,6 +13,7 @@ import {
   consoleCopySupported,
   intervalChoices,
   intervalSupported,
+  numberBoxLeft,
   useAutoSaveBackupStore,
 } from "../../state/autoSaveBackup";
 import { useConnectionStore } from "../../state/connection";
@@ -345,8 +346,9 @@ export default function AutoBackupCard() {
           defaultValue={settings.keep}
           key={settings.keep}
           onBlur={(e) => {
-            const keep = clampKeep(Number(e.target.value));
-            if (keep !== settings.keep) void set({ keep });
+            const left = numberBoxLeft(e.target.value, settings.keep, clampKeep);
+            e.target.value = left.show;
+            if (left.save !== null) void set({ keep: left.save });
           }}
           className="w-20 justify-self-start rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-sm text-[var(--color-text)] sm:justify-self-end"
         />

@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import type { NpState, RemotePlayReadiness } from "../../../api/ps5";
-import { nextStep, playReady, setupProgress, setupStates, type SetupInput } from "./playSetup";
+import {
+  nextStep,
+  playReady,
+  setupProgress,
+  setupStates,
+  userFacts,
+  userSignedIn,
+  userWait,
+  type SetupInput,
+} from "./playSetup";
 
 const R = (o: Partial<RemotePlayReadiness> = {}): RemotePlayReadiness => ({
   fw_magic: 0x13600000,
@@ -35,6 +44,16 @@ const NP = (o: Partial<NpState> = {}): NpState => ({
   login_flag: null,
   ...o,
 });
+// What the helper answers for a signed-in offline user with no account ID yet (#864).
+const NO_ID = R({
+  account_uid: 0,
+  account_via: "none",
+  user_slot: -1,
+  account_id_b64: "",
+  account_id_raw: 0,
+  account_type: "",
+  service_enabled: 0,
+});
 const base: SetupInput = {
   connected: true,
   readiness: R(),
@@ -56,11 +75,12 @@ describe("Play setup", () => {
 
   it("walks a fresh offline user through each step in order", () => {
     // Nobody signed in.
-    let s = setupStates({ ...base, readiness: R({ account_uid: -1 }), np: null });
+    let s = setupStates({ ...base, readiness: R({ account_uid: -1, foreground_uid: -1 }), np: null });
     expect(nextStep(s)).toBe("user");
     expect(s.account).toBe("wait");
-    // Signed in, no account id.
-    s = setupStates({ ...base, readiness: R({ account_id_raw: 0, account_type: "", service_enabled: 0 }), np: null });
+    // Signed in, no account id: the helper finds no account to pair with (account_uid 0,
+    // via none), as it answers for such a user.
+    s = setupStates({ ...base, readiness: NO_ID, np: null });
     expect([s.user, s.account, s.signin]).toEqual(["ok", "todo", "wait"]);
     // Activated, not signed in to PSN, service off.
     s = setupStates({ ...base, readiness: R({ service_enabled: 0 }), np: NP({ online_id: "", auth_dat: false }) });
@@ -84,6 +104,40 @@ describe("Play setup", () => {
     s = setupStates({ ...base, restOk: true, paired: true, played: true });
     expect(nextStep(s)).toBeNull();
     expect(setupProgress(s)).toEqual({ done: 9, total: 9 });
+  });
+
+  it("counts a signed-in user without an account ID as signed in (#864)", () => {
+    // In front, no account ID: signed in, and the account ID is the step to do.
+    let s = setupStates({ ...base, readiness: NO_ID, np: null });
+    expect(nextStep(s)).toBe("account");
+    expect(userWait(NO_ID)).toBeNull();
+    // Nobody in front (the dashboard), but signed in: a newer helper says so in login_count.
+    const behind = { ...NO_ID, foreground_uid: -1, login_count: 1, login_rc: 0, fg_rc: 0 };
+    s = setupStates({ ...base, readiness: behind, np: null });
+    expect([s.user, s.account]).toEqual(["ok", "todo"]);
+    // An older helper with nobody in front and no account user: still open, it can't tell.
+    expect(setupStates({ ...base, readiness: { ...NO_ID, foreground_uid: -1 }, np: null }).user).toBe("todo");
+    // An activated user found through the login list.
+    expect(userSignedIn(R({ foreground_uid: -1, account_via: "login-list" }))).toBe(true);
+  });
+
+  it("says why the sign-in step stays open, with the helper's raw answer", () => {
+    expect(userWait(null)).toBeNull();
+    // Nobody signed in, as the console said.
+    const nobody = R({ foreground_uid: -1, account_uid: 0, account_via: "none", login_count: 0, login_rc: 0, fg_rc: 0 });
+    expect(userWait(nobody)).toEqual({ why: "none" });
+    // The console answered with an error: not read as nobody.
+    const failed = { ...nobody, login_count: -1, login_rc: 0x80960002, fg_rc: 0x80960002 };
+    expect(userWait(failed)).toEqual({ why: "error", code: "0x80960002" });
+    // The list answered; the foreground's error is not the one in the way.
+    expect(userWait({ ...nobody, fg_rc: 0x80960002 })).toEqual({ why: "none" });
+    // An older helper: no codes, so nobody.
+    expect(userWait(R({ foreground_uid: -1, account_uid: 0 }))).toEqual({ why: "none" });
+    expect(userFacts(failed)).toBe(
+      "foreground_uid=0xffffffff account_uid=0x00000000 account_via=none user_slot=1 login_count=-1 fg_rc=0x80960002 login_rc=0x80960002",
+    );
+    // Never the account ID.
+    expect(userFacts(R())).not.toContain("AAAAAAAAAAE");
   });
 
   it("needs this user allowed on firmware that asks per user", () => {

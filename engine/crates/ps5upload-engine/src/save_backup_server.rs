@@ -187,6 +187,13 @@ pub fn closed_titles(before: Option<&BTreeSet<String>>, now: &BTreeSet<String>) 
         .unwrap_or_default()
 }
 
+/// Whether a console's closed games that failed to back up are tried again now: not within
+/// `RETRY_MS` of the last failed try. Each try copies the save off the console before it reaches
+/// the server, so a server that is off for the night must not have the console read every minute.
+pub fn pending_due(tried_ms: Option<u64>, now_ms: u64) -> bool {
+    tried_ms.is_none_or(|t| now_ms.saturating_sub(t) >= RETRY_MS)
+}
+
 /// Which saves a pass backs up.
 pub struct Pick<'a> {
     /// Only these users; empty: all.
@@ -244,6 +251,8 @@ struct Shared {
     seen: BTreeMap<String, BTreeSet<String>>,
     /// Games closed and not backed up yet (a busy console, a failed pass): console → titles.
     pending: BTreeMap<String, BTreeSet<String>>,
+    /// When a console's pending games were last tried and one failed (Unix ms): console → time.
+    pending_tried: BTreeMap<String, u64>,
 }
 
 fn shared() -> &'static Mutex<Shared> {
@@ -254,6 +263,7 @@ fn shared() -> &'static Mutex<Shared> {
             state: local::load(STATE_FILE),
             seen: BTreeMap::new(),
             pending: BTreeMap::new(),
+            pending_tried: BTreeMap::new(),
         })
     })
 }
@@ -487,12 +497,16 @@ pub async fn store_verified(
         crate::log_warn!("save backup to server: no checksum file for {target}: {e}");
     }
     let _ = std::fs::remove_file(&sum_file);
-    // Older backups go only once the new one is there and checked.
-    let existing: Vec<String> = names_in(fs, &dir)
-        .await?
-        .into_iter()
-        .map(|e| e.name)
-        .collect();
+    // Older backups go only once the new one is there and checked. The backup is made by now:
+    // a listing that fails prunes nothing this time, and does not fail the backup (it would be
+    // sent again at the next look, a second copy beside this one).
+    let existing: Vec<String> = match names_in(fs, &dir).await {
+        Ok(entries) => entries.into_iter().map(|e| e.name).collect(),
+        Err(e) => {
+            crate::log_warn!("save backup to server: {dir} not pruned: {e}");
+            Vec::new()
+        }
+    };
     let tag = backup_tag(name);
     for old in tagged_backups_to_prune(&existing, &auto_backup_stem(title_id, user_id), tag, keep) {
         let p = format!("{dir}/{old}");
@@ -555,7 +569,11 @@ pub async fn fetch_backup(
         let want = std::fs::read_to_string(&sum_path).unwrap_or_default();
         let _ = std::fs::remove_file(&sum_path);
         let want = want.split_whitespace().next().unwrap_or_default();
-        if !want.eq_ignore_ascii_case(&sum) {
+        // A checksum file cut short (the connection dropped while it was written: it is empty,
+        // or part of a sum) says nothing about the backup, as if it were not there; the zip's
+        // own check below still runs. Only a whole sum that differs is a changed backup.
+        let whole = want.len() == 64 && want.bytes().all(|b| b.is_ascii_hexdigit());
+        if whole && !want.eq_ignore_ascii_case(&sum) {
             return Err(format!(
                 "{file} on the server does not match the checksum written with it: it was changed or damaged"
             ));
@@ -786,17 +804,31 @@ pub fn tick() {
                             closed.join(", ")
                         );
                     }
+                    // A game just closed is tried at once, whatever failed before.
+                    if !closed.is_empty() {
+                        g.pending_tried.remove(&host);
+                    }
                     g.pending.entry(host.clone()).or_default().extend(closed);
                     g.seen.insert(host.clone(), titles);
                 }
                 if local::console_busy(&host) {
                     continue;
                 }
-                let pending: Vec<String> = lock()
-                    .pending
-                    .get(&host)
-                    .map(|p| p.iter().cloned().collect())
-                    .unwrap_or_default();
+                let (pending, tried): (Vec<String>, Option<u64>) = {
+                    let g = lock();
+                    (
+                        g.pending
+                            .get(&host)
+                            .map(|p| p.iter().cloned().collect())
+                            .unwrap_or_default(),
+                        g.pending_tried.get(&host).copied(),
+                    )
+                };
+                if pending.is_empty() || !pending_due(tried, now) {
+                    checked = true;
+                    continue;
+                }
+                let mut any_failed = false;
                 for title in pending {
                     let before = tally.failed;
                     if pass_host(&s, &host, Some(&title), false, &mut tally).is_ok()
@@ -805,6 +837,16 @@ pub fn tick() {
                         if let Some(p) = lock().pending.get_mut(&host) {
                             p.remove(&title);
                         }
+                    } else {
+                        any_failed = true;
+                    }
+                }
+                {
+                    let mut g = lock();
+                    if any_failed {
+                        g.pending_tried.insert(host.clone(), now);
+                    } else {
+                        g.pending_tried.remove(&host);
                     }
                 }
                 checked = true;
@@ -1037,6 +1079,7 @@ pub async fn put_settings(Json(p): Json<Patch>) -> Response {
         if next.target != before {
             g.state.done.clear();
             g.state.hosts.clear();
+            g.pending_tried.clear();
             persist(&g);
         }
     }
@@ -1162,6 +1205,15 @@ mod tests {
         assert!(host_due(&failing, 10 * h + RETRY_MS, 6));
         // Hours are clamped: 0 means 1.
         assert!(host_due(&run, 11 * h, 0));
+    }
+
+    #[test]
+    fn a_closed_game_that_failed_is_not_tried_again_every_minute() {
+        let t = 1_700_000_000_000u64;
+        assert!(pending_due(None, t));
+        assert!(!pending_due(Some(t), t + 60_000));
+        assert!(!pending_due(Some(t), t + RETRY_MS - 1));
+        assert!(pending_due(Some(t), t + RETRY_MS));
     }
 
     #[test]
@@ -1433,6 +1485,53 @@ mod tests {
                 .await
                 .is_err()
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The backup is on the server and checked by the time the folder is listed for pruning: a
+    /// listing that fails then used to fail the backup, so the next look sent another copy.
+    #[tokio::test]
+    async fn a_failed_listing_for_the_prune_does_not_fail_a_verified_backup() {
+        let dir = scratch("prune-listing");
+        let fs = MemFs::new(&[]);
+        let zip = make_zip(&dir, "PPSA01234", b"progress");
+        let name = format!("{}2026-10-01_000000.zip", auto_backup_stem("PPSA01234", 1));
+        fs.fail_next_lists(1);
+        let v = store_verified(&fs, &zip, "/b", "PPSA01234", 1, &name, 5, &dir.join("rb"))
+            .await
+            .unwrap();
+        assert_eq!(v.file, name);
+        assert!(fs.bytes(&format!("/b/PPSA01234/{name}")).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The checksum file is written after the backup; cut short, it used to make a good backup
+    /// "changed or damaged" for good.
+    #[tokio::test]
+    async fn a_checksum_file_cut_short_does_not_condemn_a_good_backup() {
+        let dir = scratch("short-sum");
+        let fs = MemFs::new(&[]);
+        let zip = make_zip(&dir, "PPSA01234", b"progress");
+        let name = format!("{}2026-10-01_000000.zip", auto_backup_stem("PPSA01234", 1));
+        store_verified(&fs, &zip, "/b", "PPSA01234", 1, &name, 5, &dir.join("rb"))
+            .await
+            .unwrap();
+        let sum_path = format!("/b/PPSA01234/{name}.sha256");
+        let whole = fs.bytes(&sum_path).unwrap();
+        let out = dir.join("restore.zip");
+        for cut in [&b""[..], &whole[..10]] {
+            fs.add(&[(&sum_path, cut)]);
+            fetch_backup(&fs, "/b", "PPSA01234", &name, &out)
+                .await
+                .unwrap();
+        }
+        // A whole sum that is another file's still refuses it.
+        let other = format!("{}  {name}\n", "0".repeat(64));
+        fs.add(&[(&sum_path, other.as_bytes())]);
+        let e = fetch_backup(&fs, "/b", "PPSA01234", &name, &out)
+            .await
+            .unwrap_err();
+        assert!(e.contains("changed or damaged"), "{e}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

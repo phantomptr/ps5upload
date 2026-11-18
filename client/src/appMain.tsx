@@ -22,6 +22,7 @@ import { installEngineLogBridge } from "./state/engineLogBridge";
 import { installEngineStartupEvents } from "./state/engineStartupEvents";
 import { installAccidentalReloadGuard } from "./lib/preventAccidentalReload";
 import { installSystemBack } from "./lib/systemBack";
+import { installNumberInputWheelGuard } from "./lib/numberInputWheel";
 
 // Capture console.error / warn + unhandled promise rejections into
 // the in-app log store before any other module runs — that way the
@@ -77,6 +78,9 @@ installAccidentalReloadGuard();
 
 // System Back closes what is open on top before it changes the page (phones have no Escape).
 installSystemBack();
+
+// A mouse wheel over a focused number box (the upload speed limit) must not change it.
+installNumberInputWheelGuard();
 
 // iPhone: the copies the Files sheet makes do not stay forever.
 void import("./state/iosInbox").then((m) => m.installIosInbox());

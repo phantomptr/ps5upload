@@ -222,12 +222,14 @@ test("the checklist ticks steps by itself and does the ones it can", async ({ pa
 
 test("a step ticks by itself when the console changes", async ({ page }) => {
   const c = await consoleHalfSetUp(page);
-  c.readiness = { ...c.readiness, account_uid: -1 };
+  // Nobody signed in: no user in front, none with an account ID.
+  c.readiness = { ...c.readiness, foreground_uid: -1, account_uid: -1 };
   await page.goto("/play/setup", { waitUntil: "domcontentloaded" });
   const user = page.locator('[data-step="user"]');
   await expect(user).toHaveAttribute("data-state", "todo", { timeout: 30_000 });
-  // Someone signs in on the console: the next read ticks it, no button pressed.
-  c.readiness = { ...c.readiness, account_uid: 0x10000000 };
+  // Someone signs in on the console, with no account ID yet (#864): the next read ticks the
+  // step, no button pressed, and the account ID is left to its own step.
+  c.readiness = { ...c.readiness, foreground_uid: 0x10000000, account_uid: 0 };
   await expect(user).toHaveAttribute("data-state", "ok", { timeout: 12_000 });
 });
 
