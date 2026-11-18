@@ -194,17 +194,50 @@ pub(crate) fn set_quietly(name: &str, value: Value) -> std::io::Result<()> {
     .1
 }
 
-/// Changes a document in one step (a new revision): the document after it, or what went wrong.
-pub(crate) fn update(name: &str, change: impl FnOnce(&mut Value)) -> Result<Doc, String> {
-    let (doc, saved) = with(|docs| {
+/// Why a change cannot be kept: nowhere to save it, or the document would pass [`MAX_BYTES`].
+#[derive(Debug, PartialEq)]
+pub(crate) enum UpdateError {
+    /// No folder to save in (`Place::Nowhere`).
+    Nowhere(String),
+    /// The document's size in bytes after the change.
+    TooLarge(usize),
+    Failed(String),
+}
+
+fn nowhere(place: &Place) -> Option<String> {
+    match place {
+        Place::Nowhere(why) => Some(why.clone()),
+        Place::File(_) | Place::Memory => None,
+    }
+}
+
+/// [`update`] held to what `PUT /api/shared/{name}` holds a document to: refused when there is
+/// nowhere to save it (a "saved" that a restart would lose is a lie), and when the document
+/// would be larger than [`MAX_BYTES`] after the change (the browsers' whole-document saves
+/// would then be refused for good). A refused change leaves the document as it was.
+pub(crate) fn update_checked(
+    name: &str,
+    change: impl FnOnce(&mut Value),
+) -> Result<Doc, UpdateError> {
+    if let Some(why) = nowhere(&place()) {
+        return Err(UpdateError::Nowhere(why));
+    }
+    let (r, saved) = with(|docs| {
         let doc = docs.entry(name.to_string()).or_default();
-        let mut value = doc.value.take().unwrap_or(Value::Null);
+        let mut value = doc.value.clone().unwrap_or(Value::Null);
         change(&mut value);
+        let size = serde_json::to_vec(&value)
+            .map(|v| v.len())
+            .unwrap_or(usize::MAX);
+        if size > MAX_BYTES {
+            return Err(UpdateError::TooLarge(size));
+        }
         doc.value = Some(value);
         doc.rev += 1;
-        doc.clone()
+        Ok(doc.clone())
     });
-    saved.map_err(|e| e.to_string())?;
+    let doc = r?;
+    saved.map_err(|e| UpdateError::Failed(e.to_string()))?;
     Ok(doc)
 }
 
@@ -314,6 +347,13 @@ pub async fn put_doc(UrlPath(name): UrlPath<String>, Json(body): Json<PutBody>) 
 #[cfg(test)]
 mod place_tests {
     use super::*;
+
+    #[test]
+    fn only_nowhere_refuses_a_change() {
+        assert_eq!(nowhere(&Place::Nowhere("why".into())), Some("why".into()));
+        assert_eq!(nowhere(&Place::Memory), None);
+        assert_eq!(nowhere(&Place::File(PathBuf::from("x"))), None);
+    }
 
     #[test]
     fn no_data_directory_is_nowhere_and_says_so() {
