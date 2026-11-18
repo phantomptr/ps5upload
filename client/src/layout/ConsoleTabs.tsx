@@ -167,7 +167,9 @@ export default function ConsoleTabs() {
   return (
     <div
       ref={stripRef}
-      className="fade-x flex min-w-0 items-center gap-2 overflow-x-auto px-1 py-1.5"
+      // relative: each tab's screen-reader label is placed absolutely; held here it scrolls with
+      // the strip and is cut off by it, rather than sitting past the screen's right edge (#856).
+      className="fade-x relative flex min-w-0 items-center gap-2 overflow-x-auto px-1 py-1.5"
     >
       {profiles.map((p) => (
         <ConsoleTab
