@@ -139,6 +139,9 @@ mod workshop_api;
 mod zstd_packs;
 mod zstd_runtime;
 
+mod standalone_notice;
+pub use standalone_notice::double_click_notice;
+
 #[cfg(test)]
 mod api_surface_tests;
 #[cfg(test)]
