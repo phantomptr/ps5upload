@@ -45,6 +45,12 @@ export function intervalSupported(settings: Pick<SaveBackupSettings, "interval_m
   return typeof settings?.interval_minutes === "number";
 }
 
+/** Whether the engine can keep a copy of each backup on a PS5 drive: one before 12.6.5 leaves
+ *  `console_drive` out and ignores it. */
+export function consoleCopySupported(settings: Pick<SaveBackupSettings, "console_drive"> | null): boolean {
+  return typeof settings?.console_drive === "string";
+}
+
 /** The settings an older version kept here, if it had a folder set. */
 export function legacySettings(raw: string | null): Pick<SaveBackupSettings, "enabled" | "dir" | "keep"> | null {
   try {
@@ -67,7 +73,9 @@ interface AutoSaveBackupState {
   /** The last error talking to the engine (a refused folder, an engine that is down). */
   error: string | null;
   refresh: () => Promise<void>;
-  set: (patch: Partial<Pick<SaveBackupSettings, "enabled" | "dir" | "keep" | "interval_minutes">>) => Promise<void>;
+  set: (
+    patch: Partial<Pick<SaveBackupSettings, "enabled" | "dir" | "keep" | "interval_minutes" | "console_drive">>,
+  ) => Promise<void>;
   runNow: () => Promise<void>;
 }
 
