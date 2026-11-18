@@ -314,7 +314,8 @@ export function SaveBackupsList({
                 file: toUser.file,
                 to_user: t.uid,
                 server: toUser.server ?? false,
-                on_console: !!toUser.console,
+                // Only for a copy on a PS5 drive: an older engine has no such field.
+                ...(toUser.console ? { on_console: true } : {}),
               });
             } catch (e) {
               if (e instanceof SaveCopyError && e.missing.length > 0) {
