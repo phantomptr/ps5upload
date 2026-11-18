@@ -1102,6 +1102,10 @@ export class RemotePlayStream {
   private planesNext: VideoFrame | null = null;
   /** Copies in a row that came back empty (chromaBlank): a few and frames go as frames. */
   private planesBlank = 0;
+  /** Copies in a row that stopped short of the last rows (Planes.complete false; a green band
+   *  under a Linux app's 1080p picture): a few and the reader copies the whole coded frame, a
+   *  few more and frames go as frames. */
+  private planesShort = 0;
   /** How the last frame reached WebGL, for the log: "frame" (texImage2D) or "<format>-planes". */
   private input = "";
 
@@ -1392,6 +1396,7 @@ export class RemotePlayStream {
   /** The picture and sound start over; the next keyframe brings the picture. */
   private reopenPicture(): void {
     this.planes = isTauriEnv() && isLinuxDesktop() ? new PlaneReader() : null;
+    this.planesShort = 0;
     this.openSound();
     this.ticking = true;
     this.schedule();
@@ -2588,6 +2593,23 @@ export class RemotePlayStream {
           return;
         }
         this.planesBlank = 0;
+        if (!planes.complete) {
+          if (++this.planesShort >= 3) {
+            this.planesShort = 0;
+            const what = `${planes.format} ${planes.w}x${planes.h} (coded ${frame.codedWidth}x${frame.codedHeight})`;
+            if (reader.mode === "visible" && PlaneReader.codedDiffers(frame)) {
+              log.warn("remote-play", `picture: copying the frame's ${what} planes left the last rows empty: copying the whole coded frame`);
+              reader.mode = "coded";
+              frame.close();
+            } else {
+              log.warn("remote-play", `picture: copying the frame's ${what} planes left the last rows empty: drawing frames as they are`);
+              this.planes = null;
+              this.drawFrame(frame);
+            }
+          } else frame.close();
+          return;
+        }
+        this.planesShort = 0;
         const tools = this.passOff ? DEFAULT_PICTURE : this.tools;
         const band = cropRect(fw, fh, tools.crop219).h;
         const to = upscales(tools) ? upscaleSize({ w: fw, h: band }, this.boxPx()) : null;
@@ -2601,7 +2623,7 @@ export class RemotePlayStream {
           this.glFailed(String(e));
           return;
         }
-        this.input = `${planes.format.toLowerCase()}-planes`;
+        this.input = `${planes.format.toLowerCase()}-planes${reader.mode === "coded" ? "-coded" : ""}`;
         this.checkSlow(t0, tools);
         this.drawn(fw, fh, out, fw / band);
         frame.close();
