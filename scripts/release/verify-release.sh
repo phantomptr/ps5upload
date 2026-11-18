@@ -8,8 +8,9 @@
 # Checks that the release exists, is still a pre-release (publish.yml always creates one),
 # and carries every asset publish.yml uploads, none of them empty. The expected names are
 # read from publish.yml itself (the "Every expected asset is present" list, the optional
-# phone builds it copies, and the manifests it writes with --out), so this cannot drift from
-# the workflow. The Android APKs and the iPhone IPA are optional there (their jobs are
+# phone builds it copies, the manifests it writes with --out, and the LICENSE it copies in), so
+# this cannot drift from the workflow, and the two counts on the last line agree on a complete
+# release. The Android APKs and the iPhone IPA are optional there (their jobs are
 # continue-on-error) and only warn here.
 #
 # --promote runs `gh release edit vX.Y.Z --prerelease=false --latest` once every check
@@ -42,6 +43,12 @@ optional="$(grep -oE '"release/(PS5Upload|ps5upload)[^"$]*\$\{TAG_VERSION\}[^"$]
   | grep -vxF -f <(printf '%s\n' "$required"))"
 # Generated manifests (--out release/<name>).
 manifests="$(grep -oE -- '--out release/[A-Za-z0-9._-]+' "$workflow" | sed 's#--out release/##' | sort -u)"
+# Files copied in under a fixed name (cp ... release/<name>: the LICENSE that ships with the binaries).
+fixed="$(grep -oE 'cp( -[a-z]+)* [A-Za-z0-9._/-]+ release/[A-Za-z0-9._-]+$' "$workflow" | sed 's#.* release/##' | sort -u)"
+if ! grep -qxF LICENSE <<<"$fixed"; then
+  echo "verify-release: $workflow no longer copies LICENSE into release/; did that step change shape?" >&2
+  exit 2
+fi
 
 n_required="$(printf '%s\n' "$required" | grep -c .)"
 if (( n_required < 20 )); then
@@ -83,9 +90,10 @@ check() { # name, kind (required|optional)
 expected=0
 while IFS= read -r n; do [[ -n "$n" ]] && { check "$n" required; expected=$((expected + 1)); }; done <<<"$required"
 while IFS= read -r n; do [[ -n "$n" ]] && { check "$n" required; expected=$((expected + 1)); }; done <<<"$manifests"
+while IFS= read -r n; do [[ -n "$n" ]] && { check "$n" required; expected=$((expected + 1)); }; done <<<"$fixed"
 while IFS= read -r n; do [[ -n "$n" ]] && { check "$n" optional; expected=$((expected + 1)); }; done <<<"$optional"
 
-extra="$(cut -f1 <<<"$assets" | grep -vxF -f <(printf '%s\n' "$required" "$manifests" "$optional" | grep .) || true)"
+extra="$(cut -f1 <<<"$assets" | grep -vxF -f <(printf '%s\n' "$required" "$manifests" "$fixed" "$optional" | grep .) || true)"
 if [[ -n "$extra" ]]; then
   echo "note  not in publish.yml's list (left alone):"
   while IFS= read -r n; do echo "        $n"; done <<<"$extra"

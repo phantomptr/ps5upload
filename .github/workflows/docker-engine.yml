@@ -268,7 +268,8 @@ jobs:
           # llvm-22 is not in Ubuntu 24.04's default repos.
           sudo bash scripts/install-llvm-apt.sh 22
           # Bounded and retried: a stalled apt mirror must not hold the job (scripts/ci-apt.sh).
-          bash scripts/ci-apt.sh clang-22 llvm-22-dev lld-22 unzip python3
+          # ci-apt-latest.sh: a tag's image build runs main's copy of it (a pull request its own).
+          bash scripts/ci-apt-latest.sh clang-22 llvm-22-dev lld-22 unzip python3
 
       - name: Install pinned PS5 Payload SDK
         run: sudo env PS5_SDK_INSTALL_DIR=/opt/ps5-payload-sdk bash scripts/install-ps5-sdk.sh

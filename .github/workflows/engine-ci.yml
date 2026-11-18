@@ -212,11 +212,20 @@ jobs:
       - name: UnRAR stays out of the engine
         working-directory: engine
         run: |
-          if cargo tree --locked -p ps5upload-engine --target all -e normal,build | grep -E ' unrar(_sys)? v'; then
+          set -euo pipefail
+          # The trees first, each on its own line: piped straight into grep, a `cargo tree` that
+          # failed printed nothing, grep matched nothing, and the check passed without looking.
+          engine_tree="$(cargo tree --locked -p ps5upload-engine --target all -e normal,build)"
+          unrar_tree="$(cargo tree --locked -p ps5upload-unrar --target all -e normal,build)"
+          if ! grep -q 'ps5upload-engine v' <<< "$engine_tree" || ! grep -Eq ' unrar(_sys)? v' <<< "$unrar_tree"; then
+            echo "::error::cargo tree did not print the trees this check reads (the engine's own line, and unrar under ps5upload-unrar)"
+            exit 1
+          fi
+          if grep -E ' unrar(_sys)? v' <<< "$engine_tree"; then
             echo "::error::ps5upload-engine links unrar; RAR must go through ps5upload-unrar"
             exit 1
           fi
-          if cargo tree --locked -p ps5upload-unrar --target all -e normal,build | grep -E 'ps5upload-(core|fpkg|ava1|engine) v'; then
+          if grep -E 'ps5upload-(core|fpkg|ava1|engine) v' <<< "$unrar_tree"; then
             echo "::error::ps5upload-unrar must hold only ps5upload's own code and UnRAR"
             exit 1
           fi
@@ -976,7 +985,15 @@ jobs:
         working-directory: client/src-tauri
         shell: bash
         run: |
-          if cargo tree --locked --target all -e normal,build | grep -E ' unrar(_sys)? v'; then
+          set -euo pipefail
+          # The tree first: inside `if cargo tree | grep`, a cargo tree that failed just made the
+          # condition false (pipefail does not apply to an `if`), and the check passed unread.
+          tree="$(cargo tree --locked --target all -e normal,build)"
+          if ! grep -q 'ps5upload-core v' <<< "$tree"; then
+            echo "::error::cargo tree did not print the desktop app's tree (no ps5upload-core in it)"
+            exit 1
+          fi
+          if grep -E ' unrar(_sys)? v' <<< "$tree"; then
             echo "::error::the desktop app links unrar; RAR must go through ps5upload-unrar"
             exit 1
           fi

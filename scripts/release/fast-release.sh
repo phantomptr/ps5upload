@@ -4,7 +4,8 @@
 # CI, always a PRE-RELEASE (promote it by hand after trying it, as usual).
 #
 #   scripts/release/fast-release.sh <X.Y.Z>          # from a branch with the change committed
-#   make fast-release V=<X.Y.Z>
+#   scripts/release/fast-release.sh <X.Y.Z> --gate   # the same, but merge only on a green PR gate
+#   make fast-release V=<X.Y.Z>                      # make fast-release V=<X.Y.Z> GATE=1 for --gate
 #
 # What it does, in order (stops at the first failure):
 #   1. Checks the setup: the active gh account is phantomptr, you are on a branch (not main), the
@@ -16,8 +17,12 @@
 #      audit when payload C changed, engine fmt when Rust changed, client typecheck + lint when
 #      the client changed.
 #   4. Pushes, opens a PR and squash-merges it with --admin at once (no CI wait).
-#   5. Dispatches release-tag with prerelease=true and force=true (tags without CI on main), waits
-#      for the tag, then for publish, then runs verify-release.sh.
+#      With --gate: through scripts/release/merge-when-green.sh instead, which waits for the PR
+#      gate, re-runs an infrastructure failure once, and merges ONLY on a pass (about 20 minutes
+#      more; nothing is merged or tagged if the gate fails).
+#   5. Dispatches release-tag with prerelease=true and force=true (tags without CI on main; with
+#      --gate, force=false: the gate that just passed vouches for the commit), waits for the tag,
+#      then for publish, then runs verify-release.sh.
 #
 # Full CI still runs on the PR and on main afterwards; it just does not hold the release. Use the
 # normal path (RELEASING.md) for anything big: helper/payload changes, installs, transfers.
@@ -25,8 +30,14 @@
 set -euo pipefail
 
 V="${1:-}"
-if [[ ! "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "usage: scripts/release/fast-release.sh X.Y.Z" >&2
+GATE=0
+case "${2:-}" in
+  "") ;;
+  --gate) GATE=1 ;;
+  *) V="" ;;
+esac
+if [[ ! "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || [ "$#" -gt 2 ]; then
+  echo "usage: scripts/release/fast-release.sh X.Y.Z [--gate]" >&2
   exit 2
 fi
 ROOT="$(git rev-parse --show-toplevel)"
@@ -97,6 +108,9 @@ EOF
   echo "CHANGELOG.md taken from v$LAST"
 fi
 awk '/^## /{print; exit}' CHANGELOG.md | grep -q '^## Unreleased$' || fail "CHANGELOG.md needs this release's notes under '## Unreleased' at the top"
+# The question release-tag will ask after the merge, asked now. --check: reads only (without it
+# this command renames the heading in place).
+node scripts/release/changelog-release.mjs "$V" --previous "$LAST" --check || fail "CHANGELOG.md is not ready for $V (above)"
 if [ -n "$(git status --porcelain --untracked-files=no | grep -v '^.. third_party/' || true)" ]; then
   git add -A -- . ':!third_party'
   git commit -q -m "Catch up with v$LAST: version files and CHANGELOG"
@@ -169,7 +183,11 @@ PR="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
 if [ -z "$PR" ]; then
   BODY="$(mktemp -t fast-release-body.XXXXXX)"
   {
-    echo "Fast release v$V (scripts/release/fast-release.sh): bare checks only, merged without waiting for CI."
+    if [ "$GATE" = 1 ]; then
+      echo "Fast release v$V (scripts/release/fast-release.sh --gate): bare checks, merged once the PR gate passed."
+    else
+      echo "Fast release v$V (scripts/release/fast-release.sh): bare checks only, merged without waiting for CI."
+    fi
     echo
     awk '/^## Unreleased$/{f=1;next} /^## /{if(f)exit} f' CHANGELOG.md
   } > "$BODY"
@@ -177,11 +195,18 @@ if [ -z "$PR" ]; then
   rm -f "$BODY"
   PR="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')"
 fi
-gh pr merge "$PR" --squash --admin >/dev/null
+if [ "$GATE" = 1 ]; then
+  # Waits for the gate and merges only on a pass; its exit status is the verdict (no pipe here).
+  scripts/release/merge-when-green.sh "$PR" || fail "PR #$PR was not merged: nothing was tagged"
+  FORCE=false
+else
+  gh pr merge "$PR" --squash --admin >/dev/null
+  FORCE=true
+fi
 echo "PR #$PR merged"
 
 step "5. Tag v$V (pre-release) and publish"
-gh workflow run release-tag.yml --ref main -f version="$V" -f prerelease=true -f force=true
+gh workflow run release-tag.yml --ref main -f version="$V" -f prerelease=true -f force="$FORCE"
 sleep 8
 TAG_RUN="$(gh run list --workflow release-tag.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
 gh run watch "$TAG_RUN" --exit-status --interval 15 >/dev/null || fail "release-tag failed: gh run view $TAG_RUN --log-failed"

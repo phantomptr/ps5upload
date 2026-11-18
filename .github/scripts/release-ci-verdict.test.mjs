@@ -158,3 +158,32 @@ test("every lane on does not excuse a PR that was behind, a failed head or a fai
   const ownFailed = world({ ...base, runs: { P: [bad], M: [ok], H: [ok] }, ancestors: [["M", "H"]] });
   assert.equal(verdict("P", ownFailed).verdict, "fail");
 });
+
+test("a skipped, stale or neutral run says nothing, like a cancelled one", () => {
+  const done = (conclusion) => ({ status: "completed", conclusion });
+  for (const c of ["skipped", "stale", "neutral"]) {
+    assert.equal(ownVerdict([done(c)]), "cancelled", c);
+    assert.equal(ownVerdict([done("cancelled"), done(c)]), "cancelled", c);
+    // Beside a real failure it is still a failure; beside a pass, a pass.
+    assert.equal(ownVerdict([done(c), done("failure")]), "fail", c);
+    assert.equal(ownVerdict([done(c), done("success")]), "pass", c);
+  }
+  for (const c of ["failure", "timed_out", "startup_failure", "action_required"]) {
+    assert.equal(ownVerdict([done(c)]), "fail", c);
+    assert.equal(ownVerdict([done("cancelled"), done(c)]), "fail", c);
+  }
+});
+
+test("a PR head whose only run was skipped or cancelled does not vouch for the merge commit", () => {
+  const deps = {
+    runs: (sha) => ({ merge: [{ status: "completed", conclusion: "cancelled" }], head: [{ status: "completed", conclusion: "skipped" }] })[sha] ?? [],
+    mergedPrs: () => [{ number: 7, head: "head" }],
+    tree: () => "same-tree",
+    parent: () => "parent",
+    isAncestor: () => true,
+    everyLane: () => true,
+  };
+  const out = verdict("merge", deps);
+  assert.equal(out.verdict, "cancelled");
+  assert.match(out.reason, /PR #7 head head: ci cancelled/);
+});

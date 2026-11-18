@@ -12,13 +12,19 @@
 # So the network half runs first and on a clock: `apt-get update` and `apt-get install
 # --download-only` together get CI_APT_ATTEMPT_TIMEOUT seconds (240), three times at most. Killing
 # a download is safe (nothing is unpacked yet; apt resumes the partial files). After a failed try
-# the runner's mirror list is pointed at the next mirror in FALLBACK_MIRRORS: whichever mirror the
-# runner image picked (Azure's, or an AWS one like us-east-2.ec2.archive.ubuntu.com, which trickled
-# 13 MB in 4 minutes on 2026-11-18 and failed all three tries of a release build), the next try
-# reads another one. Only then does the real install run, from the downloaded files
-# (`--no-download`) and with no clock: dpkg must never be killed halfway.
+# apt is pointed at the next mirror of the runner's own family (use_next_mirror below: x64 and
+# arm64 runners read different archives): whichever mirror the runner image picked (Azure's, or
+# an AWS one like us-east-2.ec2.archive.ubuntu.com, which trickled 13 MB in 4 minutes on
+# 2026-11-18 and failed all three tries of a release build), the next try reads another one.
+# Only then does the real install run, from the downloaded files (`--no-download`) and with no
+# clock: dpkg must never be killed halfway.
 #
-# A step that calls this needs a timeout above 3 x 250 s plus the install itself: 20 minutes.
+# A step that calls this needs a timeout above the three tries (3 x 250 s, plus 30 s of pauses:
+# 13 minutes) plus the install itself: 20 minutes.
+#
+# A release build (publish.yml, docker-engine.yml) calls this through scripts/ci-apt-latest.sh,
+# which runs the default branch's copy: a tag keeps its own files for ever, and v12.6.6 could
+# never be published because the fix for its failing mirror was on main only.
 
 set -euo pipefail
 
@@ -54,23 +60,144 @@ case "$ATTEMPT_TIMEOUT" in
 esac
 
 # Mirrors to move to after a failed try, in order. Plain http like the runner's own list (apt
-# checks the signed Release files, not the transport).
-FALLBACK_MIRRORS=(
+# checks the signed Release files, not the transport). Two families, never mixed: amd64 packages
+# live under /ubuntu/, every other architecture (the ubuntu-24.04-arm runners) under
+# /ubuntu-ports/ on other hosts. archive.ubuntu.com has no arm64 packages at all, so pointing an
+# arm64 runner at it would turn a slow mirror into a certain failure.
+ARCHIVE_MIRRORS=(
   "http://archive.ubuntu.com/ubuntu/"
   "http://mirrors.edge.kernel.org/ubuntu/"
 )
+PORTS_MIRRORS=(
+  "http://ports.ubuntu.com/ubuntu-ports/"
+  "http://mirrors.ocf.berkeley.edu/ubuntu-ports/"
+)
+# Where the runner's Ubuntu sources are (deb822 on 24.04, the old one-line file before).
+# Third-party lists (LLVM, PPAs) are other files and are never touched.
+SOURCES_FILES="${CI_APT_SOURCES_FILES:-/etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list}"
 
-# Points the runner's mirror list at the mirror for try number $1 (2, 3, ...). apt reads the list
-# top-down and only moves on when a mirror errors, not when it is slow, so the list becomes that
-# one mirror. A runner without the list (sources.list instead of mirror+file) is left alone.
-use_next_mirror() {
-  local next_try="$1"
-  [ -f "$MIRRORS_FILE" ] || return 0
-  local idx=$(( (next_try - 2) % ${#FALLBACK_MIRRORS[@]} ))
-  local mirror="${FALLBACK_MIRRORS[$idx]}"
-  echo "ci-apt: next try reads $mirror (was: $(head -n1 "$MIRRORS_FILE" | cut -f1))" >&2
-  printf '%s\tpriority:1\n' "$mirror" | as_root tee "$MIRRORS_FILE" >/dev/null || true
+apt_arch() {
+  echo "${CI_APT_ARCH:-$(dpkg --print-architecture 2>/dev/null || uname -m)}"
 }
+
+# stdin -> file, as root when the file is not ours to write.
+write_file() {
+  if [ -w "$1" ]; then
+    cat > "$1"
+  else
+    as_root tee "$1" >/dev/null
+  fi
+}
+
+# The Ubuntu mirror URLs in the sources files, one per line, no trailing slash: an
+# *.archive.ubuntu.com or *.ports.ubuntu.com host, or one of the fallbacks above (a later try
+# moves off those too). Not security.ubuntu.com, and nothing else that merely ends in /ubuntu
+# (a PPA).
+sources_mirrors() {
+  local f known url
+  known="$(printf '%s\n' "${ARCHIVE_MIRRORS[@]}" "${PORTS_MIRRORS[@]}" | sed 's#/$##')"
+  for f in $SOURCES_FILES; do
+    [ -f "$f" ] || continue
+    { grep -v '^[[:space:]]*#' "$f" || true; } | { grep -Eo 'https?://[A-Za-z0-9._/-]+' || true; }
+  done | sed 's#/$##' | while IFS= read -r url; do
+    if printf '%s\n' "$url" | grep -Eq '^https?://([a-z0-9-]+\.)*(archive|ports)\.ubuntu\.com/ubuntu(-ports)?$' \
+        || printf '%s\n' "$known" | grep -qxF "$url"; then
+      printf '%s\n' "$url"
+    fi
+  done
+}
+
+# Does a sources file read the mirror list?
+list_in_use() {
+  local f
+  [ -f "$MIRRORS_FILE" ] || return 1
+  for f in $SOURCES_FILES; do
+    [ -f "$f" ] || continue
+    if { grep -v '^[[:space:]]*#' "$f" || true; } | grep -qF "mirror+file:$MIRRORS_FILE"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Points apt at the mirror for try number $1 (2, 3, ...).
+#  - The runner reads a mirror list (GitHub's x64 images: the sources say mirror+file:, the list
+#    has one "URL<TAB>priority:N" line per mirror): apt reads the list top-down and only moves on
+#    when a mirror errors, not when it is slow, so the list becomes that one mirror.
+#  - No list, or a list nothing reads (an image whose sources name ports.ubuntu.com directly):
+#    the mirror's URL is replaced in the Ubuntu sources files themselves.
+# The family (/ubuntu/ or /ubuntu-ports/) is the one the runner already uses, else the machine's
+# architecture. A fallback the runner is already on is skipped. Sources this cannot read (no
+# list, no known Ubuntu mirror in the sources) are left alone.
+use_next_mirror() {
+  local next_try="$1" mode current family mirror idx n i
+  if list_in_use; then
+    mode=list
+    current="$( { grep -Eo '^https?://[^[:space:]]+' "$MIRRORS_FILE" || true; } | sed -n 1p)"
+  else
+    mode=sources
+    current="$(sources_mirrors | sed -n 1p)"
+    if [ -z "$current" ]; then
+      echo "ci-apt: no mirror list in use and no Ubuntu mirror in the sources; the next try reads the same ones" >&2
+      return 0
+    fi
+  fi
+  case "$current" in
+    */ubuntu-ports|*/ubuntu-ports/) family=ports ;;
+    */ubuntu|*/ubuntu/) family=archive ;;
+    *)
+      case "$(apt_arch)" in
+        amd64|i386|x86_64) family=archive ;;
+        *) family=ports ;;
+      esac
+      ;;
+  esac
+  local mirrors=("${ARCHIVE_MIRRORS[@]}")
+  if [ "$family" = ports ]; then
+    mirrors=("${PORTS_MIRRORS[@]}")
+  fi
+  n=${#mirrors[@]}
+  idx=$(( (next_try - 2) % n ))
+  mirror=""
+  for i in $(seq 0 $((n - 1))); do
+    mirror="${mirrors[$(( (idx + i) % n ))]}"
+    if [ "${mirror%/}" != "${current%/}" ]; then
+      break
+    fi
+  done
+  echo "ci-apt: next try reads $mirror (was: ${current:-nothing}; $mode, $family)" >&2
+  if [ "$mode" = list ]; then
+    printf '%s\tpriority:1\n' "$mirror" | write_file "$MIRRORS_FILE"
+    return 0
+  fi
+  local f re url tmp wanted
+  wanted=ubuntu
+  if [ "$family" = ports ]; then
+    wanted=ubuntu-ports
+  fi
+  tmp="$(mktemp)"
+  for f in $SOURCES_FILES; do
+    [ -f "$f" ] || continue
+    cat "$f" > "$tmp"
+    # Every known mirror of this family in the file (on ports, security is the same host).
+    while IFS= read -r url; do
+      [ "${url##*/}" = "$wanted" ] || continue
+      re="$(printf '%s' "$url" | sed 's/[.]/\\./g')"
+      sed -E "/^[[:space:]]*#/!s#${re}/?([[:space:]]|\$)#${mirror}\\1#g" "$tmp" > "$tmp.new"
+      cat "$tmp.new" > "$tmp"
+    done < <(sources_mirrors | sort -u)
+    if ! cmp -s "$f" "$tmp"; then
+      write_file "$f" < "$tmp"
+    fi
+  done
+  rm -f "$tmp" "$tmp.new"
+}
+
+# Test hook (scripts/ci-apt.test.mjs): only move the mirror as a failed try would; install nothing.
+if [ "${1:-}" = "--rotate" ]; then
+  use_next_mirror "${2:?--rotate needs the try number}"
+  exit 0
+fi
 
 self="${BASH_SOURCE[0]}"
 fetched=0
@@ -87,7 +214,8 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
     echo "ci-apt: attempt $attempt/$ATTEMPTS failed (exit $rc)" >&2
   fi
   if [ "$attempt" -lt "$ATTEMPTS" ]; then
-    use_next_mirror $((attempt + 1))
+    # Never the reason the install fails: a mirror that cannot be switched is tried again as is.
+    use_next_mirror $((attempt + 1)) || echo "ci-apt: could not switch mirrors; the next try reads the same one" >&2
     sleep $((attempt * 10))
   fi
 done

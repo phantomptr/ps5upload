@@ -1,10 +1,20 @@
-# Re-runs CI jobs that never ran because GitHub had no runner for them.
+# Re-runs CI jobs that failed on something outside the change.
 #
 # GitHub's hosted macOS (arm64) pool runs short at times; a job it cannot place is cancelled with
 # no steps and the annotation "The job was not acquired by Runner of type hosted even after
-# multiple attempts", and the PR gate then fails over a job that never started. This workflow
-# looks at a finished `ci` run, and only when a failed or cancelled job carries that annotation,
-# re-runs the run's failed jobs (at most twice per run). Real failures are left alone.
+# multiple attempts", and the PR gate then fails over a job that never started. An Ubuntu mirror
+# that will not serve (scripts/ci-apt.sh: "apt could not download after 3 attempts") does the
+# same to a job that had not compiled anything yet. This workflow looks at a finished `ci` run
+# and re-runs its failed jobs only when scripts/release/gate-failures.mjs (main's copy, never the
+# pull request's) says every failure is of that kind: verdict `infra`.
+#
+# Left for a person: any real failure (one real job beside ten starved ones keeps the run red),
+# a run whose jobs were merely cancelled (a newer push), and a Playwright flaky-only result
+# (`flaky`: CI fails on those on purpose so they are seen; scripts/release/merge-when-green.sh
+# may re-run that once when someone is merging).
+#
+# It cannot loop: a run is re-run at most twice (nothing happens from attempt 3 on), and a
+# re-run that fails for a real reason is `real` and ends it.
 #
 # Not `publish`: a publish run retries itself (its `retry-failed` job and rerun-failed.yml), for
 # any failure, a starved runner included. Two workflows re-running the same run raced each other
@@ -27,7 +37,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Re-run jobs GitHub never gave a runner
+      # workflow_run runs on the default branch: this is main's classifier, whatever the run was for.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          sparse-checkout: scripts/release/gate-failures.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Re-run the failed jobs when nothing but infrastructure failed
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -39,18 +55,19 @@ jobs:
             echo "Run $RUN_ID is on attempt $ATTEMPT; not retrying again."
             exit 0
           fi
-          starved=0
-          for job in $(gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$ATTEMPT/jobs" --paginate \
-              --jq '.jobs[] | select(.conclusion == "cancelled" or .conclusion == "failure") | .id'); do
-            if gh api "repos/$REPO/check-runs/$job/annotations" \
-                --jq '.[].message' | grep -q "not acquired by Runner"; then
-              echo "Job $job never got a runner."
-              starved=1
-            fi
-          done
-          if [ "$starved" = 1 ]; then
-            echo "Re-running the failed jobs of run $RUN_ID (attempt $ATTEMPT)."
-            gh run rerun "$RUN_ID" --repo "$REPO" --failed
-          else
-            echo "No runner-starved jobs: a real failure, left for a person."
+          # A lookup that fails (exit 2) fails this job and re-runs nothing.
+          out="$(node scripts/release/gate-failures.mjs "$RUN_ID" --attempt "$ATTEMPT" --repo "$REPO")"
+          verdict="$(jq -r .verdict <<< "$out")"
+          jq -r '.jobs[] | "\(.kind)\t\(.name): \(.reason)"' <<< "$out"
+          if [ "$verdict" != infra ]; then
+            echo "Verdict '$verdict': not an infrastructure-only failure, left for a person."
+            exit 0
+          fi
+          echo "Re-running the failed jobs of run $RUN_ID (attempt $ATTEMPT): infrastructure only."
+          if ! err="$(gh run rerun "$RUN_ID" --repo "$REPO" --failed 2>&1)"; then
+            # Someone merging got there first (merge-when-green.sh): the same re-run, already going.
+            case "$err" in
+              *"already running"*) echo "It is already running again." ;;
+              *) echo "::error::could not re-run run $RUN_ID: $err"; exit 1 ;;
+            esac
           fi
