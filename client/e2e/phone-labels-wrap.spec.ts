@@ -131,5 +131,48 @@ test("Files: a paused queue row's name has the row, its buttons go below", async
     expect(b?.y ?? 0).toBeGreaterThanOrEqual((textBox?.y ?? 0) + (textBox?.height ?? 0) - 1);
     expect((b?.x ?? 0) + (b?.width ?? 0)).toBeLessThanOrEqual(412);
   }
+  // One Resume: the row's. The queue's own would start nothing while every pick is paused.
+  await expect(queue.getByRole("button", { name: "Resume" })).toHaveCount(1);
+  await noSidewaysScroll(page);
+});
+
+// #794, third time: the move card's verb was a column three letters wide ("Mo/vin/g") beside its
+// figures and "Cancel copy", and the speed was split from its unit ("252" / "MiB/s").
+test("Files: a move's verb is one line and no figure is split from its unit", async ({ page }) => {
+  await setUp(page);
+  await page.goto("/files", { waitUntil: "domcontentloaded" });
+  await expect(main(page)).toBeVisible({ timeout: 30_000 });
+  // The store the move loop writes, driven as the loop drives it: a rate needs two byte counts.
+  await page.evaluate(async (host) => {
+    const { useFsBulkOpStore } = await import("/src/state/fsBulkOp.ts");
+    const s = useFsBulkOpStore.getState();
+    s.begin(host, { op: "paste-move", total: 1, fromPath: "/data/homebrew", toPath: "/mnt/ext1/homebrew" });
+    s.setProgress(host, {
+      done: 0,
+      currentPath: "/data/homebrew/Split Fiction PPSA08560.exfat",
+      currentName: "Split Fiction PPSA08560.exfat",
+      currentSize: 152 * 1024 ** 3,
+    });
+    s.setCurrentBytesCopied(host, 100 * 1024 ** 3);
+    await new Promise((r) => setTimeout(r, 1200));
+    s.setCurrentBytesCopied(host, 100 * 1024 ** 3 + 300 * 1024 ** 2);
+    await new Promise((r) => setTimeout(r, 1200));
+    s.setCurrentBytesCopied(host, 100 * 1024 ** 3 + 600 * 1024 ** 2);
+  }, HOST);
+
+  const head = page.getByTestId("fs-bulk-head");
+  const verb = head.getByTestId("fs-bulk-verb");
+  await expect(verb).toHaveText("Moving");
+  expect((await verb.boundingBox())?.height ?? 999).toBeLessThan(24);
+  // The speed is there, and every figure is on one line.
+  await expect(head.getByTestId("fs-bulk-figure").filter({ hasText: "/s" })).toBeVisible();
+  const figures = head.getByTestId("fs-bulk-figure");
+  for (let i = 0; i < (await figures.count()); i++) {
+    expect((await figures.nth(i).boundingBox())?.height ?? 999).toBeLessThan(24);
+  }
+  const cancel = page.getByTestId("fs-bulk-cancel");
+  const c = await cancel.boundingBox();
+  expect(c?.height ?? 999).toBeLessThan(48);
+  expect((c?.x ?? 0) + (c?.width ?? 0)).toBeLessThanOrEqual(412);
   await noSidewaysScroll(page);
 });

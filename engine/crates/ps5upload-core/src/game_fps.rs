@@ -55,6 +55,24 @@ pub struct FlipRead {
     /// The first bytes the driver wrote, as hex (diagnostics, #865; empty from an older helper).
     #[serde(default)]
     pub head: String,
+    /// The count was taken from the block's first word, not the helper's `flips` (firmware 4.x,
+    /// #865). Set on this side by [`parse_flip_read`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub count_at_start: bool,
+}
+
+/// Where firmware 4.x keeps the count (#865). The helper reads the u64 at offset 8, which is where
+/// 13.60 has it. A 4.03 console answered the same request with that word always 0 and the frame
+/// count in the block's first word: two bug-report reads 4.995 s apart were 203110 and 203410,
+/// which is 60.06 a second in a 60 FPS game. So a count of 0 with a first word that is not 0 is
+/// read from the first word. A game that has shown no frame yet has both at 0 and stays as it is.
+fn count_at_start(r: &FlipRead) -> Option<u64> {
+    if !r.is_ok() || r.flips != 0 {
+        return None;
+    }
+    let head = unhex(&r.head)?;
+    let first = u64::from_le_bytes(*head.first_chunk::<8>()?);
+    (first != 0).then_some(first)
 }
 
 /// The byte offsets of the 8-byte words that differ between two `head`s (#865): where a firmware
@@ -93,6 +111,12 @@ pub fn parse_flip_read(body: &[u8]) -> Result<FlipRead> {
     let r: FlipRead = serde_json::from_slice(body).context("hw.fps reply is not JSON")?;
     if r.state.is_empty() {
         anyhow::bail!("hw.fps reply has no state");
+    }
+    let mut r = r;
+    r.count_at_start = false; // ours to say, never the reply's
+    if let Some(count) = count_at_start(&r) {
+        r.flips = count;
+        r.count_at_start = true;
     }
     Ok(r)
 }
@@ -302,6 +326,7 @@ mod tests {
                 bytes: 128,
                 errno: 0,
                 head: HEAD.into(),
+                count_at_start: false,
             }
         );
         // an older helper's reply, without the head, still parses
@@ -311,6 +336,46 @@ mod tests {
         assert_eq!((r.state.as_str(), r.errno, r.flips), ("no_game", 2, 0));
         assert!(parse_flip_read(b"{}").is_err());
         assert!(parse_flip_read(b"nope").is_err());
+    }
+
+    /// #865: the two heads a firmware 4.03 console sent, 4.995 s apart in a 60 FPS game. The
+    /// helper's count (offset 8) is 0 in both; the first word is the frame count.
+    #[test]
+    fn firmware_4_keeps_the_count_in_the_first_word() {
+        let body = |mono_us: u64, head: &str| {
+            format!("{{\"ok\":true,\"state\":\"ok\",\"flips\":0,\"mono_us\":{mono_us},\"bytes\":128,\"head\":\"{head}\"}}")
+        };
+        let h1 = "6619030000000000000000000000000068190300000000001553e6c70000000050aebd4fc40c0000\
+                  01000000000000000200000001000000d20bd24ec40c0000";
+        let h2 = "921a0300000000000000000000000000941a030000000000d6b132c800000000735cf32bc60c0000\
+                  010000000000000002000000010000000dfe002bc60c0000";
+        let a = parse_flip_read(body(1_000_000, h1).as_bytes()).unwrap();
+        let b = parse_flip_read(body(5_995_000, h2).as_bytes()).unwrap();
+        assert_eq!((a.flips, a.count_at_start), (203_110, true));
+        assert_eq!((b.flips, b.count_at_start), (203_410, true));
+        let mut m = FpsMeter::default();
+        assert_eq!(m.push(&a), None);
+        let s = m.push(&b).unwrap();
+        assert_eq!(s.frames, 300);
+        assert!((s.fps - 60.06).abs() < 0.01, "{}", s.fps);
+
+        // A count at offset 8 is used as it is, whatever the first word holds (13.60).
+        let r = parse_flip_read(OK_BODY.as_bytes()).unwrap();
+        assert_eq!((r.flips, r.count_at_start), (123_456, false));
+        let first = "0900000000000000400000000000000000000000000000000000000000000000";
+        let r = parse_flip_read(
+            format!("{{\"ok\":true,\"state\":\"ok\",\"flips\":64,\"mono_us\":1,\"bytes\":32,\"head\":\"{first}\"}}").as_bytes(),
+        )
+        .unwrap();
+        assert_eq!((r.flips, r.count_at_start), (64, false));
+        // Nothing shown yet (both 0), an older helper (no head) and a reply that claims the
+        // flag itself: the count stays the helper's.
+        let zero = "0".repeat(128);
+        let r = parse_flip_read(body(1, &zero).as_bytes()).unwrap();
+        assert_eq!((r.flips, r.count_at_start), (0, false));
+        let old = "{\"ok\":true,\"state\":\"ok\",\"flips\":0,\"mono_us\":2,\"bytes\":128,\"count_at_start\":true}";
+        let r = parse_flip_read(old.as_bytes()).unwrap();
+        assert_eq!((r.flips, r.count_at_start), (0, false));
     }
 
     #[test]

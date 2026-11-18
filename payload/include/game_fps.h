@@ -20,7 +20,8 @@
  *   ioctl 0x80308217 on /dev/dce, 48-byte argument {selector, mask, output pointer, 3 reserved},
  *   selector 0x10000000A, mask 0x8000000000. The kernel writes a block to the output pointer
  *   (128 bytes on 13.60, more than some tools reserve); the count is the u64 at offset 8.
- *   Without a game it fails with ENOENT.
+ *   Without a game it fails with ENOENT. On 4.03 the word at offset 8 stays 0 and the count is
+ *   the block's first word (#865): the engine reads it from `head` (ps5upload-core game_fps.rs).
  *
  * Safety: the output block is a 16 KiB mapping followed by a PROT_NONE guard page, so a kernel
  * that writes more than expected fails the copy (EFAULT) instead of overwriting our memory. The
