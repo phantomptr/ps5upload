@@ -270,6 +270,7 @@ import { canEjectUsb, useUsbEject } from "../../lib/useUsbEject";
 import { useMeshDriveShortcuts } from "./useMeshDriveShortcuts";
 import { formatNumber, formatDuration } from "../../lib/formatDate";
 import { Modal } from "../../components/Modal";
+import { childToReveal, REVEAL_MS } from "../../lib/revealChild";
 
 function parent(p: string): string {
   if (p === "/" || p === "") return "/";
@@ -952,6 +953,59 @@ export default function FileSystemScreen() {
       else scrollToEntry.current(name);
     });
   }, [pendingSelect, path, entries]);
+
+  // Bring a row into view and give it keyboard focus: its folder button (Enter opens it), or the
+  // row itself for a file. A long folder renders only the rows near the screen, so a row not
+  // rendered yet is scrolled to first and focused once it is there.
+  const focusRow = useCallback((name: string) => {
+    const find = () =>
+      document.querySelector<HTMLElement>(`[data-fs-name="${CSS.escape(name)}"]`);
+    const land = (row: HTMLElement) => {
+      row.scrollIntoView({ block: "nearest" });
+      const open = row.querySelector<HTMLButtonElement>("button[data-fs-open]:not(:disabled)");
+      (open ?? row).focus({ preventScroll: true });
+    };
+    let tries = 0;
+    const attempt = () => {
+      const row = find();
+      if (row) return land(row);
+      if (tries === 0) scrollToEntry.current(name);
+      if (++tries < 20) requestAnimationFrame(attempt);
+    };
+    requestAnimationFrame(attempt);
+  }, []);
+
+  // Going back out of a folder (Up, Backspace, a breadcrumb, a recent path): the folder you came
+  // out of (or, several levels up, the one on the way) is brought into view, focused and lit for
+  // a moment. Not selected: the selection stays what the user picked.
+  const cameFrom = useRef<{ host: string; path: string } | null>(null);
+  const [pendingReveal, setPendingReveal] = useState<{ dir: string; name: string } | null>(null);
+  const [revealed, setRevealed] = useState<{ dir: string; name: string } | null>(null);
+  useEffect(() => {
+    const prev = cameFrom.current;
+    cameFrom.current = { host, path };
+    const name = prev && prev.host === host ? childToReveal(prev.path, path) : null;
+    setPendingReveal(name ? { dir: path, name } : null);
+    setRevealed(null);
+  }, [host, path]);
+  useEffect(() => {
+    if (!pendingReveal) return;
+    if (pendingReveal.dir !== path) {
+      setPendingReveal(null);
+      return;
+    }
+    if (!entries) return;
+    setPendingReveal(null);
+    const { name } = pendingReveal;
+    if (!entries.some((x) => x.name === name && x.kind === "dir")) return;
+    setRevealed({ dir: path, name });
+    focusRow(name);
+  }, [pendingReveal, path, entries, focusRow]);
+  useEffect(() => {
+    if (!revealed) return;
+    const timer = setTimeout(() => setRevealed(null), REVEAL_MS);
+    return () => clearTimeout(timer);
+  }, [revealed]);
 
   const selectedEntries = useMemo(
     () => (entries ? entries.filter((e) => selected.has(e.name)) : []),
@@ -4363,16 +4417,41 @@ export default function FileSystemScreen() {
               ref={rowsListRef}
               className="grid gap-1.5"
               style={{ paddingTop: rowsBefore, paddingBottom: rowsAfter }}
+              // ↑ / ↓ from a focused row move to the row above or below it.
+              onKeyDown={(ev) => {
+                if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp") return;
+                if (ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+                if (renaming !== null) return;
+                const li = (ev.target as HTMLElement).closest<HTMLElement>("[data-fs-name]");
+                if (!li) return;
+                const at = sortedEntries.findIndex((x) => x.name === li.dataset.fsName);
+                const next = sortedEntries[at + (ev.key === "ArrowDown" ? 1 : -1)];
+                if (at < 0 || !next) return;
+                ev.preventDefault();
+                focusRow(next.name);
+              }}
             >
               {sortedEntries.slice(rowsStart, rowsEnd).map((e) => {
                 const isDir = e.kind === "dir";
                 const Icon = isDir ? Folder : FileIcon;
                 const isRenaming = renaming === e.name;
                 const isSelected = selected.has(e.name);
+                const isRevealed =
+                  revealed !== null && revealed.dir === path && revealed.name === e.name;
                 return (
                   <li
                     key={e.name}
                     data-fs-name={e.name}
+                    data-fs-revealed={isRevealed ? "" : undefined}
+                    // Focusable from the keyboard (arrows) without being a tab stop of its own.
+                    tabIndex={-1}
+                    onKeyDown={(ev) => {
+                      // Enter on the row itself (a file row: its name is not a button) opens it.
+                      if (ev.key !== "Enter" || ev.target !== ev.currentTarget || isRenaming) return;
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      openEntry(e);
+                    }}
                     // Drag rows out of the window onto this computer (desktop app), or onto
                     // another folder here to move them (Alt/Option in the desktop app).
                     draggable={canDragOut || dragMoveWorks}
@@ -4389,7 +4468,8 @@ export default function FileSystemScreen() {
                       setRowMenu({ x: ev.clientX, y: ev.clientY, entry: e });
                     }}
                     className={
-                      "list-row-contain-sm flex items-center gap-2 rounded-[var(--radius-card)] border px-2.5 py-1 text-sm transition-colors sm:gap-3 sm:px-3.5 sm:py-2.5 " +
+                      "list-row-contain-sm flex items-center gap-2 rounded-[var(--radius-card)] border px-2.5 py-1 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-[var(--color-accent)] sm:gap-3 sm:px-3.5 sm:py-2.5 " +
+                      (isRevealed ? "fs-reveal " : "") +
                       (isDir && dropTarget === joinPath(path, e.name)
                         ? "ring-2 ring-[var(--color-accent)] "
                         : "") +
@@ -4428,6 +4508,7 @@ export default function FileSystemScreen() {
                     ) : (
                       <button
                         type="button"
+                        data-fs-open=""
                         onClick={() => {
                           if (isDir) setPath(joinPath(path, e.name));
                         }}

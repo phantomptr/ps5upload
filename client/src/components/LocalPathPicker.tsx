@@ -27,6 +27,7 @@ import { usePackageViewer } from "../state/packageViewer";
 import { activateFocusTrap } from "../lib/focusTrap";
 import { useTr } from "../state/lang";
 import { humanizeCaught } from "../lib/humanizeError";
+import { childToReveal, REVEAL_MS } from "../lib/revealChild";
 
 /**
  * Global in-app file/folder browser. Mounted once at the app root; driven
@@ -84,6 +85,8 @@ export interface PickerViewProps {
   selected?: string[];
   onToggle?: (path: string) => void;
   onAddSelected?: () => void;
+  /** The folder just come back out of (its name): focused and lit for a moment. */
+  revealed?: string | null;
 }
 
 function passes(name: string, filters?: { extensions: string[] }[]): boolean {
@@ -104,6 +107,16 @@ export function PickerView(p: PickerViewProps) {
   // Keep Tab inside the picker while it is up; Escape cancels. Both go through
   // the shared modal stack, so with the package viewer (a Drawer) or a confirm
   // open on top, Escape is theirs and the picker underneath stays put.
+  // Back out of a folder: the folder left comes into view with focus, so Enter opens it again.
+  useEffect(() => {
+    if (!p.revealed) return;
+    const row = panelRef.current?.querySelector<HTMLElement>(
+      `[data-picker-name="${CSS.escape(p.revealed)}"]`,
+    );
+    if (!row) return;
+    row.scrollIntoView({ block: "nearest" });
+    row.focus({ preventScroll: true });
+  }, [p.revealed]);
   useEffect(
     () =>
       activateFocusTrap(() => panelRef.current, window, {
@@ -238,7 +251,10 @@ export function PickerView(p: PickerViewProps) {
                     const isPkg = !e.is_dir && e.name.toLowerCase().endsWith(".pkg");
                     const tickable = p.multiple && (e.is_dir ? p.mode !== "file" : p.mode !== "folder");
                     return (
-                      <li key={e.path} className="flex items-center">
+                      <li
+                        key={e.path}
+                        className={"flex items-center" + (e.is_dir && p.revealed === e.name ? " fs-reveal" : "")}
+                      >
                         {tickable && (
                           <input
                             type="checkbox"
@@ -252,6 +268,7 @@ export function PickerView(p: PickerViewProps) {
                           type="button"
                           disabled={!selectable && !p.actions}
                           className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-start hover:bg-[var(--color-surface)] disabled:opacity-40"
+                          data-picker-name={e.name}
                           onClick={() => {
                             if (e.is_dir) p.onOpenDir(e.path);
                             else if (p.mode !== "folder" && !p.actions) {
@@ -424,9 +441,18 @@ export function LocalPathPicker() {
   const [hint, setHint] = useState<string | null>(null);
   /** A multi-pick's ticked paths, in the order ticked (raw, before the source prefix). */
   const [selected, setSelected] = useState<string[]>([]);
+  /** The folder shown (set once its listing is in), and the folder come back out of. */
+  const cwdRef = useRef<string | null>(null);
+  const [revealed, setRevealed] = useState<string | null>(null);
+  useEffect(() => {
+    if (!revealed) return;
+    const timer = setTimeout(() => setRevealed(null), REVEAL_MS);
+    return () => clearTimeout(timer);
+  }, [revealed]);
 
   const loadDir = useCallback(
     async (path: string, more?: string) => {
+      const from = cwdRef.current;
       setLoading(true);
       setError(null);
       setHint(null);
@@ -459,10 +485,14 @@ export function LocalPathPicker() {
           setCursor(page.next === null ? null : String(page.next));
         }
         setCwd(path);
+        if (!more) setRevealed(childToReveal(from, path));
+        cwdRef.current = path;
       } catch (e) {
         setError(humanizeCaught(e));
         setHint(e instanceof RemoteApiError ? (e.hint ?? null) : null);
         setCwd(path);
+        setRevealed(null);
+        cwdRef.current = path;
       } finally {
         setLoading(false);
       }
@@ -509,6 +539,8 @@ export function LocalPathPicker() {
   useEffect(() => {
     if (pending) {
       setCwd(null);
+      cwdRef.current = null;
+      setRevealed(null);
       setEntries([]);
       setCursor(null);
       setSelected([]);
@@ -597,6 +629,7 @@ export function LocalPathPicker() {
         setSelected((cur) => (cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p]))
       }
       onAddSelected={() => selected.length && settleMany(selected.map(resultOf))}
+      revealed={revealed}
     />
   );
 }

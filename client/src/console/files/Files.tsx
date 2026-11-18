@@ -24,6 +24,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { formatBytes } from "../../lib/format";
+import { childToReveal, REVEAL_MS } from "../../lib/revealChild";
 import { ApiError, call } from "../api";
 import { errorText, type Message, type Volume } from "../home/Home";
 import { useJobs, type Job } from "../home/useJobs";
@@ -326,6 +327,8 @@ export interface FilesViewProps {
   onShowPc?: (path: string) => void;
   /** Entries of the folder shown that a PC upload is writing into. */
   uploading?: ReadonlySet<string>;
+  /** The folder just come back out of, lit for a moment. */
+  revealed?: string | null;
   onEject?: (path: string, force: boolean) => void;
   onUnmount?: (path: string) => void;
   onGoTo?: (path: string) => void;
@@ -1265,6 +1268,7 @@ export function FilesView(p: FilesViewProps) {
             onActions={(name) => p.onAsk({ kind: "sheet", names: [name] })}
             label={p.path}
             uploading={p.uploading}
+            revealed={p.revealed}
           />
           {p.dir.more ? (
             // Reaching it with the D-pad reads the next page: big folders load as you scroll.
@@ -1402,6 +1406,14 @@ export function Files({ ctx }: { ctx: SectionContext }) {
   const lastAnchor = useRef<FocusAnchor | null>(null);
   /** After the next load, focus this row ("" = the first one), then forget it. */
   const focusName = useRef<string | null>(null);
+  /** The next focus after a folder change is the folder come back out of: light it up. */
+  const revealNext = useRef(false);
+  const [revealed, setRevealed] = useState<string | null>(null);
+  useEffect(() => {
+    if (revealed == null) return;
+    const timer = setTimeout(() => setRevealed(null), REVEAL_MS);
+    return () => clearTimeout(timer);
+  }, [revealed]);
   /** "Show more" had focus when it read the next page: the row count before it. */
   const afterMore = useRef<number | null>(null);
   const { refresh } = dir;
@@ -1425,7 +1437,11 @@ export function Files({ ctx }: { ctx: SectionContext }) {
 
   const go = useCallback((next: string | null, focus: string | null = "") => {
     moved.current = true;
-    focusName.current = focus;
+    // Back out to a folder above (a path bar part, a pinned place): focus the folder on the way
+    // to the one left, as Up does.
+    const back = childToReveal(pathRef.current, next);
+    focusName.current = focus === "" ? (back ?? "") : focus;
+    revealNext.current = back != null && focusName.current === back;
     lastAnchor.current = null;
     setSelecting(false);
     setSelected([]);
@@ -1514,6 +1530,10 @@ export function Files({ ctx }: { ctx: SectionContext }) {
       if (path != null && !dir.loaded && !dir.error) return; // wait for the first page
       const name = focusName.current;
       focusName.current = null;
+      const reveal = revealNext.current;
+      revealNext.current = false;
+      // Only the folder come back out of is lit (not a renamed or pasted row focused after a load).
+      setRevealed(reveal && path != null && name && byAttr(el, "data-entry", name) ? name : null);
       const target =
         (path == null
           ? (byAttr(el, "data-drive", name) ?? byAttr(el, "data-share-open", name))
@@ -2317,6 +2337,7 @@ export function Files({ ctx }: { ctx: SectionContext }) {
           void showOnPc(x).then((m) => mounted.current && setMessage(m));
         }}
         uploading={uploadingHere}
+        revealed={revealed}
         onEject={onEject}
         onUnmount={onUnmount}
         onGoTo={onGoTo}

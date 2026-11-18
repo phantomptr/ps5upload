@@ -957,6 +957,30 @@ body {
 }
 :root[data-motion="none"] .support-heart { animation: none; }
 
+/* Files: the folder just come back out of, for a moment (lib/revealChild.ts). Without motion it
+ * stays lit until the class goes; with motion it fades out over the same time. */
+.fs-reveal {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
+  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--color-accent) 16%, transparent);
+}
+@keyframes fs-reveal {
+  0%,
+  45% {
+    outline-color: var(--color-accent);
+    box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--color-accent) 16%, transparent);
+  }
+  100% {
+    outline-color: transparent;
+    box-shadow: inset 0 0 0 999px transparent;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion="none"]) .fs-reveal {
+    animation: fs-reveal 2s ease-out forwards;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .anim-scrim,
   .anim-pop,
