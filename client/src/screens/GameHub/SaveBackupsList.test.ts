@@ -1,6 +1,33 @@
 import { describe, expect, it } from "vitest";
 
-import { shownUnder } from "./SaveBackupsList";
+import { backupPlace, mergeBackups, shownUnder } from "./SaveBackupsList";
+
+describe("backups on the PS5's own drive", () => {
+  const b = (stamp: string) => ({
+    file: `T_user00000001_${stamp}.zip`,
+    title_id: "T",
+    user_id: 1,
+    stamp,
+    size: 1,
+  });
+
+  it("lists the copies on the PS5 drive with the others, marked, the local one first on a tie", () => {
+    const merged = mergeBackups(
+      [b("2026-11-17_101500")],
+      [],
+      [b("2026-11-17_101500"), b("2026-11-01_000000")],
+      "usb",
+    );
+    expect(merged.map((x) => [x.stamp, backupPlace(x), x.console ?? null])).toEqual([
+      ["2026-11-17_101500", "local", null],
+      ["2026-11-17_101500", "console", "usb"],
+      ["2026-11-01_000000", "console", "usb"],
+    ]);
+    // The same file here and on the PS5 gets two keys.
+    expect(new Set(merged.map((x) => `${backupPlace(x)}:${x.file}`)).size).toBe(3);
+    expect(mergeBackups([], [], [b("2026-11-01_000000")])[0].console).toBe("ext");
+  });
+});
 
 describe("shownUnder", () => {
   const save = { user_id: 0x1000_0001, kind: "ps5" as const };

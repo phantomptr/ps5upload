@@ -61,6 +61,11 @@ pub struct Settings {
     /// A settings file from before it was a choice reads as 10.
     #[serde(default = "default_interval_minutes")]
     pub interval_minutes: u32,
+    /// A drive in the PS5 itself (`/mnt/ext<N>` M.2, `/mnt/usb<N>` USB) that also gets a copy of
+    /// each backup, so saves outlive a reset of the internal storage; "" for none
+    /// (`save_backup_console`).
+    #[serde(default)]
+    pub console_drive: String,
 }
 
 impl Settings {
@@ -124,6 +129,7 @@ impl Default for Settings {
             hosts: Vec::new(),
             old_dirs: Vec::new(),
             interval_minutes: DEFAULT_INTERVAL_MINUTES,
+            console_drive: String::new(),
         }
     }
 }
@@ -158,6 +164,8 @@ pub struct Status {
     pub backed_up: u32,
     pub failed: u32,
     pub last_error: Option<String>,
+    /// The last copies to the PS5 drive (`Settings::console_drive`); None before any.
+    pub console_copy: Option<crate::save_backup_console::CopyStatus>,
 }
 
 /// Console and save path → the save's modification time when it was last backed up.
@@ -757,6 +765,7 @@ pub fn run_pass() -> Result<(), String> {
     };
     let mut done: Done = load(DONE_FILE);
     let (mut backed_up, mut failed, mut last_error) = (0u32, 0u32, None::<String>);
+    let mut copies = crate::save_backup_console::Copies::new(&s.console_drive, s.keep);
     for host in &s.hosts {
         if console_busy(host) {
             continue;
@@ -774,10 +783,19 @@ pub fn run_pass() -> Result<(), String> {
                 break;
             }
             match back_up_one(host, entry, &s.dir, s.keep, None, &|| Ok(())) {
-                Ok(_) => {
+                Ok(zip) => {
                     done.insert(done_key(host, &entry.path), entry.mtime);
                     let _ = save(DONE_FILE, &done);
                     backed_up += 1;
+                    // A copy on the PS5's own drive too; never a reason the backup failed.
+                    if let Some(c) = copies.as_mut() {
+                        c.copy(
+                            &crate::save_backup_console::Live(host),
+                            host,
+                            &entry.title_id,
+                            &zip,
+                        );
+                    }
                 }
                 Err(e) => {
                     crate::log_warn!("save backup: {} on {host}: {e}", entry.title_id);
@@ -799,8 +817,23 @@ pub fn run_pass() -> Result<(), String> {
         st.backed_up = backed_up;
         st.failed = failed;
         st.last_error = last_error;
+        if let Some(c) = copies.filter(|c| c.status.at > 0) {
+            st.console_copy = Some(c.status);
+        }
     });
     Ok(())
+}
+
+/// Copies the backups `made` from `host` (Back up now, a snapshot) to the PS5 drive, when one is
+/// chosen, and notes what happened in the status.
+fn copy_made(host: &str, title_id: &str, made: &[PathBuf], s: &Settings) {
+    let Some(mut copies) = crate::save_backup_console::Copies::new(&s.console_drive, s.keep) else {
+        return;
+    };
+    for zip in made {
+        copies.copy(&crate::save_backup_console::Live(host), host, title_id, zip);
+    }
+    set_status(|st| st.console_copy = Some(copies.status));
 }
 
 // ── snapshots (while the game runs) ─────────────────────────────────────
@@ -913,6 +946,7 @@ pub fn snapshot(host: &str, title_id: &str) -> Result<Vec<PathBuf>, String> {
     for entry in &saves {
         made.push(snapshot_one(host, entry, &s)?);
     }
+    copy_made(host, &saves[0].title_id, &made, &s);
     crate::log_info!(
         "save backup: snapshot of {title_id} on {host} ({} file(s))",
         made.len()
@@ -965,6 +999,7 @@ pub fn back_up_now(host: &str, title_id: &str, user_id: u32) -> Result<PathBuf, 
     } else {
         back_up_one(host, &entry, &s.dir, s.keep, None, &|| Ok(()))?
     };
+    copy_made(host, &entry.title_id, std::slice::from_ref(&made), &s);
     crate::log_info!(
         "save backup: {title_id} of user {user_id:08x} backed up now on {host} ({})",
         made.display()
@@ -1186,7 +1221,7 @@ fn restore(
 /// A save just put back from the backup folder is already in it: the next pass need not back the
 /// same content up again, which would cost one more old version. Best effort: at worst that
 /// pass does back it up.
-fn mark_restored(host: &str, save_path: &str) {
+pub(crate) fn mark_restored(host: &str, save_path: &str) {
     let Ok(list) = list_saves(host) else { return };
     let Some(entry) = list.iter().find(|e| e.path == save_path) else {
         return;
@@ -1846,6 +1881,9 @@ pub struct SettingsPatch {
     /// Consoles to take off `hosts`.
     #[serde(default)]
     pub remove_hosts: Vec<String>,
+    /// The PS5 drive that also gets a copy of each backup (`/mnt/ext<N>`, `/mnt/usb<N>`); "" for
+    /// none.
+    pub console_drive: Option<String>,
 }
 
 /// `hosts` with the additions and removals made, tidy.
@@ -1876,7 +1914,7 @@ pub(crate) fn writable(dir: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// `PUT /api/save-backup` — change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts}`.
+/// `PUT /api/save-backup` — change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts, console_drive}`.
 pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
     let before = settings();
     let mut next = before.clone();
@@ -1902,6 +1940,16 @@ pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
             );
         }
         next.interval_minutes = m;
+    }
+    if let Some(d) = patch.console_drive {
+        let d = d.trim().trim_end_matches('/').to_string();
+        if !d.is_empty() && !crate::save_backup_console::drive_path_ok(&d) {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "console_drive must be a PS5 M.2 or USB drive (/mnt/ext0, /mnt/usb0, …) or empty",
+            );
+        }
+        next.console_drive = d;
     }
     if let Some(h) = patch.hosts {
         next.hosts = hosts_with(h, Vec::new(), &[]);

@@ -15,6 +15,32 @@ export interface SaveBackupSettings {
   hosts: string[];
   /** Backup folders used before `dir`: their backups still list and restore. */
   old_dirs?: string[];
+  /** A drive in the PS5 itself (`/mnt/ext0` M.2, `/mnt/usb0` USB) that also gets a copy of each
+   *  backup, so saves outlive a reset of the internal storage; "" for none. An engine before
+   *  12.6.5 leaves it out (it can't). */
+  console_drive?: string;
+}
+
+/** What the last copies to the PS5 drive did. */
+export interface ConsoleCopyStatus {
+  /** Unix ms of the last copy (or skip). */
+  at: number;
+  drive: string;
+  copied: number;
+  skipped: number;
+  failed: number;
+  /** Why the last one was skipped or failed; null when they all went. */
+  note: string | null;
+}
+
+/** A PS5 drive a copy of each backup can go to (never the internal storage). */
+export interface ConsoleDrive {
+  /** `/mnt/ext0`, `/mnt/usb1` … */
+  path: string;
+  /** `ext`: M.2 / extended storage; `usb`: a USB drive. */
+  kind: "ext" | "usb";
+  total_bytes: number;
+  free_bytes: number;
 }
 
 export interface SaveBackupStatus {
@@ -24,6 +50,8 @@ export interface SaveBackupStatus {
   backed_up: number;
   failed: number;
   last_error: string | null;
+  /** The last copies to the PS5 drive; null before any (absent from an older engine). */
+  console_copy?: ConsoleCopyStatus | null;
 }
 
 export interface SaveBackupView {
@@ -179,6 +207,17 @@ export const saveBackupApi = {
   /** Back up one user's save of a game now, every part of it (a snapshot while it runs). */
   now: (req: { addr: string; title_id: string; user_id: number }) =>
     call<{ ok: boolean; file: string }>("/now", { ...LONG, method: "POST", body: JSON.stringify(req) }),
+  /** The console's M.2 and USB drives a copy of each backup can go to. */
+  consoleDrives: async (addr: string) =>
+    (await call<{ drives: ConsoleDrive[] }>(`/console/drives?addr=${encodeURIComponent(addr)}`)).drives,
+  /** A game's backup copies on the chosen PS5 drive of the console `addr` (bare IP). */
+  consoleList: (addr: string, titleId: string) =>
+    call<{ drive: string; kind: "ext" | "usb" | ""; backups: SaveBackupFile[] }>(
+      `/console/list?addr=${encodeURIComponent(addr)}&title_id=${encodeURIComponent(titleId)}`,
+    ),
+  /** Put a backup copy on the PS5 drive back, as `restore` does (the save there now kept first). */
+  consoleRestore: (req: { addr: string; title_id: string; file: string; save_path: string; user_id: number }) =>
+    call<{ ok: boolean }>("/console/restore", { ...LONG, method: "POST", body: JSON.stringify(req) }),
   /** The newest backup of each game and user in the backup folder. */
   latest: async () =>
     (await call<{ latest: Array<{ title_id: string; user_id: number; stamp: string }> }>("/latest")).latest,

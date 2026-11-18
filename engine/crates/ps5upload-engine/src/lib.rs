@@ -112,6 +112,7 @@ mod rp_live_ts;
 mod rp_replay;
 mod rp_stream_api;
 mod save_backup;
+mod save_backup_console;
 mod save_backup_server;
 mod save_copy;
 mod save_sync;
@@ -13244,6 +13245,19 @@ fn build_app_and_mcp(
             post(save_backup_server::post_restore),
         )
         .route("/api/save-backup/list", get(save_backup::get_list))
+        // A copy of each backup on the PS5's own M.2 or USB drive.
+        .route(
+            "/api/save-backup/console/drives",
+            get(save_backup_console::get_drives),
+        )
+        .route(
+            "/api/save-backup/console/list",
+            get(save_backup_console::get_list),
+        )
+        .route(
+            "/api/save-backup/console/restore",
+            post(save_backup_console::post_restore),
+        )
         .route("/api/save-backup/switch", get(emulator_saves::get_switch))
         .route("/api/save-backup/ps2", get(ps2_saves::get_ps2))
         .route("/api/save-backup/restore", post(save_backup::post_restore))
