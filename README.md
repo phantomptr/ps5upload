@@ -152,6 +152,7 @@ Pre-built downloads land on the
 | Linux — NixOS (x64 / ARM64) | no release artifact | Packaged in [NUR](https://github.com/GriefNorth/nur-packages) as `ps5upload` — see **NixOS** below. |
 | Android | `PS5Upload-<ver>-android.apk` (older 32-bit phones: `-android-armv7.apk`) | Enable "install unknown apps" for your browser/file manager, then open the `.apk`. Same interface, mobile-friendly; connects to and manages your PS5 over Wi-Fi. On Android 17, allow local network access ("nearby devices") when asked. |
 | iPhone | `PS5Upload-<ver>-ios-unsigned.ipa` | Sideload with AltStore or Sideloadly and an Apple ID (a free one works; it is re-signed every 7 days). AltStore, SideStore and Feather can also add the source `https://ps5upload.phantomptr.com/altstore.json` and update the app from there (a raw GitHub link doesn't work; see the FAQ). Turn on Developer Mode and trust your Apple ID on the iPhone; see the FAQ. Copy games into the app's folder with the Files app. |
+| Engine only (servers, Docker, advanced) | `ps5upload-engine-<ver>-<system>` | Not the app: the engine on its own, with no window. See [Self-hosted engine and web UI](#self-hosted-engine-and-web-ui). For the app, use the files above. |
 
 ### NixOS
 

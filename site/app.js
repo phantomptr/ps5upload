@@ -240,7 +240,9 @@ function normalize(list) {
       tag: r.tag_name,
       prerelease: !!r.prerelease,
       published: r.published_at,
-      body: r.body || "",
+      // The "Which file do I download?" table at the top of each release page (publish.yml) is for
+      // GitHub; this page lists the downloads itself.
+      body: (r.body || "").replace(/<!-- downloads -->[\s\S]*?<!-- \/downloads -->\s*/, ""),
       url: r.html_url,
       assets: (r.assets || []).map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size })),
     }));

@@ -1381,8 +1381,35 @@ jobs:
             echo "::warning::no altstore.json in this release: do not promote it, source users would lose updates"
           fi
 
+      # The release page opens with which file to download: people took the engine-only
+      # Windows exe for the app ("the app doesn't run"). Only the page gets this; the in-app
+      # update notes (latest.json) and altstore.json were made from the CHANGELOG text above, and
+      # the website drops the block between the markers (site/app.js lists downloads itself).
       - name: Move release notes out of assets dir
-        run: mv release/RELEASE_NOTES.md "$RUNNER_TEMP/RELEASE_NOTES.md"
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            sed "s/@V@/${TAG_VERSION}/g" <<'EOF'
+          <!-- downloads -->
+          ### Which file do I download?
+
+          | For | Download |
+          |---|---|
+          | Windows | `PS5Upload-@V@-win-x64-setup.exe` (ARM PCs: `PS5Upload-@V@-win-arm64-setup.exe`; to run without installing: `PS5Upload-@V@-win-x64.zip`) |
+          | Mac | `PS5Upload-@V@-mac-arm64.dmg` (Apple Silicon) or `PS5Upload-@V@-mac-x64.dmg` (Intel) |
+          | Linux | `PS5Upload-@V@-linux-x64.AppImage`, `.deb` (Debian, Ubuntu) or `.rpm` (Fedora, Bazzite); ARM: the `linux-arm64` files |
+          | Android | `PS5Upload-@V@-android.apk` (older 32-bit phones: `PS5Upload-@V@-android-armv7.apk`) |
+          | iPhone | `PS5Upload-@V@-ios-unsigned.ipa`, installed with AltStore or Sideloadly (see the README) |
+          | Engine only (servers, Docker, advanced) | `ps5upload-engine-@V@-<system>`: not the app, it has no window |
+
+          <!-- /downloads -->
+
+          EOF
+            cat release/RELEASE_NOTES.md
+          } > "$RUNNER_TEMP/RELEASE_NOTES.md"
+          rm release/RELEASE_NOTES.md
 
       # After the manifests (the updater reads latest.json) and with the notes out, so the
       # attested files are exactly the ones the next step uploads.

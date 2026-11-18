@@ -43,5 +43,10 @@ async fn main() {
         let _ = writeln!(std::io::stdout(), "{}", ps5upload_engine::CLI_USAGE);
         return;
     }
+    // Windows, double-clicked from Explorer: say this is the engine on its own and where the app
+    // is, since there is no window to show otherwise (standalone_notice.rs).
+    if !ps5upload_engine::double_click_notice() {
+        return;
+    }
     ps5upload_engine::run_cli().await;
 }
