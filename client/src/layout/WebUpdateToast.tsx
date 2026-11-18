@@ -18,8 +18,11 @@ export interface EngineUpdate {
   docker: boolean;
 }
 
-/** What a Docker user runs to update: in the folder of their compose file. */
-export const DOCKER_UPDATE_COMMAND = "docker compose pull && docker compose up -d";
+/** What a Docker user runs to update: in the folder of their compose file. Pulling leaves the
+ * replaced image behind (~170 MB a release), so the last step removes this app's images that no
+ * container uses; the label filter keeps it away from every other image on the machine. */
+export const DOCKER_UPDATE_COMMAND =
+  "docker compose pull && docker compose up -d && docker image prune -af --filter label=org.opencontainers.image.source=https://github.com/phantomptr/ps5upload";
 
 const DISMISSED_KEY = "ps5upload.web_update_dismissed";
 
