@@ -313,6 +313,8 @@ pub struct RemoteSource {
     /// was cancelled. Without it a fetch outlives its cancel for as long as the origin keeps
     /// answering 429/503 (up to `PIECE_MAX_ATTEMPTS` waits of `RATE_LIMIT_MAX_WAIT` a piece).
     stop: Option<StopCheck>,
+    /// Set by [`RemoteSource::stop`]: the same, for an owner that holds the source itself.
+    stop_now: std::sync::atomic::AtomicBool,
 }
 
 /// See `RemoteSource::stop`.
@@ -778,7 +780,14 @@ impl RemoteSource {
             origin_bytes: AtomicU64::new(0),
             origin_nanos: AtomicU64::new(0),
             stop: None,
+            stop_now: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Give up every fetch in hand (a body being served, the windows read ahead) and refuse
+    /// later ones: the job this source fed was stopped.
+    pub fn stop(&self) {
+        self.stop_now.store(true, Ordering::Relaxed);
     }
 
     /// Give up the fetch in hand, and refuse later ones, once `stop` answers true.
@@ -788,7 +797,7 @@ impl RemoteSource {
     }
 
     fn stopped(&self) -> bool {
-        self.stop.as_ref().is_some_and(|stop| stop())
+        self.stop_now.load(Ordering::Relaxed) || self.stop.as_ref().is_some_and(|stop| stop())
     }
 
     /// Sleep for `wait`, waking early when stopped. False when it was stopped.
@@ -2614,6 +2623,26 @@ pub(crate) mod origin_tests {
             "the fetch outlived its cancel by {:?}",
             started.elapsed()
         );
+
+        // The same for a source stopped by its owner (a link install the user stopped).
+        let mut src = RemoteSource::new(format!("http://{addr}/game.pkg"), total);
+        src.window_bytes = total;
+        src.parallelism = 1;
+        let src = Arc::new(src);
+        let started = std::time::Instant::now();
+        let stopper = {
+            let src = src.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                src.stop();
+            })
+        };
+        let err = src
+            .read_range(0, total - 1)
+            .expect_err("a stopped fetch must not succeed");
+        stopper.join().unwrap();
+        assert!(err.to_string().contains(FETCH_STOPPED), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 
     /// An origin that throttles EVERY connection alike must not be fought

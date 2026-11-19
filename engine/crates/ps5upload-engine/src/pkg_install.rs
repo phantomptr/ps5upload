@@ -63,6 +63,15 @@ impl RemotePkg {
         }
     }
 
+    /// The install was stopped: give up what is being fetched from a link. Without this the
+    /// body in flight and the windows read ahead went on fetching after the stop, for as long
+    /// as the host kept answering 429/503 (each has its own clone of the source).
+    pub fn stop(&self) {
+        if let RemotePkg::Http(r) = self {
+            r.stop();
+        }
+    }
+
     /// The file behind a link changed under this install. Only a link can do that.
     pub fn origin_changed(&self) -> bool {
         matches!(self, RemotePkg::Http(r) if r.origin_changed())
