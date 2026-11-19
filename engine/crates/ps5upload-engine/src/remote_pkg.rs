@@ -309,7 +309,19 @@ pub struct RemoteSource {
     /// the two is actually slow.
     origin_bytes: AtomicU64,
     origin_nanos: AtomicU64,
+    /// Asked before every request and during every wait: true once the job this source feeds
+    /// was cancelled. Without it a fetch outlives its cancel for as long as the origin keeps
+    /// answering 429/503 (up to `PIECE_MAX_ATTEMPTS` waits of `RATE_LIMIT_MAX_WAIT` a piece).
+    stop: Option<StopCheck>,
 }
+
+/// See `RemoteSource::stop`.
+type StopCheck = Box<dyn Fn() -> bool + Send + Sync>;
+
+/// What a fetch that was stopped fails with.
+const FETCH_STOPPED: &str = "the download was cancelled";
+/// How often a wait looks at the stop check.
+const STOP_POLL: Duration = Duration::from_millis(100);
 
 /// Holds one slot in `RemoteSource::in_flight` until dropped.
 struct ConnectionPermit<'a> {
@@ -765,6 +777,32 @@ impl RemoteSource {
             prefetching: Mutex::new(HashSet::new()),
             origin_bytes: AtomicU64::new(0),
             origin_nanos: AtomicU64::new(0),
+            stop: None,
+        }
+    }
+
+    /// Give up the fetch in hand, and refuse later ones, once `stop` answers true.
+    pub fn with_stop(mut self, stop: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        self.stop = Some(Box::new(stop));
+        self
+    }
+
+    fn stopped(&self) -> bool {
+        self.stop.as_ref().is_some_and(|stop| stop())
+    }
+
+    /// Sleep for `wait`, waking early when stopped. False when it was stopped.
+    fn sleep_unless_stopped(&self, wait: Duration) -> bool {
+        let until = std::time::Instant::now() + wait;
+        loop {
+            if self.stopped() {
+                return false;
+            }
+            let left = until.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return true;
+            }
+            std::thread::sleep(left.min(STOP_POLL));
         }
     }
 
@@ -1264,6 +1302,9 @@ impl RemoteSource {
         let mut attempts = 0u32;
         let mut last_err = String::from("no attempt was made");
         while filled < len {
+            if self.stopped() {
+                return Err(FETCH_STOPPED.to_string());
+            }
             if stalls >= PIECE_STALL_ATTEMPTS {
                 return Err(format!(
                     "gave up after {stalls} attempts with no progress \
@@ -1279,7 +1320,9 @@ impl RemoteSource {
             if stalls > 0 {
                 let backoff = Duration::from_millis(250 * u64::from(stalls));
                 stat.backoff_ms += backoff.as_millis() as u64;
-                std::thread::sleep(backoff);
+                if !self.sleep_unless_stopped(backoff) {
+                    return Err(FETCH_STOPPED.to_string());
+                }
             }
             attempts += 1;
             let from = start + filled;
@@ -1321,7 +1364,9 @@ impl RemoteSource {
                         retry_after,
                     }
                     .to_string();
-                    std::thread::sleep(wait);
+                    if !self.sleep_unless_stopped(wait) {
+                        return Err(FETCH_STOPPED.to_string());
+                    }
                 }
                 // Said once more on another connection in case a mirror answered: the second answer
                 // settles it, and asking any longer would only read a package that cannot be used.
@@ -2508,6 +2553,67 @@ pub(crate) mod origin_tests {
             .expect("a 429 must not fail the fetch");
         assert_eq!(got.len(), total as usize);
         assert_eq!(&got[..], &body(total as usize)[..], "wrong bytes");
+    }
+
+    /// A cancel ends a fetch that is waiting out a rate limit. The origin here answers every
+    /// request 429 with `Retry-After: 30`: without the stop check the read came back after
+    /// hours (512 attempts of 30 s a piece), long after the job was cancelled.
+    #[test]
+    fn a_cancel_ends_a_fetch_that_is_waiting_out_a_rate_limit() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut stream) = conn else { break };
+                std::thread::spawn(move || {
+                    let Ok(peer) = stream.try_clone() else { return };
+                    let mut reader = BufReader::new(peer);
+                    loop {
+                        let mut saw = false;
+                        loop {
+                            let mut line = String::new();
+                            match reader.read_line(&mut line) {
+                                Ok(0) | Err(_) => return,
+                                Ok(_) => {}
+                            }
+                            if line == "\r\n" || line == "\n" {
+                                break;
+                            }
+                            saw = true;
+                        }
+                        let resp = "HTTP/1.1 429 Too Many Requests\r\n\
+                                    Retry-After: 30\r\nContent-Length: 0\r\n\
+                                    Connection: keep-alive\r\n\r\n";
+                        if !saw || stream.write_all(resp.as_bytes()).is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+
+        let total = 64 * 1024u64;
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let mut src = RemoteSource::new(format!("http://{addr}/game.pkg"), total)
+            .with_stop(move || flag.load(Ordering::Relaxed));
+        src.window_bytes = total;
+        src.parallelism = 1;
+        let started = std::time::Instant::now();
+        let canceller = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            cancelled.store(true, Ordering::Relaxed);
+        });
+        let err = src
+            .read_range(0, total - 1)
+            .expect_err("a cancelled fetch must not succeed");
+        canceller.join().unwrap();
+        assert!(err.to_string().contains(FETCH_STOPPED), "{err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the fetch outlived its cancel by {:?}",
+            started.elapsed()
+        );
     }
 
     /// An origin that throttles EVERY connection alike must not be fought
