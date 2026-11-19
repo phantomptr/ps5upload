@@ -42,9 +42,14 @@ export default function ServerBackupCard({
     return () => window.clearInterval(id);
   }, [running, refresh]);
   const targetConn = settings?.target ? parseRemotePath(settings.target)?.connectionId : undefined;
+  // The saved folder's server is shown when it is loaded or changes. Not on every change of
+  // `server`: that put the list back on it the moment another server was picked, so the folder
+  // could never be moved to a different server.
   useEffect(() => {
     if (targetConn) setServer(targetConn);
-    else if (!server && connections.length > 0) setServer(connections[0].id);
+  }, [targetConn]);
+  useEffect(() => {
+    if (!targetConn && !server && connections.length > 0) setServer(connections[0].id);
   }, [targetConn, connections, server]);
 
   if (!settings) return null;
