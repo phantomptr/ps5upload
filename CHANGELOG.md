@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.11
 
 **Fixes**
 - **Extracting a RAR that doesn't fit is refused at the start, not at 99% (#869).** A 150 GB multi-part RAR extracted for over two hours, then failed because the drive was full. The PS5 now adds up the files in the archive first, which takes a few seconds, and says right away when the drive has too little room. This works for RARs that are not "solid" (the usual kind for games); a solid one is still checked file by file as before. Not yet tried on a console.
