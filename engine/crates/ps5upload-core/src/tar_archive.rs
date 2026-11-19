@@ -509,7 +509,10 @@ impl<R: Read> Read for ZstdReader<R> {
 /// content size, its blocks walked by their headers. `None` when a frame does not say
 /// (a stream compressed from a pipe), and the file must be decoded to learn it.
 pub fn zst_content_size(path: &Path) -> io::Result<Option<u64>> {
-    let mut f = BufReader::with_capacity(64 << 10, File::open(path)?);
+    // A small buffer on purpose: only headers are read (at most 13 bytes), and each block is
+    // skipped with a seek, which throws the buffer away. Refilling 64 KiB after every block of
+    // at most 128 KiB read half the file or more just to add up sizes.
+    let mut f = BufReader::with_capacity(32, File::open(path)?);
     let mut total = 0u64;
     let mut frames = 0u64;
     loop {
