@@ -3712,13 +3712,20 @@ const makePkgLibraryStore = () =>
       });
       opts?.onTask?.(taskId);
       let taskFinished = false;
-      const finishStreamTask = <T extends { ok: boolean; message?: string }>(
+      const finishStreamTask = <
+        T extends { ok: boolean; message?: string; unverified?: boolean },
+      >(
         result: T,
         cancelled = false,
       ): T => {
         if (taskFinished) return result;
         taskFinished = true;
-        if (result.ok) {
+        if (result.ok && result.unverified) {
+          // The console took the package but its installer never confirmed it: not "verified".
+          useTaskStore.getState().finishTask(taskId, "unverified", {
+            detail: result.message,
+          });
+        } else if (result.ok) {
           const progress = useTaskStore.getState().getTask(taskId)?.progress;
           useTaskStore.getState().finishTask(taskId, "done", {
             detail: trStatic("pkg.stream_verified", "Installed and verified on the PS5."),
