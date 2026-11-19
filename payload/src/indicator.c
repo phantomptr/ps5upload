@@ -2,6 +2,7 @@
 
 #include "kernel_rw_lock.h"
 #include "indicator.h"
+#include "sony_api_lock.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -51,10 +52,21 @@ static int led_flag(uint8_t on) {
     return rc;
 }
 
+/* A Sony call, under sony_api_lock like every other (sony_api_lock.h). Neither caller holds it
+ * (runtime.c's peripheral handler takes it only for the BD/USB actions; the shell takes none), and
+ * the lookup before it runs outside it, so the two locks are never nested here. */
+static int sony_int_call(icc_int_fn fn, int arg) {
+    pthread_mutex_lock(&sony_api_lock);
+    int rc = fn(arg);
+    usleep(SONY_API_POST_SLEEP_US);
+    pthread_mutex_unlock(&sony_api_lock);
+    return rc;
+}
+
 int indicator_beep(int pattern) {
     if (pattern < 0 || pattern > 3) return INDICATOR_BAD_VALUE;
     icc_int_fn buzzer = resolve("sceKernelIccSetBuzzer");
-    return buzzer ? buzzer(pattern) : INDICATOR_UNAVAILABLE;
+    return buzzer ? sony_int_call(buzzer, pattern) : INDICATOR_UNAVAILABLE;
 }
 
 int indicator_led(int on) {
@@ -64,7 +76,7 @@ int indicator_led(int on) {
 int indicator_led_dim(int level) {
     if (level < 0 || level > 2) return INDICATOR_BAD_VALUE;
     icc_int_fn dim = resolve("sceKernelIccSetDynamicLedDimSetting");
-    return dim ? dim(level) : INDICATOR_UNAVAILABLE;
+    return dim ? sony_int_call(dim, level) : INDICATOR_UNAVAILABLE;
 }
 
 /* A whole number in [lo, hi], or -1. */
