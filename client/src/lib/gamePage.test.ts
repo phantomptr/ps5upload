@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { CollectionLocation, CollectionOffer } from "../api/collection";
 import type { ConsoleEntry, GameView } from "../api/games";
-import { ageLabel, driveOffers, hasTitleId, offersAfterReread, rosterOnly, needsReread, queueLinkFor, REREAD_MS, rowActions, summaryLine } from "./gamePage";
+import { ageLabel, driveOffers, hasTitleId, offersAfterReread, rosterOnly, needsReread, queueLinkFor, REREAD_MS, nextStepInstall, rowActions, summaryLine } from "./gamePage";
 
 const tr = (_k: string, vars?: Record<string, string | number>, fallback?: string) =>
   (fallback ?? "").replace(/\{(\w+)\}/g, (_, k) => String(vars?.[k] ?? ""));
@@ -46,6 +46,19 @@ describe("ageLabel", () => {
   });
   it("says when a console never read the game", () => {
     expect(ageLabel(null, now, false, tr)).toBe("Not checked yet");
+  });
+});
+
+describe("nextStepInstall", () => {
+  it("queues the package install when the drives hold the game as a package", () => {
+    const e = entry({ base: offer("gd", "/b"), update: offer("gp", "/u") });
+    expect(nextStepInstall(e, [])).toEqual([e.base, e.update]);
+    // A folder copy beside the package changes nothing: the row installs the package too.
+    expect(nextStepInstall(e, [folder])).toEqual([e.base, e.update]);
+  });
+  it("leaves a folder, image or archive to the send panel", () => {
+    expect(nextStepInstall(entry(), [folder])).toBeNull();
+    expect(nextStepInstall(undefined, [folder])).toBeNull();
   });
 });
 

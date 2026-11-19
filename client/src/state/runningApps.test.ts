@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { runningAfterClose, runningOn, useRunningAppsStore } from "./runningApps";
+import { runningAfterClose, runningKnownOn, runningOn, useRunningAppsStore } from "./runningApps";
 
 const store = () => useRunningAppsStore.getState();
 
@@ -51,6 +51,19 @@ describe("runningAfterClose", () => {
   it("drops the closed title from that console's set", () => {
     const s = { titleIds: new Set(["A", "B"]), host: "10.0.0.2" };
     expect(runningAfterClose(s, "10.0.0.2:9200", "A")).toEqual(["B"]);
+  });
+
+  it("knows nothing about a console just selected until it has answered", () => {
+    store().setRunning(["PPSA01341"], "192.0.2.100");
+    expect(runningKnownOn(store(), "192.0.2.100:9120")).toBe(true);
+    expect(runningKnownOn(store(), "192.0.2.101")).toBe(false);
+    // Looked at another console and came back: the list is empty, and not an answer yet.
+    store().clearForHostChange("192.0.2.101");
+    store().clearForHostChange("192.0.2.100");
+    expect(runningOn(store(), "192.0.2.100").size).toBe(0);
+    expect(runningKnownOn(store(), "192.0.2.100")).toBe(false);
+    store().setRunning([], "192.0.2.100");
+    expect(runningKnownOn(store(), "192.0.2.100")).toBe(true);
   });
 
   it("never republishes another console's running titles under this one", () => {
