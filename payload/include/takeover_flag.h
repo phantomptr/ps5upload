@@ -46,9 +46,11 @@ int takeover_flag_asks_us_to_exit(const char *dir, uint64_t my_nonce, const take
  * (only a refused connect is 0). Bounded: about half a second at most, never a blocking connect. */
 int takeover_port_responding(int port);
 
-/* Writes the flag, then waits until none of `ports` answers on loopback: `attempts` checks,
- * `interval_us` apart (the loop counts checks, not time). 0 when every port is free (the flag is
- * unlinked), -1 when one still answers after the last check (the flag stays for the old instance). */
+/* Writes the flag, then waits until none of `ports` answers on loopback, checking every
+ * `interval_us` for at most `attempts` x `interval_us` on CLOCK_MONOTONIC (a slow probe of a wedged
+ * instance does not stretch the wait; the ports are always checked at least once). 0 when every port
+ * is free (the flag is unlinked), -1 when one still answers at the deadline (the flag stays for the
+ * old instance). */
 int takeover_flag_request(const char *dir, uint64_t my_nonce, const int *ports, int nports,
                           int attempts, int interval_us);
 
@@ -67,5 +69,30 @@ int takeover_wait_port_free(int port, int max_ms, int interval_ms);
 int takeover_gate_start(int port, int max_ms, int interval_ms, void (*start)(void *), void *ctx);
 
 int takeover_flag_poll_start(const char *dir, uint64_t my_nonce, int period_ms, void (*on_newer)(void));
+
+/*
+ * One helper starts at a time. Two helpers sent together used to run their start-up side by side:
+ * each removed the other's takeover flag, the later one read the earlier one's fresh ownership record
+ * as "the prior instance" and killed it once it was serving, and the one that lost the port deleted
+ * the winner's record on its way out.
+ *
+ * The lock is flock(LOCK_EX | LOCK_NB) on <dir>/start.lock, held from before the takeover until the
+ * transfer port is serving. The kernel drops it when the holder exits or dies, so a file left by a
+ * crash or a power cut never keeps a helper from starting. The holder writes "pid monotonic_ms" into
+ * the file.
+ *
+ * Returns a descriptor (>= 0) when this process holds the lock; TAKEOVER_START_BUSY when another
+ * helper holds it and has for no longer than `max_age_ms` (the caller exits and touches nothing);
+ * TAKEOVER_START_NO_LOCK when no lock could be had (no flock here, the file cannot be opened) or the
+ * holder has been starting for longer than max_age_ms and is taken for stuck: the caller starts
+ * without the lock, as every helper did before it existed. `holder_pid` (may be NULL) gets the
+ * holder's pid when it is known, else 0.
+ */
+#define TAKEOVER_START_NO_LOCK (-1)
+#define TAKEOVER_START_BUSY (-2)
+int takeover_start_lock(const char *dir, int max_age_ms, int *holder_pid);
+
+/* Releases the lock (a descriptor from takeover_start_lock; negative is ignored). */
+void takeover_start_unlock(int fd);
 
 #endif

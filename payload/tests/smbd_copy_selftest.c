@@ -140,6 +140,10 @@ static int m_readdir(xfs_t *fs, void *d, char *name, size_t cap, xstat_t *st) {
         if (!x->used) continue;
         smbp_parent(x->path, par, sizeof par);
         if (strcmp(par, md->dir) != 0) continue;
+        if (strlen(smbp_base(x->path)) >= cap) { /* like smbd_smbfs.c: an error for this entry */
+            md->at++;
+            return XE_BAD_NAME;
+        }
         snprintf(name, cap, "%s", smbp_base(x->path));
         st->kind = x->kind;
         st->size = x->size;
@@ -646,6 +650,33 @@ static void t_depth(void) {
     mem_free(&m);
 }
 
+/* A name longer than 255 bytes on the share (100 CJK characters are 300 UTF-8 bytes): the folder
+ * copy fails and names the folder, never reports done with the file missing. */
+static void t_long_name(void) {
+    xfs_t src, dst;
+    mem_t m;
+    copy_progress_t pr;
+    copy_opts_t o = {0};
+    char d[1024], longp[SMBP_PATH_MAX], failed[256];
+    int i, rc;
+    mem_init(&src, &m);
+    localfs_init(&dst);
+    o.sleep_s = no_sleep;
+    add(&m, "Long", XK_DIR, NULL, 0);
+    add(&m, "Long/a.txt", XK_FILE, "a", 1);
+    snprintf(longp, sizeof longp, "Long/");
+    for (i = 0; i < 100; i++) strcat(longp, "\xe6\x96\x87"); /* 文 */
+    add(&m, longp, XK_FILE, "b", 1);
+    lp(d, "long");
+    memset(&pr, 0, sizeof pr);
+    failed[0] = '\0';
+    rc = copy_run(&src, "Long", &dst, d, &o, &pr, failed, sizeof failed);
+    CHECK(rc == XE_BAD_NAME);
+    CHECK(strcmp(failed, "Long") == 0);
+    rm_rf(d);
+    mem_free(&m);
+}
+
 int main(void) {
     snprintf(g_tmp, sizeof g_tmp, "/tmp/ps5upload-smbd-copy-%d", (int)getpid());
     rm_rf(g_tmp);
@@ -657,6 +688,7 @@ int main(void) {
     t_no_space();
     t_upload();
     t_depth();
+    t_long_name();
     rm_rf(g_tmp);
     if (g_fail) {
         fprintf(stderr, "%d check(s) failed\n", g_fail);

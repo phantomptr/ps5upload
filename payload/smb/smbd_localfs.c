@@ -89,8 +89,9 @@ static int l_readdir(xfs_t *fs, void *dir, char *name, size_t cap, xstat_t *st) 
         e = readdir(d->d);
         if (!e) return errno ? map_errno(errno) : 0;
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
-        if (strlen(e->d_name) >= cap) continue;
-        if (smbp_join(d->path, e->d_name, full, sizeof full) != 0) continue;
+        /* Too long to name or to reach: an error for this entry (smbd_copy.h), not left out. */
+        if (strlen(e->d_name) >= cap) return XE_BAD_NAME;
+        if (smbp_join(d->path, e->d_name, full, sizeof full) != 0) return XE_BAD_NAME;
         if (lstat(full, &s) != 0) continue; /* gone meanwhile */
         strcpy(name, e->d_name);
         fill(&s, st);

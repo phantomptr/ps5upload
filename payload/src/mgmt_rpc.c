@@ -1,5 +1,6 @@
 /* AVA1 management dispatcher: see include/mgmt_rpc.h. */
 #include "mgmt_rpc.h"
+#include "user_guard.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -489,7 +490,17 @@ int mgmt_call_paged(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_legacy_
         o_rc = mgmt_json_u64(z, "offset", &offset);
         l_rc = mgmt_json_u64(z, "limit", &limit);
         /* The one other field a paged method takes: it selects whose list this is. */
-        if (mgmt_json_u64(z, "user_id", &user) <= 0) user = UINT64_MAX;
+        /* Signed (an engine's i32) or unsigned, the same 32 bits either way: a user above 0x7fffffff
+         * must not share a key with "everyone" or with another such user (user_id_parse). */
+        {
+            const char *u = strstr(z, "\"user_id\"");
+            uint32_t uid = 0;
+            if (u) {
+                u += strlen("\"user_id\"");
+                while (*u == ' ' || *u == '\t' || *u == ':') u++;
+            }
+            user = u && user_id_parse(u, &uid) ? (uint64_t)uid : UINT64_MAX;
+        }
         free(z);
         if (o_rc < 0) return mgmt_reply_error(cx, AVA1_ERR_PROTOCOL, "bad offset");
         if (l_rc < 0) return mgmt_reply_error(cx, AVA1_ERR_PROTOCOL, "bad limit");

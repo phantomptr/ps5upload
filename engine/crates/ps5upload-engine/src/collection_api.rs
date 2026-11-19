@@ -205,6 +205,27 @@ pub fn start_scan(deep: bool) -> Result<(), String> {
                 }
             }
         }
+        // The index is written before the status lock is taken: the status is read by async
+        // handlers, and a save of a large index to a slow disk would hold each of them (and
+        // the worker it runs on) for as long as the write takes. `running` stays true until
+        // the lock below, so no second scan starts meanwhile.
+        if let Ok(lib) = &result {
+            let saved = s.saved_ms.load(Ordering::Relaxed);
+            if let Some(dir) = store::dir()
+                .filter(|_| index_needs_saving(previous.as_deref(), lib, now_ms(), saved))
+            {
+                match store::save_index_at(&dir, lib) {
+                    Ok(()) => s.saved_ms.store(now_ms(), Ordering::Relaxed),
+                    Err(e) => {
+                        s.saved_ms.store(0, Ordering::Relaxed);
+                        crate::engine_log::record(
+                            "warn",
+                            format!("collection: index not saved: {e}"),
+                        );
+                    }
+                }
+            }
+        }
         let mut st = s.status.lock().unwrap_or_else(|e| e.into_inner());
         st.running = false;
         st.finished_ms = now_ms();
@@ -212,21 +233,6 @@ pub fn start_scan(deep: bool) -> Result<(), String> {
         st.done = s.progress.done.load(Ordering::Relaxed);
         match result {
             Ok(lib) => {
-                let saved = s.saved_ms.load(Ordering::Relaxed);
-                if let Some(dir) = store::dir()
-                    .filter(|_| index_needs_saving(previous.as_deref(), &lib, now_ms(), saved))
-                {
-                    match store::save_index_at(&dir, &lib) {
-                        Ok(()) => s.saved_ms.store(now_ms(), Ordering::Relaxed),
-                        Err(e) => {
-                            s.saved_ms.store(0, Ordering::Relaxed);
-                            crate::engine_log::record(
-                                "warn",
-                                format!("collection: index not saved: {e}"),
-                            );
-                        }
-                    }
-                }
                 st.games = lib.summary.total_games;
                 st.locations = lib.summary.total_locations;
                 st.unreadable = lib.unreadable.clone();
@@ -327,11 +333,19 @@ pub async fn put_settings(Json(s): Json<store::Settings>) -> Response {
             if let Err(e) = checked {
                 return err(StatusCode::BAD_REQUEST, e);
             }
-        } else if !std::path::Path::new(r).is_dir() {
-            return err(
-                StatusCode::BAD_REQUEST,
-                format!("{r} is not a folder the engine can read"),
-            );
+        } else {
+            // A stat of a folder on a sleeping disk or a dead network mount can take long:
+            // not on an async worker.
+            let root = PathBuf::from(r);
+            let is_dir = tokio::task::spawn_blocking(move || root.is_dir())
+                .await
+                .unwrap_or(false);
+            if !is_dir {
+                return err(
+                    StatusCode::BAD_REQUEST,
+                    format!("{r} is not a folder the engine can read"),
+                );
+            }
         }
     }
     let Some(dir) = store::dir() else {

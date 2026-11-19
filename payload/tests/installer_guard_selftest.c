@@ -51,6 +51,14 @@ static void test_sony_wedged(void) {
     CHECK(inst_sony_wedged(1000, 1000 + INST_SONY_CEILING_MS));
     CHECK(inst_sony_wedged(1000, 1000 + 2 * INST_SONY_CEILING_MS));
     CHECK(!inst_sony_wedged(5000, 4000));                   /* clock never goes back */
+
+    /* The request line's deadline: each recv waits only for what is left, capped at the 5 s timeout. */
+    CHECK(inst_deadline_left_ms(1000, INST_REQ_HEAD_DEADLINE_MS, 1000, 5000) == 5000);
+    CHECK(inst_deadline_left_ms(1000, 10000, 8000, 5000) == 3000);
+    CHECK(inst_deadline_left_ms(1000, 10000, 10999, 5000) == 1);
+    CHECK(inst_deadline_left_ms(1000, 10000, 11000, 5000) == 0);  /* spent */
+    CHECK(inst_deadline_left_ms(1000, 10000, 4000000, 5000) == 0); /* a byte every 4 s for an hour: long gone */
+    CHECK(inst_deadline_left_ms(5000, 10000, 4000, 5000) == 0);   /* a clock before the start: spent */
     /* Longer than the engine waits for the answer (INSTALL_TIMEOUT, 900 s): a slow call the engine
      * still waits on is never ended from here. */
     CHECK(INST_SONY_CEILING_MS > 900u * 1000u);

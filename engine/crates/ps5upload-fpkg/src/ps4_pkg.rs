@@ -274,6 +274,16 @@ struct Pfsc<R> {
     cached: Option<(usize, Vec<u8>)>,
 }
 
+/// The byte length of a PFSC offset table of `count` blocks, or `None` when it does not fit an
+/// address space of `max` bytes (this build's, outside tests).
+fn offset_table_len(count: u64, max: u64) -> Option<usize> {
+    let len = count.checked_add(1)?.checked_mul(8)?;
+    if len > max {
+        return None;
+    }
+    usize::try_from(len).ok()
+}
+
 impl<R: Read + Seek> Pfsc<R> {
     fn open(mut inner: R) -> Result<Self> {
         let mut h = [0u8; 0x30];
@@ -293,7 +303,12 @@ impl<R: Read + Seek> Pfsc<R> {
         if (count + 1).saturating_mul(8) > stored {
             return format_err("the PS4 package's PFSC offset table is too large");
         }
-        let mut raw = vec![0u8; ((count + 1) * 8) as usize];
+        // Checked: on a 32-bit build (Android armv7) a table of 4 GiB or more would be cut
+        // short by a plain cast and a later block index would run off its end.
+        let Some(raw_len) = offset_table_len(count, usize::MAX as u64) else {
+            return format_err("the PS4 package's PFSC offset table is too large");
+        };
+        let mut raw = vec![0u8; raw_len];
         inner.seek(SeekFrom::Start(table))?;
         inner.read_exact(&mut raw)?;
         let offsets: Vec<u64> = raw
@@ -315,7 +330,15 @@ impl<R: Read + Seek> Pfsc<R> {
     }
 
     fn block(&mut self, index: usize) -> std::io::Result<Vec<u8>> {
-        let (from, to) = (self.offsets[index], self.offsets[index + 1]);
+        let (Some(&from), Some(&to)) = (
+            self.offsets.get(index),
+            index.checked_add(1).and_then(|next| self.offsets.get(next)),
+        ) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "a PFSC block is outside the offset table",
+            ));
+        };
         let size = to - from;
         if size > BLOCK {
             return Err(std::io::Error::new(
@@ -813,6 +836,32 @@ impl SourceTree for Ps4Package {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn an_offset_table_too_large_for_a_32_bit_build_is_refused() {
+        let max32 = u32::MAX as u64;
+        // 4 GiB of offsets: one more than a 32-bit address space holds.
+        assert_eq!(offset_table_len((1 << 29) - 1, max32), None);
+        assert_eq!(
+            offset_table_len((1 << 29) - 2, max32),
+            Some((1 << 32) - 8_usize)
+        );
+        assert_eq!(offset_table_len(u64::MAX, u64::MAX), None);
+        assert_eq!(offset_table_len(u64::MAX / 8, u64::MAX), None);
+    }
+
+    #[test]
+    fn a_block_outside_the_offset_table_is_an_error() {
+        let mut p = Pfsc {
+            inner: std::io::Cursor::new(Vec::new()),
+            offsets: vec![0, 0],
+            len: BLOCK * 4,
+            pos: 0,
+            cached: None,
+        };
+        assert!(p.block(1).is_err());
+        assert!(p.block(usize::MAX).is_err());
+    }
 
     #[test]
     fn a_folder_the_container_filled_is_not_empty() {

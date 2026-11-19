@@ -256,7 +256,11 @@ impl PfsSource {
         if at.checked_add(len).is_none_or(|e| e > self.image_len) {
             return Err(self.bad("the PFS image is shorter than what it holds"));
         }
-        let mut out = vec![0u8; len as usize];
+        // A 32-bit build (Android armv7) cannot hold 4 GiB in one buffer: an error, not a
+        // buffer cut short that a later index would run off.
+        let len = usize::try_from(len)
+            .map_err(|_| self.bad("the PFS image holds a piece too large to read here"))?;
+        let mut out = vec![0u8; len];
         self.r.seek(SeekFrom::Start(at))?;
         self.r.read_exact(&mut out)?;
         Ok(out)
@@ -378,9 +382,13 @@ impl PfsSource {
         let table = self.bytes(
             base.checked_add(le64(&head, 0x18))
                 .ok_or_else(|| self.bad("a compressed file's block table is out of range"))?,
-            (blocks + 1) * 8,
+            table_len(blocks)
+                .ok_or_else(|| self.bad("a compressed file's block table is out of range"))?,
         )?;
         let offsets: Vec<u64> = table.chunks(8).map(|c| le64(c, 0)).collect();
+        if offsets.len() as u64 != blocks + 1 {
+            return Err(self.bad("a compressed file's block table is out of range"));
+        }
         let ordered = offsets
             .windows(2)
             .all(|w| w[1] >= w[0] && w[1] - w[0] <= PFSC_BLOCK);
@@ -443,6 +451,19 @@ impl PfsSource {
         }
         Ok(out)
     }
+}
+
+/// The byte length of a PFSC offset table of `blocks` blocks (one offset more than blocks), or
+/// `None` when it does not fit this build's address space: on a 32-bit build a table of 4 GiB
+/// or more would otherwise be cut short and indexed past its end.
+fn table_len(blocks: u64) -> Option<u64> {
+    table_len_within(blocks, usize::MAX as u64)
+}
+
+/// [`table_len`] for an address space of `max` bytes (what a test of the 32-bit case passes).
+fn table_len_within(blocks: u64, max: u64) -> Option<u64> {
+    let len = blocks.checked_add(1)?.checked_mul(8)?;
+    (len <= max).then_some(len)
 }
 
 /// One file of a PFS image as seekable bytes: the game image nested in it.
@@ -607,6 +628,15 @@ impl SourceTree for PfsSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_offset_table_too_large_for_a_32_bit_build_is_refused() {
+        let max32 = u32::MAX as u64;
+        assert_eq!(table_len_within((1 << 29) - 1, max32), None);
+        assert_eq!(table_len_within((1 << 29) - 2, max32), Some((1 << 32) - 8));
+        assert_eq!(table_len_within(u64::MAX, u64::MAX), None);
+        assert_eq!(table_len(3), Some(32));
+    }
 
     fn entry(out: &mut Vec<u8>, inode: u32, name: &str) {
         let size = (name.len() + 17).div_ceil(8) * 8;

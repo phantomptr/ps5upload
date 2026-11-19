@@ -10,7 +10,7 @@ use serde::Serialize;
 use tokio::sync::Mutex;
 
 use super::store::{Connection, Secret};
-use super::{Entry, Page, RemoteError, RemoteFile, RemoteFs, PAGE};
+use super::{Entry, Page, RemoteError, RemoteFile, RemoteFs};
 
 type PendingCloses = Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<Result<(), smb2::Error>>>>>;
 
@@ -18,6 +18,7 @@ pub struct SmbFs {
     session: Mutex<(smb2::SmbClient, smb2::Tree)>,
     host: String,
     pending_closes: PendingCloses,
+    pages: super::Pages,
 }
 
 #[derive(Serialize)]
@@ -181,6 +182,7 @@ impl SmbFs {
             session: Mutex::new((client, tree)),
             host: addr,
             pending_closes: Arc::default(),
+            pages: Default::default(),
         })
     }
 
@@ -301,16 +303,7 @@ impl super::RemoteWriter for SmbWriter {
 #[async_trait::async_trait]
 impl RemoteFs for SmbFs {
     async fn list(&self, path: &str, cursor: Option<String>) -> Result<Page, RemoteError> {
-        let all = self.entries(path).await?;
-        let from = cursor
-            .and_then(|c| c.parse::<usize>().ok())
-            .unwrap_or(0)
-            .min(all.len());
-        let to = (from + PAGE).min(all.len());
-        Ok(Page {
-            entries: all[from..to].to_vec(),
-            next_cursor: (to < all.len()).then(|| to.to_string()),
-        })
+        self.pages.page(path, cursor, || self.entries(path)).await
     }
 
     async fn stat(&self, path: &str) -> Result<Entry, RemoteError> {

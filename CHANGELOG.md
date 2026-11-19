@@ -6,6 +6,24 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Fixes**
+- **A resumed upload finishes sooner (#873).** After an interrupted upload was resumed, the PS5 checked everything it had written before the interruption only after the last byte arrived, which could take minutes for a large game. It now checks those bytes while the rest of the file is still arriving. Stopping an upload also no longer waits up to 30 seconds while the PS5 works out its free space.
+- **Sending the PS5 helper twice at the same moment no longer leaves the two fighting.** One starts, the other steps aside. A stuck helper no longer makes the next one wait about a minute instead of 10 seconds.
+- **Deleting a user always deletes the user you picked.** Users with very large id numbers could be mixed up in the saves list or could not be deleted at all.
+- **Building from a large solid RAR or 7z archive** no longer leaves the app waiting with no progress and no Stop while the archive is scanned.
+- **Installing from a saved server** opens the package once instead of twice and reads it in larger pieces.
+- **Folder uploads stop right away** when you press Stop, even while the app is still listing the folder.
+- **Saved servers:** browsing an FTP server no longer waits for an upload on the same server to finish; long folders page faster.
+- **Copying a folder from a PS5 share** that holds a file with a very long name now says so, instead of reporting done with that file missing.
+- **Cheats:** searching is faster, and a search with no connection says it failed instead of showing no results.
+- **Mesh Drive:** a PS5 that stops answering mid-sync is marked as away instead of failing every file after it.
+- **Windows:** a build into a folder you cannot write to says so, instead of "already being built"; Tailscale works when your Windows user name has non-English letters.
+- **The PS5's package installer** no longer lets a stalled connection hold a slot for hours.
+- Smaller fixes: the engine log never skips a line, finished install sessions are cleaned up, the update check gives up quickly on a dead network, and a Payload Manager rename interrupted once is finished the next time.
+- The PS5 helper changes have not been run on a console yet.
+
+## 12.6.12
+
 **New**
 - **Save a link straight to a PS5 folder, without installing it (#872).** In Files, More › Download from a link saves the file into the folder that is open. On Send, a package link has a new "Save to a PS5 folder" button next to Install. The file goes to the console over your network and is not stored on this computer.
 - **Links from servers that only send a file in one piece now work (#872).** Some download hosts cannot hand out parts of a file. Such a link was refused everywhere. Now it can be saved to a PS5 folder, and a package from it installs by saving to this computer first (the app picks that way and says so). If one of these downloads is interrupted it starts again from the beginning, and the app tells you that before you start.

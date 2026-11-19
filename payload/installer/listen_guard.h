@@ -35,6 +35,15 @@ int inst_listen_broken(uint64_t err_since_ms, uint64_t now_ms);
 /* 1 when a Sony call in flight since `since_ms` (0 = none) has passed INST_SONY_CEILING_MS by `now_ms`. */
 int inst_sony_wedged(uint64_t since_ms, uint64_t now_ms);
 
+/* The whole request line must arrive within this of the accept, however it trickles in: a client
+ * sending a byte every few seconds would otherwise hold a connection slot for hours (each recv waits
+ * at most the 5 s socket timeout, and every byte restarts it). */
+#define INST_REQ_HEAD_DEADLINE_MS 10000u
+
+/* Milliseconds left of a deadline started at `start_ms` and `limit_ms` long, by `now_ms`: 0 when it
+ * has passed (or the clock reads before the start), else at most `cap_ms`. */
+unsigned inst_deadline_left_ms(uint64_t start_ms, uint64_t limit_ms, uint64_t now_ms, unsigned cap_ms);
+
 /* CLOCK_MONOTONIC milliseconds; never 0 (0 means "not failing" above). */
 uint64_t inst_mono_ms(void);
 

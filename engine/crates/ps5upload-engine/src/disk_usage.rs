@@ -410,8 +410,24 @@ pub(crate) fn skip_rule(
 // ─── Jobs ───────────────────────────────────────────────────────────────────
 
 enum Outcome {
-    Walked(Walked),
+    /// The tree as JSON, made once when the walk ends (the walk itself is dropped then): a
+    /// status poll used to serialise the whole finished tree again, each time, under the lock.
+    Walked {
+        tree_json: Arc<str>,
+        partial: Option<&'static str>,
+    },
     Failed(String),
+}
+
+impl Outcome {
+    fn walked(w: Walked) -> Self {
+        Outcome::Walked {
+            tree_json: serde_json::to_string(&w.tree)
+                .unwrap_or_else(|_| "null".into())
+                .into(),
+            partial: w.partial,
+        }
+    }
 }
 
 struct Job {
@@ -437,7 +453,9 @@ impl Job {
                 >= UNWATCHED
     }
 
-    fn status(&self) -> serde_json::Value {
+    /// The walk's state as a JSON body: everything but the tree built as a value, the tree's
+    /// text (made once, see [`Outcome::Walked`]) put in as it is.
+    fn status(&self) -> Response {
         *self.last_seen.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
         let mut v = serde_json::json!({
             "id": self.id.to_string(),
@@ -447,30 +465,55 @@ impl Job {
             "bytes": self.progress.bytes.load(Ordering::Relaxed),
             "skipped": self.progress.skipped.load(Ordering::Relaxed),
         });
-        let g = self.outcome.lock().unwrap_or_else(|e| e.into_inner());
-        let (state, elapsed) = match &*g {
-            None => ("running", self.started.elapsed()),
-            Some((Outcome::Failed(e), took, _)) => {
-                v["error"] = e.clone().into();
-                ("failed", *took)
-            }
-            Some((Outcome::Walked(w), took, _)) => {
-                if let Some(p) = w.partial {
-                    v["partial"] = p.into();
+        let (state, elapsed, tree) = {
+            let g = self.outcome.lock().unwrap_or_else(|e| e.into_inner());
+            match &*g {
+                None => ("running", self.started.elapsed(), None),
+                Some((Outcome::Failed(e), took, _)) => {
+                    v["error"] = e.clone().into();
+                    ("failed", *took, None)
                 }
-                v["tree"] = serde_json::to_value(&w.tree).unwrap_or_default();
-                let state = if w.partial == Some("cancelled") {
-                    "cancelled"
-                } else {
-                    "done"
-                };
-                (state, *took)
+                Some((Outcome::Walked { tree_json, partial }, took, _)) => {
+                    if let Some(p) = partial {
+                        v["partial"] = (*p).into();
+                    }
+                    let state = if *partial == Some("cancelled") {
+                        "cancelled"
+                    } else {
+                        "done"
+                    };
+                    (state, *took, Some(Arc::clone(tree_json)))
+                }
             }
         };
         v["state"] = state.into();
         v["elapsed_ms"] = (elapsed.as_millis() as u64).into();
-        v
+        let mut body = v.to_string();
+        if let Some(tree) = tree {
+            // `v` is an object: its closing brace makes way for the tree.
+            body.pop();
+            body.push_str(",\"tree\":");
+            body.push_str(&tree);
+            body.push('}');
+        }
+        (
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            body,
+        )
+            .into_response()
     }
+}
+
+/// Drops the walks that ended more than [`KEEP_FINISHED`] ago, finished trees with them. Run at
+/// each start and each status poll, so a big tree is not kept until another walk happens.
+fn prune_finished(jobs: &mut HashMap<Uuid, Arc<Job>>) {
+    jobs.retain(|_, j| {
+        j.outcome
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_none_or(|(_, _, at)| at.elapsed() < KEEP_FINISHED)
+    });
 }
 
 fn jobs() -> &'static Mutex<HashMap<Uuid, Arc<Job>>> {
@@ -480,11 +523,9 @@ fn jobs() -> &'static Mutex<HashMap<Uuid, Arc<Job>>> {
 
 fn find(id: &str) -> Option<Arc<Job>> {
     let id = Uuid::parse_str(id).ok()?;
-    jobs()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&id)
-        .cloned()
+    let mut g = jobs().lock().unwrap_or_else(|e| e.into_inner());
+    prune_finished(&mut g);
+    g.get(&id).cloned()
 }
 
 #[derive(Deserialize)]
@@ -531,16 +572,10 @@ pub(crate) async fn start(State(state): State<AppState>, Json(req): Json<StartRe
     });
     {
         let mut g = jobs().lock().unwrap_or_else(|e| e.into_inner());
-        g.retain(|_, j| {
-            j.outcome
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .as_ref()
-                .is_none_or(|(_, _, at)| at.elapsed() < KEEP_FINISHED)
-        });
+        prune_finished(&mut g);
         if let Some(running) = running_walk(&g, &addr) {
             if running.path == job.path {
-                return Json(running.status()).into_response();
+                return running.status();
             }
             return (
                 StatusCode::CONFLICT,
@@ -604,20 +639,20 @@ pub(crate) async fn start(State(state): State<AppState>, Json(req): Json<StartRe
                     took.as_millis(),
                     w.partial.map(|p| format!(" (partial: {p})")).unwrap_or_default(),
                 ));
-                Outcome::Walked(w)
+                Outcome::walked(w)
             }
             Err(e) => Outcome::Failed(format!("{e:#}")),
         };
         *j.outcome.lock().unwrap_or_else(|e| e.into_inner()) =
             Some((outcome, took, Instant::now()));
     });
-    Json(job.status()).into_response()
+    job.status()
 }
 
 /// GET /api/ps5/disk-usage/{id}
 pub(crate) async fn status(Path(id): Path<String>) -> Response {
     match find(&id) {
-        Some(j) => Json(j.status()).into_response(),
+        Some(j) => j.status(),
         None => json_err(StatusCode::NOT_FOUND, "no such disk usage walk").into_response(),
     }
 }
@@ -627,7 +662,7 @@ pub(crate) async fn cancel(Path(id): Path<String>) -> Response {
     match find(&id) {
         Some(j) => {
             j.cancel.store(true, Ordering::Relaxed);
-            Json(j.status()).into_response()
+            j.status()
         }
         None => json_err(StatusCode::NOT_FOUND, "no such disk usage walk").into_response(),
     }
@@ -666,6 +701,41 @@ mod one_walk_per_console_tests {
         *live.outcome.lock().unwrap() =
             Some((Outcome::Failed("x".into()), Duration::ZERO, Instant::now()));
         assert!(running_walk(&jobs, "a").is_none());
+    }
+}
+
+#[cfg(test)]
+mod status_body_tests {
+    use super::*;
+
+    /// A finished walk's status is one JSON object with the tree in it, from text made once.
+    #[tokio::test]
+    async fn a_finished_walk_answers_with_its_tree_made_once() {
+        let job = Job {
+            id: Uuid::new_v4(),
+            addr: "a".into(),
+            path: "/data".into(),
+            started: Instant::now(),
+            progress: Progress::default(),
+            cancel: AtomicBool::new(false),
+            last_seen: Mutex::new(Instant::now()),
+            outcome: Mutex::new(Some((
+                Outcome::Walked {
+                    tree_json: r#"{"name":"data","bytes":7}"#.into(),
+                    partial: Some("time_limit"),
+                },
+                Duration::from_millis(5),
+                Instant::now(),
+            ))),
+        };
+        let body = axum::body::to_bytes(job.status().into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["state"], "done");
+        assert_eq!(v["partial"], "time_limit");
+        assert_eq!(v["tree"]["bytes"], 7);
+        assert_eq!(v["path"], "/data");
     }
 }
 

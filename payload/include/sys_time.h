@@ -2,6 +2,7 @@
 #define PS5UPLOAD2_SYS_TIME_H
 
 #include <stdint.h>
+#include <time.h>
 
 /*
  * PS5 system clock get/set, via SCE's sceSystemServiceGetCurrentDateTime
@@ -130,5 +131,12 @@ int sys_time_set(const sce_datetime_t *dt,
                  int64_t *out_prior_unix,
                  int64_t *out_new_unix,
                  int *out_used_fallback);
+
+/* Reads CLOCK_REALTIME and CLOCK_MONOTONIC (0, or -1 when either cannot be read), and takes how many
+ * seconds this helper's own sys_time_set calls moved the wall clock against the monotonic one since
+ * the last call (0 when none). Atomic with every set: a step is reported on the same call whose
+ * clocks first include it. The wake watchdog subtracts it, so the app setting the console's clock is
+ * never read as the console waking from rest (power_phase.h). */
+int sys_time_clocks_now(struct timespec *real, struct timespec *mono, int64_t *own_step_s);
 
 #endif /* PS5UPLOAD2_SYS_TIME_H */

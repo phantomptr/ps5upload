@@ -595,9 +595,26 @@ int tn_os_local_ipv4(uint32_t *out, int cap)
 
 /* ---------------- files ---------------- */
 
+#ifdef _WIN32
+/* Paths come in UTF-8 (the Rust side passes them so). Windows' narrow calls read them in the
+ * ANSI code page, so a state folder under a profile with non-ASCII letters could not be opened:
+ * every file call here goes through the wide one. NULL for a path that is not UTF-8 or too long. */
+enum { WPATH_MAX = 640 };
+static wchar_t *wpath(const char *path, wchar_t *buf)
+{
+	int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, buf, WPATH_MAX);
+	return n > 0 ? buf : NULL;
+}
+#endif
+
 int tn_file_read(const char *path, void *buf, size_t cap)
 {
+#ifdef _WIN32
+	wchar_t w[WPATH_MAX];
+	FILE *f = wpath(path, w) ? _wfopen(w, L"rb") : NULL;
+#else
 	FILE *f = fopen(path, "rb");
+#endif
 	if (!f)
 		return -1;
 	size_t n = fread(buf, 1, cap, f);
@@ -611,13 +628,16 @@ int tn_file_write_atomic(const char *path, const void *p, size_t n)
 	char tmp[600];
 	snprintf(tmp, sizeof tmp, "%s.tmp", path);
 #ifdef _WIN32
-	int fd = _open(tmp, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE);
+	wchar_t wtmp[WPATH_MAX], wdst[WPATH_MAX];
+	if (!wpath(tmp, wtmp) || !wpath(path, wdst))
+		return -1;
+	int fd = _wopen(wtmp, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE);
 	if (fd < 0)
 		return -1;
 	int ok = _write(fd, p, (unsigned)n) == (int)n && _commit(fd) == 0;
 	_close(fd);
-	if (!ok || !MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-		_unlink(tmp);
+	if (!ok || !MoveFileExW(wtmp, wdst, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+		_wunlink(wtmp);
 		return -1;
 	}
 	return 0;
@@ -648,7 +668,8 @@ int tn_file_write_atomic(const char *path, const void *p, size_t n)
 int tn_file_remove(const char *path)
 {
 #ifdef _WIN32
-	return _unlink(path) == 0 ? 0 : -1;
+	wchar_t w[WPATH_MAX];
+	return wpath(path, w) && _wunlink(w) == 0 ? 0 : -1;
 #else
 	return unlink(path) == 0 ? 0 : -1;
 #endif
@@ -657,7 +678,9 @@ int tn_file_remove(const char *path)
 void tn_mkdir(const char *path)
 {
 #ifdef _WIN32
-	_mkdir(path);
+	wchar_t w[WPATH_MAX];
+	if (wpath(path, w))
+		_wmkdir(w);
 #else
 	mkdir(path, 0700);
 #endif

@@ -114,6 +114,13 @@ static inline int64_t pp_tailnet_hold_s(const pp_state *s) {
  * running only holds background work for the settle minute, which is harmless. */
 #define PP_FROZEN_POLL_S 60
 
+/* A wall clock stepped forward while the helper runs looks the same to these rules as a wake. The
+ * step this helper makes itself (the app's time sync, sys_time_set) is taken out before they run
+ * (sys_time_clocks_now, wake_watchdog.c). A step made by the system or the user is not: no signal
+ * the helper has reliably comes before every rest (a background wake that rested again was seen with
+ * no failing probe, only the tailnet core noticing), so requiring one would miss real wakes, and a
+ * missed wake runs fan and kernel work while the console resumes. Such a step holds background work
+ * for the settle minute. */
 /* Did the clocks' movement across one poll say the process was frozen? */
 static inline int pp_clocks_say_frozen(int64_t real_elapsed_s, int64_t mono_elapsed_s) {
     if (real_elapsed_s - mono_elapsed_s > PP_FROZEN_GAP_S) return 1;

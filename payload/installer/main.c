@@ -31,7 +31,7 @@
 #include "authid.h"          /* ps5_detect_firmware_major */
 
 #define INST_PORT     9115
-#define INST_VERSION  "1.6.1"
+#define INST_VERSION  "1.6.2"
 #define BOOT_STEP_MS  500
 #define BOOT_STEPS    50     /* 50 * 500ms = 25s */
 /* A replaced daemon releases :9115 within a poll slice of its `stop`; the new
@@ -271,12 +271,32 @@ static void *conn_worker(void *arg) {
 
     char buf[INST_REQ_MAX + 1];
     size_t len = 0;
+    buf[0] = '\0';
+    /* The request line within INST_REQ_HEAD_DEADLINE_MS of the accept, on the monotonic clock: each
+     * recv waits only for what is left of it, so a trickling client gives its slot back in time. */
+    uint64_t head_start = inst_mono_ms();
+    int head_late = 0;
     while (len < INST_REQ_MAX) {
+        unsigned left = inst_deadline_left_ms(head_start, INST_REQ_HEAD_DEADLINE_MS, inst_mono_ms(), 5000u);
+        if (left == 0) {
+            fprintf(stderr, "[installer] request not complete within %u ms; connection closed\n",
+                    (unsigned)INST_REQ_HEAD_DEADLINE_MS);
+            head_late = 1;
+            break;
+        }
+        struct timeval rtv = { (time_t)(left / 1000u), (suseconds_t)((left % 1000u) * 1000u) };
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rtv, sizeof(rtv));
         ssize_t n = recv(fd, buf + len, INST_REQ_MAX - len, 0);
         if (n <= 0) break;
         len += (size_t)n;
         buf[len] = '\0';
         if (memchr(buf, '\n', len)) break;   /* one line per request */
+    }
+    if (head_late) {
+        /* No reply: a client this slow is not waiting for one. */
+        close(fd);
+        inst_slot_release(&g_d.conns);
+        return NULL;
     }
     /* trim at newline */
     char *nl = memchr(buf, '\n', len);

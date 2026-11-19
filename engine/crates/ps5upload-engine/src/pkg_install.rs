@@ -486,12 +486,26 @@ fn cleanup_stale_uploads_in(dir: &std::path::Path) {
 }
 
 /// Sweeps staged browser uploads when the engine starts and every hour after: an upload that was
-/// the last one for a while must not leave its copy for as long as the engine runs.
-pub(crate) fn spawn_stale_upload_sweep() {
-    tokio::spawn(async {
+/// the last one for a while must not leave its copy for as long as the engine runs. Install
+/// sessions no console reads from any more are pruned every ten minutes (`gc_old_sessions`).
+pub(crate) fn spawn_stale_upload_sweep(state: PkgInstallStateHandle) {
+    tokio::spawn(async move {
+        let mut tick = 0u64;
         loop {
-            let _ = tokio::task::spawn_blocking(cleanup_stale_pkg_uploads).await;
-            tokio::time::sleep(std::time::Duration::from_secs(60 * 60)).await;
+            let state = state.clone();
+            let uploads_too = tick.is_multiple_of(6);
+            tick = tick.wrapping_add(1);
+            let _ = tokio::task::spawn_blocking(move || {
+                if uploads_too {
+                    cleanup_stale_pkg_uploads();
+                }
+                let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+                if gc_old_sessions(&mut sessions, now_unix(), pkg_session_max_age_sec()) > 0 {
+                    persist::save(&sessions);
+                }
+            })
+            .await;
+            tokio::time::sleep(std::time::Duration::from_secs(10 * 60)).await;
         }
     });
 }
@@ -1926,6 +1940,10 @@ pub struct InstallStartRequest {
     /// Set by `link_create_handler`, never by a request body.
     #[serde(skip)]
     pub link_only: bool,
+    /// A package on a saved server the install job has opened already, with the `remote://`
+    /// path it was opened from: served from as it is. Never from a request body.
+    #[serde(skip)]
+    pub opened_remote: Option<(String, OpenedRemote)>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -2073,64 +2091,11 @@ pub(crate) async fn install_start_handler(
     // 2.2.55: opportunistic GC pass under the same lock to bound the
     // sessions map across a long-running engine.
     //
-    // Two-policy GC, by design — see `gc_old_sessions` for the
-    // status-poll-time fallback. Policies:
-    //   1. (here, install_start) Drop sessions whose staging_path is
-    //      already None AND that are older than ~half the
-    //      configured max-age. staging_path == None is a strong
-    //      "we already cleaned up" signal — set by the terminal and cancel
-    //      paths. Aggressive prune of
-    //      definitely-done sessions, while still keeping recent
-    //      rows the UI may poll.
-    //   2. (gc_old_sessions, status_handler) Pure age-based prune at
-    //      full max-age; runs on every status poll. Catches
-    //      sessions that never reached terminal (e.g. user closed
-    //      the app mid-install, no cancel ever fired).
-    //
-    // Without this insert-time pass, a sequence of register-reject
-    // failures (no status polls fire because the UI sees the
-    // immediate error) would bloat the map unbounded — gc_old_sessions
-    // alone wouldn't help because nothing calls status.
+    // The same prune the periodic sweep runs (`gc_old_sessions`): here too, so a run of
+    // installs refused at once (no poll, no serving) cannot grow the map between sweeps.
     let rival = {
         let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
-        let now = now_unix();
-        let max_age = pkg_session_max_age_sec();
-        let full_cutoff = now.saturating_sub(max_age);
-        let aggressive_cutoff = now.saturating_sub(max_age / 2);
-        // Aggressive prune: drop sessions that are clearly "done with
-        // host-side work AND old enough." `staging_path == None`
-        // *alone* doesn't qualify any more — HTTP-mode (streaming)
-        // installs always have staging_path == None for their entire
-        // lifetime, so the v2.16.0 gate `staging_path.is_some()` was
-        // evicting in-flight multi-GB downloads at the half-max-age
-        // mark.
-        //
-        // The correct "definitely done" signal is `terminal_status.is_
-        // some()` — set by the status handler the moment BGFT reaches
-        // Done or Error. Sessions in either of those states have no
-        // further polls to serve and can safely be reaped early.
-        //
-        // ALSO apply a pure age prune at full max-age regardless of state.
-        // Register-reject installs (err_code != 0) never reach the status
-        // poll's Done/Error path, so their terminal_status stays None forever
-        // — the `terminal_status.is_none()` arm would otherwise retain them
-        // indefinitely (gc_old_sessions only runs from the status handler,
-        // which a register-reject never calls). The full-age sweep here is the
-        // only thing that reaps them, bounding the sessions map.
-        sessions.retain(|_, s| {
-            // Measured from the last sign of life, so an install that is still
-            // pulling bytes is never reaped no matter how long it runs.
-            // A shared link lasts until it is stopped (or the engine quits), however long no
-            // console fetches it, as PS Game Library's served packages did.
-            if s.shared_link && !s.cancelled {
-                return true;
-            }
-            let idle_since = s.last_activity_unix.max(s.created_at_unix);
-            if idle_since <= full_cutoff {
-                return false;
-            }
-            idle_since > aggressive_cutoff || s.terminal_status.is_none()
-        });
+        gc_old_sessions(&mut sessions, now_unix(), pkg_session_max_age_sec());
         // ── Rival-session guard ──────────────────────────────────────────
         //
         // Sony keys an install by content_id, and a base, its patch and its
@@ -3182,6 +3147,17 @@ async fn serve_handler(
     builder.body(body).unwrap_or_else(builder_failed_response)
 }
 
+/// How much one read of a range response asks for. A package on a saved server is read
+/// [`crate::remote::range::READ_AT_ONCE`] at a time: its source splits that into positioned
+/// reads that run together, where a megabyte at a time was one read, waited for, then the next,
+/// each a round trip to the server. Everything else reads [`PKG_HOST_STREAM_CHUNK`].
+fn read_chunk_for(session: &InstallSession, source: &ServeSource) -> u64 {
+    match (source, session.remote.as_deref()) {
+        (ServeSource::Package, Some(RemotePkg::Remote(_))) => crate::remote::range::READ_AT_ONCE,
+        _ => PKG_HOST_STREAM_CHUNK,
+    }
+}
+
 /// Bytes read per chunk while streaming a range response. Small enough that a
 /// quarter-gigabyte range costs kilobytes of buffer, large enough that the
 /// per-chunk overhead stays negligible against disk and LAN throughput.
@@ -3236,8 +3212,9 @@ fn range_body(
         let mut cursor = start;
         // The part file being read, kept open from one chunk to the next.
         let mut open = None;
+        let chunk = read_chunk_for(&session, &source);
         while cursor <= end {
-            let stop = end.min(cursor + PKG_HOST_STREAM_CHUNK - 1);
+            let stop = end.min(cursor + chunk - 1);
             let read = match &source {
                 ServeSource::Package => read_split_range_keeping(&session, cursor, stop, &mut open),
                 ServeSource::EmbeddedCrc { offset, .. } => {
@@ -3257,11 +3234,20 @@ fn range_body(
             };
             match read {
                 Ok(b) => {
-                    // A send error means the console hung up; stop reading.
-                    if tx.blocking_send(Ok(axum::body::Bytes::from(b))).is_err() {
-                        return;
+                    // Sent a megabyte at a time whatever was read at once, so what is counted
+                    // as served stays what the console has been handed.
+                    let b = axum::body::Bytes::from(b);
+                    let mut at = 0usize;
+                    while at < b.len() {
+                        let n = (b.len() - at).min(PKG_HOST_STREAM_CHUNK as usize);
+                        // A send error means the console hung up; stop reading.
+                        if tx.blocking_send(Ok(b.slice(at..at + n))).is_err() {
+                            return;
+                        }
+                        let from = cursor + at as u64;
+                        on_sent(from, from + n as u64 - 1);
+                        at += n;
                     }
-                    on_sent(cursor, stop);
                 }
                 Err(e) => {
                     let _ = tx.blocking_send(Err(e));
@@ -3427,19 +3413,18 @@ mod remote_type_tests {
     }
 }
 
-/// Open a package on a saved server and read its header through ranges.
-pub(crate) async fn open_remote_package(
-    remote_path: &str,
-) -> Result<
-    (
-        Arc<RemotePkg>,
-        u64,
-        ps5upload_pkg::ReaderMetadata,
-        String,
-        String,
-    ),
+/// A package on a saved server, opened: the source, its size, its header, its fingerprint and
+/// its file name.
+pub(crate) type OpenedRemote = (
+    Arc<RemotePkg>,
+    u64,
+    ps5upload_pkg::ReaderMetadata,
     String,
-> {
+    String,
+);
+
+/// Open a package on a saved server and read its header through ranges.
+pub(crate) async fn open_remote_package(remote_path: &str) -> Result<OpenedRemote, String> {
     let r = crate::remote::pool::global().map_err(|e| e.to_string())?;
     let source = crate::remote::range::RemoteRangeSource::open(
         Arc::clone(&r.pool),
@@ -3492,7 +3477,17 @@ async fn resolve_remote_fs_source(
     if req.split_root.is_some() || req.remote_url.is_some() {
         return Err("a server path cannot be combined with split_root or remote_url".into());
     }
-    let (remote, total_size, head, fingerprint, name) = open_remote_package(remote_path).await?;
+    // The install job opened it already, to read its header: the same open handle and
+    // fingerprint serve the console, rather than a second sign-in, open and sampled read.
+    let opened = match req
+        .opened_remote
+        .as_ref()
+        .filter(|(path, _)| path == remote_path)
+    {
+        Some((_, o)) => o.clone(),
+        None => open_remote_package(remote_path).await?,
+    };
+    let (remote, total_size, head, fingerprint, name) = opened;
     let metadata = streamed_metadata(req, head, fingerprint, total_size, &name);
     Ok((vec![], vec![], total_size, metadata, Some(remote)))
 }
@@ -3591,6 +3586,7 @@ async fn remote_probe_handler(Json(req): Json<RemoteProbeRequest>) -> Response<B
         package_fingerprint: None,
         serve_only: true,
         link_only: false,
+        opened_remote: None,
     };
     match resolve_remote_source(&url, &probe_req).await {
         Ok((_, _, total_size, meta, _)) => {
@@ -3659,6 +3655,7 @@ async fn console_probe_handler(Json(req): Json<ConsoleProbeRequest>) -> Response
         package_fingerprint: None,
         serve_only: true,
         link_only: false,
+        opened_remote: None,
     };
     match resolve_console_source(&url, &probe_req).await {
         Ok((_, _, total_size, meta, _)) => {
@@ -4391,6 +4388,31 @@ mod loader_route_tests {
             pl::DPI_REASON_LOADER_UNREACHABLE
         );
     }
+}
+
+/// Drops the sessions no console reads from any more. Called at each install start and by the
+/// periodic sweep (`spawn_stale_upload_sweep`): a session kept after a stall, or one whose job
+/// ended with no reply, used to stay (window cache, SMB handle and FTP sessions of a saved
+/// server included) until the next install happened to start.
+///
+/// Measured from the last byte served (`last_activity_unix`), never from creation: a console
+/// still pulling, however long the install runs, keeps its session. Gone after `max_age` idle;
+/// one already released (`cancelled`, it answers 410 to everything) or with a terminal status
+/// after half that. A shared link stays until it is stopped. Returns how many were dropped.
+fn gc_old_sessions(map: &mut HashMap<String, InstallSession>, now: u64, max_age: u64) -> usize {
+    let before = map.len();
+    map.retain(|_, s| {
+        if s.shared_link && !s.cancelled {
+            return true;
+        }
+        let idle = now.saturating_sub(s.last_activity_unix.max(s.created_at_unix));
+        if idle >= max_age {
+            return false;
+        }
+        let ended = s.cancelled || s.terminal_status.is_some();
+        !(ended && idle >= max_age / 2)
+    });
+    before - map.len()
 }
 
 /// Whether `other` is a live install of the same package to the same console as `new`.
@@ -5141,6 +5163,36 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         );
     }
 
+    /// Ended and abandoned sessions are pruned by the sweep, not only by the next install start;
+    /// one a console still fetches from, or a live shared link, is kept however old.
+    #[test]
+    fn the_sweep_drops_ended_sessions_and_keeps_live_ones() {
+        let (now, max_age) = (1_000_000u64, 7200u64);
+        let mut map = HashMap::new();
+        let mut add = |id: &str, idle: u64, f: &dyn Fn(&mut InstallSession)| {
+            let mut s = dummy_session(vec![]);
+            s.id = id.into();
+            s.created_at_unix = now - 5 * max_age;
+            s.last_activity_unix = now - idle;
+            f(&mut s);
+            map.insert(id.to_string(), s);
+        };
+        add("busy", 1, &|_| {});
+        add("stalled-recent", max_age / 4, &|_| {});
+        add("stalled-old", max_age, &|_| {});
+        add("released-recent", 60, &|s| s.cancelled = true);
+        add("released-old", max_age / 2, &|s| s.cancelled = true);
+        add("link", 10 * max_age, &|s| s.shared_link = true);
+        add("stopped-link", max_age, &|s| {
+            s.shared_link = true;
+            s.cancelled = true;
+        });
+        assert_eq!(gc_old_sessions(&mut map, now, max_age), 3);
+        let mut kept: Vec<_> = map.keys().cloned().collect();
+        kept.sort();
+        assert_eq!(kept, ["busy", "link", "released-recent", "stalled-recent"]);
+    }
+
     /// A remote-backed session must satisfy ranges from the HTTP origin
     /// instead of the (empty) `parts` list. This is the seam between the
     /// range proxy and the pkg-host serve path: if `read_split_range` ever
@@ -5300,6 +5352,56 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         );
         assert_eq!(&axum::body::to_bytes(full, 1024).await.unwrap()[..], b"dec");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A package on a saved server is read several pieces at once, and still handed to the
+    /// console (and counted) a megabyte at a time, byte for byte.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_package_on_a_server_is_served_in_large_reads_byte_for_byte() {
+        use crate::remote::store::{conn, Protocol, Secret};
+        let data: Vec<u8> = (0..(21 * 1024 * 1024 + 7))
+            .map(|i| (i % 251) as u8)
+            .collect();
+        let r = crate::remote::pool::testing::remote_with_shared(
+            Arc::new(crate::remote::MemFs::new(&[("/g/a.pkg", &data)])),
+            None,
+        );
+        let id = r
+            .store
+            .add(conn("NAS", Protocol::Smb), Secret::None)
+            .unwrap()
+            .conn
+            .id;
+        let src = crate::remote::range::RemoteRangeSource::open(
+            Arc::clone(&r.pool),
+            Arc::clone(&r.store),
+            &format!("remote://{id}/g/a.pkg"),
+            crate::remote::pool::Backoff::instant(),
+        )
+        .await
+        .unwrap();
+        let mut s = dummy_session(vec![]);
+        s.remote = Some(Arc::new(RemotePkg::Remote(src)));
+        assert_eq!(
+            read_chunk_for(&s, &ServeSource::Package),
+            crate::remote::range::READ_AT_ONCE
+        );
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&sent);
+        let (start, end) = (3u64, data.len() as u64 - 2);
+        let body = range_body(s, ServeSource::Package, start, end, move |a, b| {
+            log.lock().unwrap().push((a, b))
+        });
+        let got = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+        assert!(got[..] == data[start as usize..=end as usize]);
+        let sent = sent.lock().unwrap();
+        let mut next = start;
+        for &(a, b) in sent.iter() {
+            assert_eq!(a, next);
+            assert!(b - a < PKG_HOST_STREAM_CHUNK);
+            next = b + 1;
+        }
+        assert_eq!(next, end + 1);
     }
 
     #[test]

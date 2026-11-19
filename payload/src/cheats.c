@@ -3202,8 +3202,23 @@ static int collect_enabled_ranges(pid_t pid, intptr_t base, const char *title_id
         int flat = 0;
         for (int fi = 0; fi < n && count >= 0; fi++) {
             /* A file that does not load lists no mods and takes no flat numbers (slots_load and
-             * cheats_toggle skip it the same way). */
-            if (load_cheat_file(files[fi].path, files[fi].format, cf) != 0) continue;
+             * cheats_toggle skip it the same way). What its game patch entries wrote this session
+             * is still on record (xml_applied, by file): those ranges are kept all the same. A
+             * cheat file of another format keeps no such record (its locations are worked out
+             * from the file each time), so nothing of it can be kept once it stops loading. */
+            if (load_cheat_file(files[fi].path, files[fi].format, cf) != 0) {
+                for (int i = 0; i < XML_APPLIED_MAX && count >= 0; i++) {
+                    xml_applied_t *a = &g_xml_applied[i];
+                    if (!a->rec || a->pid != pid || strcmp(a->path, files[fi].path) != 0) continue;
+                    for (int k = 0; k < a->n && count >= 0; k++) {
+                        if (count >= max) { count = -1; break; }
+                        out[count].addr = a->rec[k].addr;
+                        out[count].len = a->rec[k].len;
+                        count++;
+                    }
+                }
+                continue;
+            }
             for (int mi = 0; mi < cf->mod_count && count >= 0; mi++, flat++) {
                 /* on as the watcher sees it: saved on, or switched on by its file and not turned
                  * off (#627). A button is one press, never kept on (slots_load skips it too). */

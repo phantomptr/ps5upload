@@ -220,7 +220,8 @@ static int read_listing(xfs_t *fs, const char *path, lent_t **out, size_t *count
     int rc = fs->ops->opendir(fs, path, &d);
     *truncated = 0;
     if (rc != 0) return rc;
-    while ((rc = fs->ops->readdir(fs, d, name, sizeof name, &st)) > 0) {
+    while ((rc = fs->ops->readdir(fs, d, name, sizeof name, &st)) > 0 || rc == XE_BAD_NAME) {
+        if (rc == XE_BAD_NAME) continue; /* a name too long to show: the rest is listed */
         if (n == cap) {
             size_t nc = cap ? cap * 2 : 128;
             lent_t *nv;
