@@ -633,8 +633,15 @@ static int tw_file(tarw_t *w, const struct stat *lst) {
         if ((uint64_t)room > size - done) room = (size_t)(size - done);
         r = pread(in, w->buf + w->used, room, (off_t)done);
         if (r < 0 && errno == EINTR) continue;
-        if (r <= 0) {
-            /* shrank (or a read error): zeros keep the archive's framing */
+        if (r < 0) {
+            /* A read error (a failing drive): the download ends here, cut short, as a single
+             * file's does. Zeros in its place made a complete-looking archive with a silently
+             * damaged file inside. */
+            close(in);
+            return -1;
+        }
+        if (r == 0) {
+            /* shrank while being read: zeros keep the archive's framing */
             memset(w->buf + w->used, 0, room);
             r = (ssize_t)room;
         }
