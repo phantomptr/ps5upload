@@ -3364,7 +3364,8 @@ pub(crate) mod origin_tests {
         let err =
             RemoteSource::probe_with_options(&format!("http://{}/game.pkg", origin.addr), false)
                 .expect_err("a 200 origin must be rejected");
-        assert!(err.contains("206"), "unhelpful message: {err}");
+        // It says what does work for such an origin (#872), not only that this does not.
+        assert_eq!(err, NO_RANGES);
     }
 
     #[test]
