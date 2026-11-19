@@ -40,6 +40,7 @@
 #include "kernel_rw_lock.h"
 #include "hw_info.h"
 #include "atomic_file.h"
+#include "statvfs_avail.h"
 #include "hw_guard.h"
 #include "hw_temps_flight.h"
 #include "hw_bg_read.h"
@@ -1157,11 +1158,12 @@ static void storage_read_part(const char *path,
     uint64_t bs = (uint64_t)sf.f_bsize;
     *total_out  = (uint64_t)sf.f_blocks * bs;
     *bfree_out  = (uint64_t)sf.f_bfree  * bs;
-    /* f_bavail can underflow on a near-full filesystem (FreeBSD
-     * reports bavail as a signed 64; bfree - bavail = reserved).
-     * Treat any value <= 0 as "use bfree" so we don't surface a
-     * negative free count. */
-    *bavail_out = (sf.f_bavail > 0) ? (uint64_t)sf.f_bavail * bs : *bfree_out;
+    /* f_bavail goes to zero and below once the filesystem is written
+     * into its reserve (FreeBSD reports it as a signed 64; bfree -
+     * bavail = reserved). That is no room left (statvfs_avail.h). It
+     * used to read as bfree here, which showed the whole reserve as
+     * free space and the reserve itself as 0. */
+    *bavail_out = statvfs_avail_blocks_to_bytes((uint64_t)sf.f_bavail, bs);
 }
 
 int hw_storage_get_text(char *out, size_t out_cap, size_t *out_written,

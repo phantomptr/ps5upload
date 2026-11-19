@@ -68,6 +68,7 @@
 #include "sys_registry.h"
 #include "profile.h"
 #include "sony_api_lock.h"
+#include "statvfs_avail.h"
 #include "power_phase.h"
 #include "net_probe.h"
 #include "net_ports.h"
@@ -1990,13 +1991,13 @@ static int handle_fs_list_volumes(runtime_state_t *state) {
         const char *mnt_from = mnts[i].f_mntfromname;
         uint64_t bs    = (uint64_t)mnts[i].f_bsize;
         uint64_t total = (uint64_t)mnts[i].f_blocks * bs;  /* full partition size */
-        uint64_t bfree = (uint64_t)mnts[i].f_bfree  * bs;  /* free incl. root-only reserve */
-        /* f_bavail (free usable by non-root) is signed on FreeBSD and can
-         * read <=0 on a near-full FS; fall back to bfree so we never
-         * publish a reserve bigger than the real free pool. */
-        uint64_t avail = ((int64_t)mnts[i].f_bavail > 0)
-                             ? (uint64_t)mnts[i].f_bavail * bs
-                             : bfree;
+        /* f_bavail (free usable by non-root) is signed on FreeBSD and reads
+         * <=0 once the drive is written into its reserve. That is no room,
+         * as fs.freespace says (statvfs_avail.h). It used to fall back to
+         * bfree here, which published the reserve itself as free: the apps
+         * then admitted an upload onto a drive that was past full, and the
+         * helper (root) wrote it into the reserve. */
+        uint64_t avail = statvfs_avail_blocks_to_bytes((uint64_t)mnts[i].f_bavail, bs);
         uint64_t safety_reserve = mgmt_fs_reserve_for(total);
         uint64_t allocatable =
             avail > safety_reserve ? avail - safety_reserve : 0;
@@ -4620,7 +4621,6 @@ static sce_icc_get_fn p_sceKernelIccGetPowerUpCause = NULL;
 static int            sce_icc_get_resolve_attempted = 0;
 static void resolve_sce_icc_get(void) {
     if (sce_icc_get_resolve_attempted) return;
-    sce_icc_get_resolve_attempted = 1;
     p_sceKernelIccGetPowerOperatingTime = (sce_icc_get_fn)
         dlsym(RTLD_DEFAULT, "sceKernelIccGetPowerOperatingTime");
     p_sceKernelIccGetPowerNumberOfBootShutdown = (sce_icc_get_fn)
@@ -4629,6 +4629,10 @@ static void resolve_sce_icc_get(void) {
         dlsym(RTLD_DEFAULT, "sceKernelIccGetThermalAlert");
     p_sceKernelIccGetPowerUpCause = (sce_icc_get_fn)
         dlsym(RTLD_DEFAULT, "sceKernelIccGetPowerUpCause");
+    /* Set last: set first, a second thread's first call in between found the flag up and the
+     * pointers still NULL, and answered "not supported" for something that is. Two threads
+     * resolving at once store the same values. */
+    sce_icc_get_resolve_attempted = 1;
 }
 /* User service — libSceUserService. Initialise/Terminate are
  * idempotent; we call Initialize once on first user-list request and
@@ -4745,9 +4749,12 @@ static sce_notification_send_fn p_sceNotificationSend = NULL;
 static int sce_notification_resolve_attempted = 0;
 static void resolve_sce_notification(void) {
     if (sce_notification_resolve_attempted) return;
-    sce_notification_resolve_attempted = 1;
     p_sceNotificationSend = (sce_notification_send_fn)
         dlsym(RTLD_DEFAULT, "sceNotificationSend");
+    /* Set last: set first, a second thread's first call in between found the flag up and the
+     * pointers still NULL, and answered "not supported" for something that is. Two threads
+     * resolving at once store the same values. */
+    sce_notification_resolve_attempted = 1;
 }
 
 /* Peripheral control + module enumeration — also dlsym-resolved for
@@ -4785,7 +4792,6 @@ static sce_get_module_info_fn p_sceKernelGetModuleInfo          = NULL;
 static int                    sce_kernel_extras_resolve_attempted = 0;
 static void resolve_sce_kernel_extras(void) {
     if (sce_kernel_extras_resolve_attempted) return;
-    sce_kernel_extras_resolve_attempted = 1;
     p_sceKernelIccControlBDPowerState = (sce_icc_bd_fn)
         dlsym(RTLD_DEFAULT, "sceKernelIccControlBDPowerState");
     p_sceKernelIccControlUSBPowerState = (sce_icc_usb_fn)
@@ -4794,6 +4800,10 @@ static void resolve_sce_kernel_extras(void) {
         dlsym(RTLD_DEFAULT, "sceKernelGetModuleList");
     p_sceKernelGetModuleInfo = (sce_get_module_info_fn)
         dlsym(RTLD_DEFAULT, "sceKernelGetModuleInfo");
+    /* Set last: set first, a second thread's first call in between found the flag up and the
+     * pointers still NULL, and answered "not supported" for something that is. Two threads
+     * resolving at once store the same values. */
+    sce_kernel_extras_resolve_attempted = 1;
 }
 
 /* sceNetGetIfList — populates an array of network interface info
@@ -7292,6 +7302,10 @@ static int handle_shell_exec(runtime_state_t *state, const char *body,
         const char *err = "{\"err\":\"empty_cmd\"}";
         return mgmt_reply(MGMT_FRAME_SHELL_EXEC_ACK, err, strlen(err));
     }
+    /* A command that filled the buffer was cut there, and the cut command still ran: the last
+     * path of an `rm -r` shortened to whatever its first bytes name. */
+    if (strlen(cmd) >= sizeof(cmd) - 1)
+        return shell_send_json_result(state, 1, "shell: command too long\n", cwd, session_id, 0);
     {
         char probe[2100];
         char *argv_probe[8];

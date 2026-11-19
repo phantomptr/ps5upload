@@ -49,6 +49,7 @@ extern unsigned int ps5upload_extractor_elf_len;
 #define EXTRACT_POLL_MS 200
 /* After Stop: the extractor stops within one buffer; this long without it ending, it is killed. */
 #define EXTRACT_KILL_AFTER_MS 10000
+#define EXTRACT_KILL_WAIT_MS 10000 /* for a killed extractor to be gone before its folder is removed */
 
 static pthread_mutex_t g_busy = PTHREAD_MUTEX_INITIALIZER;
 static int g_running;
@@ -350,6 +351,11 @@ static int follow(ava1_op_ctx_t *c, const char *id, xstatus_t *s, const char *de
             fprintf(stderr, "extract: the extractor (pid %llu) did not stop; killing it\n", (unsigned long long)s->pid);
             /* pid_alive passed just above, so it is a real pid; never this helper's own. */
             if (archive_extract_pid_ok(s->pid) && (pid_t)s->pid != getpid()) (void)kill((pid_t)s->pid, SIGKILL);
+            /* Until it is really gone, not a fixed half second: a process inside a long write (a
+             * slow USB drive) ends only when that write returns, and the caller removes the folder
+             * next, under a writer that was still putting files into it. Bounded, so a pid that
+             * never goes away cannot hold the job (and the one-at-a-time lock) for good. */
+            for (int i = 0; i < EXTRACT_KILL_WAIT_MS / 100 && pid_alive(s->pid); i++) sleep_ms(100);
             sleep_ms(500);
             sweep_parts(dest, s->pid, 0);
             ava1_op_message(c, "fs_extract_cancelled");

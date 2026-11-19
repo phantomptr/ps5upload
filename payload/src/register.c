@@ -366,14 +366,21 @@ static int copy_file_bytes(const char *src, const char *dst) {
     if (in_fd < 0) return -1;
     struct stat st;
     if (fstat(in_fd, &st) != 0) { close(in_fd); return -1; }
-    int out_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, st.st_mode & 0777);
+    /* Into a sibling temp, renamed over `dst` only when every byte is written. Opened with O_TRUNC
+     * in place, a copy that failed (a full drive) left `dst` empty: registering a title again
+     * emptied the param.json / icons of a registration that worked. A sibling, so the rename
+     * never leaves the directory (cross_device.h). */
+    char tmp[REG_MAX_PATH + 8];
+    int tn = snprintf(tmp, sizeof(tmp), "%s.tmp~", dst);
+    if (tn < 0 || (size_t)tn >= sizeof(tmp)) { close(in_fd); return -1; }
+    int out_fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, st.st_mode & 0777);
     if (out_fd < 0) { close(in_fd); return -1; }
 
     /* 64 KiB heap buffer -- large enough to amortize syscall overhead,
      * small enough to keep peak memory low when copying many files. */
     const size_t BUF_SZ = 64 * 1024;
     char *buf = (char *)malloc(BUF_SZ);
-    if (!buf) { close(in_fd); close(out_fd); return -1; }
+    if (!buf) { close(in_fd); close(out_fd); unlink(tmp); return -1; }
     ssize_t n;
     int ok = 0;
     while ((n = read(in_fd, buf, BUF_SZ)) > 0) {
@@ -389,7 +396,10 @@ static int copy_file_bytes(const char *src, const char *dst) {
 done:
     free(buf);
     close(in_fd);
-    close(out_fd);
+    if (ok == 0 && fsync(out_fd) != 0) ok = -1;
+    if (close(out_fd) != 0) ok = -1;
+    if (ok == 0 && rename(tmp, dst) != 0) ok = -1;
+    if (ok != 0) unlink(tmp);
     return ok;
 }
 
