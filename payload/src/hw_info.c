@@ -39,6 +39,7 @@
 
 #include "kernel_rw_lock.h"
 #include "hw_info.h"
+#include "atomic_file.h"
 #include "hw_guard.h"
 #include "hw_temps_flight.h"
 #include "hw_bg_read.h"
@@ -1313,10 +1314,11 @@ int hw_fan_load_persisted(void) {
  * console) is silently ignored — the in-memory pin still works for
  * this session, and the next successful set will retry the write. */
 static void hw_fan_save_persisted(uint8_t threshold_c) {
-    FILE *fp = fopen(FAN_PERSIST_PATH, "w");
-    if (!fp) return;
-    fprintf(fp, "v2 %u\n", (unsigned)threshold_c);
-    fclose(fp);
+    /* Through a sibling temp and a rename: fopen("w") emptied the file first, so on a full drive
+     * the saved threshold was lost and the fan setting did not come back after a restart. */
+    char text[32];
+    int n = snprintf(text, sizeof text, "v2 %u\n", (unsigned)threshold_c);
+    if (n > 0) (void)atomic_file_write(FAN_PERSIST_PATH, FAN_PERSIST_PATH ".tmp", text, (size_t)n, 0644);
 }
 
 /* ── Watcher tick persistence ──────────────────────────────────────
@@ -1339,10 +1341,10 @@ int hw_fan_load_reapply_interval(void) {
 }
 
 static void hw_fan_save_reapply_interval(int seconds) {
-    FILE *fp = fopen(FAN_REAPPLY_PERSIST_PATH, "w");
-    if (!fp) return;
-    fprintf(fp, "v3 %d\n", seconds);
-    fclose(fp);
+    char text[32];
+    int n = snprintf(text, sizeof text, "v3 %d\n", seconds);
+    if (n > 0)
+        (void)atomic_file_write(FAN_REAPPLY_PERSIST_PATH, FAN_REAPPLY_PERSIST_PATH ".tmp", text, (size_t)n, 0644);
 }
 
 int hw_fan_reapply_interval(void) {

@@ -124,6 +124,46 @@ static void flatten_path(const char *src, char *out, size_t out_size) {
     out[i] = 0;
 }
 
+/* A flattened name longer than this is cut to its tail: a file name over 255 bytes cannot be
+ * created at all, so a file deep in a tree was left out of its snapshot without a word. */
+#define BACKUP_FLAT_MAX 200
+#define BACKUP_NAME_TRIES 100000
+
+/* The name `src` is kept under in the snapshot folder (`flat`) and that file's path (`dst`); 0, or
+ * -1 when the file cannot be kept (then it is left out, as one that failed to copy is).
+ *
+ * The name must be one no earlier file of this snapshot has. Flattening is not one-to-one
+ * ("a/b_c" and "a_b/c" are both "a_b_c", and so are two long paths cut to one tail): the second
+ * file was copied over the first, and a restore put the second file's bytes at BOTH original
+ * paths. The snapshot folder starts empty, so a name that exists there is another file's, and
+ * "~<n>" is added until the name is free. Restore reads the name from the manifest, so snapshots
+ * made before this still restore.
+ *
+ * The manifest is one "name<TAB>path" line per file: a path with a line break in it cannot be
+ * written there (its first half would be restored as if it were the whole path), so it is left out. */
+static int snapshot_name_for(const char *snap_dir, const char *src, char *flat, size_t flat_sz,
+                             char *dst, size_t dst_sz) {
+    char full[1024];
+    const char *base = full;
+    size_t len;
+    struct stat st;
+    if (strchr(src, '\n') || strchr(src, '\r')) return -1;
+    flatten_path(src, full, sizeof(full));
+    for (char *c = full; *c; c++)
+        if (*c == '\t') *c = '_'; /* the first tab of a manifest line ends the name */
+    len = strlen(full);
+    if (len == 0) return -1;
+    if (len > BACKUP_FLAT_MAX) base = full + (len - BACKUP_FLAT_MAX);
+    for (int k = 0; k < BACKUP_NAME_TRIES; k++) {
+        int n = k == 0 ? snprintf(flat, flat_sz, "%s", base) : snprintf(flat, flat_sz, "%s~%d", base, k);
+        if (n < 0 || (size_t)n >= flat_sz) return -1;
+        n = snprintf(dst, dst_sz, "%s/%s", snap_dir, flat);
+        if (n < 0 || (size_t)n >= dst_sz) return -1;
+        if (lstat(dst, &st) != 0) return errno == ENOENT ? 0 : -1;
+    }
+    return -1;
+}
+
 static int snapshot_tree_inner(const char *snap_dir, const char *src,
                                int depth, int *file_count) {
     if (depth > 8) return 0;
@@ -145,9 +185,8 @@ static int snapshot_tree_inner(const char *snap_dir, const char *src,
             snapshot_tree_inner(snap_dir, child, depth + 1, file_count);
         } else if (S_ISREG(st.st_mode)) {
             char flat[512];
-            flatten_path(child, flat, sizeof(flat));
             char dst[1024];
-            snprintf(dst, sizeof(dst), "%s/%s", snap_dir, flat);
+            if (snapshot_name_for(snap_dir, child, flat, sizeof(flat), dst, sizeof(dst)) != 0) continue;
             if (copy_file(child, dst) == 0) {
                 manifest_append(snap_dir, flat, child);
                 (*file_count)++;
@@ -238,10 +277,9 @@ int backup_snapshot(const char *tag, const char *src_path,
         snapshot_tree_inner(snap, src_path, 0, &file_count);
     } else if (S_ISREG(st.st_mode)) {
         char flat[512];
-        flatten_path(src_path, flat, sizeof(flat));
         char dst[1024];
-        snprintf(dst, sizeof(dst), "%s/%s", snap, flat);
-        if (copy_file(src_path, dst) == 0) {
+        if (snapshot_name_for(snap, src_path, flat, sizeof(flat), dst, sizeof(dst)) == 0 &&
+            copy_file(src_path, dst) == 0) {
             manifest_append(snap, flat, src_path);
             file_count = 1;
             mgmt_op_progress(1, 0);
@@ -402,9 +440,24 @@ static int restore_from_manifest(const char *snap_dir, int *restored) {
     FILE *f = fopen(mpath, "r");
     if (!f) return -1;
     int n = 0;
-    char line[1100];
-    while (fgets(line, sizeof(line), f)) {
+    /* A line is a name (up to 511 bytes in older snapshots), a tab and a path (up to 1023): longer
+     * than the 1100 bytes this buffer was. A longer line came back from fgets in two pieces, and
+     * the first piece, name and a path cut short, was restored: the file's bytes written to a path
+     * that is not the file's. So: room for every line a snapshot can hold (heap, not a worker's
+     * stack), and a line that still does not fit is skipped whole, never used in part. */
+    enum { LINE_CAP = 4096 };
+    char *line = malloc(LINE_CAP);
+    if (!line) {
+        fclose(f);
+        return -1;
+    }
+    while (fgets(line, LINE_CAP, f)) {
         size_t L = strlen(line);
+        if (L == LINE_CAP - 1 && line[L - 1] != '\n') {
+            int ch;
+            while ((ch = fgetc(f)) != EOF && ch != '\n') {}
+            continue;
+        }
         while (L > 0 && (line[L - 1] == '\n' || line[L - 1] == '\r'))
             line[--L] = 0;
         char *tab = strchr(line, '\t');
@@ -427,11 +480,13 @@ static int restore_from_manifest(const char *snap_dir, int *restored) {
             mgmt_op_progress(1, 0);
         } else if (c == BACKUP_CANCELLED) {
             fclose(f);
+            free(line);
             if (restored) *restored = n;
             return BACKUP_CANCELLED; /* the files restored so far stay restored */
         }
     }
     fclose(f);
+    free(line);
     if (restored) *restored = n;
     return 0;
 }

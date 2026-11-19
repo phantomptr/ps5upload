@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <pthread.h>
 
+#include "atomic_file.h"
 #include "config.h"
 #include "hw_info.h"
 #include "fan_map.h"
@@ -47,17 +48,10 @@ int fan_curve_set(const char *points_json, char *err, size_t err_cap) {
     pthread_mutex_lock(&g_fan_curve_mtx);
 
     ensure_dir(FAN_CURVE_DIR);
-    int fd = open(FAN_CURVE_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) {
-        if (err && err_cap > 0)
-            snprintf(err, err_cap, "cannot open %s", FAN_CURVE_FILE);
-        pthread_mutex_unlock(&g_fan_curve_mtx);
-        return -1;
-    }
+    /* Through a sibling temp and a rename: opened with O_TRUNC in place, a write that failed (a
+     * full drive) left the saved curve empty. */
     size_t len = strlen(points_json);
-    ssize_t w = write(fd, points_json, len);
-    close(fd);
-    if (w < 0 || (size_t)w != len) {
+    if (atomic_file_write(FAN_CURVE_FILE, FAN_CURVE_FILE ".tmp", points_json, len, 0644) != 0) {
         if (err && err_cap > 0)
             snprintf(err, err_cap, "write failed");
         pthread_mutex_unlock(&g_fan_curve_mtx);

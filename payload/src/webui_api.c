@@ -16,6 +16,7 @@
 #include <limits.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include "statvfs_avail.h"
 #include <time.h>
 #include <unistd.h>
 
@@ -2619,7 +2620,7 @@ static void r_upload_begin(const char *b, size_t n, uint8_t *out, int fd) {
         }
     }
     /* The bytes go to a temporary file first: the whole size must be free even when it replaces one. */
-    if (statvfs(dir, &vf) == 0 && (uint64_t)vf.f_bavail * (uint64_t)vf.f_frsize < size) {
+    if (statvfs(dir, &vf) == 0 && statvfs_avail_bytes(&vf) < size) {
         send_error(fd, 507, "no_space", 8);
         return;
     }

@@ -63,12 +63,12 @@ void inst_coverage_add(inst_coverage_t *c, uint64_t start, uint64_t end) {
     if (end < start) return;
     /* insert sorted by start */
     size_t pos = 0;
+    /* Make room first: coalescing shifts the entries after the merged pair one place left, so a
+     * place worked out before it was one too far for a range sorting after that pair. The range
+     * then sat behind one with a larger start and the merge pass below swallowed it: bytes that
+     * were served went uncounted, and the job could end below its total. */
+    if (c->count >= INST_COVERAGE_MAX) coverage_coalesce_smallest_gap(c);
     while (pos < c->count && c->iv[pos].start < start) pos++;
-    if (c->count >= INST_COVERAGE_MAX) {
-        /* make room, then re-derive; coalescing keeps the union monotone */
-        coverage_coalesce_smallest_gap(c);
-        if (pos > c->count) pos = c->count;
-    }
     for (size_t i = c->count; i > pos; i--) c->iv[i] = c->iv[i - 1];
     c->iv[pos].start = start;
     c->iv[pos].end = end;

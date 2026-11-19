@@ -15,6 +15,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include "statvfs_avail.h"
 #include <time.h>
 #include <unistd.h>
 
@@ -234,7 +235,18 @@ void archive_extract_sweep(void) {
     /* The helper that wrote it, or its extractor, still runs (a takeover lets the old one finish). */
     if ((hpid > 1 && hpid != (long)getpid() && pid_alive((uint64_t)hpid)) || pid_alive(xpid)) return;
     if (dest[0] == '/' && may_write_here(dest)) {
-        if (created && !fsj_path_is_root(dest)) {
+        char sbuf[4096], state[16] = "";
+        uint64_t spid = 0;
+        if (read_small(EXTRACT_STATUS, sbuf, sizeof sbuf) > 0) {
+            (void)fsj_json_u64(sbuf, "pid", &spid);
+            (void)fsj_json_str(sbuf, "state", state, sizeof state);
+        }
+        if (archive_extract_sweep_keeps(xpid, spid, state)) {
+            /* The extractor finished after its helper died: the folder is whole (and no part
+             * file is left). Only the record and the status go. */
+            fprintf(stderr, "extract: a helper died mid-extraction, its extractor finished; keeping %s\n", dest);
+            (void)unlink(EXTRACT_STATUS);
+        } else if (created && !fsj_path_is_root(dest)) {
             fprintf(stderr, "extract: a helper died mid-extraction; removing the folder it made: %s\n", dest);
             (void)fsj_rm_rf(dest, 0, NULL);
         } else if (xpid) {
@@ -275,7 +287,7 @@ const char *archive_extract_probe(const char *path, archive_probe_t *p) {
         char dir[1024];
         snprintf(dir, sizeof dir, "%.*s", (int)(slash - src), src);
         if (statvfs(dir[0] ? dir : "/", &sv) == 0) {
-            p->free = (uint64_t)sv.f_bavail * sv.f_frsize;
+            p->free = statvfs_avail_bytes(&sv);
             p->have_free = 1;
         }
     }

@@ -35,6 +35,7 @@
 #include <strings.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include "statvfs_avail.h"
 #include <unistd.h>
 
 #include "ava1_data.h"
@@ -231,7 +232,7 @@ const char *fsj_ffpfsc_probe(const char *path, fsj_unpack_probe_t *p) {
     snprintf(dst, sizeof dst, "%s/%s", dir, L.name);
     p->exists = lstat(dst, &st) == 0;
     if (statvfs(dir, &sv) == 0) {
-        p->free = (uint64_t)sv.f_bavail * sv.f_frsize;
+        p->free = statvfs_avail_bytes(&sv);
         p->have_free = 1;
     }
     return NULL;
@@ -323,9 +324,9 @@ int fsj_op_ffpfsc_unpack(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_
         part[0] = 0; /* nothing of ours to remove */
         goto done;
     }
-    if (statvfs(dir, &sv) == 0 && (uint64_t)sv.f_bavail * sv.f_frsize < L.raw + UNP_MARGIN) {
+    if (statvfs(dir, &sv) == 0 && statvfs_avail_bytes(&sv) < L.raw + UNP_MARGIN) {
         ava1_op_message(c, "fs_unpack_no_space: needs %llu bytes, %llu free", (unsigned long long)(L.raw + UNP_MARGIN),
-                        (unsigned long long)sv.f_bavail * sv.f_frsize);
+                        (unsigned long long)statvfs_avail_bytes(&sv));
         goto done;
     }
     out = open(part, O_WRONLY | O_CREAT | O_TRUNC, 0666);

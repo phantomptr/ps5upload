@@ -14,6 +14,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include "statvfs_avail.h"
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
@@ -494,7 +495,7 @@ static int stage_copy(ava1_op_ctx_t *c, const char *src, uint64_t size, const pk
         return -1;
     }
     if (statvfs(WEBUI_PKG_STAGE_DIR, &sv) == 0) {
-        uint64_t avail = (uint64_t)sv.f_bavail * (uint64_t)sv.f_frsize;
+        uint64_t avail = statvfs_avail_bytes(&sv);
         if (avail < size + WEBUI_PKG_STAGE_MARGIN) {
             ava1_op_message(c, "pkg_install_no_space: %llu", (unsigned long long)(size + WEBUI_PKG_STAGE_MARGIN));
             return -1;
