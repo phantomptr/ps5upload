@@ -3394,7 +3394,12 @@ fn sync_one(lm: &LocalMember, me: &str) {
 /// own, and the links on another, so a long first sync holds up only what shares its console.
 /// A worker still busy from its last round is left to it.
 pub fn tick() {
-    let me = crate::mesh_api::id_hex().unwrap_or_default();
+    // No identity this round (its file could not be read just now): nothing is synced, and
+    // above all no folder is taken for "removed from its drive" because no member of the
+    // drive is this device's. That forgot every folder here, base files and all.
+    let Some(me) = crate::mesh_api::id_hex() else {
+        return;
+    };
     let mut by_console: BTreeMap<String, Vec<LocalMember>> = BTreeMap::new();
     for lm in load_config().members {
         by_console.entry(lm.console.clone()).or_default().push(lm);
@@ -3566,6 +3571,21 @@ fn valid_name(name: &str) -> bool {
 fn inside(a: &str, b: &str) -> bool {
     let (a, b) = (a.trim_end_matches('/'), b.trim_end_matches('/'));
     a == b || a.starts_with(&format!("{b}/"))
+}
+
+/// [`inside`] for two folders on this computer, compared part by part: on Windows a path is
+/// spelled with `\` (which `inside` took for part of a name, so a folder inside another
+/// drive's folder was let through), and there and on macOS `D:\Sync` is `d:\sync`.
+fn inside_local(a: &str, b: &str) -> bool {
+    let fold = |s: &str| {
+        if cfg!(any(windows, target_os = "macos")) {
+            s.to_lowercase()
+        } else {
+            s.to_string()
+        }
+    };
+    let (a, b) = (fold(a), fold(b));
+    Path::new(&a).starts_with(Path::new(&b))
 }
 
 fn fail_check(path: &str, problem: &str, detail: Option<String>) -> FolderCheck {
@@ -3774,7 +3794,7 @@ pub fn check_local(path: &str, drive: Option<&str>) -> FolderCheck {
     }
     if let Some(data) = crate::remote::store::data_dir() {
         let (a, b) = (p.to_string_lossy(), data.to_string_lossy());
-        if inside(&a, &b) || inside(&b, &a) {
+        if inside_local(&a, &b) || inside_local(&b, &a) {
             return fail_check(&shown, "app_data", None);
         }
     }
@@ -3787,11 +3807,11 @@ pub fn check_local(path: &str, drive: Option<&str>) -> FolderCheck {
         .filter(|m| Some(m.drive.as_str()) != drive)
     {
         let (a, b) = (shown.as_str(), m.path.as_str());
-        let problem = if inside(a, b) && inside(b, a) {
+        let problem = if inside_local(a, b) && inside_local(b, a) {
             "taken"
-        } else if inside(a, b) {
+        } else if inside_local(a, b) {
             "inside"
-        } else if inside(b, a) {
+        } else if inside_local(b, a) {
             "holds"
         } else {
             continue;
@@ -6256,6 +6276,17 @@ mod tests {
         assert!(inside("/data/A/B", "/data/A"));
         assert!(inside("/data/A", "/data/A/"));
         assert!(!inside("/data/AB", "/data/A"));
+        // Folders on this computer, part by part.
+        assert!(inside_local("/data/A/B", "/data/A"));
+        assert!(inside_local("/data/A", "/data/A/"));
+        assert!(!inside_local("/data/AB", "/data/A"));
+        assert!(!inside_local("/data/A", "/data/A/B"));
+        #[cfg(windows)]
+        {
+            assert!(inside_local(r"D:\Sync\A\Photos", r"D:\Sync\A"));
+            assert!(inside_local(r"d:\sync\a", r"D:\Sync\A\"));
+            assert!(!inside_local(r"D:\Sync\AB", r"D:\Sync\A"));
+        }
     }
 
     #[test]
