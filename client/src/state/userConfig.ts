@@ -304,7 +304,11 @@ export async function hydrateFromUserConfig(): Promise<void> {
       typeof u.bandwidth_cap_mbps === "number" &&
       Number.isFinite(u.bandwidth_cap_mbps) &&
       u.bandwidth_cap_mbps >= 0 &&
-      u.bandwidth_cap_mbps !== us.bandwidthCapMbps
+      u.bandwidth_cap_mbps !== us.bandwidthCapMbps &&
+      // Like the two above: the stored limit is what the user (or the settings API) set last; the
+      // file can be older (a quit inside the mirror's debounce, a change made while the app was
+      // closed), and applying it put the old limit back.
+      unset("ps5upload.bandwidth_cap_mbps")
     ) {
       us.setBandwidthCapMbps(u.bandwidth_cap_mbps);
     }
