@@ -62,6 +62,16 @@ fn same_file(file: &std::fs::File, path: &Path) -> bool {
     }
 }
 
+/// Whether a failed open of the claim file is worth another try. On Windows "access denied"
+/// has two causes: the file is being removed by its owner right now (over in an instant, as
+/// the owner closes it straight after), or the folder cannot be written at all. Neither is "a
+/// build holds it": the first passes on a retry, and the second stays, so the caller then
+/// goes on without a claim file and the build itself reports the folder it cannot write,
+/// where this used to say the output was already being built.
+fn retry_open(kind: std::io::ErrorKind, windows: bool) -> bool {
+    windows && kind == std::io::ErrorKind::PermissionDenied
+}
+
 impl ClaimLock {
     /// Takes the claim on `path`. `Err(())` when another process holds it. `Ok(None)` when no
     /// claim file can be made there (a read-only folder, a file system without locks, a path
@@ -83,9 +93,9 @@ impl ClaimLock {
                 .open(&file_path)
             {
                 Ok(f) => f,
-                // Windows: the claim file is being removed by its owner right now.
-                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && cfg!(windows) => {
-                    return Err(())
+                Err(e) if retry_open(e.kind(), cfg!(windows)) => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    continue;
                 }
                 Err(_) => return Ok(None),
             };
@@ -374,6 +384,26 @@ mod tests {
             Ok(None)
         ));
         sweep_dead_claims(&root);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_folder_no_claim_file_can_be_made_in_is_not_a_running_build() {
+        use std::io::ErrorKind;
+        // Windows "access denied" is retried, never read as "held by another build".
+        assert!(retry_open(ErrorKind::PermissionDenied, true));
+        assert!(!retry_open(ErrorKind::PermissionDenied, false));
+        assert!(!retry_open(ErrorKind::NotFound, true));
+        // A parent that is a file: no claim file can exist there on any OS.
+        let root = std::env::temp_dir().join(format!("ps5upload-noclaim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let blocker = root.join("not-a-folder");
+        std::fs::write(&blocker, b"x").unwrap();
+        assert!(matches!(
+            ClaimLock::take(&blocker.join("Game.exfat.partial")),
+            Ok(None)
+        ));
         let _ = std::fs::remove_dir_all(&root);
     }
 
