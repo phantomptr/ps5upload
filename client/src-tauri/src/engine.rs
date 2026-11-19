@@ -285,6 +285,13 @@ async fn command_output(program: &str, args: &[&str], port: u16) -> Option<Strin
         .env("PORT", port.to_string())
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
+    // A system shell and `ss`: with an AppImage's library paths the shell died at once (#603),
+    // which read as "nothing listens" and left an orphaned engine on the port.
+    #[cfg(target_os = "linux")]
+    crate::commands::self_install::without_appimage_env(
+        cmd.as_std_mut(),
+        std::env::var_os("APPIMAGE").is_some(),
+    );
     // No console window for a moment: the app has none of its own.
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW

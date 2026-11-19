@@ -41,9 +41,12 @@ pub fn reveal(path: &Path) -> Result<(), String> {
     not(target_os = "ios")
 ))]
 pub fn reveal(path: &Path) -> Result<(), String> {
-    std::process::Command::new("xdg-open")
-        .arg(path)
-        .spawn()
+    let mut cmd = std::process::Command::new("xdg-open");
+    cmd.arg(path);
+    // xdg-open is a shell script and starts the system's file manager: neither is to load an
+    // AppImage's libraries (the shell died at once with them, #603, and nothing opened).
+    super::self_install::without_appimage_env(&mut cmd, std::env::var_os("APPIMAGE").is_some());
+    cmd.spawn()
         .map(|_| ())
         .map_err(|e| format!("xdg-open failed: {e}"))
 }

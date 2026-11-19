@@ -293,20 +293,28 @@ fn acquire_inhibitor() -> Result<Option<Handle>, String> {
     }
     // Held only while this app runs: a `sleep infinity` outlived an app that was killed (seen
     // on Ubuntu, 2026-10-31) and kept the PC from sleeping until the next reboot.
-    let child = Command::new("systemd-inhibit")
-        .args([
-            "--what=idle:sleep",
-            "--who=ps5upload",
-            "--why=active transfer",
-            "sh",
-            "-c",
-            &hold_while_alive_script(std::process::id()),
-        ])
-        // A process group of its own, which `release_inhibitor` ends as one.
-        .process_group(0)
-        // See the caffeinate spawn — kill on Handle drop; exit-handler
-        // release covers the never-dropped HOLDER static.
-        .kill_on_drop(true)
+    let script = hold_while_alive_script(std::process::id());
+    let mut cmd = Command::new("systemd-inhibit");
+    cmd.args([
+        "--what=idle:sleep",
+        "--who=ps5upload",
+        "--why=active transfer",
+        "sh",
+        "-c",
+        script.as_str(),
+    ])
+    // A process group of its own, which `release_inhibitor` ends as one.
+    .process_group(0)
+    // See the caffeinate spawn — kill on Handle drop; exit-handler
+    // release covers the never-dropped HOLDER static.
+    .kill_on_drop(true);
+    // The hold is a system shell: with an AppImage's library paths it died at once (#603), and
+    // the inhibitor ended with it while the app still showed the PC as kept awake.
+    super::self_install::without_appimage_env(
+        cmd.as_std_mut(),
+        std::env::var_os("APPIMAGE").is_some(),
+    );
+    let child = cmd
         .spawn()
         .map_err(|e| format!("spawn systemd-inhibit: {e}"))?;
     if let Some(pid) = child.id() {

@@ -701,7 +701,10 @@ const APPIMAGE_BUNDLE_ENV: &[&str] = &[
 /// Starts `cmd` (the update script) with the system's own libraries when this copy runs as an
 /// AppImage. `LD_PRELOAD`, `APPIMAGE_EXTRACT_AND_RUN` and the `WEBKIT_*` switches stay: the
 /// launcher (PS5Upload.sh) set them, and the app the script starts again needs them too.
-fn without_appimage_env(cmd: &mut std::process::Command, appimage: bool) {
+///
+/// Also for the other system programs this app starts through a shell (`xdg-open`, the
+/// keep-awake hold, the port query): the same shell dies the same way with these set.
+pub(crate) fn without_appimage_env(cmd: &mut std::process::Command, appimage: bool) {
     if appimage {
         for var in APPIMAGE_BUNDLE_ENV {
             cmd.env_remove(var);
