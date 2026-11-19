@@ -2724,7 +2724,9 @@ void fs_pfsc_sweep(void) {
     }
     if (pid != (int)getpid() && (kill(pid, 0) == 0 || errno == EPERM)) return; /* still running */
     /* Only our own mount point; the unit came from the same boot (the record is on tmpfs). */
-    if (strncmp(mp, FS_UNPACK_BASE "/", strlen(FS_UNPACK_BASE) + 1) != 0) {
+    /* (No ".." either: the record sits in a folder a client can write to, and
+     * "<base>/../../ext1" has the prefix and names a drive, which would be force-unmounted.) */
+    if (strncmp(mp, FS_UNPACK_BASE "/", strlen(FS_UNPACK_BASE) + 1) != 0 || path_has_dotdot_component(mp)) {
         (void)unlink(rec);
         return;
     }
@@ -3599,7 +3601,11 @@ static int fs_unmount_request(runtime_state_t *state, const char *request_body,
         free(probe);
     }
 
-    if (path_has_dotdot_component(mount_point) ||
+    /* Only an absolute path. A bare "data" has the tracker key of an image mounted as
+     * /mnt/ps5upload/data, matches no mount by name (so the image-unit check below is skipped),
+     * and unmount(2) resolves it against the working directory: from "/" that is /data itself,
+     * retried with MNT_FORCE. */
+    if (mount_point[0] != '/' || path_has_dotdot_component(mount_point) ||
         (!legacy_match && !sandbox_overlay && !mount_tracker_exists(mount_point))) {
         return mgmt_reply(MGMT_FRAME_ERROR, "fs_unmount_not_our_mount", 24);
     }
