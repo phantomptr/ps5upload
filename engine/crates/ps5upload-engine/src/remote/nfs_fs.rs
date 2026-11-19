@@ -1185,7 +1185,9 @@ impl Inner {
                 return Err(RemoteError::Io("NFS: malformed read reply".to_string()));
             }
             let empty = data.is_empty();
-            out.extend_from_slice(&data);
+            // No more than was asked for, whatever the server sent: the copy writes what it
+            // is given, and a longer answer made a longer file.
+            out.extend_from_slice(&data[..data.len().min(want as usize)]);
             if eof || empty {
                 break;
             }
