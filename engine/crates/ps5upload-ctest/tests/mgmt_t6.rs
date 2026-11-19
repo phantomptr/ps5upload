@@ -150,8 +150,9 @@ const INDEX_SEARCH: u16 = gen::METHOD_INDEX_SEARCH;
 const INDEX_CANCEL: u16 = gen::METHOD_INDEX_CANCEL;
 
 // INFO_SET toasts through pop_notification, which takes sony_api_lock now (final review: console)
-const SONY_METHODS: [u16; 7] = [
-    REGISTER, UNREGISTER, LAUNCH, APP_LIST, BROWSER, LIFECYCLE, INFO_SET,
+// FOCUS asks sceSystemService for the big/mini app ids, under sony_api_lock
+const SONY_METHODS: [u16; 8] = [
+    REGISTER, UNREGISTER, LAUNCH, APP_LIST, BROWSER, LIFECYCLE, INFO_SET, FOCUS,
 ];
 
 // ---- the real table and the static audits ----
