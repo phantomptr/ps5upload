@@ -182,6 +182,50 @@ fn cli_candidates() -> Vec<&'static str> {
     }
 }
 
+enum Spawned {
+    /// The program is not there (or could not be started).
+    No,
+    TimedOut,
+    /// What it printed, when it ended well.
+    Done(Option<String>),
+}
+
+/// Runs `cmd` and returns what it printed, giving it `limit` to end. Its output is read while
+/// it runs: read only once it had ended, a status longer than the pipe holds (a tailnet with
+/// a few dozen devices) left the program waiting to write and this waiting for it to end,
+/// until the time limit killed it, every time.
+fn output_within(mut cmd: std::process::Command, limit: Duration) -> Spawned {
+    let Ok(mut child) = cmd.spawn() else {
+        return Spawned::No;
+    };
+    let stdout = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut out = Vec::new();
+        if let Some(mut s) = stdout {
+            let _ = std::io::Read::read_to_end(&mut s, &mut out);
+        }
+        out
+    });
+    let t0 = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if t0.elapsed() < limit => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Spawned::TimedOut;
+            }
+        }
+    };
+    let out = reader.join().unwrap_or_default();
+    Spawned::Done(
+        status
+            .success()
+            .then(|| String::from_utf8_lossy(&out).into_owned()),
+    )
+}
+
 fn run_cli() -> Option<String> {
     if cfg!(any(target_os = "android", target_os = "ios")) {
         return None;
@@ -201,26 +245,11 @@ fn run_cli() -> Option<String> {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
-        let Ok(mut child) = cmd.spawn() else {
-            continue;
-        };
-        let t0 = Instant::now();
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) if t0.elapsed() < CLI_TIMEOUT => {
-                    std::thread::sleep(Duration::from_millis(20))
-                }
-                _ => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return None;
-                }
-            }
-        }
-        let out = child.wait_with_output().ok()?;
-        if out.status.success() {
-            return Some(String::from_utf8_lossy(&out.stdout).into_owned());
+        match output_within(cmd, CLI_TIMEOUT) {
+            Spawned::No => continue,
+            Spawned::TimedOut => return None,
+            Spawned::Done(Some(out)) => return Some(out),
+            Spawned::Done(None) => {}
         }
     }
     None
@@ -317,6 +346,31 @@ pub fn renamed_by_control(asked: &str, assigned: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// More output than a pipe holds (64 KiB at most) comes through whole: the program is not
+    /// left waiting to write until the time limit kills it.
+    #[cfg(unix)]
+    #[test]
+    fn a_status_longer_than_the_pipe_holds_is_read_whole() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "head -c 300000 /dev/zero | tr '\\0' 'a'"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        match output_within(cmd, Duration::from_secs(20)) {
+            Spawned::Done(Some(out)) => assert_eq!(out.len(), 300_000),
+            _ => panic!("the program's output was not read"),
+        }
+        let mut slow = std::process::Command::new("sh");
+        slow.args(["-c", "sleep 30"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        assert!(matches!(
+            output_within(slow, Duration::from_millis(100)),
+            Spawned::TimedOut
+        ));
+    }
 
     #[test]
     fn labels_are_dns_safe() {
