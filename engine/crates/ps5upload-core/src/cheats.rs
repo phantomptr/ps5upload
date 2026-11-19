@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::mgmt::{self, m, Method};
 
 use std::io::Read;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheatTitle {
@@ -579,6 +580,55 @@ fn repo_tree_listing(repo: &CheatRepo) -> Result<Vec<(String, String)>> {
     Ok(out)
 }
 
+/// Index files fetched, by URL, with when: a search used to fetch all six again each time, and
+/// the Collection asks for the whole index at every start.
+type IndexCache =
+    std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Arc<str>)>>;
+
+fn index_cache() -> &'static IndexCache {
+    static CACHE: std::sync::OnceLock<IndexCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// The index file at `url`, from the cache while it is younger than [`TREE_CACHE_TTL`].
+fn index_text(url: &str) -> Result<Arc<str>> {
+    index_text_with(index_cache(), url, repo_fetch)
+}
+
+fn index_text_with(
+    cache: &IndexCache,
+    url: &str,
+    fetch: impl Fn(&str) -> Result<Vec<u8>>,
+) -> Result<Arc<str>> {
+    if let Some((at, text)) = cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(url)
+        .cloned()
+    {
+        if at.elapsed() < TREE_CACHE_TTL {
+            return Ok(text);
+        }
+    }
+    let text: Arc<str> = String::from_utf8_lossy(&fetch(url)?).into();
+    cache.lock().unwrap_or_else(|e| e.into_inner()).insert(
+        url.to_string(),
+        (std::time::Instant::now(), Arc::clone(&text)),
+    );
+    Ok(text)
+}
+
+/// A search whose every source failed is an error (no internet, GitHub blocked), not an empty
+/// result that reads as "no cheats for this game". One source failing among others is not.
+fn search_failed(read: usize, failures: &[String]) -> Option<anyhow::Error> {
+    (read == 0 && !failures.is_empty()).then(|| {
+        anyhow::anyhow!(
+            "no cheat repository could be reached (check the internet connection): {}",
+            failures[0]
+        )
+    })
+}
+
 /// Search all community repos for cheat entries matching `query`.
 /// `query` may match either the filename (e.g. a CUSA ID) or the game
 /// title. Matching is case-insensitive substring.
@@ -589,6 +639,9 @@ pub fn cheats_repo_search(query: &str) -> Result<CheatRepoSearchResponse> {
     // was written for: the same file listed by two different repos,
     // whose entries are never adjacent because repos are walked in turn.
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Sources read, and why the others could not be.
+    let mut read = 0usize;
+    let mut failures: Vec<String> = Vec::new();
     for repo in cheat_repos() {
         let q = query.to_lowercase();
         let repo_id = repo.id.clone();
@@ -613,11 +666,15 @@ pub fn cheats_repo_search(query: &str) -> Result<CheatRepoSearchResponse> {
         if repo.id == PS_GAME_PATCH_REPO {
             match patch_archive() {
                 Ok(files) => {
+                    read += 1;
                     for (filename, title, _) in files.iter() {
                         push(filename.clone(), title.clone(), "xml".into());
                     }
                 }
-                Err(e) => crate::core_log!("[cheats] patch archive failed: {e}"),
+                Err(e) => {
+                    crate::core_log!("[cheats] patch archive failed: {e}");
+                    failures.push(format!("{}: {e}", repo.id));
+                }
             }
         } else if repo.index_files.is_empty() {
             // No index published — enumerate through the git tree.
@@ -625,20 +682,22 @@ pub fn cheats_repo_search(query: &str) -> Result<CheatRepoSearchResponse> {
             // entries match on filename (the title id) only.
             match repo_tree_listing(&repo) {
                 Ok(listing) => {
+                    read += 1;
                     for (filename, format) in listing {
                         push(filename, String::new(), format);
                     }
                 }
                 Err(e) => {
                     crate::core_log!("[cheats] tree listing failed for {}: {}", repo.id, e);
+                    failures.push(format!("{}: {e}", repo.id));
                 }
             }
         } else {
             for idx in &repo.index_files {
                 let url = format!("{}{}", repo.raw_base, idx);
-                match repo_fetch(&url) {
-                    Ok(bytes) => {
-                        let text = String::from_utf8_lossy(&bytes);
+                match index_text(&url) {
+                    Ok(text) => {
+                        read += 1;
                         for line in text.lines() {
                             if let Some((filename, game_title)) = parse_index_line(line) {
                                 push(filename, game_title, format_from_index(idx).into());
@@ -647,10 +706,14 @@ pub fn cheats_repo_search(query: &str) -> Result<CheatRepoSearchResponse> {
                     }
                     Err(e) => {
                         crate::core_log!("[cheats] fetch failed for {}/{}: {}", repo.id, idx, e);
+                        failures.push(format!("{}/{idx}: {e}", repo.id));
                     }
                 }
             }
         }
+    }
+    if let Some(e) = search_failed(read, &failures) {
+        return Err(e);
     }
 
     Ok(CheatRepoSearchResponse {
@@ -1284,6 +1347,47 @@ mod tests {
         let resp: CheatsEngineSetResponse = serde_json::from_str(json).unwrap();
         assert!(resp.ok);
         assert!(!resp.enabled);
+    }
+
+    /// An index file is fetched once for many searches, and again once it is old.
+    #[test]
+    fn an_index_file_is_fetched_once_for_many_searches() {
+        let cache = IndexCache::default();
+        let fetches = std::sync::atomic::AtomicUsize::new(0);
+        let fetch = |_: &str| {
+            fetches.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(b"CUSA00001_01.00.json=Game".to_vec())
+        };
+        for _ in 0..3 {
+            let text = index_text_with(&cache, "https://x/json.txt", fetch).unwrap();
+            assert_eq!(&*text, "CUSA00001_01.00.json=Game");
+        }
+        assert_eq!(fetches.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // A failed fetch is not kept.
+        assert!(
+            index_text_with(&cache, "https://x/shn.txt", |_| anyhow::bail!("offline")).is_err()
+        );
+        assert!(cache.lock().unwrap().get("https://x/shn.txt").is_none());
+        // Old: fetched again.
+        cache
+            .lock()
+            .unwrap()
+            .get_mut("https://x/json.txt")
+            .unwrap()
+            .0 = std::time::Instant::now() - TREE_CACHE_TTL - std::time::Duration::from_secs(1);
+        index_text_with(&cache, "https://x/json.txt", fetch).unwrap();
+        assert_eq!(fetches.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    /// Offline, a search says so; one source down among others does not fail it.
+    #[test]
+    fn a_search_with_no_source_read_is_an_error() {
+        let failures = vec!["a: dns error".to_string(), "b: dns error".to_string()];
+        let e = search_failed(0, &failures).unwrap().to_string();
+        assert!(e.contains("no cheat repository could be reached"), "{e}");
+        assert!(e.contains("a: dns error"), "{e}");
+        assert!(search_failed(1, &failures).is_none());
+        assert!(search_failed(0, &[]).is_none());
     }
 
     #[test]
