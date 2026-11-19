@@ -7615,8 +7615,6 @@ async fn transfer_file_handler(
     };
 
     let job_id = Uuid::new_v4();
-    telemetry::tag(job_id, "file");
-    telemetry::set_drive(job_id, &req.dest);
     mesh_api::note_job(job_id, &addr, "Upload", &req.dest);
     let started_at_ms = now_ms();
     crate::log_info!(
@@ -7717,6 +7715,10 @@ async fn transfer_file_handler(
     // JobState::Running's files_finalized / bytes_finalized fields.
     let progress_files_finalized = Arc::new(AtomicU64::new(0));
     let progress_bytes_finalized = Arc::new(AtomicU64::new(0));
+    // Tagged once the job is certain: a request refused above never ends as a job, and its
+    // tag would have stayed in the telemetry map for as long as the engine runs.
+    telemetry::tag(job_id, "file");
+    telemetry::set_drive(job_id, &req.dest);
     let ctx = TickerContext {
         started_at_ms,
         total_bytes,
@@ -11204,8 +11206,6 @@ async fn transfer_file_list_handler(
     };
 
     let job_id = Uuid::new_v4();
-    telemetry::tag(job_id, "file_list");
-    telemetry::set_drive(job_id, &req.dest_root);
     mesh_api::note_job(job_id, &addr, "Upload", &req.dest_root);
     let started_at_ms = now_ms();
     let entries: Vec<FileListEntry> = req
@@ -11309,6 +11309,9 @@ async fn transfer_file_list_handler(
         skipped_files: 0,
         skipped_bytes: 0,
     };
+    // Tagged once the job is certain (see `transfer_file_handler`).
+    telemetry::tag(job_id, "file_list");
+    telemetry::set_drive(job_id, &req.dest_root);
     set_job(
         &state.jobs,
         &state.events_tx,
