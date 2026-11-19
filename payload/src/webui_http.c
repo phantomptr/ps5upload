@@ -60,6 +60,7 @@ static int parse_request_line(const char *p, size_t n, webui_req_t *out) {
     plen = q ? (size_t)(q - (sp1 + 1)) : tlen;
     qlen = q ? tlen - plen - 1 : 0;
     if (plen > WEBUI_PATH_CAP || qlen > WEBUI_PATH_CAP) return WEBUI_PARSE_TOO_BIG;
+    out->http10 = sp2[8] == '0';
     memcpy(out->method, p, mlen);
     out->method[mlen] = '\0';
     memcpy(out->path, sp1 + 1, plen);

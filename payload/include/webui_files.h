@@ -136,4 +136,12 @@ size_t wf_tar_header(uint8_t *out, size_t cap, const char *name, int is_dir, uin
 int wf_send_tar(int fd, const char *root, int (*skip)(const char *path, void *ctx), void *skip_ctx, unsigned idle_ms,
                 uint8_t *buf, size_t cap, uint64_t *sent);
 
+/* wf_send_tar as the body of an HTTP/1.1 reply. With `chunked` the archive goes out in chunks
+ * ("Transfer-Encoding: chunked" is the caller's header) and the closing chunk is written only when
+ * all of it was sent. A folder download has no Content-Length, and a body that simply ends when the
+ * connection closes looks complete to a browser: a download cut by a read error on the drive was
+ * saved as a finished .tar. `sent` counts the archive's bytes, not the chunk framing. */
+int wf_send_tar_http(int fd, const char *root, int (*skip)(const char *path, void *ctx), void *skip_ctx,
+                     unsigned idle_ms, uint8_t *buf, size_t cap, uint64_t *sent, int chunked);
+
 #endif
