@@ -194,6 +194,17 @@ pub fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// What a finished install shows as delivered. The count of bytes sent includes every range the
+/// console read twice (its installer re-reads the package's end), so it can pass the package's
+/// size: a finished job then said more was delivered than there is.
+pub fn served_of_total(served: u64, total: u64) -> u64 {
+    if total > 0 {
+        served.min(total)
+    } else {
+        served
+    }
+}
+
 /// served_bytes as MB (1_000_000) over the deliver phase in seconds.
 pub fn throughput_mbps(served_bytes: u64, deliver_ms: u64) -> f64 {
     if deliver_ms == 0 {
@@ -268,5 +279,14 @@ mod tests {
     fn throughput_is_mb_over_deliver_seconds() {
         assert!((throughput_mbps(100_000_000, 1000) - 100.0).abs() < 1e-6);
         assert_eq!(throughput_mbps(1, 0), 0.0);
+    }
+
+    #[test]
+    fn a_finished_install_never_shows_more_delivered_than_the_package() {
+        // The console read the last 262 MiB twice.
+        assert_eq!(served_of_total(1_262, 1_000), 1_000);
+        assert_eq!(served_of_total(900, 1_000), 900);
+        // No total known: the count stands.
+        assert_eq!(served_of_total(5, 0), 5);
     }
 }

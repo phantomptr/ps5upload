@@ -1199,6 +1199,9 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         }
     }
     // And for a package on a saved server: the client does not read it, the serve session would.
+    // Its header is kept for the category check below, which opened and fingerprinted the
+    // package on the server a second time to read the same bytes.
+    let mut remote_header = None;
     if let Source::Remote { connection, path } = &req.source {
         let remote = format!("remote://{connection}/{path}");
         let head = unless_stopped(&state, &job, async move {
@@ -1213,6 +1216,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 &h.category,
                 &h.app_ver,
             );
+            remote_header = Some(h);
         }
     }
     crate::log_at!(
@@ -1232,13 +1236,16 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         .clone()
         .filter(|c| certainly_a_game(c) && !matches!(req.source, Source::Url(_)))
     {
-        let header = unless_stopped(
-            &state,
-            &job,
-            read_source_header(&req.source, &mgmt, req.options.insecure_tls),
-        )
-        .await
-        .flatten();
+        let header = match remote_header {
+            Some(h) => Some(h),
+            None => unless_stopped(
+                &state,
+                &job,
+                read_source_header(&req.source, &mgmt, req.options.insecure_tls),
+            )
+            .await
+            .flatten(),
+        };
         if let Some(fixed) = category_from_header(&sent, header.as_ref()) {
             crate::log_at!(
                 Info,
@@ -2218,7 +2225,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         s.app_ver_after = app_ver_after.clone();
         s.shortened = shortened;
         s.metrics.total_bytes = total;
-        s.metrics.served_bytes = served;
+        s.metrics.served_bytes = status::served_of_total(served, total);
         s.metrics.throughput_mbps = status::throughput_mbps(served, deliver_ms);
         s.metrics.phase_ms.insert("deliver".into(), deliver_ms);
         s.metrics.phase_ms.insert("verify".into(), verify_ms);
