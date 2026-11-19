@@ -30,22 +30,43 @@ export function imageDirFor(volume: string | null): string {
 
 const IMAGE_LABEL: Record<string, string> = { exfat: "exFAT", ufs: "UFS (.ffpkg)", pfs: "PFS" };
 
-/** A link that is a real file but not a package (R4, #368): offer to download it to a console
- *  folder. The engine streams it over AVA1; nothing is stored on this computer. */
+/** Where a link's file goes when the user has not chosen: a game image to the folder
+ *  ShadowMount+ scans, a package to the console's package folder (where it can be installed
+ *  from later), anything else to `downloads` beside it. */
+export function linkDefaultDir(
+  kind: LinkClass["kind"],
+  image: string | null,
+  storage: { volume: string | null; dir: string },
+): string {
+  if (image) return imageDirFor(storage.volume);
+  if (kind === "pkg") return storage.dir;
+  return storage.dir.replace(/\/pkg_library$/, "/downloads");
+}
+
+/** A link that is a real file (R4, #368): offer to download it to a console folder. Also a
+ *  package the user wants saved, not installed (#872). The engine streams it over AVA1;
+ *  nothing is stored on this computer. */
 export function LinkDownloadCard({
   host,
   url,
   info,
   insecureTls,
+  fixedDir,
+  onDone,
   onClose,
 }: {
   host: string;
   url: string;
   info: LinkClass;
   insecureTls: boolean;
+  /** Files: the folder that is open. The card then starts there, whatever the link serves. */
+  fixedDir?: string;
+  /** The file is on the PS5 (called once). */
+  onDone?: () => void;
   onClose: () => void;
 }) {
   const tr = useTr();
+  const isPkg = info.kind === "pkg";
   const lz4 = info.lz4 ?? null;
   const canUnpack = !!lz4 && !lz4.unsupported && (lz4.unpacked_size ?? 0) > 0;
   const [unpack, setUnpack] = useState(canUnpack);
@@ -55,10 +76,8 @@ export function LinkDownloadCard({
   // The default folder depends on the console's drives, known once their list arrives; both the
   // first guess and the switch below compare against the default for the drives known now.
   const [volumes, setVolumes] = useState<Parameters<typeof pkgStorageFor>[1]>(null);
-  const defaultDirFor = (img: string | null, v: Parameters<typeof pkgStorageFor>[1]) => {
-    const storage = pkgStorageFor(host, v);
-    return img ? imageDirFor(storage.volume) : storage.dir.replace(/\/pkg_library$/, "/downloads");
-  };
+  const defaultDirFor = (img: string | null, v: Parameters<typeof pkgStorageFor>[1]) =>
+    fixedDir ?? linkDefaultDir(info.kind, img, pkgStorageFor(host, v));
   const [dir, setDir] = useState(() => defaultDirFor(image, null));
   const linkName = (u: boolean) => (u && lz4 ? lz4.unpacked_name : info.filename);
   const [name, setName] = useState(() => linkName(unpacking));
@@ -89,6 +108,14 @@ export function LinkDownloadCard({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [host]);
+
+  const doneTold = useRef(false);
+  useEffect(() => {
+    if (phase !== "done" || doneTold.current) return;
+    doneTold.current = true;
+    onDone?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
 
   const packed = info.total_size ?? 0;
   const total = unpacking ? (lz4?.unpacked_size ?? 0) : packed;
@@ -145,7 +172,11 @@ export function LinkDownloadCard({
           ? tr("linkdl.lz4_title", undefined, "This link is LZ4-compressed")
           : image
             ? tr("linkdl.image_title", undefined, "This link is a game image")
-            : tr("linkdl.title", undefined, "This link is a file, not a package")}
+            : isPkg
+              ? tr("linkdl.pkg_title", undefined, "Save this package on the PS5")
+              : fixedDir
+                ? tr("linkdl.file_title", undefined, "Download this file to the PS5")
+                : tr("linkdl.title", undefined, "This link is a file, not a package")}
       </div>
       <p className="my-1 text-xs text-[var(--color-muted)]">
         {lz4
@@ -154,12 +185,33 @@ export function LinkDownloadCard({
               undefined,
               "ps5upload can unpack it while it downloads, so the PS5 receives the unpacked file. Nothing is stored on this computer, and the PS5 only needs room for the unpacked file.",
             )
-          : tr(
-              "linkdl.help",
-              undefined,
-              "It cannot be installed, but it can be downloaded straight to a folder on the PS5. The file goes to the console over your network and is not stored on this computer.",
-            )}
+          : isPkg
+            ? tr(
+                "linkdl.pkg_help",
+                undefined,
+                "The package is saved to a folder on the PS5 and is not installed. It goes to the console over your network and is not stored on this computer.",
+              )
+            : fixedDir
+              ? tr(
+                  "linkdl.file_help",
+                  undefined,
+                  "The file goes straight to a folder on the PS5 over your network and is not stored on this computer.",
+                )
+              : tr(
+                  "linkdl.help",
+                  undefined,
+                  "It cannot be installed, but it can be downloaded straight to a folder on the PS5. The file goes to the console over your network and is not stored on this computer.",
+                )}
       </p>
+      {!info.ranges && (
+        <p className="mb-1 text-xs text-[var(--color-warn)]" data-testid="linkdl-whole">
+          {tr(
+            "linkdl.whole_hint",
+            undefined,
+            "This server sends the file in one piece. If the download is interrupted, it starts again from the beginning.",
+          )}
+        </p>
+      )}
       <p className="mb-2 text-xs text-[var(--color-muted)]">
         {info.filename}
         {packed > 0 ? ` (${formatBytes(packed)})` : ""}

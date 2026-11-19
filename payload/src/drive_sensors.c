@@ -31,6 +31,7 @@
 #include <cam/scsi/scsi_pass.h>
 
 #include "drive_sensors.h"
+#include "shell_builtin.h" /* mntinfo_snapshot */
 #include "json_escape.h"
 
 #define MAX_DA_DEVS     10
@@ -103,9 +104,15 @@ fs_usage_for_device(const char *devpath, uint64_t *total,
                     uint64_t *used, uint64_t *freeb,
                     char *mnt_out, size_t mnt_sz)
 {
+    /* Never getmntinfo() itself: it hands back libc's one shared array, which the next call from
+     * any thread rewrites or reallocates (volumes, mount, unmount and the shell all ask), and this
+     * walk then read freed memory. mntinfo_snapshot gives a private copy. */
     struct statfs *mnt = NULL;
-    int n = getmntinfo(&mnt, MNT_NOWAIT);
-    if (n <= 0) return -1;
+    int n = mntinfo_snapshot(&mnt);
+    if (n <= 0 || !mnt) {
+        free(mnt);
+        return -1;
+    }
     size_t dl = strlen(devpath);
     for (int k = 0; k < n; k++) {
         const char *from = mnt[k].f_mntfromname;
@@ -120,8 +127,10 @@ fs_usage_for_device(const char *devpath, uint64_t *total,
         if (t == 0) continue;
         *total = t; *freeb = f; *used = (t > f) ? (t - f) : 0;
         if (mnt_out && mnt_sz) snprintf(mnt_out, mnt_sz, "%s", mnt[k].f_mntonname);
+        free(mnt);
         return 0;
     }
+    free(mnt);
     return -1;
 }
 

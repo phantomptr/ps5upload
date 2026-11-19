@@ -327,6 +327,8 @@ struct Live {
     keyboard: crate::rp_keyboard::KeyboardLink,
     /// While the console waits for the user's passcode: whether the last one was wrong.
     passcode_ask: Mutex<Option<bool>>,
+    /// How the session ended, once it has: for a page that attached too late to be told.
+    last_word: Mutex<Option<serde_json::Value>>,
     /// The page's answer, until the stream thread takes it.
     passcode_answer: Mutex<Option<Passcode>>,
     /// A local automation client's frame requests and held input (rp_automation.rs).
@@ -1009,6 +1011,7 @@ impl Live {
             spectators: Mutex::new(Vec::new()),
             keyboard: Default::default(),
             passcode_ask: Mutex::new(None),
+            last_word: Mutex::new(None),
             passcode_answer: Mutex::new(None),
             auto: Default::default(),
             feed: Arc::new(live_feed::LiveFeed::new(hevc)),
@@ -2045,13 +2048,14 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         } else {
             crate::log_at!(Info, "rp", "rp_stream: {}: session ended: {end}", l.host);
         }
+        if let Ok(mut w) = l.last_word.lock() {
+            *w = Some(end.clone());
+        }
         let end_note = end.clone();
         note_last(|v| {
             v["end"] = end_note;
             v["ended_unix_ms"] = unix_ms().into();
         });
-        // A fan boost for this console ends with its session.
-        crate::fan_boost::session_ended(&l.host);
         // The live feed's readers reach the end of their stream.
         l.feed.close();
         if let Ok(mut g) = LIVE.lock() {
@@ -2064,6 +2068,10 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         if let Some(v) = viewer {
             let _ = v.ctl.blocking_send(text(end));
         }
+        // A fan boost for this console ends with its session. Last: the undo is a call to the
+        // console, and a session that ended because the console went away waited out that call
+        // before its page heard the end and the next Start could begin.
+        crate::fan_boost::session_ended(&l.host);
     });
     live
 }
@@ -2078,7 +2086,7 @@ fn panic_text(p: &Box<dyn std::any::Any + Send>) -> String {
 
 async fn session(mut socket: WebSocket) {
     // The first message says where and how.
-    let start: StartReq = match socket.recv().await {
+    let mut start: StartReq = match socket.recv().await {
         Some(Ok(Message::Text(t))) => {
             match serde_json::from_str(t.as_str()) {
                 Ok(s) => s,
@@ -2093,6 +2101,10 @@ async fn session(mut socket: WebSocket) {
         }
         _ => return,
     };
+    // A console named with its port (`10.0.0.2:9120`, as the app's other calls take it) is the
+    // console: with the port left on, the session took the console's place here and then failed
+    // to resolve "10.0.0.2:9120" as a host name.
+    start.host = crate::vinput_api::host_key(&start.host);
     let (video_tx, mut video_rx) = mpsc::channel::<Message>(start.video_queue());
     let (ctl_tx, mut ctl_rx) = mpsc::channel::<Message>(CTL_QUEUE);
 
@@ -2204,6 +2216,25 @@ async fn session(mut socket: WebSocket) {
     }
     let id = live.attach(video_tx, ctl_tx, start.timing);
     crate::log_detail!("rp_stream: {}: page {id} shows the session", live.host);
+    // The session may have ended between the look at LIVE above and the attach: its worker
+    // takes LIVE away first and then says the last word to the page it finds, so a page that
+    // attached after that would wait on a stream nobody ends. Looked at after the attach, a
+    // session still in LIVE has not looked for its page yet.
+    let still_live = LIVE
+        .lock()
+        .is_ok_and(|g| g.as_ref().is_some_and(|x| Arc::ptr_eq(x, &live)));
+    if !still_live {
+        // What the session's own page would have heard (a start that failed at once says why).
+        let m = live
+            .last_word
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+            .unwrap_or_else(|| serde_json::json!({"stage": "ended", "reason": "no session"}));
+        let _ = socket.send(text(m)).await;
+        close(&mut socket, "ended").await;
+        return;
+    }
 
     let mut reason = "ended";
     let mut ping = tokio::time::interval(PEER_PING_EVERY);

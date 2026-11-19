@@ -22,6 +22,7 @@ vi.mock("../api/cleanup", () => {
 import { CleanupError } from "../api/cleanup";
 import {
   attachRunningApply,
+  beginApplyFollow,
   cleanupRunOf,
   dismissCleanupResult,
   followApply,
@@ -139,6 +140,25 @@ describe("following a Clean-up Remove", () => {
     // The helper still answers "running": followed for the longer grace, then ended.
     expect(t).toBeGreaterThanOrEqual(3000 + STOP_ANSWERING_GRACE_MS);
     expect(t).toBeLessThanOrEqual(3000 + STOP_ANSWERING_GRACE_MS + 1000);
+  });
+
+  it("follows a Remove the console accepted even when the first status read fails", async () => {
+    // The helper is busy starting the removal: the first read fails, the next ones answer.
+    status
+      .mockRejectedValueOnce(new Error("timeout"))
+      .mockResolvedValueOnce(run())
+      .mockResolvedValue(run({ state: "done", done: [1], freed_bytes: 10 }));
+    await beginApplyFollow("10.0.0.2", 7, [{ id: 1 } as never], 500, noWait);
+    await vi.waitFor(() => expect(now().summary).not.toBeNull());
+    expect(now().applying).toBeNull();
+    expect(now().error).toBeNull();
+    expect(status.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("shows a Remove as running from its first status read", async () => {
+    status.mockResolvedValueOnce(run()).mockReturnValue(new Promise(() => {}));
+    await beginApplyFollow("10.0.0.2", 7, [{ id: 1 } as never], 500, noWait);
+    expect(now().applying?.apply_id).toBe(7);
   });
 
   it("takes the helper's own word when it stops in time", async () => {

@@ -152,6 +152,16 @@ fn reissuable(op: JobOp) -> bool {
     op.id != gen::JOB_OP_BACKUP_SNAPSHOT
 }
 
+/// The deadline of a hash that just reported more bytes done: `limit` from now, never sooner
+/// than it was. For a hash the limit is how long it may say nothing new, not how long it may
+/// take, which depends on a file size its callers do not pass: counted from the start, the
+/// hash of a file the console needs longer than the limit for (30 s by default, 10 s in a
+/// resume check: from a few GiB up) was cancelled every time, so such a file was sent again in
+/// full or never compared. Every other operation keeps its caller's deadline as the whole wait.
+fn after_progress(deadline: Instant, now: Instant, limit: Duration) -> Instant {
+    deadline.max(now + limit)
+}
+
 impl AvaTransport {
     /// Runs `op` as a job on `console` and waits for its result (the handler's reply body).
     pub(crate) async fn run_job_async(
@@ -189,7 +199,8 @@ impl AvaTransport {
         }
         .to_bytes()?;
         let by_id = JobRef { job_id }.to_bytes()?;
-        let deadline = Instant::now() + call.deadline;
+        let mut deadline = Instant::now() + call.deadline;
+        let mut bytes_seen = 0u64;
         let (mut issued, mut reissues, mut polls) = (false, 0u32, 0u32);
         let mut backoff = Duration::from_millis(250);
         loop {
@@ -241,6 +252,10 @@ impl AvaTransport {
                             bytes_total: st.bytes_total,
                             cancel_requested: cancel.load(Ordering::Relaxed),
                         };
+                    }
+                    if op.id == gen::JOB_OP_HASH && st.bytes_durable > bytes_seen {
+                        bytes_seen = st.bytes_durable;
+                        deadline = after_progress(deadline, Instant::now(), call.deadline);
                     }
                     match st.state {
                         Some(1) => return Ok(Some(st.result.unwrap_or_default())),
@@ -411,6 +426,19 @@ mod tests {
         .unwrap();
         assert!(lookup(0).is_none());
         drop(z);
+    }
+
+    #[test]
+    fn a_job_that_gets_further_is_given_its_limit_again() {
+        let start = Instant::now();
+        let limit = Duration::from_secs(30);
+        let deadline = start + limit;
+        // 25 s in, more bytes done: 30 s from then.
+        let later = start + Duration::from_secs(25);
+        assert_eq!(after_progress(deadline, later, limit), later + limit);
+        // Never sooner than it already was.
+        let far = start + Duration::from_secs(600);
+        assert_eq!(after_progress(far, later, limit), far);
     }
 
     #[test]

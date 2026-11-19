@@ -20,6 +20,10 @@
 //   verifying                     every byte is on the console and it is reading the last large
 //                                 files back from its drive to check them (#783): "Verifying on the
 //                                 console"
+//   console_quiet_ms              once the console has every byte (#873): how long since it last
+//                                 confirmed anything new. Small while it gets on with the files;
+//                                 past a minute the row says so ("The PS5 has reported no
+//                                 progress for ...")
 //   route / route_reason          a console-to-console copy (#433): "direct" between the consoles,
 //                                 or "relay" through this computer and why (live while running, and
 //                                 in the finished job's commit_ack)
@@ -46,6 +50,9 @@ export interface JobLive {
    *  when the engine does not send the counts (the line then shows no number). */
   settleLeft?: number;
   settleTotal?: number;
+  /** The console has every byte and has confirmed nothing new for this long (only from
+   *  QUIET_AFTER_MS on: a console that is getting on with the files is not quiet). */
+  quietMs?: number;
   /** A finished job that carries the engine's "console did not confirm saving" warning. */
   unsettled?: boolean;
   /** A console-to-console copy's route, and why it went through this computer. */
@@ -66,6 +73,7 @@ export interface JobLiveFields {
   verifying?: boolean | null;
   settle_files_left?: number | null;
   settle_files_total?: number | null;
+  console_quiet_ms?: number | null;
   route?: string | null;
   route_reason?: string | null;
   commit_ack?: {
@@ -75,6 +83,10 @@ export interface JobLiveFields {
     route_reason?: string | null;
   } | null;
 }
+
+/** How long the console may confirm nothing new, once it has every byte, before the row says so.
+ *  The engine's own log line comes at the same point (`progress::QUIET_AFTER`). */
+export const QUIET_AFTER_MS = 60_000;
 
 /** Maps the engine's bottleneck word (`ps5upload_ava1::progress::bottleneck_name`) to a
  *  cause; `none`, empty or an unknown word is no cause. */
@@ -120,7 +132,9 @@ export function jobLiveFromSnapshot(
   const route = routeWord === "direct" || routeWord === "relay" ? routeWord : undefined;
   const reasonWord = (snap.route_reason ?? snap.commit_ack?.route_reason ?? "").trim();
   const routeReason = route === "relay" && reasonWord ? reasonWord : undefined;
-  if (!skipping && !measuring && !listing && !bottleneck && !settling && !verifying && !unsettled && !route) return undefined;
+  const quietFor = Number(snap.console_quiet_ms) || 0;
+  const quietMs = quietFor >= QUIET_AFTER_MS ? quietFor : undefined;
+  if (!skipping && !measuring && !listing && !bottleneck && !settling && !verifying && !unsettled && !route && !quietMs) return undefined;
   const counted =
     settling && typeof snap.settle_files_left === "number" && Number.isFinite(snap.settle_files_left);
   const settleLeft = counted ? Math.max(0, snap.settle_files_left as number) : 0;
@@ -142,6 +156,7 @@ export function jobLiveFromSnapshot(
     settling,
     ...(verifying ? { verifying } : {}),
     ...(counted ? { settleLeft, settleTotal } : {}),
+    ...(quietMs ? { quietMs } : {}),
     ...(unsettled ? { unsettled } : {}),
     ...(route ? { route } : {}),
     ...(routeReason ? { routeReason } : {}),

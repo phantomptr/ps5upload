@@ -76,8 +76,12 @@ fn plain_listing_line(line: &str, mlsd: bool) -> Option<Entry> {
     // `ls -l`: mode, links, owner, [group], size, three parts of a date, then the name, which may
     // hold any spaces. Split by hand, so the name comes out as it is.
     let mut rest = line.trim_start();
-    let mut fields: Vec<&str> = Vec::with_capacity(8);
-    while fields.len() < 8 {
+    // Seven fields are there with or without a group; what follows is the time and the name,
+    // or with no group the name already. (Eight were asked for whatever the line: a name with
+    // no space in it on a server with no group column has no eighth, and the file was not
+    // listed; and its name was then looked for by its first word, found in an earlier field.)
+    let mut fields: Vec<&str> = Vec::with_capacity(7);
+    while fields.len() < 7 {
         let end = rest.find(char::is_whitespace)?;
         fields.push(&rest[..end]);
         rest = rest[end..].trim_start();
@@ -88,11 +92,11 @@ fn plain_listing_line(line: &str, mlsd: bool) -> Option<Entry> {
     }
     let numeric = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
     let (size, name) = if numeric(fields[4]) {
-        (fields[4], rest)
+        let end = rest.find(char::is_whitespace)?;
+        (fields[4], rest[end..].trim_start())
     } else if numeric(fields[3]) {
-        // No group column: the date ends a field sooner, and the eighth field starts the name.
-        let start = line.find(fields[7])?;
-        (fields[3], &line[start..])
+        // No group column: the date ends a field sooner, and the name follows it.
+        (fields[3], rest)
     } else {
         return None;
     };
@@ -541,15 +545,22 @@ impl FtpFs {
         };
         let mut session = sign_in(&target).await?;
         let host = addr_of(conn);
-        let login = session.pwd().await.unwrap_or_else(|_| "/".into());
+        // Both answers are waited for no longer than any other step: a server that takes the
+        // sign-in and then says nothing held "Test connection" open for good.
+        let login = tokio::time::timeout(STEP, session.pwd())
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_else(|| "/".into());
         let home = if conn.from_root {
             String::new()
         } else {
             login.clone()
         };
-        let mlsd = session
-            .feat()
+        let mlsd = tokio::time::timeout(STEP, session.feat())
             .await
+            .ok()
+            .and_then(Result::ok)
             .map(|f| {
                 f.keys()
                     .any(|k| k.eq_ignore_ascii_case("MLSD") || k.eq_ignore_ascii_case("MLST"))
@@ -749,8 +760,15 @@ impl RemoteFile for FtpFile {
             Some((stream, _, _)) => stream,
             None => {
                 let (ftp, path, host) = (&mut s.ftp, self.path.as_str(), self.host.as_str());
+                // On a 32-bit build (Android armv7) `as usize` cut an offset past 4 GiB short: the
+                // read then came from the wrong place in the file with no error.
+                let at = usize::try_from(offset).map_err(|_| {
+                    RemoteError::Unsupported(format!(
+                        "This device can't read an FTP file past 4 GiB (offset {offset})"
+                    ))
+                })?;
                 timed(host, "a read", async move {
-                    ftp.resume_transfer(offset as usize)
+                    ftp.resume_transfer(at)
                         .await
                         .map_err(|e| map_err(host, e))?;
                     ftp.retr_as_stream(path).await.map_err(|e| map_err(host, e))
@@ -773,8 +791,11 @@ impl RemoteFile for FtpFile {
         out.truncate(got);
         let at = offset + got as u64;
         if at >= self.size {
-            // The whole rest of the file came through: the transfer ends cleanly.
-            if stream.finish().await.is_err() {
+            // The whole rest of the file came through: the transfer ends cleanly. The bytes are
+            // all here, so a server that never says so (its control connection went quiet
+            // during a long file and a router dropped it) costs this session, not the read:
+            // waited for without a limit, the copy sat at 100% and could not be stopped.
+            if !matches!(tokio::time::timeout(STEP, stream.finish()).await, Ok(Ok(_))) {
                 return Ok(out);
             }
         } else {
@@ -1061,6 +1082,21 @@ mod tests {
         assert!(got.contains(&("папка", true, 0)), "{got:?}");
         assert!(got.contains(&("link", false, 7)), "{got:?}");
         assert_eq!(got.len(), 5, "{got:?}");
+    }
+
+    /// No group column: a name with no space in it is listed, and a name that starts with a
+    /// word from earlier in the line keeps all of itself.
+    #[test]
+    fn a_line_with_no_group_shows_a_name_with_no_space_in_it() {
+        let got = parse_listing(
+            &lines(&[
+                "-rw-r--r-- 1 root 34 ноя 6 12:00 game.pkg",
+                "-rw-r--r-- 1 root 5 ноя 6 12:00 root x.bin",
+            ]),
+            false,
+        );
+        let got: Vec<(&str, u64)> = got.iter().map(|e| (e.name.as_str(), e.size)).collect();
+        assert_eq!(got, [("game.pkg", 34), ("root x.bin", 5)]);
     }
 
     #[test]

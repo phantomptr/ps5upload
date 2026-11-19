@@ -10,6 +10,7 @@ running out of space, conflicts and cancel.
 The RAR fixtures are libarchive's own test archives (tests/fixtures/README.md).
 """
 import bz2
+import gzip
 import io
 import hashlib
 import json
@@ -435,10 +436,35 @@ def test_out_of_space(root):
     s = run(root, arc, os.path.join(root, "o1"), env={"XTEST_FREE": str(1 << 20)})
     check("space precheck", s["message"].startswith("fs_extract_no_space: needs"), s)
     check("space precheck", not os.path.exists(os.path.join(root, "o1")), "made the folder anyway")
+    # The same when the folder is to be made several levels down (the room is asked of the
+    # nearest folder that exists).
+    s = run(root, arc, os.path.join(root, "na", "nb", "o1"), env={"XTEST_FREE": str(1 << 20)})
+    check("space precheck deep", s["message"].startswith("fs_extract_no_space: needs"), s)
+    check("space precheck deep", not os.path.exists(os.path.join(root, "na")), "made the folder anyway")
+    # A merge is not held to the whole archive: it skips what is already there.
+    s = run(root, arc, os.path.join(root, "m1"))
+    check("space merge", s["state"] == "done", s)
+    one = max(len(v) for v in tree(os.path.join(root, "m1")).values() if isinstance(v, bytes))
+    s = run(root, arc, os.path.join(root, "m1"), env={"XTEST_FREE": str((64 << 20) + one)}, merge=True)
+    check("space merge", s["state"] == "done", s)
     # The drive fills up while writing.
     s = run(root, arc, os.path.join(root, "o2"), env={"XTEST_WRITE_LIMIT": "100000"})
     check("space mid-write", s["message"].startswith("fs_extract_no_space"), s)
     check("space mid-write", "b.bin" not in str(tree(os.path.join(root, "o2"))), "a partial file was kept")
+
+
+def test_out_of_space_without_a_size(root):
+    # A .gz says nothing of its size, so nothing is checked when the file begins: the room is
+    # looked at again while writing, and the extraction ends when none is left (it used to write on).
+    big = os.path.join(root, "big.bin")
+    with open(big, "wb") as f:
+        f.write(b"\0" * (12 << 20))
+    with open(big, "rb") as src, gzip.open(os.path.join(root, "big.bin.gz"), "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    os.unlink(big)
+    s = run(root, os.path.join(root, "big.bin.gz"), os.path.join(root, "o1"), env={"XTEST_FREE": str(2 << 20)})
+    check("space no size", s["state"] == "failed" and s["message"].startswith("fs_extract_no_space"), s)
+    check("space no size", "big.bin" not in str(tree(os.path.join(root, "o1"))), "a partial file was kept")
 
 
 def test_rar_total_precheck(root):
@@ -531,6 +557,26 @@ def test_bad_request(root):
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     s = json.load(open(os.path.join(root, "status.json")))
     check("bad request", p.returncode != 0 and s["message"] == "fs_extract_bad_request", s)
+
+
+def test_no_status_no_extraction(root):
+    # The status cannot be written (its folder is gone, its drive is full): the helper could never
+    # follow or stop this run, so nothing is extracted.
+    src = make_src(root)
+    arc = os.path.join(root, "t.zip")
+    with zipfile.ZipFile(arc, "w", zipfile.ZIP_STORED) as z:
+        for dp, dn, fn in os.walk(src):
+            for n in fn:
+                p = os.path.join(dp, n)
+                z.write(p, os.path.relpath(p, src))
+    dest = os.path.join(root, "o1")
+    with open(os.path.join(root, "request.json"), "w") as f:
+        json.dump({"id": "t1", "archive": arc, "dest": dest, "merge": False, "replace": False}, f)
+    p = subprocess.run([BIN, os.path.join(root, "request.json"), os.path.join(root, "no-such-folder", "status.json"),
+                        os.path.join(root, "c")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+    check("no status", p.returncode != 0, p.returncode)
+    check("no status", not os.path.exists(dest), "extracted without a status")
+    check("no status", not os.path.exists(os.path.join(root, "request.json")), "the request was left behind")
 
 
 def main():

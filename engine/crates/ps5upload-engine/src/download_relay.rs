@@ -25,41 +25,70 @@ pub fn is_server_dest(dest: &str) -> bool {
     remote::path::is_remote(dest)
 }
 
-/// Every file under `root` on the console, as (path relative to `root`'s parent, size).
-fn console_files(addr: &str, root: &str, kind: DownloadKind) -> Result<Vec<(String, String, u64)>> {
+/// A file on the console: its path, its path relative to the root's parent, its size.
+type ConsoleFile = (String, String, u64);
+
+/// Every file under `root` on the console, and every folder (relative to `root`'s parent, the
+/// root itself first among them): a folder with no file in it is made on the server too.
+fn console_files(
+    addr: &str,
+    root: &str,
+    kind: DownloadKind,
+) -> Result<(Vec<ConsoleFile>, Vec<String>)> {
     let root = root.trim_end_matches('/');
-    let base = root.rsplit('/').next().unwrap_or(root).to_string();
     if matches!(kind, DownloadKind::File) {
+        let base = root.rsplit('/').next().unwrap_or(root).to_string();
         let st = fs_ops::fs_stat(addr, root)?;
-        return Ok(vec![(root.to_string(), base, st.size)]);
+        return Ok((vec![(root.to_string(), base, st.size)], Vec::new()));
     }
+    walk_console(root, |dir, offset| {
+        let l = fs_ops::list_dir(addr, dir, ListDirOptions { offset, limit: 256 })?;
+        let entries = l
+            .entries
+            .into_iter()
+            .map(|e| (e.name, e.kind, e.size))
+            .collect();
+        Ok((entries, l.truncated))
+    })
+}
+
+/// The walk of [`console_files`], with the console's folder listing as `list(dir, offset)`:
+/// one page of (name, kind, size) and whether more follow.
+fn walk_console(
+    root: &str,
+    mut list: impl FnMut(&str, u64) -> Result<(Vec<(String, String, u64)>, bool)>,
+) -> Result<(Vec<ConsoleFile>, Vec<String>)> {
+    let base = root.rsplit('/').next().unwrap_or(root).to_string();
     let mut out = Vec::new();
+    let mut dirs = Vec::new();
     let mut stack = vec![(root.to_string(), base)];
     while let Some((dir, rel)) = stack.pop() {
+        dirs.push(rel.clone());
         let mut offset = 0u64;
         loop {
-            let l = fs_ops::list_dir(addr, &dir, ListDirOptions { offset, limit: 256 })?;
-            let n = l.entries.len() as u64;
-            for e in l.entries {
-                if e.name == "." || e.name == ".." {
+            let (entries, truncated) = list(&dir, offset)?;
+            let n = entries.len() as u64;
+            for (name, kind, size) in entries {
+                if name == "." || name == ".." {
                     continue;
                 }
-                let path = format!("{dir}/{}", e.name);
-                let r = format!("{rel}/{}", e.name);
-                match e.kind.as_str() {
+                let path = format!("{dir}/{name}");
+                let r = format!("{rel}/{name}");
+                match kind.as_str() {
                     "dir" => stack.push((path, r)),
-                    "file" => out.push((path, r, e.size)),
+                    "file" => out.push((path, r, size)),
                     _ => {}
                 }
             }
-            if n == 0 || (n < 256 && !l.truncated) {
+            if n == 0 || (n < 256 && !truncated) {
                 break;
             }
             offset += n;
         }
     }
     out.sort_by(|a, b| a.1.cmp(&b.1));
-    Ok(out)
+    dirs.sort();
+    Ok((out, dirs))
 }
 
 fn remote_err(e: RemoteError) -> anyhow::Error {
@@ -122,6 +151,12 @@ pub(crate) async fn place(
     }
 }
 
+/// The name a console file is staged under on this computer (what `to_local_escaped` writes).
+fn staged_name(console_path: &str) -> Result<String> {
+    let name = console_path.rsplit('/').next().unwrap_or(console_path);
+    ps5upload_core::host_names::escape_name(name).map_err(|why| anyhow!(why))
+}
+
 /// Pulls `src` (a file or a folder) from the console at `addr` into `dest` (`remote://id/dir`).
 /// Returns the bytes delivered.
 #[allow(clippy::too_many_arguments)]
@@ -141,7 +176,7 @@ pub fn to_server(
     let fs = rt
         .block_on(r.pool.fs(&r.store, &rp.connection_id))
         .map_err(remote_err)?;
-    let files = console_files(addr, src, kind)?;
+    let (files, dirs) = console_files(addr, src, kind)?;
     let total: u64 = files.iter().map(|f| f.2).sum();
     if let Some(t) = &counters.total {
         t.store(total.max(1), Ordering::Relaxed);
@@ -154,6 +189,15 @@ pub fn to_server(
         let dest_dir = rp.path.trim_end_matches('/').to_string();
         let mut made = std::collections::HashSet::new();
         let mut done = 0u64;
+        // Every folder, so one with nothing in it is on the server as it is on the console.
+        for rel in &dirs {
+            if cancel.load(Ordering::Relaxed) {
+                bail!("transfer_cancelled");
+            }
+            let dir = format!("{dest_dir}/{rel}");
+            rt.block_on(make_dirs(fs.as_ref(), &dir))?;
+            made.insert(dir);
+        }
         for (path, rel, size) in &files {
             if cancel.load(Ordering::Relaxed) {
                 bail!("transfer_cancelled");
@@ -184,7 +228,10 @@ pub fn to_server(
                     }
                 })
             };
-            let got = ps5upload_ava1::download::to_local(
+            // Staged under a name this computer can hold whatever the console's is (`a:b`,
+            // `CON`, `x.` on Windows): the server gets the console's own name, and it is the
+            // server, not this computer's staging folder, that says whether it can hold it.
+            let got = ps5upload_ava1::download::to_local_escaped(
                 addr,
                 path,
                 DownloadKind::File,
@@ -197,8 +244,7 @@ pub fn to_server(
             stop.store(true, Ordering::Relaxed);
             let _ = mirror.join();
             got?;
-            let name = path.rsplit('/').next().unwrap_or(path);
-            let staged = staging.join(name);
+            let staged = staging.join(staged_name(path)?);
             // 2. Onto the server (the other half).
             let half = size / 2;
             counters.bytes.store(base + half, Ordering::Relaxed);
@@ -271,6 +317,53 @@ mod tests {
         assert!(fs.bytes("/games/old.bin.ps5upload-tmp").is_none());
         assert_eq!(seen.load(Ordering::Relaxed), 11);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A folder with nothing in it is listed, so it is made on the server (it was dropped).
+    #[test]
+    fn a_folder_with_no_file_in_it_is_still_listed() {
+        let (files, dirs) = walk_console("/data/game", |dir, offset| {
+            let page: Vec<(String, String, u64)> = match (dir, offset) {
+                ("/data/game", 0) => vec![
+                    (".".into(), "dir".into(), 0),
+                    ("saves".into(), "dir".into(), 0),
+                    ("sub".into(), "dir".into(), 0),
+                    ("eboot.bin".into(), "file".into(), 7),
+                ],
+                ("/data/game/sub", 0) => vec![("a.bin".into(), "file".into(), 3)],
+                _ => Vec::new(),
+            };
+            Ok((page, false))
+        })
+        .unwrap();
+        assert_eq!(
+            files,
+            vec![
+                (
+                    "/data/game/eboot.bin".to_string(),
+                    "game/eboot.bin".to_string(),
+                    7
+                ),
+                (
+                    "/data/game/sub/a.bin".to_string(),
+                    "game/sub/a.bin".to_string(),
+                    3
+                ),
+            ]
+        );
+        assert_eq!(dirs, ["game", "game/saves", "game/sub"]);
+    }
+
+    /// A console name Windows cannot hold is staged under another, and an ordinary one as is.
+    #[test]
+    fn a_file_is_staged_under_a_name_this_computer_can_hold() {
+        assert_eq!(staged_name("/data/x/eboot.bin").unwrap(), "eboot.bin");
+        let odd = staged_name("/data/x/a:b?.bin").unwrap();
+        assert!(!odd.contains(':') && !odd.contains('?'), "{odd}");
+        assert_eq!(
+            ps5upload_core::host_names::unescape_name(&odd).unwrap(),
+            "a:b?.bin"
+        );
     }
 
     #[tokio::test]

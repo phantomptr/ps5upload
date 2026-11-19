@@ -762,29 +762,43 @@ static int sw_clean(void *ctx) {
     return rc;
 }
 
-/* Sleeps `seconds`; returns 1 at once when a tile request newer than the sweep's arrives. */
+/* Milliseconds on the clock that does not jump (time sync and a wake move the wall clock by hours). */
+static long long tile_mono_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* Sleeps `seconds`; returns 1 at once when a tile request newer than the sweep's arrives, or a
+ * sweep is asked for.
+ *
+ * (A sweep request raises g_busy and wakes this wait, but only a newer request used to end it:
+ * the sweep then ran when the watch was over, minutes later, with the page showing "busy" all
+ * that time. And the wait was a pthread_cond_timedwait on a wall-clock deadline: a clock set back
+ * made it last that much longer, one set ahead ended it at once. So: short naps, the request
+ * looked at between them, the time counted on the monotonic clock.) */
 static int sw_wait(void *ctx, unsigned seconds) {
     const sweep_ctx_t *c = ctx;
-    struct timespec until;
-    int newer;
-    clock_gettime(CLOCK_REALTIME, &until);
-    until.tv_sec += (time_t)seconds;
-    pthread_mutex_lock(&g_req_mu);
-    while (g_req_gen == c->gen) {
-        if (pthread_cond_timedwait(&g_req_new, &g_req_mu, &until) == ETIMEDOUT) break;
+    long long until = tile_mono_ms() + (long long)seconds * 1000;
+    int newer, sweep;
+    for (;;) {
+        pthread_mutex_lock(&g_req_mu);
+        newer = g_req_gen != c->gen;
+        sweep = g_sweep_pending;
+        pthread_mutex_unlock(&g_req_mu);
+        if (newer || sweep || tile_mono_ms() >= until) break;
+        usleep(200 * 1000);
     }
-    newer = g_req_gen != c->gen;
-    pthread_mutex_unlock(&g_req_mu);
-    /* The wait above is on the wall clock, which jumps ahead on a wake and ends it at once. Never
-     * the next sweep (app.db, Sony register/uninstall) while the console goes to rest or settles
-     * after a wake (power_phase.h). */
+    /* Never the next sweep (app.db, Sony register/uninstall) while the console goes to rest or
+     * settles after a wake (power_phase.h). */
     while (!newer && power_phase_quiet()) {
         sleep(1);
         pthread_mutex_lock(&g_req_mu);
         newer = g_req_gen != c->gen;
+        sweep = g_sweep_pending;
         pthread_mutex_unlock(&g_req_mu);
     }
-    return newer;
+    return newer || sweep;
 }
 
 static void sweep_ops(webui_tile_sweep_ops_t *o, sweep_ctx_t *c) {
@@ -946,13 +960,15 @@ void webui_tile_sweep_request(void) {
 
 /* The PC uninstall ACK means completed, unlike the Settings endpoint's explicit busy state. */
 int webui_tile_remove_wait(unsigned mine) {
-    struct timespec until;
+    /* The time limit on the monotonic clock, in short naps: on a wall-clock deadline a clock set
+     * ahead during the removal (time sync, a wake) ended this at once as "still running". */
+    long long until = tile_mono_ms() + (long long)WEBUI_TILE_WAIT_S * 1000;
     int rc;
-    clock_gettime(CLOCK_REALTIME, &until);
-    until.tv_sec += WEBUI_TILE_WAIT_S;
     pthread_mutex_lock(&g_req_mu);
-    while (g_busy && g_req_gen == mine) {
-        if (pthread_cond_timedwait(&g_req_done, &g_req_mu, &until) == ETIMEDOUT) break;
+    while (g_busy && g_req_gen == mine && tile_mono_ms() < until) {
+        pthread_mutex_unlock(&g_req_mu);
+        usleep(100 * 1000);
+        pthread_mutex_lock(&g_req_mu);
     }
     rc = g_busy || g_last_failed || g_req_tile != 0 || g_req_gen != mine ? -1 : 0;
     if (g_busy) fprintf(stderr, "webui tile: removal still running after %d s\n", WEBUI_TILE_WAIT_S);

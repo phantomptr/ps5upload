@@ -104,7 +104,7 @@ import { ArchivePackagesCard } from "./ArchivePackagesCard";
 import { LinkInstallCard } from "./LinkInstallCard";
 import { KrakenMountCard } from "./KrakenMountCard";
 import { Tabs } from "../../components/Tabs";
-import { linkModeFacts } from "../../lib/linkModes";
+import { linkModeFacts, linkModeFor } from "../../lib/linkModes";
 import { useRecentLinksStore } from "../../state/recentLinks";
 import type { LinkInstallMode } from "../../state/linkInstallPrefs";
 import { formatBytes } from "../../lib/format";
@@ -1145,12 +1145,21 @@ export default function InstallPackageScreen({
       setLinkDownload({ url: link, info });
       return;
     }
+    // A server without byte ranges sends the package only whole, in order: neither the PS5
+    // nor a pass-through can read it, so this computer saves it first (#872).
+    const mode = linkModeFor(req.mode, info);
     // Each way asks something different of the user, so each says its own thing: the old
     // single text told someone who chose "the PS5 downloads it" to keep this computer awake.
     const approved = await confirm({
       title: tr("linkcard.confirm.title", undefined, "Install from this link?"),
       message:
-        req.mode === "direct"
+        mode !== req.mode
+          ? tr(
+              "linkcard.confirm.whole",
+              undefined,
+              "This server sends the file only in one piece, so it cannot be passed straight to the PS5. This computer first saves the whole package to its disk, then installs it on the PS5. If the download is interrupted, it starts again from the beginning. This computer must stay awake until both are done and needs free space for the package. Reinstalling over an installed game may remove it if Sony's installer fails. Use only a package link you trust and are authorized to install.",
+            )
+          : req.mode === "direct"
           ? tr(
               "linkcard.confirm.direct",
               undefined,
@@ -1179,11 +1188,33 @@ export default function InstallPackageScreen({
     // Content-Disposition).
     await runUrlInstall(
       link,
-      req.mode,
+      mode,
       req.name || info?.filename,
       undefined,
       info?.total_size,
     );
+  }
+
+  /** Save what a link serves to a PS5 folder without installing it (#872): a package too. */
+  async function handleLinkSave(url: string) {
+    setPickError(null);
+    setLinkDownload(null);
+    setCheckingLink(true);
+    try {
+      const info = await linkProbe(url, linkInsecure);
+      if (info.kind === "refused") {
+        setPickError(
+          info.message ??
+            tr("linkdl.refused", undefined, "That link is not a file download."),
+        );
+        return;
+      }
+      setLinkDownload({ url, info });
+    } catch (e) {
+      setPickError(`${e}`);
+    } finally {
+      setCheckingLink(false);
+    }
   }
 
   /** Start a link install that was approved. `existing`: the user's answer to a different
@@ -1655,6 +1686,7 @@ export default function InstallPackageScreen({
         checking={checkingLink}
         prefill={linkPrefill}
         onInstall={(link) => void handleUrlInstall(link)}
+        onSave={(url) => void handleLinkSave(url)}
       />
       {linkDownload && (
         <LinkDownloadCard
@@ -2302,7 +2334,10 @@ function ExternalPackages({ host }: { host: string }) {
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanned, setScanned] = useState(false);
-  const [installingPath, setInstallingPath] = useState<string | null>(null);
+  // Every package whose install was asked for and has not ended: several can be queued at once,
+  // and one name here let the second click unlock the first row and the first finish unlock the
+  // second while it was still installing.
+  const [installingPaths, setInstallingPaths] = useState<ReadonlySet<string>>(new Set());
   const [results, setResults] = useState<
     Record<
       string,
@@ -2310,6 +2345,8 @@ function ExternalPackages({ host }: { host: string }) {
         ok: boolean;
         message?: string;
         mayNotLaunch?: boolean;
+        /** The PS5 took it but it could not be confirmed: not "installed". */
+        unverified?: true;
       }
     >
   >({});
@@ -2368,12 +2405,16 @@ function ExternalPackages({ host }: { host: string }) {
   }, [pkgs, host]);
 
   async function onInstall(pkg: ExternalPkg) {
-    setInstallingPath(pkg.path);
+    setInstallingPaths((prev) => new Set(prev).add(pkg.path));
     try {
       const r = await installExternal(pkg, host);
       setResults((prev) => ({ ...prev, [pkg.path]: r }));
     } finally {
-      setInstallingPath(null);
+      setInstallingPaths((prev) => {
+        const next = new Set(prev);
+        next.delete(pkg.path);
+        return next;
+      });
     }
   }
 
@@ -2535,14 +2576,14 @@ function ExternalPackages({ host }: { host: string }) {
                       className="mt-1 flex items-center gap-1.5 text-xs font-medium"
                       style={{
                         color: r.ok
-                          ? r.mayNotLaunch
+                          ? r.mayNotLaunch || r.unverified
                             ? "var(--color-warn)"
                             : "var(--color-good)"
                           : "var(--color-bad)",
                       }}
                     >
                       {r.ok ? (
-                        r.mayNotLaunch ? (
+                        r.mayNotLaunch || r.unverified ? (
                           <AlertTriangle size={13} className="shrink-0" />
                         ) : (
                           <CheckCircle2 size={13} className="shrink-0" />
@@ -2552,7 +2593,11 @@ function ExternalPackages({ host }: { host: string }) {
                       )}
                       <span className="min-w-0">
                         {r.ok
-                          ? r.mayNotLaunch
+                          ? r.unverified
+                            ? // Not confirmed: the installer's own words, never "installed".
+                              r.message ||
+                              tr("pkg.check_the_ps5", { label: p.name }, "{label}: check the PS5")
+                            : r.mayNotLaunch
                             ? tr(
                                 "pkglib.external.installedWarn",
                                 "installed (may not launch)",
@@ -2568,17 +2613,17 @@ function ExternalPackages({ host }: { host: string }) {
                   variant="primary"
                   size="sm"
                   leftIcon={
-                    installingPath === p.path ? (
+                    installingPaths.has(p.path) ? (
                       <Spinner size={14} tone="inherit" />
                     ) : (
                       <Download size={13} />
                     )
                   }
                   // Each click queues; only this package's own install locks it.
-                  disabled={installingPath === p.path}
+                  disabled={installingPaths.has(p.path)}
                   onClick={() => void onInstall(p)}
                 >
-                  {installingPath === p.path
+                  {installingPaths.has(p.path)
                     ? tr("pkglib.external.installingThis", "Installing…")
                     : tr("pkglib.external.install", "Install")}
                 </Button>

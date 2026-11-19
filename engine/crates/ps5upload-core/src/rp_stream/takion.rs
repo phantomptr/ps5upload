@@ -439,7 +439,9 @@ impl Takion {
             if let Some(n) = self.recv_raw(&mut buf, Duration::from_secs(5))? {
                 let pkt = &buf[..n];
                 if n < 1 + HEADER + 0x10 + COOKIE || pkt[0] != PACKET_CONTROL {
-                    bail!("expected INIT_ACK, got {n} bytes of kind {:#x}", pkt[0]);
+                    // An empty datagram has no kind byte to name.
+                    let kind = pkt.first().copied().unwrap_or(0);
+                    bail!("expected INIT_ACK, got {n} bytes of kind {kind:#x}");
                 }
                 let (chunk, payload) = self.parse_control(pkt)?;
                 if chunk != CHUNK_INIT_ACK {
@@ -471,7 +473,7 @@ impl Takion {
                 self.recv_raw(&mut buf, deadline.saturating_duration_since(Instant::now()))?
             {
                 let pkt = &buf[..n];
-                if pkt[0] != PACKET_CONTROL {
+                if pkt.first() != Some(&PACKET_CONTROL) {
                     continue;
                 }
                 match self.parse_control(pkt) {

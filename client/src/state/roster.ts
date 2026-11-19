@@ -396,6 +396,11 @@ export const useRosterStore = create<RosterState>((set, get) => ({
         useFsClipboardStore.getState().switchToHost(next[0].host);
         useUploadStore.getState().switchToHost(next[0].host);
         useConnectionStore.getState().setHost(next[0].host);
+      } else {
+        // The last console: no console is selected now. Left on the removed address, the app
+        // went on polling it, and the next launch added it back as a console (the roster is
+        // seeded from a stored address when it is empty).
+        useConnectionStore.getState().setHost("");
       }
     }
     // Evict the removed host's upload draft + FS clipboard AFTER the promotion
@@ -575,6 +580,8 @@ export const useRosterStore = create<RosterState>((set, get) => ({
       else {
         set({ active_id: null });
         persist(next, null);
+        // No console left: none is selected (see remove()).
+        useConnectionStore.getState().setHost("");
       }
     } else if (oldActive && newActive.host !== oldActive.host) {
       // Re-pointed elsewhere: follow it, as updateHost() does for the active console.

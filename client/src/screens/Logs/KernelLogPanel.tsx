@@ -170,7 +170,12 @@ export default function KernelLogPanel() {
   // The klog stream belongs to ONE console. Drop the scrollback when the
   // tab switches — without this, console A's lines stay on screen and
   // console B's lines append after them, producing an unreadable mix.
+  // A tree that was hidden (another console's tab, another screen) runs its effects again when
+  // it is shown: only a real change of console resets, or coming back wiped what was here.
+  const shownHostRef = useRef(host);
   useEffect(() => {
+    if (shownHostRef.current === host) return;
+    shownHostRef.current = host;
     setEntries([]);
     setError(null);
   }, [host]);
@@ -182,7 +187,7 @@ export default function KernelLogPanel() {
       const chunk = await klogChunk(mgmtAddr(tickHost.trim()), 16 * 1024);
       // Stale-host guard: a chunk that lands after a tab switch must not
       // leak the previous console's lines into the fresh scrollback.
-      if (useConnectionStore.getState().host !== tickHost) return;
+      if (shownHostRef.current !== tickHost) return;
       if (chunk && chunk.length > 0) {
         setEntries((prev) => {
           const newLines = chunk
@@ -200,7 +205,7 @@ export default function KernelLogPanel() {
         setError(null);
       }
     } catch (e) {
-      if (useConnectionStore.getState().host !== tickHost) return;
+      if (shownHostRef.current !== tickHost) return;
       setError(humanizeCaught(e));
     }
   }, [host, payloadStatus]);

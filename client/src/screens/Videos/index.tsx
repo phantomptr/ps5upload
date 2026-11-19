@@ -1,5 +1,5 @@
 import { consoleAddr } from "../../lib/addr";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Video as VideoIcon,
   RefreshCw,
@@ -143,8 +143,12 @@ export default function VideosScreen({ tabs }: { tabs?: ReactNode } = {}) {
 
   // Clear rendered list + selection the instant the active console changes,
   // before the new console's videosList resolves — same reasoning as
-  // Screenshots (stops A's rows/selection leaking into B).
+  // Screenshots (stops A's rows/selection leaking into B). Only when the console really
+  // changed: the effect also runs again each time the tab (or this console) is shown again.
+  const listedHost = useRef(host);
   useEffect(() => {
+    if (listedHost.current === host) return;
+    listedHost.current = host;
     setItems(null);
     setSelected(new Set());
     setError(null);

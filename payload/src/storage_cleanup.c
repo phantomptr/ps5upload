@@ -27,6 +27,7 @@
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include "statvfs_avail.h"
 #include <time.h>
 #include <unistd.h>
 
@@ -845,7 +846,7 @@ static void *scan_main(void *arg) {
         if (statvfs("/user", &v) == 0) {
             pthread_mutex_lock(&g_mu);
             G.reserve = ((uint64_t)v.f_bfree - (uint64_t)v.f_bavail) * (uint64_t)v.f_frsize;
-            G.free_b = (uint64_t)v.f_bavail * (uint64_t)v.f_frsize;
+            G.free_b = statvfs_avail_bytes(&v);
             G.total_b = (uint64_t)v.f_blocks * (uint64_t)v.f_frsize;
             pthread_mutex_unlock(&g_mu);
         }

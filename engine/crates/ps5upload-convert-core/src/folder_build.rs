@@ -642,6 +642,8 @@ fn write_checked_here(
     }
     // Not `create_dir_all`: a folder here now is another build's, never written into.
     std::fs::create_dir(&partial).map_err(|e| format!("{}: {e}", partial.display()))?;
+    // Set when the checked folder could not be given its name: it is then left where it is.
+    let mut kept = false;
     let result = (|| -> Result<FolderBuilt, String> {
         std::fs::write(partial.join(MARKER), b"").map_err(|e| e.to_string())?;
         if drive_folds_case(&partial) {
@@ -679,7 +681,7 @@ fn write_checked_here(
         // the files it kept go first, so only one is ever held.
         tree.release();
         let checked = check(Written::Dir(&partial), &listed, &empty_dirs, stage)?;
-        name_folder(&partial, target)?;
+        name_folder(&partial, target, &mut kept)?;
         Ok(FolderBuilt {
             files: listed.len() as u64,
             bytes: total,
@@ -690,6 +692,9 @@ fn write_checked_here(
             ),
         })
     })();
+    if kept {
+        return result;
+    }
     if result.is_err() {
         let _ = std::fs::remove_dir_all(&partial);
     }
@@ -703,15 +708,16 @@ fn write_checked_here(
 /// The marker stays until the folder has its name: a crash before that leaves a `.partial` the
 /// sweep knows as ours (an unmarked one it never removes). A finished folder never keeps it: if
 /// it can't be removed, the folder goes back to its `.partial` name (which the caller removes)
-/// and this fails.
-fn name_folder(partial: &Path, target: &Path) -> Result<(), String> {
+/// and this fails. A rename that fails sets `kept`: the checked folder stays at its `.partial`
+/// name for the user to rename, since writing it again may take hours.
+fn name_folder(partial: &Path, target: &Path, kept: &mut bool) -> Result<(), String> {
     if target.exists() {
         return Err(format!(
             "{} appeared while it was written",
             target.display()
         ));
     }
-    crate::safe_write::rename_new(partial, target).map_err(|e| e.to_string())?;
+    crate::safe_write::name_finished(partial, target, kept)?;
     if let Err(e) = std::fs::remove_file(target.join(MARKER)) {
         let back = crate::safe_write::rename_new(target, partial);
         return Err(format!(
@@ -832,6 +838,8 @@ pub fn extract_file(
         return Err(format!("{} already exists", target.display()));
     }
     let partial = partial_of(target);
+    // Set when the checked file could not be given its name: it is then left where it is.
+    let mut kept = false;
     let result = (|| -> Result<FolderBuilt, String> {
         let mut written = 0u64;
         stage("write", 0, size);
@@ -870,13 +878,16 @@ pub fn extract_file(
                 target.display()
             ));
         }
-        crate::safe_write::rename_new(&partial, target).map_err(|e| e.to_string())?;
+        crate::safe_write::name_finished(&partial, target, &mut kept)?;
         Ok(FolderBuilt {
             files: 1,
             bytes: size,
             detail: format!("1 file, {size} bytes, SHA-256 checked in full"),
         })
     })();
+    if kept {
+        return result;
+    }
     if result.is_err() {
         let _ = crate::safe_write::discard(&partial);
     }
@@ -1370,6 +1381,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A checked folder whose rename fails (on Windows: a scanner still holds a file in it) is
+    /// reported as kept, so the caller leaves hours of work where it is.
+    #[test]
+    fn a_checked_folder_that_cannot_be_named_is_kept() {
+        let root = scratch("keptfolder");
+        let partial = partial_of(&root.join("g"));
+        std::fs::create_dir_all(&partial).unwrap();
+        std::fs::write(partial.join(MARKER), b"").unwrap();
+        std::fs::write(partial.join("a.bin"), b"a").unwrap();
+        // A name in a folder that is not there: the rename fails.
+        let target = root.join("gone").join("g");
+        let mut kept = false;
+        let err = name_folder(&partial, &target, &mut kept).unwrap_err();
+        assert!(kept);
+        assert!(err.contains("kept as"), "{err}");
+        assert!(ps5upload_fpkg::finish::is_kept(&partial));
+        assert_eq!(std::fs::read(partial.join("a.bin")).unwrap(), b"a");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// The marker comes out only once the folder has its name: a name that is taken leaves the
     /// `.partial` marked (the sweep's sign it is ours), a free one leaves no marker behind.
     #[test]
@@ -1380,10 +1411,10 @@ mod tests {
         std::fs::write(partial.join(MARKER), b"").unwrap();
         std::fs::write(partial.join("a.bin"), b"a").unwrap();
         std::fs::create_dir(&target).unwrap();
-        assert!(name_folder(&partial, &target).is_err());
+        assert!(name_folder(&partial, &target, &mut false).is_err());
         assert!(is_our_partial_dir(&partial));
         std::fs::remove_dir(&target).unwrap();
-        name_folder(&partial, &target).unwrap();
+        name_folder(&partial, &target, &mut false).unwrap();
         assert!(!partial.exists());
         assert!(!target.join(MARKER).exists());
         assert_eq!(std::fs::read(target.join("a.bin")).unwrap(), b"a");

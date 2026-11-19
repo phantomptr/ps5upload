@@ -12,6 +12,7 @@
 #include <sys/statvfs.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include "statvfs_avail.h"
 
 int xj_fail(xjob_t *j, const char *fmt, ...) {
     if (!j->cause[0]) {
@@ -61,15 +62,29 @@ int xs_safe_name(const char *name, char *out, size_t cap) {
     return 0;
 }
 
+/* The room on the drive `dest` is on, or will be on.
+ *
+ * The whole-archive check runs BEFORE the folder is made (nothing is left behind when it cannot
+ * fit), and statvfs of a folder that is not there yet fails: the answer was "not known", the check
+ * was skipped, and on the console an archive too large for the drive was always started (the
+ * helper refuses an existing folder unless merging, so that was every new extraction). So the
+ * nearest folder above that exists is asked, as fs.freespace does. */
 static uint64_t free_bytes(xjob_t *j, int *known) {
     struct statvfs sv;
+    char dir[XJ_PATH];
     *known = 1;
-    if (j->test_free) return j->test_free > j->written_total ? j->test_free - j->written_total : 0;
-    if (statvfs(j->dest[0] ? j->dest : "/", &sv) != 0) {
-        *known = 0;
-        return 0;
+    snprintf(dir, sizeof dir, "%s", j->dest[0] ? j->dest : "/");
+    while (statvfs(dir, &sv) != 0) {
+        char *slash = strrchr(dir, '/');
+        if (errno != ENOENT || !slash || !dir[1]) {
+            *known = 0;
+            return 0;
+        }
+        if (slash == dir) dir[1] = 0;
+        else *slash = 0;
     }
-    return (uint64_t)sv.f_bavail * (uint64_t)sv.f_frsize;
+    if (j->test_free) return j->test_free > j->written_total ? j->test_free - j->written_total : 0;
+    return statvfs_avail_bytes(&sv); /* 0 once the drive is into its reserve, never a wrapped 16 EiB */
 }
 
 int xs_check_space(xjob_t *j, uint64_t need) {
@@ -207,6 +222,9 @@ static uint8_t *wbuf;
 static size_t wfill;
 static int wbuf_tried;
 
+#define XS_RECHECK (4ull << 20)
+static uint64_t last_space_check;
+
 static int write_out(xjob_t *j, xentry_t *e, const uint8_t *p, size_t n) {
     while (n) {
         size_t take = n;
@@ -234,6 +252,17 @@ static int write_out(xjob_t *j, xentry_t *e, const uint8_t *p, size_t n) {
         p += w;
         n -= (size_t)w;
         j->written_total += (uint64_t)w;
+        /* The room is checked when a file begins, from the size its header gives. A file with no
+         * size there (a .gz, a tar stream), one larger than it said, or a drive whose free space
+         * falls faster than the bytes written (the PS5's internal drive) gets past that, and this
+         * runs as root: the writes would go on through the drive's reserve to its very last block.
+         * So the room is looked at again every XS_RECHECK bytes, and none left for an ordinary
+         * writer ends the extraction as out of space. */
+        if (j->written_total - last_space_check >= XS_RECHECK) {
+            int known;
+            last_space_check = j->written_total;
+            if (free_bytes(j, &known) == 0 && known) return xj_fail(j, "fs_extract_no_space: %s, 0 free", j->current);
+        }
     }
     return 0;
 }

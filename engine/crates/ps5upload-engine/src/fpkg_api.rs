@@ -900,8 +900,12 @@ async fn ps4_package_build(
             }
             // Never over a file that appeared since the check above (another program's, a
             // second build's): the system's no-replace rename where there is one.
-            ps5upload_convert_core::safe_write::rename_new(&partial_path, &final_path)
-                .map_err(|e| format!("{}: {e}", final_path.display()))?;
+            let mut kept = false;
+            ps5upload_convert_core::safe_write::name_finished(
+                &partial_path,
+                &final_path,
+                &mut kept,
+            )?;
             Ok(written)
         })();
         drop(partial);
@@ -2259,15 +2263,19 @@ pub(crate) async fn exfat_build_handler(
     // rather than filling the drive and failing near the end. A compressed one or LZ4 packs may
     // well fit in less, so the screen warns and it goes ahead.
     // Straight to a console, the console's own room is checked once the image's size is planned.
+    let partial_out = PathBuf::from(format!("{}.partial", output.display()));
     if !straight && !compress && packs.is_none() && zstd_level.is_none() {
-        if let Some(why) = build::free_bytes(&out_dir)
-            .and_then(|free| crate::folder_build::shortfall(free, total, &out_dir))
-        {
+        // What a build that stopped part way left is room too: the build goes on from it or
+        // clears it. Counted as taken, a retry of a 100 GB image stopped at 60 GB was refused
+        // for the 60 GB its own partial held, every time, until that file was deleted by hand.
+        let held = leftover_bytes(&partial_out);
+        if let Some(why) = build::free_bytes(&out_dir).and_then(|free| {
+            crate::folder_build::shortfall(free.saturating_add(held), total, &out_dir)
+        }) {
             return json_err(StatusCode::BAD_REQUEST, why).into_response();
         }
     }
 
-    let partial_out = PathBuf::from(format!("{}.partial", output.display()));
     // Two builds into one console path would wreck each other's job, as two into one file would.
     let claimed = match (&to_console, &to_server) {
         (Some((addr, path)), _) => PathBuf::from(format!("ps5://{addr}{path}")),
@@ -3884,6 +3892,8 @@ pub(crate) fn sweep_output_leftovers(out: &Path) {
                 }
             })
             .map(|e| e.path())
+            // A finished output whose rename failed stays for the user to rename.
+            .filter(|p| !ps5upload_fpkg::finish::is_kept(p))
             .filter(|p| !active.contains(p) && !claimed_elsewhere(p))
             .partition(|p| p.is_file())
     };
@@ -3971,24 +3981,39 @@ pub(crate) fn extract_root_of(path: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+/// The bytes of the partial output file a stopped build left at `partial` (0 when there is
+/// none, or it is a folder): room the next build of it has, since it resumes or clears it.
+fn leftover_bytes(partial: &Path) -> u64 {
+    std::fs::symlink_metadata(partial)
+        .ok()
+        .filter(|m| m.is_file())
+        .map_or(0, |m| m.len())
+}
+
 /// Unpack folders left in `out` by an earlier run (a crash, a closed app), not in use now.
 fn remove_stale_extracts(out: &Path) {
     let Ok(entries) = std::fs::read_dir(out) else {
         return;
     };
-    let active = active_extracts().lock().unwrap_or_else(|e| e.into_inner());
-    for e in entries.flatten() {
-        let p = e.path();
-        let stale = e
-            .file_name()
-            .to_str()
-            .is_some_and(|n| n.starts_with(EXTRACT_PREFIX))
-            && e.file_type().is_ok_and(|t| t.is_dir())
-            && !active.contains(&p)
-            && !claimed_elsewhere(&p);
-        if stale {
-            let _ = ps5upload_core::archive_extract::remove_path_retrying(&p);
-        }
+    // Found with the list of folders in use held, removed with it let go: removing a whole
+    // unpacked game takes minutes, and every request that looks at the list (an unpack
+    // starting, one being cleaned up) waited behind it. A new unpack folder has a new name.
+    let stale: Vec<PathBuf> = {
+        let active = active_extracts().lock().unwrap_or_else(|e| e.into_inner());
+        entries
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_str()
+                    .is_some_and(|n| n.starts_with(EXTRACT_PREFIX))
+                    && e.file_type().is_ok_and(|t| t.is_dir())
+            })
+            .map(|e| e.path())
+            .filter(|p| !active.contains(p) && !claimed_elsewhere(p))
+            .collect()
+    };
+    for p in stale {
+        let _ = ps5upload_core::archive_extract::remove_path_retrying(&p);
     }
 }
 
@@ -4228,6 +4253,19 @@ pub(crate) async fn fpkg_extract_cleanup_handler(
 #[cfg(test)]
 mod extract_tests {
     use super::*;
+
+    /// The partial image a stopped build left counts as room for the next build of it; a
+    /// folder of that name, or nothing there, counts for none.
+    #[test]
+    fn a_stopped_builds_partial_counts_as_room() {
+        let base = std::env::temp_dir().join(format!("fpkg-leftover-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(base.join("dir.exfat.partial")).unwrap();
+        std::fs::write(base.join("game.exfat.partial"), vec![0u8; 4096]).unwrap();
+        assert_eq!(leftover_bytes(&base.join("game.exfat.partial")), 4096);
+        assert_eq!(leftover_bytes(&base.join("dir.exfat.partial")), 0);
+        assert_eq!(leftover_bytes(&base.join("none.exfat.partial")), 0);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     /// An unpack that fails half way (here a damaged second entry, after the first was written)
     /// leaves nothing on this computer: the files it wrote are closed and the folder removed.

@@ -22,6 +22,7 @@ typedef struct {
     uint64_t content_length;
     size_t header_len;  /* bytes up to and including the blank line */
     uint32_t peer;      /* the client's IPv4 address, host order (0 unknown); set by the server */
+    int http10;         /* the request line said HTTP/1.0: no chunked reply for this client */
 } webui_req_t;
 
 enum {

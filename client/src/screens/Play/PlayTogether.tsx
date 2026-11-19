@@ -913,7 +913,7 @@ export function JoinAsks({
   const a = asks[0];
   return (
     <div
-      className={`pointer-events-auto absolute left-1/2 top-28 z-40 flex max-w-[min(32rem,calc(100%-2rem))] -translate-x-1/2 flex-wrap items-center gap-2 bg-black/85 px-4 py-2 text-sm text-white shadow-lg ${
+      className={`pointer-events-auto absolute left-1/2 top-28 z-40 flex w-max max-w-[min(32rem,calc(100%-2rem))] -translate-x-1/2 flex-wrap items-center gap-2 bg-black/85 px-4 py-2 text-sm text-white shadow-lg ${
         seatNext || nextProfile ? "rounded-2xl" : "rounded-full"
       }`}
       data-testid="pt-ask"

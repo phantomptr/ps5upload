@@ -44,18 +44,23 @@ static void nap_ms(int ms) {
     nanosleep(&ts, NULL);
 }
 
-const char *smbc_elf_id(void) {
-    pthread_mutex_lock(&g_mu);
-    if (!g_elf_id[0]) {
-        uint64_t h = 1469598103934665603ull;
-        unsigned int i;
-        for (i = 0; i < smbd_elf_len; i++) {
-            h ^= smbd_elf[i];
-            h *= 1099511628211ull;
-        }
-        snprintf(g_elf_id, sizeof g_elf_id, "%016llx", (unsigned long long)h);
+/* Not under g_mu: two callers ask with g_mu already held (key_locked, ensure_daemon), and the
+ * mutex is not recursive. Where a second lock fails instead of blocking, the inner unlock
+ * released g_mu under the outer holder; where it blocks, that thread hung for good holding
+ * g_start_mu and every SMB call after it waited. */
+static pthread_once_t g_elf_id_once = PTHREAD_ONCE_INIT;
+static void elf_id_make(void) {
+    uint64_t h = 1469598103934665603ull;
+    unsigned int i;
+    for (i = 0; i < smbd_elf_len; i++) {
+        h ^= smbd_elf[i];
+        h *= 1099511628211ull;
     }
-    pthread_mutex_unlock(&g_mu);
+    snprintf(g_elf_id, sizeof g_elf_id, "%016llx", (unsigned long long)h);
+}
+
+const char *smbc_elf_id(void) {
+    pthread_once(&g_elf_id_once, elf_id_make);
     return g_elf_id;
 }
 

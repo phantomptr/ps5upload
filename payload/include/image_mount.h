@@ -44,6 +44,18 @@ static inline int image_mount_from_is_unit(const char *from) {
     return 0;
 }
 
+/* Whether a mount whose source is `from` (statfs's f_mntfromname) lives on the device node
+ * `device`: the node itself, or a slice / partition of it ("/dev/da1p1", "/dev/da1s1" on
+ * "/dev/da1"). "/dev/da12" is another drive, not part of "/dev/da1". fs.fsck asks before a repair:
+ * a repair writes to the device, and writing under a mounted file system corrupts it. */
+static inline int image_mount_from_is_on_device(const char *device, const char *from) {
+    size_t n;
+    if (!device || !device[0] || !from) return 0;
+    n = strlen(device);
+    if (strncmp(from, device, n) != 0) return 0;
+    return from[n] == '\0' || !(from[n] >= '0' && from[n] <= '9');
+}
+
 /* Whether a mount tracker file may be believed for what is mounted on `mount_point` from `from`.
  *
  * A tracker's file name is made from the mount point, in two forms that can meet: the bare leaf

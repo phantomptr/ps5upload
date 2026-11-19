@@ -12,8 +12,10 @@
 //!   or an empty body is refused with a message that says which.
 
 use std::io::{self, Read};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use ava1::seq::{EntrySink, Keep, Restart, SeqSource};
 use ava1::source::{ReadAt, Source, SourceMeta};
 use serde::Serialize;
 
@@ -547,9 +549,291 @@ impl Source for LinkSource {
     }
 }
 
+/// One remote file whose origin sends it only whole (no byte ranges), as a forward-only
+/// AVA1 source: one connection, read in order. A pass that starts again (a resume after a
+/// dropped connection to the console) downloads from the first byte again; the sender
+/// drops what the console already holds.
+pub struct WholeLinkSource {
+    url: String,
+    insecure_tls: bool,
+    name: String,
+    size: u64,
+}
+
+/// How much is handed to the sink at a time, and how often `cancel` is polled.
+const WHOLE_SLICE: usize = 1 << 20;
+
+impl WholeLinkSource {
+    pub fn new(url: String, insecure_tls: bool, name: String, size: u64) -> Self {
+        Self {
+            url,
+            insecure_tls,
+            name,
+            size,
+        }
+    }
+}
+
+impl Source for WholeLinkSource {
+    fn open(&self, rel: &str) -> io::Result<Box<dyn ReadAt>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!("{rel}: this link is read in order from its start"),
+        ))
+    }
+
+    fn list(&self, rel: &str) -> io::Result<Vec<(String, SourceMeta)>> {
+        if !rel.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::NotFound, rel.to_string()));
+        }
+        Ok(vec![(self.name.clone(), self.stat(&self.name)?)])
+    }
+
+    fn stat(&self, rel: &str) -> io::Result<SourceMeta> {
+        if rel.is_empty() {
+            return Ok(SourceMeta {
+                size: 0,
+                mtime: 0,
+                mode: 0o755,
+                is_dir: true,
+            });
+        }
+        if rel != self.name {
+            return Err(io::Error::new(io::ErrorKind::NotFound, rel.to_string()));
+        }
+        Ok(SourceMeta {
+            size: self.size,
+            mtime: 0,
+            mode: 0o644,
+            is_dir: false,
+        })
+    }
+}
+
+/// Hands exactly `size` bytes of `body` to `sink` in order. A body that ends early or runs
+/// past `size` is an error: the file on the console must be the one that was announced.
+pub fn copy_whole(
+    mut body: impl Read,
+    size: u64,
+    sink: &mut dyn EntrySink,
+    cancel: &AtomicBool,
+) -> io::Result<()> {
+    let mut buf = vec![0u8; WHOLE_SLICE];
+    let mut pos = 0u64;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(io::Error::other("transfer_cancelled"));
+        }
+        let n = match body.read(&mut buf) {
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            // A body cut short of its Content-Length; said below with the figures.
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => 0,
+            Err(e) => return Err(e),
+        };
+        if n == 0 {
+            break;
+        }
+        if pos + n as u64 > size {
+            return Err(io::Error::other(format!(
+                "the server sent more than the {size} bytes it announced; the file changed"
+            )));
+        }
+        sink.data(&buf[..n])?;
+        pos += n as u64;
+    }
+    if pos != size {
+        return Err(io::Error::other(format!(
+            "the download ended at {pos} of {size} bytes. This server cannot continue a \
+             download, so it has to be started again."
+        )));
+    }
+    Ok(())
+}
+
+impl SeqSource for WholeLinkSource {
+    fn pass(
+        &self,
+        _restart: Restart,
+        want: &mut dyn FnMut(&str, u64) -> Keep,
+        sink: &mut dyn EntrySink,
+        cancel: &AtomicBool,
+    ) -> io::Result<()> {
+        if want(&self.name, self.size) == Keep::Skip {
+            return Ok(());
+        }
+        let (body, len) = RemoteSource::open_whole(&self.url, self.insecure_tls)?;
+        if len.is_some_and(|l| l != self.size) {
+            return Err(io::Error::other(format!(
+                "the file is now {} bytes, not the {} it was when the download was set up",
+                len.unwrap_or(0),
+                self.size
+            )));
+        }
+        sink.begin(&self.name)?;
+        copy_whole(body, self.size, sink, cancel)?;
+        sink.end()
+    }
+
+    fn restart_for(&self, _file_id: u32) -> Restart {
+        Restart::START
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct Collect {
+        began: Vec<String>,
+        bytes: Vec<u8>,
+        ended: u32,
+    }
+
+    impl EntrySink for Collect {
+        fn begin(&mut self, path: &str) -> io::Result<()> {
+            self.began.push(path.to_string());
+            Ok(())
+        }
+        fn data(&mut self, bytes: &[u8]) -> io::Result<()> {
+            self.bytes.extend_from_slice(bytes);
+            Ok(())
+        }
+        fn end(&mut self) -> io::Result<()> {
+            self.ended += 1;
+            Ok(())
+        }
+    }
+
+    /// An origin without byte ranges: every request, whatever its `Range`, gets `announce`
+    /// as the length and `body` as the bytes (one request per connection).
+    pub(super) fn whole_origin(body: Vec<u8>, announce: usize) -> std::net::SocketAddr {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut stream) = conn else { break };
+                let body = body.clone();
+                std::thread::spawn(move || {
+                    let Ok(peer) = stream.try_clone() else { return };
+                    let mut reader = BufReader::new(peer);
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                            return;
+                        }
+                        if line == "\r\n" || line == "\n" {
+                            break;
+                        }
+                    }
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\
+                         Content-Length: {announce}\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(&body);
+                });
+            }
+        });
+        addr
+    }
+
+    pub(super) fn bytes(n: usize) -> Vec<u8> {
+        (0..n).map(|i| (i * 31 % 251) as u8).collect()
+    }
+
+    /// #872: a host that answers 200 to a ranged request (no byte ranges) is still a file,
+    /// and is read whole, in order, on one connection.
+    #[test]
+    fn a_link_without_byte_ranges_is_read_whole_in_order() {
+        let mut data = b"\x7FCNT".to_vec();
+        data.extend_from_slice(&bytes(3 * WHOLE_SLICE + 12_345));
+        let addr = whole_origin(data.clone(), data.len());
+        let url = format!("http://{addr}/dl/Game.pkg?token=SECRET");
+
+        let class = probe(&url, false).unwrap();
+        assert_eq!(class.kind, LinkKind::Pkg);
+        assert!(!class.ranges);
+        assert_eq!(class.total_size, Some(data.len() as u64));
+        assert_eq!(class.filename, "Game.pkg");
+
+        let src = WholeLinkSource::new(url, false, "Game.pkg".into(), data.len() as u64);
+        assert_eq!(src.stat("Game.pkg").unwrap().size, data.len() as u64);
+        let mut sink = Collect::default();
+        src.pass(
+            Restart::START,
+            &mut |_, _| Keep::All,
+            &mut sink,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(sink.began, ["Game.pkg"]);
+        assert_eq!(sink.ended, 1);
+        assert!(sink.bytes == data, "the bytes arrive whole and in order");
+
+        // Nothing is fetched for a file the console already has.
+        let mut sink = Collect::default();
+        src.pass(
+            Restart::START,
+            &mut |_, _| Keep::Skip,
+            &mut sink,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(sink.began.is_empty() && sink.bytes.is_empty());
+    }
+
+    #[test]
+    fn a_whole_download_cut_short_or_changed_is_an_error_not_a_short_file() {
+        // The connection closes 1000 bytes before the announced end.
+        let data = bytes(50_000);
+        let addr = whole_origin(data[..49_000].to_vec(), data.len());
+        let src = WholeLinkSource::new(
+            format!("http://{addr}/f.bin"),
+            false,
+            "f.bin".into(),
+            data.len() as u64,
+        );
+        let mut sink = Collect::default();
+        let err = src
+            .pass(
+                Restart::START,
+                &mut |_, _| Keep::All,
+                &mut sink,
+                &AtomicBool::new(false),
+            )
+            .expect_err("short");
+        assert_eq!(sink.ended, 0, "{err}");
+
+        // The origin now announces another size than the one the job was set up with.
+        let addr = whole_origin(data.clone(), data.len());
+        let src = WholeLinkSource::new(format!("http://{addr}/f.bin"), false, "f.bin".into(), 10);
+        let mut sink = Collect::default();
+        let err = src
+            .pass(
+                Restart::START,
+                &mut |_, _| Keep::All,
+                &mut sink,
+                &AtomicBool::new(false),
+            )
+            .expect_err("changed");
+        assert!(err.to_string().contains("50000"), "{err}");
+        assert!(sink.began.is_empty());
+
+        // Plain readers: short, long, cancelled.
+        let mut sink = Collect::default();
+        let e = copy_whole(&data[..10], 20, &mut sink, &AtomicBool::new(false)).unwrap_err();
+        assert!(e.to_string().contains("10 of 20"), "{e}");
+        let mut sink = Collect::default();
+        let e = copy_whole(&data[..30], 20, &mut sink, &AtomicBool::new(false)).unwrap_err();
+        assert!(e.to_string().contains("more than"), "{e}");
+        let mut sink = Collect::default();
+        let e = copy_whole(&data[..20], 20, &mut sink, &AtomicBool::new(true)).unwrap_err();
+        assert_eq!(e.to_string(), "transfer_cancelled");
+        assert!(sink.bytes.is_empty());
+    }
 
     fn input(status: u16, ctype: &str, head: &[u8]) -> ProbeInput {
         ProbeInput {
@@ -829,6 +1113,7 @@ mod served {
 #[cfg(test)]
 mod served_tests {
     use super::served::*;
+    use super::tests::{bytes, whole_origin};
     use super::*;
 
     fn base() -> String {
@@ -996,6 +1281,74 @@ mod served_tests {
         .expect("upload");
         assert_eq!(r.bytes_sent, ilen);
         assert!(std::fs::read(dir.join("host/share/dst/g.exfat")).unwrap() == image);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #872, the whole path: a link without byte ranges -> WholeLinkSource -> AVA1 upload ->
+    /// a console folder. A large file (past the cutoff) and a small one.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_link_without_byte_ranges_streams_to_a_console_folder_over_ava1() {
+        use ava1::host::FolderHost;
+        use ava1::keys::Identity;
+        use ava1::peers::PeerStore;
+        use ava1::server::{self, ServerCtx};
+        use ps5upload_ava1::Pool;
+
+        let dir = std::env::temp_dir().join(format!("link-whole-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ava = dir.join("engine");
+        let key = Identity::load_or_create(&ava.join("identity"))
+            .unwrap()
+            .public();
+        std::fs::create_dir_all(dir.join("host/share")).unwrap();
+        let mut peers = PeerStore::in_memory();
+        peers.add(key, "engine").unwrap();
+        let rpc: ava1::server::RpcHandler = Box::new(|_, _| ava1::session::RpcReply {
+            status: ps5upload_ava1::gen::ERR_UNKNOWN_METHOD,
+            body: Vec::new(),
+        });
+        let ctx = ServerCtx::new(Identity::generate().unwrap(), "host", peers, rpc).with_jobs(
+            Arc::new(FolderHost {
+                root: dir.join("host/share"),
+                jobs_dir: dir.join("host/jobs"),
+            }),
+        );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap().to_string();
+        tokio::spawn(server::serve(l, Arc::new(ctx)));
+
+        for (job, name, len) in [
+            ([7u8; 16], "Game.pkg", 9 * 1024 * 1024 + 321),
+            ([8u8; 16], "small.bin", 4000),
+        ] {
+            let data = bytes(len);
+            let origin = whole_origin(data.clone(), data.len());
+            let url = format!("http://{origin}/dl/{name}");
+            let pool = Pool::new(ava.clone()).with_addr(addr.clone());
+            let total = data.len() as u64;
+            let r = tokio::task::spawn_blocking(move || {
+                let source = Arc::new(WholeLinkSource::new(url, false, name.into(), total));
+                let manifest = ava1::manifest::single(source.as_ref(), name).unwrap();
+                let mut opts = ava1::send::SendOptions::upload(&format!("dst/{name}"));
+                opts.flags = ps5upload_ava1::gen::JF_SINGLE_FILE;
+                opts.seq = Some(source.clone());
+                ps5upload_ava1::upload::upload_with_in(
+                    &pool,
+                    "127.0.0.1",
+                    job,
+                    manifest,
+                    source,
+                    opts,
+                    &ps5upload_core::transfer::TransferConfig::new("127.0.0.1"),
+                )
+            })
+            .await
+            .unwrap()
+            .expect("upload");
+            assert_eq!(r.bytes_sent, total);
+            let got = std::fs::read(dir.join("host/share/dst").join(name)).unwrap();
+            assert!(got == data, "{name} arrives whole");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

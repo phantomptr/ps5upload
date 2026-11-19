@@ -4,7 +4,6 @@ import { Eraser, File, Folder, FolderOpen, RefreshCw, Square, Trash2, Wand2 } fr
 
 import {
   cleanupApply,
-  cleanupApplyStatus,
   cleanupCancel,
   cleanupScanStart,
   cleanupScanStatus,
@@ -56,9 +55,8 @@ import {
   attachRunningApply,
   cleanupRunOf,
   dismissCleanupResult,
-  followApply,
+  beginApplyFollow,
   HELPER_SILENT,
-  startedApply,
   STOP_UNCONFIRMED,
   stopCleanupApply,
   useCleanupRuns,
@@ -405,23 +403,27 @@ export default function CleanupScreen() {
   const items = useMemo(() => scan?.items ?? [], [scan]);
   const groups = useMemo(() => groupItems(items), [items]);
   const totals = useMemo(() => selectionTotals(items, selected), [items, selected]);
-  const busy = scanning || applying !== null;
+  // A Remove that was confirmed and is being handed to the console: Remove stays off meanwhile.
+  const [starting, setStarting] = useState(false);
+  const busy = scanning || starting || applying !== null;
 
   async function stopScan() {
     if (scan && host) await cleanupCancel(host, scan.scan_id).catch(() => {});
   }
 
   async function remove() {
-    if (!scan || !host) return;
+    if (!scan || !host || starting) return;
     setConfirming(false);
     setError(null);
     const ids = items.filter((i) => selected.has(i.id) && isRemovable(i)).map((i) => i.id);
+    setStarting(true);
     try {
       const { apply_id } = await cleanupApply(host, scan.scan_id, ids);
-      startedApply(host, await cleanupApplyStatus(host, apply_id));
-      void followApply(host, apply_id, items, scan.free_bytes);
+      await beginApplyFollow(host, apply_id, items, scan.free_bytes);
     } catch (e) {
       setError(errorText(tr, e));
+    } finally {
+      setStarting(false);
     }
   }
 

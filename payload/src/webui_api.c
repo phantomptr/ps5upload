@@ -16,6 +16,7 @@
 #include <limits.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include "statvfs_avail.h"
 #include <time.h>
 #include <unistd.h>
 
@@ -2619,7 +2620,7 @@ static void r_upload_begin(const char *b, size_t n, uint8_t *out, int fd) {
         }
     }
     /* The bytes go to a temporary file first: the whole size must be free even when it replaces one. */
-    if (statvfs(dir, &vf) == 0 && (uint64_t)vf.f_bavail * (uint64_t)vf.f_frsize < size) {
+    if (statvfs(dir, &vf) == 0 && statvfs_avail_bytes(&vf) < size) {
         send_error(fd, 507, "no_space", 8);
         return;
     }
@@ -3031,8 +3032,12 @@ static void serve_download(const webui_req_t *r, int fd) {
             webui_send_json(fd, 404, "{\"error\":\"gone\"}");
         } else {
             path_protected_forms(pf->lex, pf->canon);
-            if (send_dl_head(fd, 200, "application/x-tar", -1, "", name) == 0)
-                (void)wf_send_tar(fd, canon, skip_protected, pf, WF_IDLE_MS, buf, WF_IO_BUF, &sent);
+            /* Chunked (every HTTP/1.1 client reads it): only then can the browser tell an
+             * archive cut short from a whole one (wf_send_tar_http). */
+            int chunked = !r->http10;
+            if (send_dl_head(fd, 200, "application/x-tar", -1, chunked ? "Transfer-Encoding: chunked\r\n" : "",
+                             name) == 0)
+                (void)wf_send_tar_http(fd, canon, skip_protected, pf, WF_IDLE_MS, buf, WF_IO_BUF, &sent, chunked);
         }
         free(pf);
         free(canon);

@@ -492,16 +492,12 @@ static void *relay_main(void *arg) {
         } else if (!wanted && g_st != ST_STARTING) {
             break; /* nothing to do: started again with the next session */
         }
-        {
-            struct timespec ts;
-            clock_gettime(CLOCK_REALTIME, &ts);
-            ts.tv_nsec += 50 * 1000000L;
-            if (ts.tv_nsec >= 1000000000L) {
-                ts.tv_sec++;
-                ts.tv_nsec -= 1000000000L;
-            }
-            pthread_cond_timedwait(&g_cv, &g_mu, &ts);
-        }
+        /* A 50 ms nap with the lock released, not a pthread_cond_timedwait on a wall-clock
+         * deadline: with the clock set back (time sync, a wake) that wait lasted as long as the
+         * jump, no heartbeat was sent and the companion ended as idle under an open device. */
+        pthread_mutex_unlock(&g_mu);
+        nap_ms(50);
+        pthread_mutex_lock(&g_mu);
     }
     g_thread_on = 0;
     /* Ended on its own: nobody joins it (vinput_relay_reset joins one it asked to end). */

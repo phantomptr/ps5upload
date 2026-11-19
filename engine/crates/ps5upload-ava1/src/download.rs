@@ -256,6 +256,67 @@ fn set_mtime(p: &Path, t: std::time::SystemTime) -> io::Result<()> {
     f.set_times(std::fs::FileTimes::new().set_modified(t).set_accessed(t))
 }
 
+/// Two paths of `m` that differ only in case, one of them a file (the console's own disk
+/// tells `Save.dat` from `save.dat`).
+fn case_twins(m: &Manifest) -> Option<(&str, &str)> {
+    let mut seen: std::collections::HashMap<String, &manifest::Entry> =
+        std::collections::HashMap::new();
+    for e in &m.entries {
+        if let Some(first) = seen.insert(e.path.to_lowercase(), e) {
+            if first.path != e.path && (first.kind == gen::ENTRY_FILE || e.kind == gen::ENTRY_FILE)
+            {
+                return Some((&first.path, &e.path));
+            }
+        }
+    }
+    None
+}
+
+/// Whether the folder `root` is (or will be) made in ignores case in names: its nearest
+/// folder that exists, found again under its name in the other case.
+fn ignores_case(root: &Path) -> bool {
+    let mut at = Some(root);
+    while let Some(p) = at {
+        at = p.parent();
+        let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !p.exists() {
+            continue;
+        }
+        let other: String = name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_lowercase() {
+                    c.to_ascii_uppercase()
+                } else {
+                    c.to_ascii_lowercase()
+                }
+            })
+            .collect();
+        // A name with no letter says nothing: ask the folder above.
+        if other != name {
+            return p.with_file_name(other).exists();
+        }
+    }
+    false
+}
+
+/// Err when `m` holds two names that are one name in `root`: both were written to the one
+/// file, the later over the earlier, and the download ended as done with a file's bytes gone.
+fn refuse_case_twins(m: &Manifest, root: &Path) -> io::Result<()> {
+    match case_twins(m) {
+        Some((a, b)) if ignores_case(root) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{a:?} and {b:?} differ only in capital letters, and {} keeps one file for both; download to a disk that tells them apart",
+                root.display()
+            ),
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// `m` with every path in the form it is kept under on this computer
 /// (`host_names::escape_path`). The entries keep their order, so their file ids.
 fn kept_manifest(m: &Manifest) -> io::Result<Manifest> {
@@ -277,6 +338,9 @@ impl Sink for CheckedSink {
         } else {
             m
         };
+        if !self.single {
+            refuse_case_twins(m, &self.root)?;
+        }
         *self.landed.lock().unwrap() = Some(m.clone());
         if self.single && self.root.is_dir() {
             return Err(io::Error::new(
@@ -1371,6 +1435,36 @@ mod tests {
         Manifest {
             entries: paths.iter().map(|p| entry(gen::ENTRY_FILE, p)).collect(),
         }
+    }
+
+    /// A console folder holding `Save.dat` and `save.dat` is refused where the disk keeps one
+    /// file for both (it ended "done" with one file's bytes lost), and only there. Checked
+    /// against what the disk under the temp folder really does.
+    #[test]
+    fn names_that_differ_only_in_case_are_refused_where_the_disk_merges_them() {
+        let dir = std::env::temp_dir().join(format!("ps5u-dl-case-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("probe")).unwrap();
+        let really = dir.join("PROBE").exists();
+        // The download's own folder is not made yet: the one above answers.
+        let root = dir.join("probe").join("save");
+        assert_eq!(ignores_case(&root), really);
+
+        let twins = files(&["a/Save.dat", "b.bin", "a/save.dat"]);
+        assert_eq!(case_twins(&twins), Some(("a/Save.dat", "a/save.dat")));
+        assert_eq!(refuse_case_twins(&twins, &root).is_err(), really);
+        // Folders that differ in case only merge; nothing is lost.
+        let dirs = Manifest {
+            entries: vec![
+                entry(gen::ENTRY_DIR, "Media"),
+                entry(gen::ENTRY_DIR, "media"),
+                entry(gen::ENTRY_FILE, "Media/a.prx"),
+                entry(gen::ENTRY_FILE, "media/b.prx"),
+            ],
+        };
+        assert_eq!(case_twins(&dirs), None);
+        assert!(refuse_case_twins(&files(&["a.bin", "b.bin"]), &root).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

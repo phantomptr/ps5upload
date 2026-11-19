@@ -138,6 +138,51 @@ int main(void) {
     allowed(cmd, "hello");
     allowed("echo /data/ps5upload/ava/identity", "identity");
 
+    /* A word that starts with '-' is a path to cat/stat/mv: a link named "-L" into the store
+     * (made some other way) must not get the key out. The working directory is the test root. */
+    if (symlink("ava", "-L") != 0) return 2;
+    refused("cat -L/identity");
+    refused("stat -L/identity");
+    snprintf(cmd, sizeof cmd, "mv -L/identity %s/out", g_root);
+    refused(cmd);
+    allowed("chmod -R 644 notes.txt", NULL); /* real options still pass */
+    /* A path too long to judge is refused, not waved through. */
+    {
+        size_t at = (size_t)snprintf(cmd, sizeof cmd, "cat ");
+        while (at < 1300) at += (size_t)snprintf(cmd + at, sizeof cmd - at, "./");
+        snprintf(cmd + at, sizeof cmd - at, "notes.txt");
+        refused(cmd);
+    }
+    /* cp of a file onto itself fails and leaves the file as it was. */
+    {
+        char *t;
+        int code = run("cp notes.txt notes.txt", &t);
+        if (code == 0 || !strstr(t, "same file")) {
+            fprintf(stderr, "FAIL cp onto itself: %d %s\n", code, t);
+            fails++;
+        }
+        free(t);
+        code = run("cp notes.txt .", &t);
+        if (code == 0) {
+            fprintf(stderr, "FAIL cp into its own folder: %d %s\n", code, t);
+            fails++;
+        }
+        free(t);
+        allowed("cat notes.txt", "hello");
+    }
+    /* More words than the built-ins take: refused whole, not run on the first 31. */
+    {
+        char *t;
+        size_t at = (size_t)snprintf(cmd, sizeof cmd, "touch");
+        for (int i = 0; i < 40; i++) at += (size_t)snprintf(cmd + at, sizeof cmd - at, " tf%d", i);
+        int code = run(cmd, &t);
+        if (code != 1 || !strstr(t, "too many arguments") || access("tf0", F_OK) == 0) {
+            fprintf(stderr, "FAIL too many words: %d %s\n", code, t);
+            fails++;
+        }
+        free(t);
+    }
+
     snprintf(cmd, sizeof cmd, "rm -rf %s", g_root);
     if (system(cmd) != 0) fprintf(stderr, "warn: could not remove %s\n", g_root);
     if (fails) {

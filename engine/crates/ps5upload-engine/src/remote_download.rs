@@ -351,7 +351,18 @@ async fn start_handler(
     let insecure = req.insecure_tls;
     let probe_url = url.clone();
     let probe = match tokio::task::spawn_blocking(move || {
-        crate::remote_pkg::RemoteSource::probe_with_options(&probe_url, insecure)
+        let probe = crate::remote_pkg::RemoteSource::probe_any(&probe_url, insecure)?;
+        // A 200 to the ranged request is the whole of whatever is there: a file, or a page
+        // (a share link, a login, an error). Only a file is worth saving.
+        if !probe.ranges {
+            let class = crate::link::probe(&probe_url, insecure)?;
+            if class.kind == crate::link::LinkKind::Refused {
+                return Err(class
+                    .message
+                    .unwrap_or_else(|| "that link is not a file download".to_string()));
+            }
+        }
+        Ok(probe)
     })
     .await
     {
@@ -405,8 +416,10 @@ async fn start_handler(
         })
         .await
     };
+    let ranges = probe.ranges;
     let (complete, may_resume) = match prep {
-        Ok(Ok(v)) => v,
+        // An origin without byte ranges cannot continue a partial: it starts over.
+        Ok(Ok((complete, may_resume))) => (complete, may_resume && ranges),
         Ok(Err(resp)) => return *resp,
         Err(e) => {
             return json_err(
@@ -443,18 +456,28 @@ async fn start_handler(
         // Never log the path or query of a link: signed download URLs carry
         // credentials there. The host is enough to tell two origins apart.
         crate::log_info!(
-            "link-download start: id={} host={} bytes={} dest={}",
+            "link-download start: id={} host={} bytes={} ranges={} dest={}",
             id,
             host,
             total,
+            ranges,
             path.display()
         );
         let worker = dl.clone();
         tokio::task::spawn_blocking(move || {
             let dl = worker;
-            let src = crate::remote_pkg::RemoteSource::new_with_options(url, total, insecure)
-                .with_validators(validators);
-            match copy_to_file(&src, &dl, may_resume) {
+            let copied = if ranges {
+                let stop = dl.clone();
+                let src = crate::remote_pkg::RemoteSource::new_with_options(url, total, insecure)
+                    .with_validators(validators)
+                    // A cancel also ends a fetch that is waiting out the host's 429/503.
+                    .with_stop(move || stop.cancelled.load(Ordering::Relaxed));
+                copy_to_file(&src, &dl, may_resume)
+            } else {
+                crate::remote_pkg::RemoteSource::open_whole(&url, insecure)
+                    .and_then(|(body, len)| whole_to_file(body, len, &dl))
+            };
+            match copied {
                 // The partial stays: the next try of the same link resumes from it.
                 Err(e) => {
                     crate::log_warn!("link-download failed: host={} err={}", dl.url_host, e);
@@ -654,7 +677,12 @@ fn copy_to_file(
             return Ok(false);
         }
         let end = (offset + COPY_WINDOW).min(total) - 1;
-        let bytes = src.read_range(offset, end)?;
+        let bytes = match src.read_range(offset, end) {
+            Ok(bytes) => bytes,
+            // The fetch was given up for the cancel: that is not a failed download.
+            Err(_) if dl.cancelled.load(Ordering::Relaxed) => return Ok(false),
+            Err(e) => return Err(e),
+        };
         file.write_all(&bytes)?;
         offset = end + 1;
         dl.written.store(offset, Ordering::Relaxed);
@@ -663,6 +691,68 @@ fn copy_to_file(
     // The install that follows reads this file back immediately; make sure
     // what it reads is what we fetched, not what is still in the page cache
     // of a machine that might be about to sleep.
+    file.sync_all()?;
+    drop(file);
+    if dl.cancelled.load(Ordering::Relaxed) {
+        return Ok(false);
+    }
+    std::fs::rename(&dl.partial, &dl.path)?;
+    Ok(true)
+}
+
+/// A file from an origin without byte ranges: the body of one request, written in order from
+/// the start into `dl.partial` (whatever it held is replaced), then renamed to `dl.path`.
+/// `Ok(true)` once the file is complete under its name; `Ok(false)` when cancelled. Exactly
+/// `dl.total` bytes or an error: a short package must never get the real name.
+fn whole_to_file(
+    mut body: impl std::io::Read,
+    announced: Option<u64>,
+    dl: &Arc<Download>,
+) -> std::io::Result<bool> {
+    let total = dl.total;
+    if announced.is_some_and(|l| l != total) {
+        return Err(std::io::Error::other(format!(
+            "the file is now {} bytes, not the {total} it was when the download was set up",
+            announced.unwrap_or(0)
+        )));
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&dl.partial)?;
+    dl.written.store(0, Ordering::Relaxed);
+    let mut buf = vec![0u8; 1 << 20];
+    let mut offset = 0u64;
+    loop {
+        if dl.cancelled.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
+        let n = match body.read(&mut buf) {
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => 0,
+            Err(e) => return Err(e),
+        };
+        if n == 0 {
+            break;
+        }
+        if offset + n as u64 > total {
+            return Err(std::io::Error::other(format!(
+                "the server sent more than the {total} bytes it announced; the file changed"
+            )));
+        }
+        file.write_all(&buf[..n])?;
+        offset += n as u64;
+        dl.written.store(offset, Ordering::Relaxed);
+    }
+    if offset != total {
+        return Err(std::io::Error::other(format!(
+            "the download ended at {offset} of {total} bytes. This server cannot continue a \
+             download, so it has to be started again."
+        )));
+    }
+    file.flush()?;
     file.sync_all()?;
     drop(file);
     if dl.cancelled.load(Ordering::Relaxed) {
@@ -789,6 +879,52 @@ mod tests {
         take_over_existing(&path, &partial, Some("replace")).unwrap();
         assert!(!path.exists());
         assert!(!partial.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #872: a download from an origin without byte ranges is written in order from the
+    /// start; only a complete one gets the real name.
+    #[test]
+    fn a_whole_download_replaces_the_partial_and_is_named_only_when_complete() {
+        let dir = std::env::temp_dir().join(format!("ps5u-dl-whole-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("game.pkg");
+        let partial = partial_path(&path);
+        let data: Vec<u8> = (0..(2 << 20) + 77).map(|i| (i % 253) as u8).collect();
+        let dl = |total: u64| {
+            Arc::new(Download {
+                path: path.clone(),
+                partial: partial.clone(),
+                total,
+                ..Default::default()
+            })
+        };
+
+        // A partial from an earlier try is not continued: this origin cannot.
+        std::fs::write(&partial, vec![9u8; 4096]).unwrap();
+        let d = dl(data.len() as u64);
+        assert!(whole_to_file(&data[..], Some(data.len() as u64), &d).unwrap());
+        assert!(std::fs::read(&path).unwrap() == data);
+        assert!(!partial.exists());
+        assert_eq!(d.written.load(Ordering::Relaxed), data.len() as u64);
+        std::fs::remove_file(&path).unwrap();
+
+        // Cut short: an error, and no file under the real name.
+        let d = dl(data.len() as u64);
+        let err = whole_to_file(&data[..1000], None, &d).unwrap_err();
+        assert!(err.to_string().contains("1000 of"), "{err}");
+        assert!(!path.exists());
+
+        // Another size than the one probed: refused before anything is written over.
+        let d = dl(10);
+        assert!(whole_to_file(&data[..], Some(data.len() as u64), &d).is_err());
+        assert!(!path.exists());
+
+        // Cancelled: stops, names nothing.
+        let d = dl(data.len() as u64);
+        d.cancelled.store(true, Ordering::Relaxed);
+        assert!(!whole_to_file(&data[..], None, &d).unwrap());
+        assert!(!path.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

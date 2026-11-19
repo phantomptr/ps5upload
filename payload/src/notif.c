@@ -13,7 +13,42 @@
 
 #include "config.h"
 
-extern int sceNotificationSend(int32_t type, const char *msg);
+/* The toast on the TV.
+ *
+ * This used to be `sceNotificationSend(level, text)`. That function takes THREE arguments (user id,
+ * a flag, a JSON template: runtime.c's toast.send and the SDK's notify sample call it so), so the
+ * text went in as the flag and the template was whatever the third argument register held: no
+ * toast was ever shown (cheat on/off, the crash-guard warning, the Remote Play PIN), and a stale
+ * pointer there was read as a string inside the helper. It was also a link-time import of a
+ * library not every firmware has.
+ *
+ * So the same request the helper's other toasts use (main.c pop_notification), looked up at run
+ * time: a firmware without it shows nothing and the entry is still kept in the ring. No lock is
+ * taken here: the caller holds sony_api_lock (notif.h). */
+#ifndef NOTIF_SHOW
+#include <dlfcn.h>
+typedef struct {
+    char _reserved[45];
+    char message[3075];
+} notif_req_t;
+typedef int (*notif_send_request_fn)(int, notif_req_t *, size_t, int);
+static void notif_show(const char *text) {
+    static notif_send_request_fn send_fn;
+    notif_send_request_fn fn = send_fn;
+    notif_req_t *req;
+    if (!fn) {
+        fn = (notif_send_request_fn)dlsym(RTLD_DEFAULT, "sceKernelSendNotificationRequest");
+        if (!fn) return;
+        send_fn = fn; /* the same value from whichever thread gets here first */
+    }
+    req = calloc(1, sizeof *req); /* 3 KiB: not on a caller's stack */
+    if (!req) return;
+    strncpy(req->message, text, sizeof req->message - 1);
+    (void)fn(0, req, sizeof *req, 0);
+    free(req);
+}
+#define NOTIF_SHOW(text) notif_show(text)
+#endif
 
 #define NOTIF_RING_SIZE 64
 #define NOTIF_MSG_MAX   256
@@ -289,7 +324,7 @@ int notif_send_kept(const char *shown, const char *msg, int level) {
     notif_persist_locked();
     pthread_mutex_unlock(&s_ring_mtx);
 
-    sceNotificationSend((int32_t)level, shown);
+    NOTIF_SHOW(shown);
     return 0;
 }
 

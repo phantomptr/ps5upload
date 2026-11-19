@@ -31,7 +31,7 @@
 #include "authid.h"          /* ps5_detect_firmware_major */
 
 #define INST_PORT     9115
-#define INST_VERSION  "1.6.0"
+#define INST_VERSION  "1.6.1"
 #define BOOT_STEP_MS  500
 #define BOOT_STEPS    50     /* 50 * 500ms = 25s */
 /* A replaced daemon releases :9115 within a poll slice of its `stop`; the new

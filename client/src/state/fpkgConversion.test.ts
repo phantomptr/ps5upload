@@ -1325,7 +1325,13 @@ describe("fpkg pipeline", () => {
       expect.any(Function),
     );
     expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done", swap: journal });
-    await useFpkgConversion.getState().finishReplace("delete");
+    // A double click (or Delete, then Keep) is one answer: the second does nothing.
+    finishSwap.mockClear();
+    await Promise.all([
+      useFpkgConversion.getState().finishReplace("delete"),
+      useFpkgConversion.getState().finishReplace("keep"),
+    ]);
+    expect(finishSwap).toHaveBeenCalledTimes(1);
     expect(finishSwap).toHaveBeenCalledWith(journal, "delete", expect.anything());
     expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done", swap: null });
   });
@@ -1348,6 +1354,24 @@ describe("fpkg pipeline", () => {
       message: "The install did not finish. The dump is back where it was.",
       packagePath: "/out/a.pkg",
     });
+  });
+
+  it("fails the run when the console does not answer as the swap starts, instead of running for good", async () => {
+    jobStatus.mockResolvedValue({
+      status: "done",
+      dest: "/out/a.pkg",
+      bytes_sent: 1,
+      tx_id_hex: "UP0000-PPSA30528_00-X000000000000000",
+    });
+    runSwap.mockRejectedValue(new Error("connection refused"));
+    await useFpkgConversion
+      .getState()
+      .start({ source: "ps5://10.0.0.2/data/homebrew/G.exfat", outputDir: "/out" }, { install: true, host: "10.0.0.2" });
+    await tick();
+    await tick();
+    const p = useFpkgConversion.getState().pipeline;
+    expect(p).toMatchObject({ phase: "failed", stage: "park", packagePath: "/out/a.pkg" });
+    expect(p.phase === "failed" && p.message).toContain("connection refused");
   });
 });
 

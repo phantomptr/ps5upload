@@ -617,7 +617,7 @@ pub fn cheats_repo_search(query: &str) -> Result<CheatRepoSearchResponse> {
                         push(filename.clone(), title.clone(), "xml".into());
                     }
                 }
-                Err(e) => eprintln!("[cheats] patch archive failed: {e}"),
+                Err(e) => crate::core_log!("[cheats] patch archive failed: {e}"),
             }
         } else if repo.index_files.is_empty() {
             // No index published — enumerate through the git tree.
@@ -630,7 +630,7 @@ pub fn cheats_repo_search(query: &str) -> Result<CheatRepoSearchResponse> {
                     }
                 }
                 Err(e) => {
-                    eprintln!("[cheats] tree listing failed for {}: {}", repo.id, e);
+                    crate::core_log!("[cheats] tree listing failed for {}: {}", repo.id, e);
                 }
             }
         } else {
@@ -646,7 +646,7 @@ pub fn cheats_repo_search(query: &str) -> Result<CheatRepoSearchResponse> {
                         }
                     }
                     Err(e) => {
-                        eprintln!("[cheats] fetch failed for {}/{}: {}", repo.id, idx, e);
+                        crate::core_log!("[cheats] fetch failed for {}/{}: {}", repo.id, idx, e);
                     }
                 }
             }
@@ -774,7 +774,7 @@ fn write_cheat_file(
     bytes: &[u8],
 ) -> Result<CheatDownloadResponse> {
     if let Err(e) = crate::fs_ops::fs_mkdir(addr, dir) {
-        eprintln!("[cheats] mkdir {} failed (may already exist): {}", dir, e);
+        crate::core_log!("[cheats] mkdir {} failed (may already exist): {}", dir, e);
     }
 
     if bytes.len() > 256 * 1024 {

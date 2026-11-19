@@ -1586,8 +1586,9 @@ fn attach_live_notes(cfg: &mut TransferConfig, job_id: Uuid) {
 }
 
 /// Adds a running job's live notes to its snapshot JSON: `phase` (`"skipping"` with
-/// `skip_done_bytes` / `skip_total_bytes`), `bottleneck` (AVA1's word), `settling` and
-/// `verifying` (the console reads its last large files back, #783). Fields
+/// `skip_done_bytes` / `skip_total_bytes`), `bottleneck` (AVA1's word), `settling`,
+/// `verifying` (the console reads its last large files back, #783) and, once the console has
+/// every byte, `all_sent_ms` / `console_quiet_ms` (#873). Fields
 /// that do not apply are absent, so the client shows nothing for them. A snapshot that is not
 /// `running` is returned as it is.
 pub(crate) fn merge_live_notes(
@@ -1674,6 +1675,17 @@ pub(crate) fn merge_live_notes(
     // Every byte is on the console and it is reading the last large files back (#783).
     if n.verifying.load(Relaxed) && !n.settling.load(Relaxed) {
         o.insert("verifying".into(), true.into());
+    }
+    // The stretch after the last byte (#873): how long ago the console acknowledged it, and
+    // how long since it last confirmed anything new. A client tells a console that is getting
+    // on with it (the second stays small) from one that has gone quiet (it grows).
+    let all_sent_ms = n.all_sent_ms.load(Relaxed);
+    if all_sent_ms > 0 {
+        o.insert("all_sent_ms".into(), all_sent_ms.into());
+        o.insert(
+            "console_quiet_ms".into(),
+            n.console_quiet_ms.load(Relaxed).into(),
+        );
     }
     v
 }
@@ -10968,14 +10980,8 @@ async fn link_download_handler(
         )
         .into_response();
     };
-    if !class.ranges {
-        return json_err(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "the server does not support partial downloads (HTTP Range), which streaming to the \
-             console needs. Download the file on this computer and upload it instead.",
-        )
-        .into_response();
-    }
+    // Without byte ranges the file is read in order on one connection (`WholeLinkSource`).
+    let ranges = class.ranges;
     let validators = class.validators.clone();
     // An .lz4 link is unpacked on the way: the console gets the image, not the .lz4.
     let lz4 = class.lz4.clone().filter(|_| req.unpack);
@@ -11016,7 +11022,7 @@ async fn link_download_handler(
         .and_then(|u| u.host().map(str::to_string))
         .unwrap_or_default();
     crate::log_info!(
-        "link_download: job={job_id} addr={addr} host={host} dest={dest_path} bytes={total}{}",
+        "link_download: job={job_id} addr={addr} host={host} dest={dest_path} bytes={total} ranges={ranges}{}",
         if lz4.is_some() {
             format!(" lz4_packed={packed}")
         } else {
@@ -11089,16 +11095,27 @@ async fn link_download_handler(
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
         attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
+        let stop = cfg.cancel.clone();
         let remote = Arc::new(
-            crate::remote_pkg::RemoteSource::new_with_options(url, packed, insecure)
-                .with_validators(validators),
+            crate::remote_pkg::RemoteSource::new_with_options(url.clone(), packed, insecure)
+                .with_validators(validators)
+                // A cancel also ends a fetch that is waiting out the host's 429/503.
+                .with_stop(move || stop.as_ref().is_some_and(|c| c.load(Ordering::Relaxed))),
         );
         // A plain file is read at any offset (resume continues where the console stopped); an
         // .lz4 is decoded forward on one thread and its decoded bytes are what is sent.
         let (source, seq): (
             Arc<dyn ava1::source::Source>,
             Option<Arc<dyn ava1::seq::SeqSource>>,
-        ) = if lz4.is_some() {
+        ) = if !ranges {
+            let s = Arc::new(link::WholeLinkSource::new(
+                url,
+                insecure,
+                name.clone(),
+                total,
+            ));
+            (s.clone(), Some(s))
+        } else if lz4.is_some() {
             let s = Arc::new(
                 link_lz4::Lz4LinkSource::new(remote, packed, name.clone(), total)
                     .pad_short(lz4.as_ref().is_some_and(|i| i.size_from_image)),
@@ -12904,7 +12921,15 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // terminal is closed). Printed only once the bind has succeeded:
     // it used to come first, so a log showing it proved nothing about
     // whether the engine was actually listening.
-    println!("[ps5upload-engine] listening on http://{bind}  (ps5={ps5_addr})");
+    // Never `println!`: it panics when stdout is a closed pipe (the app that started the
+    // engine already gone), and the engine then never serves.
+    {
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stdout(),
+            "[ps5upload-engine] listening on http://{bind}  (ps5={ps5_addr})"
+        );
+    }
     crate::log_info!("listening on http://{bind}  (ps5={ps5_addr})");
     // Fan boosts end on time and are undone even if the app closed in between.
     fan_boost::spawn_sweeper();
@@ -14166,7 +14191,9 @@ where
                     match tokio::net::TcpListener::bind(bind).await {
                         Ok(l) => break l,
                         Err(e) => {
-                            eprintln!("[ps5upload-engine] listening again on {bind}: {e}");
+                            stderr_quiet(&format!(
+                                "[ps5upload-engine] listening again on {bind}: {e}"
+                            ));
                             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                         }
                     }
@@ -15450,6 +15477,23 @@ mod helpers_tests {
         n.verifying.store(true, Relaxed);
         let v = merge_live_notes(Some(&n), running.clone());
         assert_eq!(v["verifying"], true);
+        // #873: nothing about the stretch after the last byte while bytes are on their way,
+        // then how long ago it was acknowledged and how long the console has been quiet
+        assert!(v.get("all_sent_ms").is_none() && v.get("console_quiet_ms").is_none());
+        n.all_sent_ms.store(90_000, Relaxed);
+        n.console_quiet_ms.store(61_000, Relaxed);
+        let v = merge_live_notes(Some(&n), running.clone());
+        assert_eq!(
+            (v["all_sent_ms"].as_u64(), v["console_quiet_ms"].as_u64()),
+            (Some(90_000), Some(61_000))
+        );
+        n.console_quiet_ms.store(0, Relaxed);
+        let v = merge_live_notes(Some(&n), running.clone());
+        assert_eq!(
+            v["console_quiet_ms"], 0,
+            "a console getting on with it: present and small"
+        );
+        n.all_sent_ms.store(0, Relaxed);
         n.settling.store(true, Relaxed);
         n.unswept.store(12, Relaxed);
         n.unswept_peak.store(50, Relaxed);

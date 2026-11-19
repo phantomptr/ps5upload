@@ -39,6 +39,14 @@ int main(void) {
     CHECK(!archive_extract_pid_ok(0) && !archive_extract_pid_ok(1));
     CHECK(!archive_extract_pid_ok(4294967295ull) && !archive_extract_pid_ok(4294967297ull));
     CHECK(!archive_extract_pid_ok(0x80000000ull) && !archive_extract_pid_ok(~0ull));
+    /* After a helper died mid-extraction: the folder is removed, unless that extractor went on and
+     * finished (its own last status says done). */
+    CHECK(archive_extract_sweep_keeps(77, 77, "done"));
+    CHECK(!archive_extract_sweep_keeps(77, 77, "running")); /* it died too */
+    CHECK(!archive_extract_sweep_keeps(77, 77, "failed"));
+    CHECK(!archive_extract_sweep_keeps(77, 78, "done")); /* another extractor's status */
+    CHECK(!archive_extract_sweep_keeps(77, 0, "") && !archive_extract_sweep_keeps(77, 77, NULL));
+    CHECK(!archive_extract_sweep_keeps(0, 0, "done")); /* no extractor ever reported */
     if (failures) {
         fprintf(stderr, "archive_request_selftest: %d failure(s)\n", failures);
         return 1;

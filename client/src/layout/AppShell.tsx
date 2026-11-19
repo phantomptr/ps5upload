@@ -909,28 +909,34 @@ function useStatusPolling() {
  *  - Stops after MAX_REDEPLOYS_WITHOUT_RECOVERY delivered helpers with no
  *    "up" verdict in between; re-arms on any "up".
  *  - Pauses when the window is hidden (matches the poller). */
-function useAutoRedeployDownHelpers() {
-  const visible = useDocumentVisible();
-  // Per-host bookkeeping: last wall-clock send attempt + whether a send is
-  // currently in flight. Kept in refs so the interval closure always sees
-  // fresh values without re-arming the effect.
-  const lastAttemptRef = useRef<Record<string, number>>({});
-  const inFlightRef = useRef<Record<string, boolean>>({});
+/** The redeploy loop's per-console bookkeeping (see the hook below for each field). Kept for the
+ *  app's lifetime, not in the hook: every console tab has its own tree and so its own copy of the
+ *  hook, and with the counts in refs a console's first visit started them at zero. The brake
+ *  (MAX_REDEPLOYS_WITHOUT_RECOVERY) then allowed that many more helpers per tree, and
+ *  "Bring up automatically" could run the bring-up again for a console already up this boot. */
+const redeployBook = {
+  // Last wall-clock send attempt, and whether a send is in flight now.
+  lastAttemptRef: { current: {} as Record<string, number> },
+  inFlightRef: { current: {} as Record<string, boolean> },
   // Consecutive ELFs actually DELIVERED to :9021 without the helper ever
   // reporting back up. A failed send (console asleep, loader refused) does not
   // count — that's the rest-mode case this loop exists for, and it must keep
   // trying through an all-night standby. A delivered send that doesn't produce
   // an up verdict means we are the problem, not the console.
-  const deliveredRef = useRef<Record<string, number>>({});
+  deliveredRef: { current: {} as Record<string, number> },
   // Consecutive ticks a console was left alone because its helper still
   // accepted connections (see liveHelperDecision).
-  const liveHoldsRef = useRef<Record<string, number>>({});
+  liveHoldsRef: { current: {} as Record<string, number> },
   // When :9021 was first seen open on a down console (see loaderSettled).
-  const loaderFirstOpenRef = useRef<Record<string, number>>({});
+  loaderFirstOpenRef: { current: {} as Record<string, number> },
   // Consoles whose helper read up since they were last seen switched off (or since the app
   // started): "Bring up automatically" runs the whole bring-up only for the others (#479).
-  const upThisBootRef = useRef<Record<string, boolean>>({});
-  const unreachableTicksRef = useRef<Record<string, number>>({});
+  upThisBootRef: { current: {} as Record<string, boolean> },
+  unreachableTicksRef: { current: {} as Record<string, number> },
+};
+
+function useAutoRedeployDownHelpers() {
+  const visible = useDocumentVisible();
   // The bring-up's own messages (pairing, loader stuck) in the user's language.
   const tr = useTr();
   const trRef = useRef(tr);
@@ -944,12 +950,12 @@ function useAutoRedeployDownHelpers() {
 
     const tryRedeploy = async (host: string, action: Exclude<RedeployAction, "none">) => {
       const key = hostOf(host) || host;
-      if (inFlightRef.current[key]) return;
+      if (redeployBook.inFlightRef.current[key]) return;
       const now = Date.now();
-      if (now - (lastAttemptRef.current[key] ?? 0) < AUTO_REDEPLOY_INTERVAL_MS)
+      if (now - (redeployBook.lastAttemptRef.current[key] ?? 0) < AUTO_REDEPLOY_INTERVAL_MS)
         return;
-      lastAttemptRef.current[key] = now;
-      inFlightRef.current[key] = true;
+      redeployBook.lastAttemptRef.current[key] = now;
+      redeployBook.inFlightRef.current[key] = true;
       try {
         // ── Price of admission: a fresh verdict that the console is gone ──
         //
@@ -1001,9 +1007,9 @@ function useAutoRedeployDownHelpers() {
           )
         ).some(Boolean);
         if (cancelled) return;
-        const held = liveHoldsRef.current[key] ?? 0;
+        const held = redeployBook.liveHoldsRef.current[key] ?? 0;
         if (liveHelperDecision({ portsOpen, held }) === "hold") {
-          liveHoldsRef.current[key] = held + 1;
+          redeployBook.liveHoldsRef.current[key] = held + 1;
           if (held === 0) {
             log.warn(
               "connection",
@@ -1014,7 +1020,7 @@ function useAutoRedeployDownHelpers() {
           }
           return;
         }
-        liveHoldsRef.current[key] = 0;
+        redeployBook.liveHoldsRef.current[key] = 0;
         // ── A loader that just appeared belongs to a console still booting ──
         //
         // The jailbreak's autoloader brings elfldr up before kstuff and the rest
@@ -1030,17 +1036,17 @@ function useAutoRedeployDownHelpers() {
         const settleMs = helperAtBootSettleMs(loadBootRecord(host));
         const settle = loaderSettled({
           loaderOpen,
-          firstOpenAt: loaderFirstOpenRef.current[key],
+          firstOpenAt: redeployBook.loaderFirstOpenRef.current[key],
           now: Date.now(),
           settleMs,
         });
         if (settle === "closed") {
-          delete loaderFirstOpenRef.current[key];
+          delete redeployBook.loaderFirstOpenRef.current[key];
           return; // nothing can take the helper; a send could only fail
         }
         if (settle === "settle") {
-          if (loaderFirstOpenRef.current[key] === undefined) {
-            loaderFirstOpenRef.current[key] = Date.now();
+          if (redeployBook.loaderFirstOpenRef.current[key] === undefined) {
+            redeployBook.loaderFirstOpenRef.current[key] = Date.now();
             log.info(
               "connection",
               `auto-redeploy: ${host}'s loader just came up — waiting ${Math.round(settleMs / 1000)}s for the console to finish booting before sending the helper`,
@@ -1081,8 +1087,8 @@ function useAutoRedeployDownHelpers() {
         // whatever helper manages to start. Stop and say so, loudly enough
         // to find in a bug report. Resets the moment the console reports up.
         if (delivered) {
-          const n = (deliveredRef.current[key] ?? 0) + 1;
-          deliveredRef.current[key] = n;
+          const n = (redeployBook.deliveredRef.current[key] ?? 0) + 1;
+          redeployBook.deliveredRef.current[key] = n;
           if (n >= MAX_REDEPLOYS_WITHOUT_RECOVERY) {
             log.error(
               "connection",
@@ -1093,7 +1099,7 @@ function useAutoRedeployDownHelpers() {
           }
         }
       } finally {
-        inFlightRef.current[key] = false;
+        redeployBook.inFlightRef.current[key] = false;
       }
     };
 
@@ -1117,7 +1123,7 @@ function useAutoRedeployDownHelpers() {
         const decision = autoRedeployDecision({
           status: runtimeByHost[key]?.payloadStatus,
           busy: transferScreenBusy(h),
-          delivered: deliveredRef.current[key] ?? 0,
+          delivered: redeployBook.deliveredRef.current[key] ?? 0,
           // The user stopped this helper (Connection → Stop helper): it stays off (#471).
           stopped: isHelperStopped(h),
           power: runtimeByHost[key]?.power,
@@ -1125,23 +1131,23 @@ function useAutoRedeployDownHelpers() {
         // Switched off: the next time it answers it has booted again (not woken from rest).
         // Two ticks in a row, so one dropped probe on a busy network is not a reboot.
         if (runtimeByHost[key]?.power === "unreachable") {
-          const n = (unreachableTicksRef.current[key] ?? 0) + 1;
-          unreachableTicksRef.current[key] = n;
-          if (n >= 2) delete upThisBootRef.current[key];
+          const n = (redeployBook.unreachableTicksRef.current[key] ?? 0) + 1;
+          redeployBook.unreachableTicksRef.current[key] = n;
+          if (n >= 2) delete redeployBook.upThisBootRef.current[key];
         } else {
-          delete unreachableTicksRef.current[key];
+          delete redeployBook.unreachableTicksRef.current[key];
         }
         if (decision === "rearm") {
-          upThisBootRef.current[key] = true;
-          liveHoldsRef.current[key] = 0;
-          delete loaderFirstOpenRef.current[key];
-          if ((deliveredRef.current[key] ?? 0) > 0) {
-            deliveredRef.current[key] = 0;
+          redeployBook.upThisBootRef.current[key] = true;
+          redeployBook.liveHoldsRef.current[key] = 0;
+          delete redeployBook.loaderFirstOpenRef.current[key];
+          if ((redeployBook.deliveredRef.current[key] ?? 0) > 0) {
+            redeployBook.deliveredRef.current[key] = 0;
             log.info("connection", `auto-redeploy: ${h} is back up — re-armed`);
           }
         } else if (decision === "redeploy") {
           // This console by its own settings (Settings › This PS5), not the selected one's.
-          const action = redeployActionForProfile(p, defaults, upThisBootRef.current[key] === true);
+          const action = redeployActionForProfile(p, defaults, redeployBook.upThisBootRef.current[key] === true);
           if (action !== "none") void tryRedeploy(h, action);
         }
       }

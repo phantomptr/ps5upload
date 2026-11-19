@@ -11,6 +11,9 @@
 static char g_store[64], g_store_tmp[80];
 #define NOTIF_STORE_PATH g_store
 #define NOTIF_STORE_TMP g_store_tmp
+/* The toast itself is the console's; here it is only counted, with the text it was given. */
+static void test_show(const char *msg);
+#define NOTIF_SHOW(text) test_show(text)
 #include "../src/notif.c"
 
 static int failures = 0;
@@ -28,11 +31,9 @@ static int failures = 0;
 pthread_mutex_t sony_api_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_toasts;
 static char g_shown[256];
-int sceNotificationSend(int32_t type, const char *msg) {
-    (void)type;
+static void test_show(const char *msg) {
     snprintf(g_shown, sizeof g_shown, "%s", msg);
     g_toasts++;
-    return 0;
 }
 
 /* ---- helpers ---- */

@@ -155,6 +155,17 @@ static void test_coverage(void) {
     inst_coverage_add(&c, 0, 99);
     CHECK(inst_coverage_bytes(&c) == 200);
     /* out-of-order fill to complete */
+    /* A full table (256 ranges apart), then one more that sorts AFTER the pair merged to make
+     * room: it must still be counted. The pair with the smallest gap is the first two (50 bytes
+     * apart, counted as covered once merged: 250), the rest are 900 apart. */
+    inst_coverage_reset(&c);
+    inst_coverage_add(&c, 0, 99);
+    inst_coverage_add(&c, 150, 249);
+    for (uint64_t i = 2; i < INST_COVERAGE_MAX; i++) inst_coverage_add(&c, i * 1000, i * 1000 + 99);
+    CHECK(inst_coverage_bytes(&c) == 100ull * INST_COVERAGE_MAX);
+    inst_coverage_add(&c, 100500, 100599);
+    CHECK(inst_coverage_bytes(&c) == 250 + 100ull * (INST_COVERAGE_MAX - 2) + 100);
+
     inst_coverage_reset(&c);
     inst_coverage_add(&c, 200, 299);
     inst_coverage_add(&c, 0, 99);

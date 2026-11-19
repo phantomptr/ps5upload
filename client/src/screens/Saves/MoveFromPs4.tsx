@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRightLeft, CheckCircle2, CircleAlert, ShieldCheck } from "lucide-react";
 
 import { Button, Card, Checkbox, Input, Select, Spinner } from "../../components";
@@ -84,10 +84,21 @@ export default function MoveFromPs4() {
       setUser(u[0]?.id ?? "");
       setGames(null);
       setCopied(new Map());
+      // Reading the same PS4 and user again changes neither `conn` nor `user`: without this the
+      // list was cleared above and never read again (no games, no error, Copy disabled).
+      setReads((n) => n + 1);
     });
 
+  // Which read the list on screen belongs to. The effect below also runs again when this dialog
+  // is shown again after its tree was hidden (a look at another screen or console): the same
+  // read must not be repeated then, or the saves already copied were forgotten.
+  const [reads, setReads] = useState(0);
+  const loadedRef = useRef("");
   useEffect(() => {
     if (!conn || !user) return;
+    const key = [conn, user, reads].join("|");
+    if (loadedRef.current === key) return;
+    loadedRef.current = key;
     void run(tr("ps4move_reading_games", undefined, "Reading this user's saves…"), async () => {
       const g = await ps4Games(conn, user);
       setGames(g);
@@ -95,7 +106,7 @@ export default function MoveFromPs4() {
       setCopied(new Map());
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conn, user]);
+  }, [conn, user, reads]);
 
   const backUp = () =>
     run(tr("ps4move_copying", undefined, "Copying saves to this computer…"), async () => {

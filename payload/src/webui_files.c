@@ -580,11 +580,18 @@ typedef struct {
     uint64_t sent;
     char path[WF_TAR_PATH_MAX + 256];
     size_t cut; /* where the archive names start in path */
+    int chunked; /* each flush goes out as one HTTP chunk */
     uint8_t head[WF_TAR_HEADER_MAX];
 } tarw_t;
 
 static int tw_flush(tarw_t *w) {
+    if (w->used && w->chunked) {
+        char size[24];
+        int k = snprintf(size, sizeof size, "%zx\r\n", w->used);
+        if (send_rated(w->fd, size, (size_t)k, w->idle, NULL) != 0) return -1;
+    }
     if (w->used && send_rated(w->fd, w->buf, w->used, w->idle, &w->rate) != 0) return -1;
+    if (w->used && w->chunked && send_rated(w->fd, "\r\n", 2, w->idle, NULL) != 0) return -1;
     w->sent += w->used;
     w->used = 0;
     return 0;
@@ -633,8 +640,15 @@ static int tw_file(tarw_t *w, const struct stat *lst) {
         if ((uint64_t)room > size - done) room = (size_t)(size - done);
         r = pread(in, w->buf + w->used, room, (off_t)done);
         if (r < 0 && errno == EINTR) continue;
-        if (r <= 0) {
-            /* shrank (or a read error): zeros keep the archive's framing */
+        if (r < 0) {
+            /* A read error (a failing drive): the download ends here, cut short, as a single
+             * file's does. Zeros in its place made a complete-looking archive with a silently
+             * damaged file inside. */
+            close(in);
+            return -1;
+        }
+        if (r == 0) {
+            /* shrank while being read: zeros keep the archive's framing */
             memset(w->buf + w->used, 0, room);
             r = (ssize_t)room;
         }
@@ -691,6 +705,11 @@ static int tw_dir(tarw_t *w, int depth) {
 
 int wf_send_tar(int fd, const char *root, int (*skip)(const char *path, void *ctx), void *skip_ctx, unsigned idle_ms,
                 uint8_t *buf, size_t cap, uint64_t *sent) {
+    return wf_send_tar_http(fd, root, skip, skip_ctx, idle_ms, buf, cap, sent, 0);
+}
+
+int wf_send_tar_http(int fd, const char *root, int (*skip)(const char *path, void *ctx), void *skip_ctx,
+                     unsigned idle_ms, uint8_t *buf, size_t cap, uint64_t *sent, int chunked) {
     static const uint8_t zeros[1024];
     tarw_t *w;
     struct stat st;
@@ -711,6 +730,7 @@ int wf_send_tar(int fd, const char *root, int (*skip)(const char *path, void *ct
     w->skip = skip;
     w->skip_ctx = skip_ctx;
     w->dev = st.st_dev;
+    w->chunked = chunked;
     memcpy(w->path, root, n);
     w->path[n] = '\0';
     slash = strrchr(w->path, '/');
@@ -720,6 +740,9 @@ int wf_send_tar(int fd, const char *root, int (*skip)(const char *path, void *ct
     if (rc == 0) rc = tw_dir(w, 0);
     if (rc == 0) rc = tw_put(w, zeros, sizeof zeros);
     if (rc == 0) rc = tw_flush(w);
+    /* The last chunk only after a whole archive: a stream cut before it is a failed download to
+     * the browser, where a plain close after a read error was a finished one. */
+    if (rc == 0 && chunked) rc = send_rated(fd, "0\r\n\r\n", 5, idle_ms, NULL);
     if (sent) *sent = w->sent;
     free(w);
     return rc;

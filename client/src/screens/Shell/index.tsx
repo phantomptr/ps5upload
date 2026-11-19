@@ -40,7 +40,12 @@ export default function ShellScreen() {
   // console. Switching tabs must start fresh: console B has its own payload
   // process, its own filesystem layout, and must never receive console A's
   // session id or inherit a cwd that may not exist on it.
+  // A tree that was hidden (another console's tab, another screen) runs its effects again when
+  // it is shown: only a real change of console resets, or coming back wiped what was here.
+  const shownHostRef = useRef(host);
   useEffect(() => {
+    if (shownHostRef.current === host) return;
+    shownHostRef.current = host;
     sessionIdRef.current = "";
     setHistory([]);
     setHistoryCursor(null);
@@ -107,7 +112,7 @@ export default function ShellScreen() {
       // Stale-host guard: the host-switch effect above already cleared the
       // scrollback; don't resurrect the old console's cwd/result into the
       // new console's session.
-      if (useConnectionStore.getState().host !== sentHost) return;
+      if (shownHostRef.current !== sentHost) return;
       setCwd(currentCwd);
       setHistory((prev) =>
         prev.map((h) => (h.id === id ? { ...h, result, durationMs } : h)),
@@ -115,7 +120,7 @@ export default function ShellScreen() {
     } catch (e) {
       const durationMs = performance.now() - t0;
       const error = e instanceof Error ? e.message : String(e);
-      if (useConnectionStore.getState().host !== sentHost) return;
+      if (shownHostRef.current !== sentHost) return;
       setHistory((prev) =>
         prev.map((h) => (h.id === id ? { ...h, error, durationMs } : h)),
       );

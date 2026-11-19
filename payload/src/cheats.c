@@ -2509,6 +2509,20 @@ static struct {
 } g_mail[SESS_MAIL_MAX];
 static int g_nmail;
 
+/* Whether the watcher's last published status has the cheat at `flat` written into this game
+ * process (applied, or applied and since changed by the game). */
+static int sess_in_game(pid_t pid, int flat) {
+    int in = 0;
+    pthread_mutex_lock(&g_sess_lock);
+    for (int i = 0; g_snap.pid == pid && i < g_snap.n; i++) {
+        if (g_snap.e[i].flat != flat) continue;
+        in = g_snap.e[i].status == CHEATS_ST_APPLIED || g_snap.e[i].status == CHEATS_ST_CHANGED;
+        break;
+    }
+    pthread_mutex_unlock(&g_sess_lock);
+    return in;
+}
+
 static void publish_snapshot(void) {
     pthread_mutex_lock(&g_sess_lock);
     g_snap.pid = g_sess.pid;
@@ -3166,10 +3180,16 @@ int cheats_list_mods(const char *title_id, char *buf, size_t cap,
 #define KEEP_RANGES_MAX 8192 /* XML game patches can have hundreds of locations */
 
 /* Every location of the title's enabled cheats other than `skip_flat`, as byte ranges.
- * Returns the count, or -1 when the list could not be made complete (out of memory, a cheat
- * file or the state that cannot be read, an enabled cheat whose locations cannot be resolved,
- * more ranges than fit): the caller then refuses, because a missing range could be a shared
- * cave that would be wiped under another cheat's jump. Call with g_apply_lock held. */
+ * Returns the count, or -1 when the list could not be made complete (out of memory, the state
+ * that cannot be read, more ranges than fit): the caller then refuses, because a missing range
+ * could be a shared cave that would be wiped under another cheat's jump. Call with g_apply_lock
+ * held.
+ *
+ * A cheat that is switched on but cannot be worked out (a bad offset, bytes missing, its module
+ * not loaded, a file that no longer loads) has no ranges: apply_mod_locked works it out the same
+ * way before it writes anything, so nothing of it is in the game. It used to make this -1, and
+ * then no other cheat of the title could be turned off for as long as it stayed on. Only one the
+ * watcher has as applied to this process (worked out then, not now) still makes it -1. */
 static int collect_enabled_ranges(pid_t pid, intptr_t base, const char *title_id, int skip_flat,
                                   cheat_range_t *out, int max) {
     found_file_t files[16];
@@ -3181,7 +3201,9 @@ static int collect_enabled_ranges(pid_t pid, intptr_t base, const char *title_id
         count = 0;
         int flat = 0;
         for (int fi = 0; fi < n && count >= 0; fi++) {
-            if (load_cheat_file(files[fi].path, files[fi].format, cf) != 0) { count = -1; break; }
+            /* A file that does not load lists no mods and takes no flat numbers (slots_load and
+             * cheats_toggle skip it the same way). */
+            if (load_cheat_file(files[fi].path, files[fi].format, cf) != 0) continue;
             for (int mi = 0; mi < cf->mod_count && count >= 0; mi++, flat++) {
                 /* on as the watcher sees it: saved on, or switched on by its file and not turned
                  * off (#627). A button is one press, never kept on (slots_load skips it too). */
@@ -3203,8 +3225,20 @@ static int collect_enabled_ranges(pid_t pid, intptr_t base, const char *title_id
                 if (cf->mods[mi].module_name[0])
                     mb = resolve_module_base(pid, cf->mods[mi].module_name);
                 cheat_loc_t *locs = locs_for(&cf->mods[mi]);
-                int nl = locs ? resolve_mod_locs(pid, mb, &cf->mods[mi], locs, NULL, 0) : -1;
-                if (nl <= 0 || count + nl > max) {
+                if (!locs) {
+                    count = -1;
+                    break;
+                }
+                int nl = resolve_mod_locs(pid, mb, &cf->mods[mi], locs, NULL, 0);
+                if (nl <= 0) {
+                    free(locs);
+                    if (sess_in_game(pid, flat)) { /* written earlier, and where is not known now */
+                        count = -1;
+                        break;
+                    }
+                    continue; /* never written: nothing of it to keep */
+                }
+                if (count + nl > max) {
                     free(locs);
                     count = -1;
                     break;
@@ -3231,11 +3265,6 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
         return -1;
     }
 
-    /* Auto-enable engine if toggling while game is running */
-    if (turn_on && !atomic_load(&g_engine_enabled)) {
-        cheats_engine_set_enabled(1);
-    }
-
     found_file_t files[16];
     int n = find_cheat_files(title_id, files, 16, 0);
     if (n == 0) {
@@ -3259,6 +3288,14 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
                           "running game (%s) does not match cheat target (%s)",
                           rg_title, title_id);
         return -1;
+    }
+
+    /* Auto-enable the engine when a cheat of the running game is turned on. Only here, after the
+     * checks above: done first, a request that was then refused (no game, another game, no cheat
+     * file) still switched the engine on and saved that, and the next launch applied every saved
+     * cheat with the engine the player had left off. */
+    if (turn_on && !atomic_load(&g_engine_enabled)) {
+        cheats_engine_set_enabled(1);
     }
 
     /* Resolve flat index to file + mod */

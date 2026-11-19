@@ -286,6 +286,12 @@ shows nothing for it. Code that matches on these fields points here (`client/src
 | `bottleneck` | string | AVA1's words: `network`, `source`, `console drive`, `console workers`, `console memory`, `none`. A finished job carries the same word in `commit_ack.bottleneck`. |
 | `settling` | bool | Files are still settling on the console after the job finished (the engine sees `unswept` > 0 in `job.status`): the client shows "Finishing on the console…". Sent on the job while it settles; absent or `false` shows nothing. |
 | `verifying` | bool | The job asked for the read-back (`JF_READBACK`, SPEC §13.5; #783), every byte is durable on the console and files are still being committed: the console is reading the last large files back from its drive. The client shows "Verifying on the PS5…". Never with `settling`. |
+| `all_sent_ms`, `console_quiet_ms` | u64 | Once the console has acknowledged every byte it needed (#873; absent before): milliseconds since then, and milliseconds since it last confirmed anything new (a durable byte, a finished file, a file saved in place). A console that is getting on with the files keeps the second small; from 60 s on the client shows "The PS5 has reported no progress for …" and the engine's log says so once, with what the console had confirmed (a read-back of a large file confirms nothing until the file is done). |
+
+`bytes_sent` on a running upload is what the console has of the job: what its map said it held at the
+latest open (a resume, a reconnect) plus what it has acknowledged since, capped at `total_bytes`. It
+reaches `total_bytes` when the console has acknowledged the last byte it needed, so
+`bytes_sent == total_bytes` on a running job means only the console's own work is left.
 
 A finished upload's `commit_ack` also carries `readback`: `"on"` (the console read each large file back
 from its drive before it counted it written), `"off"` (the `verify_writes` setting is off) or

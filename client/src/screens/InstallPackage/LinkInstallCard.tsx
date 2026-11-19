@@ -50,6 +50,7 @@ export function LinkInstallCard({
   checking,
   prefill,
   onInstall,
+  onSave,
 }: {
   host: string;
   hostReady: boolean;
@@ -62,6 +63,8 @@ export function LinkInstallCard({
     name: string;
     mode: LinkInstallMode;
   }) => void;
+  /** Save what the link serves to a PS5 folder without installing it (#872). */
+  onSave?: (url: string) => void;
 }) {
   const tr = useTr();
   const mode = useLinkInstallPrefs((s) => s.modeFor(host));
@@ -306,7 +309,24 @@ export function LinkInstallCard({
         </label>
       )}
 
-      <div className="mt-3 flex justify-end">
+      <div className="mt-3 flex flex-wrap justify-end gap-2">
+        {onSave && (
+          <Button
+            variant="secondary"
+            size="sm"
+            leftIcon={<HardDrive size={14} />}
+            disabled={!hostReady || !url.trim() || checking}
+            onClick={() => onSave(url.trim())}
+            title={tr(
+              "linkcard.save_hint",
+              undefined,
+              "Save what the link serves to a folder on the PS5 without installing it",
+            )}
+            data-testid="link-install-save"
+          >
+            {tr("linkcard.save", undefined, "Save to a PS5 folder")}
+          </Button>
+        )}
         <Button
           variant="primary"
           size="sm"

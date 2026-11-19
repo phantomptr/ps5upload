@@ -825,6 +825,17 @@ export class RemotePlayStream {
     if (el) {
       host.appendChild(el);
       this.mse?.resume();
+    } else if (
+      typeof VideoDecoder === "undefined" &&
+      this.pictureOn &&
+      !this.ended &&
+      this.header &&
+      !this.video
+    ) {
+      // A system without WebCodecs whose stream began while the picture was on no page: the
+      // media player had nowhere to go then, and nothing asked again, so the picture stayed
+      // black for the whole session. It starts now (and asks for a keyframe).
+      this.openVideo();
     }
     return () => {
       if (this.cv.parentElement === host) host.removeChild(this.cv);
@@ -1450,7 +1461,14 @@ export class RemotePlayStream {
       // The HDR canvas is set up before the console is asked: if it cannot be, the session is
       // plain HEVC from the start.
       try {
-        this.hdr = await HdrPresenter.create(this.cv);
+        const hdr = await HdrPresenter.create(this.cv);
+        // Stopped while it was being made: `finish` has already let go of everything else, so
+        // one kept now is never disposed (it holds a graphics device of its own).
+        if (this.ended) {
+          hdr.dispose();
+          return;
+        }
+        this.hdr = hdr;
       } catch (e) {
         codec = hevc ? "h265" : "h264";
         hdrOff = String(e);
@@ -2013,6 +2031,23 @@ export class RemotePlayStream {
   snapshot(): Promise<Blob | null> {
     const c = this.cv;
     if (!this.decoded || !this.pictureOn) return Promise.resolve(null);
+    if (this.mse) {
+      // The media player shows the picture and the canvas is never drawn: the shot comes from
+      // its <video>. (The canvas gave a blank image, saved as if it had worked.)
+      const v = this.mse.element.querySelector("video");
+      if (!v || !v.videoWidth || !v.videoHeight) return Promise.resolve(null);
+      const shot = document.createElement("canvas");
+      shot.width = v.videoWidth;
+      shot.height = v.videoHeight;
+      const g = shot.getContext("2d");
+      if (!g) return Promise.resolve(null);
+      try {
+        g.drawImage(v, 0, 0);
+      } catch {
+        return Promise.resolve(null);
+      }
+      return new Promise((resolve) => shot.toBlob((b) => resolve(b), "image/png"));
+    }
     return new Promise((resolve) => c.toBlob((b) => resolve(b), "image/png"));
   }
 
@@ -2021,6 +2056,9 @@ export class RemotePlayStream {
    *  plays is untouched. `release()` takes the tap off again. */
   captureMedia(fps: number): { stream: MediaStream; release: () => void } | null {
     if (!this.pictureOn) return null;
+    // The media player shows the picture: the canvas is empty, and a recording of it is a blank
+    // clip. None is made (the caller says the clip could not be recorded).
+    if (this.mse) return null;
     const c = this.cv as HTMLCanvasElement & { captureStream?: (fps?: number) => MediaStream };
     if (typeof c.captureStream !== "function") return null;
     const stream = c.captureStream(fps);
@@ -2367,6 +2405,8 @@ export class RemotePlayStream {
       return;
     }
     this.bytes += payload.length;
+    // No WebCodecs, and the media player not started yet (see `openVideo`): nothing takes frames.
+    if (typeof EncodedVideoChunk === "undefined") return;
     const key = isKeyframe(payload, this.hevc);
     // Behind: old pictures are no use to someone playing. Skip to a keyframe.
     const backlog = this.o.lowLatency ? VIDEO_BACKLOG_LOW_LATENCY : VIDEO_BACKLOG;
@@ -2709,6 +2749,9 @@ export class RemotePlayStream {
     if (this.o.decoding === "mse" && this.startMse("chosen in Settings › Video decoding", true)) return;
     // No WebCodecs on this system at all (an older WebKit, #766): the media player from the start.
     if (typeof VideoDecoder === "undefined" && this.startMse("this system has no WebCodecs", true)) return;
+    // No WebCodecs and the media player could not start (the picture is not on a page yet, so
+    // it has nowhere to go): nothing to open. `mount` opens it once the picture is shown.
+    if (typeof VideoDecoder === "undefined") return;
     // A new decoder: its wait for a picture starts with its first frame.
     this.waitingSince = 0;
     // Linux: the GL display WebKitGTK needs first, and the crash marker until the first picture.

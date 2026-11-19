@@ -636,6 +636,10 @@ export async function sendPayloadChecked(
   elfPath: string,
   port?: number,
 ): Promise<{ viaPayloadManager: boolean }> {
+  // The web UI's send is made by the engine, which does this check itself. The question below
+  // only exists in the desktop app: asked from a browser it failed every catalogue send with
+  // "needs the desktop app".
+  if (!isTauriEnv()) return sendPayload(ip, elfPath, port);
   const check = await invoke<{ ok?: boolean; status?: string }>("payload_send_check", {
     ip,
     path: elfPath,
@@ -4644,6 +4648,11 @@ export interface JobSnapshot {
    *  Absent on engines that do not send the counts. */
   settle_files_left?: number;
   settle_files_total?: number;
+  /** Once the console has acknowledged every byte (#873): milliseconds since then, and
+   *  milliseconds since it last confirmed anything new (a durable byte, a finished file, a file
+   *  saved in place). Absent while bytes are still on their way and on older engines. */
+  all_sent_ms?: number;
+  console_quiet_ms?: number;
   /** A console-to-console copy (#433): "direct" between the consoles or "relay" through this
    *  computer, and why not direct. Absent until the route is known (and on other jobs). */
   route?: string;

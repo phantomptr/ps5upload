@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { streamErrorMessage } from "./StreamPanel";
+import { streamErrorFor } from "./streamErrors";
+
+describe("streamErrorFor", () => {
+  const lost = { code: "lost", detail: "" } as const;
+
+  it("shows a stream's error on the page of the console it streamed", () => {
+    expect(streamErrorFor(lost, "192.0.2.10", "192.0.2.10")).toBe(lost);
+  });
+
+  it("keeps it off another console's page", () => {
+    expect(streamErrorFor(lost, "192.0.2.10", "192.0.2.11")).toBeNull();
+  });
+
+  it("shows it when the console is not known on either side", () => {
+    expect(streamErrorFor(lost, null, "192.0.2.11")).toBe(lost);
+    expect(streamErrorFor(lost, "192.0.2.10", null)).toBe(lost);
+    expect(streamErrorFor(null, "192.0.2.10", "192.0.2.10")).toBeNull();
+  });
+});
 
 // The English fallback, as the app shows it without a translation.
 const tr = ((_key: string, _vars: unknown, fallback?: string) => fallback ?? "") as Parameters<

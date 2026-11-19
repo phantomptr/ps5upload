@@ -46,6 +46,17 @@ pub fn unregister(pid: u32) {
         .retain(|(_, p)| *p != pid);
 }
 
+/// Whether `pid` is on the list (tests of the callers that must take it off).
+#[cfg(test)]
+#[allow(dead_code)] // its caller's test is not built on every system
+pub fn registered(pid: u32) -> bool {
+    CHILDREN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|(_, p)| *p == pid)
+}
+
 /// Kills every registered child at once. Last resort, from the exit path only.
 pub fn kill_all() {
     let children = std::mem::take(&mut *CHILDREN.lock().unwrap_or_else(|e| e.into_inner()));

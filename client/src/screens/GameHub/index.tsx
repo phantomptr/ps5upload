@@ -13,7 +13,7 @@
 import { formatDate } from "../../lib/formatDate";
 import { useGameLaunch } from "../../lib/useGameLaunch";
 import { useStreamLaunch } from "../Play/game/streamLaunch";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   useLocation,
   useParams,
@@ -150,7 +150,13 @@ export default function GameHubScreen() {
   // The connected console's installed titles: this game's "On this PS5" card, the name of a
   // game the drives scan doesn't have, and what a backport's library scan may walk.
   const [installedTick, setInstalledTick] = useState(0);
+  // Cleared for another console only. The effect also runs again each time the page is shown
+  // again: clearing then took "On this PS5" off the page until the list was read once more,
+  // with whatever was open in it (and for good when that read failed).
+  const titlesHost = useRef(host);
   useEffect(() => {
+    if (titlesHost.current === host) return;
+    titlesHost.current = host;
     setInstalledTitles([]);
   }, [host]);
   useEffect(() => {
@@ -742,6 +748,10 @@ function useTabFetch<T>(
 ): {
   data: T | null;
   loading: boolean;
+  /** The data on hand answers this same question (console and deps), so a read under way is
+   *  only a refresh: the tab keeps showing it. The effect runs again each time the page is
+   *  shown again, and swapping the body for "Loading…" then threw away what was open in it. */
+  refreshing: boolean;
   error: string | null;
   setData: (data: T) => void;
 } {
@@ -749,6 +759,8 @@ function useTabFetch<T>(
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dataFor, setDataFor] = useState<string | null>(null);
+  const asked = JSON.stringify([host, ...deps]);
 
   useEffect(() => {
     if (!host?.trim() || payloadStatus !== "up") {
@@ -762,7 +774,9 @@ function useTabFetch<T>(
     setError(null);
     fetcher(transferAddr(host.trim()))
       .then((res) => {
-        if (!cancelled) setData(res);
+        if (cancelled) return;
+        setData(res);
+        setDataFor(asked);
       })
       .catch((e) => {
         if (!cancelled) setError(humanizeCaught(e));
@@ -778,7 +792,7 @@ function useTabFetch<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [host, payloadStatus, ...deps]);
 
-  return { data, loading, error, setData };
+  return { data, loading, refreshing: loading && data !== null && dataFor === asked, error, setData };
 }
 
 /** Standard card wrapper for a fetched tab: title, spinner, error, body. */
@@ -786,12 +800,15 @@ function TabCard({
   icon: Icon,
   title,
   loading,
+  refreshing,
   error,
   children,
 }: {
   icon: typeof Info;
   title: string;
   loading?: boolean;
+  /** Loading over data already shown: the spinner turns, the body stays. */
+  refreshing?: boolean;
   error?: string | null;
   children: React.ReactNode;
 }) {
@@ -812,7 +829,7 @@ function TabCard({
         >
           {error}
         </Callout>
-      ) : loading ? (
+      ) : loading && !refreshing ? (
         <p className="text-sm text-[var(--color-muted)]">
           {tr("loading", undefined, "Loading…")}
         </p>
@@ -849,7 +866,7 @@ function CheatsTab({
   const navigate = useNavigate();
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const connected = !!host?.trim() && payloadStatus === "up";
-  const { data, loading, error, setData } = useTabFetch(
+  const { data, loading, refreshing, error, setData } = useTabFetch(
     host,
     (addr) => cheatsGet(titleId, addr),
     [titleId],
@@ -904,6 +921,7 @@ function CheatsTab({
       icon={Shield}
       title={tr("game_hub_cheats", undefined, "Cheats")}
       loading={loading}
+      refreshing={refreshing}
       error={error ?? data?.error ?? null}
     >
       {!connected ? (
@@ -972,7 +990,7 @@ function SavesTab({ titleId, host }: { titleId: string; host: string | null }) {
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const connected = !!host?.trim() && payloadStatus === "up";
   // user_id=0 lists every user's saves; we filter to this title client-side.
-  const { data, loading, error } = useTabFetch(
+  const { data, loading, refreshing, error } = useTabFetch(
     host,
     (addr) => savesList(addr, 0),
     [],
@@ -1001,6 +1019,7 @@ function SavesTab({ titleId, host }: { titleId: string; host: string | null }) {
       icon={Save}
       title={tr("game_hub_saves", undefined, "Saves")}
       loading={loading}
+      refreshing={refreshing}
       error={error}
     >
       {!connected ? (

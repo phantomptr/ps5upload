@@ -277,6 +277,18 @@ export function evictUploadDraft(host: string): void {
   draftStash.delete(draftKey(host));
 }
 
+/** The result of inspecting a file picked on console `pickedFor`, arriving after the user moved
+ *  to another console: it goes into that console's stashed draft (if it still holds the pick).
+ *  True when it was handled here; false when that console is still the one on screen. Without
+ *  this an archive or package came back un-inspected: no contents, no size, no title, and a
+ *  lost "password required". */
+function landInStashedDraft(pickedFor: string, path: string, patch: Partial<UploadDraft>): boolean {
+  if (draftKey(useConnectionStore.getState().host) === pickedFor) return false;
+  const stashed = draftStash.get(pickedFor);
+  if (stashed?.source?.path === path) draftStash.set(pickedFor, { ...stashed, ...patch });
+  return true;
+}
+
 export const useUploadStore = create<UploadState>((set, get) => ({
   source: null,
   detecting: false,
@@ -303,6 +315,8 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   excludes: defaultExcludes,
 
   async pickFile(path) {
+    // The console this pick belongs to: an inspection can finish after a console switch.
+    const pickedFor = draftKey(useConnectionStore.getState().host);
     // An archive is inspected (and later extracted) from local disk, so one on a saved server
     // is copied here first and then handled like any other archive.
     if (isRemotePath(path) && isArchivePath(path)) {
@@ -362,48 +376,45 @@ export const useUploadStore = create<UploadState>((set, get) => ({
           parts?: unknown[];
           total_size?: number;
         };
-        if (get().source?.path !== path) return;
         if ((meta.parts?.length ?? 1) > 1) {
-          set({
-            detecting: false,
-            detectError: trStatic(
-              "upload_split_pkg_unsupported",
-              "This is one part of a split package, and split packages can't be installed. Join the parts into one .pkg first.",
-            ),
-          });
+          const detectError = trStatic(
+            "upload_split_pkg_unsupported",
+            "This is one part of a split package, and split packages can't be installed. Join the parts into one .pkg first.",
+          );
+          if (landInStashedDraft(pickedFor, path, { detectError })) return;
+          if (get().source?.path !== path) return;
+          set({ detecting: false, detectError });
           return;
         }
-        set({
-          source: {
-            kind: "pkg",
-            path,
-            meta: null,
-            wrappedHint: null,
-            zipInfo: null,
-            pkgInfo: {
-              contentId: meta.head?.content_id ?? "",
-              title: meta.head?.title ?? null,
-              category: meta.head?.category ?? null,
-              totalBytes: meta.total_size ?? 0,
-              platform:
-                meta.head?.platform ||
-                platformFromTitleId(
-                  titleIdFromContentId(meta.head?.content_id ?? ""),
-                ),
-            },
+        const source: PickedSource = {
+          kind: "pkg",
+          path,
+          meta: null,
+          wrappedHint: null,
+          zipInfo: null,
+          pkgInfo: {
+            contentId: meta.head?.content_id ?? "",
+            title: meta.head?.title ?? null,
+            category: meta.head?.category ?? null,
+            totalBytes: meta.total_size ?? 0,
+            platform:
+              meta.head?.platform ||
+              platformFromTitleId(
+                titleIdFromContentId(meta.head?.content_id ?? ""),
+              ),
           },
-          detecting: false,
-          detectError: null,
-        });
-      } catch (e) {
+        };
+        if (landInStashedDraft(pickedFor, path, { source, detectError: null })) return;
         if (get().source?.path !== path) return;
-        set({
-          detecting: false,
-          detectError: trStatic(
-            "upload_pkg_header_unreadable",
-            "Couldn't read the .pkg header: {error}",
-          ).replace("{error}", () => (e instanceof Error ? e.message : String(e))),
-        });
+        set({ source, detecting: false, detectError: null });
+      } catch (e) {
+        const detectError = trStatic(
+          "upload_pkg_header_unreadable",
+          "Couldn't read the .pkg header: {error}",
+        ).replace("{error}", () => (e instanceof Error ? e.message : String(e)));
+        if (landInStashedDraft(pickedFor, path, { detectError })) return;
+        if (get().source?.path !== path) return;
+        set({ detecting: false, detectError });
       }
       return;
     }
@@ -446,24 +457,22 @@ export const useUploadStore = create<UploadState>((set, get) => ({
             set({ zipInspectEntries: p.entries_seen });
           });
         }
+        const source: PickedSource = { kind: "archive", path, meta: null, wrappedHint: null, zipInfo };
+        if (landInStashedDraft(pickedFor, path, { source, detectError: null })) return;
         if (get().source?.path !== path) return;
         set({
-          source: {
-            kind: "archive",
-            path,
-            meta: null,
-            wrappedHint: null,
-            zipInfo,
-          },
+          source,
           detecting: false,
           detectError: null,
           zipInspectEntries: null,
         });
       } catch (e) {
+        const detectError = e instanceof Error ? e.message : String(e);
+        if (landInStashedDraft(pickedFor, path, { detectError })) return;
         if (get().source?.path !== path) return;
         set({
           detecting: false,
-          detectError: e instanceof Error ? e.message : String(e),
+          detectError,
           zipInspectEntries: null,
         });
       }

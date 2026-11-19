@@ -303,7 +303,12 @@ export default function SendPanel() {
   const latestProbePathRef = useRef<string | null>(null);
   const pickedIsHelper = useRef(false);
   const { guard: guardReplace, dialog: replaceDialog } = useHelperReplaceGuard();
+  // A send is on its way. Kept apart from `status`: a file check started meanwhile (leaving the
+  // path field, a click on a recent send) used to overwrite "sending", which put Send back and
+  // let the same payload be sent a second time.
+  const sendingRef = useRef(false);
   const probeFile = async (path: string) => {
+    if (sendingRef.current) return;
     latestProbePathRef.current = path;
     pickedIsHelper.current = false;
     if (isRemotePath(path)) {
@@ -347,12 +352,14 @@ export default function SendPanel() {
   };
 
   const send = async () => {
-    if (!elfPath || !host?.trim() || parsedPort === null) return;
+    if (!elfPath || !host?.trim() || parsedPort === null || sendingRef.current) return;
     const startedHost = host.trim();
     const startedPort = parsedPort;
     const startedPath = elfPath;
     // The file is our own helper: it replaces the one running, so ask as Connection does.
     if (pickedIsHelper.current && startedPort === 9021 && !(await guardReplace(startedHost))) return;
+    if (sendingRef.current) return;
+    sendingRef.current = true;
     setStatus({ kind: "sending" });
     try {
       // A payload on a saved server is copied here first (the loader sends local bytes), and
@@ -377,6 +384,8 @@ export default function SendPanel() {
         timestamp: Date.now(),
         error: err,
       });
+    } finally {
+      sendingRef.current = false;
     }
   };
 

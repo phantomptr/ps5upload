@@ -498,6 +498,64 @@ pub(crate) fn list_saves(host: &str) -> Result<Vec<SaveEntry>, String> {
 
 // ── backup ──────────────────────────────────────────────────────────────
 
+// ── one save operation per console at a time ────────────────────────────
+//
+// The console keeps one save open at a time, and opening another closes the first (writing its
+// copy back). Every operation here asks "is a save open?" and then opens, fills and closes over
+// many requests, so two of them on one console at once passed that check together and then
+// closed each other's save half filled, or backed a folder up while the other was replacing it.
+
+/// Holds the consoles of one save operation until dropped.
+pub(crate) struct SaveOp(Vec<String>);
+
+type SaveOps = (
+    Mutex<BTreeMap<String, std::thread::ThreadId>>,
+    std::sync::Condvar,
+);
+
+fn save_ops() -> &'static SaveOps {
+    static OPS: OnceLock<SaveOps> = OnceLock::new();
+    OPS.get_or_init(Default::default)
+}
+
+/// Waits until no other save operation runs on any of `hosts`, then holds them. A step of an
+/// operation that already holds a console (the same thread: an operation is one thread) passes
+/// straight through, so the steps can each ask. Two consoles are taken together or not at all,
+/// so two copies in opposite directions can't each hold one and wait for the other.
+pub(crate) fn save_op(hosts: &[&str]) -> SaveOp {
+    let me = std::thread::current().id();
+    let (held, freed) = save_ops();
+    let mut held = held.lock().unwrap_or_else(|e| e.into_inner());
+    let mut keys: Vec<String> = hosts
+        .iter()
+        .map(|h| crate::helper_stop::console_key(h))
+        .filter(|k| !k.is_empty() && held.get(k) != Some(&me))
+        .collect();
+    keys.sort();
+    keys.dedup();
+    while keys.iter().any(|k| held.contains_key(k)) {
+        held = freed.wait(held).unwrap_or_else(|e| e.into_inner());
+    }
+    for k in &keys {
+        held.insert(k.clone(), me);
+    }
+    SaveOp(keys)
+}
+
+impl Drop for SaveOp {
+    fn drop(&mut self) {
+        if self.0.is_empty() {
+            return;
+        }
+        let (held, freed) = save_ops();
+        let mut held = held.lock().unwrap_or_else(|e| e.into_inner());
+        for k in &self.0 {
+            held.remove(k);
+        }
+        freed.notify_all();
+    }
+}
+
 /// Backs up one save into `dir`; returns the zip's path. `tag` marks the kind (`snap`: taken
 /// while the game ran; None: automatic), and each kind keeps its own `keep`. `verify` runs once
 /// the copy is on this computer, before it is kept: an Err throws the copy away.
@@ -509,6 +567,7 @@ pub(crate) fn back_up_one(
     tag: Option<&str>,
     verify: &dyn Fn() -> Result<(), String>,
 ) -> Result<PathBuf, String> {
+    let _op = save_op(&[host]);
     let user = entry.user_id as u32;
     let tmp = make_temp_dir(&entry.title_id)?;
     let tmp_s = tmp.to_string_lossy().into_owned();
@@ -1310,6 +1369,7 @@ pub(crate) fn restore_zip(
     save_path: &str,
     user_id: u32,
 ) -> Result<(), String> {
+    let _op = save_op(&[host]);
     // A save made on another PS5, or another user's here, does not load as this user's when it is
     // put in place as it is (an emulator's is plain files).
     if save_writer(save_path, title_id, user_id)?
@@ -1338,6 +1398,7 @@ pub(crate) fn restore_zip_any_user(
     user_id: u32,
     beside: Option<PathBuf>,
 ) -> Result<(), String> {
+    let _op = save_op(&[host]);
     match restore_zip(host, title_id, zip, save_path, user_id) {
         Err(e) if e == OTHER_USER_ERROR || e == OTHER_CONSOLE_ERROR => {
             let file = backup_file_name(zip, title_id);
@@ -1374,6 +1435,7 @@ pub(crate) fn restore_zip_with(
     user_id: u32,
     keep_current: bool,
 ) -> Result<(), String> {
+    let _op = save_op(&[host]);
     let s = settings();
     let writer = save_writer(save_path, title_id, user_id)?;
     let (app, emulator) = (writer.app, writer.emulator.is_some());
@@ -1481,6 +1543,7 @@ pub(crate) fn put_in_place(
     tag: Option<&str>,
     keep_current: bool,
 ) -> Result<(), String> {
+    let _op = save_op(&[host]);
     // Keep what is there now, so the change can be undone: in the backup folder, or (with none
     // set) on the server the save backups go to.
     let current = SaveEntry {
@@ -2209,6 +2272,64 @@ mod tests {
     }
 
     use super::*;
+
+    /// Two save operations on one console never overlap (the console keeps one save open, and
+    /// opening another closes the first): the second starts only when the first is over, and
+    /// one on another console is not held up.
+    #[test]
+    fn a_second_save_operation_on_a_console_waits_for_the_first() {
+        let first = save_op(&["192.0.2.41:9020"]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let second = std::thread::spawn(move || {
+            // The same console, named without its port and in another case.
+            let _other_console = save_op(&["192.0.2.42"]);
+            tx.send("other").unwrap();
+            drop(_other_console);
+            let _op = save_op(&["192.0.2.41"]);
+            tx.send("same").unwrap();
+        });
+        assert_eq!(rx.recv_timeout(Duration::from_secs(10)), Ok("other"));
+        assert!(
+            rx.recv_timeout(Duration::from_millis(300)).is_err(),
+            "the second operation ran while the first held the console"
+        );
+        drop(first);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(10)), Ok("same"));
+        second.join().unwrap();
+    }
+
+    /// A step of an operation asks for the console its operation already holds, and two copies
+    /// between the same two consoles in opposite directions both finish.
+    #[test]
+    fn save_operations_nest_and_take_two_consoles_together() {
+        let outer = save_op(&["192.0.2.51", "192.0.2.52"]);
+        let inner = save_op(&["192.0.2.52"]);
+        drop(inner);
+        // Still held after the step: another thread can't have it yet.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let threads: Vec<_> = [["192.0.2.51", "192.0.2.52"], ["192.0.2.52", "192.0.2.51"]]
+            .into_iter()
+            .map(|pair| {
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..200 {
+                        let _op = save_op(&pair);
+                        let _step = save_op(&[pair[1]]);
+                    }
+                    tx.send(()).unwrap();
+                })
+            })
+            .collect();
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        drop(outer);
+        for _ in 0..2 {
+            rx.recv_timeout(Duration::from_secs(20))
+                .expect("two copies in opposite directions held each other up");
+        }
+        for t in threads {
+            t.join().unwrap();
+        }
+    }
 
     #[tokio::test]
     async fn a_missing_local_zip_is_the_requests_fault() {

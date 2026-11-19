@@ -357,6 +357,48 @@ static void test_tar_stream(void) {
     pthread_join(t, NULL);
     CHECK(rc == 0 && sent > 1536 * 1024 && sent % 512 == 0);
 
+    /* As an HTTP body in chunks: the same archive once the framing is taken off, and the closing
+     * chunk at the end (the browser's proof that it has all of it). */
+    {
+        char chf[700];
+        struct stat st_plain, st_ch;
+        uint64_t sent2 = 0, body = 0;
+        FILE *in, *ref;
+        int ok = 1, closed = 0;
+        snprintf(chf, sizeof chf, "%s/out.chunked", g_root);
+        socketpair(AF_UNIX, SOCK_STREAM, 0, sv);
+        s.fd = sv[1];
+        s.out = chf;
+        pthread_create(&t, NULL, sink_main, &s);
+        rc = wf_send_tar_http(sv[0], tree, skip_secret, (void *)"/secret", 5000, buf, WF_IO_BUF, &sent2, 1);
+        close(sv[0]);
+        pthread_join(t, NULL);
+        CHECK(rc == 0 && sent2 == sent);
+        CHECK(stat(tarf, &st_plain) == 0 && stat(chf, &st_ch) == 0 && st_ch.st_size > st_plain.st_size);
+        in = fopen(chf, "rb");
+        ref = fopen(tarf, "rb");
+        CHECK(in && ref);
+        while (in && ref && ok && !closed) {
+            char line[32];
+            unsigned long n;
+            if (!fgets(line, sizeof line, in)) {
+                ok = 0;
+                break;
+            }
+            n = strtoul(line, NULL, 16);
+            if (n == 0) {
+                closed = strcmp(line, "0\r\n") == 0 && fgetc(in) == '\r' && fgetc(in) == '\n' && fgetc(in) == EOF;
+                break;
+            }
+            for (unsigned long i = 0; i < n && ok; i++) ok = fgetc(in) == fgetc(ref);
+            body += n;
+            ok = ok && fgetc(in) == '\r' && fgetc(in) == '\n';
+        }
+        CHECK(ok && closed && body == sent && ref && fgetc(ref) == EOF);
+        if (in) fclose(in);
+        if (ref) fclose(ref);
+    }
+
     snprintf(out, sizeof out, "%s/x", g_root);
     mkdir(out, 0755);
     snprintf(cmd, sizeof cmd, "tar -xf '%s' -C '%s' 2>&1", tarf, out);

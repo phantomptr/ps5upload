@@ -68,6 +68,7 @@
 #include "sys_registry.h"
 #include "profile.h"
 #include "sony_api_lock.h"
+#include "statvfs_avail.h"
 #include "power_phase.h"
 #include "net_probe.h"
 #include "net_ports.h"
@@ -1990,13 +1991,13 @@ static int handle_fs_list_volumes(runtime_state_t *state) {
         const char *mnt_from = mnts[i].f_mntfromname;
         uint64_t bs    = (uint64_t)mnts[i].f_bsize;
         uint64_t total = (uint64_t)mnts[i].f_blocks * bs;  /* full partition size */
-        uint64_t bfree = (uint64_t)mnts[i].f_bfree  * bs;  /* free incl. root-only reserve */
-        /* f_bavail (free usable by non-root) is signed on FreeBSD and can
-         * read <=0 on a near-full FS; fall back to bfree so we never
-         * publish a reserve bigger than the real free pool. */
-        uint64_t avail = ((int64_t)mnts[i].f_bavail > 0)
-                             ? (uint64_t)mnts[i].f_bavail * bs
-                             : bfree;
+        /* f_bavail (free usable by non-root) is signed on FreeBSD and reads
+         * <=0 once the drive is written into its reserve. That is no room,
+         * as fs.freespace says (statvfs_avail.h). It used to fall back to
+         * bfree here, which published the reserve itself as free: the apps
+         * then admitted an upload onto a drive that was past full, and the
+         * helper (root) wrote it into the reserve. */
+        uint64_t avail = statvfs_avail_blocks_to_bytes((uint64_t)mnts[i].f_bavail, bs);
         uint64_t safety_reserve = mgmt_fs_reserve_for(total);
         uint64_t allocatable =
             avail > safety_reserve ? avail - safety_reserve : 0;
@@ -2724,7 +2725,9 @@ void fs_pfsc_sweep(void) {
     }
     if (pid != (int)getpid() && (kill(pid, 0) == 0 || errno == EPERM)) return; /* still running */
     /* Only our own mount point; the unit came from the same boot (the record is on tmpfs). */
-    if (strncmp(mp, FS_UNPACK_BASE "/", strlen(FS_UNPACK_BASE) + 1) != 0) {
+    /* (No ".." either: the record sits in a folder a client can write to, and
+     * "<base>/../../ext1" has the prefix and names a drive, which would be force-unmounted.) */
+    if (strncmp(mp, FS_UNPACK_BASE "/", strlen(FS_UNPACK_BASE) + 1) != 0 || path_has_dotdot_component(mp)) {
         (void)unlink(rec);
         return;
     }
@@ -3599,7 +3602,11 @@ static int fs_unmount_request(runtime_state_t *state, const char *request_body,
         free(probe);
     }
 
-    if (path_has_dotdot_component(mount_point) ||
+    /* Only an absolute path. A bare "data" has the tracker key of an image mounted as
+     * /mnt/ps5upload/data, matches no mount by name (so the image-unit check below is skipped),
+     * and unmount(2) resolves it against the working directory: from "/" that is /data itself,
+     * retried with MNT_FORCE. */
+    if (mount_point[0] != '/' || path_has_dotdot_component(mount_point) ||
         (!legacy_match && !sandbox_overlay && !mount_tracker_exists(mount_point))) {
         return mgmt_reply(MGMT_FRAME_ERROR, "fs_unmount_not_our_mount", 24);
     }
@@ -4614,7 +4621,6 @@ static sce_icc_get_fn p_sceKernelIccGetPowerUpCause = NULL;
 static int            sce_icc_get_resolve_attempted = 0;
 static void resolve_sce_icc_get(void) {
     if (sce_icc_get_resolve_attempted) return;
-    sce_icc_get_resolve_attempted = 1;
     p_sceKernelIccGetPowerOperatingTime = (sce_icc_get_fn)
         dlsym(RTLD_DEFAULT, "sceKernelIccGetPowerOperatingTime");
     p_sceKernelIccGetPowerNumberOfBootShutdown = (sce_icc_get_fn)
@@ -4623,6 +4629,10 @@ static void resolve_sce_icc_get(void) {
         dlsym(RTLD_DEFAULT, "sceKernelIccGetThermalAlert");
     p_sceKernelIccGetPowerUpCause = (sce_icc_get_fn)
         dlsym(RTLD_DEFAULT, "sceKernelIccGetPowerUpCause");
+    /* Set last: set first, a second thread's first call in between found the flag up and the
+     * pointers still NULL, and answered "not supported" for something that is. Two threads
+     * resolving at once store the same values. */
+    sce_icc_get_resolve_attempted = 1;
 }
 /* User service — libSceUserService. Initialise/Terminate are
  * idempotent; we call Initialize once on first user-list request and
@@ -4739,9 +4749,12 @@ static sce_notification_send_fn p_sceNotificationSend = NULL;
 static int sce_notification_resolve_attempted = 0;
 static void resolve_sce_notification(void) {
     if (sce_notification_resolve_attempted) return;
-    sce_notification_resolve_attempted = 1;
     p_sceNotificationSend = (sce_notification_send_fn)
         dlsym(RTLD_DEFAULT, "sceNotificationSend");
+    /* Set last: set first, a second thread's first call in between found the flag up and the
+     * pointers still NULL, and answered "not supported" for something that is. Two threads
+     * resolving at once store the same values. */
+    sce_notification_resolve_attempted = 1;
 }
 
 /* Peripheral control + module enumeration — also dlsym-resolved for
@@ -4779,7 +4792,6 @@ static sce_get_module_info_fn p_sceKernelGetModuleInfo          = NULL;
 static int                    sce_kernel_extras_resolve_attempted = 0;
 static void resolve_sce_kernel_extras(void) {
     if (sce_kernel_extras_resolve_attempted) return;
-    sce_kernel_extras_resolve_attempted = 1;
     p_sceKernelIccControlBDPowerState = (sce_icc_bd_fn)
         dlsym(RTLD_DEFAULT, "sceKernelIccControlBDPowerState");
     p_sceKernelIccControlUSBPowerState = (sce_icc_usb_fn)
@@ -4788,6 +4800,10 @@ static void resolve_sce_kernel_extras(void) {
         dlsym(RTLD_DEFAULT, "sceKernelGetModuleList");
     p_sceKernelGetModuleInfo = (sce_get_module_info_fn)
         dlsym(RTLD_DEFAULT, "sceKernelGetModuleInfo");
+    /* Set last: set first, a second thread's first call in between found the flag up and the
+     * pointers still NULL, and answered "not supported" for something that is. Two threads
+     * resolving at once store the same values. */
+    sce_kernel_extras_resolve_attempted = 1;
 }
 
 /* sceNetGetIfList — populates an array of network interface info
@@ -6888,7 +6904,12 @@ static int handle_net_interfaces(runtime_state_t *state) {
     n += snprintf(resp + n, resp_cap - n, "{\"interfaces\":[");
 
     /* ── Path 1: sceNetGetIfList ── */
-    if (resolve_sce_net() == 0) {
+    /* The resolve (a dlopen, sceNetInit, unsynchronised statics) and the call are Sony library
+     * work: one at a time with every other (sony_api_lock.h). */
+    pthread_mutex_lock(&sony_api_lock);
+    int have_sce_net = resolve_sce_net() == 0;
+    pthread_mutex_unlock(&sony_api_lock);
+    if (have_sce_net) {
         const size_t if_buf_sz = (size_t)NET_IF_MAX_ENTRIES * NET_IF_ENTRY_BYTES;
         unsigned char *if_buf = malloc(if_buf_sz);
         if (!if_buf) {
@@ -6898,7 +6919,9 @@ static int handle_net_interfaces(runtime_state_t *state) {
         }
         memset(if_buf, 0, if_buf_sz);
         int count = 0;
+        pthread_mutex_lock(&sony_api_lock);
         int sce_rc = p_sceNetGetIfList(if_buf, NET_IF_MAX_ENTRIES, &count);
+        pthread_mutex_unlock(&sony_api_lock);
         if (sce_rc == 0 && count > 0) {
             source = "sceNetGetIfList";
             if (count > NET_IF_MAX_ENTRIES) count = NET_IF_MAX_ENTRIES;
@@ -7279,6 +7302,10 @@ static int handle_shell_exec(runtime_state_t *state, const char *body,
         const char *err = "{\"err\":\"empty_cmd\"}";
         return mgmt_reply(MGMT_FRAME_SHELL_EXEC_ACK, err, strlen(err));
     }
+    /* A command that filled the buffer was cut there, and the cut command still ran: the last
+     * path of an `rm -r` shortened to whatever its first bytes name. */
+    if (strlen(cmd) >= sizeof(cmd) - 1)
+        return shell_send_json_result(state, 1, "shell: command too long\n", cwd, session_id, 0);
     {
         char probe[2100];
         char *argv_probe[8];
@@ -7732,10 +7759,14 @@ static int save_do_unmount(int *written_back, char *kept, size_t kept_sz) {
     if (!g_save_unmounted) {
         SceFsUmountSaveDataOpt uopt;
         memset(&uopt, 0, sizeof uopt);
+        /* Sony calls: one at a time with every other (sony_api_lock.h). Order: g_save_mtx, then
+         * sony_api_lock; nothing takes them the other way round. */
+        pthread_mutex_lock(&sony_api_lock);
         sceFsInitUmountSaveDataOpt(&uopt);
         errno = 0;
         int rc = sceFsUmountSaveData(&uopt, SAVE_MOUNT_POINT, 0, 0);
         int ue = errno; /* read before sync() can overwrite it */
+        pthread_mutex_unlock(&sony_api_lock);
         sync();
         /* EINVAL / ENOENT: not mounted (a reboot, or someone else unmounted it). */
         if (rc < 0 && ue != EINVAL && ue != ENOENT) {
@@ -7817,10 +7848,12 @@ static int save_mount_point_busy(void) {
 static int save_release_orphan(void) {
     SceFsUmountSaveDataOpt uopt;
     memset(&uopt, 0, sizeof uopt);
+    pthread_mutex_lock(&sony_api_lock); /* Sony calls: one at a time with the others */
     sceFsInitUmountSaveDataOpt(&uopt);
     errno = 0;
     int rc = sceFsUmountSaveData(&uopt, SAVE_MOUNT_POINT, 0, 0);
     int ue = errno; /* read before sync() can overwrite it */
+    pthread_mutex_unlock(&sony_api_lock);
     sync();
     if ((rc < 0 && ue != EINVAL && ue != ENOENT) || save_mount_point_busy()) {
         fprintf(stderr, "[payload2] save: a save left open by an earlier helper could not be closed "
@@ -7904,6 +7937,7 @@ static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps
     snprintf(copy, sizeof copy, SAVE_COPY_DIR "/%s", bname);
     if (save_copy_file(image, copy) != 0) {
         snprintf(err, err_sz, "save_copy_failed: %s", strerror(errno));
+        unlink(copy); /* a part of an image, left on a drive that is likely full */
         return -1;
     }
     chmod(copy, 0755);
@@ -7916,6 +7950,7 @@ static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps
         if (save_copy_file(real_key, copy_key) != 0) {
             snprintf(err, err_sz, "save_key_missing: %s has no %s.bin beside it", bname, name);
             unlink(copy);
+            unlink(copy_key);
             return -1;
         }
         chmod(copy_key, 0755);
@@ -7931,6 +7966,8 @@ static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps
     }
     SceFsMountSaveDataOpt mopt;
     memset(&mopt, 0, sizeof mopt);
+    /* Sony calls: one at a time with every other (sony_api_lock.h), taken after g_save_mtx. */
+    pthread_mutex_lock(&sony_api_lock);
     sceFsInitMountSaveDataOpt(&mopt);
     mopt.budgetid = "system";
     /* The mount talks to a shell service over a pipe; with SIGPIPE ignored (as our server
@@ -7941,6 +7978,7 @@ static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps
     int ret = sceFsMountSaveData(&mopt, copy, SAVE_MOUNT_POINT, key);
     int e = errno;
     sigpipe_default_close(&sp);
+    pthread_mutex_unlock(&sony_api_lock);
     memset(key, 0, sizeof key);
     if (ret < 0) {
         snprintf(err, err_sz, "save_mount_failed: 0x%x, %s", (unsigned)ret, strerror(e));
@@ -8243,13 +8281,18 @@ static int handle_pkg_direct_mount(runtime_state_t *state, const char *body,
         return mgmt_reply(MGMT_FRAME_PKG_DIRECT_MOUNT_ACK, err, strlen(err));
     }
     /* Resolve the optional libSceFsInternalForVsh export at first use. */
+    /* The resolve (a dlopen, and unsynchronised statics) and the call are Sony library work: one
+     * at a time with every other (sony_api_lock.h). */
+    pthread_mutex_lock(&sony_api_lock);
     if (resolve_sce_fs_internal() != 0 || !p_sceFsMountGamePkg) {
+        pthread_mutex_unlock(&sony_api_lock);
         const char *err = "{\"ok\":false,\"err\":\"libSceFsInternalForVsh_unavailable\"}";
         return mgmt_reply(MGMT_FRAME_PKG_DIRECT_MOUNT_ACK, err, strlen(err));
     }
     /* Best-effort mkdir of the mount point. */
     int created_mp = (mkdir(mount_point, 0755) == 0);
     int rc = p_sceFsMountGamePkg(pkg_path, mount_point, 0);
+    pthread_mutex_unlock(&sony_api_lock);
     if (rc != 0 && created_mp) {
         /* Clean up the empty mount-point dir we just made so a
          * failed attempt doesn't leave litter on the FS. */
@@ -8320,7 +8363,33 @@ static int handle_ufs_fsck(runtime_state_t *state, const char *body,
             repair = 1;
         }
     }
+    /* A repair writes to the device. With a file system mounted from it (the device or one of its
+     * partitions) the kernel's view and the disk go apart: the volume is corrupted and the next
+     * access can panic. Only a device nothing is mounted from is repaired; the read-only check
+     * stays available. */
+    if (repair) {
+        struct statfs *mnts = NULL;
+        int nmnts = mntinfo_snapshot(&mnts);
+        int in_use = 0;
+        for (int i = 0; i < nmnts && mnts; i++) {
+            char from[sizeof mnts[i].f_mntfromname + 1];
+            memcpy(from, mnts[i].f_mntfromname, sizeof mnts[i].f_mntfromname);
+            from[sizeof mnts[i].f_mntfromname] = '\0';
+            if (image_mount_from_is_on_device(device, from)) {
+                in_use = 1;
+                break;
+            }
+        }
+        free(mnts);
+        if (in_use) {
+            const char *err =
+                "{\"ok\":false,\"err\":\"device_mounted: unmount the volume before a repair\"}";
+            return mgmt_reply(MGMT_FRAME_UFS_FSCK_ACK, err, strlen(err));
+        }
+    }
+    pthread_mutex_lock(&sony_api_lock); /* Sony library work: one at a time with the others */
     if (resolve_sce_fs_internal() != 0 || !p_sceFsUfsFsck) {
+        pthread_mutex_unlock(&sony_api_lock);
         const char *err = "{\"ok\":false,\"err\":\"libSceFsInternalForVsh_unavailable\"}";
         return mgmt_reply(MGMT_FRAME_UFS_FSCK_ACK, err, strlen(err));
     }
@@ -8329,6 +8398,7 @@ static int handle_ufs_fsck(runtime_state_t *state, const char *body,
      * pointer is documented as "implementation-specific" — we pass
      * NULL which works for the simple checks we need. */
     int rc = p_sceFsUfsFsck(device, repair ? 1 : 0, NULL);
+    pthread_mutex_unlock(&sony_api_lock);
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
@@ -8368,13 +8438,16 @@ static int handle_lwfs_mount(runtime_state_t *state, const char *body,
         const char *err = "{\"ok\":false,\"err\":\"path_not_allowed\"}";
         return mgmt_reply(MGMT_FRAME_LWFS_MOUNT_ACK, err, strlen(err));
     }
+    pthread_mutex_lock(&sony_api_lock); /* Sony library work: one at a time with the others */
     if (resolve_sce_fs_internal() != 0 || !p_sceFsMountLwfs) {
+        pthread_mutex_unlock(&sony_api_lock);
         const char *err = "{\"ok\":false,\"err\":\"libSceFsInternalForVsh_unavailable\"}";
         return mgmt_reply(MGMT_FRAME_LWFS_MOUNT_ACK, err, strlen(err));
     }
     int created_mp = (mkdir(mount_point, 0755) == 0);
     int rc = p_sceFsMountLwfs(patch_path, mount_point,
                               title_id[0] ? title_id : NULL, 0);
+    pthread_mutex_unlock(&sony_api_lock);
     if (rc != 0 && created_mp) {
         (void)rmdir(mount_point);
     }

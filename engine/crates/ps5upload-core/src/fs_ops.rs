@@ -203,7 +203,7 @@ pub fn fs_hash_with_timeout(
     let body = serde_json::to_vec(&serde_json::json!({ "path": path }))
         .context("serialize fs_hash body")?;
     // A job over AVA1 (the hash of a multi-GiB file outlives any request deadline); the
-    // caller's timeout is now the whole wait.
+    // caller's timeout is how long the job may go without getting further.
     let resp = mgmt::run_op(
         addr,
         mgmt::ops::HASH,

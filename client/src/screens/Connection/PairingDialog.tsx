@@ -216,7 +216,7 @@ export function PairingPanel({
             </p>
           ) : null}
         </div>
-        <div className="flex items-center justify-end gap-2 border-t border-[var(--color-border)] px-4 py-3">
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-[var(--color-border)] px-4 py-3">
           <Button variant="ghost" onClick={onCancel}>
             {tr("close", undefined, "Close")}
           </Button>

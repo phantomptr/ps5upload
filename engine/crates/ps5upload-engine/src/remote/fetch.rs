@@ -587,6 +587,23 @@ fn safe_join(dest: &Path, rel: &str) -> Result<PathBuf, String> {
     Ok(out)
 }
 
+/// Gives a copied file its name. A folder is copied into a folder this job made, so a file
+/// already under the name is another of the server's files: two names that differ only in upper
+/// and lower case (`Readme.txt`, `README.TXT`) are one name on Windows, macOS and a phone's
+/// shared storage, and the rename put the second over the first, the job ending "done" one
+/// file short. Refused instead, with both still on the server.
+fn name_copied(partial: &Path, local: &Path, in_new_folder: bool) -> Result<(), String> {
+    if in_new_folder && local.symlink_metadata().is_ok() {
+        let _ = std::fs::remove_file(partial);
+        return Err(format!(
+            "{}: the server folder has another file whose name differs only in upper and lower \
+             case, and this drive keeps one name for both. Nothing was replaced",
+            local.display()
+        ));
+    }
+    std::fs::rename(partial, local).map_err(|e| format!("{}: {e}", local.display()))
+}
+
 /// Copy every file, each to `<name>.partial` then renamed. Returns the file count and the bytes
 /// copied (the listing's total was an estimate).
 async fn copy_all(job: CopyJob<'_>) -> Result<(u64, u64), String> {
@@ -669,11 +686,12 @@ async fn copy_all(job: CopyJob<'_>) -> Result<(u64, u64), String> {
             (job.report)(done);
         }
         // A copy that did not reach the disk is not a copy: a failed sync fails the job.
+        let in_new_folder = job.is_dir;
         blocking(move || {
             out.sync_all()
                 .map_err(|e| format!("{}: {e}", partial.display()))?;
             drop(out);
-            std::fs::rename(&partial, &local).map_err(|e| format!("{}: {e}", local.display()))
+            name_copied(&partial, &local, in_new_folder)
         })
         .await?;
     }
@@ -957,6 +975,27 @@ fn total_size(sizes: impl IntoIterator<Item = u64>) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// In a folder the copy made, a second file landing on a name already there is refused,
+    /// not put over the first (on a drive that folds case, `README.TXT` after `Readme.txt`).
+    #[test]
+    fn a_second_file_under_one_name_does_not_replace_the_first() {
+        let dir = std::env::temp_dir().join(format!("ps5upload-twins-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let local = dir.join("Readme.txt");
+        let partial = dir.join("Readme.txt.partial");
+        std::fs::write(&partial, b"first").unwrap();
+        name_copied(&partial, &local, true).unwrap();
+        std::fs::write(&partial, b"second").unwrap();
+        let err = name_copied(&partial, &local, true).unwrap_err();
+        assert!(err.contains("upper and lower"), "{err}");
+        assert_eq!(std::fs::read(&local).unwrap(), b"first");
+        assert!(!partial.exists());
+        // One file copied to a name the plan found free: placed as before.
+        std::fs::write(&partial, b"third").unwrap();
+        name_copied(&partial, &dir.join("other.bin"), false).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A closed app's copy goes; one being written or held for a build stays, and the folder
     /// goes once nothing is left in it.

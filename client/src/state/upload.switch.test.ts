@@ -7,6 +7,7 @@ let failInspect: (e: Error) => void = () => {};
 vi.mock("../api/ps5", async (orig) => ({
   ...(await orig<typeof import("../api/ps5")>()),
   inspectFolder: vi.fn(() => new Promise((r, j) => ((finishInspect = r), (failInspect = j)))),
+  rarInspect: vi.fn(() => new Promise((r, j) => ((finishInspect = r), (failInspect = j)))),
 }));
 vi.mock("../lib/tauriEnv", () => ({ isTauriEnv: () => true }));
 
@@ -59,5 +60,35 @@ describe("an Upload folder pick across a console switch", () => {
     expect(useUploadStore.getState().detectError).toBeNull();
     switchTo(A);
     expect(useUploadStore.getState().detectError).toContain("permission denied");
+  });
+});
+
+describe("an Upload archive pick across a console switch", () => {
+  beforeEach(() => {
+    useConnectionStore.getState().setHost(A);
+    useUploadStore.setState({ source: null, detecting: false, detectError: null });
+  });
+
+  it("comes back inspected on the console it was picked on", async () => {
+    const pick = useUploadStore.getState().pickFile("/dl/Game.rar");
+    switchTo(B);
+    finishInspect({ entries: 3, total_size: 42 });
+    await pick;
+    expect(useUploadStore.getState().source).toBeNull();
+
+    switchTo(A);
+    const s = useUploadStore.getState().source;
+    expect(s?.kind).toBe("archive");
+    expect(s?.zipInfo).toMatchObject({ total_size: 42 });
+  });
+
+  it("keeps a failed inspection (a password is needed) for that console", async () => {
+    const pick = useUploadStore.getState().pickFile("/dl/Locked.rar");
+    switchTo(B);
+    failInspect(new Error("rar_password_required"));
+    await pick;
+    expect(useUploadStore.getState().detectError).toBeNull();
+    switchTo(A);
+    expect(useUploadStore.getState().detectError).toBe("rar_password_required");
   });
 });

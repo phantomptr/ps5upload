@@ -42,7 +42,14 @@ pub fn set_sink(f: impl Fn(&str) + Send + Sync + 'static) {
     let _ = sink_cell().set(Box::new(f));
 }
 
-/// Emit an `info` line in the `general` category through the installed sink, or `eprintln!` if
+/// A line to stderr that never panics: `eprintln!` does when stderr is a closed pipe, which is
+/// what the app that started this process leaves behind when it dies.
+fn stderr_quiet(msg: &str) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "{msg}");
+}
+
+/// Emit an `info` line in the `general` category through the installed sink, or stderr if
 /// none has been set yet. Safe to call before/without `set_sink`. Dropped when the level of
 /// `general` is below `info`.
 pub fn log(msg: &str) {
@@ -51,7 +58,7 @@ pub fn log(msg: &str) {
     }
     match sink_cell().get() {
         Some(f) => f(msg),
-        None => eprintln!("[core] {msg}"),
+        None => stderr_quiet(&format!("[core] {msg}")),
     }
 }
 
@@ -385,7 +392,7 @@ pub fn set_leveled_sink(f: impl Fn(Lv, &'static str, &str) + Send + Sync + 'stat
 pub fn log_at(lv: Lv, cat: &'static str, msg: &str) {
     match leveled_sink_cell().get() {
         Some(f) => f(lv, cat, msg),
-        None => eprintln!("[core:{}:{cat}] {msg}", lv.name()),
+        None => stderr_quiet(&format!("[core:{}:{cat}] {msg}", lv.name())),
     }
 }
 

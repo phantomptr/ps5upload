@@ -41,3 +41,13 @@ export function linkModeFacts(mode: LinkInstallMode): LinkModeFacts {
     certificateCheckApplies: true,
   };
 }
+
+/** The way a link is really installed: a server that sends the file only whole (no byte
+ *  ranges) can be neither streamed to the PS5 nor fetched by it, so this computer saves the
+ *  package first (#872). `info` null: the link could not be checked, the choice stands. */
+export function linkModeFor(
+  chosen: LinkInstallMode,
+  info: { kind: string; ranges: boolean } | null,
+): LinkInstallMode {
+  return info?.kind === "pkg" && info.ranges === false ? "download" : chosen;
+}

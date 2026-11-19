@@ -326,6 +326,24 @@ describe("archive parts from download links", () => {
     expect(mod.listRarPackages).not.toHaveBeenCalled();
   });
 
+  it("keeps a Stop pressed while the part's status was being read", async () => {
+    let reads = 0;
+    const w = linkWorld({
+      status: async () => {
+        // Pressed while this request is out, not during the pause between reads.
+        if (++reads === 1) stopArchiveDownload(A);
+        return { written: 1, total: 100, done: false, cancelled: false, error: null };
+      },
+      sleep: async () => {
+        if (reads > 3) throw new Error("the Stop was lost");
+      },
+    });
+    await downloadArchiveParts(A, ["https://x/a.part1.rar"], false, w.deps);
+    expect(reads).toBe(1);
+    expect(w.log).toContain("cancel a.part1.rar");
+    expect(at(A)?.downloading).toBeNull();
+  });
+
   it("says so when none of the files is the first part of an archive", async () => {
     const w = linkWorld();
     await downloadArchiveParts(A, ["https://x/a.part2.rar"], false, w.deps);

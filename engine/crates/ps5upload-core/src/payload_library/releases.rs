@@ -392,7 +392,9 @@ impl Library {
                 ))
             }
         };
-        self.write_cache(&cache_path, &body)?;
+        // The cache is a saving, not the answer: a data folder that is full or read-only must
+        // not turn a release that was fetched and read into an error.
+        let _ = self.write_cache(&cache_path, &body);
         Ok(release_to_info(&entry, &release, 0, None))
     }
 
@@ -464,7 +466,7 @@ impl Library {
                 ))
             }
         };
-        self.write_cache(&cache_path, &body)?;
+        let _ = self.write_cache(&cache_path, &body);
         Ok(infos(&list, 0, None))
     }
 }

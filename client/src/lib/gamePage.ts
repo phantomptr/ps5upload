@@ -60,6 +60,16 @@ export function rowActions(
   return out;
 }
 
+/** The packages the "send it to this console" next step queues, when the drives hold the game
+ *  as a package (the row's own Install); null when it is sent as a folder, image or archive. */
+export function nextStepInstall(
+  e: ConsoleEntry | undefined,
+  copies: CollectionLocation[],
+): CollectionOffer[] | null {
+  const install = rowActions(e, copies, false).find((a) => a.kind === "install");
+  return install?.kind === "install" ? install.offers : null;
+}
+
 /** "Installed on Pro (01.004) · not on Phat · 2 copies on your drives". */
 export function summaryLine(view: GameView, names: Record<string, string>, tr: Tr): string {
   const parts = view.consoles.map((c) => {

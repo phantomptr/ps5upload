@@ -9,6 +9,7 @@ import { hostOf } from "../../lib/addr";
 import { openInConvert } from "../../lib/collectionActions";
 import { shrinkCandidate } from "../../lib/collectionInsights";
 import { bestSendable } from "../../lib/collectionSend";
+import { nextStepInstall } from "../../lib/gamePage";
 import { formatCollectionBytes } from "../../lib/collectionView";
 import {
   buildExtension,
@@ -91,6 +92,9 @@ export function NextStep({
     !entry.installed &&
     (entry.base || bestSendable(copies))
   ) {
+    // The drives hold it as a package: the same install the console's row offers. Opening the
+    // send panel did nothing then (it lists folders, images and archives, never packages).
+    const install = nextStepInstall(entry, copies);
     step = {
       text: tr(
         "game_next_send",
@@ -99,7 +103,7 @@ export function NextStep({
       ),
       action: tr("game_next_send_go", { name: consoleName }, "Send to {name}"),
       icon: <Send size={13} />,
-      run: onSend,
+      run: install ? () => queue(install) : onSend,
     };
   } else if (entry?.installed && entry.dlc_missing.length > 0) {
     const dlc = entry.dlc_missing;

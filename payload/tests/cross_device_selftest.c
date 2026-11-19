@@ -159,6 +159,15 @@ int main(void) {
     CHECK(xdev_rename_crosses("/data/a", "/mnt/usb0", fake_dev) == XDEV_CROSSES);
     CHECK(xdev_rename_crosses("/data/a", "/mnt/usb0/", fake_dev) == XDEV_CROSSES);
     CHECK(xdev_rename_crosses_l("/data/a", "/mnt/ext0", fake_dev, fake_dev) == XDEV_CROSSES);
+
+    /* A SOURCE that is itself a mount point, moved to a path on the drive
+     * mounted there: source and destination directory agree (the drive), but
+     * the entry being moved sits in /mnt, on the internal drive. */
+    CHECK(xdev_rename_crosses("/mnt/usb0", "/mnt/usb0/dir/x", fake_dev) == XDEV_CROSSES);
+    CHECK(xdev_rename_crosses("/mnt/usb0/", "/mnt/usb0/x", fake_dev) == XDEV_CROSSES);
+    CHECK(xdev_rename_crosses_l("/mnt/ext0", "/mnt/ext0/x", fake_dev, fake_dev) == XDEV_CROSSES);
+    /* A folder on that drive is still an ordinary same-device rename. */
+    CHECK(xdev_rename_crosses("/mnt/usb0/dir", "/mnt/usb0/other/x", fake_dev) == XDEV_SAME);
     /* An ordinary existing destination on its parent's device is replaced as before. */
     CHECK(xdev_rename_crosses("/data/a", "/data/existing", fake_dev) == XDEV_SAME);
     /* One that cannot be looked up is simply not there yet. */

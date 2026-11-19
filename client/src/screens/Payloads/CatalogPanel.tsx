@@ -182,6 +182,15 @@ export default function CatalogPanel() {
   }, [inventory]);
 
   const setBusy = (id: string, busy: boolean) => {
+    // A new try starts clean: the last failure used to stay on the card after a later success.
+    if (busy) {
+      setErrors((prev) => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    }
     setBusyIds((prev) => {
       const next = new Set(prev);
       if (busy) next.add(id);

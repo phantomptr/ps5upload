@@ -253,14 +253,9 @@ export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
     set({ showTransferFiles });
   },
   setBandwidthCapMbps: (bandwidthCapMbps) => {
-    if (bandwidthCapMbps > 0) {
-      safeSetItem(
-        KEY_BANDWIDTH_CAP,
-        bandwidthCapMbps.toString(),
-      );
-    } else {
-      safeRemoveItem(KEY_BANDWIDTH_CAP);
-    }
+    // "No limit" is stored as "0", not removed: a removed key reads as "never set", and the
+    // settings file's older limit was then filled back in at the next launch (state/userConfig).
+    safeSetItem(KEY_BANDWIDTH_CAP, bandwidthCapMbps > 0 ? bandwidthCapMbps.toString() : "0");
     set({ bandwidthCapMbps });
   },
   setAutoResume: (autoResume) => {

@@ -15,6 +15,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include "statvfs_avail.h"
 #include <time.h>
 #include <unistd.h>
 
@@ -48,6 +49,7 @@ extern unsigned int ps5upload_extractor_elf_len;
 #define EXTRACT_POLL_MS 200
 /* After Stop: the extractor stops within one buffer; this long without it ending, it is killed. */
 #define EXTRACT_KILL_AFTER_MS 10000
+#define EXTRACT_KILL_WAIT_MS 10000 /* for a killed extractor to be gone before its folder is removed */
 
 static pthread_mutex_t g_busy = PTHREAD_MUTEX_INITIALIZER;
 static int g_running;
@@ -234,7 +236,18 @@ void archive_extract_sweep(void) {
     /* The helper that wrote it, or its extractor, still runs (a takeover lets the old one finish). */
     if ((hpid > 1 && hpid != (long)getpid() && pid_alive((uint64_t)hpid)) || pid_alive(xpid)) return;
     if (dest[0] == '/' && may_write_here(dest)) {
-        if (created && !fsj_path_is_root(dest)) {
+        char sbuf[4096], state[16] = "";
+        uint64_t spid = 0;
+        if (read_small(EXTRACT_STATUS, sbuf, sizeof sbuf) > 0) {
+            (void)fsj_json_u64(sbuf, "pid", &spid);
+            (void)fsj_json_str(sbuf, "state", state, sizeof state);
+        }
+        if (archive_extract_sweep_keeps(xpid, spid, state)) {
+            /* The extractor finished after its helper died: the folder is whole (and no part
+             * file is left). Only the record and the status go. */
+            fprintf(stderr, "extract: a helper died mid-extraction, its extractor finished; keeping %s\n", dest);
+            (void)unlink(EXTRACT_STATUS);
+        } else if (created && !fsj_path_is_root(dest)) {
             fprintf(stderr, "extract: a helper died mid-extraction; removing the folder it made: %s\n", dest);
             (void)fsj_rm_rf(dest, 0, NULL);
         } else if (xpid) {
@@ -275,7 +288,7 @@ const char *archive_extract_probe(const char *path, archive_probe_t *p) {
         char dir[1024];
         snprintf(dir, sizeof dir, "%.*s", (int)(slash - src), src);
         if (statvfs(dir[0] ? dir : "/", &sv) == 0) {
-            p->free = (uint64_t)sv.f_bavail * sv.f_frsize;
+            p->free = statvfs_avail_bytes(&sv);
             p->have_free = 1;
         }
     }
@@ -338,6 +351,11 @@ static int follow(ava1_op_ctx_t *c, const char *id, xstatus_t *s, const char *de
             fprintf(stderr, "extract: the extractor (pid %llu) did not stop; killing it\n", (unsigned long long)s->pid);
             /* pid_alive passed just above, so it is a real pid; never this helper's own. */
             if (archive_extract_pid_ok(s->pid) && (pid_t)s->pid != getpid()) (void)kill((pid_t)s->pid, SIGKILL);
+            /* Until it is really gone, not a fixed half second: a process inside a long write (a
+             * slow USB drive) ends only when that write returns, and the caller removes the folder
+             * next, under a writer that was still putting files into it. Bounded, so a pid that
+             * never goes away cannot hold the job (and the one-at-a-time lock) for good. */
+            for (int i = 0; i < EXTRACT_KILL_WAIT_MS / 100 && pid_alive(s->pid); i++) sleep_ms(100);
             sleep_ms(500);
             sweep_parts(dest, s->pid, 0);
             ava1_op_message(c, "fs_extract_cancelled");

@@ -157,6 +157,22 @@ export function startedApply(host: string, st: CleanupApplyStatus): void {
   patch(host, { applying: st, summary: null, error: null });
 }
 
+/** A Remove the console has just accepted: shown from the first moment, and followed to its end
+ *  whatever the first status read does. That read failing (the helper is busy starting the
+ *  removal) used to leave the run unfollowed: the console deleting, the screen idle. Resolves
+ *  once the following has started. */
+export async function beginApplyFollow(
+  host: string,
+  applyId: number,
+  items: CleanupItem[],
+  freeBefore: number | null,
+  wait?: (ms: number) => Promise<unknown>,
+): Promise<void> {
+  const first = await cleanupApplyStatus(host, applyId).catch(() => null);
+  if (first) startedApply(host, first);
+  void followApply(host, applyId, items, freeBefore, wait);
+}
+
 /** The user saw the result: it goes when they leave. A running one stays. */
 export function dismissCleanupResult(host: string): void {
   if (cleanupRunOf(useCleanupRuns.getState(), host).applying) return;

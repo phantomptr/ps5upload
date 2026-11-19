@@ -124,7 +124,17 @@ int main(int argc, char **argv) {
 #endif
     fprintf(stderr, "extract %s -> %s (merge %d, replace %d, password %s)\n", job.archive, job.dest, job.merge, job.replace,
             job.has_password ? "yes" : "no");
-    progress(&job, 1);
+    /* The helper knows this extractor only by the status it reads here. Without a first one (the
+     * drive holding the status folder is full, say) it gives up after 20 s as "not started" and
+     * removes the destination folder: under an extractor still writing into it, which nothing
+     * follows and no Stop reaches, while a second extraction may be started beside it. So no
+     * status, no extraction. */
+    m.last_status = now_ms();
+    if (xstatus_write(m.status_path, &job, "running", (long)getpid()) != 0) {
+        fprintf(stderr, "cannot write the status (%s): not extracting\n", strerror(errno));
+        memset(job.password, 0, sizeof job.password);
+        return 1;
+    }
     rc = xj_run(&job);
     memset(job.password, 0, sizeof job.password);
     if (rc != 0 && !job.cause[0]) xj_fail(&job, "fs_extract_corrupt");

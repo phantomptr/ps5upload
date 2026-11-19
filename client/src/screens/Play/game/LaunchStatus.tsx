@@ -23,7 +23,7 @@ export function LaunchStatus() {
   const failed = p.stage === "failed";
   return (
     <div
-      className="pointer-events-auto absolute left-1/2 top-16 z-30 flex max-w-[min(32rem,calc(100%-2rem))] -translate-x-1/2 items-center gap-2 rounded-2xl bg-black/85 px-4 py-2 text-sm text-white shadow-lg ring-1 ring-white/10"
+      className="pointer-events-auto absolute left-1/2 top-16 z-30 flex w-max max-w-[min(32rem,calc(100%-2rem))] -translate-x-1/2 items-center gap-2 rounded-2xl bg-black/85 px-4 py-2 text-sm text-white shadow-lg ring-1 ring-white/10"
       role={failed ? "alert" : "status"}
       data-testid="rp-launch-status"
       data-stage={p.stage}

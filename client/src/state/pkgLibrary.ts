@@ -3712,13 +3712,20 @@ const makePkgLibraryStore = () =>
       });
       opts?.onTask?.(taskId);
       let taskFinished = false;
-      const finishStreamTask = <T extends { ok: boolean; message?: string }>(
+      const finishStreamTask = <
+        T extends { ok: boolean; message?: string; unverified?: boolean },
+      >(
         result: T,
         cancelled = false,
       ): T => {
         if (taskFinished) return result;
         taskFinished = true;
-        if (result.ok) {
+        if (result.ok && result.unverified) {
+          // The console took the package but its installer never confirmed it: not "verified".
+          useTaskStore.getState().finishTask(taskId, "unverified", {
+            detail: result.message,
+          });
+        } else if (result.ok) {
           const progress = useTaskStore.getState().getTask(taskId)?.progress;
           useTaskStore.getState().finishTask(taskId, "done", {
             detail: trStatic("pkg.stream_verified", "Installed and verified on the PS5."),
@@ -4315,16 +4322,26 @@ const makePkgLibraryStore = () =>
       if (!host?.trim()) return;
       // Optimistic removal — drop the row immediately, restore on failure.
       const prev = get().entries;
+      const removed = prev.find((e) => e.path === path);
       set({ entries: prev.filter((e) => e.path !== path), error: null });
       try {
         await fsDeleteWithRetry(mgmtAddr(host), path);
       } catch (e) {
-        set({ entries: prev, error: tx("pkg.delete_failed", { error: pkgError(e) }, "Delete failed: {error}") });
+        // Put back this one row, into the list as it is now. Restoring the whole list from before
+        // undid everything since: a row added by an upload vanished, another delete came back.
+        set((s) => ({
+          entries:
+            !removed || s.entries.some((x) => x.path === path) ? s.entries : [...s.entries, removed],
+          error: tx("pkg.delete_failed", { error: pkgError(e) }, "Delete failed: {error}"),
+        }));
       }
     },
 
     async clearFinished(host) {
-      await bulkDelete(get, set, host, isFinishedPkg);
+      // Not a row whose install is waiting again in the console queue (a Reinstall behind an
+      // upload): it reads finished until that install starts, and deleting its file fails it.
+      const queued = new Set(pkgQueue().queuedInstallPaths(host));
+      await bulkDelete(get, set, host, (e) => isFinishedPkg(e) && !queued.has(e.path));
     },
 
     async clearAll(host) {

@@ -17,6 +17,7 @@ import {
   useFsUploadStore,
   type FsUploadDeps,
 } from "./fsUpload";
+import { resumeFsUploadQueue } from "./fsUploadQueue";
 import { useUploadSettingsStore } from "./uploadSettings";
 import { useConnectionStore } from "./connection";
 import { hostOf } from "../lib/addr";
@@ -66,7 +67,11 @@ export function resumeStoppedFsUploadOnWake(host: string): boolean {
   // Only a failure: the user's own Stop, and a run the app closed on, wait for the button.
   if (cur.stopped.why !== "failed") return false;
   if (!mayRetry(cur.stopped.reason, cur.stopped.error)) return false;
-  void resumeFsUpload(host, fsUploadDeps);
+  // Like the stopped card's Resume: once it has gone through, the picks queued behind it go on
+  // too. The failure paused the queue, and without this they waited for a click all night.
+  void resumeFsUpload(host, fsUploadDeps).then((r) => {
+    if (r.ok) resumeFsUploadQueue(host, fsUploadDeps);
+  });
   return true;
 }
 

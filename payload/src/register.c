@@ -366,14 +366,21 @@ static int copy_file_bytes(const char *src, const char *dst) {
     if (in_fd < 0) return -1;
     struct stat st;
     if (fstat(in_fd, &st) != 0) { close(in_fd); return -1; }
-    int out_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, st.st_mode & 0777);
+    /* Into a sibling temp, renamed over `dst` only when every byte is written. Opened with O_TRUNC
+     * in place, a copy that failed (a full drive) left `dst` empty: registering a title again
+     * emptied the param.json / icons of a registration that worked. A sibling, so the rename
+     * never leaves the directory (cross_device.h). */
+    char tmp[REG_MAX_PATH + 8];
+    int tn = snprintf(tmp, sizeof(tmp), "%s.tmp~", dst);
+    if (tn < 0 || (size_t)tn >= sizeof(tmp)) { close(in_fd); return -1; }
+    int out_fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, st.st_mode & 0777);
     if (out_fd < 0) { close(in_fd); return -1; }
 
     /* 64 KiB heap buffer -- large enough to amortize syscall overhead,
      * small enough to keep peak memory low when copying many files. */
     const size_t BUF_SZ = 64 * 1024;
     char *buf = (char *)malloc(BUF_SZ);
-    if (!buf) { close(in_fd); close(out_fd); return -1; }
+    if (!buf) { close(in_fd); close(out_fd); unlink(tmp); return -1; }
     ssize_t n;
     int ok = 0;
     while ((n = read(in_fd, buf, BUF_SZ)) > 0) {
@@ -389,7 +396,10 @@ static int copy_file_bytes(const char *src, const char *dst) {
 done:
     free(buf);
     close(in_fd);
-    close(out_fd);
+    if (ok == 0 && fsync(out_fd) != 0) ok = -1;
+    if (close(out_fd) != 0) ok = -1;
+    if (ok == 0 && rename(tmp, dst) != 0) ok = -1;
+    if (ok != 0) unlink(tmp);
     return ok;
 }
 
@@ -993,7 +1003,12 @@ static int mount_title_nullfs(const char *title_id, const char *src_path,
     if (statfs(dst, &dst_stat) == 0 &&
         strcmp(dst_stat.f_mntonname, dst) == 0) {
         if (unmount(dst, 0) != 0 && errno != EINVAL && errno != ENOENT) {
-            if (unmount(dst, MNT_FORCE) != 0 && errno != EINVAL && errno != ENOENT) {
+            /* Forced only for a nullfs: an earlier registration (ours, ShadowMount+'s). Anything
+             * else mounted here and busy is Sony's own mount of an installed copy of this title,
+             * in use; forcing that off takes live content out from under the console
+             * (unregister_title has the same rule). */
+            if (strcmp(dst_stat.f_fstypename, "nullfs") != 0 ||
+                (unmount(dst, MNT_FORCE) != 0 && errno != EINVAL && errno != ENOENT)) {
                 if (err_out) *err_out = "register_preclean_unmount_failed";
                 return -1;
             }

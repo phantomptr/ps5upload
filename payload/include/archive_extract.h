@@ -20,6 +20,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include <time.h>
 
 #define EXTRACT_DIR "/data/ps5upload/extract"
@@ -63,6 +64,17 @@ static inline int archive_extract_dest_ok(const char *dest) {
 /* A process id read from a file (status.json, job.rec) that may be signalled: a real one. The
  * cast to pid_t of a larger number wraps: 4294967295 is -1, and kill(-1) is every process. */
 static inline int archive_extract_pid_ok(unsigned long long pid) { return pid > 1 && pid <= 0x7FFFFFFFull; }
+
+/* Whether the sweep leaves the folder of a dead helper's extraction alone: the extractor is its own
+ * process and went on without the helper, and its last status (of that same extractor, by pid) says
+ * it finished. That folder is a complete extraction, the person may have been using it since, and
+ * removing it at the next start (or at the next extraction, days later) deleted good files. Any
+ * other state (failed, still "running" when it died, another extractor's status, none) is the
+ * half-made folder the sweep is for. */
+static inline int archive_extract_sweep_keeps(unsigned long long rec_pid, unsigned long long status_pid,
+                                              const char *status_state) {
+    return rec_pid != 0 && status_pid == rec_pid && status_state && strcmp(status_state, "done") == 0;
+}
 
 /* Deletes a request left behind (archive_extract_request_stale). Run at the start, by archive_extract_sweep,
  * and again a minute later for one too young to judge then. */

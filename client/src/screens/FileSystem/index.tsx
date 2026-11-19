@@ -4,6 +4,7 @@ import { FileProperties } from "./FileProperties";
 import { consoleAddr, hostOf } from "../../lib/addr";
 import { trStatic } from "../../lib/trStatic";
 import { rememberDestination } from "../../lib/moveTo";
+import { LinkToFolder } from "./LinkToFolder";
 import { MoveToDialog, type MoveItem } from "./MoveToDialog";
 import { ExtractDialog, extractDest, type ExtractAfter, type ExtractChoice } from "./ExtractDialog";
 import { extractCause, isExtractableArchive, needsPassword } from "../../lib/archiveName";
@@ -479,6 +480,8 @@ export default function FileSystemScreen() {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [mkdirDraft, setMkdirDraft] = useState<string | null>(null);
+  /** The folder a "Download from a link" was opened for, while its card is up (#872). */
+  const [linkInto, setLinkInto] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [localBusy, setBusyEntry] = useState<{
     name: string;
@@ -1073,7 +1076,14 @@ export default function FileSystemScreen() {
       const r = await installFromConsolePath(fullPath, host, {
         sizeBytes: splitPkgBytes(entry.name, entry.size, entries ?? []),
       });
-      if (r.ok) {
+      if (r.ok && r.unverified) {
+        // The PS5 took it but it could not be confirmed: say what to check, not "Installed".
+        pushNotification(
+          "warning",
+          tr("pkg.check_the_ps5", { label: entry.name }, "{label}: check the PS5"),
+          { body: r.message, jobOutcome: true },
+        );
+      } else if (r.ok) {
         pushNotification(
           r.mayNotLaunch ? "warning" : "success",
           tr(
@@ -1762,6 +1772,8 @@ export default function FileSystemScreen() {
       destructive: true,
     });
     if (!ok) return;
+    // Asked again: a move dropped on a folder may have started while the question was up.
+    if (fsBulk.op !== null) return;
     setError(null);
     fsBulk.begin({
       op: "delete",
@@ -2472,6 +2484,10 @@ export default function FileSystemScreen() {
       });
       if (!overwrite) return;
     }
+    // Asked again after the awaits above: two drops in a row (each waiting on its folder's
+    // listing) both passed the first check, and two loops on one console share one progress
+    // state, so the first to finish hid the banner and Stop of the other.
+    if (fsBulk.op !== null) return;
     setError(null);
     fsBulk.begin({
       op: op === "cut" ? "paste-move" : "paste-copy",
@@ -3364,6 +3380,11 @@ export default function FileSystemScreen() {
           onClose={() => setMoreMenu(null)}
           items={[
             ...folderViewItems(),
+            {
+              icon: Link2,
+              label: tr("fs_link_download", undefined, "Download from a link"),
+              run: () => setLinkInto(path),
+            },
             // The size map of the drive you are on (Disk usage, a Files view). With the other
             // whole-drive tools here, not among the drive chips, which only pick a drive.
             {
@@ -4053,6 +4074,15 @@ export default function FileSystemScreen() {
                 {tr("cancel", undefined, "Cancel")}
               </button>
             </div>
+          )}
+
+          {linkInto !== null && host?.trim() && (
+            <LinkToFolder
+              host={host}
+              dir={linkInto}
+              onSaved={() => void refresh()}
+              onClose={() => setLinkInto(null)}
+            />
           )}
 
           {bulkOpHere && bulkOp.op !== null && (

@@ -43,7 +43,8 @@ static int rar_fail(xjob_t *j, struct archive *a, const xrar_vols_t *v) {
     if (!msg) msg = "";
     if (strstr(msg, "ncrypt")) return xj_fail(j, "fs_extract_rar_encrypted");
     if (strstr(msg, "subsequent volume") ||
-        (v->is_set && (uint64_t)archive_filter_bytes(a, -1) >= v->last_starts && !strstr(msg, "CRC")))
+        (v->is_set && (uint64_t)archive_filter_bytes(a, -1) >= v->last_starts && !strstr(msg, "CRC") &&
+         !strstr(msg, "Checksum")))
         return xj_fail(j, "fs_extract_missing_volume: %s", next ? next + 1 : v->next);
     if (strstr(msg, "Truncated") || strstr(msg, "Premature")) return xj_fail(j, "fs_extract_truncated: %s", msg);
     if (strstr(msg, "allocat") || strstr(msg, "memory")) return xj_fail(j, "fs_extract_no_memory: %s", msg);

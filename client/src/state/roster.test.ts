@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { useConnectionStore } from "./connection";
 import {
   addConsoleByAddress,
   addressChoiceNeeded,
@@ -209,5 +210,17 @@ describe("the engine's saved console state follows the roster", () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+  });
+});
+
+describe("removing the last console", () => {
+  it("leaves no console selected, so it is not polled or added back at the next launch", () => {
+    useRosterStore.setState({ profiles: [], active_id: null });
+    const id = useRosterStore.getState().add({ name: "Only", host: "192.168.1.30" });
+    useRosterStore.getState().setActive(id);
+    expect(useConnectionStore.getState().host).toBe("192.168.1.30");
+    useRosterStore.getState().remove(id);
+    expect(useRosterStore.getState().profiles).toEqual([]);
+    expect(useConnectionStore.getState().host).toBe("");
   });
 });

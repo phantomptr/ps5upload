@@ -45,7 +45,7 @@
  *   src/fs_jobs.c         1  dir    chmod/copy tmp inside the destination folder
  *   src/icon_keeper.c     1  dir    hidden_icons.txt: tmp -> final
  *   src/smp_meta.c        1  dir    restored tile art / param.json: <file>.tmp-<pid> -> file, same appmeta folder
- *   src/register.c        1  dir    param.json: tmp -> final
+ *   src/register.c        2  dir    param.json: tmp -> final; a staged metadata copy: <dst>.tmp sibling -> <dst>
  *   src/ffpfsc_unpack.c   1  dir    decompressed image: <name>.part -> <name>, beside the .ffpfsc
  *   src/shell_builtin.c   1  guard  `mv` (xdev_rename_crosses_l, lstat of the source; anything but SAME copies)
  *   src/webui_settings.c  1  dir    webui.json: tmp -> final
@@ -159,7 +159,14 @@ static inline void xdev_parent_dir(const char *path, char *buf,
  * kernel takes that like any other cross-device rename. So an existing `to`
  * must be on its parent's device as well (`from_dev`, the lstat lookup: what
  * is replaced is the entry, never a link's target). A `to` that cannot be
- * looked up is taken as absent, which is the ordinary case of a rename. */
+ * looked up is taken as absent, which is the ordinary case of a rename.
+ *
+ * The SOURCE can be a mount point as well: lstat("/mnt/usb0") answers with the
+ * mounted drive's device, while the entry rename() would move sits in /mnt, on
+ * another. Renamed to a path on that drive ("/mnt/usb0/dir/x"), source and
+ * destination directory agree and the rename went ahead with the source's own
+ * directory on a different filesystem. So the source must be on ITS parent's
+ * device too; a parent that cannot be looked up is UNKNOWN. */
 static inline xdev_result_t xdev_rename_crosses_l(const char *from,
                                                   const char *to,
                                                   xdev_dev_fn from_dev,
@@ -168,6 +175,14 @@ static inline xdev_result_t xdev_rename_crosses_l(const char *from,
 
     unsigned long long dev_from = 0, dev_to = 0, dev_entry = 0;
     if (from_dev(from, &dev_from) != 0) return XDEV_UNKNOWN;
+    {
+        char from_dir[4096];
+        unsigned long long dev_from_dir = 0;
+        if (strlen(from) >= sizeof(from_dir)) return XDEV_UNKNOWN;
+        xdev_parent_dir(from, from_dir, sizeof(from_dir));
+        if (dir_dev(from_dir, &dev_from_dir) != 0) return XDEV_UNKNOWN;
+        if (dev_from_dir != dev_from) return XDEV_CROSSES;
+    }
 
     /* The parent is judged WHOLE: a path too long for the buffer would be clamped by xdev_parent_dir and
      * stat a different, nonexistent directory (a parent on another mount cut off), so it is UNKNOWN, which
