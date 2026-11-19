@@ -10968,14 +10968,8 @@ async fn link_download_handler(
         )
         .into_response();
     };
-    if !class.ranges {
-        return json_err(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "the server does not support partial downloads (HTTP Range), which streaming to the \
-             console needs. Download the file on this computer and upload it instead.",
-        )
-        .into_response();
-    }
+    // Without byte ranges the file is read in order on one connection (`WholeLinkSource`).
+    let ranges = class.ranges;
     let validators = class.validators.clone();
     // An .lz4 link is unpacked on the way: the console gets the image, not the .lz4.
     let lz4 = class.lz4.clone().filter(|_| req.unpack);
@@ -11016,7 +11010,7 @@ async fn link_download_handler(
         .and_then(|u| u.host().map(str::to_string))
         .unwrap_or_default();
     crate::log_info!(
-        "link_download: job={job_id} addr={addr} host={host} dest={dest_path} bytes={total}{}",
+        "link_download: job={job_id} addr={addr} host={host} dest={dest_path} bytes={total} ranges={ranges}{}",
         if lz4.is_some() {
             format!(" lz4_packed={packed}")
         } else {
@@ -11090,7 +11084,7 @@ async fn link_download_handler(
         attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         let remote = Arc::new(
-            crate::remote_pkg::RemoteSource::new_with_options(url, packed, insecure)
+            crate::remote_pkg::RemoteSource::new_with_options(url.clone(), packed, insecure)
                 .with_validators(validators),
         );
         // A plain file is read at any offset (resume continues where the console stopped); an
@@ -11098,7 +11092,15 @@ async fn link_download_handler(
         let (source, seq): (
             Arc<dyn ava1::source::Source>,
             Option<Arc<dyn ava1::seq::SeqSource>>,
-        ) = if lz4.is_some() {
+        ) = if !ranges {
+            let s = Arc::new(link::WholeLinkSource::new(
+                url,
+                insecure,
+                name.clone(),
+                total,
+            ));
+            (s.clone(), Some(s))
+        } else if lz4.is_some() {
             let s = Arc::new(
                 link_lz4::Lz4LinkSource::new(remote, packed, name.clone(), total)
                     .pad_short(lz4.as_ref().is_some_and(|i| i.size_from_image)),

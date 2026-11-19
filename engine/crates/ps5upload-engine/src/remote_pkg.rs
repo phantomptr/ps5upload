@@ -33,7 +33,7 @@
 //! same cached window and cost no origin traffic at all.
 
 use std::collections::{HashSet, VecDeque};
-use std::io::Read;
+use std::io::{self, Read};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -155,6 +155,10 @@ pub struct RemoteProbe {
     /// revision (see [`OriginValidators`]).
     pub etag: Option<String>,
     pub last_modified: Option<String>,
+    /// The origin answers byte ranges (206). False: it sends the file only whole, from the
+    /// start, on one connection ([`RemoteSource::open_whole`]); nothing that reads at an offset
+    /// (streaming to the console's installer, the parallel fetcher, a resume) can use it.
+    pub ranges: bool,
 }
 
 impl RemoteProbe {
@@ -445,6 +449,22 @@ impl PieceStat {
 /// most of the transfer spent ramping up and none of it at speed, which is
 /// the shape of the 1.9 MB/s reports — a browser or download manager holds
 /// its connections open and never pays this.
+/// What a link without byte ranges is told where the file must be read at an offset.
+pub const NO_RANGES: &str = "the server sends this file only whole, from the start (it does not \
+     support byte ranges), so it cannot be passed straight to the PS5. Choose \"This computer \
+     saves the whole package, then installs it\", or save the file to a PS5 folder.";
+
+/// The agent for one whole-file download ([`RemoteSource::open_whole`]): [`build_agent`]
+/// without the limit on the whole request, which a large file would always exceed.
+fn build_agent_whole(insecure_tls: bool) -> ureq::Agent {
+    build_agent_with(
+        1,
+        insecure_tls,
+        links_are_guarded().then_some(link_target_refused),
+        true,
+    )
+}
+
 pub(crate) fn build_agent(parallelism: usize, insecure_tls: bool) -> ureq::Agent {
     build_agent_guarded(
         parallelism,
@@ -526,8 +546,27 @@ fn build_agent_guarded(
     insecure_tls: bool,
     refused: Option<fn(std::net::SocketAddr) -> bool>,
 ) -> ureq::Agent {
+    build_agent_with(parallelism, insecure_tls, refused, false)
+}
+
+fn build_agent_with(
+    parallelism: usize,
+    insecure_tls: bool,
+    refused: Option<fn(std::net::SocketAddr) -> bool>,
+    whole: bool,
+) -> ureq::Agent {
     let keep = parallelism.max(1);
-    let config = ureq::Agent::config_builder()
+    let builder = ureq::Agent::config_builder();
+    // A ranged piece is bounded as a whole; a whole file only per read and to its first byte.
+    let builder = if whole {
+        builder
+            .timeout_connect(Some(Duration::from_secs(30)))
+            .timeout_recv_response(Some(PIECE_TIMEOUT))
+            .timeout_per_read(Some(PIECE_TIMEOUT))
+    } else {
+        builder.timeout_global(Some(PIECE_TIMEOUT))
+    };
+    let config = builder
         // Certificate verification stays ON unless the caller asked for it to
         // be skipped, per install. With it off, a machine between us and the
         // origin can substitute the package, so this is never a global
@@ -544,7 +583,6 @@ fn build_agent_guarded(
         // so it was retried four times in a second and then failed the whole
         // install, instead of waiting the moment the host asked for.
         .http_status_as_error(false)
-        .timeout_global(Some(PIECE_TIMEOUT))
         .max_idle_connections_per_host(keep)
         .max_idle_connections(keep.saturating_mul(2).max(10))
         .build();
@@ -603,6 +641,17 @@ impl RemoteSource {
     /// The choice belongs to the same install either way, so both legs honour
     /// it. Verification stays on unless the caller explicitly asks.
     pub fn probe_with_options(url: &str, insecure_tls: bool) -> Result<RemoteProbe, String> {
+        let probe = Self::probe_any(url, insecure_tls)?;
+        if !probe.ranges {
+            return Err(NO_RANGES.to_string());
+        }
+        Ok(probe)
+    }
+
+    /// As [`Self::probe_with_options`], but an origin that sends the file only whole (200 to
+    /// the ranged request, with its size) is answered with `ranges: false` instead of refused:
+    /// what reads the file in order from the start can still use it.
+    pub fn probe_any(url: &str, insecure_tls: bool) -> Result<RemoteProbe, String> {
         // A single one-byte GET; one pooled connection is all it can use.
         let agent = build_agent(1, insecure_tls);
         let probe_started = std::time::Instant::now();
@@ -648,22 +697,41 @@ impl RemoteSource {
         );
 
         let status = resp.status().as_u16();
-        if status != 206 {
-            return Err(format!(
-                "the server answered {status} for a byte-range request; \
-                 installing from a link needs a host that supports ranges \
-                 (HTTP 206). Direct-download links work; share/preview pages \
-                 usually do not."
-            ));
-        }
-        let content_range = resp
-            .headers()
-            .get("content-range")
-            .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| "the server sent no Content-Range for a range request".to_string())?;
-        let total_size = total_from_content_range(content_range).ok_or_else(|| {
-            format!("the server sent an unusable Content-Range ({content_range})")
-        })?;
+        let total_size = match status {
+            206 => {
+                let content_range = resp
+                    .headers()
+                    .get("content-range")
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or_else(|| {
+                        "the server sent no Content-Range for a range request".to_string()
+                    })?;
+                total_from_content_range(content_range).ok_or_else(|| {
+                    format!("the server sent an unusable Content-Range ({content_range})")
+                })?
+            }
+            // The whole file, whatever was asked for. Usable in order when it says how long
+            // it is; the body is dropped here unread (the connection with it).
+            200 => resp
+                .headers()
+                .get("content-length")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .filter(|t| *t > 0)
+                .ok_or_else(|| {
+                    "the server sends this file only whole and does not say how big it is, \
+                     so it cannot be downloaded here. Download it in a browser and use the \
+                     file instead."
+                        .to_string()
+                })?,
+            _ => {
+                return Err(format!(
+                    "the server answered {status} instead of sending the file. The link is \
+                     wrong, has expired, or needs a login; share/preview pages usually do \
+                     not work."
+                ));
+            }
+        };
 
         let validator = |name: &str| {
             resp.headers()
@@ -680,7 +748,36 @@ impl RemoteSource {
             ),
             etag: validator("etag"),
             last_modified: validator("last-modified"),
+            ranges: status == 206,
         })
+    }
+
+    /// The whole file on one connection, from its first byte: for an origin without byte
+    /// ranges. Returns the body and the length the origin announced for it. No overall
+    /// time limit (a package takes as long as it takes); a connection that delivers nothing
+    /// for [`PIECE_TIMEOUT`] fails the read.
+    pub fn open_whole(
+        url: &str,
+        insecure_tls: bool,
+    ) -> io::Result<(Box<dyn Read + Send>, Option<u64>)> {
+        let agent = build_agent_whole(insecure_tls);
+        let resp = agent
+            .get(url)
+            .header("User-Agent", "ps5upload")
+            .call()
+            .map_err(|e| io::Error::other(format!("could not reach the link: {e}")))?;
+        let status = resp.status().as_u16();
+        if status != 200 {
+            return Err(io::Error::other(format!(
+                "the server answered {status} instead of sending the file"
+            )));
+        }
+        let len = resp
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<u64>().ok());
+        Ok((Box::new(resp.into_body().into_reader()), len))
     }
 
     /// Verifying constructor. Only the tests use it — the install path always
@@ -2003,6 +2100,53 @@ pub(crate) mod origin_tests {
         let p =
             RemoteSource::probe_with_options(&format!("http://{addr}/get?id=7"), false).unwrap();
         assert_eq!(p.filename, "ゲーム.pkg");
+    }
+
+    /// #872: an origin without byte ranges answers the one-byte probe with the whole file.
+    /// What reads at an offset refuses it and says what does work; what reads in order
+    /// learns the size from Content-Length.
+    #[test]
+    fn a_probe_tells_an_origin_without_byte_ranges_from_a_broken_link() {
+        let addr = spawn_scripted_origin(|_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello".to_vec()
+        });
+        let url = format!("http://{addr}/dl/Game.pkg");
+        let p = RemoteSource::probe_any(&url, false).unwrap();
+        assert!(!p.ranges);
+        assert_eq!((p.total_size, p.filename.as_str()), (5, "Game.pkg"));
+        let err = RemoteSource::probe_with_options(&url, false).unwrap_err();
+        assert_eq!(err, NO_RANGES);
+
+        let (mut body, len) = RemoteSource::open_whole(&url, false).unwrap();
+        let mut got = Vec::new();
+        body.read_to_end(&mut got).unwrap();
+        assert_eq!((got.as_slice(), len), (&b"hello"[..], Some(5)));
+
+        // No size: nothing can tell a complete download from a cut one.
+        let addr = spawn_scripted_origin(|_| {
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nhello".to_vec()
+        });
+        let err = RemoteSource::probe_any(&format!("http://{addr}/x"), false).unwrap_err();
+        assert!(err.contains("does not say how big"), "{err}");
+
+        // An error status is neither.
+        let addr = spawn_scripted_origin(|_| {
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
+        });
+        let err = RemoteSource::probe_any(&format!("http://{addr}/x"), false).unwrap_err();
+        assert!(err.contains("404"), "{err}");
+        assert!(RemoteSource::open_whole(&format!("http://{addr}/x"), false).is_err());
+
+        let addr = spawn_scripted_origin(|_| {
+            b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-0/100\r\nContent-Length: 1\r\n\
+              Connection: close\r\n\r\nx"
+                .to_vec()
+        });
+        assert!(
+            RemoteSource::probe_any(&format!("http://{addr}/x"), false)
+                .unwrap()
+                .ranges
+        );
     }
 
     #[test]
