@@ -12904,7 +12904,15 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // terminal is closed). Printed only once the bind has succeeded:
     // it used to come first, so a log showing it proved nothing about
     // whether the engine was actually listening.
-    println!("[ps5upload-engine] listening on http://{bind}  (ps5={ps5_addr})");
+    // Never `println!`: it panics when stdout is a closed pipe (the app that started the
+    // engine already gone), and the engine then never serves.
+    {
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stdout(),
+            "[ps5upload-engine] listening on http://{bind}  (ps5={ps5_addr})"
+        );
+    }
     crate::log_info!("listening on http://{bind}  (ps5={ps5_addr})");
     // Fan boosts end on time and are undone even if the app closed in between.
     fan_boost::spawn_sweeper();
@@ -14166,7 +14174,9 @@ where
                     match tokio::net::TcpListener::bind(bind).await {
                         Ok(l) => break l,
                         Err(e) => {
-                            eprintln!("[ps5upload-engine] listening again on {bind}: {e}");
+                            stderr_quiet(&format!(
+                                "[ps5upload-engine] listening again on {bind}: {e}"
+                            ));
                             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                         }
                     }

@@ -86,7 +86,7 @@ fn root() -> Option<&'static Path> {
                 match crate::remote::store::data_dir() {
                     Some(d) => d.join("cache"),
                     None => {
-                        eprintln!("[icon-cache] no data folder — artwork caching disabled");
+                        crate::log_warn!("[icon-cache] no data folder — artwork caching disabled");
                         return None;
                     }
                 }
@@ -94,7 +94,7 @@ fn root() -> Option<&'static Path> {
         };
         let dir = base.join("icons");
         if let Err(e) = fs::create_dir_all(&dir) {
-            eprintln!(
+            crate::log_warn!(
                 "[icon-cache] {} unusable ({e}) — artwork caching disabled",
                 dir.display()
             );

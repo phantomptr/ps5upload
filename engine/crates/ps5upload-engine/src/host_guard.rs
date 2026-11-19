@@ -296,18 +296,18 @@ pub(crate) fn log_settings() {
     let raw = std::env::var("PS5UPLOAD_TRUSTED_PROXY").unwrap_or_default();
     let bad = crate::invalid_allow_ip_entries(&raw);
     if !bad.is_empty() {
-        eprintln!(
+        crate::stderr_quiet(&format!(
             "[ps5upload-engine] WARNING: ignoring PS5UPLOAD_TRUSTED_PROXY entries that are not an \
              IP or CIDR range: {}",
             bad.join(", ")
-        );
+        ));
     }
     let raw = std::env::var("PS5UPLOAD_BASE_URL").unwrap_or_default();
     if normalize_base(&raw).is_none() {
-        eprintln!(
+        crate::stderr_quiet(&format!(
             "[ps5upload-engine] WARNING: ignoring PS5UPLOAD_BASE_URL={raw}: it is a path such as \
              /ps5/, not a hostname or a full URL. Serving at the root instead."
-        );
+        ));
     }
 }
 
