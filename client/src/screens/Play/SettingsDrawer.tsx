@@ -275,13 +275,18 @@ export function SettingsDrawer({
         data-layout={layout}
         className={`${pos} z-50 flex flex-col overflow-hidden text-[var(--color-text)] outline-none glass-float elev-3 ${
           sheet
-            ? "inset-x-0 bottom-0 mx-auto w-full max-w-xl rounded-t-[var(--radius-panel)] border-b-0 anim-sheet-up"
+            ? // The viewport height limit is a class, not an inline style: WebKit before 15.4 has
+              // no dvh unit and dropped the inline value, so the sheet grew past the top of the
+              // screen and could not scroll. The stylesheet carries a vh fallback (postcss/oldWebkit).
+              `inset-x-0 bottom-0 mx-auto w-full max-w-xl rounded-t-[var(--radius-panel)] border-b-0 anim-sheet-up ${
+                contained ? "" : "max-h-[85dvh]"
+              }`
             : "right-2 w-[min(26rem,calc(100%-1rem))] rounded-[var(--radius-panel)] anim-side"
         }`}
         style={
           sheet
             ? {
-                maxHeight: contained ? "85%" : "85dvh",
+                maxHeight: contained ? "85%" : undefined,
                 paddingBottom: "env(safe-area-inset-bottom)",
                 // `translate`, not `transform`: the entrance animation holds the transform.
                 translate: drag ? `0 ${drag}px` : undefined,
