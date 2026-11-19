@@ -1427,9 +1427,12 @@ fn title_id_from_content_id_str(content_id: &str) -> String {
         .nth(1)
         .and_then(|seg| seg.split('_').next())
         .filter(|id| {
+            // By bytes: the id comes from a package header, and a `str` cut inside a
+            // character that is not ASCII panics.
+            let id = id.as_bytes();
             id.len() == 9
-                && id[..4].bytes().all(|b| b.is_ascii_uppercase())
-                && id[4..].bytes().all(|b| b.is_ascii_digit())
+                && id[..4].iter().all(u8::is_ascii_uppercase)
+                && id[4..].iter().all(u8::is_ascii_digit)
         })
         .unwrap_or("")
         .to_string()
@@ -1606,6 +1609,27 @@ fn b64_encode(input: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A content id is bytes from a package header. One whose title part is 9 bytes with a
+    /// character that is not ASCII across the 4th panicked the parse ("byte index 4 is not a
+    /// char boundary"), failing the install or the metadata read it was part of.
+    #[test]
+    fn a_content_id_that_is_not_ascii_gives_no_title_id_and_no_panic() {
+        assert_eq!(
+            super::title_id_from_content_id_str("UP9000-CUSA07842_00-0000000000000000"),
+            "CUSA07842"
+        );
+        // 9 bytes: "ABC", a 3-byte character, "123".
+        assert_eq!(
+            super::title_id_from_content_id_str("XX0000-ABC\u{FFFD}123_00-X"),
+            ""
+        );
+        assert_eq!(
+            super::title_id_from_content_id_str("UP0000-ABC\u{e9}1234_00-X"),
+            ""
+        );
+        assert_eq!(super::title_id_from_content_id_str(""), "");
+    }
+
     /// A package built from a dump keeps its original DRM type and then refuses
     /// to start once installed. Warn at parse time, before an hour of uploading.
     #[test]

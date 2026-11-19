@@ -531,6 +531,37 @@ async fn the_wait_ends_at_the_callers_deadline_and_says_the_job_may_still_run() 
     assert_eq!(st.lock().unwrap().cancels, 1);
 }
 
+/// A hash is not given up while it gets further: its caller's deadline (30 s by default) is far
+/// less than a large file takes, and counted from the start it cancelled every such hash. Here
+/// the console reports more bytes at each poll and ends well after the 1.3 s deadline.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hash_that_gets_further_outlives_its_callers_deadline() {
+    let script = Script {
+        finish_at: 8,
+        result: br#"{"hash":"ab"}"#.to_vec(),
+        ..Script::default()
+    };
+    let (t, _p, c, st) = console("hash-progress", script).await;
+    let started = Instant::now();
+    let r = run_op(
+        &t,
+        &c,
+        ops::HASH,
+        r#"{"path":"/data/big.bin"}"#,
+        0,
+        "",
+        Duration::from_millis(1300),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.as_deref(), Some(&br#"{"hash":"ab"}"#[..]));
+    assert!(
+        started.elapsed() > Duration::from_millis(1300),
+        "the script ended before the deadline: it proved nothing"
+    );
+    assert_eq!(st.lock().unwrap().cancels, 0);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_progress_query_before_the_job_is_listed_waits_instead_of_reading_zero() {
     let (t, _p, c, st) = console(

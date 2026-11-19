@@ -749,8 +749,15 @@ impl RemoteFile for FtpFile {
             Some((stream, _, _)) => stream,
             None => {
                 let (ftp, path, host) = (&mut s.ftp, self.path.as_str(), self.host.as_str());
+                // On a 32-bit build (Android armv7) `as usize` cut an offset past 4 GiB short: the
+                // read then came from the wrong place in the file with no error.
+                let at = usize::try_from(offset).map_err(|_| {
+                    RemoteError::Unsupported(format!(
+                        "This device can't read an FTP file past 4 GiB (offset {offset})"
+                    ))
+                })?;
                 timed(host, "a read", async move {
-                    ftp.resume_transfer(offset as usize)
+                    ftp.resume_transfer(at)
                         .await
                         .map_err(|e| map_err(host, e))?;
                     ftp.retr_as_stream(path).await.map_err(|e| map_err(host, e))

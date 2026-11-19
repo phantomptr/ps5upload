@@ -467,8 +467,11 @@ async fn start_handler(
         tokio::task::spawn_blocking(move || {
             let dl = worker;
             let copied = if ranges {
+                let stop = dl.clone();
                 let src = crate::remote_pkg::RemoteSource::new_with_options(url, total, insecure)
-                    .with_validators(validators);
+                    .with_validators(validators)
+                    // A cancel also ends a fetch that is waiting out the host's 429/503.
+                    .with_stop(move || stop.cancelled.load(Ordering::Relaxed));
                 copy_to_file(&src, &dl, may_resume)
             } else {
                 crate::remote_pkg::RemoteSource::open_whole(&url, insecure)
@@ -674,7 +677,12 @@ fn copy_to_file(
             return Ok(false);
         }
         let end = (offset + COPY_WINDOW).min(total) - 1;
-        let bytes = src.read_range(offset, end)?;
+        let bytes = match src.read_range(offset, end) {
+            Ok(bytes) => bytes,
+            // The fetch was given up for the cancel: that is not a failed download.
+            Err(_) if dl.cancelled.load(Ordering::Relaxed) => return Ok(false),
+            Err(e) => return Err(e),
+        };
         file.write_all(&bytes)?;
         offset = end + 1;
         dl.written.store(offset, Ordering::Relaxed);

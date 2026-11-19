@@ -11083,9 +11083,12 @@ async fn link_download_handler(
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
         attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
+        let stop = cfg.cancel.clone();
         let remote = Arc::new(
             crate::remote_pkg::RemoteSource::new_with_options(url.clone(), packed, insecure)
-                .with_validators(validators),
+                .with_validators(validators)
+                // A cancel also ends a fetch that is waiting out the host's 429/503.
+                .with_stop(move || stop.as_ref().is_some_and(|c| c.load(Ordering::Relaxed))),
         );
         // A plain file is read at any offset (resume continues where the console stopped); an
         // .lz4 is decoded forward on one thread and its decoded bytes are what is sent.
@@ -12906,7 +12909,15 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // terminal is closed). Printed only once the bind has succeeded:
     // it used to come first, so a log showing it proved nothing about
     // whether the engine was actually listening.
-    println!("[ps5upload-engine] listening on http://{bind}  (ps5={ps5_addr})");
+    // Never `println!`: it panics when stdout is a closed pipe (the app that started the
+    // engine already gone), and the engine then never serves.
+    {
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stdout(),
+            "[ps5upload-engine] listening on http://{bind}  (ps5={ps5_addr})"
+        );
+    }
     crate::log_info!("listening on http://{bind}  (ps5={ps5_addr})");
     // Fan boosts end on time and are undone even if the app closed in between.
     fan_boost::spawn_sweeper();
@@ -14168,7 +14179,9 @@ where
                     match tokio::net::TcpListener::bind(bind).await {
                         Ok(l) => break l,
                         Err(e) => {
-                            eprintln!("[ps5upload-engine] listening again on {bind}: {e}");
+                            stderr_quiet(&format!(
+                                "[ps5upload-engine] listening again on {bind}: {e}"
+                            ));
                             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                         }
                     }

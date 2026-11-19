@@ -100,6 +100,11 @@ pub fn part_label(name: &str) -> String {
 
 /// What the steps need from a console.
 pub trait Console {
+    /// The console's address, for holding it while a save operation runs (`local::save_op`).
+    /// None: a console that is not a real one.
+    fn host(&self) -> Option<&str> {
+        None
+    }
     /// Every save on the console.
     fn saves(&self) -> Result<Vec<SaveEntry>, String>;
     /// Whether `title_id` runs now.
@@ -372,6 +377,12 @@ fn user_of_folder(folder: &str, asked: Option<u32>) -> Result<u32, String> {
     }
 }
 
+/// Holds the consoles of an operation until dropped (`local::save_op`).
+fn hold(consoles: &[&dyn Console]) -> local::SaveOp {
+    let hosts: Vec<&str> = consoles.iter().filter_map(|c| c.host()).collect();
+    local::save_op(&hosts)
+}
+
 fn checks(c: &dyn Console, title_id: &str) -> Result<(), String> {
     if c.running(title_id)? {
         return Err(running_error(title_id));
@@ -405,6 +416,7 @@ impl Drop for SharedZip {
 
 /// [`share`], leaving the zip in a file: a save can be larger than is sensible to hold in memory.
 pub fn share_file(c: &dyn Console, folder: &str) -> Result<SharedZip, String> {
+    let _op = hold(&[c]);
     let folder = folder.trim_end_matches('/');
     let title_id = title_of_folder(folder)?;
     checks(c, &title_id)?;
@@ -785,6 +797,7 @@ fn import_as(
     backup: Option<&Path>,
     compat: Option<&str>,
 ) -> Result<Vec<String>, Failed> {
+    let _op = hold(&[c]);
     let folder = folder.trim_end_matches('/');
     let title_id = title_of_folder(folder)?;
     if backup.is_none() {
@@ -928,6 +941,7 @@ pub struct Done {
 /// Copies `from_user`'s PS5 save of `title_id`, every image of it, into `to_user`'s: shared, then
 /// used (their folder backed up first, put back on failure).
 pub fn copy_to_user(c: &dyn Console, b: &CopyBody) -> Result<Done, Failed> {
+    let _op = hold(&[c]);
     let title_id = b.title_id.trim().to_ascii_uppercase();
     if !plain(&title_id) {
         return Err("unexpected title ID".into());
@@ -972,6 +986,7 @@ pub fn restore_to_user(
     zip: &Path,
     to_user: u32,
 ) -> Result<Done, Failed> {
+    let _op = hold(&[c]);
     let title_id = title_id.trim().to_ascii_uppercase();
     if !plain(&title_id) || !plain(file) || !file.ends_with(".zip") {
         return Err("unexpected backup name".into());
@@ -1221,6 +1236,9 @@ impl<'a> Live<'a> {
 }
 
 impl Console for Live<'_> {
+    fn host(&self) -> Option<&str> {
+        Some(self.host)
+    }
     fn saves(&self) -> Result<Vec<SaveEntry>, String> {
         local::list_saves(self.host)
     }
@@ -1710,6 +1728,7 @@ pub fn copy_to_console(
     from_user: u32,
     to_user: u32,
 ) -> Result<Done, Failed> {
+    let _op = hold(&[from, to]);
     let title_id = title_id.trim().to_ascii_uppercase();
     if !plain(&title_id) {
         return Err("unexpected title ID".into());
@@ -1751,6 +1770,7 @@ pub(crate) fn copy_emulator_save(
     to_path: &str,
     to_user: u32,
 ) -> Result<(), String> {
+    let _op = local::save_op(&[from, to]);
     let titles = crate::emulator_saves::titles_of(crate::emulator_saves::app_of(entry));
     if local::running_of(from, &titles)?.is_some() {
         return Err(running_error(&entry.title_id));

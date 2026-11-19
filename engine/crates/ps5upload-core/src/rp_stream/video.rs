@@ -169,7 +169,8 @@ impl FrameAssembler {
             .map(|u| u.as_ref().map_or(0, Vec::len))
             .collect();
         if source_missing {
-            let ok = self.m > 0 && missing.len() <= self.m && {
+            // A rebuilt unit starts with its 2-byte padding count.
+            let ok = self.m > 0 && missing.len() <= self.m && self.unit_size >= 2 && {
                 let mut padded: Vec<Vec<u8>> = self
                     .units
                     .iter()
@@ -292,6 +293,18 @@ mod tests {
         let f = frames(a.push(&unit(1, 2, 3, 1, &all[2]))).pop().unwrap();
         assert_eq!(f, vec![0xaa, 0xbb, 0xcc]);
         assert_eq!(a.stats.frames_recovered, 1);
+    }
+
+    /// A frame whose first unit to arrive is one byte long, with a source unit missing: the
+    /// rebuilt unit has no room for the 2-byte padding count that was read from it (a panic,
+    /// ending the session on "an internal error"). The frame is given up instead.
+    #[test]
+    fn a_one_byte_unit_cannot_be_rebuilt_and_does_not_panic() {
+        let mut a = FrameAssembler::new();
+        // 2 units, 1 of them coding: the coding unit arrives, the source unit never does.
+        let out = a.push(&unit(1, 1, 2, 1, &[7]));
+        assert!(frames(out).is_empty());
+        assert_eq!(a.stats.frames_recovered, 0);
     }
 
     #[test]

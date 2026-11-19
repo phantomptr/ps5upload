@@ -2050,8 +2050,6 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
             v["end"] = end_note;
             v["ended_unix_ms"] = unix_ms().into();
         });
-        // A fan boost for this console ends with its session.
-        crate::fan_boost::session_ended(&l.host);
         // The live feed's readers reach the end of their stream.
         l.feed.close();
         if let Ok(mut g) = LIVE.lock() {
@@ -2064,6 +2062,10 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         if let Some(v) = viewer {
             let _ = v.ctl.blocking_send(text(end));
         }
+        // A fan boost for this console ends with its session. Last: the undo is a call to the
+        // console, and a session that ended because the console went away waited out that call
+        // before its page heard the end and the next Start could begin.
+        crate::fan_boost::session_ended(&l.host);
     });
     live
 }
