@@ -683,6 +683,59 @@ describe("RemotePlayStream with a decoder that never shows a picture (#683)", ()
     vi.restoreAllMocks();
   });
 
+  it("no WebCodecs and the picture on no page when the stream begins: the media player starts once it is shown", async () => {
+    mediaPage();
+    vi.stubGlobal("VideoDecoder", undefined);
+    const s = new RemotePlayStream(options());
+    // The canvas is on no page (another screen is up while the console wakes).
+    (s.canvas as unknown as { parentElement: unknown }).parentElement = null;
+    await s.start();
+    const p = s as unknown as {
+      mse: { element: object } | null;
+      onVideo(kind: number, payload: Uint8Array, recv: number, engineAt: number): void;
+    };
+    // The codec header and a keyframe arrive: nothing can show them yet, and nothing throws.
+    expect(() => open(s, false)).not.toThrow();
+    expect(() => p.onVideo(1, Uint8Array.from([0, 0, 0, 1, 0x65, 1, 2, 3]), 0, NaN)).not.toThrow();
+    expect(p.mse).toBeNull();
+    // The Play screen comes up and mounts the picture: the media player starts now.
+    const kids: object[] = [];
+    const host = {
+      appendChild(c: { parentElement: unknown }) {
+        kids.push(c);
+        c.parentElement = host;
+      },
+      append(c: object) {
+        kids.push(c);
+      },
+      removeChild() {},
+    };
+    s.mount(host as unknown as HTMLElement);
+    expect(p.mse).not.toBeNull();
+    expect(kids).toContain(p.mse?.element);
+    s.stop();
+    vi.restoreAllMocks();
+  });
+
+  it("the media player shows the picture: a clip of the empty canvas is not recorded, and a shot waits for its video", async () => {
+    failingDecoders();
+    mediaPage();
+    const s = new RemotePlayStream({ ...options(), decoding: "mse" });
+    await s.start();
+    open(s, false);
+    await settle();
+    const p = s as unknown as { mse: { element: { querySelector?: unknown } }; decoded: number };
+    expect(p.mse).not.toBeNull();
+    p.decoded = 5;
+    (s.canvas as unknown as { captureStream: () => object }).captureStream = () => ({});
+    expect(s.captureMedia(30)).toBeNull();
+    // The player's <video> has no picture yet (no size): no shot, rather than a blank one.
+    p.mse.element.querySelector = () => ({ videoWidth: 0, videoHeight: 0 });
+    expect(await s.snapshot()).toBeNull();
+    s.stop();
+    vi.restoreAllMocks();
+  });
+
   it("#720: no Opus in WebCodecs or MSE: the WebAssembly decoder feeds the same worklet", async () => {
     mediaPage();
     vi.stubGlobal("AudioDecoder", undefined);

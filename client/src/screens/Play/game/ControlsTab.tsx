@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 
 import { Toggle } from "../../../components";
@@ -26,6 +26,13 @@ export function listeningAfterRemove(listening: number | null, removed: number):
   return listening > removed ? listening - 1 : listening;
 }
 
+/** The macros once row `i` is given the key `code`; null when nothing changes (Esc only ends the
+ *  wait, and a row that has gone meanwhile takes no key). */
+export function macrosWithKey(macros: Macro[], i: number, code: string): Macro[] | null {
+  if (code === "Escape" || !macros[i]) return null;
+  return macros.map((m, j) => (j === i ? { ...m, key: code } : m));
+}
+
 /** Game panel › Controls: this game's turbo buttons, mouse aim and macros (kept per game on
  *  this device; they switch by themselves with the running game). */
 export function ControlsTab({ name }: { name: (id: string) => string }) {
@@ -35,6 +42,24 @@ export function ControlsTab({ name }: { name: (id: string) => string }) {
   const update = useGameControlsStore((s) => s.update);
   const reset = useGameControlsStore((s) => s.reset);
   const [listening, setListening] = useState<number | null>(null);
+
+  // The key for a macro is caught on the window, like the other key pickers. It used to be
+  // caught on this tab's own box, which only hears keys while focus is inside it: where a click
+  // does not focus a button (the Mac app, Safari) the key went to the game instead and the row
+  // stayed on "Press a key…".
+  const macros = c.macros;
+  useEffect(() => {
+    if (listening === null || !title) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setListening(null);
+      const next = macrosWithKey(macros, listening, e.code);
+      if (next) update(title, { macros: next });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [listening, title, macros, update]);
 
   if (!title) {
     return (
@@ -48,16 +73,7 @@ export function ControlsTab({ name }: { name: (id: string) => string }) {
     set({ macros: m ? c.macros.map((x, j) => (j === i ? m : x)) : c.macros.filter((_, j) => j !== i) });
 
   return (
-    <div
-      className="space-y-5 py-1"
-      data-testid="rp-controls"
-      onKeyDown={(e) => {
-        if (listening === null) return;
-        e.preventDefault();
-        if (e.code !== "Escape") setMacro(listening, { ...c.macros[listening], key: e.code });
-        setListening(null);
-      }}
-    >
+    <div className="space-y-5 py-1" data-testid="rp-controls">
       <p className="text-xs text-white/60">
         {tr("rp_controls_for", { name: name(title) }, `For ${name(title)}; each game keeps its own.`)}
       </p>

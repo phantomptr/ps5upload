@@ -294,7 +294,7 @@ export function CaptureOverlay({ top }: { top?: string }) {
       {notice && notice.kind !== "ready" && (
         <div
           role="status"
-          className="pointer-events-none absolute bottom-3 left-1/2 z-30 max-w-[calc(100%-2rem)] -translate-x-1/2 truncate rounded-full bg-black/70 px-3 py-1.5 text-xs text-white"
+          className="pointer-events-none absolute bottom-3 left-1/2 z-30 w-max max-w-[calc(100%-2rem)] -translate-x-1/2 truncate rounded-full bg-black/70 px-3 py-1.5 text-xs text-white"
           data-testid="rp-capture-notice"
         >
           {noticeText(tr, notice)}
@@ -317,7 +317,7 @@ function ReadyNotice() {
     <div
       role="status"
       {...keep}
-      className="absolute bottom-3 left-1/2 z-30 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-2 rounded-full bg-black/75 py-1 ps-3 pe-1 text-xs text-white"
+      className="absolute bottom-3 left-1/2 z-30 flex w-max max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-2 rounded-full bg-black/75 py-1 ps-3 pe-1 text-xs text-white"
       data-testid="rp-capture-ready"
     >
       <span className="truncate">{noticeText(tr, notice)}</span>

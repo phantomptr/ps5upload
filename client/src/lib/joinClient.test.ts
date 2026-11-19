@@ -112,6 +112,18 @@ function joinNow(c: JoinClient, player = 2) {
 }
 
 describe("join client", () => {
+  it("leaves nothing running when the first socket cannot be made", () => {
+    class NoSocket {
+      constructor() {
+        throw new Error("blocked");
+      }
+    }
+    const before = vi.getTimerCount();
+    client({ WebSocketImpl: NoSocket as unknown as typeof WebSocket }).start();
+    expect(stages[stages.length - 1]).toEqual({ kind: "ended", why: "lost" });
+    expect(vi.getTimerCount()).toBe(before);
+  });
+
   it("says hello with the invite and name, asks, then joins and keeps the token", () => {
     const c = client();
     c.start();

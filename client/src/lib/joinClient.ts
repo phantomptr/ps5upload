@@ -161,6 +161,9 @@ export class JoinClient {
     this.stopped = false;
     this.setStage({ kind: "connecting" });
     this.connect();
+    // The first socket could not even be made (a bad address, or one the page may not open):
+    // it has ended, and nothing is left running for it.
+    if (this.stopped) return;
     const tick = () => {
       this.sendPad(false);
       this.raf = (this.o.raf ?? ((cb) => window.requestAnimationFrame(cb)))(tick);

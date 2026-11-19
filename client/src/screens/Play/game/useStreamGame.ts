@@ -114,8 +114,12 @@ export function useStreamGame(host: string | null, on: boolean) {
     return () => window.clearInterval(t);
   }, [on, addr, read]);
 
-  // Another console: start over.
+  // Another console: start over. Not when the same one is merely shown again (the effect runs
+  // then too): that blanked the open panel and dropped a switch still on its way.
+  const shownAddr = useRef(addr);
   useEffect(() => {
+    if (shownAddr.current === addr) return;
+    shownAddr.current = addr;
     ref.current = EMPTY;
     setS(EMPTY);
   }, [addr]);

@@ -2,7 +2,7 @@
 // Remote Play readiness, the signed-in user's PSN state, this app's pairing keys and the user's
 // own ticks. Re-read every few seconds while a screen shows it, so steps tick by themselves.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   profileInfo,
@@ -65,8 +65,13 @@ export function usePlaySetup(opts: { poll?: boolean } = {}) {
     setNp(t ? await profileNpState(t.slot, t.uid, mgmtAddr(host)).catch(() => null) : null);
   }, [host, connected]);
 
-  // A different console starts from nothing.
+  // A different console starts from nothing. Only a different one: this effect also runs again
+  // each time the screen is shown again, and dropping the last read then put every step back to
+  // "waiting" and closed the step that was open.
+  const readFor = useRef(host);
   useEffect(() => {
+    if (readFor.current === host) return;
+    readFor.current = host;
     setReadiness(null);
     setInfo(null);
     setNp(null);
