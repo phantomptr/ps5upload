@@ -1501,6 +1501,28 @@ describe("clearFinished with a reinstall waiting", () => {
   });
 });
 
+describe("remove: a delete that fails", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    pkgLibraryStore(HOST).setState({ entries: [], error: null });
+  });
+
+  it("puts back that row only, keeping what changed in the list meanwhile", async () => {
+    vi.useFakeTimers();
+    mockedDelete.mockReset().mockRejectedValue(new Error("busy"));
+    const a = entry({ name: "a.pkg" });
+    seed([a, entry({ name: "b.pkg" })]);
+    const removing = pkgLibraryStore(HOST).getState().remove(a.path, HOST);
+    // While the delete is retried: b goes, and an upload adds c.
+    pkgLibraryStore(HOST).setState({ entries: [entry({ name: "c.pkg", status: "uploading" })] });
+    await vi.runAllTimersAsync();
+    await removing;
+    const st = pkgLibraryStore(HOST).getState();
+    expect(st.entries.map((e) => e.name).sort()).toEqual(["a.pkg", "c.pkg"]);
+    expect(st.error).toContain("Delete failed");
+  });
+});
+
 describe("clearAll", () => {
   beforeEach(() => {
     mockedDelete.mockReset().mockResolvedValue(undefined);

@@ -4315,11 +4315,18 @@ const makePkgLibraryStore = () =>
       if (!host?.trim()) return;
       // Optimistic removal — drop the row immediately, restore on failure.
       const prev = get().entries;
+      const removed = prev.find((e) => e.path === path);
       set({ entries: prev.filter((e) => e.path !== path), error: null });
       try {
         await fsDeleteWithRetry(mgmtAddr(host), path);
       } catch (e) {
-        set({ entries: prev, error: tx("pkg.delete_failed", { error: pkgError(e) }, "Delete failed: {error}") });
+        // Put back this one row, into the list as it is now. Restoring the whole list from before
+        // undid everything since: a row added by an upload vanished, another delete came back.
+        set((s) => ({
+          entries:
+            !removed || s.entries.some((x) => x.path === path) ? s.entries : [...s.entries, removed],
+          error: tx("pkg.delete_failed", { error: pkgError(e) }, "Delete failed: {error}"),
+        }));
       }
     },
 
