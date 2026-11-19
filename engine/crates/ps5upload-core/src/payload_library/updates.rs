@@ -252,6 +252,18 @@ fn is_rate_limited(why: &str) -> bool {
 const RATE_LIMITED: &str =
     "The payload host's rate limit was reached; this is the release as last fetched.";
 
+/// A fetch that got no answer at all (no network, DNS, a timeout), as `fetch` words it: the
+/// URL and the client's error, with no HTTP status. A host that answered with one is reachable.
+fn is_unreachable(why: &str) -> bool {
+    why.starts_with("fetch ")
+        && !why.contains(": HTTP ")
+        && !why.contains("redirects")
+        && !why.contains("parse release")
+}
+
+const UNREACHABLE: &str =
+    "The payload host could not be reached; this is the release as last fetched.";
+
 fn io_err(what: impl std::fmt::Display) -> LibraryError {
     LibraryError::new("io_failed", what.to_string())
 }
@@ -350,9 +362,16 @@ impl Library {
             }
         }
         let mut rate_limited = false;
+        // Hosts that did not answer at all: the payloads on them come from the cache, rather
+        // than each waiting out the same timeout on a dead network.
+        let mut unreachable: std::collections::HashSet<String> = Default::default();
         let mut rows = Vec::with_capacity(ids.len());
         for id in &ids {
             let info = catalog.iter().find(|p| &p.id == id);
+            let host = self
+                .resolve_entry(id)
+                .map(|e| e.repo_host)
+                .unwrap_or_default();
             let local = self.local_entry(id);
             let (installed, local_size) = local
                 .as_ref()
@@ -361,6 +380,9 @@ impl Library {
             let release = if rate_limited {
                 self.cached_release(id, RATE_LIMITED)
                     .ok_or_else(|| LibraryError::new("rate_limited", RATE_LIMITED))
+            } else if unreachable.contains(&host) {
+                self.cached_release(id, UNREACHABLE)
+                    .ok_or_else(|| LibraryError::new("unreachable", UNREACHABLE))
             } else {
                 self.release(id, force)
             };
@@ -377,6 +399,9 @@ impl Library {
                     if r.refresh_error.as_deref().is_some_and(is_rate_limited) {
                         rate_limited = true;
                     }
+                    if r.refresh_error.as_deref().is_some_and(is_unreachable) {
+                        unreachable.insert(host.clone());
+                    }
                     row.update_available = !r.picked_asset_url.is_empty()
                         && (is_newer(&r.tag, &installed)
                             || rebuilt_under_same_tag(&r, &installed, local_size));
@@ -389,6 +414,9 @@ impl Library {
                 Err(e) => {
                     if is_rate_limited(&e.message) {
                         rate_limited = true;
+                    }
+                    if is_unreachable(&e.message) {
+                        unreachable.insert(host.clone());
                     }
                     row.error = Some(e.message);
                 }
@@ -735,6 +763,40 @@ mod tests {
         // Both still show what was last known.
         assert!(s.rows.iter().all(|r| r.update_available), "{:?}", s.rows);
         assert!(s.rows.iter().all(|r| r.error.is_some()));
+    }
+
+    /// A host that does not answer is asked once per check, not once per payload on it.
+    #[test]
+    fn a_host_that_does_not_answer_is_asked_once() {
+        let (_d, http, lib) = library("unreachable");
+        let smp_latest = "https://api.github.com/repos/drakmor/shadowMountPlus/releases/latest";
+        seed(&lib, ID, "kstuff.elf", &elf(1, 64), "v1");
+        seed(
+            &lib,
+            "shadowmountplus",
+            "shadowmountplus.elf",
+            &elf(1, 64),
+            "v1",
+        );
+        http.ok(LATEST, release_json("v2", 80).as_bytes());
+        http.ok(
+            smp_latest,
+            br#"{"tag_name":"v3","assets":[{"name":"shadowmountplus.elf","browser_download_url":"https://github.com/drakmor/shadowMountPlus/releases/download/v3/shadowmountplus.elf","size":9}]}"#,
+        );
+        lib.check_updates(true, &[]).unwrap();
+
+        // The network goes.
+        http.unreachable(LATEST);
+        http.unreachable(smp_latest);
+        let before = http.asked.lock().unwrap().len();
+        let s = lib.check_updates(true, &[]).unwrap();
+        let asked = http.asked.lock().unwrap().len() - before;
+        assert_eq!(asked, 1, "one request, not one per payload");
+        // Both still show what was last known, saying it may be old.
+        assert!(s.rows.iter().all(|r| r.update_available), "{:?}", s.rows);
+        assert!(s.rows.iter().all(|r| r.error.is_some()));
+        assert!(is_unreachable("fetch https://x: io: Connection refused"));
+        assert!(!is_unreachable("fetch https://x: HTTP 404 (Not Found)"));
     }
 
     #[test]

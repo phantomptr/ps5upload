@@ -458,6 +458,13 @@ pub(crate) mod test_support {
                 .unwrap()
                 .insert(url.to_string(), (status, None, Vec::new()));
         }
+        /// Nothing answers at `url` (no network): the client's own error, no status.
+        pub fn unreachable(&self, url: &str) {
+            self.routes
+                .lock()
+                .unwrap()
+                .insert(url.to_string(), (0, None, Vec::new()));
+        }
         pub fn redirect(&self, url: &str, to: &str) {
             self.routes
                 .lock()
@@ -481,6 +488,9 @@ pub(crate) mod test_support {
                 .get(url)
                 .cloned()
                 .unwrap_or((404, None, Vec::new()));
+            if status == 0 {
+                return Err("io: Connection refused".into());
+            }
             Ok(HttpResponse {
                 status,
                 location,
