@@ -262,12 +262,18 @@ fn wipe_app_data(app: &AppHandle) -> Result<usize, String> {
 
     // 1. Config base dir — remove wholesale, then recreate empty so later
     //    writes don't fail on a missing parent.
+    #[cfg(not(target_os = "android"))]
     if let Ok(base) = config_base_dir(app) {
         if base.exists() {
             std::fs::remove_dir_all(&base).map_err(|e| format!("remove {base:?}: {e}"))?;
             removed += 1;
         }
         let _ = std::fs::create_dir_all(&base);
+    }
+    //    Android: that dir is the app's whole data folder, so only this app's entries go.
+    #[cfg(target_os = "android")]
+    if let Ok(base) = config_base_dir(app) {
+        removed += remove_own_config_entries(&base)?;
     }
 
     // Mobile: the in-process engine's folder (saved consoles, pairings, its identity).
@@ -311,6 +317,43 @@ fn wipe_app_data(app: &AppHandle) -> Result<usize, String> {
         removed += 1;
     }
 
+    Ok(removed)
+}
+
+/// What this app keeps in the config base dir on a phone: the settings file (`user_config_path`)
+/// and the bug-report folders (`crash_reports`, `diag_log`, `bug_screenshots`).
+#[cfg(any(target_os = "android", test))]
+const OWN_CONFIG_ENTRIES: [&str; 4] = ["settings.json", "crash-reports", "logs", "bug-screenshots"];
+
+/// Android's reset of the config base dir. Tauri's `app_config_dir` there is the app's whole
+/// data folder (`dataDir`): it also holds the running WebView's profile (`app_webview`) and
+/// Android's own folders, and the app may not remove the folder itself, so removing it
+/// wholesale deleted the WebView's files under it and then failed with "Permission denied"
+/// before the reset was finished. Only what this app wrote there goes, with any temporary a
+/// settings save left (`save_to`). Returns how many entries were removed.
+#[cfg(any(target_os = "android", test))]
+fn remove_own_config_entries(base: &Path) -> Result<usize, String> {
+    let entries = match std::fs::read_dir(base) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(format!("read {base:?}: {e}")),
+    };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !OWN_CONFIG_ENTRIES.contains(&name) && !name.starts_with("settings.json.tmp.") {
+            continue;
+        }
+        let path = entry.path();
+        let gone = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        gone.map_err(|e| format!("remove {path:?}: {e}"))?;
+        removed += 1;
+    }
     Ok(removed)
 }
 
