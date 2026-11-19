@@ -23,6 +23,112 @@ use crate::{
     JobStage, JobState,
 };
 
+/// How long a build request waits for its source to be read (and checked) before it answers.
+/// Under the app's 60 s request limit, with room to spare.
+const SCAN_ANSWER_WITHIN: Duration = Duration::from_secs(20);
+
+/// Runs `rest`, a build's scan of its source and everything up to its job's start, and answers
+/// as it does when it is over within [`SCAN_ANSWER_WITHIN`]: a refusal is still a refusal before
+/// any job. A scan that takes longer (a solid `.7z` or `.rar` decoded up to the game's param
+/// file, a slow server) used to hold the request until the app gave up on it, while the build
+/// started anyway with nobody told; Stop could not reach it either. Now the job is listed at its
+/// `check` stage and the request answers with its id: what `rest` ends with becomes the job's
+/// (its own start, or a failure with the refusal's words), and Stop sets the flag the scan reads.
+async fn answer_or_hand_off(
+    state: &AppState,
+    job_id: Uuid,
+    rest: impl std::future::Future<Output = axum::response::Response> + Send + 'static,
+) -> axum::response::Response {
+    answer_or_hand_off_within(state, job_id, rest, SCAN_ANSWER_WITHIN).await
+}
+
+async fn answer_or_hand_off_within(
+    state: &AppState,
+    job_id: Uuid,
+    rest: impl std::future::Future<Output = axum::response::Response> + Send + 'static,
+    within: Duration,
+) -> axum::response::Response {
+    let mut task = tokio::spawn(rest);
+    let failed = |e: tokio::task::JoinError| {
+        json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("the build stopped unexpectedly: {e}"),
+        )
+        .into_response()
+    };
+    let Ok(joined) = tokio::time::timeout(within, &mut task).await else {
+        let started_at_ms = now_ms();
+        {
+            // Only while `rest` has not listed the job itself, which it may have done a moment
+            // ago: under the lock, so its own state is never overwritten by this one.
+            let mut jobs = state.jobs.lock().unwrap_or_else(|e| e.into_inner());
+            if let std::collections::hash_map::Entry::Vacant(slot) = jobs.entry(job_id) {
+                let st = slot.insert(JobState::Running {
+                    stage: Some(JobStage {
+                        id: "check".into(),
+                        index: 0,
+                        count: 1,
+                        done: 0,
+                        total: 0,
+                    }),
+                    started_at_ms,
+                    bytes_sent: 0,
+                    total_bytes: 0,
+                    files: Default::default(),
+                    skipped_files: 0,
+                    skipped_bytes: 0,
+                    files_processing: 0,
+                    files_finalized: 0,
+                    files_finalizing_total: 0,
+                    bytes_finalized: 0,
+                });
+                let st = serde_json::json!(st);
+                drop(jobs);
+                let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": st });
+                let _ = state.events_tx.send(msg.to_string());
+            }
+        }
+        let (jobs, events_tx) = (state.jobs.clone(), state.events_tx.clone());
+        tokio::spawn(async move {
+            let answer = task.await.unwrap_or_else(failed);
+            if answer.status().is_success() {
+                return;
+            }
+            let body = axum::body::to_bytes(answer.into_body(), 1 << 20)
+                .await
+                .unwrap_or_default();
+            let error = serde_json::from_slice::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v["error"].as_str().map(str::to_string))
+                .unwrap_or_else(|| String::from_utf8_lossy(&body).into_owned());
+            let completed_at_ms = now_ms();
+            set_job(
+                &jobs,
+                &events_tx,
+                job_id,
+                JobState::Failed {
+                    started_at_ms,
+                    completed_at_ms,
+                    elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                    error,
+                    error_reason: None,
+                    error_detail: None,
+                    error_console: None,
+                    error_space: None,
+                },
+            );
+        });
+        return (
+            StatusCode::ACCEPTED,
+            Json(JobCreated {
+                job_id: job_id.to_string(),
+            }),
+        )
+            .into_response();
+    };
+    joined.unwrap_or_else(failed)
+}
+
 /// A job's overall bytes out of `job_total`, for its `bytes_sent`: each of the `of` stages it goes
 /// through an equal share, those before `at` done in full and this one by its own `done` of
 /// `total`. Never past `job_total`. The stage's own count is the job's `stage`, which the Convert
@@ -2118,193 +2224,10 @@ pub(crate) async fn exfat_build_handler(
     } else {
         None
     };
-    let scan_source = source.clone();
-    let check_packs = packs.is_some();
-    let install_runtime = req.ampr_lz4.as_ref().is_some_and(|r| r.install_runtime);
-    let add_ampr_emu = req.add_ampr_emu;
-    let ampr_emu_build = req.ampr_emu_build.clone();
-    let edited_tree = edited.map(|e| e.tree);
-    let scan_update = update.clone();
-    let remove_backport = req.remove_backport;
-    let scan_archive = archive.clone();
-    // What the source's reader left out (`SourceTree::notes`): it keeps a source that goes.
-    let source_notes: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
-    let scan_notes = source_notes.clone();
-    let scanned = tokio::task::spawn_blocking(move || {
-        // An edited copy keeps the image's own names: only the user's changes are made.
-        if let Some(tree) = edited_tree {
-            return Ok(tree);
-        }
-        if let Some(why) = patch_refusal(&scan_source) {
-            return Err(why);
-        }
-        // An image an in-place edit was interrupted in is settled before it is read.
-        if image_file && !remote {
-            crate::image_edit_in_place::before_open(&scan_source)?;
-        }
-        // A UFS2 image (.ffpkg) is case-sensitive like /data: give modules the eboot's spelling.
-        // A PS4 update goes into its game here (the merge checks they go together).
-        let (mut tree, renamed, signing) =
-            open_game(&scan_source, scan_update.as_deref(), scan_archive.as_ref())?;
-        if scan_archive.is_some() {
-            crate::log_at!(Info, "convert", "image build: {}", tree.describe());
-        }
-        *scan_notes.lock().unwrap_or_else(|e| e.into_inner()) = tree.notes();
-        match &scan_update {
-            Some(_) => crate::log_at!(Info, "convert", "image build: {}", tree.describe()),
-            None => {
-                if let Some(why) = ps4_refusal(&scan_source, &mut *tree, true) {
-                    return Err(why);
-                }
-            }
-        }
-        if !renamed.is_empty() {
-            crate::log_at!(
-                Info,
-                "convert",
-                "image build: renamed to the eboot's spelling: {}",
-                ps5upload_fpkg::module_case::describe(&renamed)
-            );
-        }
-        if let Some(line) = signing.describe() {
-            crate::log_at!(Info, "convert", "image build: {line}");
-        }
-        if let Some(open) = &unpack {
-            // The packs decoded: the image holds the plain game.
-            tree = open(tree)?;
-        }
-        if zstd_level.is_some() {
-            // A packed game goes straight into the new packs.
-            tree = crate::zstd_packs::readable_for_packing(tree)?;
-        } else if check_packs && ps5_dump_forge_zstd::reader::detect(&*tree) {
-            // The other way: the zstd packs decoded, for LZ4 packs to be made from them.
-            tree = Box::new(
-                ps5_dump_forge_zstd::reader::unpack(tree)
-                    .map_err(|e| format!("reading the game's zstd packs: {e}"))?,
-            );
-        }
-        // After any packs were decoded (their own list names the backport's files) and before
-        // an emulator or new packs are added to what is left.
-        if remove_backport {
-            let libs = crate::remove_backport::removable(&mut *tree)?;
-            tree = crate::remove_backport::without(tree, &libs);
-        }
-        if !check_packs && zstd_level.is_none() && add_ampr_emu {
-            // Some libSceAmpr games with no emulator fail to start from an image, and
-            // ShadowMount+ doesn't add one. Packs have their own choice below.
-            if let Some(module) = ps5upload_fpkg::ampr_pack::image::emulator_needed_at(&mut *tree) {
-                let bytes =
-                    crate::ampr_trace::emulator(ampr_emu_build.as_deref()).map_err(|e| {
-                        format!(
-                            "this game may need an AMPR emulator to start from an image, and it \
-                         could not be fetched: {e}. Connect to the internet, or turn off \
-                         \"Add the AMPR emulator\" in Convert's options"
-                        )
-                    })?;
-                tree = Box::new(
-                    ps5upload_fpkg::ampr_pack::image::RuntimeInstalled::new_at(
-                        tree, bytes, &module,
-                    )
-                    .map_err(|e| e.to_string())?,
-                );
-                crate::log_at!(
-                    Info,
-                    "convert",
-                    "image build: {} added as {module}",
-                    ampr_emu_build.as_deref().unwrap_or("ampr_emu")
-                );
-            }
-        }
-        if check_packs && install_runtime {
-            // The game's own ampr_emu is missing or too old for packs: the image gets the
-            // release one, its own kept beside it. Only for a game that reads through AMPR.
-            let ready = ps5upload_fpkg::ampr_pack::image::readiness(&mut *tree);
-            match ready.as_ref().map(|r| r.kind) {
-                Some("runtime") => {
-                    let bytes = crate::ampr_trace::release_runtime()?;
-                    tree = Box::new(
-                        ps5upload_fpkg::ampr_pack::image::RuntimeInstalled::new(tree, bytes)
-                            .map_err(|e| e.to_string())?,
-                    );
-                }
-                Some("ok") => {}
-                _ => {
-                    return Err(ready
-                        .and_then(|r| r.refusal)
-                        .unwrap_or_else(|| "the game cannot use asset packs".into()))
-                }
-            }
-        }
-        // Refused here, before a job exists, when the game cannot use the packs.
-        if check_packs {
-            if let Some(why) = ps5upload_fpkg::ampr_pack::image::refusal(&mut *tree) {
-                return Err(why);
-            }
-        }
-        Ok(tree)
-    })
-    .await;
-    let tree = match scanned {
-        Ok(Ok(t)) => t,
-        Ok(Err(e)) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
-        Err(e) => {
-            return json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
-        }
-    };
-    let total: u64 = tree.files().iter().map(|f| f.size).sum();
-    if tree.files().is_empty() {
-        return json_err(
-            StatusCode::BAD_REQUEST,
-            format!("{} has no files in it", source.display()),
-        )
-        .into_response();
-    }
-    // An uncompressed image is at least as large as the game: refused before the first write
-    // rather than filling the drive and failing near the end. A compressed one or LZ4 packs may
-    // well fit in less, so the screen warns and it goes ahead.
-    // Straight to a console, the console's own room is checked once the image's size is planned.
-    let partial_out = PathBuf::from(format!("{}.partial", output.display()));
-    if !straight && !compress && packs.is_none() && zstd_level.is_none() {
-        // What a build that stopped part way left is room too: the build goes on from it or
-        // clears it. Counted as taken, a retry of a 100 GB image stopped at 60 GB was refused
-        // for the 60 GB its own partial held, every time, until that file was deleted by hand.
-        let held = leftover_bytes(&partial_out);
-        if let Some(why) = build::free_bytes(&out_dir).and_then(|free| {
-            crate::folder_build::shortfall(free.saturating_add(held), total, &out_dir)
-        }) {
-            return json_err(StatusCode::BAD_REQUEST, why).into_response();
-        }
-    }
-
-    // Two builds into one console path would wreck each other's job, as two into one file would.
-    let claimed = match (&to_console, &to_server) {
-        (Some((addr, path)), _) => PathBuf::from(format!("ps5://{addr}{path}")),
-        (None, Some(d)) => PathBuf::from(d.url(&d.path_of(&out_name))),
-        (None, None) => partial_out.clone(),
-    };
-    let Some(writing) = claim_off_thread(claimed.clone()).await else {
-        return already_building(&claimed);
-    };
-    // LZ4 packs are spooled beside the image. Straight to a console or a server they are made
-    // as they are sent; the engine's data folder (one spool per destination) is the fallback.
-    let spool = if straight {
-        crate::image_build::stream_spool(&claimed)
-    } else {
-        crate::image_build::lz4_spool(&output)
-    };
-    let spooling = match straight && packs.is_none() {
-        true => None,
-        false => {
-            let Some(s) = claim_off_thread(spool.clone()).await else {
-                return already_building(&spool);
-            };
-            Some(s)
-        }
-    };
-
+    // The job's id and Stop exist before the source is read: a solid archive's scan can decode
+    // gigabytes, and a scan that outlasts `SCAN_ANSWER_WITHIN` goes on as the job (see
+    // `answer_or_hand_off`), stopped by Stop like the rest of it.
     let job_id = Uuid::new_v4();
-    crate::workshop_api::note_run(job_id, "image", &source);
-    let scaffold = Scaffold::of(&source);
     // Straight to a console the job can be cancelled, not paused: a writer held for minutes
     // would leave the console's job without data until it gives up (AVA1's stall limit).
     let cancel = if straight {
@@ -2316,130 +2239,344 @@ pub(crate) async fn exfat_build_handler(
     if let Some(a) = &archive {
         a.cancel.set(cancel.clone());
     }
-    let bytes = Arc::new(AtomicU64::new(0));
-    let started_at_ms = now_ms();
-    set_job(
-        &state.jobs,
-        &state.events_tx,
-        job_id,
-        JobState::Running {
-            stage: None,
-            started_at_ms,
-            bytes_sent: 0,
-            total_bytes: total,
-            files: Default::default(),
-            skipped_files: 0,
-            skipped_bytes: 0,
-            files_processing: 0,
-            files_finalized: 0,
-            files_finalizing_total: 0,
-            bytes_finalized: 0,
-        },
-    );
-    let jobs = state.jobs.clone();
-    let events_tx = state.events_tx.clone();
-    let tick_bytes = bytes.clone();
-    // The build's stage (plan, write or compress, verify) and its own progress.
-    let current: Arc<std::sync::Mutex<Option<JobStage>>> = Arc::default();
-    let tick_stage = current.clone();
-    let ticker = tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            let mut g = jobs.lock().unwrap_or_else(|e| e.into_inner());
-            match g.get_mut(&job_id) {
-                Some(JobState::Running {
-                    bytes_sent, stage, ..
-                }) => {
-                    *bytes_sent = tick_bytes.load(Ordering::Relaxed);
-                    *stage = tick_stage.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                    // Nobody listening: nothing to build.
-                    let state = crate::event_bus::tick_wanted(&events_tx)
-                        .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
-                        .flatten();
-                    drop(g);
-                    if let Some(state) = state {
-                        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": crate::with_live_notes(job_id, state) });
-                        let _ = events_tx.send(msg.to_string());
+    let handoff_state = state.clone();
+    let rest = async move {
+        let scan_source = source.clone();
+        let check_packs = packs.is_some();
+        let install_runtime = req.ampr_lz4.as_ref().is_some_and(|r| r.install_runtime);
+        let add_ampr_emu = req.add_ampr_emu;
+        let ampr_emu_build = req.ampr_emu_build.clone();
+        let edited_tree = edited.map(|e| e.tree);
+        let scan_update = update.clone();
+        let remove_backport = req.remove_backport;
+        let scan_archive = archive.clone();
+        // What the source's reader left out (`SourceTree::notes`): it keeps a source that goes.
+        let source_notes: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        let scan_notes = source_notes.clone();
+        let scanned = tokio::task::spawn_blocking(move || {
+            // An edited copy keeps the image's own names: only the user's changes are made.
+            if let Some(tree) = edited_tree {
+                return Ok(tree);
+            }
+            if let Some(why) = patch_refusal(&scan_source) {
+                return Err(why);
+            }
+            // An image an in-place edit was interrupted in is settled before it is read.
+            if image_file && !remote {
+                crate::image_edit_in_place::before_open(&scan_source)?;
+            }
+            // A UFS2 image (.ffpkg) is case-sensitive like /data: give modules the eboot's spelling.
+            // A PS4 update goes into its game here (the merge checks they go together).
+            let (mut tree, renamed, signing) =
+                open_game(&scan_source, scan_update.as_deref(), scan_archive.as_ref())?;
+            if scan_archive.is_some() {
+                crate::log_at!(Info, "convert", "image build: {}", tree.describe());
+            }
+            *scan_notes.lock().unwrap_or_else(|e| e.into_inner()) = tree.notes();
+            match &scan_update {
+                Some(_) => crate::log_at!(Info, "convert", "image build: {}", tree.describe()),
+                None => {
+                    if let Some(why) = ps4_refusal(&scan_source, &mut *tree, true) {
+                        return Err(why);
                     }
                 }
-                _ => break,
+            }
+            if !renamed.is_empty() {
+                crate::log_at!(
+                    Info,
+                    "convert",
+                    "image build: renamed to the eboot's spelling: {}",
+                    ps5upload_fpkg::module_case::describe(&renamed)
+                );
+            }
+            if let Some(line) = signing.describe() {
+                crate::log_at!(Info, "convert", "image build: {line}");
+            }
+            if let Some(open) = &unpack {
+                // The packs decoded: the image holds the plain game.
+                tree = open(tree)?;
+            }
+            if zstd_level.is_some() {
+                // A packed game goes straight into the new packs.
+                tree = crate::zstd_packs::readable_for_packing(tree)?;
+            } else if check_packs && ps5_dump_forge_zstd::reader::detect(&*tree) {
+                // The other way: the zstd packs decoded, for LZ4 packs to be made from them.
+                tree = Box::new(
+                    ps5_dump_forge_zstd::reader::unpack(tree)
+                        .map_err(|e| format!("reading the game's zstd packs: {e}"))?,
+                );
+            }
+            // After any packs were decoded (their own list names the backport's files) and before
+            // an emulator or new packs are added to what is left.
+            if remove_backport {
+                let libs = crate::remove_backport::removable(&mut *tree)?;
+                tree = crate::remove_backport::without(tree, &libs);
+            }
+            if !check_packs && zstd_level.is_none() && add_ampr_emu {
+                // Some libSceAmpr games with no emulator fail to start from an image, and
+                // ShadowMount+ doesn't add one. Packs have their own choice below.
+                if let Some(module) =
+                    ps5upload_fpkg::ampr_pack::image::emulator_needed_at(&mut *tree)
+                {
+                    let bytes =
+                        crate::ampr_trace::emulator(ampr_emu_build.as_deref()).map_err(|e| {
+                            format!(
+                            "this game may need an AMPR emulator to start from an image, and it \
+                         could not be fetched: {e}. Connect to the internet, or turn off \
+                         \"Add the AMPR emulator\" in Convert's options"
+                        )
+                        })?;
+                    tree = Box::new(
+                        ps5upload_fpkg::ampr_pack::image::RuntimeInstalled::new_at(
+                            tree, bytes, &module,
+                        )
+                        .map_err(|e| e.to_string())?,
+                    );
+                    crate::log_at!(
+                        Info,
+                        "convert",
+                        "image build: {} added as {module}",
+                        ampr_emu_build.as_deref().unwrap_or("ampr_emu")
+                    );
+                }
+            }
+            if check_packs && install_runtime {
+                // The game's own ampr_emu is missing or too old for packs: the image gets the
+                // release one, its own kept beside it. Only for a game that reads through AMPR.
+                let ready = ps5upload_fpkg::ampr_pack::image::readiness(&mut *tree);
+                match ready.as_ref().map(|r| r.kind) {
+                    Some("runtime") => {
+                        let bytes = crate::ampr_trace::release_runtime()?;
+                        tree = Box::new(
+                            ps5upload_fpkg::ampr_pack::image::RuntimeInstalled::new(tree, bytes)
+                                .map_err(|e| e.to_string())?,
+                        );
+                    }
+                    Some("ok") => {}
+                    _ => {
+                        return Err(ready
+                            .and_then(|r| r.refusal)
+                            .unwrap_or_else(|| "the game cannot use asset packs".into()))
+                    }
+                }
+            }
+            // Refused here, before a job exists, when the game cannot use the packs.
+            if check_packs {
+                if let Some(why) = ps5upload_fpkg::ampr_pack::image::refusal(&mut *tree) {
+                    return Err(why);
+                }
+            }
+            Ok(tree)
+        })
+        .await;
+        let tree = match scanned {
+            Ok(Ok(t)) => t,
+            Ok(Err(e)) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+            Err(e) => {
+                return json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))
+                    .into_response()
+            }
+        };
+        // Stopped while the source was read (a scan that does not read through the archive
+        // cannot be interrupted): nothing starts.
+        if cancel.load(Ordering::Relaxed) {
+            return json_err(StatusCode::BAD_REQUEST, "build cancelled").into_response();
+        }
+        let total: u64 = tree.files().iter().map(|f| f.size).sum();
+        if tree.files().is_empty() {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                format!("{} has no files in it", source.display()),
+            )
+            .into_response();
+        }
+        // An uncompressed image is at least as large as the game: refused before the first write
+        // rather than filling the drive and failing near the end. A compressed one or LZ4 packs may
+        // well fit in less, so the screen warns and it goes ahead.
+        // Straight to a console, the console's own room is checked once the image's size is planned.
+        let partial_out = PathBuf::from(format!("{}.partial", output.display()));
+        if !straight && !compress && packs.is_none() && zstd_level.is_none() {
+            // What a build that stopped part way left is room too: the build goes on from it or
+            // clears it. Counted as taken, a retry of a 100 GB image stopped at 60 GB was refused
+            // for the 60 GB its own partial held, every time, until that file was deleted by hand.
+            let held = leftover_bytes(&partial_out);
+            if let Some(why) = build::free_bytes(&out_dir).and_then(|free| {
+                crate::folder_build::shortfall(free.saturating_add(held), total, &out_dir)
+            }) {
+                return json_err(StatusCode::BAD_REQUEST, why).into_response();
             }
         }
-    });
 
-    let state_for_job = state.clone();
-    let ticker = JobTicker(ticker.abort_handle());
-    spawn_workshop_job(move || {
-        // Released last: an in-place edit may claim the source once this job is over.
-        let _reading = reading;
-        // First in, last out: gone only after everything reading it has been dropped.
-        let _scaffold = scaffold;
-        // A panic in the work below must not leave the job "running" forever with its
-        // ticker looping: both guards act on any exit, `fail` unless a result was recorded.
-        let mut fail = JobFailOnDropGuard::new(
-            state_for_job.jobs.clone(),
-            state_for_job.events_tx.clone(),
-            job_id,
-            started_at_ms,
-        );
-        if !straight {
-            sweep_output_leftovers(&out_dir);
-        } else if packs.is_some() {
-            // What killed builds left in the data folder's spools, none of them running.
-            if let Some(dir) = spool.parent() {
-                sweep_output_leftovers(dir);
+        // Two builds into one console path would wreck each other's job, as two into one file would.
+        let claimed = match (&to_console, &to_server) {
+            (Some((addr, path)), _) => PathBuf::from(format!("ps5://{addr}{path}")),
+            (None, Some(d)) => PathBuf::from(d.url(&d.path_of(&out_name))),
+            (None, None) => partial_out.clone(),
+        };
+        let Some(writing) = claim_off_thread(claimed.clone()).await else {
+            return already_building(&claimed);
+        };
+        // LZ4 packs are spooled beside the image. Straight to a console or a server they are made
+        // as they are sent; the engine's data folder (one spool per destination) is the fallback.
+        let spool = if straight {
+            crate::image_build::stream_spool(&claimed)
+        } else {
+            crate::image_build::lz4_spool(&output)
+        };
+        let spooling = match straight && packs.is_none() {
+            true => None,
+            false => {
+                let Some(s) = claim_off_thread(spool.clone()).await else {
+                    return already_building(&spool);
+                };
+                Some(s)
             }
-        }
-        let mut tree = tree;
-        // With LZ4 packs the build packs first; the stage list says so. A `.ffpfsc` straight to
-        // a console or a server is compressed once to measure it before it is written.
-        let measured = straight && compress;
-        let stages: &[&str] = match (packs.is_some() || zstd_level.is_some(), measured) {
-            (true, true) => &["pack", "plan", "compress", "write", "verify"],
-            (true, false) => &["pack", "plan", "write", "verify"],
-            (false, true) => &["plan", "compress", "write", "verify"],
-            (false, false) => &["plan", "write", "verify"],
         };
-        // The job's bytes are the whole build's (see `overall_progress`); the stage's own are in
-        // its `stage`.
-        let job_total = total;
-        let mut report = |id: &str, done: u64, total: u64| {
-            let index = stages
-                .iter()
-                .position(|s| *s == id || (id == "compress" && *s == "write"))
-                .unwrap_or(0) as u32;
-            bytes.fetch_max(
-                overall_progress(job_total, index, stages.len() as u32, done, total),
-                Ordering::Relaxed,
+
+        crate::workshop_api::note_run(job_id, "image", &source);
+        let scaffold = Scaffold::of(&source);
+        let bytes = Arc::new(AtomicU64::new(0));
+        let started_at_ms = now_ms();
+        set_job(
+            &state.jobs,
+            &state.events_tx,
+            job_id,
+            JobState::Running {
+                stage: None,
+                started_at_ms,
+                bytes_sent: 0,
+                total_bytes: total,
+                files: Default::default(),
+                skipped_files: 0,
+                skipped_bytes: 0,
+                files_processing: 0,
+                files_finalized: 0,
+                files_finalizing_total: 0,
+                bytes_finalized: 0,
+            },
+        );
+        let jobs = state.jobs.clone();
+        let events_tx = state.events_tx.clone();
+        let tick_bytes = bytes.clone();
+        // The build's stage (plan, write or compress, verify) and its own progress.
+        let current: Arc<std::sync::Mutex<Option<JobStage>>> = Arc::default();
+        let tick_stage = current.clone();
+        let ticker = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                let mut g = jobs.lock().unwrap_or_else(|e| e.into_inner());
+                match g.get_mut(&job_id) {
+                    Some(JobState::Running {
+                        bytes_sent, stage, ..
+                    }) => {
+                        *bytes_sent = tick_bytes.load(Ordering::Relaxed);
+                        *stage = tick_stage.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                        // Nobody listening: nothing to build.
+                        let state = crate::event_bus::tick_wanted(&events_tx)
+                            .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
+                            .flatten();
+                        drop(g);
+                        if let Some(state) = state {
+                            let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": crate::with_live_notes(job_id, state) });
+                            let _ = events_tx.send(msg.to_string());
+                        }
+                    }
+                    _ => break,
+                }
+            }
+        });
+
+        let state_for_job = state.clone();
+        let ticker = JobTicker(ticker.abort_handle());
+        spawn_workshop_job(move || {
+            // Released last: an in-place edit may claim the source once this job is over.
+            let _reading = reading;
+            // First in, last out: gone only after everything reading it has been dropped.
+            let _scaffold = scaffold;
+            // A panic in the work below must not leave the job "running" forever with its
+            // ticker looping: both guards act on any exit, `fail` unless a result was recorded.
+            let mut fail = JobFailOnDropGuard::new(
+                state_for_job.jobs.clone(),
+                state_for_job.events_tx.clone(),
+                job_id,
+                started_at_ms,
             );
-            *current.lock().unwrap_or_else(|e| e.into_inner()) = Some(JobStage {
-                id: id.to_string(),
-                index,
-                count: stages.len() as u32,
-                done,
-                total,
-            });
-        };
-        // A PS4 game's image needs the param.json ShadowMount+ reads, which only PS5 games ship.
-        let mut ps4 = ps5upload_fpkg::ps4_param::Ps4Params::wrap(&mut *tree);
-        let source_tree: Result<&mut dyn ps5upload_fpkg::source::SourceTree, String> =
-            match ps4.as_mut() {
-                Ok(Some(p)) => Ok(p),
-                Ok(None) => Ok(&mut *tree),
-                Err(e) => Err(format!("param.sfo: {e}")),
+            if !straight {
+                sweep_output_leftovers(&out_dir);
+            } else if packs.is_some() {
+                // What killed builds left in the data folder's spools, none of them running.
+                if let Some(dir) = spool.parent() {
+                    sweep_output_leftovers(dir);
+                }
+            }
+            let mut tree = tree;
+            // With LZ4 packs the build packs first; the stage list says so. A `.ffpfsc` straight to
+            // a console or a server is compressed once to measure it before it is written.
+            let measured = straight && compress;
+            let stages: &[&str] = match (packs.is_some() || zstd_level.is_some(), measured) {
+                (true, true) => &["pack", "plan", "compress", "write", "verify"],
+                (true, false) => &["pack", "plan", "write", "verify"],
+                (false, true) => &["plan", "compress", "write", "verify"],
+                (false, false) => &["plan", "write", "verify"],
             };
-        // zstd packs: the emulator that goes in, fetched here (off the request) and recorded.
-        let mut runtime = None;
-        // Straight to a console or a server in a `.ffpfsc`: the image's name inside it.
-        let ffpfsc = inner_name
-            .as_deref()
-            .map(|inner| crate::image_build::FfpfscOut { inner, level });
-        // Straight to a console: its own job, failing with the transfer's reasons.
-        let ended = match (source_tree, &to_console) {
-            (Ok(tree), None) if to_server.is_some() => Ended::Server(match &to_server {
-                Some(dest) => to_server_job(
-                    dest,
-                    &out_name,
+            // The job's bytes are the whole build's (see `overall_progress`); the stage's own are in
+            // its `stage`.
+            let job_total = total;
+            let mut report = |id: &str, done: u64, total: u64| {
+                let index = stages
+                    .iter()
+                    .position(|s| *s == id || (id == "compress" && *s == "write"))
+                    .unwrap_or(0) as u32;
+                bytes.fetch_max(
+                    overall_progress(job_total, index, stages.len() as u32, done, total),
+                    Ordering::Relaxed,
+                );
+                *current.lock().unwrap_or_else(|e| e.into_inner()) = Some(JobStage {
+                    id: id.to_string(),
+                    index,
+                    count: stages.len() as u32,
+                    done,
+                    total,
+                });
+            };
+            // A PS4 game's image needs the param.json ShadowMount+ reads, which only PS5 games ship.
+            let mut ps4 = ps5upload_fpkg::ps4_param::Ps4Params::wrap(&mut *tree);
+            let source_tree: Result<&mut dyn ps5upload_fpkg::source::SourceTree, String> =
+                match ps4.as_mut() {
+                    Ok(Some(p)) => Ok(p),
+                    Ok(None) => Ok(&mut *tree),
+                    Err(e) => Err(format!("param.sfo: {e}")),
+                };
+            // zstd packs: the emulator that goes in, fetched here (off the request) and recorded.
+            let mut runtime = None;
+            // Straight to a console or a server in a `.ffpfsc`: the image's name inside it.
+            let ffpfsc = inner_name
+                .as_deref()
+                .map(|inner| crate::image_build::FfpfscOut { inner, level });
+            // Straight to a console: its own job, failing with the transfer's reasons.
+            let ended = match (source_tree, &to_console) {
+                (Ok(tree), None) if to_server.is_some() => Ended::Server(match &to_server {
+                    Some(dest) => to_server_job(
+                        dest,
+                        &out_name,
+                        format,
+                        ffpfsc,
+                        zstd_level,
+                        zstd_rules.as_deref(),
+                        &mut runtime,
+                        packs.as_ref().map(|p| (p, spool.as_path())),
+                        tree,
+                        mode,
+                        verify_chunk,
+                        &cancel,
+                        &mut report,
+                    ),
+                    None => Err("no server".into()),
+                }),
+                (Err(e), None) if to_server.is_some() => Ended::Server(Err(e)),
+                (Ok(tree), Some((addr, path))) => Ended::Console(to_console_job(
+                    addr,
+                    path,
                     format,
                     ffpfsc,
                     zstd_level,
@@ -2450,121 +2587,103 @@ pub(crate) async fn exfat_build_handler(
                     mode,
                     verify_chunk,
                     &cancel,
+                    job_id,
                     &mut report,
-                ),
-                None => Err("no server".into()),
-            }),
-            (Err(e), None) if to_server.is_some() => Ended::Server(Err(e)),
-            (Ok(tree), Some((addr, path))) => Ended::Console(to_console_job(
-                addr,
-                path,
-                format,
-                ffpfsc,
-                zstd_level,
-                zstd_rules.as_deref(),
-                &mut runtime,
-                packs.as_ref().map(|p| (p, spool.as_path())),
-                tree,
-                mode,
-                verify_chunk,
-                &cancel,
-                job_id,
-                &mut report,
-            )),
-            (Err(e), Some(_)) => Ended::Console(Err(anyhow::anyhow!(e))),
-            (source_tree, None) => Ended::Local(match (source_tree, &packs) {
-                (Err(e), _) => Err(e),
-                (Ok(tree), None) if zstd_level.is_some() => {
-                    // The .ffpfsc's own level, before the zstd level takes the name.
-                    let level_ffpfsc = level;
-                    let (level, choice) = zstd_level.unwrap_or_default();
-                    crate::zstd_runtime::pack_runtime(choice).and_then(|r| {
-                        crate::log_at!(
-                            Info,
-                            "convert",
-                            "zstd packs: {} goes into {}",
-                            r.describe(),
-                            output.display()
-                        );
-                        crate::zstd_packs::build(
-                            format,
-                            inner_name.as_deref(),
-                            level_ffpfsc,
-                            level,
-                            zstd_rules.as_deref(),
-                            runtime.insert(r),
-                            tree,
-                            &output,
-                            mode,
-                            verify_chunk,
-                            &cancel,
-                            &mut report,
-                        )
-                    })
-                }
-                (Ok(tree), Some(packs)) => crate::image_build::build_packed(
-                    format,
-                    inner_name.as_deref(),
-                    level,
-                    tree,
-                    &output,
-                    packs,
-                    mode,
-                    verify_chunk,
-                    &cancel,
-                    &mut report,
-                ),
-                // A libSceAmpr game gets a fresh ampr_emu.index (#449), as a package does.
-                // Any image without packs can go on after a crash: same files, same bytes, as long as
-                // the regenerated index and a PFS image keep their time.
-                (Ok(tree), None) => {
-                    let stamp = crate::image_build::index_stamp(&partial_out);
-                    match crate::image_build::AmprIndexed::wrap_at(&mut *tree, stamp) {
-                        Ok(Some(mut indexed)) => crate::image_build::build_resumable(
-                            format,
-                            inner_name.as_deref(),
-                            level,
-                            stamp,
-                            &mut indexed,
-                            &output,
-                            mode,
-                            verify_chunk,
-                            &cancel,
-                            &mut report,
-                        ),
-                        Ok(None) => crate::image_build::build_resumable(
-                            format,
-                            inner_name.as_deref(),
-                            level,
-                            stamp,
-                            tree,
-                            &output,
-                            mode,
-                            verify_chunk,
-                            &cancel,
-                            &mut report,
-                        ),
-                        Err(e) => Err(format!("ampr_emu.index: {e}")),
+                )),
+                (Err(e), Some(_)) => Ended::Console(Err(anyhow::anyhow!(e))),
+                (source_tree, None) => Ended::Local(match (source_tree, &packs) {
+                    (Err(e), _) => Err(e),
+                    (Ok(tree), None) if zstd_level.is_some() => {
+                        // The .ffpfsc's own level, before the zstd level takes the name.
+                        let level_ffpfsc = level;
+                        let (level, choice) = zstd_level.unwrap_or_default();
+                        crate::zstd_runtime::pack_runtime(choice).and_then(|r| {
+                            crate::log_at!(
+                                Info,
+                                "convert",
+                                "zstd packs: {} goes into {}",
+                                r.describe(),
+                                output.display()
+                            );
+                            crate::zstd_packs::build(
+                                format,
+                                inner_name.as_deref(),
+                                level_ffpfsc,
+                                level,
+                                zstd_rules.as_deref(),
+                                runtime.insert(r),
+                                tree,
+                                &output,
+                                mode,
+                                verify_chunk,
+                                &cancel,
+                                &mut report,
+                            )
+                        })
                     }
-                }
-            }),
-        };
-        drop(writing);
-        drop(spooling);
-        if matches!(ended, Ended::Local(Err(_))) {
-            sweep_output_leftovers(&out_dir);
-        }
-        let completed_at_ms = now_ms();
-        drop(ticker);
-        let outcome = match ended {
-            Ended::Local(outcome) => outcome,
-            Ended::Server(written) => {
-                let url = to_server
-                    .as_ref()
-                    .map_or_else(String::new, |d| d.url(&d.path_of(&out_name)));
-                let state = match written {
-                    Ok(s) => {
-                        crate::engine_log::record(
+                    (Ok(tree), Some(packs)) => crate::image_build::build_packed(
+                        format,
+                        inner_name.as_deref(),
+                        level,
+                        tree,
+                        &output,
+                        packs,
+                        mode,
+                        verify_chunk,
+                        &cancel,
+                        &mut report,
+                    ),
+                    // A libSceAmpr game gets a fresh ampr_emu.index (#449), as a package does.
+                    // Any image without packs can go on after a crash: same files, same bytes, as long as
+                    // the regenerated index and a PFS image keep their time.
+                    (Ok(tree), None) => {
+                        let stamp = crate::image_build::index_stamp(&partial_out);
+                        match crate::image_build::AmprIndexed::wrap_at(&mut *tree, stamp) {
+                            Ok(Some(mut indexed)) => crate::image_build::build_resumable(
+                                format,
+                                inner_name.as_deref(),
+                                level,
+                                stamp,
+                                &mut indexed,
+                                &output,
+                                mode,
+                                verify_chunk,
+                                &cancel,
+                                &mut report,
+                            ),
+                            Ok(None) => crate::image_build::build_resumable(
+                                format,
+                                inner_name.as_deref(),
+                                level,
+                                stamp,
+                                tree,
+                                &output,
+                                mode,
+                                verify_chunk,
+                                &cancel,
+                                &mut report,
+                            ),
+                            Err(e) => Err(format!("ampr_emu.index: {e}")),
+                        }
+                    }
+                }),
+            };
+            drop(writing);
+            drop(spooling);
+            if matches!(ended, Ended::Local(Err(_))) {
+                sweep_output_leftovers(&out_dir);
+            }
+            let completed_at_ms = now_ms();
+            drop(ticker);
+            let outcome = match ended {
+                Ended::Local(outcome) => outcome,
+                Ended::Server(written) => {
+                    let url = to_server
+                        .as_ref()
+                        .map_or_else(String::new, |d| d.url(&d.path_of(&out_name)));
+                    let state = match written {
+                        Ok(s) => {
+                            crate::engine_log::record(
                             "info",
                             format!(
                                 "image: {} -> {url} ({} files, {} bytes, {}, read back on the server){}",
@@ -2578,52 +2697,52 @@ pub(crate) async fn exfat_build_handler(
                                     .unwrap_or_default()
                             ),
                         );
-                        let mut ack = serde_json::json!({
-                            "to_server": true,
-                            "resumed_from": s.resumed_from,
-                        });
-                        if let (Some(o), Some(r)) = (ack.as_object_mut(), runtime.as_ref()) {
-                            o.insert("ampr_runtime".into(), serde_json::json!(r));
+                            let mut ack = serde_json::json!({
+                                "to_server": true,
+                                "resumed_from": s.resumed_from,
+                            });
+                            if let (Some(o), Some(r)) = (ack.as_object_mut(), runtime.as_ref()) {
+                                o.insert("ampr_runtime".into(), serde_json::json!(r));
+                            }
+                            JobState::Done {
+                                started_at_ms,
+                                completed_at_ms,
+                                elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                                tx_id_hex: String::new(),
+                                bytes_sent: s.built.image_bytes,
+                                dest: url,
+                                files_sent: s.built.files,
+                                skipped_files: 0,
+                                skipped_bytes: 0,
+                                commit_ack: Some(ack),
+                            }
                         }
-                        JobState::Done {
-                            started_at_ms,
-                            completed_at_ms,
-                            elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                            tx_id_hex: String::new(),
-                            bytes_sent: s.built.image_bytes,
-                            dest: url,
-                            files_sent: s.built.files,
-                            skipped_files: 0,
-                            skipped_bytes: 0,
-                            commit_ack: Some(ack),
+                        Err(error) => {
+                            crate::engine_log::record(
+                                "warn",
+                                format!("image: to the server failed: {error}"),
+                            );
+                            JobState::Failed {
+                                started_at_ms,
+                                completed_at_ms,
+                                elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                                error,
+                                error_reason: None,
+                                error_detail: None,
+                                error_console: None,
+                                error_space: None,
+                            }
                         }
-                    }
-                    Err(error) => {
-                        crate::engine_log::record(
-                            "warn",
-                            format!("image: to the server failed: {error}"),
-                        );
-                        JobState::Failed {
-                            started_at_ms,
-                            completed_at_ms,
-                            elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                            error,
-                            error_reason: None,
-                            error_detail: None,
-                            error_console: None,
-                            error_space: None,
-                        }
-                    }
-                };
-                set_job(&state_for_job.jobs, &state_for_job.events_tx, job_id, state);
-                fail.mark_succeeded();
-                return;
-            }
-            Ended::Console(streamed) => {
-                let path = to_console.as_ref().map_or("", |(_, p)| p.as_str());
-                let state = match streamed {
-                    Ok(s) => {
-                        crate::engine_log::record(
+                    };
+                    set_job(&state_for_job.jobs, &state_for_job.events_tx, job_id, state);
+                    fail.mark_succeeded();
+                    return;
+                }
+                Ended::Console(streamed) => {
+                    let path = to_console.as_ref().map_or("", |(_, p)| p.as_str());
+                    let state = match streamed {
+                        Ok(s) => {
+                            crate::engine_log::record(
                             "info",
                             format!(
                                 "image: {} -> PS5 {path} ({} files, {} bytes, {}, read back on the PS5){}",
@@ -2637,132 +2756,134 @@ pub(crate) async fn exfat_build_handler(
                                     .unwrap_or_default()
                             ),
                         );
-                        let mut ack: serde_json::Value =
-                            serde_json::from_str(&s.transfer.commit_ack_body)
-                                .unwrap_or_else(|_| serde_json::json!({}));
-                        if let (Some(o), Some(r)) = (ack.as_object_mut(), runtime.as_ref()) {
-                            o.insert("ampr_runtime".into(), serde_json::json!(r));
+                            let mut ack: serde_json::Value =
+                                serde_json::from_str(&s.transfer.commit_ack_body)
+                                    .unwrap_or_else(|_| serde_json::json!({}));
+                            if let (Some(o), Some(r)) = (ack.as_object_mut(), runtime.as_ref()) {
+                                o.insert("ampr_runtime".into(), serde_json::json!(r));
+                            }
+                            if let Some(o) = ack.as_object_mut() {
+                                o.insert("to_console".into(), true.into());
+                                o.insert("passes".into(), s.passes.into());
+                            }
+                            JobState::Done {
+                                started_at_ms,
+                                completed_at_ms,
+                                elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                                tx_id_hex: s.transfer.tx_id_hex,
+                                bytes_sent: s.built.image_bytes,
+                                dest: path.to_string(),
+                                files_sent: s.built.files,
+                                skipped_files: 0,
+                                skipped_bytes: 0,
+                                commit_ack: Some(ack),
+                            }
                         }
-                        if let Some(o) = ack.as_object_mut() {
-                            o.insert("to_console".into(), true.into());
-                            o.insert("passes".into(), s.passes.into());
+                        Err(e) => {
+                            crate::engine_log::record(
+                                "warn",
+                                format!("image: to the PS5 failed: {e:#}"),
+                            );
+                            crate::job_failed_from_err(started_at_ms, completed_at_ms, &e)
                         }
+                    };
+                    set_job(&state_for_job.jobs, &state_for_job.events_tx, job_id, state);
+                    fail.mark_succeeded();
+                    return;
+                }
+            };
+            match outcome {
+                Ok(built) => {
+                    built_packages()
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(output.clone());
+                    let removal = match &removal {
+                        Some(plan) => {
+                            // The source's own files are closed before it is moved away. (The
+                            // PS4 wrapper above only borrowed the tree, and is done with it.)
+                            drop(tree);
+                            let notes = std::mem::take(
+                                &mut *source_notes.lock().unwrap_or_else(|e| e.into_inner()),
+                            );
+                            Some(remove_source(
+                                plan,
+                                &output,
+                                &state_for_job,
+                                job_id,
+                                "image",
+                                &notes,
+                            ))
+                        }
+                        None => None,
+                    };
+                    crate::engine_log::record(
+                        "info",
+                        format!(
+                            "image: {} -> {} ({} files, {} bytes, {}, read back){}",
+                            source.display(),
+                            output.display(),
+                            built.files,
+                            built.image_bytes,
+                            built.detail,
+                            runtime
+                                .as_ref()
+                                .map(|r| format!("; emulator {}", r.describe()))
+                                .unwrap_or_default()
+                        ),
+                    );
+                    set_job(
+                        &state_for_job.jobs,
+                        &state_for_job.events_tx,
+                        job_id,
                         JobState::Done {
                             started_at_ms,
                             completed_at_ms,
                             elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                            tx_id_hex: s.transfer.tx_id_hex,
-                            bytes_sent: s.built.image_bytes,
-                            dest: path.to_string(),
-                            files_sent: s.built.files,
+                            tx_id_hex: String::new(),
+                            bytes_sent: built.image_bytes,
+                            dest: output.display().to_string(),
+                            files_sent: built.files,
                             skipped_files: 0,
                             skipped_bytes: 0,
-                            commit_ack: Some(ack),
-                        }
-                    }
-                    Err(e) => {
-                        crate::engine_log::record(
-                            "warn",
-                            format!("image: to the PS5 failed: {e:#}"),
-                        );
-                        crate::job_failed_from_err(started_at_ms, completed_at_ms, &e)
-                    }
-                };
-                set_job(&state_for_job.jobs, &state_for_job.events_tx, job_id, state);
-                fail.mark_succeeded();
-                return;
+                            commit_ack: crate::source_removal::ack(
+                                runtime.as_ref().map(runtime_ack),
+                                removal.as_ref(),
+                            ),
+                        },
+                    );
+                }
+                Err(error) => {
+                    crate::engine_log::record("warn", format!("image: build failed: {error}"));
+                    set_job(
+                        &state_for_job.jobs,
+                        &state_for_job.events_tx,
+                        job_id,
+                        JobState::Failed {
+                            started_at_ms,
+                            completed_at_ms,
+                            elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                            error,
+                            error_reason: None,
+                            error_detail: None,
+                            error_console: None,
+                            error_space: None,
+                        },
+                    );
+                }
             }
-        };
-        match outcome {
-            Ok(built) => {
-                built_packages()
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .insert(output.clone());
-                let removal = match &removal {
-                    Some(plan) => {
-                        // The source's own files are closed before it is moved away. (The
-                        // PS4 wrapper above only borrowed the tree, and is done with it.)
-                        drop(tree);
-                        let notes = std::mem::take(
-                            &mut *source_notes.lock().unwrap_or_else(|e| e.into_inner()),
-                        );
-                        Some(remove_source(
-                            plan,
-                            &output,
-                            &state_for_job,
-                            job_id,
-                            "image",
-                            &notes,
-                        ))
-                    }
-                    None => None,
-                };
-                crate::engine_log::record(
-                    "info",
-                    format!(
-                        "image: {} -> {} ({} files, {} bytes, {}, read back){}",
-                        source.display(),
-                        output.display(),
-                        built.files,
-                        built.image_bytes,
-                        built.detail,
-                        runtime
-                            .as_ref()
-                            .map(|r| format!("; emulator {}", r.describe()))
-                            .unwrap_or_default()
-                    ),
-                );
-                set_job(
-                    &state_for_job.jobs,
-                    &state_for_job.events_tx,
-                    job_id,
-                    JobState::Done {
-                        started_at_ms,
-                        completed_at_ms,
-                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        tx_id_hex: String::new(),
-                        bytes_sent: built.image_bytes,
-                        dest: output.display().to_string(),
-                        files_sent: built.files,
-                        skipped_files: 0,
-                        skipped_bytes: 0,
-                        commit_ack: crate::source_removal::ack(
-                            runtime.as_ref().map(runtime_ack),
-                            removal.as_ref(),
-                        ),
-                    },
-                );
-            }
-            Err(error) => {
-                crate::engine_log::record("warn", format!("image: build failed: {error}"));
-                set_job(
-                    &state_for_job.jobs,
-                    &state_for_job.events_tx,
-                    job_id,
-                    JobState::Failed {
-                        started_at_ms,
-                        completed_at_ms,
-                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        error,
-                        error_reason: None,
-                        error_detail: None,
-                        error_console: None,
-                        error_space: None,
-                    },
-                );
-            }
-        }
-        fail.mark_succeeded();
-    });
+            fail.mark_succeeded();
+        });
 
-    (
-        StatusCode::ACCEPTED,
-        Json(JobCreated {
-            job_id: job_id.to_string(),
-        }),
-    )
-        .into_response()
+        (
+            StatusCode::ACCEPTED,
+            Json(JobCreated {
+                job_id: job_id.to_string(),
+            }),
+        )
+            .into_response()
+    };
+    answer_or_hand_off(&handoff_state, job_id, rest).await
 }
 
 #[derive(Deserialize)]
@@ -3311,170 +3432,9 @@ pub(crate) async fn folder_build_handler(
     } else {
         None
     };
-    let scan_source = source.clone();
-    let scan_entry = entry.clone();
-    let scan_update = update.clone();
-    let packing = zstd.is_some();
-    let lz4_packing = lz4.is_some();
-    // The backport libraries left out, found once: the read-back leaves the same ones out.
-    let left_out: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
-    let scan_left_out = left_out.clone();
-    let scan_unpack = unpack.clone();
-    let scan_archive = archive.clone();
-    // What the source's reader left out (`SourceTree::notes`): it keeps a source that goes.
-    let source_notes: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
-    let scan_notes = source_notes.clone();
-    let scanned = tokio::task::spawn_blocking(move || {
-        // An image an in-place edit was interrupted in is settled before it is read.
-        settle_local_source(&scan_source)?;
-        let noted = |tree: &dyn ps5upload_fpkg::source::SourceTree| {
-            *scan_notes.lock().unwrap_or_else(|e| e.into_inner()) = tree.notes();
-        };
-        if let Some(entry) = scan_entry {
-            // A part of the image is saved as the image spells it, as the browser listed it.
-            return open_entry(&scan_source, &entry);
-        }
-        // `tree` (packs already decoded when new ones are made) without its backport.
-        let strip = |mut tree: Box<dyn ps5upload_fpkg::source::SourceTree>| {
-            if !remove_backport {
-                return Ok(tree);
-            }
-            let libs = crate::remove_backport::removable(&mut *tree)?;
-            let tree = crate::remove_backport::without(tree, &libs);
-            *scan_left_out.lock().unwrap_or_else(|e| e.into_inner()) = libs;
-            Ok::<_, String>(tree)
-        };
-        if packing {
-            // Packs are made of a whole game.
-            if let Some(why) = patch_refusal(&scan_source) {
-                return Err(why);
-            }
-            let (mut tree, notes) =
-                open_for_packing(&scan_source, scan_update.as_deref(), scan_archive.as_ref())?;
-            *scan_notes.lock().unwrap_or_else(|e| e.into_inner()) = notes;
-            if scan_update.is_none() {
-                if let Some(why) = ps4_refusal(&scan_source, &mut *tree, false) {
-                    return Err(why);
-                }
-            }
-            return Ok(Unpacked::Tree(strip(tree)?));
-        }
-        if lz4_packing {
-            // LZ4 packs too are made of a whole game, with its own ampr_emu (or the release one).
-            if let Some(why) = patch_refusal(&scan_source) {
-                return Err(why);
-            }
-            let (mut tree, notes) =
-                open_for_lz4(&scan_source, scan_update.as_deref(), scan_archive.as_ref())?;
-            *scan_notes.lock().unwrap_or_else(|e| e.into_inner()) = notes;
-            if scan_update.is_none() {
-                if let Some(why) = ps4_refusal(&scan_source, &mut *tree, false) {
-                    return Err(why);
-                }
-            }
-            return Ok(Unpacked::Tree(lz4_ready(strip(tree)?, install_runtime)?));
-        }
-        // An image ignores letter case and /data does not: a Unity dump whose
-        // Il2cppUserAssemblies.prx the eboot loads as Il2CppUserAssemblies.prx plays from the
-        // image and crashes a second in from the folder. The folder takes the eboot's spelling.
-        // A PS4 update goes into its game here (the merge checks they go together).
-        let (mut tree, renamed, signing) =
-            open_game(&scan_source, scan_update.as_deref(), scan_archive.as_ref())?;
-        if scan_archive.is_some() {
-            crate::log_at!(Info, "convert", "folder build: {}", tree.describe());
-        }
-        match &scan_update {
-            Some(_) => crate::log_at!(Info, "convert", "folder build: {}", tree.describe()),
-            None => {
-                if let Some(why) = ps4_refusal(&scan_source, &mut *tree, false) {
-                    return Err(why);
-                }
-            }
-        }
-        if !renamed.is_empty() {
-            crate::log_at!(
-                Info,
-                "convert",
-                "folder build: renamed to the eboot's spelling: {}",
-                ps5upload_fpkg::module_case::describe(&renamed)
-            );
-        }
-        if let Some(line) = signing.describe() {
-            crate::log_at!(Info, "convert", "folder build: {line}");
-        }
-        // A patch package unpacks to the files it carries whole; the log says what it left.
-        for note in tree.notes() {
-            crate::log_at!(Info, "convert", "folder build: {note}");
-        }
-        noted(&*tree);
-        if let Some(open) = &scan_unpack {
-            // The packs decoded: the folder holds the plain game.
-            tree = open(tree)?;
-        }
-        Ok::<_, String>(Unpacked::Tree(strip(tree)?))
-    })
-    .await;
-    let unpacked = match scanned {
-        Ok(Ok(t)) => t,
-        Ok(Err(e)) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
-        Err(e) => {
-            return json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
-        }
-    };
-    let total: u64 = match &unpacked {
-        Unpacked::Tree(tree) => {
-            if tree.files().is_empty() {
-                let what = match &entry {
-                    Some(e) => e.clone(),
-                    None => source.display().to_string(),
-                };
-                return json_err(
-                    StatusCode::BAD_REQUEST,
-                    format!("{what} has no files in it"),
-                )
-                .into_response();
-            }
-            tree.files().iter().map(|f| f.size).sum()
-        }
-        Unpacked::File { size, .. } => *size,
-    };
-    // Packs may well fit in less, as for an image: no refusal before the first write. On a
-    // server, the server's own room is asked once the job starts.
-    if let Some(why) = build::free_bytes(&out_dir)
-        .and_then(|free| crate::folder_build::shortfall(free, total, &out_dir))
-        .filter(|_| zstd.is_none() && lz4.is_none() && to_server.is_none())
-    {
-        return json_err(StatusCode::BAD_REQUEST, why).into_response();
-    }
-    // Two builds into one server folder would wreck each other, as two into one folder here.
-    let claimed = match &to_server {
-        Some(d) => PathBuf::from(d.url(&d.path_of(&name))),
-        None => partial.clone(),
-    };
-    let Some(writing) = claim_off_thread(claimed.clone()).await else {
-        return already_building(&claimed);
-    };
-    // LZ4 packs are spooled beside the folder first, or, for a folder on a server, in the
-    // engine's data folder.
-    let spool = match &to_server {
-        Some(_) => crate::image_build::stream_spool(&claimed),
-        None => crate::image_build::lz4_spool(&target),
-    };
-    let spooling = match lz4.is_some() {
-        false => None,
-        true => {
-            let Some(s) = claim_off_thread(spool.clone()).await else {
-                return already_building(&spool);
-            };
-            Some(s)
-        }
-    };
-    // A source that goes afterwards is replaced by this folder: every file is compared in full.
-    let mode =
-        ps5upload_fpkg::sample::VerifyMode::from_full(req.full_verify || req.delete_source, false);
-
+    // As for an image: the job's id and Stop exist before the source is read, and a long scan
+    // goes on as the job (`answer_or_hand_off`).
     let job_id = Uuid::new_v4();
-    crate::workshop_api::note_run(job_id, "folder", &source);
     // To a server the job can be cancelled, not paused: a write held for minutes would leave
     // the server's connection idle until it gives up.
     let cancel = if to_server.is_some() {
@@ -3487,284 +3447,466 @@ pub(crate) async fn folder_build_handler(
     if let Some(a) = &archive {
         a.cancel.set(cancel.clone());
     }
-    let bytes = Arc::new(AtomicU64::new(0));
-    let started_at_ms = now_ms();
-    set_job(
-        &state.jobs,
-        &state.events_tx,
-        job_id,
-        JobState::Running {
-            stage: None,
-            started_at_ms,
-            bytes_sent: 0,
-            total_bytes: total,
-            files: Default::default(),
-            skipped_files: 0,
-            skipped_bytes: 0,
-            files_processing: 0,
-            files_finalized: 0,
-            files_finalizing_total: 0,
-            bytes_finalized: 0,
-        },
-    );
-    let jobs = state.jobs.clone();
-    let events_tx = state.events_tx.clone();
-    let tick_bytes = bytes.clone();
-    let current: Arc<std::sync::Mutex<Option<JobStage>>> = Arc::default();
-    let tick_stage = current.clone();
-    let ticker = tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            let mut g = jobs.lock().unwrap_or_else(|e| e.into_inner());
-            match g.get_mut(&job_id) {
-                Some(JobState::Running {
-                    bytes_sent, stage, ..
-                }) => {
-                    *bytes_sent = tick_bytes.load(Ordering::Relaxed);
-                    *stage = tick_stage.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                    let state = crate::event_bus::tick_wanted(&events_tx)
-                        .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
-                        .flatten();
-                    drop(g);
-                    if let Some(state) = state {
-                        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": crate::with_live_notes(job_id, state) });
-                        let _ = events_tx.send(msg.to_string());
+    let handoff_state = state.clone();
+    let rest = async move {
+        let scan_source = source.clone();
+        let scan_entry = entry.clone();
+        let scan_update = update.clone();
+        let packing = zstd.is_some();
+        let lz4_packing = lz4.is_some();
+        // The backport libraries left out, found once: the read-back leaves the same ones out.
+        let left_out: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        let scan_left_out = left_out.clone();
+        let scan_unpack = unpack.clone();
+        let scan_archive = archive.clone();
+        // What the source's reader left out (`SourceTree::notes`): it keeps a source that goes.
+        let source_notes: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        let scan_notes = source_notes.clone();
+        let scanned = tokio::task::spawn_blocking(move || {
+            // An image an in-place edit was interrupted in is settled before it is read.
+            settle_local_source(&scan_source)?;
+            let noted = |tree: &dyn ps5upload_fpkg::source::SourceTree| {
+                *scan_notes.lock().unwrap_or_else(|e| e.into_inner()) = tree.notes();
+            };
+            if let Some(entry) = scan_entry {
+                // A part of the image is saved as the image spells it, as the browser listed it.
+                return open_entry(&scan_source, &entry);
+            }
+            // `tree` (packs already decoded when new ones are made) without its backport.
+            let strip = |mut tree: Box<dyn ps5upload_fpkg::source::SourceTree>| {
+                if !remove_backport {
+                    return Ok(tree);
+                }
+                let libs = crate::remove_backport::removable(&mut *tree)?;
+                let tree = crate::remove_backport::without(tree, &libs);
+                *scan_left_out.lock().unwrap_or_else(|e| e.into_inner()) = libs;
+                Ok::<_, String>(tree)
+            };
+            if packing {
+                // Packs are made of a whole game.
+                if let Some(why) = patch_refusal(&scan_source) {
+                    return Err(why);
+                }
+                let (mut tree, notes) =
+                    open_for_packing(&scan_source, scan_update.as_deref(), scan_archive.as_ref())?;
+                *scan_notes.lock().unwrap_or_else(|e| e.into_inner()) = notes;
+                if scan_update.is_none() {
+                    if let Some(why) = ps4_refusal(&scan_source, &mut *tree, false) {
+                        return Err(why);
                     }
                 }
-                _ => break,
+                return Ok(Unpacked::Tree(strip(tree)?));
             }
-        }
-    });
-
-    let state_for_job = state.clone();
-    let ticker = JobTicker(ticker.abort_handle());
-    spawn_workshop_job(move || {
-        // Released last: an in-place edit may claim the source once this job is over.
-        let _reading = reading;
-        let mut fail = JobFailOnDropGuard::new(
-            state_for_job.jobs.clone(),
-            state_for_job.events_tx.clone(),
-            job_id,
-            started_at_ms,
-        );
-        // A part of an image is saved wherever the user chose: that folder is theirs, and its
-        // leftovers are not swept.
-        let sweep = entry.is_none() && to_server.is_none();
-        if sweep {
-            sweep_output_leftovers(&out_dir);
-        } else if lz4.is_some() {
-            // What killed builds left in the data folder's spools, none of them running.
-            if let Some(dir) = spool.parent() {
-                sweep_output_leftovers(dir);
-            }
-        }
-        // Packs are made first: the stage list says so.
-        let stages: &[&str] = if zstd.is_some() || lz4.is_some() {
-            &["pack", "write", "verify"]
-        } else {
-            &["write", "verify"]
-        };
-        // The job's bytes are the whole build's (see `overall_progress`); the stage's own are in
-        // its `stage`.
-        let job_total = total;
-        let mut report = |id: &str, done: u64, total: u64| {
-            let index = stages.iter().position(|s| *s == id).unwrap_or(0) as u32;
-            bytes.fetch_max(
-                overall_progress(job_total, index, stages.len() as u32, done, total),
-                Ordering::Relaxed,
-            );
-            *current.lock().unwrap_or_else(|e| e.into_inner()) = Some(JobStage {
-                id: id.to_string(),
-                index,
-                count: stages.len() as u32,
-                done,
-                total,
-            });
-        };
-        let reopen_source = source.clone();
-        let reopen_entry = entry.clone();
-        let reopen_update = update.clone();
-        // An archive is opened again the same way (its password kept in memory for that).
-        let reopen_archive = archive.clone();
-        // Verification reads the source afresh by the folder's names, so with the same renames
-        // (or, for a part of the image, the same part; for packs, decoded the same way; with an
-        // update, merged the same way).
-        let left_out = std::mem::take(&mut *left_out.lock().unwrap_or_else(|e| e.into_inner()));
-        let reopen = move || match &reopen_entry {
-            Some(e) => open_entry(&reopen_source, e).map(|u| match u {
-                Unpacked::Tree(t) | Unpacked::File { tree: t, .. } => t,
-            }),
-            None if lz4_packing => open_for_lz4(
-                &reopen_source,
-                reopen_update.as_deref(),
-                reopen_archive.as_ref(),
-            )
-            .map(|(t, _)| crate::remove_backport::without(t, &left_out))
-            .and_then(|t| lz4_ready(t, install_runtime)),
-            None if packing => open_for_packing(
-                &reopen_source,
-                reopen_update.as_deref(),
-                reopen_archive.as_ref(),
-            )
-            .map(|(t, _)| crate::remove_backport::without(t, &left_out)),
-            None => open_game(
-                &reopen_source,
-                reopen_update.as_deref(),
-                reopen_archive.as_ref(),
-            )
-            .map(|(t, _, _)| t)
-            // Unpacked the same way: the same emulator, the same index.
-            .and_then(|t| match &unpack {
-                Some(open) => open(t),
-                None => Ok(t),
-            })
-            // Then the same backport libraries left out.
-            .map(|t| crate::remove_backport::without(t, &left_out)),
-        };
-        // zstd packs: the emulator that goes in, fetched here (off the request) and recorded.
-        let mut runtime = None;
-        let on_server = to_server
-            .as_ref()
-            .map(|dest| crate::server_out::ServerFolder {
-                dest,
-                name: name.clone(),
-                cancel: cancel.clone(),
-            });
-        let out = match &on_server {
-            Some(s) => folder_build::FolderOut::Server(s),
-            None => folder_build::FolderOut::Local(&target),
-        };
-        let shown = out.describe();
-        let outcome = match unpacked {
-            Unpacked::Tree(mut tree) => match zstd {
-                None if lz4.is_some() => match &lz4 {
-                    Some(packs) => crate::lz4_packs::build_folder_to(
-                        packs,
-                        &mut *tree,
-                        &reopen,
-                        &out,
-                        &spool,
-                        mode,
-                        &cancel,
-                        &mut report,
-                    ),
-                    None => Err("no LZ4 packs".into()),
-                },
-                Some((level, choice)) => crate::zstd_runtime::pack_runtime(choice).and_then(|r| {
-                    crate::log_at!(
-                        Info,
-                        "convert",
-                        "zstd packs: {} goes into {shown}",
-                        r.describe(),
-                    );
-                    crate::zstd_packs::build_folder_to(
-                        level,
-                        zstd_rules.as_deref(),
-                        runtime.insert(r),
-                        &mut *tree,
-                        &reopen,
-                        &out,
-                        mode,
-                        &cancel,
-                        &mut report,
-                    )
-                }),
-                None => {
-                    folder_build::build_to(&mut *tree, &reopen, &out, mode, &cancel, &mut report)
+            if lz4_packing {
+                // LZ4 packs too are made of a whole game, with its own ampr_emu (or the release one).
+                if let Some(why) = patch_refusal(&scan_source) {
+                    return Err(why);
                 }
-            },
-            Unpacked::File {
-                mut tree,
-                path,
-                size,
-            } => folder_build::extract_file(
-                &mut *tree,
-                &path,
-                size,
-                &reopen,
-                &target,
-                &cancel,
-                &mut report,
-            ),
+                let (mut tree, notes) =
+                    open_for_lz4(&scan_source, scan_update.as_deref(), scan_archive.as_ref())?;
+                *scan_notes.lock().unwrap_or_else(|e| e.into_inner()) = notes;
+                if scan_update.is_none() {
+                    if let Some(why) = ps4_refusal(&scan_source, &mut *tree, false) {
+                        return Err(why);
+                    }
+                }
+                return Ok(Unpacked::Tree(lz4_ready(strip(tree)?, install_runtime)?));
+            }
+            // An image ignores letter case and /data does not: a Unity dump whose
+            // Il2cppUserAssemblies.prx the eboot loads as Il2CppUserAssemblies.prx plays from the
+            // image and crashes a second in from the folder. The folder takes the eboot's spelling.
+            // A PS4 update goes into its game here (the merge checks they go together).
+            let (mut tree, renamed, signing) =
+                open_game(&scan_source, scan_update.as_deref(), scan_archive.as_ref())?;
+            if scan_archive.is_some() {
+                crate::log_at!(Info, "convert", "folder build: {}", tree.describe());
+            }
+            match &scan_update {
+                Some(_) => crate::log_at!(Info, "convert", "folder build: {}", tree.describe()),
+                None => {
+                    if let Some(why) = ps4_refusal(&scan_source, &mut *tree, false) {
+                        return Err(why);
+                    }
+                }
+            }
+            if !renamed.is_empty() {
+                crate::log_at!(
+                    Info,
+                    "convert",
+                    "folder build: renamed to the eboot's spelling: {}",
+                    ps5upload_fpkg::module_case::describe(&renamed)
+                );
+            }
+            if let Some(line) = signing.describe() {
+                crate::log_at!(Info, "convert", "folder build: {line}");
+            }
+            // A patch package unpacks to the files it carries whole; the log says what it left.
+            for note in tree.notes() {
+                crate::log_at!(Info, "convert", "folder build: {note}");
+            }
+            noted(&*tree);
+            if let Some(open) = &scan_unpack {
+                // The packs decoded: the folder holds the plain game.
+                tree = open(tree)?;
+            }
+            Ok::<_, String>(Unpacked::Tree(strip(tree)?))
+        })
+        .await;
+        let unpacked = match scanned {
+            Ok(Ok(t)) => t,
+            Ok(Err(e)) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+            Err(e) => {
+                return json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))
+                    .into_response()
+            }
         };
-        drop(writing);
-        drop(spooling);
-        if outcome.is_err() && sweep {
-            sweep_output_leftovers(&out_dir);
+        // Stopped while the source was read (a scan that does not read through the archive
+        // cannot be interrupted): nothing starts.
+        if cancel.load(Ordering::Relaxed) {
+            return json_err(StatusCode::BAD_REQUEST, "build cancelled").into_response();
         }
-        let completed_at_ms = now_ms();
-        drop(ticker);
-        match outcome {
-            Ok(built) => {
-                // The trees that read the source are gone by now (the build took them).
-                let removal = removal.as_ref().map(|plan| {
-                    let notes = std::mem::take(
-                        &mut *source_notes.lock().unwrap_or_else(|e| e.into_inner()),
-                    );
-                    remove_source(plan, &target, &state_for_job, job_id, "folder", &notes)
-                });
-                crate::engine_log::record(
-                    "info",
-                    format!(
-                        "folder: {} -> {shown} ({}, read back){}",
-                        source.display(),
-                        built.detail,
-                        runtime
-                            .as_ref()
-                            .map(|r| format!("; zstd packs, emulator {}", r.describe()))
-                            .unwrap_or_default()
-                    ),
-                );
-                set_job(
-                    &state_for_job.jobs,
-                    &state_for_job.events_tx,
-                    job_id,
-                    JobState::Done {
-                        started_at_ms,
-                        completed_at_ms,
-                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        tx_id_hex: String::new(),
-                        bytes_sent: built.bytes,
-                        dest: shown.clone(),
-                        files_sent: built.files,
-                        skipped_files: 0,
-                        skipped_bytes: 0,
-                        commit_ack: crate::source_removal::ack(
-                            runtime.as_ref().map(runtime_ack),
-                            removal.as_ref(),
-                        ),
-                    },
-                );
+        let total: u64 = match &unpacked {
+            Unpacked::Tree(tree) => {
+                if tree.files().is_empty() {
+                    let what = match &entry {
+                        Some(e) => e.clone(),
+                        None => source.display().to_string(),
+                    };
+                    return json_err(
+                        StatusCode::BAD_REQUEST,
+                        format!("{what} has no files in it"),
+                    )
+                    .into_response();
+                }
+                tree.files().iter().map(|f| f.size).sum()
             }
-            Err(error) => {
-                crate::engine_log::record("warn", format!("folder: build failed: {error}"));
-                set_job(
-                    &state_for_job.jobs,
-                    &state_for_job.events_tx,
-                    job_id,
-                    JobState::Failed {
-                        started_at_ms,
-                        completed_at_ms,
-                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        error,
-                        error_reason: None,
-                        error_detail: None,
-                        error_console: None,
-                        error_space: None,
-                    },
-                );
-            }
+            Unpacked::File { size, .. } => *size,
+        };
+        // Packs may well fit in less, as for an image: no refusal before the first write. On a
+        // server, the server's own room is asked once the job starts.
+        if let Some(why) = build::free_bytes(&out_dir)
+            .and_then(|free| crate::folder_build::shortfall(free, total, &out_dir))
+            .filter(|_| zstd.is_none() && lz4.is_none() && to_server.is_none())
+        {
+            return json_err(StatusCode::BAD_REQUEST, why).into_response();
         }
-        fail.mark_succeeded();
-    });
+        // Two builds into one server folder would wreck each other, as two into one folder here.
+        let claimed = match &to_server {
+            Some(d) => PathBuf::from(d.url(&d.path_of(&name))),
+            None => partial.clone(),
+        };
+        let Some(writing) = claim_off_thread(claimed.clone()).await else {
+            return already_building(&claimed);
+        };
+        // LZ4 packs are spooled beside the folder first, or, for a folder on a server, in the
+        // engine's data folder.
+        let spool = match &to_server {
+            Some(_) => crate::image_build::stream_spool(&claimed),
+            None => crate::image_build::lz4_spool(&target),
+        };
+        let spooling = match lz4.is_some() {
+            false => None,
+            true => {
+                let Some(s) = claim_off_thread(spool.clone()).await else {
+                    return already_building(&spool);
+                };
+                Some(s)
+            }
+        };
+        // A source that goes afterwards is replaced by this folder: every file is compared in full.
+        let mode = ps5upload_fpkg::sample::VerifyMode::from_full(
+            req.full_verify || req.delete_source,
+            false,
+        );
 
-    (
-        StatusCode::ACCEPTED,
-        Json(JobCreated {
-            job_id: job_id.to_string(),
-        }),
-    )
-        .into_response()
+        crate::workshop_api::note_run(job_id, "folder", &source);
+        let bytes = Arc::new(AtomicU64::new(0));
+        let started_at_ms = now_ms();
+        set_job(
+            &state.jobs,
+            &state.events_tx,
+            job_id,
+            JobState::Running {
+                stage: None,
+                started_at_ms,
+                bytes_sent: 0,
+                total_bytes: total,
+                files: Default::default(),
+                skipped_files: 0,
+                skipped_bytes: 0,
+                files_processing: 0,
+                files_finalized: 0,
+                files_finalizing_total: 0,
+                bytes_finalized: 0,
+            },
+        );
+        let jobs = state.jobs.clone();
+        let events_tx = state.events_tx.clone();
+        let tick_bytes = bytes.clone();
+        let current: Arc<std::sync::Mutex<Option<JobStage>>> = Arc::default();
+        let tick_stage = current.clone();
+        let ticker = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                let mut g = jobs.lock().unwrap_or_else(|e| e.into_inner());
+                match g.get_mut(&job_id) {
+                    Some(JobState::Running {
+                        bytes_sent, stage, ..
+                    }) => {
+                        *bytes_sent = tick_bytes.load(Ordering::Relaxed);
+                        *stage = tick_stage.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                        let state = crate::event_bus::tick_wanted(&events_tx)
+                            .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
+                            .flatten();
+                        drop(g);
+                        if let Some(state) = state {
+                            let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": crate::with_live_notes(job_id, state) });
+                            let _ = events_tx.send(msg.to_string());
+                        }
+                    }
+                    _ => break,
+                }
+            }
+        });
+
+        let state_for_job = state.clone();
+        let ticker = JobTicker(ticker.abort_handle());
+        spawn_workshop_job(move || {
+            // Released last: an in-place edit may claim the source once this job is over.
+            let _reading = reading;
+            let mut fail = JobFailOnDropGuard::new(
+                state_for_job.jobs.clone(),
+                state_for_job.events_tx.clone(),
+                job_id,
+                started_at_ms,
+            );
+            // A part of an image is saved wherever the user chose: that folder is theirs, and its
+            // leftovers are not swept.
+            let sweep = entry.is_none() && to_server.is_none();
+            if sweep {
+                sweep_output_leftovers(&out_dir);
+            } else if lz4.is_some() {
+                // What killed builds left in the data folder's spools, none of them running.
+                if let Some(dir) = spool.parent() {
+                    sweep_output_leftovers(dir);
+                }
+            }
+            // Packs are made first: the stage list says so.
+            let stages: &[&str] = if zstd.is_some() || lz4.is_some() {
+                &["pack", "write", "verify"]
+            } else {
+                &["write", "verify"]
+            };
+            // The job's bytes are the whole build's (see `overall_progress`); the stage's own are in
+            // its `stage`.
+            let job_total = total;
+            let mut report = |id: &str, done: u64, total: u64| {
+                let index = stages.iter().position(|s| *s == id).unwrap_or(0) as u32;
+                bytes.fetch_max(
+                    overall_progress(job_total, index, stages.len() as u32, done, total),
+                    Ordering::Relaxed,
+                );
+                *current.lock().unwrap_or_else(|e| e.into_inner()) = Some(JobStage {
+                    id: id.to_string(),
+                    index,
+                    count: stages.len() as u32,
+                    done,
+                    total,
+                });
+            };
+            let reopen_source = source.clone();
+            let reopen_entry = entry.clone();
+            let reopen_update = update.clone();
+            // An archive is opened again the same way (its password kept in memory for that).
+            let reopen_archive = archive.clone();
+            // Verification reads the source afresh by the folder's names, so with the same renames
+            // (or, for a part of the image, the same part; for packs, decoded the same way; with an
+            // update, merged the same way).
+            let left_out = std::mem::take(&mut *left_out.lock().unwrap_or_else(|e| e.into_inner()));
+            let reopen = move || match &reopen_entry {
+                Some(e) => open_entry(&reopen_source, e).map(|u| match u {
+                    Unpacked::Tree(t) | Unpacked::File { tree: t, .. } => t,
+                }),
+                None if lz4_packing => open_for_lz4(
+                    &reopen_source,
+                    reopen_update.as_deref(),
+                    reopen_archive.as_ref(),
+                )
+                .map(|(t, _)| crate::remove_backport::without(t, &left_out))
+                .and_then(|t| lz4_ready(t, install_runtime)),
+                None if packing => open_for_packing(
+                    &reopen_source,
+                    reopen_update.as_deref(),
+                    reopen_archive.as_ref(),
+                )
+                .map(|(t, _)| crate::remove_backport::without(t, &left_out)),
+                None => open_game(
+                    &reopen_source,
+                    reopen_update.as_deref(),
+                    reopen_archive.as_ref(),
+                )
+                .map(|(t, _, _)| t)
+                // Unpacked the same way: the same emulator, the same index.
+                .and_then(|t| match &unpack {
+                    Some(open) => open(t),
+                    None => Ok(t),
+                })
+                // Then the same backport libraries left out.
+                .map(|t| crate::remove_backport::without(t, &left_out)),
+            };
+            // zstd packs: the emulator that goes in, fetched here (off the request) and recorded.
+            let mut runtime = None;
+            let on_server = to_server
+                .as_ref()
+                .map(|dest| crate::server_out::ServerFolder {
+                    dest,
+                    name: name.clone(),
+                    cancel: cancel.clone(),
+                });
+            let out = match &on_server {
+                Some(s) => folder_build::FolderOut::Server(s),
+                None => folder_build::FolderOut::Local(&target),
+            };
+            let shown = out.describe();
+            let outcome = match unpacked {
+                Unpacked::Tree(mut tree) => match zstd {
+                    None if lz4.is_some() => match &lz4 {
+                        Some(packs) => crate::lz4_packs::build_folder_to(
+                            packs,
+                            &mut *tree,
+                            &reopen,
+                            &out,
+                            &spool,
+                            mode,
+                            &cancel,
+                            &mut report,
+                        ),
+                        None => Err("no LZ4 packs".into()),
+                    },
+                    Some((level, choice)) => {
+                        crate::zstd_runtime::pack_runtime(choice).and_then(|r| {
+                            crate::log_at!(
+                                Info,
+                                "convert",
+                                "zstd packs: {} goes into {shown}",
+                                r.describe(),
+                            );
+                            crate::zstd_packs::build_folder_to(
+                                level,
+                                zstd_rules.as_deref(),
+                                runtime.insert(r),
+                                &mut *tree,
+                                &reopen,
+                                &out,
+                                mode,
+                                &cancel,
+                                &mut report,
+                            )
+                        })
+                    }
+                    None => folder_build::build_to(
+                        &mut *tree,
+                        &reopen,
+                        &out,
+                        mode,
+                        &cancel,
+                        &mut report,
+                    ),
+                },
+                Unpacked::File {
+                    mut tree,
+                    path,
+                    size,
+                } => folder_build::extract_file(
+                    &mut *tree,
+                    &path,
+                    size,
+                    &reopen,
+                    &target,
+                    &cancel,
+                    &mut report,
+                ),
+            };
+            drop(writing);
+            drop(spooling);
+            if outcome.is_err() && sweep {
+                sweep_output_leftovers(&out_dir);
+            }
+            let completed_at_ms = now_ms();
+            drop(ticker);
+            match outcome {
+                Ok(built) => {
+                    // The trees that read the source are gone by now (the build took them).
+                    let removal = removal.as_ref().map(|plan| {
+                        let notes = std::mem::take(
+                            &mut *source_notes.lock().unwrap_or_else(|e| e.into_inner()),
+                        );
+                        remove_source(plan, &target, &state_for_job, job_id, "folder", &notes)
+                    });
+                    crate::engine_log::record(
+                        "info",
+                        format!(
+                            "folder: {} -> {shown} ({}, read back){}",
+                            source.display(),
+                            built.detail,
+                            runtime
+                                .as_ref()
+                                .map(|r| format!("; zstd packs, emulator {}", r.describe()))
+                                .unwrap_or_default()
+                        ),
+                    );
+                    set_job(
+                        &state_for_job.jobs,
+                        &state_for_job.events_tx,
+                        job_id,
+                        JobState::Done {
+                            started_at_ms,
+                            completed_at_ms,
+                            elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                            tx_id_hex: String::new(),
+                            bytes_sent: built.bytes,
+                            dest: shown.clone(),
+                            files_sent: built.files,
+                            skipped_files: 0,
+                            skipped_bytes: 0,
+                            commit_ack: crate::source_removal::ack(
+                                runtime.as_ref().map(runtime_ack),
+                                removal.as_ref(),
+                            ),
+                        },
+                    );
+                }
+                Err(error) => {
+                    crate::engine_log::record("warn", format!("folder: build failed: {error}"));
+                    set_job(
+                        &state_for_job.jobs,
+                        &state_for_job.events_tx,
+                        job_id,
+                        JobState::Failed {
+                            started_at_ms,
+                            completed_at_ms,
+                            elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                            error,
+                            error_reason: None,
+                            error_detail: None,
+                            error_console: None,
+                            error_space: None,
+                        },
+                    );
+                }
+            }
+            fail.mark_succeeded();
+        });
+
+        (
+            StatusCode::ACCEPTED,
+            Json(JobCreated {
+                job_id: job_id.to_string(),
+            }),
+        )
+            .into_response()
+    };
+    answer_or_hand_off(&handoff_state, job_id, rest).await
 }
 
 /// Stops a job's progress ticker when dropped: when the work ends, a panic included.
@@ -4734,6 +4876,123 @@ mod title_param_tests {
         let msg = missing_param_message(Path::new("/games/Foo"), true);
         assert!(msg.contains("sce_sys/param.json") && msg.contains("eboot.bin"));
         assert!(missing_param_message(Path::new("/x"), false).contains("param.sfo"));
+    }
+}
+
+#[cfg(test)]
+mod hand_off_tests {
+    use super::*;
+
+    fn state() -> AppState {
+        let (events_tx, _rx) = tokio::sync::broadcast::channel(16);
+        AppState {
+            jobs: Arc::default(),
+            default_ps5_addr: "127.0.0.1".to_string(),
+            events_tx,
+        }
+    }
+
+    fn refusal() -> axum::response::Response {
+        json_err(StatusCode::BAD_REQUEST, "no game in it").into_response()
+    }
+
+    async fn status_of(state: &AppState, id: Uuid) -> Option<JobState> {
+        for _ in 0..200 {
+            let st = state.jobs.lock().unwrap().get(&id).cloned();
+            if matches!(st, Some(JobState::Failed { .. })) {
+                return st;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        state.jobs.lock().unwrap().get(&id).cloned()
+    }
+
+    /// A scan that ends in time answers as it always did: a refusal, and no job.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_quick_refusal_is_the_answer_and_starts_no_job() {
+        let state = state();
+        let id = Uuid::new_v4();
+        let resp =
+            answer_or_hand_off_within(&state, id, async { refusal() }, Duration::from_secs(5))
+                .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(state.jobs.lock().unwrap().is_empty());
+    }
+
+    /// A long scan answers with the job at once, listed at its check stage; its refusal then
+    /// ends the job in the same words.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_long_scan_becomes_the_job_and_its_refusal_the_job_failure() {
+        let state = state();
+        let id = Uuid::new_v4();
+        let (go, wait) = tokio::sync::oneshot::channel::<()>();
+        let resp = answer_or_hand_off_within(
+            &state,
+            id,
+            async move {
+                let _ = wait.await;
+                refusal()
+            },
+            Duration::from_millis(20),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains(&id.to_string()));
+        let st = state.jobs.lock().unwrap().get(&id).cloned();
+        match st {
+            Some(JobState::Running { stage, .. }) => {
+                assert_eq!(stage.as_ref().map(|s| s.id.as_str()), Some("check"))
+            }
+            other => panic!("{other:?}"),
+        }
+        go.send(()).unwrap();
+        match status_of(&state, id).await {
+            Some(JobState::Failed { error, .. }) => assert_eq!(error, "no game in it"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// A job the scan listed itself is never overwritten by the placeholder.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_job_already_listed_keeps_its_own_state() {
+        let state = state();
+        let id = Uuid::new_v4();
+        let jobs = state.jobs.clone();
+        let resp = answer_or_hand_off_within(
+            &state,
+            id,
+            async move {
+                jobs.lock().unwrap().insert(
+                    id,
+                    JobState::Running {
+                        stage: None,
+                        started_at_ms: 1,
+                        bytes_sent: 0,
+                        total_bytes: 42,
+                        files: Default::default(),
+                        skipped_files: 0,
+                        skipped_bytes: 0,
+                        files_processing: 0,
+                        files_finalized: 0,
+                        files_finalizing_total: 0,
+                        bytes_finalized: 0,
+                    },
+                );
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                (StatusCode::ACCEPTED, "{}").into_response()
+            },
+            Duration::from_millis(20),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        let st = state.jobs.lock().unwrap().get(&id).cloned();
+        match st {
+            Some(JobState::Running { total_bytes, .. }) => assert_eq!(total_bytes, 42),
+            other => panic!("{other:?}"),
+        }
     }
 }
 
