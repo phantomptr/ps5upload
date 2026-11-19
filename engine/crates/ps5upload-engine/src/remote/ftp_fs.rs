@@ -20,7 +20,7 @@ use tokio::sync::Mutex;
 
 use super::host_key;
 use super::store::{Connection, Secret};
-use super::{Entry, Page, RemoteError, RemoteFile, RemoteFs, PAGE};
+use super::{Entry, Page, RemoteError, RemoteFile, RemoteFs};
 
 /// Most sessions one open file keeps for concurrent reads.
 const READ_SESSIONS: usize = 4;
@@ -482,6 +482,10 @@ pub struct FtpFs {
     /// back is not an option there.
     mlsd: bool,
     session: Mutex<Ftp>,
+    /// Set while an upload holds `session` (FTP has one transfer per session): a listing then
+    /// goes over a read session instead of waiting for the whole file.
+    writing: std::sync::atomic::AtomicBool,
+    pages: super::Pages,
 }
 
 /// A file being written over STOR, holding the session it was started on. A failed or given-up
@@ -489,6 +493,7 @@ pub struct FtpFs {
 /// reply first.
 struct FtpWriter<'a> {
     _session: tokio::sync::MutexGuard<'a, Ftp>,
+    _writing: Writing<'a>,
     stream: suppaftp::tokio::TransferStream<suppaftp::tokio::AsyncRustlsStream>,
     host: String,
     path: String,
@@ -512,6 +517,15 @@ impl super::RemoteWriter for FtpWriter<'_> {
     }
 
     async fn abort(self: Box<Self>) {}
+}
+
+/// [`FtpFs::writing`] while a writer lives: cleared when it goes, however it goes.
+struct Writing<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl Drop for Writing<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// `path` ("/games/x") under `home` ("/ftp/t") on the server.
@@ -576,6 +590,8 @@ impl FtpFs {
             readers: Arc::new(Mutex::new(Vec::new())),
             mlsd,
             session: Mutex::new(session),
+            writing: Default::default(),
+            pages: Default::default(),
         })
     }
 
@@ -603,7 +619,42 @@ impl FtpFs {
         self.counts
             .1
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // An upload holds the session for its whole file: a listing meanwhile (the user
+        // browsing the server) goes over a read session rather than wait for it to end.
+        if self.writing.load(std::sync::atomic::Ordering::SeqCst) {
+            let mut side = self.side_session().await?;
+            let listed = self.list_on(&mut side.ftp, dir).await;
+            if listed.is_ok() {
+                let mut idle = self.readers.lock().await;
+                if idle.len() < READ_SESSIONS {
+                    idle.push(side);
+                }
+            }
+            return listed;
+        }
         let mut s = self.session.lock().await;
+        self.list_on(&mut s, dir).await
+    }
+
+    /// A read session with no transfer open, or a new sign-in.
+    async fn side_session(&self) -> Result<Session, RemoteError> {
+        {
+            let mut idle = self.readers.lock().await;
+            if let Some(i) = idle.iter().position(|s| s.open.is_none()) {
+                return Ok(idle.swap_remove(i));
+            }
+        }
+        self.counts
+            .0
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(Session {
+            ftp: sign_in(&self.target).await?,
+            open: None,
+        })
+    }
+
+    /// The listing of `dir` (a server path) over the session `s`.
+    async fn list_on(&self, s: &mut Ftp, dir: &str) -> Result<Vec<Entry>, RemoteError> {
         let host = self.host.as_str();
         let mlsd = self.mlsd;
         timed(host, "a folder listing", async move {
@@ -816,16 +867,7 @@ impl RemoteFs for FtpFs {
     }
 
     async fn list(&self, path: &str, cursor: Option<String>) -> Result<Page, RemoteError> {
-        let all = self.entries(path).await?;
-        let from = cursor
-            .and_then(|c| c.parse::<usize>().ok())
-            .unwrap_or(0)
-            .min(all.len());
-        let to = (from + PAGE).min(all.len());
-        Ok(Page {
-            entries: all[from..to].to_vec(),
-            next_cursor: (to < all.len()).then(|| to.to_string()),
-        })
+        self.pages.page(path, cursor, || self.entries(path)).await
     }
 
     async fn stat(&self, path: &str) -> Result<Entry, RemoteError> {
@@ -1011,8 +1053,11 @@ impl RemoteFs for FtpFs {
                 .map_err(|e| map_err(host, e))
         })
         .await?;
+        self.writing
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(Box::new(FtpWriter {
             _session: s,
+            _writing: Writing(&self.writing),
             stream,
             host: self.host.clone(),
             path: path.to_string(),
@@ -1537,6 +1582,34 @@ mod tests {
         assert_eq!((e.is_dir, e.size), (false, GLOB_SIZE));
         // A folder the server won't enter falls back to listing by its path.
         assert!(fs.list("/nope", None).await.unwrap().entries.is_empty());
+    }
+
+    /// An upload holds the session for its whole file; browsing meanwhile is answered over
+    /// another session, not after the upload.
+    #[tokio::test]
+    async fn browsing_is_not_held_up_by_an_upload() {
+        let port = globbing_server().await;
+        let mut conn = crate::remote::store::conn("t", crate::remote::store::Protocol::Ftp);
+        conn.host = "127.0.0.1".into();
+        conn.port = port;
+        conn.user = "t".into();
+        let secret = Secret::Password {
+            password: "t".into(),
+        };
+        let fs = FtpFs::connect(&conn, &secret, false).await.unwrap();
+        let held = fs.session.lock().await;
+        fs.writing.store(true, std::sync::atomic::Ordering::SeqCst);
+        let page =
+            tokio::time::timeout(std::time::Duration::from_secs(10), fs.list(GLOB_DIR, None))
+                .await
+                .expect("the listing waited for the upload")
+                .unwrap();
+        assert_eq!(triples(&page.entries), [(GLOB_FILE, false, GLOB_SIZE)]);
+        // The session it signed in for is kept for the next one.
+        let sign_ins = fs.counters().0;
+        fs.list(GLOB_DIR, None).await.unwrap();
+        assert_eq!(fs.counters().0, sign_ins);
+        drop(held);
     }
 
     /// The same against a real Pure-FTPd: in `<dir>`, make the report's folder

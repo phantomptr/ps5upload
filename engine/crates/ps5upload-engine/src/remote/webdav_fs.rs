@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use super::http_digest::Auth;
 use super::store::{Connection, Protocol, Secret};
-use super::{Entry, Page, RemoteError, RemoteFile, RemoteFs, PAGE};
+use super::{Entry, Page, RemoteError, RemoteFile, RemoteFs};
 
 /// One request, including a ranged read of a few MiB from a slow NAS.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -105,6 +105,7 @@ pub struct WebdavFs {
     host: String,
     /// How requests are signed, when the connection has a user.
     auth: Arc<Auth>,
+    pages: super::Pages,
 }
 
 impl WebdavFs {
@@ -172,6 +173,7 @@ impl WebdavFs {
             base: format!("{scheme}://{hostport}"),
             host: hostport,
             auth: Arc::new(auth),
+            pages: Default::default(),
         };
         // Signing in = one PROPFIND of the start folder (or the root).
         let start = if conn.start_path.trim().is_empty() {
@@ -794,16 +796,7 @@ impl RemoteFile for WebdavFile {
 #[async_trait::async_trait]
 impl RemoteFs for WebdavFs {
     async fn list(&self, path: &str, cursor: Option<String>) -> Result<Page, RemoteError> {
-        let all = self.entries(path).await?;
-        let from = cursor
-            .and_then(|c| c.parse::<usize>().ok())
-            .unwrap_or(0)
-            .min(all.len());
-        let to = (from + PAGE).min(all.len());
-        Ok(Page {
-            entries: all[from..to].to_vec(),
-            next_cursor: (to < all.len()).then(|| to.to_string()),
-        })
+        self.pages.page(path, cursor, || self.entries(path)).await
     }
 
     async fn stat(&self, path: &str) -> Result<Entry, RemoteError> {

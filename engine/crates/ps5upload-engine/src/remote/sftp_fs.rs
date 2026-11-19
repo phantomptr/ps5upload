@@ -15,7 +15,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use super::ftp_fs::under;
 use super::host_key;
 use super::store::{Connection, Secret};
-use super::{Entry, Page, RemoteError, RemoteFile, RemoteFs, PAGE};
+use super::{Entry, Page, RemoteError, RemoteFile, RemoteFs};
 
 /// Longest wait for any one server step.
 const STEP: Duration = Duration::from_secs(30);
@@ -123,6 +123,7 @@ pub struct SftpFs {
     sftp: Arc<SftpSession>,
     /// Keeps the SSH connection open for as long as the session is in use.
     _ssh: client::Handle<Tofu>,
+    pages: super::Pages,
 }
 
 impl SftpFs {
@@ -213,6 +214,7 @@ impl SftpFs {
             login,
             sftp: Arc::new(sftp),
             _ssh: ssh,
+            pages: Default::default(),
         })
     }
 
@@ -306,16 +308,7 @@ impl RemoteFs for SftpFs {
     }
 
     async fn list(&self, path: &str, cursor: Option<String>) -> Result<Page, RemoteError> {
-        let all = self.entries(path).await?;
-        let from = cursor
-            .and_then(|c| c.parse::<usize>().ok())
-            .unwrap_or(0)
-            .min(all.len());
-        let to = (from + PAGE).min(all.len());
-        Ok(Page {
-            entries: all[from..to].to_vec(),
-            next_cursor: (to < all.len()).then(|| to.to_string()),
-        })
+        self.pages.page(path, cursor, || self.entries(path)).await
     }
 
     async fn stat(&self, path: &str) -> Result<Entry, RemoteError> {
