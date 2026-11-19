@@ -145,11 +145,52 @@ static int64_t kernel_wall_clock_unix(void) {
     return (int64_t)tv.tv_sec;
 }
 
+/* How far this helper's own sets moved the wall clock against the monotonic one, not yet taken by
+ * sys_time_clocks_now. Under g_step_mu, which a set holds from its first clock read to its last, so
+ * a reader sees a set's step together with the clocks that include it, or neither. */
+static pthread_mutex_t g_step_mu = PTHREAD_MUTEX_INITIALIZER;
+static int64_t g_own_step_s;
+
+static int read_both(struct timespec *real, struct timespec *mono) {
+    return clock_gettime(CLOCK_REALTIME, real) == 0 && clock_gettime(CLOCK_MONOTONIC, mono) == 0 ? 0 : -1;
+}
+
+int sys_time_clocks_now(struct timespec *real, struct timespec *mono, int64_t *own_step_s) {
+    pthread_mutex_lock(&g_step_mu);
+    int rc = read_both(real, mono);
+    if (own_step_s) *own_step_s = rc == 0 ? g_own_step_s : 0;
+    if (rc == 0) g_own_step_s = 0;
+    pthread_mutex_unlock(&g_step_mu);
+    return rc;
+}
+
+static int sys_time_set_locked(const sce_datetime_t *dt,
+                               uint32_t *out_err_code,
+                               int64_t *out_prior_unix,
+                               int64_t *out_new_unix,
+                               int *out_used_fallback);
+
 int sys_time_set(const sce_datetime_t *dt,
                  uint32_t *out_err_code,
                  int64_t *out_prior_unix,
                  int64_t *out_new_unix,
                  int *out_used_fallback) {
+    struct timespec r0, m0, r1, m1;
+    pthread_mutex_lock(&g_step_mu);
+    int have0 = read_both(&r0, &m0) == 0;
+    int rc = sys_time_set_locked(dt, out_err_code, out_prior_unix, out_new_unix, out_used_fallback);
+    /* Counted whatever rc says: a set reported as failed can still have moved the clock. */
+    if (have0 && read_both(&r1, &m1) == 0)
+        g_own_step_s += ((int64_t)r1.tv_sec - (int64_t)r0.tv_sec) - ((int64_t)m1.tv_sec - (int64_t)m0.tv_sec);
+    pthread_mutex_unlock(&g_step_mu);
+    return rc;
+}
+
+static int sys_time_set_locked(const sce_datetime_t *dt,
+                               uint32_t *out_err_code,
+                               int64_t *out_prior_unix,
+                               int64_t *out_new_unix,
+                               int *out_used_fallback) {
     if (!dt) {
         if (out_err_code) *out_err_code = SYS_TIME_ERR_NULL_ARG;
         return -1;

@@ -107,6 +107,18 @@ int main(void) {
     CHECK(sys_time_unix_to_sce(-1, &dt) == -1);
     CHECK(sys_time_unix_to_sce(0, NULL) == -1);
 
+    /* The wake watchdog's clock read: both clocks, and no step of our own when nothing was set (the
+     * set itself is not run here: it would set the host's clock). */
+    {
+        struct timespec r, m;
+        int64_t step = 99;
+        CHECK(sys_time_clocks_now(&r, &m, &step) == 0);
+        CHECK(step == 0 && r.tv_sec > 0);
+        step = 99;
+        CHECK(sys_time_clocks_now(&r, &m, &step) == 0 && step == 0);
+        CHECK(sys_time_clocks_now(&r, &m, NULL) == 0);
+    }
+
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

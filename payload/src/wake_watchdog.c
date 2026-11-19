@@ -16,6 +16,7 @@
 #include "runtime.h"
 #include "hw_info.h"
 #include "power_phase.h"
+#include "sys_time.h"
 
 #include <ps5/kernel.h>
 
@@ -91,20 +92,22 @@ static void *wake_watchdog_thread_fn(void *arg) {
      * begins while this thread is inside a poll (the probe's socket call as the network goes away, a
      * log flush) would otherwise fall between two measurements and never be seen. Measured on the Pro
      * (12.4.1, 2026-11-09): a 7-minute rest from the console's menu left no "woke" line at all. */
+    /* Read through sys_time_clocks_now: a clock set by this helper (the app's time sync) moves the
+     * wall clock ahead of the monotonic one exactly like a wake does, so its step is taken out. A step
+     * made by anything else (the system's own sync, the user in Settings) is still counted. */
     struct timespec last_real, last_mono;
-    while (clock_gettime(CLOCK_REALTIME, &last_real) != 0 || clock_gettime(CLOCK_MONOTONIC, &last_mono) != 0)
-        sleep(WAKE_POLL_S);
+    int64_t own_step = 0;
+    while (sys_time_clocks_now(&last_real, &last_mono, &own_step) != 0) sleep(WAKE_POLL_S);
     for (;;) {
         struct timespec real1, mono1;
         sleep(WAKE_POLL_S);
-        if (clock_gettime(CLOCK_REALTIME, &real1) != 0 ||
-            clock_gettime(CLOCK_MONOTONIC, &mono1) != 0) {
-            continue;
-        }
-        int64_t real_elapsed = (int64_t)real1.tv_sec - (int64_t)last_real.tv_sec;
+        if (sys_time_clocks_now(&real1, &mono1, &own_step) != 0) continue;
+        int64_t real_elapsed = (int64_t)real1.tv_sec - (int64_t)last_real.tv_sec - own_step;
         int64_t mono_elapsed = (int64_t)mono1.tv_sec - (int64_t)last_mono.tv_sec;
         last_real = real1;
         last_mono = mono1;
+        if (own_step != 0)
+            fprintf(stderr, "wake_watchdog: this helper set the clock (%+llds); not a wake\n", (long long)own_step);
 
         PLOG(PLOG_TRACE, PLOG_WAKE, "wake_watchdog: slept %llds (monotonic %llds)", (long long)real_elapsed,
              (long long)mono_elapsed);
