@@ -201,9 +201,12 @@ pub fn device_name() -> String {
             return n.trim().to_string();
         }
         let run = |cmd: &str, args: &[&str]| {
-            std::process::Command::new(cmd)
-                .args(args)
-                .output()
+            let mut c = std::process::Command::new(cmd);
+            c.args(args);
+            // CREATE_NO_WINDOW: without it a console window flashes up under the app.
+            #[cfg(windows)]
+            std::os::windows::process::CommandExt::creation_flags(&mut c, 0x0800_0000);
+            c.output()
                 .ok()
                 .filter(|o| o.status.success())
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
