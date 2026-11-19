@@ -11,6 +11,7 @@
 #include <time.h>
 
 #include "focus_probe.h"
+#include "sony_api_lock.h"
 #include "proc_list.h"
 
 /* sceSystemServiceGetAppIdOfBigApp / ...MiniApp take no arguments and
@@ -210,10 +211,14 @@ int focus_probe_get_json(char *buf, size_t cap, size_t *written_out,
         return -1;
     }
 
+    /* sceSystemService calls: one at a time with every other Sony call (sony_api_lock.h). The
+     * resolve is inside too, so two first probes do not race on its statics. */
+    pthread_mutex_lock(&sony_api_lock);
     resolve_focus_apis();
 
     if (p_big_app)  big  = p_big_app();
     if (p_mini_app) mini = p_mini_app();
+    pthread_mutex_unlock(&sony_api_lock);
 
     /* Emit the whole candidate table so a single probe tells us what this
      * firmware can answer, rather than one guess per redeploy. */

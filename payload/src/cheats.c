@@ -3265,11 +3265,6 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
         return -1;
     }
 
-    /* Auto-enable engine if toggling while game is running */
-    if (turn_on && !atomic_load(&g_engine_enabled)) {
-        cheats_engine_set_enabled(1);
-    }
-
     found_file_t files[16];
     int n = find_cheat_files(title_id, files, 16, 0);
     if (n == 0) {
@@ -3293,6 +3288,14 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
                           "running game (%s) does not match cheat target (%s)",
                           rg_title, title_id);
         return -1;
+    }
+
+    /* Auto-enable the engine when a cheat of the running game is turned on. Only here, after the
+     * checks above: done first, a request that was then refused (no game, another game, no cheat
+     * file) still switched the engine on and saved that, and the next launch applied every saved
+     * cheat with the engine the player had left off. */
+    if (turn_on && !atomic_load(&g_engine_enabled)) {
+        cheats_engine_set_enabled(1);
     }
 
     /* Resolve flat index to file + mod */
