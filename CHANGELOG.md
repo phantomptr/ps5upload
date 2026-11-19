@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.12
 
 **New**
 - **Save a link straight to a PS5 folder, without installing it (#872).** In Files, More › Download from a link saves the file into the folder that is open. On Send, a package link has a new "Save to a PS5 folder" button next to Install. The file goes to the console over your network and is not stored on this computer.
