@@ -104,7 +104,7 @@ import { ArchivePackagesCard } from "./ArchivePackagesCard";
 import { LinkInstallCard } from "./LinkInstallCard";
 import { KrakenMountCard } from "./KrakenMountCard";
 import { Tabs } from "../../components/Tabs";
-import { linkModeFacts } from "../../lib/linkModes";
+import { linkModeFacts, linkModeFor } from "../../lib/linkModes";
 import { useRecentLinksStore } from "../../state/recentLinks";
 import type { LinkInstallMode } from "../../state/linkInstallPrefs";
 import { formatBytes } from "../../lib/format";
@@ -1145,12 +1145,21 @@ export default function InstallPackageScreen({
       setLinkDownload({ url: link, info });
       return;
     }
+    // A server without byte ranges sends the package only whole, in order: neither the PS5
+    // nor a pass-through can read it, so this computer saves it first (#872).
+    const mode = linkModeFor(req.mode, info);
     // Each way asks something different of the user, so each says its own thing: the old
     // single text told someone who chose "the PS5 downloads it" to keep this computer awake.
     const approved = await confirm({
       title: tr("linkcard.confirm.title", undefined, "Install from this link?"),
       message:
-        req.mode === "direct"
+        mode !== req.mode
+          ? tr(
+              "linkcard.confirm.whole",
+              undefined,
+              "This server sends the file only in one piece, so it cannot be passed straight to the PS5. This computer first saves the whole package to its disk, then installs it on the PS5. If the download is interrupted, it starts again from the beginning. This computer must stay awake until both are done and needs free space for the package. Reinstalling over an installed game may remove it if Sony's installer fails. Use only a package link you trust and are authorized to install.",
+            )
+          : req.mode === "direct"
           ? tr(
               "linkcard.confirm.direct",
               undefined,
@@ -1179,11 +1188,33 @@ export default function InstallPackageScreen({
     // Content-Disposition).
     await runUrlInstall(
       link,
-      req.mode,
+      mode,
       req.name || info?.filename,
       undefined,
       info?.total_size,
     );
+  }
+
+  /** Save what a link serves to a PS5 folder without installing it (#872): a package too. */
+  async function handleLinkSave(url: string) {
+    setPickError(null);
+    setLinkDownload(null);
+    setCheckingLink(true);
+    try {
+      const info = await linkProbe(url, linkInsecure);
+      if (info.kind === "refused") {
+        setPickError(
+          info.message ??
+            tr("linkdl.refused", undefined, "That link is not a file download."),
+        );
+        return;
+      }
+      setLinkDownload({ url, info });
+    } catch (e) {
+      setPickError(`${e}`);
+    } finally {
+      setCheckingLink(false);
+    }
   }
 
   /** Start a link install that was approved. `existing`: the user's answer to a different
@@ -1655,6 +1686,7 @@ export default function InstallPackageScreen({
         checking={checkingLink}
         prefill={linkPrefill}
         onInstall={(link) => void handleUrlInstall(link)}
+        onSave={(url) => void handleLinkSave(url)}
       />
       {linkDownload && (
         <LinkDownloadCard
