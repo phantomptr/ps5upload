@@ -708,7 +708,7 @@ mod tests {
 
     /// An origin without byte ranges: every request, whatever its `Range`, gets `announce`
     /// as the length and `body` as the bytes (one request per connection).
-    fn whole_origin(body: Vec<u8>, announce: usize) -> std::net::SocketAddr {
+    pub(super) fn whole_origin(body: Vec<u8>, announce: usize) -> std::net::SocketAddr {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");
@@ -740,7 +740,7 @@ mod tests {
         addr
     }
 
-    fn bytes(n: usize) -> Vec<u8> {
+    pub(super) fn bytes(n: usize) -> Vec<u8> {
         (0..n).map(|i| (i * 31 % 251) as u8).collect()
     }
 
@@ -1113,6 +1113,7 @@ mod served {
 #[cfg(test)]
 mod served_tests {
     use super::served::*;
+    use super::tests::{bytes, whole_origin};
     use super::*;
 
     fn base() -> String {
@@ -1280,6 +1281,74 @@ mod served_tests {
         .expect("upload");
         assert_eq!(r.bytes_sent, ilen);
         assert!(std::fs::read(dir.join("host/share/dst/g.exfat")).unwrap() == image);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #872, the whole path: a link without byte ranges -> WholeLinkSource -> AVA1 upload ->
+    /// a console folder. A large file (past the cutoff) and a small one.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_link_without_byte_ranges_streams_to_a_console_folder_over_ava1() {
+        use ava1::host::FolderHost;
+        use ava1::keys::Identity;
+        use ava1::peers::PeerStore;
+        use ava1::server::{self, ServerCtx};
+        use ps5upload_ava1::Pool;
+
+        let dir = std::env::temp_dir().join(format!("link-whole-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ava = dir.join("engine");
+        let key = Identity::load_or_create(&ava.join("identity"))
+            .unwrap()
+            .public();
+        std::fs::create_dir_all(dir.join("host/share")).unwrap();
+        let mut peers = PeerStore::in_memory();
+        peers.add(key, "engine").unwrap();
+        let rpc: ava1::server::RpcHandler = Box::new(|_, _| ava1::session::RpcReply {
+            status: ps5upload_ava1::gen::ERR_UNKNOWN_METHOD,
+            body: Vec::new(),
+        });
+        let ctx = ServerCtx::new(Identity::generate().unwrap(), "host", peers, rpc).with_jobs(
+            Arc::new(FolderHost {
+                root: dir.join("host/share"),
+                jobs_dir: dir.join("host/jobs"),
+            }),
+        );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap().to_string();
+        tokio::spawn(server::serve(l, Arc::new(ctx)));
+
+        for (job, name, len) in [
+            ([7u8; 16], "Game.pkg", 9 * 1024 * 1024 + 321),
+            ([8u8; 16], "small.bin", 4000),
+        ] {
+            let data = bytes(len);
+            let origin = whole_origin(data.clone(), data.len());
+            let url = format!("http://{origin}/dl/{name}");
+            let pool = Pool::new(ava.clone()).with_addr(addr.clone());
+            let total = data.len() as u64;
+            let r = tokio::task::spawn_blocking(move || {
+                let source = Arc::new(WholeLinkSource::new(url, false, name.into(), total));
+                let manifest = ava1::manifest::single(source.as_ref(), name).unwrap();
+                let mut opts = ava1::send::SendOptions::upload(&format!("dst/{name}"));
+                opts.flags = ps5upload_ava1::gen::JF_SINGLE_FILE;
+                opts.seq = Some(source.clone());
+                ps5upload_ava1::upload::upload_with_in(
+                    &pool,
+                    "127.0.0.1",
+                    job,
+                    manifest,
+                    source,
+                    opts,
+                    &ps5upload_core::transfer::TransferConfig::new("127.0.0.1"),
+                )
+            })
+            .await
+            .unwrap()
+            .expect("upload");
+            assert_eq!(r.bytes_sent, total);
+            let got = std::fs::read(dir.join("host/share/dst").join(name)).unwrap();
+            assert!(got == data, "{name} arrives whole");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
