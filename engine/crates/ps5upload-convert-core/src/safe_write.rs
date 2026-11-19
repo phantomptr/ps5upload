@@ -355,7 +355,7 @@ pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
         };
         same_device(from, dir).map_err(io::Error::other)?;
     }
-    std::fs::rename(from, to)
+    ps5upload_fpkg::finish::rename(from, to)
 }
 
 /// [`rename`] that never replaces what is at `to`: a finished output only ever gets a free
@@ -373,7 +373,8 @@ pub fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
         };
         same_device(from, dir).map_err(io::Error::other)?;
     }
-    match rename_excl(from, to) {
+    // Tried again while a virus scanner or indexer briefly holds the file (Windows).
+    ps5upload_fpkg::finish::retry_held(|| match rename_excl(from, to) {
         Some(r) => r,
         None => {
             if to.symlink_metadata().is_ok() {
@@ -381,7 +382,21 @@ pub fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
             }
             std::fs::rename(from, to)
         }
-    }
+    })
+}
+
+/// [`rename_new`] for a build's last step, `partial` being a finished and checked output. On a
+/// failure `kept` is set and the error says where the output is: the caller leaves `partial`
+/// alone instead of removing it as it does a failed build's. A name something else took while
+/// the build ran is not such a failure: that stays the refusal it was, the partial removed.
+pub fn name_finished(partial: &Path, target: &Path, kept: &mut bool) -> Result<(), String> {
+    rename_new(partial, target).map_err(|e| {
+        if e.kind() == io::ErrorKind::AlreadyExists {
+            return e.to_string();
+        }
+        *kept = true;
+        ps5upload_fpkg::finish::kept_message(partial, target, &e)
+    })
 }
 
 fn taken(to: &Path) -> io::Error {

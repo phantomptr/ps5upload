@@ -477,6 +477,8 @@ pub fn wrap(
         n => n,
     };
     let partial = PathBuf::from(format!("{}.partial", output.display()));
+    // Set once the image is written and checked: a rename that fails then leaves it in place.
+    let mut kept = false;
     let result = write_image(
         source, &partial, &inner, raw_size, time, threads, options, control,
     )
@@ -489,13 +491,16 @@ pub fn wrap(
             options.sample,
             control.cancel,
         )?;
-        std::fs::rename(&partial, output)?;
+        if let Err(e) = crate::finish::rename(&partial, output) {
+            kept = true;
+            return crate::format_err(crate::finish::kept_message(&partial, output, &e));
+        }
         Ok(WrapReport {
             output: output.to_path_buf(),
             ..report
         })
     });
-    if result.is_err() {
+    if result.is_err() && !kept {
         std::fs::remove_file(&partial).ok();
     }
     result

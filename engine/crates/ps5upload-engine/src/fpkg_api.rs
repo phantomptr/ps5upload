@@ -900,8 +900,12 @@ async fn ps4_package_build(
             }
             // Never over a file that appeared since the check above (another program's, a
             // second build's): the system's no-replace rename where there is one.
-            ps5upload_convert_core::safe_write::rename_new(&partial_path, &final_path)
-                .map_err(|e| format!("{}: {e}", final_path.display()))?;
+            let mut kept = false;
+            ps5upload_convert_core::safe_write::name_finished(
+                &partial_path,
+                &final_path,
+                &mut kept,
+            )?;
             Ok(written)
         })();
         drop(partial);
@@ -3888,6 +3892,8 @@ pub(crate) fn sweep_output_leftovers(out: &Path) {
                 }
             })
             .map(|e| e.path())
+            // A finished output whose rename failed stays for the user to rename.
+            .filter(|p| !ps5upload_fpkg::finish::is_kept(p))
             .filter(|p| !active.contains(p) && !claimed_elsewhere(p))
             .partition(|p| p.is_file())
     };
@@ -3989,19 +3995,25 @@ fn remove_stale_extracts(out: &Path) {
     let Ok(entries) = std::fs::read_dir(out) else {
         return;
     };
-    let active = active_extracts().lock().unwrap_or_else(|e| e.into_inner());
-    for e in entries.flatten() {
-        let p = e.path();
-        let stale = e
-            .file_name()
-            .to_str()
-            .is_some_and(|n| n.starts_with(EXTRACT_PREFIX))
-            && e.file_type().is_ok_and(|t| t.is_dir())
-            && !active.contains(&p)
-            && !claimed_elsewhere(&p);
-        if stale {
-            let _ = ps5upload_core::archive_extract::remove_path_retrying(&p);
-        }
+    // Found with the list of folders in use held, removed with it let go: removing a whole
+    // unpacked game takes minutes, and every request that looks at the list (an unpack
+    // starting, one being cleaned up) waited behind it. A new unpack folder has a new name.
+    let stale: Vec<PathBuf> = {
+        let active = active_extracts().lock().unwrap_or_else(|e| e.into_inner());
+        entries
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_str()
+                    .is_some_and(|n| n.starts_with(EXTRACT_PREFIX))
+                    && e.file_type().is_ok_and(|t| t.is_dir())
+            })
+            .map(|e| e.path())
+            .filter(|p| !active.contains(p) && !claimed_elsewhere(p))
+            .collect()
+    };
+    for p in stale {
+        let _ = ps5upload_core::archive_extract::remove_path_retrying(&p);
     }
 }
 

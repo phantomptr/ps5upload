@@ -230,6 +230,11 @@ impl Writing {
         // Another process (the `convert` command, a second engine) writing it refuses this one
         // too, and its file is not cleared from under it.
         let lock = ClaimLock::take(&path).ok()?;
+        // Claimed from here, and the list let go before the leftover is cleared: removing an
+        // unfinished folder build or a pack spool takes minutes, and every other build's end
+        // and every sweep of leftovers waited behind it.
+        active.insert(path.clone());
+        drop(active);
         // Only ever our own leftovers (a `.partial` output or an `.lz4spool`) at an absolute
         // path with no `..`, whatever path a caller hands in; anything else is never touched.
         if let Some(leftover) = clearable_leftover(&path) {
@@ -249,7 +254,6 @@ impl Writing {
                 let _ = std::fs::remove_file(&leftover);
             }
         }
-        active.insert(path.clone());
         Some(Writing { path, _lock: lock })
     }
 }

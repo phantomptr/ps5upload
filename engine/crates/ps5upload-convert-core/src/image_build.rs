@@ -1176,9 +1176,11 @@ impl Unnamed {
 
     /// Gives the image its name (never over something that took it meanwhile).
     pub fn name(mut self) -> Result<(), String> {
-        crate::safe_write::rename_new(&self.partial, &self.output).map_err(|e| e.to_string())?;
-        self.named = true;
-        Ok(())
+        // A checked image whose rename failed is kept (not removed on drop) for the user.
+        let mut kept = false;
+        let named = crate::safe_write::name_finished(&self.partial, &self.output, &mut kept);
+        self.named = named.is_ok() || kept;
+        named
     }
 }
 
@@ -1342,6 +1344,8 @@ fn build_once(
     };
     let skip = resume.as_ref().map_or(0, |c| c.done);
     let skip_blocks = resume.as_ref().map_or(0, |c| c.blocks);
+    // Set when the checked image could not be given its name: it is then left where it is.
+    let mut kept = false;
     let result = (|| -> Result<ImageBuilt, String> {
         let planned_at = started.elapsed();
         let mut hashing = HashingTree::new(source);
@@ -1471,7 +1475,11 @@ fn build_once(
         drop(image);
         if name {
             // Never over something that took the name while this was written.
-            crate::safe_write::rename_new(&partial, output).map_err(|e| e.to_string())?;
+            if let Err(e) = crate::safe_write::name_finished(&partial, output, &mut kept) {
+                // Whole and checked: no checkpoint to go on from, and nothing to remove.
+                remove_checkpoint(&partial);
+                return Err(e);
+            }
         }
         remove_checkpoint(&partial);
         crate::log::record("info", format!("verify: {}", log_line(&summary)));
@@ -1519,6 +1527,9 @@ fn build_once(
     })();
     // A crash a test asked for leaves everything as a killed engine would.
     let stopped = checkpoints.is_some_and(|c| c.stopped.load(Ordering::Relaxed));
+    if kept {
+        return (result, resumed);
+    }
     if result.is_err() && !stopped {
         let _ = crate::safe_write::discard(&partial);
         remove_checkpoint(&partial);
