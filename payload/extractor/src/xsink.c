@@ -62,14 +62,28 @@ int xs_safe_name(const char *name, char *out, size_t cap) {
     return 0;
 }
 
+/* The room on the drive `dest` is on, or will be on.
+ *
+ * The whole-archive check runs BEFORE the folder is made (nothing is left behind when it cannot
+ * fit), and statvfs of a folder that is not there yet fails: the answer was "not known", the check
+ * was skipped, and on the console an archive too large for the drive was always started (the
+ * helper refuses an existing folder unless merging, so that was every new extraction). So the
+ * nearest folder above that exists is asked, as fs.freespace does. */
 static uint64_t free_bytes(xjob_t *j, int *known) {
     struct statvfs sv;
+    char dir[XJ_PATH];
     *known = 1;
-    if (j->test_free) return j->test_free > j->written_total ? j->test_free - j->written_total : 0;
-    if (statvfs(j->dest[0] ? j->dest : "/", &sv) != 0) {
-        *known = 0;
-        return 0;
+    snprintf(dir, sizeof dir, "%s", j->dest[0] ? j->dest : "/");
+    while (statvfs(dir, &sv) != 0) {
+        char *slash = strrchr(dir, '/');
+        if (errno != ENOENT || !slash || !dir[1]) {
+            *known = 0;
+            return 0;
+        }
+        if (slash == dir) dir[1] = 0;
+        else *slash = 0;
     }
+    if (j->test_free) return j->test_free > j->written_total ? j->test_free - j->written_total : 0;
     return statvfs_avail_bytes(&sv); /* 0 once the drive is into its reserve, never a wrapped 16 EiB */
 }
 

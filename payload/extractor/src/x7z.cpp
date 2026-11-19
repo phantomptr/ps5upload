@@ -627,7 +627,10 @@ static int Prepare(xjob_t *j, IInArchive *arc, bool sizesKnown, bool *anyEncrypt
   j->files_total = files;
   if (sizesKnown) {
     j->bytes_total = total;
-    if (xs_check_space(j, total) != 0) return -1;
+    // A merge may skip files it already has, so it keeps the per-file check only (as xrar.c does):
+    // checked for the whole, a second run over a mostly extracted folder was refused for room it
+    // would not use.
+    if (!j->merge && xs_check_space(j, total) != 0) return -1;
   }
   return xs_open_dest(j);
 }

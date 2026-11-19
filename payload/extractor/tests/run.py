@@ -436,6 +436,17 @@ def test_out_of_space(root):
     s = run(root, arc, os.path.join(root, "o1"), env={"XTEST_FREE": str(1 << 20)})
     check("space precheck", s["message"].startswith("fs_extract_no_space: needs"), s)
     check("space precheck", not os.path.exists(os.path.join(root, "o1")), "made the folder anyway")
+    # The same when the folder is to be made several levels down (the room is asked of the
+    # nearest folder that exists).
+    s = run(root, arc, os.path.join(root, "na", "nb", "o1"), env={"XTEST_FREE": str(1 << 20)})
+    check("space precheck deep", s["message"].startswith("fs_extract_no_space: needs"), s)
+    check("space precheck deep", not os.path.exists(os.path.join(root, "na")), "made the folder anyway")
+    # A merge is not held to the whole archive: it skips what is already there.
+    s = run(root, arc, os.path.join(root, "m1"))
+    check("space merge", s["state"] == "done", s)
+    one = max(len(v) for v in tree(os.path.join(root, "m1")).values() if isinstance(v, bytes))
+    s = run(root, arc, os.path.join(root, "m1"), env={"XTEST_FREE": str((64 << 20) + one)}, merge=True)
+    check("space merge", s["state"] == "done", s)
     # The drive fills up while writing.
     s = run(root, arc, os.path.join(root, "o2"), env={"XTEST_WRITE_LIMIT": "100000"})
     check("space mid-write", s["message"].startswith("fs_extract_no_space"), s)
