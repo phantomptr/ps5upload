@@ -116,6 +116,10 @@ static runtime_state_t *g_state = NULL;
  * other process of ours is a stray copy: sweep it. */
 #define LATE_SWEEP_DELAY_S 65
 
+/* Longest a helper's start may hold the start lock before the next one takes it for stuck: the takeover
+ * waits (10 s each, up to three), the reap and sweep, and the 15 s transfer-port gate, with room. */
+#define START_LOCK_MAX_AGE_MS 120000
+
 static void *late_sweep_main(void *arg) {
     (void)arg;
     proc_name_set_self(PS5UPLOAD2_PROC_NAME);
@@ -603,6 +607,25 @@ int main(void) {
     }
     startup_trace("ENSURE_DIRECTORIES_DONE");
 
+    /* One helper starts at a time (takeover_flag.h). Taken before anything that touches shared state
+     * (the log file, the staging sweeps, the ownership record, the takeover flag, the ports): a helper
+     * sent while another is still starting leaves without touching any of it, so the one starting is
+     * not asked to exit, reaped or stripped of its record. Held until the transfer port serves; a
+     * helper sent after that takes over as always. */
+    int start_lock = -1;
+    {
+        int holder = 0;
+        start_lock = takeover_start_lock(PS5UPLOAD2_RUNTIME_DIR, START_LOCK_MAX_AGE_MS, &holder);
+        if (start_lock == TAKEOVER_START_BUSY) {
+            startup_trace("START_LOCK_BUSY");
+            fprintf(stderr,
+                    "[payload2] another helper (pid %d) is starting right now; this one leaves it to finish\n",
+                    holder);
+            return 0;
+        }
+        startup_trace(start_lock >= 0 ? "START_LOCK_HELD" : "START_LOCK_NONE");
+    }
+
     /* Now that the runtime root exists, capture stdout+stderr to a fetchable
      * file and detach stdin so the helper's own error diagnostics survive for
      * bug reports. */
@@ -800,10 +823,14 @@ int main(void) {
     }
     if (!ava1_up) {
         /* Nothing is serving: a helper that idles with no port is worse than none (the app would wait on it).
-         * Leave, and take our ownership record with us so the next instance does not read it as live. */
+         * Leave, and take our ownership record with us so the next instance does not read it as live. The
+         * start lock is still held here, so the record is this helper's own, never a newer starter's. */
         (void)runtime_clear_ownership(&state);
         return 1;
     }
+    /* Serving: the start is over, and a helper sent from now on takes over from this one. */
+    takeover_start_unlock(start_lock);
+    start_lock = -1;
     startup_trace("AVA1_STARTED");
     printf("ps5upload2 payload ready on port %d (instance=%llu)\n", (int)AVA1_DEFAULT_PORT,
            (unsigned long long)state.instance_id);
