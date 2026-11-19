@@ -36,6 +36,67 @@ use serde::Serialize;
 /// Most entries one listing call returns; the rest follow through `next_cursor`.
 pub const PAGE: usize = 200;
 
+/// How long a folder's listing is kept for the pages after its first one.
+const PAGES_KEEP: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The paging of a backend that lists a folder whole (FTP, SFTP, SMB, WebDAV): the first page
+/// lists it and keeps the listing, and the pages after it (asked with a cursor) are cut from
+/// that, where every page used to list the whole folder again. Kept for one folder, for
+/// [`PAGES_KEEP`], until its last page is handed out; a page asked for a folder not kept (or
+/// kept too long) lists it again, as before.
+#[derive(Default)]
+pub(crate) struct Pages(std::sync::Mutex<Option<KeptListing>>);
+
+type KeptListing = (String, std::time::Instant, Arc<Vec<Entry>>);
+
+impl Pages {
+    pub(crate) async fn page<F, Fut>(
+        &self,
+        path: &str,
+        cursor: Option<String>,
+        list: F,
+    ) -> Result<Page, RemoteError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Vec<Entry>, RemoteError>>,
+    {
+        let from = cursor.and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
+        let kept = (from > 0)
+            .then(|| {
+                let g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+                g.as_ref()
+                    .filter(|(p, at, _)| p == path && at.elapsed() < PAGES_KEEP)
+                    .map(|(_, _, all)| Arc::clone(all))
+            })
+            .flatten();
+        let all = match kept {
+            Some(all) => all,
+            None => {
+                let all = Arc::new(list().await?);
+                *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some((
+                    path.to_string(),
+                    std::time::Instant::now(),
+                    Arc::clone(&all),
+                ));
+                all
+            }
+        };
+        let from = from.min(all.len());
+        let to = (from + PAGE).min(all.len());
+        if to >= all.len() {
+            // The last page: nothing more will be cut from it.
+            let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            if g.as_ref().is_some_and(|(_, _, a)| Arc::ptr_eq(a, &all)) {
+                *g = None;
+            }
+        }
+        Ok(Page {
+            entries: all[from..to].to_vec(),
+            next_cursor: (to < all.len()).then(|| to.to_string()),
+        })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct Entry {
     pub name: String,
@@ -1048,6 +1109,41 @@ mod tests {
             Some(RemoteError::NotFound(_))
         ));
         assert!(fs.create_writer("/w/a", 100, 50).await.is_err());
+    }
+
+    /// A folder listed whole is listed once for all its pages, and again from its first page.
+    #[tokio::test]
+    async fn pages_after_the_first_are_cut_from_one_listing() {
+        let pages = Pages::default();
+        let calls = AtomicUsize::new(0);
+        let listing = || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok((0..450)
+                .map(|i| Entry {
+                    name: format!("f{i:03}"),
+                    is_dir: false,
+                    size: 1,
+                    mtime: None,
+                })
+                .collect::<Vec<_>>())
+        };
+        let p1 = pages.page("/big", None, listing).await.unwrap();
+        let p2 = pages.page("/big", p1.next_cursor, listing).await.unwrap();
+        let p3 = pages.page("/big", p2.next_cursor, listing).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            (p1.entries.len(), p2.entries.len(), p3.entries.len()),
+            (PAGE, PAGE, 50)
+        );
+        assert_eq!(p2.entries[0].name, "f200");
+        assert!(p3.next_cursor.is_none());
+        // A first page lists again; a page of another folder is not cut from this one.
+        let again = pages.page("/big", None, listing).await.unwrap();
+        pages
+            .page("/other", again.next_cursor, listing)
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]

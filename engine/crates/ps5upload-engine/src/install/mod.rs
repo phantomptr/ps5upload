@@ -1201,14 +1201,19 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     // And for a package on a saved server: the client does not read it, the serve session would.
     // Its header is kept for the category check below, which opened and fingerprinted the
     // package on the server a second time to read the same bytes.
+    // The package stays open for the serve session too, fingerprint and all: opening it there
+    // again cost a second sign-in, open and sampled read of a file on a server.
     let mut remote_header = None;
+    let mut remote_opened = None;
     if let Source::Remote { connection, path } = &req.source {
         let remote = format!("remote://{connection}/{path}");
+        let at = remote.clone();
         let head = unless_stopped(&state, &job, async move {
-            crate::pkg_install::open_remote_package(&remote).await
+            crate::pkg_install::open_remote_package(&at).await
         })
         .await;
-        if let Some(Ok((_, _, h, _, _))) = head {
+        if let Some(Ok(opened)) = head {
+            let h = &opened.2;
             fill_from_header(
                 &mut req,
                 &h.content_id,
@@ -1216,7 +1221,8 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 &h.category,
                 &h.app_ver,
             );
-            remote_header = Some(h);
+            remote_header = Some(h.clone());
+            remote_opened = Some((remote, opened));
         }
     }
     crate::log_at!(
@@ -1457,7 +1463,9 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                             .await;
                         }
                         let console_url = format!("ps5://{ip}{path}");
-                        match serve_session_unless_stopped(&state, &job, &req, &console_url).await {
+                        match serve_session_unless_stopped(&state, &job, &req, &console_url, None)
+                            .await
+                        {
                             Ok((sid, url)) => {
                                 served_from = origin_of(&url);
                                 route = Route::Stream;
@@ -1534,7 +1542,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                                 "{tag}: the console refused the link (0x{code:08X}); proxying it through this engine instead"
                             );
                         }
-                        match serve_session_unless_stopped(&state, &job, &req, url).await {
+                        match serve_session_unless_stopped(&state, &job, &req, url, None).await {
                             Ok((sid, purl)) => {
                                 served_from = origin_of(&purl);
                                 route = Route::Stream;
@@ -1567,7 +1575,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 }
             }
             Source::HostFile(_) | Source::Remote { .. } => {
-                match create_serve_session(&state, &job, &req).await {
+                match create_serve_session(&state, &job, &req, remote_opened.take()).await {
                     Ok((sid, url)) => {
                         served_from = origin_of(&url);
                         // No reach pre-check: hand the URL to the console and let it try. If it
@@ -2314,6 +2322,7 @@ async fn create_serve_session(
     state: &PkgInstallStateHandle,
     job: &str,
     req: &InstallRequest,
+    opened: Option<(String, crate::pkg_install::OpenedRemote)>,
 ) -> Result<(String, String), ServeFailure> {
     let path = match &req.source {
         Source::HostFile(p) => p.clone(),
@@ -2324,7 +2333,7 @@ async fn create_serve_session(
             ))
         }
     };
-    serve_session_unless_stopped(state, job, req, &path).await
+    serve_session_unless_stopped(state, job, req, &path, opened).await
 }
 
 /// `create_serve_session_for`, given up on as soon as the user stops `job`. Setting a session up can
@@ -2335,10 +2344,12 @@ async fn serve_session_unless_stopped(
     job: &str,
     req: &InstallRequest,
     path: &str,
+    opened: Option<(String, crate::pkg_install::OpenedRemote)>,
 ) -> Result<(String, String), ServeFailure> {
     let start_req = serve_session_request(req, path);
     let st = state.clone();
-    let mut task = tokio::spawn(async move { create_serve_session_for(&st, start_req).await });
+    let mut task =
+        tokio::spawn(async move { create_serve_session_for(&st, start_req, opened).await });
     tokio::select! {
         biased;
         _ = state.jobs.stop_requested(job) => {
@@ -2422,9 +2433,11 @@ impl ServeFailure {
 async fn create_serve_session_for(
     state: &PkgInstallStateHandle,
     start_req: serde_json::Value,
+    opened: Option<(String, crate::pkg_install::OpenedRemote)>,
 ) -> Result<(String, String), ServeFailure> {
-    let start_req: crate::pkg_install::InstallStartRequest = serde_json::from_value(start_req)
+    let mut start_req: crate::pkg_install::InstallStartRequest = serde_json::from_value(start_req)
         .map_err(|e| ServeFailure::plain(format!("build start request: {e}")))?;
+    start_req.opened_remote = opened;
     let resp =
         crate::pkg_install::install_start_handler(State(state.clone()), Json(start_req)).await;
     let (parts, body) = resp.into_parts();

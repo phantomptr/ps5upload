@@ -703,3 +703,55 @@ pub(crate) async fn metrics_handler() -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod refused_upload_tests {
+    use super::*;
+    use axum::extract::State;
+    use axum::response::IntoResponse;
+    use axum::Json;
+
+    /// An upload refused before its job exists leaves nothing in the map of tagged jobs: it
+    /// never reaches an end that would take it out.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_refused_upload_is_not_kept_as_tagged() {
+        let tagged = || held().lock().unwrap_or_else(|e| e.into_inner()).len();
+        let before = tagged();
+        let (events_tx, _rx) = tokio::sync::broadcast::channel(16);
+        let state = crate::AppState {
+            jobs: Arc::default(),
+            default_ps5_addr: "127.0.0.1".to_string(),
+            events_tx: events_tx.clone(),
+        };
+        let missing = std::env::temp_dir().join(format!(
+            "ps5upload-untagged-{}-missing.bin",
+            std::process::id()
+        ));
+        let req = crate::TransferFileReq {
+            addr: Some("127.0.0.1:1".to_string()),
+            tx_id: None,
+            dest: "/data/x/one.bin".to_string(),
+            src: missing.to_string_lossy().into_owned(),
+            bandwidth_cap_mbps: None,
+        };
+        let resp = crate::transfer_file_handler(State(state.clone()), Json(req))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
+        let req = crate::TransferFileListReq {
+            addr: Some("127.0.0.1:1".to_string()),
+            tx_id: Some("not a tx id".to_string()),
+            dest_root: "/data/x".to_string(),
+            files: vec![crate::FileListEntryReq {
+                src: missing.to_string_lossy().into_owned(),
+                dest: "one.bin".to_string(),
+            }],
+            bandwidth_cap_mbps: None,
+        };
+        let resp = crate::transfer_file_list_handler(State(state), Json(req))
+            .await
+            .into_response();
+        assert!(resp.status().is_client_error());
+        assert_eq!(tagged(), before);
+    }
+}

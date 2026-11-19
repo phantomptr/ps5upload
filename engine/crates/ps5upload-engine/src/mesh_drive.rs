@@ -1740,7 +1740,11 @@ const BATCH_FILES: usize = 200;
 const BATCH_BYTES: u64 = 512 << 20;
 
 /// How often a running pass checks that its consoles still answer.
-const WATCH_EVERY: Duration = Duration::from_secs(10);
+const WATCH_EVERY: Duration = if cfg!(test) {
+    Duration::from_millis(600)
+} else {
+    Duration::from_secs(10)
+};
 /// How often a running pass checks that its member is still wanted.
 const WANTED_EVERY: Duration = if cfg!(test) {
     Duration::from_millis(600)
@@ -1753,9 +1757,14 @@ const WANTED_EVERY: Duration = if cfg!(test) {
 /// console put to rest mid-copy would hold the pass, and every drive behind it, until it woke.
 /// Two missed checks in a row (or the drive's lock lost, or the member stopped) flip the pass's
 /// cancel flag: the copy stops, the pass finds out why and ends, keeping what it did.
+///
+/// A console that stopped answering is named in `silent`: the pass ends there as for a console
+/// that went away. It used to go on to the next file with the flag still set, each copy then
+/// failing at once and counted against its file.
 struct Watchdog {
     stop: std::sync::Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    silent: std::sync::Arc<Mutex<Option<String>>>,
 }
 
 impl Watchdog {
@@ -1769,6 +1778,8 @@ impl Watchdog {
         XFER_CANCEL.with(|c| *c.borrow_mut() = Some(cancel.clone()));
         let stop = std::sync::Arc::new(AtomicBool::new(false));
         let st = stop.clone();
+        let silent: std::sync::Arc<Mutex<Option<String>>> = Default::default();
+        let quiet = silent.clone();
         let thread = std::thread::Builder::new()
             .name("mesh-drive-watch".into())
             .spawn(move || {
@@ -1800,23 +1811,36 @@ impl Watchdog {
                         continue;
                     }
                     last = std::time::Instant::now();
-                    let answers = consoles.iter().all(|c| {
-                        crate::mesh_api::call(c, || mesh::state(c, u64::MAX, u64::MAX)).is_ok()
+                    let silent_now = consoles.iter().find(|c| {
+                        crate::mesh_api::call(c, || mesh::state(c, u64::MAX, u64::MAX)).is_err()
                     });
-                    misses = if answers { 0 } else { misses + 1 };
+                    misses = if silent_now.is_none() { 0 } else { misses + 1 };
                     if misses >= 2 {
                         crate::log_at!(
                             Info,
                             "mesh",
                             "mesh drive: a console stopped answering mid-pass; its copy stops"
                         );
+                        *quiet.lock().unwrap_or_else(|e| e.into_inner()) = silent_now.cloned();
                         cancel.store(true, Ordering::SeqCst);
                         return;
                     }
                 }
             })
             .ok();
-        Self { stop, thread }
+        Self {
+            stop,
+            thread,
+            silent,
+        }
+    }
+
+    /// The console that stopped answering, once two checks in a row have missed it.
+    fn went_silent(&self) -> Option<String> {
+        self.silent
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 
@@ -2085,6 +2109,19 @@ impl Pass<'_> {
         self.hub.away(e).or_else(|| self.side.away(e))
     }
 
+    /// The watchdog found `addr` silent: away (unless something more exact is known of it).
+    fn silent_mid_pass(&self, addr: &str) {
+        crate::log_at!(
+            Info,
+            "mesh",
+            "mesh drive {}: {addr} stopped answering mid-pass; stopping",
+            self.drive.name
+        );
+        if away_of(addr).is_none() {
+            mark_away(addr, AwayWhy::Unreachable);
+        }
+    }
+
     /// One pass. Returns whether it changed the hub, and whether it changed this member's side.
     fn run(&self) -> Result<Changed> {
         let member_id = self.member_id.as_str();
@@ -2310,6 +2347,11 @@ impl Pass<'_> {
                 first_error.get_or_insert_with(lock_taken);
                 break;
             }
+            if let Some(addr) = watch.as_ref().and_then(Watchdog::went_silent) {
+                self.silent_mid_pass(&addr);
+                went = Some(addr);
+                break;
+            }
             let rel = op.path().to_string();
             let agreed_before = base.get(&rel).copied();
             set_status(member_id, |s| s.current = rel.clone());
@@ -2428,6 +2470,12 @@ impl Pass<'_> {
                     // Stopped because another device took the drive's lock: not the file's fault.
                     if self.lost.load(Ordering::SeqCst) {
                         first_error.get_or_insert_with(lock_taken);
+                        break;
+                    }
+                    // Stopped by the watchdog: the console it names went quiet, not the file.
+                    if let Some(addr) = watch.as_ref().and_then(Watchdog::went_silent) {
+                        self.silent_mid_pass(&addr);
+                        went = Some(addr);
                         break;
                     }
                     if let Some((addr, why)) = self.gone(&e) {
@@ -5907,6 +5955,25 @@ mod tests {
         // An old stop says nothing about the next pass.
         let next = begin_pass(&member);
         assert!(!next.stop.load(Ordering::SeqCst));
+    }
+
+    /// A console that misses two checks stops the copy and is named, so the pass ends there
+    /// instead of going on with every later copy refused by the same flag.
+    #[test]
+    fn a_watchdog_names_the_console_that_went_quiet() {
+        let quiet = "127.0.0.1:1".to_string();
+        let watch = Watchdog::start(vec![quiet.clone()], Arc::default(), Arc::default(), None);
+        let cancel = xfer_cancel();
+        let from = std::time::Instant::now();
+        while !cancel.load(Ordering::SeqCst) && from.elapsed() < Duration::from_secs(20) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(cancel.load(Ordering::SeqCst));
+        assert_eq!(watch.went_silent(), Some(quiet));
+        // Nothing to watch: nobody is named.
+        let none = Watchdog::start(Vec::new(), Arc::default(), Arc::default(), None);
+        std::thread::sleep(Duration::from_millis(1500));
+        assert_eq!(none.went_silent(), None);
     }
 
     #[test]

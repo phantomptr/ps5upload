@@ -15,6 +15,8 @@ use super::{RemoteError, RemoteFile};
 const PIECE: u64 = 4 * 1024 * 1024;
 /// How many run at once.
 const PIECES_IN_FLIGHT: usize = 4;
+/// What a reader that streams a whole range asks for at once: one batch of pieces in flight.
+pub const READ_AT_ONCE: u64 = PIECE * PIECES_IN_FLIGHT as u64;
 
 pub struct RemoteRangeSource {
     handle: tokio::runtime::Handle,

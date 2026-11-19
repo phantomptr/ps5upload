@@ -61,6 +61,13 @@ pub(crate) struct LogEntry {
 // silently dropped from the Log tab. Reserving 0 makes the first record seq=1.
 static SEQ: AtomicU64 = AtomicU64::new(1);
 
+/// Held while a line takes its number and enters its ring, and while a reader goes over the
+/// rings. Without it a line could take number 5, another take 6 and be stored first, and a
+/// reader that came in between would move its cursor to 6: line 5, stored a moment later,
+/// was then never shown to it. With it, every line a reader has not seen has a number above
+/// every one it has.
+static ORDER: Mutex<()> = Mutex::new(());
+
 fn ring() -> &'static Mutex<VecDeque<LogEntry>> {
     // SAFETY: OnceLock in a plain `fn` needs it to be inside the fn body.
     use std::sync::OnceLock;
@@ -227,6 +234,7 @@ pub(crate) fn record_quiet(level: &'static str, msg: String) {
 }
 
 fn push(which: Ring, level: &'static str, cat: &'static str, ts: u64, msg: String) {
+    let _order = ORDER.lock().unwrap_or_else(|e| e.into_inner());
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let entry = LogEntry {
         seq,
@@ -316,6 +324,7 @@ pub(crate) fn install_convert_sink() {
 /// Return every entry whose `seq` is strictly greater than `since`.
 /// Callers poll with `since = last-seen-seq` to receive only new lines.
 pub(crate) fn tail_since(since: u64) -> Vec<LogEntry> {
+    let _order = ORDER.lock().unwrap_or_else(|e| e.into_inner());
     let mut out: Vec<LogEntry> = {
         let g = ring().lock().unwrap_or_else(|e| e.into_inner());
         g.iter().filter(|e| e.seq > since).cloned().collect()
@@ -399,6 +408,47 @@ mod tests {
         assert!(lines
             .iter()
             .any(|e| e.msg == format!("GET /api/x-{id}-{} -> 200 (1ms)", DEBUG_RING_CAP + 49)));
+    }
+
+    /// A reader that follows the log with a cursor sees every line, whichever ring it went to
+    /// and however the writers interleave.
+    #[test]
+    fn a_cursor_never_skips_a_line() {
+        let id = std::process::id();
+        const WRITERS: usize = 4;
+        const EACH: usize = 100;
+        let writers: Vec<_> = (0..WRITERS)
+            .map(|w| {
+                std::thread::spawn(move || {
+                    for i in 0..EACH {
+                        let msg = format!("cursor-{id}-{w}-{i}");
+                        match (w + i) % 3 {
+                            0 => record("warn", msg),
+                            1 => record("debug", msg),
+                            _ => record_access(msg),
+                        }
+                    }
+                })
+            })
+            .collect();
+        let (mut cursor, mut seen) = (0u64, 0usize);
+        let read = |cursor: &mut u64, seen: &mut usize| {
+            for e in tail_since(*cursor) {
+                assert!(e.seq > *cursor);
+                *cursor = e.seq;
+                if e.msg.starts_with(&format!("cursor-{id}-")) {
+                    *seen += 1;
+                }
+            }
+        };
+        while writers.iter().any(|w| !w.is_finished()) {
+            read(&mut cursor, &mut seen);
+        }
+        for w in writers {
+            w.join().unwrap();
+        }
+        read(&mut cursor, &mut seen);
+        assert_eq!(seen, WRITERS * EACH);
     }
 
     /// `/api/engine-logs` answers from the rings, at both levels, and quiet lines too.

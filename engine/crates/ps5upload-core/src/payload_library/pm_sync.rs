@@ -398,14 +398,6 @@ impl Library {
             }
             let here = ours(&listed, &filename).cloned();
             let record = choice.stored.get(&filename).cloned();
-            if here.is_some() && record.as_ref().is_some_and(|r| r.sha256 == sha) {
-                report.changes.push(PmChange::Unchanged {
-                    payload_id: id.clone(),
-                    filename,
-                    version: local.version.clone(),
-                });
-                continue;
-            }
             // Earlier copies this app stored for the same payload under another name.
             let old_names: Vec<String> = choice
                 .stored
@@ -417,6 +409,20 @@ impl Library {
                 .iter()
                 .filter_map(|n| ours(&listed, n).cloned())
                 .collect();
+            if here.is_some() && record.as_ref().is_some_and(|r| r.sha256 == sha) {
+                report.changes.push(PmChange::Unchanged {
+                    payload_id: id.clone(),
+                    filename: filename.clone(),
+                    version: local.version.clone(),
+                });
+                // A rename a failed boot-list write left half done (the new copy stored, the
+                // old one still named in the list and kept): finished now. It used to stay so
+                // for good, as the new copy is never stored again.
+                for old in old_entries {
+                    renamed.push((id.clone(), old, filename.clone()));
+                }
+                continue;
+            }
             if here.is_none() {
                 // Storing into a folder Payload Manager already has removes that folder's other
                 // files. Only into a new folder, or one that holds our own older copy.
@@ -669,6 +675,7 @@ mod tests {
         autoload: RefCell<Autoload>,
         renames: RefCell<Vec<(String, String)>>,
         fail_store: bool,
+        fail_autoload_set: std::cell::Cell<bool>,
         uploads: RefCell<Vec<String>>,
         autoload_writes: RefCell<usize>,
     }
@@ -778,6 +785,9 @@ mod tests {
             Ok(self.autoload.borrow().clone())
         }
         fn autoload_set(&self, enabled: bool, list: &[String]) -> Result<(), String> {
+            if self.fail_autoload_set.get() {
+                return Err("Payload Manager did not answer (timed out)".into());
+            }
             *self.autoload_writes.borrow_mut() += 1;
             let delay_s = self.autoload.borrow().delay_s;
             *self.autoload.borrow_mut() = Autoload {
@@ -941,6 +951,52 @@ mod tests {
             .files
             .borrow()
             .contains_key("/data/pldmgr/payloads/local/thing_v1/thing_v1.elf"));
+    }
+
+    /// The boot list could not be written when the new name was stored: the next sync, with
+    /// nothing new to store, still moves the entry and removes the old copy.
+    #[test]
+    fn a_rename_a_failed_boot_list_write_left_is_finished_next_time() {
+        let (_d, _h, lib) = library("pm-rename-retry");
+        let id =
+            super::super::repos::test_repos::save_custom_repo(&lib, "me", "thing", "me/thing").id;
+        let id = id.as_str();
+        cache(&lib, id, "thing_v1.elf", "v1", &elf(1, 32));
+        lib.set_pm_sync_choice(HOST, &ids(&[id]), &ids(&[id]))
+            .unwrap();
+        let pm = FakePm::default().with_autoload(true, &["local/etahen"]);
+        lib.sync_payload_manager(HOST, &pm);
+
+        cache(&lib, id, "thing_v2.elf", "v2", &elf(2, 32));
+        pm.fail_autoload_set.set(true);
+        lib.sync_payload_manager(HOST, &pm);
+        assert_eq!(
+            pm.autoload.borrow().list,
+            ["local/etahen", "local/thing_v1"]
+        );
+        assert!(pm
+            .files
+            .borrow()
+            .contains_key("/data/pldmgr/payloads/local/thing_v1/thing_v1.elf"));
+
+        pm.fail_autoload_set.set(false);
+        let r = lib.sync_payload_manager(HOST, &pm);
+        assert_eq!(
+            pm.autoload.borrow().list,
+            ["local/etahen", "local/thing_v2"],
+            "{r:?}"
+        );
+        assert!(r.changes.contains(&PmChange::RemovedOld {
+            payload_id: id.into(),
+            filename: "thing_v1.elf".into(),
+        }));
+        assert!(!pm
+            .files
+            .borrow()
+            .contains_key("/data/pldmgr/payloads/local/thing_v1/thing_v1.elf"));
+        // Done: a further sync changes nothing.
+        let again = lib.sync_payload_manager(HOST, &pm);
+        assert!(!again.changed_anything(), "{again:?}");
     }
 
     #[test]
