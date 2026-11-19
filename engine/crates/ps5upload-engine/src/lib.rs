@@ -8956,7 +8956,8 @@ struct UserCreateReq {
 struct UserDeleteReq {
     #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
-    uid: i32,
+    /// The console user id: unsigned (0 to 4294967295) or the same 32 bits signed (-2147483648 to -1).
+    uid: i64,
     #[serde(default)]
     wipe_saves: bool,
 }
@@ -9211,9 +9212,13 @@ async fn user_delete_handler(
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
-    let uid = req.uid;
+    // Never truncated onto another user: a number that is not a 32-bit user id is refused.
+    let Some(uid) = ps5upload_core::users::user_id_from_i64(req.uid) else {
+        return json_err(StatusCode::BAD_REQUEST, format!("invalid uid {}", req.uid))
+            .into_response();
+    };
     let wipe_saves = req.wipe_saves;
-    crate::log_info!("user_delete: addr={addr} uid={uid} wipe_saves={wipe_saves}");
+    crate::log_info!("user_delete: addr={addr} uid={uid} (0x{uid:08x}) wipe_saves={wipe_saves}");
     let r = tokio::task::spawn_blocking(move || {
         ps5upload_core::users::user_delete(&addr, uid, wipe_saves)
     })

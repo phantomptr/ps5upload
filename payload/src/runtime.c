@@ -5245,7 +5245,18 @@ static int handle_user_create(runtime_state_t *state, const char *body) {
 
 static int handle_user_delete(runtime_state_t *state, const char *body) {
     if (!state) return -1;
-    int uid = (int)extract_json_uint64_field(body, "uid");
+    /* All 32 bits, sent signed (an engine's i32) or unsigned; a number that is not a user id is
+     * refused, never truncated onto another user's id. */
+    uint32_t uid_u32 = 0;
+    {
+        const char *p = body ? strstr(body, "\"uid\"") : NULL;
+        if (p) {
+            p += strlen("\"uid\"");
+            while (*p == ' ' || *p == ':') p++;
+            if (!user_id_parse(p, &uid_u32)) uid_u32 = 0;
+        }
+    }
+    int uid = (int)user_id_as_i32(uid_u32);
     /* The engine sends a JSON bool (users.rs: json!({"uid", "wipe_saves": bool})). Read as a
      * number it was always 0 ("true" is not a digit), so the option was never honoured. A bool
      * first; a number (an older caller's 0/1) still counts. */
@@ -5254,7 +5265,7 @@ static int handle_user_delete(runtime_state_t *state, const char *body) {
         wipe_saves = extract_json_uint64_field(body, "wipe_saves") != 0;
     int rc = -1;
     const char *err_msg = "";
-    if (uid > 0) {
+    if (uid_u32 != 0 && uid_u32 != 0xFFFFFFFFu) {
         pthread_mutex_lock(&sony_api_lock);
         sceUserServiceInitialize(NULL); /* a Sony call: inside the lock (final review: console) */
         /* Who is signed in, read under the same lock as the delete it decides. */
@@ -5281,10 +5292,10 @@ static int handle_user_delete(runtime_state_t *state, const char *body) {
             if (wipe_saves) {
                 char sd_path[512];
                 snprintf(sd_path, sizeof(sd_path),
-                         "/user/home/%08x/savedata", (unsigned)uid);
+                         "/user/home/%08x/savedata", (unsigned)uid_u32);
                 remove_recursive_path(sd_path, NULL, NULL);
                 snprintf(sd_path, sizeof(sd_path),
-                         "/user/home/%08x/savedata_prospero", (unsigned)uid);
+                         "/user/home/%08x/savedata_prospero", (unsigned)uid_u32);
                 remove_recursive_path(sd_path, NULL, NULL);
             }
         } else {
@@ -6079,7 +6090,8 @@ static int handle_list_saves(runtime_state_t *state, const char *body, uint64_t 
     if (!state) return -1;
     /* Optional `{"user_id":N}` body filters to one user; else walk all
      * user dirs under /user/home. */
-    int filter_uid = 0;
+    /* The id signed (an engine's i32) or unsigned, read without loss (user_id_parse). 0: everyone. */
+    uint32_t filter_uid = 0;
     if (body && body_len > 0 && body_len < 256) {
         char buf[260];
         memcpy(buf, body, (size_t)body_len);
@@ -6088,7 +6100,11 @@ static int handle_list_saves(runtime_state_t *state, const char *body, uint64_t 
         if (p) {
             p += strlen("\"user_id\"");
             while (*p == ' ' || *p == ':') p++;
-            filter_uid = atoi(p);
+            if (!user_id_parse(p, &filter_uid)) {
+                /* Not an id this helper can read: list nobody's saves rather than everybody's. */
+                const char *err = "{\"saves\":[],\"err\":\"invalid user_id\"}";
+                return mgmt_reply(MGMT_FRAME_LIST_SAVES_ACK, err, strlen(err));
+            }
         }
     }
 
@@ -6121,10 +6137,14 @@ static int handle_list_saves(runtime_state_t *state, const char *body, uint64_t 
              * numeric or edge-case names still resolve. */
             const char *raw_name = uent->d_name;
             char *endp = NULL;
-            unsigned long uid_u32 = strtoul(raw_name, &endp, 16);
-            if (!endp || *endp != '\0' || uid_u32 == 0) continue;
-            int uid_for_json = (int)(uid_u32 & 0x7FFFFFFFu);
-            if (filter_uid != 0 && uid_for_json != filter_uid) continue;
+            unsigned long uid_ul = strtoul(raw_name, &endp, 16);
+            if (!endp || *endp != '\0' || uid_ul == 0 || uid_ul > 0xFFFFFFFFul) continue;
+            uint32_t uid_u32 = (uint32_t)uid_ul;
+            if (filter_uid != 0 && uid_u32 != filter_uid) continue;
+            /* All 32 bits, written signed: an engine reads user_id as an i32, and a number above
+             * i32::MAX would fail its whole list. The app reads it back unsigned (`>>> 0`). Masking
+             * the top bit off made two users one. */
+            int uid_for_json = (int)user_id_as_i32(uid_u32);
             char ps5_root[256];
             char ps4_root[256];
             snprintf(ps5_root, sizeof(ps5_root),

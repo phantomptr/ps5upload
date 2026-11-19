@@ -721,7 +721,8 @@ pub struct ProfileActivateReq {
 pub struct UserDeleteReq {
     #[serde(default)]
     pub addr: Option<String>,
-    pub uid: i32,
+    /// Passed through: the engine reads it unsigned or signed, all 32 bits.
+    pub uid: i64,
     #[serde(default)]
     pub wipe_saves: bool,
 }
