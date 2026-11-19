@@ -168,13 +168,16 @@ impl ExFat {
         if offset >= f.size {
             return Ok(Vec::new());
         }
-        let want = len.min((f.size - offset) as usize);
+        // Not `as usize`: where that is 32 bits (Android on an older phone) a file with more
+        // than 4 GiB left came back short, and empty with exactly 4 GiB left.
+        let left = |end: u64| usize::try_from(end - offset).unwrap_or(usize::MAX);
+        let want = len.min(left(f.size));
         // Bytes at and past ValidDataLength were never written: the specification has them
         // read as zeros, whatever the clusters hold.
         if offset >= f.valid {
             return Ok(vec![0u8; want]);
         }
-        let written = want.min((f.valid - offset) as usize);
+        let written = want.min(left(f.valid));
         let mut out =
             self.read_stream(f.first_cluster, f.no_fat_chain, &f.path, offset, written)?;
         out.resize(want, 0);

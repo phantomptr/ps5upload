@@ -889,8 +889,12 @@ fn build_mode(
             final_path.display()
         ));
     }
-    std::fs::rename(&partial, &final_path)?;
+    // Written and verified: from here the `.partial` is never removed. A rename that still
+    // fails after its retries leaves it for the user to rename.
     leftover.keep();
+    if let Err(e) = crate::finish::rename(&partial, &final_path) {
+        return format_err(crate::finish::kept_message(&partial, &final_path, &e));
+    }
     let size = std::fs::metadata(&final_path)?.len();
     debug_assert_eq!(size, written);
     progress("done");

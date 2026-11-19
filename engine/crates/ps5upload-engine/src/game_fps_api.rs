@@ -145,6 +145,15 @@ impl Session {
             self.note_read(r);
         }
         self.apply_read(read, now, now_ms);
+        // Six hours by the clock too: a console that went to rest (or has no game, or no
+        // count) gives no samples, so the sample limit alone never came and a capture whose
+        // tab was closed had the console asked every second until the engine quit.
+        if let Some(c) = self.capture.as_mut().filter(|c| c.active()) {
+            if now_ms - c.started_ms >= MAX_CAPTURE_SAMPLES as i64 * 1000 {
+                c.stopped_ms = Some(now_ms);
+                c.stop_reason = Some("limit");
+            }
+        }
         if self.state != before {
             crate::log_info!("game_fps: {before} -> {}; {}", self.state, self.diag_line());
         }
@@ -575,6 +584,22 @@ mod tests {
             ..Capture::default()
         });
         s
+    }
+
+    #[test]
+    fn a_capture_with_no_samples_still_ends_after_six_hours() {
+        let now = Instant::now();
+        let mut s = capturing(now);
+        let six_hours = MAX_CAPTURE_SAMPLES as i64 * 1000;
+        s.apply(Err("offline".into()), now, 1_000 + six_hours - 1);
+        assert!(s.capturing() && s.wanted(now));
+        s.apply(Err("offline".into()), now, 1_000 + six_hours);
+        let c = s.capture.as_ref().unwrap();
+        assert_eq!(
+            (c.stopped_ms, c.stop_reason),
+            (Some(1_000 + six_hours), Some("limit"))
+        );
+        assert!(!s.capturing());
     }
 
     #[test]
