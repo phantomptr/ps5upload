@@ -4,7 +4,7 @@ import { Activity, ArrowUp, Folder, HardDrive, Monitor, Send, Usb } from "lucide
 import { fetchVolumes, fsListDir, type Volume } from "../../api/ps5";
 import { Button, Modal, SegmentedControl } from "../../components";
 import { consoleAddr, hostOf } from "../../lib/addr";
-import { planConsoleSend, type SendItem } from "../../lib/consoleSend";
+import { planConsoleSend, sendBlocked, type SendItem } from "../../lib/consoleSend";
 import { formatBytes } from "../../lib/format";
 import { quickDestinations } from "../../lib/moveTo";
 import { useTr } from "../../state/lang";
@@ -100,7 +100,14 @@ export function SendToConsoleDialog({
   const targetName =
     others.find((p) => hostOf(p.host) === target)?.name || target;
   const plan = planConsoleSend(items, dest, volumes ?? [], listing?.names ?? []);
-  const blocked = !target || !!reachError || volumes === null || plan.fits === "no" || !addrOk;
+  const blocked = sendBlocked({
+    target,
+    reachError,
+    volumesLoaded: volumes !== null,
+    listingLoaded: listing !== null,
+    fits: plan.fits,
+    addrOk,
+  });
   const what =
     items.length === 1
       ? `"${items[0].name}"`

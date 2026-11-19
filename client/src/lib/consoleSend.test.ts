@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Volume } from "../api/ps5";
-import { planConsoleSend } from "./consoleSend";
+import { planConsoleSend, sendBlocked } from "./consoleSend";
 
 const vol = (path: string, free: number): Volume =>
   ({ path, fs_type: "exfatfs", total_bytes: free * 2, free_bytes: free, writable: true }) as Volume;
@@ -36,5 +36,32 @@ describe("planConsoleSend", () => {
 
   it("joins the root without a double slash", () => {
     expect(planConsoleSend([items[1]], "/", [], []).dests).toEqual(["/b.ffpfsc"]);
+  });
+});
+
+describe("sendBlocked", () => {
+  const ready = {
+    target: "192.0.2.99",
+    reachError: null,
+    volumesLoaded: true,
+    listingLoaded: true,
+    fits: "yes" as const,
+    addrOk: true,
+  };
+
+  it("lets a send go once the drives and the folder's listing are in", () => {
+    expect(sendBlocked(ready)).toBe(false);
+  });
+
+  it("waits for the destination listing, so what is replaced is always named first", () => {
+    expect(sendBlocked({ ...ready, listingLoaded: false })).toBe(true);
+  });
+
+  it("stays off without a console, an answer, room or a valid address", () => {
+    expect(sendBlocked({ ...ready, target: "" })).toBe(true);
+    expect(sendBlocked({ ...ready, reachError: "no answer" })).toBe(true);
+    expect(sendBlocked({ ...ready, volumesLoaded: false })).toBe(true);
+    expect(sendBlocked({ ...ready, fits: "no" })).toBe(true);
+    expect(sendBlocked({ ...ready, addrOk: false })).toBe(true);
   });
 });

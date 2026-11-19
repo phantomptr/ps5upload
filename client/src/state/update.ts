@@ -476,6 +476,17 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
       const result = await updateCheck(channel);
       if (get().channel !== channel) return;
       saveCache(result);
+      // "Check for updates" with an update already downloaded, and the answer is that same
+      // version: the download stands. Going back to "available" forgot it (Download again, and
+      // "installs when you quit" was off until then).
+      if (
+        prior.kind === "downloaded" &&
+        result.available &&
+        result.latest_version === prior.result.latest_version
+      ) {
+        set({ phase: prior, lastCheckedMs: Date.now() });
+        return;
+      }
       set({
         phase: phaseFromResult(result),
         lastCheckedMs: Date.now(),
