@@ -34,6 +34,7 @@
 #include <strings.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include "statvfs_avail.h"
 #include <time.h>
 #include <unistd.h>
 
@@ -891,7 +892,7 @@ int app_dump_run(const app_dump_args_t *a, const app_dump_hooks_t *h, app_dump_r
         return APP_DUMP_E_IO;
     }
     if (statvfs(a->dest, &sv) == 0) {
-        uint64_t avail = (uint64_t)sv.f_bavail * (uint64_t)sv.f_frsize;
+        uint64_t avail = statvfs_avail_bytes(&sv);
         uint64_t need = sz.bytes + (d.fself_on ? sz.self_bytes : 0) + AD_SPACE_MARGIN;
         if (need > avail) {
             fprintf(stderr, "app_dump: %s needs %llu MiB, %s has %llu MiB free\n", a->title_id,

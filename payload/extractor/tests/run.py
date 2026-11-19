@@ -10,6 +10,7 @@ running out of space, conflicts and cancel.
 The RAR fixtures are libarchive's own test archives (tests/fixtures/README.md).
 """
 import bz2
+import gzip
 import io
 import hashlib
 import json
@@ -439,6 +440,20 @@ def test_out_of_space(root):
     s = run(root, arc, os.path.join(root, "o2"), env={"XTEST_WRITE_LIMIT": "100000"})
     check("space mid-write", s["message"].startswith("fs_extract_no_space"), s)
     check("space mid-write", "b.bin" not in str(tree(os.path.join(root, "o2"))), "a partial file was kept")
+
+
+def test_out_of_space_without_a_size(root):
+    # A .gz says nothing of its size, so nothing is checked when the file begins: the room is
+    # looked at again while writing, and the extraction ends when none is left (it used to write on).
+    big = os.path.join(root, "big.bin")
+    with open(big, "wb") as f:
+        f.write(b"\0" * (12 << 20))
+    with open(big, "rb") as src, gzip.open(os.path.join(root, "big.bin.gz"), "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    os.unlink(big)
+    s = run(root, os.path.join(root, "big.bin.gz"), os.path.join(root, "o1"), env={"XTEST_FREE": str(2 << 20)})
+    check("space no size", s["state"] == "failed" and s["message"].startswith("fs_extract_no_space"), s)
+    check("space no size", "big.bin" not in str(tree(os.path.join(root, "o1"))), "a partial file was kept")
 
 
 def test_rar_total_precheck(root):

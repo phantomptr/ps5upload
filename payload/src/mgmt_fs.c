@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include "statvfs_avail.h"
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -292,7 +293,7 @@ int mgmt_run_fs_freespace(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
         *slash = '\0';
     }
     bs = (uint64_t)(vfs.f_frsize ? vfs.f_frsize : vfs.f_bsize);
-    free_bytes = (uint64_t)vfs.f_bavail * bs; /* what an unprivileged writer can take */
+    free_bytes = statvfs_avail_blocks_to_bytes((uint64_t)vfs.f_bavail, bs); /* what an unprivileged writer can take */
     memset(&r, 0, sizeof r);
     r.total = (uint64_t)vfs.f_blocks * bs;
     r.free = free_bytes;

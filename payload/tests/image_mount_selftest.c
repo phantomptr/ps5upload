@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "image_mount.h"
+#include "statvfs_avail.h"
 
 static int fails;
 #define CHECK(cond)                                                 \
@@ -74,6 +75,23 @@ int main(void) {
     CHECK(!image_mount_from_is_on_device("/dev/da1", "tmpfs") && !image_mount_from_is_on_device("/dev/da1", ""));
     CHECK(!image_mount_from_is_on_device("", "/dev/da1") && !image_mount_from_is_on_device(NULL, "/dev/da1"));
     CHECK(!image_mount_from_is_on_device("/dev/da1", NULL));
+
+    /* Free space from statvfs: the kernel's count is signed and goes below zero on a drive written
+     * into its reserve; read as unsigned that is about 16 EiB free. Zero or below is no room. */
+    CHECK(statvfs_avail_blocks_to_bytes(10, 4096) == 40960);
+    CHECK(statvfs_avail_blocks_to_bytes(0, 4096) == 0);
+    CHECK(statvfs_avail_blocks_to_bytes((uint64_t)-1, 4096) == 0);
+    CHECK(statvfs_avail_blocks_to_bytes((uint64_t)-70000000, 32768) == 0);
+    {
+        struct statvfs v;
+        memset(&v, 0, sizeof v);
+        v.f_frsize = 512;
+        v.f_bsize = 4096;
+        v.f_bavail = 3;
+        CHECK(statvfs_avail_bytes(&v) == 1536);
+        v.f_frsize = 0; /* no fragment size: the block size counts */
+        CHECK(statvfs_avail_bytes(&v) == 12288);
+    }
 
     /* A tracker file is believed outside /mnt/ps5upload/ only for an image unit: "data.src" is
      * the tracker of /mnt/ps5upload/data AND of /data, and must never make /data ours. */
