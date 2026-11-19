@@ -993,7 +993,12 @@ static int mount_title_nullfs(const char *title_id, const char *src_path,
     if (statfs(dst, &dst_stat) == 0 &&
         strcmp(dst_stat.f_mntonname, dst) == 0) {
         if (unmount(dst, 0) != 0 && errno != EINVAL && errno != ENOENT) {
-            if (unmount(dst, MNT_FORCE) != 0 && errno != EINVAL && errno != ENOENT) {
+            /* Forced only for a nullfs: an earlier registration (ours, ShadowMount+'s). Anything
+             * else mounted here and busy is Sony's own mount of an installed copy of this title,
+             * in use; forcing that off takes live content out from under the console
+             * (unregister_title has the same rule). */
+            if (strcmp(dst_stat.f_fstypename, "nullfs") != 0 ||
+                (unmount(dst, MNT_FORCE) != 0 && errno != EINVAL && errno != ENOENT)) {
                 if (err_out) *err_out = "register_preclean_unmount_failed";
                 return -1;
             }

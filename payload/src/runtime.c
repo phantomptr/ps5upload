@@ -6894,7 +6894,12 @@ static int handle_net_interfaces(runtime_state_t *state) {
     n += snprintf(resp + n, resp_cap - n, "{\"interfaces\":[");
 
     /* ── Path 1: sceNetGetIfList ── */
-    if (resolve_sce_net() == 0) {
+    /* The resolve (a dlopen, sceNetInit, unsynchronised statics) and the call are Sony library
+     * work: one at a time with every other (sony_api_lock.h). */
+    pthread_mutex_lock(&sony_api_lock);
+    int have_sce_net = resolve_sce_net() == 0;
+    pthread_mutex_unlock(&sony_api_lock);
+    if (have_sce_net) {
         const size_t if_buf_sz = (size_t)NET_IF_MAX_ENTRIES * NET_IF_ENTRY_BYTES;
         unsigned char *if_buf = malloc(if_buf_sz);
         if (!if_buf) {
@@ -6904,7 +6909,9 @@ static int handle_net_interfaces(runtime_state_t *state) {
         }
         memset(if_buf, 0, if_buf_sz);
         int count = 0;
+        pthread_mutex_lock(&sony_api_lock);
         int sce_rc = p_sceNetGetIfList(if_buf, NET_IF_MAX_ENTRIES, &count);
+        pthread_mutex_unlock(&sony_api_lock);
         if (sce_rc == 0 && count > 0) {
             source = "sceNetGetIfList";
             if (count > NET_IF_MAX_ENTRIES) count = NET_IF_MAX_ENTRIES;
@@ -7916,6 +7923,7 @@ static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps
     snprintf(copy, sizeof copy, SAVE_COPY_DIR "/%s", bname);
     if (save_copy_file(image, copy) != 0) {
         snprintf(err, err_sz, "save_copy_failed: %s", strerror(errno));
+        unlink(copy); /* a part of an image, left on a drive that is likely full */
         return -1;
     }
     chmod(copy, 0755);
@@ -7928,6 +7936,7 @@ static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps
         if (save_copy_file(real_key, copy_key) != 0) {
             snprintf(err, err_sz, "save_key_missing: %s has no %s.bin beside it", bname, name);
             unlink(copy);
+            unlink(copy_key);
             return -1;
         }
         chmod(copy_key, 0755);
