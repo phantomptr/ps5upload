@@ -165,6 +165,32 @@ pub struct TailnetEngine {
     last_error: Mutex<String>,
     /// Something the user should know while it runs (the key expires soon, or has).
     last_warning: Mutex<String>,
+    /// One op at a time: two (a rename and an enable) interleaving their stop and start ran a
+    /// second node beside the first.
+    ops: Mutex<()>,
+}
+
+/// How long a stop waits for the node's last borrower (a status read, a dial) to let go, so it
+/// is gone before another starts under the same keys.
+const NODE_RELEASE_WAIT: Duration = Duration::from_secs(3);
+
+/// Drops `shared` once nothing else holds it, waiting up to `wait`: true when this was the last
+/// owner (its drop ran here). Past `wait` the last borrower drops it instead.
+fn drop_when_last<T>(mut shared: Arc<T>, wait: Duration) -> bool {
+    let from = Instant::now();
+    loop {
+        match Arc::try_unwrap(shared) {
+            Ok(inner) => {
+                drop(inner);
+                return true;
+            }
+            Err(back) if from.elapsed() < wait => {
+                shared = back;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => return false,
+        }
+    }
 }
 
 static ENGINE: OnceLock<Arc<TailnetEngine>> = OnceLock::new();
@@ -239,6 +265,7 @@ impl TailnetEngine {
             state: Mutex::new(HashMap::new()),
             last_error: Mutex::new(String::new()),
             last_warning: Mutex::new(String::new()),
+            ops: Mutex::new(()),
         }
     }
 
@@ -327,8 +354,18 @@ impl TailnetEngine {
     }
 
     fn stop(&self) {
-        let node = lock(&self.node).take();
-        drop(node);
+        // Left before anything starts again: a node a status read still held stayed on the
+        // tailnet beside the one a rename started under the same keys.
+        if let Some(node) = lock(&self.node).take() {
+            if !drop_when_last(node, NODE_RELEASE_WAIT) {
+                crate::log_at!(
+                    Warn,
+                    "tailnet",
+                    "tailnet: the old node was still in use after {} s; it leaves when let go",
+                    NODE_RELEASE_WAIT.as_secs()
+                );
+            }
+        }
         for st in lock(&self.state).values_mut() {
             st.maps.clear();
         }
@@ -344,6 +381,7 @@ impl TailnetEngine {
         authkey: &str,
         choice: &str,
     ) -> anyhow::Result<Value> {
+        let _one = lock(&self.ops);
         match op {
             "enable" => {
                 let changed = {
@@ -989,6 +1027,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         let _ = std::fs::create_dir_all(&d);
         d
+    }
+
+    /// A stop waits for the last borrower to let the node go, so it has left before the next
+    /// one starts.
+    #[test]
+    fn a_stopped_node_is_gone_before_the_call_returns() {
+        struct Flag(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for Flag {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let node = Arc::new(Flag(gone.clone()));
+        let borrowed = node.clone();
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            drop(borrowed);
+        });
+        assert!(drop_when_last(node, Duration::from_secs(5)));
+        assert!(gone.load(std::sync::atomic::Ordering::SeqCst));
+        t.join().unwrap();
+        // Held past the wait: not dropped here, and not left forever either.
+        let gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let node = Arc::new(Flag(gone.clone()));
+        let held = node.clone();
+        assert!(!drop_when_last(node, Duration::from_millis(30)));
+        assert!(!gone.load(std::sync::atomic::Ordering::SeqCst));
+        drop(held);
+        assert!(gone.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[test]
