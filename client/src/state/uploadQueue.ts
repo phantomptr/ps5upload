@@ -701,6 +701,13 @@ export function isUploadItem(it: QueueItem): boolean {
   return it.sourceKind !== "install";
 }
 
+/** What a failed row has to say outside the queue (the task list, Activity): the console's
+ *  reason code when it gave one, else the failure's own words. A failure that did not come from
+ *  the console (source gone, engine unreachable) has only the words. Pure. */
+export function queueFailureText(it: Pick<QueueItem, "errorReason" | "error">): string | null {
+  return it.errorReason || it.error || null;
+}
+
 /** The same install already waiting or running on the same console. Matched on
  *  the source (file, on-console path, link), not the content id: two files with
  *  one content id are legitimate (same-version variants, a deliberate reinstall). */

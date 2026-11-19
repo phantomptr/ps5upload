@@ -91,6 +91,7 @@ import {
   libraryInstallStates,
   LOST_CONTACT_GIVE_UP_MS,
   MAX_POLL_FAILURES,
+  queueFailureText,
   sameInstall,
 } from "./uploadQueue";
 import { installLocalStorageStub } from "../test-utils/storage";
@@ -2108,6 +2109,19 @@ describe("Retry via upload", () => {
     });
     await q.done;
     expect(useUploadQueueStore.getState().items.find((i) => i.id === q.id)?.fallbackToUpload).toBeFalsy();
+  });
+});
+
+describe("queueFailureText", () => {
+  it("falls back to the failure's own words when the console gave no reason", () => {
+    expect(queueFailureText({ errorReason: "fs_write_failed_errno_28", error: "raw" })).toBe(
+      "fs_write_failed_errno_28",
+    );
+    // Source gone, engine unreachable: no reason code, and the words used to be dropped.
+    expect(queueFailureText({ errorReason: null, error: "source file not found" })).toBe(
+      "source file not found",
+    );
+    expect(queueFailureText({ errorReason: null, error: null })).toBeNull();
   });
 });
 

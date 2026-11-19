@@ -28,7 +28,7 @@ import {
 import { installLibraryTaskBridge } from "./libraryTaskBridge";
 import { installTaskBridges } from "./taskBridges";
 import { useTransferStore, IDLE_PHASE } from "./transfer";
-import { isUploadItem, useUploadQueueStore } from "./uploadQueue";
+import { isUploadItem, queueFailureText, useUploadQueueStore } from "./uploadQueue";
 import { useTaskStore, type TaskKind } from "./tasks";
 import { hostOf } from "../lib/addr";
 import { trStatic } from "../lib/trStatic";
@@ -259,7 +259,7 @@ export function installTaskWiring() {
             useTaskStore.getState().finishTask(taskId, "failed", {
               lastError: {
                 code: "QUEUE_ERROR",
-                message: item.errorReason ?? "upload failed",
+                message: queueFailureText(item) ?? "upload failed",
                 recoverable: true,
               },
             });
