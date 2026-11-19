@@ -4324,7 +4324,10 @@ const makePkgLibraryStore = () =>
     },
 
     async clearFinished(host) {
-      await bulkDelete(get, set, host, isFinishedPkg);
+      // Not a row whose install is waiting again in the console queue (a Reinstall behind an
+      // upload): it reads finished until that install starts, and deleting its file fails it.
+      const queued = new Set(pkgQueue().queuedInstallPaths(host));
+      await bulkDelete(get, set, host, (e) => isFinishedPkg(e) && !queued.has(e.path));
     },
 
     async clearAll(host) {

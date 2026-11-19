@@ -1470,6 +1470,37 @@ describe("clearFinished", () => {
   });
 });
 
+describe("clearFinished with a reinstall waiting", () => {
+  beforeEach(() => {
+    mockedDelete.mockReset().mockResolvedValue(undefined);
+  });
+  afterEach(() => {
+    pkgLibraryStore(HOST).setState({ entries: [], error: null });
+    useUploadQueueStore.setState({ items: [] });
+  });
+
+  it("keeps a finished row whose install is queued again", async () => {
+    const again = entry({ name: "again.pkg", lastResult: { ok: true, message: "Installed." } });
+    seed([again, entry({ name: "done.pkg", lastResult: { ok: true, message: "Installed." } })]);
+    useUploadQueueStore.setState({
+      items: [
+        {
+          id: "q1",
+          sourceKind: "install",
+          status: "pending",
+          addr: `${HOST}:9113`,
+          install: { via: "library", path: again.path },
+        } as never,
+      ],
+    });
+
+    await pkgLibraryStore(HOST).getState().clearFinished(HOST);
+
+    expect(pkgLibraryStore(HOST).getState().entries.map((e) => e.name)).toEqual(["again.pkg"]);
+    expect(mockedDelete).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("clearAll", () => {
   beforeEach(() => {
     mockedDelete.mockReset().mockResolvedValue(undefined);
