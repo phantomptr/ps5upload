@@ -318,7 +318,8 @@ static int read_dir(scan_t *s, const char *path, lent_t **out, size_t *count) {
         free(name);
         return rc;
     }
-    while ((rc = s->fs->ops->readdir(s->fs, d, name, SMBP_NAME_MAX, &st)) > 0) {
+    while ((rc = s->fs->ops->readdir(s->fs, d, name, SMBP_NAME_MAX, &st)) > 0 || rc == XE_BAD_NAME) {
+        if (rc == XE_BAD_NAME) continue; /* a name too long to hold is no game folder the scan can use */
         if (n >= LIB_DIR_ENTRIES_MAX) {
             /* One folder holds more than a scan reads: the result is partial, and says so. */
             if (!s->stopped) s->stopped = "entries";

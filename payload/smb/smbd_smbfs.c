@@ -253,10 +253,13 @@ static int s_readdir(xfs_t *fs, void *dir, char *name, size_t cap, xstat_t *st) 
         ent = smb2_readdir(SFS(fs)->ctx, d->dir);
         if (!ent) return 0;
         if (!ent->name || strcmp(ent->name, ".") == 0 || strcmp(ent->name, "..") == 0) continue;
-        if (strlen(ent->name) >= cap) continue; /* cannot be named here: left out */
+        /* Longer than a name here holds (255 UTF-8 bytes; a long name in CJK or emoji passes that
+         * well under the share's 255 characters): an error for this entry, so a folder copy fails
+         * and names the folder instead of reporting done without it. The next call goes on. */
+        if (strlen(ent->name) >= cap) return XE_BAD_NAME;
         /* A name the server should never send: a separator or a control byte in it would be joined
          * into a console path as-is (copy_dir), so "../x" from a hostile or broken server could
-         * leave the approved destination. Left out, like a too-long name. */
+         * leave the approved destination. Left out. */
         if (strpbrk(ent->name, "/\\") != NULL) continue;
         {
             const unsigned char *q = (const unsigned char *)ent->name;

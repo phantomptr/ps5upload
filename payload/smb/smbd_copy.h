@@ -39,7 +39,10 @@ typedef struct xfs xfs_t;
 typedef struct {
     int (*stat)(xfs_t *fs, const char *path, xstat_t *st);
     int (*opendir)(xfs_t *fs, const char *path, void **dir);
-    /* 1 = an entry (name and st set), 0 = the end, < 0 = an error. "." and ".." are never returned. */
+    /* 1 = an entry (name and st set), 0 = the end, < 0 = an error. "." and ".." are never returned.
+     * XE_BAD_NAME: one entry whose name does not fit in `cap` (or whose path is too long); the next
+     * call goes on with the next entry. A copy fails on it (nothing is left out unseen); a listing
+     * or a scan may skip it. */
     int (*readdir)(xfs_t *fs, void *dir, char *name, size_t cap, xstat_t *st);
     void (*closedir)(xfs_t *fs, void *dir);
     int (*mkdir)(xfs_t *fs, const char *path);
