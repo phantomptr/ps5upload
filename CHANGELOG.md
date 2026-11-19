@@ -4,6 +4,14 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+**New**
+- **Save a link straight to a PS5 folder, without installing it (#872).** In Files, More › Download from a link saves the file into the folder that is open. On Send, a package link has a new "Save to a PS5 folder" button next to Install. The file goes to the console over your network and is not stored on this computer.
+- **Links from servers that only send a file in one piece now work (#872).** Some download hosts cannot hand out parts of a file. Such a link was refused everywhere. Now it can be saved to a PS5 folder, and a package from it installs by saving to this computer first (the app picks that way and says so). If one of these downloads is interrupted it starts again from the beginning, and the app tells you that before you start.
+
+**Fixes**
+
 ## 12.6.11
 
 **Fixes**
