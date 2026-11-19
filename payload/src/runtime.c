@@ -7732,10 +7732,14 @@ static int save_do_unmount(int *written_back, char *kept, size_t kept_sz) {
     if (!g_save_unmounted) {
         SceFsUmountSaveDataOpt uopt;
         memset(&uopt, 0, sizeof uopt);
+        /* Sony calls: one at a time with every other (sony_api_lock.h). Order: g_save_mtx, then
+         * sony_api_lock; nothing takes them the other way round. */
+        pthread_mutex_lock(&sony_api_lock);
         sceFsInitUmountSaveDataOpt(&uopt);
         errno = 0;
         int rc = sceFsUmountSaveData(&uopt, SAVE_MOUNT_POINT, 0, 0);
         int ue = errno; /* read before sync() can overwrite it */
+        pthread_mutex_unlock(&sony_api_lock);
         sync();
         /* EINVAL / ENOENT: not mounted (a reboot, or someone else unmounted it). */
         if (rc < 0 && ue != EINVAL && ue != ENOENT) {
@@ -7817,10 +7821,12 @@ static int save_mount_point_busy(void) {
 static int save_release_orphan(void) {
     SceFsUmountSaveDataOpt uopt;
     memset(&uopt, 0, sizeof uopt);
+    pthread_mutex_lock(&sony_api_lock); /* Sony calls: one at a time with the others */
     sceFsInitUmountSaveDataOpt(&uopt);
     errno = 0;
     int rc = sceFsUmountSaveData(&uopt, SAVE_MOUNT_POINT, 0, 0);
     int ue = errno; /* read before sync() can overwrite it */
+    pthread_mutex_unlock(&sony_api_lock);
     sync();
     if ((rc < 0 && ue != EINVAL && ue != ENOENT) || save_mount_point_busy()) {
         fprintf(stderr, "[payload2] save: a save left open by an earlier helper could not be closed "
@@ -7931,6 +7937,8 @@ static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps
     }
     SceFsMountSaveDataOpt mopt;
     memset(&mopt, 0, sizeof mopt);
+    /* Sony calls: one at a time with every other (sony_api_lock.h), taken after g_save_mtx. */
+    pthread_mutex_lock(&sony_api_lock);
     sceFsInitMountSaveDataOpt(&mopt);
     mopt.budgetid = "system";
     /* The mount talks to a shell service over a pipe; with SIGPIPE ignored (as our server
@@ -7941,6 +7949,7 @@ static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps
     int ret = sceFsMountSaveData(&mopt, copy, SAVE_MOUNT_POINT, key);
     int e = errno;
     sigpipe_default_close(&sp);
+    pthread_mutex_unlock(&sony_api_lock);
     memset(key, 0, sizeof key);
     if (ret < 0) {
         snprintf(err, err_sz, "save_mount_failed: 0x%x, %s", (unsigned)ret, strerror(e));
@@ -8243,13 +8252,18 @@ static int handle_pkg_direct_mount(runtime_state_t *state, const char *body,
         return mgmt_reply(MGMT_FRAME_PKG_DIRECT_MOUNT_ACK, err, strlen(err));
     }
     /* Resolve the optional libSceFsInternalForVsh export at first use. */
+    /* The resolve (a dlopen, and unsynchronised statics) and the call are Sony library work: one
+     * at a time with every other (sony_api_lock.h). */
+    pthread_mutex_lock(&sony_api_lock);
     if (resolve_sce_fs_internal() != 0 || !p_sceFsMountGamePkg) {
+        pthread_mutex_unlock(&sony_api_lock);
         const char *err = "{\"ok\":false,\"err\":\"libSceFsInternalForVsh_unavailable\"}";
         return mgmt_reply(MGMT_FRAME_PKG_DIRECT_MOUNT_ACK, err, strlen(err));
     }
     /* Best-effort mkdir of the mount point. */
     int created_mp = (mkdir(mount_point, 0755) == 0);
     int rc = p_sceFsMountGamePkg(pkg_path, mount_point, 0);
+    pthread_mutex_unlock(&sony_api_lock);
     if (rc != 0 && created_mp) {
         /* Clean up the empty mount-point dir we just made so a
          * failed attempt doesn't leave litter on the FS. */
@@ -8320,7 +8334,33 @@ static int handle_ufs_fsck(runtime_state_t *state, const char *body,
             repair = 1;
         }
     }
+    /* A repair writes to the device. With a file system mounted from it (the device or one of its
+     * partitions) the kernel's view and the disk go apart: the volume is corrupted and the next
+     * access can panic. Only a device nothing is mounted from is repaired; the read-only check
+     * stays available. */
+    if (repair) {
+        struct statfs *mnts = NULL;
+        int nmnts = mntinfo_snapshot(&mnts);
+        int in_use = 0;
+        for (int i = 0; i < nmnts && mnts; i++) {
+            char from[sizeof mnts[i].f_mntfromname + 1];
+            memcpy(from, mnts[i].f_mntfromname, sizeof mnts[i].f_mntfromname);
+            from[sizeof mnts[i].f_mntfromname] = '\0';
+            if (image_mount_from_is_on_device(device, from)) {
+                in_use = 1;
+                break;
+            }
+        }
+        free(mnts);
+        if (in_use) {
+            const char *err =
+                "{\"ok\":false,\"err\":\"device_mounted: unmount the volume before a repair\"}";
+            return mgmt_reply(MGMT_FRAME_UFS_FSCK_ACK, err, strlen(err));
+        }
+    }
+    pthread_mutex_lock(&sony_api_lock); /* Sony library work: one at a time with the others */
     if (resolve_sce_fs_internal() != 0 || !p_sceFsUfsFsck) {
+        pthread_mutex_unlock(&sony_api_lock);
         const char *err = "{\"ok\":false,\"err\":\"libSceFsInternalForVsh_unavailable\"}";
         return mgmt_reply(MGMT_FRAME_UFS_FSCK_ACK, err, strlen(err));
     }
@@ -8329,6 +8369,7 @@ static int handle_ufs_fsck(runtime_state_t *state, const char *body,
      * pointer is documented as "implementation-specific" — we pass
      * NULL which works for the simple checks we need. */
     int rc = p_sceFsUfsFsck(device, repair ? 1 : 0, NULL);
+    pthread_mutex_unlock(&sony_api_lock);
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
@@ -8368,13 +8409,16 @@ static int handle_lwfs_mount(runtime_state_t *state, const char *body,
         const char *err = "{\"ok\":false,\"err\":\"path_not_allowed\"}";
         return mgmt_reply(MGMT_FRAME_LWFS_MOUNT_ACK, err, strlen(err));
     }
+    pthread_mutex_lock(&sony_api_lock); /* Sony library work: one at a time with the others */
     if (resolve_sce_fs_internal() != 0 || !p_sceFsMountLwfs) {
+        pthread_mutex_unlock(&sony_api_lock);
         const char *err = "{\"ok\":false,\"err\":\"libSceFsInternalForVsh_unavailable\"}";
         return mgmt_reply(MGMT_FRAME_LWFS_MOUNT_ACK, err, strlen(err));
     }
     int created_mp = (mkdir(mount_point, 0755) == 0);
     int rc = p_sceFsMountLwfs(patch_path, mount_point,
                               title_id[0] ? title_id : NULL, 0);
+    pthread_mutex_unlock(&sony_api_lock);
     if (rc != 0 && created_mp) {
         (void)rmdir(mount_point);
     }

@@ -62,6 +62,19 @@ int main(void) {
     CHECK(!image_mount_from_is_unit("/dev/lvd") && !image_mount_from_is_unit("/dev/md"));
     CHECK(!image_mount_from_is_unit("/dev/lvdx") && !image_mount_from_is_unit("/dev/mdctl"));
 
+    /* fs.fsck repair: a device with anything mounted from it (itself or a partition) is in use. */
+    CHECK(image_mount_from_is_on_device("/dev/da1", "/dev/da1"));
+    CHECK(image_mount_from_is_on_device("/dev/da1", "/dev/da1p1"));
+    CHECK(image_mount_from_is_on_device("/dev/da1", "/dev/da1s1"));
+    CHECK(image_mount_from_is_on_device("/dev/lvd3", "/dev/lvd3"));
+    CHECK(!image_mount_from_is_on_device("/dev/da1", "/dev/da12")); /* another drive */
+    CHECK(!image_mount_from_is_on_device("/dev/lvd3", "/dev/lvd31"));
+    CHECK(!image_mount_from_is_on_device("/dev/md0", "/dev/lvd0"));
+    CHECK(!image_mount_from_is_on_device("/dev/da1p1", "/dev/da1"));
+    CHECK(!image_mount_from_is_on_device("/dev/da1", "tmpfs") && !image_mount_from_is_on_device("/dev/da1", ""));
+    CHECK(!image_mount_from_is_on_device("", "/dev/da1") && !image_mount_from_is_on_device(NULL, "/dev/da1"));
+    CHECK(!image_mount_from_is_on_device("/dev/da1", NULL));
+
     /* A tracker file is believed outside /mnt/ps5upload/ only for an image unit: "data.src" is
      * the tracker of /mnt/ps5upload/data AND of /data, and must never make /data ours. */
     CHECK(image_mount_tracker_trusted("/mnt/ps5upload/data", "/dev/lvd3"));
