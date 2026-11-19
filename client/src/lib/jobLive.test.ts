@@ -74,6 +74,18 @@ describe("job live notes", () => {
     expect(both?.verifying).toBeUndefined();
   });
 
+  it("says the console is quiet only from a minute on (#873)", () => {
+    expect(jobLiveFromSnapshot({ console_quiet_ms: 5_000 })).toBeUndefined();
+    expect(jobLiveFromSnapshot({ verifying: true, console_quiet_ms: 59_999 })).not.toHaveProperty(
+      "quietMs",
+    );
+    expect(jobLiveFromSnapshot({ console_quiet_ms: 60_000 })?.quietMs).toBe(60_000);
+    expect(
+      jobLiveFromSnapshot({ verifying: true, console_quiet_ms: 600_000 }),
+    ).toMatchObject({ verifying: true, quietMs: 600_000 });
+    expect(jobLiveFromSnapshot({ console_quiet_ms: null })).toBeUndefined();
+  });
+
   it("carries the settle counts only while settling, never below zero or above the total", () => {
     expect(
       jobLiveFromSnapshot({ settling: true, settle_files_left: 30, settle_files_total: 100 }),

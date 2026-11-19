@@ -74,6 +74,22 @@ describe("finishing on the console", () => {
   });
 });
 
+describe("a console that has every byte and reports nothing new (#873)", () => {
+  it("says for how long, beside what it was last doing", () => {
+    const html = renderToStaticMarkup(
+      <JobLiveNotes live={live({ verifying: true, quietMs: 14 * 60_000 })} />,
+    );
+    expect(html).toContain("Verifying on the PS5…");
+    expect(html).toContain('data-testid="console-quiet-line"');
+    expect(html).toContain("The PS5 has reported no progress for 14 min.");
+  });
+  it("says nothing while the console is getting on with it", () => {
+    expect(
+      renderToStaticMarkup(<JobLiveNotes live={live({ verifying: true })} />),
+    ).not.toContain("console-quiet-line");
+  });
+});
+
 describe("a finished upload the console did not confirm", () => {
   it("is a warning in the result, not a clean success", () => {
     const html = renderToStaticMarkup(<UnsettledLine live={live({ unsettled: true })} />);

@@ -4,7 +4,7 @@
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -17,7 +17,7 @@ use ava1::Ava1Error;
 use ps5upload_core::transfer::{FileListEntry, TransferConfig, TransferResult};
 
 use crate::pool::{pool, Pool};
-use crate::progress::{bottleneck_name, Bridge};
+use crate::progress::{bottleneck_name, Bridge, Opened};
 use crate::source::{FsSource, ListSource};
 use crate::zip_source::ZipSource;
 
@@ -781,19 +781,21 @@ fn dir_source_for(cfg: &TransferConfig, root: &Path) -> Arc<dyn Source> {
     Arc::new(crate::source::RenamedSource::new(source, &cfg.renames))
 }
 
-/// `gate`, also storing in `resumed` the bytes the receiver held before this job's own
-/// sending: what it proves durable at an open (whole files in place plus durable ranges of
-/// unfinished ones) less what this job has had acknowledged so far. The first open of a
-/// resume gives it all; a later open can only raise it, when bytes an earlier run sent became
-/// durable after that open (a resume right after a cancel).
-fn record_resumed(
+/// `gate`, also telling `opened` what the receiver holds at this open (whole files in place
+/// plus durable ranges of unfinished ones) and what this job has had acknowledged so far.
+/// The sender runs it at every open, before it sends a byte of that attempt: the job's count
+/// starts again from the console's own figure each time, and the first open's figure is what
+/// a resume found there (see [`Opened`]).
+fn record_opened(
     gate: ava1::send::SpaceGate,
     progress: Arc<Progress>,
-    resumed: Arc<AtomicU64>,
+    opened: Arc<Opened>,
 ) -> ava1::send::SpaceGate {
     Arc::new(move |figures: &ava1::send::SpaceFigures| {
-        let ours = progress.bytes_sent.load(Ordering::Relaxed);
-        resumed.fetch_max(figures.durable_bytes.saturating_sub(ours), Ordering::AcqRel);
+        opened.opened(
+            figures.durable_bytes,
+            progress.bytes_sent.load(Ordering::Relaxed),
+        );
         gate(figures)
     })
 }
@@ -856,14 +858,19 @@ impl Readback {
     }
 }
 
-/// Bytes the console reported durable beyond the job's size: what it asked for again after a
+/// Bytes the console had acknowledged beyond the job's size: what it asked for again after a
 /// file failed a check (its read-back from the drive, or the root of what arrived) and the
-/// sender sent it again. A resume resets the count to what the console holds, and a frame
-/// applied twice is one range, so neither adds to it.
-pub fn rechecked_bytes(p: &Progress) -> u64 {
-    p.bytes_durable
-        .load(Ordering::Relaxed)
-        .saturating_sub(p.bytes_total.load(Ordering::Relaxed))
+/// sender sent it again. Counted from what the console held at the last open (see [`Opened`]),
+/// so bytes lost before a resume do not add to it. Nor does a range the console wrote twice
+/// (a frame of a stopped run landing after the resume, a frame sent again after its lane
+/// died): the console reports such a range durable twice, which is why this is not its
+/// durable count less the job's size (#873: a clean resume said bytes "did not match").
+pub fn rechecked_bytes(p: &Progress, opened: &Opened) -> u64 {
+    let total = p.bytes_total.load(Ordering::Relaxed);
+    let done = opened
+        .done(p.bytes_sent.load(Ordering::Relaxed))
+        .unwrap_or_else(|| p.bytes_durable.load(Ordering::Relaxed));
+    done.saturating_sub(total)
 }
 
 /// `upload_with_in` for a forward-only source (`seq`, SPEC.md section 17): one decode
@@ -908,13 +915,13 @@ pub fn upload_with_seq_in(
     let dest = opts.root.clone();
     // What this job promised the drive is released however it ends (design 015/02).
     let _promise = crate::space::Reservation::new(job_id);
-    // What the console already held when the job first opened (a resume): read from the
-    // figures the sender hands the space check before any byte goes out.
-    let resumed = Arc::new(AtomicU64::new(0));
-    let space_gate = record_resumed(
+    // What the console already held at each open of the job (a resume, a reconnect): read
+    // from the figures the sender hands the space check before any byte goes out.
+    let opened = Arc::new(Opened::default());
+    let space_gate = record_opened(
         crate::space::gate(pool.room_probe(), console.to_string(), dest.clone(), job_id),
         progress.clone(),
-        resumed.clone(),
+        opened.clone(),
     );
     // What the job asked the console for, the last attempt's answer (the helper may be
     // replaced between attempts); said in the log once when the helper cannot do it.
@@ -922,7 +929,12 @@ pub fn upload_with_seq_in(
     let mut told_unsupported = false;
     let outcome = crate::block_on(async {
         SessionGate::identity(pool)?;
-        let bridge = Bridge::start_resumed(progress.clone(), cfg, resumed.clone());
+        let bridge = Bridge::start_job(
+            progress.clone(),
+            cfg,
+            opened.clone(),
+            format!("ava1 send {} to {console}:{dest}", hex(&job_id)),
+        );
         let mut backoff = Duration::from_millis(250);
         let mut gate = SessionGate::default();
         let mut busy = 0u32;
@@ -973,6 +985,7 @@ pub fn upload_with_seq_in(
                 );
             }
             bridge.set_readback(readback == Readback::On);
+            bridge.set_session(&session);
             let mut link = session.job(job_id);
             let o = SendOptions {
                 kind: opts.kind,
@@ -1007,7 +1020,10 @@ pub fn upload_with_seq_in(
                     let _ = std::fs::remove_dir_all(&persist);
                     let skipped_files = progress.skipped_files.load(Ordering::Relaxed);
                     let skipped_bytes = progress.skipped_bytes.load(Ordering::Relaxed);
-                    let rechecked = rechecked_bytes(&progress);
+                    let rechecked = rechecked_bytes(&progress, &opened);
+                    // Every file is in place: the count reads the whole job, also when the
+                    // console finished it from bytes this run did not have to send.
+                    opened.complete();
                     if rechecked > 0 {
                         // Loud on purpose (#783): a file did not check out on the console and was
                         // sent again. The helper's own log names the file and where it differed.
@@ -1037,7 +1053,7 @@ pub fn upload_with_seq_in(
                         "files_sent": manifest_files.saturating_sub(skipped_files),
                         // Every byte the console held when the job first opened, partly
                         // written files included (a resumed single file has no skipped files).
-                        "resumed_bytes": resumed.load(Ordering::Acquire).max(skipped_bytes),
+                        "resumed_bytes": opened.resumed().max(skipped_bytes),
                         // Whether the console read the large files back from its drive (#783):
                         // "on", "off" (the setting) or "unsupported" (an older helper).
                         "readback": readback.word(),
@@ -1967,15 +1983,44 @@ mod readback_tests {
     }
 
     #[test]
-    fn rechecked_bytes_are_what_the_console_made_durable_past_the_job() {
+    fn rechecked_bytes_are_what_the_console_took_past_the_job() {
+        const MIB: u64 = 1 << 20;
         let p = Progress::default();
-        p.bytes_total.store(10 << 20, Ordering::Relaxed);
-        p.bytes_durable.store(10 << 20, Ordering::Relaxed);
-        assert_eq!(rechecked_bytes(&p), 0);
-        p.bytes_durable.store(13 << 20, Ordering::Relaxed); // a 3 MiB file went twice
-        assert_eq!(rechecked_bytes(&p), 3 << 20);
-        p.bytes_durable.store(1, Ordering::Relaxed); // mid-job
-        assert_eq!(rechecked_bytes(&p), 0);
+        let opened = Opened::default();
+        p.bytes_total.store(10 * MIB, Ordering::Relaxed);
+        opened.opened(0, 0); // a fresh job
+        p.bytes_sent.store(MIB, Ordering::Relaxed); // mid-job
+        assert_eq!(rechecked_bytes(&p, &opened), 0);
+        p.bytes_sent.store(10 * MIB, Ordering::Relaxed);
+        assert_eq!(rechecked_bytes(&p, &opened), 0);
+        p.bytes_sent.store(13 * MIB, Ordering::Relaxed); // a 3 MiB file went twice
+        assert_eq!(rechecked_bytes(&p, &opened), 3 * MIB);
+
+        // A resume: the console held 6 MiB, this run sent the other 4. A range it wrote twice
+        // (a frame of the stopped run that landed after the resume) is durable twice in its
+        // reports, and is not a file that failed a check (#873).
+        let (p, opened) = (Progress::default(), Opened::default());
+        p.bytes_total.store(10 * MIB, Ordering::Relaxed);
+        opened.opened(6 * MIB, 0);
+        p.bytes_sent.store(4 * MIB, Ordering::Relaxed);
+        p.bytes_durable.store(12 * MIB, Ordering::Relaxed);
+        assert_eq!(rechecked_bytes(&p, &opened), 0);
+
+        // The helper stopped with 2 MiB acknowledged and not yet durable: the reconnect sends
+        // them again, and they are not a recheck either.
+        let (p, opened) = (Progress::default(), Opened::default());
+        p.bytes_total.store(10 * MIB, Ordering::Relaxed);
+        opened.opened(0, 0);
+        p.bytes_sent.store(5 * MIB, Ordering::Relaxed);
+        opened.opened(3 * MIB, 5 * MIB);
+        p.bytes_sent.store(12 * MIB, Ordering::Relaxed);
+        assert_eq!(rechecked_bytes(&p, &opened), 0);
+
+        // A path without the space check: the console's durable count, as before.
+        let (p, opened) = (Progress::default(), Opened::default());
+        p.bytes_total.store(10 * MIB, Ordering::Relaxed);
+        p.bytes_durable.store(13 * MIB, Ordering::Relaxed);
+        assert_eq!(rechecked_bytes(&p, &opened), 3 * MIB);
     }
 }
 
