@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.13
 
 **Fixes**
 - **A resumed upload finishes sooner (#873).** After an interrupted upload was resumed, the PS5 checked everything it had written before the interruption only after the last byte arrived, which could take minutes for a large game. It now checks those bytes while the rest of the file is still arriving. Stopping an upload also no longer waits up to 30 seconds while the PS5 works out its free space.
