@@ -11,6 +11,20 @@ What's new in ps5upload, written for humans.
 - **Links from servers that only send a file in one piece now work (#872).** Some download hosts cannot hand out parts of a file. Such a link was refused everywhere. Now it can be saved to a PS5 folder, and a package from it installs by saving to this computer first (the app picks that way and says so). If one of these downloads is interrupted it starts again from the beginning, and the app tells you that before you start.
 
 **Fixes**
+- **Extracting an archive that doesn't fit is now really refused at the start (#869).** The check added in 12.6.11 did not run on the console when the archive was extracted into a new folder, which is the usual case. It does now. The PS5 also stops an extraction when the drive runs out of room, before the drive's last reserved space is used up.
+- **Uploads no longer show "Finalizing on PS5" while data is still being sent (#873).** After a Stop and Resume the app could count some bytes twice and show 100% early. When the PS5 really is quiet after the last byte, the row now says for how long, and the log records what the PS5 was doing. The long wait in the report is not explained yet; these details are there to find it.
+- **Screens keep what you were doing when you look at another console and come back.** Screenshots and Videos selections, Play set-up steps, the game page's lists and open dialogs, running Workshop tools, the Payloads cards, the shell session, the kernel log and search results were all reset.
+- **Files:** two drops in a row no longer run as two mixed-up operations; Send to another console waits until it knows what is already there; an upload queue resumed after a dropped connection carries on with the rest by itself.
+- **Queue and installs:** Retry on one failed install no longer starts the whole queue; Stop is no longer lost while archive parts download; Clear finished no longer deletes a package that is queued to install again; an install the PS5 never confirmed is no longer shown as "installed and verified".
+- **Saves:** two save operations on one console now wait for each other (they could close each other's save half done); the backup server choice no longer snaps back; Save to USB no longer fails because you looked at another console.
+- **Remote Play:** two crashes on damaged network packets; a black picture for the whole session on systems without the fast video decoder; screenshots that came out blank; one console's stream error showing on every console's Play page.
+- **Updates:** "Check for updates" no longer forgets an update that is already downloaded.
+- **Building images and packages on Windows:** a finished build is no longer deleted when an antivirus or indexer holds the file for a moment; the rename is retried and the file is kept.
+- **Saved servers:** FTP copies no longer hang at 100%; some FTP listings no longer hide files; copying a server folder to this computer no longer overwrites a file whose name differs only in upper and lower case, and downloads from the PS5 refuse that case with a clear message.
+- **Linux AppImage:** Open folder, keeping the PC awake during a transfer, and finding a leftover engine now work on systems where they silently did nothing.
+- **Android:** Reset PS5Upload no longer fails half way.
+- **On the PS5:** cheat, crash-guard and Remote Play PIN messages now appear on the TV; one broken cheat no longer blocks turning the others off; snapshots no longer mix up files whose paths look alike; on a full drive, re-registering a game no longer empties its icon and details, and fan settings are no longer lost; the shell's `cp` no longer empties a file copied onto itself.
+- Many smaller fixes from a full review of the app, the engine and the PS5 helper. The helper changes have not been run on a console yet.
 
 ## 12.6.11
 
