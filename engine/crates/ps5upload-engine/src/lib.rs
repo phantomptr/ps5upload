@@ -12909,6 +12909,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     }
 
     let state_jobs_for_presence = state.jobs.clone();
+    let sweep_installs = pkg_state.clone();
     let (app, mcp_state) = build_app_and_mcp(
         state,
         pkg_state,
@@ -12944,7 +12945,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     save_sync::spawn();
     // Mesh Drive folders are kept in sync here too, app open or not.
     mesh_drive::spawn();
-    pkg_install::spawn_stale_upload_sweep();
+    pkg_install::spawn_stale_upload_sweep(sweep_installs);
     // What the other devices see of this engine, with no window open to say so.
     mesh_api::spawn_presence(state_jobs_for_presence);
     // Server copies an earlier run left behind (an extract that failed, then the app closed)
