@@ -806,8 +806,13 @@ pub async fn start(app: &AppHandle) -> Result<String> {
         // (possibly fallback) port below isn't rejected by its own
         // "don't relocate a running sidecar" guard.
         if let Some(mut child) = guard.take() {
+            // Read before it is reaped (None afterwards): a reaped PID must not stay registered.
+            let pid = child.id();
             let _ = child.kill().await;
             let _ = child.wait().await;
+            if let Some(pid) = pid {
+                crate::exit_guard::unregister(pid);
+            }
             mark_sidecar_stopped();
         }
 
@@ -1070,8 +1075,14 @@ pub async fn start(app: &AppHandle) -> Result<String> {
     {
         let mut guard = child_lock().await.lock().await;
         if let Some(mut child) = guard.take() {
+            // Its stderr watcher finds the slot empty and unregisters nothing: do it here, or
+            // the exit guard would later kill whatever process has this PID by then.
+            let pid = child.id();
             let _ = child.kill().await;
             let _ = child.wait().await;
+            if let Some(pid) = pid {
+                crate::exit_guard::unregister(pid);
+            }
         }
         mark_sidecar_stopped();
     }
