@@ -15,13 +15,17 @@ use axum::{
     Json, Router,
 };
 use ps5upload_core::payload_lifecycle::{
-    is_ps5upload_payload, send_payload_file, send_payload_image, SentPayload, PS5_LOADER_PORT,
+    image_is_helper, is_ps5upload_payload, send_payload_file, send_payload_image, SentPayload,
+    PS5_LOADER_PORT,
 };
 use serde::Deserialize;
 use serde_json::json;
 use std::time::{Duration, Instant};
 
 use crate::pkg_install::PkgInstallStateHandle;
+
+/// The name a browser upload is sent under (it has no file name here).
+const UPLOAD_LABEL: &str = "upload";
 
 /// How long a send waits out an elfldr swap or an install's daemon send before it says so.
 const LOADER_WAIT: Duration = Duration::from_secs(15);
@@ -236,7 +240,10 @@ async fn send(
     if host.is_empty() || port == 0 || !bytes.starts_with(b"\x7fELF") {
         return bad_request("Choose an ELF payload and a valid loader address and port.");
     }
-    let helper = crate::console_payload::is_helper(&bytes);
+    // As the send below decides it (it then stops the running helper): the AVA1 marker alone
+    // missed a helper the send recognised by its name string, and the refusal that keeps a
+    // running transfer from being cut was skipped.
+    let helper = image_is_helper(UPLOAD_LABEL, &bytes) || crate::console_payload::is_helper(&bytes);
     if let Some(refused) = send_refused(&installs, &host, port, helper) {
         return refused;
     }
@@ -245,7 +252,7 @@ async fn send(
             return Err(m);
         }
         with_loader_lock(&host, port, || {
-            send_payload_image(&host, port, "upload", &bytes, &mut stamp_helper)
+            send_payload_image(&host, port, UPLOAD_LABEL, &bytes, &mut stamp_helper)
         })
     })
     .await
@@ -515,6 +522,24 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// A helper sent as bytes from the browser is known as the send knows it (its name string),
+    /// not only by the AVA1 marker: a running transfer then refuses it.
+    #[tokio::test]
+    async fn a_browser_sent_helper_waits_for_a_running_transfer() {
+        let busy = crate::helper_stop::enter("127.0.0.1");
+        let image = Bytes::from_static(b"\x7fELF\x02\x01\x01 ps5upload helper build");
+        let r = send(
+            Default::default(),
+            query(Some(PS5_LOADER_PORT)),
+            octet(),
+            image,
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::CONFLICT);
+        assert_eq!(body_json(r).await["error"], "helper_busy");
+        drop(busy);
     }
 
     #[test]

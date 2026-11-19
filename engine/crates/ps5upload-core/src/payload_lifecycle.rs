@@ -348,6 +348,13 @@ pub fn is_ps5upload_payload(path: &str, head: &[u8]) -> bool {
         || memmem_ascii(head, b"PS5UPLOAD")
 }
 
+/// Whether `send_payload_image` will send `image` (named `label`) as the helper: what a caller
+/// checks before the send (a running transfer the helper's restart would stop) must be decided
+/// the same way, or a helper slips past that check.
+pub fn image_is_helper(label: &str, image: &[u8]) -> bool {
+    is_ps5upload_payload(label, &image[..image.len().min(PAYLOAD_PROBE_WINDOW)])
+}
+
 /// Resolve on its own budget, so no lookup can hold a send for longer than that.
 fn resolve_within(host: &str, addr: &str) -> Result<Vec<std::net::SocketAddr>, String> {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -482,7 +489,7 @@ pub fn send_payload_image(
                 &image[..4]
             ));
         }
-        is_helper = is_ps5upload_payload(label, &image[..image.len().min(PAYLOAD_PROBE_WINDOW)]);
+        is_helper = image_is_helper(label, image);
         if !is_helper {
             refuse_second_mounter(label, image, || {
                 crate::kraken::KrakenApi::probe(host).is_some()
