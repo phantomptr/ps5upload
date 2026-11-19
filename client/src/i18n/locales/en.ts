@@ -1242,6 +1242,7 @@ home_low_space_body: "Clean up finds updates, leftover packages and games you ne
 "cleanup_plan_unmeasured": "{count} game folders couldn't be measured and are left out.",
 "cleanup_plan_stale": "The clean-up list was read again. Make the plan again before running it.",
 "cleanup_plan_do_it": "Do it",
+"cleanup_plan_other_console": "Another console is making room right now. This plan can run when that is done.",
 "cleanup_plan_confirm_title": "Free {size} on the PS5?",
 "cleanup_plan_confirm_leftovers": "Delete {count} leftovers ({size})",
 "cleanup_plan_confirm_move": "Move {name} ({size}) to {drive}: copied first, then the original is deleted",

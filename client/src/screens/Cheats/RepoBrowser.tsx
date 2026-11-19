@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   cheatFilterOptions,
   filterCheatEntries,
@@ -79,6 +79,9 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
   const [query, setQuery] = useState("");
   const [entries, setEntries] = useState<CheatRepoEntry[]>([]);
   const [searching, setSearching] = useState(false);
+  // The newest search wins: a game picked while an earlier search is still out must not have
+  // that earlier answer land on top of it.
+  const searchSeq = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [downloaded, setDownloaded] = useState<Set<string>>(new Set());
@@ -148,11 +151,13 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
    * searches immediately instead of waiting a render for setQuery. */
   const searchFor = useCallback(async (q: string) => {
     setQuery(q);
+    const mine = ++searchSeq.current;
     setSearching(true);
     setError(null);
     setDownloadError(null);
     try {
       const r = await cheatsReposSearch(q);
+      if (mine !== searchSeq.current) return;
       setEntries(r.entries ?? []);
       // A filter from the previous search almost never applies to the next
       // one: pick version 01.04 for one game, search another, and every row
@@ -168,11 +173,13 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
   }, []);
 
   const handleSearch = useCallback(async () => {
+    const mine = ++searchSeq.current;
     setSearching(true);
     setError(null);
     setDownloadError(null);
     try {
       const r = await cheatsReposSearch(query);
+      if (mine !== searchSeq.current) return;
       setEntries(r.entries ?? []);
       // A filter from the previous search almost never applies to the next
       // one: pick version 01.04 for one game, search another, and every row
@@ -406,7 +413,7 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
                         size="sm"
                         className="flex-shrink-0"
                         onClick={() => void handleDownload(e)}
-                        disabled={downloading === e.filename}
+                        disabled={downloading !== null}
                         leftIcon={
                           downloading === e.filename ? (
                             <Spinner size={14} tone="inherit" />
