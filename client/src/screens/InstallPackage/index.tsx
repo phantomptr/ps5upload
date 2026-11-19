@@ -2302,7 +2302,10 @@ function ExternalPackages({ host }: { host: string }) {
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanned, setScanned] = useState(false);
-  const [installingPath, setInstallingPath] = useState<string | null>(null);
+  // Every package whose install was asked for and has not ended: several can be queued at once,
+  // and one name here let the second click unlock the first row and the first finish unlock the
+  // second while it was still installing.
+  const [installingPaths, setInstallingPaths] = useState<ReadonlySet<string>>(new Set());
   const [results, setResults] = useState<
     Record<
       string,
@@ -2370,12 +2373,16 @@ function ExternalPackages({ host }: { host: string }) {
   }, [pkgs, host]);
 
   async function onInstall(pkg: ExternalPkg) {
-    setInstallingPath(pkg.path);
+    setInstallingPaths((prev) => new Set(prev).add(pkg.path));
     try {
       const r = await installExternal(pkg, host);
       setResults((prev) => ({ ...prev, [pkg.path]: r }));
     } finally {
-      setInstallingPath(null);
+      setInstallingPaths((prev) => {
+        const next = new Set(prev);
+        next.delete(pkg.path);
+        return next;
+      });
     }
   }
 
@@ -2574,17 +2581,17 @@ function ExternalPackages({ host }: { host: string }) {
                   variant="primary"
                   size="sm"
                   leftIcon={
-                    installingPath === p.path ? (
+                    installingPaths.has(p.path) ? (
                       <Spinner size={14} tone="inherit" />
                     ) : (
                       <Download size={13} />
                     )
                   }
                   // Each click queues; only this package's own install locks it.
-                  disabled={installingPath === p.path}
+                  disabled={installingPaths.has(p.path)}
                   onClick={() => void onInstall(p)}
                 >
-                  {installingPath === p.path
+                  {installingPaths.has(p.path)
                     ? tr("pkglib.external.installingThis", "Installing…")
                     : tr("pkglib.external.install", "Install")}
                 </Button>
