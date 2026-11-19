@@ -5,7 +5,7 @@ import {
   IDLE_DOWNLOAD,
 } from "./fsBulkOp";
 import { useTransferStore, IDLE_PHASE } from "./transfer";
-import { isUploadItem, useUploadQueueStore } from "./uploadQueue";
+import { isUploadItem, queueFailureText, useUploadQueueStore } from "./uploadQueue";
 import {
   useActivityHistoryStore,
   type ActivityKind,
@@ -393,7 +393,7 @@ export function installActivityWiring() {
                 : "stopped";
           useActivityHistoryStore.getState().finish(activityId, outcome, {
             bytes: item.bytesSent,
-            error: item.errorReason ?? undefined,
+            error: queueFailureText(item) ?? undefined,
           });
           uploadQueueActivityIds.delete(item.id);
         }

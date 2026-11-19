@@ -761,17 +761,9 @@ export default function SavesScreen() {
           );
         }
       }
-      // 5) Stale-host re-check, same reasoning as handleRestore: the
-      // download+zip steps above can run for many seconds, and the user
-      // may have switched PS5 in the roster sidebar meanwhile. Refuse to
-      // upload to the wrong console.
-      const currentHost = useConnectionStore.getState().host?.trim();
-      if (currentHost !== backupHost) {
-        throw new Error(
-          `Host changed during backup (was ${backupHost}, now ${currentHost || "(none)"}). ` +
-            "Aborted before upload — your other console's USB drive is untouched.",
-        );
-      }
+      // (No check of the selected console here: the upload below goes to `addr`, this backup's
+      // own console, whichever tab is on screen. Checking it failed every backup still running
+      // when the user looked at another console.)
       // 6) Upload the zip to the PS5's USB path. The payload's
       // ensure_parent_dir auto-creates <title_id>/<timestamp>/ — no
       // manual mkdir needed.

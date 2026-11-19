@@ -7,6 +7,7 @@ vi.mock("../lib/tauriEnv", () => ({ isTauriEnv: () => true }));
 
 import { useConnectionStore } from "./connection";
 import { useRosterStore } from "./roster";
+import { useUploadSettingsStore } from "./uploadSettings";
 import { hydrateFromUserConfig, installUserConfigMirror } from "./userConfig";
 
 const saves = () => invoke.mock.calls.filter(([c]) => c === "user_config_save");
@@ -65,5 +66,48 @@ describe("hydrating the selected console", () => {
     await hydrateFromUserConfig();
     expect(useRosterStore.getState().profiles.map((p) => p.host)).toEqual(["10.0.0.9"]);
     expect(useConnectionStore.getState().host).toBe("10.0.0.9");
+  });
+});
+
+describe("hydrating the upload speed limit", () => {
+  let stored: Map<string, string>;
+  beforeEach(() => {
+    invoke.mockReset();
+    stored = new Map();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (k: string) => stored.get(k) ?? null,
+        setItem: (k: string, v: string) => void stored.set(k, v),
+        removeItem: (k: string) => void stored.delete(k),
+      },
+    });
+    useUploadSettingsStore.setState({ bandwidthCapMbps: 0 });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const fileSays = (bandwidth_cap_mbps: number) =>
+    invoke.mockImplementation(async (cmd: string) =>
+      cmd === "user_config_load" ? { upload: { bandwidth_cap_mbps } } : undefined,
+    );
+
+  it("keeps the limit the user chose when the file holds an older one", async () => {
+    useUploadSettingsStore.getState().setBandwidthCapMbps(5);
+    fileSays(20);
+    await hydrateFromUserConfig();
+    expect(useUploadSettingsStore.getState().bandwidthCapMbps).toBe(5);
+  });
+
+  it("keeps 'no limit' when the user cleared it and the file still holds the old one", async () => {
+    useUploadSettingsStore.getState().setBandwidthCapMbps(5);
+    useUploadSettingsStore.getState().setBandwidthCapMbps(0);
+    fileSays(5);
+    await hydrateFromUserConfig();
+    expect(useUploadSettingsStore.getState().bandwidthCapMbps).toBe(0);
+  });
+
+  it("fills the limit from the file when this app has never stored one", async () => {
+    fileSays(12);
+    await hydrateFromUserConfig();
+    expect(useUploadSettingsStore.getState().bandwidthCapMbps).toBe(12);
   });
 });

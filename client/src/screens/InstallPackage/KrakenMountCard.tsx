@@ -46,6 +46,9 @@ export function KrakenMountCard({ host }: { host: string }) {
   // the new console's busy state, and the new console starts not busy.
   const pickRef = useRef(0);
   useEffect(() => {
+    // Shown again after being hidden (another console's tab or screen), this runs again with
+    // the same console: a pick still going must not be cut short for that.
+    if (hostRef.current === host) return;
     hostRef.current = host;
     pickRef.current++;
     setResults([]);

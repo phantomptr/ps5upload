@@ -636,6 +636,10 @@ export async function sendPayloadChecked(
   elfPath: string,
   port?: number,
 ): Promise<{ viaPayloadManager: boolean }> {
+  // The web UI's send is made by the engine, which does this check itself. The question below
+  // only exists in the desktop app: asked from a browser it failed every catalogue send with
+  // "needs the desktop app".
+  if (!isTauriEnv()) return sendPayload(ip, elfPath, port);
   const check = await invoke<{ ok?: boolean; status?: string }>("payload_send_check", {
     ip,
     path: elfPath,

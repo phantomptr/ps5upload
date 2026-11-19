@@ -232,7 +232,12 @@ export function SearchPanel({
   // results — otherwise console A's hits render under console B's tab
   // (and a scan finishing after the switch would write A's results into
   // B's view).
+  // A tree that was hidden (another console's tab, another screen) runs its effects again when
+  // it is shown: only a real change of console resets, or coming back wiped what was here.
+  const shownHostRef = useRef(host);
   useEffect(() => {
+    if (shownHostRef.current === host) return;
+    shownHostRef.current = host;
     abortRef.current?.abort();
     setResult(null);
     setError(null);
@@ -275,10 +280,10 @@ export function SearchPanel({
         scopeRoots,
         controller.signal,
       );
-      if (useConnectionStore.getState().host !== searchedHost) return;
+      if (shownHostRef.current !== searchedHost) return;
       setResult(res);
     } catch (e) {
-      if (useConnectionStore.getState().host !== searchedHost) return;
+      if (shownHostRef.current !== searchedHost) return;
       setError(humanizeCaught(e));
       setResult(null);
     } finally {

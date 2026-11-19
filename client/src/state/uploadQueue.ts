@@ -701,6 +701,13 @@ export function isUploadItem(it: QueueItem): boolean {
   return it.sourceKind !== "install";
 }
 
+/** What a failed row has to say outside the queue (the task list, Activity): the console's
+ *  reason code when it gave one, else the failure's own words. A failure that did not come from
+ *  the console (source gone, engine unreachable) has only the words. Pure. */
+export function queueFailureText(it: Pick<QueueItem, "errorReason" | "error">): string | null {
+  return it.errorReason || it.error || null;
+}
+
 /** The same install already waiting or running on the same console. Matched on
  *  the source (file, on-console path, link), not the content id: two files with
  *  one content id are legitimate (same-version variants, a deliberate reinstall). */
@@ -2860,7 +2867,9 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       }));
       scheduleSave();
       const done = wait(id);
-      void get().startHost(hostOf(it.addr));
+      // This row only, like an upload row's Retry: a plain start ran every waiting row of the
+      // console too, including ones the user had not started ("start when I add" off).
+      void get().startHost(hostOf(it.addr), { onlyIds: [id] });
       return { id, done };
     },
 
@@ -3226,7 +3235,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
         ),
       }));
       if (!get().retryItem(id)) return false;
-      void get().startHost(hostOf(item.addr));
+      // This row only (see retryInstall).
+      void get().startHost(hostOf(item.addr), { onlyIds: [id] });
       return true;
     },
 

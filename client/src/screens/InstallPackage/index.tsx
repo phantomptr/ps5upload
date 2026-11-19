@@ -2334,7 +2334,10 @@ function ExternalPackages({ host }: { host: string }) {
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanned, setScanned] = useState(false);
-  const [installingPath, setInstallingPath] = useState<string | null>(null);
+  // Every package whose install was asked for and has not ended: several can be queued at once,
+  // and one name here let the second click unlock the first row and the first finish unlock the
+  // second while it was still installing.
+  const [installingPaths, setInstallingPaths] = useState<ReadonlySet<string>>(new Set());
   const [results, setResults] = useState<
     Record<
       string,
@@ -2342,6 +2345,8 @@ function ExternalPackages({ host }: { host: string }) {
         ok: boolean;
         message?: string;
         mayNotLaunch?: boolean;
+        /** The PS5 took it but it could not be confirmed: not "installed". */
+        unverified?: true;
       }
     >
   >({});
@@ -2400,12 +2405,16 @@ function ExternalPackages({ host }: { host: string }) {
   }, [pkgs, host]);
 
   async function onInstall(pkg: ExternalPkg) {
-    setInstallingPath(pkg.path);
+    setInstallingPaths((prev) => new Set(prev).add(pkg.path));
     try {
       const r = await installExternal(pkg, host);
       setResults((prev) => ({ ...prev, [pkg.path]: r }));
     } finally {
-      setInstallingPath(null);
+      setInstallingPaths((prev) => {
+        const next = new Set(prev);
+        next.delete(pkg.path);
+        return next;
+      });
     }
   }
 
@@ -2567,14 +2576,14 @@ function ExternalPackages({ host }: { host: string }) {
                       className="mt-1 flex items-center gap-1.5 text-xs font-medium"
                       style={{
                         color: r.ok
-                          ? r.mayNotLaunch
+                          ? r.mayNotLaunch || r.unverified
                             ? "var(--color-warn)"
                             : "var(--color-good)"
                           : "var(--color-bad)",
                       }}
                     >
                       {r.ok ? (
-                        r.mayNotLaunch ? (
+                        r.mayNotLaunch || r.unverified ? (
                           <AlertTriangle size={13} className="shrink-0" />
                         ) : (
                           <CheckCircle2 size={13} className="shrink-0" />
@@ -2584,7 +2593,11 @@ function ExternalPackages({ host }: { host: string }) {
                       )}
                       <span className="min-w-0">
                         {r.ok
-                          ? r.mayNotLaunch
+                          ? r.unverified
+                            ? // Not confirmed: the installer's own words, never "installed".
+                              r.message ||
+                              tr("pkg.check_the_ps5", { label: p.name }, "{label}: check the PS5")
+                            : r.mayNotLaunch
                             ? tr(
                                 "pkglib.external.installedWarn",
                                 "installed (may not launch)",
@@ -2600,17 +2613,17 @@ function ExternalPackages({ host }: { host: string }) {
                   variant="primary"
                   size="sm"
                   leftIcon={
-                    installingPath === p.path ? (
+                    installingPaths.has(p.path) ? (
                       <Spinner size={14} tone="inherit" />
                     ) : (
                       <Download size={13} />
                     )
                   }
                   // Each click queues; only this package's own install locks it.
-                  disabled={installingPath === p.path}
+                  disabled={installingPaths.has(p.path)}
                   onClick={() => void onInstall(p)}
                 >
-                  {installingPath === p.path
+                  {installingPaths.has(p.path)
                     ? tr("pkglib.external.installingThis", "Installing…")
                     : tr("pkglib.external.install", "Install")}
                 </Button>

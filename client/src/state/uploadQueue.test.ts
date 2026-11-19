@@ -91,6 +91,7 @@ import {
   libraryInstallStates,
   LOST_CONTACT_GIVE_UP_MS,
   MAX_POLL_FAILURES,
+  queueFailureText,
   sameInstall,
 } from "./uploadQueue";
 import { installLocalStorageStub } from "../test-utils/storage";
@@ -1900,6 +1901,30 @@ describe("install item lifecycle", () => {
     await expect(again!.done).resolves.toEqual({ ok: true });
   });
 
+  it("retryInstall runs that row only, not uploads still waiting for Start", async () => {
+    let n = 0;
+    registerInstallExecutor(async () => (++n === 1 ? { ok: false, message: "first" } : { ok: true }));
+    const first = useUploadQueueStore.getState().enqueueInstall({
+      host, request: { via: "library", path: "/p.pkg" }, displayName: "P",
+    });
+    await expect(first.done).resolves.toMatchObject({ ok: false });
+    for (let i = 0; i < 200 && useUploadQueueStore.getState().runningHosts[host]; i++)
+      await new Promise((r) => setTimeout(r, 5));
+    // Queued after the failure and never started.
+    mockedStartFile.mockClear();
+    addItem(`${host}:9113`, "waiting.bin");
+    const again = useUploadQueueStore.getState().retryInstall(first.id);
+    // A run limited to the retried row: the waiting upload is outside it.
+    expect(useUploadQueueStore.getState().limitedHosts[host]).toBe(true);
+    await expect(again!.done).resolves.toEqual({ ok: true });
+    for (let i = 0; i < 200 && useUploadQueueStore.getState().runningHosts[host]; i++)
+      await new Promise((r) => setTimeout(r, 5));
+    expect(mockedStartFile).not.toHaveBeenCalled();
+    expect(
+      useUploadQueueStore.getState().items.find((i) => i.displayName === "waiting.bin")?.status,
+    ).toBe("pending");
+  });
+
   it("never writes a link to disk", async () => {
     registerInstallExecutor(() => new Promise(() => {}));
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -2084,6 +2109,19 @@ describe("Retry via upload", () => {
     });
     await q.done;
     expect(useUploadQueueStore.getState().items.find((i) => i.id === q.id)?.fallbackToUpload).toBeFalsy();
+  });
+});
+
+describe("queueFailureText", () => {
+  it("falls back to the failure's own words when the console gave no reason", () => {
+    expect(queueFailureText({ errorReason: "fs_write_failed_errno_28", error: "raw" })).toBe(
+      "fs_write_failed_errno_28",
+    );
+    // Source gone, engine unreachable: no reason code, and the words used to be dropped.
+    expect(queueFailureText({ errorReason: null, error: "source file not found" })).toBe(
+      "source file not found",
+    );
+    expect(queueFailureText({ errorReason: null, error: null })).toBeNull();
   });
 });
 
