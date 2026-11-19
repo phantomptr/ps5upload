@@ -27893,14 +27893,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/SharedLink"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InstallStartResponse"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/InstallStartResponse"
                 }
               }
             },
@@ -27964,12 +27957,10 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SharedLink"
-                }
+                "schema": {}
               }
             },
-            "description": "Success."
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
           },
           "403": {
             "$ref": "#/components/responses/Error",
@@ -27994,7 +27985,7 @@
         ],
         "x-ps5upload": {
           "access": "loopback",
-          "response_schema": "struct"
+          "response_schema": "json-unknown"
         }
       }
     },
