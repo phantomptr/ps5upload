@@ -31,6 +31,14 @@ int inst_sony_wedged(uint64_t since_ms, uint64_t now_ms) {
     return since_ms != 0 && now_ms >= since_ms && now_ms - since_ms >= INST_SONY_CEILING_MS;
 }
 
+unsigned inst_deadline_left_ms(uint64_t start_ms, uint64_t limit_ms, uint64_t now_ms, unsigned cap_ms) {
+    if (now_ms < start_ms) return 0; /* monotonic never goes back: treat it as spent */
+    uint64_t used = now_ms - start_ms;
+    if (used >= limit_ms) return 0;
+    uint64_t left = limit_ms - used;
+    return left < cap_ms ? (unsigned)left : cap_ms;
+}
+
 uint64_t inst_mono_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
