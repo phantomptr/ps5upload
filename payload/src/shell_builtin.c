@@ -5,6 +5,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -421,7 +422,11 @@ static const char *shell_protected_arg(const char *prog, int argc, char **argv) 
     int tree = shell_walks_or_changes(prog);
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
-        if (!a || !a[0] || a[0] == '-') continue;
+        /* One that starts with '-' is judged too: cat, xxd, stat, file, tail, sfoinfo, mv and
+         * chmod take such a word as a path, and a link named "-L" that points at the store made
+         * `cat -L/identity` print the key. A real option ("-r") is a name in the working
+         * directory to the policy, and passes unless that is the protected folder itself. */
+        if (!a || !a[0]) continue;
         /* The policy judges absolute paths: a relative one is taken from the working directory. */
         char abs[2048];
         const char *p = a;
@@ -431,6 +436,9 @@ static const char *shell_protected_arg(const char *prog, int argc, char **argv) 
             if ((size_t)snprintf(abs, sizeof abs, "%s/%s", cwd, a) >= sizeof abs) return a;
             p = abs;
         }
+        /* Too long to judge is refused: the policy answers "not protected" for a path it cannot
+         * hold (path_policy.c lex_normalize) and counts on its caller to fail closed. */
+        if (strlen(p) >= PATH_MAX - 1) return a;
         if (path_in_protected(p) || (tree && path_tree_op_refused(p))) return a;
     }
     return NULL;
@@ -443,13 +451,26 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
     *out_exit = 0;
     char cmdbuf[2100];
     snprintf(cmdbuf, sizeof(cmdbuf), "%s", cmd_in);
-    char *argv[32];
-    int argc = shell_split(cmdbuf, argv, 32);
+    char *argv[33];
+    int argc = shell_split(cmdbuf, argv, 33);
     if (argc == 0) return -1;
     const char *prog = argv[0];
 
     char *out = NULL;
     size_t cap = 0, len = 0;
+
+    /* The built-ins take 32 words. More were dropped without a word and the rest still ran:
+     * `mv f1 .. f31 dir` moved the files into f31 when that was a folder, `touch` and `rm` did part
+     * of the list and answered 0. (Commands whose words are text, like echo, keep their old cut.) */
+    if (argc > 32) {
+        if (!shell_args_not_paths(prog)) {
+            len = shell_appendf(&out, &cap, len, "%s: too many arguments (31 at most)\n", prog);
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+        argc = 32;
+    }
 
     /* beep: the console's beeper (indicator.c). */
     if (indicator_shell(argc, argv, out_text, out_exit)) return 0;
@@ -1651,6 +1672,19 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
                     any_err = 1;
                     continue;
                 }
+                /* The same file under both names (`cp a a`, `cp a .`): opening the target
+                 * truncates it, and the copy then read nothing: an empty file, exit 0. */
+                {
+                    struct stat s_st, t_st;
+                    if (fstat(sfd, &s_st) == 0 && stat(target, &t_st) == 0 &&
+                        s_st.st_dev == t_st.st_dev && s_st.st_ino == t_st.st_ino) {
+                        close(sfd);
+                        len = shell_appendf(&out, &cap, len,
+                                             "cp: %s and %s are the same file\n", src, target);
+                        any_err = 1;
+                        continue;
+                    }
+                }
                 int dfd = open(target, O_WRONLY | O_CREAT | O_TRUNC,
                                sst.st_mode & 0777);
                 if (dfd < 0) {
@@ -1755,20 +1789,25 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
                 }
                 char *buf = malloc(SHELL_COPY_BUF);
                 ssize_t rd = -1;
+                int werr = 0;
                 if (buf) {
                     while ((rd = read(sfd, buf, SHELL_COPY_BUF)) > 0) {
                         ssize_t off = 0;
                         while (off < rd) {
                             ssize_t w = write(dfd, buf + off, (size_t)(rd - off));
-                            if (w <= 0) { rd = -1; break; }
+                            if (w <= 0) { werr = 1; break; }
                             off += w;
                         }
+                        /* Out of the read loop too: it used to go on, the next read overwrote
+                         * the -1 that marked the failure, and a full drive left short files
+                         * with no error line and exit 0. */
+                        if (werr) break;
                     }
                     free(buf);
                 }
                 close(sfd);
                 close(dfd);
-                if (rd < 0) {
+                if (rd < 0 || werr) {
                     len = shell_appendf(&out, &cap, len,
                                          "cp: %s -> %s: copy failed\n",
                                          ent->fts_path, dpath);
