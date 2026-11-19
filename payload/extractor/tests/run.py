@@ -533,6 +533,26 @@ def test_bad_request(root):
     check("bad request", p.returncode != 0 and s["message"] == "fs_extract_bad_request", s)
 
 
+def test_no_status_no_extraction(root):
+    # The status cannot be written (its folder is gone, its drive is full): the helper could never
+    # follow or stop this run, so nothing is extracted.
+    src = make_src(root)
+    arc = os.path.join(root, "t.zip")
+    with zipfile.ZipFile(arc, "w", zipfile.ZIP_STORED) as z:
+        for dp, dn, fn in os.walk(src):
+            for n in fn:
+                p = os.path.join(dp, n)
+                z.write(p, os.path.relpath(p, src))
+    dest = os.path.join(root, "o1")
+    with open(os.path.join(root, "request.json"), "w") as f:
+        json.dump({"id": "t1", "archive": arc, "dest": dest, "merge": False, "replace": False}, f)
+    p = subprocess.run([BIN, os.path.join(root, "request.json"), os.path.join(root, "no-such-folder", "status.json"),
+                        os.path.join(root, "c")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+    check("no status", p.returncode != 0, p.returncode)
+    check("no status", not os.path.exists(dest), "extracted without a status")
+    check("no status", not os.path.exists(os.path.join(root, "request.json")), "the request was left behind")
+
+
 def main():
     if not os.path.exists(BIN):
         print(f"missing {BIN}: run make host")
