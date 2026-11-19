@@ -72,6 +72,22 @@ struct Pending {
     answer: oneshot::Sender<Answer>,
 }
 
+/// Clears the frame request `id` when dropped, if it is still the one in flight.
+struct PendingGuard<'a> {
+    auto: &'a AutoState,
+    id: u64,
+}
+
+impl Drop for PendingGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut p) = self.auto.pending.lock() {
+            if p.as_ref().is_some_and(|p| p.id == self.id) {
+                *p = None;
+            }
+        }
+    }
+}
+
 /// What the page said: its metadata, and the image when there is one.
 #[derive(Debug)]
 struct Answer {
@@ -291,6 +307,9 @@ async fn frame_with(
             answer: tx,
         });
     }
+    // However this request ends, its place is given up: a client that hung up while the page
+    // had not answered left it taken, and every later request was "busy" until the page left.
+    let _pending = PendingGuard { auto, id };
     let mut ask = serde_json::json!({ "id": id, "format": format });
     if let Some(w) = max_width {
         ask["max_width"] = w.into();
@@ -753,6 +772,27 @@ mod tests {
 
     fn session(host: &str) -> Arc<Live> {
         Arc::new(Live::new(host.into(), false, Duration::from_secs(60)))
+    }
+
+    /// A frame request whose client hung up before the page answered gives its place up, and
+    /// never another request's.
+    #[test]
+    fn an_abandoned_frame_request_does_not_stay_in_flight() {
+        let auto = AutoState::default();
+        let pend = |id| {
+            let (answer, _rx) = oneshot::channel();
+            *auto.pending.lock().unwrap() = Some(Pending {
+                id,
+                viewer: 1,
+                answer,
+            });
+        };
+        pend(7);
+        drop(PendingGuard { auto: &auto, id: 7 });
+        assert!(auto.pending.lock().unwrap().is_none());
+        pend(8);
+        drop(PendingGuard { auto: &auto, id: 7 });
+        assert!(auto.pending.lock().unwrap().is_some(), "a later request");
     }
 
     struct Page {
