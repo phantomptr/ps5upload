@@ -48,6 +48,7 @@ pub fn unregister(pid: u32) {
 
 /// Whether `pid` is on the list (tests of the callers that must take it off).
 #[cfg(test)]
+#[allow(dead_code)] // its caller's test is not built on every system
 pub fn registered(pid: u32) -> bool {
     CHILDREN
         .lock()

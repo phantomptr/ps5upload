@@ -2278,7 +2278,7 @@ mod tests {
     /// one on another console is not held up.
     #[test]
     fn a_second_save_operation_on_a_console_waits_for_the_first() {
-        let first = save_op(&["192.0.2.41:9113"]);
+        let first = save_op(&["192.0.2.41:9020"]);
         let (tx, rx) = std::sync::mpsc::channel();
         let second = std::thread::spawn(move || {
             // The same console, named without its port and in another case.
