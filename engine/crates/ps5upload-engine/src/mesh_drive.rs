@@ -1687,8 +1687,21 @@ impl Side for LocalSide {
         unstorable(rel)
     }
     fn case_insensitive(&self) -> bool {
-        cfg!(windows) || cfg!(target_os = "macos")
+        folder_ignores_case(&self.root)
     }
+}
+
+/// Whether the folder `root` ignores case in names, asked of the folder itself: its marker,
+/// looked for in capitals. The system alone does not say: a phone's shared storage ignores
+/// case on Android, and so does an exFAT, NTFS or network disk on Linux. Taken for
+/// case-sensitive there, two files of the console that differ only in case were downloaded in
+/// turn onto one name, the second failing as "changed here" on every pass. With no marker to
+/// ask (it is checked before a pass), what the system usually does.
+fn folder_ignores_case(root: &Path) -> bool {
+    if root.join(MARKER).is_file() {
+        return root.join(MARKER.to_ascii_uppercase()).is_file();
+    }
+    cfg!(windows) || cfg!(target_os = "macos")
 }
 
 /// A folder on a second console. Bytes go console to console (directly when the consoles can
@@ -2229,6 +2242,7 @@ impl Pass<'_> {
         }
         let (today, stamp) = date_parts(now);
         let (mut up, mut down, mut del, mut conf) = (0, 0, 0, 0);
+        let mut base_saved_at = 0;
         let mut hub_changed = false;
         let mut side_changed = false;
         // What each op left on both sides (stat right after it): the base is refreshed from the
@@ -2443,8 +2457,12 @@ impl Pass<'_> {
                 }
             }
             set_status(member_id, |s| s.done += 1);
-            // Progress survives an interrupted pass.
-            if up + down + del + conf > 0 && (up + down + del + conf) % 20 == 0 {
+            // Progress survives an interrupted pass. Once per 20 changes: asked after every
+            // step, a count resting on a multiple of 20 wrote the whole base again (to the
+            // console, for a link) for each later step that changed nothing.
+            let changes = up + down + del + conf;
+            if save_base_due(changes, base_saved_at) {
+                base_saved_at = changes;
                 let _ = self.side.save_base(&self.drive.id, member_id, &base);
             }
         }
@@ -5054,8 +5072,39 @@ pub async fn confirm(Json(req): Json<MemberReq>) -> Response {
     Json(json!({ "supported": true, "ok": true })).into_response()
 }
 
+/// Whether the base is saved now, part way through a pass: at each 20th change, once.
+fn save_base_due(changes: usize, saved_at: usize) -> bool {
+    changes > 0 && changes.is_multiple_of(20) && changes != saved_at
+}
+
 #[cfg(test)]
 mod tests {
+    /// A folder is asked whether it ignores case, whatever the system: checked against what
+    /// this disk really does.
+    #[test]
+    fn a_folder_says_itself_whether_it_ignores_case() {
+        let dir = std::env::temp_dir().join(format!("ps5u-mesh-case-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("probe.txt"), b"x").unwrap();
+        let really = dir.join("PROBE.TXT").is_file();
+        std::fs::write(dir.join(super::MARKER), b"").unwrap();
+        assert_eq!(super::folder_ignores_case(&dir), really);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A step that changes nothing (a file that already matches, a failed copy) does not save
+    /// the base again while the count of changes rests on a multiple of 20.
+    #[test]
+    fn the_base_is_saved_once_at_each_twentieth_change() {
+        assert!(!super::save_base_due(0, 0));
+        assert!(!super::save_base_due(19, 0));
+        assert!(super::save_base_due(20, 0));
+        assert!(!super::save_base_due(20, 20));
+        assert!(!super::save_base_due(21, 20));
+        assert!(super::save_base_due(40, 20));
+    }
+
     /// Checked as text: no id from a console's document reaches a path with a separator, a
     /// drive or `..` in it.
     #[test]
