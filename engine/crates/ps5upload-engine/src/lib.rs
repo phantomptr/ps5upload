@@ -1108,10 +1108,24 @@ async fn browser_origin_guard(req: Request, next: Next) -> impl IntoResponse {
 /// for each regular file so the UI can render per-file progress.
 /// Errors silently skipped (matches the permissive walk elsewhere).
 fn walk_plan(root: &std::path::Path, excludes: &[String]) -> (u64, Vec<PlannedFile>) {
+    walk_plan_until(root, excludes, &AtomicBool::new(false))
+}
+
+/// [`walk_plan`] that ends at the next folder once `stop` is set (the job was stopped): what it
+/// returns then is a part of the plan, for a caller that checks `stop` and goes no further. A
+/// folder upload used to go on walking a large source to its end after Stop.
+fn walk_plan_until(
+    root: &std::path::Path,
+    excludes: &[String],
+    stop: &AtomicBool,
+) -> (u64, Vec<PlannedFile>) {
     let mut stack = vec![root.to_path_buf()];
     let mut total = 0u64;
     let mut out = Vec::new();
     while let Some(dir) = stack.pop() {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
         let Ok(rd) = std::fs::read_dir(&dir) else {
             continue;
         };
@@ -1149,15 +1163,29 @@ fn walk_plan(root: &std::path::Path, excludes: &[String]) -> (u64, Vec<PlannedFi
 /// `walk_plan` over any source (a saved server): one listing per folder, sizes from the listing.
 /// A folder that cannot be listed fails the plan — over a network that is a dropped connection
 /// or a permission problem, and skipping it would upload an incomplete game and call it done.
+#[cfg(test)]
 fn walk_plan_with(
     fs: &dyn ps5upload_core::source_fs::SourceFs,
     root: &std::path::Path,
     excludes: &[String],
 ) -> Result<(u64, Vec<PlannedFile>), String> {
+    walk_plan_with_until(fs, root, excludes, &AtomicBool::new(false))
+}
+
+/// [`walk_plan_with`] that ends at the next folder once `stop` is set (see [`walk_plan_until`]).
+fn walk_plan_with_until(
+    fs: &dyn ps5upload_core::source_fs::SourceFs,
+    root: &std::path::Path,
+    excludes: &[String],
+    stop: &AtomicBool,
+) -> Result<(u64, Vec<PlannedFile>), String> {
     let mut stack = vec![root.to_path_buf()];
     let mut total = 0u64;
     let mut out = Vec::new();
     while let Some(dir) = stack.pop() {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
         let children = fs
             .read_dir(&dir)
             .map_err(|e| format!("could not list {}: {e}", dir.display()))?;
@@ -7990,8 +8018,9 @@ async fn transfer_dir_handler(
         let renames = module_case_renames(source_fs.as_deref(), &src_path, &req.src_dir);
         let walk_started = std::time::Instant::now();
         let planned = match &source_fs {
-            Some(fs) => walk_plan_with(fs.as_ref(), &src_path, &req.excludes),
-            None => Ok(walk_plan(&src_path, &req.excludes)),
+            // Stop ends the walk at its next folder; the check below then ends the job.
+            Some(fs) => walk_plan_with_until(fs.as_ref(), &src_path, &req.excludes, &cancel),
+            None => Ok(walk_plan_until(&src_path, &req.excludes, &cancel)),
         };
         let (total_bytes, files) = match planned {
             Ok(p) => p,
@@ -14985,6 +15014,24 @@ mod helpers_tests {
         let inventory = ps5upload_core::fs_ops::walk_local_inventory(&root, &excludes).unwrap();
         assert_eq!(inventory.keys().collect::<Vec<_>>(), vec!["eboot.bin"]);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A stopped folder upload's walk ends at its next folder, not at the end of the source.
+    #[test]
+    fn a_stopped_walk_ends_at_once() {
+        let root = std::env::temp_dir().join(format!("ps5upload-walkstop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a/b")).unwrap();
+        std::fs::write(root.join("a/b/f.bin"), b"xyz").unwrap();
+        let stop = AtomicBool::new(true);
+        assert!(walk_plan_until(&root, &[], &stop).1.is_empty());
+        let local = ps5upload_core::source_fs::LocalFs;
+        assert!(walk_plan_with_until(&local, &root, &[], &stop)
+            .unwrap()
+            .1
+            .is_empty());
+        assert_eq!(walk_plan(&root, &[]).0, 3);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Every transfer reports a resume the same way: zip, 7z and RAR used to say 0 skipped and the
