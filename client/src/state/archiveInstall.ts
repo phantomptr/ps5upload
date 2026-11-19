@@ -476,6 +476,11 @@ export async function downloadArchiveParts(
   const stopped = () =>
     archiveInstallFor(useArchiveInstallStore.getState(), host)?.downloading
       ?.stopRequested ?? true;
+  // A Stop pressed while a request was out (starting a part, reading its status) must survive
+  // the progress write that follows it: writing `false` there lost the Stop.
+  const stopAsked = () =>
+    archiveInstallFor(useArchiveInstallStore.getState(), host)?.downloading
+      ?.stopRequested ?? false;
 
   for (const [i, url] of links.entries()) {
     const which = `part ${i + 1} of ${links.length}`;
@@ -485,7 +490,7 @@ export async function downloadArchiveParts(
         count: links.length,
         written: 0,
         total: 0,
-        stopRequested: false,
+        stopRequested: stopAsked(),
       },
     });
     let started: { download_id?: string; path?: string; total?: number };
@@ -526,7 +531,7 @@ export async function downloadArchiveParts(
           count: links.length,
           written: st.written ?? 0,
           total: st.total ?? started.total ?? 0,
-          stopRequested: false,
+          stopRequested: stopAsked(),
         },
       });
       await deps.sleep(1000);
