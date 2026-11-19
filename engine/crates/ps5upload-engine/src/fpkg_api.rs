@@ -2259,15 +2259,19 @@ pub(crate) async fn exfat_build_handler(
     // rather than filling the drive and failing near the end. A compressed one or LZ4 packs may
     // well fit in less, so the screen warns and it goes ahead.
     // Straight to a console, the console's own room is checked once the image's size is planned.
+    let partial_out = PathBuf::from(format!("{}.partial", output.display()));
     if !straight && !compress && packs.is_none() && zstd_level.is_none() {
-        if let Some(why) = build::free_bytes(&out_dir)
-            .and_then(|free| crate::folder_build::shortfall(free, total, &out_dir))
-        {
+        // What a build that stopped part way left is room too: the build goes on from it or
+        // clears it. Counted as taken, a retry of a 100 GB image stopped at 60 GB was refused
+        // for the 60 GB its own partial held, every time, until that file was deleted by hand.
+        let held = leftover_bytes(&partial_out);
+        if let Some(why) = build::free_bytes(&out_dir).and_then(|free| {
+            crate::folder_build::shortfall(free.saturating_add(held), total, &out_dir)
+        }) {
             return json_err(StatusCode::BAD_REQUEST, why).into_response();
         }
     }
 
-    let partial_out = PathBuf::from(format!("{}.partial", output.display()));
     // Two builds into one console path would wreck each other's job, as two into one file would.
     let claimed = match (&to_console, &to_server) {
         (Some((addr, path)), _) => PathBuf::from(format!("ps5://{addr}{path}")),
@@ -3971,6 +3975,15 @@ pub(crate) fn extract_root_of(path: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+/// The bytes of the partial output file a stopped build left at `partial` (0 when there is
+/// none, or it is a folder): room the next build of it has, since it resumes or clears it.
+fn leftover_bytes(partial: &Path) -> u64 {
+    std::fs::symlink_metadata(partial)
+        .ok()
+        .filter(|m| m.is_file())
+        .map_or(0, |m| m.len())
+}
+
 /// Unpack folders left in `out` by an earlier run (a crash, a closed app), not in use now.
 fn remove_stale_extracts(out: &Path) {
     let Ok(entries) = std::fs::read_dir(out) else {
@@ -4228,6 +4241,19 @@ pub(crate) async fn fpkg_extract_cleanup_handler(
 #[cfg(test)]
 mod extract_tests {
     use super::*;
+
+    /// The partial image a stopped build left counts as room for the next build of it; a
+    /// folder of that name, or nothing there, counts for none.
+    #[test]
+    fn a_stopped_builds_partial_counts_as_room() {
+        let base = std::env::temp_dir().join(format!("fpkg-leftover-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(base.join("dir.exfat.partial")).unwrap();
+        std::fs::write(base.join("game.exfat.partial"), vec![0u8; 4096]).unwrap();
+        assert_eq!(leftover_bytes(&base.join("game.exfat.partial")), 4096);
+        assert_eq!(leftover_bytes(&base.join("dir.exfat.partial")), 0);
+        assert_eq!(leftover_bytes(&base.join("none.exfat.partial")), 0);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     /// An unpack that fails half way (here a damaged second entry, after the first was written)
     /// leaves nothing on this computer: the files it wrote are closed and the folder removed.
