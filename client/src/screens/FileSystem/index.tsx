@@ -1073,7 +1073,14 @@ export default function FileSystemScreen() {
       const r = await installFromConsolePath(fullPath, host, {
         sizeBytes: splitPkgBytes(entry.name, entry.size, entries ?? []),
       });
-      if (r.ok) {
+      if (r.ok && r.unverified) {
+        // The PS5 took it but it could not be confirmed: say what to check, not "Installed".
+        pushNotification(
+          "warning",
+          tr("pkg.check_the_ps5", { label: entry.name }, "{label}: check the PS5"),
+          { body: r.message, jobOutcome: true },
+        );
+      } else if (r.ok) {
         pushNotification(
           r.mayNotLaunch ? "warning" : "success",
           tr(

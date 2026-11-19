@@ -2310,6 +2310,8 @@ function ExternalPackages({ host }: { host: string }) {
         ok: boolean;
         message?: string;
         mayNotLaunch?: boolean;
+        /** The PS5 took it but it could not be confirmed: not "installed". */
+        unverified?: true;
       }
     >
   >({});
@@ -2535,14 +2537,14 @@ function ExternalPackages({ host }: { host: string }) {
                       className="mt-1 flex items-center gap-1.5 text-xs font-medium"
                       style={{
                         color: r.ok
-                          ? r.mayNotLaunch
+                          ? r.mayNotLaunch || r.unverified
                             ? "var(--color-warn)"
                             : "var(--color-good)"
                           : "var(--color-bad)",
                       }}
                     >
                       {r.ok ? (
-                        r.mayNotLaunch ? (
+                        r.mayNotLaunch || r.unverified ? (
                           <AlertTriangle size={13} className="shrink-0" />
                         ) : (
                           <CheckCircle2 size={13} className="shrink-0" />
@@ -2552,7 +2554,11 @@ function ExternalPackages({ host }: { host: string }) {
                       )}
                       <span className="min-w-0">
                         {r.ok
-                          ? r.mayNotLaunch
+                          ? r.unverified
+                            ? // Not confirmed: the installer's own words, never "installed".
+                              r.message ||
+                              tr("pkg.check_the_ps5", { label: p.name }, "{label}: check the PS5")
+                            : r.mayNotLaunch
                             ? tr(
                                 "pkglib.external.installedWarn",
                                 "installed (may not launch)",
