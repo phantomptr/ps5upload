@@ -119,16 +119,19 @@ export default function CheatsScreen() {
   }, []);
 
   const repoNames = useMemo(() => namesFromRepoEntries(index), [index]);
+  // The id, not the status object: the 5 s poll stores a new object each time, and the list (a
+  // join over the whole cheat index) and the version reads below were redone on every poll.
+  const runningTitleId = status?.game_running ? (status.game_title_id ?? null) : null;
   const games = useMemo(
     () =>
       buildCheatGames({
         installed,
         downloaded,
         index,
-        runningTitleId: status?.game_running ? status.game_title_id : null,
+        runningTitleId,
         repoNames,
       }),
-    [installed, downloaded, index, status, repoNames],
+    [installed, downloaded, index, runningTitleId, repoNames],
   );
   const sections = useMemo(() => cheatSections(applyCheatFilters(games, filters)), [games, filters]);
   const selected = games.find((g) => g.titleId === selectedId) ?? null;

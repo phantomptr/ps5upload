@@ -83,6 +83,7 @@ import {
   type ConvertThen,
 } from "../../state/convertQueue";
 import { gameFoldersAmong, gamesInFolder } from "../../lib/folderScan";
+import { takeHandOver } from "../../lib/convertFirst";
 import { sourcesForPath, withoutBuilding } from "../../lib/convertQueueSources";
 import { usePackageViewer } from "../../state/packageViewer";
 import { consoleSwapDeps } from "../../lib/dumpSwapConsole";
@@ -168,6 +169,9 @@ export default function WorkshopScreen() {
   const mountKey = mountRunKey(host, pipeline);
   const mountKeyRef = useRef(mountKey);
   useEffect(() => {
+    // The same run shown again (the effect runs then too) keeps its state: clearing it put the
+    // button back while the copy to the PS5 was still going, so a second copy could start.
+    if (mountKeyRef.current === mountKey) return;
     mountKeyRef.current = mountKey;
     setMountRun(IDLE_MOUNT_RUN);
   }, [mountKey]);
@@ -502,7 +506,7 @@ export default function WorkshopScreen() {
   } | null;
   const handed = handedState?.source;
   useEffect(() => {
-    if (handed) chooseOrQueue(handed);
+    if (handed && takeHandOver(`${location.key}:one`)) chooseOrQueue(handed);
     // Once per hand-over.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handed]);
@@ -510,7 +514,7 @@ export default function WorkshopScreen() {
   // to make as Convert has it set.
   const handedMany = handedState?.sources;
   useEffect(() => {
-    if (handedMany && handedMany.length > 0) queueAll(handedMany, 0);
+    if (handedMany && handedMany.length > 0 && takeHandOver(`${location.key}:many`)) queueAll(handedMany, 0);
     // Once per hand-over.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handedMany]);
@@ -842,8 +846,13 @@ export default function WorkshopScreen() {
       if (mergeLatest.current.isCurrent(token)) setMergeChecking(false);
     }
   };
-  // A new game under ① starts without a pair.
+  // A new game under ① starts without a pair. A new one only: the effect also runs again each
+  // time the screen is shown again, and dropping the pair then let the game be built without
+  // its update (Run was no longer held for it).
+  const pairedSrc = useRef(src);
   useEffect(() => {
+    if (pairedSrc.current === src) return;
+    pairedSrc.current = src;
     mergeLatest.current.invalidate();
     setMergeOther("");
     setMerged(null);

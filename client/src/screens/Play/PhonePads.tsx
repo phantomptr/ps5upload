@@ -258,9 +258,12 @@ export function PhonePadsPanel({
     setNetWhy(null);
   };
   useEffect(() => {
-    void openPadLink(true, consoleHost).then((s) =>
-      s ? onLink(s) : setFailed(true),
-    );
+    void openPadLink(true, consoleHost).then((s) => {
+      // A later open that works takes the "no address" line down again: one failed ask used
+      // to keep it up (and hold back the internet link) until the panel was closed.
+      setFailed(!s);
+      if (s) onLink(s);
+    });
   }, [consoleHost, onLink]);
   // The internet link when that is the choice and the engine has none (opening the panel, the
   // engine restarted): made once; a refusal stays shown until the host picks again.
@@ -641,7 +644,7 @@ export function PadAsks({ pending }: { pending: PadLinkState["pending"] }) {
   const p = pending[0];
   return (
     <div
-      className="pointer-events-auto absolute left-1/2 top-16 z-40 flex -translate-x-1/2 flex-wrap items-center gap-2 rounded-full bg-black/85 px-4 py-2 text-sm text-white shadow-lg"
+      className="pointer-events-auto absolute left-1/2 top-16 z-40 flex w-max max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center gap-2 rounded-full bg-black/85 px-4 py-2 text-sm text-white shadow-lg"
       data-testid="rp-pad-ask"
       onClick={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}

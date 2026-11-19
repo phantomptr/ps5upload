@@ -146,6 +146,9 @@ export class PadClient {
     this.done = false;
     this.setStage({ kind: "connecting" });
     this.connect();
+    // The first socket could not even be made (a bad address, or one the page may not open):
+    // the link has ended, and nothing is left running for it.
+    if (this.done) return;
     const raf = this.o.raf ?? ((cb) => window.requestAnimationFrame(cb));
     const tick = () => {
       this.send(false);

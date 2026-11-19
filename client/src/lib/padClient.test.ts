@@ -98,6 +98,17 @@ describe("the phone's link", () => {
     vi.useRealTimers();
   });
 
+  it("leaves nothing running when the first socket cannot be made", () => {
+    class NoSocket {
+      constructor() {
+        throw new Error("blocked");
+      }
+    }
+    client({ WebSocketImpl: NoSocket as unknown as typeof WebSocket });
+    expect(stages[stages.length - 1]).toEqual({ kind: "lost" });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("sends a held pad at least every 250 ms and says it keeps sending", () => {
     const c = inGame();
     touch = { ...IDLE_PAD, buttons: 1 };

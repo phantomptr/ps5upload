@@ -402,7 +402,11 @@ export function SpacePlanner({
 
   const plan = useMemo(() => (input ? planWithSelection(input, selected) : null), [input, selected]);
   const neededBytes = parseSizeGib(size);
-  const busy = phase !== null || run.running;
+  // One run at a time across consoles (one store): a run on ANOTHER console holds back only "Do
+  // it" here. It used to freeze this whole planner, Close included, with nothing saying why.
+  const runningHere = run.running && run.host === host;
+  const runningElsewhere = run.running && run.host !== host;
+  const busy = phase !== null || runningHere;
   const ranHere = run.host === host && (run.running || run.finished) && run.order.length > 0;
 
   async function makePlan() {
@@ -411,7 +415,8 @@ export function SpacePlanner({
     setError(null);
     setInput(null);
     setRoomAfter(null);
-    useSpaceRunStore.getState().reset();
+    // Another console's finished run keeps its result: only this console's own is cleared.
+    if (run.host === null || run.host === host) useSpaceRunStore.getState().reset();
     try {
       const collectionIds = new Set(Object.keys(useCollectionStore.getState().library?.games ?? {}).map((k) => k.toUpperCase()));
       const running = new Set([...runningOn(useRunningAppsStore.getState(), host)].map((t) => t.toUpperCase()));
@@ -511,7 +516,7 @@ export function SpacePlanner({
   }
 
   const chosen = plan ? runOrder(plan).length : 0;
-  const stale = plan !== null && !run.running && planScanId !== scanId;
+  const stale = plan !== null && !runningHere && planScanId !== scanId;
   const failures = Object.values(run.steps).filter((p) => p.state === "failed" || p.state === "skipped").length;
 
   return (
@@ -531,7 +536,7 @@ export function SpacePlanner({
             )}
           </div>
         </div>
-        <Button variant="ghost" size="sm" onClick={onClose} disabled={run.running}>
+        <Button variant="ghost" size="sm" onClick={onClose} disabled={runningHere}>
           {tr("close", undefined, "Close")}
         </Button>
       </header>
@@ -612,11 +617,20 @@ export function SpacePlanner({
           ) : null}
           {plan.shortBytes > 0 && !ranHere ? (
             <div className="flex flex-wrap items-center justify-end gap-2">
+              {runningElsewhere ? (
+                <span className="min-w-0 flex-1 basis-[12rem] text-xs text-[var(--color-muted)]" data-testid="space-plan-elsewhere">
+                  {tr(
+                    "cleanup_plan_other_console",
+                    undefined,
+                    "Another console is making room right now. This plan can run when that is done.",
+                  )}
+                </span>
+              ) : null}
               <Button
                 variant="danger"
                 size="sm"
                 leftIcon={<Wand2 size={14} />}
-                disabled={busy || chosen === 0 || stale}
+                disabled={busy || runningElsewhere || chosen === 0 || stale}
                 onClick={() => void doIt()}
                 data-testid="space-plan-do-it"
               >
@@ -627,7 +641,7 @@ export function SpacePlanner({
         </>
       ) : null}
 
-      {run.running && run.host === host ? (
+      {runningHere ? (
         <div className="flex flex-wrap items-center gap-2 text-xs" data-testid="space-plan-running">
           <Spinner size={12} />
           <span>{tr("cleanup_plan_running", undefined, "Making room… each step runs in turn.")}</span>

@@ -81,7 +81,7 @@ export function KbmReleaseChip({ low = false }: { low?: boolean }) {
   const key = useKbmStore((s) => shortcutLabel(s.shortcuts.release));
   return (
     <div
-      className={`pointer-events-none absolute left-1/2 z-10 -translate-x-1/2 rounded-full bg-black/45 px-3 py-1 text-xs text-white/70 ${low ? "top-16" : "top-3"}`}
+      className={`pointer-events-none absolute left-1/2 z-10 w-max max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-full bg-black/45 px-3 py-1 text-xs text-white/70 ${low ? "top-16" : "top-3"}`}
       data-testid="rp-kbm-chip"
     >
       {tr("rp_kbm_chip", { key }, `${key} to release`)}
@@ -95,7 +95,7 @@ export function KbmToast({ mode, captured }: { mode: KbmMode; captured: boolean 
   return (
     <div
       role="status"
-      className="pointer-events-none absolute left-1/2 top-24 z-30 -translate-x-1/2 rounded-full bg-black/80 px-4 py-2 text-sm text-white shadow-lg"
+      className="pointer-events-none absolute left-1/2 top-24 z-30 w-max max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-full bg-black/80 px-4 py-2 text-sm text-white shadow-lg"
       data-testid="rp-kbm-toast"
     >
       <span className="font-medium">{kbmModeLabel(tr, mode)}</span>

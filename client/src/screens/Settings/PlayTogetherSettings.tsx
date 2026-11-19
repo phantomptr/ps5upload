@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   Button,
@@ -38,6 +38,10 @@ export function PlayTogetherSettings() {
   const [saveWhy, setSaveWhy] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
+  // What the text fields were last filled with. This read runs again each time Settings is
+  // shown again: a field still as it was filled takes the saved value, one being typed in is
+  // left alone (it used to be put back to the saved value, losing what was typed).
+  const filled = useRef({ hub: "", stun: "", port: "" });
   useEffect(() => {
     let alive = true;
     void joinApi.read(host).then((s) => {
@@ -47,9 +51,16 @@ export function PlayTogetherSettings() {
         return;
       }
       setNet(s.settings);
-      setHub(s.settings.hubUrl);
-      setStun(s.settings.stun.join("\n"));
-      setPort(s.settings.port ? String(s.settings.port) : "");
+      const was = filled.current;
+      const now = {
+        hub: s.settings.hubUrl,
+        stun: s.settings.stun.join("\n"),
+        port: s.settings.port ? String(s.settings.port) : "",
+      };
+      filled.current = now;
+      setHub((cur) => (cur === was.hub ? now.hub : cur));
+      setStun((cur) => (cur === was.stun ? now.stun : cur));
+      setPort((cur) => (cur === was.port ? now.port : cur));
     });
     return () => {
       alive = false;

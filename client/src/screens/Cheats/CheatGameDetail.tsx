@@ -72,7 +72,7 @@ export function CheatGameDetail({
   const [mods, setMods] = useState<CheatMod[]>([]);
   const [modsLoading, setModsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [toggling, setToggling] = useState<number | null>(null);
+  const [toggling, setToggling] = useState<ReadonlySet<number>>(new Set());
   const [downloading, setDownloading] = useState<string | null>(null);
   const [fetched, setFetched] = useState<Set<string>>(new Set());
 
@@ -112,7 +112,7 @@ export function CheatGameDetail({
     `${game.titleId}@${addr}`,
     () => cheatsGet(game.titleId, addr),
     (r) => setMods(r.mods ?? []),
-    () => toggling !== null,
+    () => toggling.size > 0,
   );
 
   async function download(e: CheatRepoEntry) {
@@ -152,7 +152,7 @@ export function CheatGameDetail({
   }
 
   async function toggle(m: CheatMod) {
-    setToggling(m.index);
+    setToggling((prev) => new Set(prev).add(m.index));
     try {
       const r = await cheatsToggle(game.titleId, m.index, !m.on, addr);
       if (!r.ok) {
@@ -177,7 +177,12 @@ export function CheatGameDetail({
     } catch (err) {
       setError(humanizePs5Error(String(err)));
     } finally {
-      setToggling(null);
+      // Only this switch: another one flipped meanwhile is still on its way.
+      setToggling((prev) => {
+        const next = new Set(prev);
+        next.delete(m.index);
+        return next;
+      });
     }
   }
 
@@ -333,7 +338,7 @@ export function CheatGameDetail({
                   <div className="min-w-0 flex-1">
                     <Toggle
                       checked={m.on}
-                      disabled={toggling === m.index || !game.running}
+                      disabled={toggling.has(m.index) || !game.running}
                       onChange={() => void toggle(m)}
                       label={m.name || tr("cheats_unnamed_mod", { index: m.index }, "Cheat #{index}")}
                       hint={m.desc || undefined}
@@ -345,7 +350,7 @@ export function CheatGameDetail({
                       {tr("cheats_other_version", undefined, "Other game version")}
                     </span>
                   )}
-                  {toggling === m.index && <Spinner size={14} />}
+                  {toggling.has(m.index) && <Spinner size={14} />}
                 </li>
               ))}
             </ul>

@@ -1772,6 +1772,8 @@ export default function FileSystemScreen() {
       destructive: true,
     });
     if (!ok) return;
+    // Asked again: a move dropped on a folder may have started while the question was up.
+    if (fsBulk.op !== null) return;
     setError(null);
     fsBulk.begin({
       op: "delete",
@@ -2482,6 +2484,10 @@ export default function FileSystemScreen() {
       });
       if (!overwrite) return;
     }
+    // Asked again after the awaits above: two drops in a row (each waiting on its folder's
+    // listing) both passed the first check, and two loops on one console share one progress
+    // state, so the first to finish hid the banner and Stop of the other.
+    if (fsBulk.op !== null) return;
     setError(null);
     fsBulk.begin({
       op: op === "cut" ? "paste-move" : "paste-copy",

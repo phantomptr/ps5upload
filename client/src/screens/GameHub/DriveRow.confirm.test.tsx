@@ -1,7 +1,23 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { confirmClosesFor, confirmRunAllowed, ConfirmRow, packedWithin } from "./DriveRow";
+import { confirmClosesFor, confirmRunAllowed, ConfirmRow, packedWithin, rowBusyText } from "./DriveRow";
+
+describe("game row: what the progress strip says", () => {
+  it("only a download reads as one; Play, Register, Unregister, Heal and Edit have their own words", () => {
+    expect(rowBusyText("download")[2]).toBe("Downloading from PS5");
+    const others = (["launch", "register", "unregister", "heal", "edit-checkout"] as const).map(
+      (b) => rowBusyText(b)[2],
+    );
+    expect(others).toEqual([
+      "Starting…",
+      "Registering…",
+      "Unregistering",
+      "Restoring home-screen files",
+      "Getting the files ready to edit",
+    ]);
+  });
+});
 
 type Confirm = Parameters<typeof ConfirmRow>[0]["confirm"];
 const confirm = { kind: "delete", entry: { name: "Dead Space", path: "/data/games/ds" } } as unknown as Confirm;

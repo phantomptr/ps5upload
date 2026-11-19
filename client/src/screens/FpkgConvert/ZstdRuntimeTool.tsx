@@ -125,6 +125,8 @@ export function ZstdRuntimeTool({
   const host = consoleOf(source.trim());
   const now = runtimeNow(inspection, tr);
   useEffect(() => {
+    // Another game only: shown again with the same one, the result stays (and the button off).
+    if (shown.current === source) return;
     shown.current = source;
     setDone(null);
     setFailed(null);

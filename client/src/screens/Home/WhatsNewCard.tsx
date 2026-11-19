@@ -42,7 +42,8 @@ export function WhatsNewCard() {
         if (cancelled) return;
         const { show, next } = whatsNewState(load(), v, Date.now());
         safeSetItem(KEY, JSON.stringify(next));
-        if (show) setVersion(v);
+        // Also cleared: dismissed on another console's Home, this one is shown again without it.
+        setVersion(show ? v : null);
       })
       .catch(() => {
         // No version, nothing to announce.

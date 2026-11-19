@@ -264,6 +264,24 @@ describe("desktop updates", () => {
     expect(useUpdateStore.getState().phase.kind).toBe("up-to-date");
   });
 
+  it("checking again with the update already downloaded keeps the download", async () => {
+    const api = await import("../api/ps5");
+    vi.mocked(api.updateCheck).mockResolvedValueOnce(result("10.2.0"));
+    const { useUpdateStore } = await import("./update");
+    const have = { kind: "downloaded" as const, result: result("10.2.0"), download: download() };
+    useUpdateStore.setState({ phase: have });
+    await useUpdateStore.getState().checkNow();
+    expect(useUpdateStore.getState().phase).toEqual(have);
+    expect(api.updateDownload).not.toHaveBeenCalled();
+    // A newer release than the one in hand is offered as usual.
+    vi.mocked(api.updateCheck).mockResolvedValueOnce(result("10.3.0"));
+    useUpdateStore.setState({ autoCheckEnabled: false });
+    await useUpdateStore.getState().checkNow();
+    const phase = useUpdateStore.getState().phase;
+    expect(phase.kind).toBe("available");
+    if (phase.kind === "available") expect(phase.result.latest_version).toBe("10.3.0");
+  });
+
   it("removing old downloads asks the app and counts again", async () => {
     const api = await import("../api/ps5");
     vi.mocked(api.updateRemoveOldDownloads).mockResolvedValue(2);

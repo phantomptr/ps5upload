@@ -109,3 +109,14 @@ export function streamErrorMessage(tr: Tr, e: StreamError): string {
       return tr("rp_err_other", undefined, "The stream stopped.");
   }
 }
+
+/** The last stream's error, for the Play page of the console at `pageHost`: only the page of the
+ *  console that was streamed (`streamedHost`) shows it. With either side unknown it is shown. */
+export function streamErrorFor(
+  error: StreamError | null,
+  streamedHost: string | null,
+  pageHost: string | null,
+): StreamError | null {
+  if (!error) return null;
+  return !streamedHost || !pageHost || streamedHost === pageHost ? error : null;
+}

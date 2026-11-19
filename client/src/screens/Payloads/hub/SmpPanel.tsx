@@ -65,8 +65,14 @@ export default function SmpPanel({ mgmtAddr }: { mgmtAddr: string | null }) {
 
   // Reset the auto-expand latch when switching to a different PS5 so
   // the new console gets its own first-install auto-expand.
+  // A different one only: the effect also runs again each time the screen is shown again, and
+  // resetting then opened a panel the user had collapsed.
+  const latchFor = useRef(mgmtAddr);
   useEffect(() => {
-    didAutoExpandRef.current = false;
+    if (latchFor.current !== mgmtAddr) {
+      latchFor.current = mgmtAddr;
+      didAutoExpandRef.current = false;
+    }
     refresh();
   }, [mgmtAddr, refresh]);
 

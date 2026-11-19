@@ -41,6 +41,8 @@ export function AmprEmuTool({
   const [done, setDone] = useState<AmprEmuOutcome | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => {
+    // Another game only: shown again with the same one, the result stays (and the button off).
+    if (shown.current === source) return;
     shown.current = source;
     setDone(null);
     setFailed(null);

@@ -24,3 +24,16 @@ export function convertFirstState(items: ConvertCandidate[]): WorkshopHandOver |
   if (ok.length === 1) return { source: ok[0].path };
   return { sources: ok.map((i) => ({ path: i.path, isDir: i.isDir })) };
 }
+
+const taken = new Set<string>();
+
+/** Whether the hand-over that came with the navigation `key` (the router's `location.key`) is
+ *  still to be taken: true once, false ever after. The router state stays on its history entry,
+ *  and the Workshop's effects run again each time it is shown again (another screen and back,
+ *  another console and back), so without this the same games were queued or chosen again, on
+ *  top of whatever had been done since. */
+export function takeHandOver(key: string): boolean {
+  if (taken.has(key)) return false;
+  taken.add(key);
+  return true;
+}

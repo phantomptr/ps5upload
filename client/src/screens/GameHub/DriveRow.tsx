@@ -332,6 +332,38 @@ type BusyState =
   | "edit-checkout"
   | "heal";
 
+/** What the row's progress strip says it is doing: the key, no variables, and the English.
+ *  Every state has its own words: Play, Register, Unregister, Heal and Edit files all used to
+ *  read "Downloading from PS5", the last case of a chain that named only some of them. */
+export function rowBusyText(busy: Exclude<BusyState, null>): [string, undefined, string] {
+  switch (busy) {
+    case "delete":
+      return ["library_busy_delete", undefined, "Deleting"];
+    case "chmod":
+      return ["library_busy_chmod", undefined, "Applying Permission 777"];
+    case "unmount":
+      return ["library_busy_unmount", undefined, "Unmounting"];
+    case "mount":
+      return ["library_busy_mount", undefined, "Mounting"];
+    case "move-copying":
+      return ["library_busy_move_copying", undefined, "Copying to new location"];
+    case "move-deleting":
+      return ["library_busy_move_deleting", undefined, "Cleaning up source"];
+    case "download":
+      return ["library_busy_download", undefined, "Downloading from PS5"];
+    case "launch":
+      return ["game_hub_launching", undefined, "Starting…"];
+    case "register":
+      return ["library_busy_register", undefined, "Registering…"];
+    case "unregister":
+      return ["library_busy_unregister", undefined, "Unregistering"];
+    case "edit-checkout":
+      return ["library_busy_edit_checkout", undefined, "Getting the files ready to edit"];
+    case "heal":
+      return ["library_busy_heal", undefined, "Restoring home-screen files"];
+  }
+}
+
 
 /** "Copied, but the source is still there": shown in the row and in the notification. */
 function moveDeleteFailedText(
@@ -904,6 +936,9 @@ function LibraryRowImpl({
           return;
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
+          // Nothing was mounted: Activity must not record this mount as done.
+          okOutcome = false;
+          errMsg = msg;
           setError(
             humanizePs5Error(
               tr(
@@ -2038,15 +2073,17 @@ function LibraryRowImpl({
           )}
           {fromImagePath && fromImageBasename && (
             <div
-              className="mt-1 inline-flex items-center gap-1 rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-xs font-medium uppercase tracking-wide text-[var(--color-muted)]"
+              className="mt-1 inline-flex max-w-[11rem] items-center gap-1 rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-xs font-medium uppercase tracking-wide text-[var(--color-muted)]"
               title={tr(
                 "library_badge_from_image_tooltip",
                 { image: fromImagePath },
                 `Lives inside ${fromImagePath}. Unmounting that image will hide this title until you remount it.`,
               )}
             >
-              <FileArchive size={9} />
-              <span>
+              <FileArchive size={9} className="shrink-0" />
+              {/* Cut short: a long image name made this column wider than a phone's row (the
+                  column never shrinks), and the row ran off the edge. The tooltip has it whole. */}
+              <span className="min-w-0 truncate">
                 {tr(
                   "library_badge_from_image",
                   { image: fromImageBasename },
@@ -2496,35 +2533,7 @@ function LibraryRowImpl({
           <div className="flex items-center gap-2">
             <Spinner size={12} tone="accent" />
             <span className="font-medium">
-              {busy === "delete"
-                ? tr("library_busy_delete", undefined, "Deleting")
-                : busy === "chmod"
-                  ? tr(
-                      "library_busy_chmod",
-                      undefined,
-                      "Applying Permission 777",
-                    )
-                  : busy === "unmount"
-                    ? tr("library_busy_unmount", undefined, "Unmounting")
-                    : busy === "mount"
-                      ? tr("library_busy_mount", undefined, "Mounting")
-                      : busy === "move-copying"
-                        ? tr(
-                            "library_busy_move_copying",
-                            undefined,
-                            "Copying to new location",
-                          )
-                        : busy === "move-deleting"
-                          ? tr(
-                              "library_busy_move_deleting",
-                              undefined,
-                              "Cleaning up source",
-                            )
-                          : tr(
-                              "library_busy_download",
-                              undefined,
-                              "Downloading from PS5",
-                            )}
+              {tr(...rowBusyText(busy))}
             </span>
             <span className="text-[var(--color-muted)]">
               {entry.name} · {formatDuration(elapsedMs / 1000)}

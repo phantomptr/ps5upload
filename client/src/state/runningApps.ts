@@ -110,6 +110,16 @@ export function runningOn(
   return h && s.host === h ? s.titleIds : EMPTY;
 }
 
+/** Whether the running set is a real answer from `host`. Selecting a console empties the set
+ *  until that console is asked again: until then "nothing is running" is only "not known". */
+export function runningKnownOn(
+  s: Pick<RunningAppsState, "host" | "updatedAtMs">,
+  host: string | null | undefined,
+): boolean {
+  const h = storeHost(host ?? null);
+  return !!h && s.host === h && s.updatedAtMs > 0;
+}
+
 /** The running set on `host` once `titleId` was closed there: never another
  *  console's titles republished under `host`'s name. */
 export function runningAfterClose(

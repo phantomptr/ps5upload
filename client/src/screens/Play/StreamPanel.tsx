@@ -106,7 +106,7 @@ import { closePip, openPip, pipPadsInBackground, pipSupport } from "./pip";
 import { PictureOffPlaceholder } from "./PictureHere";
 import { CaptureBarButtons, CaptureOverlay } from "./CaptureControls";
 import { LatencyLine, QualityNotice } from "./NetworkExtras";
-import { streamErrorMessage } from "./streamErrors";
+import { streamErrorFor, streamErrorMessage } from "./streamErrors";
 import { RpBlockerNotice, RpBlockerPhase } from "./RpBlockers";
 import { RpKeyboardBox } from "./RpKeyboardBox";
 import { RpPasscodeBox } from "./RpPasscodeBox";
@@ -511,6 +511,9 @@ export function StreamPanel({
   // stream offered (show it, or stop it and play this one).
   const streaming = !!stream && phase !== null && phase !== "ended";
   const running = streaming && !!profile && target?.host === profile.host;
+  // The last stream's error belongs to the console it streamed (`target` stays after it ends):
+  // another console's page showed it too, with no name, beside that page's own blocker list.
+  const errorHere = streamErrorFor(error, target?.host ?? null, profile?.host ?? null);
   // Phones playing along as controllers, and phones asking to (pad_link.rs).
   const [padLink, setPadLink] = usePadLink(running, target?.host ?? null);
   // Play Together on the console streaming (whichever it is): its friends, asks and invite.
@@ -1289,7 +1292,7 @@ export function StreamPanel({
           )}
           {playing && kbm.captureHint && !settingsOpen && !pip && (
             <div
-              className={`pointer-events-none absolute left-1/2 z-10 -translate-x-1/2 rounded-full bg-black/70 px-3 py-1 text-xs text-white/85 ${showBar && !compact ? "top-16" : "top-3"}`}
+              className={`pointer-events-none absolute left-1/2 z-10 w-max max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-full bg-black/70 px-3 py-1 text-xs text-white/85 ${showBar && !compact ? "top-16" : "top-3"}`}
               data-testid="rp-capture-hint"
             >
               {tr("rp_capture_hint", undefined, "Click the picture to capture the mouse")}
@@ -1570,7 +1573,7 @@ export function StreamPanel({
           )}
           {running && pictureHere && <CaptureOverlay />}
           {running && goLive && <GoLiveChip />}
-          <QualityNotice />
+          {(running || startHeld) && <QualityNotice />}
           {touchHere && touchpadOn && (
             <TouchpadOverlay
               input={kbm.touch}
@@ -1938,12 +1941,12 @@ export function StreamPanel({
         </Callout>
       )}
 
-      {error && (
+      {errorHere && (
         <Callout
           tone="error"
-          title={streamErrorMessage(tr, error)}
+          title={streamErrorMessage(tr, errorHere)}
           action={
-            error.code === "keys" ? (
+            errorHere.code === "keys" ? (
               <Button size="sm" variant="primary" onClick={() => navigate("/play/setup")} data-testid="rp-err-pair-again">
                 {tr("play_setup_title", undefined, "Set up Play")}
               </Button>
@@ -1951,10 +1954,10 @@ export function StreamPanel({
           }
         >
           {/* The console's words are in the title already. */}
-          {streamErrorHelp(tr, error) ?? (error.code === "console_ended" ? null : error.detail)}
+          {streamErrorHelp(tr, errorHere) ?? (errorHere.code === "console_ended" ? null : errorHere.detail)}
         </Callout>
       )}
-      <RpBlockerNotice host={profile?.host ?? null} error={error} running={running} />
+      <RpBlockerNotice host={profile?.host ?? null} error={errorHere} running={running} />
       {pipFailed && (
         <Callout tone="warn" title={tr("rp_pip_failed", undefined, "Picture in picture did not open.")}>
           {tr(

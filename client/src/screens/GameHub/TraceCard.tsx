@@ -8,6 +8,7 @@ import { formatBytes } from "../../lib/format";
 import { formatDate } from "../../lib/formatDate";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
+import { runningKnownOn, useRunningAppsStore } from "../../state/runningApps";
 import { humanizeCaught } from "../../lib/humanizeError";
 
 /**
@@ -70,8 +71,13 @@ export function TraceCard({
   };
 
   // A session ends when the game closes: collect it without being asked.
+  // "Closed" counts only once this console has said what runs on it. Looking at another console
+  // and coming back empties that list until the next read, and that gap used to be taken for
+  // the game closing: the session was collected while the game was still running.
+  const runningKnown = useRunningAppsStore((s) => runningKnownOn(s, host));
   const wasRunning = useRef(running);
   useEffect(() => {
+    if (!running && !runningKnown) return;
     const tracing = !!status?.state?.tracing && status.state.host === host;
     if (wasRunning.current && !running && tracing && host && gamePath && !busy) {
       void run("collect", () => amprTrace.collect(host, gamePath, titleId)).then((ok) => {
@@ -84,7 +90,7 @@ export function TraceCard({
     }
     wasRunning.current = running;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running]);
+  }, [running, runningKnown]);
 
   const tracing = !!status?.state?.tracing;
   const sessions = status?.sessions ?? [];

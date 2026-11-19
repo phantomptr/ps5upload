@@ -151,15 +151,18 @@ export function AmprIndexTool({
   const plan = amprIndexPlan(source, inspection);
   const [run, setRun] = useState<AmprIndexRun>({ phase: "idle" });
   const [explain, setExplain] = useState(false);
-  const live = useRef(true);
+  // Which follow loop is the current one. A rebuild is followed to its end even while this
+  // screen is hidden: the loop used to stop when the screen was left, and coming back then
+  // showed the button as if nothing ran (no Cancel, no result, a second rebuild possible)
+  // while the job was still going.
+  const loop = useRef(0);
+  // Another game: the last result was about the previous one. Another one only: the effect
+  // also runs again each time the screen is shown again.
+  const shown = useRef(source);
   useEffect(() => {
-    live.current = true;
-    return () => {
-      live.current = false;
-    };
-  }, []);
-  // Another game: the last result was about the previous one.
-  useEffect(() => {
+    if (shown.current === source) return;
+    shown.current = source;
+    loop.current++;
     setRun({ phase: "idle" });
     setExplain(false);
   }, [source]);
@@ -167,6 +170,8 @@ export function AmprIndexTool({
   if (plan === "hidden") return null;
 
   const follow = async (jobId: string, isImage: boolean) => {
+    const mine = ++loop.current;
+    const live = { get current() { return mine === loop.current; } };
     setRun({ phase: "running", jobId });
     for (;;) {
       await new Promise((r) => setTimeout(r, POLL_MS));

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { convertFirstState } from "./convertFirst";
+import { convertFirstState, takeHandOver } from "./convertFirst";
 
 describe("convertFirstState", () => {
   it("hands one game over as `source`", () => {
@@ -30,5 +30,15 @@ describe("convertFirstState", () => {
   it("offers nothing when nothing is convertible", () => {
     expect(convertFirstState([{ path: "/g/c.pkg", isDir: false, kind: "pkg" }])).toBeNull();
     expect(convertFirstState([])).toBeNull();
+  });
+});
+
+describe("takeHandOver", () => {
+  it("lets one navigation's hand-over be taken once, however often the screen is shown again", () => {
+    expect(takeHandOver("nav-a:many")).toBe(true);
+    expect(takeHandOver("nav-a:many")).toBe(false);
+    expect(takeHandOver("nav-a:many")).toBe(false);
+    // Handing the same games over again is a new navigation.
+    expect(takeHandOver("nav-b:many")).toBe(true);
   });
 });

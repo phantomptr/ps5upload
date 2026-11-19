@@ -209,7 +209,12 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
   // remove console A's already-rendered (and clickable) rows, and a selection
   // made on A would otherwise leak into B so "Download N" targets A's paths
   // against the now-current host. Mirrors Saves/Hardware/Dashboard.
+  // Only when the console really changed: this effect also runs again each time the tab (or
+  // this console) is shown again, and clearing then threw away the selection and the list.
+  const listedHost = useRef(host);
   useEffect(() => {
+    if (listedHost.current === host) return;
+    listedHost.current = host;
     setItems(null);
     setSelected(new Set());
     setError(null);

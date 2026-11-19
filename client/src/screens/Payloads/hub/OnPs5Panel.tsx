@@ -156,9 +156,14 @@ function OnPs5Body() {
 
   const entries = useMemo(() => hubEntries(catalog), [catalog]);
 
-  // Another console's cards are not this one's.
+  // Another console's cards are not this one's. Only another console's: this effect also runs
+  // again each time the tab is shown again, and clearing then threw away the loaded cards (they
+  // stayed blank for a whole transfer, when nothing is read) and a Stop still in progress.
   const genRef = useRef(0);
+  const shownAddr = useRef(addr);
   useEffect(() => {
+    if (shownAddr.current === addr) return;
+    shownAddr.current = addr;
     genRef.current++;
     setProcs([]);
     setProcsLoaded(false);

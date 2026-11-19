@@ -44,3 +44,23 @@ export function planConsoleSend(
   const replacing = items.filter((i) => existing.has(i.name)).map((i) => i.name);
   return { dests, bytes, fits, replacing };
 }
+
+/** Whether Send stays off. The destination folder's listing must have arrived: until it has,
+ *  nothing is known to be "already there", so a send pressed early replaced files unannounced. */
+export function sendBlocked(s: {
+  target: string;
+  reachError: string | null;
+  volumesLoaded: boolean;
+  listingLoaded: boolean;
+  fits: ConsoleSendPlan["fits"];
+  addrOk: boolean;
+}): boolean {
+  return (
+    !s.target ||
+    !!s.reachError ||
+    !s.volumesLoaded ||
+    !s.listingLoaded ||
+    s.fits === "no" ||
+    !s.addrOk
+  );
+}
