@@ -4648,6 +4648,11 @@ export interface JobSnapshot {
    *  Absent on engines that do not send the counts. */
   settle_files_left?: number;
   settle_files_total?: number;
+  /** Once the console has acknowledged every byte (#873): milliseconds since then, and
+   *  milliseconds since it last confirmed anything new (a durable byte, a finished file, a file
+   *  saved in place). Absent while bytes are still on their way and on older engines. */
+  all_sent_ms?: number;
+  console_quiet_ms?: number;
   /** A console-to-console copy (#433): "direct" between the consoles or "relay" through this
    *  computer, and why not direct. Absent until the route is known (and on other jobs). */
   route?: string;

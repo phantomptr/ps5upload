@@ -3568,6 +3568,7 @@ bottleneck_workers: "เวิร์กเกอร์ของเครื่�
 bottleneck_memory: "หน่วยความจำของเครื่อง",
 upload_phase_settling: "กำลังเสร็จสิ้นบนเครื่อง…",
 upload_phase_verifying: "กำลังตรวจสอบบน PS5…",
+upload_console_quiet: "PS5 ไม่ได้รายงานความคืบหน้ามา {time} แล้ว",
 upload_warn_unsettled_title: "อัปโหลดเสร็จแล้ว แต่ยังไม่ยืนยันว่าบันทึกครบ",
 upload_warn_unsettled: "ข้อมูลทุกไบต์ถึงเครื่องแล้ว แต่เครื่องยังไม่ยืนยันว่าบันทึกไฟล์ทั้งหมด ไฟล์จะเสร็จเอง หากเครื่องไฟดับก่อน ให้ส่งโฟลเดอร์อีกครั้ง",
 queue_rar_password_required: "ไฟล์บีบอัดนี้ต้องใช้รหัสผ่าน",

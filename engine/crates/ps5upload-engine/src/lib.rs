@@ -1586,8 +1586,9 @@ fn attach_live_notes(cfg: &mut TransferConfig, job_id: Uuid) {
 }
 
 /// Adds a running job's live notes to its snapshot JSON: `phase` (`"skipping"` with
-/// `skip_done_bytes` / `skip_total_bytes`), `bottleneck` (AVA1's word), `settling` and
-/// `verifying` (the console reads its last large files back, #783). Fields
+/// `skip_done_bytes` / `skip_total_bytes`), `bottleneck` (AVA1's word), `settling`,
+/// `verifying` (the console reads its last large files back, #783) and, once the console has
+/// every byte, `all_sent_ms` / `console_quiet_ms` (#873). Fields
 /// that do not apply are absent, so the client shows nothing for them. A snapshot that is not
 /// `running` is returned as it is.
 pub(crate) fn merge_live_notes(
@@ -1674,6 +1675,17 @@ pub(crate) fn merge_live_notes(
     // Every byte is on the console and it is reading the last large files back (#783).
     if n.verifying.load(Relaxed) && !n.settling.load(Relaxed) {
         o.insert("verifying".into(), true.into());
+    }
+    // The stretch after the last byte (#873): how long ago the console acknowledged it, and
+    // how long since it last confirmed anything new. A client tells a console that is getting
+    // on with it (the second stays small) from one that has gone quiet (it grows).
+    let all_sent_ms = n.all_sent_ms.load(Relaxed);
+    if all_sent_ms > 0 {
+        o.insert("all_sent_ms".into(), all_sent_ms.into());
+        o.insert(
+            "console_quiet_ms".into(),
+            n.console_quiet_ms.load(Relaxed).into(),
+        );
     }
     v
 }
@@ -15465,6 +15477,23 @@ mod helpers_tests {
         n.verifying.store(true, Relaxed);
         let v = merge_live_notes(Some(&n), running.clone());
         assert_eq!(v["verifying"], true);
+        // #873: nothing about the stretch after the last byte while bytes are on their way,
+        // then how long ago it was acknowledged and how long the console has been quiet
+        assert!(v.get("all_sent_ms").is_none() && v.get("console_quiet_ms").is_none());
+        n.all_sent_ms.store(90_000, Relaxed);
+        n.console_quiet_ms.store(61_000, Relaxed);
+        let v = merge_live_notes(Some(&n), running.clone());
+        assert_eq!(
+            (v["all_sent_ms"].as_u64(), v["console_quiet_ms"].as_u64()),
+            (Some(90_000), Some(61_000))
+        );
+        n.console_quiet_ms.store(0, Relaxed);
+        let v = merge_live_notes(Some(&n), running.clone());
+        assert_eq!(
+            v["console_quiet_ms"], 0,
+            "a console getting on with it: present and small"
+        );
+        n.all_sent_ms.store(0, Relaxed);
         n.settling.store(true, Relaxed);
         n.unswept.store(12, Relaxed);
         n.unswept_peak.store(50, Relaxed);

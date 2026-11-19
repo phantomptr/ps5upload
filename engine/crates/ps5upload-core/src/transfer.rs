@@ -231,6 +231,13 @@ pub struct LiveNotes {
     /// most it reported: the numerator and denominator of "Finishing on the console: N left".
     pub unswept: std::sync::atomic::AtomicU32,
     pub unswept_peak: std::sync::atomic::AtomicU32,
+    /// The stretch after the last byte (#873): milliseconds since the console acknowledged
+    /// every byte it needed (0 = bytes are still on their way), and milliseconds since it last
+    /// confirmed anything new in that stretch (a durable byte, a finished file, a file saved in
+    /// place). The second one growing is a console that is busy without saying so, or stuck;
+    /// staying small is one that is getting on with it.
+    pub all_sent_ms: std::sync::atomic::AtomicU64,
+    pub console_quiet_ms: std::sync::atomic::AtomicU64,
     /// A console-to-console job's route (`LIVE_ROUTE_*`; 0 = not known yet), and why it
     /// went through this computer when it did.
     pub route: std::sync::atomic::AtomicU8,

@@ -137,6 +137,20 @@ export function VerifyingLine({ live }: { live: JobLive }) {
   );
 }
 
+/** The console has every byte and has confirmed nothing new for a minute or more (#873): it is
+ *  busy without saying so (checking a large file takes a while), or stuck. The row otherwise
+ *  only says "Finalizing", whichever it is. */
+export function QuietLine({ live }: { live: JobLive }) {
+  const tr = useTr();
+  if (!live.quietMs) return null;
+  const time = formatEtaSeconds(Math.floor(live.quietMs / 1000));
+  return (
+    <div className="text-xs text-[var(--color-warn)]" data-testid="console-quiet-line">
+      {tr("upload_console_quiet", { time }, `The PS5 has reported no progress for ${time}.`)}
+    </div>
+  );
+}
+
 /** A finished upload whose files the console has not confirmed saved (the engine's commit_ack warning):
  *  a warning in the result, never a clean success. */
 export function UnsettledLine({ live }: { live: JobLive | undefined }) {
@@ -168,6 +182,7 @@ export function JobLiveNotes({ live }: { live: JobLive | undefined }) {
       <BottleneckLine cause={live.bottleneck} />
       <SettlingLine live={live} />
       <VerifyingLine live={live} />
+      <QuietLine live={live} />
     </div>
   );
 }
