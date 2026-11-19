@@ -124,3 +124,38 @@ fn the_engine_url_is_read_only_when_it_says_something() {
     assert_eq!(url(json!({"theme": "dark"})), None);
     assert_eq!(engine_url_in(b"{not json"), None);
 }
+
+/// Android: the config base dir is the app's whole data folder. A reset removes what this app
+/// wrote there and leaves the WebView's profile and Android's own folders alone.
+#[test]
+fn an_android_reset_removes_only_this_apps_entries() {
+    let dir = Scratch::new("android-reset");
+    let base = &dir.0;
+    for folder in [
+        "crash-reports",
+        "logs",
+        "bug-screenshots",
+        "app_webview",
+        "cache",
+        "ps5upload",
+    ] {
+        std::fs::create_dir_all(base.join(folder)).unwrap();
+        std::fs::write(base.join(folder).join("inside"), b"x").unwrap();
+    }
+    for file in ["settings.json", "settings.json.tmp.7", "resume_txids.json"] {
+        std::fs::write(base.join(file), b"{}").unwrap();
+    }
+    assert_eq!(remove_own_config_entries(base).unwrap(), 5);
+    let mut left: Vec<_> = std::fs::read_dir(base)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    left.sort();
+    assert_eq!(
+        left,
+        ["app_webview", "cache", "ps5upload", "resume_txids.json"]
+    );
+    assert!(base.join("app_webview").join("inside").is_file());
+    // Nothing there (a first launch that never saved): nothing to do, not an error.
+    assert_eq!(remove_own_config_entries(&base.join("missing")).unwrap(), 0);
+}

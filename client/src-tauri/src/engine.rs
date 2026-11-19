@@ -285,6 +285,13 @@ async fn command_output(program: &str, args: &[&str], port: u16) -> Option<Strin
         .env("PORT", port.to_string())
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
+    // A system shell and `ss`: with an AppImage's library paths the shell died at once (#603),
+    // which read as "nothing listens" and left an orphaned engine on the port.
+    #[cfg(target_os = "linux")]
+    crate::commands::self_install::without_appimage_env(
+        cmd.as_std_mut(),
+        std::env::var_os("APPIMAGE").is_some(),
+    );
     // No console window for a moment: the app has none of its own.
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
@@ -799,8 +806,13 @@ pub async fn start(app: &AppHandle) -> Result<String> {
         // (possibly fallback) port below isn't rejected by its own
         // "don't relocate a running sidecar" guard.
         if let Some(mut child) = guard.take() {
+            // Read before it is reaped (None afterwards): a reaped PID must not stay registered.
+            let pid = child.id();
             let _ = child.kill().await;
             let _ = child.wait().await;
+            if let Some(pid) = pid {
+                crate::exit_guard::unregister(pid);
+            }
             mark_sidecar_stopped();
         }
 
@@ -1033,7 +1045,7 @@ pub async fn start(app: &AppHandle) -> Result<String> {
         {
             let mut guard = child_lock().await.lock().await;
             if let Some(child) = guard.as_mut() {
-                if let Ok(Some(status)) = child.try_wait() {
+                if let Ok(Some(status)) = try_wait_reaped(child) {
                     return Err(anyhow!(crate::commands::shell_error::coded(
                         "engine_exited_at_start",
                         serde_json::json!({
@@ -1063,8 +1075,14 @@ pub async fn start(app: &AppHandle) -> Result<String> {
     {
         let mut guard = child_lock().await.lock().await;
         if let Some(mut child) = guard.take() {
+            // Its stderr watcher finds the slot empty and unregisters nothing: do it here, or
+            // the exit guard would later kill whatever process has this PID by then.
+            let pid = child.id();
             let _ = child.kill().await;
             let _ = child.wait().await;
+            if let Some(pid) = pid {
+                crate::exit_guard::unregister(pid);
+            }
         }
         mark_sidecar_stopped();
     }
@@ -1073,6 +1091,18 @@ pub async fn start(app: &AppHandle) -> Result<String> {
         &last_probe_error,
         &log_path
     )))
+}
+
+/// `try_wait` on the sidecar, taking it off the exit guard's list once it has exited. `try_wait`
+/// reaps it: from then on `Child::id()` is None, so neither the stderr watcher nor `stop()` can
+/// unregister it later, and its PID may by then be another process's.
+fn try_wait_reaped(child: &mut Child) -> std::io::Result<Option<std::process::ExitStatus>> {
+    let pid = child.id();
+    let status = child.try_wait()?;
+    if let (Some(_), Some(pid)) = (&status, pid) {
+        crate::exit_guard::unregister(pid);
+    }
+    Ok(status)
 }
 
 /// The renderer's words for a readiness timeout (`lib/shellError.ts`): the likely causes on this
@@ -1179,7 +1209,7 @@ pub async fn diagnose(app: &AppHandle) -> Diagnosis {
         let child_running = {
             let mut guard = child_lock().await.lock().await;
             match guard.as_mut() {
-                Some(child) => matches!(child.try_wait(), Ok(None)),
+                Some(child) => matches!(try_wait_reaped(child), Ok(None)),
                 None => false,
             }
         };
@@ -1793,5 +1823,29 @@ mod extract_tests {
             extract_engine(&dir, "ps5upload-engine", b"new engine", "aaaa1111bbbb2222").unwrap();
         assert_ne!(p, dir.join("ps5upload-engine"));
         assert_eq!(std::fs::read(&p).unwrap(), b"new engine");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod reaped_child_tests {
+    use super::try_wait_reaped;
+    use std::time::{Duration, Instant};
+
+    #[tokio::test]
+    async fn a_sidecar_seen_to_have_exited_leaves_the_exit_guards_list() {
+        let mut child = tokio::process::Command::new("true").spawn().unwrap();
+        let pid = child.id().unwrap();
+        crate::exit_guard::register("test-reaped", pid);
+        let started = Instant::now();
+        while try_wait_reaped(&mut child).unwrap().is_none() {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "`true` never exited"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // Why nothing later could unregister it: the PID is no longer given out.
+        assert_eq!(child.id(), None);
+        assert!(!crate::exit_guard::registered(pid));
     }
 }
