@@ -2860,7 +2860,9 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       }));
       scheduleSave();
       const done = wait(id);
-      void get().startHost(hostOf(it.addr));
+      // This row only, like an upload row's Retry: a plain start ran every waiting row of the
+      // console too, including ones the user had not started ("start when I add" off).
+      void get().startHost(hostOf(it.addr), { onlyIds: [id] });
       return { id, done };
     },
 
@@ -3226,7 +3228,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
         ),
       }));
       if (!get().retryItem(id)) return false;
-      void get().startHost(hostOf(item.addr));
+      // This row only (see retryInstall).
+      void get().startHost(hostOf(item.addr), { onlyIds: [id] });
       return true;
     },
 
