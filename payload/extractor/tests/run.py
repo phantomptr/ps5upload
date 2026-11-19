@@ -441,6 +441,33 @@ def test_out_of_space(root):
     check("space mid-write", "b.bin" not in str(tree(os.path.join(root, "o2"))), "a partial file was kept")
 
 
+def test_rar_total_precheck(root):
+    # #869: a RAR that is not solid is refused before anything is made when all of it cannot fit.
+    # rar4-multi holds several files across six volumes; each file alone would fit.
+    vols = [f"rar4-multi.part{i}.rar" for i in range(1, 7)]
+    copy_fixtures(root, vols + ["rar5.rar", "rar5-dict128m.rar"])
+    first = os.path.join(root, vols[0])
+    s = run(root, first, os.path.join(root, "full"))
+    check("rar total", s["state"] == "done", s)
+    sizes = sorted(len(v) for v in tree(os.path.join(root, "full")).values() if isinstance(v, bytes))
+    total, margin = sum(sizes), 64 << 20
+    check("rar total", len(sizes) >= 2 and sizes[-1] < total, sizes)
+    # Room for the largest file, not for all of them.
+    free = margin + total - 1
+    s = run(root, first, os.path.join(root, "o1"), env={"XTEST_FREE": str(free)})
+    check("rar total short", s["message"] == f"fs_extract_no_space: needs {total + margin} bytes, {free} free", s)
+    check("rar total short", not os.path.exists(os.path.join(root, "o1")), "made the folder anyway")
+    s = run(root, first, os.path.join(root, "o2"), env={"XTEST_FREE": str(margin + total)})
+    check("rar total fits", s["state"] == "done", s)
+    for n in ("rar5.rar", "rar5-dict128m.rar"):
+        s = run(root, os.path.join(root, n), os.path.join(root, "o-" + n), env={"XTEST_FREE": str(1 << 20)})
+        check("rar5 total " + n, s["message"].startswith("fs_extract_no_space: needs"), s)
+        check("rar5 total " + n, not os.path.exists(os.path.join(root, "o-" + n)), "made the folder anyway")
+    # A merge keeps the per-file check (it may skip what is already there).
+    s = run(root, first, os.path.join(root, "o2"), env={"XTEST_FREE": str(free)}, merge=True)
+    check("rar total merge", s["state"] == "done", s)
+
+
 def test_conflicts(root):
     arc = os.path.join(root, "c.zip")
     with zipfile.ZipFile(arc, "w") as z:

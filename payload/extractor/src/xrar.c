@@ -6,11 +6,15 @@
  * RAR5 readers are independent implementations under the BSD license. They do not decrypt: an
  * encrypted RAR is refused with fs_extract_rar_encrypted, which the apps explain.
  *
- * Progress is in archive bytes read (the RAR headers do not give a total of the unpacked sizes
- * without decoding a solid archive twice); free space is checked per file from its header. */
+ * Progress is in archive bytes read. Free space is checked per file from its header, and, for an
+ * archive that is not solid, for all of it before anything is written (#869: a 150 GB set ran for
+ * 2 h 21 min and filled the drive at 99%). The total comes from one pass over the headers, which in
+ * an archive that is not solid skips each file's data without decoding it. A solid archive would be
+ * decoded twice for that, so it keeps the per-file check only. */
 #include "xjob.h"
 
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -48,6 +52,84 @@ static int rar_fail(xjob_t *j, struct archive *a, const xrar_vols_t *v) {
     return xj_fail(j, "fs_extract_corrupt: %s", msg);
 }
 
+static uint64_t vint(const unsigned char *p, size_t n, size_t *at, int *ok) {
+    uint64_t v = 0;
+    for (int shift = 0; shift < 64 && *at < n; shift += 7) {
+        unsigned char c = p[(*at)++];
+        v |= (uint64_t)(c & 0x7f) << shift;
+        if (!(c & 0x80)) return v;
+    }
+    *ok = 0;
+    return 0;
+}
+
+/* Whether the archive is solid, from its main header: 1, 0, or -1 when that cannot be told (a
+ * self-extractor, encrypted headers, not a RAR). `p` is the first volume's first `n` bytes. */
+static int xrar_solid(const unsigned char *p, size_t n) {
+    static const unsigned char sig5[8] = {'R', 'a', 'r', '!', 0x1a, 0x07, 0x01, 0x00};
+    static const unsigned char sig4[7] = {'R', 'a', 'r', '!', 0x1a, 0x07, 0x00};
+    if (n >= sizeof sig5 && memcmp(p, sig5, sizeof sig5) == 0) {
+        /* CRC32, header size, type, header flags, [extra size], [data size], archive flags */
+        size_t at = sizeof sig5 + 4;
+        int ok = 1;
+        uint64_t type, hflags, aflags;
+        (void)vint(p, n, &at, &ok);
+        type = vint(p, n, &at, &ok);
+        hflags = vint(p, n, &at, &ok);
+        if (hflags & 1) (void)vint(p, n, &at, &ok);
+        if (hflags & 2) (void)vint(p, n, &at, &ok);
+        aflags = vint(p, n, &at, &ok);
+        if (!ok || type != 1) return -1;
+        return (aflags & 0x4) ? 1 : 0;
+    }
+    if (n >= sizeof sig4 + 5 && memcmp(p, sig4, sizeof sig4) == 0) {
+        /* CRC16, type (0x73 = main), flags */
+        unsigned flags = (unsigned)p[sizeof sig4 + 3] | ((unsigned)p[sizeof sig4 + 4] << 8);
+        if (p[sizeof sig4 + 2] != 0x73 || (flags & 0x0080)) return -1;
+        return (flags & 0x0008) ? 1 : 0;
+    }
+    return -1;
+}
+
+/* The unpacked size of every file in a set that is not solid, or 0 when it is not known: a solid
+ * or unreadable archive, a file without a size, a cancel. Never sets the job's cause: whatever is
+ * wrong with the archive, the extraction itself says so. */
+static uint64_t rar_total(xjob_t *j, char **vols) {
+    unsigned char head[64];
+    struct archive *a;
+    struct archive_entry *ae;
+    uint64_t total = 0;
+    size_t n;
+    FILE *f = fopen(vols[0], "rb");
+    if (!f) return 0;
+    n = fread(head, 1, sizeof head, f);
+    fclose(f);
+    if (xrar_solid(head, n) != 0) return 0;
+    a = archive_read_new();
+    if (!a) return 0;
+    archive_read_support_format_rar(a);
+    archive_read_support_format_rar5(a);
+    if (archive_read_open_filenames(a, (const char **)vols, XRAR_BLOCK) != ARCHIVE_OK) goto unknown;
+    for (;;) {
+        int r = archive_read_next_header(a, &ae);
+        if (r == ARCHIVE_EOF) break;
+        if (r != ARCHIVE_OK && r != ARCHIVE_WARN) goto unknown;
+        if (j->cancelled && j->cancelled(j)) goto unknown;
+        if (archive_entry_filetype(ae) == AE_IFREG && !archive_entry_hardlink(ae)) {
+            if (!archive_entry_size_is_set(ae) || archive_entry_size(ae) < 0) goto unknown;
+            total += (uint64_t)archive_entry_size(ae);
+        }
+        if (archive_read_data_skip(a) != ARCHIVE_OK) goto unknown;
+    }
+    archive_read_close(a);
+    archive_read_free(a);
+    return total;
+unknown:
+    archive_read_close(a);
+    archive_read_free(a);
+    return 0;
+}
+
 static int kind_of(struct archive_entry *e) {
     switch (archive_entry_filetype(e)) {
     case AE_IFREG: return archive_entry_hardlink(e) ? XE_LINK : XE_FILE;
@@ -74,6 +156,15 @@ int xrar_extract(xjob_t *j) {
     }
     vi.is_set = vi.count > 1 || archive_rar_part(j->archive, &at, &len);
     if (xj_rar_volume_name(j->archive, (unsigned)vi.count, vi.next, sizeof vi.next) != 0) vi.next[0] = 0;
+    /* All of it has to fit, before the folder is made (a merge may skip files it already has, so
+     * it keeps the per-file check only). */
+    if (vi.count && !j->merge) {
+        uint64_t total = rar_total(j, vols);
+        if (total && xs_check_space(j, total) != 0) {
+            xj_free_list(vols);
+            return -1;
+        }
+    }
     a = archive_read_new();
     if (!a) {
         xj_free_list(vols);
