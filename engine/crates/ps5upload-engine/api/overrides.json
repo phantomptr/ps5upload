@@ -303,7 +303,69 @@
    "summary": "Tasks started on the console page, with their progress"
   },
   "GET /api/ps5/disk-usage/{id}": {
-   "summary": "How a disk usage measurement stands"
+   "summary": "How a disk usage measurement stands",
+   "responses": {
+    "200": {
+     "description": "How the walk stands; `tree` once it is done (made once, when the walk ends).",
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "id": {
+          "type": "string"
+         },
+         "path": {
+          "type": "string"
+         },
+         "state": {
+          "type": "string",
+          "enum": [
+           "running",
+           "done",
+           "cancelled",
+           "failed"
+          ]
+         },
+         "dirs_scanned": {
+          "type": "integer"
+         },
+         "files": {
+          "type": "integer"
+         },
+         "bytes": {
+          "type": "integer"
+         },
+         "skipped": {
+          "type": "integer"
+         },
+         "elapsed_ms": {
+          "type": "integer"
+         },
+         "partial": {
+          "type": "string"
+         },
+         "error": {
+          "type": "string"
+         },
+         "tree": {
+          "type": "object"
+         }
+        },
+        "required": [
+         "id",
+         "path",
+         "state",
+         "elapsed_ms"
+        ]
+       }
+      }
+     }
+    }
+   },
+   "x-ps5upload": {
+    "response_schema": "described"
+   }
   },
   "GET /api/ps5/fan-boost": {
    "summary": "Whether fan boost is on"
@@ -716,10 +778,134 @@
    "summary": "Stop a task started on the console page"
   },
   "POST /api/ps5/disk-usage": {
-   "summary": "Start measuring a folder on the console"
+   "summary": "Start measuring a folder on the console",
+   "responses": {
+    "200": {
+     "description": "How the walk stands; `tree` once it is done (made once, when the walk ends).",
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "id": {
+          "type": "string"
+         },
+         "path": {
+          "type": "string"
+         },
+         "state": {
+          "type": "string",
+          "enum": [
+           "running",
+           "done",
+           "cancelled",
+           "failed"
+          ]
+         },
+         "dirs_scanned": {
+          "type": "integer"
+         },
+         "files": {
+          "type": "integer"
+         },
+         "bytes": {
+          "type": "integer"
+         },
+         "skipped": {
+          "type": "integer"
+         },
+         "elapsed_ms": {
+          "type": "integer"
+         },
+         "partial": {
+          "type": "string"
+         },
+         "error": {
+          "type": "string"
+         },
+         "tree": {
+          "type": "object"
+         }
+        },
+        "required": [
+         "id",
+         "path",
+         "state",
+         "elapsed_ms"
+        ]
+       }
+      }
+     }
+    }
+   },
+   "x-ps5upload": {
+    "response_schema": "described"
+   }
   },
   "POST /api/ps5/disk-usage/{id}/cancel": {
-   "summary": "Stop a disk usage measurement"
+   "summary": "Stop a disk usage measurement",
+   "responses": {
+    "200": {
+     "description": "How the walk stands; `tree` once it is done (made once, when the walk ends).",
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "id": {
+          "type": "string"
+         },
+         "path": {
+          "type": "string"
+         },
+         "state": {
+          "type": "string",
+          "enum": [
+           "running",
+           "done",
+           "cancelled",
+           "failed"
+          ]
+         },
+         "dirs_scanned": {
+          "type": "integer"
+         },
+         "files": {
+          "type": "integer"
+         },
+         "bytes": {
+          "type": "integer"
+         },
+         "skipped": {
+          "type": "integer"
+         },
+         "elapsed_ms": {
+          "type": "integer"
+         },
+         "partial": {
+          "type": "string"
+         },
+         "error": {
+          "type": "string"
+         },
+         "tree": {
+          "type": "object"
+         }
+        },
+        "required": [
+         "id",
+         "path",
+         "state",
+         "elapsed_ms"
+        ]
+       }
+      }
+     }
+    }
+   },
+   "x-ps5upload": {
+    "response_schema": "described"
+   }
   },
   "POST /api/ps5/dump": {
    "summary": "Dump an installed title to a folder"

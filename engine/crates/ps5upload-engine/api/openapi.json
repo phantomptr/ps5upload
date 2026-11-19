@@ -32656,10 +32656,59 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "properties": {
+                    "bytes": {
+                      "type": "integer"
+                    },
+                    "dirs_scanned": {
+                      "type": "integer"
+                    },
+                    "elapsed_ms": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "files": {
+                      "type": "integer"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "partial": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "skipped": {
+                      "type": "integer"
+                    },
+                    "state": {
+                      "enum": [
+                        "running",
+                        "done",
+                        "cancelled",
+                        "failed"
+                      ],
+                      "type": "string"
+                    },
+                    "tree": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "path",
+                    "state",
+                    "elapsed_ms"
+                  ],
+                  "type": "object"
+                }
               }
             },
-            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+            "description": "How the walk stands; `tree` once it is done (made once, when the walk ends)."
           },
           "400": {
             "$ref": "#/components/responses/Error",
@@ -32715,7 +32764,7 @@
             "name": "addr",
             "required": false
           },
-          "response_schema": "json-unknown"
+          "response_schema": "described"
         }
       }
     },
@@ -32736,10 +32785,59 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "properties": {
+                    "bytes": {
+                      "type": "integer"
+                    },
+                    "dirs_scanned": {
+                      "type": "integer"
+                    },
+                    "elapsed_ms": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "files": {
+                      "type": "integer"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "partial": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "skipped": {
+                      "type": "integer"
+                    },
+                    "state": {
+                      "enum": [
+                        "running",
+                        "done",
+                        "cancelled",
+                        "failed"
+                      ],
+                      "type": "string"
+                    },
+                    "tree": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "path",
+                    "state",
+                    "elapsed_ms"
+                  ],
+                  "type": "object"
+                }
               }
             },
-            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+            "description": "How the walk stands; `tree` once it is done (made once, when the walk ends)."
           },
           "403": {
             "$ref": "#/components/responses/Error",
@@ -32760,7 +32858,7 @@
         ],
         "x-ps5upload": {
           "access": "loopback",
-          "response_schema": "json-unknown"
+          "response_schema": "described"
         }
       }
     },
@@ -32781,10 +32879,59 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "properties": {
+                    "bytes": {
+                      "type": "integer"
+                    },
+                    "dirs_scanned": {
+                      "type": "integer"
+                    },
+                    "elapsed_ms": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "files": {
+                      "type": "integer"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "partial": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "skipped": {
+                      "type": "integer"
+                    },
+                    "state": {
+                      "enum": [
+                        "running",
+                        "done",
+                        "cancelled",
+                        "failed"
+                      ],
+                      "type": "string"
+                    },
+                    "tree": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "path",
+                    "state",
+                    "elapsed_ms"
+                  ],
+                  "type": "object"
+                }
               }
             },
-            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+            "description": "How the walk stands; `tree` once it is done (made once, when the walk ends)."
           },
           "403": {
             "$ref": "#/components/responses/Error",
@@ -32805,7 +32952,7 @@
         ],
         "x-ps5upload": {
           "access": "loopback",
-          "response_schema": "json-unknown"
+          "response_schema": "described"
         }
       }
     },
