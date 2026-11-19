@@ -416,6 +416,109 @@ static void damaged_manifest(void) {
     CHECK(backup_restore("t5", 2000, &restored) == -1);
 }
 
+/* Two paths that flatten to one name ("a/b_c" and "a_b/c"), and two long paths whose names are cut
+ * to one tail: each keeps its own bytes. The second used to be copied over the first, and a restore
+ * wrote the second file's bytes to both paths. */
+static void same_flat_name_keeps_both(void) {
+    char src[512], a[700], b[700], la[1024], lb[1024], da[160], db[160], dx[160], leaf[120];
+    int64_t ts = 0;
+    int files = 0, restored = 0;
+
+    snprintf(src, sizeof src, "%s/clash", g_root);
+    mkdir(src, 0777);
+    mk("%s/clash/%s", "a");
+    mk("%s/clash/%s", "a_b");
+    snprintf(a, sizeof a, "%s/a/b_c", src);
+    put(a, "the file a/b_c");
+    snprintf(b, sizeof b, "%s/a_b/c", src);
+    put(b, "the file a_b/c");
+
+    /* <src>/<A x120>/<X x120>/<leaf x100> and <src>/<B x120>/<X x120>/<leaf x100>: over 255 bytes
+     * flattened (no file can have that name), and the same last 200 bytes. */
+    memset(da, 'A', 120), da[120] = 0;
+    memset(db, 'B', 120), db[120] = 0;
+    memset(dx, 'X', 120), dx[120] = 0;
+    memset(leaf, 'f', 100), leaf[100] = 0;
+    snprintf(la, sizeof la, "%s/%s", src, da);
+    mkdir(la, 0777);
+    snprintf(la, sizeof la, "%s/%s/%s", src, da, dx);
+    mkdir(la, 0777);
+    snprintf(la, sizeof la, "%s/%s/%s/%s", src, da, dx, leaf);
+    put(la, "long A");
+    snprintf(lb, sizeof lb, "%s/%s", src, db);
+    mkdir(lb, 0777);
+    snprintf(lb, sizeof lb, "%s/%s/%s", src, db, dx);
+    mkdir(lb, 0777);
+    snprintf(lb, sizeof lb, "%s/%s/%s/%s", src, db, dx, leaf);
+    put(lb, "long B");
+
+    CHECK(backup_snapshot("t6", src, &ts, &files, NULL) == 0);
+    CHECK(files == 4);
+    put(a, "x");
+    put(b, "y");
+    unlink(la);
+    put(lb, "z");
+    CHECK(backup_restore("t6", ts, &restored) == 0);
+    CHECK(restored == 4);
+    CHECK(same_text(a, "the file a/b_c"));
+    CHECK(same_text(b, "the file a_b/c"));
+    CHECK(same_text(la, "long A"));
+    CHECK(same_text(lb, "long B"));
+    CHECK(backup_delete("t6", ts) == 0);
+}
+
+/* A manifest line longer than the old 1100-byte read buffer (snapshots made before the names were
+ * cut hold them): the file goes back to its whole path, never to the path cut short. A line no
+ * buffer holds is skipped whole, and the line after it is still read. */
+static void long_manifest_lines(void) {
+    char snap[1024], p[1400], name[401], dst[1024], cut[1024], after[600], *text;
+    int restored = -1;
+    size_t at, k;
+
+    snprintf(snap, sizeof snap, "%s/t7/3000", BACKUPS_ROOT);
+    snprintf(p, sizeof p, "%s/t7", BACKUPS_ROOT);
+    mkdir(p, 0777);
+    mkdir(snap, 0777);
+    memset(name, 'n', 200), name[200] = 0; /* a real file name; the line is made long by the path */
+    snprintf(p, sizeof p, "%s/%s", snap, name);
+    put(p, "long line bytes");
+    snprintf(p, sizeof p, "%s/after", snap);
+    put(p, "after bytes");
+
+    /* <root>/deep/<d x200>/<d x200>/<d x200>/<d x200>/<e x80>: about 930 bytes. */
+    at = (size_t)snprintf(dst, sizeof dst, "%s/deep", g_root);
+    for (k = 0; k < 4; k++) {
+        dst[at++] = '/';
+        memset(dst + at, 'd', 200);
+        at += 200;
+    }
+    dst[at++] = '/';
+    memset(dst + at, 'e', 80);
+    at += 80;
+    dst[at] = 0;
+    CHECK(strlen(name) + 1 + strlen(dst) > 1100);
+    /* What the first 1099 bytes of that line named: the path cut short. */
+    snprintf(cut, sizeof cut, "%.*s", (int)(1099 - strlen(name) - 1), dst);
+    snprintf(after, sizeof after, "%s/restored-after", g_root);
+
+    text = malloc(16384);
+    CHECK(text != NULL);
+    if (!text) return;
+    at = (size_t)snprintf(text, 16384, "%s\t%s\nafter\t%s/", name, dst, g_root);
+    memset(text + at, 'q', 6000); /* a line of over 4096 bytes: skipped whole */
+    at += 6000;
+    snprintf(text + at, 16384 - at, "\nafter\t%s\n", after);
+    snprintf(p, sizeof p, "%s/.manifest", snap);
+    put(p, text);
+    free(text);
+
+    CHECK(backup_restore("t7", 3000, &restored) == 0);
+    CHECK(restored == 2);
+    CHECK(same_text(dst, "long line bytes"));
+    CHECK(access(cut, F_OK) != 0);
+    CHECK(same_text(after, "after bytes"));
+}
+
 int main(void) {
     char tmpl[] = "/tmp/ps5upload-backup-XXXXXX";
     if (!mkdtemp(tmpl)) {
@@ -433,6 +536,8 @@ int main(void) {
     list_survives_strange_folders();
     list_stays_inside_its_buffer();
     damaged_manifest();
+    same_flat_name_keeps_both();
+    long_manifest_lines();
     (void)rm_rf(tmpl);
     if (failures) {
         fprintf(stderr, "backup_selftest: %d failure(s)\n", failures);
