@@ -168,4 +168,38 @@ describe("stageRows", () => {
       ["verify", "pending"],
     ]);
   });
+
+  it("a folder from an archive shows its copy and its check, and the unpack only when there is one", () => {
+    const copying = stageRows(
+      { phase: "running", ...base, source: "remote://nas-1/g/Game.zip", mode: "folder", stage: "copy", stageDone: 1, stageTotal: 4, stageMs: {} },
+      null,
+    );
+    expect(copying.map((r) => [r.stage, r.state])).toEqual([
+      ["copy", "active"],
+      ["check", "pending"],
+      ["write", "pending"],
+      ["verify", "pending"],
+    ]);
+    expect(copying[0]).toMatchObject({ done: 1, total: 4 });
+    const unpacking = stageRows(
+      { phase: "running", ...base, source: "/dl/Game.7z", mode: "folder", stage: "extract", stageDone: 0, stageTotal: 0, stageMs: {} },
+      null,
+    );
+    expect(unpacking.map((r) => [r.stage, r.state])).toEqual([
+      ["extract", "active"],
+      ["check", "pending"],
+      ["write", "pending"],
+      ["verify", "pending"],
+    ]);
+    // A failure while it is looked into marks that row.
+    const failed = stageRows(
+      { phase: "failed", ...base, source: "/dl/Game.rar", mode: "folder", stage: "check", message: "x", packagePath: null, stageMs: {} },
+      null,
+    );
+    expect(failed.map((r) => [r.stage, r.state])).toEqual([
+      ["check", "failed"],
+      ["write", "pending"],
+      ["verify", "pending"],
+    ]);
+  });
 });

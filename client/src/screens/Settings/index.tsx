@@ -403,7 +403,19 @@ function FakelibCorpusSection() {
       destructive: true,
     });
     if (!ok) return;
-    await deleteFakelibSet(id);
+    try {
+      await deleteFakelibSet(id);
+    } catch (e) {
+      // It said nothing before: the set just stayed in the list.
+      useToastStore.getState().push({
+        tone: "warn",
+        message: tr(
+          "fakelibs_set_remove_failed",
+          { error: e instanceof Error ? e.message : String(e) },
+          "Couldn't remove that library set: {error}",
+        ),
+      });
+    }
     await refresh();
   };
 

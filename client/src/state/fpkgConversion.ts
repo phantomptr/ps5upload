@@ -505,6 +505,9 @@ export function consoleDumpPath(source: string): string | null {
   return m ? m[1] : null;
 }
 
+/** The swaps whose Delete / Keep is being carried out right now (see `finishReplace`). */
+const finishingSwaps = new WeakSet<object>();
+
 /** A dump on the console is swapped for its package, never installed beside it: both share a
  *  title id, and ShadowMountPlus would register the dump again over the install. */
 async function runReplace(packagePath: string, host: string, dump: string) {
@@ -520,11 +523,27 @@ async function runReplace(packagePath: string, host: string, dump: string) {
   }
   enterStage("park");
   const startedMs = Date.now();
-  const r = await runSwap(
-    { titleId: p.titleId, dump, packagePath },
-    consoleSwapDeps(host),
-    (step) => enterStage(step === "install" ? "install" : "park"),
-  );
+  let r: Awaited<ReturnType<typeof runSwap>>;
+  try {
+    r = await runSwap(
+      { titleId: p.titleId, dump, packagePath },
+      consoleSwapDeps(host),
+      (step) => enterStage(step === "install" ? "install" : "park"),
+    );
+  } catch (e) {
+    // The swap's first questions (is the game running, is the dump there) reject when the
+    // console does not answer, before anything is moved. Nothing caught that: the run stayed
+    // "running" for good, with no Cancel and the queue waiting behind it.
+    if (!running()) return;
+    fail(
+      "park",
+      trStatic("fpkg_swap_no_answer", "The PS5 did not answer, so nothing was moved: {error}", {
+        error: e instanceof Error ? e.message : String(e),
+      }),
+      packagePath,
+    );
+    return;
+  }
   if (!running()) return;
   if (!r.ok) {
     fail(running()!.stage, r.message ?? trStatic("fpkg_swap_unfinished", "The swap did not finish."), packagePath);
@@ -1295,7 +1314,15 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
   finishReplace: async (choice) => {
     const p = get().pipeline;
     if (p.phase !== "done" || !p.swap || !p.host) return;
-    await finishSwap(p.swap, choice, consoleSwapDeps(p.host));
+    // One answer per swap: a second click (or Delete, then Keep) while the first is still at
+    // work ran a second finish on the same dump, and its failure read as a conversion error.
+    if (finishingSwaps.has(p.swap)) return;
+    finishingSwaps.add(p.swap);
+    try {
+      await finishSwap(p.swap, choice, consoleSwapDeps(p.host));
+    } finally {
+      finishingSwaps.delete(p.swap);
+    }
     const now = get().pipeline;
     if (now.phase === "done") set({ pipeline: { ...now, swap: null } });
   },

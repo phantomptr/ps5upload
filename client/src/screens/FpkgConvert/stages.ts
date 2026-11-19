@@ -4,7 +4,7 @@
 import type { Pipeline, PipelineMode, PipelineStage } from "../../state/fpkgConversion";
 import type { Task } from "../../state/tasks";
 import { isRemotePath } from "../../lib/remotePath";
-import { isArchiveSource } from "../../state/fpkgConversion";
+import { isArchiveSource, isInPlaceArchive } from "../../state/fpkgConversion";
 
 export type RowState = "pending" | "active" | "done" | "failed";
 
@@ -44,9 +44,26 @@ const WEIGHT: Record<PipelineStage, number> = {
   install: 5,
 };
 
-function stagesFor(mode: PipelineMode, source: string, packs: boolean): readonly PipelineStage[] {
+function stagesFor(
+  mode: PipelineMode,
+  source: string,
+  packs: boolean,
+  unpacked: boolean,
+): readonly PipelineStage[] {
   // The engine reads the image or package in place, wherever it is.
-  if (mode === "folder") return packs ? PACKED_FOLDER : FOLDER;
+  if (mode === "folder") {
+    const write = packs ? PACKED_FOLDER : FOLDER;
+    if (!isInPlaceArchive(source)) return write;
+    // From a .zip, .7z or .rar: copied here first when it is on a server, then looked into, and
+    // unpacked only when it holds a game image. Without these rows the card showed no stage
+    // at all (and 0%) for the whole copy, and a failure there marked no row.
+    return [
+      ...(isRemotePath(source) ? (["copy"] as const) : []),
+      ...(unpacked ? (["extract"] as const) : []),
+      "check",
+      ...write,
+    ];
+  }
   const copy: PipelineStage[] = [];
   // A build reads a server folder or image in place; a server archive, or an image being
   // compressed (which reads local disk), is copied first.
@@ -74,7 +91,9 @@ export function stageRows(p: Pipeline, installTask: Task | null): StageRow[] {
   if (p.phase === "idle") return [];
   // Only a packed image or folder build packs; it shows the row once it has entered that stage.
   const packs = ("stage" in p && p.stage === "pack") || p.stageMs.pack !== undefined;
-  const stages = stagesFor(p.mode, p.source, packs);
+  // A folder from an archive unpacks it only when it must; the row shows once it has.
+  const unpacked = ("stage" in p && p.stage === "extract") || p.stageMs.extract !== undefined;
+  const stages = stagesFor(p.mode, p.source, packs, unpacked);
   const withMs = (stage: PipelineStage, state: RowState): StageRow =>
     p.stageMs[stage] !== undefined ? { stage, state, ms: p.stageMs[stage] } : { stage, state };
   if (p.phase === "done") return stages.map((s) => withMs(s, "done"));
