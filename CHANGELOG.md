@@ -4,6 +4,21 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+**New**
+- **Run Play Together on your own server (#881).** If you host the engine yourself (for example in Docker behind a reverse proxy with HTTPS), it can now run its own Play Together hub and serve the friends' pages itself. It is off unless you turn it on, it listens on its own port, and that port serves only the hub and the friends' pages, never the engine's controls. See SELF_HOSTING.md. Nothing changes for anyone who doesn't turn it on.
+- **Your own hub and friends' page address are kept (#881).** A custom hub address, STUN servers and a new "Guest page address" setting now survive an engine restart, and can be set once for a Docker container with environment variables. Settings shows whether each one is the default, your setting, or set on the server, and warns when your own pages are paired with the official hub, which only accepts its own pages.
+
+**Faster**
+- **Friends join over the internet much sooner.** The friend's page connects to the hub as soon as it opens, and builds its connection while it does. With the hub far away, the time from pressing Join to being connected dropped from about 1.4 seconds to about 0.4 seconds in our tests.
+
+**Fixes**
+- **Internet invites no longer lose their outside address after one lost packet.** The address lookup is now retried and refreshed while a room is open, and it no longer pauses the stream of every friend already playing.
+- **A friend leaving while the host replies no longer breaks the room** for a moment and reconnects it.
+- **After the hub restarts, invites work again within about 5 seconds** instead of up to 30.
+- The hub passes messages through without rebuilding them, about five times less work per message.
+
 ## 12.6.14
 
 **Fixes**
