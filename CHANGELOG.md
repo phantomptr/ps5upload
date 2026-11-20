@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.16
 
 **New**
 - **The window opens where you left it.** The desktop app now remembers the main window's size, position and whether it was maximized. If that screen is no longer connected, or the window would not fit, it opens centred on your main screen at a size that fits.
