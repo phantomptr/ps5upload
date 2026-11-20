@@ -85,7 +85,8 @@ Host receives:
 
 Forwarded as `{"t":"signal","from":"host"|"<gid>","data":<data unchanged>}`.
 
-- `data` must be a JSON **object** of at most **12 KiB** serialized, else `bad_data` and close.
+- `data` must be a JSON **object** of at most **12 KiB** as sent (its text, spaces included), else
+  `bad_data` and close. It is forwarded byte for byte.
   Its content is up to the engine and the page; the hub does not look inside. Suggested shapes:
   `{"sdp":{"type":"offer","sdp":"..."}}`, `{"ice":{"candidate":"...","sdpMid":"0","sdpMLineIndex":0}}`.
 - A guest may only address `"host"`; a host only a `gid`. Anything else: `bad_target`, close.
