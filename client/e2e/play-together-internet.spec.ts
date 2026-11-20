@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
-import { createServer as netServer, type AddressInfo } from "node:net";
+import { connect as netConnect, createServer as netServer, type AddressInfo, type Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
 
@@ -99,7 +99,7 @@ test.beforeAll(async () => {
   if (!exe) throw new Error("no engine test binary");
 
   // The website: the one page, and a list of everything asked of it.
-  const page = readFileSync(SITE_PAGE);
+  const page = readFileSync(process.env.PS5UPLOAD_E2E_SITE_PAGE || SITE_PAGE);
   site = createServer((req, res) => {
     siteRequests.push(`${req.method} ${req.url}`);
     if (req.method === "GET" && req.url === "/join/") {
@@ -261,4 +261,113 @@ test("the invite service can't be reached: the page offers the host's own page o
   await expect(page).toHaveURL(`${lan}#i=${key}`);
   // (A LAN link in a browser first offers the app.)
   await expect(page.getByTestId("open-in-gate").or(page.getByTestId("join-name-step"))).toBeVisible();
+});
+
+/** A TCP proxy to the hub that holds every chunk `oneWayMs` each way (a hub that far away), and a
+ *  socket's first bytes `handshakeMs` more (the TCP and TLS handshakes a wss:// connection makes
+ *  before its upgrade; a name lookup is not counted). */
+async function delayProxy(target: number, oneWayMs: number, handshakeMs: number): Promise<{ port: number; close: () => void }> {
+  const socks = new Set<Socket>();
+  const srv = netServer((c) => {
+    const u = netConnect(target, "127.0.0.1");
+    socks.add(c).add(u);
+    const pipe = (from: Socket, to: Socket, first: number) => {
+      let extra = first;
+      let last = 0;
+      from.on("data", (d) => {
+        // In order: never before the chunk ahead of it.
+        const at = Math.max(Date.now() + oneWayMs + extra, last);
+        extra = 0;
+        last = at;
+        setTimeout(() => to.write(d), at - Date.now());
+      });
+    };
+    pipe(c, u, handshakeMs);
+    pipe(u, c, 0);
+    const end = () =>
+      setTimeout(() => {
+        c.destroy();
+        u.destroy();
+      }, oneWayMs);
+    for (const s of [c, u]) {
+      s.on("close", end);
+      s.on("error", end);
+    }
+  });
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+  return {
+    port: (srv.address() as AddressInfo).port,
+    close: () => {
+      for (const s of socks) s.destroy();
+      srv.close();
+    },
+  };
+}
+
+// The connect path's timeline, measured: from pressing Join to the data channel open and to the
+// host being asked, with the hub at a simulated distance (the browser and the engine are on this
+// computer: ICE, DTLS and SCTP cost loopback time here). Prints a table; asserts nothing about
+// speed. PS5UPLOAD_E2E_TIMING=1 (and PS5UPLOAD_E2E_SITE_PAGE=<a built page> to time another
+// build of the page).
+test("timeline: Join to the channel open and the host asked, with the hub far away", async ({ browser }) => {
+  test.skip(!process.env.PS5UPLOAD_E2E_TIMING, "a measurement: PS5UPLOAD_E2E_TIMING=1");
+  test.setTimeout(15 * 60_000);
+  await api("/api/join/open", { addr: consoleAddr });
+  const inv = (await api("/api/join/invite", { addr: consoleAddr, internet: true })) as { internet: { url: string } };
+  await expect.poll(async () => (await state()).invite?.internet?.state, { timeout: 15_000 }).toBe("hosted");
+  const rows: Array<{ rtt: number; pause: number; open: number; asked: number }> = [];
+  const runs = Number(process.env.PS5UPLOAD_E2E_TIMING_RUNS) || 3;
+  for (const rtt of [0, 100, 200]) {
+    for (const pause of [0, 3000]) {
+      for (let run = 0; run < runs; run++) {
+        const began = Date.now();
+        const proxy = await delayProxy(hubPort, rtt / 2, 2 * rtt);
+        const link = inv.internet.url
+          .replace(SITE, `${siteOrigin}/join/`)
+          .replace(`hub=127.0.0.1:${hubPort}`, `hub=127.0.0.1:${proxy.port}`);
+        const ctx = await browser.newContext();
+        const page = await ctx.newPage();
+        const marks: Array<[string, number]> = [];
+        page.on("console", (m) => {
+          const t = m.text();
+          if (t.startsWith("[join] ")) marks.push([t.slice(7), Date.now()]);
+        });
+        await page.goto(link, { waitUntil: "domcontentloaded" });
+        await page.getByTestId("open-in-browser").first().click();
+        await page.getByTestId("join-name").fill(`T${rtt}x${run}`);
+        // The friend reading the page and typing a name.
+        await page.waitForTimeout(pause);
+        const t0 = Date.now();
+        await page.getByTestId("join-go").click();
+        await page
+          .waitForFunction(() => document.querySelector('[data-testid="join-stage"]')?.textContent?.includes("to let you in"), null, {
+            polling: 5,
+            timeout: 30_000,
+          })
+          .catch(async (e: Error) => {
+            throw new Error(`run ${rtt}/${pause}/${run}: ${e.message}\n${marks.map((m) => m[0]).join("\n")}\n${await page.locator("body").innerText()}`);
+          });
+        const asked = Date.now() - t0;
+        const open = (marks.find((m) => m[0] === "channel open")?.[1] ?? NaN) - t0;
+        rows.push({ rtt, pause, open, asked });
+        // Turned away, so the next run is not one player too many.
+        for (const p of (await state()).pending ?? []) await api("/api/join/decide", { id: p.id, allow: false });
+        await expect.poll(async () => (await state()).pending?.length ?? 0, { timeout: 10_000 }).toBe(0);
+        await ctx.close();
+        proxy.close();
+        // The engine takes 10 guest connections a minute from one address (join.rs CONNECTS_PER_MIN).
+        await new Promise((r) => setTimeout(r, Math.max(0, began + 6500 - Date.now())));
+      }
+    }
+  }
+  const med = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+  const lines = ["hub RTT ms | pause before Join ms | Join -> channel open ms (median) | Join -> host asked ms (median) | runs"];
+  for (const rtt of [0, 100, 200]) {
+    for (const pause of [0, 3000]) {
+      const r = rows.filter((x) => x.rtt === rtt && x.pause === pause);
+      lines.push(`${rtt} | ${pause} | ${med(r.map((x) => x.open))} | ${med(r.map((x) => x.asked))} | ${r.map((x) => `${x.open}/${x.asked}`).join(" ")}`);
+    }
+  }
+  console.log(`TIMELINE (${process.env.PS5UPLOAD_E2E_SITE_PAGE || "site/join/index.html"})\n${lines.join("\n")}`);
+  await api("/api/join/close", { addr: consoleAddr });
 });
