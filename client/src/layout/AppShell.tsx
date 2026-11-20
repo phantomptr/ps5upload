@@ -144,6 +144,7 @@ import {
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import { isHelperStopped, noteHelperAnswering } from "../state/helperStopped";
 import { guardElfldr } from "../lib/elfldrGuard";
+import { startAutoUpdateLoop } from "../state/helperAutoUpdate";
 import { installPlayTimeAccumulator } from "../state/playTime";
 import { installRunningWatch } from "../state/runningWatch";
 import { useTr } from "../state/lang";
@@ -1174,6 +1175,18 @@ function useAutoRedeployDownHelpers() {
   }, [visible]);
 }
 
+/** Replace an OLDER helper with this app's by itself, only while nothing can break
+ *  (lib/helperAutoUpdate, state/helperAutoUpdate): the "I had to send the helper again after
+ *  updating" complaint. Desktop and phone apps (they carry the helper), while the window shows,
+ *  like the reconnect loop. One loop for every console tree. */
+function useAutoUpdateOlderHelper() {
+  const visible = useDocumentVisible();
+  useEffect(() => {
+    if (!visible || !isTauriEnv()) return;
+    return startAutoUpdateLoop();
+  }, [visible]);
+}
+
 /** Fire the TTL-gated update checks from mount on. The store debounces to
  *  one check per day and caches in sessionStorage, so this is safe to
  *  call unconditionally — subsequent tab switches hit cache. */
@@ -1639,6 +1652,7 @@ export default function AppShell() {
   useMeshSync();
   useTrayApply();
   useAutoRedeployDownHelpers();
+  useAutoUpdateOlderHelper();
   useMovedConsoleWatch();
   useUpdateCheckOnMount();
   useAgentMcpStaleNotice();

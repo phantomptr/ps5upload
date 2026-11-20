@@ -6,7 +6,8 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 import { EMPTY_HOST_RUNTIME, type HostRuntime } from "../../../state/connection";
 import type { MeshState } from "../../../api/mesh";
-import { ConsoleCardView, tailnetSummary, type ConsoleCardViewProps, type TailnetSummary } from "./ConsoleCard";
+import { autoUpdateNote, ConsoleCardView, tailnetSummary, type ConsoleCardViewProps, type TailnetSummary } from "./ConsoleCard";
+import type { Translator } from "../../../state/lang";
 import { cardStatus } from "./model";
 import { TrustedDevicesView } from "./TrustedDevices";
 
@@ -101,6 +102,24 @@ describe("Consoles › a console's card", () => {
     // The card on show is always the console picked at the top: no "Selected", no "Use this PS5".
     expect(html).not.toContain("Selected");
     expect(html).not.toContain("Use this PS5");
+  });
+
+  it("an older helper: one quiet line says what its automatic update waits for, beside Replace helper", () => {
+    const tr = ((_k: string, vars: Record<string, string> | undefined, fallback: string) =>
+      fallback.replace(/\{(\w+)\}/g, (_, n) => vars?.[n] ?? "")) as unknown as Translator;
+    const note = autoUpdateNote(tr, { state: "waiting", why: "busy-here", to: "12.1.0" });
+    const html = card({ ...READY, payloadVersion: "12.0.9" }, { autoUpdateNote: note });
+    expect(html).toContain("Helper v12.0.9 · update available");
+    expect(html).toContain('data-testid="console-card-auto-update"');
+    expect(html).toContain("once your transfers, installs and streams on this PS5 finish");
+    expect(html).toContain("Replace helper");
+    // Not shown for a helper that matches.
+    expect(card(READY, { autoUpdateNote: note })).not.toContain("console-card-auto-update");
+    expect(autoUpdateNote(tr, { state: "waiting", why: "loader-closed", to: "12.1.0" })).toContain("port 9021");
+    expect(autoUpdateNote(tr, { state: "never", why: "off", to: "12.1.0" })).toContain("are off for this PS5");
+    expect(autoUpdateNote(tr, { state: "never", why: "gave-up", to: "12.1.0" })).toContain("Replace helper");
+    expect(autoUpdateNote(tr, { state: "updating", to: "12.1.0" })).toBe("Updating the helper to v12.1.0…");
+    expect(autoUpdateNote(tr, undefined)).toBeNull();
   });
 
   it("needs the helper: the checklist shows in the card, and no Invite yet", () => {
