@@ -140,7 +140,7 @@ impl Entry {
             let hub = crate::join_net::hub_host(r.url())?;
             let mut s = format!(
                 "{}#room={room}&fp={fp}&hub={hub}",
-                crate::join_net::SHARE_PAGE
+                crate::join_net::Kind::Share.page()
             );
             if let Some(l) = &self.lan {
                 s.push_str("&lan=");

@@ -6,6 +6,8 @@ export interface TextareaProps
     "className"
   > {
   label?: string;
+  /** Beside the label, muted (as Input's). */
+  labelHint?: string;
   error?: string;
   hint?: string;
   block?: boolean;
@@ -18,6 +20,7 @@ export interface TextareaProps
  */
 export function Textarea({
   label,
+  labelHint,
   error,
   hint,
   block = true,
@@ -36,13 +39,26 @@ export function Textarea({
 
   return (
     <div className={block ? "w-full" : ""}>
-      {label && (
+      {label && !labelHint && (
         <label
           htmlFor={textareaId}
           className="mb-1 block text-xs font-medium text-[var(--color-text)]"
         >
           {label}
         </label>
+      )}
+      {labelHint && (
+        <div className="mb-1 flex items-baseline justify-between gap-2">
+          {label && (
+            <label
+              htmlFor={textareaId}
+              className="text-xs font-medium text-[var(--color-text)]"
+            >
+              {label}
+            </label>
+          )}
+          <span className="text-xs text-[var(--color-muted)]">{labelHint}</span>
+        </div>
       )}
       <textarea
         id={textareaId}

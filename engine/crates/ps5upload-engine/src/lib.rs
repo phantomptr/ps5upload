@@ -116,6 +116,7 @@ mod save_backup_console;
 mod save_backup_server;
 mod save_copy;
 mod save_sync;
+mod self_host;
 mod server_out;
 mod settings_api;
 mod settings_backup;
@@ -12981,7 +12982,9 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     };
     // "Use less of this computer" as it was last set (#632).
     workshop_api::load();
-    // Play Together's "Invites work" as it was last set.
+    // Play Together: the defaults a self-hosted engine takes from its environment, then "Invites
+    // work" and the rest as they were last set.
+    self_host::log_settings();
     join::load_invites();
 
     // The Collection's automatic refresh (a no-op until a folder is added).

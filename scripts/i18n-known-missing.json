@@ -1,6 +1,15 @@
 {
   "ar": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -16,7 +25,16 @@
     ]
   },
   "bn": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -36,7 +54,16 @@
     ]
   },
   "de": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -60,12 +87,20 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "es": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -83,12 +118,20 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "fa": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -106,7 +149,16 @@
     ]
   },
   "fr": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -123,12 +175,20 @@
       "processes_pid",
       "pt_way_internet",
       "queue_console_total",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "hi": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -148,7 +208,16 @@
     ]
   },
   "hu": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -169,12 +238,20 @@
       "remote_play",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "id": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -197,12 +274,20 @@
       "search_saved_tooltip",
       "smp_meta_json",
       "status_helper_version",
-      "task_dump",
-      "usb_wizard_payload_filter"
+      "task_dump"
     ]
   },
   "it": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -225,12 +310,20 @@
       "search_saved_tooltip",
       "shortcuts_sec_filesystem",
       "smp_meta_json",
-      "status_helper_version",
-      "usb_wizard_payload_filter"
+      "status_helper_version"
     ]
   },
   "ja": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -247,7 +340,16 @@
     ]
   },
   "ko": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -266,7 +368,16 @@
     ]
   },
   "pl": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -284,12 +395,20 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "pt-BR": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -307,12 +426,20 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "queue_console_total",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "ru": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -329,12 +456,20 @@
       "processes_pid",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "th": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -355,7 +490,16 @@
     ]
   },
   "tr": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -375,12 +519,20 @@
       "remote_play",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "vi": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -399,12 +551,20 @@
       "processes_pid",
       "remote_play",
       "smp_meta_json",
-      "task_dump",
-      "usb_wizard_payload_filter"
+      "task_dump"
     ]
   },
   "zh-CN": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -417,12 +577,20 @@
       "helper_copy_place_pldmgr",
       "processes_pid",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "zh-TW": {
-    "missing": [],
+    "missing": [
+      "pt_set_page_base",
+      "pt_set_page_base_bad",
+      "pt_set_page_base_hint",
+      "pt_set_page_base_needs_hub",
+      "pt_set_source_custom",
+      "pt_set_source_default",
+      "pt_set_source_environment",
+      "pt_set_use_defaults"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -435,8 +603,7 @@
       "helper_copy_place_pldmgr",
       "processes_pid",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   }
 }

@@ -96,7 +96,9 @@ fn settings_body() -> SettingsBody {
         internet_invites: None,
         invites: None,
         hub_url: None,
+        page_base: None,
         stun: None,
+        reset: None,
         upnp: None,
         port: None,
         video_track: None,
@@ -1045,22 +1047,170 @@ async fn invites_work_only_on_the_wifi_keeps_to_the_home_networks_link() {
 fn invites_work_is_saved_and_an_old_off_reads_as_wifi() {
     let dir = std::env::temp_dir().join(format!("ps5u-invites-{}", std::process::id()));
     let p = dir.join(INVITES_FILE);
-    assert_eq!(read_invites(&p), (None, None));
-    write_invites(&p, false, 0).unwrap();
-    assert_eq!(read_invites(&p), (Some(false), None));
+    let d = crate::self_host::defaults();
+    let with = |anywhere: bool, port: u16| Settings {
+        internet_invites: anywhere,
+        port,
+        ..Settings::default()
+    };
+    let saved = |anywhere: Option<bool>, port: Option<u16>| Saved {
+        anywhere,
+        port,
+        ..Saved::default()
+    };
+    assert_eq!(read_invites(&p), Saved::default());
+    write_invites(&p, &with(false, 0), d).unwrap();
+    assert_eq!(read_invites(&p), saved(Some(false), None));
     assert!(std::fs::read_to_string(&p).unwrap().contains("\"wifi\""));
-    write_invites(&p, true, 0).unwrap();
-    assert_eq!(read_invites(&p), (Some(true), None));
+    write_invites(&p, &with(true, 0), d).unwrap();
+    assert_eq!(read_invites(&p), saved(Some(true), None));
     std::fs::write(&p, r#"{"internet_invites": false}"#).unwrap();
-    assert_eq!(read_invites(&p), (Some(false), None));
+    assert_eq!(read_invites(&p), saved(Some(false), None));
     std::fs::write(&p, "not json").unwrap();
-    assert_eq!(read_invites(&p), (None, None));
+    assert_eq!(read_invites(&p), Saved::default());
     // The internet friends' port is kept with it (#822); a privileged one reads as none.
-    write_invites(&p, true, 41234).unwrap();
-    assert_eq!(read_invites(&p), (Some(true), Some(41234)));
+    write_invites(&p, &with(true, 41234), d).unwrap();
+    assert_eq!(read_invites(&p), saved(Some(true), Some(41234)));
     std::fs::write(&p, r#"{"invites": "anywhere", "port": 80}"#).unwrap();
-    assert_eq!(read_invites(&p), (Some(true), None));
+    assert_eq!(read_invites(&p), saved(Some(true), None));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The hub, the page base and the STUN servers are kept across restarts (#881) while they differ
+/// from the default: a round trip, a file from before them, a reset that removes them, and a
+/// saved value that wins over a default from the environment.
+#[test]
+fn hub_page_base_and_stun_are_kept_until_reset() {
+    let dir = std::env::temp_dir().join(format!("ps5u-hub-kept-{}", std::process::id()));
+    let p = dir.join(INVITES_FILE);
+    let d = crate::self_host::defaults();
+    let custom = Settings {
+        hub_url: "wss://hub.example.com/ws".into(),
+        page_base: "https://play.example.com/".into(),
+        stun: vec!["stun.example.com:3478".into()],
+        ..Settings::default()
+    };
+    write_invites(&p, &custom, d).unwrap();
+    let back = read_invites(&p);
+    assert_eq!(back.hub_url.as_deref(), Some("wss://hub.example.com/ws"));
+    assert_eq!(back.page_base.as_deref(), Some("https://play.example.com/"));
+    assert_eq!(back.stun, Some(vec!["stun.example.com:3478".to_string()]));
+    let mut s = Settings::default();
+    apply_saved(&mut s, back);
+    assert_eq!(s, Settings { port: 0, ..custom.clone() });
+    // No STUN at all is a choice too, and kept.
+    write_invites(&p, &Settings { stun: Vec::new(), ..Settings::default() }, d).unwrap();
+    assert_eq!(read_invites(&p).stun, Some(Vec::new()));
+
+    // Back to the defaults: nothing of them stays in the file.
+    write_invites(&p, &Settings::default(), d).unwrap();
+    let text = std::fs::read_to_string(&p).unwrap();
+    for k in ["hub_url", "page_base", "stun"] {
+        assert!(!text.contains(k), "{k} left in {text}");
+    }
+    let back = read_invites(&p);
+    assert_eq!(back, Saved { anywhere: Some(true), ..Saved::default() });
+
+    // A file from before these fields loads as it did.
+    std::fs::write(&p, r#"{"invites": "wifi", "port": 41234}"#).unwrap();
+    let mut s = Settings::default();
+    apply_saved(&mut s, read_invites(&p));
+    assert!(!s.internet_invites);
+    assert_eq!((s.port, s.hub_url.as_str()), (41234, d.hub_url.as_str()));
+    assert_eq!(s.page_base, d.page_base);
+
+    // What the settings would refuse is not loaded either.
+    std::fs::write(
+        &p,
+        r#"{"hub_url": "http://x/ws", "page_base": "ftp://x/", "stun": ["no port"]}"#,
+    )
+    .unwrap();
+    assert_eq!(read_invites(&p), Saved::default());
+
+    // A saved value wins over a default the environment set; one the same as it is not saved.
+    let mut warn = Vec::new();
+    let env = crate::self_host::Defaults::from_lookup(
+        |k| match k {
+            "PS5UPLOAD_HUB_URL" => Some("wss://env-hub.example.com/ws".into()),
+            "PS5UPLOAD_PAGE_BASE" => Some("https://env.example.com".into()),
+            _ => None,
+        },
+        &mut warn,
+    );
+    assert!(warn.is_empty());
+    let from_env = Settings {
+        hub_url: env.hub_url.clone(),
+        page_base: env.page_base.clone(),
+        ..Settings::default()
+    };
+    write_invites(&p, &from_env, &env).unwrap();
+    assert_eq!(read_invites(&p).hub_url, None, "the environment's own default");
+    let mut s = from_env.clone();
+    write_invites(&p, &custom, &env).unwrap();
+    apply_saved(&mut s, read_invites(&p));
+    assert_eq!(s.hub_url, "wss://hub.example.com/ws");
+    assert_eq!(s.page_base, "https://play.example.com/");
+    assert_eq!(
+        env.sources(&s.hub_url, &s.page_base, &s.stun),
+        serde_json::json!({"hub_url": "custom", "page_base": "custom", "stun": "custom"})
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `POST /api/join/settings` takes a page base (checked, in one form), and a reset (or an empty
+/// value) puts the hub and the page base back; the view says where each comes from.
+#[tokio::test]
+async fn the_page_base_setting_and_reset() {
+    let _turn = PARTY_TESTS.lock().await;
+    async fn post(b: SettingsBody) -> Response {
+        let (ci, h) = local();
+        set_settings(ci, h, Json(b)).await
+    }
+    let page = |v: &str| SettingsBody {
+        page_base: Some(v.into()),
+        ..settings_body()
+    };
+    for bad_base in ["http://play.example.com/", "https://x/?a=1", "https://x/#f", "play.example.com"] {
+        let r = post(page(bad_base)).await;
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{bad_base}");
+        assert_eq!(body(r).await["error"], "page_base");
+    }
+    let r = body(
+        post(SettingsBody {
+            page_base: Some("https://Play.Example.com/ps5".into()),
+            hub_url: Some("wss://play.example.com/ws".into()),
+            ..settings_body()
+        })
+        .await,
+    )
+    .await;
+    assert_eq!(r["settings"]["page_base"], "https://play.example.com/ps5/");
+    assert_eq!(r["settings"]["sources"]["page_base"], "custom");
+    assert_eq!(r["settings"]["sources"]["hub_url"], "custom");
+    assert_eq!(r["settings"]["sources"]["stun"], "default");
+    assert_eq!(
+        crate::join_net::Kind::Join.page(),
+        "https://play.example.com/ps5/join/"
+    );
+    let r = body(
+        post(SettingsBody {
+            reset: Some(vec!["hub_url".into()]),
+            page_base: Some(String::new()),
+            ..settings_body()
+        })
+        .await,
+    )
+    .await;
+    assert_eq!(r["settings"]["page_base"], "https://ps5upload.phantomptr.com/");
+    assert_eq!(r["settings"]["hub_url"], "wss://hub.phantomptr.com/ws");
+    assert_eq!(r["settings"]["sources"]["page_base"], "default");
+    let r = post(SettingsBody {
+        reset: Some(vec!["everything".into()]),
+        ..settings_body()
+    })
+    .await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 /// The one link's words: the internet link unless the hub can't be reached; the Wi-Fi's link says

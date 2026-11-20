@@ -623,6 +623,89 @@ fn links_and_hub_addresses() {
     assert_eq!(super::fingerprint().unwrap(), fp);
 }
 
+/// A page base the host chose (#881): checked and put in one form, and every kind's link on it
+/// keeps each fragment parameter as on the website's pages.
+#[test]
+fn a_custom_page_base_and_its_links() {
+    use super::{page_base, page_origin, Kind};
+    for (raw, want) in [
+        ("https://play.example.com", "https://play.example.com/"),
+        ("https://play.example.com/", "https://play.example.com/"),
+        (
+            " HTTPS://Play.Example.COM:443/ ",
+            "https://play.example.com/",
+        ),
+        (
+            "https://play.example.com:8443/ps5//",
+            "https://play.example.com:8443/ps5/",
+        ),
+        ("https://[2001:db8::1]/", "https://[2001:db8::1]/"),
+        ("http://localhost:8080", "http://localhost:8080/"),
+        ("http://127.0.0.1/pages", "http://127.0.0.1/pages/"),
+    ] {
+        assert_eq!(page_base(raw).as_deref(), Some(want), "{raw}");
+    }
+    for raw in [
+        "",
+        "play.example.com",
+        "http://play.example.com/",
+        "ws://play.example.com/",
+        "https://play.example.com/?x=1",
+        "https://play.example.com/#x",
+        "https://user@play.example.com/",
+        "https://play.example.com/a/../b",
+        "https://play.example.com/a b",
+        "https://play.example.com:0/",
+        "https://play.example.com:99999/",
+        "https://:443/",
+        "javascript:alert(1)",
+    ] {
+        assert_eq!(page_base(raw), None, "{raw}");
+    }
+    assert_eq!(
+        page_base(&format!("https://{}.com/", "a".repeat(200))),
+        None
+    );
+    assert_eq!(
+        page_origin("https://play.example.com/ps5/"),
+        "https://play.example.com"
+    );
+    assert_eq!(
+        page_origin("https://play.example.com:8443/"),
+        "https://play.example.com:8443"
+    );
+
+    let base = "https://play.example.com/ps5/";
+    for (kind, page) in [
+        (Kind::Join, "join"),
+        (Kind::Pad, "pad"),
+        (Kind::Share, "share"),
+    ] {
+        assert_eq!(kind.page_on(base), format!("{base}{page}/"));
+        assert_eq!(
+            super::link_on(
+                &kind.page_on(base),
+                "R",
+                "K",
+                "AA:BB",
+                "play.example.com",
+                Some("http://192.168.1.10:19113/join"),
+                Some("http://100.101.2.3:19113/join"),
+            ),
+            format!(
+                "https://play.example.com/ps5/{page}/#room=R&k=K&fp=AA:BB&hub=play.example.com\
+                 &lan=http%3A%2F%2F192.168.1.10%3A19113%2Fjoin\
+                 &ts=http%3A%2F%2F100.101.2.3%3A19113%2Fjoin"
+            )
+        );
+        // The default base is the website's, as before.
+        assert_eq!(
+            kind.page_on(super::DEFAULT_PAGE_BASE),
+            format!("https://ps5upload.phantomptr.com/{page}/")
+        );
+    }
+}
+
 // ── Back-pressure ────────────────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
