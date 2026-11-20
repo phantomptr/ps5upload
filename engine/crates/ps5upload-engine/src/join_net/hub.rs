@@ -331,6 +331,13 @@ async fn session(
                         shared.set("hosted", None);
                         *backoff = BACKOFF_FIRST;
                     }
+                    // A signal to a guest that has just left (an answer, a late candidate): the one
+                    // error the hub does not close for (PROTOCOL.md). Taken as an error, it put
+                    // the room in "error" (the host's page showed the home network's link) and
+                    // the hub connection was made again.
+                    "error" if s("why") == "no_peer" => {
+                        crate::log_at!(Debug, "together", "join: a signal to a guest that left");
+                    }
                     "error" => {
                         let why = s("why");
                         crate::log_at!(Debug, "together", "join: the hub says {why}");
