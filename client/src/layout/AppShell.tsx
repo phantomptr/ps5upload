@@ -86,11 +86,12 @@ import { consoleBusy } from "../lib/usePoll";
 import {
   autoRedeployDecision,
   checkShowsLiveHelper,
+  helperAnsweredButUnusable,
   liveHelperDecision,
-  loaderSettled,
   MAX_REDEPLOYS_WITHOUT_RECOVERY,
   REDEPLOY_GAVE_UP_RETRY_MS,
   redeployBrakeResets,
+  redeployWhyFromOutcome,
   type RedeployAction,
 } from "../lib/autoRedeploy";
 import { noteRedeployWhy } from "../state/redeployStatus";
@@ -146,7 +147,8 @@ import {
   keepAwakeModesInUse,
   redeployActionForProfile,
 } from "../state/consoleSettings";
-import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
+import { ensurePayloadCurrent, lastEnsureOutcome } from "../lib/ensurePayloadCurrent";
+import { noteConsoleGone, noteHelperUp, unattendedSettle } from "../lib/loaderSettle";
 import { isHelperStopped, noteHelperAnswering } from "../state/helperStopped";
 import { guardElfldr } from "../lib/elfldrGuard";
 import { startAutoUpdateLoop } from "../state/helperAutoUpdate";
@@ -550,6 +552,13 @@ function useStatusPolling() {
         // A console that answers but wants pairing HAS a helper
         // running: calling it down would arm the auto-redeploy loop below against a live
         // console. Only the session state says what the person has to do about it.
+        // The one record every helper send reads (lib/loaderSettle): a console seen answering is not
+        // one that is starting; one in rest mode or not answering at all will start again later.
+        // Only what this reply said, never a carried-over state: an old "unreachable" would keep
+        // the record starting over and the send waiting forever.
+        const saidNow = powerFromCheck(s);
+        if (s.reachable) noteHelperUp(probedHost);
+        else if (saidNow === "rest" || saidNow === "unreachable") noteConsoleGone(probedHost);
         if (s.reachable || sessionNeedsAttention(s.session)) {
           missCountRef.current[key] = 0;
           newStatus = "up";
@@ -933,8 +942,8 @@ const redeployBook = {
   // Consecutive ticks a console was left alone because its helper still
   // accepted connections (see liveHelperDecision).
   liveHoldsRef: { current: {} as Record<string, number> },
-  // When :9021 was first seen open on a down console (see loaderSettled).
-  loaderFirstOpenRef: { current: {} as Record<string, number> },
+  // The settle wait last logged per console (lib/loaderSettle keeps when the loader opened).
+  settleLoggedRef: { current: {} as Record<string, number> },
   // Consoles whose helper read up since they were last seen switched off (or since the app
   // started): "Bring up automatically" runs the whole bring-up only for the others (#479).
   upThisBootRef: { current: {} as Record<string, boolean> },
@@ -981,12 +990,17 @@ function useAutoRedeployDownHelpers() {
         }
         if (cancelled) return;
         if (checkShowsLiveHelper(fresh)) {
-          noteRedeployWhy(host, null);
+          // A helper that answered in a way this app cannot use (another app version's, older or
+          // newer) is running too: never replaced unattended, and the screen says why (12.6.15).
+          const unusable = !fresh.reachable && !sessionNeedsAttention(fresh.session) && helperAnsweredButUnusable(fresh);
+          noteRedeployWhy(host, unusable ? { kind: "answering" } : null);
           log.info(
             "connection",
             fresh.reachable || sessionNeedsAttention(fresh.session)
               ? `auto-redeploy: ${host} answered a fresh probe — nothing to restore (the down verdict was stale)`
-              : `auto-redeploy: ${host}'s helper is running but slow to answer (a weak network?) — not sending another over it`,
+              : unusable
+                ? `auto-redeploy: ${host} runs a helper this app cannot use (${fresh.reason ?? "too old"}) — left running; Send helper replaces it`
+                : `auto-redeploy: ${host}'s helper is running but slow to answer (a weak network?) — not sending another over it`,
           );
           return;
         }
@@ -1045,30 +1059,22 @@ function useAutoRedeployDownHelpers() {
         if (cancelled) return;
         // Payload Manager starts the helper at boot here: give its boot list time first.
         const settleMs = helperAtBootSettleMs(loadBootRecord(host));
-        const settle = loaderSettled({
-          loaderOpen,
-          firstOpenAt: redeployBook.loaderFirstOpenRef.current[key],
-          now: Date.now(),
-          settleMs,
-        });
-        if (settle === "closed") {
-          delete redeployBook.loaderFirstOpenRef.current[key];
+        // The record every send path shares (lib/loaderSettle): a queue's recovery waits the same.
+        const settle = unattendedSettle(host, loaderOpen, settleMs);
+        if (settle.state === "closed") {
           // Nothing can take the helper; a send could only fail. Said on the screen, not silently.
           noteRedeployWhy(host, { kind: "loader-closed" });
           return;
         }
-        if (settle === "settle") {
-          if (redeployBook.loaderFirstOpenRef.current[key] === undefined) {
-            redeployBook.loaderFirstOpenRef.current[key] = Date.now();
+        if (settle.state === "settle") {
+          if (redeployBook.settleLoggedRef.current[key] !== settle.sendAt) {
+            redeployBook.settleLoggedRef.current[key] = settle.sendAt;
             log.info(
               "connection",
-              `auto-redeploy: ${host}'s loader just came up — waiting ${Math.round(settleMs / 1000)}s for the console to finish booting before sending the helper`,
+              `auto-redeploy: ${host}'s loader just came up — waiting ${Math.max(0, Math.round((settle.sendAt - Date.now()) / 1000))}s for the console to finish booting before sending the helper`,
             );
           }
-          noteRedeployWhy(host, {
-            kind: "settling",
-            sendAt: redeployBook.loaderFirstOpenRef.current[key] + settleMs,
-          });
+          noteRedeployWhy(host, { kind: "settling", sendAt: settle.sendAt });
           return;
         }
         noteRedeployWhy(host, { kind: "sending" });
@@ -1097,8 +1103,17 @@ function useAutoRedeployDownHelpers() {
             `auto-redeploy: attempting helper restore on ${host}`,
           );
           const result = await ensurePayloadCurrent(host, () => cancelled, true);
-          // "pushed"/"stale-ok" both mean an ELF reached the loader.
-          delivered = result === "pushed" || result === "stale-ok";
+          // "pushed"/"stale-ok" mean an ELF reached the loader; "sent-failed" a send that broke
+          // after the loader took it (the console may run it, or have crashed on it): all count.
+          delivered = result === "pushed" || result === "stale-ok" || result === "sent-failed";
+          if (result === "no-push") {
+            // Why it held back, on the screen: the engine's limits, a busy console, a stale build.
+            const why = redeployWhyFromOutcome(lastEnsureOutcome(host));
+            if (why) {
+              noteRedeployWhy(host, why);
+              return;
+            }
+          }
         }
         // If a console takes MAX_REDEPLOYS_WITHOUT_RECOVERY deliveries and still
         // reads down, pushing more cannot help — it only keeps killing
@@ -1190,7 +1205,7 @@ function useAutoRedeployDownHelpers() {
           noteRedeployWhy(h, null);
           redeployBook.upThisBootRef.current[key] = true;
           redeployBook.liveHoldsRef.current[key] = 0;
-          delete redeployBook.loaderFirstOpenRef.current[key];
+          noteHelperUp(h);
           if ((redeployBook.deliveredRef.current[key] ?? 0) > 0) {
             redeployBook.deliveredRef.current[key] = 0;
             log.info("connection", `auto-redeploy: ${h} is back up — re-armed`);

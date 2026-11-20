@@ -245,6 +245,18 @@ export function SetupChecklist({
                   {send.msg}
                 </p>
               ) : null}
+              {send?.state === "fail" && send.forceable ? (
+                <div>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void sendHelperTo(target, tr, undefined, { force: true })}
+                    data-testid="consoles-send-helper-anyway"
+                  >
+                    {tr("helper_send_anyway", undefined, "Send anyway")}
+                  </Button>
+                </div>
+              ) : null}
               {isTauriEnv() ? <FirstRunNudge /> : null}
               {/* The one-tap path (bring-up playlist, helper, auto-loader); it sends from this
                   machine, so not in the browser, and it acts on the selected console. */}

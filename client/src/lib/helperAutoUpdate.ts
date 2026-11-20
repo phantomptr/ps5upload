@@ -62,6 +62,9 @@ export interface ConsoleCheck {
   cheats: Known;
   /** The payload loader (:9021) or Payload Manager answers: something can take the helper. */
   loaderOpen: boolean;
+  /** What the helper itself says a restart would stop (STATUS_ACK `busy`, 12.6.15). `unknown` for a
+   *  helper before that, which is exactly the one being updated: the other answers decide then. */
+  consoleBusy?: Known;
 }
 
 export interface AutoUpdateInput {
@@ -157,7 +160,8 @@ export function helperAutoUpdateDecision(i: AutoUpdateInput): AutoUpdateDecision
   if (fresh !== "older") return never(NEVER_FOR_AGE[fresh]);
   if (c.othersBusy !== "idle" || c.locks !== "idle") return wait("busy-others");
   if (c.otherRestart) return wait("another-device");
-  if (c.consoleTasks === "busy" || c.saveOpen === "busy" || c.cheats === "busy") return wait("console-work");
+  if (c.consoleTasks === "busy" || c.saveOpen === "busy" || c.cheats === "busy" || c.consoleBusy === "busy")
+    return wait("console-work");
   // Not knowing is not knowing it is idle, for what a restart would break: the console's own
   // tasks and an open save. The cheat engine is not held for (see the top).
   if (c.consoleTasks === "unknown" || c.saveOpen === "unknown") return wait("console-unknown");

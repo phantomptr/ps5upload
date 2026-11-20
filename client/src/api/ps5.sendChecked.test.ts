@@ -15,6 +15,7 @@ it("the web UI sends a payload without the desktop-only question first", async (
   invoke.mockResolvedValue({ ok: true, status: "sent" });
   await expect(sendPayloadChecked("10.0.0.2", "/cache/etaHEN.elf")).resolves.toEqual({
     viaPayloadManager: false,
+    unstamped: false,
   });
   expect(invoke.mock.calls.map(([cmd]) => cmd)).toEqual(["payload_send"]);
 });

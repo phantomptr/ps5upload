@@ -18,16 +18,23 @@ describe("waiting for the console's loader", () => {
     expect(asked).toBe(1);
   });
 
-  it("waits out a patched elfldr's 15 s deadline when it is stuck", async () => {
-    const answers: LoaderHealth[] = ["stuck", "stuck", "healthy"];
-    const r = await waitForLoader("10.0.0.2", { health: async () => answers.shift() ?? "healthy", ...clock });
+  it("waits out a patched elfldr's 15 s deadline when it is stuck, then asks once more", async () => {
+    const answers: LoaderHealth[] = ["stuck", "healthy"];
+    let asked = 0;
+    const r = await waitForLoader("10.0.0.2", {
+      health: async () => (asked++, answers.shift() ?? "healthy"),
+      ...clock,
+    });
     expect(r).toBe("healthy");
-    expect(now - 1_000_000).toBeLessThanOrEqual(20_000);
+    expect(asked).toBe(2);
+    expect(now - 1_000_000).toBe(20_000);
   });
 
-  it("gives up after 20 s on a stock elfldr that stays stuck", async () => {
-    const r = await waitForLoader("10.0.0.2", { health: async () => "stuck", ...clock });
+  it("gives up after 20 s on a stock elfldr that stays stuck, having asked it only twice", async () => {
+    let asked = 0;
+    const r = await waitForLoader("10.0.0.2", { health: async () => (asked++, "stuck"), ...clock });
     expect(r).toBe("stuck");
+    expect(asked).toBe(2);
     expect(now - 1_000_000).toBeGreaterThanOrEqual(20_000);
   });
 

@@ -50,6 +50,17 @@ export function SendHelperButton({
           {send.msg}
         </p>
       )}
+      {send?.state === "fail" && send.forceable && (
+        <Button
+          variant="secondary"
+          size={size}
+          className="mt-2"
+          onClick={() => void sendHelperTo(host, tr, undefined, { force: true })}
+          data-testid="send-helper-anyway"
+        >
+          {tr("helper_send_anyway", undefined, "Send anyway")}
+        </Button>
+      )}
     </div>
   );
 }

@@ -2506,20 +2506,15 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
             parkForWake(next, message);
             break drain;
           }
-          // Re-deploy the payload, then poll until it answers. force=true:
-          // we got here from a connection-class transfer failure, so the
-          // payload is suspect — its transfer listener may be dead even
-          // if management still answers the version check. A
-          // plain (non-force) call would see "version matches → current" and
-          // skip the redeploy, leaving the dead listener in place so the resume
-          // retry fails again — the "had to re-send the ELF manually" bug.
-          // Re-send is idempotent and the resume continues from committed
-          // shards, so a needless redeploy on a transient blip only costs the
-          // boot wait, never re-uploaded data.
-          // `() => !isLive()` lets a Stop bail out of the ~30 s boot-wait
+          // Re-deploy the payload when it is gone, then poll until it answers. Transfers and
+          // management share the helper's one AVA1 port (12.6.15), so a helper that answers
+          // status also serves the transfer: it is NOT replaced mid-run, whatever `force` says
+          // (replacing it stopped every device's work, and the retry adopts its job anyway).
+          // Only a helper whose port refuses, or takes connections and never answers, gets a
+          // new one, after the same settle wait, cooldown and engine limits as any unattended
+          // send (lib/ensurePayloadCurrent).
+          // `() => !isLive()` lets a Stop bail out of the boot-wait
           // promptly instead of leaving a ghost push running.
-          // Not when only the status reads failed: the transfer may still be running on the
-          // helper, so re-send it only if it no longer answers (the retry then adopts the job).
           const forceRedeploy =
             !(e instanceof Error && lostContactErrors.has(e)) && recoveryResendsHelper(reason);
           try {

@@ -1135,9 +1135,18 @@ export async function browserInvoke<T>(
       // bundled payload path and calls `payload_send`, which a browser
       // cannot do. Never long: a stuck restore must not hold the install
       // cascade's `finally` open for an hour.
+      // The helper gate's options (engine helper_send.rs): an older engine ignores them.
       return postJson<T>("/api/pkg/payload-restore", {
         ps5_addr: args["ip"],
+        mode: args["mode"] ?? undefined,
+        force: args["force"] ?? undefined,
+        replace: args["replace"] ?? undefined,
+        app_version: args["appVersion"] ?? undefined,
       });
+
+    // The helper this engine sends and its version (the browser has no bundled ELF of its own).
+    case "payload_bundled_info":
+      return getJson<T>("/api/payload/bundled");
 
     // Local .pkg header/split parse. Missing here meant the browser build
     // could not stream-install at all: installStream reads metadata through

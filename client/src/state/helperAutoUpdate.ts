@@ -213,6 +213,7 @@ export async function checkConsole(host: string): Promise<ConsoleCheck> {
   return {
     reachable,
     version: probe?.payloadVersion ?? null,
+    consoleBusy: !probe?.busy ? "unknown" : probe.busy.idle ? "idle" : "busy",
     othersBusy,
     locks,
     otherRestart,
@@ -266,7 +267,9 @@ export async function evaluateAutoUpdate(host: string, cancelled: () => boolean 
     attemptsByPair.set(pk, { n, at: Date.now() });
     publish(key, { state: "updating", to });
     log.info("payload", `auto-update: ${host} runs helper v${from}, older than this app's v${to}; nothing is running there, sending it (try ${n})`);
-    const result = await ensurePayloadCurrent(host, cancelled, false, "auto");
+    // The console was asked just now (checkConsole): an older helper that cannot report its own
+    // work may be replaced, on those answers.
+    const result = await ensurePayloadCurrent(host, cancelled, false, "auto", { consoleChecked: true });
     attemptsByPair.set(pk, { n, at: Date.now() });
     if (result === "pushed") {
       attemptsByPair.delete(pk);

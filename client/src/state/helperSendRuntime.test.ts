@@ -15,7 +15,7 @@ vi.mock("../lib/appVersion", () => ({ getAppVersion: async () => "5.37.1" }));
 
 import { useConnectionStore } from "./connection";
 import { useHelperSendStore } from "./helperSend";
-import { loaderHint, sendHelperAndWait, sendHelperTo } from "./helperSendRuntime";
+import { isIpv6Literal, loaderHint, sendHelperAndWait, sendHelperTo, sendNowHold } from "./helperSendRuntime";
 import type { Translator } from "./lang";
 
 const tr = ((_k: string, a?: unknown, b?: string) =>
@@ -181,7 +181,7 @@ describe("sendHelperAndWait", () => {
       },
       async () => ({ reachable: false, error: "connection refused" }),
     );
-    expect(out).toContain("helper didn't start");
+    expect(out).toContain("may still be starting");
   });
 
   it("reports the joined send's failure", async () => {
@@ -206,5 +206,54 @@ describe("an explicit send after Stop helper (#471)", () => {
     expect(isHelperStopped("192.168.0.9")).toBe(false);
     // Only the console sent to.
     expect(isHelperStopped("192.168.0.10")).toBe(true);
+  });
+});
+
+describe("plain next steps for the errors a send meets (12.6.15)", () => {
+  it.each([
+    ["connect 192.168.1.5:9021: No route to host (os error 65)", "Local Network"],
+    ["connect 192.168.1.5:9021: Operation not permitted (os error 1)", "Permissions"],
+    ['cannot resolve "ps5.lan": failed to lookup address information', "IP address"],
+  ])("%s", (raw, says) => {
+    const msg = loaderHint(raw, "192.168.1.5");
+    expect(msg).toContain(says);
+    expect(msg).toContain(raw);
+  });
+
+  it("an IPv6 console address is told to use IPv4", () => {
+    expect(loaderHint("connect [fe80::1]:9021: timeout", "fe80::1")).toContain("IPv4");
+    expect(isIpv6Literal("[fe80::1]:9021")).toBe(true);
+    expect(isIpv6Literal("192.168.1.5:9021")).toBe(false);
+    expect(isIpv6Literal("ps5.lan")).toBe(false);
+  });
+});
+
+describe("a send someone asks for right after another, or right after the console started", () => {
+  it("says so and offers Send anyway instead of sending", async () => {
+    const { sendHelperOnce, resetHelperSendGate } = await import("../lib/helperSendGate");
+    resetHelperSendGate();
+    runHelperSend.mockReset();
+    useHelperSendStore.setState({ byHost: {} });
+    await sendHelperOnce("192.168.0.42", async () => {});
+    expect(sendNowHold("192.168.0.42", tr)).toContain("may still be starting");
+    expect(await sendHelperTo("192.168.0.42", tr)).toBe("fail");
+    expect(runHelperSend).not.toHaveBeenCalled();
+    const entry = useHelperSendStore.getState().byHost["192.168.0.42"];
+    expect(entry?.forceable).toBe(true);
+    // Send anyway goes.
+    runHelperSend.mockResolvedValue("ok");
+    expect(await sendHelperTo("192.168.0.42", tr, undefined, { force: true })).toBe("ok");
+    expect(runHelperSend).toHaveBeenCalledTimes(1);
+    resetHelperSendGate();
+  });
+
+  it("a console this app saw start moments ago is named as just started", async () => {
+    const { noteConsoleGone, noteLoader, resetLoaderSettle } = await import("../lib/loaderSettle");
+    resetLoaderSettle();
+    noteConsoleGone("192.168.0.43");
+    noteLoader("192.168.0.43", true, 1_000);
+    expect(sendNowHold("192.168.0.43", tr, 2_000)).toContain("just started");
+    expect(sendNowHold("192.168.0.43", tr, 1_000 + 10 * 60_000)).toBeNull();
+    resetLoaderSettle();
   });
 });

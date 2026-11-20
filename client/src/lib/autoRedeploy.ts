@@ -94,8 +94,39 @@ export function checkShowsLiveHelper(check: {
   reachable: boolean;
   session?: SessionState | null;
   reason?: string | null;
+  helperAlive?: boolean;
+  helperTooOld?: boolean;
 }): boolean {
-  return check.reachable || sessionNeedsAttention(check.session) || check.reason === STATUS_SLOW_REASON;
+  return (
+    check.reachable ||
+    sessionNeedsAttention(check.session) ||
+    check.reason === STATUS_SLOW_REASON ||
+    helperAnsweredButUnusable(check)
+  );
+}
+
+/** The engine's reasons for a helper that answered the handshake in a way this app cannot use
+ *  (12.6.15): another app version's helper, a newer one, a reply that does not read. */
+export const HELPER_ANSWERED_REASONS: ReadonlySet<string> = new Set([
+  "helper_alive_unreadable",
+  "helper_too_new",
+  "ava1_wrong_console",
+]);
+
+/** A helper answered (the engine's `helper_alive`, one of HELPER_ANSWERED_REASONS, or too old):
+ *  it is running. Nothing unattended replaces it, whatever its version: two app versions used to
+ *  take each other's helper for a dead one and replace it back and forth. A person may (Send
+ *  helper), and the screens say why the app leaves it. */
+export function helperAnsweredButUnusable(check: {
+  reason?: string | null;
+  helperAlive?: boolean;
+  helperTooOld?: boolean;
+}): boolean {
+  return (
+    check.helperAlive === true ||
+    check.helperTooOld === true ||
+    (check.reason != null && HELPER_ANSWERED_REASONS.has(check.reason))
+  );
 }
 
 /** Whether the brake starts over: the console went to rest mode, or was off (no answer of any
@@ -122,7 +153,51 @@ export type RedeployWhy =
   /** Sending now. */
   | { kind: "sending" }
   /** Three helpers did not bring it back: one more at `retryAt`. */
-  | { kind: "gave-up"; retryAt: number };
+  | { kind: "gave-up"; retryAt: number }
+  /** A helper answers there, only not in a way this app can use (another app version's, older or
+   *  newer): never replaced by itself (12.6.15). */
+  | { kind: "answering" }
+  /** Unattended sends to this console stopped (the engine's `code`): too many this hour (until
+   *  `retryAt`), or the console restarted twice right after one, or another console now answers
+   *  at the address. A Send helper press starts them again. */
+  | { kind: "limit"; code: string; retryAt: number | null }
+  /** The PS5 is busy with work a restart would stop: sent once that ends. */
+  | { kind: "console-busy" }
+  /** This app carries a helper of another version than itself: never sent by itself. */
+  | { kind: "stale-build" };
+
+/** What the reconnect loop's screen says when the send itself held back (lib/ensurePayloadCurrent's
+ *  `lastEnsureOutcome`: its own reasons, or the engine's refusal codes). null: nothing to add. */
+export function redeployWhyFromOutcome(
+  o: { why?: string; retryAt?: number | null } | null,
+): RedeployWhy | null {
+  switch (o?.why) {
+    case "send_budget_spent":
+    case "console_restarted_after_sends":
+    case "different_console":
+      return { kind: "limit", code: o.why, retryAt: o.retryAt ?? null };
+    case "console-busy":
+    case "console_busy":
+      return { kind: "console-busy" };
+    case "others-busy":
+    case "files-busy":
+    case "helper_busy":
+    case "pkg_install_busy":
+      return { kind: "busy" };
+    case "stale-build":
+    case "helper_version_mismatch":
+      return { kind: "stale-build" };
+    case "answering":
+    case "helper_answers":
+      return { kind: "answering" };
+    case "settling":
+      return o.retryAt ? { kind: "settling", sendAt: o.retryAt } : null;
+    case "loader-closed":
+      return { kind: "loader-closed" };
+    default:
+      return null;
+  }
+}
 
 /** How many redeploy ticks (15 s each) a helper that still accepts
  *  connections is left alone before the loop may replace it anyway.

@@ -2,9 +2,11 @@ import { useCallback } from "react";
 
 import { useConfirm } from "../../components/ConfirmDialog";
 import { meshAnnounce } from "../../api/mesh";
+import { payloadCheck } from "../../api/ps5";
+import { allowForceOnce } from "../../state/helperSendRuntime";
 import { hostOf } from "../../lib/addr";
 import { getAppVersion } from "../../lib/appVersion";
-import { busyText, replaceCheck } from "../../lib/helperGuard";
+import { busyText, consoleWorkText, replaceCheck } from "../../lib/helperGuard";
 import { transferScreenBusy } from "../../lib/ps5Transfers";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
@@ -59,6 +61,26 @@ export function useHelperReplaceGuard(): { guard: (host: string) => Promise<bool
         });
         if (!ok) return false;
       }
+      // What the console itself reports a restart would stop (a helper of 12.6.15 or later):
+      // another device's install, an extraction, remote controls. One that cannot say asks
+      // nothing more here.
+      const probe = await payloadCheck(host).catch(() => null);
+      const work = probe?.reachable && probe.busy && !probe.busy.idle ? consoleWorkText(tr, probe.busy) : null;
+      if (work) {
+        const ok = await confirm({
+          title: tr("helper_replace_console_busy_title", undefined, "The PS5 is busy"),
+          message: tr(
+            "helper_replace_console_busy_body",
+            { work },
+            "The PS5 is running {work}. Sending the helper restarts it, and that stops.",
+          ),
+          confirmLabel: tr("helper_send_anyway", undefined, "Send anyway"),
+          destructive: true,
+        });
+        if (!ok) return false;
+        // Confirmed: the engine is not to ask again for this send.
+        allowForceOnce(host);
+      }
       // This app's own uploads and copies stop with the helper too.
       if (transferScreenBusy(host)) {
         const ok = await confirm({
@@ -72,6 +94,8 @@ export function useHelperReplaceGuard(): { guard: (host: string) => Promise<bool
           destructive: true,
         });
         if (!ok) return false;
+        // Confirmed: the engine, which sees the same transfer, is not to ask again.
+        allowForceOnce(host);
       }
       if (state) {
         // Best effort: the others hear it on their next poll, before the helper goes.

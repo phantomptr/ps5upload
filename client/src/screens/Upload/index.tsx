@@ -58,6 +58,7 @@ import {
   type UploadStrategy,
 } from "../../state/transfer";
 import { useConnectionStore } from "../../state/connection";
+import { redeployWhyText, useRedeployWhy } from "../../state/redeployStatus";
 import { log } from "../../state/logs";
 import { hostOf } from "../../lib/addr";
 import { Modal } from "../../components/Modal";
@@ -4380,6 +4381,8 @@ function PayloadReadinessBanner() {
   const status = useConnectionStore((s) => s.payloadStatus);
   const power = useConnectionStore((s) => s.power);
   const helperTooOld = useConnectionStore((s) => s.helperTooOld);
+  const host = useConnectionStore((s) => s.host);
+  const redeployWhy = useRedeployWhy(host);
   const navigate = useNavigate();
   if (status === "up") return null;
   // Asleep is not a fault: say so calmly, and that queued uploads wait for the wake.
@@ -4417,24 +4420,39 @@ function PayloadReadinessBanner() {
   // A helper runs, but one too old for this app (#877): say so, not "isn't reachable".
   const tooOld = showsHelperTooOld({ payloadStatus: status, helperTooOld });
   const oldText = tooOld ? helperTooOldText(tr) : null;
+  // What the last check said, not always "isn't reachable" (12.6.15): a console that does not
+  // answer at all is off or elsewhere, and the reconnect loop's own reason (just started, a
+  // helper it cannot use, its loader closed, a limit) says what happens next.
+  const notAnswering = status === "down" && power === "unreachable";
+  const whyText = status === "down" ? redeployWhyText(tr, redeployWhy) : null;
   const title = oldText
     ? oldText.title
-    : status === "down"
-      ? tr("upload_helper_down", undefined, "PS5 helper isn't reachable")
-      : tr("upload_helper_unknown", undefined, "PS5 helper status unknown");
+    : notAnswering
+      ? tr("gate_not_answering_title", undefined, "Your PS5 isn't answering")
+      : status === "down"
+        ? tr("upload_helper_down", undefined, "PS5 helper isn't reachable")
+        : tr("upload_helper_unknown", undefined, "PS5 helper status unknown");
   const detail = oldText
     ? oldText.detail
-    : status === "down"
-      ? tr(
-          "upload_helper_down_detail_v2",
-          undefined,
-          "Uploads will fail until the helper is running. Send it from here, or open Connection to check the console's address.",
-        )
-      : tr(
-          "upload_helper_unknown_detail",
-          undefined,
-          "We haven't confirmed your PS5 is running the helper yet. Set your IP and send the helper on the Connection screen first.",
-        );
+    : whyText
+      ? whyText
+      : notAnswering
+        ? tr(
+            "upload_console_not_answering",
+            undefined,
+            "It is off, on another network, or in rest mode with its network features off. Uploads wait until it answers.",
+          )
+        : status === "down"
+          ? tr(
+              "upload_helper_down_detail_v2",
+              undefined,
+              "Uploads will fail until the helper is running. Send it from here, or open Connection to check the console's address.",
+            )
+          : tr(
+              "upload_helper_unknown_detail",
+              undefined,
+              "We haven't confirmed your PS5 is running the helper yet. Set your IP and send the helper on the Connection screen first.",
+            );
   return (
     <div className="mb-4">
       <WarningCard

@@ -159,6 +159,8 @@ describe("helperAutoUpdateDecision", () => {
       ["a console-page task running (extract, install)", { consoleTasks: "busy" }, wait("console-work")],
       ["a save mounted", { saveOpen: "busy" }, wait("console-work")],
       ["cheats on with a game running", { cheats: "busy" }, wait("console-work")],
+      ["the helper itself reports work a restart stops (12.6.15)", { consoleBusy: "busy" }, wait("console-work")],
+      ["an older helper that cannot report its work: the other answers decide", { consoleBusy: "unknown" }, { kind: "update" }],
       ["an older helper with no task list", { consoleTasks: "unknown" }, wait("console-unknown")],
       ["a save state it could not tell", { saveOpen: "unknown" }, wait("console-unknown")],
       ["no loader to take the helper", { loaderOpen: false }, wait("loader-closed")],

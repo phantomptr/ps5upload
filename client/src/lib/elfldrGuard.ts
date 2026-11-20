@@ -28,21 +28,23 @@ const realClock: Clock = {
 
 /** How long to wait on a stuck loader: past the patched build's 15 s deadline. */
 const STUCK_WAIT_MS = 20_000;
-const STUCK_POLL_MS = 5_000;
 
-/** The loader's state, waiting up to 20 s for a stuck one to recover. "unknown" when the
- *  check itself failed (an older engine): the caller sends as it always has. */
+/** The loader's state, waiting 20 s for a stuck one to recover. "unknown" when the
+ *  check itself failed (an older engine): the caller sends as it always has.
+ *
+ *  A stuck loader is asked once more after the wait, not every 5 s (12.6.15): each probe takes
+ *  the one connection it serves, and a jailbreak's own listener on :9021 may take the probe's
+ *  request for a payload to run. The engine ends a probe that got no reply with a reset. */
 export async function waitForLoader(
   host: string,
   deps: { health: (host: string) => Promise<LoaderHealth> } & Clock = { health: elfldrHealth, ...realClock },
 ): Promise<LoaderHealth | "unknown"> {
-  const until = deps.now() + STUCK_WAIT_MS;
   try {
-    for (;;) {
-      const h = await deps.health(host);
-      if (h !== "stuck" || deps.now() >= until) return h;
-      await deps.sleep(STUCK_POLL_MS);
-    }
+    const first = await deps.health(host);
+    if (first !== "stuck") return first;
+    // Past the patched build's 15 s deadline.
+    await deps.sleep(STUCK_WAIT_MS);
+    return await deps.health(host);
   } catch {
     return "unknown";
   }
@@ -113,7 +115,7 @@ export async function guardElfldr(
     ...realClock,
   },
 ): Promise<void> {
-  const key = host.trim().toLowerCase();
+  const key = loaderKey(host);
   // One loop per console: a second call (a fresh send while the first still waits) would swap in
   // parallel with it.
   if (inFlight.has(key)) return;

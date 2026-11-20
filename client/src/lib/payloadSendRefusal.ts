@@ -17,7 +17,25 @@ export function payloadSendRefusalText(e: unknown): string {
     // Reached through Tailscale now: a loader port is not carried there.
     case "tailnet_away":
       return translate(lang, "payload_refused_tailnet", undefined);
-    default:
+    // The engine's helper gate (12.6.15).
+    case "recent_send":
+      return translate(lang, "payload_refused_recent", undefined);
+    case "console_busy":
+      return translate(lang, "payload_refused_console_busy", undefined);
+    case "send_budget_spent":
+      return translate(lang, "payload_refused_budget", undefined);
+    case "console_restarted_after_sends":
+      return translate(lang, "reconnect_why_restarted", undefined);
+    case "different_console":
+      return translate(lang, "reconnect_why_different_console", undefined);
+    case "helper_version_mismatch":
+      return translate(lang, "reconnect_why_stale_build", undefined);
+    case "engine_unreachable":
+      return translate(lang, "payload_refused_engine", undefined);
+    case "loader_busy":
       return translate(lang, "payload_refused_loader", undefined);
+    default:
+      // A code this app does not know (a newer engine): its own sentence, if it gave one.
+      return e.detail ?? translate(lang, "payload_refused_loader", undefined);
   }
 }

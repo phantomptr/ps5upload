@@ -67,12 +67,55 @@ export function redeployWhyText(tr: Translator, why: RedeployWhy | undefined, no
         "The helper still answers on its port, only not to this app. It gets a minute to recover before it is replaced.",
       );
     case "sending":
-      return tr("reconnect_why_sending", undefined, "Sending the helper by itself now…");
+      return tr("helper_starting", undefined, "Starting the helper…");
     case "gave-up":
       return tr(
         "reconnect_why_gave_up",
         { count: MAX_REDEPLOYS_WITHOUT_RECOVERY, minutes: Math.max(1, Math.ceil((why.retryAt - now) / 60_000)) },
         "Sent {count} times without the helper starting. The next try is in about {minutes} min, or press Send helper now.",
       );
+    case "answering":
+      return tr(
+        "reconnect_why_answering",
+        undefined,
+        "A helper is running on this PS5 but this app can't use it (most often another version of the app sent it). It is left running: press Send helper to replace it with this app's.",
+      );
+    case "limit":
+      return limitText(tr, why.code, why.retryAt, now);
+    case "console-busy":
+      return tr(
+        "reconnect_why_console_busy",
+        undefined,
+        "The PS5 is busy (an install, a transfer, an extraction or remote controls), and a new helper would stop that. It is sent by itself once that ends.",
+      );
+    case "stale-build":
+      return tr(
+        "reconnect_why_stale_build",
+        undefined,
+        "This app carries a helper of another version than itself, so it never sends it by itself. Reinstall the app; Send helper still sends it.",
+      );
   }
+}
+
+/** Why unattended sends to a console stopped (the engine's refusal code). */
+function limitText(tr: Translator, code: string, retryAt: number | null, now: number): string {
+  if (code === "console_restarted_after_sends") {
+    return tr(
+      "reconnect_why_restarted",
+      undefined,
+      "The PS5 restarted twice right after the helper was sent to it by itself, so it is no longer sent by itself. Check the console, then press Send helper.",
+    );
+  }
+  if (code === "different_console") {
+    return tr(
+      "reconnect_why_different_console",
+      undefined,
+      "Another PS5 answers at this address now (its network address changed), so the helper is not sent to it by itself. Check the address, then press Send helper.",
+    );
+  }
+  return tr(
+    "reconnect_why_budget",
+    { minutes: Math.max(1, Math.ceil(((retryAt ?? now) - now) / 60_000)) },
+    "The helper was sent several times in the last hour without staying up, so it is not sent by itself for about {minutes} min. Press Send helper to send it now.",
+  );
 }

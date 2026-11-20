@@ -22,6 +22,9 @@ export interface HelperSendState {
   /** What the step shows, already in the user's language. */
   msg: string;
   startedAtMs: number;
+  /** A failure a person may override: the step offers "Send anyway" (a helper sent moments ago,
+   *  a console that just started, one busy with work a restart stops). */
+  forceable?: boolean;
 }
 
 interface HelperSendStore {
@@ -110,9 +113,9 @@ export async function runHelperSend<P extends HelperProbe>(
   const startedAtMs = Date.now();
   const busy = (phase: HelperSendPhase, msg: string) =>
     store.put(host, { state: "busy", phase, msg, startedAtMs });
-  const fail = (msg: string): HelperSendResult => {
+  const fail = (msg: string, forceable = false): HelperSendResult => {
     deps.setProbing(host, false);
-    store.put(host, { state: "fail", phase: null, msg, startedAtMs });
+    store.put(host, { state: "fail", phase: null, msg, startedAtMs, ...(forceable ? { forceable } : {}) });
     return "fail";
   };
 
@@ -124,9 +127,11 @@ export async function runHelperSend<P extends HelperProbe>(
     busy("sending", text.sending(elf));
     await deps.send(host, elf);
   } catch (e) {
-    // The send itself failed (loader unreachable, ELF missing): no new helper to wait for.
+    // The send itself failed (loader unreachable, ELF missing), or was refused for now (a
+    // refusal a person may override carries `forceable`): no new helper to wait for.
     const msg = e instanceof Error ? e.message : String(e);
-    return fail(isEngineUnreachable(msg) ? text.engineUnreachable(msg) : msg);
+    const forceable = (e as { forceable?: unknown } | null)?.forceable === true;
+    return fail(isEngineUnreachable(msg) ? text.engineUnreachable(msg) : msg, forceable);
   }
   busy("waiting", text.waiting);
   // The last raw probe error, so a timeout can say why the helper looks dead.
