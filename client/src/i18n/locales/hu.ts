@@ -2384,6 +2384,11 @@ err_uninstall_unavailable:
   "Ennek a PS5-nek a firmware-e nem ad módot a segédprogramnak az eltávolításra, és a játék továbbra is telepítve van. Töröld a PS5 Beállítások → Tárhely menüjében.",
 installed_uninstall_still_present:
   "A PS5 elfogadta az eltávolítást, de a(z) {name} még a konzolon van. Egy nagy játék eltávolítása néhány percig is tarthat: frissíts kicsit később. Ha megmarad, töröld a PS5 Beállítások → Tárhely menüjében.",
+installed_uninstall_confirm_smp: "A ShadowMount+ egy lemezképből tette ezt a játékot a kezdőképernyőre. Ez eltávolítja a kezdőképernyőről, de a ShadowMount+ a következő keresésekor visszateszi, amíg a lemezkép valamelyik keresési mappájában van. Töröld vagy helyezd át a lemezképet, hogy ne kerüljön vissza. A lemezkép nem törlődik.",
+installed_uninstall_smp_returns: "A(z) {name} lekerült a kezdőképernyőről, de a ShadowMount+ a következő keresésekor visszateszi, amíg a(z) {image} valamelyik keresési mappájában van. Töröld vagy helyezd át azt a lemezképet, hogy ne kerüljön vissza.",
+installed_uninstall_unverified: "A PS5 elfogadta a(z) {name} eltávolítását, de az alkalmazás nem tudta beolvasni a konzol címlistáját, hogy megerősítse, eltűnt. Frissíts egy kicsit később, és nézd meg a kezdőképernyőt.",
+library_unregistered_unverified: "A(z) {id} regisztrációja megszűnt, de az alkalmazás nem tudta beolvasni a konzol címlistáját, hogy megerősítse, eltűnt a csempéje a kezdőképernyőről. Frissíts egy kicsit később. A lemezen lévő forrásfájlokhoz nem nyúltunk.",
+library_unregistered_smp_returns: "A(z) {id} lekerült a kezdőképernyőről, de a ShadowMount+ a következő keresésekor visszateszi, amíg a(z) {image} valamelyik keresési mappájában van. Töröld vagy helyezd át azt a lemezképet, hogy ne kerüljön vissza.",
 err_unmount_permission:
   "Nem lehet leválasztani: a kernel EACCES/EPERM-mel elutasította. Lehet, hogy a payload elvesztette a root jogosultságokat — töltsd be újra a Connection → Send payload menüből.",
 err_not_enough_space: "Nincs elég szabad hely ezen a számítógépen: {need} kell, és {free} szabad. Szabadíts fel helyet, majd próbáld újra.",
@@ -2543,6 +2548,8 @@ gate_no_console_body: "Add meg a konzolod IP-címét a Kapcsolat képernyőn —
 gate_setup_cta: "Kapcsolat beállítása",
 gate_checking: "PS5 ellenőrzése…",
 gate_payload_down_title: "A segédprogram nem fut a PS5-ön",
+helper_too_old_title: "Régebbi PS5 segédprogram fut",
+helper_too_old_detail: "A PS5-ön egy régebbi segédprogram fut, amelyet ez az alkalmazás nem tud használni. A cseréjéhez küldd el innen a segédprogramot. Ha egy payload-betöltő indítja a segédprogramot a PS5 indulásakor, frissítsd az általa használt példányt.",
 gate_send_helper_cta: "Kapcsolat megnyitása",
 picker_choose_folder: "Mappa kiválasztása",
 picker_choose_file: "Fájl kiválasztása",
@@ -8833,6 +8840,7 @@ rp_users_add_hint: "Ha másik felhasználóként is játszanál, jelentkezz be a
 "cs_card_firmware": "Firmware {fw}",
 "cs_card_helper_match": "Segédprogram {v} · egyezik az alkalmazással",
 "cs_card_helper_missing": "A segédprogram nem fut",
+"cs_card_helper_old": "Régebbi segédprogram fut · küldd el a segédprogramot a cseréjéhez",
 "cs_card_helper_newer": "Segédprogram {v} · újabb az alkalmazásnál",
 "cs_card_helper_pairing": "A segédprogram fut · ennek az eszköznek a beengedésére vár",
 "cs_card_helper_sending": "A segédprogram küldése…",

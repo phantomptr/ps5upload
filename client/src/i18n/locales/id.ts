@@ -1717,6 +1717,11 @@ err_uninstall_unavailable:
   "Firmware PS5 ini tidak memberi helper cara untuk mencopot pemasangan, dan game masih terpasang. Hapus dari Pengaturan → Penyimpanan di PS5.",
 installed_uninstall_still_present:
   "PS5 menerima pencopotan, tetapi {name} masih ada di konsol. Game besar bisa butuh beberapa menit untuk dihapus: segarkan sebentar lagi. Jika tetap ada, hapus dari Pengaturan → Penyimpanan di PS5.",
+installed_uninstall_confirm_smp: "ShadowMount+ menaruh game ini di layar beranda dari image disk. Ini menghapusnya dari layar beranda, tetapi ShadowMount+ menambahkannya lagi pada pemindaian berikutnya selama image masih ada di salah satu folder pindainya. Hapus atau pindahkan image agar tidak kembali. Image tidak dihapus.",
+installed_uninstall_smp_returns: "{name} telah dihapus dari layar beranda, tetapi ShadowMount+ menambahkannya lagi pada pemindaian berikutnya selama {image} masih ada di salah satu folder pindainya. Hapus atau pindahkan image tersebut agar tidak kembali.",
+installed_uninstall_unverified: "PS5 menerima pencopotan {name}, tetapi aplikasi tidak dapat membaca daftar judul konsol untuk memastikan judul itu sudah hilang. Muat ulang sebentar lagi dan periksa layar beranda.",
+library_unregistered_unverified: "Pendaftaran {id} telah dibatalkan, tetapi aplikasi tidak dapat membaca daftar judul konsol untuk memastikan ubinnya sudah hilang dari layar beranda. Muat ulang sebentar lagi. File sumber di disk tidak diubah.",
+library_unregistered_smp_returns: "{id} telah dihapus dari layar beranda, tetapi ShadowMount+ menambahkannya lagi pada pemindaian berikutnya selama {image} masih ada di salah satu folder pindainya. Hapus atau pindahkan image tersebut agar tidak kembali.",
 err_unmount_permission:
   "Tidak dapat melepas: kernel menolak dengan EACCES/EPERM. Payload mungkin kehilangan kredensial root — muat ulang dari Connection → Send payload.",
 err_not_enough_space: "Ruang kosong di komputer ini tidak cukup: butuh {need}, dan yang kosong {free}. Kosongkan sedikit ruang lalu coba lagi.",
@@ -1934,6 +1939,8 @@ gate_no_console_body: "Tambahkan alamat IP konsol Anda di layar Koneksi — sete
 gate_setup_cta: "Siapkan koneksi",
 gate_checking: "Memeriksa PS5 Anda…",
 gate_payload_down_title: "Helper tidak berjalan di PS5",
+helper_too_old_title: "Helper PS5 versi lama sedang berjalan",
+helper_too_old_detail: "PS5 menjalankan helper versi lama yang tidak dapat digunakan aplikasi ini. Kirim helper dari sini untuk menggantinya. Jika pemuat payload menjalankan helper saat PS5 menyala, perbarui salinan yang digunakannya.",
 gate_send_helper_cta: "Buka Koneksi",
 picker_choose_folder: "Pilih folder",
 picker_choose_file: "Pilih berkas",
@@ -8550,6 +8557,7 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "cs_card_firmware": "Firmware {fw}",
 "cs_card_helper_match": "Helper {v} · cocok dengan aplikasi ini",
 "cs_card_helper_missing": "Helper tidak berjalan",
+"cs_card_helper_old": "Helper versi lama sedang berjalan · kirim helper untuk menggantinya",
 "cs_card_helper_newer": "Helper {v} · lebih baru dari aplikasi ini",
 "cs_card_helper_pairing": "Helper berjalan · menunggu untuk mengizinkan perangkat ini",
 "cs_card_helper_sending": "Mengirim helper…",
