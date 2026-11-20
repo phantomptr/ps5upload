@@ -101,6 +101,37 @@ fn an_empty_unregister_reply_still_means_sony_rc_zero() {
 }
 
 #[test]
+fn a_registration_only_unregister_says_so_and_a_plain_one_is_unchanged() {
+    // #884: a folder or image row taking its registration off asks the helper to refuse the
+    // console's own install of that title id; the game page's Uninstall sends what it always did.
+    let (t, _g) = fake(|_, _| refuse("APP_UNREGISTER", 9, "unregister_title_installed:m2"));
+    let e = ps5upload_core::fs_ops::app_unregister_scoped(A, "PPSA03595", true).unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "payload rejected APP_UNREGISTER: unregister_title_installed:m2"
+    );
+    let _ = ps5upload_core::fs_ops::app_unregister(A, "PPSA03595");
+    let seen = t.seen.lock().unwrap();
+    let scoped: serde_json::Value = serde_json::from_slice(&seen[0].2).unwrap();
+    assert_eq!(scoped["registration_only"], serde_json::Value::Bool(true));
+    assert_eq!(scoped["title_id"], "PPSA03595");
+    assert_eq!(seen[1].2, br#"{"title_id":"PPSA03595"}"#);
+}
+
+#[test]
+fn a_register_refused_over_an_installed_game_keeps_its_reason() {
+    let (_t, _g) = fake(|_, _| {
+        refuse(
+            "APP_REGISTER(/mnt/usb0/dump/PPSA03595)",
+            9,
+            "register_title_installed:m2",
+        )
+    });
+    let e = ps5upload_core::fs_ops::app_register(A, "/mnt/usb0/dump/PPSA03595", false).unwrap_err();
+    assert!(e.to_string().ends_with("register_title_installed:m2"));
+}
+
+#[test]
 fn a_refused_register_keeps_the_text_callers_and_the_ui_match_on() {
     let (_t, _g) = fake(|_, _| {
         refuse(

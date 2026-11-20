@@ -64,7 +64,13 @@ fn loader_listening(addr: &str) -> bool {
     let Ok(mut it) = std::net::ToSocketAddrs::to_socket_addrs(target.as_str()) else {
         return false;
     };
-    it.any(|a| std::net::TcpStream::connect_timeout(&a, Duration::from_secs(1)).is_ok())
+    // Closed with a reset, never a plain close: a loader takes EOF on a connection as "run what
+    // you read", and a listener that runs what it reads would run nothing at all, or crash on it.
+    it.any(|a| {
+        std::net::TcpStream::connect_timeout(&a, Duration::from_secs(1))
+            .map(|s| ps5upload_core::payload_lifecycle::abort_with_rst(&s))
+            .is_ok()
+    })
 }
 
 pub fn not_paired() -> UploadFailure {
@@ -74,12 +80,64 @@ pub fn not_paired() -> UploadFailure {
     }
 }
 
+/// A helper answered the handshake but this app cannot use what it said: another app version's
+/// helper speaking another way, a reply that does not decode, a refusal of another kind. It is
+/// running: nothing replaces it unasked (12.6.15).
+pub const HELPER_ALIVE_UNREADABLE: &str = "helper_alive_unreadable";
+/// The text that goes with [`HELPER_ALIVE_UNREADABLE`].
+pub const HELPER_ALIVE_UNREADABLE_MESSAGE: &str = "A ps5upload helper is running on the PS5 but \
+    this app cannot read its answers (most often another version of the app sent it). It is left \
+    running. Update the apps you use with this PS5 to the same version, or press Send helper to \
+    replace it with this app's.";
+/// A helper answered with a newer protocol than this app speaks: a newer app sent it.
+pub const HELPER_TOO_NEW: &str = "helper_too_new";
+/// The text that goes with [`HELPER_TOO_NEW`].
+pub const HELPER_TOO_NEW_MESSAGE: &str = "A newer ps5upload helper is running on the PS5 (a newer \
+    version of the app sent it). Update this app to use it; sending this app's helper would replace \
+    it with an older one for every device.";
+
+/// Whether a failed handshake still got an answer from a helper (so one is running there): the
+/// reasons [`classify`] gives for that.
+pub fn helper_answered(reason: &str) -> bool {
+    matches!(
+        reason,
+        HELPER_ALIVE_UNREADABLE | HELPER_TOO_NEW | NOT_PAIRED | "ava1_wrong_console"
+    )
+}
+
 /// Maps a failed session attempt to the reason the person can act on. Nothing listening is
 /// `helper_not_ava1`; an unpaired console (or one whose pairing window is closed) is
-/// `not_paired`; anything else keeps the adapters' own reasons (`ava1_wrong_console`, and
-/// `ava1_unreachable` for a timeout or other network failure).
+/// `not_paired`; a helper that answered in a way this app cannot use is `helper_too_new`,
+/// `helper_not_ava1` with the too-old message, or `helper_alive_unreadable`; anything else keeps
+/// the adapters' own reasons (`ava1_wrong_console`, and `ava1_unreachable` for a timeout or other
+/// network failure).
 pub fn classify(e: &Ava1Error) -> UploadFailure {
     match e {
+        // No protocol version in common: the helper answered with its range.
+        Ava1Error::Version { min, ours, .. } if min > ours => UploadFailure {
+            reason: HELPER_TOO_NEW.into(),
+            detail: HELPER_TOO_NEW_MESSAGE.into(),
+        },
+        Ava1Error::Version { .. } => helper_not_ava1_because(HELPER_TOO_OLD_MESSAGE),
+        // It answered, and what it said does not read or was refused for another reason.
+        Ava1Error::Header(_)
+        | Ava1Error::Decode(_)
+        | Ava1Error::Noise(_)
+        | Ava1Error::BadTag
+        | Ava1Error::Unexpected(_)
+        | Ava1Error::WeakKey
+        | Ava1Error::PairingCommitMismatch => UploadFailure {
+            reason: HELPER_ALIVE_UNREADABLE.into(),
+            detail: format!("{HELPER_ALIVE_UNREADABLE_MESSAGE} ({e})"),
+        },
+        Ava1Error::Refused { code, .. }
+            if *code != gen::ERR_NOT_PAIRED && *code != gen::ERR_PAIRING_CLOSED =>
+        {
+            UploadFailure {
+                reason: HELPER_ALIVE_UNREADABLE.into(),
+                detail: format!("{HELPER_ALIVE_UNREADABLE_MESSAGE} ({e})"),
+            }
+        }
         Ava1Error::Io(io) if io.kind() == std::io::ErrorKind::ConnectionRefused => {
             helper_not_ava1()
         }
@@ -310,6 +368,48 @@ mod tests {
         }
         assert!(f.detail.contains("port 9021"));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A handshake that got any answer names a running helper, never "down": two app versions
+    /// must not take each other's helper for a dead one and replace it (12.6.15).
+    #[test]
+    fn a_helper_that_answered_the_handshake_is_never_down() {
+        let too_new = classify(&Ava1Error::Version {
+            min: 2,
+            max: 3,
+            ours: 1,
+        });
+        assert_eq!(too_new.reason, HELPER_TOO_NEW);
+        let too_old = classify(&Ava1Error::Version {
+            min: 0,
+            max: 0,
+            ours: 1,
+        });
+        assert_eq!(too_old.reason, HELPER_NOT_AVA1);
+        assert_eq!(too_old.detail, HELPER_TOO_OLD_MESSAGE);
+        for e in [
+            Ava1Error::BadTag,
+            Ava1Error::Unexpected(0x42),
+            Ava1Error::Noise("bad".into()),
+            Ava1Error::WeakKey,
+            Ava1Error::Refused {
+                code: gen::ERR_UNSUPPORTED_VERSION,
+                message: "no protocol version in common".into(),
+            },
+            Ava1Error::Refused {
+                code: gen::ERR_BUSY,
+                message: "all lanes are open".into(),
+            },
+        ] {
+            let f = classify(&e);
+            assert_eq!(f.reason, HELPER_ALIVE_UNREADABLE, "{e}");
+            assert!(helper_answered(&f.reason));
+        }
+        // Silence and a closed port are not answers.
+        assert_eq!(classify(&Ava1Error::Timeout).reason, "ava1_unreachable");
+        assert!(!helper_answered("ava1_unreachable"));
+        assert!(!helper_answered(HELPER_NOT_AVA1));
+        assert!(helper_answered("not_paired"));
     }
 
     #[test]

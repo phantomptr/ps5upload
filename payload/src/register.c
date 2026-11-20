@@ -32,6 +32,8 @@
 #include "register.h"
 #include "plog.h"
 #include "unregister_outcome.h"
+#include "install_guard.h"
+#include "shell_builtin.h" /* mntinfo_snapshot */
 #include "content_db.h"
 #include "sony_api_lock.h"
 #include "proc_list.h"
@@ -1080,6 +1082,14 @@ int register_remount_nullfs(const char *title_id, const char *src_path,
         if (err_reason_out) *err_reason_out = "register_args_invalid";
         return -1;
     }
+    /* A bind over /system_ex/app/<id> of a title the console installed would hide its own (#884). */
+    {
+        install_guard_hit_t hit;
+        if (register_title_installed_by_console(title_id, &hit)) {
+            if (err_reason_out) *err_reason_out = install_guard_register_reason(hit.where);
+            return -1;
+        }
+    }
     return mount_title_nullfs(title_id, src_path, err_reason_out);
 }
 
@@ -1239,6 +1249,42 @@ int list_registered_titles_json(char *out_json,
     return 0;
 }
 
+/* -- Titles the console's installer owns (#884) ------------------------- */
+
+#define REG_GUARD_MAX_VOLUMES 16
+
+/* Whether `title_id` is installed by the console's own installer on any storage (see
+ * install_guard.h): an app.pkg on the internal drive, on M.2, on USB extended storage or on any
+ * other /mnt/ext<N> the mount table shows, or appinfo.db recording a package location for it
+ * while it has no tracker of ours. Read-only: stat() and one read-only SQLite query. Logged, so a
+ * bug report shows why a register was refused. */
+int register_title_installed_by_console(const char *title_id, install_guard_hit_t *hit) {
+    install_guard_hit_t local;
+    if (!hit) hit = &local;
+    char vols[REG_GUARD_MAX_VOLUMES][32]; /* /mnt/ext<N>: short; kept small for the mgmt threads' stacks */
+    const char *extra[REG_GUARD_MAX_VOLUMES];
+    int nextra = 0;
+    struct statfs *mnts = NULL;
+    int n = mntinfo_snapshot(&mnts);
+    for (int i = 0; i < n && nextra < REG_GUARD_MAX_VOLUMES; i++) {
+        if (!install_guard_is_ext_volume(mnts[i].f_mntonname) ||
+            strlen(mnts[i].f_mntonname) >= sizeof vols[0])
+            continue;
+        snprintf(vols[nextra], sizeof vols[nextra], "%s", mnts[i].f_mntonname);
+        extra[nextra] = vols[nextra];
+        nextra++;
+    }
+    free(mnts);
+    char org[512];
+    int have_org = install_guard_valid_id(title_id) &&
+                   content_db_appinfo_get(title_id, "_org_path", org, sizeof org) == 1;
+    int found = install_guard_check("", title_id, extra, nextra, have_org ? org : NULL, hit);
+    if (found)
+        fprintf(stderr, "[register] %s is installed by the console (%s: %s): left alone\n", title_id,
+                install_guard_word(hit->where), hit->path);
+    return found;
+}
+
 /* -- Public register / unregister / launch ----------------------------- */
 
 int register_title_from_path(const char *src_path,
@@ -1268,6 +1314,19 @@ int register_title_from_path(const char *src_path,
     if (!is_safe_component(title_id)) {
         if (err_reason_out) *err_reason_out = "register_title_id_unsafe";
         return -1;
+    }
+
+    /* 0a -- never over an install of the console's own (#884). Staging /user/app/<id> and asking
+     * Sony's installer to install it rewrote the record of a game installed on M.2: the console
+     * then listed it under Console Storage, with no package there, and could not start it. Checked
+     * before ANY write, the DRM patch of the source included, so an older app asking gets the
+     * same refusal. */
+    {
+        install_guard_hit_t hit;
+        if (register_title_installed_by_console(title_id, &hit)) {
+            if (err_reason_out) *err_reason_out = install_guard_register_reason(hit.where);
+            return -1;
+        }
     }
 
     /* 0b -- pre-validate the source has what Sony's launcher needs.
@@ -1520,14 +1579,31 @@ static int read_link_text(const char *path, char *out, size_t cap) {
 
 int unregister_title(const char *title_id, const char **err_reason_out,
                      unregister_outcome_t *out) {
+    return unregister_title_ex(title_id, 0, err_reason_out, out);
+}
+
+int unregister_title_ex(const char *title_id, int registration_only, const char **err_reason_out,
+                        unregister_outcome_t *out) {
     register_module_init();
     unregister_outcome_t local = {0};
     if (!out) out = &local;
     memset(out, 0, sizeof(*out));
-    PLOG(PLOG_DEBUG, PLOG_INSTALL, "[register] unregister %s", title_id ? title_id : "(none)");
+    PLOG(PLOG_DEBUG, PLOG_INSTALL, "[register] unregister %s%s", title_id ? title_id : "(none)",
+         registration_only ? " (registration only)" : "");
     if (!title_id || !is_safe_component(title_id)) {
         if (err_reason_out) *err_reason_out = "unregister_title_id_invalid";
         return -1;
+    }
+    /* #884: a folder or image row taking "its" registration off must not uninstall the console's
+     * own install of the same title id (Sony's uninstall removes the real game, M.2 copies
+     * included). Asked by the app's folder and image rows; the game page's Uninstall of a package
+     * install does not ask, and older apps do not either. */
+    if (registration_only) {
+        install_guard_hit_t hit;
+        if (register_title_installed_by_console(title_id, &hit)) {
+            if (err_reason_out) *err_reason_out = install_guard_unregister_reason(hit.where);
+            return -1;
+        }
     }
     /* Distinguish OUR nullfs registrations from Sony-managed installs.
      * A title we registered via register_title_from_path() has a

@@ -82,6 +82,7 @@ static void make_appinfo_db(const char *path) {
         "INSERT INTO tbl_appinfo VALUES"
         " ('PPSA01650','CONTENT_VERSION','01.00'),"
         " ('PPSA01650','VERSION_FILE_URI','http://sony.example/v.json'),"
+        " ('PPSA03595','_org_path','/mnt/ext1/user/app/PPSA03595'),"
         " ('CUSA00900','CONTENT_VERSION','01.09');");
     sqlite3_close(db);
 }
@@ -330,6 +331,19 @@ int main(void) {
                                    &written) == 0);
     assert(contains(buf, "\"ok\":false"));
     printf("✓ malformed title id refused before it reaches a bind\n");
+
+    /* one value, the install guard's `_org_path` read (#884) */
+    {
+        char v[128];
+        assert(content_db_appinfo_get("PPSA03595", "_org_path", v, sizeof v) == 1);
+        assert(strcmp(v, "/mnt/ext1/user/app/PPSA03595") == 0);
+        assert(content_db_appinfo_get("PPSA01650", "_org_path", v, sizeof v) == 0 && v[0] == '\0');
+        assert(content_db_appinfo_get("nope", "_org_path", v, sizeof v) == -1);
+        char tiny[8];
+        assert(content_db_appinfo_get("PPSA03595", "_org_path", tiny, sizeof tiny) == 1);
+        assert(strlen(tiny) == sizeof tiny - 1);
+        printf("✓ one appinfo value read by title and key\n");
+    }
 
     /* ── appinfo.db writes ───────────────────────────────────────────── */
     char err[256];

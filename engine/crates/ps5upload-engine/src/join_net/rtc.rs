@@ -35,8 +35,24 @@ const CONNECT_WAIT: Duration = Duration::from_secs(30);
 const DISCONNECTED_WAIT: Duration = Duration::from_secs(10);
 /// A session that ended has this long to get its last messages (the bye) out.
 const CLOSE_DRAIN: Duration = Duration::from_secs(2);
-/// How long STUN servers have to answer.
+/// How long a STUN server's name lookup, or a request's send, may take.
 const STUN_WAIT: Duration = Duration::from_secs(2);
+/// A STUN request not answered yet goes again after each of these waits, then is given up (RFC
+/// 8489's first 500 ms, doubled). Sent once before, a datagram lost at the room's start cost it
+/// its outside candidate for as long as it was open.
+const STUN_RETRY: [Duration; 3] = [
+    Duration::from_millis(500),
+    Duration::from_millis(1000),
+    Duration::from_millis(2000),
+];
+/// While an internet room is open the STUN servers are asked again this often (as a browser keeps
+/// its own STUN binding alive): the router keeps the ICE port's mapping (many drop an idle UDP
+/// mapping after 30 s), so the outside candidate a guest gets an hour later still reaches this
+/// engine, and an outside address that changed is trickled.
+const STUN_REFRESH: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 25 });
+/// Outside addresses kept per socket from STUN (one per server): an older one goes once a newer
+/// one differs, so a router that keeps moving the port cannot grow the answer.
+const STUN_KEPT: usize = 2;
 /// What the data channel's SCTP may hold (str0m's default is 128 KiB, below [`super::HIGH_WATER`]).
 pub(crate) const SCTP_BUFFER: usize = 1024 * 1024;
 /// Messages queued from the channel to the session before the peer is dropped as a flood.
@@ -1105,7 +1121,9 @@ async fn start() -> Option<Arc<Net>> {
         peers: Vec::new(),
         rooms: HashMap::new(),
         local_rooms: std::collections::HashSet::new(),
-        stun_tx: HashMap::new(),
+        stun_pending: StunPending::default(),
+        stun_ask: None,
+        stun_kept: HashMap::new(),
         cmd: cmd.clone(),
         nat_want: None,
     };
@@ -1153,8 +1171,12 @@ struct Driver {
     /// The rooms in `rooms` that are home-network joins' own ([`Cmd::RoomOpenLocal`]): they want
     /// no router mapping.
     local_rooms: std::collections::HashSet<String>,
-    /// STUN requests in flight: transaction id → socket index.
-    stun_tx: HashMap<[u8; 12], usize>,
+    /// STUN requests in flight: transaction id → socket index (filled by [`keep_stun`]).
+    stun_pending: StunPending,
+    /// The STUN task, while an internet room is open (a change asks the servers again now).
+    stun_ask: Option<tokio::sync::watch::Sender<u64>>,
+    /// The outside addresses STUN gave each socket, newest last (at most [`STUN_KEPT`]).
+    stun_kept: HashMap<SocketAddr, VecDeque<SocketAddr>>,
     cmd: mpsc::UnboundedSender<Cmd>,
     /// The task keeping the router mapping, while one is wanted.
     nat_want: Option<tokio::sync::watch::Sender<bool>>,
@@ -1259,7 +1281,13 @@ impl Driver {
 
     fn on_packet(&mut self, i: usize, from: SocketAddr, data: &[u8]) {
         if let Some(tx) = stun::response_tx(data) {
-            if self.stun_tx.remove(&tx).is_some() {
+            let ours = self
+                .stun_pending
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&tx)
+                .is_some();
+            if ours {
                 self.on_stun(i, data);
                 return;
             }
@@ -1299,6 +1327,25 @@ impl Driver {
         if addr == base || addr.is_ipv4() != base.is_ipv4() {
             return; // no NAT in between: the host candidate says it already
         }
+        // The servers are asked again while a room is open (keep_stun): a router that moved the
+        // mapping gives a new address, trickled like any; past STUN_KEPT for this socket the
+        // oldest is no longer given to new peers (unless the router mapping is that address).
+        let kept = self.stun_kept.entry(base).or_default();
+        if kept.contains(&addr) {
+            return;
+        }
+        kept.push_back(addr);
+        if kept.len() > STUN_KEPT {
+            if let Some(old) = kept.pop_front() {
+                let mapped = NET_MAPPED
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .map(|(a, _)| a);
+                if mapped != Some(old) {
+                    self.extra.retain(|c| c.addr() != old);
+                }
+            }
+        }
         self.add_extra(Candidate::server_reflexive(addr, base, "udp").ok(), "stun");
     }
 
@@ -1315,7 +1362,12 @@ impl Driver {
             c.addr().port()
         );
         for p in &mut self.peers {
-            if p.closing_at.is_none() && p.rtc.add_local_candidate(c.clone()).is_some() {
+            // Not to a peer whose channel is open: its page has left the hub (the signal would
+            // only meet `no_peer`), and the connection is up on the pair it has.
+            if p.closing_at.is_none()
+                && p.cid.is_none()
+                && p.rtc.add_local_candidate(c.clone()).is_some()
+            {
                 let _ = p
                     .signal
                     .send((p.info.gid.clone(), candidate_json(&c, &p.mid)));
@@ -1324,38 +1376,19 @@ impl Driver {
         self.extra.push(c);
     }
 
-    /// Asks the STUN servers in the settings, from every socket.
-    async fn gather(&mut self) {
-        let servers = crate::join::settings().stun;
-        let mut addrs: Vec<SocketAddr> = Vec::new();
-        for s in servers.iter().take(4) {
-            if cfg!(test) && s.parse::<SocketAddr>().is_err() {
-                continue; // the tests never look a name up (nor reach a real server)
+    /// Asks the STUN servers while an internet room is open ([`keep_stun`], its own task), now
+    /// when `want` (a room just opened); stops when not.
+    fn want_stun(&mut self, want: bool) {
+        match (&self.stun_ask, want) {
+            (Some(tx), true) => tx.send_modify(|n| *n += 1),
+            (Some(_), false) => self.stun_ask = None, // its task ends with the sender
+            (None, true) => {
+                let (tx, rx) = tokio::sync::watch::channel(0u64);
+                let socks = self.socks.iter().map(|s| (s.s.clone(), s.addr)).collect();
+                tokio::spawn(keep_stun(socks, self.stun_pending.clone(), rx));
+                self.stun_ask = Some(tx);
             }
-            if let Ok(Ok(found)) =
-                tokio::time::timeout(STUN_WAIT, tokio::net::lookup_host(s.as_str())).await
-            {
-                // One of each family: an IPv6 socket asks over IPv6 (its answer is rarely news, but
-                // a router that translates IPv6 prefixes, NPTv6, shows there).
-                let found: Vec<SocketAddr> = found.collect();
-                addrs.extend(found.iter().find(|a| a.is_ipv4()));
-                addrs.extend(found.iter().find(|a| a.is_ipv6()));
-            }
-        }
-        self.stun_tx.clear();
-        for (i, sock) in self.socks.iter().map(|s| &s.s).enumerate() {
-            let v6 = self.socks[i].addr.is_ipv6();
-            for a in addrs.iter().filter(|a| a.is_ipv6() == v6) {
-                let mut tx = [0u8; 12];
-                if getrandom::fill(&mut tx).is_err() {
-                    continue;
-                }
-                self.stun_tx.insert(tx, i);
-                // Awaited, not `try_send_to`: the sockets are new when the first room opens, and a
-                // socket the runtime has not yet seen writable refuses a try (WouldBlock), which
-                // lost the request, and with it the STUN candidate, whenever the machine was busy.
-                let _ = tokio::time::timeout(STUN_WAIT, sock.send_to(&stun::request(tx), *a)).await;
-            }
+            (None, false) => {}
         }
     }
 
@@ -1386,7 +1419,7 @@ impl Driver {
             Cmd::RoomOpen(r, kind) => {
                 self.rooms.insert(r, kind);
                 self.want_mapping(true);
-                self.gather().await;
+                self.want_stun(true);
             }
             Cmd::RoomOpenLocal(r, kind) => {
                 self.rooms.insert(r.clone(), kind);
@@ -1397,6 +1430,7 @@ impl Driver {
                 self.local_rooms.remove(&r);
                 if self.rooms.len() == self.local_rooms.len() {
                     self.want_mapping(false);
+                    self.want_stun(false);
                 }
             }
             Cmd::Offer {
@@ -2365,6 +2399,109 @@ async fn keep_mapping(
         nat::remove(mm).await;
     }
     let _ = cmd.send(Cmd::Mapped(None));
+}
+
+/// STUN requests in flight, shared by [`keep_stun`] (which sends them) and the driver (which takes
+/// the answers off its sockets): transaction id → socket index.
+type StunPending = Arc<Mutex<HashMap<[u8; 12], usize>>>;
+
+/// The STUN servers in the settings, looked up together (an unanswered lookup no longer waits
+/// behind another): one address of each family per server, at most four servers.
+async fn stun_servers() -> Vec<SocketAddr> {
+    let names = crate::join::settings().stun;
+    let looks = names
+        .iter()
+        .take(4)
+        // The tests never look a name up (nor reach a real server).
+        .filter(|s| !cfg!(test) || s.parse::<SocketAddr>().is_ok())
+        .map(|s| async move {
+            match tokio::time::timeout(STUN_WAIT, tokio::net::lookup_host(s.as_str())).await {
+                // One of each family: an IPv6 socket asks over IPv6 (its answer is rarely news,
+                // but a router that translates IPv6 prefixes, NPTv6, shows there).
+                Ok(Ok(found)) => {
+                    let found: Vec<SocketAddr> = found.collect();
+                    [
+                        found.iter().find(|a| a.is_ipv4()).copied(),
+                        found.iter().find(|a| a.is_ipv6()).copied(),
+                    ]
+                }
+                _ => [None, None],
+            }
+        });
+    futures_util::future::join_all(looks)
+        .await
+        .into_iter()
+        .flatten()
+        .flatten()
+        .collect()
+}
+
+/// Resolves once the driver no longer wants STUN (its sender is gone).
+async fn stun_gone(ask: &mut tokio::sync::watch::Receiver<u64>) {
+    while ask.changed().await.is_ok() {}
+}
+
+/// Asks the STUN servers from every socket, each request again after [`STUN_RETRY`] until it is
+/// answered (the driver takes the answer off `pending`), and all of it again every
+/// [`STUN_REFRESH`] or when `ask` changes, until the driver drops its sender. Its own task: name
+/// lookups and sends once ran on the driver's, and a slow lookup held every guest's packets.
+async fn keep_stun(
+    socks: Vec<(Arc<UdpSocket>, SocketAddr)>,
+    pending: StunPending,
+    mut ask: tokio::sync::watch::Receiver<u64>,
+) {
+    loop {
+        let servers = tokio::select! {
+            s = stun_servers() => s,
+            _ = stun_gone(&mut ask) => return,
+        };
+        let mut sent = Vec::new();
+        {
+            let mut p = pending.lock().unwrap_or_else(|e| e.into_inner());
+            p.clear(); // a late answer to the last round tells nothing new
+            for (i, (_, base)) in socks.iter().enumerate() {
+                for a in servers.iter().filter(|a| a.is_ipv6() == base.is_ipv6()) {
+                    let mut tx = [0u8; 12];
+                    if getrandom::fill(&mut tx).is_ok() {
+                        p.insert(tx, i);
+                        sent.push((tx, i, *a));
+                    }
+                }
+            }
+        }
+        let left = || {
+            let p = pending.lock().unwrap_or_else(|e| e.into_inner());
+            sent.iter()
+                .filter(|(tx, ..)| p.contains_key(tx))
+                .copied()
+                .collect::<Vec<_>>()
+        };
+        'round: for wait in STUN_RETRY {
+            for (tx, i, a) in left() {
+                // Awaited, not `try_send_to`: the sockets are new when the first room opens, and
+                // a socket the runtime has not yet seen writable refuses a try (WouldBlock), which
+                // lost the request whenever the machine was busy. The same transaction id each
+                // time (RFC 8489): any one answer counts.
+                let _ = tokio::time::timeout(STUN_WAIT, socks[i].0.send_to(&stun::request(tx), a))
+                    .await;
+            }
+            // Until every request is answered, or it is time to send the rest again.
+            let until = tokio::time::Instant::now() + wait;
+            while tokio::time::Instant::now() < until {
+                if left().is_empty() {
+                    break 'round;
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep_until(until.min(tokio::time::Instant::now() + Duration::from_millis(50))) => {}
+                    _ = stun_gone(&mut ask) => return,
+                }
+            }
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(STUN_REFRESH) => {}
+            r = ask.changed() => if r.is_err() { return },
+        }
+    }
 }
 
 /// Where to look for the router: the LAN's SSDP and NAT-PMP, or (tests) the fake router a test

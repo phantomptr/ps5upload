@@ -93,6 +93,20 @@ impl FakeHub {
         self.st.lock().unwrap().host_conns
     }
 
+    /// Says `v` to the host of `room`, as if the hub sent it.
+    pub(crate) fn tell_host(&self, room: &str, v: serde_json::Value) {
+        if let Some(tx) = self
+            .st
+            .lock()
+            .unwrap()
+            .rooms
+            .get(room)
+            .and_then(|r| r.1.clone())
+        {
+            let _ = tx.send(j(v));
+        }
+    }
+
     pub(crate) fn has_host(&self, room: &str) -> bool {
         self.st
             .lock()
@@ -183,6 +197,9 @@ async fn conn(mut s: WebSocket, hub: FakeHub) {
                             Some(("host", _)) => {
                                 if let Some((_, g)) = st.guests.get(&str_of("to")) {
                                     let _ = g.send(j(serde_json::json!({"t": "signal", "from": "host", "data": data})));
+                                } else {
+                                    // The real hub's answer (not fatal: the guest left a moment ago).
+                                    let _ = tx.send(j(serde_json::json!({"t": "error", "why": "no_peer"})));
                                 }
                             }
                             Some(("guest", gid)) => {
@@ -621,6 +638,89 @@ fn links_and_hub_addresses() {
     // One certificate per run: the fingerprint never changes.
     let fp = super::fingerprint().unwrap();
     assert_eq!(super::fingerprint().unwrap(), fp);
+}
+
+/// A page base the host chose (#881): checked and put in one form, and every kind's link on it
+/// keeps each fragment parameter as on the website's pages.
+#[test]
+fn a_custom_page_base_and_its_links() {
+    use super::{page_base, page_origin, Kind};
+    for (raw, want) in [
+        ("https://play.example.com", "https://play.example.com/"),
+        ("https://play.example.com/", "https://play.example.com/"),
+        (
+            " HTTPS://Play.Example.COM:443/ ",
+            "https://play.example.com/",
+        ),
+        (
+            "https://play.example.com:8443/ps5//",
+            "https://play.example.com:8443/ps5/",
+        ),
+        ("https://[2001:db8::1]/", "https://[2001:db8::1]/"),
+        ("http://localhost:8080", "http://localhost:8080/"),
+        ("http://127.0.0.1/pages", "http://127.0.0.1/pages/"),
+    ] {
+        assert_eq!(page_base(raw).as_deref(), Some(want), "{raw}");
+    }
+    for raw in [
+        "",
+        "play.example.com",
+        "http://play.example.com/",
+        "ws://play.example.com/",
+        "https://play.example.com/?x=1",
+        "https://play.example.com/#x",
+        "https://user@play.example.com/",
+        "https://play.example.com/a/../b",
+        "https://play.example.com/a b",
+        "https://play.example.com:0/",
+        "https://play.example.com:99999/",
+        "https://:443/",
+        "javascript:alert(1)",
+    ] {
+        assert_eq!(page_base(raw), None, "{raw}");
+    }
+    assert_eq!(
+        page_base(&format!("https://{}.com/", "a".repeat(200))),
+        None
+    );
+    assert_eq!(
+        page_origin("https://play.example.com/ps5/"),
+        "https://play.example.com"
+    );
+    assert_eq!(
+        page_origin("https://play.example.com:8443/"),
+        "https://play.example.com:8443"
+    );
+
+    let base = "https://play.example.com/ps5/";
+    for (kind, page) in [
+        (Kind::Join, "join"),
+        (Kind::Pad, "pad"),
+        (Kind::Share, "share"),
+    ] {
+        assert_eq!(kind.page_on(base), format!("{base}{page}/"));
+        assert_eq!(
+            super::link_on(
+                &kind.page_on(base),
+                "R",
+                "K",
+                "AA:BB",
+                "play.example.com",
+                Some("http://192.168.1.10:19113/join"),
+                Some("http://100.101.2.3:19113/join"),
+            ),
+            format!(
+                "https://play.example.com/ps5/{page}/#room=R&k=K&fp=AA:BB&hub=play.example.com\
+                 &lan=http%3A%2F%2F192.168.1.10%3A19113%2Fjoin\
+                 &ts=http%3A%2F%2F100.101.2.3%3A19113%2Fjoin"
+            )
+        );
+        // The default base is the website's, as before.
+        assert_eq!(
+            kind.page_on(super::DEFAULT_PAGE_BASE),
+            format!("https://ps5upload.phantomptr.com/{page}/")
+        );
+    }
 }
 
 // ── Back-pressure ────────────────────────────────────────────────────────────────────────────────

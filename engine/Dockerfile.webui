@@ -73,6 +73,8 @@ COPY AUTOMATION.md API.md MCP.md ./
 # See engine/Dockerfile: build.rs embeds these, and the web UI's update /
 # DLC install is exactly what breaks without them (the web UI half of #152).
 COPY payload/ ./payload/
+# The built-in Play Together hub serves the website's Share page (src/builtin_hub.rs).
+COPY site/share/index.html ./site/share/index.html
 WORKDIR /build/engine
 
 # Populate the webui/ embed directory from the frontend build output.

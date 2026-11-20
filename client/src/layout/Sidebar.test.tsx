@@ -20,10 +20,9 @@ vi.mock("../state/logs", () => ({
     selector: (state: { errorCount: number }) => unknown,
   ) => selector({ errorCount: 0 }),
 }));
-vi.mock("../state/update", () => ({
-  useUpdateStore: (
-    selector: (state: { phase: { kind: string } }) => unknown,
-  ) => selector({ phase: { kind: "idle" } }),
+// The Settings dot (lib/updateNotice): nothing waiting.
+vi.mock("../state/updateNoticeRuntime", () => ({
+  useSettingsDot: () => false,
 }));
 vi.mock("./NotificationInbox", () => ({
   default: () => <span data-testid="notifications" />,

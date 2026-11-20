@@ -6,6 +6,38 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**New**
+- **Run Play Together on your own server (#881).** If you host the engine yourself (for example in Docker behind a reverse proxy with HTTPS), it can now run its own Play Together hub and serve the friends' pages itself. It is off unless you turn it on, it listens on its own port, and that port serves only the hub and the friends' pages, never the engine's controls. See SELF_HOSTING.md. Nothing changes for anyone who doesn't turn it on.
+- **Your own hub and friends' page address are kept (#881).** A custom hub address, STUN servers and a new "Guest page address" setting now survive an engine restart, and can be set once for a Docker container with environment variables. Settings shows whether each one is the default, your setting, or set on the server, and warns when your own pages are paired with the official hub, which only accepts its own pages.
+
+- **Updates are quieter.** A new version shows as a small dot on Settings (the More tab on phones) and a row at the top of Settings, instead of a banner across the screen. It still downloads by itself and installs when you quit. A banner, one line only, is left for the two cases that need you: the PS5 runs a newer helper than this app, or an update didn't install.
+- **The PS5 helper updates itself.** When the PS5 runs an older helper than this app, the app now sends the new one by itself, but only while nothing is running on the PS5: no transfer, install, extraction, open save, Remote Play, cheats in a running game, or another device's work. It never replaces a newer helper. You can turn this off for each PS5 in its settings. When it can't, the console card says why.
+
+**Faster**
+- **Friends join over the internet much sooner.** The friend's page connects to the hub as soon as it opens, and builds its connection while it does. With the hub far away, the time from pressing Join to being connected dropped from about 1.4 seconds to about 0.4 seconds in our tests.
+
+**Fixes**
+- **Adding a game copy to the home screen no longer breaks the installed game (#884).** Pressing Play on a dumped copy of a game that the PS5 had installed itself could make the PS5 list the real game under Console Storage, where it couldn't start. PS5Upload now refuses before changing anything when the same game is installed on any drive, and offers to start the installed game. Removing a copy from the home screen also never uninstalls a game the PS5 installed. A game page already in this state shows how to repair it.
+- **Sending the helper is safer and needs you less often.**
+  - The app no longer sends the helper while the PS5 is still starting up after a reboot, which could crash it. That includes when an upload recovers from a dropped connection.
+  - A helper that is running, even one the app can't use, is never replaced by itself. A new helper can tell the app when the PS5 is busy, so the app waits instead of stopping that work.
+  - Two devices sending the helper at the same moment now restart it once, not twice.
+  - Automatic sends are limited to a few per hour per PS5, and stop with an explanation if the PS5 keeps restarting afterwards or another PS5 now answers at that address.
+  - On a slow network the app waits for the helper to arrive instead of giving up after a minute, and it waits up to two minutes for the new helper to start instead of telling you to send it again.
+  - The PS5's boot copy of the helper is never replaced with an older one.
+  - Clearer messages for a missing local-network permission on Mac, iPhone, iPad and Android, for IPv6 addresses (use the PS5's IPv4 address), and for a PS5 that just started.
+  - When the helper isn't running, the screen says why it isn't sent by itself, and the app tries again every 15 minutes instead of giving up after three tries.
+- **The app says when the connection to the PS5 keeps dropping.** When the PS5 drops in and out several times in a few minutes, a note says so, with what to try. When it started around when a USB drive was plugged into a PS5 on Wi-Fi, the note says that USB 3 drives can disturb 2.4 GHz Wi-Fi, and to try a cable, 5 GHz Wi-Fi, or moving the drive away from the console. Bug reports now include the recent drops and whether the PS5 is on a cable or Wi-Fi.
+- **A PS5 on a weak network no longer gets its helper replaced while it is running.** When the helper was running but slow to answer, the app could send a new one over it, which cut every connection and made the PS5 drop in and out even more.
+- **Internet invites no longer lose their outside address after one lost packet.** The address lookup is now retried and refreshed while a room is open, and it no longer pauses the stream of every friend already playing.
+- **A friend leaving while the host replies no longer breaks the room** for a moment and reconnects it.
+- **After the hub restarts, invites work again within about 5 seconds** instead of up to 30.
+- The hub passes messages through without rebuilding them, about five times less work per message.
+- Thank you to everyone who supported PS5Upload this month; the Thanks page has your names.
+- Most of the PS5 helper changes in this release have not been tried on a console yet.
+
+## 12.6.14
+
 **Fixes**
 - **The PS5 helper starts again when it is sent twice at once (#877).** In 12.6.13, when a payload loader and you both started the helper within a few seconds, the second copy stepped aside, and if the first then failed to start, no helper was left running and the app said the helper isn't reachable. The second copy now waits for the first and takes over if the first doesn't come up.
 - **An older helper is named as one.** When the PS5 runs an older helper (for example one a payload loader starts when the PS5 boots), the app now says an older helper is running and offers to send the new one, instead of saying the helper isn't reachable.

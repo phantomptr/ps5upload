@@ -49,6 +49,11 @@ services:
       # Where packages uploaded from a browser wait for their install. By default
       # beside the engine's state in /data; point it at a bigger volume if needed.
       # PS5UPLOAD_STAGING_DIR: "/pkgs-staging"
+      # Play Together invites through your own name (SELF_HOSTING.md): the hub and the
+      # guest pages on a port of their own, which only your HTTPS reverse proxy publishes.
+      # The engine itself (19113) stays on the LAN.
+      # PS5UPLOAD_HUB_LISTEN: "127.0.0.1:19115"
+      # PS5UPLOAD_HUB_PUBLIC_URL: "https://play.example.com"
 
     # Synology and other NAS boxes: the container runs as UID 65532 unless told
     # otherwise, and your bind mount is owned by someone else. Pick ONE:

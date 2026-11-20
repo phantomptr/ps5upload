@@ -17,6 +17,11 @@
 #include "runtime.h"
 
 static pthread_mutex_t g_busy = PTHREAD_MUTEX_INITIALIZER;
+/* Set while g_busy is held by a dump: read by app_dump_running without touching the lock (a trylock
+ * there would make a dump that starts at that moment fail with dump_busy). */
+static volatile int g_dump_running = 0;
+
+int app_dump_running(void) { return __atomic_load_n(&g_dump_running, __ATOMIC_ACQUIRE); }
 
 static int hk_cancelled(void *a) { return ava1_op_cancelled((ava1_op_ctx_t *)a); }
 static void hk_total(void *a, uint64_t files, uint64_t bytes) { ava1_op_set_total((ava1_op_ctx_t *)a, files, bytes); }
@@ -44,7 +49,9 @@ int app_dump_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t n) {
         ava1_op_message(c, "dump_busy");
         return AVA1_ERR_BUSY;
     }
+    __atomic_store_n(&g_dump_running, 1, __ATOMIC_RELEASE);
     if (!(r = calloc(1, sizeof *r))) {
+        __atomic_store_n(&g_dump_running, 0, __ATOMIC_RELEASE);
         pthread_mutex_unlock(&g_busy);
         ava1_op_message(c, "dump_io_failed: out of memory");
         return AVA1_ERR_IO;
@@ -81,6 +88,7 @@ int app_dump_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t n) {
         fprintf(stderr, "app_dump: %s failed: %s\n", a.title_id, r->cause);
     }
     free(r);
+    __atomic_store_n(&g_dump_running, 0, __ATOMIC_RELEASE);
     pthread_mutex_unlock(&g_busy);
     return status;
 }

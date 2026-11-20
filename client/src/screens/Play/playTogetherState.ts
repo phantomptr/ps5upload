@@ -141,6 +141,15 @@ export interface ShareLink {
   why: string | null;
 }
 
+/** Where a setting's value comes from: set in Settings ("custom"), by the engine's environment on
+ *  a self-hosted server ("environment", PS5UPLOAD_HUB_URL and the like), or the default. */
+export type NetSource = "custom" | "environment" | "default";
+export interface NetSources {
+  hubUrl: NetSource;
+  pageBase: NetSource;
+  stun: NetSource;
+}
+
 /** The host's Play Together choices for internet invites (every console). */
 export interface NetSettings {
   /** Internet invites allowed; null: an engine from before internet invites (none offered). */
@@ -150,7 +159,15 @@ export interface NetSettings {
    *  before the word says it with internet_invites. */
   invites: "anywhere" | "wifi" | null;
   hubUrl: string;
+  /** Where the guest pages are (`https://…/`, the pages being `join/`, `pad/` and `share/` below
+   *  it); null: an engine from before it (always the website's). */
+  pageBase: string | null;
   stun: string[];
+  /** Where hubUrl, pageBase and stun come from; null: an engine from before it. */
+  sources: NetSources | null;
+  /** The engine runs its own hub (a server, PS5UPLOAD_HUB_LISTEN): shown, never changed here.
+   *  Null when it does not (or an engine from before it). */
+  builtInHub: BuiltInHub | null;
   upnp: boolean;
   /** The UDP port internet friends connect to (0: not chosen yet; null: an engine before it). */
   port: number | null;
@@ -193,7 +210,7 @@ export const EMPTY_JOIN: JoinHostState = {
   invite: null,
   guests: [],
   asks: [],
-  settings: { blockSystemButtons: true, maxPlayers: 3, streamSeat: false, internetInvites: null, invites: null, hubUrl: "", stun: [], upnp: true, port: null, videoTrack: true },
+  settings: { blockSystemButtons: true, maxPlayers: 3, streamSeat: false, internetInvites: null, invites: null, hubUrl: "", pageBase: null, stun: [], sources: null, builtInHub: null, upnp: true, port: null, videoTrack: true },
   netPeers: [],
   seatNext: false,
   nextProfile: null,
@@ -314,6 +331,28 @@ export function lowerForAll(
   return { guest: g, gotKbps: g.link.kbps ?? g.link.fitKbps!, toKbps: to };
 }
 
+/** The engine's own hub (builtin_hub.rs view): its port and public address. */
+export interface BuiltInHub {
+  port: number;
+  publicUrl: string | null;
+}
+
+/** `settings.built_in_hub`, or null when the engine runs none. */
+export function readBuiltInHub(v: unknown): BuiltInHub | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o.port !== "number") return null;
+  return { port: o.port, publicUrl: typeof o.public_url === "string" && o.public_url ? o.public_url : null };
+}
+
+/** `settings.sources` (join.rs settings_view), or null from an engine before it. */
+export function readSources(v: unknown): NetSources | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const one = (x: unknown): NetSource => (x === "custom" || x === "environment" ? x : "default");
+  return { hubUrl: one(o.hub_url), pageBase: one(o.page_base), stun: one(o.stun) };
+}
+
 /** The engine's answer, checked field by field (an older or odd one never breaks the page). */
 export function readJoinState(v: unknown): JoinHostState {
   const o = (v ?? {}) as Record<string, unknown>;
@@ -386,7 +425,10 @@ export function readJoinState(v: unknown): JoinHostState {
               : "wifi"
             : null,
       hubUrl: typeof s.hub_url === "string" ? s.hub_url : "",
+      pageBase: typeof s.page_base === "string" ? s.page_base : null,
       stun: Array.isArray(s.stun) ? s.stun.filter((x): x is string => typeof x === "string") : [],
+      sources: readSources(s.sources),
+      builtInHub: readBuiltInHub(s.built_in_hub),
       upnp: s.upnp !== false,
       port: typeof s.port === "number" ? s.port : null,
       videoTrack: s.video_track !== false,
@@ -627,11 +669,89 @@ export interface NetSettingsBody {
    *  the word reads). */
   invites?: "anywhere" | "wifi";
   internet_invites?: boolean;
+  /** Empty: back to the default. */
   hub_url?: string;
+  /** Where the guest pages are; empty: back to the default. */
+  page_base?: string;
   stun?: string[];
+  /** Back to the default. */
+  reset?: Array<"hub_url" | "page_base" | "stun">;
   upnp?: boolean;
   port?: number;
   video_track?: boolean;
+}
+
+/** Where the guest pages are by default, and the hub that only takes those pages' origin
+ *  (ps5upload-hub config.rs GUEST_PAGE_ORIGIN, beside the app's own). */
+export const DEFAULT_PAGE_BASE = "https://ps5upload.phantomptr.com/";
+export const DEFAULT_HUB_HOST = "hub.phantomptr.com";
+
+/** A page base the engine takes (join_net::page_base), in its one form, or null: `https://` (or
+ *  `http://` to this computer), a host, an optional port and path, no user, query or fragment. */
+export function pageBaseOf(raw: string): string | null {
+  const t = raw.trim();
+  if (!t || t.length > 200 || /[?#@\\]/.test(t) || /[^\x21-\x7e]/.test(t)) return null;
+  const m = /^([a-z][a-z0-9+.-]*):\/\/([^/]+)(\/.*)?$/i.exec(t);
+  if (!m) return null;
+  const scheme = m[1].toLowerCase();
+  let u: URL;
+  try {
+    u = new URL(`${scheme}://${m[2]}`);
+  } catch {
+    return null;
+  }
+  const host = u.hostname.replace(/^\[|\]$/g, "");
+  const local = host === "localhost" || host === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+  if (!(scheme === "https" || (scheme === "http" && local)) || !u.hostname || u.username || u.password) return null;
+  const path = (m[3] ?? "").replace(/\/+$/, "");
+  const segs = path.split("/").slice(1);
+  if (!segs.every((s) => s !== "" && s !== "." && s !== ".." && /^[A-Za-z0-9._~-]+$/.test(s))) return null;
+  return `${u.origin}${path}/`;
+}
+
+/** The pages' origin, what a friend's browser sends the hub. */
+export function pageOrigin(base: string): string {
+  try {
+    return new URL(base).origin;
+  } catch {
+    return base;
+  }
+}
+
+/** The pages are the host's own but the hub is the default one: that hub only takes the website's
+ *  pages (and the app), so a friend opening the link in a browser could not join. */
+export function ownPagesNeedOwnHub(pageBase: string, hubUrl: string): boolean {
+  const base = pageBaseOf(pageBase);
+  if (!base || pageOrigin(base) === pageOrigin(DEFAULT_PAGE_BASE)) return false;
+  try {
+    return new URL(hubUrl.trim()).hostname.toLowerCase() === DEFAULT_HUB_HOST;
+  } catch {
+    return false;
+  }
+}
+
+/** What Settings › Play Together › Advanced saves: only what changed; an emptied hub or page base
+ *  goes back to the default. Null when nothing changed or a field is not valid. */
+export function advancedBody(
+  net: Pick<NetSettings, "hubUrl" | "pageBase" | "stun">,
+  typed: { hub: string; pageBase: string; stun: string },
+): NetSettingsBody | null {
+  const body: NetSettingsBody = {};
+  const hub = typed.hub.trim();
+  if (hub !== net.hubUrl) {
+    if (hub && !hubUrlOk(hub)) return null;
+    body.hub_url = hub;
+  }
+  if (net.pageBase !== null) {
+    const raw = typed.pageBase.trim();
+    const base = raw ? pageBaseOf(raw) : "";
+    if (base === null) return null;
+    if (base !== net.pageBase) body.page_base = base;
+  }
+  const stun = parseStun(typed.stun);
+  if (!stun) return null;
+  if (stun.join("\n") !== net.stun.join("\n")) body.stun = stun;
+  return Object.keys(body).length ? body : null;
 }
 
 /** A port Settings › Play Together takes: 1024-65535 (the engine also takes 0, "pick one"). */

@@ -159,7 +159,12 @@ pub(super) fn tools() -> Vec<ToolDef> {
                     "internet_invites": flag(
                         "The older name of `invites`: true is anywhere, false only on the Wi-Fi.",
                     ),
-                    "hub_url": text("The signalling hub, a wss:// address."),
+                    "hub_url": text("The signalling hub, a wss:// address (empty: the default)."),
+                    "page_base": text(
+                        "Where the guest pages are, an https:// address such as \
+                         https://play.example.com/ (links open <page_base>join/, pad/ or share/; \
+                         empty: the default).",
+                    ),
                     "stun": {
                         "type": "array",
                         "items": { "type": "string" },

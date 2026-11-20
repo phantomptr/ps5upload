@@ -232,6 +232,10 @@ pub(crate) struct Settings {
     /// The signalling hub (`wss://`; `ws://` only to this computer).
     #[serde(default = "default_hub")]
     pub hub_url: String,
+    /// Where the guest pages are: internet links open `<page_base>join/`, `pad/` or `share/`
+    /// (crate::join_net::page_base). The website's unless the host runs their own.
+    #[serde(default = "default_page_base")]
+    pub page_base: String,
     /// STUN servers (`host:port`) the engine asks for its outside address.
     #[serde(default = "default_stun")]
     pub stun: Vec<String>,
@@ -255,15 +259,18 @@ fn yes() -> bool {
     true
 }
 
+// The defaults are this run's: the built-in ones, or what a self-hosted engine's environment set
+// (crate::self_host).
 fn default_hub() -> String {
-    crate::join_net::DEFAULT_HUB.to_string()
+    crate::self_host::defaults().hub_url.clone()
+}
+
+fn default_page_base() -> String {
+    crate::self_host::defaults().page_base.clone()
 }
 
 fn default_stun() -> Vec<String> {
-    crate::join_net::DEFAULT_STUN
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    crate::self_host::defaults().stun.clone()
 }
 
 impl Default for Settings {
@@ -274,6 +281,7 @@ impl Default for Settings {
             stream_seat: false,
             internet_invites: true,
             hub_url: default_hub(),
+            page_base: default_page_base(),
             stun: default_stun(),
             upnp: true,
             port: 0,
@@ -304,10 +312,11 @@ pub(crate) fn settings() -> Settings {
         .unwrap_or_default()
 }
 
-// ── "Invites work" (kept across restarts) ───────────────────────────────────────────────────────
+// ── Kept across restarts ─────────────────────────────────────────────────────────────────────────
 
-/// Where the engine keeps "Invites work" and the internet friends' port (in its data folder). The
-/// other Play Together choices last one engine run, as before.
+/// Where the engine keeps "Invites work", the internet friends' port, and the hub, page base and
+/// STUN servers while they differ from this run's defaults (in its data folder). The other Play
+/// Together choices last one engine run, as before.
 const INVITES_FILE: &str = "play_together.json";
 
 /// "Invites work" as the API says it: "anywhere" (the one link: the internet invite, which also
@@ -320,11 +329,16 @@ pub(crate) fn invites_word(anywhere: bool) -> &'static str {
     }
 }
 
-/// The settings as the API shows them: every field, and `invites` (the same choice as
-/// `internet_invites`, in the words of Settings › App › Play Together).
+/// The settings as the API shows them: every field, `invites` (the same choice as
+/// `internet_invites`, in the words of Settings › App › Play Together), and `sources`: where
+/// `hub_url`, `page_base` and `stun` come from ("custom": set in Settings; "environment": a
+/// self-hosted engine's variables; "default"), and `built_in_hub`: this engine's own hub when
+/// it runs one (crate::builtin_hub: `{port, public_url, stun_ports}`, read-only), else null.
 pub(crate) fn settings_view(s: &Settings) -> serde_json::Value {
     let mut v = serde_json::to_value(s).unwrap_or_default();
     v["invites"] = invites_word(s.internet_invites).into();
+    v["sources"] = crate::self_host::defaults().sources(&s.hub_url, &s.page_base, &s.stun);
+    v["built_in_hub"] = crate::builtin_hub::view();
     v
 }
 
@@ -339,22 +353,47 @@ struct StoredInvites {
     /// Settings::port (absent: none chosen yet).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     port: Option<u16>,
+    /// Settings::hub_url, page_base and stun, each only while it is not the default (absent: the
+    /// default, which a self-hosted engine's environment may change from run to run).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hub_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    page_base: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stun: Option<Vec<String>>,
 }
 
-/// The saved choice (true: anywhere; None when the file says none) and port.
-fn read_invites(path: &std::path::Path) -> (Option<bool>, Option<u16>) {
+/// What the file says, each part checked as the settings check it (None: nothing saved, or
+/// nothing usable).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Saved {
+    /// true: anywhere.
+    anywhere: Option<bool>,
+    port: Option<u16>,
+    hub_url: Option<String>,
+    page_base: Option<String>,
+    stun: Option<Vec<String>>,
+}
+
+fn read_invites(path: &std::path::Path) -> Saved {
     let Some(s) = std::fs::read(path)
         .ok()
         .and_then(|b| serde_json::from_slice::<StoredInvites>(&b).ok())
     else {
-        return (None, None);
+        return Saved::default();
     };
     let anywhere = match s.invites.as_deref() {
         Some("anywhere") => Some(true),
         Some("wifi") => Some(false),
         _ => s.internet_invites,
     };
-    (anywhere, s.port.filter(|p| port_ok(*p) && *p != 0))
+    Saved {
+        anywhere,
+        port: s.port.filter(|p| port_ok(*p) && *p != 0),
+        hub_url: s.hub_url.filter(|h| crate::join_net::hub_url_ok(h)),
+        page_base: s.page_base.and_then(|b| crate::join_net::page_base(&b)),
+        stun: s.stun.and_then(|v| clean_stun(&v)),
+    }
 }
 
 /// A port the settings take: 0 (the engine picks) or 1024-65535 (no privileged port).
@@ -362,15 +401,25 @@ pub(crate) fn port_ok(p: u16) -> bool {
     p == 0 || p >= 1024
 }
 
-fn write_invites(path: &std::path::Path, anywhere: bool, port: u16) -> Result<(), String> {
+/// Writes what is kept of `s`: the hub, page base and STUN servers only where they differ from
+/// `d` (so a reset to the default leaves nothing behind, and a default from the environment is
+/// not frozen into the file).
+fn write_invites(
+    path: &std::path::Path,
+    s: &Settings,
+    d: &crate::self_host::Defaults,
+) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)
             .map_err(|e| crate::state_io::describe("the Play Together setting", dir, &e))?;
     }
     let body = serde_json::to_vec_pretty(&StoredInvites {
-        invites: Some(invites_word(anywhere).to_string()),
+        invites: Some(invites_word(s.internet_invites).to_string()),
         internet_invites: None,
-        port: (port != 0).then_some(port),
+        port: (s.port != 0).then_some(s.port),
+        hub_url: (s.hub_url != d.hub_url).then(|| s.hub_url.clone()),
+        page_base: (s.page_base != d.page_base).then(|| s.page_base.clone()),
+        stun: (s.stun != d.stun).then(|| s.stun.clone()),
     })
     .map_err(|e| e.to_string())?;
     // Written aside and renamed over: a crash mid-write never leaves half a file.
@@ -380,24 +429,40 @@ fn write_invites(path: &std::path::Path, anywhere: bool, port: u16) -> Result<()
         .map_err(|e| crate::state_io::describe("the Play Together setting", path, &e))
 }
 
+/// `s` with what was saved put on it: a saved setting wins over the defaults (the environment's
+/// too).
+fn apply_saved(s: &mut Settings, saved: Saved) {
+    if let Some(a) = saved.anywhere {
+        s.internet_invites = a;
+    }
+    if let Some(p) = saved.port {
+        s.port = p;
+    }
+    if let Some(h) = saved.hub_url {
+        s.hub_url = h;
+    }
+    if let Some(b) = saved.page_base {
+        s.page_base = b;
+    }
+    if let Some(v) = saved.stun {
+        s.stun = v;
+    }
+}
+
 fn invites_path() -> Option<std::path::PathBuf> {
     ps5upload_ava1::pool::data_dir().map(|d| d.join(INVITES_FILE))
 }
 
-/// "Invites work" as it was last set; called once as the engine starts. Nothing saved (every
-/// engine before 12.1 kept Allow internet invites for one run only, on at each start): anywhere.
+/// The kept settings as they were last set; called once as the engine starts. Nothing saved
+/// (every engine before 12.1 kept Allow internet invites for one run only, on at each start):
+/// anywhere, and the defaults.
 pub(crate) fn load_invites() {
-    let Some((anywhere, port)) = invites_path().map(|p| read_invites(&p)) else {
+    let Some(saved) = invites_path().map(|p| read_invites(&p)) else {
         return;
     };
     let mut g = SETTINGS.lock().unwrap_or_else(|e| e.into_inner());
     let mut s = g.clone().unwrap_or_default();
-    if let Some(a) = anywhere {
-        s.internet_invites = a;
-    }
-    if let Some(p) = port {
-        s.port = p;
-    }
+    apply_saved(&mut s, saved);
     *g = Some(s);
 }
 
@@ -416,17 +481,17 @@ pub(crate) fn keep_picked_port(port: u16) {
         *g = Some(s.clone());
         s
     };
-    save_invites(s.internet_invites, s.port);
+    save_invites(&s);
 }
 
-/// Saves "Invites work" and the port (never from the tests: they would write the user's own data
-/// folder).
-fn save_invites(anywhere: bool, port: u16) {
+/// Saves what is kept of the settings (never from the tests: they would write the user's own
+/// data folder).
+fn save_invites(s: &Settings) {
     if cfg!(test) {
         return;
     }
     if let Some(p) = invites_path() {
-        if let Err(e) = write_invites(&p, anywhere, port) {
+        if let Err(e) = write_invites(&p, s, crate::self_host::defaults()) {
             crate::log_at!(Warn, "together", "join: {e}");
         }
     }
@@ -2270,9 +2335,12 @@ pub async fn relay(
         .on_upgrade(move |s| async move { crate::pad_link::relay_to(s, &target).await })
 }
 
+/// The guest page (client/vite.join.config.ts), also served by the built-in hub.
+pub(crate) const PAGE_HTML: &str = include_str!("join_page.html");
+
 /// `GET /join`: the guest page.
 pub async fn page() -> impl IntoResponse {
-    Html(include_str!("join_page.html"))
+    Html(PAGE_HTML)
 }
 
 fn say(v: serde_json::Value) -> Message {
@@ -3886,8 +3954,14 @@ pub struct SettingsBody {
     invites: Option<String>,
     #[serde(default)]
     hub_url: Option<String>,
+    /// Where the guest pages are (`https://play.example.com/`); "" is the default.
+    #[serde(default)]
+    page_base: Option<String>,
     #[serde(default)]
     stun: Option<Vec<String>>,
+    /// Back to the default: any of "hub_url", "page_base", "stun".
+    #[serde(default)]
+    reset: Option<Vec<String>>,
     #[serde(default)]
     upnp: Option<bool>,
     #[serde(default)]
@@ -3910,14 +3984,32 @@ fn stun_server_ok(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'))
 }
 
+/// STUN servers as the settings keep them (a `stun:` prefix and empty entries dropped), or None
+/// for more than 8 or one that is not `host:port`.
+fn clean_stun(v: &[String]) -> Option<Vec<String>> {
+    let v: Vec<String> = v
+        .iter()
+        .map(|x| x.trim().trim_start_matches("stun:").to_string())
+        .filter(|x| !x.is_empty())
+        .collect();
+    (v.len() <= 8 && v.iter().all(|x| stun_server_ok(x))).then_some(v)
+}
+
 /// `POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,
-/// invites?, internet_invites?, hub_url?, stun?, upnp?, video_track?}`: the host's choices (every
+/// invites?, internet_invites?, hub_url?, page_base?, stun?, reset?, upnp?, video_track?}`: the host's choices (every
 /// console). Fewer players lets nobody go; it only stops new ones. `stream_seat` off moves a friend
 /// on the stream's controller to a pad of their own. `invites` is "Invites work": "anywhere" (the
 /// one link, through the hub) or "wifi" (the home network's link only; 400 `invites` otherwise),
 /// the same choice as `internet_invites` on or off, and the one setting kept across restarts.
 /// "wifi" closes the internet rooms (guests already in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`
-/// otherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the
+/// otherwise), `page_base` where the guest pages are (`https://play.example.com/`: links open
+/// `<page_base>join/`, `pad/` or `share/`; `http://` only to this computer, no query or fragment;
+/// 400 `page_base` otherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none),
+/// `reset` a list of `hub_url`, `page_base` and `stun` to put back to the default (an empty
+/// `hub_url` or `page_base` does the same; 400 `reset` for another name). The hub, page base and
+/// STUN servers are kept across restarts while they differ from the default, which a self-hosted
+/// engine may take from `PS5UPLOAD_HUB_URL` and `PS5UPLOAD_PAGE_BASE`; `settings.sources` says
+/// which each is ("custom", "environment" or "default"). `upnp` is whether the
 /// router is asked for a port, `video_track` whether internet guests get the picture as a video
 /// track (new connections; the data channel otherwise).
 ///
@@ -3977,23 +4069,40 @@ pub async fn set_settings(
         Some("wifi") => s.internet_invites = false,
         Some(_) => return bad(StatusCode::BAD_REQUEST, "invites"),
     }
-    if let Some(v) = b.hub_url {
-        let v = v.trim().to_string();
-        if !crate::join_net::hub_url_ok(&v) {
+    let d = crate::self_host::defaults();
+    if let Some(v) = &b.hub_url {
+        let v = v.trim();
+        if v.is_empty() {
+            s.hub_url = d.hub_url.clone();
+        } else if crate::join_net::hub_url_ok(v) {
+            s.hub_url = v.to_string();
+        } else {
             return bad(StatusCode::BAD_REQUEST, "hub_url");
         }
-        s.hub_url = v;
     }
-    if let Some(v) = b.stun {
-        let v: Vec<String> = v
-            .iter()
-            .map(|x| x.trim().trim_start_matches("stun:").to_string())
-            .filter(|x| !x.is_empty())
-            .collect();
-        if v.len() > 8 || v.iter().any(|x| !stun_server_ok(x)) {
-            return bad(StatusCode::BAD_REQUEST, "stun");
+    if let Some(v) = &b.page_base {
+        if v.trim().is_empty() {
+            s.page_base = d.page_base.clone();
+        } else {
+            match crate::join_net::page_base(v) {
+                Some(v) => s.page_base = v,
+                None => return bad(StatusCode::BAD_REQUEST, "page_base"),
+            }
         }
-        s.stun = v;
+    }
+    if let Some(v) = &b.stun {
+        match clean_stun(v) {
+            Some(v) => s.stun = v,
+            None => return bad(StatusCode::BAD_REQUEST, "stun"),
+        }
+    }
+    for what in b.reset.iter().flatten() {
+        match what.as_str() {
+            "hub_url" => s.hub_url = d.hub_url.clone(),
+            "page_base" => s.page_base = d.page_base.clone(),
+            "stun" => s.stun = d.stun.clone(),
+            _ => return bad(StatusCode::BAD_REQUEST, "reset"),
+        }
     }
     if let Some(v) = b.upnp {
         s.upnp = v;
@@ -4020,8 +4129,12 @@ pub async fn set_settings(
     *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
     if ((b.internet_invites.is_some() || b.invites.is_some()) && s.internet_invites != was_anywhere)
         || b.port.is_some()
+        || b.hub_url.is_some()
+        || b.page_base.is_some()
+        || b.stun.is_some()
+        || b.reset.is_some()
     {
-        save_invites(s.internet_invites, s.port);
+        save_invites(&s);
     }
     let fx = with_parties(|m| {
         m.values_mut()
@@ -7951,7 +8064,9 @@ mod tests {
                     internet_invites: None,
                     invites: None,
                     hub_url: None,
+                    page_base: None,
                     stun: None,
+                    reset: None,
                     upnp: None,
                     port: None,
                     video_track: None,

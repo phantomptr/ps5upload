@@ -28,6 +28,8 @@ import { useRosterStore, type PS5Profile } from "../../../state/roster";
 import { helperSendFor, useHelperSendStore } from "../../../state/helperSend";
 import { useHelperStopped } from "../../../state/helperStopped";
 import { sendHelperTo } from "../../../state/helperSendRuntime";
+import { useHelperAutoUpdateStore, type AutoUpdateView } from "../../../state/helperAutoUpdate";
+import { redeployWhyText, useRedeployWhy } from "../../../state/redeployStatus";
 import { meshFor, pollMesh, useMeshStore } from "../../../state/mesh";
 import { consoleOnTailnet } from "../../../state/useTailnet";
 import { useConsoleWake } from "../../../lib/useConsoleWake";
@@ -96,6 +98,58 @@ function helperChip(tr: Translator, s: CardStatus): { text: string; tone: "good"
       };
     default:
       return { text: tr("cs_card_helper_unknown", undefined, "Checking the helper…"), tone: "neutral" };
+  }
+}
+
+/** The one quiet line under an older helper: what the automatic update is waiting for, or why it
+ *  is not doing it (state/helperAutoUpdate). The Replace helper button beside it sends now. */
+export function autoUpdateNote(tr: Translator, view: AutoUpdateView | undefined): string | null {
+  if (!view) return null;
+  if (view.state === "updating")
+    return tr("helper_auto_updating", { version: view.to }, "Updating the helper to v{version}…");
+  if (view.state === "failed")
+    return tr("helper_auto_retry", undefined, "The last automatic update didn't work. It tries again in a few minutes.");
+  if (view.state === "never") {
+    return view.why === "off"
+      ? tr("helper_auto_off", undefined, "Automatic helper updates are off for this PS5.")
+      : tr("helper_auto_gave_up", undefined, "Couldn't update the helper by itself. Press Replace helper to send it.");
+  }
+  switch (view.why) {
+    case "busy-here":
+      return tr(
+        "helper_auto_wait_busy_here",
+        undefined,
+        "This app updates the helper by itself once your transfers, installs and streams on this PS5 finish.",
+      );
+    case "busy-others":
+      return tr(
+        "helper_auto_wait_busy_others",
+        undefined,
+        "This app updates the helper by itself once the other devices using this PS5 finish.",
+      );
+    case "console-work":
+      return tr(
+        "helper_auto_wait_console_work",
+        undefined,
+        "This app updates the helper by itself once the PS5 finishes its own work (an extraction, an install, an open save, or cheats in a running game).",
+      );
+    case "console-unknown":
+      return tr(
+        "helper_auto_wait_unknown",
+        undefined,
+        "This helper can't say whether the PS5 is busy, so it isn't replaced by itself. Replace it when nothing is running on the PS5.",
+      );
+    case "loader-closed":
+      return tr(
+        "helper_auto_wait_loader",
+        undefined,
+        "Can't update the helper by itself: the PS5's payload loader (port 9021) isn't answering. Start the helper from your payload loader on the PS5, or load elfldr and it updates by itself.",
+      );
+    case "retry-later":
+      return tr("helper_auto_retry", undefined, "The last automatic update didn't work. It tries again in a few minutes.");
+    default:
+      // Settling, a send moments ago, another device restarting it, a probe that did not answer.
+      return tr("helper_auto_wait_soon", undefined, "This app updates the helper by itself in a moment.");
   }
 }
 
@@ -413,6 +467,9 @@ export interface ConsoleCardViewProps {
   error: string | null;
   /** The helper before this one did not end cleanly (another payload ended it, low memory). */
   priorKilled?: boolean;
+  /** An older helper: what its automatic update is waiting for (`autoUpdateNote`). A helper that
+   *  is not running: why the app is not sending it by itself (state/redeployStatus). */
+  autoUpdateNote?: string | null;
   checklist: ReactNode;
   tailnetPanel: ReactNode;
   trusted: ReactNode;
@@ -486,6 +543,12 @@ export function ConsoleCardView(p: ConsoleCardViewProps) {
           </Badge>
         ) : null}
       </div>
+
+      {p.autoUpdateNote && (s.helper === "update" || s.helper === "missing") ? (
+        <p className="mt-2 text-xs text-[var(--color-muted)]" data-testid="console-card-auto-update">
+          {p.autoUpdateNote}
+        </p>
+      ) : null}
 
       {p.priorKilled ? (
         <div className="mt-3 flex flex-col gap-2 text-xs" data-testid="console-card-prior-killed">
@@ -628,6 +691,8 @@ export function ConsoleCard({
   const updateHost = useRosterStore((s) => s.updateHost);
   const stopped = useHelperStopped(host);
   const send = useHelperSendStore((st) => helperSendFor(st, host));
+  const autoUpdate = useHelperAutoUpdateStore((st) => st.byHost[hostOf(host)]);
+  const redeployWhy = useRedeployWhy(host);
   const mesh = useMeshStore((s) => meshFor(s, host));
   const wake = useConsoleWake(host);
   const { guard, dialog: guardDialog } = useHelperReplaceGuard();
@@ -729,6 +794,9 @@ export function ConsoleCard({
         error={error}
         checklist={<SetupChecklist host={host} status={status} active />}
         priorKilled={up && runtime.priorInstance === "killed_externally"}
+        autoUpdateNote={
+          status.helper === "missing" ? redeployWhyText(tr, redeployWhy) : autoUpdateNote(tr, autoUpdate)
+        }
         tailnetPanel={<TailnetPanel host={host} startTest={testNonce} />}
         trusted={<TrustedDevices host={host} consoleName={profile.name} state={up ? mesh.state : null} />}
         stop={<StopHelperButton host={host} size="sm" />}

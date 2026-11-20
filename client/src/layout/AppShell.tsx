@@ -8,17 +8,14 @@ import SessionBanner from "./SessionBanner";
 import RemotePlayBanner from "./RemotePlayBanner";
 import EngineDownBanner from "./EngineDownBanner";
 import MovedConsoleBanner, { useMovedConsoleWatch } from "./MovedConsoleBanner";
+import LinkDropBanner from "./LinkDropBanner";
 import { InstallAskHost } from "../components/InstallAskHost";
 import { PairingDialog } from "../screens/Connection/PairingDialog";
-import { useHelperReplaceGuard } from "../screens/Connection/useHelperReplaceGuard";
-import { helperSendFor, useHelperSendStore } from "../state/helperSend";
-import { sendHelperTo } from "../state/helperSendRuntime";
-import { liveCopyDeps } from "../state/helperStoredCopiesRuntime";
-import { findStoredCopies, type StoredCopy } from "../lib/helperStoredCopies";
 import ConsoleTabs from "./ConsoleTabs";
 import ActivityBar from "./ActivityBar";
-import UpdateToast, { WhatsNewOnLaunch } from "./UpdateToast";
-import WebUpdateToast from "./WebUpdateToast";
+import { WhatsNewOnLaunch } from "./UpdateToast";
+import UpdateBanner from "./UpdateBanner";
+import { useWebUpdateStore } from "./WebUpdateToast";
 import { Button } from "../components/Button";
 import {
   useConnectionFrozen,
@@ -88,11 +85,16 @@ import { bytesMoved } from "../lib/bytesMoved";
 import { consoleBusy } from "../lib/usePoll";
 import {
   autoRedeployDecision,
+  checkShowsLiveHelper,
+  helperAnsweredButUnusable,
   liveHelperDecision,
-  loaderSettled,
   MAX_REDEPLOYS_WITHOUT_RECOVERY,
+  REDEPLOY_GAVE_UP_RETRY_MS,
+  redeployBrakeResets,
+  redeployWhyFromOutcome,
   type RedeployAction,
 } from "../lib/autoRedeploy";
+import { noteRedeployWhy } from "../state/redeployStatus";
 import { bringUpStatusFor, useBringUpStore } from "../state/bringUp";
 import { CommandPalette, openCommandPalette } from "../components/CommandPalette";
 import { AppLogo } from "../components/AppLogo";
@@ -133,7 +135,6 @@ import { startStagedRelease } from "../lib/browserStaging";
 import { startSharedPrefs } from "../lib/sharedPrefs";
 import { startMeshShare } from "../lib/meshShare";
 import { useMeshSync } from "./useMeshSync";
-import { compareVersions } from "../lib/semver";
 import { useNavSidebarStore, navListsFromStorage } from "../state/navSidebar";
 import { UpdateCheckButton } from "./UpdateCheckButton";
 import { useTransferStore } from "../state/transfer";
@@ -146,9 +147,11 @@ import {
   keepAwakeModesInUse,
   redeployActionForProfile,
 } from "../state/consoleSettings";
-import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
+import { ensurePayloadCurrent, lastEnsureOutcome } from "../lib/ensurePayloadCurrent";
+import { noteConsoleGone, noteHelperUp, unattendedSettle } from "../lib/loaderSettle";
 import { isHelperStopped, noteHelperAnswering } from "../state/helperStopped";
 import { guardElfldr } from "../lib/elfldrGuard";
+import { startAutoUpdateLoop } from "../state/helperAutoUpdate";
 import { installPlayTimeAccumulator } from "../state/playTime";
 import { installRunningWatch } from "../state/runningWatch";
 import { useTr } from "../state/lang";
@@ -549,6 +552,13 @@ function useStatusPolling() {
         // A console that answers but wants pairing HAS a helper
         // running: calling it down would arm the auto-redeploy loop below against a live
         // console. Only the session state says what the person has to do about it.
+        // The one record every helper send reads (lib/loaderSettle): a console seen answering is not
+        // one that is starting; one in rest mode or not answering at all will start again later.
+        // Only what this reply said, never a carried-over state: an old "unreachable" would keep
+        // the record starting over and the send waiting forever.
+        const saidNow = powerFromCheck(s);
+        if (s.reachable) noteHelperUp(probedHost);
+        else if (saidNow === "rest" || saidNow === "unreachable") noteConsoleGone(probedHost);
         if (s.reachable || sessionNeedsAttention(s.session)) {
           missCountRef.current[key] = 0;
           newStatus = "up";
@@ -926,11 +936,14 @@ const redeployBook = {
   // trying through an all-night standby. A delivered send that doesn't produce
   // an up verdict means we are the problem, not the console.
   deliveredRef: { current: {} as Record<string, number> },
+  // When the last of those was delivered: past the brake, one more goes a while later
+  // (REDEPLOY_GAVE_UP_RETRY_MS) instead of never.
+  lastDeliveredRef: { current: {} as Record<string, number> },
   // Consecutive ticks a console was left alone because its helper still
   // accepted connections (see liveHelperDecision).
   liveHoldsRef: { current: {} as Record<string, number> },
-  // When :9021 was first seen open on a down console (see loaderSettled).
-  loaderFirstOpenRef: { current: {} as Record<string, number> },
+  // The settle wait last logged per console (lib/loaderSettle keeps when the loader opened).
+  settleLoggedRef: { current: {} as Record<string, number> },
   // Consoles whose helper read up since they were last seen switched off (or since the app
   // started): "Bring up automatically" runs the whole bring-up only for the others (#479).
   upThisBootRef: { current: {} as Record<string, boolean> },
@@ -976,10 +989,18 @@ function useAutoRedeployDownHelpers() {
           return;
         }
         if (cancelled) return;
-        if (fresh.reachable || sessionNeedsAttention(fresh.session)) {
+        if (checkShowsLiveHelper(fresh)) {
+          // A helper that answered in a way this app cannot use (another app version's, older or
+          // newer) is running too: never replaced unattended, and the screen says why (12.6.15).
+          const unusable = !fresh.reachable && !sessionNeedsAttention(fresh.session) && helperAnsweredButUnusable(fresh);
+          noteRedeployWhy(host, unusable ? { kind: "answering" } : null);
           log.info(
             "connection",
-            `auto-redeploy: ${host} answered a fresh probe — nothing to restore (the down verdict was stale)`,
+            fresh.reachable || sessionNeedsAttention(fresh.session)
+              ? `auto-redeploy: ${host} answered a fresh probe — nothing to restore (the down verdict was stale)`
+              : unusable
+                ? `auto-redeploy: ${host} runs a helper this app cannot use (${fresh.reason ?? "too old"}) — left running; Send helper replaces it`
+                : `auto-redeploy: ${host}'s helper is running but slow to answer (a weak network?) — not sending another over it`,
           );
           return;
         }
@@ -992,6 +1013,7 @@ function useAutoRedeployDownHelpers() {
         }
         // Asleep (DDP 620): nothing to send to until it wakes, and no port probes either.
         if (powerFromCheck(fresh) === "rest") {
+          noteRedeployWhy(host, null);
           useConnectionStore.getState().setHostStatus(host, { power: "rest" });
           return;
         }
@@ -1012,6 +1034,7 @@ function useAutoRedeployDownHelpers() {
         const held = redeployBook.liveHoldsRef.current[key] ?? 0;
         if (liveHelperDecision({ portsOpen, held }) === "hold") {
           redeployBook.liveHoldsRef.current[key] = held + 1;
+          noteRedeployWhy(host, { kind: "alive" });
           if (held === 0) {
             log.warn(
               "connection",
@@ -1036,26 +1059,25 @@ function useAutoRedeployDownHelpers() {
         if (cancelled) return;
         // Payload Manager starts the helper at boot here: give its boot list time first.
         const settleMs = helperAtBootSettleMs(loadBootRecord(host));
-        const settle = loaderSettled({
-          loaderOpen,
-          firstOpenAt: redeployBook.loaderFirstOpenRef.current[key],
-          now: Date.now(),
-          settleMs,
-        });
-        if (settle === "closed") {
-          delete redeployBook.loaderFirstOpenRef.current[key];
-          return; // nothing can take the helper; a send could only fail
-        }
-        if (settle === "settle") {
-          if (redeployBook.loaderFirstOpenRef.current[key] === undefined) {
-            redeployBook.loaderFirstOpenRef.current[key] = Date.now();
-            log.info(
-              "connection",
-              `auto-redeploy: ${host}'s loader just came up — waiting ${Math.round(settleMs / 1000)}s for the console to finish booting before sending the helper`,
-            );
-          }
+        // The record every send path shares (lib/loaderSettle): a queue's recovery waits the same.
+        const settle = unattendedSettle(host, loaderOpen, settleMs);
+        if (settle.state === "closed") {
+          // Nothing can take the helper; a send could only fail. Said on the screen, not silently.
+          noteRedeployWhy(host, { kind: "loader-closed" });
           return;
         }
+        if (settle.state === "settle") {
+          if (redeployBook.settleLoggedRef.current[key] !== settle.sendAt) {
+            redeployBook.settleLoggedRef.current[key] = settle.sendAt;
+            log.info(
+              "connection",
+              `auto-redeploy: ${host}'s loader just came up — waiting ${Math.max(0, Math.round((settle.sendAt - Date.now()) / 1000))}s for the console to finish booting before sending the helper`,
+            );
+          }
+          noteRedeployWhy(host, { kind: "settling", sendAt: settle.sendAt });
+          return;
+        }
+        noteRedeployWhy(host, { kind: "sending" });
         let delivered: boolean;
         if (action === "bring-up") {
           // "Bring up automatically" (#479): the same chain as Connection → Bring up PS5
@@ -1081,22 +1103,33 @@ function useAutoRedeployDownHelpers() {
             `auto-redeploy: attempting helper restore on ${host}`,
           );
           const result = await ensurePayloadCurrent(host, () => cancelled, true);
-          // "pushed"/"stale-ok" both mean an ELF reached the loader.
-          delivered = result === "pushed" || result === "stale-ok";
+          // "pushed"/"stale-ok" mean an ELF reached the loader; "sent-failed" a send that broke
+          // after the loader took it (the console may run it, or have crashed on it): all count.
+          delivered = result === "pushed" || result === "stale-ok" || result === "sent-failed";
+          if (result === "no-push") {
+            // Why it held back, on the screen: the engine's limits, a busy console, a stale build.
+            const why = redeployWhyFromOutcome(lastEnsureOutcome(host));
+            if (why) {
+              noteRedeployWhy(host, why);
+              return;
+            }
+          }
         }
         // If a console takes MAX_REDEPLOYS_WITHOUT_RECOVERY deliveries and still
         // reads down, pushing more cannot help — it only keeps killing
         // whatever helper manages to start. Stop and say so, loudly enough
         // to find in a bug report. Resets the moment the console reports up.
+        noteRedeployWhy(host, null);
         if (delivered) {
           const n = (redeployBook.deliveredRef.current[key] ?? 0) + 1;
           redeployBook.deliveredRef.current[key] = n;
+          redeployBook.lastDeliveredRef.current[key] = Date.now();
           if (n >= MAX_REDEPLOYS_WITHOUT_RECOVERY) {
             log.error(
               "connection",
               `auto-redeploy: gave up on ${host} after ${n} delivered helpers with no recovery — ` +
                 `the console is not coming back on its own. Check it (power, rest mode, network), ` +
-                `then use Connection → Send. Not sending more.`,
+                `then use Connection → Send. One more try in ${Math.round(REDEPLOY_GAVE_UP_RETRY_MS / 60_000)} minutes.`,
             );
           }
         }
@@ -1122,27 +1155,57 @@ function useAutoRedeployDownHelpers() {
         // out, the helper was declared "down", the redeploy landed and killed
         // the transfer mid-flight, and the whole thing repeated: 33 redeploys,
         // 23 helper shutdowns, 132 GB re-sent for a 20 GB archive.
-        const decision = autoRedeployDecision({
-          status: runtimeByHost[key]?.payloadStatus,
-          busy: transferScreenBusy(h),
-          delivered: redeployBook.deliveredRef.current[key] ?? 0,
-          // The user stopped this helper (Connection → Stop helper): it stays off (#471).
-          stopped: isHelperStopped(h),
-          power: runtimeByHost[key]?.power,
-        });
         // Switched off: the next time it answers it has booted again (not woken from rest).
         // Two ticks in a row, so one dropped probe on a busy network is not a reboot.
-        if (runtimeByHost[key]?.power === "unreachable") {
-          const n = (redeployBook.unreachableTicksRef.current[key] ?? 0) + 1;
-          redeployBook.unreachableTicksRef.current[key] = n;
-          if (n >= 2) delete redeployBook.upThisBootRef.current[key];
+        const power = runtimeByHost[key]?.power;
+        let unreachableTicks = 0;
+        if (power === "unreachable") {
+          unreachableTicks = (redeployBook.unreachableTicksRef.current[key] ?? 0) + 1;
+          redeployBook.unreachableTicksRef.current[key] = unreachableTicks;
+          if (unreachableTicks >= 2) delete redeployBook.upThisBootRef.current[key];
         } else {
           delete redeployBook.unreachableTicksRef.current[key];
         }
+        // Rest mode or off: the brake starts over, so a console that took three helpers and
+        // then was put to sleep or restarted gets its helper back by itself afterwards.
+        if (redeployBrakeResets({ power, unreachableTicks }) && (redeployBook.deliveredRef.current[key] ?? 0) > 0) {
+          redeployBook.deliveredRef.current[key] = 0;
+          delete redeployBook.lastDeliveredRef.current[key];
+          log.info("connection", `auto-redeploy: ${h} went to rest mode or was off — the brake starts over`);
+        }
+        const delivered = redeployBook.deliveredRef.current[key] ?? 0;
+        const lastDelivered = redeployBook.lastDeliveredRef.current[key];
+        const status = runtimeByHost[key]?.payloadStatus;
+        const busy = transferScreenBusy(h);
+        // The user stopped this helper (Connection → Stop helper): it stays off (#471).
+        const stopped = isHelperStopped(h);
+        const decision = autoRedeployDecision({
+          status,
+          busy,
+          delivered,
+          stopped,
+          power,
+          lastDeliveredAgoMs: lastDelivered === undefined ? null : Date.now() - lastDelivered,
+        });
+        if (decision === "hold") {
+          // What the "Helper isn't running" screen says about it (rest mode and "stopped by you"
+          // have their own screens).
+          noteRedeployWhy(
+            h,
+            status !== "down" || stopped || power === "rest"
+              ? null
+              : busy
+                ? { kind: "busy" }
+                : delivered >= MAX_REDEPLOYS_WITHOUT_RECOVERY
+                  ? { kind: "gave-up", retryAt: (lastDelivered ?? Date.now()) + REDEPLOY_GAVE_UP_RETRY_MS }
+                  : null,
+          );
+        }
         if (decision === "rearm") {
+          noteRedeployWhy(h, null);
           redeployBook.upThisBootRef.current[key] = true;
           redeployBook.liveHoldsRef.current[key] = 0;
-          delete redeployBook.loaderFirstOpenRef.current[key];
+          noteHelperUp(h);
           if ((redeployBook.deliveredRef.current[key] ?? 0) > 0) {
             redeployBook.deliveredRef.current[key] = 0;
             log.info("connection", `auto-redeploy: ${h} is back up — re-armed`);
@@ -1151,6 +1214,7 @@ function useAutoRedeployDownHelpers() {
           // This console by its own settings (Settings › This PS5), not the selected one's.
           const action = redeployActionForProfile(p, defaults, redeployBook.upThisBootRef.current[key] === true);
           if (action !== "none") void tryRedeploy(h, action);
+          else noteRedeployWhy(h, { kind: "setting-off" });
         }
       }
     };
@@ -1179,6 +1243,18 @@ function useAutoRedeployDownHelpers() {
   }, [visible]);
 }
 
+/** Replace an OLDER helper with this app's by itself, only while nothing can break
+ *  (lib/helperAutoUpdate, state/helperAutoUpdate): the "I had to send the helper again after
+ *  updating" complaint. Desktop and phone apps (they carry the helper), while the window shows,
+ *  like the reconnect loop. One loop for every console tree. */
+function useAutoUpdateOlderHelper() {
+  const visible = useDocumentVisible();
+  useEffect(() => {
+    if (!visible || !isTauriEnv()) return;
+    return startAutoUpdateLoop();
+  }, [visible]);
+}
+
 /** Fire the TTL-gated update checks from mount on. The store debounces to
  *  one check per day and caches in sessionStorage, so this is safe to
  *  call unconditionally — subsequent tab switches hit cache. */
@@ -1190,6 +1266,8 @@ function useUpdateCheckOnMount() {
     // DNS would otherwise delay the initial UI by up to a few seconds.
     let stop: (() => void) | null = null;
     const id = window.setTimeout(() => {
+      // The web UI updates with its engine: ask it once (Settings shows the answer).
+      if (!isTauriEnv()) useWebUpdateStore.getState().load();
       stop = startUpdateChecks(ensureChecked);
     }, 1500);
     return () => {
@@ -1443,168 +1521,6 @@ function useRoutePersistence() {
   }, [location.pathname, location.search]);
 }
 
-/**
- * Stale-helper banner.
- *
- * When the app updates but the PS5 still runs the previous payload, the two
- * halves disagree about what exists — features land in the app that the
- * console can't serve, and fixes look like they haven't worked. This was
- * logged as a warning and NOTHING else, so a user could run a 2½-version-old
- * app against a newer helper and have no way to see it: they simply saw
- * behaviour that didn't match the release notes and reasonably concluded the
- * fix was broken. A log line nobody opens is not user-visible.
- *
- * Dismissible per version pair, so re-loading the payload isn't nagged about
- * forever, but a NEW mismatch (next update) surfaces again.
- */
-function HelperVersionBanner() {
-  const tr = useTr();
-  const navigate = useNavigate();
-  const host = useConnectionStore((s) => s.host);
-  const { guard: guardReplace, dialog: replaceDialog } = useHelperReplaceGuard();
-  const send = useHelperSendStore((s) => helperSendFor(s, host));
-  // A send started from this banner keeps it (with the send's step) until it ends; a send
-  // started anywhere else does not raise it.
-  const [sentHere, setSentHere] = useState(false);
-  const payloadVersion = useConnectionStore((s) => s.payloadVersion);
-  const payloadStatus = useConnectionStore((s) => s.payloadStatus);
-  const [appVersion, setAppVersion] = useState<string | null>(null);
-  const [dismissed, setDismissed] = useState<string | null>(() =>
-    safeGetItem("ps5upload.helper-mismatch.dismissed"),
-  );
-  useEffect(() => {
-    let cancelled = false;
-    void getAppVersion()
-      .then((v) => {
-        if (!cancelled) setAppVersion(v);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // A send in progress keeps the banner, with its step, until the new helper answers.
-  const sending = send?.state === "busy";
-  const mismatch =
-    payloadStatus === "up" &&
-    !!appVersion &&
-    !!payloadVersion &&
-    payloadVersion !== appVersion;
-  const pair = `${payloadVersion}->${appVersion}`;
-  const olderHelper =
-    mismatch && compareVersions(payloadVersion ?? "", appVersion ?? "") === -1;
-  // An older helper is usually the copy an autoloader started at boot (#541): look for it,
-  // once per console and version pair, so the banner can say so.
-  const copiesKey = olderHelper ? `${host.trim()}|${pair}` : null;
-  const [bootCopies, setBootCopies] = useState<{ key: string; copies: StoredCopy[] } | null>(null);
-  useEffect(() => {
-    if (!copiesKey) return;
-    let cancelled = false;
-    void findStoredCopies(host.trim(), liveCopyDeps).then((copies) => {
-      if (!cancelled) setBootCopies({ key: copiesKey, copies });
-    });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- copiesKey carries host and pair
-  }, [copiesKey]);
-  const copies = bootCopies?.key === copiesKey ? bootCopies.copies : [];
-  const following = sentHere && (sending || send?.state === "fail");
-  if (!following && (!mismatch || dismissed === pair)) return null;
-  // The helper is the newer one (another device sent it, 8.0.0): sending ours would take that
-  // away from every device. The fix is updating this app.
-  const appOlder = !!payloadVersion && !!appVersion && compareVersions(payloadVersion, appVersion) === 1;
-
-  return (
-    <div className="mx-3 mt-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-warn)_35%,transparent)] bg-[var(--color-warn-soft)] px-4 py-2.5 backdrop-blur-xl md:mx-5 text-[var(--color-text)]">
-      {replaceDialog}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-        <div className="flex min-w-0 flex-1 items-start gap-3">
-          <RefreshCw
-            size={18}
-            className="mt-0.5 shrink-0 text-[var(--color-warn)]"
-          />
-          <div className="min-w-0">
-            <p className="text-sm font-medium">
-              {tr(
-                "helper_mismatch_title",
-                { payload: payloadVersion ?? "?", app: appVersion ?? "?" },
-                `The PS5 helper is v${payloadVersion} but this app is v${appVersion}`,
-              )}
-            </p>
-            <p className="text-xs text-[var(--color-muted)]">
-              {appOlder
-                ? tr(
-                    "helper_mismatch_app_older",
-                    undefined,
-                    "Another device sent a newer helper. Update this app to match it; sending this app's helper would replace it with an older one for every device.",
-                  )
-                : copies.length > 0
-                  ? tr(
-                      "helper_mismatch_boot_copy",
-                      { list: copies.map((c) => c.path).join(", ") },
-                      "Your PS5 started an older copy of the helper that it keeps for boot ({list}). Press Send helper: this app sends the matching helper and also updates that copy, so the PS5 starts the new one after a restart.",
-                    )
-                  : tr(
-                      "helper_mismatch_body_v3",
-                      undefined,
-                      "Nothing to do on the PS5 itself: press Send helper and this app sends the matching helper to the console. Fixes and features from the newer version won't work until then.",
-                    )}
-            </p>
-            {send?.msg && (
-              <p
-                className={`mt-1 text-xs ${send.state === "fail" ? "text-[var(--color-bad)]" : "text-[var(--color-muted)]"}`}
-              >
-                {send.msg}
-              </p>
-            )}
-          </div>
-        </div>
-        <div className="flex shrink-0 gap-2">
-          <Button
-            size="sm"
-            variant="primary"
-            onClick={() => {
-              if (appOlder) {
-                // The browser build updates with its container; Settings says how.
-                if (isTauriEnv()) void useUpdateStore.getState().checkNow();
-                navigate("/settings");
-              } else {
-                // Send it right here: the banner already said what this does.
-                const target = host.trim();
-                void guardReplace(target).then((ok) => {
-                  if (!ok) return;
-                  setSentHere(true);
-                  void sendHelperTo(target, tr).finally(() => {
-                    if (helperSendFor(useHelperSendStore.getState(), target)?.state !== "fail") setSentHere(false);
-                  });
-                });
-              }
-            }}
-            loading={!appOlder && sending}
-            disabled={!appOlder && sending}
-          >
-            {appOlder
-              ? tr("helper_mismatch_update_app", undefined, "Update this app")
-              : tr("helper_mismatch_send", undefined, "Send helper")}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              safeSetItem("ps5upload.helper-mismatch.dismissed", pair);
-              setDismissed(pair);
-            }}
-          >
-            {tr("dismiss", undefined, "Dismiss")}
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function AndroidStorageAccessBanner() {
   const tr = useTr();
   const [visible, setVisible] = useState(false);
@@ -1804,6 +1720,7 @@ export default function AppShell() {
   useMeshSync();
   useTrayApply();
   useAutoRedeployDownHelpers();
+  useAutoUpdateOlderHelper();
   useMovedConsoleWatch();
   useUpdateCheckOnMount();
   useAgentMcpStaleNotice();
@@ -1936,10 +1853,10 @@ export default function AppShell() {
       </div>
       {/* Clear of a column of system icons, as the page is (an iPhone Duo folded, #675). */}
       <div className="shell-safe-x shrink-0">
-        <HelperVersionBanner />
         <SessionBanner />
         <RemotePlayBanner />
         <MovedConsoleBanner />
+        <LinkDropBanner />
         <EngineDownBanner />
         <AndroidLocalNetworkBanner />
         <AndroidStorageAccessBanner />
@@ -1972,9 +1889,10 @@ export default function AppShell() {
               </div>
               <TopBarActions />
             </div>
-            {/* Slim, dismissible "update available" bar (the auto-check already
-                ran on mount). Pinned above the scroll area so it stays visible. */}
-            {isTauriEnv() ? <UpdateToast /> : <WebUpdateToast />}
+            {/* One line, only when the person has to act: a failed update install, or a PS5
+                that runs a newer helper than this app (lib/updateNotice). A routine update is a
+                dot on Settings and a row there. Pinned above the scroll area. */}
+            <UpdateBanner />
             {/* The first launch of a new version: its release notes, once. */}
             <WhatsNewOnLaunch />
             {/* Vertical scroll only. overflow-x-hidden is a backstop: the

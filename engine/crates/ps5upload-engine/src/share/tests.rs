@@ -687,7 +687,10 @@ async fn two_engines_share_a_homebrew_folder_and_a_save_over_webrtc() {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(url.starts_with(crate::join_net::SHARE_PAGE), "{url}");
+    assert!(
+        url.starts_with(&crate::join_net::Kind::Share.page()),
+        "{url}"
+    );
     assert!(!url.contains("k="), "no secret in the link");
     // The friend's engine opens it.
     let (_, r) = body(

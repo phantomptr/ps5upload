@@ -11,8 +11,8 @@ import { getAppVersion } from "../lib/appVersion";
 /**
  * "Check for updates", where people look: the top bar on desktop and tablet, the foot of More on
  * a phone, and the command palette. One press checks GitHub now (the launch check runs once a
- * day) and says the answer: up to date, or the update bar appears. With an update already found
- * it lights up and opens Settings → Updates.
+ * day) and says the answer: up to date, or (an update found) it opens Settings, whose top row
+ * offers it. With an update already found it lights up and opens Settings the same way.
  *
  * The browser web UI has no button: the page updates with the engine (the Docker image) that
  * serves it.
@@ -57,7 +57,9 @@ export async function checkForUpdatesNow(tr: Translator, openSettings: () => voi
       ),
     });
   }
-  // An update found shows the update bar (UpdateToast) by itself.
+  // An update found: no banner shows it any more (lib/updateNotice), so the answer to "check
+  // now" is the Settings row that offers it.
+  else if (updateWaiting(phase)) openSettings();
 }
 
 function useAppVersion(): string {

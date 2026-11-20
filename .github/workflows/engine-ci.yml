@@ -1477,6 +1477,8 @@ jobs:
           fi
           # AVA1: the engine stamps its key into exactly one trust slot (SPEC.md §5.1).
           python3 -c "d=open('payload/ps5upload.elf','rb').read(); n=d.count(b'AVA1TRUST'); assert n==1, n"
+          # The helper says its version, and it is this one (the app never sends another by itself).
+          make check-helper-version
           dpi_size_bytes=$(stat -c '%s' payload/installer/ps5upload-installer.elf)
           echo "ps5upload-installer.elf: ${dpi_size_bytes} bytes"
           if [ "$dpi_size_bytes" -lt 50000 ]; then

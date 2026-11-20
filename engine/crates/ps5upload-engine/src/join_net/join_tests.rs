@@ -96,7 +96,9 @@ fn settings_body() -> SettingsBody {
         internet_invites: None,
         invites: None,
         hub_url: None,
+        page_base: None,
         stun: None,
+        reset: None,
         upnp: None,
         port: None,
         video_track: None,
@@ -1045,22 +1047,170 @@ async fn invites_work_only_on_the_wifi_keeps_to_the_home_networks_link() {
 fn invites_work_is_saved_and_an_old_off_reads_as_wifi() {
     let dir = std::env::temp_dir().join(format!("ps5u-invites-{}", std::process::id()));
     let p = dir.join(INVITES_FILE);
-    assert_eq!(read_invites(&p), (None, None));
-    write_invites(&p, false, 0).unwrap();
-    assert_eq!(read_invites(&p), (Some(false), None));
+    let d = crate::self_host::defaults();
+    let with = |anywhere: bool, port: u16| Settings {
+        internet_invites: anywhere,
+        port,
+        ..Settings::default()
+    };
+    let saved = |anywhere: Option<bool>, port: Option<u16>| Saved {
+        anywhere,
+        port,
+        ..Saved::default()
+    };
+    assert_eq!(read_invites(&p), Saved::default());
+    write_invites(&p, &with(false, 0), d).unwrap();
+    assert_eq!(read_invites(&p), saved(Some(false), None));
     assert!(std::fs::read_to_string(&p).unwrap().contains("\"wifi\""));
-    write_invites(&p, true, 0).unwrap();
-    assert_eq!(read_invites(&p), (Some(true), None));
+    write_invites(&p, &with(true, 0), d).unwrap();
+    assert_eq!(read_invites(&p), saved(Some(true), None));
     std::fs::write(&p, r#"{"internet_invites": false}"#).unwrap();
-    assert_eq!(read_invites(&p), (Some(false), None));
+    assert_eq!(read_invites(&p), saved(Some(false), None));
     std::fs::write(&p, "not json").unwrap();
-    assert_eq!(read_invites(&p), (None, None));
+    assert_eq!(read_invites(&p), Saved::default());
     // The internet friends' port is kept with it (#822); a privileged one reads as none.
-    write_invites(&p, true, 41234).unwrap();
-    assert_eq!(read_invites(&p), (Some(true), Some(41234)));
+    write_invites(&p, &with(true, 41234), d).unwrap();
+    assert_eq!(read_invites(&p), saved(Some(true), Some(41234)));
     std::fs::write(&p, r#"{"invites": "anywhere", "port": 80}"#).unwrap();
-    assert_eq!(read_invites(&p), (Some(true), None));
+    assert_eq!(read_invites(&p), saved(Some(true), None));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The hub, the page base and the STUN servers are kept across restarts (#881) while they differ
+/// from the default: a round trip, a file from before them, a reset that removes them, and a
+/// saved value that wins over a default from the environment.
+#[test]
+fn hub_page_base_and_stun_are_kept_until_reset() {
+    let dir = std::env::temp_dir().join(format!("ps5u-hub-kept-{}", std::process::id()));
+    let p = dir.join(INVITES_FILE);
+    let d = crate::self_host::defaults();
+    let custom = Settings {
+        hub_url: "wss://hub.example.com/ws".into(),
+        page_base: "https://play.example.com/".into(),
+        stun: vec!["stun.example.com:3478".into()],
+        ..Settings::default()
+    };
+    write_invites(&p, &custom, d).unwrap();
+    let back = read_invites(&p);
+    assert_eq!(back.hub_url.as_deref(), Some("wss://hub.example.com/ws"));
+    assert_eq!(back.page_base.as_deref(), Some("https://play.example.com/"));
+    assert_eq!(back.stun, Some(vec!["stun.example.com:3478".to_string()]));
+    let mut s = Settings::default();
+    apply_saved(&mut s, back);
+    assert_eq!(s, Settings { port: 0, ..custom.clone() });
+    // No STUN at all is a choice too, and kept.
+    write_invites(&p, &Settings { stun: Vec::new(), ..Settings::default() }, d).unwrap();
+    assert_eq!(read_invites(&p).stun, Some(Vec::new()));
+
+    // Back to the defaults: nothing of them stays in the file.
+    write_invites(&p, &Settings::default(), d).unwrap();
+    let text = std::fs::read_to_string(&p).unwrap();
+    for k in ["hub_url", "page_base", "stun"] {
+        assert!(!text.contains(k), "{k} left in {text}");
+    }
+    let back = read_invites(&p);
+    assert_eq!(back, Saved { anywhere: Some(true), ..Saved::default() });
+
+    // A file from before these fields loads as it did.
+    std::fs::write(&p, r#"{"invites": "wifi", "port": 41234}"#).unwrap();
+    let mut s = Settings::default();
+    apply_saved(&mut s, read_invites(&p));
+    assert!(!s.internet_invites);
+    assert_eq!((s.port, s.hub_url.as_str()), (41234, d.hub_url.as_str()));
+    assert_eq!(s.page_base, d.page_base);
+
+    // What the settings would refuse is not loaded either.
+    std::fs::write(
+        &p,
+        r#"{"hub_url": "http://x/ws", "page_base": "ftp://x/", "stun": ["no port"]}"#,
+    )
+    .unwrap();
+    assert_eq!(read_invites(&p), Saved::default());
+
+    // A saved value wins over a default the environment set; one the same as it is not saved.
+    let mut warn = Vec::new();
+    let env = crate::self_host::Defaults::from_lookup(
+        |k| match k {
+            "PS5UPLOAD_HUB_URL" => Some("wss://env-hub.example.com/ws".into()),
+            "PS5UPLOAD_PAGE_BASE" => Some("https://env.example.com".into()),
+            _ => None,
+        },
+        &mut warn,
+    );
+    assert!(warn.is_empty());
+    let from_env = Settings {
+        hub_url: env.hub_url.clone(),
+        page_base: env.page_base.clone(),
+        ..Settings::default()
+    };
+    write_invites(&p, &from_env, &env).unwrap();
+    assert_eq!(read_invites(&p).hub_url, None, "the environment's own default");
+    let mut s = from_env.clone();
+    write_invites(&p, &custom, &env).unwrap();
+    apply_saved(&mut s, read_invites(&p));
+    assert_eq!(s.hub_url, "wss://hub.example.com/ws");
+    assert_eq!(s.page_base, "https://play.example.com/");
+    assert_eq!(
+        env.sources(&s.hub_url, &s.page_base, &s.stun),
+        serde_json::json!({"hub_url": "custom", "page_base": "custom", "stun": "custom"})
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `POST /api/join/settings` takes a page base (checked, in one form), and a reset (or an empty
+/// value) puts the hub and the page base back; the view says where each comes from.
+#[tokio::test]
+async fn the_page_base_setting_and_reset() {
+    let _turn = PARTY_TESTS.lock().await;
+    async fn post(b: SettingsBody) -> Response {
+        let (ci, h) = local();
+        set_settings(ci, h, Json(b)).await
+    }
+    let page = |v: &str| SettingsBody {
+        page_base: Some(v.into()),
+        ..settings_body()
+    };
+    for bad_base in ["http://play.example.com/", "https://x/?a=1", "https://x/#f", "play.example.com"] {
+        let r = post(page(bad_base)).await;
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{bad_base}");
+        assert_eq!(body(r).await["error"], "page_base");
+    }
+    let r = body(
+        post(SettingsBody {
+            page_base: Some("https://Play.Example.com/ps5".into()),
+            hub_url: Some("wss://play.example.com/ws".into()),
+            ..settings_body()
+        })
+        .await,
+    )
+    .await;
+    assert_eq!(r["settings"]["page_base"], "https://play.example.com/ps5/");
+    assert_eq!(r["settings"]["sources"]["page_base"], "custom");
+    assert_eq!(r["settings"]["sources"]["hub_url"], "custom");
+    assert_eq!(r["settings"]["sources"]["stun"], "default");
+    assert_eq!(
+        crate::join_net::Kind::Join.page(),
+        "https://play.example.com/ps5/join/"
+    );
+    let r = body(
+        post(SettingsBody {
+            reset: Some(vec!["hub_url".into()]),
+            page_base: Some(String::new()),
+            ..settings_body()
+        })
+        .await,
+    )
+    .await;
+    assert_eq!(r["settings"]["page_base"], "https://ps5upload.phantomptr.com/");
+    assert_eq!(r["settings"]["hub_url"], "wss://hub.phantomptr.com/ws");
+    assert_eq!(r["settings"]["sources"]["page_base"], "default");
+    let r = post(SettingsBody {
+        reset: Some(vec!["everything".into()]),
+        ..settings_body()
+    })
+    .await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 /// The one link's words: the internet link unless the hub can't be reached; the Wi-Fi's link says
@@ -1082,4 +1232,157 @@ fn the_one_link_says_where_it_works() {
     // An older engine's room json has no `offline`: its link stands.
     let old = serde_json::json!({"url": "https://x/join/#room=r"});
     assert_eq!(share_json(lan, Some(&old), true)["works"], "anywhere");
+}
+
+/// A page's offer with a "join" data channel only (str0m's), from a made-up address.
+fn data_offer() -> String {
+    let mut g = str0m::Rtc::builder()
+        .set_crypto_provider(crate::join_net::crypto::provider())
+        .build(Instant::now());
+    let _ = g.add_local_candidate(str0m::Candidate::host(([192, 0, 2, 9], 9).into(), "udp").unwrap());
+    let mut api = g.sdp_api();
+    api.add_channel("join".into());
+    api.apply().unwrap().0.to_sdp_string()
+}
+
+/// The hub's `no_peer` (the engine signalled a guest that left a moment ago: an answer, a late
+/// candidate) is not the end of the connection. It was taken as an error: the room went to
+/// "error", the host's page showed the home network's link instead of the internet one, and the
+/// engine dropped the hub and hosted the room again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_signal_to_a_guest_that_left_keeps_the_room_hosted() {
+    let _turn = PARTY_TESTS.lock().await;
+    let hub = FakeHub::start().await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        hub_url: hub.url.clone(),
+        stun: Vec::new(),
+        upnp: false,
+        ..Settings::default()
+    });
+    let console = "10.77.0.43";
+    set_helper(console, Arc::new(FakeHelper::default()));
+    set_live(console, 1);
+    open_party(console).await;
+    let room = internet_invite(console).await["internet"]["room"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    until("hosted", || hub.has_host(&room)).await;
+    until_state(console, "hosted", |s| s["invite"]["internet"]["state"] == "hosted").await;
+    let conns = hub.host_conns();
+    // An offer from a guest the hub no longer has: the engine's answer meets `no_peer`.
+    hub.tell_host(
+        &room,
+        serde_json::json!({"t": "signal", "from": "gone", "data": {"type": "offer", "sdp": data_offer()}}),
+    );
+    until("the answer", || {
+        hub.st.lock().unwrap().host_frames.iter().any(|f| f["to"] == "gone")
+    })
+    .await;
+    // Past the first reconnect's backoff: still the one connection, hosted, the internet link.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let s = host_state(console).await;
+    assert_eq!(s["invite"]["internet"]["state"], "hosted", "{s}");
+    assert_eq!(s["invite"]["internet"]["offline"], false, "{s}");
+    assert!(s["invite"]["internet"]["error"].is_null(), "{s}");
+    assert_eq!(hub.host_conns(), conns, "no new connection to the hub");
+    close_party(console).await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_live(console, 0);
+}
+
+/// A STUN server on loopback that drops the first request it gets, then says the asker is at the
+/// next address of `at` for each request it answers (the last one from then on).
+async fn lossy_stun(at: Vec<std::net::SocketAddr>) -> std::net::SocketAddr {
+    let s = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr = s.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut b = [0u8; 1500];
+        let mut n_req = 0usize;
+        while let Ok((n, from)) = s.recv_from(&mut b).await {
+            n_req += 1;
+            if n < 20 || n_req == 1 {
+                continue;
+            }
+            let tx: [u8; 12] = b[8..20].try_into().unwrap();
+            let who = at[(n_req - 2).min(at.len() - 1)];
+            let _ = s
+                .send_to(&crate::join_net::stun::answer(tx, who), from)
+                .await;
+        }
+    });
+    addr
+}
+
+/// The outside (STUN) candidate: a lost first request is sent again (once, before, it cost the
+/// room its candidate for as long as it was open), the servers are asked again while the room is
+/// open (the router keeps the port's mapping), and a mapping that moved reaches a connecting guest
+/// at once and new guests in their answer, without the stale ones piling up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_stun_candidate_survives_a_lost_request_and_follows_a_moved_mapping() {
+    use crate::join_net::rtc::{self, Cmd};
+    let _turn = PARTY_TESTS.lock().await;
+    let at = |p: u16| std::net::SocketAddr::from(([203, 0, 113, 5], p));
+    let stun = lossy_stun(vec![at(40000), at(40001), at(40002)]).await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        stun: vec![stun.to_string()],
+        upnp: false,
+        ..Settings::default()
+    });
+    let net = rtc::net().await.unwrap();
+    let offer = data_offer;
+    let (sig, mut sig_rx) = tokio::sync::mpsc::unbounded_channel();
+    let t0 = Instant::now();
+    net.cmd
+        .send(Cmd::RoomOpen("stun-room".into(), crate::join_net::Kind::Join))
+        .unwrap();
+    net.cmd
+        .send(Cmd::Offer {
+            room: "stun-room".into(),
+            gid: "g1".into(),
+            sdp: offer(),
+            signal: sig.clone(),
+        })
+        .unwrap();
+    // The answer, then each outside address as it is found (trickled to the guest).
+    let mut found = Vec::new();
+    while found.len() < 3 {
+        let (_, m) = tokio::time::timeout(Duration::from_secs(10), sig_rx.recv())
+            .await
+            .expect("candidates within 10 s")
+            .unwrap();
+        let line = m["candidate"].as_str().or(m["sdp"].as_str()).unwrap_or("");
+        for p in 40000..40003u16 {
+            if line.contains(&format!("203.0.113.5 {p} typ srflx")) && !found.iter().any(|f: &(u16, Duration)| f.0 == p) {
+                found.push((p, t0.elapsed()));
+            }
+        }
+    }
+    eprintln!("stun candidates (port, time since the room opened): {found:?}");
+    assert_eq!(found.iter().map(|f| f.0).collect::<Vec<_>>(), [40000, 40001, 40002]);
+    // The first request was dropped: its retry 500 ms later found it.
+    assert!(found[0].1 < Duration::from_millis(1500), "{found:?}");
+    // A new guest's answer: the two newest outside addresses, not the stale first one.
+    net.cmd
+        .send(Cmd::Offer {
+            room: "stun-room".into(),
+            gid: "g2".into(),
+            sdp: offer(),
+            signal: sig.clone(),
+        })
+        .unwrap();
+    let answer = loop {
+        let (gid, m) = tokio::time::timeout(Duration::from_secs(5), sig_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        if gid == "g2" && m["type"] == "answer" {
+            break m["sdp"].as_str().unwrap().to_string();
+        }
+    };
+    assert!(answer.contains("203.0.113.5 40001 typ srflx"), "{answer}");
+    assert!(answer.contains("203.0.113.5 40002 typ srflx"), "{answer}");
+    assert!(!answer.contains("203.0.113.5 40000 typ srflx"), "{answer}");
+    net.cmd.send(Cmd::RoomClose("stun-room".into())).unwrap();
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }

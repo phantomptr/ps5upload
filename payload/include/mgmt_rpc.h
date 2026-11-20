@@ -148,7 +148,8 @@ int mgmt_call_probe(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_legacy_
 
 int mgmt_call_text_keep(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_legacy_fn fn); /* a failure body is the cause */
 
-int mgmt_call_empty(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_legacy_fn fn);     /* -> empty (node.shutdown) */
+int mgmt_call_empty(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_legacy_fn fn);     /* -> empty, request ignored */
+int mgmt_call_shutdown(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_legacy_fn fn);  /* node.shutdown: optional MgmtText in, empty out */
 int mgmt_call_node_status(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_legacy_fn fn); /* -> NodeStatus */
 
 /* Where a clamped tail of `len` bytes starts so that at most `cap` bytes remain: 0 and *start = 0

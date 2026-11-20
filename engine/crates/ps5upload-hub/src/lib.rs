@@ -95,6 +95,30 @@ impl Hub {
     /// must bind.
     pub async fn start(config: Config, log: LogSink) -> io::Result<Hub> {
         let listener = TcpListener::bind(config.http_listen).await?;
+        let metrics_here = config.metrics_listen.is_none();
+        Self::serve_on(config, log, listener, None, metrics_here).await
+    }
+
+    /// The hub inside another program's tokio runtime (the PS5Upload engine's built-in hub), on a
+    /// listener the caller bound (`http_listen` is not used). `extra` routes are served beside
+    /// `/ws` and `/health` (they must not overlap them); `/metrics` is never on this listener,
+    /// only on `metrics_listen` when that is set. Everything else answers 404.
+    pub async fn start_on(
+        config: Config,
+        log: LogSink,
+        listener: TcpListener,
+        extra: Option<axum::Router>,
+    ) -> io::Result<Hub> {
+        Self::serve_on(config, log, listener, extra, false).await
+    }
+
+    async fn serve_on(
+        config: Config,
+        log: LogSink,
+        listener: TcpListener,
+        extra: Option<axum::Router>,
+        metrics_here: bool,
+    ) -> io::Result<Hub> {
         let http_addr = listener.local_addr()?;
         let metrics_listener = match config.metrics_listen {
             Some(a) => Some(TcpListener::bind(a).await?),
@@ -137,7 +161,11 @@ impl Hub {
             )));
         }
         tasks.push(tokio::spawn(hub::sweeper(shared.clone(), stun_table)));
-        let app = hub::router(shared.clone(), metrics_listener.is_none());
+        let app = hub::router(shared.clone(), metrics_here);
+        let app = match extra {
+            Some(r) => app.merge(r),
+            None => app,
+        };
         tasks.push(serve(listener, app, &shared));
         if let Some(l) = metrics_listener {
             tasks.push(serve(l, hub::metrics_router(shared.clone()), &shared));

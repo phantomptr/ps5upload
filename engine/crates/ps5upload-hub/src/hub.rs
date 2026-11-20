@@ -18,8 +18,11 @@ use axum::routing::get;
 use axum::Router;
 use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
+use serde_json::value::RawValue;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
+use std::collections::BTreeMap;
 use tokio::sync::{mpsc, Notify};
 
 use crate::config::Config;
@@ -485,12 +488,28 @@ fn close_guest(p: &Peer, m: &Metrics) {
     p.send(Out::Close(CLOSE_DONE, "closed"), m);
 }
 
-fn str_field<'a>(v: &'a Value, k: &str) -> Result<Option<&'a str>, ErrorKind> {
-    match v.get(k) {
-        None => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s)),
-        Some(_) => Err(ErrorKind::BadJson),
+/// A message's top-level fields, each as the JSON text it came as. Nothing under them is parsed
+/// (a signal's `data`, nearly all of its bytes, is checked to be an object and goes on as it
+/// came): before, the whole message became a tree of values and `data` was written out again,
+/// which cost about 14 µs for a 5 KB offer against about 3 µs now (`forward_cost` below). A field
+/// that comes twice counts as the last one, as before.
+type Msg<'a> = BTreeMap<String, &'a RawValue>;
+
+/// A string field: None when absent, `bad_json` when it is not a string (null included).
+fn str_field<'a>(m: &Msg<'a>, k: &str) -> Result<Option<Cow<'a, str>>, ErrorKind> {
+    let Some(raw) = m.get(k) else {
+        return Ok(None);
+    };
+    let t: &'a str = raw.get();
+    // A plain string (no escape) is its text between the quotes: no copy.
+    if let Some(inner) = t.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+        if !inner.contains(['\\', '"']) {
+            return Ok(Some(Cow::Borrowed(inner)));
+        }
     }
+    serde_json::from_str::<String>(t)
+        .map(|s| Some(Cow::Owned(s)))
+        .map_err(|_| ErrorKind::BadJson)
 }
 
 fn handle_text(
@@ -504,15 +523,18 @@ fn handle_text(
     if text.len() > cfg.max_frame_bytes {
         return Err(ErrorKind::TooLarge);
     }
-    let msg: Value = serde_json::from_str(text).map_err(|_| ErrorKind::BadJson)?;
-    if !msg.is_object() {
-        return Err(ErrorKind::BadJson);
-    }
+    // Not an object (an array, a string, a number): no map, `bad_json` as before.
+    let msg: Msg = serde_json::from_str(text).map_err(|_| ErrorKind::BadJson)?;
     let t = str_field(&msg, "t")?.ok_or(ErrorKind::BadJson)?;
-    let v = msg.get("v");
+    let t: &str = &t;
+    let v = msg.get("v").map(|raw| {
+        serde_json::from_str::<Value>(raw.get())
+            .ok()
+            .and_then(|v| v.as_u64())
+    });
     match (t, v) {
         ("host" | "join", None) => return Err(ErrorKind::BadVersion),
-        (_, Some(v)) if v.as_u64() != Some(PROTOCOL_VERSION) => return Err(ErrorKind::BadVersion),
+        (_, Some(v)) if v != Some(PROTOCOL_VERSION) => return Err(ErrorKind::BadVersion),
         _ => {}
     }
     match t {
@@ -529,17 +551,19 @@ fn on_host(
     role: &mut Role,
     me: &Peer,
     ip: IpKey,
-    msg: &Value,
+    msg: &Msg,
 ) -> Result<Action, ErrorKind> {
     let cfg = &shared.config;
     if !matches!(role, Role::None) {
         return Err(ErrorKind::BadState);
     }
     let room_id = str_field(msg, "room")?.unwrap_or_default();
+    let room_id: &str = &room_id;
     if !is_b64url(room_id, ROOM_LEN) {
         return Err(ErrorKind::BadRoom);
     }
     let secret = str_field(msg, "secret")?.unwrap_or_default();
+    let secret: &str = &secret;
     if !is_b64url(secret, SECRET_LEN) {
         return Err(ErrorKind::BadSecret);
     }
@@ -593,7 +617,7 @@ fn on_join(
     role: &mut Role,
     me: &Peer,
     ip: IpKey,
-    msg: &Value,
+    msg: &Msg,
 ) -> Result<Action, ErrorKind> {
     let cfg = &shared.config;
     if !matches!(role, Role::None) {
@@ -606,6 +630,7 @@ fn on_join(
         return Err(ErrorKind::RateLimited);
     }
     let room_id = str_field(msg, "room")?.unwrap_or_default();
+    let room_id: &str = &room_id;
     if !is_b64url(room_id, ROOM_LEN) {
         return Err(ErrorKind::BadRoom);
     }
@@ -644,15 +669,14 @@ fn on_join(
     Ok(Action::Reply(vec![reply]))
 }
 
-fn on_signal(shared: &Shared, role: &mut Role, msg: &Value) -> Result<Action, ErrorKind> {
+fn on_signal(shared: &Shared, role: &mut Role, msg: &Msg) -> Result<Action, ErrorKind> {
     let cfg = &shared.config;
     let to = str_field(msg, "to")?.ok_or(ErrorKind::BadTarget)?;
-    let data = msg.get("data").ok_or(ErrorKind::BadData)?;
-    if !data.is_object() {
-        return Err(ErrorKind::BadData);
-    }
-    let data_text = data.to_string();
-    if data_text.len() > cfg.max_signal_data_bytes {
+    let to: &str = &to;
+    // The object's text as it came (valid JSON already: the whole message parsed). Its size is as
+    // sent; the engine and the pages send compact JSON, so that is what it always was.
+    let data_text = msg.get("data").ok_or(ErrorKind::BadData)?.get();
+    if !data_text.starts_with('{') || data_text.len() > cfg.max_signal_data_bytes {
         return Err(ErrorKind::BadData);
     }
     let now = Instant::now();
@@ -678,7 +702,7 @@ fn on_signal(shared: &Shared, role: &mut Role, msg: &Value) -> Result<Action, Er
             let Some(h) = &r.host else {
                 return Err(ErrorKind::NoPeer);
             };
-            h.send(Out::Text(forward(gid, &data_text)), &shared.metrics);
+            h.send(Out::Text(forward(gid, data_text)), &shared.metrics);
             Metrics::inc(&shared.metrics.signals);
             Ok(Action::Reply(Vec::new()))
         }
@@ -699,7 +723,7 @@ fn on_signal(shared: &Shared, role: &mut Role, msg: &Value) -> Result<Action, Er
                 return Err(ErrorKind::NoPeer);
             };
             g.peer
-                .send(Out::Text(forward("host", &data_text)), &shared.metrics);
+                .send(Out::Text(forward("host", data_text)), &shared.metrics);
             Metrics::inc(&shared.metrics.signals);
             Ok(Action::Reply(Vec::new()))
         }
@@ -707,15 +731,21 @@ fn on_signal(shared: &Shared, role: &mut Role, msg: &Value) -> Result<Action, Er
 }
 
 /// `{"t":"signal","from":<from>,"data":<data>}`, with `data` spliced in as the JSON it already is.
+/// `from` is "host" or a gid (base64url): nothing in it needs escaping.
 fn forward(from: &str, data_json: &str) -> String {
-    format!(
-        "{{\"t\":\"signal\",\"from\":{},\"data\":{}}}",
-        Value::String(from.to_string()),
-        data_json
-    )
+    debug_assert!(from == "host" || is_b64url(from, GID_LEN));
+    const HEAD: &str = "{\"t\":\"signal\",\"from\":\"";
+    const MID: &str = "\",\"data\":";
+    let mut s = String::with_capacity(HEAD.len() + from.len() + MID.len() + data_json.len() + 1);
+    s.push_str(HEAD);
+    s.push_str(from);
+    s.push_str(MID);
+    s.push_str(data_json);
+    s.push('}');
+    s
 }
 
-fn on_leave(shared: &Shared, role: &mut Role, me: &Peer, msg: &Value) -> Result<Action, ErrorKind> {
+fn on_leave(shared: &Shared, role: &mut Role, me: &Peer, msg: &Msg) -> Result<Action, ErrorKind> {
     let gid_arg = str_field(msg, "gid")?;
     let mut st = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     match std::mem::replace(role, Role::None) {
@@ -749,7 +779,7 @@ fn on_leave(shared: &Shared, role: &mut Role, me: &Peer, msg: &Value) -> Result<
                 Some(gid) => {
                     *role = Role::Host { room: room.clone() };
                     let r = st.rooms.get_mut(&room).expect("checked above");
-                    match r.guests.remove(gid) {
+                    match r.guests.remove(&*gid) {
                         Some(g) => {
                             close_guest(&g.peer, &shared.metrics);
                             Ok(Action::Reply(Vec::new()))
@@ -836,4 +866,210 @@ pub(crate) async fn sweeper(shared: Arc<Shared>, stun_table: Arc<Mutex<RateTable
 /// Resolves once shutdown is asked for (holds no borrow of the channel across the await).
 async fn stopped(rx: &mut tokio::sync::watch::Receiver<bool>) {
     let _ = rx.wait_for(|v| *v).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, AtomicUsize};
+
+    fn shared(c: Config) -> Shared {
+        let (shutdown, _) = tokio::sync::watch::channel(false);
+        Shared {
+            state: Mutex::new(State::new(&c)),
+            metrics: Metrics::default(),
+            shutdown,
+            next_conn: AtomicU64::new(1),
+            connections: AtomicUsize::new(0),
+            log: Arc::new(|_: &str| {}),
+            config: c,
+        }
+    }
+
+    fn peer(conn: u64) -> (Peer, mpsc::Receiver<Out>) {
+        let (tx, rx) = mpsc::channel(PEER_QUEUE);
+        let p = Peer {
+            conn,
+            tx,
+            kill: Arc::new(Notify::new()),
+        };
+        (p, rx)
+    }
+
+    fn text(o: Option<Out>) -> String {
+        match o {
+            Some(Out::Text(t)) => t,
+            _ => panic!("no text queued"),
+        }
+    }
+
+    /// A host and one guest in a room, handled in process (no sockets): what `connection` does
+    /// with each text frame.
+    struct Room1 {
+        sh: Shared,
+        host: (Role, Peer, mpsc::Receiver<Out>),
+        guest: (Role, Peer, mpsc::Receiver<Out>),
+        gid: String,
+    }
+
+    fn ip() -> IpKey {
+        IpKey::of("192.0.2.1".parse().unwrap())
+    }
+
+    fn room1(c: Config) -> Room1 {
+        let sh = shared(c);
+        let (hp, mut hrx) = peer(1);
+        let (gp, grx) = peer(2);
+        let mut hrole = Role::None;
+        let mut grole = Role::None;
+        let host = json!({"v": 1, "t": "host", "room": "A".repeat(ROOM_LEN), "secret": "S".repeat(SECRET_LEN)});
+        assert!(handle_text(&sh, &mut hrole, &hp, ip(), &host.to_string()).is_ok());
+        let join = json!({"v": 1, "t": "join", "room": "A".repeat(ROOM_LEN)});
+        assert!(handle_text(&sh, &mut grole, &gp, ip(), &join.to_string()).is_ok());
+        let guest: Value = serde_json::from_str(&text(hrx.try_recv().ok())).unwrap();
+        let gid = guest["gid"].as_str().unwrap().to_string();
+        Room1 {
+            sh,
+            host: (hrole, hp, hrx),
+            guest: (grole, gp, grx),
+            gid,
+        }
+    }
+
+    /// An offer the size a browser makes (a video, an audio and a data section: about 5 KB).
+    fn offer_data() -> Value {
+        let mut sdp =
+            String::from("v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n");
+        while sdp.len() < 5000 {
+            sdp.push_str(
+                "a=rtpmap:96 H264/90000\r\na=rtcp-fb:96 nack pli\r\na=fmtp:96 \
+                 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f\r\n",
+            );
+        }
+        json!({"type": "offer", "sdp": sdp})
+    }
+
+    #[test]
+    fn a_signal_is_forwarded_with_its_data_unchanged() {
+        let mut r = room1(Config::default());
+        // Guest → host: the data as sent.
+        let data = r#"{"type":"candidate","candidate":"candidate:1 1 udp 2122260223 192.0.2.9 5000 typ host","sdpMid":"0","x":"é\n"}"#;
+        let msg = format!(r#"{{"t":"signal","to":"host","data":{data}}}"#);
+        let (role, me, _) = &mut r.guest;
+        assert!(matches!(
+            handle_text(&r.sh, role, me, ip(), &msg),
+            Ok(Action::Reply(v)) if v.is_empty()
+        ));
+        let got: Value = serde_json::from_str(&text(r.host.2.try_recv().ok())).unwrap();
+        assert_eq!(
+            got,
+            json!({"t": "signal", "from": r.gid, "data": serde_json::from_str::<Value>(data).unwrap()})
+        );
+        // Host → guest.
+        let offer = offer_data();
+        let msg = json!({"t": "signal", "to": r.gid, "data": offer}).to_string();
+        let (role, me, _) = &mut r.host;
+        assert!(handle_text(&r.sh, role, me, ip(), &msg).is_ok());
+        let got: Value = serde_json::from_str(&text(r.guest.2.try_recv().ok())).unwrap();
+        assert_eq!(got, json!({"t": "signal", "from": "host", "data": offer}));
+        // Not an object, too large, or a field of the wrong type: refused as before.
+        let (role, me, _) = &mut r.guest;
+        for (bad, why) in [
+            (
+                json!({"t": "signal", "to": "host", "data": [1]}),
+                ErrorKind::BadData,
+            ),
+            (
+                json!({"t": "signal", "to": "host", "data": "x"}),
+                ErrorKind::BadData,
+            ),
+            (
+                json!({"t": "signal", "to": "host", "data": null}),
+                ErrorKind::BadData,
+            ),
+            (json!({"t": "signal", "to": "host"}), ErrorKind::BadData),
+            (
+                json!({"t": "signal", "to": "host", "data": {"x": "y".repeat(13_000)}}),
+                ErrorKind::BadData,
+            ),
+            (
+                json!({"t": "signal", "to": 7, "data": {}}),
+                ErrorKind::BadJson,
+            ),
+            (
+                json!({"t": "signal", "to": null, "data": {}}),
+                ErrorKind::BadJson,
+            ),
+            (json!({"t": "signal", "data": {}}), ErrorKind::BadTarget),
+            (json!({"t": 1}), ErrorKind::BadJson),
+            (json!({"to": "host"}), ErrorKind::BadJson),
+            (
+                json!({"t": "signal", "to": "host", "data": {}, "v": 2}),
+                ErrorKind::BadVersion,
+            ),
+            (
+                json!({"t": "signal", "to": "host", "data": {}, "v": "1"}),
+                ErrorKind::BadVersion,
+            ),
+            (json!({"t": "nope", "v": 1}), ErrorKind::UnknownType),
+            (json!(["signal"]), ErrorKind::BadJson),
+        ] {
+            let res = handle_text(&r.sh, role, me, ip(), &bad.to_string());
+            assert!(matches!(res, Err(k) if k == why), "{bad}");
+        }
+        for bad in ["", "nul", "{\"t\":\"signal\"", "1"] {
+            let res = handle_text(&r.sh, role, me, ip(), bad);
+            assert!(matches!(res, Err(ErrorKind::BadJson)), "{bad}");
+        }
+        // A signal with `v` 1 is fine (the engine sends one), and so are spaces and escapes.
+        let ok = json!({"v": 1, "t": "signal", "to": "host", "data": {"a": 1}}).to_string();
+        assert!(handle_text(&r.sh, role, me, ip(), &ok).is_ok());
+        let spaced =
+            "{ \"t\" : \"sig\\u006eal\", \"to\":\"ho\\u0073t\" , \"data\" :  {\"a\": [1, 2]} }";
+        assert!(handle_text(&r.sh, role, me, ip(), spaced).is_ok());
+        let got: Value = serde_json::from_str(&text(r.host.2.try_recv().ok())).unwrap();
+        // (the one forwarded before, `ok`'s)
+        assert_eq!(got["data"], json!({"a": 1}));
+        let got: Value = serde_json::from_str(&text(r.host.2.try_recv().ok())).unwrap();
+        assert_eq!(got["data"], json!({"a": [1, 2]}));
+        // A field that comes twice counts as the last one, as before.
+        let twice = r#"{"t":"leave","t":"signal","to":"host","data":{"b":2}}"#;
+        assert!(handle_text(&r.sh, role, me, ip(), twice).is_ok());
+        let got: Value = serde_json::from_str(&text(r.host.2.try_recv().ok())).unwrap();
+        assert_eq!(got["data"], json!({"b": 2}));
+    }
+
+    /// `cargo test -p ps5upload-hub --release forward_cost -- --ignored --nocapture`: the time the
+    /// hub spends on one forwarded offer (about 5 KB) and one ICE candidate, in process.
+    #[test]
+    #[ignore = "a measurement: prints the cost per forwarded signal"]
+    fn forward_cost() {
+        let c = Config {
+            max_signals_per_guest: u32::MAX,
+            max_signals_per_host: u32::MAX,
+            ..Config::default()
+        };
+        let mut r = room1(c);
+        let offer = json!({"t": "signal", "to": "host", "data": offer_data()}).to_string();
+        let cand = json!({"t": "signal", "to": "host", "data": {"type": "candidate",
+            "candidate": "candidate:842163049 1 udp 1677729535 203.0.113.5 40000 typ srflx raddr \
+                          0.0.0.0 rport 0 generation 0 ufrag abcd network-cost 999",
+            "sdpMid": "0"}})
+        .to_string();
+        for (name, msg) in [("offer", &offer), ("candidate", &cand)] {
+            let n = 20_000u32;
+            let t0 = Instant::now();
+            for _ in 0..n {
+                let (role, me, _) = &mut r.guest;
+                let _ = handle_text(&r.sh, role, me, ip(), msg).unwrap();
+                let _ = r.host.2.try_recv().unwrap();
+            }
+            let per = t0.elapsed() / n;
+            println!(
+                "hub forward {name} ({} bytes): {:.2} us per message",
+                msg.len(),
+                per.as_secs_f64() * 1e6
+            );
+        }
+    }
 }

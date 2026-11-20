@@ -148,6 +148,18 @@ function Ps5SettingsBody({ profile }: { profile: PS5Profile }) {
               )}
             />
           )}
+          {show.reconnectAfterRest && (
+            <Toggle
+              checked={s.auto_update_helper}
+              onChange={(on) => setConsoleSetting(id, "auto_update_helper", on)}
+              label={tr("helper_auto_update_label", undefined, "Update the PS5 helper automatically")}
+              hint={tr(
+                "helper_auto_update_hint_ps5",
+                undefined,
+                "When this PS5 runs an older helper than this app, send this app's helper by itself, but only while nothing is running on the PS5: no transfer, install, extraction, open save, Remote Play, cheats in a running game, or another device's work. A newer helper is never replaced. On by default.",
+              )}
+            />
+          )}
 
           <div className="text-sm">
             <div className="flex items-center gap-2 font-medium">

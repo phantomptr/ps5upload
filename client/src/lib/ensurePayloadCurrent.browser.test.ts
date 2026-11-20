@@ -30,14 +30,14 @@ vi.mock("../state/logs", () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { ensurePayloadCurrent } from "./ensurePayloadCurrent";
-import { resetHelperSendGate, sentAgoMs } from "./helperSendGate";
+import { ensurePayloadCurrent, resetEnsurePayloadState } from "./ensurePayloadCurrent";
+import { sentAgoMs } from "./helperSendGate";
 
 beforeEach(() => {
   [payloadCheckMock, bundledPathMock, sendPayloadMock, restoreMock, appVersionMock]
     .forEach((m) => m.mockReset());
   appVersionMock.mockResolvedValue("5.17.7");
-  resetHelperSendGate();
+  resetEnsurePayloadState();
 });
 
 /** Runs `run` on a fake clock, so the helper's boot wait (1.5 s, then 1 s polls) passes at once. */
@@ -66,9 +66,12 @@ describe("ensurePayloadCurrent in a browser", () => {
     payloadCheckMock
       .mockResolvedValueOnce({ reachable: true, payloadVersion: "5.16.0" })
       .mockResolvedValue({ reachable: true, payloadVersion: "5.17.7" });
-    const r = await onFakeClock(() => ensurePayloadCurrent("10.0.0.5"));
+    // An older helper that answers: replaced unattended only on the automatic update's own
+    // check of the console (consoleChecked), and through the engine's gate as an unattended
+    // replace.
+    const r = await onFakeClock(() => ensurePayloadCurrent("10.0.0.5", undefined, false, "auto", { consoleChecked: true }));
     expect(r).toBe("pushed");
-    expect(restoreMock).toHaveBeenCalledWith("10.0.0.5");
+    expect(restoreMock).toHaveBeenCalledWith("10.0.0.5", expect.objectContaining({ mode: "auto", replace: true }));
     expect(bundledPathMock).not.toHaveBeenCalled();
     expect(sendPayloadMock).not.toHaveBeenCalled();
   });
@@ -79,7 +82,9 @@ describe("ensurePayloadCurrent in a browser", () => {
     // to "no-push" for the cooldown.
     payloadCheckMock.mockResolvedValue({ reachable: true, payloadVersion: "5.16.0" });
     restoreMock.mockRejectedValue(new Error("the engine has no helper to send"));
-    await expect(ensurePayloadCurrent("10.0.0.5")).resolves.toBe("no-push");
+    await expect(
+      ensurePayloadCurrent("10.0.0.5", undefined, false, "auto", { consoleChecked: true }),
+    ).resolves.toBe("no-push");
     expect(restoreMock).toHaveBeenCalledTimes(1);
     expect(sentAgoMs("10.0.0.5")).toBeNull();
   });

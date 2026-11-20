@@ -464,6 +464,22 @@ int mgmt_call_empty(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_legacy_
     return AVA1_STATUS_OK;
 }
 
+/* node.shutdown (12.6.15): an optional MgmtText request ({"if_idle":true}) reaches the handler; an
+ * acknowledgement is empty as before, and a refusal ({"ok":false,"err":"helper_working",...}) is an
+ * error whose cause is that body. An empty request is the plain shutdown older apps send. */
+int mgmt_call_shutdown(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_legacy_fn fn) {
+    const char *b;
+    uint32_t bl;
+    mgmt_reply_t rep;
+    int rc;
+    if ((rc = text_request(cx, req, n, &b, &bl)) != AVA1_STATUS_OK) return rc;
+    rc = mgmt_legacy_call(cx, fn, b, bl, 4096, &rep);
+    if (rc != AVA1_STATUS_OK) return rc;
+    mgmt_reply_free(&rep);
+    cx->out_len = 0;
+    return AVA1_STATUS_OK;
+}
+
 static uint64_t paged_now_ms(void) {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;

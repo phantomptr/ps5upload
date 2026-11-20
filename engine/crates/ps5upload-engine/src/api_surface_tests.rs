@@ -820,9 +820,12 @@ fn routes_in_source() -> Vec<String> {
             if p.is_dir() {
                 walk(&p, out);
             } else if p.extension().is_some_and(|x| x == "rs")
-                // Test routers and the MCP catalogue's own scanner, whose samples are not routes.
+                // Test routers and the MCP catalogue's own scanner, whose samples are not routes, and
+            // the built-in hub's pages, which are on its own listener and never on the API's.
                 && !p.to_string_lossy().ends_with("_tests.rs")
-                && !p.file_name().is_some_and(|n| n == "tests.rs" || n == "catalog_routes.rs")
+                && !p.file_name().is_some_and(|n| {
+                    n == "tests.rs" || n == "catalog_routes.rs" || n == "builtin_hub.rs"
+                })
             {
                 out.push(p);
             }

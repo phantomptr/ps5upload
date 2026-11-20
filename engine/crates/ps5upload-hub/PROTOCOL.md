@@ -14,7 +14,8 @@ Endpoint: `wss://hub.phantomptr.com/ws`.
 - `Origin`: a browser must come from an allowed origin (by default
   `https://ps5upload.phantomptr.com` and the PS5Upload app's own pages: `tauri://localhost`,
   `http://tauri.localhost`, `https://tauri.localhost`); anything else gets HTTP 403 before the upgrade. A client
-  that sends no `Origin` (the engine) is allowed.
+  that sends no `Origin` (the engine) is allowed. The same hub built into an engine
+  (`PS5UPLOAD_HUB_LISTEN`, SELF_HOSTING.md) also allows its own public origin.
 - Keepalive: the hub sends a WebSocket ping every 20 s to a peer it has not heard from in that
   time (a peer that pings the hub itself, like the engine, gets none). A peer that sends nothing
   at all (no message, no pong) for 60 s is closed with code 1001.
@@ -85,7 +86,8 @@ Host receives:
 
 Forwarded as `{"t":"signal","from":"host"|"<gid>","data":<data unchanged>}`.
 
-- `data` must be a JSON **object** of at most **12 KiB** serialized, else `bad_data` and close.
+- `data` must be a JSON **object** of at most **12 KiB** as sent (its text, spaces included), else
+  `bad_data` and close. It is forwarded byte for byte.
   Its content is up to the engine and the page; the hub does not look inside. Suggested shapes:
   `{"sdp":{"type":"offer","sdp":"..."}}`, `{"ice":{"candidate":"...","sdpMid":"0","sdpMLineIndex":0}}`.
 - A guest may only address `"host"`; a host only a `gid`. Anything else: `bad_target`, close.

@@ -42,6 +42,7 @@ export const CONSOLE_SETTING_KEYS: readonly ConsoleSettingKey[] = [
   "rest_after_upload",
   "auto_bring_up",
   "auto_redeploy_on_wake",
+  "auto_update_helper",
   "install_path_fallback",
 ];
 
@@ -57,6 +58,7 @@ export function defaultConsoleSettings(): ConsoleSettings {
     rest_after_upload: useRestAfterUploadStore.getState().enabled,
     auto_bring_up: u.autoBringUp,
     auto_redeploy_on_wake: u.autoRedeployOnWake,
+    auto_update_helper: u.autoUpdateHelper,
     install_path_fallback: useInstallPathFallbackStore.getState().enabled,
   };
 }
@@ -121,6 +123,7 @@ export function useConsoleSettings(id: string | null | undefined): ConsoleSettin
   const awake = useUploadSettingsStore((s) => s.keepPs5AwakeMode);
   const bringUp = useUploadSettingsStore((s) => s.autoBringUp);
   const redeploy = useUploadSettingsStore((s) => s.autoRedeployOnWake);
+  const updateHelper = useUploadSettingsStore((s) => s.autoUpdateHelper);
   const rest = useRestAfterUploadStore((s) => s.enabled);
   const fallback = useInstallPathFallbackStore((s) => s.enabled);
   return settingsOfProfile(profile, {
@@ -129,6 +132,7 @@ export function useConsoleSettings(id: string | null | undefined): ConsoleSettin
     rest_after_upload: rest,
     auto_bring_up: bringUp,
     auto_redeploy_on_wake: redeploy,
+    auto_update_helper: updateHelper,
     install_path_fallback: fallback,
   });
 }

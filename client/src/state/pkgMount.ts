@@ -7,7 +7,16 @@
 // (not a package-library item), so no install can follow it by accident.
 
 import { fetchConsoleStat } from "../api/consoleFiles";
-import { fsMkdir, isPathMissingError, listVolumes, smpRescan, smpStatus, type SmpStatus } from "../api/ps5";
+import {
+  consoleInstallOfTitle,
+  fsMkdir,
+  isPathMissingError,
+  listVolumes,
+  smpRescan,
+  smpStatus,
+  type SmpStatus,
+} from "../api/ps5";
+import { registerRefusedText } from "../lib/consoleInstall";
 import { keepBothName } from "../lib/consolePath";
 import { mgmtAddr, transferAddr } from "../lib/addr";
 import { invoke } from "../lib/invokeLogged";
@@ -162,6 +171,17 @@ export async function placePkgForMount(
   }
   const refusal = mountRefusalMessage(meta.head, meta.parts?.length ?? 1);
   if (refusal) return fail(refusal);
+  // #884: Kraken Mount puts it on the home screen under its title id; never over a game the PS5
+  // installed itself under the same id (that rewrote the installed game's record).
+  const titleId = (meta.head?.content_id ?? "").slice(7, 16);
+  if (/^[A-Z]{4}\d{5}$/.test(titleId)) {
+    try {
+      const installed = await consoleInstallOfTitle(transferAddr(host), titleId);
+      if (installed) return fail(registerRefusedText(installed.where, meta.head?.title));
+    } catch (e) {
+      return fail(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   let drive = opts.drive ?? null;
   if (!drive) {

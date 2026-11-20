@@ -153,6 +153,22 @@ pub(super) fn tools() -> Vec<ToolDef> {
             ),
         },
         ToolDef {
+            name: "consoles_link_history",
+            title: "How a console's connection has been holding up",
+            description: "A console's connection drops (`timeout` or `refused`), recoveries, \
+                          helper restarts and USB drives appearing, from the app's own checks, \
+                          with the console's link (`wired` / `wifi`) once known and `hint` when \
+                          it keeps dropping (`usb_wifi`: it started around when a USB drive \
+                          appeared, on Wi-Fi). Sends nothing to the console: for \"why does the \
+                          connection keep dropping\".",
+            kind: Kind::Read,
+            schema: object(json!({ "console": console_optional() }), &[]),
+            run: route!(
+                path: "/api/ps5/link-history",
+                done: "The connection's record."
+            ),
+        },
+        ToolDef {
             name: "consoles_readiness",
             title: "Console readiness",
             description: "Whether a console is in a stable state to install a package: `ready`, \

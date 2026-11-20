@@ -416,6 +416,9 @@ with **Settings → Engine URL**.
   not a full URL, and the web page is built with it, so a prefix needs its own image build. The
   variables a self-hoster may need are in [engine/README.md](engine/README.md#environment-variables). See [reverse-proxy setup](REVERSE_PROXY.md) for nginx,
   proxy authentication, Docker bridge networking, and sub-path hosting.
+- **Play Together through your own name:** the engine can run the invite hub and guest pages
+  itself, published on their own port while the engine stays on the LAN. See
+  [SELF_HOSTING.md](SELF_HOSTING.md).
 - **Scripting it:** see [API and AI agents](#api-and-ai-agents) below. [ps5upctl](https://github.com/yuanzhengze/ps5upctl)
   is a community command-line client for the engine API (unofficial; the API can change between
   versions).
@@ -657,7 +660,7 @@ Thank you to everyone who has supported PS5Upload. Every coffee keeps it going. 
 the website list you too, under Thanks & Support.)
 
 <!-- supporters:start (scripts/supporters.mjs) -->
-BigPapii420 · clincher · Heng · Ice · Marv530e · mikekay1 · San · Dennis · gabuscus · Slappula · b1ackcoffee · Bud · drsam · f0d · GorFMan · Joe Szymkowicz · John Malpas · kheops · LEO · Lucky · MagneTo · Peejay571 · Ronnie K. · Mohd Rahimi Samsuddin · B3aver08 · Beetle · David Rabilero · Florian · Gr33k420 · hernanr1993 · JB · Joey Lam · kuttenkop de kutjelikker · Mehmet · Niko · StrijderNL · TOPMUSICMAN8 · Ferko · GerardoPTC · AciDFliX · Griffdaddy · here · Mayankk! · Pedro Madureira · Rubén · Turcan Vadim · Zeiko · DM · Snowcone Wizard
+BigPapii420 · clincher · Heng · Ice · Marv530e · mikekay1 · San · Dennis · gabuscus · Slappula · b1ackcoffee · Bud · DM · drsam · f0d · GorFMan · Joe Szymkowicz · John Malpas · Khairul Hazziq Zufar Che Zulkifly · kheops · LEO · Lucky · MagneTo · Peejay571 · PS5FOREVA · Ronnie K. · Mohd Rahimi Samsuddin · B3aver08 · Beetle · David Rabilero · Florian · Gr33k420 · hernanr1993 · JB · Joey Lam · kuttenkop de kutjelikker · Mehmet · Niko · Ry · StrijderNL · thanks · TOPMUSICMAN8 · Ferko · GerardoPTC · AciDFliX · Angry Cj · Griffdaddy · K3n1ch1V · here · Marc · Mayankk! · Pedro Madureira · reo · Rubén · Snowcone Wizard · Turcan Vadim · Zeiko
 
 …and 9 anonymous supporters. Thank you all! 💛
 

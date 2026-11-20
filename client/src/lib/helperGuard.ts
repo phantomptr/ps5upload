@@ -3,8 +3,24 @@
 // a newer one (every device would lose the newer one's features and fixes).
 
 import type { MeshActivityItem, MeshDevice, MeshState } from "../api/mesh";
+import type { HelperBusy } from "../api/ps5";
 import { deviceName, othersBusy } from "../state/mesh";
+import type { Translator } from "../state/lang";
 import { compareVersions } from "./semver";
+
+/** What the console reports a restart would stop (STATUS_ACK `busy`, 12.6.15), in plain words
+ *  ("an install, remote controls"). */
+export function consoleWorkText(tr: Translator, b: HelperBusy): string {
+  const parts: string[] = [];
+  if (b.uploads > 0) parts.push(tr("helper_work_transfer", undefined, "a transfer"));
+  if (b.install) parts.push(tr("helper_work_install", undefined, "an install"));
+  if (b.extract) parts.push(tr("helper_work_extract", undefined, "an archive extraction"));
+  if (b.convert) parts.push(tr("helper_work_convert", undefined, "a conversion"));
+  if (b.dump) parts.push(tr("helper_work_dump", undefined, "a game dump"));
+  if (b.input) parts.push(tr("helper_work_input", undefined, "remote controls"));
+  if (b.pads > 0) parts.push(tr("helper_work_pads", undefined, "virtual controllers"));
+  return parts.join(", ");
+}
 
 export interface ReplaceCheck {
   /** The running helper is newer than this app's. */

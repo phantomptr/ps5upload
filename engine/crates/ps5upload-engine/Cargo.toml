@@ -42,6 +42,9 @@ mime_guess = { version = "2", optional = true }
 smb2 = "0.39"
 ps5upload-core = { path = "../ps5upload-core" }
 ps5upload-tailnet = { path = "../ps5upload-tailnet" }
+# Play Together's hub, run in the engine only when PS5UPLOAD_HUB_LISTEN asks (builtin_hub.rs).
+# Its dependencies are all the engine's already.
+ps5upload-hub = { path = "../ps5upload-hub" }
 ps5upload-pkg = { path = "../ps5upload-pkg" }
 ps5upload-fpkg = { path = "../ps5upload-fpkg" }
 # The converter's build code, shared with the program that runs on the PS5 (ps5upload-convert).

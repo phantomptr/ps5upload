@@ -31,7 +31,18 @@ const CONNECT_WAIT: Duration = Duration::from_secs(10);
 /// How often the room checks it is still wanted.
 const CHECK_EVERY: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 5 });
 const BACKOFF_FIRST: Duration = Duration::from_secs(1);
-const BACKOFF_MAX: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 30 });
+/// At most this between tries. It was 30 s: a hub back from a restart (an update) 16 s later had
+/// the room again only at 31 s, and every friend who opened the link meanwhile was told the
+/// invite is gone (the page waits 20 s only for a hub that said it is restarting).
+const BACKOFF_MAX: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 5 });
+
+/// `d` give or take a quarter, so the hosts a restarted hub dropped do not all come back in the
+/// same instant.
+fn jitter(d: Duration) -> Duration {
+    let mut b = [0u8; 1];
+    let _ = getrandom::fill(&mut b);
+    d.mul_f64(0.75 + f64::from(b[0]) / 255.0 * 0.5)
+}
 
 pub(crate) trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
@@ -163,6 +174,9 @@ impl Room {
 }
 
 pub(crate) async fn connect(url: &str) -> Result<Ws, String> {
+    // This engine's own built-in hub: over loopback, not out through its reverse proxy.
+    let own = crate::builtin_hub::dial(url);
+    let url = own.as_deref().unwrap_or(url);
     let uri: axum::http::Uri = url.parse().map_err(|_| "bad hub address".to_string())?;
     let host = uri.host().ok_or("bad hub address")?.to_string();
     let tls = uri.scheme_str() == Some("wss");
@@ -236,7 +250,7 @@ async fn run(shared: Arc<Shared>, wanted: Wanted, mut stop: watch::Receiver<()>)
             End::Stop => break,
             End::Now => Duration::ZERO,
             End::Again => {
-                let w = backoff;
+                let w = jitter(backoff);
                 backoff = (backoff * 2).min(BACKOFF_MAX);
                 if shared.st.lock().unwrap_or_else(|e| e.into_inner()).state == "hosted" {
                     shared.set("reconnecting", None);
@@ -331,6 +345,13 @@ async fn session(
                         shared.set("hosted", None);
                         *backoff = BACKOFF_FIRST;
                     }
+                    // A signal to a guest that has just left (an answer, a late candidate): the one
+                    // error the hub does not close for (PROTOCOL.md). Taken as an error, it put
+                    // the room in "error" (the host's page showed the home network's link) and
+                    // the hub connection was made again.
+                    "error" if s("why") == "no_peer" => {
+                        crate::log_at!(Debug, "together", "join: a signal to a guest that left");
+                    }
                     "error" => {
                         let why = s("why");
                         crate::log_at!(Debug, "together", "join: the hub says {why}");
@@ -384,5 +405,25 @@ async fn session(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod backoff_tests {
+    use super::*;
+
+    #[test]
+    fn tries_come_back_within_the_cap_a_little_apart() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..200 {
+            let w = jitter(Duration::from_secs(4));
+            assert!(
+                w >= Duration::from_secs(3) && w <= Duration::from_secs(5),
+                "{w:?}"
+            );
+            seen.insert(w.as_millis());
+        }
+        assert!(seen.len() > 10, "spread out");
+        assert!(BACKOFF_MAX <= Duration::from_secs(5));
     }
 }

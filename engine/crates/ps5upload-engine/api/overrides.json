@@ -70,6 +70,7 @@
   "/api/ps5/health": "health",
   "/api/ps5/helper": "payloads",
   "/api/ps5/hw": "hardware",
+  "/api/ps5/link-history": "consoles",
   "/api/ps5/list-dir": "console-files",
   "/api/ps5/payload": "payloads",
   "/api/ps5/pkg": "install",
@@ -242,6 +243,9 @@
   "GET /api/ops/{id}": {
    "summary": "How an operation, job or install stands, and its answer when done"
   },
+  "GET /api/payload/bundled": {
+   "summary": "The helper this engine sends, and its version"
+  },
   "GET /api/pkg/install/history": {
    "summary": "A console's past installs"
   },
@@ -402,6 +406,9 @@
   },
   "GET /api/ps5/hw/temps": {
    "summary": "Console temperatures and clocks"
+  },
+  "GET /api/ps5/link-history": {
+   "summary": "How a console's connection has been holding up: drops, recoveries, helper restarts, USB drives"
   },
   "GET /api/ps5/list-dir": {
    "summary": "List a folder on the console"

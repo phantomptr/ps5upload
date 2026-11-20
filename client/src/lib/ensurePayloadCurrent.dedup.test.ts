@@ -29,9 +29,11 @@ vi.mock("../state/logs", () => ({
 
 import {
   ensurePayloadCurrent,
+  lastEnsureOutcome,
   resetEnsurePayloadState,
   RESEND_COOLDOWN_MS,
 } from "./ensurePayloadCurrent";
+import { sendHelperOnce } from "./helperSendGate";
 
 beforeEach(() => {
   vi.useRealTimers();
@@ -69,22 +71,49 @@ describe("sending the helper", () => {
     expect(restoreMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not send again while the last one may still be starting", async () => {
+  it("waits about two minutes for the helper it sent before saying it did not show", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     payloadCheckMock.mockResolvedValue({ reachable: false });
     const first = ensurePayloadCurrent("10.0.0.5", undefined, true);
-    await vi.advanceTimersByTimeAsync(40_000);
+    let done = false;
+    void first.then(() => (done = true));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(70_000);
     expect(await first).toBe("stale-ok");
     expect(restoreMock).toHaveBeenCalledTimes(1);
+  });
 
+  it("does not send again while the last one may still be starting", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    payloadCheckMock.mockResolvedValue({ reachable: false });
+    // A helper was sent moments ago (the Send button, another path).
+    await sendHelperOnce("10.0.0.5", async () => {});
     expect(await ensurePayloadCurrent("10.0.0.5", undefined, true)).toBe("no-push");
-    expect(restoreMock).toHaveBeenCalledTimes(1);
+    expect(lastEnsureOutcome("10.0.0.5")?.why).toBe("recent");
+    expect(restoreMock).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(RESEND_COOLDOWN_MS);
     const again = ensurePayloadCurrent("10.0.0.5", undefined, true);
-    await vi.advanceTimersByTimeAsync(40_000);
+    await vi.advanceTimersByTimeAsync(130_000);
     await again;
-    expect(restoreMock).toHaveBeenCalledTimes(2);
+    expect(restoreMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("an explicit request joining an unattended check that held back runs after it, as itself", async () => {
+    // The unattended check holds (the console just started); the person's queue start then
+    // waits out the start itself instead of taking the "no-push".
+    payloadCheckMock
+      .mockResolvedValueOnce({ reachable: false })
+      .mockResolvedValueOnce({ reachable: false })
+      .mockResolvedValue({ reachable: true, payloadVersion: "5.33.3" });
+    await sendHelperOnce("10.0.0.5", async () => {});
+    const auto = ensurePayloadCurrent("10.0.0.5", undefined, false, "auto");
+    const asked = ensurePayloadCurrent("10.0.0.5", undefined, false, "explicit");
+    expect(await auto).toBe("no-push");
+    // The explicit one ran too (and met the same cooldown: nothing sent twice).
+    expect(await asked).toBe("no-push");
+    expect(payloadCheckMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps consoles independent", async () => {

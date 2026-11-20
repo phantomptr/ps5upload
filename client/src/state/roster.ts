@@ -104,6 +104,9 @@ export interface ConsoleSettings {
   auto_bring_up: boolean;
   /** Send the helper to this PS5 again after rest mode or a network drop. */
   auto_redeploy_on_wake: boolean;
+  /** Replace an older helper on this PS5 with this app's by itself, when nothing runs there
+   *  (lib/helperAutoUpdate). */
+  auto_update_helper: boolean;
   /** Allow the install-by-file-path last resort on this PS5 (firmware dependent). */
   install_path_fallback: boolean;
 }

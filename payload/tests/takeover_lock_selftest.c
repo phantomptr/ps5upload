@@ -7,6 +7,11 @@
  * of probes. Built with -DTAKEOVER_FLOCK=test_flock. fork() here is the host test only: the helper
  * itself never forks. */
 #include "takeover_flag.h"
+#include "start_dedupe.h"
+#include "helper_busy.h"
+
+#include <pthread.h>
+#include <stdint.h>
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -50,7 +55,7 @@ int test_flock(int fd, int op) {
 
 /* ---- Simulated helpers: separate processes running main()'s start-up order ----
  * lock (wait) -> [behaviour] -> take over whoever serves (flag) -> bind -> flag poll -> unlock. */
-enum { SIM_OK, SIM_SLOW, SIM_DIE_BEFORE_SERVE, SIM_HANG, SIM_HANG_NO_STAMP, SIM_OLD_NO_LOCK };
+enum { SIM_OK, SIM_SLOW, SIM_DIE_BEFORE_SERVE, SIM_HANG, SIM_HANG_NO_STAMP, SIM_OLD_NO_LOCK, SIM_DEDUPE };
 #define SIM_MAX_AGE_MS 1500
 
 static void sim_on_newer(void) { _exit(0); } /* asked to leave by a newer helper: a clean exit */
@@ -67,11 +72,74 @@ static int port_answers(int port) {
     return ok;
 }
 
+/* The version the next simulated helper says it is, and whether its transfer port stays mute (it
+ * accepts and never answers a frame). Set before sim_start; the forked child keeps its copy. */
+static const char *g_sim_version = "12.6.15";
+static int g_sim_mute = 0;
+
+/* A stand-in AVA1 server: reads a 16-byte frame header and answers with an Error frame header
+ * ("A1", type 0x0b, valid CRC32C), as the real server answers an Hs1 that does not decode. */
+static uint32_t test_crc32c(const uint8_t *p, size_t n) {
+    uint32_t c = 0xFFFFFFFFu;
+    for (size_t i = 0; i < n; i++) {
+        c ^= p[i];
+        for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0x82F63B78u & (0u - (c & 1u)));
+    }
+    return c ^ 0xFFFFFFFFu;
+}
+
+static void *sim_responder(void *arg) {
+    int s = (int)(intptr_t)arg;
+    for (;;) {
+        int c = accept(s, NULL, NULL);
+        if (c < 0) continue;
+        uint8_t in[16], out[16];
+        size_t have = 0;
+        while (have < sizeof in) {
+            ssize_t n = read(c, in + have, sizeof in - have);
+            if (n <= 0) break;
+            have += (size_t)n;
+        }
+        if (have == sizeof in && !g_sim_mute) {
+            memset(out, 0, sizeof out);
+            out[0] = 'A';
+            out[1] = '1';
+            out[2] = 0x0b;
+            uint32_t crc = test_crc32c(out, 12);
+            out[12] = (uint8_t)crc;
+            out[13] = (uint8_t)(crc >> 8);
+            out[14] = (uint8_t)(crc >> 16);
+            out[15] = (uint8_t)(crc >> 24);
+            (void)write(c, out, sizeof out);
+        }
+        if (g_sim_mute) {
+            usleep(3000 * 1000);
+        }
+        close(c);
+    }
+    return NULL;
+}
+
 static pid_t sim_start(const char *dir, int port, int behaviour) {
     pid_t pid = fork();
     if (pid != 0) return pid;
     int lock = -1;
-    if (behaviour != SIM_OLD_NO_LOCK) lock = takeover_start_lock_wait(dir, SIM_MAX_AGE_MS, 20, NULL);
+    takeover_start_info_t info;
+    memset(&info, 0, sizeof info);
+    if (behaviour != SIM_OLD_NO_LOCK) lock = takeover_start_lock_wait(dir, SIM_MAX_AGE_MS, 20, &info);
+    /* main.c's dedupe: a helper that waited leaves the start to a recent, same-or-newer helper
+     * that really serves. */
+    if (behaviour == SIM_DEDUPE && info.waited && lock >= 0) {
+        serving_rec_t rec;
+        int ok = serving_record_read(dir, &rec);
+        int pid_alive = ok && kill(rec.pid, 0) == 0;
+        if (start_dedupe_should_stand_down(&rec, ok, g_sim_version, start_dedupe_mono_ms(), (int)getpid(),
+                                           pid_alive) &&
+            start_dedupe_probe_serves(port, 1000)) {
+            takeover_start_unlock(lock);
+            _exit(7);
+        }
+    }
     if (behaviour == SIM_HANG_NO_STAMP && lock >= 0 && ftruncate(lock, 0) != 0) _exit(9);
     if (behaviour == SIM_HANG || behaviour == SIM_HANG_NO_STAMP)
         for (;;) pause();
@@ -91,9 +159,28 @@ static pid_t sim_start(const char *dir, int port, int behaviour) {
     (void)setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
     if (s < 0 || bind(s, (struct sockaddr *)&a, sizeof a) != 0 || listen(s, 16) != 0) _exit(5);
     if (takeover_flag_poll_start(dir, nonce, 50, sim_on_newer) != 0) _exit(6);
+    {
+        pthread_t t;
+        if (pthread_create(&t, NULL, sim_responder, (void *)(intptr_t)s) != 0) _exit(8);
+        pthread_detach(t);
+    }
+    /* Serving: the record main.c writes before it lets the next start go. */
+    {
+        serving_rec_t me;
+        memset(&me, 0, sizeof me);
+        me.pid = (int)getpid();
+        snprintf(me.version, sizeof me.version, "%s", g_sim_version);
+        me.mono_ms = start_dedupe_mono_ms();
+        (void)serving_record_write(dir, &me);
+    }
     takeover_start_unlock(lock);
     for (;;) pause();
 }
+
+/* Two helpers sent together (12.6.15): the one that waited leaves the start to a helper of the same
+ * or a newer version that began serving moments ago and answers; in every other case it takes
+ * over, so a helper always ends up serving. */
+static void simulated_dedupe(const char *dir, int port);
 
 /* 1 = exited with `code` within ms; 0 = still running (or another status). */
 static int exited_with(pid_t p, int code, int ms) {
@@ -235,6 +322,167 @@ static void simulated_starts(const char *dir) {
     }
 }
 
+static void simulated_dedupe(const char *dir, int port) {
+    char rec_path[300];
+    snprintf(rec_path, sizeof rec_path, "%s/serving", dir);
+    /* 1. Same version, sent together: the second leaves quietly, the first keeps serving. One
+     * restart instead of two. */
+    {
+        unlink(rec_path);
+        g_sim_version = "12.6.15";
+        pid_t a = sim_start(dir, port, SIM_SLOW);
+        usleep(50 * 1000);
+        pid_t b = sim_start(dir, port, SIM_DEDUPE);
+        check(exited_with(b, 7, 5000), "dedupe same version: the one that waited leaves the start to the first");
+        check(alive(a) && port_served_within(port, 1000), "dedupe same version: the first keeps serving");
+        reap(a);
+        reap(b);
+    }
+    /* 2. The first is an older helper: the newer one that waited takes over, as before. */
+    {
+        unlink(rec_path);
+        g_sim_version = "12.6.14";
+        pid_t a = sim_start(dir, port, SIM_SLOW);
+        usleep(50 * 1000);
+        g_sim_version = "12.6.15";
+        pid_t b = sim_start(dir, port, SIM_DEDUPE);
+        check(exited_with(a, 0, 6000), "dedupe older first: the older one is asked to leave");
+        check(alive(b) && port_served_within(port, 3000), "dedupe older first: the newer one serves");
+        reap(a);
+        reap(b);
+    }
+    /* 3. The first dies before it serves (no record of it): the one that waited serves. */
+    {
+        unlink(rec_path);
+        g_sim_version = "12.6.15";
+        pid_t a = sim_start(dir, port, SIM_DIE_BEFORE_SERVE);
+        usleep(50 * 1000);
+        pid_t b = sim_start(dir, port, SIM_DEDUPE);
+        check(exited_with(a, 3, 3000), "dedupe first dies: the first dies before serving");
+        check(alive(b) && port_served_within(port, 3000), "dedupe first dies: the one that waited serves");
+        reap(a);
+        reap(b);
+    }
+    /* 4. The first serves but does not answer a frame (wedged): the one that waited takes over. */
+    {
+        unlink(rec_path);
+        g_sim_version = "12.6.15";
+        g_sim_mute = 1;
+        pid_t a = sim_start(dir, port, SIM_SLOW);
+        g_sim_mute = 0;
+        usleep(50 * 1000);
+        pid_t b = sim_start(dir, port, SIM_DEDUPE);
+        check(exited_with(a, 0, 8000), "dedupe mute first: it is asked to leave");
+        check(alive(b) && port_served_within(port, 3000), "dedupe mute first: the one that waited serves");
+        reap(a);
+        reap(b);
+    }
+    unlink(rec_path);
+}
+
+/* The pieces of the dedupe and the busy report, one by one. */
+static void dedupe_units(const char *dir) {
+    /* Versions. */
+    check(start_dedupe_version_cmp("12.6.15", "12.6.15") == 0, "version: equal");
+    check(start_dedupe_version_cmp("12.6.14", "12.6.15") == -1, "version: older");
+    check(start_dedupe_version_cmp("12.10.0", "12.9.9") == 1, "version: numbers, not text");
+    check(start_dedupe_version_cmp("12.6.15-rc.1", "12.6.15") == -1, "version: a pre-release is below its release");
+    check(start_dedupe_version_cmp("v12.6", "12.6.0") == 0, "version: 'v' and two parts");
+    check(start_dedupe_version_cmp("garbage", "12.6.15") == -2, "version: not a version");
+    check(start_dedupe_version_cmp("12.6.15x", "12.6.15") == -2, "version: trailing junk is not a version");
+
+    /* The record. */
+    serving_rec_t r, back;
+    memset(&r, 0, sizeof r);
+    r.pid = 4242;
+    snprintf(r.version, sizeof r.version, "12.6.15");
+    r.mono_ms = 123456;
+    char buf[128];
+    int n = serving_record_format(buf, sizeof buf, &r);
+    check(n > 0 && serving_record_parse(buf, (size_t)n, &back) && back.pid == 4242 &&
+              strcmp(back.version, "12.6.15") == 0 && back.mono_ms == 123456,
+          "record: round trip");
+    check(!serving_record_parse(buf, (size_t)n - 1, &back), "record: a read caught mid-write is incomplete");
+    check(!serving_record_parse("pid=1\nversion=1.0.0\n", 20, &back), "record: a missing field is incomplete");
+    r.pid = 0;
+    check(serving_record_format(buf, sizeof buf, &r) == -1, "record: no pid is never written");
+    r.pid = (int)getpid();
+    check(serving_record_write(dir, &r) == 0 && serving_record_read(dir, &back) && back.pid == (int)getpid(),
+          "record: written and read back");
+    serving_record_clear(dir, 999999);
+    check(serving_record_read(dir, &back), "record: another process's exit leaves it");
+    serving_record_clear(dir, (int)getpid());
+    check(!serving_record_read(dir, &back), "record: its own exit removes it");
+
+    /* The decision. */
+    serving_rec_t s;
+    memset(&s, 0, sizeof s);
+    s.pid = 77;
+    snprintf(s.version, sizeof s.version, "12.6.15");
+    s.mono_ms = 1000000;
+    long long now = 1000000 + 5000;
+    check(start_dedupe_should_stand_down(&s, 1, "12.6.15", now, 1, 1), "decide: same version, just started: stand down");
+    check(start_dedupe_should_stand_down(&s, 1, "12.6.14", now, 1, 1), "decide: newer one serving: stand down");
+    check(!start_dedupe_should_stand_down(&s, 1, "12.7.0", now, 1, 1), "decide: older one serving: take over");
+    check(!start_dedupe_should_stand_down(&s, 1, "12.6.15", 1000000 + START_DEDUPE_RECENT_MS + 1, 1, 1),
+          "decide: serving for long: take over (someone asked for a new one)");
+    check(!start_dedupe_should_stand_down(&s, 1, "12.6.15", now, 1, 0), "decide: its process is gone: take over");
+    check(!start_dedupe_should_stand_down(&s, 0, "12.6.15", now, 1, 1), "decide: no complete record: take over");
+    check(!start_dedupe_should_stand_down(&s, 1, "12.6.15", now, 77, 1), "decide: our own record: take over");
+    check(!start_dedupe_should_stand_down(&s, 1, "12.6.15", 999000, 1, 1), "decide: a record from the future: take over");
+    snprintf(s.version, sizeof s.version, "dev");
+    check(!start_dedupe_should_stand_down(&s, 1, "12.6.15", now, 1, 1), "decide: a version that does not read: take over");
+
+    /* The loopback round trip. */
+    {
+        int port = free_port();
+        check(!start_dedupe_probe_serves(port, 300), "probe: nothing listening: no");
+        int ls = socket(AF_INET, SOCK_STREAM, 0), one = 1;
+        struct sockaddr_in a;
+        memset(&a, 0, sizeof a);
+        a.sin_family = AF_INET;
+        a.sin_port = htons((uint16_t)port);
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        (void)setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        int ok = ls >= 0 && bind(ls, (struct sockaddr *)&a, sizeof a) == 0 && listen(ls, 4) == 0;
+        check(ok, "probe: a stand-in server");
+        pthread_t t;
+        g_sim_mute = 0;
+        pthread_create(&t, NULL, sim_responder, (void *)(intptr_t)ls);
+        pthread_detach(t);
+        check(start_dedupe_probe_serves(port, 1000), "probe: a server that answers a frame: yes");
+        g_sim_mute = 1;
+        long long t0 = mono_ms();
+        check(!start_dedupe_probe_serves(port, 400), "probe: a server that takes the connection and never answers: no");
+        check(mono_ms() - t0 < 1500, "probe: bounded by its timeout");
+        g_sim_mute = 0;
+    }
+
+    /* The busy report (helper_busy.h). */
+    helper_busy_t b;
+    memset(&b, 0, sizeof b);
+    char js[256];
+    check(helper_busy_cause(&b) == NULL, "busy: nothing running: idle");
+    b.other_devices = 3;
+    check(helper_busy_cause(&b) == NULL, "busy: other devices only connected: still idle");
+    check(helper_busy_json(&b, js, sizeof js) > 0 && strstr(js, "\"idle\":true") && strstr(js, "\"other_devices\":3"),
+          "busy: json says idle");
+    b.extract = 1;
+    b.uploads = 2;
+    check(helper_busy_cause(&b) && strcmp(helper_busy_cause(&b), "uploads") == 0, "busy: the first cause is named");
+    check(helper_busy_json(&b, js, sizeof js) > 0 && strstr(js, "\"idle\":false") && strstr(js, "\"uploads\":2"),
+          "busy: json says busy");
+    check(helper_busy_json(&b, js, 10) == -1, "busy: a buffer too small is refused, not cut");
+    memset(&b, 0, sizeof b);
+    b.pads = 1;
+    check(helper_busy_cause(&b) && strcmp(helper_busy_cause(&b), "pads") == 0, "busy: virtual controllers count");
+    check(helper_shutdown_if_idle("{\"if_idle\":true}", 16), "if_idle: true");
+    check(helper_shutdown_if_idle("{ \"if_idle\" : true }", 20), "if_idle: with spaces");
+    check(!helper_shutdown_if_idle("{\"if_idle\":false}", 17), "if_idle: false");
+    check(!helper_shutdown_if_idle("", 0) && !helper_shutdown_if_idle(NULL, 0), "if_idle: no body is a plain shutdown");
+    check(!helper_shutdown_if_idle("{\"if_idle\":tr", 13), "if_idle: cut short is a plain shutdown");
+}
+
 static void write_lock_body(const char *dir, const char *body) {
     char path[300];
     snprintf(path, sizeof path, "%s/start.lock", dir);
@@ -356,6 +604,8 @@ int main(void) {
     }
 
     simulated_starts(dir);
+    dedupe_units(dir);
+    simulated_dedupe(dir, free_port());
 
     /* The takeover wait ends by the monotonic clock. A listener that never goes away. */
     {

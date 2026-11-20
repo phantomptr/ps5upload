@@ -10,14 +10,18 @@ import {
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
 import {
+  advancedBody,
   hubUrlOk,
   invitesBody,
   joinApi,
   MAX_STUN,
+  ownPagesNeedOwnHub,
+  pageBaseOf,
   parseStun,
   portOk,
   type NetSettings,
   type NetSettingsBody,
+  type NetSource,
 } from "../Play/playTogetherState";
 /**
  * Settings › App › Play Together: where invites work. Anywhere: one link (through the signalling
@@ -32,6 +36,7 @@ export function PlayTogetherSettings() {
   const [net, setNet] = useState<NetSettings | null>(null);
   const [unread, setUnread] = useState(false);
   const [hub, setHub] = useState("");
+  const [pageBase, setPageBase] = useState("");
   const [stun, setStun] = useState("");
   const [port, setPort] = useState("");
   const [portSaved, setPortSaved] = useState(false);
@@ -41,7 +46,7 @@ export function PlayTogetherSettings() {
   // What the text fields were last filled with. This read runs again each time Settings is
   // shown again: a field still as it was filled takes the saved value, one being typed in is
   // left alone (it used to be put back to the saved value, losing what was typed).
-  const filled = useRef({ hub: "", stun: "", port: "" });
+  const filled = useRef({ hub: "", pageBase: "", stun: "", port: "" });
   useEffect(() => {
     let alive = true;
     void joinApi.read(host).then((s) => {
@@ -54,11 +59,13 @@ export function PlayTogetherSettings() {
       const was = filled.current;
       const now = {
         hub: s.settings.hubUrl,
+        pageBase: s.settings.pageBase ?? "",
         stun: s.settings.stun.join("\n"),
         port: s.settings.port ? String(s.settings.port) : "",
       };
       filled.current = now;
       setHub((cur) => (cur === was.hub ? now.hub : cur));
+      setPageBase((cur) => (cur === was.pageBase ? now.pageBase : cur));
       setStun((cur) => (cur === was.stun ? now.stun : cur));
       setPort((cur) => (cur === was.port ? now.port : cur));
     });
@@ -72,8 +79,17 @@ export function PlayTogetherSettings() {
     const r = await joinApi.netSettings(host, body);
     setSaveWhy(r.error ?? null);
     if (r.state) {
-      setNet(r.state.settings);
-      if (body.hub_url != null || body.stun != null) setSaved(true);
+      const n = r.state.settings;
+      setNet(n);
+      if (body.hub_url != null || body.page_base != null || body.stun != null || body.reset) {
+        setSaved(true);
+        // The fields show what is in force now (an emptied one is its default again).
+        const now = { ...filled.current, hub: n.hubUrl, pageBase: n.pageBase ?? "", stun: n.stun.join("\n") };
+        filled.current = now;
+        setHub(now.hub);
+        setPageBase(now.pageBase);
+        setStun(now.stun);
+      }
     }
     return r.error ?? null;
   };
@@ -111,13 +127,23 @@ export function PlayTogetherSettings() {
   const invites =
     net.invites ?? (net.internetInvites ? "anywhere" : "wifi");
   const hubBad = hub.trim() !== "" && !hubUrlOk(hub);
+  const pageBaseBad = pageBase.trim() !== "" && pageBaseOf(pageBase) === null;
   const stunList = parseStun(stun);
   const portNum = Number(port.trim());
   const portBad = port.trim() !== "" && !portOk(portNum);
   const portChanged = port.trim() !== "" && portNum !== (net.port ?? 0);
-  const advancedChanged =
-    hub.trim() !== net.hubUrl ||
-    (stunList ?? []).join("\n") !== net.stun.join("\n");
+  const advanced = advancedBody(net, { hub, pageBase, stun });
+  const sources = net.sources;
+  const anyCustom = !!sources && Object.values(sources).some((v) => v === "custom");
+  const sourceText = (v: NetSource | undefined) =>
+    v === "custom"
+      ? tr("pt_set_source_custom", undefined, "Your setting")
+      : v === "environment"
+        ? tr("pt_set_source_environment", undefined, "Set on the engine's server")
+        : v === "default"
+          ? tr("pt_set_source_default", undefined, "Default")
+          : undefined;
+  const needOwnHub = net.pageBase !== null && ownPagesNeedOwnHub(net.pageBase, net.hubUrl);
 
   return (
     <div className="space-y-3" data-testid="pt-settings">
@@ -255,8 +281,27 @@ export function PlayTogetherSettings() {
           {tr("pt_set_advanced", undefined, "Advanced")}
         </summary>
         <div className="mt-3 space-y-3">
+          {net.builtInHub && (
+            <p
+              className="text-xs text-[var(--color-muted)]"
+              data-testid="pt-set-built-in-hub"
+            >
+              {net.builtInHub.publicUrl
+                ? tr(
+                    "pt_set_built_in_hub",
+                    { port: net.builtInHub.port, url: net.builtInHub.publicUrl },
+                    `This engine runs its own hub on port ${net.builtInHub.port}, reached at ${net.builtInHub.publicUrl}. It is set on the engine's server and can't be changed here.`,
+                  )
+                : tr(
+                    "pt_set_built_in_hub_no_url",
+                    { port: net.builtInHub.port },
+                    `This engine runs its own hub on port ${net.builtInHub.port}, with no public address set. It is set on the engine's server and can't be changed here.`,
+                  )}
+            </p>
+          )}
           <Input
             label={tr("pt_set_hub", undefined, "Hub address")}
+            labelHint={sourceText(sources?.hubUrl)}
             value={hub}
             onChange={(e) => {
               setHub(e.target.value);
@@ -281,8 +326,50 @@ export function PlayTogetherSettings() {
             }
             data-testid="pt-set-hub"
           />
+          {net.pageBase !== null && (
+            <Input
+              label={tr("pt_set_page_base", undefined, "Guest page address")}
+              labelHint={sourceText(sources?.pageBase)}
+              value={pageBase}
+              onChange={(e) => {
+                setPageBase(e.target.value);
+                setSaved(false);
+              }}
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+              hint={tr(
+                "pt_set_page_base_hint",
+                undefined,
+                "Where your friends' links open. Change it only if you host the pages yourself: they are at join/, pad/ and share/ below this address.",
+              )}
+              error={
+                pageBaseBad || saveWhy === "page_base"
+                  ? tr(
+                      "pt_set_page_base_bad",
+                      undefined,
+                      "Use an https:// address with no ? or # in it.",
+                    )
+                  : undefined
+              }
+              data-testid="pt-set-page-base"
+            />
+          )}
+          {needOwnHub && (
+            <p
+              className="text-xs text-[var(--color-warn)]"
+              data-testid="pt-set-own-hub"
+            >
+              {tr(
+                "pt_set_page_base_needs_hub",
+                undefined,
+                "The default hub only accepts its own guest pages and the PS5Upload app, so friends who open your link in a browser can't join. Set the hub address to your own hub too.",
+              )}
+            </p>
+          )}
           <Textarea
             label={tr("pt_set_stun", undefined, "STUN servers")}
+            labelHint={sourceText(sources?.stun)}
             value={stun}
             onChange={(e) => {
               setStun(e.target.value);
@@ -311,14 +398,24 @@ export function PlayTogetherSettings() {
             <Button
               size="sm"
               variant="secondary"
-              disabled={!advancedChanged || hubBad || !hub.trim() || !stunList}
-              onClick={() =>
-                void save({ hub_url: hub.trim(), stun: stunList ?? [] })
-              }
+              disabled={!advanced || hubBad || pageBaseBad || !stunList}
+              onClick={() => {
+                if (advanced) void save(advanced);
+              }}
               data-testid="pt-set-save"
             >
               {tr("save", undefined, "Save")}
             </Button>
+            {anyCustom && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => void save({ reset: ["hub_url", "page_base", "stun"] })}
+                data-testid="pt-set-reset"
+              >
+                {tr("pt_set_use_defaults", undefined, "Use the defaults")}
+              </Button>
+            )}
             {saved && (
               <span
                 className="text-xs text-[var(--color-good)]"
@@ -330,7 +427,7 @@ export function PlayTogetherSettings() {
           </div>
         </div>
       </details>
-      {saveWhy && saveWhy !== "hub_url" && saveWhy !== "stun" && saveWhy !== "port" && (
+      {saveWhy && saveWhy !== "hub_url" && saveWhy !== "page_base" && saveWhy !== "stun" && saveWhy !== "port" && (
         <p
           className="text-xs text-[var(--color-warn)]"
           data-testid="pt-set-failed"

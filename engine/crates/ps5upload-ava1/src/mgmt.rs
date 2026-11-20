@@ -309,13 +309,15 @@ impl AvaTransport {
         trace: &mut crate::console::SessionTrace,
     ) -> Result<()> {
         use crate::console::{
-            require_in_traced, AVA1_UNREACHABLE, CONSOLE_REST_MODE, HELPER_NOT_AVA1, NOT_PAIRED,
+            require_in_traced, AVA1_UNREACHABLE, CONSOLE_REST_MODE, HELPER_ALIVE_UNREADABLE,
+            HELPER_NOT_AVA1, HELPER_TOO_NEW, NOT_PAIRED,
         };
         require_in_traced(self.pool(), console, gen::CAP_MGMT, trace).map_err(|f| {
             match f.reason.as_str() {
                 HELPER_NOT_AVA1 => mgmt::helper_not_ava1_because(label, &f.detail),
-                // The token leads the text so a status route can name it (`reason`).
-                CONSOLE_REST_MODE | AVA1_UNREACHABLE => {
+                // The token leads the text so a status route can name it (`reason`). A helper
+                // that answered but cannot be used says so (12.6.15): it is running.
+                CONSOLE_REST_MODE | AVA1_UNREACHABLE | HELPER_ALIVE_UNREADABLE | HELPER_TOO_NEW => {
                     mgmt::console_unusable(label, &f.reason, &f.detail)
                 }
                 NOT_PAIRED => MgmtError {
@@ -657,8 +659,19 @@ impl AvaTransport {
                 json(conv::fs_freespace_reply(&gen::FsFreeSpace::decode(&r)?))
             }
             gen::METHOD_NODE_SHUTDOWN => {
-                // An empty reply; the legacy ack was `{}`.
-                self.rpc(console, id, label, &[], timeout).await?;
+                // An empty reply; the legacy ack was `{}`. A body (`{"if_idle":true}`) goes as
+                // MgmtText: a helper of 12.6.15 or later reads it and refuses while busy, an older
+                // one ignores the request body and exits.
+                let req = if body.is_empty() {
+                    Vec::new()
+                } else {
+                    MgmtText {
+                        body: body.to_vec(),
+                        more: None,
+                    }
+                    .to_bytes()?
+                };
+                self.rpc(console, id, label, &req, timeout).await?;
                 Ok(Some(b"{}".to_vec()))
             }
             gen::METHOD_FS_MKDIR => {

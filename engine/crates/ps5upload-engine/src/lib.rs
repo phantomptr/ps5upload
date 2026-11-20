@@ -25,6 +25,7 @@ mod archive_build_tests;
 mod archive_tree;
 mod ava1_api;
 mod browser_payload;
+mod builtin_hub;
 mod bundled_payload;
 mod c2c_api;
 mod collection;
@@ -67,6 +68,7 @@ mod golive_dest;
 mod golive_ffmpeg;
 mod helper_copies_api;
 mod helper_mirror;
+mod helper_send;
 mod helper_stop;
 mod host_guard;
 mod icon_cache;
@@ -78,6 +80,7 @@ mod install;
 mod join;
 mod join_net;
 mod link;
+mod link_drops;
 mod link_lz4;
 mod local_fs;
 mod log_dedup;
@@ -116,6 +119,7 @@ mod save_backup_console;
 mod save_backup_server;
 mod save_copy;
 mod save_sync;
+mod self_host;
 mod server_out;
 mod settings_api;
 mod settings_backup;
@@ -172,7 +176,7 @@ use ps5upload_core::{
     download::DownloadKind,
     focus::{focus_probe, FocusProbe},
     fs_ops::{
-        app_launch, app_list_registered, app_register, app_unregister, fs_delete_with_op_id,
+        app_launch, app_list_registered, app_register, app_unregister_scoped, fs_delete_with_op_id,
         fs_mkdir, fs_mount, fs_op_cancel, fs_op_status, fs_read, fs_read_with_timeout, fs_unmount,
         list_dir, reconcile, DirListing, ListDirOptions, MountResult, ReconcileMode,
         RegisterResult,
@@ -3477,6 +3481,12 @@ struct AppUnregisterReq {
     #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     title_id: String,
+    /// Only take off a folder or image registration (#884): a helper from 12.6.16 on then
+    /// refuses, before touching anything, a title the console's own installer has installed
+    /// (`unregister_title_installed:<where>`), instead of uninstalling that game. Older helpers
+    /// ignore it. Default false: the game page's Uninstall of a package install.
+    #[serde(default)]
+    registration_only: bool,
 }
 
 async fn ps5_app_unregister(
@@ -3488,11 +3498,12 @@ async fn ps5_app_unregister(
         return missing_console_addr();
     };
     let title_id = req.title_id;
+    let registration_only = req.registration_only;
     let started = std::time::Instant::now();
     crate::log_at!(
         Info,
         "files",
-        "app_unregister: addr={addr} title_id={title_id}"
+        "app_unregister: addr={addr} title_id={title_id} registration_only={registration_only}"
     );
     let title_for_log = title_id.clone();
     // Uninstalling changes which artwork exists, so drop this console's
@@ -3500,7 +3511,7 @@ async fn ps5_app_unregister(
     // otherwise see a cover for a title they just removed.
     match tokio::task::spawn_blocking(move || {
         icon_cache::invalidate_console(&addr);
-        app_unregister(&addr, &title_id)
+        app_unregister_scoped(&addr, &title_id, registration_only)
     })
     .await
     .map_err(anyhow::Error::from)
@@ -6967,6 +6978,7 @@ async fn ps5_volumes(
     Query(q): Query<AddrQuery>,
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+    let console = addr.clone();
     let result: Result<VolumeList, anyhow::Error> =
         tokio::task::spawn_blocking(move || list_volumes(&addr))
             .await
@@ -6974,6 +6986,8 @@ async fn ps5_volumes(
             .and_then(|inner| inner);
     match result {
         Ok(mut v) => {
+            // A USB drive appearing is part of the connection's record (link_drops).
+            link_drops::note_volumes(&console, &v);
             // What the app shows as likely to fit: on internal storage less than the free
             // figure, because the console holds back more as data is written.
             for vol in &mut v.volumes {
@@ -7027,6 +7041,11 @@ async fn ps5_status(
                 "status ok",
             );
             helper_mirror::note_console(&console);
+            // The connection's record (link_drops): a recovery after a drop, a helper that
+            // started over, and what to read in the background while it drops.
+            link_drops::after_status_ok(&console, &json);
+            // After an unattended helper send: whether the console restarted on the way.
+            helper_send::after_status_ok(&console, &json);
             // A helper with the converter gets the zstd runtime it needs (background, once).
             convert_runtime::after_status(console_addr(&console), &json);
             spawn_console_upgrade_cleanup(console);
@@ -7040,7 +7059,9 @@ async fn ps5_status(
                 Some(&console),
                 format!("{e:#}"),
             );
+            link_drops::after_status_failed(&console, &e);
             let power = ps5upload_ava1::console::recent_power(&console);
+            helper_send::after_status_failed(&console, power);
             (
                 StatusCode::BAD_GATEWAY,
                 Json(status_failure_body(&e, power)),
@@ -7084,6 +7105,41 @@ async fn ps5_connect_timings(Query(q): Query<AddrQuery>) -> impl IntoResponse {
     }
 }
 
+#[derive(Deserialize)]
+struct LinkHistoryQuery {
+    addr: Option<String>,
+    /// `1`: ask the console's helper for its link (cable or Wi-Fi) when it is not known yet.
+    read_link: Option<String>,
+}
+
+/// GET /api/ps5/link-history?addr=IP[&read_link=1]
+///
+/// How the console's connection has been holding up, kept from the app's own status checks and
+/// volume reads (in memory, this engine run, the last day at most): `events` (oldest first)
+/// `drop` with `why` (`timeout`: the console stopped answering; `refused`: nothing listened on
+/// the helper's port; `other`), `back` (`after_ms`), `helper_restarted` (`prior`: how the new
+/// helper says the previous one ended), `drive_added` / `drive_removed` (a drive's mount point,
+/// `usb`); `link`: the console's link (`kind` `wired` / `wifi` / `unknown`, `iface`), read only
+/// while it drops or when `read_link=1` asks (one helper call); `hint`: `null`, or `kind`
+/// `keeps_dropping` (several drops close together, lately) or `usb_wifi` (the same, starting
+/// around when a USB drive appeared, on a console on Wi-Fi), with `drops`, `since_ms` (the first
+/// drop: key a dismissal on it), `last_ms` and `drive_at_ms`; `up`: the last check answered.
+/// Nothing here names an address. Sends nothing to the console without `read_link`.
+async fn ps5_link_history(
+    State(state): State<AppState>,
+    Query(q): Query<LinkHistoryQuery>,
+) -> impl IntoResponse {
+    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+    let read = q
+        .read_link
+        .as_deref()
+        .is_some_and(|v| v == "1" || v == "true");
+    match tokio::task::spawn_blocking(move || link_drops::report(&addr, read)).await {
+        Ok(r) => (StatusCode::OK, Json(r)).into_response(),
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+    }
+}
+
 /// The 502 body of a failed status probe: `{ error, reason?, power?, helper_too_old? }`.
 /// `reason` is the token the error leads with (`console_rest_mode`, `ava1_unreachable`,
 /// `helper_not_ava1`, `not_paired`, ...); `power` is what DDP said (`awake` / `rest` /
@@ -7100,14 +7156,24 @@ fn status_failure_body(
             .then_some(ps5upload_core::ddp::Power::Rest)
     });
     let mut body = serde_json::json!({ "error": format!("{e:#}") });
-    if let Some(r) = reason {
+    if let Some(r) = reason.clone() {
         body["reason"] = r.into();
     }
     if let Some(p) = power {
         body["power"] = p.as_str().into();
     }
-    if ps5upload_core::mgmt::helper_too_old(e) {
+    let too_old = ps5upload_core::mgmt::helper_too_old(e);
+    if too_old {
         body["helper_too_old"] = true.into();
+    }
+    // A helper answered (the handshake got a reply, or the status call was only slow): one is
+    // running there, and nothing may replace it unasked (12.6.15). Absent otherwise.
+    let answered = too_old
+        || reason.as_deref().is_some_and(|r| {
+            ps5upload_ava1::console::helper_answered(r) || r == ps5upload_ava1::mgmt::STATUS_SLOW
+        });
+    if answered {
+        body["helper_alive"] = true.into();
     }
     body
 }
@@ -7322,6 +7388,58 @@ mod status_failure_body_tests {
         ] {
             let b = status_failure_body(&e, Some(Power::Awake));
             assert!(b.get("helper_too_old").is_none(), "{b}");
+        }
+    }
+
+    /// A helper that answered in any way (unreadable, too new, too old, wants pairing, slow) is
+    /// running: `helper_alive` says so, and nothing replaces it unasked (12.6.15). Nothing
+    /// listening, rest mode and silence never carry it.
+    #[test]
+    fn a_helper_that_answered_is_alive() {
+        use ps5upload_ava1::console::{
+            HELPER_ALIVE_UNREADABLE, HELPER_ALIVE_UNREADABLE_MESSAGE, HELPER_TOO_NEW,
+            HELPER_TOO_NEW_MESSAGE,
+        };
+        for e in [
+            mgmt::console_unusable(
+                "NODE_STATUS",
+                HELPER_ALIVE_UNREADABLE,
+                HELPER_ALIVE_UNREADABLE_MESSAGE,
+            ),
+            mgmt::console_unusable("NODE_STATUS", HELPER_TOO_NEW, HELPER_TOO_NEW_MESSAGE),
+            mgmt::helper_not_ava1_because("NODE_STATUS", mgmt::HELPER_TOO_OLD_MESSAGE),
+            mgmt::console_unusable("NODE_STATUS", ps5upload_ava1::mgmt::STATUS_SLOW, "slow"),
+            mgmt::MgmtError {
+                label: "NODE_STATUS".into(),
+                status: 9,
+                cause: mgmt::NOT_PAIRED.into(),
+            }
+            .into(),
+        ] {
+            let b = status_failure_body(&e, Some(Power::Awake));
+            assert_eq!(b["helper_alive"], true, "{b}");
+        }
+        let b = status_failure_body(
+            &mgmt::console_unusable("NODE_STATUS", HELPER_TOO_NEW, HELPER_TOO_NEW_MESSAGE),
+            None,
+        );
+        assert_eq!(b["reason"], "helper_too_new");
+        for e in [
+            mgmt::helper_not_ava1("NODE_STATUS"),
+            mgmt::console_unusable(
+                "NODE_STATUS",
+                mgmt::CONSOLE_REST_MODE,
+                mgmt::CONSOLE_REST_MODE_MESSAGE,
+            ),
+            mgmt::console_unusable(
+                "NODE_STATUS",
+                mgmt::AVA1_UNREACHABLE,
+                mgmt::CONSOLE_NOT_ANSWERING_MESSAGE,
+            ),
+            anyhow::anyhow!("timed out"),
+        ] {
+            let b = status_failure_body(&e, Some(Power::Awake));
+            assert!(b.get("helper_alive").is_none(), "{b}");
         }
     }
 }
@@ -12981,8 +13099,12 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     };
     // "Use less of this computer" as it was last set (#632).
     workshop_api::load();
-    // Play Together's "Invites work" as it was last set.
+    // Play Together: the defaults a self-hosted engine takes from its environment, then "Invites
+    // work" and the rest as they were last set.
+    self_host::log_settings();
     join::load_invites();
+    // The built-in hub, only when PS5UPLOAD_HUB_LISTEN asks for it (a listener of its own).
+    builtin_hub::start().await;
 
     // The Collection's automatic refresh (a no-op until a folder is added).
     collection_api::spawn_auto_refresh();
@@ -13159,6 +13281,7 @@ fn build_app_and_mcp(
         .route("/api/activity/label", post(activity::label_handler))
         .route("/api/ps5/status", get(ps5_status))
         .route("/api/ps5/connect-timings", get(ps5_connect_timings))
+        .route("/api/ps5/link-history", get(ps5_link_history))
         .route("/api/ps5/port-check", get(ps5_port_check))
         .route("/api/ps5/toast", post(ps5_toast))
         .route("/api/ps5/readiness", get(ps5_readiness))

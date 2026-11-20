@@ -77,7 +77,112 @@ pub const INSTALLER_PORT: u16 = 9115;
 const ELF_SEND_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 const ELF_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const ELF_SEND_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How long a send may make no progress at all before it is given up: the loader stopped reading,
+/// or the link went. A fixed deadline for the whole image (60 s) killed sends on a slow link that
+/// were moving the whole time, after the running helper had already been stopped for them.
+pub const SEND_STALL_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// The slowest whole send that is still waited for: 30 s plus one second per 32 KiB, so a 2 MiB
+/// helper gets about a minute and a half on a link that moves at least that.
+pub fn send_time_cap(len: usize) -> Duration {
+    Duration::from_secs(30) + Duration::from_secs(len as u64 / (32 * 1024))
+}
+
+/// Ends a connection with a reset (RST) instead of a normal close (FIN). A loader takes EOF as
+/// "run what you read", and a third-party listener on :9021 may do that with a probe's request or
+/// with half an image. A reset is a broken connection, which nothing executes.
+pub fn abort_with_rst(stream: &TcpStream) {
+    let _ = socket2::SockRef::from(stream).set_linger(Some(Duration::ZERO));
+}
+
+/// Writes `image` on `stream`, giving up when nothing moves for [`SEND_STALL_TIMEOUT`] or the
+/// whole send takes longer than [`send_time_cap`]. On a failure the connection is reset (see
+/// [`abort_with_rst`]) so the loader never runs a part of the image.
+fn write_image(stream: &mut TcpStream, image: &[u8], addr: &str) -> Result<(), String> {
+    write_image_within(
+        stream,
+        image,
+        addr,
+        SEND_STALL_TIMEOUT,
+        send_time_cap(image.len()),
+    )
+}
+
+fn write_image_within(
+    stream: &mut TcpStream,
+    image: &[u8],
+    addr: &str,
+    stall: Duration,
+    cap: Duration,
+) -> Result<(), String> {
+    let give_up = std::time::Instant::now() + cap;
+    let r = (|| {
+        stream
+            .set_write_timeout(Some(stall))
+            .map_err(|e| format!("set write timeout: {e}"))?;
+        for chunk in image.chunks(64 * 1024) {
+            if std::time::Instant::now() >= give_up {
+                return Err(format!(
+                    "send timed out: {addr} took more than {} s for {} bytes",
+                    cap.as_secs(),
+                    image.len()
+                ));
+            }
+            stream.write_all(chunk).map_err(|e| match e.kind() {
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => format!(
+                    "send timed out: {addr} took nothing for {} s",
+                    stall.as_secs()
+                ),
+                _ => format!("write {addr}: {e}"),
+            })?;
+        }
+        stream.flush().map_err(|e| format!("flush {addr}: {e}"))
+    })();
+    if r.is_err() {
+        abort_with_rst(stream);
+    }
+    r
+}
+
+/// What a running helper said to `node.shutdown`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShutdownOutcome {
+    /// It agreed to exit.
+    Acked,
+    /// It is working (`if_idle`): an install, an upload, an extraction... It keeps running. The
+    /// text is the helper's own refusal (`{"ok":false,"err":"helper_working","busy":"..."}`).
+    Busy(String),
+    /// No answer: nothing running, not paired, or too slow. Nothing to displace.
+    NoAnswer,
+}
+
+/// The token a helper's busy refusal carries.
+pub const HELPER_BUSY_TOKEN: &str = "helper_working";
+
+/// Ask the helper at `mgmt_addr` to exit; with `if_idle` only when nothing runs on it (a helper of
+/// 12.6.15 or later answers [`ShutdownOutcome::Busy`] then; an older one ignores the condition and
+/// exits, so callers keep their own checks).
+pub fn shutdown_running_payload_with(mgmt_addr: &str, if_idle: bool) -> ShutdownOutcome {
+    let body: &[u8] = if if_idle { br#"{"if_idle":true}"# } else { b"" };
+    match mgmt::call_with(
+        mgmt_addr,
+        m::NODE_SHUTDOWN,
+        "SHUTDOWN",
+        body,
+        Some(Duration::from_secs(2)),
+    ) {
+        Ok(_) => ShutdownOutcome::Acked,
+        Err(e) => {
+            let text = format!("{e:#}");
+            if if_idle && text.contains(HELPER_BUSY_TOKEN) {
+                ShutdownOutcome::Busy(text)
+            } else {
+                ShutdownOutcome::NoAnswer
+            }
+        }
+    }
+}
 
 /// Ask the helper running at `mgmt_addr` (the console's host; a `:port` suffix is ignored, the
 /// AVA1 session uses its own port) to exit: `node.shutdown` over the paired session.
@@ -120,9 +225,12 @@ pub fn port_is_open(addr: &str, timeout: Duration) -> bool {
     let Ok(targets) = resolve_connect_targets(addr) else {
         return false;
     };
-    targets
-        .iter()
-        .any(|sa| TcpStream::connect_timeout(sa, timeout).is_ok())
+    // A reset, not a plain close: a loader may take an empty connection's EOF as "run it".
+    targets.iter().any(|sa| {
+        TcpStream::connect_timeout(sa, timeout)
+            .map(|s| abort_with_rst(&s))
+            .is_ok()
+    })
 }
 
 /// Probe `host:port`, keeping "the name never resolved" distinct from
@@ -142,7 +250,10 @@ pub fn probe_port(host: &str, port: u16, timeout: Duration) -> Result<(), String
     let mut last = String::from("no addresses to try");
     for sa in &targets {
         match TcpStream::connect_timeout(sa, timeout) {
-            Ok(_) => return Ok(()),
+            Ok(s) => {
+                abort_with_rst(&s);
+                return Ok(());
+            }
             Err(e) => last = format!("connect {sa}: {e}"),
         }
     }
@@ -272,13 +383,7 @@ fn connect_evict_stream(
     }
     let mut stream = stream.ok_or(last_err)?;
     evict();
-    stream
-        .set_write_timeout(Some(ELF_SEND_TIMEOUT))
-        .map_err(|e| format!("set write timeout: {e}"))?;
-    stream
-        .write_all(bytes)
-        .map_err(|e| format!("write {addr}: {e}"))?;
-    stream.flush().map_err(|e| format!("flush {addr}: {e}"))?;
+    write_image(&mut stream, bytes, &addr)?;
     // The loader treats EOF on the write side as "go execute". A failure
     // here is not fatal on its own — the bytes are already in the kernel's
     // send buffer — but report it so a wedged console is visible.
@@ -317,7 +422,6 @@ const PAYLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// A host name gets its own budget, separate from the connect one: a slow first lookup could
 /// spend all of it, and the send then said "port not open" for a name that was only slow (#272).
 const PAYLOAD_RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
-const PAYLOAD_SEND_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long a refused :9021 is tried again before it counts as closed: elfldr leaves it closed for
 /// about a second whenever it is replaced, and for 3 s after a failed accept. A desktop send has no
 /// lock to wait on for that gap (the auto-loader, a playlist step).
@@ -353,6 +457,87 @@ pub fn is_ps5upload_payload(path: &str, head: &[u8]) -> bool {
 /// the same way, or a helper slips past that check.
 pub fn image_is_helper(label: &str, image: &[u8]) -> bool {
     is_ps5upload_payload(label, &image[..image.len().min(PAYLOAD_PROBE_WINDOW)])
+        || helper_image_version(image).is_some()
+}
+
+/// Orders two app/helper versions (`12.6.15`, `12.7.0-rc.1`) the way the client's
+/// `compareVersions` does: the numeric triple, then a pre-release below the release, pre-release
+/// identifiers by SemVer's rule. `None` when either does not read as a version.
+pub fn compare_versions(a: &str, b: &str) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering;
+    fn parse(v: &str) -> Option<([u64; 3], Option<&str>)> {
+        let v = v.trim().trim_start_matches(['v', 'V']);
+        let v = v.split('+').next()?;
+        let (core, pre) = match v.split_once('-') {
+            Some((c, p)) if !p.is_empty() => (c, Some(p)),
+            Some(_) => return None,
+            None => (v, None),
+        };
+        let mut parts = [0u64; 3];
+        let mut n = 0;
+        for (i, p) in core.split('.').enumerate() {
+            if i >= 3 || p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            parts[i] = p.parse().ok()?;
+            n += 1;
+        }
+        (n >= 2).then_some((parts, pre))
+    }
+    let (pa, xa) = parse(a)?;
+    let (pb, xb) = parse(b)?;
+    Some(pa.cmp(&pb).then_with(|| match (xa, xb) {
+        (None, None) => Ordering::Equal,
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(x), Some(y)) => {
+            let (xs, ys): (Vec<&str>, Vec<&str>) = (x.split('.').collect(), y.split('.').collect());
+            for (p, q) in xs.iter().zip(ys.iter()) {
+                if p == q {
+                    continue;
+                }
+                let (pn, qn) = (p.parse::<u64>().ok(), q.parse::<u64>().ok());
+                return match (pn, qn) {
+                    (Some(p), Some(q)) => p.cmp(&q),
+                    (Some(_), None) => Ordering::Less,
+                    (None, Some(_)) => Ordering::Greater,
+                    (None, None) => p.cmp(q),
+                };
+            }
+            xs.len().cmp(&ys.len())
+        }
+    }))
+}
+
+/// The marker a helper of 12.6.15 or later carries in its read-only data, followed by its
+/// version and a `;` (payload/src/main.c `ps5upload_helper_version_marker`).
+pub const HELPER_VERSION_MARKER: &[u8] = b"PS5UPLOAD_HELPER_VERSION=";
+
+/// The version a helper image says it is, from [`HELPER_VERSION_MARKER`]; `None` for an image
+/// without it (a helper before 12.6.15, a stand-in built for tests, another payload). Only the
+/// characters a version has are read, up to the `;`.
+pub fn helper_image_version(image: &[u8]) -> Option<String> {
+    let m = HELPER_VERSION_MARKER;
+    let first = m[0];
+    let mut i = 0;
+    while i + m.len() <= image.len() {
+        let at = image[i..].iter().position(|&b| b == first)? + i;
+        if image.len() - at < m.len() {
+            return None;
+        }
+        if &image[at..at + m.len()] == m {
+            let rest = &image[at + m.len()..];
+            let end = rest.iter().position(|&b| b == b';')?;
+            let v = &rest[..end];
+            let ok = !v.is_empty()
+                && v.len() <= 64
+                && v.iter()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+'));
+            return ok.then(|| String::from_utf8_lossy(v).into_owned());
+        }
+        i = at + 1;
+    }
+    None
 }
 
 /// Resolve on its own budget, so no lookup can hold a send for longer than that.
@@ -378,16 +563,17 @@ fn resolve_within(host: &str, addr: &str) -> Result<Vec<std::net::SocketAddr>, S
 /// Connect, run `before`, stream `image`, half-close. A failure to reach the loader starts with
 /// `connect `, and then `before` has not run: stopping the running helper and only then finding the
 /// loader closed left the console with neither. A refused connect is tried again for
-/// `retry_refused`; a timeout already took its full budget.
+/// `retry_refused`; a timeout already took its full budget. `before` may refuse the send (an
+/// `Err`): the connection is then reset with nothing written.
 fn stream_to_port(
     host: &str,
     port: u16,
     image: &[u8],
     retry_refused: Duration,
-    before: impl FnOnce(),
-) -> Result<u64, String> {
+    before: impl FnOnce() -> Result<(), String>,
+) -> Result<u64, SendFailure> {
     let addr = join_host_port(host, port);
-    let targets = resolve_within(host, &addr)?;
+    let targets = resolve_within(host, &addr).map_err(SendFailure::Unreached)?;
     let give_up = std::time::Instant::now() + retry_refused;
     let mut stream = None;
     while stream.is_none() {
@@ -411,35 +597,64 @@ fn stream_to_port(
         }
         if stream.is_none() {
             if !was_refused || std::time::Instant::now() >= give_up {
-                return Err(last);
+                return Err(SendFailure::Unreached(last));
             }
             std::thread::sleep(LOADER_REFUSED_POLL);
         }
     }
-    let mut stream = stream.ok_or_else(|| format!("connect {addr}: no connection"))?;
-    before();
-    let deadline = std::time::Instant::now() + PAYLOAD_SEND_TIMEOUT;
-    for chunk in image.chunks(64 * 1024) {
-        let left = deadline.saturating_duration_since(std::time::Instant::now());
-        if left.is_zero() {
-            return Err("send timed out".to_string());
-        }
-        stream
-            .set_write_timeout(Some(left))
-            .map_err(|e| format!("set write timeout: {e}"))?;
-        stream.write_all(chunk).map_err(|e| match e.kind() {
-            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
-                "send timed out".to_string()
-            }
-            _ => format!("write: {e}"),
-        })?;
+    let mut stream =
+        stream.ok_or_else(|| SendFailure::Unreached(format!("connect {addr}: no connection")))?;
+    if let Err(why) = before() {
+        // Nothing was written: end the connection so the loader does not run an empty image.
+        abort_with_rst(&stream);
+        return Err(SendFailure::Refused(why));
     }
+    write_image(&mut stream, image, &addr).map_err(SendFailure::Broke)?;
     // The loader takes EOF as "go execute". The bytes are already in the kernel's buffer, so this
     // only fails on a socket that is really gone.
     stream
         .shutdown(std::net::Shutdown::Write)
-        .map_err(|e| format!("shutdown: {e}"))?;
+        .map_err(|e| SendFailure::Broke(format!("shutdown: {e}")))?;
     Ok(image.len() as u64)
+}
+
+/// Why a send did not go through, by how far it got: what decides whether the console may be
+/// running some of it, and so whether it counts as a send.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SendFailure {
+    /// The image itself was refused (not an ELF, too large, not allowed beside what runs): nothing
+    /// was sent.
+    Invalid(String),
+    /// Nothing was sent: the step before the stream refused (the running helper is working). The
+    /// loader's connection was reset.
+    Refused(String),
+    /// The loader was never reached (`connect …`, `cannot resolve …`): nothing was sent.
+    Unreached(String),
+    /// The send broke after the connection was up: the console may have some of it, or all.
+    Broke(String),
+}
+
+impl SendFailure {
+    pub fn message(&self) -> &str {
+        match self {
+            SendFailure::Invalid(m)
+            | SendFailure::Refused(m)
+            | SendFailure::Unreached(m)
+            | SendFailure::Broke(m) => m,
+        }
+    }
+
+    /// Whether the loader took the connection and some of the image went out: a send that has to
+    /// be counted (the console may start it, or crash on it).
+    pub fn past_connect(&self) -> bool {
+        matches!(self, SendFailure::Broke(_))
+    }
+}
+
+impl std::fmt::Display for SendFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
 }
 
 /// Launch an image through Payload Manager (:8084). The stored copy is removed once it has been
@@ -471,29 +686,74 @@ pub fn send_payload_image(
     image: &[u8],
     stamp: &mut dyn FnMut(&mut Vec<u8>),
 ) -> Result<SentPayload, String> {
+    send_payload_image_with(host, port, label, image, stamp, Evict::Always)
+        .map_err(|e| e.message().to_string())
+}
+
+/// How a send treats the helper already running on the console when the image is a helper.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Evict {
+    /// Ask it to exit, whatever it is doing: a send someone asked for and confirmed.
+    Always,
+    /// Ask it to exit only when nothing runs on it (`node.shutdown {if_idle:true}`): a helper that
+    /// says it is busy keeps running and the send stops with [`SendFailure::Refused`]. An older
+    /// helper ignores the condition and exits, which is why callers keep their own checks.
+    IfIdle,
+}
+
+/// [`evict_running_helper`] with the condition: `Err("helper_busy: …")` when the helper refused.
+fn evict_running_helper_with(host: &str, evict: Evict) -> Result<(), String> {
+    if evict == Evict::Always {
+        evict_running_helper(host.to_string());
+        return Ok(());
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let h = host.to_string();
+    std::thread::spawn(move || {
+        let _ = tx.send(shutdown_running_payload_with(&h, true));
+    });
+    if let Ok(ShutdownOutcome::Busy(why)) = rx.recv_timeout(EVICT_BUDGET) {
+        return Err(format!("{HELPER_BUSY_TOKEN}: {why}"));
+    }
+    std::thread::sleep(EVICT_GRACE);
+    Ok(())
+}
+
+/// [`send_payload_image`] that says how far a failed send got, with the eviction `evict`.
+pub fn send_payload_image_with(
+    host: &str,
+    port: u16,
+    label: &str,
+    image: &[u8],
+    stamp: &mut dyn FnMut(&mut Vec<u8>),
+    evict: Evict,
+) -> Result<SentPayload, SendFailure> {
     let size = image.len() as u64;
     if size > PAYLOAD_FILE_MAX_BYTES {
-        return Err(format!(
+        return Err(SendFailure::Invalid(format!(
             "payload is too large ({size} bytes > {PAYLOAD_FILE_MAX_BYTES} cap)"
-        ));
+        )));
     }
     let mut is_helper = false;
     // Other ports serve .bin/.js/.lua/.jar flows, which don't begin with the ELF magic.
     if port == PS5_LOADER_PORT {
         if size < 4 {
-            return Err(format!("not an ELF file: {label} (only {size} bytes)"));
+            return Err(SendFailure::Invalid(format!(
+                "not an ELF file: {label} (only {size} bytes)"
+            )));
         }
         if &image[..4] != b"\x7FELF" {
-            return Err(format!(
+            return Err(SendFailure::Invalid(format!(
                 "not an ELF file: {label} (first 4 bytes {:02x?})",
                 &image[..4]
-            ));
+            )));
         }
         is_helper = image_is_helper(label, image);
         if !is_helper {
             refuse_second_mounter(label, image, || {
                 crate::kraken::KrakenApi::probe(host).is_some()
-            })?;
+            })
+            .map_err(SendFailure::Invalid)?;
         }
     }
     let image_kind = if is_helper {
@@ -515,10 +775,12 @@ pub fn send_payload_image(
     } else {
         Duration::ZERO
     };
-    let evict = should_evict_running_payload(port, image_kind);
+    let should_evict = should_evict_running_payload(port, image_kind);
     let sent = stream_to_port(host, port, to_send, retry_refused, || {
-        if evict {
-            evict_running_helper(host.to_string());
+        if should_evict {
+            evict_running_helper_with(host, evict)
+        } else {
+            Ok(())
         }
     });
     match sent {
@@ -527,7 +789,12 @@ pub fn send_payload_image(
             via_payload_manager: false,
             status: format!("sent {n} bytes to {host}:{port}"),
         }),
-        Err(e) if port == PS5_LOADER_PORT && e.starts_with("connect ") => {
+        Err(SendFailure::Unreached(e)) if port == PS5_LOADER_PORT && e.starts_with("connect ") => {
+            // Payload Manager starts the helper without asking the one running to leave (the new
+            // one takes over by itself): the same condition is asked first.
+            if should_evict && evict == Evict::IfIdle {
+                evict_running_helper_with(host, evict).map_err(SendFailure::Refused)?;
+            }
             let mut v = image.to_vec();
             stamp(&mut v);
             match launch_through_payload_manager(host, &v) {
@@ -538,7 +805,10 @@ pub fn send_payload_image(
                         "{e}; launched {n} bytes through Payload Manager on {host}:8084 instead"
                     ),
                 }),
-                Err(pm) => Err(format!("{e} (and no fallback: {pm})")),
+                // Usually no Payload Manager at all: nothing reached the console.
+                Err(pm) => Err(SendFailure::Unreached(format!(
+                    "{e} (and no fallback: {pm})"
+                ))),
             }
         }
         Err(e) => Err(e),
@@ -611,8 +881,14 @@ mod tests {
         let port = closed.local_addr().unwrap().port();
         drop(closed);
         let mut ran = false;
-        let e = stream_to_port("127.0.0.1", port, b"x", Duration::ZERO, || ran = true).unwrap_err();
-        assert!(e.starts_with("connect "), "{e}");
+        let e = stream_to_port("127.0.0.1", port, b"x", Duration::ZERO, || {
+            ran = true;
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(matches!(e, SendFailure::Unreached(_)), "{e:?}");
+        assert!(e.message().starts_with("connect "), "{e}");
+        assert!(!e.past_connect());
         assert!(
             !ran,
             "the helper must not be stopped for a loader that is closed"
@@ -628,11 +904,112 @@ mod tests {
         });
         let mut ran = false;
         let sent = stream_to_port("127.0.0.1", port, b"abc", Duration::from_secs(5), || {
-            ran = true
+            ran = true;
+            Ok(())
         });
         assert_eq!(sent, Ok(3));
         assert!(ran);
         assert_eq!(opens.join().unwrap(), b"abc");
+    }
+
+    /// A busy helper that refuses to leave stops the send before a byte goes out, and the
+    /// loader's connection ends with a reset: a loader that takes EOF as "run it" gets no EOF.
+    #[test]
+    fn a_refusal_before_the_stream_sends_nothing_and_resets() {
+        use std::io::Read;
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let seen = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut got = Vec::new();
+            let r = s.read_to_end(&mut got);
+            (got, r.map(|_| ()).map_err(|e| e.kind()))
+        });
+        let e = stream_to_port("127.0.0.1", port, b"\x7FELFimage", Duration::ZERO, || {
+            Err("helper_busy: installing".into())
+        })
+        .unwrap_err();
+        assert_eq!(e, SendFailure::Refused("helper_busy: installing".into()));
+        assert!(!e.past_connect());
+        let (got, r) = seen.join().unwrap();
+        assert!(got.is_empty(), "bytes went out: {got:?}");
+        assert_eq!(
+            r,
+            Err(std::io::ErrorKind::ConnectionReset),
+            "a reset, not an EOF"
+        );
+    }
+
+    /// A loader that stops reading ends the send after the no-progress timeout (not a fixed
+    /// deadline), as a send that got past the connect, with a reset.
+    #[test]
+    fn a_stalled_send_gives_up_on_no_progress_and_counts_as_past_the_connect() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let hold = std::thread::spawn(move || {
+            // Accept and never read: the send fills the buffers and stalls.
+            let (s, _) = l.accept().unwrap();
+            std::thread::sleep(Duration::from_secs(3));
+            drop(s);
+        });
+        let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let image = vec![0u8; 64 * 1024 * 1024];
+        let t = std::time::Instant::now();
+        let e = write_image_within(
+            &mut s,
+            &image,
+            "loader",
+            Duration::from_millis(300),
+            Duration::from_secs(60),
+        )
+        .unwrap_err();
+        assert!(e.contains("took nothing for"), "{e}");
+        assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+        hold.join().unwrap();
+        assert!(SendFailure::Broke(e).past_connect());
+    }
+
+    #[test]
+    fn versions_order_like_the_client() {
+        use std::cmp::Ordering::*;
+        let c = |a, b| compare_versions(a, b);
+        assert_eq!(c("12.6.15", "12.6.15"), Some(Equal));
+        assert_eq!(c("12.6.14", "12.6.15"), Some(Less));
+        assert_eq!(c("12.10.0", "12.9.9"), Some(Greater));
+        assert_eq!(c("12.6.15-rc.1", "12.6.15"), Some(Less));
+        assert_eq!(c("12.6.15-rc.9", "12.6.15-rc.10"), Some(Less));
+        assert_eq!(c("v12.6.15", "12.6.15"), Some(Equal));
+        assert_eq!(c("12.6", "12.6.0"), Some(Equal));
+        assert_eq!(c("garbage", "12.6.15"), None);
+        assert_eq!(c("", "12.6.15"), None);
+        assert_eq!(c("12.6.15-", "12.6.15"), None);
+    }
+
+    #[test]
+    fn the_time_cap_grows_with_the_image() {
+        assert_eq!(send_time_cap(0), Duration::from_secs(30));
+        assert_eq!(send_time_cap(2 * 1024 * 1024), Duration::from_secs(94));
+        assert!(send_time_cap(64 * 1024 * 1024) > Duration::from_secs(2000));
+    }
+
+    #[test]
+    fn the_helper_version_is_read_from_its_marker() {
+        let mut img = b"\x7FELF\x00junk PS5UPLOAD_HELPER_VERSION".to_vec();
+        img.extend_from_slice(b" ... PS5UPLOAD_HELPER_VERSION=12.6.15;\x00 more");
+        assert_eq!(helper_image_version(&img).as_deref(), Some("12.6.15"));
+        assert!(image_is_helper("upload", &img));
+        let pre = b"xxPS5UPLOAD_HELPER_VERSION=12.7.0-rc.1;";
+        assert_eq!(helper_image_version(pre).as_deref(), Some("12.7.0-rc.1"));
+        for bad in [
+            &b"\x7FELF no marker"[..],
+            b"PS5UPLOAD_HELPER_VERSION=;",
+            b"PS5UPLOAD_HELPER_VERSION=12.6.15",
+            b"PS5UPLOAD_HELPER_VERSION=12 6;",
+            b"PS5UPLOAD_HELPER_VERSIO",
+        ] {
+            assert_eq!(helper_image_version(bad), None, "{bad:?}");
+        }
+        assert!(!image_is_helper("upload", b"\x7FELF other"));
     }
 
     /// The interesting failure mode for callers is "nothing listening on

@@ -8,6 +8,8 @@ import {
   MAX_LIVE_HELPER_HOLDS,
   MAX_REDEPLOYS_WITHOUT_RECOVERY,
   redeployAction,
+  redeployBrakeResets,
+  REDEPLOY_GAVE_UP_RETRY_MS,
 } from "../lib/autoRedeploy";
 import { useTransferStore } from "../state/transfer";
 import { useUploadQueueStore } from "../state/uploadQueue";
@@ -125,6 +127,27 @@ describe("auto-redeploy must not run away on a healthy console", () => {
     );
     // Well past the brake (the 09-14 loop reached 10) it must still hold.
     expect(autoRedeployDecision(delivered(10))).toBe("hold");
+  });
+
+  it("past the brake, sends one more only a quarter hour after the last, never sooner", () => {
+    const past = (ago: number | null) => ({ ...delivered(MAX_REDEPLOYS_WITHOUT_RECOVERY), lastDeliveredAgoMs: ago });
+    // Before 12.6.15 it held for good, until someone pressed Send.
+    expect(autoRedeployDecision(past(REDEPLOY_GAVE_UP_RETRY_MS - 1))).toBe("hold");
+    expect(autoRedeployDecision(past(null))).toBe("hold");
+    expect(autoRedeployDecision(past(REDEPLOY_GAVE_UP_RETRY_MS))).toBe("redeploy");
+    expect(autoRedeployDecision({ ...past(REDEPLOY_GAVE_UP_RETRY_MS), delivered: 10 })).toBe("redeploy");
+    // The retry keeps every other guard.
+    expect(autoRedeployDecision({ ...past(REDEPLOY_GAVE_UP_RETRY_MS), busy: true })).toBe("hold");
+    expect(autoRedeployDecision({ ...past(REDEPLOY_GAVE_UP_RETRY_MS), stopped: true })).toBe("hold");
+    expect(autoRedeployDecision({ ...past(REDEPLOY_GAVE_UP_RETRY_MS), power: "rest" })).toBe("hold");
+    expect(autoRedeployDecision({ ...past(REDEPLOY_GAVE_UP_RETRY_MS), status: "unknown" })).toBe("hold");
+  });
+
+  it("starts the brake over after rest mode or the console being off, not on one dropped probe", () => {
+    expect(redeployBrakeResets({ power: "rest", unreachableTicks: 0 })).toBe(true);
+    expect(redeployBrakeResets({ power: "unreachable", unreachableTicks: 2 })).toBe(true);
+    expect(redeployBrakeResets({ power: "unreachable", unreachableTicks: 1 })).toBe(false);
+    expect(redeployBrakeResets({ power: "awake", unreachableTicks: 0 })).toBe(false);
   });
 
   it("re-arms on any up verdict, so the next standby still recovers", () => {

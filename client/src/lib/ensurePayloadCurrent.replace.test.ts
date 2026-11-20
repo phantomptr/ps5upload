@@ -10,7 +10,8 @@ const filesBusyMock = vi.fn();
 
 vi.mock("./tauriEnv", () => ({ isTauriEnv: () => false }));
 vi.mock("./appVersion", () => ({ getAppVersion: async () => "5.37.1" }));
-vi.mock("../api/ps5", () => ({
+vi.mock("../api/ps5", async (importOriginal) => ({
+  PayloadSendRefused: (await importOriginal<typeof import("../api/ps5")>()).PayloadSendRefused,
   payloadCheck: (...a: unknown[]) => payloadCheckMock(...a),
   bundledPayloadPath: vi.fn(),
   sendPayload: vi.fn(),
@@ -38,7 +39,9 @@ vi.mock("../state/mesh", () => {
   };
 });
 
-import { ensurePayloadCurrent, resetEnsurePayloadState } from "./ensurePayloadCurrent";
+import { ensurePayloadCurrent, lastEnsureOutcome, resetEnsurePayloadState } from "./ensurePayloadCurrent";
+import { sentAgoMs } from "./helperSendGate";
+import { PayloadSendRefused } from "../api/ps5";
 import * as mesh from "../state/mesh";
 
 const H = "10.0.0.5";
@@ -80,6 +83,15 @@ describe("replacing a running helper unasked", () => {
     expect(restoreMock).not.toHaveBeenCalled();
   });
 
+  it.each([[false], [true]])(
+    "leaves a helper that is running but slow to answer, as on a weak Wi-Fi link (force=%s)",
+    async (force) => {
+      payloadCheckMock.mockResolvedValue({ reachable: false, session: "down", reason: "status_slow" });
+      expect(await ensurePayloadCurrent(H, undefined, force)).toBe("no-push");
+      expect(restoreMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not stop other devices' work", async () => {
     answers("5.0.0");
     meshState[H] = { state: { busy: [{ device: {}, items: [{}] }] } };
@@ -102,9 +114,87 @@ describe("replacing a running helper unasked", () => {
     const order: string[] = [];
     announceMock.mockImplementation(async () => (order.push("announce"), true));
     restoreMock.mockImplementation(async () => void order.push("send"));
-    expect(await onFakeClock(() => ensurePayloadCurrent(H))).toBe("pushed");
+    // The automatic update asked the console itself first (consoleChecked).
+    expect(
+      await onFakeClock(() => ensurePayloadCurrent(H, undefined, false, "auto", { consoleChecked: true })),
+    ).toBe("pushed");
     expect(order).toEqual(["announce", "send"]);
     expect(announceMock.mock.calls[0].slice(0, 2)).toEqual([H, "restart"]);
+  });
+
+  it("does not replace, unattended, an older helper that cannot say whether the PS5 is busy", async () => {
+    answers("5.0.0");
+    expect(await ensurePayloadCurrent(H)).toBe("no-push");
+    expect(lastEnsureOutcome(H)?.why).toBe("console-unknown");
+    expect(restoreMock).not.toHaveBeenCalled();
+  });
+
+  it("does not replace a helper that reports work a restart would stop, asked or not", async () => {
+    const busy = { uploads: 0, install: true, extract: false, convert: false, dump: false, input: false, pads: 0, otherDevices: 0, idle: false };
+    payloadCheckMock.mockResolvedValue({ reachable: true, payloadVersion: "5.0.0", busy });
+    for (const mode of ["auto", "explicit"] as const) {
+      expect(await ensurePayloadCurrent(H, undefined, false, mode, { consoleChecked: true })).toBe("no-push");
+      expect(lastEnsureOutcome(H)?.why).toBe("console-busy");
+    }
+    expect(restoreMock).not.toHaveBeenCalled();
+  });
+
+  it.each([["helper_alive_unreadable"], ["helper_too_new"]])(
+    "never replaces a helper that answered in a way this app cannot use (%s), even on a forced recovery",
+    async (reason) => {
+      payloadCheckMock.mockResolvedValue({ reachable: false, session: "down", reason, helperAlive: true });
+      for (const mode of ["auto", "explicit"] as const) {
+        expect(await ensurePayloadCurrent(H, undefined, true, mode)).toBe("no-push");
+        expect(lastEnsureOutcome(H)?.why).toBe("answering");
+      }
+      expect(restoreMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("replaces a too-old helper only when someone started the upload, never unattended", async () => {
+    payloadCheckMock
+      .mockResolvedValueOnce({ reachable: false, session: "down", reason: "helper_not_ava1", helperTooOld: true, helperAlive: true })
+      .mockResolvedValueOnce({ reachable: false, session: "down", reason: "helper_not_ava1", helperTooOld: true, helperAlive: true })
+      .mockResolvedValue({ reachable: true, payloadVersion: "5.37.1" });
+    expect(await ensurePayloadCurrent(H, undefined, true, "auto")).toBe("no-push");
+    expect(restoreMock).not.toHaveBeenCalled();
+    expect(await onFakeClock(() => ensurePayloadCurrent(H, undefined, false, "explicit"))).toBe("pushed");
+    expect(restoreMock).toHaveBeenCalledWith(H, expect.objectContaining({ mode: "explicit" }));
+  });
+
+  it("a forced recovery leaves a current helper that answers (transfers share its port)", async () => {
+    answers("5.37.1");
+    expect(await ensurePayloadCurrent(H, undefined, true)).toBe("current");
+    expect(restoreMock).not.toHaveBeenCalled();
+  });
+
+  it("holds, unattended, a helper whose version does not read as one", async () => {
+    answers("dev-build");
+    expect(await ensurePayloadCurrent(H, undefined, true)).toBe("no-push");
+    expect(lastEnsureOutcome(H)?.why).toBe("version-unknown");
+  });
+
+  it("a send that broke after the loader took it counts as a send", async () => {
+    payloadCheckMock.mockResolvedValue({ reachable: false });
+    restoreMock.mockRejectedValue(new Error("send timed out: 10.0.0.5:9021 took nothing for 20 s"));
+    expect(await ensurePayloadCurrent(H)).toBe("sent-failed");
+    expect(sentAgoMs(H)).not.toBeNull();
+    // A loader never reached is no send.
+    resetEnsurePayloadState();
+    restoreMock.mockRejectedValue(new Error("connect 10.0.0.5:9021: Connection refused"));
+    expect(await ensurePayloadCurrent(H)).toBe("no-push");
+    expect(sentAgoMs(H)).toBeNull();
+  });
+
+  it("an engine refusal is held with its code and when it may go again", async () => {
+    payloadCheckMock.mockResolvedValue({ reachable: false });
+    restoreMock.mockRejectedValue(
+      new PayloadSendRefused("send_budget_spent", { message: "x", retryAfterMs: 60_000 }),
+    );
+    expect(await ensurePayloadCurrent(H)).toBe("no-push");
+    const o = lastEnsureOutcome(H);
+    expect(o?.why).toBe("send_budget_spent");
+    expect(o?.retryAt).toBeGreaterThan(Date.now());
   });
 
   it("a console with no helper gets one, whatever a stale picture of the others says", async () => {

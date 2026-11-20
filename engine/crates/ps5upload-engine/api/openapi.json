@@ -761,6 +761,10 @@
               "host"
             ]
           },
+          "registration_only": {
+            "description": "Only take off a folder or image registration (#884): a helper from 12.6.16 on then\nrefuses, before touching anything, a title the console's own installer has installed\n(`unregister_title_installed:<where>`), instead of uninstalling that game. Older helpers\nignore it. Default false: the game page's Uninstall of a package install.",
+            "type": "boolean"
+          },
           "title_id": {
             "type": "string"
           }
@@ -2631,6 +2635,29 @@
         },
         "type": "object"
       },
+      "ConsoleLink": {
+        "description": "The console's own link, as its helper reported it.",
+        "properties": {
+          "at_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "iface": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/engine.net_doctor.LinkKind"
+          }
+        },
+        "required": [
+          "kind",
+          "at_ms"
+        ],
+        "type": "object"
+      },
       "ConsolePort": {
         "description": "One port held on the console (`net.ports`).",
         "properties": {
@@ -3522,6 +3549,15 @@
           "storage"
         ],
         "type": "object"
+      },
+      "DropWhy": {
+        "description": "Why a check failed, as far as it counts as a drop.",
+        "enum": [
+          "timeout",
+          "refused",
+          "other"
+        ],
+        "type": "string"
       },
       "DumpReq": {
         "properties": {
@@ -5532,6 +5568,51 @@
           "error"
         ],
         "type": "object"
+      },
+      "Hint": {
+        "properties": {
+          "drive_at_ms": {
+            "description": "When the USB drive was first seen (for `usb_wifi`).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "drops": {
+            "description": "Drops in this episode.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/HintKind"
+          },
+          "last_ms": {
+            "description": "The episode's last drop.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "since_ms": {
+            "description": "The episode's first drop: what a dismissal is keyed on, so a new episode shows again.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "drops",
+          "since_ms",
+          "last_ms"
+        ],
+        "type": "object"
+      },
+      "HintKind": {
+        "description": "What the app should say about a console's connection.",
+        "enum": [
+          "usb_wifi",
+          "keeps_dropping"
+        ],
+        "type": "string"
       },
       "HistoryEntry": {
         "properties": {
@@ -7993,6 +8074,183 @@
         ],
         "type": "object"
       },
+      "LinkEvent": {
+        "description": "One thing that happened to a console's connection.",
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "drop"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "at_ms": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "why": {
+                    "$ref": "#/components/schemas/DropWhy"
+                  }
+                },
+                "required": [
+                  "at_ms",
+                  "why"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A check failed after one that answered."
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "back"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "after_ms": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "at_ms": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "at_ms",
+                  "after_ms"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A check answered again, `after_ms` after the drop."
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "helper_restarted"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "at_ms": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "prior": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "at_ms"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "Another helper instance answers: the helper started over (sent again, or restarted).\n`prior` is how the new one says the previous one ended (`replaced`, `clean`, ...)."
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "drive_added"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "absent_at_ms": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "at_ms": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "usb": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "at_ms",
+                  "path",
+                  "usb",
+                  "absent_at_ms"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A drive appeared in the console's volume list. `usb`: a USB drive (not the M.2 slot).\n`absent_at_ms`: the last list it was not in."
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "drive_removed"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "at_ms": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "at_ms",
+                  "path"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A drive went from the volume list."
+          }
+        ]
+      },
       "LinkOpenRequest": {
         "properties": {
           "any": {
@@ -8021,6 +8279,53 @@
         },
         "required": [
           "url"
+        ],
+        "type": "object"
+      },
+      "LinkReport": {
+        "description": "The record as the route answers it.",
+        "properties": {
+          "events": {
+            "description": "Oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/LinkEvent"
+            },
+            "type": "array"
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hint"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "link": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConsoleLink"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The console's link, when it was read (only while it drops, or when asked)."
+          },
+          "up": {
+            "description": "Whether the console's last check answered (`None`: no check yet).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "events",
+          "link",
+          "hint",
+          "up"
         ],
         "type": "object"
       },
@@ -9589,21 +9894,28 @@
         "type": "object"
       },
       "PayloadRestoreRequest": {
-        "description": "`POST /api/pkg/payload-restore` — (re)send the bundled MAIN ps5upload\npayload to the console's loader (:9021). The desktop app does this itself\n(it holds the ELF and can open the socket); the self-hosted web UI cannot,\nso it asks the engine — which is what `ensurePayloadCurrent` /\n`restoreMainPayload` call in the browser build to redeploy a stale or dead\nhelper. Install-time restore is handled inside the unified install state\nmachine; this route is for the general payload-freshness path only.\n\nNever an HTTP error on a failed send: the browser caller runs it\nbest-effort and a failed restore is information to log, not a reason to\nsurface a red error over whatever prompted the refresh.",
-        "properties": {
-          "ps5_addr": {
-            "type": "string",
-            "x-aliases": [
-              "console",
-              "addr",
-              "host"
-            ]
+        "allOf": [
+          {
+            "properties": {
+              "ps5_addr": {
+                "type": "string",
+                "x-aliases": [
+                  "console",
+                  "addr",
+                  "host"
+                ]
+              }
+            },
+            "required": [
+              "ps5_addr"
+            ],
+            "type": "object"
+          },
+          {
+            "$ref": "#/components/schemas/SendOpts"
           }
-        },
-        "required": [
-          "ps5_addr"
         ],
-        "type": "object"
+        "description": "`POST /api/pkg/payload-restore` — (re)send the bundled MAIN ps5upload\npayload to the console's loader (:9021). The desktop app does this itself\n(it holds the ELF and can open the socket); the self-hosted web UI cannot,\nso it asks the engine — which is what `ensurePayloadCurrent` /\n`restoreMainPayload` call in the browser build to redeploy a stale or dead\nhelper. Install-time restore is handled inside the unified install state\nmachine; this route is for the general payload-freshness path only.\n\nNever an HTTP error on a failed send: the browser caller runs it\nbest-effort and a failed restore is information to log, not a reason to\nsurface a red error over whatever prompted the refresh."
       },
       "PeripheralAck": {
         "properties": {
@@ -11447,6 +11759,10 @@
               "host"
             ]
           },
+          "force": {
+            "description": "Write over a stored copy that is a newer helper too (otherwise `{ok:false,\nerror:\"newer_copy\", version}` and nothing changes).",
+            "type": "boolean"
+          },
           "keep_previous": {
             "description": "Keep the copy being replaced as `<path>.prev` first.",
             "type": "boolean"
@@ -12371,6 +12687,34 @@
         ],
         "type": "object"
       },
+      "SendOpts": {
+        "description": "How a caller asks for a helper send. Every field is optional: an older client sends none and\ngets an explicit send, as before.",
+        "properties": {
+          "app_version": {
+            "description": "The caller's app version, which the helper sent must match for an unattended send\n(default: this engine's version).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "force": {
+            "description": "The person confirmed \"Send anyway\": the refusals a person may override are skipped.",
+            "type": "boolean"
+          },
+          "mode": {
+            "description": "`\"auto\"` or `\"explicit\"` (the default).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "replace": {
+            "description": "Unattended only: the caller means to replace a helper that answers (an older one).",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "SessionInfo": {
         "description": "The running session as a stream for a site sees it (Go live checks it against each site's\nlimits, rp_golive.rs).",
         "properties": {
@@ -12604,10 +12948,27 @@
               "null"
             ]
           },
+          "page_base": {
+            "description": "Where the guest pages are (`https://play.example.com/`); \"\" is the default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "port": {
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "reset": {
+            "description": "Back to the default: any of \"hub_url\", \"page_base\", \"stun\".",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -17718,7 +18079,16 @@
                         "set_id": {
                           "type": "string"
                         },
-                        "title_id_hint": {}
+                        "title_id_hint": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Hint"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
                       },
                       "type": "object"
                     },
@@ -17733,7 +18103,16 @@
                         "set_id": {
                           "type": "null"
                         },
-                        "title_id_hint": {}
+                        "title_id_hint": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Hint"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
                       },
                       "type": "object"
                     }
@@ -24149,7 +24528,7 @@
     },
     "/api/join/settings": {
       "post": {
-        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninvites?, internet_invites?, hub_url?, stun?, upnp?, video_track?}`: the host's choices (every\nconsole). Fewer players lets nobody go; it only stops new ones. `stream_seat` off moves a friend\non the stream's controller to a pad of their own. `invites` is \"Invites work\": \"anywhere\" (the\none link, through the hub) or \"wifi\" (the home network's link only; 400 `invites` otherwise),\nthe same choice as `internet_invites` on or off, and the one setting kept across restarts.\n\"wifi\" closes the internet rooms (guests already in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the\nrouter is asked for a port, `video_track` whether internet guests get the picture as a video\ntrack (new connections; the data channel otherwise).\n\n`guest_profiles` with `addr` (\"Guests play as\" on that console): each guest's player gets the\nprofile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).\nOnly signed-in profiles can be seated. The host's own profile (the one in front) needs `owner`\ntrue, the host's confirmation that the guest may use its saves and trophies (409\n`owner_confirm` otherwise; `owner_unknown` when the console does not say which one is in front,\nfor any profile newly chosen without `owner`); 400 `addr` without a console, 400 `player`, `user` or `duplicate`\nfor a list that is not one profile per player.",
+        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninvites?, internet_invites?, hub_url?, page_base?, stun?, reset?, upnp?, video_track?}`: the host's choices (every\nconsole). Fewer players lets nobody go; it only stops new ones. `stream_seat` off moves a friend\non the stream's controller to a pad of their own. `invites` is \"Invites work\": \"anywhere\" (the\none link, through the hub) or \"wifi\" (the home network's link only; 400 `invites` otherwise),\nthe same choice as `internet_invites` on or off, and the one setting kept across restarts.\n\"wifi\" closes the internet rooms (guests already in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `page_base` where the guest pages are (`https://play.example.com/`: links open\n`<page_base>join/`, `pad/` or `share/`; `http://` only to this computer, no query or fragment;\n400 `page_base` otherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none),\n`reset` a list of `hub_url`, `page_base` and `stun` to put back to the default (an empty\n`hub_url` or `page_base` does the same; 400 `reset` for another name). The hub, page base and\nSTUN servers are kept across restarts while they differ from the default, which a self-hosted\nengine may take from `PS5UPLOAD_HUB_URL` and `PS5UPLOAD_PAGE_BASE`; `settings.sources` says\nwhich each is (\"custom\", \"environment\" or \"default\"). `upnp` is whether the\nrouter is asked for a port, `video_track` whether internet guests get the picture as a video\ntrack (new connections; the data channel otherwise).\n\n`guest_profiles` with `addr` (\"Guests play as\" on that console): each guest's player gets the\nprofile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).\nOnly signed-in profiles can be seated. The host's own profile (the one in front) needs `owner`\ntrue, the host's confirmation that the guest may use its saves and trophies (409\n`owner_confirm` otherwise; `owner_unknown` when the console does not say which one is in front,\nfor any profile newly chosen without `owner`); 400 `addr` without a console, 400 `player`, `user` or `duplicate`\nfor a list that is not one profile per player.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -26211,6 +26590,79 @@
         }
       }
     },
+    "/api/payload/bundled": {
+      "get": {
+        "description": "`GET /api/payload/bundled`: the helper this engine sends, `{available, version, app_version,\nmatches}`. `version` is null for a helper without a version marker (built before 12.6.15) or\nno helper at all; `matches` is false when it is another version than the engine (a stale build:\nnothing is sent unasked then), null when not known.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "app_version": {},
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "matches": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "version": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The helper this engine sends, and its version",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/payload/send": {
       "post": {
         "parameters": [
@@ -26237,6 +26689,51 @@
               "minimum": 0,
               "type": [
                 "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "A helper send's options (helper_send::SendOpts), as query parameters.",
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "replace",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "app_version",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
                 "null"
               ]
             }
@@ -26298,6 +26795,10 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
           },
           "500": {
             "content": {
@@ -36808,6 +37309,74 @@
             "required": false
           },
           "response_schema": "literal"
+        }
+      }
+    },
+    "/api/ps5/link-history": {
+      "get": {
+        "description": "GET /api/ps5/link-history?addr=IP[&read_link=1]\n\nHow the console's connection has been holding up, kept from the app's own status checks and\nvolume reads (in memory, this engine run, the last day at most): `events` (oldest first)\n`drop` with `why` (`timeout`: the console stopped answering; `refused`: nothing listened on\nthe helper's port; `other`), `back` (`after_ms`), `helper_restarted` (`prior`: how the new\nhelper says the previous one ended), `drive_added` / `drive_removed` (a drive's mount point,\n`usb`); `link`: the console's link (`kind` `wired` / `wifi` / `unknown`, `iface`), read only\nwhile it drops or when `read_link=1` asks (one helper call); `hint`: `null`, or `kind`\n`keeps_dropping` (several drops close together, lately) or `usb_wifi` (the same, starting\naround when a USB drive appeared, on a console on Wi-Fi), with `drops`, `since_ms` (the first\ndrop: key a dismissal on it), `last_ms` and `drive_at_ms`; `up`: the last check answered.\nNothing here names an address. Sends nothing to the console without `read_link`.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "`1`: ask the console's helper for its link (cable or Wi-Fi) when it is not known yet.",
+            "in": "query",
+            "name": "read_link",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkReport"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "How a console's connection has been holding up: drops, recoveries, helper restarts, USB drives",
+        "tags": [
+          "consoles"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "struct"
         }
       }
     },

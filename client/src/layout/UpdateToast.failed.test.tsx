@@ -43,7 +43,9 @@ const download: UpdateDownload = {
   can_install: true,
 };
 
-describe("update banner after a failed install (#611)", () => {
+// UpdateToast is the update row at the top of Settings now (a routine update has no banner;
+// layout/UpdateBanner covers the failed install across the top too).
+describe("the Settings update row after a failed install (#611)", () => {
   it("says it didn't install and offers Try again and the download page, not Install", () => {
     seeded.phase = { kind: "downloaded", result, download };
     seeded.lastInstall = { version: "10.5.1", installed: false, message: "x", new: false };
@@ -62,6 +64,16 @@ describe("update banner after a failed install (#611)", () => {
     expect(html).not.toContain("Try again");
   });
 
+  it("stays until the update is installed or skipped: no Dismiss, Skip this version on every width", () => {
+    seeded.phase = { kind: "available", result };
+    seeded.lastInstall = null;
+    const html = renderToStaticMarkup(<UpdateToast />);
+    expect(html).toContain('data-testid="settings-update-row"');
+    expect(html).not.toContain("Dismiss");
+    expect(html).toContain("Skip this version");
+    expect(html).not.toContain("max-sm:hidden\">Skip");
+  });
+
   it("a failure of an older version does not block a newer one", () => {
     seeded.phase = { kind: "available", result };
     seeded.lastInstall = { version: "10.5.0", installed: false, message: "", new: false };
@@ -71,7 +83,7 @@ describe("update banner after a failed install (#611)", () => {
   });
 });
 
-describe("update banner for an update downloaded in the background", () => {
+describe("the Settings update row for an update downloaded in the background", () => {
   it("reads as a quiet 'ready, installs when you quit' with Restart now", () => {
     seeded.phase = { kind: "downloaded", result, download };
     seeded.lastInstall = null;

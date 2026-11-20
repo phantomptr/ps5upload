@@ -48,8 +48,21 @@ export async function updateHelperCopiesAfterSend(
     // Payload Manager can put its repo copy back, so the same copy is replaced on every
     // send: say it once per console and version, not each time.
     if (n.level === "success" && !firstUpdateNotice(host, version)) return;
+    // The same failure after every send (the reconnect loop, the automatic update, a button) is
+    // said once per run of the app, not each time.
+    if (n.level === "warning" && !firstFailureNotice(host, `${version ?? ""}|${n.body}`)) return;
     pushNotification(n.level, n.title, { body: n.body });
   });
+}
+
+const failuresSaid = new Set<string>();
+
+/** True the first time this failure is said for `host` in this run of the app. */
+export function firstFailureNotice(host: string, what: string): boolean {
+  const k = `${host.trim().toLowerCase()}|${what}`;
+  if (failuresSaid.has(k)) return false;
+  failuresSaid.add(k);
+  return true;
 }
 
 const NOTIFIED_KEY = "ps5upload.helper_copies_notified";

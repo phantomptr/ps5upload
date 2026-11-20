@@ -836,9 +836,12 @@ pub fn broadcast(text: &str) {
     }
 }
 
+/// The controller page (client/vite.pad.config.ts), also served by the built-in hub.
+pub(crate) const PAGE_HTML: &str = include_str!("pad_page.html");
+
 /// `GET /pad`: the controller page a phone opens from the QR code.
 pub async fn page() -> impl IntoResponse {
-    Html(include_str!("pad_page.html"))
+    Html(PAGE_HTML)
 }
 
 #[derive(serde::Deserialize)]

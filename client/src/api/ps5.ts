@@ -31,6 +31,12 @@ import {
   appendManualListLine,
   SMP_MANUAL_LIST_PATH,
 } from "../lib/smpManualList";
+import {
+  ConsoleInstallRefusal,
+  findConsoleInstall,
+  titleIdFromParamJson,
+  type ConsoleInstall,
+} from "../lib/consoleInstall";
 
 export interface FolderInspectResult {
   path: string;
@@ -604,28 +610,88 @@ function assertOk<T extends { ok?: boolean; error?: string | null }>(
  * case. If both exist, it is API surface, not debris.
  */
 
+/** How a helper send is asked for (the engine's helper gate, engine helper_send.rs). Every field
+ *  is optional; an older engine ignores them. */
+export interface HelperSendOptions {
+  /** `auto`: nobody asked (the reconnect loop, a queue's recovery, the automatic update), with
+   *  the stricter rules. `explicit` (the default): a person asked. */
+  mode?: "auto" | "explicit";
+  /** The person confirmed "Send anyway". */
+  force?: boolean;
+  /** Unattended only: the caller means to replace a helper that answers (an older one). */
+  replace?: boolean;
+  /** This app's version, which an unattended send's helper must match. */
+  appVersion?: string;
+}
+
 export async function sendPayload(
   ip: string,
   elfPath: string,
   port?: number,
-): Promise<{ viaPayloadManager: boolean }> {
-  const resp = await invoke<{ ok?: boolean; status?: string; error?: string }>(
-    "payload_send",
-    { ip, path: elfPath, port: port ?? null },
-  );
+  opts: HelperSendOptions = {},
+): Promise<{ viaPayloadManager: boolean; unstamped: boolean }> {
+  const resp = await invoke<{
+    ok?: boolean;
+    status?: string;
+    error?: string;
+    refused?: string;
+    forceable?: boolean;
+    retry_after_ms?: number | null;
+    via_payload_manager?: boolean;
+    unstamped?: boolean;
+  }>("payload_send", {
+    ip,
+    path: elfPath,
+    port: port ?? null,
+    mode: opts.mode ?? null,
+    force: opts.force ?? null,
+    replace: opts.replace ?? null,
+    appVersion: opts.appVersion ?? null,
+  });
   if (resp && resp.ok === false) {
+    if (resp.refused) {
+      throw new PayloadSendRefused(resp.refused, {
+        message: resp.status,
+        forceable: resp.forceable === true,
+        retryAfterMs: typeof resp.retry_after_ms === "number" ? resp.retry_after_ms : null,
+      });
+    }
     throw new Error(resp.error ?? resp.status ?? "payload_send failed");
   }
-  return { viaPayloadManager: sentViaPayloadManager(resp?.status) };
+  return {
+    viaPayloadManager: resp?.via_payload_manager === true || sentViaPayloadManager(resp?.status),
+    unstamped: resp?.unstamped === true,
+  };
 }
 
-/** A send the user started that should not go now, by the engine's reason (`pkg_install_busy`,
- *  `helper_busy`, `loader_busy`): `payloadSendRefusalText` says it. */
+/** A send that should not go now, by the engine's reason (`pkg_install_busy`, `helper_busy`,
+ *  `loader_busy`, and for helper sends `recent_send`, `console_busy`, `send_budget_spent`...):
+ *  `payloadSendRefusalText` says it. `forceable`: a person may send anyway (`force`). */
 export class PayloadSendRefused extends Error {
-  constructor(readonly code: string) {
+  readonly forceable: boolean;
+  readonly retryAfterMs: number | null;
+  /** The engine's own sentence, when it gave one. */
+  readonly detail: string | null;
+  constructor(
+    readonly code: string,
+    info: { message?: string | null; forceable?: boolean; retryAfterMs?: number | null } = {},
+  ) {
     super(code);
     this.name = "PayloadSendRefused";
+    this.forceable = info.forceable === true;
+    this.retryAfterMs = info.retryAfterMs ?? null;
+    this.detail = info.message && info.message !== code ? info.message : null;
   }
+}
+
+/** The version of the helper this app sends (its version marker), or null when it does not say
+ *  (a build from before 12.6.15, a stand-in, or an engine too old to tell). Desktop: the bundled
+ *  ELF; browser: the engine's own helper. */
+export async function bundledHelperVersion(): Promise<string | null> {
+  const resp = await invoke<{ version?: string | null }>(
+    isTauriEnv() ? "payload_bundled_path" : "payload_bundled_info",
+  );
+  return typeof resp?.version === "string" && resp.version ? resp.version : null;
 }
 
 /** `sendPayload` for a send the user started (Send, a catalogue card, a playlist step): asks the
@@ -1783,6 +1849,10 @@ export async function appRegister(
   opts?: { patchDrmType?: boolean },
 ): Promise<RegisterResult> {
   const addr = toMgmtAddr(transferAddr);
+  // #884: never over a game the PS5's own installer installed (the helper refuses too, from
+  // 12.6.16; this keeps an older helper from rewriting that game's install record).
+  const installed = await consoleInstallOfSource(transferAddr, srcPath);
+  if (installed) throw new ConsoleInstallRefusal("register", installed);
   return invoke<RegisterResult>("ps5_app_register", {
     req: {
       addr,
@@ -1790,6 +1860,43 @@ export async function appRegister(
       patch_drm_type: opts?.patchDrmType ?? null,
     },
   });
+}
+
+/** #884: the PS5 installer's own install of the title a game folder carries (its
+ *  sce_sys/param.json), or null. A folder without a readable param.json (a param.sfo game) is
+ *  left to the helper's own check. Rejects when the console could not say whether the game is
+ *  installed. */
+export async function consoleInstallOfSource(
+  transferAddr: string,
+  srcPath: string,
+): Promise<ConsoleInstall | null> {
+  let titleId: string | null = null;
+  try {
+    const r = await fsReadPreview(
+      toMgmtAddr(transferAddr),
+      `${srcPath.replace(/\/+$/, "")}/sce_sys/param.json`,
+      64 * 1024,
+    );
+    if (r.base64) {
+      const bin = atob(r.base64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      titleId = titleIdFromParamJson(new TextDecoder().decode(bytes));
+    }
+  } catch {
+    return null;
+  }
+  if (!titleId) return null;
+  return findConsoleInstall({ exists: (p) => fsPathPresent(transferAddr, p) }, titleId);
+}
+
+/** #884: the PS5 installer's own install of `titleId`, or null. Rejects when the console could
+ *  not say. */
+export function consoleInstallOfTitle(
+  transferAddr: string,
+  titleId: string,
+): Promise<ConsoleInstall | null> {
+  return findConsoleInstall({ exists: (p) => fsPathPresent(transferAddr, p) }, titleId);
 }
 
 /** What an uninstall left behind. */
@@ -1817,8 +1924,19 @@ export interface UnregisterResult {
 export async function appUnregister(
   transferAddr: string,
   titleId: string,
+  /** `registrationOnly`: a folder or image row taking its own registration off (#884). A game
+   *  the PS5's installer installed under the same title id is then refused, by the app and by a
+   *  12.6.16+ helper, instead of uninstalled. The game page's Uninstall leaves it off. */
+  opts?: { registrationOnly?: boolean },
 ): Promise<UnregisterResult> {
   const addr = toMgmtAddr(transferAddr);
+  if (opts?.registrationOnly) {
+    const installed = await findConsoleInstall(
+      { exists: (p) => fsPathPresent(transferAddr, p) },
+      titleId,
+    );
+    if (installed) throw new ConsoleInstallRefusal("unregister", installed);
+  }
   const res = await invoke<{
     ok?: boolean;
     error?: string | null;
@@ -1829,7 +1947,9 @@ export async function appUnregister(
     managed_by?: string | null;
     image?: string | null;
   } | null>("ps5_app_unregister", {
-    req: { addr, title_id: titleId },
+    req: opts?.registrationOnly
+      ? { addr, title_id: titleId, registration_only: true }
+      : { addr, title_id: titleId },
   });
   if (res) assertOk(res, "Uninstall");
   // A 7.1.6 helper that tore down our own folder registration reports Sony's refusal with
@@ -5293,6 +5413,9 @@ export async function helperReplaceCopy(
   if (body.ok && body.status === "unchanged") return "unchanged";
   if (body.ok) return "updated";
   if (body.error === "not_found") return "not_found";
+  // The stored copy is a newer helper (another device's, or this app's before a downgrade): the
+  // engine leaves it (12.6.15), and so is it reported, as nothing to do.
+  if (body.error === "newer_copy") return "unchanged";
   throw new Error(body.error || "the copy was not replaced");
 }
 
@@ -5605,6 +5728,42 @@ export function elfldrEnsure(host: string): Promise<{
   return invoke("ps5_elfldr_ensure", { host });
 }
 
+/** What a restart of the helper would stop on the console (payload helper_busy.h). */
+export interface HelperBusy {
+  uploads: number;
+  install: boolean;
+  extract: boolean;
+  convert: boolean;
+  dump: boolean;
+  input: boolean;
+  pads: number;
+  /** Devices other than this one with a live session (not work: they reconnect by themselves). */
+  otherDevices: number;
+  /** Nothing a restart would stop. */
+  idle: boolean;
+}
+
+/** STATUS_ACK's `busy` object, or null when there is none (an older helper) or it does not read. */
+export function parseHelperBusy(v: unknown): HelperBusy | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  const n = (k: string) => (typeof o[k] === "number" ? Math.max(0, o[k] as number) : 0);
+  const b = (k: string) => o[k] === true || (typeof o[k] === "number" && (o[k] as number) > 0);
+  const busy: Omit<HelperBusy, "idle"> = {
+    uploads: n("uploads"),
+    install: b("install"),
+    extract: b("extract"),
+    convert: b("convert"),
+    dump: b("dump"),
+    input: b("input"),
+    pads: n("pads"),
+    otherDevices: n("other_devices"),
+  };
+  const working =
+    busy.uploads > 0 || busy.install || busy.extract || busy.convert || busy.dump || busy.input || busy.pads > 0;
+  return { ...busy, idle: !working };
+}
+
 /**
  * Check whether the PS5 runtime (AVA1, :9120) is currently serving. Returns a
  * lightly-parsed shape — the full command's return covers more details
@@ -5659,6 +5818,18 @@ export async function payloadCheck(ip: string): Promise<{
   /** A helper answered but is too old for this app (the engine's `helper_too_old`, sent with
    *  `reason` still `helper_not_ava1`). Absent when not, or from an engine too old to say. */
   helperTooOld?: boolean;
+  /** A helper answered the engine in some way (the handshake got a reply, it wants pairing, it is
+   *  too old or too new, or it is only slow): one is running, and nothing replaces it unasked
+   *  (12.6.15). Absent when not, or from an engine too old to say. */
+  helperAlive?: boolean;
+  /** Which run of the helper answered (STATUS_ACK `instance_id`): a new helper is a new id, a
+   *  same-version replace included. null when not reachable. Compared for change only. */
+  instanceId: number | null;
+  /** When that helper started (unix seconds, the console's clock). */
+  startedAtUnix: number | null;
+  /** What a restart would stop on the console (STATUS_ACK `busy`, 12.6.15): null for an older
+   *  helper, which cannot say. */
+  busy: HelperBusy | null;
 }> {
   const resp = await invoke<{
     reachable?: boolean;
@@ -5668,11 +5839,15 @@ export async function payloadCheck(ip: string): Promise<{
     reason?: string;
     power?: string;
     helper_too_old?: boolean;
+    helper_alive?: boolean;
     status?: {
       version?: string;
       ps5_kernel?: string;
       ucred_elevated?: boolean;
       prior_instance?: string;
+      instance_id?: number;
+      started_at_unix?: number;
+      busy?: unknown;
     };
   }>("payload_check", { ip });
   const error = resp?.reachable ? null : (resp?.error ?? null);
@@ -5684,10 +5859,16 @@ export async function payloadCheck(ip: string): Promise<{
       ? resp.power
       : undefined;
   const helperTooOld = !resp?.reachable && resp?.helper_too_old === true;
+  const helperAlive = !resp?.reachable && resp?.helper_alive === true;
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
   return {
     ...(reason !== undefined ? { reason } : {}),
     ...(power !== undefined ? { power } : {}),
     ...(helperTooOld ? { helperTooOld } : {}),
+    ...(helperAlive ? { helperAlive } : {}),
+    instanceId: resp?.reachable ? num(resp?.status?.instance_id) : null,
+    startedAtUnix: resp?.reachable ? num(resp?.status?.started_at_unix) : null,
+    busy: resp?.reachable ? parseHelperBusy(resp?.status?.busy) : null,
     reachable: !!resp?.reachable,
     loaded: !!resp?.loaded,
     engineReachable: resp?.engine !== false,

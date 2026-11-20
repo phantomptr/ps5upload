@@ -60,12 +60,10 @@ use std::time::{Duration, Instant};
 use axum::extract::ws::Message;
 use tokio::sync::{mpsc, Notify};
 
-/// The guest page that reads an internet invite.
-pub(crate) const PAGE: &str = "https://ps5upload.phantomptr.com/join/";
-/// The phone page that reads an internet phone link (a controller, or `&w=1` to watch).
-pub(crate) const PAD_PAGE: &str = "https://ps5upload.phantomptr.com/pad/";
-/// The page that reads a Share link in a browser (share/mod.rs): file downloads only.
-pub(crate) const SHARE_PAGE: &str = "https://ps5upload.phantomptr.com/share/";
+/// Where the guest pages are unless the host names their own (Settings::page_base): `join/` reads
+/// an internet invite, `pad/` an internet phone link (a controller, or `&w=1` to watch), `share/` a
+/// Share link in a browser (share/mod.rs: file downloads only).
+pub(crate) const DEFAULT_PAGE_BASE: &str = "https://ps5upload.phantomptr.com/";
 
 /// What a room's peers come for, and so which session their channel gets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,13 +86,23 @@ impl Kind {
         }
     }
 
-    /// The website's page its links open.
-    pub(crate) fn page(self) -> &'static str {
+    /// The page's folder below the page base.
+    pub(crate) fn dir(self) -> &'static str {
         match self {
-            Kind::Join => PAGE,
-            Kind::Pad => PAD_PAGE,
-            Kind::Share => SHARE_PAGE,
+            Kind::Join => "join/",
+            Kind::Pad => "pad/",
+            Kind::Share => "share/",
         }
+    }
+
+    /// The page its links open, below `base` (a [`page_base`] one: it ends in `/`).
+    pub(crate) fn page_on(self, base: &str) -> String {
+        format!("{base}{}", self.dir())
+    }
+
+    /// The page its links open, below the page base in the settings.
+    pub(crate) fn page(self) -> String {
+        self.page_on(&crate::join::settings().page_base)
     }
 }
 pub(crate) const DEFAULT_HUB: &str = "wss://hub.phantomptr.com/ws";
@@ -658,7 +666,90 @@ pub(crate) fn hub_url_ok(url: &str) -> bool {
     }
 }
 
-/// A room's link (an internet invite, or the phone link's), on the website's page for its kind.
+/// A page base the settings may hold (Settings::page_base) in one form, or None. `https://` (or
+/// `http://` to this computer, for testing), a host, an optional port and path; no user, query or
+/// fragment; at most 200 characters. The scheme and host come out lower-case, a default port is
+/// dropped and a trailing `/` added: `<base>join/` is the page, and [`page_origin`] is what a
+/// browser on it sends as `Origin`.
+pub(crate) fn page_base(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty()
+        || raw.len() > 200
+        || raw
+            .chars()
+            .any(|c| !c.is_ascii_graphic() || matches!(c, '?' | '#' | '@' | '\\'))
+    {
+        return None;
+    }
+    let (scheme, rest) = raw.split_once("://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    let (authority, path) = match rest.find('/') {
+        Some(i) => rest.split_at(i),
+        None => (rest, ""),
+    };
+    let authority = authority.to_ascii_lowercase();
+    // `host`, `host:port`, `[v6]` or `[v6]:port`.
+    let (host, port) = match authority.strip_prefix('[') {
+        Some(v6) => {
+            let (h, after) = v6.split_once(']')?;
+            h.parse::<std::net::Ipv6Addr>().ok()?;
+            (format!("[{h}]"), after.strip_prefix(':'))
+        }
+        None => match authority.split_once(':') {
+            Some((h, p)) => (h.to_string(), Some(p)),
+            None => (authority.clone(), None),
+        },
+    };
+    if host.is_empty()
+        || host.len() > 253
+        || !host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '[' | ']' | ':'))
+    {
+        return None;
+    }
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    let local = bare == "localhost"
+        || bare
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    let default_port = match scheme.as_str() {
+        "https" => 443,
+        "http" if local => 80,
+        _ => return None,
+    };
+    let port = match port {
+        None => String::new(),
+        Some(p) => match p.parse::<u16>() {
+            Ok(0) | Err(_) => return None,
+            Ok(n) if n == default_port => String::new(),
+            Ok(n) => format!(":{n}"),
+        },
+    };
+    let path = path.trim_end_matches('/');
+    let path_ok = path.split('/').skip(1).all(|seg| {
+        !seg.is_empty()
+            && seg != "."
+            && seg != ".."
+            && seg
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'))
+    });
+    if !path_ok {
+        return None;
+    }
+    Some(format!("{scheme}://{host}{port}{path}/"))
+}
+
+/// The origin of a [`page_base`] one (`https://play.example.com`), what a browser on its pages
+/// sends as `Origin`.
+pub(crate) fn page_origin(base: &str) -> String {
+    let after = base.find("://").map_or(0, |i| i + 3);
+    let end = base[after..].find('/').map_or(base.len(), |i| after + i);
+    base[..end].to_string()
+}
+
+/// A room's link (an internet invite, or the phone link's), on the guest page for its kind.
 /// `lan`: this engine's own page for the kind on the home network (`http://192.168.1.10:19113/join`),
 /// the hint the page offers as "Open on this Wi-Fi" when it cannot reach the hub, and where the
 /// app signals without the hub ([`local_signal`]). It is no secret: the page there asks the host,
@@ -674,7 +765,20 @@ pub(crate) fn link_for(
     lan: Option<&str>,
     ts: Option<&str>,
 ) -> String {
-    let mut s = format!("{}#room={room}&k={key}&fp={fp}&hub={hub}", kind.page());
+    link_on(&kind.page(), room, key, fp, hub, lan, ts)
+}
+
+/// [`link_for`] on a given page ([`Kind::page_on`]).
+pub(crate) fn link_on(
+    page: &str,
+    room: &str,
+    key: &str,
+    fp: &str,
+    hub: &str,
+    lan: Option<&str>,
+    ts: Option<&str>,
+) -> String {
+    let mut s = format!("{page}#room={room}&k={key}&fp={fp}&hub={hub}");
     let page = |p: &&str| p.starts_with("http://") || p.starts_with("https://");
     let lan = lan.filter(page);
     if let Some(l) = lan {

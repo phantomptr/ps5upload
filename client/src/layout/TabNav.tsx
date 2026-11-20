@@ -1,6 +1,7 @@
 // Tabs are Links, not NavLinks: a NavLink sets aria-current from its own path alone, so the
 // Games tab told screen readers nothing while Collection, Saves or Captures was open.
 import { useEffect, useRef, useState } from "react";
+import { useSettingsDot } from "../state/updateNoticeRuntime";
 import { Link, useLocation } from "react-router";
 import {
   LayoutDashboard,
@@ -181,6 +182,8 @@ export function TabBottomNav() {
   const tr = useTr();
   const activeTab = useActiveTab();
   const playing = useAnyGameRunning();
+  // Settings lives in More on a phone: its update dot shows on the More tab too.
+  const settingsDot = useSettingsDot();
   const [railAt, railProbe] = useSideRail();
 
   return (
@@ -237,14 +240,27 @@ export function TabBottomNav() {
             that tab in 10.0.0). */}
         <Link
           to="/more"
-          aria-label={tr("v5_tab_more", undefined, "More")}
+          aria-label={
+            settingsDot
+              ? `${tr("v5_tab_more", undefined, "More")} — ${tr("update_available_short", undefined, "Update available")}`
+              : tr("v5_tab_more", undefined, "More")
+          }
+          data-update-dot={settingsDot ? "1" : undefined}
           aria-current={activeTab === null ? "page" : undefined}
           className={[
             "nav-pill flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-full text-[0.6875rem] font-medium",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]",
           ].join(" ")}
         >
-          <MoreHorizontal size={21} strokeWidth={1.8} className="nav-pill-icon" aria-hidden />
+          <span className="relative">
+            <MoreHorizontal size={21} strokeWidth={1.8} className="nav-pill-icon" aria-hidden />
+            {settingsDot && (
+              <span
+                aria-hidden
+                className="absolute end-0 top-0 h-2 w-2 rounded-full bg-[var(--color-accent)] ring-2 ring-[var(--color-float)]"
+              />
+            )}
+          </span>
           <span className="max-w-full truncate px-0.5">{tr("v5_tab_more", undefined, "More")}</span>
         </Link>
       </nav>

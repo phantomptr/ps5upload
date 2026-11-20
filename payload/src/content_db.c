@@ -653,6 +653,34 @@ int content_db_appinfo_json(const char *title_id, const char *keys,
     return 0;
 }
 
+int content_db_appinfo_get(const char *title_id, const char *key, char *out, size_t cap) {
+    if (!out || cap == 0) return -1;
+    out[0] = '\0';
+    if (!cdb_valid_title_id(title_id) || !key || !key[0]) return -1;
+    sqlite3 *db = NULL;
+    if (cdb_open_ro(CONTENT_DB_APPINFO, &db, NULL) != SQLITE_OK || !db) return -1;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(db, "SELECT val FROM tbl_appinfo WHERE titleId = ? AND key = ? LIMIT 1", -1,
+                           &st, NULL) != SQLITE_OK) {
+        sqlite3_close(db);
+        return -1;
+    }
+    sqlite3_bind_text(st, 1, title_id, -1, SQLITE_STATIC);
+    sqlite3_bind_text(st, 2, key, -1, SQLITE_STATIC);
+    int found = 0;
+    int rc = sqlite3_step(st);
+    if (rc == SQLITE_ROW) {
+        const unsigned char *v = sqlite3_column_text(st, 0);
+        snprintf(out, cap, "%s", v ? (const char *)v : "");
+        found = 1;
+    } else if (rc != SQLITE_DONE) {
+        found = -1;
+    }
+    sqlite3_finalize(st);
+    sqlite3_close(db);
+    return found;
+}
+
 int content_db_appinfo_set(const char *title_id, const char *key,
                            const char *val, char *err, size_t errcap) {
 #define CDB_FAIL(msg) do { snprintf(err, errcap, "%s", (msg)); goto fail; } while (0)

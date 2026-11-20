@@ -107,6 +107,11 @@ For a self-hosted engine (Docker, a NAS, or a standalone program). None is neede
 | `PS5UPLOAD_BROWSE_ROOTS` | Folders the web UI's file picker opens on, comma-separated | the engine's home folder |
 | `PS5UPLOAD_PKG_HOST_IP` | The address the PS5 is told to download packages from, when the engine can't work it out (Docker bridge networking, several networks) | detected |
 | `PS5UPLOAD_BASE_URL` | URL path prefix, such as `/ps5/`. The web page is built with it ([REVERSE_PROXY.md](../REVERSE_PROXY.md)) | none |
+| `PS5UPLOAD_HUB_URL` | Play Together's hub (`wss://…`) when none is saved in Settings › Play Together ([SELF_HOSTING.md](../SELF_HOSTING.md)) | `wss://hub.phantomptr.com/ws` |
+| `PS5UPLOAD_PAGE_BASE` | Where Play Together's guest pages are (`https://play.example.com/`: links open `join/`, `pad/` and `share/` below it) when none is saved | `https://ps5upload.phantomptr.com/` |
+| `PS5UPLOAD_HUB_LISTEN` | Runs Play Together's hub and guest pages in the engine, on this address of their own (`127.0.0.1:19115`, a port, or `on`) | off |
+| `PS5UPLOAD_HUB_PUBLIC_URL` | The built-in hub's public `https://` address; the hub and pages above follow from it | none |
+| `PS5UPLOAD_HUB_STUN` | The built-in hub also answers STUN on this UDP port | off |
 | `PS5UPLOAD_DEVICE_NAME` | The name the console and other devices see | the computer's name |
 | `PS5UPLOAD_DATA_DIR` | Where the engine keeps its identity and state | `~/.ps5upload` |
 | `PS5UPLOAD_STATE_DIR` | Install history and console snapshots | `<data dir>/state` |
