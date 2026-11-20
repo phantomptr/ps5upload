@@ -1717,6 +1717,11 @@ err_uninstall_unavailable:
   "O firmware deste PS5 não dá ao auxiliar nenhuma forma de desinstalar, e o jogo continua instalado. Apague-o em Configurações → Armazenamento no PS5.",
 installed_uninstall_still_present:
   "O PS5 aceitou a desinstalação, mas {name} ainda está no console. Um jogo grande pode levar alguns minutos para ser removido: atualize daqui a pouco. Se continuar lá, apague-o em Configurações → Armazenamento no PS5.",
+installed_uninstall_confirm_smp: "O ShadowMount+ colocou este jogo na tela inicial a partir de uma imagem de disco. Isso o remove da tela inicial, mas o ShadowMount+ o adiciona de novo na próxima varredura enquanto a imagem estiver em uma das pastas que ele varre. Exclua ou mova a imagem para que ele não volte. A imagem não é excluída.",
+installed_uninstall_smp_returns: "{name} foi removido da tela inicial, mas o ShadowMount+ o adiciona de novo na próxima varredura enquanto {image} estiver em uma das pastas que ele varre. Exclua ou mova essa imagem para que ele não volte.",
+installed_uninstall_unverified: "O PS5 aceitou a desinstalação de {name}, mas o app não conseguiu ler a lista de títulos do console para confirmar que ele saiu. Atualize em instantes e confira a tela inicial.",
+library_unregistered_unverified: "{id} teve o registro removido, mas o app não conseguiu ler a lista de títulos do console para confirmar que o bloco saiu da tela inicial. Atualize em instantes. Os arquivos de origem no disco não foram alterados.",
+library_unregistered_smp_returns: "{id} foi removido da tela inicial, mas o ShadowMount+ o adiciona de novo na próxima varredura enquanto {image} estiver em uma das pastas que ele varre. Exclua ou mova essa imagem para que ele não volte.",
 err_unmount_permission:
   "Não é possível desmontar: o kernel recusou com EACCES/EPERM. O payload pode ter perdido as credenciais de root — recarregue-o em Connection → Send payload.",
 err_not_enough_space: "Não há espaço livre suficiente neste computador: são necessários {need} e há {free} livres. Libere um pouco de espaço e tente de novo.",
@@ -1935,6 +1940,8 @@ gate_no_console_body:
 gate_setup_cta: "Configurar conexão",
 gate_checking: "Verificando seu PS5…",
 gate_payload_down_title: "O auxiliar não está em execução no PS5",
+helper_too_old_title: "Um auxiliar do PS5 antigo está em execução",
+helper_too_old_detail: "O PS5 está executando um auxiliar antigo, que este app não consegue usar. Envie o auxiliar daqui para substituí-lo. Se um carregador de payloads inicia o auxiliar quando o PS5 liga, atualize a cópia que ele usa.",
 gate_send_helper_cta: "Abrir Connection",
 picker_choose_folder: "Escolher uma pasta",
 picker_choose_file: "Escolher um arquivo",
@@ -8556,6 +8563,7 @@ rp_users_add_hint: "Para jogar também como outro usuário, entre com esse usuá
 "cs_card_firmware": "Firmware {fw}",
 "cs_card_helper_match": "Auxiliar {v} · igual ao deste app",
 "cs_card_helper_missing": "Auxiliar não está rodando",
+"cs_card_helper_old": "Um auxiliar antigo está em execução · envie o auxiliar para substituí-lo",
 "cs_card_helper_newer": "Auxiliar {v} · mais novo que este app",
 "cs_card_helper_pairing": "Auxiliar rodando · aguardando para deixar este dispositivo entrar",
 "cs_card_helper_sending": "Enviando o auxiliar…",

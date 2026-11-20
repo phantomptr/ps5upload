@@ -2104,6 +2104,11 @@ err_uninstall_unavailable:
   "Oprogramowanie tej PS5 nie daje pomocnikowi możliwości odinstalowania, a gra nadal jest zainstalowana. Usuń ją na PS5 w Ustawienia → Pamięć.",
 installed_uninstall_still_present:
   "PS5 przyjęła odinstalowanie, ale {name} nadal jest na konsoli. Usuwanie dużej gry może potrwać kilka minut: odśwież za chwilę. Jeśli zostanie, usuń ją na PS5 w Ustawienia → Pamięć.",
+installed_uninstall_confirm_smp: "ShadowMount+ umieścił tę grę na ekranie głównym z obrazu dysku. To usuwa ją z ekranu głównego, ale ShadowMount+ doda ją ponownie przy następnym skanowaniu, dopóki obraz jest w jednym z jego skanowanych folderów. Usuń lub przenieś obraz, aby nie wróciła. Obraz nie zostanie usunięty.",
+installed_uninstall_smp_returns: "Usunięto {name} z ekranu głównego, ale ShadowMount+ doda tę grę ponownie przy następnym skanowaniu, dopóki {image} jest w jednym z jego skanowanych folderów. Usuń lub przenieś ten obraz, aby nie wróciła.",
+installed_uninstall_unverified: "PS5 przyjęła odinstalowanie {name}, ale aplikacja nie mogła odczytać listy tytułów konsoli, aby potwierdzić, że zniknął. Odśwież za chwilę i sprawdź ekran główny.",
+library_unregistered_unverified: "Wyrejestrowano {id}, ale aplikacja nie mogła odczytać listy tytułów konsoli, aby potwierdzić, że kafelek zniknął z ekranu głównego. Odśwież za chwilę. Pliki źródłowe na dysku nie zostały naruszone.",
+library_unregistered_smp_returns: "Usunięto {id} z ekranu głównego, ale ShadowMount+ doda go ponownie przy następnym skanowaniu, dopóki {image} jest w jednym z jego skanowanych folderów. Usuń lub przenieś ten obraz, aby nie wrócił.",
 err_unmount_permission:
   "Nie można odmontować: kernel odmówił dostępu (EACCES/EPERM). Payload mógł utracić uprawnienia roota — załaduj go ponownie przez Połączenie → Wyślij payload.",
 err_not_enough_space: "Za mało wolnego miejsca na tym komputerze: potrzeba {need}, a wolne jest {free}. Zwolnij trochę miejsca i spróbuj ponownie.",
@@ -2259,6 +2264,8 @@ gate_no_console_body: "Dodaj adres IP konsoli na ekranie Połączenie — potem 
 gate_setup_cta: "Skonfiguruj połączenie",
 gate_checking: "Sprawdzanie PS5…",
 gate_payload_down_title: "Pomocnik nie działa na PS5",
+helper_too_old_title: "Działa starszy pomocnik PS5",
+helper_too_old_detail: "Na PS5 działa starszy pomocnik, którego ta aplikacja nie może używać. Wyślij pomocnika stąd, aby go zastąpić. Jeśli loader payloadów uruchamia pomocnika przy starcie PS5, zaktualizuj kopię, której używa.",
 gate_send_helper_cta: "Otwórz Połączenie",
 picker_choose_folder: "Wybierz folder",
 picker_choose_file: "Wybierz plik",
@@ -8778,6 +8785,7 @@ rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim 
 "cs_card_firmware": "Firmware {fw}",
 "cs_card_helper_match": "Pomocnik {v} · zgodny z tą aplikacją",
 "cs_card_helper_missing": "Pomocnik nie działa",
+"cs_card_helper_old": "Działa starszy pomocnik · wyślij pomocnika, aby go zastąpić",
 "cs_card_helper_newer": "Pomocnik {v} · nowszy niż ta aplikacja",
 "cs_card_helper_pairing": "Pomocnik działa · czeka, by wpuścić to urządzenie",
 "cs_card_helper_sending": "Wysyłanie pomocnika…",
