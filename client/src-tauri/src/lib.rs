@@ -80,6 +80,9 @@ mod tray {
 mod open_links;
 mod opened_files;
 mod pip_window;
+// The main window opens at the size and place it was left (desktop only).
+#[cfg(desktop)]
+mod window_state;
 
 /// Build and run the Tauri application. The desktop `main.rs` calls this
 /// directly; on mobile the `tauri::mobile_entry_point` macro generates
@@ -271,10 +274,15 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             quit_signals::spawn(app.handle().clone());
 
-            // Open the main window centred + fully on-screen. Desktop-only —
-            // the centre/monitor/size window APIs don't exist on mobile, so
-            // this is a no-op there (see center_main_window).
-            crash_hook::optional("placing the window", || center_main_window(app.handle()));
+            // The main window is created hidden on desktop: placed where it was left (or
+            // centred + fully on-screen the first time), then shown, so it never jumps. Mobile
+            // has no window placement (see center_main_window).
+            #[cfg(desktop)]
+            window_state::place_main(app.handle(), |app| {
+                crash_hook::optional("placing the window", || center_main_window(app));
+            });
+            #[cfg(mobile)]
+            center_main_window(app.handle());
 
             // One-time 6.0 upgrade clean-up of this app's data folder (old files are moved
             // aside, never reset). Desktop-only: mobile installs start on 6.x.
@@ -337,6 +345,8 @@ pub fn run() {
             tray::on_window_event(_window, _event);
             #[cfg(desktop)]
             pip_window::on_window_event(_window, _event);
+            #[cfg(desktop)]
+            window_state::on_window_event(_window, _event);
         })
         .invoke_handler(tauri::generate_handler![
             // ── Engine proxies ──────────────────────────────────────
@@ -809,6 +819,9 @@ pub fn run() {
             tauri::async_runtime::spawn(engine::check_listener());
         }
         if let tauri::RunEvent::Exit = event {
+            // The window's last size and place, if the delayed save has not written it yet.
+            #[cfg(desktop)]
+            window_state::flush();
             // A downloaded update armed for the quit: its script waits for this process to end,
             // so it is started before the clean-up and never delays it.
             #[cfg(not(any(target_os = "android", target_os = "ios")))]

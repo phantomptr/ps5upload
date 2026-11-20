@@ -34,6 +34,12 @@ pub fn build_main<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     else {
         return Ok(());
     };
+    // Desktop: hidden until window_state has put it where it was left, then shown there.
+    #[cfg(desktop)]
+    let cfg = tauri::utils::config::WindowConfig {
+        visible: false,
+        ..cfg
+    };
     let builder = tauri::WebviewWindowBuilder::from_config(app, &cfg)?;
     #[cfg(desktop)]
     let builder = {
