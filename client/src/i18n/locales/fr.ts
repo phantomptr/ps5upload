@@ -2878,9 +2878,6 @@ library_mount_tooltip_smp: "Confier cette image à ShadowMount+, qui la monte et
 
 
 
-helper_mismatch_title: "L'assistant PS5 est en v{payload} mais cette application est en v{app}",
-helper_mismatch_send: "Envoyer l'assistant",
-helper_mismatch_body_v3: "Rien à faire sur la PS5 elle-même : appuyez sur Envoyer l'assistant et cette application envoie l'assistant correspondant à la console. D'ici là, les correctifs et fonctions de la nouvelle version ne marcheront pas.",
 
 "joberr.direct_staged_file_missing_v2": "Cet envoi était déjà terminé, il ne restait donc rien à publier — et le fichier sur la PS5 est maintenant absent ou de taille incorrecte. Renvoyez-le en choisissant « Remplacer » plutôt que « Reprendre ».",
 "joberr.direct_tx_corrupt": "La PS5 a détecté une corruption du protocole sur ce transfert. Relancez le payload depuis l'onglet « Envoyer le payload », puis réessayez.",
@@ -4405,8 +4402,6 @@ queue_stop_install_title: "Arrêter cette installation ?",
 queue_stopping: "Arrêt…",
 "collection.send_submit": "Envoyer",
 queue_install_quiet: "La PS5 n’a rien demandé depuis {min} min. Annulé sur la PS5 ? Arrête-la ici (⊘).",
-helper_mismatch_app_older: "Un autre appareil a envoyé un assistant plus récent. Mets à jour cette app pour qu’elle corresponde ; envoyer l’assistant de cette app le remplacerait par une version plus ancienne pour tous les appareils.",
-helper_mismatch_update_app: "Mettre à jour cette app",
 mesh_chip: "Autres appareils : {count}",
 mesh_another_device: "Un autre appareil",
 mesh_ev_restart: "{name} redémarre l’assistant sur cette console. Les transferts se mettent en pause et reprennent dans un instant.",
@@ -7507,7 +7502,6 @@ helper_copies_updated_title: "Assistant mis à jour",
 helper_copies_updated_body: "Votre PS5 lancera l'assistant {version} au prochain redémarrage.",
 helper_copies_failed_title: "Impossible de mettre à jour l'assistant lancé par votre PS5 au démarrage",
 helper_copies_failed_body: "Toujours l'ancien assistant : {list}. La PS5 le relance après chaque redémarrage. Pour corriger à la main, téléchargez ps5upload.elf {version} depuis la page des versions et copiez-le par-dessus ce fichier (écran Fichiers, FTP ou la clé USB), ou téléversez-le à nouveau dans Payload Manager sous le même nom. ({error})",
-helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant qu'elle garde pour le démarrage ({list}). Appuyez sur Envoyer l'assistant : cette application envoie l'assistant correspondant et met aussi à jour cette copie, pour que la PS5 lance le nouveau après un redémarrage.",
   hw_gpu_clock: "Fréquence GPU",
   hw_gpu_clock_hint: "Fréquence graphique du SMU, lue à la demande",
   hw_cpu_measured: "Fréquence CPU (mesurée)",

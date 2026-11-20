@@ -3824,9 +3824,6 @@ library_mount_tooltip_smp: "Hand this image to ShadowMount+, which mounts and re
 
 
 
-helper_mismatch_title: "The PS5 helper is v{payload} but this app is v{app}",
-helper_mismatch_send: "Send helper",
-helper_mismatch_body_v3: "Nothing to do on the PS5 itself: press Send helper and this app sends the matching helper to the console. Fixes and features from the newer version won't work until then.",
 
 "joberr.direct_staged_file_missing_v2": "This upload had already finished, so there was nothing left to publish — and the file on the PS5 is now missing or the wrong size. Upload it again and choose Replace rather than Resume.",
 "joberr.direct_tx_corrupt": "The PS5 detected protocol corruption on this transfer. Restart the payload from the Send Payload tab and retry.",
@@ -5114,8 +5111,6 @@ queue_stop_install_title: "Stop this install?",
 queue_stopping: "Stopping…",
 "collection.send_submit": "Send",
 queue_install_quiet: "The PS5 hasn't asked for data for {min} min. Cancelled it on the PS5? Stop it here (⊘).",
-helper_mismatch_app_older: "Another device sent a newer helper. Update this app to match it; sending this app's helper would replace it with an older one for every device.",
-helper_mismatch_update_app: "Update this app",
 mesh_chip: "Other devices: {count}",
 mesh_another_device: "Another device",
 mesh_ev_restart: "{name} is restarting the helper on this console. Transfers pause and pick up again in a moment.",
@@ -7796,7 +7791,6 @@ helper_copies_updated_title: "Helper updated",
 helper_copies_updated_body: "Your PS5 will start helper {version} the next time it restarts.",
 helper_copies_failed_title: "Couldn't update the helper your PS5 starts at boot",
 helper_copies_failed_body: "Still the old helper: {list}. The PS5 starts it again after every restart. To fix it by hand, download ps5upload.elf {version} from the releases page and copy it over that file (Files screen, FTP or the USB drive), or upload it again in Payload Manager under the same name. ({error})",
-helper_mismatch_boot_copy: "Your PS5 started an older copy of the helper that it keeps for boot ({list}). Press Send helper: this app sends the matching helper and also updates that copy, so the PS5 starts the new one after a restart.",
 "hw_gpu_clock": "GPU clock",
 "hw_gpu_clock_hint": "SMU graphics clock, read on request",
 "hw_cpu_measured": "CPU clock (measured)",
@@ -9359,6 +9353,10 @@ game_fps_tv_note: "Shown here, not on the TV: drawing over a game means changing
 "usb_wizard_remove_file": "Remove",
 "usb_wizard_local_order": "Your files load after the library's payloads, in the order added.",
 "usb_wizard_step2_hint_v2": "Tick copies already in the app's library, or add payload files from this computer.",
+update_banner_match_helper: "Update this app to v{version} to match your PS5",
+update_banner_match_helper_web: "Update PS5Upload where this page comes from to v{version} to match your PS5",
+update_banner_more: "{count} more in Settings",
+update_row_helper_newer: "Your PS5 runs helper v{helper}, newer than this app (v{app}). Update this app to match it.",
 };
 
 export default en;

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ExternalLink, Download, RefreshCw, X, Sparkles } from "lucide-react";
+import { ExternalLink, Download, RefreshCw, Sparkles } from "lucide-react";
 
 import { failedInstall, useUpdateStore } from "../state/update";
 import { getAppVersion } from "../lib/appVersion";
@@ -23,7 +23,13 @@ import { ReleaseNotesBody } from "./ReleaseNotesBody";
 import { isIOS, isMobile } from "../lib/platform";
 import { useApkInstallGuard } from "./useApkInstallGuard";
 import { apkUpdaterAvailable, progressPercent, useApkUpdateStore } from "../state/apkUpdate";
+import { useConnectionStore } from "../state/connection";
+import { useAppVersionValue } from "../state/updateNoticeRuntime";
+import { helperIsNewer } from "../lib/updateNotice";
 
+/** The row at the top of Settings: wraps on a phone (the text takes its own line, in full). */
+const ROW_CLASS =
+  "mb-4 flex items-center gap-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] px-4 py-2 text-sm max-sm:flex-wrap max-sm:gap-y-1";
 /** The GitHub page of one release. */
 export function releasePageUrl(version: string): string {
   return `https://github.com/phantomptr/ps5upload/releases/tag/v${version.replace(/^v/, "")}`;
@@ -136,14 +142,16 @@ export function WhatsNewOnLaunch() {
 }
 
 /**
- * Non-intrusive update banner. The update store already auto-checks on launch
- * (AppShell's useUpdateCheckOnMount); this surfaces the "available" result as a
- * slim, dismissible bar at the top of the content area with a one-tap Download
- * — instead of only a sidebar dot the user has to notice. Dismiss hides it for
- * the session (the Settings → Updates panel remains the durable surface).
+ * The "Update available" row at the top of Settings (desktop and phone app). A routine update is
+ * quiet (lib/updateNotice): this row, a dot on Settings and the notification bell, never a banner
+ * across every screen (layout/UpdateBanner is only for a failed install and a PS5 that runs a
+ * newer helper). The update store checks by itself (AppShell's useUpdateCheckOnMount); this row
+ * offers Details and the next step (download, install, try again) and stays through the whole
+ * flow (downloading, downloaded, failed). Skip this version hides it and the dot; the Updates
+ * section further down shows every state regardless.
  *
- * Renders nothing unless an update is available (or actively downloading after
- * the user clicked Download here), so it costs nothing in the common case.
+ * With no update found while the PS5 runs a newer helper than this app (another device sent it),
+ * it says so, with Check for updates.
  */
 export function UpdateToast() {
   const tr = useTr();
@@ -161,9 +169,11 @@ export function UpdateToast() {
   const retryInstall = useUpdateStore((s) => s.retryInstall);
   const apkStep = useApkUpdateStore((s) => s.step);
   const { confirmInstall, guardDialog } = useApkInstallGuard();
-  // Dismiss is keyed by version so a NEWER release later in the session
-  // re-surfaces the bar instead of staying hidden.
-  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
+  const appVersion = useAppVersionValue();
+  const helperVersion = useConnectionStore((s) =>
+    s.payloadStatus === "up" && s.session !== "needs_pairing" ? s.payloadVersion : null,
+  );
+  const checkNow = useUpdateStore((s) => s.checkNow);
 
   // Surface every actionable update state — not just "available" — so the bar
   // doesn't vanish mid-flow (downloading), on completion (downloaded, which
@@ -175,9 +185,32 @@ export function UpdateToast() {
     phase.kind === "download-failed"
       ? phase.result.latest_version
       : null;
-  if (version == null || dismissedVersion === version) return null;
-  // Skipped (remembered across launches): only Settings still shows it.
-  if (version === skippedVersion) return null;
+  // Skipped (remembered across launches): only the Updates section still shows it.
+  if (version == null || version === skippedVersion) {
+    // Nothing to install, but the PS5 already runs a newer helper: this app is behind.
+    if (!helperIsNewer(helperVersion, appVersion)) return null;
+    return (
+      <div data-testid="settings-update-row" className={ROW_CLASS}>
+        <Sparkles size={15} className="shrink-0 text-[var(--color-accent)]" />
+        <span className="min-w-0 flex-1 text-[var(--color-text)] max-sm:basis-[calc(100%-2.5rem)]">
+          {tr(
+            "update_row_helper_newer",
+            { helper: helperVersion ?? "", app: appVersion ?? "" },
+            "Your PS5 runs helper v{helper}, newer than this app (v{app}). Update this app to match it.",
+          )}
+        </span>
+        <button
+          type="button"
+          disabled={phase.kind === "checking"}
+          onClick={() => void checkNow()}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent)] disabled:opacity-60"
+        >
+          {phase.kind === "checking" ? <Spinner size={14} /> : <RefreshCw size={13} />}
+          {tr("update_check_button", undefined, "Check for updates")}
+        </button>
+      </div>
+    );
+  }
   const notes = "result" in phase ? phase.result.notes : "";
 
   const downloading = phase.kind === "downloading";
@@ -204,7 +237,7 @@ export function UpdateToast() {
 
   return (
     // A phone has no room for this on one line: the text takes its own row, in full.
-    <div className="mx-3 mt-2 flex items-center gap-3 rounded-full border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] px-4 py-2 text-sm max-sm:flex-wrap max-sm:gap-y-1 max-sm:rounded-[var(--radius-card)] md:mx-6">
+    <div data-testid="settings-update-row" className={ROW_CLASS}>
       <Sparkles size={15} className="shrink-0 text-[var(--color-accent)]" />
       <span className="min-w-0 flex-1 truncate max-sm:basis-[calc(100%-2.5rem)] max-sm:whitespace-normal">
         <span className="font-medium text-[var(--color-text)]">
@@ -352,19 +385,11 @@ export function UpdateToast() {
         <button
           type="button"
           onClick={skipVersion}
-          className="shrink-0 rounded px-2 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)] max-sm:hidden"
+          className="shrink-0 rounded px-2 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
         >
           {tr("update_skip_version", undefined, "Skip this version")}
         </button>
       )}
-      <button
-        type="button"
-        aria-label={tr("update_toast_dismiss", undefined, "Dismiss")}
-        onClick={() => setDismissedVersion(version)}
-        className="shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:text-[var(--color-text)]"
-      >
-        <X size={14} />
-      </button>
       {showNotes && (
         <ReleaseNotesDialog version={version} notes={notes} onClose={() => setShowNotes(false)} />
       )}

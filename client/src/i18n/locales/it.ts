@@ -2815,9 +2815,6 @@ library_mount_tooltip_smp: "Affida questa immagine a ShadowMount+, che la monta 
 
 
 
-helper_mismatch_title: "L'helper della PS5 è v{payload} ma questa app è v{app}",
-helper_mismatch_send: "Invia helper",
-helper_mismatch_body_v3: "Non c'è nulla da fare sulla PS5: premi Invia helper e questa app invia alla console l'helper corrispondente. Fino ad allora le correzioni e le funzioni della versione nuova non funzioneranno.",
 
 "joberr.direct_staged_file_missing_v2": "Questo caricamento era già terminato, quindi non restava nulla da pubblicare — e ora il file sulla PS5 è mancante o ha la dimensione sbagliata. Caricalo di nuovo scegliendo «Sostituisci» invece di «Riprendi».",
 "joberr.direct_tx_corrupt": "La PS5 ha rilevato una corruzione del protocollo in questo trasferimento. Riavvia il payload dalla scheda «Invia payload» e riprova.",
@@ -4342,8 +4339,6 @@ queue_stop_install_title: "Fermare questa installazione?",
 queue_stopping: "Arresto…",
 "collection.send_submit": "Invia",
 queue_install_quiet: "La PS5 non chiede dati da {min} min. Annullata sulla PS5? Fermala qui (⊘).",
-helper_mismatch_app_older: "Un altro dispositivo ha inviato un helper più recente. Aggiorna questa app perché corrisponda; inviare l'helper di questa app lo sostituirebbe con uno più vecchio per tutti i dispositivi.",
-helper_mismatch_update_app: "Aggiorna questa app",
 mesh_chip: "Altri dispositivi: {count}",
 mesh_another_device: "Un altro dispositivo",
 mesh_ev_restart: "{name} sta riavviando l'helper su questa console. I trasferimenti si mettono in pausa e riprendono tra un attimo.",
@@ -7444,7 +7439,6 @@ helper_copies_updated_title: "Helper aggiornato",
 helper_copies_updated_body: "La tua PS5 avvierà l'helper {version} al prossimo riavvio.",
 helper_copies_failed_title: "Impossibile aggiornare l'helper che la PS5 avvia all'accensione",
 helper_copies_failed_body: "Ancora il vecchio helper: {list}. La PS5 lo riavvia dopo ogni riavvio. Per sistemarlo a mano, scarica ps5upload.elf {version} dalla pagina delle release e copialo sopra quel file (schermata File, FTP o l'unità USB), oppure caricalo di nuovo in Payload Manager con lo stesso nome. ({error})",
-helper_mismatch_boot_copy: "La PS5 ha avviato una copia più vecchia dell'helper che conserva per l'accensione ({list}). Premi Invia helper: questa app invia l'helper corrispondente e aggiorna anche quella copia, così la PS5 avvia quello nuovo dopo un riavvio.",
   hw_gpu_clock: "Clock GPU",
   hw_gpu_clock_hint: "Clock grafico dell'SMU, letto su richiesta",
   hw_cpu_measured: "Clock CPU (misurato)",

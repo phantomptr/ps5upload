@@ -3099,9 +3099,6 @@ library_mount_tooltip_smp: "Przekaż ten obraz do ShadowMount+, który zamontuje
 
 
 
-helper_mismatch_title: "Pomocnik PS5 ma v{payload}, a ta aplikacja v{app}",
-helper_mismatch_send: "Wyślij pomocnika",
-helper_mismatch_body_v3: "Na samej PS5 nie trzeba nic robić: naciśnij „Wyślij pomocnika”, a ta aplikacja wyśle na konsolę pasującego pomocnika. Do tego czasu poprawki i funkcje nowszej wersji nie będą działać.",
 
 "joberr.direct_staged_file_missing_v2": "To przesyłanie już się zakończyło, więc nie było nic do opublikowania — a pliku na PS5 teraz brakuje lub ma zły rozmiar. Wyślij go ponownie i wybierz „Zastąp” zamiast „Wznów”.",
 "joberr.direct_tx_corrupt": "PS5 wykryła uszkodzenie protokołu podczas tego transferu. Uruchom ponownie payload z karty „Wyślij payload” i spróbuj jeszcze raz.",
@@ -4626,8 +4623,6 @@ queue_stop_install_title: "Zatrzymać tę instalację?",
 queue_stopping: "Zatrzymywanie…",
 "collection.send_submit": "Wyślij",
 queue_install_quiet: "PS5 od {min} min nie prosi o dane. Anulowano na PS5? Zatrzymaj tutaj (⊘).",
-helper_mismatch_app_older: "Inne urządzenie wysłało nowszego pomocnika. Zaktualizuj tę aplikację, aby się zgadzała; wysłanie pomocnika z tej aplikacji zastąpi go starszym na wszystkich urządzeniach.",
-helper_mismatch_update_app: "Zaktualizuj tę aplikację",
 mesh_chip: "Inne urządzenia: {count}",
 mesh_another_device: "Inne urządzenie",
 mesh_ev_restart: "{name} uruchamia ponownie pomocnika na tej konsoli. Przesyłanie zatrzyma się i za chwilę wznowi.",
@@ -7728,7 +7723,6 @@ helper_copies_updated_title: "Pomocnik zaktualizowany",
 helper_copies_updated_body: "Twoja PS5 uruchomi pomocnika {version} przy następnym restarcie.",
 helper_copies_failed_title: "Nie udało się zaktualizować pomocnika uruchamianego przez PS5 przy starcie",
 helper_copies_failed_body: "Nadal stary pomocnik: {list}. PS5 uruchamia go ponownie po każdym restarcie. Aby naprawić ręcznie, pobierz ps5upload.elf {version} ze strony wydań i skopiuj go w miejsce tego pliku (ekran Pliki, FTP lub dysk USB) albo prześlij go ponownie w Payload Manager pod tą samą nazwą. ({error})",
-helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą trzyma na potrzeby startu ({list}). Naciśnij „Wyślij pomocnika”: ta aplikacja wyśle pasującego pomocnika i zaktualizuje też tę kopię, więc po restarcie PS5 uruchomi nowego.",
   hw_gpu_clock: "Taktowanie GPU",
   hw_gpu_clock_hint: "Taktowanie grafiki z SMU, odczytywane na żądanie",
   hw_cpu_measured: "Taktowanie CPU (zmierzone)",

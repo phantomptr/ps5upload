@@ -2866,9 +2866,6 @@ library_mount_tooltip_smp: "Dieses Abbild an ShadowMount+ übergeben, das es ein
 
 
 
-helper_mismatch_title: "Der PS5-Helfer ist v{payload}, diese App ist v{app}",
-helper_mismatch_send: "Helfer senden",
-helper_mismatch_body_v3: "Auf der PS5 selbst ist nichts zu tun: Drücke „Helfer senden“, und diese App sendet den passenden Helfer an die Konsole. Bis dahin funktionieren die Fixes und Funktionen der neueren Version nicht.",
 
 "joberr.direct_staged_file_missing_v2": "Dieser Upload war bereits abgeschlossen, es gab also nichts mehr zu veröffentlichen – und die Datei auf der PS5 fehlt jetzt oder hat die falsche Größe. Lade sie erneut hoch und wähle „Ersetzen“ statt „Fortsetzen“.",
 "joberr.direct_tx_corrupt": "Die PS5 hat bei dieser Übertragung eine Protokollbeschädigung erkannt. Starte das Payload über den Tab „Payload senden“ neu und versuche es erneut.",
@@ -4397,8 +4394,6 @@ queue_stop_install_title: "Diese Installation stoppen?",
 queue_stopping: "Wird gestoppt …",
 "collection.send_submit": "Senden",
 queue_install_quiet: "Die PS5 hat seit {min} Min. keine Daten angefordert. Auf der PS5 abgebrochen? Hier stoppen (⊘).",
-helper_mismatch_app_older: "Ein anderes Gerät hat einen neueren Helfer gesendet. Aktualisiere diese App passend dazu; den Helfer dieser App zu senden, würde ihn für jedes Gerät durch einen älteren ersetzen.",
-helper_mismatch_update_app: "Diese App aktualisieren",
 mesh_chip: "Andere Geräte: {count}",
 mesh_another_device: "Ein anderes Gerät",
 mesh_ev_restart: "{name} startet den Helfer auf dieser Konsole neu. Übertragungen pausieren und laufen gleich weiter.",
@@ -7499,7 +7494,6 @@ helper_copies_updated_title: "Helfer aktualisiert",
 helper_copies_updated_body: "Deine PS5 startet beim nächsten Neustart den Helfer {version}.",
 helper_copies_failed_title: "Der Helfer, den deine PS5 beim Start lädt, konnte nicht aktualisiert werden",
 helper_copies_failed_body: "Weiterhin der alte Helfer: {list}. Die PS5 startet ihn nach jedem Neustart wieder. Zum Beheben von Hand lade ps5upload.elf {version} von der Releases-Seite herunter und kopiere sie über diese Datei (Dateien-Bildschirm, FTP oder das USB-Laufwerk), oder lade sie im Payload Manager unter demselben Namen erneut hoch. ({error})",
-helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestartet, die sie für den Start aufbewahrt ({list}). Drücke „Helfer senden“: Diese App sendet den passenden Helfer und aktualisiert auch diese Kopie, sodass die PS5 nach einem Neustart den neuen startet.",
   hw_gpu_clock: "GPU-Takt",
   hw_gpu_clock_hint: "SMU-Grafiktakt, auf Anfrage gelesen",
   hw_cpu_measured: "CPU-Takt (gemessen)",

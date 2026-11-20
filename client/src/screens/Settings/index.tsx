@@ -86,7 +86,8 @@ import { failedInstall, useUpdateStore, type UpdatePhase } from "../../state/upd
 import { updateOpenLog, updateQuitForManualInstall } from "../../api/ps5";
 import { useToastStore } from "../../state/toasts";
 import { openExternalUrl } from "../../lib/openExternalUrl";
-import { releasePageUrl } from "../../layout/UpdateToast";
+import { releasePageUrl, UpdateToast } from "../../layout/UpdateToast";
+import { WebUpdateToast } from "../../layout/WebUpdateToast";
 import { isIOS, isMobile } from "../../lib/platform";
 import { apkUpdaterAvailable } from "../../state/apkUpdate";
 import { ApkProgress, ApkUpdateStatus } from "../../layout/ApkUpdateStatus";
@@ -537,6 +538,8 @@ export default function SettingsScreen() {
           "App: this device and choices for every console. This PS5: one console's own settings.",
         )}
       />
+      {/* An update waiting for this app, on both tabs: the quiet place for it (lib/updateNotice). */}
+      {isTauriEnv() ? <UpdateToast /> : <WebUpdateToast />}
       <Tabs
         className="mb-4"
         variant="segmented"

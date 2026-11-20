@@ -2869,9 +2869,6 @@ library_mount_tooltip_smp: "Bu imajı ShadowMount+'a devret; onu bağlayıp kayd
 
 
 
-helper_mismatch_title: "PS5 yardımcısı v{payload}, bu uygulama ise v{app}",
-helper_mismatch_send: "Yardımcıyı gönder",
-helper_mismatch_body_v3: "PS5'in kendisinde yapılacak bir şey yok: Yardımcıyı gönder'e bas, bu uygulama eşleşen yardımcıyı konsola gönderir. O zamana kadar yeni sürümün düzeltmeleri ve özellikleri çalışmaz.",
 
 "joberr.direct_staged_file_missing_v2": "Bu yükleme zaten tamamlanmıştı, dolayısıyla yayımlanacak bir şey kalmamıştı — üstelik PS5'teki dosya şu anda yok ya da boyutu yanlış. Dosyayı yeniden yükleyin ve «Devam et» yerine «Değiştir» seçin.",
 "joberr.direct_tx_corrupt": "PS5 bu aktarımda protokol bozulması algıladı. «Payload gönder» sekmesinden payload'ı yeniden başlatıp tekrar deneyin.",
@@ -4396,8 +4393,6 @@ queue_stop_install_title: "Bu yükleme durdurulsun mu?",
 queue_stopping: "Durduruluyor…",
 "collection.send_submit": "Gönder",
 queue_install_quiet: "PS5 {min} dakikadır veri istemedi. PS5'te iptal mi ettiniz? Burada durdurun (⊘).",
-helper_mismatch_app_older: "Başka bir cihaz daha yeni bir yardımcı gönderdi. Bu uygulamayı ona uyacak şekilde güncelleyin; bu uygulamanın yardımcısını göndermek onu her cihaz için daha eski bir sürümle değiştirir.",
-helper_mismatch_update_app: "Bu uygulamayı güncelle",
 mesh_chip: "Diğer cihazlar: {count}",
 mesh_another_device: "Başka bir cihaz",
 mesh_ev_restart: "{name} bu konsoldaki yardımcıyı yeniden başlatıyor. Aktarımlar duraklar ve birazdan devam eder.",
@@ -7498,7 +7493,6 @@ helper_copies_updated_title: "Yardımcı güncellendi",
 helper_copies_updated_body: "PS5'iniz bir sonraki yeniden başlatmada {version} yardımcısını başlatacak.",
 helper_copies_failed_title: "PS5'in açılışta başlattığı yardımcı güncellenemedi",
 helper_copies_failed_body: "Hâlâ eski yardımcı: {list}. PS5 her yeniden başlatmada onu tekrar başlatır. Elle düzeltmek için sürümler sayfasından ps5upload.elf {version} dosyasını indirip o dosyanın üzerine kopyala (Dosyalar ekranı, FTP veya USB sürücü) ya da Payload Manager'a aynı adla yeniden yükle. ({error})",
-helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımcı kopyasını başlattı ({list}). Yardımcıyı gönder'e bas: bu uygulama eşleşen yardımcıyı gönderir ve o kopyayı da günceller, böylece PS5 yeniden başlatmadan sonra yenisini başlatır.",
   hw_gpu_clock: "GPU saati",
   hw_gpu_clock_hint: "SMU grafik saati, istek üzerine okunur",
   hw_cpu_measured: "CPU saati (ölçülen)",

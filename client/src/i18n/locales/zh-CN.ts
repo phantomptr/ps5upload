@@ -2821,9 +2821,6 @@ library_mount_tooltip_smp: "把此镜像交给 ShadowMount+，由它挂载并注
 
 
 
-helper_mismatch_title: "PS5 助手为 v{payload}，而此应用为 v{app}",
-helper_mismatch_send: "发送助手",
-helper_mismatch_body_v3: "PS5 本身无需操作：按“发送助手”，此应用会把匹配的助手发送到主机。在此之前，新版本的修复和功能无法使用。",
 
 "joberr.direct_staged_file_missing_v2": "本次上传其实已经完成，没有剩余内容可以发布——而且 PS5 上的文件现在丢失或大小不对。请重新上传，并选择「替换」而不是「继续」。",
 "joberr.direct_tx_corrupt": "PS5 在本次传输中检测到协议损坏。请在「发送 payload」标签页重启 payload，然后重试。",
@@ -4348,8 +4345,6 @@ queue_stop_install_title: "要停止此安装吗?",
 queue_stopping: "正在停止…",
 "collection.send_submit": "发送",
 queue_install_quiet: "PS5 已有 {min} 分钟没有请求数据。在 PS5 上取消了?请在这里停止 (⊘)。",
-helper_mismatch_app_older: "另一台设备发送了更新的助手。请更新此应用以与之匹配；发送此应用的助手会为所有设备把它替换成旧版本。",
-helper_mismatch_update_app: "更新此应用",
 mesh_chip: "其他设备：{count}",
 mesh_another_device: "另一台设备",
 mesh_ev_restart: "{name} 正在重启此主机上的助手。传输会暂停，稍后自动继续。",
@@ -7450,7 +7445,6 @@ helper_copies_updated_title: "助手已更新",
 helper_copies_updated_body: "PS5 下次重启时会启动助手 {version}。",
 helper_copies_failed_title: "无法更新 PS5 开机时启动的助手",
 helper_copies_failed_body: "仍是旧助手：{list}。PS5 每次重启后都会再次启动它。如需手动修复，请从发布页面下载 ps5upload.elf {version} 并覆盖该文件（文件页面、FTP 或 USB 驱动器），或在 Payload Manager 中以相同名称重新上传。({error})",
-helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手副本（{list}）。按“发送助手”：此应用会发送匹配的助手并同时更新该副本，PS5 重启后就会启动新版。",
   hw_gpu_clock: "GPU 频率",
   hw_gpu_clock_hint: "SMU 图形频率，按需读取",
   hw_cpu_measured: "CPU 频率（实测）",

@@ -6,7 +6,7 @@ import { getAppVersion } from "../lib/appVersion";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { useTr } from "../state/lang";
 import { useLogsStore } from "../state/logs";
-import { useUpdateStore } from "../state/update";
+import { useSettingsDot } from "../state/updateNoticeRuntime";
 import { useNavSidebarStore } from "../state/navSidebar";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { useBetaFeaturesStore } from "../state/betaFeatures";
@@ -59,10 +59,8 @@ export default function Sidebar() {
     };
   }, []);
   const errorCount = useLogsStore((s) => s.errorCount);
-  const updateAvailable = useUpdateStore(
-    // Not for a version the user skipped.
-    (s) => s.phase.kind === "available" && s.phase.result.latest_version !== s.skippedVersion,
-  );
+  // An update waiting (not skipped), or a PS5 helper newer than this app (lib/updateNotice).
+  const updateAvailable = useSettingsDot();
   // Subscribed, not read once: flipping the switch in Settings must add or
   // remove the row without a reload.
   const betaEnabled = useBetaFeaturesStore((s) => s.enabled);

@@ -10,15 +10,11 @@ import EngineDownBanner from "./EngineDownBanner";
 import MovedConsoleBanner, { useMovedConsoleWatch } from "./MovedConsoleBanner";
 import { InstallAskHost } from "../components/InstallAskHost";
 import { PairingDialog } from "../screens/Connection/PairingDialog";
-import { useHelperReplaceGuard } from "../screens/Connection/useHelperReplaceGuard";
-import { helperSendFor, useHelperSendStore } from "../state/helperSend";
-import { sendHelperTo } from "../state/helperSendRuntime";
-import { liveCopyDeps } from "../state/helperStoredCopiesRuntime";
-import { findStoredCopies, type StoredCopy } from "../lib/helperStoredCopies";
 import ConsoleTabs from "./ConsoleTabs";
 import ActivityBar from "./ActivityBar";
-import UpdateToast, { WhatsNewOnLaunch } from "./UpdateToast";
-import WebUpdateToast from "./WebUpdateToast";
+import { WhatsNewOnLaunch } from "./UpdateToast";
+import UpdateBanner from "./UpdateBanner";
+import { useWebUpdateStore } from "./WebUpdateToast";
 import { Button } from "../components/Button";
 import {
   useConnectionFrozen,
@@ -133,7 +129,6 @@ import { startStagedRelease } from "../lib/browserStaging";
 import { startSharedPrefs } from "../lib/sharedPrefs";
 import { startMeshShare } from "../lib/meshShare";
 import { useMeshSync } from "./useMeshSync";
-import { compareVersions } from "../lib/semver";
 import { useNavSidebarStore, navListsFromStorage } from "../state/navSidebar";
 import { UpdateCheckButton } from "./UpdateCheckButton";
 import { useTransferStore } from "../state/transfer";
@@ -1190,6 +1185,8 @@ function useUpdateCheckOnMount() {
     // DNS would otherwise delay the initial UI by up to a few seconds.
     let stop: (() => void) | null = null;
     const id = window.setTimeout(() => {
+      // The web UI updates with its engine: ask it once (Settings shows the answer).
+      if (!isTauriEnv()) useWebUpdateStore.getState().load();
       stop = startUpdateChecks(ensureChecked);
     }, 1500);
     return () => {
@@ -1441,168 +1438,6 @@ function useRoutePersistence() {
     }, 500);
     return () => window.clearTimeout(id);
   }, [location.pathname, location.search]);
-}
-
-/**
- * Stale-helper banner.
- *
- * When the app updates but the PS5 still runs the previous payload, the two
- * halves disagree about what exists — features land in the app that the
- * console can't serve, and fixes look like they haven't worked. This was
- * logged as a warning and NOTHING else, so a user could run a 2½-version-old
- * app against a newer helper and have no way to see it: they simply saw
- * behaviour that didn't match the release notes and reasonably concluded the
- * fix was broken. A log line nobody opens is not user-visible.
- *
- * Dismissible per version pair, so re-loading the payload isn't nagged about
- * forever, but a NEW mismatch (next update) surfaces again.
- */
-function HelperVersionBanner() {
-  const tr = useTr();
-  const navigate = useNavigate();
-  const host = useConnectionStore((s) => s.host);
-  const { guard: guardReplace, dialog: replaceDialog } = useHelperReplaceGuard();
-  const send = useHelperSendStore((s) => helperSendFor(s, host));
-  // A send started from this banner keeps it (with the send's step) until it ends; a send
-  // started anywhere else does not raise it.
-  const [sentHere, setSentHere] = useState(false);
-  const payloadVersion = useConnectionStore((s) => s.payloadVersion);
-  const payloadStatus = useConnectionStore((s) => s.payloadStatus);
-  const [appVersion, setAppVersion] = useState<string | null>(null);
-  const [dismissed, setDismissed] = useState<string | null>(() =>
-    safeGetItem("ps5upload.helper-mismatch.dismissed"),
-  );
-  useEffect(() => {
-    let cancelled = false;
-    void getAppVersion()
-      .then((v) => {
-        if (!cancelled) setAppVersion(v);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // A send in progress keeps the banner, with its step, until the new helper answers.
-  const sending = send?.state === "busy";
-  const mismatch =
-    payloadStatus === "up" &&
-    !!appVersion &&
-    !!payloadVersion &&
-    payloadVersion !== appVersion;
-  const pair = `${payloadVersion}->${appVersion}`;
-  const olderHelper =
-    mismatch && compareVersions(payloadVersion ?? "", appVersion ?? "") === -1;
-  // An older helper is usually the copy an autoloader started at boot (#541): look for it,
-  // once per console and version pair, so the banner can say so.
-  const copiesKey = olderHelper ? `${host.trim()}|${pair}` : null;
-  const [bootCopies, setBootCopies] = useState<{ key: string; copies: StoredCopy[] } | null>(null);
-  useEffect(() => {
-    if (!copiesKey) return;
-    let cancelled = false;
-    void findStoredCopies(host.trim(), liveCopyDeps).then((copies) => {
-      if (!cancelled) setBootCopies({ key: copiesKey, copies });
-    });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- copiesKey carries host and pair
-  }, [copiesKey]);
-  const copies = bootCopies?.key === copiesKey ? bootCopies.copies : [];
-  const following = sentHere && (sending || send?.state === "fail");
-  if (!following && (!mismatch || dismissed === pair)) return null;
-  // The helper is the newer one (another device sent it, 8.0.0): sending ours would take that
-  // away from every device. The fix is updating this app.
-  const appOlder = !!payloadVersion && !!appVersion && compareVersions(payloadVersion, appVersion) === 1;
-
-  return (
-    <div className="mx-3 mt-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-warn)_35%,transparent)] bg-[var(--color-warn-soft)] px-4 py-2.5 backdrop-blur-xl md:mx-5 text-[var(--color-text)]">
-      {replaceDialog}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-        <div className="flex min-w-0 flex-1 items-start gap-3">
-          <RefreshCw
-            size={18}
-            className="mt-0.5 shrink-0 text-[var(--color-warn)]"
-          />
-          <div className="min-w-0">
-            <p className="text-sm font-medium">
-              {tr(
-                "helper_mismatch_title",
-                { payload: payloadVersion ?? "?", app: appVersion ?? "?" },
-                `The PS5 helper is v${payloadVersion} but this app is v${appVersion}`,
-              )}
-            </p>
-            <p className="text-xs text-[var(--color-muted)]">
-              {appOlder
-                ? tr(
-                    "helper_mismatch_app_older",
-                    undefined,
-                    "Another device sent a newer helper. Update this app to match it; sending this app's helper would replace it with an older one for every device.",
-                  )
-                : copies.length > 0
-                  ? tr(
-                      "helper_mismatch_boot_copy",
-                      { list: copies.map((c) => c.path).join(", ") },
-                      "Your PS5 started an older copy of the helper that it keeps for boot ({list}). Press Send helper: this app sends the matching helper and also updates that copy, so the PS5 starts the new one after a restart.",
-                    )
-                  : tr(
-                      "helper_mismatch_body_v3",
-                      undefined,
-                      "Nothing to do on the PS5 itself: press Send helper and this app sends the matching helper to the console. Fixes and features from the newer version won't work until then.",
-                    )}
-            </p>
-            {send?.msg && (
-              <p
-                className={`mt-1 text-xs ${send.state === "fail" ? "text-[var(--color-bad)]" : "text-[var(--color-muted)]"}`}
-              >
-                {send.msg}
-              </p>
-            )}
-          </div>
-        </div>
-        <div className="flex shrink-0 gap-2">
-          <Button
-            size="sm"
-            variant="primary"
-            onClick={() => {
-              if (appOlder) {
-                // The browser build updates with its container; Settings says how.
-                if (isTauriEnv()) void useUpdateStore.getState().checkNow();
-                navigate("/settings");
-              } else {
-                // Send it right here: the banner already said what this does.
-                const target = host.trim();
-                void guardReplace(target).then((ok) => {
-                  if (!ok) return;
-                  setSentHere(true);
-                  void sendHelperTo(target, tr).finally(() => {
-                    if (helperSendFor(useHelperSendStore.getState(), target)?.state !== "fail") setSentHere(false);
-                  });
-                });
-              }
-            }}
-            loading={!appOlder && sending}
-            disabled={!appOlder && sending}
-          >
-            {appOlder
-              ? tr("helper_mismatch_update_app", undefined, "Update this app")
-              : tr("helper_mismatch_send", undefined, "Send helper")}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              safeSetItem("ps5upload.helper-mismatch.dismissed", pair);
-              setDismissed(pair);
-            }}
-          >
-            {tr("dismiss", undefined, "Dismiss")}
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 function AndroidStorageAccessBanner() {
@@ -1936,7 +1771,6 @@ export default function AppShell() {
       </div>
       {/* Clear of a column of system icons, as the page is (an iPhone Duo folded, #675). */}
       <div className="shell-safe-x shrink-0">
-        <HelperVersionBanner />
         <SessionBanner />
         <RemotePlayBanner />
         <MovedConsoleBanner />
@@ -1972,9 +1806,10 @@ export default function AppShell() {
               </div>
               <TopBarActions />
             </div>
-            {/* Slim, dismissible "update available" bar (the auto-check already
-                ran on mount). Pinned above the scroll area so it stays visible. */}
-            {isTauriEnv() ? <UpdateToast /> : <WebUpdateToast />}
+            {/* One line, only when the person has to act: a failed update install, or a PS5
+                that runs a newer helper than this app (lib/updateNotice). A routine update is a
+                dot on Settings and a row there. Pinned above the scroll area. */}
+            <UpdateBanner />
             {/* The first launch of a new version: its release notes, once. */}
             <WhatsNewOnLaunch />
             {/* Vertical scroll only. overflow-x-hidden is a backstop: the

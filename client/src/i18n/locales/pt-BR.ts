@@ -2877,9 +2877,6 @@ library_mount_tooltip_smp: "Entregar esta imagem ao ShadowMount+, que a monta e 
 
 
 
-helper_mismatch_title: "O auxiliar do PS5 é v{payload}, mas este app é v{app}",
-helper_mismatch_send: "Enviar auxiliar",
-helper_mismatch_body_v3: "Não há nada a fazer no próprio PS5: toque em Enviar auxiliar e este app envia ao console o auxiliar correspondente. Até lá, as correções e os recursos da versão nova não vão funcionar.",
 
 "joberr.direct_staged_file_missing_v2": "Este envio já havia terminado, então não restava nada para publicar — e agora o arquivo no PS5 está ausente ou com o tamanho errado. Envie-o novamente e escolha «Substituir» em vez de «Retomar».",
 "joberr.direct_tx_corrupt": "O PS5 detectou corrupção de protocolo nesta transferência. Reinicie o payload na aba «Enviar payload» e tente de novo.",
@@ -4404,8 +4401,6 @@ queue_stop_install_title: "Parar esta instalação?",
 queue_stopping: "Parando…",
 "collection.send_submit": "Enviar",
 queue_install_quiet: "O PS5 não pede dados há {min} min. Cancelou no PS5? Pare aqui (⊘).",
-helper_mismatch_app_older: "Outro dispositivo enviou um auxiliar mais novo. Atualize este app para igualar; enviar o auxiliar deste app o substituiria por um mais antigo para todos os dispositivos.",
-helper_mismatch_update_app: "Atualizar este app",
 mesh_chip: "Outros dispositivos: {count}",
 mesh_another_device: "Outro dispositivo",
 mesh_ev_restart: "{name} está reiniciando o auxiliar neste console. As transferências pausam e continuam em instantes.",
@@ -7506,7 +7501,6 @@ helper_copies_updated_title: "Auxiliar atualizado",
 helper_copies_updated_body: "Seu PS5 vai iniciar o auxiliar {version} na próxima vez que reiniciar.",
 helper_copies_failed_title: "Não foi possível atualizar o auxiliar que seu PS5 inicia ao ligar",
 helper_copies_failed_body: "Ainda é o auxiliar antigo: {list}. O PS5 o inicia de novo a cada reinício. Para corrigir manualmente, baixe o ps5upload.elf {version} na página de versões e copie-o sobre esse arquivo (tela Arquivos, FTP ou o pendrive USB), ou envie-o de novo no Payload Manager com o mesmo nome. ({error})",
-helper_mismatch_boot_copy: "Seu PS5 iniciou uma cópia antiga do auxiliar que guarda para a inicialização ({list}). Toque em Enviar auxiliar: este app envia o auxiliar correspondente e também atualiza essa cópia, então o PS5 inicia o novo após reiniciar.",
   hw_gpu_clock: "Clock da GPU",
   hw_gpu_clock_hint: "Clock gráfico do SMU, lido sob demanda",
   hw_cpu_measured: "Clock da CPU (medido)",

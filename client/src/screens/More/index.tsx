@@ -43,7 +43,7 @@ import { PageHeader, Input, EmptyState } from "../../components";
 import { useTr } from "../../state/lang";
 import { useNavSidebarStore } from "../../state/navSidebar";
 import { useLogsStore } from "../../state/logs";
-import { useUpdateStore } from "../../state/update";
+import { useSettingsDot } from "../../state/updateNoticeRuntime";
 import { isDarkTheme, useThemeStore } from "../../state/theme";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { getAppVersion } from "../../lib/appVersion";
@@ -79,10 +79,8 @@ export default function MoreScreen() {
   }, []);
 
   const errorCount = useLogsStore((s) => s.errorCount);
-  const updateAvailable = useUpdateStore(
-    // Not for a version the user skipped.
-    (s) => s.phase.kind === "available" && s.phase.result.latest_version !== s.skippedVersion,
-  );
+  // An update waiting (not skipped), or a PS5 helper newer than this app (lib/updateNotice).
+  const updateAvailable = useSettingsDot();
   const betaEnabled = useBetaFeaturesStore((s) => s.enabled);
 
   const visible = useMemo(
