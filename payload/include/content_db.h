@@ -161,6 +161,14 @@ int content_db_appinfo_json(const char *title_id, const char *keys,
                             char *buf, size_t cap, size_t *written);
 
 /*
+ * One appinfo.db value for one title (e.g. `_org_path`, where the console
+ * recorded the title's install). Read-only. 1 found (`out` holds it, cut to
+ * fit), 0 no such row, -1 appinfo.db could not be read or the id is not a
+ * title id.
+ */
+int content_db_appinfo_get(const char *title_id, const char *key, char *out, size_t cap);
+
+/*
  * Set one appinfo.db value. This writes to a live system database.
  *
  * Guarded, because getting it wrong bricks the title's Settings entry:

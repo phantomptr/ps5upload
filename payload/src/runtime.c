@@ -3749,6 +3749,10 @@ static int handle_app_register(runtime_state_t *state, const char *request_body,
     if (register_title_from_path(src_path, patch_drm_type, title_id,
                                   title_name, &used_nullfs, &err) != 0) {
         const char *reason = err ? err : "register_failed";
+        if (strncmp(reason, "register_title_installed", 24) == 0) {
+            /* #884: said on the TV too, for an app too old to explain it. */
+            pop_notification("Not added: this game is installed on the PS5. Start it from the home screen.");
+        }
         return mgmt_reply(MGMT_FRAME_ERROR, reason, (uint64_t)strlen(reason));
     }
     json_escape_into(title_name, title_name_esc, sizeof(title_name_esc));
@@ -3812,8 +3816,12 @@ static int handle_app_unregister(runtime_state_t *state, const char *request_bod
         pop_notification("PS5Upload tile removed");
         return mgmt_reply(MGMT_FRAME_APP_UNREGISTER_ACK, ack, (uint64_t)(sizeof ack - 1));
     }
+    /* #884: a folder or image row removing its registration sends registration_only, and then
+     * an install of the console's own is refused instead of uninstalled. */
+    int registration_only = 0;
+    if (request_body) (void)extract_json_bool_field(request_body, "registration_only", &registration_only);
     unregister_outcome_t outcome;
-    if (unregister_title(title_id, &err, &outcome) != 0) {
+    if (unregister_title_ex(title_id, registration_only, &err, &outcome) != 0) {
         const char *reason = err ? err : "unregister_failed";
         return mgmt_reply(MGMT_FRAME_ERROR, reason, (uint64_t)strlen(reason));
     }
