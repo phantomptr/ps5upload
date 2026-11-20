@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   autoRedeployDecision,
+  checkShowsLiveHelper,
   LOADER_SETTLE_MS,
   liveHelperDecision,
   loaderSettled,
@@ -56,5 +57,20 @@ describe("redeployAction", () => {
     expect(redeployAction({ autoBringUp: false, autoRedeploy: true, upThisBoot: false })).toBe("helper");
     expect(redeployAction({ autoBringUp: false, autoRedeploy: false, upThisBoot: false })).toBe("none");
     expect(redeployAction({ autoBringUp: true, autoRedeploy: false, upThisBoot: true })).toBe("none");
+  });
+});
+
+describe("checkShowsLiveHelper", () => {
+  it("a helper that answers, wants pairing, or is only slow is running: nothing is sent over it", () => {
+    expect(checkShowsLiveHelper({ reachable: true, session: "connected" })).toBe(true);
+    expect(checkShowsLiveHelper({ reachable: false, session: "needs_pairing" })).toBe(true);
+    // A weak Wi-Fi link: the port took a connection and the session kept hearing from the
+    // console, but node.status did not come back in time.
+    expect(checkShowsLiveHelper({ reachable: false, session: "down", reason: "status_slow" })).toBe(true);
+  });
+
+  it("a console that stopped answering or refuses the helper's port has no live helper", () => {
+    for (const reason of ["ava1_unreachable", "helper_not_ava1", undefined])
+      expect(checkShowsLiveHelper({ reachable: false, session: "down", reason })).toBe(false);
   });
 });

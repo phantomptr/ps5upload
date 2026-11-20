@@ -8,6 +8,8 @@
  */
 
 import type { HostPower } from "./consolePower";
+import { sessionNeedsAttention, type SessionState } from "./consoleSession";
+import { STATUS_SLOW_REASON } from "./statusSchedule";
 
 /** A console's probed state, as far as the redeploy loop cares. */
 export type RedeployStatus = "unknown" | "up" | "down" | undefined;
@@ -66,6 +68,20 @@ export function autoRedeployDecision(input: {
   if (input.power === "rest") return "hold";
   if (input.delivered >= MAX_REDEPLOYS_WITHOUT_RECOVERY) return "hold";
   return "redeploy";
+}
+
+/** Whether a status check shows a helper running on the console, so nothing may be sent over it
+ *  unasked: it answered, it answered and wants pairing, or it is alive and talking but slow to
+ *  answer (`status_slow`: its port took a connection and its open session kept hearing from it).
+ *
+ *  A slow answer is what a weak Wi-Fi link gives. Sending a helper then replaces the one that is
+ *  running, which drops every connection to it, and the console drops in and out over and over. */
+export function checkShowsLiveHelper(check: {
+  reachable: boolean;
+  session?: SessionState | null;
+  reason?: string | null;
+}): boolean {
+  return check.reachable || sessionNeedsAttention(check.session) || check.reason === STATUS_SLOW_REASON;
 }
 
 /** How many redeploy ticks (15 s each) a helper that still accepts

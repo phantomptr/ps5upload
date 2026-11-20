@@ -88,6 +88,7 @@ import { bytesMoved } from "../lib/bytesMoved";
 import { consoleBusy } from "../lib/usePoll";
 import {
   autoRedeployDecision,
+  checkShowsLiveHelper,
   liveHelperDecision,
   loaderSettled,
   MAX_REDEPLOYS_WITHOUT_RECOVERY,
@@ -976,10 +977,12 @@ function useAutoRedeployDownHelpers() {
           return;
         }
         if (cancelled) return;
-        if (fresh.reachable || sessionNeedsAttention(fresh.session)) {
+        if (checkShowsLiveHelper(fresh)) {
           log.info(
             "connection",
-            `auto-redeploy: ${host} answered a fresh probe — nothing to restore (the down verdict was stale)`,
+            fresh.reachable || sessionNeedsAttention(fresh.session)
+              ? `auto-redeploy: ${host} answered a fresh probe — nothing to restore (the down verdict was stale)`
+              : `auto-redeploy: ${host}'s helper is running but slow to answer (a weak network?) — not sending another over it`,
           );
           return;
         }
