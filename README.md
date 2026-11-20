@@ -416,6 +416,9 @@ with **Settings → Engine URL**.
   not a full URL, and the web page is built with it, so a prefix needs its own image build. The
   variables a self-hoster may need are in [engine/README.md](engine/README.md#environment-variables). See [reverse-proxy setup](REVERSE_PROXY.md) for nginx,
   proxy authentication, Docker bridge networking, and sub-path hosting.
+- **Play Together through your own name:** the engine can run the invite hub and guest pages
+  itself, published on their own port while the engine stays on the LAN. See
+  [SELF_HOSTING.md](SELF_HOSTING.md).
 - **Scripting it:** see [API and AI agents](#api-and-ai-agents) below. [ps5upctl](https://github.com/yuanzhengze/ps5upctl)
   is a community command-line client for the engine API (unofficial; the API can change between
   versions).

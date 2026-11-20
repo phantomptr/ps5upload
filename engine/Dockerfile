@@ -71,6 +71,8 @@ COPY AUTOMATION.md API.md MCP.md ./
 # so this always works; ps5upload.elf appears only if you ran
 # `make payload` first (it needs the PS5 payload SDK).
 COPY payload payload
+# The built-in Play Together hub serves the website's Share page (src/builtin_hub.rs).
+COPY site/share/index.html site/share/index.html
 WORKDIR /build/engine
 # --locked: the image is built from a tag; the lockfile must already satisfy
 # Cargo.toml (a stale lock after a squash merge fails here, not re-resolves).

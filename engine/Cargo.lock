@@ -2780,6 +2780,7 @@ dependencies = [
  "ps5upload-convert-core",
  "ps5upload-core",
  "ps5upload-fpkg",
+ "ps5upload-hub",
  "ps5upload-pkg",
  "ps5upload-tailnet",
  "rcgen",

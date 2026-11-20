@@ -743,7 +743,6 @@ pub(crate) fn page_base(raw: &str) -> Option<String> {
 
 /// The origin of a [`page_base`] one (`https://play.example.com`), what a browser on its pages
 /// sends as `Origin`.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn page_origin(base: &str) -> String {
     let after = base.find("://").map_or(0, |i| i + 3);
     let end = base[after..].find('/').map_or(base.len(), |i| after + i);

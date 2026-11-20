@@ -4951,6 +4951,7 @@ dependencies = [
  "ps5upload-convert-core",
  "ps5upload-core",
  "ps5upload-fpkg",
+ "ps5upload-hub",
  "ps5upload-pkg",
  "ps5upload-tailnet",
  "rcgen",
@@ -5000,6 +5001,20 @@ dependencies = [
  "thiserror 2.0.21",
  "toml 1.1.4+spec-1.1.0",
  "unicode-normalization",
+]
+
+[[package]]
+name = "ps5upload-hub"
+version = "12.6.14"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "futures-util",
+ "getrandom 0.4.3",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tokio",
 ]
 
 [[package]]

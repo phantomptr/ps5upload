@@ -4,12 +4,15 @@
 //!
 //! * `PS5UPLOAD_HUB_URL`: the hub (`wss://…`, as the hub setting takes it);
 //! * `PS5UPLOAD_PAGE_BASE`: where the guest pages are (`https://play.example.com/`, the pages
-//!   being `<base>join/`, `<base>pad/` and `<base>share/`).
+//!   being `<base>join/`, `<base>pad/` and `<base>share/`);
+//! * the built-in hub's `PS5UPLOAD_HUB_PUBLIC_URL` (crate::builtin_hub), which gives both when
+//!   these two are not set, and its `PS5UPLOAD_HUB_STUN`, which puts its STUN server first.
 //!
 //! A value that does not pass the setting's own check is ignored with a warning at start-up. A
 //! saved setting wins over the environment (join.rs keeps a setting only while it differs from
 //! these defaults), and the API says which one is in force (`sources`).
 
+use crate::builtin_hub::Plan;
 use crate::join_net::{DEFAULT_HUB, DEFAULT_PAGE_BASE, DEFAULT_STUN};
 
 pub(crate) const HUB_URL_ENV: &str = "PS5UPLOAD_HUB_URL";
@@ -24,6 +27,8 @@ pub(crate) struct Defaults {
     pub hub_url_env: bool,
     pub page_base_env: bool,
     pub stun_env: bool,
+    /// The built-in hub the environment asks for (None: off).
+    pub built_in: Option<Plan>,
 }
 
 impl Defaults {
@@ -33,13 +38,22 @@ impl Defaults {
         get: impl Fn(&str) -> Option<String>,
         warn: &mut Vec<String>,
     ) -> Self {
+        let built_in = Plan::from_lookup(&get, warn);
+        let derived = |f: fn(&Plan) -> Option<String>| built_in.as_ref().and_then(f);
+        let hub = derived(Plan::hub_url);
+        let pages = derived(Plan::page_base);
+        let own_stun = derived(Plan::stun_server);
         let mut d = Defaults {
-            hub_url: DEFAULT_HUB.to_string(),
-            page_base: DEFAULT_PAGE_BASE.to_string(),
-            stun: DEFAULT_STUN.iter().map(|s| s.to_string()).collect(),
-            hub_url_env: false,
-            page_base_env: false,
-            stun_env: false,
+            hub_url_env: hub.is_some(),
+            hub_url: hub.unwrap_or_else(|| DEFAULT_HUB.to_string()),
+            page_base_env: pages.is_some(),
+            page_base: pages.unwrap_or_else(|| DEFAULT_PAGE_BASE.to_string()),
+            stun_env: own_stun.is_some(),
+            stun: own_stun
+                .into_iter()
+                .chain(DEFAULT_STUN.iter().map(|s| s.to_string()))
+                .collect(),
+            built_in,
         };
         let set = |k: &str| get(k).filter(|v| !v.trim().is_empty());
         if let Some(v) = set(HUB_URL_ENV) {
@@ -50,7 +64,8 @@ impl Defaults {
             } else {
                 warn.push(format!(
                     "ignoring {HUB_URL_ENV}={v}: use a wss:// address (ws:// only to this \
-                     computer). Using {DEFAULT_HUB} instead."
+                     computer). Using {} instead.",
+                    d.hub_url
                 ));
             }
         }
@@ -62,9 +77,9 @@ impl Defaults {
                 }
                 None => warn.push(format!(
                     "ignoring {PAGE_BASE_ENV}={}: use an https:// address with no query or \
-                     fragment, such as https://play.example.com/. Using {DEFAULT_PAGE_BASE} \
-                     instead.",
-                    v.trim()
+                     fragment, such as https://play.example.com/. Using {} instead.",
+                    v.trim(),
+                    d.page_base
                 )),
             }
         }

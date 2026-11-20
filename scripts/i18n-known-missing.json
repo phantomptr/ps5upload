@@ -1,6 +1,8 @@
 {
   "ar": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -26,6 +28,8 @@
   },
   "bn": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -55,6 +59,8 @@
   },
   "de": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -92,6 +98,8 @@
   },
   "es": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -123,6 +131,8 @@
   },
   "fa": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -150,6 +160,8 @@
   },
   "fr": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -180,6 +192,8 @@
   },
   "hi": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -209,6 +223,8 @@
   },
   "hu": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -243,6 +259,8 @@
   },
   "id": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -279,6 +297,8 @@
   },
   "it": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -315,6 +335,8 @@
   },
   "ja": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -341,6 +363,8 @@
   },
   "ko": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -369,6 +393,8 @@
   },
   "pl": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -400,6 +426,8 @@
   },
   "pt-BR": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -431,6 +459,8 @@
   },
   "ru": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -461,6 +491,8 @@
   },
   "th": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -491,6 +523,8 @@
   },
   "tr": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -524,6 +558,8 @@
   },
   "vi": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -556,6 +592,8 @@
   },
   "zh-CN": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",
@@ -582,6 +620,8 @@
   },
   "zh-TW": {
     "missing": [
+      "pt_set_built_in_hub",
+      "pt_set_built_in_hub_no_url",
       "pt_set_page_base",
       "pt_set_page_base_bad",
       "pt_set_page_base_hint",

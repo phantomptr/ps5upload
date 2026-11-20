@@ -25,6 +25,7 @@ mod archive_build_tests;
 mod archive_tree;
 mod ava1_api;
 mod browser_payload;
+mod builtin_hub;
 mod bundled_payload;
 mod c2c_api;
 mod collection;
@@ -12986,6 +12987,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // work" and the rest as they were last set.
     self_host::log_settings();
     join::load_invites();
+    // The built-in hub, only when PS5UPLOAD_HUB_LISTEN asks for it (a listener of its own).
+    builtin_hub::start().await;
 
     // The Collection's automatic refresh (a no-op until a folder is added).
     collection_api::spawn_auto_refresh();

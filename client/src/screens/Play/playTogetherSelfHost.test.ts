@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { advancedBody, ownPagesNeedOwnHub, pageBaseOf, pageOrigin, readJoinState, readSources } from "./playTogetherState";
+import { advancedBody, ownPagesNeedOwnHub, pageBaseOf, pageOrigin, readBuiltInHub, readJoinState, readSources } from "./playTogetherState";
 
 // Settings › Play Together › Advanced on a self-hosted engine (#881): the guest page address, where
 // each value comes from, and what Save sends.
@@ -54,6 +54,14 @@ describe("reading the settings", () => {
     expect(old.settings.pageBase).toBeNull();
     expect(old.settings.sources).toBeNull();
     expect(readSources("x")).toBeNull();
+  });
+
+  it("reads the engine's own hub, shown only when it runs one", () => {
+    const on = readJoinState({ settings: { built_in_hub: { port: 19115, public_url: "https://play.example.com/", stun_ports: [] } } });
+    expect(on.settings.builtInHub).toEqual({ port: 19115, publicUrl: "https://play.example.com/" });
+    expect(readBuiltInHub({ port: 19115, public_url: null })).toEqual({ port: 19115, publicUrl: null });
+    expect(readJoinState({ settings: { built_in_hub: null } }).settings.builtInHub).toBeNull();
+    expect(readJoinState({ settings: {} }).settings.builtInHub).toBeNull();
   });
 });
 

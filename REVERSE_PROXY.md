@@ -4,6 +4,10 @@ A proxy with TLS is also how **Play works in a browser on another device**. Brow
 page the video decoder on `https://` (or on `localhost`), so `http://<nas>:19113` can open the whole
 app except Play. Over plain http, play with the desktop or phone app instead.
 
+Play Together's own hub and guest pages on your server, for internet invites through your own
+name, are in [SELF_HOSTING.md](SELF_HOSTING.md). That is the one part a proxy may publish to the
+internet; this page is about the web UI, which stays on your LAN.
+
 Use the published web UI image unchanged. `PS5UPLOAD_BASE_URL` is a **URL path prefix**,
 such as `/ps5/`, not a hostname or a full URL. Leave it unset for a dedicated hostname. It is
 read when the engine starts, so it needs no rebuild. A value that is not a path is ignored with a

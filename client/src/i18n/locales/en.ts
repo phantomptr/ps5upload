@@ -8631,6 +8631,8 @@ rp_users_add_hint: "To play as another user too, sign in to that user on the PS5
 "pt_set_source_custom": "Your setting",
 "pt_set_source_environment": "Set on the engine's server",
 "pt_set_use_defaults": "Use the defaults",
+"pt_set_built_in_hub": "This engine runs its own hub on port {port}, reached at {url}. It is set on the engine's server and can't be changed here.",
+"pt_set_built_in_hub_no_url": "This engine runs its own hub on port {port}, with no public address set. It is set on the engine's server and can't be changed here.",
 "pt_set_failed": "The engine didn't take this setting. Try again.",
 "join_net_lost": "The connection to {host} dropped. Check your internet connection, then ask again.",
 "pt_set_guests_as": "Guests play as",

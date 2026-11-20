@@ -281,6 +281,24 @@ export function PlayTogetherSettings() {
           {tr("pt_set_advanced", undefined, "Advanced")}
         </summary>
         <div className="mt-3 space-y-3">
+          {net.builtInHub && (
+            <p
+              className="text-xs text-[var(--color-muted)]"
+              data-testid="pt-set-built-in-hub"
+            >
+              {net.builtInHub.publicUrl
+                ? tr(
+                    "pt_set_built_in_hub",
+                    { port: net.builtInHub.port, url: net.builtInHub.publicUrl },
+                    `This engine runs its own hub on port ${net.builtInHub.port}, reached at ${net.builtInHub.publicUrl}. It is set on the engine's server and can't be changed here.`,
+                  )
+                : tr(
+                    "pt_set_built_in_hub_no_url",
+                    { port: net.builtInHub.port },
+                    `This engine runs its own hub on port ${net.builtInHub.port}, with no public address set. It is set on the engine's server and can't be changed here.`,
+                  )}
+            </p>
+          )}
           <Input
             label={tr("pt_set_hub", undefined, "Hub address")}
             labelHint={sourceText(sources?.hubUrl)}

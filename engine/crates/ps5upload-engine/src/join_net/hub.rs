@@ -163,6 +163,9 @@ impl Room {
 }
 
 pub(crate) async fn connect(url: &str) -> Result<Ws, String> {
+    // This engine's own built-in hub: over loopback, not out through its reverse proxy.
+    let own = crate::builtin_hub::dial(url);
+    let url = own.as_deref().unwrap_or(url);
     let uri: axum::http::Uri = url.parse().map_err(|_| "bad hub address".to_string())?;
     let host = uri.host().ok_or("bad hub address")?.to_string();
     let tls = uri.scheme_str() == Some("wss");

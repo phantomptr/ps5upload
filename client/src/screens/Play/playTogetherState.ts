@@ -165,6 +165,9 @@ export interface NetSettings {
   stun: string[];
   /** Where hubUrl, pageBase and stun come from; null: an engine from before it. */
   sources: NetSources | null;
+  /** The engine runs its own hub (a server, PS5UPLOAD_HUB_LISTEN): shown, never changed here.
+   *  Null when it does not (or an engine from before it). */
+  builtInHub: BuiltInHub | null;
   upnp: boolean;
   /** The UDP port internet friends connect to (0: not chosen yet; null: an engine before it). */
   port: number | null;
@@ -207,7 +210,7 @@ export const EMPTY_JOIN: JoinHostState = {
   invite: null,
   guests: [],
   asks: [],
-  settings: { blockSystemButtons: true, maxPlayers: 3, streamSeat: false, internetInvites: null, invites: null, hubUrl: "", pageBase: null, stun: [], sources: null, upnp: true, port: null, videoTrack: true },
+  settings: { blockSystemButtons: true, maxPlayers: 3, streamSeat: false, internetInvites: null, invites: null, hubUrl: "", pageBase: null, stun: [], sources: null, builtInHub: null, upnp: true, port: null, videoTrack: true },
   netPeers: [],
   seatNext: false,
   nextProfile: null,
@@ -328,6 +331,20 @@ export function lowerForAll(
   return { guest: g, gotKbps: g.link.kbps ?? g.link.fitKbps!, toKbps: to };
 }
 
+/** The engine's own hub (builtin_hub.rs view): its port and public address. */
+export interface BuiltInHub {
+  port: number;
+  publicUrl: string | null;
+}
+
+/** `settings.built_in_hub`, or null when the engine runs none. */
+export function readBuiltInHub(v: unknown): BuiltInHub | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o.port !== "number") return null;
+  return { port: o.port, publicUrl: typeof o.public_url === "string" && o.public_url ? o.public_url : null };
+}
+
 /** `settings.sources` (join.rs settings_view), or null from an engine before it. */
 export function readSources(v: unknown): NetSources | null {
   if (!v || typeof v !== "object") return null;
@@ -411,6 +428,7 @@ export function readJoinState(v: unknown): JoinHostState {
       pageBase: typeof s.page_base === "string" ? s.page_base : null,
       stun: Array.isArray(s.stun) ? s.stun.filter((x): x is string => typeof x === "string") : [],
       sources: readSources(s.sources),
+      builtInHub: readBuiltInHub(s.built_in_hub),
       upnp: s.upnp !== false,
       port: typeof s.port === "number" ? s.port : null,
       videoTrack: s.video_track !== false,

@@ -332,11 +332,13 @@ pub(crate) fn invites_word(anywhere: bool) -> &'static str {
 /// The settings as the API shows them: every field, `invites` (the same choice as
 /// `internet_invites`, in the words of Settings › App › Play Together), and `sources`: where
 /// `hub_url`, `page_base` and `stun` come from ("custom": set in Settings; "environment": a
-/// self-hosted engine's variables; "default").
+/// self-hosted engine's variables; "default"), and `built_in_hub`: this engine's own hub when
+/// it runs one (crate::builtin_hub: `{port, public_url, stun_ports}`, read-only), else null.
 pub(crate) fn settings_view(s: &Settings) -> serde_json::Value {
     let mut v = serde_json::to_value(s).unwrap_or_default();
     v["invites"] = invites_word(s.internet_invites).into();
     v["sources"] = crate::self_host::defaults().sources(&s.hub_url, &s.page_base, &s.stun);
+    v["built_in_hub"] = crate::builtin_hub::view();
     v
 }
 
@@ -2333,9 +2335,12 @@ pub async fn relay(
         .on_upgrade(move |s| async move { crate::pad_link::relay_to(s, &target).await })
 }
 
+/// The guest page (client/vite.join.config.ts), also served by the built-in hub.
+pub(crate) const PAGE_HTML: &str = include_str!("join_page.html");
+
 /// `GET /join`: the guest page.
 pub async fn page() -> impl IntoResponse {
-    Html(include_str!("join_page.html"))
+    Html(PAGE_HTML)
 }
 
 fn say(v: serde_json::Value) -> Message {
