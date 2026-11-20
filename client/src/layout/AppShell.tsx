@@ -723,6 +723,8 @@ function useStatusPolling() {
           // hide a console that needs pairing.
           session: s.session,
           power,
+          // From this reply only: a helper too old for this app, not nothing listening (#877).
+          helperTooOld: !s.reachable && s.helperTooOld === true,
         });
         // Clear the active console's "rechecking…" flag once its probe lands.
         if (isActive(key)) setStatus({ payloadProbing: false });

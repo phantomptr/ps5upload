@@ -89,6 +89,11 @@ function helperChip(tr: Translator, s: CardStatus): { text: string; tone: "good"
       return { text: tr("cs_card_helper_stopped", undefined, "Helper stopped by you"), tone: "neutral" };
     case "missing":
       return { text: tr("cs_card_helper_missing", undefined, "Helper not running"), tone: "warn" };
+    case "old":
+      return {
+        text: tr("cs_card_helper_old", undefined, "An older helper is running · send the helper to replace it"),
+        tone: "warn",
+      };
     default:
       return { text: tr("cs_card_helper_unknown", undefined, "Checking the helper…"), tone: "neutral" };
   }

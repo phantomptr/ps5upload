@@ -186,8 +186,9 @@ pub async fn payload_check(ip: String) -> serde_json::Value {
 
 /// The reply for an engine that answered the status probe with a failure. `error` stays the
 /// raw body (the renderer matches tokens in it); `reason` (the engine's token, e.g.
-/// `console_rest_mode`) and `power` (`awake` / `rest` / `unreachable`) are passed through
-/// from a JSON body `{ error, reason, power }` when the engine sent them.
+/// `console_rest_mode`), `power` (`awake` / `rest` / `unreachable`) and `helper_too_old`
+/// (`true`: a helper answered but is too old for this app) are passed through from a JSON
+/// body `{ error, reason, power, helper_too_old }` when the engine sent them.
 fn status_failure(code: u16, body: &str) -> serde_json::Value {
     let mut out = serde_json::json!({
         "ok": false,
@@ -204,6 +205,9 @@ fn status_failure(code: u16, body: &str) -> serde_json::Value {
             if let Some(v @ serde_json::Value::String(_)) = parsed.get(key) {
                 out[key] = v.clone();
             }
+        }
+        if parsed.get("helper_too_old") == Some(&serde_json::Value::Bool(true)) {
+            out["helper_too_old"] = true.into();
         }
     }
     out
@@ -238,6 +242,16 @@ mod status_failure_tests {
         let v = status_failure(502, r#"{"error":"x","reason":"helper_not_ava1"}"#);
         assert_eq!(v["reason"], "helper_not_ava1");
         assert!(v.get("power").is_none());
+        assert!(v.get("helper_too_old").is_none());
+        // A helper that answered but is too old (#877): only a real `true` passes.
+        let v = status_failure(
+            502,
+            r#"{"error":"x","reason":"helper_not_ava1","helper_too_old":true}"#,
+        );
+        assert_eq!(v["reason"], "helper_not_ava1");
+        assert_eq!(v["helper_too_old"], true);
+        let v = status_failure(502, r#"{"error":"x","helper_too_old":"yes"}"#);
+        assert!(v.get("helper_too_old").is_none());
     }
 }
 

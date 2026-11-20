@@ -82,13 +82,15 @@ export function timeSyncBody(
 }
 
 /**
- * `reason` and `power` from a failed status probe's body (`{ error, reason, power }`), the
- * fields probes.rs passes through for `payload_check`. Only string values; nothing for an
+ * `reason`, `power` and `helper_too_old` from a failed status probe's body
+ * (`{ error, reason, power, helper_too_old }`), the fields probes.rs passes through for
+ * `payload_check`. Only string values (and `helper_too_old` only when `true`); nothing for an
  * older engine or a body that is not JSON.
  */
 export function statusFailureFields(body: string): {
   reason?: string;
   power?: string;
+  helper_too_old?: true;
 } {
   let parsed: unknown;
   try {
@@ -98,9 +100,10 @@ export function statusFailureFields(body: string): {
   }
   if (typeof parsed !== "object" || parsed === null) return {};
   const o = parsed as Record<string, unknown>;
-  const out: { reason?: string; power?: string } = {};
+  const out: { reason?: string; power?: string; helper_too_old?: true } = {};
   if (typeof o["reason"] === "string") out.reason = o["reason"];
   if (typeof o["power"] === "string") out.power = o["power"];
+  if (o["helper_too_old"] === true) out.helper_too_old = true;
   return out;
 }
 
@@ -1167,7 +1170,8 @@ export async function browserInvoke<T>(
           reachable: false,
           engine: true,
           error: statusFailureText(body) || `engine HTTP ${r.status}`,
-          // The engine's `{ error, reason, power }`: passed through like probes.rs does.
+          // The engine's `{ error, reason, power, helper_too_old }`: passed through like
+          // probes.rs does.
           ...statusFailureFields(body),
         } as unknown as T;
       } catch (e) {

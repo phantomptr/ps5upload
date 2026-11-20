@@ -61,6 +61,16 @@ describe("Consoles › a card at a glance", () => {
     expect(showChecklist(s)).toBe(true);
   });
 
+  it("an older helper runs (#877): said so, at the helper step, even if once stopped", () => {
+    const s = cardStatus(
+      input({ stopped: true, runtime: rt({ payloadStatus: "down", power: "awake", helperTooOld: true }) }),
+    );
+    expect(s.power).toBe("online");
+    expect(s.helper).toBe("old");
+    expect(s.step).toBe("helper");
+    expect(showChecklist(s)).toBe(true);
+  });
+
   it("not answering at all: offline, no path, the checklist at reaching it", () => {
     const s = cardStatus(input({ runtime: rt({ payloadStatus: "down", power: "unreachable" }) }));
     expect(s.power).toBe("offline");
