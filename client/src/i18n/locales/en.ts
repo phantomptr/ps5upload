@@ -9365,6 +9365,23 @@ game_fps_tv_note: "Shown here, not on the TV: drawing over a game means changing
 "usb_wizard_remove_file": "Remove",
 "usb_wizard_local_order": "Your files load after the library's payloads, in the order added.",
 "usb_wizard_step2_hint_v2": "Tick copies already in the app's library, or add payload files from this computer.",
+console_install_where_internal: "console storage",
+console_install_where_m2: "M.2 storage",
+console_install_where_usb: "USB extended storage",
+console_install_where_extended: "extended storage",
+console_install_where_record: "a storage drive that isn't connected right now",
+console_install_this_game: "This game",
+console_install_register_refused: "{name} is already installed on {where}. Start it from the home screen. A copy with the same title can't be added to the home screen while the installed game is there, so nothing was changed.",
+console_install_unregister_refused: "{name} is installed on {where} by the PS5 itself, so it was left alone: removing this copy from the home screen would have uninstalled that game. To remove the installed game, use Uninstall on its page or Settings › Storage on the PS5.",
+console_install_title: "Already installed on this PS5",
+console_install_start_installed: "Start the installed game",
+displaced_install_title: "{name} needs to be installed again",
+displaced_install_body: "{name} is installed on {where} ({pkg}), but an earlier version of PS5Upload added a copy of it to the home screen, and the PS5 now lists the game under Console Storage, where it has no game data, so it can't start. PS5Upload no longer does this. Your game files and saves are still there.",
+displaced_install_step_saves: "Back up this game's saves first (Saves on this page, or Settings › Saved Data on the PS5).",
+displaced_install_step_delete: "On the PS5, go to Settings › Storage › Console Storage › Games and Apps, select {name} and delete it. Saves are kept.",
+displaced_install_step_download: "Download {name} again from the Game Library. To have it on {where} again, choose that first in Settings › Storage › Installation Location.",
+displaced_install_step_no_move: "Don't use Move Games and Apps for this game: the copy the PS5 lists on Console Storage has no game data, and moving it onto {where} could overwrite the real game there.",
+displaced_install_step_rebuild: "Only if it still won't start: Rebuild Database in Safe Mode. It keeps games and saves, but resets the home screen's order, and games added by PS5Upload or other homebrew have to be added again.",
 };
 
 export default en;

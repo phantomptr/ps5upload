@@ -175,7 +175,7 @@ use ps5upload_core::{
     download::DownloadKind,
     focus::{focus_probe, FocusProbe},
     fs_ops::{
-        app_launch, app_list_registered, app_register, app_unregister, fs_delete_with_op_id,
+        app_launch, app_list_registered, app_register, app_unregister_scoped, fs_delete_with_op_id,
         fs_mkdir, fs_mount, fs_op_cancel, fs_op_status, fs_read, fs_read_with_timeout, fs_unmount,
         list_dir, reconcile, DirListing, ListDirOptions, MountResult, ReconcileMode,
         RegisterResult,
@@ -3480,6 +3480,12 @@ struct AppUnregisterReq {
     #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     title_id: String,
+    /// Only take off a folder or image registration (#884): a helper from 12.6.16 on then
+    /// refuses, before touching anything, a title the console's own installer has installed
+    /// (`unregister_title_installed:<where>`), instead of uninstalling that game. Older helpers
+    /// ignore it. Default false: the game page's Uninstall of a package install.
+    #[serde(default)]
+    registration_only: bool,
 }
 
 async fn ps5_app_unregister(
@@ -3491,11 +3497,12 @@ async fn ps5_app_unregister(
         return missing_console_addr();
     };
     let title_id = req.title_id;
+    let registration_only = req.registration_only;
     let started = std::time::Instant::now();
     crate::log_at!(
         Info,
         "files",
-        "app_unregister: addr={addr} title_id={title_id}"
+        "app_unregister: addr={addr} title_id={title_id} registration_only={registration_only}"
     );
     let title_for_log = title_id.clone();
     // Uninstalling changes which artwork exists, so drop this console's
@@ -3503,7 +3510,7 @@ async fn ps5_app_unregister(
     // otherwise see a cover for a title they just removed.
     match tokio::task::spawn_blocking(move || {
         icon_cache::invalidate_console(&addr);
-        app_unregister(&addr, &title_id)
+        app_unregister_scoped(&addr, &title_id, registration_only)
     })
     .await
     .map_err(anyhow::Error::from)

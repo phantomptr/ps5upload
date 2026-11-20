@@ -1024,6 +1024,12 @@ test-payload: payload
 		-o $(SELFTEST_DIR)/ps5upload-unregister-outcome-selftest \
 		$(PAYLOAD_DIR)/tests/unregister_outcome_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-unregister-outcome-selftest
+	@echo "Running console-install guard self-test (host build, #884)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-DREGISTER_C_PATH='"$(PAYLOAD_DIR)/src/register.c"' \
+		-o $(SELFTEST_DIR)/ps5upload-install-guard-selftest \
+		$(PAYLOAD_DIR)/tests/install_guard_selftest.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-install-guard-selftest
 	@echo "Running metadata title-id normalizer self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o $(SELFTEST_DIR)/ps5upload-tmdb-id-selftest \
 		$(PAYLOAD_DIR)/tests/tmdb_id_selftest.c

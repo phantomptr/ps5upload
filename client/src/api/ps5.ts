@@ -31,6 +31,12 @@ import {
   appendManualListLine,
   SMP_MANUAL_LIST_PATH,
 } from "../lib/smpManualList";
+import {
+  ConsoleInstallRefusal,
+  findConsoleInstall,
+  titleIdFromParamJson,
+  type ConsoleInstall,
+} from "../lib/consoleInstall";
 
 export interface FolderInspectResult {
   path: string;
@@ -1783,6 +1789,10 @@ export async function appRegister(
   opts?: { patchDrmType?: boolean },
 ): Promise<RegisterResult> {
   const addr = toMgmtAddr(transferAddr);
+  // #884: never over a game the PS5's own installer installed (the helper refuses too, from
+  // 12.6.16; this keeps an older helper from rewriting that game's install record).
+  const installed = await consoleInstallOfSource(transferAddr, srcPath);
+  if (installed) throw new ConsoleInstallRefusal("register", installed);
   return invoke<RegisterResult>("ps5_app_register", {
     req: {
       addr,
@@ -1790,6 +1800,43 @@ export async function appRegister(
       patch_drm_type: opts?.patchDrmType ?? null,
     },
   });
+}
+
+/** #884: the PS5 installer's own install of the title a game folder carries (its
+ *  sce_sys/param.json), or null. A folder without a readable param.json (a param.sfo game) is
+ *  left to the helper's own check. Rejects when the console could not say whether the game is
+ *  installed. */
+export async function consoleInstallOfSource(
+  transferAddr: string,
+  srcPath: string,
+): Promise<ConsoleInstall | null> {
+  let titleId: string | null = null;
+  try {
+    const r = await fsReadPreview(
+      toMgmtAddr(transferAddr),
+      `${srcPath.replace(/\/+$/, "")}/sce_sys/param.json`,
+      64 * 1024,
+    );
+    if (r.base64) {
+      const bin = atob(r.base64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      titleId = titleIdFromParamJson(new TextDecoder().decode(bytes));
+    }
+  } catch {
+    return null;
+  }
+  if (!titleId) return null;
+  return findConsoleInstall({ exists: (p) => fsPathPresent(transferAddr, p) }, titleId);
+}
+
+/** #884: the PS5 installer's own install of `titleId`, or null. Rejects when the console could
+ *  not say. */
+export function consoleInstallOfTitle(
+  transferAddr: string,
+  titleId: string,
+): Promise<ConsoleInstall | null> {
+  return findConsoleInstall({ exists: (p) => fsPathPresent(transferAddr, p) }, titleId);
 }
 
 /** What an uninstall left behind. */
@@ -1817,8 +1864,19 @@ export interface UnregisterResult {
 export async function appUnregister(
   transferAddr: string,
   titleId: string,
+  /** `registrationOnly`: a folder or image row taking its own registration off (#884). A game
+   *  the PS5's installer installed under the same title id is then refused, by the app and by a
+   *  12.6.16+ helper, instead of uninstalled. The game page's Uninstall leaves it off. */
+  opts?: { registrationOnly?: boolean },
 ): Promise<UnregisterResult> {
   const addr = toMgmtAddr(transferAddr);
+  if (opts?.registrationOnly) {
+    const installed = await findConsoleInstall(
+      { exists: (p) => fsPathPresent(transferAddr, p) },
+      titleId,
+    );
+    if (installed) throw new ConsoleInstallRefusal("unregister", installed);
+  }
   const res = await invoke<{
     ok?: boolean;
     error?: string | null;
@@ -1829,7 +1887,9 @@ export async function appUnregister(
     managed_by?: string | null;
     image?: string | null;
   } | null>("ps5_app_unregister", {
-    req: { addr, title_id: titleId },
+    req: opts?.registrationOnly
+      ? { addr, title_id: titleId, registration_only: true }
+      : { addr, title_id: titleId },
   });
   if (res) assertOk(res, "Uninstall");
   // A 7.1.6 helper that tore down our own folder registration reports Sony's refusal with

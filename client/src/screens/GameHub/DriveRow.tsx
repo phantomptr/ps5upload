@@ -76,6 +76,8 @@ import {
   appLaunch,
   appRegister,
   appUnregister,
+  consoleInstallOfSource,
+  consoleInstallOfTitle,
   smpManualInstall,
   smpCheckoutBegin,
   fetchGameMeta,
@@ -121,6 +123,7 @@ import { useImageRetry } from "../../lib/useImageRetry";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { createLimiter } from "../../lib/limitConcurrency";
 import { humanizePs5Error, humanizeCaught } from "../../lib/humanizeError";
+import { ConsoleInstallRefusal, installRefusal, registerRefusedText } from "../../lib/consoleInstall";
 import {
   fetchTitleInfo,
   patchesSiteName,
@@ -706,7 +709,7 @@ function LibraryRowImpl({
     const addr = consoleAddr(host);
     if (registeredHere) {
       for (const id of titlesOfRow()) {
-        await appUnregister(addr, id).catch((e: unknown) => console.warn(`appUnregister(${id}) failed:`, e));
+        await appUnregister(addr, id, { registrationOnly: true }).catch((e: unknown) => console.warn(`appUnregister(${id}) failed:`, e));
       }
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
@@ -1546,7 +1549,7 @@ function LibraryRowImpl({
         );
         for (const tid of titleIdsToUnregister) {
           try {
-            await appUnregister(addr, tid);
+            await appUnregister(addr, tid, { registrationOnly: true });
           } catch (uErr) {
             console.warn(`appUnregister(${tid}) failed (best-effort):`, uErr);
           }
@@ -1636,10 +1639,23 @@ function LibraryRowImpl({
         // root cause, not the secondary symptom.
         const regMsg =
           regErr instanceof Error ? regErr.message : String(regErr);
-        // Idempotent re-register returns 0x80990002 ("already
-        // registered") which the payload normalises to success;
-        // if we somehow see it here, treat as success.
-        if (/0x80990002|already\s*registered/i.test(regMsg)) {
+        const installed = installRefusal(regMsg);
+        if (installed) {
+          // #884: the PS5 has this game installed itself (M.2, console or extended storage).
+          // Nothing was written; a DRM-patch retry would only write to the copy. Offer the
+          // installed game instead of this copy.
+          setMountNote(null);
+          const startInstalled = await confirmDialog({
+            title: tr("console_install_title", undefined, "Already installed on this PS5"),
+            message: registerRefusedText(installed.where, entry.name),
+            confirmLabel: tr("console_install_start_installed", undefined, "Start the installed game"),
+          });
+          if (!startInstalled) {
+            okOutcome = false;
+            errMsg = registerRefusedText(installed.where, entry.name);
+            return;
+          }
+        } else if (/0x80990002|already\s*registered/i.test(regMsg)) {
           // proceed to launch
         } else {
           setMountNote(
@@ -1747,6 +1763,12 @@ function LibraryRowImpl({
         // (or timing out after it landed), not "SMP is gone": registering
         // here as well would race SMP for /user/app + app.db, so say what
         // happened and stop. The user can try again.
+        // #884: ShadowMount+ registers it the same way, so the same rule: never over a game the
+        // PS5 installed itself.
+        const installedByPs5 = entry.titleId
+          ? await consoleInstallOfTitle(consoleAddr(host), entry.titleId)
+          : await consoleInstallOfSource(consoleAddr(host), entry.path);
+        if (installedByPs5) throw new ConsoleInstallRefusal("register", installedByPs5);
         let r: { added: boolean };
         try {
           r = await smpManualInstall(mgmt, entry.path);
@@ -1959,6 +1981,7 @@ function LibraryRowImpl({
       const { stillPresent, unverified, shadowMount, image } = await appUnregister(
         consoleAddr(host),
         entry.titleId,
+        { registrationOnly: true },
       );
       audit("library_unregister", withConsolePrefix(host, entry.name), { context: entry.titleId });
       // #476: say so when the PS5 still lists the title, rather than claim the tile is gone.

@@ -1914,6 +1914,10 @@ pub async fn ps5_app_register(req: AppRegisterReq) -> Result<JsonValue, String> 
 pub struct AppUnregisterReq {
     pub addr: Option<String>,
     pub title_id: String,
+    /// Only a folder or image registration: the helper refuses the console's own install of the
+    /// same title id instead of uninstalling it (#884).
+    #[serde(default)]
+    pub registration_only: bool,
 }
 
 #[tauri::command]
@@ -1925,6 +1929,7 @@ pub async fn ps5_app_unregister(req: AppUnregisterReq) -> Result<JsonValue, Stri
         &serde_json::json!({
             "addr": req.addr,
             "title_id": req.title_id,
+            "registration_only": req.registration_only,
         }),
     )
     .await

@@ -45,6 +45,7 @@ import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { BackportPanel } from "../Backport/BackportPanel";
+import { DisplacedInstallNotice } from "./DisplacedInstallNotice";
 import { DumpThisGame, isDumpable, useTitleDumpJobs } from "./DumpThisGame";
 import { useCollectionItems, useCollectionLoaded } from "./collectionLink";
 import { InstalledKindBadge, installedKindOf } from "./installedKind";
@@ -462,6 +463,9 @@ export function OnThisPs5Card({
         <div className="mb-3">
           <SmpNeededWarning host={host} count={1} />
         </div>
+      )}
+      {!title.system && (
+        <DisplacedInstallNotice host={host} titleId={title.titleId} name={title.titleName} />
       )}
       {actionError && (
         <div className="mb-3">

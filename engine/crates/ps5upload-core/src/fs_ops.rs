@@ -947,7 +947,29 @@ impl UnregisterOutcome {
 /// Unmount our registration (when there is one) and ask Sony to uninstall the
 /// title. See [`UnregisterOutcome`] for what the reply means.
 pub fn app_unregister(addr: &str, title_id: &str) -> Result<UnregisterOutcome> {
-    let body = serde_json::to_vec(&serde_json::json!({ "title_id": title_id }))
+    app_unregister_scoped(addr, title_id, false)
+}
+
+/// The APP_UNREGISTER request body. `registration_only` is sent only when set, so the request
+/// an older caller makes is unchanged.
+pub fn app_unregister_body(title_id: &str, registration_only: bool) -> serde_json::Value {
+    if registration_only {
+        serde_json::json!({ "title_id": title_id, "registration_only": true })
+    } else {
+        serde_json::json!({ "title_id": title_id })
+    }
+}
+
+/// [`app_unregister`], but with `registration_only` the helper (12.6.16 on) refuses a title the
+/// console's own installer has installed on any storage, before touching anything, with
+/// `unregister_title_installed:<where>` (#884): a folder or image row taking its registration
+/// off must never uninstall the real game of the same title id. Older helpers ignore the field.
+pub fn app_unregister_scoped(
+    addr: &str,
+    title_id: &str,
+    registration_only: bool,
+) -> Result<UnregisterOutcome> {
+    let body = serde_json::to_vec(&app_unregister_body(title_id, registration_only))
         .context("serialize app_unregister body")?;
     // On FW 13.60 the unregister repeats for two records and can run 10 s or more, and the
     // helper then waits up to 10 s for the title's folders to go: 60 s deadline.

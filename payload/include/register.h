@@ -1,6 +1,7 @@
 #ifndef PS5UPLOAD2_REGISTER_H
 #define PS5UPLOAD2_REGISTER_H
 
+#include "install_guard.h"
 #include "unregister_outcome.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -98,6 +99,20 @@ int register_title_from_path(const char *src_path,
 int unregister_title(const char *title_id,
                      const char **err_reason_out,
                      unregister_outcome_t *out);
+
+/* unregister_title, but when `registration_only` is set it refuses, before anything is touched,
+ * a title the console's own installer has installed on any storage
+ * ("unregister_title_installed:<where>", #884): a folder or image row removing its registration
+ * must never uninstall the real game of the same title id. */
+int unregister_title_ex(const char *title_id, int registration_only,
+                        const char **err_reason_out, unregister_outcome_t *out);
+
+/* Whether `title_id` is installed by the console's own installer on any storage: an app.pkg
+ * under /user/app, /mnt/ext0, /mnt/ext1 or any other mounted /mnt/ext<N>, or appinfo.db
+ * recording a package location for it while it has no tracker of ours (install_guard.h). 1 with
+ * `hit` filled, 0 not. Read-only. register_title_from_path and register_remount_nullfs refuse
+ * such a title before writing anything ("register_title_installed:<where>", #884). */
+int register_title_installed_by_console(const char *title_id, install_guard_hit_t *hit);
 
 /* Whether app.db (what the home screen draws) still has a row for `title_id`: 1, 0, or -1 when
  * app.db could not be read. Read-only. */
