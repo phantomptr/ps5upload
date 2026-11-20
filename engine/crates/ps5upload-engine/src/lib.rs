@@ -118,6 +118,7 @@ mod save_backup;
 mod save_backup_console;
 mod save_backup_server;
 mod save_copy;
+mod save_layout;
 mod save_sync;
 mod self_host;
 mod server_out;
@@ -6310,6 +6311,14 @@ pub(crate) fn is_console_webui_tile(title_id: &str) -> bool {
     title_id
         .trim()
         .eq_ignore_ascii_case(CONSOLE_WEBUI_TILE_TITLE_ID)
+}
+
+/// A game's name on the console at `addr` (see `appmeta_title_name`), for naming its save backup
+/// folder (#886); None when the console does not say.
+pub(crate) fn title_name(addr: &str, title_id: &str) -> Option<String> {
+    appmeta_title_name(addr, title_id, &mut AppDbOnce::new(addr))
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
 }
 
 /// Best-effort title name from `/user/appmeta/<title_id>/`. Tries PS5
@@ -13521,6 +13530,8 @@ fn build_app_and_mcp(
             post(save_backup::post_import_ps4),
         )
         .route("/api/save-backup/share", post(save_copy::post_share))
+        // The same, written into the user's Decrypted folder of a backup place (#886).
+        .route("/api/save-backup/export", post(save_backup::post_export))
         // A shared save's zip comes as the body, written to disk as it arrives (its own limit).
         .route(
             "/api/save-backup/use-shared",

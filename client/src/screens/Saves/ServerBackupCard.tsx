@@ -11,9 +11,18 @@ import { hostOf } from "../../lib/addr";
 import { useConnectionsStore } from "../../state/connections";
 import { useRosterStore } from "../../state/roster";
 import { clampKeep, numberBoxLeft } from "../../state/autoSaveBackup";
-import { clampHours, isChosen, toggleChosen, useServerBackupStore } from "../../state/serverSaveBackup";
+import {
+  clampHours,
+  driveKeep,
+  isChosen,
+  serverConsoleCopySupported,
+  toggleChosen,
+  useServerBackupStore,
+} from "../../state/serverSaveBackup";
 import { useTr } from "../../state/lang";
 import { userHex } from "./saveUsers";
+import { ConsoleCopyChoice, useConsoleDrives } from "./AutoBackupCard";
+import { BackupLayoutChoice, layoutSupported } from "./BackupLayoutChoice";
 
 /** Backups to a network share (#592): where, when (every few hours or after a game is closed),
  *  which consoles and users, and how the last one went. The engine runs them and verifies each
@@ -30,6 +39,8 @@ export default function ServerBackupCard({
   const loadConnections = useConnectionsStore((s) => s.load);
   const profiles = useRosterStore((s) => s.profiles);
   const [server, setServer] = useState("");
+  const copySupported = serverConsoleCopySupported(settings) && !!settings?.target;
+  const consoleDrives = useConsoleDrives(copySupported);
 
   useEffect(() => {
     void refresh();
@@ -217,6 +228,53 @@ export default function ServerBackupCard({
                 </fieldset>
               )}
             </div>
+          )}
+          {layoutSupported(settings) && (
+            <BackupLayoutChoice
+              testId="server-save-backup-layout"
+              settings={settings}
+              status={status?.decrypted}
+              onChange={(patch) => void set(patch)}
+            />
+          )}
+          {copySupported && (
+            <ConsoleCopyChoice
+              testId="server-save-backup-console"
+              drive={settings.console_drive ?? ""}
+              drives={consoleDrives.drives}
+              connected={consoleDrives.connected}
+              loadError={consoleDrives.error}
+              status={status?.console_copy}
+              onChange={(console_drive) => {
+                if (console_drive !== settings.console_drive) void set({ console_drive });
+              }}
+            >
+              <label htmlFor="server-save-backup-console-keep" className="text-xs text-[var(--color-muted)]">
+                {tr("saves_server_console_keep", undefined, "Versions to keep on the PS5 drive")}
+              </label>
+              <input
+                id="server-save-backup-console-keep"
+                data-testid="server-save-backup-console-keep"
+                type="number"
+                min={1}
+                max={50}
+                defaultValue={driveKeep(settings)}
+                key={driveKeep(settings)}
+                onBlur={(e) => {
+                  const left = numberBoxLeft(e.target.value, driveKeep(settings), clampKeep);
+                  e.target.value = left.show;
+                  if (left.save !== null) void set({ console_keep: left.save });
+                }}
+                className="w-20 justify-self-start rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-sm text-[var(--color-text)] sm:justify-self-end"
+              />
+              <p className="text-xs text-[var(--color-muted)] sm:col-span-2">
+                {tr(
+                  "saves_server_console_note",
+                  undefined,
+                  "If the server can't be reached, the PS5 drive still gets its copy, and the server is tried again next time.",
+                )}
+              </p>
+            </ConsoleCopyChoice>
           )}
         </>
       )}

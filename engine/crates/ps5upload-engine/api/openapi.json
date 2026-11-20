@@ -3877,6 +3877,37 @@
         ],
         "type": "object"
       },
+      "ExportBody": {
+        "properties": {
+          "addr": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "folder": {
+            "description": "The PS5 save folder (`/user/home/<8 hex>/savedata_prospero/<TITLE>`).",
+            "type": "string"
+          },
+          "to": {
+            "$ref": "#/components/schemas/ExportTo"
+          }
+        },
+        "required": [
+          "addr",
+          "folder"
+        ],
+        "type": "object"
+      },
+      "ExportTo": {
+        "description": "Where a decrypted export goes.",
+        "enum": [
+          "local",
+          "server"
+        ],
+        "type": "string"
+      },
       "ExternalPkg": {
         "description": "One `.pkg` found on a connected external/USB drive.",
         "properties": {
@@ -7810,6 +7841,14 @@
         ],
         "type": "object"
       },
+      "Layout": {
+        "description": "How backups are arranged in a place.",
+        "enum": [
+          "by_game",
+          "by_user"
+        ],
+        "type": "string"
+      },
       "LevelReq": {
         "properties": {
           "categories": {
@@ -9795,10 +9834,39 @@
       },
       "Patch": {
         "properties": {
+          "console_drive": {
+            "description": "The PS5 drive that also gets a copy of each backup (`/mnt/ext<N>`, `/mnt/usb<N>`); \"\" for\nnone (#885).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "console_keep": {
+            "description": "Versions of each save kept on that drive, 1 to 50; 0: as many as `keep`.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "decrypted_copy": {
+            "description": "By user: a decrypted copy with each backup of a PS5 save.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "every_hours": {
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "game_names": {
+            "description": "By user: name a game's new folder after the game too.",
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -9817,6 +9885,17 @@
               "integer",
               "null"
             ]
+          },
+          "layout": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Layout"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`by_game` or `by_user` (#886)."
           },
           "mode": {
             "anyOf": [
@@ -16704,6 +16783,13 @@
               "null"
             ]
           },
+          "decrypted_copy": {
+            "description": "By user: a decrypted copy with each automatic backup of a PS5 save.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "dir": {
             "type": [
               "string",
@@ -16711,6 +16797,13 @@
             ]
           },
           "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "game_names": {
+            "description": "By user: name a game's new folder after the game too.",
             "type": [
               "boolean",
               "null"
@@ -16739,6 +16832,17 @@
               "integer",
               "null"
             ]
+          },
+          "layout": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Layout"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`by_game` or `by_user` (#886)."
           },
           "remove_hosts": {
             "description": "Consoles to take off `hosts`.",
@@ -46236,7 +46340,7 @@
         }
       },
       "put": {
-        "description": "`PUT /api/save-backup` — change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts, console_drive}`.",
+        "description": "`PUT /api/save-backup` — change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts, console_drive, layout, game_names, decrypted_copy}`.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -46273,7 +46377,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "Change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts, console_drive}`",
+        "summary": "Change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts, console_drive, layout, game_names, decrypted_copy}`",
         "tags": [
           "saves"
         ],
@@ -46357,7 +46461,7 @@
     },
     "/api/save-backup/console/list": {
       "get": {
-        "description": "`GET /api/save-backup/console/list?addr=&title_id=` — `{drive, kind, backups}`: that game's\nbackup copies on the chosen PS5 drive of that console, newest first (none when no drive is\nchosen, or it holds none).",
+        "description": "`GET /api/save-backup/console/list?addr=&title_id=` — `{drive, kind, backups}`: that game's\nbackup copies on the chosen PS5 drives of that console (the automatic backups' and the\nnetwork-share backups'), newest first (none when no drive is chosen, or they hold none).\n`drive` and `kind` name the first chosen drive.",
         "parameters": [
           {
             "in": "query",
@@ -46433,16 +46537,11 @@
             "$ref": "#/components/responses/Error",
             "description": "Engine error"
           },
-          "502": {
-            "$ref": "#/components/responses/Error",
-            "description": "The console or remote end failed"
-          },
           "default": {
             "$ref": "#/components/responses/Error",
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "`{drive, kind, backups}`: that game's backup copies on the chosen PS5 drive of that console, newest first (none when no drive is chosen, or it holds none)",
         "tags": [
           "saves"
         ],
@@ -46463,7 +46562,7 @@
     },
     "/api/save-backup/console/restore": {
       "post": {
-        "description": "`POST /api/save-backup/console/restore` `{addr, title_id, file, save_path, user_id}` — puts a\nbackup copy on the chosen PS5 drive back, with the refusals and the backup first of `restore`.",
+        "description": "`POST /api/save-backup/console/restore` `{addr, title_id, file, save_path, user_id}` — puts a\nbackup copy on a chosen PS5 drive back, with the refusals and the backup first of `restore`.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -46507,7 +46606,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "Puts a backup copy on the chosen PS5 drive back, with the refusals and the backup first of `restore`",
+        "summary": "Puts a backup copy on a chosen PS5 drive back, with the refusals and the backup first of `restore`",
         "tags": [
           "saves"
         ],
@@ -46734,6 +46833,76 @@
         ],
         "x-ps5upload": {
           "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-backup/export": {
+      "post": {
+        "description": "`POST /api/save-backup/export` `{addr, folder, to}` (#886) — \"Save as a file for a friend or\nanother PS5\" straight into that user's `Decrypted/PS5/<TITLE>` folder of the backup folder\n(`to: \"local\"`) or of the network-share backups' folder (`\"server\"`): `{ok, path, file}`. The\nfile is the one `/api/save-backup/share` sends, and opens on any PS5.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "file": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
           "response_schema": "literal"
         }
       }

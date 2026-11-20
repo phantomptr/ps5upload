@@ -5,11 +5,12 @@
 //! When a drive is chosen (`Settings::console_drive`, such as `/mnt/ext0`), each backup the engine
 //! makes in the backup folder (automatic, Back up now, snapshot) is checked there (every entry
 //! read against its CRC), then uploaded with the engine's ordinary file upload to
-//! `<drive>/ps5upload/save-backups/<title_id>/<same file name>` on the console it came from. The
+//! `<drive>/ps5upload/save-backups/<title_id>/<same file name>` on the console it came from (or,
+//! arranged by user, `…/save-backups/<name>_<id>/Encrypted/<PS5|PS4>/<title_id>/…`, #886). The
 //! copy is hashed on the console (BLAKE3) and compared with the local file; a copy that does not
 //! match is deleted. No file is renamed on the console. Then the oldest copies past the local
-//! `keep` are deleted, of that save and kind only, and only files named the way this app names its
-//! backups.
+//! `keep` are deleted, of that save and kind only (counted in both layouts), and only files named
+//! the way this app names its backups.
 //!
 //! A drive that is not plugged in (or not mounted, or read-only) is skipped with a note in the
 //! status: the backup in the folder is made either way, and never fails because of the copy.
@@ -24,14 +25,13 @@ use axum::extract::Query;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use ps5upload_core::save_archive::{
-    auto_backup_stem, backup_tag, cleanup_temp_dir, make_temp_dir, tagged_backups_to_prune,
-};
+use ps5upload_core::save_archive::{backup_tag, cleanup_temp_dir, make_temp_dir};
 use ps5upload_core::volumes::Volume;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::save_backup::{self as local, enc, json_error, parse_backup_name, plain, BackupFile};
+use crate::save_layout::{self as layout, Arrange, Kind, Layout, Owner};
 
 /// The folder on the drive the copies go in, by title.
 pub const FOLDER: &str = "ps5upload/save-backups";
@@ -171,43 +171,23 @@ pub fn copy_path(drive: &str, title_id: &str, file: &str) -> Result<String, Stri
 /// `<title>_user<8 hex>_<YYYY-MM-DD_HHMMSS>[_<tag>].zip`. Anything else in the folder (a file the
 /// person put there, a copy cut short) is never listed, restored or deleted.
 pub fn ours(title_id: &str, name: &str) -> bool {
-    if !plain(name) {
-        return false;
-    }
-    let Some((_, stamp)) = parse_backup_name(title_id, name) else {
-        return false;
-    };
-    let b = stamp.as_bytes();
-    let shape = b.len() >= 17
-        && b[..17].iter().enumerate().all(|(i, c)| match i {
-            4 | 7 => *c == b'-',
-            10 => *c == b'_',
-            _ => c.is_ascii_digit(),
-        });
-    shape
-        && match &stamp[17..] {
-            "" => true,
-            tag => tag
-                .strip_prefix('_')
-                .is_some_and(|t| !t.is_empty() && t.bytes().all(|c| c.is_ascii_lowercase())),
-        }
+    layout::ours(title_id, name)
 }
 
-/// Which of `names` (the files in a title's folder on the drive) to delete so `keep` copies of
-/// this save (`title_id`, `user`) and kind (`tag`) remain: the oldest, and only files of ours.
-pub fn to_prune(
-    names: &[String],
-    title_id: &str,
-    user: u32,
-    tag: Option<&str>,
-    keep: u32,
-) -> Vec<String> {
-    let mine: Vec<String> = names
-        .iter()
-        .filter(|n| ours(title_id, n))
-        .cloned()
-        .collect();
-    tagged_backups_to_prune(&mine, &auto_backup_stem(title_id, user), tag, keep)
+/// Where the copies go on `drive`: `<drive>/ps5upload/save-backups`.
+pub fn root_of(drive: &str) -> Result<String, String> {
+    if !drive_path_ok(drive) {
+        return Err(format!("{drive} is not a PS5 M.2 or USB drive"));
+    }
+    Ok(format!("{drive}/{FOLDER}"))
+}
+
+/// The copies' folder `root` on the console as `save_layout` sees it.
+fn drive_list<'a>(
+    c: &'a dyn Drive,
+    root: &'a str,
+) -> impl Fn(&str) -> Result<layout::Entries, String> + 'a {
+    move |rel| c.list(&layout::join(root, rel))
 }
 
 /// The volume at `drive` on the console, when it is one the copies can go to; why not otherwise.
@@ -226,7 +206,7 @@ pub(crate) fn check_drive(c: &dyn Drive, drive: &str) -> Result<(), String> {
 }
 
 /// What copying one backup to the console did.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Outcome {
     /// On the drive at this path, checked.
     Copied(String),
@@ -236,33 +216,41 @@ pub enum Outcome {
     Failed(String),
 }
 
-/// Copies the backup `zip` (just made in the backup folder) of `title_id` to `drive` on the
-/// console, then prunes the copies there past `keep`. `drive_ok`: what `check_drive` answered,
-/// asked once per console and pass.
+/// Copies the backup `zip` (just made in the backup folder) of `owner`'s save to `drive` on the
+/// console, arranged `how`, then prunes the copies there past `keep`. `drive_ok`: what
+/// `check_drive` answered, asked once per console and pass.
 pub(crate) fn copy_one(
     c: &dyn Drive,
     drive: &str,
     drive_ok: &Result<(), String>,
-    title_id: &str,
+    owner: &Owner,
+    how: Layout,
     zip: &Path,
     keep: u32,
 ) -> Outcome {
     if let Err(why) = drive_ok {
         return Outcome::Skipped(why.clone());
     }
+    let title_id = owner.title_id.as_str();
     let Some(file) = zip.file_name().and_then(|f| f.to_str()) else {
         return Outcome::Failed("unexpected backup name".into());
     };
     let Some((user, _)) = parse_backup_name(title_id, file) else {
         return Outcome::Failed(format!("{file} is not a backup of {title_id}"));
     };
-    let (folder, dest) = match (
-        title_folder(drive, title_id),
-        copy_path(drive, title_id, file),
-    ) {
-        (Ok(f), Ok(d)) => (f, d),
-        (Err(e), _) | (_, Err(e)) => return Outcome::Failed(e),
+    if !ours(title_id, file) || !plain(title_id) {
+        return Outcome::Failed("unexpected backup name".into());
+    }
+    let root = match root_of(drive) {
+        Ok(r) => r,
+        Err(e) => return Outcome::Failed(e),
     };
+    let list = drive_list(c, &root);
+    let folder = match layout::place(&list, how, Kind::Encrypted, owner) {
+        Ok(rel) => layout::join(&root, &rel),
+        Err(e) => return Outcome::Failed(e),
+    };
+    let dest = format!("{folder}/{file}");
     // Only a backup that reads back whole here goes to the console.
     if let Err(e) = crate::save_backup_server::check_zip(zip) {
         return Outcome::Failed(format!("{file}: {e}"));
@@ -286,24 +274,21 @@ pub(crate) fn copy_one(
             return Outcome::Failed(format!("{file}: could not check the copy on the PS5: {e}"));
         }
     }
-    // Older copies go only once the new one is there and checked.
-    if let Ok(entries) = c.list(&folder) {
-        let names: Vec<String> = entries
-            .into_iter()
-            .filter(|(_, is_dir, _)| !is_dir)
-            .map(|(n, _, _)| n)
-            .collect();
-        for old in to_prune(&names, title_id, user, backup_tag(file), keep) {
-            if old != file {
-                let _ = c.delete(&format!("{folder}/{old}"));
-            }
+    // Older copies go only once the new one is there and checked, counted in both layouts.
+    let files = layout::backup_files(&list, title_id);
+    for old in layout::to_prune(&files, title_id, user, backup_tag(file), keep) {
+        let path = layout::join(&root, &old.rel());
+        if path != dest {
+            let _ = c.delete(&path);
         }
     }
     Outcome::Copied(dest)
 }
 
-/// What the last copies to a PS5 drive did, for the Saves screen and a bug report.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+/// What the last copies to a PS5 drive did, for the Saves screen and a bug report. Kept across
+/// restarts with the network-share backups' status.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CopyStatus {
     /// Unix ms of the last copy (or skip).
     pub at: u64,
@@ -320,17 +305,20 @@ pub struct CopyStatus {
 pub(crate) struct Copies {
     drive: String,
     keep: u32,
+    arrange: Arrange,
     checked: std::collections::BTreeMap<String, Result<(), String>>,
     pub status: CopyStatus,
 }
 
 impl Copies {
-    /// None when no drive is chosen.
-    pub fn new(drive: &str, keep: u32) -> Option<Self> {
+    /// None when no drive is chosen. `arrange`: the layout of the place the backups are made
+    /// for, which the copies follow.
+    pub fn new(drive: &str, keep: u32, arrange: Arrange) -> Option<Self> {
         let drive = drive.trim();
         (!drive.is_empty()).then(|| Copies {
             drive: drive.to_string(),
             keep,
+            arrange,
             checked: Default::default(),
             status: CopyStatus {
                 drive: drive.to_string(),
@@ -339,30 +327,58 @@ impl Copies {
         })
     }
 
-    /// Copies the backup `zip` of `title_id`, just made from `host`, to that console's drive.
-    /// Never fails: what happened goes in `status` (and the log).
-    pub fn copy(&mut self, c: &dyn Drive, host: &str, title_id: &str, zip: &Path) {
-        let ok = self
-            .checked
+    /// Whether `host`'s drive can take copies now (asked once per console and pass): a save due
+    /// only for its copy is not read off the console while the drive is away.
+    pub fn ready(&mut self, c: &dyn Drive, host: &str) -> bool {
+        self.checked_for(c, host).is_ok()
+    }
+
+    fn checked_for(&mut self, c: &dyn Drive, host: &str) -> Result<(), String> {
+        self.checked
             .entry(host.to_string())
             .or_insert_with(|| check_drive(c, &self.drive))
-            .clone();
+            .clone()
+    }
+
+    /// Notes a copy not tried because the drive is away (`ready` said no).
+    pub fn note_skipped(&mut self, c: &dyn Drive, host: &str) {
+        if let Err(why) = self.checked_for(c, host) {
+            self.status.at = local::now_ms();
+            self.status.skipped += 1;
+            self.status.note = Some(why);
+        }
+    }
+
+    /// Copies the backup `zip` of `owner`'s save, just made from `host`, to that console's
+    /// drive. Never fails: what happened goes in `status` (and the log), and is answered.
+    pub fn copy(&mut self, c: &dyn Drive, host: &str, owner: &Owner, zip: &Path) -> Outcome {
+        let ok = self.checked_for(c, host);
         self.status.at = local::now_ms();
-        match copy_one(c, &self.drive, &ok, title_id, zip, self.keep) {
+        let out = copy_one(
+            c,
+            &self.drive,
+            &ok,
+            owner,
+            self.arrange.layout,
+            zip,
+            self.keep,
+        );
+        match &out {
             Outcome::Copied(_) => self.status.copied += 1,
             Outcome::Skipped(why) => {
                 if self.status.skipped == 0 {
                     crate::log_info!("save backup: no copy on {host}: {why}");
                 }
                 self.status.skipped += 1;
-                self.status.note = Some(why);
+                self.status.note = Some(why.clone());
             }
             Outcome::Failed(why) => {
                 crate::log_warn!("save backup: copy on {host} {}: {why}", self.drive);
                 self.status.failed += 1;
-                self.status.note = Some(why);
+                self.status.note = Some(why.clone());
             }
         }
+        out
     }
 }
 
@@ -373,29 +389,27 @@ fn blake3_file(path: &Path) -> Result<String, String> {
     Ok(h.finalize().to_hex().to_string())
 }
 
-/// The copies of `title_id` on `drive`, newest first.
+/// The copies of `title_id` on `drive` (by game and by user), newest first.
 pub(crate) fn list_copies(
     c: &dyn Drive,
     drive: &str,
     title_id: &str,
 ) -> Result<Vec<BackupFile>, String> {
-    let folder = title_folder(drive, title_id)?;
+    title_folder(drive, title_id)?;
+    let root = root_of(drive)?;
     // No folder yet (nothing copied, or the drive is away): no copies.
-    let Ok(entries) = c.list(&folder) else {
-        return Ok(Vec::new());
-    };
-    let mut out: Vec<BackupFile> = entries
+    let mut out: Vec<BackupFile> = layout::backup_files(&drive_list(c, &root), title_id)
         .into_iter()
-        .filter(|(name, is_dir, _)| !is_dir && ours(title_id, name))
-        .filter_map(|(file, _, size)| {
-            let (user_id, stamp) = parse_backup_name(title_id, &file)?;
+        .filter(|f| ours(title_id, &f.name))
+        .filter_map(|f| {
+            let (user_id, stamp) = parse_backup_name(title_id, &f.name)?;
             Some(BackupFile {
-                tag: backup_tag(&file).map(String::from),
+                tag: backup_tag(&f.name).map(String::from),
                 title_id: title_id.to_string(),
                 user_id,
                 stamp,
-                size,
-                file,
+                size: f.size,
+                file: f.name,
             })
         })
         .collect();
@@ -412,7 +426,11 @@ pub(crate) fn fetch(
     file: &str,
     dest: &Path,
 ) -> Result<(), String> {
-    let src = copy_path(drive, title_id, file)?;
+    let by_game = copy_path(drive, title_id, file)?;
+    let root = root_of(drive)?;
+    let src = layout::find(&drive_list(c, &root), title_id, file)
+        .map(|f| layout::join(&root, &f.rel()))
+        .unwrap_or(by_game);
     let dir = dest.parent().ok_or("no folder to download into")?;
     c.download(&src, dir)?;
     let got = dir.join(file);
@@ -422,19 +440,64 @@ pub(crate) fn fetch(
     crate::save_backup_server::check_zip(dest).map(|_| ())
 }
 
-/// The drive the settings name, or Err when none is chosen.
-fn chosen_drive() -> Result<String, String> {
-    let d = local::settings().console_drive;
-    if d.trim().is_empty() {
+/// The drives the settings name: the automatic backups' and the network-share backups' (#885),
+/// once each.
+pub(crate) fn chosen_drives() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for d in [
+        local::settings().console_drive,
+        crate::save_backup_server::settings().console_drive,
+    ] {
+        let d = d.trim().to_string();
+        if !d.is_empty() && !out.contains(&d) {
+            out.push(d);
+        }
+    }
+    out
+}
+
+/// The copies of `title_id` on every drive of `drives`, newest first; a name on two drives is
+/// listed once, from the first.
+pub(crate) fn list_copies_on(c: &dyn Drive, drives: &[String], title_id: &str) -> Vec<BackupFile> {
+    let mut out: Vec<BackupFile> = Vec::new();
+    for d in drives {
+        for b in list_copies(c, d, title_id).unwrap_or_default() {
+            if !out.iter().any(|o| o.file == b.file) {
+                out.push(b);
+            }
+        }
+    }
+    out.sort_by(|a, b| b.stamp.cmp(&a.stamp));
+    out
+}
+
+/// The first of `drives` holding the copy `file` of `title_id`, or Err saying none does.
+pub(crate) fn drive_holding(
+    c: &dyn Drive,
+    drives: &[String],
+    title_id: &str,
+    file: &str,
+) -> Result<String, String> {
+    if drives.is_empty() {
         return Err("no PS5 drive is chosen for save backup copies".into());
     }
-    Ok(d)
+    drives
+        .iter()
+        .find(|d| {
+            list_copies(c, d, title_id)
+                .map(|l| l.iter().any(|b| b.file == file))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .ok_or_else(|| format!("no copy {file} on {}", drives.join(" or ")))
 }
 
 /// Copies the backup file `file` of `title_id` off the chosen drive on `host` into the local
 /// file `dest` (restoring one to another user, `save_copy`).
 pub(crate) fn fetch_to(host: &str, title_id: &str, file: &str, dest: &Path) -> Result<(), String> {
-    fetch(&Live(host), &chosen_drive()?, title_id, file, dest)
+    let c = Live(host);
+    let drive = drive_holding(&c, &chosen_drives(), title_id, file)?;
+    fetch(&c, &drive, title_id, file, dest)
 }
 
 /// Puts the copy `file` of `title_id` on the chosen drive back into the save folder `save_path`
@@ -446,7 +509,7 @@ fn restore(
     save_path: &str,
     user_id: u32,
 ) -> Result<(), String> {
-    let drive = chosen_drive()?;
+    let drive = drive_holding(&Live(host), &chosen_drives(), title_id, file)?;
     let tmp = make_temp_dir(title_id)?;
     let tmp_s = tmp.to_string_lossy().into_owned();
     let result = (|| {
@@ -513,33 +576,32 @@ pub struct ListQuery {
 }
 
 /// `GET /api/save-backup/console/list?addr=&title_id=` — `{drive, kind, backups}`: that game's
-/// backup copies on the chosen PS5 drive of that console, newest first (none when no drive is
-/// chosen, or it holds none).
+/// backup copies on the chosen PS5 drives of that console (the automatic backups' and the
+/// network-share backups'), newest first (none when no drive is chosen, or they hold none).
+/// `drive` and `kind` name the first chosen drive.
 pub async fn get_list(Query(q): Query<ListQuery>) -> Response {
-    let drive = local::settings().console_drive;
+    let drives = chosen_drives();
     let title = q.title_id.trim().to_ascii_uppercase();
     if !plain(&title) {
         return json_error(StatusCode::BAD_REQUEST, "unexpected title id");
     }
-    if drive.trim().is_empty() {
+    let Some(drive) = drives.first().cloned() else {
         return Json(json!({ "drive": "", "kind": "", "backups": [] })).into_response();
-    }
+    };
     let host = q.addr.trim().to_string();
-    let d = drive.clone();
-    match tokio::task::spawn_blocking(move || list_copies(&Live(&host), &d, &title)).await {
-        Ok(Ok(list)) => Json(json!({
+    match tokio::task::spawn_blocking(move || list_copies_on(&Live(&host), &drives, &title)).await {
+        Ok(list) => Json(json!({
             "drive": drive,
             "kind": drive_kind(&drive),
             "backups": list,
         }))
         .into_response(),
-        Ok(Err(e)) => json_error(StatusCode::BAD_GATEWAY, e),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 
 /// `POST /api/save-backup/console/restore` `{addr, title_id, file, save_path, user_id}` — puts a
-/// backup copy on the chosen PS5 drive back, with the refusals and the backup first of `restore`.
+/// backup copy on a chosen PS5 drive back, with the refusals and the backup first of `restore`.
 pub async fn post_restore(Json(b): Json<local::RestoreBody>) -> Response {
     let r = tokio::task::spawn_blocking(move || {
         restore(
@@ -559,25 +621,25 @@ pub async fn post_restore(Json(b): Json<local::RestoreBody>) -> Response {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
 
     /// A console with drives and files in memory.
     #[derive(Default)]
-    struct Fake {
-        vols: Vec<Volume>,
-        files: RefCell<BTreeMap<String, Vec<u8>>>,
-        deleted: RefCell<Vec<String>>,
-        uploads: RefCell<u32>,
+    pub(crate) struct Fake {
+        pub(crate) vols: Vec<Volume>,
+        pub(crate) files: RefCell<BTreeMap<String, Vec<u8>>>,
+        pub(crate) deleted: RefCell<Vec<String>>,
+        pub(crate) uploads: RefCell<u32>,
         /// The console garbles what it is sent.
-        corrupt: bool,
+        pub(crate) corrupt: bool,
         /// The console can't hash.
-        no_hash: bool,
+        pub(crate) no_hash: bool,
     }
 
-    fn vol(path: &str, from: &str) -> Volume {
+    pub(crate) fn vol(path: &str, from: &str) -> Volume {
         serde_json::from_value(json!({
             "path": path, "mount_from": from, "fs_type": "ufs",
             "total_bytes": 1u64 << 40, "free_bytes": 1u64 << 39, "writable": true,
@@ -585,7 +647,7 @@ mod tests {
         .unwrap()
     }
 
-    fn with_m2() -> Fake {
+    pub(crate) fn with_m2() -> Fake {
         Fake {
             vols: vec![
                 vol("/data", "/dev/ssd0.user"),
@@ -603,17 +665,24 @@ mod tests {
         fn list(&self, dir: &str) -> Result<Vec<(String, bool, u64)>, String> {
             let prefix = format!("{dir}/");
             let files = self.files.borrow();
-            let out: Vec<_> = files
-                .iter()
-                .filter_map(|(p, b)| {
-                    let rest = p.strip_prefix(&prefix)?;
-                    (!rest.contains('/')).then(|| (rest.to_string(), false, b.len() as u64))
-                })
-                .collect();
+            let mut out: BTreeMap<String, (bool, u64)> = BTreeMap::new();
+            for (p, b) in files.iter() {
+                let Some(rest) = p.strip_prefix(&prefix) else {
+                    continue;
+                };
+                match rest.split_once('/') {
+                    Some((d, _)) => {
+                        out.insert(d.to_string(), (true, 0));
+                    }
+                    None => {
+                        out.insert(rest.to_string(), (false, b.len() as u64));
+                    }
+                }
+            }
             if out.is_empty() {
                 return Err("no such folder".into());
             }
-            Ok(out)
+            Ok(out.into_iter().map(|(n, (d, s))| (n, d, s)).collect())
         }
         fn mkdir(&self, _dir: &str) -> Result<(), String> {
             Ok(())
@@ -661,6 +730,17 @@ mod tests {
     }
 
     const T: &str = "PPSA01234";
+
+    /// User 1's PS5 save of `T`, named Alex.
+    fn alex() -> Owner {
+        Owner {
+            title_id: T.into(),
+            user: 1,
+            platform: Some(layout::Platform::Ps5),
+            name: Some("Alex".into()),
+            game: None,
+        }
+    }
 
     #[test]
     fn copies_go_under_the_drive_by_title_with_the_same_name() {
@@ -723,12 +803,26 @@ mod tests {
         .iter()
         .map(|s| s.to_string())
         .collect();
+        let files: Vec<layout::Found> = names
+            .iter()
+            .map(|n| layout::Found {
+                dir: T.into(),
+                name: n.clone(),
+                size: 1,
+            })
+            .collect();
+        let to_prune = |user, tag, keep| -> Vec<String> {
+            layout::to_prune(&files, T, user, tag, keep)
+                .into_iter()
+                .map(|f| f.name)
+                .collect()
+        };
         assert_eq!(
-            to_prune(&names, T, 1, None, 2),
+            to_prune(1, None, 2),
             vec!["PPSA01234_user00000001_2026-11-01_000000.zip".to_string()]
         );
-        assert!(to_prune(&names, T, 1, Some("snap"), 1).is_empty());
-        assert!(to_prune(&names, T, 2, None, 1).is_empty());
+        assert!(to_prune(1, Some("snap"), 1).is_empty());
+        assert!(to_prune(2, None, 1).is_empty());
     }
 
     #[test]
@@ -771,7 +865,7 @@ mod tests {
             "{ok:?}"
         );
         let (tmp, zip) = backup_zip("PPSA01234_user00000001_2026-11-17_101500.zip");
-        match copy_one(&fake, "/mnt/ext0", &ok, T, &zip, 5) {
+        match copy_one(&fake, "/mnt/ext0", &ok, &alex(), Layout::ByGame, &zip, 5) {
             Outcome::Skipped(why) => assert!(why.contains("/mnt/ext0"), "{why}"),
             other => panic!("{other:?}"),
         }
@@ -801,7 +895,7 @@ mod tests {
         let (tmp, zip) = backup_zip("PPSA01234_user00000001_2026-11-17_101500.zip");
         let ok = check_drive(&fake, "/mnt/ext0");
         assert!(ok.is_ok());
-        let got = copy_one(&fake, "/mnt/ext0", &ok, T, &zip, 2);
+        let got = copy_one(&fake, "/mnt/ext0", &ok, &alex(), Layout::ByGame, &zip, 2);
         let dest = format!("{folder}/PPSA01234_user00000001_2026-11-17_101500.zip");
         assert_eq!(got, Outcome::Copied(dest.clone()));
         assert_eq!(
@@ -835,6 +929,53 @@ mod tests {
         let _ = cleanup_temp_dir(&tmp.to_string_lossy());
     }
 
+    /// #886: by user, a copy goes under the user's Encrypted/PS5 folder; the copies kept are
+    /// counted with the ones made by game before, which still list and come back.
+    #[test]
+    fn by_user_copies_count_with_the_by_game_ones_and_both_list() {
+        let fake = with_m2();
+        let root = "/mnt/ext0/ps5upload/save-backups";
+        let old = format!("{root}/PPSA01234/PPSA01234_user00000001_2026-11-01_000000.zip");
+        let older = format!("{root}/PPSA01234/PPSA01234_user00000001_2026-10-01_000000.zip");
+        let mine = format!("{root}/PPSA01234/PPSA01234_user00000001_by-hand.zip");
+        for p in [&old, &older, &mine] {
+            fake.files.borrow_mut().insert(p.clone(), b"old".to_vec());
+        }
+        let name = "PPSA01234_user00000001_2026-11-17_101500.zip";
+        let (tmp, zip) = backup_zip(name);
+        let got = copy_one(
+            &fake,
+            "/mnt/ext0",
+            &Ok(()),
+            &alex(),
+            Layout::ByUser,
+            &zip,
+            2,
+        );
+        let dest = format!("{root}/Alex_00000001/Encrypted/PS5/PPSA01234/{name}");
+        assert_eq!(got, Outcome::Copied(dest.clone()));
+        // Keep 2 across both layouts: the oldest by-game copy went; the one by hand stays.
+        assert_eq!(*fake.deleted.borrow(), vec![older.clone()]);
+        assert!(fake.files.borrow().contains_key(&mine));
+        let listed = list_copies(&fake, "/mnt/ext0", T).unwrap();
+        let files: Vec<&str> = listed.iter().map(|b| b.file.as_str()).collect();
+        assert_eq!(
+            files,
+            vec![name, "PPSA01234_user00000001_2026-11-01_000000.zip"]
+        );
+        // Each comes back from where it is.
+        let back = tmp.join("back");
+        std::fs::create_dir_all(&back).unwrap();
+        fetch(&fake, "/mnt/ext0", T, name, &back.join("a.zip")).unwrap();
+        assert_eq!(
+            std::fs::read(back.join("a.zip")).unwrap(),
+            std::fs::read(&zip).unwrap()
+        );
+        assert!(drive_holding(&fake, &["/mnt/ext0".to_string()], T, name).is_ok());
+        assert!(drive_holding(&fake, &["/mnt/ext0".to_string()], T, "nope.zip").is_err());
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
+
     #[test]
     fn a_copy_that_does_not_match_is_removed_and_nothing_is_pruned() {
         let fake = Fake {
@@ -845,7 +986,15 @@ mod tests {
         let old = format!("{folder}/PPSA01234_user00000001_2026-11-01_000000.zip");
         fake.files.borrow_mut().insert(old.clone(), b"old".to_vec());
         let (tmp, zip) = backup_zip("PPSA01234_user00000001_2026-11-17_101500.zip");
-        let got = copy_one(&fake, "/mnt/ext0", &Ok(()), T, &zip, 1);
+        let got = copy_one(
+            &fake,
+            "/mnt/ext0",
+            &Ok(()),
+            &alex(),
+            Layout::ByGame,
+            &zip,
+            1,
+        );
         assert!(
             matches!(&got, Outcome::Failed(why) if why.contains("does not match")),
             "{got:?}"
@@ -858,7 +1007,15 @@ mod tests {
             no_hash: true,
             ..with_m2()
         };
-        let got = copy_one(&fake, "/mnt/ext0", &Ok(()), T, &zip, 1);
+        let got = copy_one(
+            &fake,
+            "/mnt/ext0",
+            &Ok(()),
+            &alex(),
+            Layout::ByGame,
+            &zip,
+            1,
+        );
         assert!(matches!(got, Outcome::Failed(_)));
         assert!(fake.files.borrow().is_empty());
         let _ = cleanup_temp_dir(&tmp.to_string_lossy());
@@ -871,7 +1028,15 @@ mod tests {
         let zip = tmp.join("PPSA01234_user00000001_2026-11-17_101500.zip");
         std::fs::write(&zip, b"not a zip").unwrap();
         assert!(matches!(
-            copy_one(&fake, "/mnt/ext0", &Ok(()), T, &zip, 5),
+            copy_one(
+                &fake,
+                "/mnt/ext0",
+                &Ok(()),
+                &alex(),
+                Layout::ByGame,
+                &zip,
+                5
+            ),
             Outcome::Failed(_)
         ));
         assert_eq!(*fake.uploads.borrow(), 0);

@@ -7,6 +7,13 @@ What's new in ps5upload, written for humans.
 ## Unreleased
 
 **New**
+- **The window opens where you left it.** The desktop app now remembers the main window's size, position and whether it was maximized. If that screen is no longer connected, or the window would not fit, it opens centred on your main screen at a size that fits.
+- **Network share backups can also keep a copy on a PS5 drive (#885).** "Backups to a network share" now has its own "Also keep a copy on a PS5 drive" option with a drive picker, and its own "Versions to keep on the PS5 drive" (for example 1 on the M.2). Each run updates both the share and the drive, from the engine, with no computer folder and no app open. If the share can't be reached, the drive still gets its copy and the share is tried again next time.
+- **Save backups can be organised by user (#886).** A new "Folder layout" option for automatic and network share backups: "By user" keeps each person's backups in a folder with their name and account ID, split into Encrypted (backups that restore on this PS5) and Decrypted (files for a friend or another PS5), and into PS4 and PS5, optionally with the game's name on each game folder. "Save as a file for a friend or another PS5" then offers that user's Decrypted folder first, and you can have a decrypted copy made with each backup (these load on any PS5, and the app says so). The default is unchanged, and backups you already have stay where they are and still show and restore.
+
+## 12.6.15
+
+**New**
 - **Run Play Together on your own server (#881).** If you host the engine yourself (for example in Docker behind a reverse proxy with HTTPS), it can now run its own Play Together hub and serve the friends' pages itself. It is off unless you turn it on, it listens on its own port, and that port serves only the hub and the friends' pages, never the engine's controls. See SELF_HOSTING.md. Nothing changes for anyone who doesn't turn it on.
 - **Your own hub and friends' page address are kept (#881).** A custom hub address, STUN servers and a new "Guest page address" setting now survive an engine restart, and can be set once for a Docker container with environment variables. Settings shows whether each one is the default, your setting, or set on the server, and warns when your own pages are paired with the official hub, which only accepts its own pages.
 
