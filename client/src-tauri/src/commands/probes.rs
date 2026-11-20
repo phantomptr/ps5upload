@@ -94,7 +94,14 @@ pub(crate) async fn connect_probe_within(
     let mut last = String::from("no addresses to try");
     for sa in targets {
         match timeout(per_address, TcpStream::connect(sa)).await {
-            Ok(Ok(_)) => return Ok(()),
+            Ok(Ok(s)) => {
+                // Closed with a reset: a loader on :9021 may take a plain close of an empty
+                // connection as "run what you read" (nothing, or whatever a listener makes of it).
+                if let Ok(s) = s.into_std() {
+                    ps5upload_core::payload_lifecycle::abort_with_rst(&s);
+                }
+                return Ok(());
+            }
             Ok(Err(e)) => last = e.to_string(),
             Err(_) => last = "timeout".to_string(),
         }
@@ -255,29 +262,249 @@ mod status_failure_tests {
     }
 }
 
-/// Send an ELF (or other payload) to the PS5 payload loader, the way
-/// `payload_lifecycle::send_payload_file` does it for every front end: TCP connect to ip:port,
-/// stream the file, half-close the write side (the loader uses EOF as the "go execute" signal),
-/// and through Payload Manager when :9021 did not answer at all.
+/// How long the app waits for the engine to make a send: the loader lock (an install's daemon
+/// send, an elfldr swap), the running helper's shutdown, a refused loader tried again, and the
+/// send itself on a slow link.
+const ENGINE_SEND_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Send an ELF (or other payload) to the PS5 payload loader.
+///
+/// The engine makes the send (`POST /api/payload/send`), so every front end goes through its one
+/// gate for helper sends: one send per console at a time under the loader lock, no send into an
+/// install or over a running job, the cooldown, and for an unattended send (`mode: "auto"`) the
+/// hourly limit and the other refusals (engine `helper_send.rs`). The app's own bundled helper
+/// goes as bytes from memory, so a damaged extracted copy is never what is sent.
 ///
 /// `port` is optional and defaults to 9021. Pass an override for scene payloads that bind a
-/// different loader port. The Connection screen's fast-path send always uses the default; the
-/// Send-payload screen exposes a port field.
+/// different loader port. `mode`/`force`/`replace`/`app_version` are the gate's options.
+///
+/// Reply: `{ok: true, status, bytes, via_payload_manager}`; `{ok: false, status, refused,
+/// forceable, retry_after_ms}` when the engine refused (`refused` is its code); `{ok: false,
+/// status}` for a failed send. Only when the engine has no such route (an older engine) or, for a
+/// person's send, cannot be reached at all does the app send itself as before; then `unstamped:
+/// true` says the helper went without this app's key (the PS5 asks to pair).
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
-pub async fn payload_send(ip: String, path: String, port: Option<u16>) -> serde_json::Value {
+pub async fn payload_send(
+    app: AppHandle,
+    ip: String,
+    path: String,
+    port: Option<u16>,
+    mode: Option<String>,
+    force: Option<bool>,
+    replace: Option<bool>,
+    app_version: Option<String>,
+) -> serde_json::Value {
     let target_port = port.unwrap_or(PS5_LOADER_PORT);
+    let auto = mode.as_deref() == Some("auto");
+    let opts = SendOptions {
+        mode: mode.clone(),
+        force: force.unwrap_or(false),
+        replace: replace.unwrap_or(false),
+        app_version,
+    };
+    // The app's own helper: its bytes from memory, not the extracted file.
+    let bundled = target_port == PS5_LOADER_PORT
+        && find_bundled_payload(&app)
+            .ok()
+            .is_some_and(|p| p.to_string_lossy() == path.as_str());
+    let through_engine = if bundled {
+        match embedded_helper() {
+            Ok(bytes) => engine_send_bytes(&ip, target_port, bytes, &opts).await,
+            Err(e) => EngineSend::Done(serde_json::json!({ "ok": false, "status": e })),
+        }
+    } else {
+        engine_send_path(&ip, target_port, &path, &opts).await
+    };
+    match through_engine {
+        EngineSend::Done(v) => v,
+        // Nothing unattended goes past the engine: without it nothing checks the send.
+        EngineSend::Unreachable(e) if auto => serde_json::json!({
+            "ok": false,
+            "status": format!("the app's engine is not reachable, so nothing is sent by itself ({e})"),
+            "refused": "engine_unreachable",
+            "forceable": false,
+        }),
+        EngineSend::Unreachable(_) | EngineSend::NoRoute => local_send(ip, path, target_port).await,
+    }
+}
+
+/// The gate's options, as the engine reads them.
+struct SendOptions {
+    mode: Option<String>,
+    force: bool,
+    replace: bool,
+    app_version: Option<String>,
+}
+
+enum EngineSend {
+    /// The engine answered: this is the reply.
+    Done(serde_json::Value),
+    /// The engine did not answer at all.
+    Unreachable(String),
+    /// The engine has no send route (one older than the app).
+    NoRoute,
+}
+
+/// The version the bundled helper carries (its version marker), or None.
+fn bundled_helper_version() -> Option<String> {
+    embedded_helper()
+        .ok()
+        .and_then(|b| ps5upload_core::payload_lifecycle::helper_image_version(&b))
+}
+
+/// The desktop app's bundled helper, decompressed once.
+fn embedded_helper() -> Result<Vec<u8>, String> {
+    static ELF: std::sync::OnceLock<Result<Vec<u8>, String>> = std::sync::OnceLock::new();
+    ELF.get_or_init(|| {
+        use std::io::Read;
+        let mut out = Vec::new();
+        flate2::read::GzDecoder::new(EMBEDDED_PAYLOAD_GZ)
+            .take(EMBEDDED_PAYLOAD_MAX_BYTES + 1)
+            .read_to_end(&mut out)
+            .map_err(|e| format!("gunzip embedded payload: {e}"))?;
+        if out.len() as u64 > EMBEDDED_PAYLOAD_MAX_BYTES || !out.starts_with(b"\x7FELF") {
+            return Err("the embedded payload is not an ELF".into());
+        }
+        Ok(out)
+    })
+    .clone()
+}
+
+async fn engine_send_bytes(ip: &str, port: u16, bytes: Vec<u8>, opts: &SendOptions) -> EngineSend {
+    let url = format!("{}/api/payload/send", crate::engine::url());
+    let Ok(client) = crate::engine_http::engine_client_builder()
+        .timeout(ENGINE_SEND_TIMEOUT)
+        .build()
+    else {
+        return EngineSend::Unreachable("no HTTP client".into());
+    };
+    let mut query: Vec<(&str, String)> = vec![("host", ip.to_string()), ("port", port.to_string())];
+    if let Some(m) = &opts.mode {
+        query.push(("mode", m.clone()));
+    }
+    if opts.force {
+        query.push(("force", "true".into()));
+    }
+    if opts.replace {
+        query.push(("replace", "true".into()));
+    }
+    if let Some(v) = &opts.app_version {
+        query.push(("app_version", v.clone()));
+    }
+    let sent = client
+        .post(url)
+        .query(&query)
+        .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+        .body(bytes)
+        .send()
+        .await;
+    engine_reply(sent).await
+}
+
+async fn engine_send_path(ip: &str, port: u16, path: &str, opts: &SendOptions) -> EngineSend {
+    let url = format!("{}/api/payload/send", crate::engine::url());
+    let Ok(client) = crate::engine_http::engine_client_builder()
+        .timeout(ENGINE_SEND_TIMEOUT)
+        .build()
+    else {
+        return EngineSend::Unreachable("no HTTP client".into());
+    };
+    let body = serde_json::json!({
+        "host": ip,
+        "port": port,
+        "path": path,
+        "mode": opts.mode,
+        "force": opts.force,
+        "replace": opts.replace,
+        "app_version": opts.app_version,
+    });
+    engine_reply(client.post(url).json(&body).send().await).await
+}
+
+async fn engine_reply(sent: Result<reqwest::Response, reqwest::Error>) -> EngineSend {
+    let resp = match sent {
+        Ok(r) => r,
+        Err(e) if e.is_timeout() => {
+            // The engine took it and is still at it: not a reason to send a second one.
+            return EngineSend::Done(serde_json::json!({
+                "ok": false,
+                "status": format!("the send is taking unusually long ({})", crate::engine_http::error_chain(&e)),
+            }));
+        }
+        Err(e) => return EngineSend::Unreachable(crate::engine_http::error_chain(&e)),
+    };
+    let code = resp.status();
+    if code == reqwest::StatusCode::NOT_FOUND || code == reqwest::StatusCode::METHOD_NOT_ALLOWED {
+        return EngineSend::NoRoute;
+    }
+    let text = resp.text().await.unwrap_or_default();
+    EngineSend::Done(engine_send_reply(code.as_u16(), &text))
+}
+
+/// The engine's send reply as `payload_send` answers it.
+fn engine_send_reply(code: u16, body: &str) -> serde_json::Value {
+    let v: serde_json::Value = serde_json::from_str(body).unwrap_or(serde_json::Value::Null);
+    let text = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+    if (200..300).contains(&code) {
+        return serde_json::json!({
+            "ok": true,
+            "status": text("status").unwrap_or_default(),
+            "bytes": v.get("bytes").cloned().unwrap_or(serde_json::Value::Null),
+            "via_payload_manager": v.get("via_payload_manager").and_then(|b| b.as_bool()).unwrap_or(false),
+        });
+    }
+    if code == 409 {
+        let refused = text("refused")
+            .or_else(|| text("error"))
+            .unwrap_or_else(|| "loader_busy".into());
+        return serde_json::json!({
+            "ok": false,
+            "status": text("message").unwrap_or_else(|| refused.clone()),
+            "refused": refused,
+            "forceable": v.get("forceable").and_then(|b| b.as_bool()).unwrap_or(false),
+            "retry_after_ms": v.get("retry_after_ms").cloned().unwrap_or(serde_json::Value::Null),
+        });
+    }
+    let status = text("error").or_else(|| text("status")).unwrap_or_else(|| {
+        if body.trim().is_empty() {
+            format!("engine returned HTTP {code}")
+        } else {
+            crate::engine_http::plain_error_text(body)
+        }
+    });
+    serde_json::json!({ "ok": false, "status": status })
+}
+
+/// The send as the app made it before the engine did: its own socket, stamped through the
+/// engine when it answers. Used only for an engine without the route, or a person's send while the
+/// engine is down.
+async fn local_send(ip: String, path: String, target_port: u16) -> serde_json::Value {
     let handle = tokio::runtime::Handle::current();
+    let unstamped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = unstamped.clone();
     let sent = tokio::task::spawn_blocking(move || {
         ps5upload_core::payload_lifecycle::send_payload_file(
             &ip,
             &path,
             target_port,
-            &mut |bytes| handle.block_on(stamp_ava1_trust(bytes)),
+            &mut |bytes| {
+                if !handle.block_on(stamp_ava1_trust(bytes)) {
+                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            },
         )
     })
     .await;
+    let unstamped = unstamped.load(std::sync::atomic::Ordering::Relaxed);
     match sent {
-        Ok(Ok(s)) => serde_json::json!({ "ok": true, "status": s.status, "bytes": s.bytes }),
+        Ok(Ok(s)) => serde_json::json!({
+            "ok": true,
+            "status": s.status,
+            "bytes": s.bytes,
+            "via_payload_manager": s.via_payload_manager,
+            "unstamped": unstamped,
+        }),
         Ok(Err(e)) => serde_json::json!({ "ok": false, "status": e }),
         Err(e) => serde_json::json!({ "ok": false, "status": format!("send task: {e}") }),
     }
@@ -366,15 +593,19 @@ async fn fetch_ava1_identity(url: &str) -> Option<([u8; 32], Option<[u8; 16]>)> 
 /// trusts the console it just launched without a pairing code either (SPEC.md §5.1, §5.2).
 /// An unreachable engine or an ELF without a slot (an older build) is sent unchanged; the
 /// console then opens its pairing window instead.
-async fn stamp_ava1_trust(bytes: &mut [u8]) {
+/// False when the engine could not be asked for its key: the helper then goes without it, and the
+/// console asks to pair.
+async fn stamp_ava1_trust(bytes: &mut [u8]) -> bool {
     let url = format!("{}/api/ava1/identity", crate::engine::url());
     let fetched = fetch_ava1_identity(&url).await;
+    let got_key = fetched.is_some();
     let key = fetched.as_ref().map(|(k, _)| k);
     let token = fetched.and_then(|(_, t)| t);
     // The same step the engine's own helper sends take (ava1_api::stamped_helper).
     if let Err(why) = ava1::trust::stamp_program(bytes, key, || token) {
         eprintln!("[payload_send] {why}");
     }
+    got_key
 }
 
 /// PS5 payload embedded at compile time via `include_bytes!`. The
@@ -555,11 +786,24 @@ pub async fn payload_bundled_path(app: AppHandle) -> serde_json::Value {
                 }
                 Err(_) => (0u64, 0i64),
             };
+            // The version the bundled helper says it is (null: built before the marker, or a
+            // stand-in). Another version than the app's is a stale build: never sent unasked.
+            let version = bundled_helper_version();
+            let app_version = app.package_info().version.to_string();
+            if version.as_deref().is_some_and(|v| v != app_version) {
+                eprintln!(
+                    "[bundled-payload] the bundled helper is v{} but the app is v{app_version}: \
+                     it is never sent by itself",
+                    version.as_deref().unwrap_or("?")
+                );
+            }
             serde_json::json!({
                 "ok": true,
                 "path": p.to_string_lossy(),
                 "size": size,
                 "mtime": mtime,
+                "version": version,
+                "app_version": app_version,
             })
         }
         Err(e) => serde_json::json!({ "ok": false, "error": e }),
@@ -726,6 +970,48 @@ mod payload_send_tests {
             "decompressed payload suspiciously small ({} bytes) — likely a stub",
             elf.len(),
         );
+    }
+
+    /// The helper this app carries is this app's version (a stale embed is never sent unasked,
+    /// and a release build fails here). A stand-in built for tests carries no version marker.
+    #[test]
+    fn the_bundled_helper_is_this_apps_version() {
+        if let Some(v) = bundled_helper_version() {
+            assert_eq!(
+                v,
+                env!("CARGO_PKG_VERSION"),
+                "the bundled helper is v{v}, the app v{}: rebuild the payload (make payload)",
+                env!("CARGO_PKG_VERSION")
+            );
+        }
+    }
+
+    #[test]
+    fn the_engines_send_reply_reads_the_same_for_the_app() {
+        let ok = engine_send_reply(
+            200,
+            r#"{"ok":true,"bytes":5,"status":"sent 5 bytes","via_payload_manager":false}"#,
+        );
+        assert_eq!(ok["ok"], true);
+        assert_eq!(ok["bytes"], 5);
+        let refused = engine_send_reply(
+            409,
+            r#"{"ok":false,"error":"recent_send","refused":"recent_send","message":"A helper was sent","forceable":true,"retry_after_ms":30000}"#,
+        );
+        assert_eq!(refused["ok"], false);
+        assert_eq!(refused["refused"], "recent_send");
+        assert_eq!(refused["status"], "A helper was sent");
+        assert_eq!(refused["forceable"], true);
+        // An older engine's send-check style refusal: the code is the error.
+        let old = engine_send_reply(409, r#"{"error":"helper_busy"}"#);
+        assert_eq!(old["refused"], "helper_busy");
+        let failed = engine_send_reply(
+            502,
+            r#"{"ok":false,"error":"connect 1.2.3.4:9021: refused"}"#,
+        );
+        assert_eq!(failed["ok"], false);
+        assert_eq!(failed["status"], "connect 1.2.3.4:9021: refused");
+        assert!(failed.get("refused").is_none());
     }
 
     #[test]

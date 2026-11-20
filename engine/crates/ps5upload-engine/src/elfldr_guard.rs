@@ -54,6 +54,7 @@ pub fn probe(ip: &str, port: u16, connect_timeout: Duration, reply_timeout: Dura
     let _ = c.set_write_timeout(Some(connect_timeout));
     let _ = c.set_read_timeout(Some(reply_timeout));
     if c.write_all(PROBE).is_err() {
+        pl::abort_with_rst(&c);
         return Health::Stuck;
     }
     let mut buf = [0u8; 64];
@@ -61,7 +62,12 @@ pub fn probe(ip: &str, port: u16, connect_timeout: Duration, reply_timeout: Dura
         Ok(n) if n > 0 => Health::Healthy,
         // Closed without a word: something answered (it read, then hung up).
         Ok(_) => Health::Healthy,
-        Err(_) => Health::Stuck,
+        // No reply: end it with a reset. A listener that reads until the sender closes (a
+        // jailbreak's own :9021) would otherwise take the probe's request for a payload to run.
+        Err(_) => {
+            pl::abort_with_rst(&c);
+            Health::Stuck
+        }
     }
 }
 

@@ -36,6 +36,10 @@ pub(crate) struct ReplaceReq {
     /// Keep the copy being replaced as `<path>.prev` first.
     #[serde(default)]
     keep_previous: bool,
+    /// Write over a stored copy that is a newer helper too (otherwise `{ok:false,
+    /// error:"newer_copy", version}` and nothing changes).
+    #[serde(default)]
+    force: bool,
 }
 
 /// Where the copy a replace kept lives: beside it, under a name no loader starts.
@@ -91,6 +95,8 @@ enum Outcome {
     Updated(usize),
     Unchanged,
     NotFound,
+    /// The stored copy is a newer helper (this version): left as it is unless forced.
+    Newer(String),
 }
 
 /// The console side, so the decision is testable without one.
@@ -115,11 +121,32 @@ fn same_bytes(console: &dyn Console, path: &str, bytes: &[u8]) -> bool {
         .is_some_and(|h| h.eq_ignore_ascii_case(&want))
 }
 
+/// The version in a helper's file name (`ps5upload-11.2.0.elf`, `ps5upload_v11.2.0.elf`).
+fn version_in_name(name: &str) -> Option<String> {
+    let rest = name.strip_suffix(".elf")?.strip_prefix("ps5upload")?;
+    let v = rest.trim_start_matches(['-', '_', 'v', '.']);
+    let parts: Vec<&str> = v.split('.').collect();
+    (parts.len() >= 2
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())))
+    .then(|| v.to_string())
+}
+
+/// The version a stored copy is: its version marker, else the version its file name carries.
+fn stored_version(old: &[u8], path: &str) -> Option<String> {
+    ps5upload_core::payload_lifecycle::helper_image_version(old).or_else(|| {
+        let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+        version_in_name(&name)
+    })
+}
+
 fn replace(
     console: &dyn Console,
     path: &str,
     bytes: &[u8],
     keep_previous: bool,
+    force: bool,
 ) -> Result<Outcome, String> {
     if !console.is_file(path)? {
         return Ok(Outcome::NotFound);
@@ -127,10 +154,29 @@ fn replace(
     if same_bytes(console, path, bytes) {
         return Ok(Outcome::Unchanged);
     }
+    let mut old_bytes = None;
+    if !force {
+        // A newer helper stored for boot (another device's, or this app's before a downgrade)
+        // stays: writing this one over it would start the older one at every boot.
+        let old = console.read_all(path)?;
+        let ours = ps5upload_core::payload_lifecycle::helper_image_version(bytes)
+            .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+        if let Some(theirs) = stored_version(&old, path) {
+            if ps5upload_core::payload_lifecycle::compare_versions(&theirs, &ours)
+                == Some(std::cmp::Ordering::Greater)
+            {
+                return Ok(Outcome::Newer(theirs));
+            }
+        }
+        old_bytes = Some(old);
+    }
     if keep_previous {
         // The copy that last came up is the one to fall back to: kept before anything is
         // written, and the replace stops when it cannot be kept.
-        let old = console.read_all(path)?;
+        let old = match old_bytes {
+            Some(b) => b,
+            None => console.read_all(path)?,
+        };
         if !old.starts_with(b"\x7fELF") {
             return Err(format!("{path} is not an ELF file; not keeping it"));
         }
@@ -486,13 +532,19 @@ pub(crate) async fn replace_copy_handler(
         return crate::missing_console_addr();
     };
     crate::log_info!("helper copy: replace {path} on {addr}");
+    let target = path.clone();
     let r = tokio::task::spawn_blocking(move || -> Result<Outcome, String> {
         let image = helper_image(req.local_path.as_deref())?;
         let bytes = crate::ava1_api::stamped_stored_helper(&image);
-        replace(&Live(&addr), &path, &bytes, req.keep_previous)
+        replace(&Live(&addr), &target, &bytes, req.keep_previous, req.force)
     })
     .await;
     match r {
+        Ok(Ok(Outcome::Newer(v))) => {
+            crate::log_info!("helper copy: {path} holds a newer helper (v{v}); left as it is");
+            Json(serde_json::json!({ "ok": false, "error": "newer_copy", "version": v }))
+                .into_response()
+        }
         Ok(Ok(Outcome::Updated(n))) => {
             Json(serde_json::json!({ "ok": true, "status": "updated", "bytes": n })).into_response()
         }
@@ -712,7 +764,7 @@ mod tests {
             writes: RefCell::new(0),
         };
         assert_eq!(
-            replace(&old, "/p", &new, false),
+            replace(&old, "/p", &new, false, false),
             Ok(Outcome::Updated(new.len()))
         );
         assert_eq!(*old.writes.borrow(), 1);
@@ -721,15 +773,75 @@ mod tests {
             file: Some(new.clone()),
             writes: RefCell::new(0),
         };
-        assert_eq!(replace(&same, "/p", &new, false), Ok(Outcome::Unchanged));
+        assert_eq!(
+            replace(&same, "/p", &new, false, false),
+            Ok(Outcome::Unchanged)
+        );
         assert_eq!(*same.writes.borrow(), 0);
 
         let none = Fake {
             file: None,
             writes: RefCell::new(0),
         };
-        assert_eq!(replace(&none, "/p", &new, false), Ok(Outcome::NotFound));
+        assert_eq!(
+            replace(&none, "/p", &new, false, false),
+            Ok(Outcome::NotFound)
+        );
         assert_eq!(*none.writes.borrow(), 0);
+    }
+
+    /// After a downgrade (or with another device's newer helper stored), the boot copy stays
+    /// newer: nothing is written over it unless forced. Told by its version marker, or by the
+    /// version in its name for a copy built before the marker.
+    #[test]
+    fn a_newer_stored_copy_is_left_unless_forced() {
+        let ours = b"\x7fELF ..PS5UPLOAD_HELPER_VERSION=12.6.15;..".to_vec();
+        let newer = Fake {
+            file: Some(b"\x7fELF ..PS5UPLOAD_HELPER_VERSION=12.7.0;..".to_vec()),
+            writes: RefCell::new(0),
+        };
+        assert_eq!(
+            replace(&newer, "/data/ps5upload.elf", &ours, false, false),
+            Ok(Outcome::Newer("12.7.0".into()))
+        );
+        assert_eq!(*newer.writes.borrow(), 0);
+        assert_eq!(
+            replace(&newer, "/data/ps5upload.elf", &ours, false, true),
+            Ok(Outcome::Updated(ours.len()))
+        );
+        // No marker: the name says it.
+        let named = Fake {
+            file: Some(b"\x7fELF old build".to_vec()),
+            writes: RefCell::new(0),
+        };
+        assert_eq!(
+            replace(&named, "/data/ps5upload-13.0.0.elf", &ours, false, false),
+            Ok(Outcome::Newer("13.0.0".into()))
+        );
+        // An older or unknown one is written as before.
+        for (path, file) in [
+            ("/data/ps5upload-12.0.0.elf", &b"\x7fELF old"[..]),
+            (
+                "/data/ps5upload.elf",
+                b"\x7fELF ..PS5UPLOAD_HELPER_VERSION=12.6.14;",
+            ),
+            ("/data/ps5upload.elf", b"\x7fELF no version at all"),
+        ] {
+            let c = Fake {
+                file: Some(file.to_vec()),
+                writes: RefCell::new(0),
+            };
+            assert_eq!(
+                replace(&c, path, &ours, false, false),
+                Ok(Outcome::Updated(ours.len())),
+                "{path}"
+            );
+        }
+        assert_eq!(
+            version_in_name("ps5upload_v11.2.0.elf").as_deref(),
+            Some("11.2.0")
+        );
+        assert_eq!(version_in_name("ps5upload.elf"), None);
     }
 
     /// Files by path, for the keep / restore round trip.
@@ -779,7 +891,7 @@ mod tests {
         let p = "/data/pldmgr/payloads/local/ps5upload/ps5upload.elf";
         let disk = Disk::with(&[(p, b"\x7fELFold")]);
         assert_eq!(
-            replace(&disk, p, b"\x7fELFnew", true),
+            replace(&disk, p, b"\x7fELFnew", true, false),
             Ok(Outcome::Updated(7))
         );
         assert_eq!(disk.get(p).as_deref(), Some(&b"\x7fELFnew"[..]));
@@ -789,7 +901,7 @@ mod tests {
         );
         // The same bytes again: nothing written, the kept copy is still the older one.
         assert_eq!(
-            replace(&disk, p, b"\x7fELFnew", true),
+            replace(&disk, p, b"\x7fELFnew", true, false),
             Ok(Outcome::Unchanged)
         );
         assert_eq!(
@@ -810,7 +922,7 @@ mod tests {
         assert_eq!(disk.get(p).as_deref(), Some(&b"\x7fELFold"[..]));
 
         let junk = Disk::with(&[(p, b"not an elf")]);
-        assert!(replace(&junk, p, b"\x7fELFnew", true).is_err());
+        assert!(replace(&junk, p, b"\x7fELFnew", true, false).is_err());
         assert_eq!(
             junk.get(p).as_deref(),
             Some(&b"not an elf"[..]),
@@ -818,7 +930,7 @@ mod tests {
         );
         // Without keep_previous a replace never writes a .prev.
         let plain = Disk::with(&[(p, b"\x7fELFold")]);
-        replace(&plain, p, b"\x7fELFnew", false).unwrap();
+        replace(&plain, p, b"\x7fELFnew", false, false).unwrap();
         assert!(plain.get(&previous_path(p)).is_none());
     }
 

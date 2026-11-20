@@ -9894,21 +9894,28 @@
         "type": "object"
       },
       "PayloadRestoreRequest": {
-        "description": "`POST /api/pkg/payload-restore` — (re)send the bundled MAIN ps5upload\npayload to the console's loader (:9021). The desktop app does this itself\n(it holds the ELF and can open the socket); the self-hosted web UI cannot,\nso it asks the engine — which is what `ensurePayloadCurrent` /\n`restoreMainPayload` call in the browser build to redeploy a stale or dead\nhelper. Install-time restore is handled inside the unified install state\nmachine; this route is for the general payload-freshness path only.\n\nNever an HTTP error on a failed send: the browser caller runs it\nbest-effort and a failed restore is information to log, not a reason to\nsurface a red error over whatever prompted the refresh.",
-        "properties": {
-          "ps5_addr": {
-            "type": "string",
-            "x-aliases": [
-              "console",
-              "addr",
-              "host"
-            ]
+        "allOf": [
+          {
+            "properties": {
+              "ps5_addr": {
+                "type": "string",
+                "x-aliases": [
+                  "console",
+                  "addr",
+                  "host"
+                ]
+              }
+            },
+            "required": [
+              "ps5_addr"
+            ],
+            "type": "object"
+          },
+          {
+            "$ref": "#/components/schemas/SendOpts"
           }
-        },
-        "required": [
-          "ps5_addr"
         ],
-        "type": "object"
+        "description": "`POST /api/pkg/payload-restore` — (re)send the bundled MAIN ps5upload\npayload to the console's loader (:9021). The desktop app does this itself\n(it holds the ELF and can open the socket); the self-hosted web UI cannot,\nso it asks the engine — which is what `ensurePayloadCurrent` /\n`restoreMainPayload` call in the browser build to redeploy a stale or dead\nhelper. Install-time restore is handled inside the unified install state\nmachine; this route is for the general payload-freshness path only.\n\nNever an HTTP error on a failed send: the browser caller runs it\nbest-effort and a failed restore is information to log, not a reason to\nsurface a red error over whatever prompted the refresh."
       },
       "PeripheralAck": {
         "properties": {
@@ -11752,6 +11759,10 @@
               "host"
             ]
           },
+          "force": {
+            "description": "Write over a stored copy that is a newer helper too (otherwise `{ok:false,\nerror:\"newer_copy\", version}` and nothing changes).",
+            "type": "boolean"
+          },
           "keep_previous": {
             "description": "Keep the copy being replaced as `<path>.prev` first.",
             "type": "boolean"
@@ -12674,6 +12685,34 @@
           "name",
           "owner"
         ],
+        "type": "object"
+      },
+      "SendOpts": {
+        "description": "How a caller asks for a helper send. Every field is optional: an older client sends none and\ngets an explicit send, as before.",
+        "properties": {
+          "app_version": {
+            "description": "The caller's app version, which the helper sent must match for an unattended send\n(default: this engine's version).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "force": {
+            "description": "The person confirmed \"Send anyway\": the refusals a person may override are skipped.",
+            "type": "boolean"
+          },
+          "mode": {
+            "description": "`\"auto\"` or `\"explicit\"` (the default).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "replace": {
+            "description": "Unattended only: the caller means to replace a helper that answers (an older one).",
+            "type": "boolean"
+          }
+        },
         "type": "object"
       },
       "SessionInfo": {
@@ -26551,6 +26590,79 @@
         }
       }
     },
+    "/api/payload/bundled": {
+      "get": {
+        "description": "`GET /api/payload/bundled`: the helper this engine sends, `{available, version, app_version,\nmatches}`. `version` is null for a helper without a version marker (built before 12.6.15) or\nno helper at all; `matches` is false when it is another version than the engine (a stale build:\nnothing is sent unasked then), null when not known.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "app_version": {},
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "matches": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "version": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The helper this engine sends, and its version",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/payload/send": {
       "post": {
         "parameters": [
@@ -26577,6 +26689,51 @@
               "minimum": 0,
               "type": [
                 "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "A helper send's options (helper_send::SendOpts), as query parameters.",
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "replace",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "app_version",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
                 "null"
               ]
             }
@@ -26638,6 +26795,10 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
           },
           "500": {
             "content": {

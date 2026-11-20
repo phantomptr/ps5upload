@@ -908,9 +908,24 @@ fn mark_released(map: &mut HashMap<String, InstallSession>, sid: &str) -> bool {
 struct PayloadRestoreRequest {
     #[serde(alias = "console", alias = "addr", alias = "host")]
     ps5_addr: String,
+    /// The helper gate's options (mode, force, replace, app_version): see helper_send.
+    #[serde(flatten)]
+    opts: crate::helper_send::SendOpts,
 }
 
-async fn payload_restore_handler(Json(req): Json<PayloadRestoreRequest>) -> Response<Body> {
+/// A refusal of the helper gate, as this route answers everything: 200 with `ok: false`, the
+/// refusal's text as `error`, and its code as `refused` (with `forceable`, `retry_after_ms`).
+fn restore_refused(r: &crate::helper_send::Refusal) -> serde_json::Value {
+    let mut v = r.fields();
+    v["error"] = r.message.clone().into();
+    v["bytes"] = 0.into();
+    v
+}
+
+async fn payload_restore_handler(
+    State(state): State<PkgInstallStateHandle>,
+    Json(req): Json<PayloadRestoreRequest>,
+) -> Response<Body> {
     let ps5_ip = strip_host_port(req.ps5_addr.trim()).trim().to_string();
     if ps5_ip.is_empty() {
         return json_response(
@@ -918,20 +933,22 @@ async fn payload_restore_handler(Json(req): Json<PayloadRestoreRequest>) -> Resp
             serde_json::json!({"ok": false, "error": "ps5_addr is required"}),
         );
     }
+    let opts = req.opts;
+    // The gate every helper send goes through (helper_send): no send into an install or over a
+    // running job, the cooldown and the unattended limits, a refused :9021 tried again for a few
+    // seconds, and Payload Manager when the loader does not answer at all.
     let res = tokio::task::spawn_blocking(move || {
-        use ps5upload_core::payload_lifecycle as pl;
-        let lock = crate::elfldr_guard::loader_lock(&ps5_ip);
-        let _loader = lock.lock().unwrap_or_else(|e| e.into_inner());
-        let bytes = payload_restore_bytes(
-            || crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Payload),
-            crate::ava1_api::stamped_helper,
-        )?;
-        pl::send_elf_to_loader(
+        let image = crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Payload)
+            .map_err(crate::helper_send::GateError::Failed)?;
+        crate::helper_send::send_helper(
+            &state,
             &ps5_ip,
-            pl::PS5_LOADER_PORT,
-            &bytes,
-            pl::LoaderImage::Ps5Upload,
+            "ps5upload.elf",
+            &image,
+            &opts,
+            &mut |b: &mut Vec<u8>| *b = crate::ava1_api::stamped_helper(b),
         )
+        .map(|s| s.bytes)
     })
     .await;
     match res {
@@ -942,7 +959,11 @@ async fn payload_restore_handler(Json(req): Json<PayloadRestoreRequest>) -> Resp
                 serde_json::json!({"ok": true, "bytes": bytes}),
             )
         }
-        Ok(Err(e)) => {
+        Ok(Err(crate::helper_send::GateError::Refused(r))) => {
+            crate::log_at!(Info, "install", "payload-restore: refused: {}", r.code);
+            json_response(StatusCode::OK, restore_refused(&r))
+        }
+        Ok(Err(crate::helper_send::GateError::Failed(e))) => {
             crate::log_at!(Warn, "install", "payload-restore: {e}");
             json_response(
                 StatusCode::OK,
@@ -959,6 +980,7 @@ async fn payload_restore_handler(Json(req): Json<PayloadRestoreRequest>) -> Resp
 /// The bytes `payload-restore` sends: the helper image from `load`, passed through
 /// `stamp` (in production `ava1_api::stamped_helper`, like the desktop app's sends) so
 /// the console trusts this engine's AVA1 identity without pairing (SPEC.md §5.1).
+#[cfg(test)]
 fn payload_restore_bytes(
     load: impl FnOnce() -> Result<std::borrow::Cow<'static, [u8]>, String>,
     stamp: impl FnOnce(&[u8]) -> Vec<u8>,
@@ -4570,9 +4592,13 @@ mod tests {
     /// must be refused before anything is sent to a loader.
     #[tokio::test]
     async fn payload_restore_rejects_an_empty_address() {
-        let resp = super::payload_restore_handler(axum::Json(super::PayloadRestoreRequest {
-            ps5_addr: "  ".into(),
-        }))
+        let resp = super::payload_restore_handler(
+            axum::extract::State(Default::default()),
+            axum::Json(super::PayloadRestoreRequest {
+                ps5_addr: "  ".into(),
+                opts: Default::default(),
+            }),
+        )
         .await;
         assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
     }

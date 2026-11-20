@@ -22,6 +22,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::time::{Duration, Instant};
 
+use crate::helper_send::{GateError, SendOpts};
 use crate::pkg_install::PkgInstallStateHandle;
 
 /// The name a browser upload is sent under (it has no file name here).
@@ -36,6 +37,26 @@ struct Target {
     host: Option<String>,
     #[serde(default)]
     port: Option<u16>,
+    /// A helper send's options (helper_send::SendOpts), as query parameters.
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    force: Option<bool>,
+    #[serde(default)]
+    replace: Option<bool>,
+    #[serde(default)]
+    app_version: Option<String>,
+}
+
+impl Target {
+    fn opts(&self) -> SendOpts {
+        SendOpts {
+            mode: self.mode.clone(),
+            force: self.force.unwrap_or(false),
+            replace: self.replace.unwrap_or(false),
+            app_version: self.app_version.clone(),
+        }
+    }
 }
 
 /// The JSON form's body.
@@ -54,6 +75,13 @@ struct SendRequest {
     /// With `payload_id`: this version of the local copy. Absent: whatever version is here.
     #[serde(default)]
     release: Option<String>,
+    /// The helper this engine carries: alone, it is what is sent; with `path`, it is sent when
+    /// that file cannot be read or is not an ELF (a damaged copy of the app's own helper).
+    #[serde(default)]
+    bundled: bool,
+    /// A helper send's options (mode, force, replace, app_version).
+    #[serde(flatten)]
+    opts: SendOpts,
 }
 
 /// What a loader takes (`payload_probe`'s list). The `path` form reads any file the engine can,
@@ -85,6 +113,75 @@ pub fn router<S: Clone + Send + Sync + 'static>(installs: PkgInstallStateHandle)
             "/api/payload/send-check",
             post(move |Json(body): Json<CheckBody>| check(installs.clone(), body)),
         )
+        .route("/api/payload/bundled", axum::routing::get(bundled))
+}
+
+/// `GET /api/payload/bundled`: the helper this engine sends, `{available, version, app_version,
+/// matches}`. `version` is null for a helper without a version marker (built before 12.6.15) or
+/// no helper at all; `matches` is false when it is another version than the engine (a stale build:
+/// nothing is sent unasked then), null when not known.
+async fn bundled() -> Response {
+    let r = tokio::task::spawn_blocking(|| {
+        let available =
+            crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Payload).is_ok();
+        let version = crate::bundled_payload::helper_version();
+        let matches = crate::bundled_payload::helper_matches_app();
+        if matches == Some(false) {
+            crate::log_error!(
+                "bundled helper is v{} but this engine is v{}: the helper is never sent by itself",
+                version.as_deref().unwrap_or("?"),
+                env!("CARGO_PKG_VERSION")
+            );
+        }
+        json!({
+            "available": available,
+            "version": version,
+            "app_version": env!("CARGO_PKG_VERSION"),
+            "matches": matches,
+        })
+    })
+    .await;
+    match r {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// The reply for a send through the helper gate (helper_send): 200 as `sent_response`, 409 with
+/// the refusal's `{error: code, message, forceable, retry_after_ms}`, 502 for a failed send.
+fn gated_response(result: Result<Result<SentPayload, GateError>, String>) -> Response {
+    match result {
+        Ok(Err(GateError::Refused(r))) => {
+            crate::log_info!("helper send refused: {} ({})", r.code, r.message);
+            (StatusCode::CONFLICT, Json(r.fields())).into_response()
+        }
+        Ok(Err(GateError::Failed(e))) => sent_response(Ok(Err(e))),
+        Ok(Ok(sent)) => sent_response(Ok(Ok(sent))),
+        Err(e) => sent_response(Err(e)),
+    }
+}
+
+/// A helper image to `host`'s loader through the gate (blocking work on its own thread).
+async fn send_helper_gated(
+    installs: PkgInstallStateHandle,
+    host: String,
+    label: String,
+    image: Vec<u8>,
+    opts: SendOpts,
+) -> Response {
+    let result = tokio::task::spawn_blocking(move || {
+        if let Some(m) = away_refusal(&host) {
+            return Err(GateError::Failed(m));
+        }
+        crate::helper_send::send_helper(&installs, &host, &label, &image, &opts, &mut stamp_helper)
+    })
+    .await
+    .map_err(|e| e.to_string());
+    gated_response(result)
 }
 
 /// Why a send to this console's loader must not go now, or None.
@@ -167,6 +264,40 @@ async fn check(installs: PkgInstallStateHandle, body: CheckBody) -> Response {
     }
 }
 
+/// A payload file, read whole (the 128 MiB cap is the send's own).
+fn read_payload_file(path: &str) -> Result<Vec<u8>, String> {
+    let size = std::fs::metadata(path)
+        .map_err(|e| format!("open {path}: {e}"))?
+        .len();
+    if size > 128 * 1024 * 1024 {
+        return Err(format!("payload is too large ({size} bytes)"));
+    }
+    std::fs::read(path).map_err(|e| format!("read {path}: {e}"))
+}
+
+/// The helper to send for `{bundled: true}`: the file at `given` when it reads as an ELF, else
+/// this engine's own helper (the desktop app's extracted copy may be damaged or gone).
+fn bundled_or_given(given: Option<&str>) -> Result<(String, Vec<u8>), String> {
+    // Only an .elf, as the path form takes it: never any file on this machine.
+    let given = given.map(str::trim).filter(|p| {
+        std::path::Path::new(p)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("elf"))
+    });
+    if let Some(p) = given {
+        match read_payload_file(p) {
+            Ok(b) if b.starts_with(b"\x7fELF") => return Ok((p.to_string(), b)),
+            Ok(_) => {
+                crate::log_warn!("helper send: {p} is not an ELF; sending the built-in helper")
+            }
+            Err(e) => crate::log_warn!("helper send: {e}; sending the built-in helper"),
+        }
+    }
+    let image = crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Payload)?;
+    Ok(("ps5upload.elf".to_string(), image.into_owned()))
+}
+
 fn bad_request(message: &str) -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
 }
@@ -235,6 +366,7 @@ async fn send(
     if is_json {
         return send_json(installs, &bytes).await;
     }
+    let opts = target.opts();
     let host = target.host.unwrap_or_default().trim().to_string();
     let port = target.port.unwrap_or(PS5_LOADER_PORT);
     if host.is_empty() || port == 0 || !bytes.starts_with(b"\x7fELF") {
@@ -244,6 +376,9 @@ async fn send(
     // missed a helper the send recognised by its name string, and the refusal that keeps a
     // running transfer from being cut was skipped.
     let helper = image_is_helper(UPLOAD_LABEL, &bytes) || crate::console_payload::is_helper(&bytes);
+    if helper && port == PS5_LOADER_PORT {
+        return send_helper_gated(installs, host, UPLOAD_LABEL.into(), bytes.to_vec(), opts).await;
+    }
     if let Some(refused) = send_refused(&installs, &host, port, helper) {
         return refused;
     }
@@ -269,6 +404,21 @@ async fn send_json(installs: PkgInstallStateHandle, body: &[u8]) -> Response {
     let port = req.port.unwrap_or(PS5_LOADER_PORT);
     if host.is_empty() || port == 0 {
         return bad_request("host and a valid port are required");
+    }
+    let opts = req.opts.clone();
+    // This engine's own helper: alone, or in place of a copy that cannot be read.
+    if req.bundled && port == PS5_LOADER_PORT {
+        let given = req.path.clone();
+        let image = tokio::task::spawn_blocking(move || bundled_or_given(given.as_deref())).await;
+        return match image {
+            Ok(Ok((label, image))) => send_helper_gated(installs, host, label, image, opts).await,
+            Ok(Err(e)) => (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "ok": false, "error": e, "status": e })),
+            )
+                .into_response(),
+            Err(e) => sent_response(Err(e.to_string())),
+        };
     }
     let path = match (req.path, req.payload_id) {
         (Some(path), None) => {
@@ -315,6 +465,16 @@ async fn send_json(installs: PkgInstallStateHandle, body: &[u8]) -> Response {
     })
     .await
     .unwrap_or(false);
+    if helper && port == PS5_LOADER_PORT {
+        // Every helper send goes through the gate (helper_send), the desktop app's included.
+        let read = path.clone();
+        let image = tokio::task::spawn_blocking(move || read_payload_file(&read)).await;
+        return match image {
+            Ok(Ok(image)) => send_helper_gated(installs, host, path, image, opts).await,
+            Ok(Err(e)) => sent_response(Ok(Err(e))),
+            Err(e) => sent_response(Err(e.to_string())),
+        };
+    }
     if let Some(refused) = send_refused(&installs, &host, port, helper) {
         return refused;
     }
@@ -370,6 +530,10 @@ mod tests {
         Query(Target {
             host: Some("127.0.0.1".into()),
             port,
+            mode: None,
+            force: None,
+            replace: None,
+            app_version: None,
         })
     }
 
@@ -550,5 +714,48 @@ mod tests {
         assert!(!loader_settled(host, Duration::from_millis(50)));
         drop(held);
         assert!(loader_settled(host, Duration::from_millis(50)));
+    }
+
+    /// `{bundled: true, path}`: the app's extracted helper when it reads as an ELF, this engine's
+    /// own one in place of a damaged copy, and never a file that is not named .elf.
+    #[test]
+    fn the_bundled_form_takes_a_good_copy_and_replaces_a_damaged_one() {
+        let dir = std::env::temp_dir().join(format!("ps5upload-bundled-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let good = dir.join("ps5upload.elf");
+        std::fs::write(&good, b"\x7fELF the app's helper").unwrap();
+        let (label, bytes) = bundled_or_given(good.to_str()).unwrap();
+        assert_eq!(label, good.to_string_lossy());
+        assert_eq!(bytes, b"\x7fELF the app's helper");
+        for (name, body) in [
+            ("damaged.elf", &b"not an elf"[..]),
+            ("helper.txt", b"\x7fELF but named .txt"),
+        ] {
+            let p = dir.join(name);
+            std::fs::write(&p, body).unwrap();
+            // The built-in helper when this build has one, else the reason it has none: never
+            // the file given.
+            match bundled_or_given(p.to_str()) {
+                Ok((label, _)) => assert_eq!(label, "ps5upload.elf", "{name}"),
+                Err(e) => assert!(e.contains("no ps5upload payload"), "{name}: {e}"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A helper sent as bytes goes through the gate: a person's send right after another one is
+    /// refused with the code, and may go anyway.
+    #[tokio::test]
+    async fn a_second_helper_right_after_one_is_refused_until_forced() {
+        let host = "192.0.2.93";
+        crate::helper_send::tests_note_sent(host);
+        let image = Bytes::from_static(b"\x7fELF..PS5UPLOAD_HELPER_VERSION=12.6.14;..");
+        let mut q = query(Some(PS5_LOADER_PORT));
+        q.0.host = Some(host.into());
+        let r = send(Default::default(), q, octet(), image).await;
+        assert_eq!(r.status(), StatusCode::CONFLICT);
+        let v = body_json(r).await;
+        assert_eq!(v["error"], "recent_send");
+        assert_eq!(v["forceable"], true);
     }
 }

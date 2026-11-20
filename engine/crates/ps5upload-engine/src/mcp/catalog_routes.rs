@@ -461,6 +461,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/ops/{id}"),
     ("POST", "/api/ops/{id}/cancel"),
     ("GET", "/api/pad/ws"),
+    ("GET", "/api/payload/bundled"),
     ("POST", "/api/payload/send"),
     ("POST", "/api/payload/send-check"),
     ("GET", "/api/payloads"),

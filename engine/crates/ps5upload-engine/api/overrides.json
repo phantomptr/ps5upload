@@ -243,6 +243,9 @@
   "GET /api/ops/{id}": {
    "summary": "How an operation, job or install stands, and its answer when done"
   },
+  "GET /api/payload/bundled": {
+   "summary": "The helper this engine sends, and its version"
+  },
   "GET /api/pkg/install/history": {
    "summary": "A console's past installs"
   },

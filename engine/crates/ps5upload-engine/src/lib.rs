@@ -68,6 +68,7 @@ mod golive_dest;
 mod golive_ffmpeg;
 mod helper_copies_api;
 mod helper_mirror;
+mod helper_send;
 mod helper_stop;
 mod host_guard;
 mod icon_cache;
@@ -7043,6 +7044,8 @@ async fn ps5_status(
             // The connection's record (link_drops): a recovery after a drop, a helper that
             // started over, and what to read in the background while it drops.
             link_drops::after_status_ok(&console, &json);
+            // After an unattended helper send: whether the console restarted on the way.
+            helper_send::after_status_ok(&console, &json);
             // A helper with the converter gets the zstd runtime it needs (background, once).
             convert_runtime::after_status(console_addr(&console), &json);
             spawn_console_upgrade_cleanup(console);
@@ -7058,6 +7061,7 @@ async fn ps5_status(
             );
             link_drops::after_status_failed(&console, &e);
             let power = ps5upload_ava1::console::recent_power(&console);
+            helper_send::after_status_failed(&console, power);
             (
                 StatusCode::BAD_GATEWAY,
                 Json(status_failure_body(&e, power)),
@@ -7152,14 +7156,24 @@ fn status_failure_body(
             .then_some(ps5upload_core::ddp::Power::Rest)
     });
     let mut body = serde_json::json!({ "error": format!("{e:#}") });
-    if let Some(r) = reason {
+    if let Some(r) = reason.clone() {
         body["reason"] = r.into();
     }
     if let Some(p) = power {
         body["power"] = p.as_str().into();
     }
-    if ps5upload_core::mgmt::helper_too_old(e) {
+    let too_old = ps5upload_core::mgmt::helper_too_old(e);
+    if too_old {
         body["helper_too_old"] = true.into();
+    }
+    // A helper answered (the handshake got a reply, or the status call was only slow): one is
+    // running there, and nothing may replace it unasked (12.6.15). Absent otherwise.
+    let answered = too_old
+        || reason.as_deref().is_some_and(|r| {
+            ps5upload_ava1::console::helper_answered(r) || r == ps5upload_ava1::mgmt::STATUS_SLOW
+        });
+    if answered {
+        body["helper_alive"] = true.into();
     }
     body
 }
@@ -7374,6 +7388,58 @@ mod status_failure_body_tests {
         ] {
             let b = status_failure_body(&e, Some(Power::Awake));
             assert!(b.get("helper_too_old").is_none(), "{b}");
+        }
+    }
+
+    /// A helper that answered in any way (unreadable, too new, too old, wants pairing, slow) is
+    /// running: `helper_alive` says so, and nothing replaces it unasked (12.6.15). Nothing
+    /// listening, rest mode and silence never carry it.
+    #[test]
+    fn a_helper_that_answered_is_alive() {
+        use ps5upload_ava1::console::{
+            HELPER_ALIVE_UNREADABLE, HELPER_ALIVE_UNREADABLE_MESSAGE, HELPER_TOO_NEW,
+            HELPER_TOO_NEW_MESSAGE,
+        };
+        for e in [
+            mgmt::console_unusable(
+                "NODE_STATUS",
+                HELPER_ALIVE_UNREADABLE,
+                HELPER_ALIVE_UNREADABLE_MESSAGE,
+            ),
+            mgmt::console_unusable("NODE_STATUS", HELPER_TOO_NEW, HELPER_TOO_NEW_MESSAGE),
+            mgmt::helper_not_ava1_because("NODE_STATUS", mgmt::HELPER_TOO_OLD_MESSAGE),
+            mgmt::console_unusable("NODE_STATUS", ps5upload_ava1::mgmt::STATUS_SLOW, "slow"),
+            mgmt::MgmtError {
+                label: "NODE_STATUS".into(),
+                status: 9,
+                cause: mgmt::NOT_PAIRED.into(),
+            }
+            .into(),
+        ] {
+            let b = status_failure_body(&e, Some(Power::Awake));
+            assert_eq!(b["helper_alive"], true, "{b}");
+        }
+        let b = status_failure_body(
+            &mgmt::console_unusable("NODE_STATUS", HELPER_TOO_NEW, HELPER_TOO_NEW_MESSAGE),
+            None,
+        );
+        assert_eq!(b["reason"], "helper_too_new");
+        for e in [
+            mgmt::helper_not_ava1("NODE_STATUS"),
+            mgmt::console_unusable(
+                "NODE_STATUS",
+                mgmt::CONSOLE_REST_MODE,
+                mgmt::CONSOLE_REST_MODE_MESSAGE,
+            ),
+            mgmt::console_unusable(
+                "NODE_STATUS",
+                mgmt::AVA1_UNREACHABLE,
+                mgmt::CONSOLE_NOT_ANSWERING_MESSAGE,
+            ),
+            anyhow::anyhow!("timed out"),
+        ] {
+            let b = status_failure_body(&e, Some(Power::Awake));
+            assert!(b.get("helper_alive").is_none(), "{b}");
         }
     }
 }

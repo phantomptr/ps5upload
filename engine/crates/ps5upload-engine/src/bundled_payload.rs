@@ -137,6 +137,30 @@ pub fn image_bytes(image: Image) -> Result<Cow<'static, [u8]>, String> {
     }
 }
 
+/// The version the helper this engine would send says it is (its version marker), `None` when it
+/// has no helper or the helper carries no marker (one built before 12.6.15, or a test stand-in).
+/// The built-in one is read once.
+pub fn helper_version() -> Option<String> {
+    use std::sync::OnceLock;
+    static EMBEDDED: OnceLock<Option<String>> = OnceLock::new();
+    if override_dir().is_some() {
+        let bytes = image_bytes(Image::Payload).ok()?;
+        return ps5upload_core::payload_lifecycle::helper_image_version(&bytes);
+    }
+    EMBEDDED
+        .get_or_init(|| {
+            EMBEDDED_PAYLOAD.and_then(ps5upload_core::payload_lifecycle::helper_image_version)
+        })
+        .clone()
+}
+
+/// How the helper this engine sends stands against the engine's own version (they ship
+/// together): `Some(true)` the same, `Some(false)` another version (a stale build: nothing is sent
+/// unasked then), `None` not known (no helper, or one without a version marker).
+pub fn helper_matches_app() -> Option<bool> {
+    helper_version().map(|v| v == env!("CARGO_PKG_VERSION"))
+}
+
 /// What to tell someone whose engine has no copy of `image`. Kept separate
 /// from the lookup so it can be asserted on regardless of whether the build
 /// running the tests happens to have the image embedded.
