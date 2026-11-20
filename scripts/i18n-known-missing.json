@@ -1,17 +1,6 @@
 {
   "ar": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -27,18 +16,7 @@
     ]
   },
   "bn": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -58,18 +36,7 @@
     ]
   },
   "de": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -93,22 +60,12 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "smp_meta_json"
+      "smp_meta_json",
+      "usb_wizard_payload_filter"
     ]
   },
   "es": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -126,22 +83,12 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "smp_meta_json"
+      "smp_meta_json",
+      "usb_wizard_payload_filter"
     ]
   },
   "fa": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -159,18 +106,7 @@
     ]
   },
   "fr": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -187,22 +123,12 @@
       "processes_pid",
       "pt_way_internet",
       "queue_console_total",
-      "smp_meta_json"
+      "smp_meta_json",
+      "usb_wizard_payload_filter"
     ]
   },
   "hi": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -222,18 +148,7 @@
     ]
   },
   "hu": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -254,22 +169,12 @@
       "remote_play",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json"
+      "smp_meta_json",
+      "usb_wizard_payload_filter"
     ]
   },
   "id": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -292,22 +197,12 @@
       "search_saved_tooltip",
       "smp_meta_json",
       "status_helper_version",
-      "task_dump"
+      "task_dump",
+      "usb_wizard_payload_filter"
     ]
   },
   "it": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -330,22 +225,12 @@
       "search_saved_tooltip",
       "shortcuts_sec_filesystem",
       "smp_meta_json",
-      "status_helper_version"
+      "status_helper_version",
+      "usb_wizard_payload_filter"
     ]
   },
   "ja": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -362,18 +247,7 @@
     ]
   },
   "ko": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -392,18 +266,7 @@
     ]
   },
   "pl": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -421,22 +284,12 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "smp_meta_json"
+      "smp_meta_json",
+      "usb_wizard_payload_filter"
     ]
   },
   "pt-BR": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -454,22 +307,12 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "queue_console_total",
-      "smp_meta_json"
+      "smp_meta_json",
+      "usb_wizard_payload_filter"
     ]
   },
   "ru": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -486,22 +329,12 @@
       "processes_pid",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json"
+      "smp_meta_json",
+      "usb_wizard_payload_filter"
     ]
   },
   "th": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -522,18 +355,7 @@
     ]
   },
   "tr": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -553,22 +375,12 @@
       "remote_play",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json"
+      "smp_meta_json",
+      "usb_wizard_payload_filter"
     ]
   },
   "vi": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -587,22 +399,12 @@
       "processes_pid",
       "remote_play",
       "smp_meta_json",
-      "task_dump"
+      "task_dump",
+      "usb_wizard_payload_filter"
     ]
   },
   "zh-CN": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -615,22 +417,12 @@
       "helper_copy_place_pldmgr",
       "processes_pid",
       "screenshots_png_sdr",
-      "smp_meta_json"
+      "smp_meta_json",
+      "usb_wizard_payload_filter"
     ]
   },
   "zh-TW": {
-    "missing": [
-      "pt_set_built_in_hub",
-      "pt_set_built_in_hub_no_url",
-      "pt_set_page_base",
-      "pt_set_page_base_bad",
-      "pt_set_page_base_hint",
-      "pt_set_page_base_needs_hub",
-      "pt_set_source_custom",
-      "pt_set_source_default",
-      "pt_set_source_environment",
-      "pt_set_use_defaults"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -643,7 +435,8 @@
       "helper_copy_place_pldmgr",
       "processes_pid",
       "screenshots_png_sdr",
-      "smp_meta_json"
+      "smp_meta_json",
+      "usb_wizard_payload_filter"
     ]
   }
 }
