@@ -2631,6 +2631,29 @@
         },
         "type": "object"
       },
+      "ConsoleLink": {
+        "description": "The console's own link, as its helper reported it.",
+        "properties": {
+          "at_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "iface": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/engine.net_doctor.LinkKind"
+          }
+        },
+        "required": [
+          "kind",
+          "at_ms"
+        ],
+        "type": "object"
+      },
       "ConsolePort": {
         "description": "One port held on the console (`net.ports`).",
         "properties": {
@@ -3522,6 +3545,15 @@
           "storage"
         ],
         "type": "object"
+      },
+      "DropWhy": {
+        "description": "Why a check failed, as far as it counts as a drop.",
+        "enum": [
+          "timeout",
+          "refused",
+          "other"
+        ],
+        "type": "string"
       },
       "DumpReq": {
         "properties": {
@@ -5532,6 +5564,51 @@
           "error"
         ],
         "type": "object"
+      },
+      "Hint": {
+        "properties": {
+          "drive_at_ms": {
+            "description": "When the USB drive was first seen (for `usb_wifi`).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "drops": {
+            "description": "Drops in this episode.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/HintKind"
+          },
+          "last_ms": {
+            "description": "The episode's last drop.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "since_ms": {
+            "description": "The episode's first drop: what a dismissal is keyed on, so a new episode shows again.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "drops",
+          "since_ms",
+          "last_ms"
+        ],
+        "type": "object"
+      },
+      "HintKind": {
+        "description": "What the app should say about a console's connection.",
+        "enum": [
+          "usb_wifi",
+          "keeps_dropping"
+        ],
+        "type": "string"
       },
       "HistoryEntry": {
         "properties": {
@@ -7993,6 +8070,183 @@
         ],
         "type": "object"
       },
+      "LinkEvent": {
+        "description": "One thing that happened to a console's connection.",
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "drop"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "at_ms": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "why": {
+                    "$ref": "#/components/schemas/DropWhy"
+                  }
+                },
+                "required": [
+                  "at_ms",
+                  "why"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A check failed after one that answered."
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "back"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "after_ms": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "at_ms": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "at_ms",
+                  "after_ms"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A check answered again, `after_ms` after the drop."
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "helper_restarted"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "at_ms": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "prior": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "at_ms"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "Another helper instance answers: the helper started over (sent again, or restarted).\n`prior` is how the new one says the previous one ended (`replaced`, `clean`, ...)."
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "drive_added"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "absent_at_ms": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "at_ms": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "usb": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "at_ms",
+                  "path",
+                  "usb",
+                  "absent_at_ms"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A drive appeared in the console's volume list. `usb`: a USB drive (not the M.2 slot).\n`absent_at_ms`: the last list it was not in."
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "drive_removed"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "at_ms": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "at_ms",
+                  "path"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A drive went from the volume list."
+          }
+        ]
+      },
       "LinkOpenRequest": {
         "properties": {
           "any": {
@@ -8021,6 +8275,53 @@
         },
         "required": [
           "url"
+        ],
+        "type": "object"
+      },
+      "LinkReport": {
+        "description": "The record as the route answers it.",
+        "properties": {
+          "events": {
+            "description": "Oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/LinkEvent"
+            },
+            "type": "array"
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hint"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "link": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConsoleLink"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The console's link, when it was read (only while it drops, or when asked)."
+          },
+          "up": {
+            "description": "Whether the console's last check answered (`None`: no check yet).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "events",
+          "link",
+          "hint",
+          "up"
         ],
         "type": "object"
       },
@@ -17735,7 +18036,16 @@
                         "set_id": {
                           "type": "string"
                         },
-                        "title_id_hint": {}
+                        "title_id_hint": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Hint"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
                       },
                       "type": "object"
                     },
@@ -17750,7 +18060,16 @@
                         "set_id": {
                           "type": "null"
                         },
-                        "title_id_hint": {}
+                        "title_id_hint": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Hint"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
                       },
                       "type": "object"
                     }
@@ -36825,6 +37144,74 @@
             "required": false
           },
           "response_schema": "literal"
+        }
+      }
+    },
+    "/api/ps5/link-history": {
+      "get": {
+        "description": "GET /api/ps5/link-history?addr=IP[&read_link=1]\n\nHow the console's connection has been holding up, kept from the app's own status checks and\nvolume reads (in memory, this engine run, the last day at most): `events` (oldest first)\n`drop` with `why` (`timeout`: the console stopped answering; `refused`: nothing listened on\nthe helper's port; `other`), `back` (`after_ms`), `helper_restarted` (`prior`: how the new\nhelper says the previous one ended), `drive_added` / `drive_removed` (a drive's mount point,\n`usb`); `link`: the console's link (`kind` `wired` / `wifi` / `unknown`, `iface`), read only\nwhile it drops or when `read_link=1` asks (one helper call); `hint`: `null`, or `kind`\n`keeps_dropping` (several drops close together, lately) or `usb_wifi` (the same, starting\naround when a USB drive appeared, on a console on Wi-Fi), with `drops`, `since_ms` (the first\ndrop: key a dismissal on it), `last_ms` and `drive_at_ms`; `up`: the last check answered.\nNothing here names an address. Sends nothing to the console without `read_link`.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "`1`: ask the console's helper for its link (cable or Wi-Fi) when it is not known yet.",
+            "in": "query",
+            "name": "read_link",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkReport"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "How a console's connection has been holding up: drops, recoveries, helper restarts, USB drives",
+        "tags": [
+          "consoles"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "struct"
         }
       }
     },

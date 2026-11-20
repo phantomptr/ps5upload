@@ -286,7 +286,7 @@ places to start.
 | Family | Routes | What it's for |
 |---|---|---|
 | `engine` | `/api/version`, `/api/events`, `/api/event-journal`, `/api/engine-logs`, `/api/logs/*`, `/api/diag/*`, `/api/metrics`, `/api/openapi.json`, `/api/mgmt/call` | The engine itself. `/api/mgmt/call` is the raw helper call, for when nothing else fits. |
-| `consoles` | `/api/consoles`, `/api/discover`, `/api/ps5/status`, `/api/ps5/readiness`, `/api/ps5/volumes`, `/api/ps5/connect-timings` | Which consoles there are and how they stand. See [Consoles, Tailscale and new devices](#consoles-tailscale-and-new-devices). |
+| `consoles` | `/api/consoles`, `/api/discover`, `/api/ps5/status`, `/api/ps5/readiness`, `/api/ps5/volumes`, `/api/ps5/connect-timings`, `/api/ps5/link-history` | Which consoles there are and how they stand. See [Consoles, Tailscale and new devices](#consoles-tailscale-and-new-devices). |
 | `console-files` | `/api/ps5/list-dir`, `/api/ps5/fs/*`, `/api/ps5/disk-usage`, `/api/ps5/console-shares` | Files on the console. |
 | `transfer` | `/api/transfer/*`, `/api/files/upload`, `/api/link/*`, `/api/zip/*`, `/api/7z/*`, `/api/rar/*`, `/api/tar/*` | Uploads and downloads. |
 | `jobs` | `/api/jobs/*`, `/api/ops/*`, `/api/ps5/console-tasks`, `/api/activity` | Following and stopping work. |
@@ -314,6 +314,12 @@ places to start.
   (session reused or opened, a remembered verdict, a plain connect, the status call), with the path
   (`lan` or `tailnet`) and the helper version. It sends nothing to a console. A status read that
   times out while the helper is only busy answers `reason: "status_slow"`: hold what you knew.
+- `GET /api/ps5/link-history?addr=[&read_link=1]`: how the console's connection has been holding
+  up, from the app's own status checks and volume reads (this engine run, the last day): drops
+  (`timeout` or `refused`), recoveries, a helper that started over, USB drives appearing; the
+  console's link (`wired` / `wifi`) once it was read; and `hint` when it keeps dropping (`usb_wifi`
+  when that started around when a USB drive appeared on a console on Wi-Fi). `read_link=1` asks the
+  helper for its link when it is not known. No addresses in the answer.
 - `GET /api/ava1/console?addr=`: which console answers at an address, as `{key, name}` (its AVA1
   identity key in hex, the same at every address), without pairing. 502 when nothing answers.
 - `GET /api/tailnet/consoles[?refresh=1&all=1&addr=]`: the PS5Upload consoles on this device's
