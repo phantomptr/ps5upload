@@ -19,6 +19,7 @@ import { t } from "../i18n";
 import { useLangStore } from "../state/lang";
 import { isNpxsContentId } from "./npxs";
 import { trStatic } from "./trStatic";
+import { installRefusal, registerRefusedText, unregisterRefusedText } from "./consoleInstall";
 
 /** Localised lookup for the humanised error copy below. This module is a
  *  plain function (not a React component), so it reads the active language
@@ -97,6 +98,18 @@ export function humanizePs5Error(
   // never saw it, so the transfer may well have finished. The queue logs the stack for a report.
   if (/Minified React error #185|Maximum update depth exceeded/i.test(raw)) {
     return te("err_display_crashed");
+  }
+
+  // ─── A game the PS5's own installer installed (#884) ─────────────────
+  // Adding a copy of it to the home screen, or removing "its" registration, was refused before
+  // anything was touched (by the helper, or by the app for an older helper).
+  {
+    const refused = installRefusal(raw);
+    if (refused) {
+      return refused.op === "register"
+        ? registerRefusedText(refused.where)
+        : unregisterRefusedText(refused.where);
+    }
   }
 
   // ─── Remote Play pairing ───────────────────────────────────────────
