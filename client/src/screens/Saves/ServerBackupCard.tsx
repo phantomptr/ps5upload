@@ -22,6 +22,7 @@ import {
 import { useTr } from "../../state/lang";
 import { userHex } from "./saveUsers";
 import { ConsoleCopyChoice, useConsoleDrives } from "./AutoBackupCard";
+import { BackupLayoutChoice, layoutSupported } from "./BackupLayoutChoice";
 
 /** Backups to a network share (#592): where, when (every few hours or after a game is closed),
  *  which consoles and users, and how the last one went. The engine runs them and verifies each
@@ -227,6 +228,14 @@ export default function ServerBackupCard({
                 </fieldset>
               )}
             </div>
+          )}
+          {layoutSupported(settings) && (
+            <BackupLayoutChoice
+              testId="server-save-backup-layout"
+              settings={settings}
+              status={status?.decrypted}
+              onChange={(patch) => void set(patch)}
+            />
           )}
           {copySupported && (
             <ConsoleCopyChoice

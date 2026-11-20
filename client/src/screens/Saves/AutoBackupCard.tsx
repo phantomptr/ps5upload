@@ -18,6 +18,7 @@ import {
 } from "../../state/autoSaveBackup";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
+import { BackupLayoutChoice, layoutSupported } from "./BackupLayoutChoice";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -393,6 +394,14 @@ export default function AutoBackupCard() {
           onChange={(console_drive) => {
             if (console_drive !== settings.console_drive) void set({ console_drive });
           }}
+        />
+      )}
+      {layoutSupported(settings) && (
+        <BackupLayoutChoice
+          testId="auto-save-backup-layout"
+          settings={settings}
+          status={status?.decrypted}
+          onChange={(patch) => void set(patch)}
         />
       )}
       {error && <p className="mt-2 text-xs text-[var(--color-bad)]">{error}</p>}

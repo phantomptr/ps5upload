@@ -12,6 +12,12 @@
 //! backup first, backs up the save that is there now (so a restore can itself be undone), then
 //! empties the save folder and uploads the backup into it.
 //!
+//! The folder is arranged by game (`<TITLE>/…`) or by user (`<name>_<id>/Encrypted/PS5/<TITLE>/…`,
+//! #886, `save_layout`); listing, restoring and the versions kept read both, so a change of layout
+//! never strands a backup. By user, a decrypted copy can be left with each backup of a PS5 save,
+//! and "Save as a file for a friend or another PS5" can go straight into the user's Decrypted
+//! folder (`POST /api/save-backup/export`).
+//!
 //! Settings, and what was last backed up, are kept in `state/` under the data folder.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -24,12 +30,14 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use ps5upload_core::save_archive::{
-    auto_backup_slot, backup_finalize, cleanup_temp_dir, make_temp_dir, restore_prepare,
-    unzip_strict, zip_comment, zip_folder_noted,
+    auto_backup_stem, backup_finalize, backup_tag, cleanup_temp_dir, make_temp_dir,
+    restore_prepare, unzip_strict, zip_comment, zip_folder_noted,
 };
 use ps5upload_core::saves::SaveEntry;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+
+use crate::save_layout::{self as layout, Arrange, DecryptedStatus, Kind, Layout, Owner, Platform};
 
 /// How often the consoles are looked at, in minutes, unless the settings say otherwise.
 pub const DEFAULT_INTERVAL_MINUTES: u32 = 10;
@@ -66,9 +74,29 @@ pub struct Settings {
     /// (`save_backup_console`).
     #[serde(default)]
     pub console_drive: String,
+    /// How backups are arranged in `dir` and on the PS5 drive (#886): by game, as always, or by
+    /// user (`save_layout`). New backups go the chosen way; ones made before stay where they are
+    /// and still list, restore and count towards `keep`.
+    #[serde(default)]
+    pub layout: Layout,
+    /// By user: a game's new folder is `<TITLE> - <game>` when the console names the game.
+    #[serde(default)]
+    pub game_names: bool,
+    /// By user: each automatic backup of a PS5 save also leaves a decrypted copy (one that opens
+    /// on any PS5) in the user's Decrypted folder, `keep` of them.
+    #[serde(default)]
+    pub decrypted_copy: bool,
 }
 
 impl Settings {
+    /// The layout of the backup folder (and its PS5 drive copies).
+    pub fn arrange(&self) -> Arrange {
+        Arrange {
+            layout: self.layout,
+            game_names: self.game_names,
+        }
+    }
+
     /// The wait between automatic passes, kept in its range whatever the file says.
     pub fn interval(&self) -> Duration {
         Duration::from_secs(u64::from(clamp_interval(self.interval_minutes)) * 60)
@@ -130,6 +158,9 @@ impl Default for Settings {
             old_dirs: Vec::new(),
             interval_minutes: DEFAULT_INTERVAL_MINUTES,
             console_drive: String::new(),
+            layout: Layout::ByGame,
+            game_names: false,
+            decrypted_copy: false,
         }
     }
 }
@@ -166,6 +197,9 @@ pub struct Status {
     pub last_error: Option<String>,
     /// The last copies to the PS5 drive (`Settings::console_drive`); None before any.
     pub console_copy: Option<crate::save_backup_console::CopyStatus>,
+    /// The last decrypted copies made with the backups (`Settings::decrypted_copy`); None
+    /// before any.
+    pub decrypted: Option<DecryptedStatus>,
 }
 
 /// Console and save path → the save's modification time when it was last backed up.
@@ -569,6 +603,7 @@ pub(crate) fn back_up_one(
 ) -> Result<PathBuf, String> {
     let _op = save_op(&[host]);
     let user = entry.user_id as u32;
+    let arrange = arrangement_for(dir);
     let tmp = make_temp_dir(&entry.title_id)?;
     let tmp_s = tmp.to_string_lossy().into_owned();
     let result = (|| {
@@ -577,18 +612,254 @@ pub(crate) fn back_up_one(
             Some(t) => format!("{}_{t}", stamp(now_ms())),
             None => stamp(now_ms()),
         };
-        let dest = auto_backup_slot(dir, &entry.title_id, user, &st, keep, false)?;
+        let stamp_ok = st
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if !plain(&entry.title_id) || entry.title_id.contains('.') || !stamp_ok {
+            return Err("automatic backup: unexpected title id or timestamp".into());
+        }
+        if dir.trim().is_empty() {
+            return Err("automatic backup: no folder chosen".into());
+        }
+        let owner = owner_of(host, entry, arrange);
+        let list = local_list(dir);
+        let rel = layout::place(&list, arrange.layout, Kind::Encrypted, &owner)?;
+        let folder = local_path(dir, &rel);
+        std::fs::create_dir_all(&folder)
+            .map_err(|e| format!("create {}: {e}", folder.display()))?;
+        let dest = folder.join(format!(
+            "{}{st}.zip",
+            auto_backup_stem(&entry.title_id, user)
+        ));
         let note = backup_note(console_identity(host).as_deref(), Some(user));
         if let Err(e) = zip_folder_noted(&tmp, &entry.title_id, &dest, &note) {
             let _ = std::fs::remove_file(&dest);
             return Err(format!("zip: {e:#}"));
         }
-        // Older backups go only once the new one is there, so a failed zip never costs one.
-        auto_backup_slot(dir, &entry.title_id, user, &st, keep, true)?;
+        // Older backups go only once the new one is there, so a failed zip never costs one;
+        // counted in both layouts of the folder.
+        prune_local(dir, &entry.title_id, user, backup_tag(&st), keep, &dest);
         Ok(dest)
     })();
     let _ = cleanup_temp_dir(&tmp_s);
     result
+}
+
+// ── where a backup goes in a folder (#886) ──────────────────────────────
+
+/// `rel` (`a/b`, from `save_layout`) as a path under the local folder `root`.
+pub(crate) fn local_path(root: &str, rel: &str) -> PathBuf {
+    let mut p = PathBuf::from(root);
+    for part in rel.split('/').filter(|s| !s.is_empty()) {
+        p.push(part);
+    }
+    p
+}
+
+/// The local folder `root` as `save_layout` sees it.
+pub(crate) fn local_list(root: &str) -> impl Fn(&str) -> Result<layout::Entries, String> + '_ {
+    move |rel| {
+        let p = local_path(root, rel);
+        let rd = std::fs::read_dir(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+        Ok(rd
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let name = e.file_name().into_string().ok()?;
+                let md = e.metadata().ok()?;
+                Some((name, md.is_dir(), md.len()))
+            })
+            .collect())
+    }
+}
+
+/// Deletes this save's oldest backups of kind `tag` in `dir` (either layout) so `keep` remain,
+/// never `just_made`. Only files named the way this app names its backups.
+fn prune_local(
+    dir: &str,
+    title_id: &str,
+    user: u32,
+    tag: Option<&str>,
+    keep: u32,
+    just_made: &Path,
+) {
+    let list = local_list(dir);
+    let files = layout::backup_files(&list, title_id);
+    for old in layout::to_prune(&files, title_id, user, tag, keep) {
+        let p = local_path(dir, &old.rel());
+        if p != just_made {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// The layout of the folder `dir`: the backup folder's own; by game for any other (a temporary
+/// folder, a console backup's).
+fn arrangement_for(dir: &str) -> Arrange {
+    let s = settings();
+    if !s.dir.trim().is_empty() && same_dir(dir, &s.dir) {
+        s.arrange()
+    } else {
+        Arrange::default()
+    }
+}
+
+/// The local users of the console at `host`, by account ID, with their names. Kept a while.
+fn user_name(host: &str, user: u32) -> Option<String> {
+    type Seen = BTreeMap<String, (BTreeMap<u32, String>, std::time::Instant)>;
+    static SEEN: OnceLock<Mutex<Seen>> = OnceLock::new();
+    let seen = SEEN.get_or_init(Mutex::default);
+    let fresh = |at: &std::time::Instant| at.elapsed() < Duration::from_secs(600);
+    if let Some((names, at)) = seen.lock().ok()?.get(host) {
+        if fresh(at) {
+            return names.get(&user).cloned();
+        }
+    }
+    let info = ps5upload_core::profile::profile_info(host).ok()?;
+    let names: BTreeMap<u32, String> = info
+        .users
+        .into_iter()
+        .map(|u| (u.uid, u.username.trim().to_string()))
+        .filter(|(_, n)| !n.is_empty())
+        .collect();
+    let name = names.get(&user).cloned();
+    if let Ok(mut g) = seen.lock() {
+        g.insert(host.to_string(), (names, std::time::Instant::now()));
+    }
+    name
+}
+
+/// The name of `title_id` on the console at `host`, for its folder. Kept a while (found or not).
+fn game_name(host: &str, title_id: &str) -> Option<String> {
+    type Seen = BTreeMap<(String, String), (Option<String>, std::time::Instant)>;
+    static SEEN: OnceLock<Mutex<Seen>> = OnceLock::new();
+    let seen = SEEN.get_or_init(Mutex::default);
+    let key = (host.to_string(), title_id.to_string());
+    if let Some((name, at)) = seen.lock().ok()?.get(&key) {
+        if at.elapsed() < Duration::from_secs(600) {
+            return name.clone();
+        }
+    }
+    let name = crate::title_name(host, title_id);
+    if let Ok(mut g) = seen.lock() {
+        g.insert(key, (name.clone(), std::time::Instant::now()));
+    }
+    name
+}
+
+/// Whose save `entry` is and what its folders are named after, for a place arranged `arrange`.
+/// The console is asked for the user's (and game's) name only when they go in a folder name.
+pub(crate) fn owner_of(host: &str, entry: &SaveEntry, arrange: Arrange) -> Owner {
+    let platform = layout::platform_of(entry);
+    let by_user = arrange.layout == Layout::ByUser && platform.is_some();
+    let user = entry.user_id as u32;
+    Owner {
+        title_id: entry.title_id.clone(),
+        user,
+        platform,
+        name: if by_user { user_name(host, user) } else { None },
+        game: if by_user && arrange.game_names {
+            game_name(host, &entry.title_id)
+        } else {
+            None
+        },
+    }
+}
+
+/// The save of a PS5 save folder (`/user/home/<8 hex>/savedata_prospero/<TITLE>`), for a decrypted
+/// export of it.
+pub(crate) fn ps5_save_entry(folder: &str) -> Result<SaveEntry, String> {
+    let folder = folder.trim().trim_end_matches('/');
+    let (title_id, _) = ps5_save_image(&format!("{folder}/x"))
+        .ok_or_else(|| format!("{folder} is not a PS5 save folder"))?;
+    let hex = folder
+        .trim_start_matches("/user/home/")
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    let user =
+        u32::from_str_radix(hex, 16).map_err(|_| format!("{folder} is not a PS5 save folder"))?;
+    Ok(SaveEntry {
+        title_id,
+        user_id: user as i32,
+        path: folder.to_string(),
+        size: 0,
+        mtime: 0,
+        kind: "ps5".into(),
+    })
+}
+
+/// The name of a decrypted copy: an automatic one is named and kept like a backup (tagged
+/// `decrypted`); one asked for keeps the name a shared save has (never deleted by the app).
+pub(crate) fn decrypted_name(entry: &SaveEntry, auto: bool, shared_name: &str) -> String {
+    if auto {
+        format!(
+            "{}{}_{}.zip",
+            auto_backup_stem(&entry.title_id, entry.user_id as u32),
+            stamp(now_ms()),
+            layout::DECRYPTED_TAG
+        )
+    } else {
+        shared_name.to_string()
+    }
+}
+
+/// A decrypted copy of the PS5 save `entry` on `host` in the user's Decrypted folder of the local
+/// folder `dir`; `auto_keep`: made with an automatic backup (that many kept), else one the person
+/// asked for. The file's path.
+pub(crate) fn export_decrypted_local(
+    host: &str,
+    entry: &SaveEntry,
+    dir: &str,
+    game_names: bool,
+    auto_keep: Option<u32>,
+) -> Result<String, String> {
+    if dir.trim().is_empty() {
+        return Err("Choose a folder for save backups first (Saves › Automatic backups).".into());
+    }
+    let shared = crate::save_copy::share_file(&crate::save_copy::Live::new(host), &entry.path)?;
+    let arrange = Arrange {
+        layout: Layout::ByUser,
+        game_names,
+    };
+    let owner = owner_of(host, entry, arrange);
+    let list = local_list(dir);
+    let rel = layout::place(&list, Layout::ByUser, Kind::Decrypted, &owner)?;
+    let folder = local_path(dir, &rel);
+    std::fs::create_dir_all(&folder).map_err(|e| format!("create {}: {e}", folder.display()))?;
+    let name = decrypted_name(entry, auto_keep.is_some(), &shared.name);
+    let dest = folder.join(&name);
+    let part = folder.join(format!("{name}.part"));
+    std::fs::copy(&shared.zip, &part)
+        .and_then(|_| std::fs::rename(&part, &dest))
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&part);
+            format!("write {}: {e}", dest.display())
+        })?;
+    if let Some(keep) = auto_keep {
+        let files = layout::decrypted_files(&list, &entry.title_id);
+        let user = entry.user_id as u32;
+        for old in layout::to_prune(
+            &files,
+            &entry.title_id,
+            user,
+            Some(layout::DECRYPTED_TAG),
+            keep,
+        ) {
+            let p = local_path(dir, &old.rel());
+            if p != dest {
+                let _ = std::fs::remove_file(p);
+            }
+        }
+    }
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+/// Whether an automatic backup of `entry` also gets a decrypted copy under `decrypted_copy` and
+/// `arrange`: by user, and a PS5 game's save (a PS4 one, or an emulator's, can't be opened).
+pub(crate) fn wants_decrypted(decrypted_copy: bool, arrange: Arrange, entry: &SaveEntry) -> bool {
+    decrypted_copy
+        && arrange.layout == Layout::ByUser
+        && layout::platform_of(entry) == Some(Platform::Ps5)
 }
 
 // ── which PS5 a backup was made on ──────────────────────────────────────
@@ -833,7 +1104,8 @@ pub fn run_pass() -> Result<(), String> {
     };
     let mut done: Done = load(DONE_FILE);
     let (mut backed_up, mut failed, mut last_error) = (0u32, 0u32, None::<String>);
-    let mut copies = crate::save_backup_console::Copies::new(&s.console_drive, s.keep);
+    let mut copies = crate::save_backup_console::Copies::new(&s.console_drive, s.keep, s.arrange());
+    let mut decrypted = DecryptedStatus::default();
     for host in &s.hosts {
         if console_busy(host) {
             continue;
@@ -860,9 +1132,21 @@ pub fn run_pass() -> Result<(), String> {
                         c.copy(
                             &crate::save_backup_console::Live(host),
                             host,
-                            &entry.title_id,
+                            &owner_of(host, entry, s.arrange()),
                             &zip,
                         );
+                    }
+                    // And a decrypted copy, when asked for; never a reason either.
+                    if wants_decrypted(s.decrypted_copy, s.arrange(), entry) {
+                        let r =
+                            export_decrypted_local(host, entry, &s.dir, s.game_names, Some(s.keep));
+                        if let Err(e) = &r {
+                            crate::log_warn!(
+                                "save backup: decrypted copy of {} on {host}: {e}",
+                                entry.title_id
+                            );
+                        }
+                        decrypted.record(&r);
                     }
                 }
                 Err(e) => {
@@ -888,18 +1172,24 @@ pub fn run_pass() -> Result<(), String> {
         if let Some(c) = copies.filter(|c| c.status.at > 0) {
             st.console_copy = Some(c.status);
         }
+        if decrypted.at > 0 {
+            st.decrypted = Some(decrypted);
+        }
     });
     Ok(())
 }
 
-/// Copies the backups `made` from `host` (Back up now, a snapshot) to the PS5 drive, when one is
-/// chosen, and notes what happened in the status.
-fn copy_made(host: &str, title_id: &str, made: &[PathBuf], s: &Settings) {
-    let Some(mut copies) = crate::save_backup_console::Copies::new(&s.console_drive, s.keep) else {
+/// Copies the backups `made` of the saves `entries` from `host` (Back up now, a snapshot) to the
+/// PS5 drive, when one is chosen, and notes what happened in the status.
+fn copy_made(host: &str, entries: &[&SaveEntry], made: &[PathBuf], s: &Settings) {
+    let Some(mut copies) =
+        crate::save_backup_console::Copies::new(&s.console_drive, s.keep, s.arrange())
+    else {
         return;
     };
-    for zip in made {
-        copies.copy(&crate::save_backup_console::Live(host), host, title_id, zip);
+    for (entry, zip) in entries.iter().zip(made) {
+        let owner = owner_of(host, entry, s.arrange());
+        copies.copy(&crate::save_backup_console::Live(host), host, &owner, zip);
     }
     set_status(|st| st.console_copy = Some(copies.status));
 }
@@ -1014,7 +1304,7 @@ pub fn snapshot(host: &str, title_id: &str) -> Result<Vec<PathBuf>, String> {
     for entry in &saves {
         made.push(snapshot_one(host, entry, &s)?);
     }
-    copy_made(host, &saves[0].title_id, &made, &s);
+    copy_made(host, &saves.iter().collect::<Vec<_>>(), &made, &s);
     crate::log_info!(
         "save backup: snapshot of {title_id} on {host} ({} file(s))",
         made.len()
@@ -1067,7 +1357,7 @@ pub fn back_up_now(host: &str, title_id: &str, user_id: u32) -> Result<PathBuf, 
     } else {
         back_up_one(host, &entry, &s.dir, s.keep, None, &|| Ok(()))?
     };
-    copy_made(host, &entry.title_id, std::slice::from_ref(&made), &s);
+    copy_made(host, &[&entry], std::slice::from_ref(&made), &s);
     crate::log_info!(
         "save backup: {title_id} of user {user_id:08x} backed up now on {host} ({})",
         made.display()
@@ -1121,19 +1411,18 @@ fn latest_into(dir: &str, best: &mut BTreeMap<(String, u32), String>) {
     if dir.trim().is_empty() {
         return;
     }
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for title in rd.filter_map(|e| e.ok()) {
-        let Ok(title_id) = title.file_name().into_string() else {
-            continue;
-        };
-        if !plain(&title_id) || !title.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        for b in list_backups(dir, &title_id) {
-            let stamp: String = b.stamp.chars().take(17).collect();
-            let e = best.entry((title_id.clone(), b.user_id)).or_default();
+    // Both layouts: by game and by user (#886).
+    let list = local_list(dir);
+    for (rel, title_id) in layout::all_title_dirs(&list) {
+        for (name, is_dir, _) in list(&rel).unwrap_or_default() {
+            let Some((user, stamp)) = (!is_dir)
+                .then(|| parse_backup_name(&title_id, &name))
+                .flatten()
+            else {
+                continue;
+            };
+            let stamp: String = stamp.chars().take(17).collect();
+            let e = best.entry((title_id.clone(), user)).or_default();
             if stamp > *e {
                 *e = stamp;
             }
@@ -1232,37 +1521,34 @@ pub fn list_backups_in(dirs: &[String], title_id: &str) -> Vec<BackupFile> {
     out
 }
 
-/// The backup `file` of `title_id` in the first of `dirs` that has it.
+/// The backup `file` of `title_id` in the first of `dirs` that has it, in either layout.
 pub fn find_backup(dirs: &[String], title_id: &str, file: &str) -> Option<PathBuf> {
     if !plain(title_id) || !plain(file) || !file.ends_with(".zip") {
         return None;
     }
-    dirs.iter()
-        .map(|d| Path::new(d).join(title_id).join(file))
-        .find(|p| p.is_file())
+    dirs.iter().find_map(|d| {
+        layout::find(&local_list(d), title_id, file)
+            .map(|f| local_path(d, &f.rel()))
+            .filter(|p| p.is_file())
+    })
 }
 
-/// The backups of `title_id` in `dir`, newest first.
+/// The backups of `title_id` in `dir` (by game and by user), newest first.
 pub fn list_backups(dir: &str, title_id: &str) -> Vec<BackupFile> {
     if !plain(title_id) || dir.trim().is_empty() {
         return Vec::new();
     }
-    let Ok(rd) = std::fs::read_dir(Path::new(dir).join(title_id)) else {
-        return Vec::new();
-    };
-    let mut out: Vec<BackupFile> = rd
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let file = e.file_name().into_string().ok()?;
-            let (user_id, stamp) = parse_backup_name(title_id, &file)?;
-            let size = e.metadata().ok()?.len();
+    let mut out: Vec<BackupFile> = layout::backup_files(&local_list(dir), title_id)
+        .into_iter()
+        .filter_map(|f| {
+            let (user_id, stamp) = parse_backup_name(title_id, &f.name)?;
             Some(BackupFile {
-                tag: ps5upload_core::save_archive::backup_tag(&file).map(String::from),
-                file,
+                tag: backup_tag(&f.name).map(String::from),
+                file: f.name,
                 title_id: title_id.to_string(),
                 user_id,
                 stamp,
-                size,
+                size: f.size,
             })
         })
         .collect();
@@ -1575,7 +1861,7 @@ pub(crate) fn put_in_place(
             .and_then(|zip| {
                 if crate::save_backup_server::configured() {
                     let tag = tag.unwrap_or(crate::save_backup_server::BEFORE_RESTORE_TAG);
-                    crate::save_backup_server::keep_on_server(&current, &zip, tag)?;
+                    crate::save_backup_server::keep_on_server(host, &current, &zip, tag)?;
                 }
                 Ok(zip)
             });
@@ -1959,6 +2245,12 @@ pub struct SettingsPatch {
     /// The PS5 drive that also gets a copy of each backup (`/mnt/ext<N>`, `/mnt/usb<N>`); "" for
     /// none.
     pub console_drive: Option<String>,
+    /// `by_game` or `by_user` (#886).
+    pub layout: Option<Layout>,
+    /// By user: name a game's new folder after the game too.
+    pub game_names: Option<bool>,
+    /// By user: a decrypted copy with each automatic backup of a PS5 save.
+    pub decrypted_copy: Option<bool>,
 }
 
 /// `hosts` with the additions and removals made, tidy.
@@ -1989,7 +2281,7 @@ pub(crate) fn writable(dir: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// `PUT /api/save-backup` — change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts, console_drive}`.
+/// `PUT /api/save-backup` — change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts, console_drive, layout, game_names, decrypted_copy}`.
 pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
     let before = settings();
     let mut next = before.clone();
@@ -2026,6 +2318,15 @@ pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
             );
         }
         next.console_drive = d;
+    }
+    if let Some(l) = patch.layout {
+        next.layout = l;
+    }
+    if let Some(g) = patch.game_names {
+        next.game_names = g;
+    }
+    if let Some(d) = patch.decrypted_copy {
+        next.decrypted_copy = d;
     }
     if let Some(h) = patch.hosts {
         next.hosts = hosts_with(h, Vec::new(), &[]);
@@ -2203,6 +2504,59 @@ pub async fn get_note(Query(q): Query<NoteQuery>) -> Response {
         .ok()
         .flatten();
     Json(json!({ "note": backup_note(console.as_deref(), Some(q.user_id)) })).into_response()
+}
+
+/// Where a decrypted export goes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportTo {
+    /// The backup folder on this computer.
+    #[default]
+    Local,
+    /// The network-share backups' folder.
+    Server,
+}
+
+#[derive(Deserialize)]
+pub struct ExportBody {
+    #[serde(alias = "console", alias = "host")]
+    pub addr: String,
+    /// The PS5 save folder (`/user/home/<8 hex>/savedata_prospero/<TITLE>`).
+    pub folder: String,
+    #[serde(default)]
+    pub to: ExportTo,
+}
+
+/// `POST /api/save-backup/export` `{addr, folder, to}` (#886) — "Save as a file for a friend or
+/// another PS5" straight into that user's `Decrypted/PS5/<TITLE>` folder of the backup folder
+/// (`to: "local"`) or of the network-share backups' folder (`"server"`): `{ok, path, file}`. The
+/// file is the one `/api/save-backup/share` sends, and opens on any PS5.
+pub async fn post_export(Json(b): Json<ExportBody>) -> Response {
+    let r = tokio::task::spawn_blocking(move || {
+        let host = b.addr.trim().to_string();
+        let entry = ps5_save_entry(&b.folder)?;
+        match b.to {
+            ExportTo::Local => {
+                let s = settings();
+                export_decrypted_local(&host, &entry, &s.dir, s.game_names, None)
+            }
+            ExportTo::Server => crate::save_backup_server::export_decrypted(&host, &entry, None),
+        }
+    })
+    .await;
+    match r {
+        Ok(Ok(path)) => {
+            let file = path
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            crate::log_info!("save backup: decrypted copy written to {path}");
+            Json(json!({ "ok": true, "path": path, "file": file })).into_response()
+        }
+        Ok(Err(e)) => json_error(StatusCode::BAD_GATEWAY, e),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -2417,12 +2771,124 @@ mod tests {
         std::fs::write(title.join(oldest), b"z").unwrap();
         let tag = crate::save_backup_server::BEFORE_RESTORE_TAG;
         let st = format!("2026-02-01_000000_{tag}");
-        let slot = auto_backup_slot(&d, "PPSA01234", 1, &st, 1, false).unwrap();
+        let slot = title.join(format!("PPSA01234_user00000001_{st}.zip"));
         std::fs::write(&slot, b"z").unwrap();
-        auto_backup_slot(&d, "PPSA01234", 1, &st, 1, true).unwrap();
+        prune_local(&d, "PPSA01234", 1, backup_tag(&st), 1, &slot);
         assert!(title.join(oldest).exists());
         assert!(slot.exists());
         let _ = cleanup_temp_dir(&d);
+    }
+
+    /// #886: a backup folder holding both layouts lists, finds, dates and prunes them as one.
+    #[test]
+    fn a_folder_in_both_layouts_lists_restores_and_keeps_versions_as_one() {
+        let dir = make_temp_dir("layouts").unwrap();
+        let d = dir.to_string_lossy().into_owned();
+        let put = |rel: &str| {
+            let p = local_path(&d, rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"z").unwrap();
+            p
+        };
+        put("PPSA01234/PPSA01234_user00000001_2026-10-01_000000.zip");
+        put("PPSA01234/PPSA01234_user00000001_2026-10-02_000000.zip");
+        let notes = put("Alex_00000001/Encrypted/PS5/PPSA01234 - Astro Bot/notes.txt");
+        let shared = put(
+            "Alex_00000001/Decrypted/PS5/PPSA01234/PPSA01234 save shared 2026-10-03_000000.zip",
+        );
+        put("Sam_9abcdef0/Encrypted/PS4/CUSA01234/CUSA01234_user9abcdef0_2026-11-05_000000.zip");
+        let newest = put(
+            "Alex_00000001/Encrypted/PS5/PPSA01234 - Astro Bot/PPSA01234_user00000001_2026-11-01_000000.zip",
+        );
+        // "Backed up …" sees the newest of each game and user, in either layout.
+        let latest = latest_backups(&d);
+        assert!(latest.contains(&("PPSA01234".into(), 1, "2026-11-01_000000".into())));
+        assert!(latest.contains(&("CUSA01234".into(), 0x9abc_def0, "2026-11-05_000000".into())));
+        let by_hand = put("PPSA01234/PPSA01234_user00000001_mine.zip");
+        // Listed together, by stamp (a name by hand sorts as it always did); the notes are not.
+        let listed: Vec<String> = list_backups(&d, "PPSA01234")
+            .into_iter()
+            .map(|b| b.stamp)
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                "mine",
+                "2026-11-01_000000",
+                "2026-10-02_000000",
+                "2026-10-01_000000",
+            ]
+        );
+        // Found where it is, for a restore.
+        let found = find_backup(
+            std::slice::from_ref(&d),
+            "PPSA01234",
+            "PPSA01234_user00000001_2026-11-01_000000.zip",
+        )
+        .unwrap();
+        assert_eq!(found, newest);
+        assert!(find_backup(std::slice::from_ref(&d), "PPSA01234", "../x.zip").is_none());
+        // Keep 2 across both layouts: only the oldest backup of ours goes.
+        prune_local(&d, "PPSA01234", 1, None, 2, &newest);
+        assert!(!local_path(&d, "PPSA01234/PPSA01234_user00000001_2026-10-01_000000.zip").exists());
+        assert!(local_path(&d, "PPSA01234/PPSA01234_user00000001_2026-10-02_000000.zip").exists());
+        assert!(newest.exists() && by_hand.exists() && notes.exists() && shared.exists());
+        let _ = cleanup_temp_dir(&d);
+    }
+
+    #[test]
+    fn a_decrypted_export_knows_whose_save_it_is() {
+        let e = ps5_save_entry("/user/home/9abcdef0/savedata_prospero/PPSA01234/").unwrap();
+        assert_eq!(e.title_id, "PPSA01234");
+        assert_eq!(
+            e.user_id as u32, 0x9abc_def0,
+            "an ID above 0x7fffffff stays whole"
+        );
+        assert_eq!(e.kind, "ps5");
+        assert_eq!(layout::platform_of(&e), Some(Platform::Ps5));
+        assert!(ps5_save_entry("/user/home/1/savedata/CUSA01234").is_err());
+        assert!(ps5_save_entry("/data/x").is_err());
+        // An automatic one is named and kept like a backup; one asked for keeps its own name.
+        let auto = decrypted_name(&e, true, "x.zip");
+        assert!(auto.starts_with("PPSA01234_user9abcdef0_") && auto.ends_with("_decrypted.zip"));
+        assert!(layout::ours("PPSA01234", &auto));
+        assert_eq!(
+            decrypted_name(&e, false, "PPSA01234 save shared x.zip"),
+            "PPSA01234 save shared x.zip"
+        );
+        // Only by user, and only for a PS5 game's save.
+        let by_user = Arrange {
+            layout: Layout::ByUser,
+            game_names: false,
+        };
+        assert!(wants_decrypted(true, by_user, &e));
+        assert!(!wants_decrypted(false, by_user, &e));
+        assert!(!wants_decrypted(true, Arrange::default(), &e));
+        let ps4 = SaveEntry {
+            kind: "ps4".into(),
+            path: "/user/home/1/savedata/CUSA01234".into(),
+            ..e
+        };
+        assert!(!wants_decrypted(true, by_user, &ps4));
+    }
+
+    #[test]
+    fn layout_settings_read_old_files_as_by_game() {
+        let s: Settings = serde_json::from_str(r#"{"enabled":true,"dir":"/b"}"#).unwrap();
+        assert_eq!(s.arrange(), Arrange::default());
+        assert!(!s.decrypted_copy);
+        let s: Settings =
+            serde_json::from_str(r#"{"layout":"by_user","game_names":true,"decrypted_copy":true}"#)
+                .unwrap();
+        assert_eq!(
+            s.arrange(),
+            Arrange {
+                layout: Layout::ByUser,
+                game_names: true
+            }
+        );
+        // Any other folder (a temporary one, a console backup's) stays by game.
+        assert_eq!(arrangement_for("/somewhere/else"), Arrange::default());
     }
 
     /// A backup notes the PS5 it was made on; one from another is refused, unknown never.

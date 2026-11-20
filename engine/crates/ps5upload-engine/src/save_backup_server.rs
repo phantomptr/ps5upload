@@ -3,7 +3,8 @@
 //!
 //! A backup is made exactly as the automatic local one is (`save_backup::download_save`: the
 //! save folder copied off the console and tidied, then zipped), then written to
-//! `<folder>/<title_id>/<title>_user<id>_<stamp>.zip` on the server under a temporary name and
+//! `<folder>/<title_id>/<title>_user<id>_<stamp>.zip` on the server (arranged by user,
+//! `<folder>/<name>_<id>/Encrypted/<PS5|PS4>/<title_id>/…`, #886) under a temporary name and
 //! moved into place. It counts only once it is verified: the file is read back from the server,
 //! its size and SHA-256 compared with the zip that was sent, and every entry of the read-back zip
 //! unpacked against its CRC. A copy that fails is removed from the server; a good one gets a
@@ -35,8 +36,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use ps5upload_core::save_archive::{
-    auto_backup_stem, backup_tag, cleanup_temp_dir, make_temp_dir, tagged_backups_to_prune,
-    zip_folder_noted,
+    auto_backup_stem, backup_tag, cleanup_temp_dir, make_temp_dir, zip_folder_noted,
 };
 use ps5upload_core::saves::SaveEntry;
 use serde::{Deserialize, Serialize};
@@ -50,6 +50,7 @@ use crate::save_backup::{
     SETTLE_SECS,
 };
 use crate::save_backup_console::{Copies, Drive, Outcome};
+use crate::save_layout::{self as layout, Arrange, DecryptedStatus, Kind, Layout, Owner};
 
 /// How often the scheduler looks: the running game on each console, and whether a pass is due.
 pub const TICK: Duration = Duration::from_secs(60);
@@ -98,9 +99,28 @@ pub struct ServerSettings {
     /// Versions of each save kept on that drive; 0: as many as `keep`.
     #[serde(default)]
     pub console_keep: u32,
+    /// How backups are arranged in the server folder and on the PS5 drive (#886): by game, as
+    /// always, or by user (`save_layout`). Backups made before stay where they are.
+    #[serde(default)]
+    pub layout: Layout,
+    /// By user: a game's new folder is `<TITLE> - <game>` when the console names the game.
+    #[serde(default)]
+    pub game_names: bool,
+    /// By user: each backup of a PS5 save also leaves a decrypted copy (one that opens on any
+    /// PS5) in the user's Decrypted folder on the server, `keep` of them.
+    #[serde(default)]
+    pub decrypted_copy: bool,
 }
 
 impl ServerSettings {
+    /// The layout of the server folder (and its PS5 drive copies).
+    pub fn arrange(&self) -> Arrange {
+        Arrange {
+            layout: self.layout,
+            game_names: self.game_names,
+        }
+    }
+
     /// Versions of each save kept on the PS5 drive.
     pub fn drive_keep(&self) -> u32 {
         if self.console_keep == 0 {
@@ -129,6 +149,9 @@ impl Default for ServerSettings {
             users: Vec::new(),
             console_drive: String::new(),
             console_keep: 0,
+            layout: Layout::ByGame,
+            game_names: false,
+            decrypted_copy: false,
         }
     }
 }
@@ -177,6 +200,10 @@ pub struct ServerStatus {
     /// The last copies to the PS5 drive (`ServerSettings::console_drive`); None before any.
     #[serde(default)]
     pub console_copy: Option<crate::save_backup_console::CopyStatus>,
+    /// The last decrypted copies made with the backups (`ServerSettings::decrypted_copy`); None
+    /// before any.
+    #[serde(default)]
+    pub decrypted: Option<DecryptedStatus>,
 }
 
 /// When a console was last backed up in full, and last tried.
@@ -474,8 +501,9 @@ fn sidecar(path: &str) -> String {
     format!("{path}.sha256")
 }
 
-/// Every file name in the server folder `dir` (all pages); none when it is not there.
-async fn names_in(fs: &dyn RemoteFs, dir: &str) -> Result<Vec<remote::Entry>, String> {
+/// Every entry of the server folder `dir` (all pages): `(name, is_dir, size)`; none when it is
+/// not there.
+async fn entries_in(fs: &dyn RemoteFs, dir: &str) -> Result<layout::Entries, String> {
     let mut out = Vec::new();
     let mut cursor = None;
     loop {
@@ -484,7 +512,12 @@ async fn names_in(fs: &dyn RemoteFs, dir: &str) -> Result<Vec<remote::Entry>, St
             Err(remote::RemoteError::NotFound(_)) => return Ok(out),
             Err(e) => return Err(e.to_string()),
         };
-        out.extend(page.entries.into_iter().filter(|e| !e.is_dir));
+        out.extend(
+            page.entries
+                .into_iter()
+                .filter(|e| e.name != "." && e.name != ".." && !e.name.contains('/'))
+                .map(|e| (e.name, e.is_dir, e.size)),
+        );
         match page.next_cursor {
             Some(c) => cursor = Some(c),
             None => return Ok(out),
@@ -492,14 +525,60 @@ async fn names_in(fs: &dyn RemoteFs, dir: &str) -> Result<Vec<remote::Entry>, St
     }
 }
 
-/// Writes the local backup zip `zip` to `<folder>/<title_id>/<name>` on the server, verifies it
-/// (removed again if it does not check out), writes its `.sha256`, then removes this save's
-/// oldest backups of the same kind beyond `keep`. `scratch` is a local file for the read-back.
+/// Runs `f` (which looks at folders of the server folder `root` through `save_layout`'s `list`)
+/// with each folder it asks for listed from the server: a round lists what the round before asked
+/// for, until it asks for nothing new (the layouts are a few folders deep).
+async fn with_listings<T>(fs: &dyn RemoteFs, root: &str, f: impl Fn(&layout::List) -> T) -> T {
+    let mut seen: BTreeMap<String, Result<layout::Entries, String>> = BTreeMap::new();
+    for _ in 0..8 {
+        let (out, missing) = {
+            let missing = std::cell::RefCell::new(BTreeSet::new());
+            let out = f(&|rel: &str| match seen.get(rel) {
+                Some(r) => r.clone(),
+                None => {
+                    missing.borrow_mut().insert(rel.to_string());
+                    Ok(Vec::new())
+                }
+            });
+            (out, missing.into_inner())
+        };
+        if missing.is_empty() {
+            return out;
+        }
+        drop(out);
+        for rel in missing {
+            let listed = entries_in(fs, &layout::join(root, &rel)).await;
+            seen.insert(rel, listed);
+        }
+    }
+    f(&|rel: &str| seen.get(rel).cloned().unwrap_or(Ok(Vec::new())))
+}
+
+/// The folder (relative to `root` on the server) a new `kind` file of `owner` goes in, arranged
+/// `how`. Err when the server folder can't be read: a user folder made then could be a second one.
+pub async fn remote_place(
+    fs: &dyn RemoteFs,
+    root: &str,
+    how: Layout,
+    kind: Kind,
+    owner: &Owner,
+) -> Result<String, String> {
+    if how == Layout::ByUser {
+        entries_in(fs, root).await?;
+    }
+    with_listings(fs, root, |list| layout::place(list, how, kind, owner)).await
+}
+
+/// Writes the local backup zip `zip` to `<folder>/<rel>/<name>` on the server (`rel`: the game's
+/// folder, `remote_place`), verifies it (removed again if it does not check out), writes its
+/// `.sha256`, then removes this save's oldest backups of the same kind beyond `keep`, counted in
+/// both layouts. `scratch` is a local file for the read-back.
 #[allow(clippy::too_many_arguments)]
 pub async fn store_verified(
     fs: &dyn RemoteFs,
     zip: &Path,
     folder: &str,
+    rel: &str,
     title_id: &str,
     user_id: u32,
     name: &str,
@@ -509,10 +588,17 @@ pub async fn store_verified(
     if !plain(title_id) || !plain(name) || !name.ends_with(".zip") {
         return Err("unexpected backup name".into());
     }
+    if rel.is_empty()
+        || rel
+            .split('/')
+            .any(|p| p.is_empty() || p == "." || p == "..")
+    {
+        return Err("unexpected backup folder".into());
+    }
     let (size, sum) = sha256_file(zip)?;
     // A zip that does not read back here would not on the server either.
     let entries = check_zip(zip).map_err(|e| format!("the backup made here: {e}"))?;
-    let dir = format!("{folder}/{title_id}");
+    let dir = layout::join(folder, rel);
     crate::download_relay::make_dirs(fs, &dir)
         .await
         .map_err(|e| format!("make {dir} on the server: {e}"))?;
@@ -543,19 +629,16 @@ pub async fn store_verified(
         crate::log_warn!("save backup to server: no checksum file for {target}: {e}");
     }
     let _ = std::fs::remove_file(&sum_file);
-    // Older backups go only once the new one is there and checked. The backup is made by now:
-    // a listing that fails prunes nothing this time, and does not fail the backup (it would be
-    // sent again at the next look, a second copy beside this one).
-    let existing: Vec<String> = match names_in(fs, &dir).await {
-        Ok(entries) => entries.into_iter().map(|e| e.name).collect(),
-        Err(e) => {
-            crate::log_warn!("save backup to server: {dir} not pruned: {e}");
-            Vec::new()
-        }
-    };
+    // Older backups go only once the new one is there and checked, counted in both layouts.
+    // The backup is made by now: a listing that fails prunes nothing there this time, and does
+    // not fail the backup (it would be sent again at the next look, a second copy beside this).
+    let files = with_listings(fs, folder, |list| layout::backup_files(list, title_id)).await;
     let tag = backup_tag(name);
-    for old in tagged_backups_to_prune(&existing, &auto_backup_stem(title_id, user_id), tag, keep) {
-        let p = format!("{dir}/{old}");
+    for old in layout::to_prune(&files, title_id, user_id, tag, keep) {
+        let p = layout::join(folder, &old.rel());
+        if p == target {
+            continue;
+        }
         let _ = fs.remove_file(&p).await;
         let _ = fs.remove_file(&sidecar(&p)).await;
     }
@@ -568,7 +651,7 @@ pub async fn store_verified(
     })
 }
 
-/// The backups of `title_id` in `folder` on the server, newest first.
+/// The backups of `title_id` in `folder` on the server (by game and by user), newest first.
 pub async fn list_on_server(
     fs: &dyn RemoteFs,
     folder: &str,
@@ -577,18 +660,20 @@ pub async fn list_on_server(
     if !plain(title_id) {
         return Ok(Vec::new());
     }
-    let mut out: Vec<BackupFile> = names_in(fs, &format!("{folder}/{title_id}"))
-        .await?
+    // A server that can't be read says so, rather than listing nothing.
+    entries_in(fs, folder).await?;
+    let files = with_listings(fs, folder, |list| layout::backup_files(list, title_id)).await;
+    let mut out: Vec<BackupFile> = files
         .into_iter()
-        .filter_map(|e| {
-            let (user_id, stamp) = parse_backup_name(title_id, &e.name)?;
+        .filter_map(|f| {
+            let (user_id, stamp) = parse_backup_name(title_id, &f.name)?;
             Some(BackupFile {
-                tag: backup_tag(&e.name).map(String::from),
-                file: e.name,
+                tag: backup_tag(&f.name).map(String::from),
+                file: f.name,
                 title_id: title_id.to_string(),
                 user_id,
                 stamp,
-                size: e.size,
+                size: f.size,
             })
         })
         .collect();
@@ -608,7 +693,11 @@ pub async fn fetch_backup(
     if !plain(title_id) || !plain(file) || !file.ends_with(".zip") {
         return Err("unexpected backup name".into());
     }
-    let path = format!("{folder}/{title_id}/{file}");
+    // Where it is, in either layout (by game when it can't be found: the error names it).
+    let path = with_listings(fs, folder, |list| layout::find(list, title_id, file))
+        .await
+        .map(|f| layout::join(folder, &f.rel()))
+        .unwrap_or_else(|| format!("{folder}/{title_id}/{file}"));
     let (_, sum) = fetch_file(fs, &path, dest).await?;
     let sum_path = dest.with_extension("sha256");
     if fetch_file(fs, &sidecar(&path), &sum_path).await.is_ok() {
@@ -663,13 +752,13 @@ pub(crate) struct Sent {
 /// Writes a backup zip to the server and verifies it there.
 pub(crate) type SendToShare<'a> = dyn Fn(&Path) -> Result<Verified, String> + 'a;
 
-/// Sends the backup zip `zip` of `title_id`, made from `host`, to the server (`share`) and to the
+/// Sends the backup zip `zip` of `owner`'s save, made from `host`, to the server (`share`) and to the
 /// PS5 drive (`drive`), each when given. Each on its own: one that fails (a server that can't be
 /// reached, a drive taken out) never stops or fails the other, and both outcomes are answered.
 pub(crate) fn deliver(
     zip: &Path,
     host: &str,
-    title_id: &str,
+    owner: &Owner,
     share: Option<&SendToShare>,
     drive: Option<(&mut Copies, &dyn Drive)>,
 ) -> Sent {
@@ -677,7 +766,7 @@ pub(crate) fn deliver(
     let drive = drive.map(|(copies, console)| {
         // A write on the console: no other save operation runs there meanwhile.
         let _op = local::save_op(&[host]);
-        copies.copy(console, host, title_id, zip)
+        copies.copy(console, host, owner, zip)
     });
     Sent { share, drive }
 }
@@ -691,6 +780,7 @@ fn back_up_one(
     sides: Sides,
     copies: Option<&mut Copies>,
 ) -> Result<Sent, String> {
+    let owner = local::owner_of(host, entry, s.arrange());
     let tmp = make_temp_dir(&entry.title_id)?;
     let tmp_s = tmp.to_string_lossy().into_owned();
     let result = (|| {
@@ -707,12 +797,12 @@ fn back_up_one(
                 .map_err(|e| format!("zip: {e:#}"))?;
         }
         let scratch = tmp.join("readback.zip");
-        let share = |z: &Path| store_zip(s, entry, &name, z, &scratch);
+        let share = |z: &Path| store_zip(s, &owner, &name, z, &scratch);
         let console = crate::save_backup_console::Live(host);
         Ok(deliver(
             &zip,
             host,
-            &entry.title_id,
+            &owner,
             sides.share.then_some(&share as &SendToShare),
             copies
                 .filter(|_| sides.drive)
@@ -723,24 +813,25 @@ fn back_up_one(
     result
 }
 
-/// The backup zip `zip` of `entry`, written to the server as `name` and verified. `scratch` is a
-/// file to read it back into.
+/// The backup zip `zip` of `owner`'s save, written to the server as `name` (where the server
+/// folder's layout puts it) and verified. `scratch` is a file to read it back into.
 fn store_zip(
     s: &ServerSettings,
-    entry: &SaveEntry,
+    owner: &Owner,
     name: &str,
     zip: &Path,
     scratch: &Path,
 ) -> Result<Verified, String> {
-    let user = entry.user_id as u32;
     let result = rt().block_on(async {
         let (fs, folder) = open_target(&s.target).await?;
+        let rel = remote_place(fs.as_ref(), &folder, s.layout, Kind::Encrypted, owner).await?;
         store_verified(
             fs.as_ref(),
             zip,
             &folder,
-            &entry.title_id,
-            user,
+            &rel,
+            &owner.title_id,
+            owner.user,
             name,
             s.keep,
             scratch,
@@ -755,17 +846,80 @@ fn store_zip(
 
 /// Called by a change to a save with no local backup folder: the zip just made of the save there
 /// now goes to the server, so it outlives the change.
-pub fn keep_on_server(entry: &SaveEntry, zip: &Path, tag: &str) -> Result<(), String> {
+pub fn keep_on_server(host: &str, entry: &SaveEntry, zip: &Path, tag: &str) -> Result<(), String> {
+    let s = settings();
+    let owner = local::owner_of(host, entry, s.arrange());
     let tmp = make_temp_dir(&entry.title_id)?;
     let result = store_zip(
-        &settings(),
-        entry,
+        &s,
+        &owner,
         &backup_name(entry, Some(tag)),
         zip,
         &tmp.join("readback.zip"),
     );
     let _ = cleanup_temp_dir(&tmp.to_string_lossy());
     result.map(|_| ())
+}
+
+/// A decrypted copy of the PS5 save `entry` on `host` in the user's Decrypted folder on the
+/// server (#886); `auto_keep`: made with an automatic backup (that many kept), else one the person
+/// asked for. Read back and checked like a backup. The file's path on the server.
+pub(crate) fn export_decrypted(
+    host: &str,
+    entry: &SaveEntry,
+    auto_keep: Option<u32>,
+) -> Result<String, String> {
+    let s = settings();
+    if s.target.trim().is_empty() {
+        return Err(
+            "Choose a server folder for the backups first (Saves › Backups to a network share)."
+                .into(),
+        );
+    }
+    let shared = crate::save_copy::share_file(&crate::save_copy::Live::new(host), &entry.path)?;
+    let arrange = Arrange {
+        layout: Layout::ByUser,
+        game_names: s.game_names,
+    };
+    let owner = local::owner_of(host, entry, arrange);
+    let name = local::decrypted_name(entry, auto_keep.is_some(), &shared.name);
+    let scratch = shared.zip.with_file_name("readback.zip");
+    let result = rt().block_on(async {
+        let (fs, folder) = open_target(&s.target).await?;
+        let fs = fs.as_ref();
+        let rel = remote_place(fs, &folder, Layout::ByUser, Kind::Decrypted, &owner).await?;
+        let dir = layout::join(&folder, &rel);
+        crate::download_relay::make_dirs(fs, &dir)
+            .await
+            .map_err(|e| format!("make {dir} on the server: {e}"))?;
+        let target = format!("{dir}/{name}");
+        crate::download_relay::place(fs, &shared.zip, &target, &quiet_progress())
+            .await
+            .map_err(|e| format!("write {target}: {e}"))?;
+        let (size, sum) = sha256_file(&shared.zip)?;
+        if let Err(e) = verify_on_server(fs, &target, size, &sum, &scratch).await {
+            let _ = fs.remove_file(&target).await;
+            return Err(format!("verification failed: {e}"));
+        }
+        if let Some(keep) = auto_keep {
+            let files = with_listings(fs, &folder, |list| {
+                layout::decrypted_files(list, &entry.title_id)
+            })
+            .await;
+            let tag = Some(layout::DECRYPTED_TAG);
+            for old in layout::to_prune(&files, &entry.title_id, owner.user, tag, keep) {
+                let p = layout::join(&folder, &old.rel());
+                if p != target {
+                    let _ = fs.remove_file(&p).await;
+                }
+            }
+        }
+        Ok(target)
+    });
+    if result.is_err() {
+        drop_session(&s.target);
+    }
+    result
 }
 
 /// The titles running on `host`, upper-case; Err when the console does not answer.
@@ -787,6 +941,8 @@ struct Tally {
     drive_failed: u32,
     last_error: Option<String>,
     last_verified: Option<Verified>,
+    /// The decrypted copies made with the backups (`ServerSettings::decrypted_copy`).
+    decrypted: DecryptedStatus,
 }
 
 impl Tally {
@@ -884,7 +1040,21 @@ fn pass_host(
             continue;
         }
         match back_up_one(s, host, entry, Sides { share, drive }, copies.as_mut()) {
-            Ok(sent) => tally.count(host, entry, sent),
+            Ok(sent) => {
+                let on_share = matches!(sent.share, Some(Ok(_)));
+                tally.count(host, entry, sent);
+                // A decrypted copy beside it, when asked for: never a reason the backup failed.
+                if on_share && local::wants_decrypted(s.decrypted_copy, s.arrange(), entry) {
+                    let r = export_decrypted(host, entry, Some(s.keep));
+                    if let Err(e) = &r {
+                        crate::log_warn!(
+                            "save backup to server: decrypted copy of {} on {host}: {e}",
+                            entry.title_id
+                        );
+                    }
+                    tally.decrypted.record(&r);
+                }
+            }
             Err(e) => {
                 crate::log_warn!("save backup to server: {} on {host}: {e}", entry.title_id);
                 tally.failed += 1;
@@ -926,6 +1096,9 @@ fn finish(trigger: &str, tally: Tally, checked: bool, copies: Option<Copies>) {
     if let Some(c) = copies.filter(|c| c.status.at > 0) {
         st.console_copy = Some(c.status);
     }
+    if tally.decrypted.at > 0 {
+        st.decrypted = Some(tally.decrypted.clone());
+    }
     let now = now_ms();
     if checked {
         st.last_check_at = now;
@@ -954,7 +1127,7 @@ pub fn tick() {
         return;
     };
     let mut tally = Tally::default();
-    let mut copies = Copies::new(&s.console_drive, s.drive_keep());
+    let mut copies = Copies::new(&s.console_drive, s.drive_keep(), s.arrange());
     let now = now_ms();
     let mut checked = false;
     for host in hosts_of(&s) {
@@ -1058,7 +1231,7 @@ pub fn run_now() -> Result<(), String> {
         return Ok(());
     };
     let mut tally = Tally::default();
-    let mut copies = Copies::new(&s.console_drive, s.drive_keep());
+    let mut copies = Copies::new(&s.console_drive, s.drive_keep(), s.arrange());
     let mut checked = false;
     for host in hosts_of(&s) {
         if pass_host(&s, &host, None, false, &mut tally, &mut copies).is_ok() {
@@ -1173,6 +1346,12 @@ pub struct Patch {
     pub console_drive: Option<String>,
     /// Versions of each save kept on that drive, 1 to 50; 0: as many as `keep`.
     pub console_keep: Option<u32>,
+    /// `by_game` or `by_user` (#886).
+    pub layout: Option<Layout>,
+    /// By user: name a game's new folder after the game too.
+    pub game_names: Option<bool>,
+    /// By user: a decrypted copy with each backup of a PS5 save.
+    pub decrypted_copy: Option<bool>,
 }
 
 /// Whether the engine can write in `target`: the folder is made, a small file written there
@@ -1240,6 +1419,15 @@ pub async fn put_settings(Json(p): Json<Patch>) -> Response {
     }
     if let Some(k) = p.console_keep {
         next.console_keep = if k == 0 { 0 } else { local::clamp_keep(k) };
+    }
+    if let Some(l) = p.layout {
+        next.layout = l;
+    }
+    if let Some(g) = p.game_names {
+        next.game_names = g;
+    }
+    if let Some(d) = p.decrypted_copy {
+        next.decrypted_copy = d;
     }
     if next.mode != Mode::Off && next.target.is_empty() {
         return json_error(
@@ -1639,6 +1827,7 @@ mod tests {
                 &zip,
                 "/backups",
                 "PPSA01234",
+                "PPSA01234",
                 0x1d,
                 &name,
                 2,
@@ -1684,6 +1873,124 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// #886: by user on a share already holding backups by game: the new one goes under the
+    /// user's folder (an existing one, found by account ID, after a rename), both list and come
+    /// back, and "Versions to keep" counts both, never deleting a file the app did not make.
+    #[tokio::test]
+    async fn by_user_on_a_share_lists_restores_and_prunes_with_the_by_game_ones() {
+        let dir = scratch("by-user");
+        let stem = auto_backup_stem("PPSA01234", 0x9abc_def0);
+        let old_a = format!("/b/PPSA01234/{stem}2026-10-01_000000.zip");
+        let old_b = format!("/b/PPSA01234/{stem}2026-10-02_000000.zip");
+        let by_hand = format!("/b/PPSA01234/{stem}copy I made.zip");
+        let other = "/b/PPSA01234/PPSA01234_user00000001_2026-09-01_000000.zip".to_string();
+        let fs = MemFs::new(&[
+            (&old_a, b"a".as_slice()),
+            (&old_b, b"b".as_slice()),
+            (&by_hand, b"h".as_slice()),
+            (&other, b"o".as_slice()),
+            (
+                "/b/Sam (old name)_9abcdef0/Decrypted/PS5/PPSA01234/keep.zip",
+                b"k".as_slice(),
+            ),
+        ]);
+        let owner = Owner {
+            title_id: "PPSA01234".into(),
+            user: 0x9abc_def0,
+            platform: Some(layout::Platform::Ps5),
+            name: Some("Sam".into()),
+            game: Some("Astro Bot".into()),
+        };
+        let rel = remote_place(&fs, "/b", Layout::ByUser, Kind::Encrypted, &owner)
+            .await
+            .unwrap();
+        assert_eq!(
+            rel, "Sam (old name)_9abcdef0/Encrypted/PS5/PPSA01234 - Astro Bot",
+            "the user's folder already there, by account ID"
+        );
+        assert_eq!(
+            remote_place(&fs, "/b", Layout::ByGame, Kind::Encrypted, &owner)
+                .await
+                .unwrap(),
+            "PPSA01234"
+        );
+        let zip = make_zip(&dir, "PPSA01234", b"progress");
+        let name = format!("{stem}2026-11-17_101500.zip");
+        store_verified(
+            &fs,
+            &zip,
+            "/b",
+            &rel,
+            "PPSA01234",
+            0x9abc_def0,
+            &name,
+            2,
+            &dir.join("rb"),
+        )
+        .await
+        .unwrap();
+        let at = format!("/b/{rel}/{name}");
+        assert!(fs.bytes(&at).is_some());
+        assert!(fs.bytes(&format!("{at}.sha256")).is_some());
+        // Keep 2 across both layouts: the oldest by-game one went; nothing else did.
+        assert!(fs.bytes(&old_a).is_none());
+        for kept in [&old_b, &by_hand, &other] {
+            assert!(fs.bytes(kept).is_some(), "{kept}");
+        }
+        let listed: Vec<String> = list_on_server(&fs, "/b", "PPSA01234")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|b| b.file)
+            .collect();
+        assert!(listed.contains(&name));
+        assert!(listed.contains(&format!("{stem}2026-10-02_000000.zip")));
+        assert!(listed.contains(&"PPSA01234_user00000001_2026-09-01_000000.zip".to_string()));
+        // Back from the user's folder, checked against its checksum.
+        let out = dir.join("restore.zip");
+        fetch_backup(&fs, "/b", "PPSA01234", &name, &out)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), std::fs::read(&zip).unwrap());
+        // And from the by-game folder too.
+        let back = dir.join("old.zip");
+        assert!(fetch_backup(
+            &fs,
+            "/b",
+            "PPSA01234",
+            &format!("{stem}2026-10-02_000000.zip"),
+            &back
+        )
+        .await
+        .is_err_and(|e| e.contains("damaged")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_new_user_folder_is_not_made_when_the_share_cannot_be_read() {
+        let fs = MemFs::new(&[]);
+        let owner = Owner {
+            title_id: "PPSA01234".into(),
+            user: 1,
+            platform: Some(layout::Platform::Ps5),
+            name: Some("Alex".into()),
+            game: None,
+        };
+        assert_eq!(
+            remote_place(&fs, "/b", Layout::ByUser, Kind::Encrypted, &owner)
+                .await
+                .unwrap(),
+            "Alex_00000001/Encrypted/PS5/PPSA01234"
+        );
+        fs.set_down(true);
+        assert!(
+            remote_place(&fs, "/b", Layout::ByUser, Kind::Encrypted, &owner)
+                .await
+                .is_err()
+        );
+        assert!(list_on_server(&fs, "/b", "PPSA01234").await.is_err());
+    }
+
     /// The backup is on the server and checked by the time the folder is listed for pruning: a
     /// listing that fails then used to fail the backup, so the next look sent another copy.
     #[tokio::test]
@@ -1693,9 +2000,19 @@ mod tests {
         let zip = make_zip(&dir, "PPSA01234", b"progress");
         let name = format!("{}2026-10-01_000000.zip", auto_backup_stem("PPSA01234", 1));
         fs.fail_next_lists(1);
-        let v = store_verified(&fs, &zip, "/b", "PPSA01234", 1, &name, 5, &dir.join("rb"))
-            .await
-            .unwrap();
+        let v = store_verified(
+            &fs,
+            &zip,
+            "/b",
+            "PPSA01234",
+            "PPSA01234",
+            1,
+            &name,
+            5,
+            &dir.join("rb"),
+        )
+        .await
+        .unwrap();
         assert_eq!(v.file, name);
         assert!(fs.bytes(&format!("/b/PPSA01234/{name}")).is_some());
         let _ = std::fs::remove_dir_all(&dir);
@@ -1709,9 +2026,19 @@ mod tests {
         let fs = MemFs::new(&[]);
         let zip = make_zip(&dir, "PPSA01234", b"progress");
         let name = format!("{}2026-10-01_000000.zip", auto_backup_stem("PPSA01234", 1));
-        store_verified(&fs, &zip, "/b", "PPSA01234", 1, &name, 5, &dir.join("rb"))
-            .await
-            .unwrap();
+        store_verified(
+            &fs,
+            &zip,
+            "/b",
+            "PPSA01234",
+            "PPSA01234",
+            1,
+            &name,
+            5,
+            &dir.join("rb"),
+        )
+        .await
+        .unwrap();
         let sum_path = format!("/b/PPSA01234/{name}.sha256");
         let whole = fs.bytes(&sum_path).unwrap();
         let out = dir.join("restore.zip");
@@ -1737,9 +2064,19 @@ mod tests {
         let fs = MemFs::new(&[]);
         let zip = make_zip(&dir, "PPSA01234", b"progress");
         let name = format!("{}2026-10-01_000000.zip", auto_backup_stem("PPSA01234", 1));
-        store_verified(&fs, &zip, "/b", "PPSA01234", 1, &name, 5, &dir.join("rb"))
-            .await
-            .unwrap();
+        store_verified(
+            &fs,
+            &zip,
+            "/b",
+            "PPSA01234",
+            "PPSA01234",
+            1,
+            &name,
+            5,
+            &dir.join("rb"),
+        )
+        .await
+        .unwrap();
         let path = format!("/b/PPSA01234/{name}");
         let (size, sum) = sha256_file(&zip).unwrap();
         // The same size, one byte changed: the hash catches it.
@@ -1804,6 +2141,11 @@ mod tests {
         let fs = MemFs::new(&[]);
         let host = "10.88.0.1";
         let stem = auto_backup_stem("PPSA01234", 1);
+        let by_game = Owner {
+            title_id: "PPSA01234".into(),
+            user: 1,
+            ..Owner::default()
+        };
         let send = |name: &str, drive: &Fake, keep: u32| {
             let zip = named_zip(&dir, name);
             let share = |z: &Path| {
@@ -1812,17 +2154,18 @@ mod tests {
                     z,
                     "/b",
                     "PPSA01234",
+                    "PPSA01234",
                     1,
                     name,
                     5,
                     &dir.join("rb.zip"),
                 ))
             };
-            let mut copies = Copies::new("/mnt/ext0", keep).unwrap();
+            let mut copies = Copies::new("/mnt/ext0", keep, Arrange::default()).unwrap();
             let sent = deliver(
                 &zip,
                 host,
-                "PPSA01234",
+                &by_game,
                 Some(&share),
                 Some((&mut copies, drive)),
             );
@@ -1878,7 +2221,7 @@ mod tests {
         // A place that is not due is not touched.
         let fifth = format!("{stem}2026-11-17_141500.zip");
         let zip = named_zip(&dir, &fifth);
-        let sent = deliver(&zip, host, "PPSA01234", None, None);
+        let sent = deliver(&zip, host, &by_game, None, None);
         assert!(sent.share.is_none() && sent.drive.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }

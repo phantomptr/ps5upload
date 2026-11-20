@@ -1307,7 +1307,7 @@ impl Console for Live<'_> {
             Some(tag),
             &|| Ok(()),
         )?;
-        crate::save_backup_server::keep_on_server(entry, &zip, tag)?;
+        crate::save_backup_server::keep_on_server(self.host, entry, &zip, tag)?;
         Ok(zip)
     }
     fn open_now(&self) -> Result<bool, String> {
