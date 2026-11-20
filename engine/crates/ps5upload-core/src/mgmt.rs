@@ -233,6 +233,11 @@ impl std::error::Error for MgmtError {}
 pub const HELPER_NOT_AVA1: &str = "helper_not_ava1";
 /// The text that goes with [`HELPER_NOT_AVA1`].
 pub const HELPER_NOT_AVA1_MESSAGE: &str = "The PS5 helper is not running or is an old version. Press Send helper on the Connection screen, or start the ps5upload payload on the console with your payload loader.";
+/// The text that goes with [`HELPER_NOT_AVA1`] when a helper answered but is too old for this
+/// app (it does not serve what the call needs). [`helper_too_old`] tells it apart.
+pub const HELPER_TOO_OLD_MESSAGE: &str = "An older ps5upload helper is running on the PS5; \
+    this app needs the one that ships with it. Press Send helper on the Connection screen, or \
+    load the ps5upload.elf of this version with your payload loader.";
 /// `error_reason` / error token for a console that has not accepted this app.
 pub const NOT_PAIRED: &str = "not_paired";
 /// The text that goes with [`NOT_PAIRED`].
@@ -290,6 +295,19 @@ pub fn helper_not_ava1(label: &str) -> anyhow::Error {
 /// the loader up or not, or a helper too old), so status checks give the same next step as a job.
 pub fn helper_not_ava1_because(label: &str, detail: &str) -> anyhow::Error {
     console_unusable(label, HELPER_NOT_AVA1, detail)
+}
+
+/// Whether `e` is the [`helper_not_ava1`] refusal for a helper that answered but is too old
+/// ([`HELPER_TOO_OLD_MESSAGE`]), as opposed to nothing listening. The token stays
+/// `helper_not_ava1` (what older clients key on); this lets a route add that a helper runs.
+pub fn helper_too_old(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<MgmtError>().is_some_and(|m| {
+        m.status == 0
+            && m.cause
+                .strip_prefix(HELPER_NOT_AVA1)
+                .and_then(|rest| rest.strip_prefix(": "))
+                == Some(HELPER_TOO_OLD_MESSAGE)
+    })
 }
 
 /// The default per-call deadline.
@@ -651,6 +669,30 @@ mod tests {
             );
         }
         assert!(m::ALL.len() >= 95);
+    }
+
+    /// A helper that answered but is too old keeps the `helper_not_ava1` token older clients
+    /// key on, and is told apart from nothing listening (#877).
+    #[test]
+    fn a_too_old_helper_is_told_apart_and_keeps_its_token() {
+        let old = helper_not_ava1_because("NODE_STATUS", HELPER_TOO_OLD_MESSAGE);
+        assert_eq!(error_token(&old).as_deref(), Some(HELPER_NOT_AVA1));
+        assert!(helper_too_old(&old));
+        // Still told apart under added context.
+        assert!(helper_too_old(&old.context("status")));
+        assert!(!helper_too_old(&helper_not_ava1("NODE_STATUS")));
+        assert!(!helper_too_old(&helper_not_ava1_because(
+            "NODE_STATUS",
+            "The PS5 helper is not running."
+        )));
+        assert!(!helper_too_old(&console_unusable(
+            "NODE_STATUS",
+            CONSOLE_REST_MODE,
+            HELPER_TOO_OLD_MESSAGE
+        )));
+        assert!(!helper_too_old(&anyhow::anyhow!(
+            "helper_not_ava1: {HELPER_TOO_OLD_MESSAGE}"
+        )));
     }
 
     #[test]

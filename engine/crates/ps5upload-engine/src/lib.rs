@@ -7057,10 +7057,12 @@ async fn ps5_connect_timings(Query(q): Query<AddrQuery>) -> impl IntoResponse {
     }
 }
 
-/// The 502 body of a failed status probe: `{ error, reason?, power? }`. `reason` is the token
-/// the error leads with (`console_rest_mode`, `ava1_unreachable`, `helper_not_ava1`,
-/// `not_paired`, ...); `power` is what DDP said (`awake` / `rest` / `unreachable`) when the
-/// engine asked it, and absent otherwise.
+/// The 502 body of a failed status probe: `{ error, reason?, power?, helper_too_old? }`.
+/// `reason` is the token the error leads with (`console_rest_mode`, `ava1_unreachable`,
+/// `helper_not_ava1`, `not_paired`, ...); `power` is what DDP said (`awake` / `rest` /
+/// `unreachable`) when the engine asked it, and absent otherwise. `helper_too_old: true` is
+/// added (with `reason` still `helper_not_ava1`, which older clients key on) when a helper
+/// answered but is too old for this app, rather than nothing listening (#877).
 fn status_failure_body(
     e: &anyhow::Error,
     power: Option<ps5upload_core::ddp::Power>,
@@ -7076,6 +7078,9 @@ fn status_failure_body(
     }
     if let Some(p) = power {
         body["power"] = p.as_str().into();
+    }
+    if ps5upload_core::mgmt::helper_too_old(e) {
+        body["helper_too_old"] = true.into();
     }
     body
 }
@@ -7263,6 +7268,34 @@ mod status_failure_body_tests {
         let b = status_failure_body(&anyhow::anyhow!("timed out"), None);
         assert!(b.get("reason").is_none(), "{b}");
         assert_eq!(b["error"], "timed out");
+    }
+
+    /// A helper that answered but is too old: the same `helper_not_ava1` reason an older client
+    /// shows its message for, plus `helper_too_old` for a client that knows it (#877). Nothing
+    /// listening never carries it.
+    #[test]
+    fn a_too_old_helper_adds_helper_too_old_and_keeps_its_reason() {
+        let e = mgmt::helper_not_ava1_because("NODE_STATUS", mgmt::HELPER_TOO_OLD_MESSAGE);
+        let b = status_failure_body(&e, None);
+        assert_eq!(b["reason"], "helper_not_ava1");
+        assert_eq!(b["helper_too_old"], true);
+        assert!(b.get("power").is_none(), "{b}");
+        assert!(b["error"]
+            .as_str()
+            .unwrap()
+            .contains("helper_not_ava1: An older ps5upload helper"));
+        for e in [
+            mgmt::helper_not_ava1("NODE_STATUS"),
+            mgmt::console_unusable(
+                "NODE_STATUS",
+                mgmt::CONSOLE_REST_MODE,
+                mgmt::CONSOLE_REST_MODE_MESSAGE,
+            ),
+            anyhow::anyhow!("timed out"),
+        ] {
+            let b = status_failure_body(&e, Some(Power::Awake));
+            assert!(b.get("helper_too_old").is_none(), "{b}");
+        }
     }
 }
 
