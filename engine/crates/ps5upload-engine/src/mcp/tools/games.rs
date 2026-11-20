@@ -108,7 +108,10 @@ pub(super) fn tools() -> Vec<ToolDef> {
             title: "Uninstall a title",
             description: "Removes a title from a console through the system. Confirm with the \
                           user first. Read the answer: `sony_uninstall_refused` means the console \
-                          said no, and `still_present` that its folders remain.",
+                          said no, `still_present` that it is still listed or on the home screen, \
+                          `unverified` that the home screen could not be checked, and \
+                          `managed_by: shadowmount` that ShadowMount+ adds it back from `image` \
+                          on its next scan while that image is in a scan folder.",
             kind: Kind::Destructive { idempotent: true },
             schema: object(
                 json!({

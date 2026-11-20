@@ -749,7 +749,7 @@
         "type": "object"
       },
       "AppUnregisterReq": {
-        "description": "Reverse of `app_register`, and the uninstall of a package install. A\nSony refusal is an error (502) from a 7.1.6 helper; from an older one it is\n`sony_uninstall_refused` in an `ok` reply, which the client must check\n(#476). `still_present` says the title's folders were still there after\nSony accepted (`null` from an older helper).",
+        "description": "Reverse of `app_register`, and the uninstall of a package install. A\nSony refusal is an error (502) from a 7.1.6 helper; from an older one it is\n`sony_uninstall_refused` in an `ok` reply, which the client must check\n(#476). `still_present` says the title was still listed, or still on the\nhome screen, after Sony accepted (`null` from an older helper);\n`unverified` that app.db could not be read to check the home screen; and\n`managed_by: \"shadowmount\"` + `image` that ShadowMount+ registers it from\nthat image and puts it back on its next scan while the image is in a scan\nfolder (#879).",
         "properties": {
           "addr": {
             "type": [
@@ -29986,6 +29986,8 @@
               "application/json": {
                 "schema": {
                   "properties": {
+                    "image": {},
+                    "managed_by": {},
                     "ok": {
                       "type": "boolean"
                     },
@@ -29995,7 +29997,8 @@
                     "sony_uninstall_refused": {
                       "type": "boolean"
                     },
-                    "still_present": {}
+                    "still_present": {},
+                    "unverified": {}
                   },
                   "type": "object"
                 }
