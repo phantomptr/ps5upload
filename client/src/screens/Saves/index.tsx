@@ -104,6 +104,9 @@ import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { useAutoSaveBackupStore } from "../../state/autoSaveBackup";
+import { useServerBackupStore } from "../../state/serverSaveBackup";
+import { exportDests, type ExportDest } from "./BackupLayoutChoice";
+import ExportDestDialog from "./ExportDestDialog";
 import { engineIsOnThisDevice } from "../../state/engine";
 import AutoBackupCard from "./AutoBackupCard";
 import ServerBackupCard from "./ServerBackupCard";
@@ -149,6 +152,11 @@ export default function SavesScreen() {
   // Copy to another user: the save being copied.
   const [copyFrom, setCopyFrom] = useState<SaveEntry | null>(null);
   const [copyToConsole, setCopyToConsole] = useState<SaveEntry | null>(null);
+  // Save as a file, when a backup place is arranged by user: the save, while its place is picked.
+  const [exportOf, setExportOf] = useState<SaveEntry | null>(null);
+  const autoSettings = useAutoSaveBackupStore((st) => st.settings);
+  const serverSettings = useServerBackupStore((st) => st.settings);
+  const shareDests = exportDests(autoSettings, serverSettings);
   const hasOtherConsole = useRosterStore((r) => r.profiles.length > 1);
   // Restore…: the save whose backups are shown.
   const [restoreOf, setRestoreOf] = useState<SaveEntry | null>(null);
@@ -252,6 +260,34 @@ export default function SavesScreen() {
         body: tr(
           "saves_shared_body_v2",
           { where: where ?? name, game },
+          "Saved as {where}. Send it to your friend, or take it to your other PS5: there, in Save Data, pick Copy to… › Load a save file on {game}.",
+        ),
+      });
+    } catch (e) {
+      pushNotification("error", tr("saves_share_failed_v2", { error: errorText(e) }, "Could not save it as a file: {error}"));
+    } finally {
+      setOpenBusy(false);
+      markBusy(entry.path, false);
+    }
+  };
+  // The same file, straight into the user's Decrypted folder of a backup place (#886).
+  const doExport = async (entry: SaveEntry, to: ExportDest) => {
+    if (to === "device") return doShare(entry);
+    if (!host?.trim() || openBusy) return;
+    setOpenBusy(true);
+    markBusy(entry.path, true);
+    try {
+      const game = await gameNameOf(entry.title_id);
+      pushNotification("info", tr("saves_share_working", { game }, "Saving {game}'s save as a file…"));
+      const { path } = await saveBackupApi.exportDecrypted({
+        addr: consoleAddr(host.trim()),
+        folder: entry.path,
+        to,
+      });
+      pushNotification("success", tr("saves_shared_v2", undefined, "Save file ready"), {
+        body: tr(
+          "saves_shared_body_v2",
+          { where: path, game },
           "Saved as {where}. Send it to your friend, or take it to your other PS5: there, in Save Data, pick Copy to… › Load a save file on {game}.",
         ),
       });
@@ -1279,6 +1315,19 @@ export default function SavesScreen() {
               }}
             />
           )}
+          {exportOf && (
+            <ExportFor
+              entry={exportOf}
+              who={whoseName(exportOf)}
+              dests={shareDests.length > 0 ? shareDests : ["device"]}
+              onClose={() => setExportOf(null)}
+              onPick={(d) => {
+                const entry = exportOf;
+                setExportOf(null);
+                void doExport(entry, d);
+              }}
+            />
+          )}
           {copyToConsole && host?.trim() && (
             <CopyToConsoleDialog
               entry={copyToConsole}
@@ -1475,7 +1524,7 @@ export default function SavesScreen() {
                                 "One .zip with the whole save. It loads on their PS5 under their own account.",
                               ),
                               icon: <Share2 size={12} />,
-                              onSelect: () => void doShare(e),
+                              onSelect: () => (shareDests.length > 0 ? setExportOf(e) : void doShare(e)),
                               disabled: isBusy(e.path) || openBusy,
                               testId: "save-share",
                             },
@@ -1738,6 +1787,24 @@ function ImagePicker({
       </ul>
     </Modal>
   );
+}
+
+/** Where to save a file of one save: the dialog with the game's name. */
+function ExportFor({
+  entry,
+  who,
+  dests,
+  onPick,
+  onClose,
+}: {
+  entry: SaveEntry;
+  who: string;
+  dests: ExportDest[];
+  onPick: (dest: ExportDest) => void;
+  onClose: () => void;
+}) {
+  const game = useGameName(entry.title_id);
+  return <ExportDestDialog game={game} who={who} dests={dests} onPick={onPick} onClose={onClose} />;
 }
 
 /** Copy to another user, for one save: the dialog with the game's name. */

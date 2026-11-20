@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { FolderOpen, History, Play } from "lucide-react";
 
 import { Button } from "../../components";
@@ -18,6 +18,7 @@ import {
 } from "../../state/autoSaveBackup";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
+import { BackupLayoutChoice, layoutSupported } from "./BackupLayoutChoice";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -75,7 +76,9 @@ export function firstConsoleDrive(drives: readonly ConsoleDrive[]): string | nul
 
 /** "Also keep a copy on a PS5 drive": each backup is copied to the console's M.2 or USB drive
  *  too, so saves outlive a reset of its internal storage. `drives` is null while it is asked
- *  (or with no console connected); `drive` is the engine's setting ("" for off). */
+ *  (or with no console connected); `drive` is the engine's setting ("" for off). Used by the
+ *  automatic backups and the network-share backups (#885): `testId` keeps their ids apart, and
+ *  `children` shows under the drive picker while the copy is on. */
 export function ConsoleCopyChoice({
   drive,
   drives,
@@ -83,6 +86,8 @@ export function ConsoleCopyChoice({
   loadError,
   status,
   onChange,
+  testId = "auto-save-backup-console",
+  children,
 }: {
   drive: string;
   drives: readonly ConsoleDrive[] | null;
@@ -90,20 +95,22 @@ export function ConsoleCopyChoice({
   loadError: string | null;
   status: ConsoleCopyStatus | null | undefined;
   onChange: (drive: string) => void;
+  testId?: string;
+  children?: ReactNode;
 }) {
   const tr = useTr();
   const on = drive.trim() !== "";
   const first = drives ? firstConsoleDrive(drives) : null;
   const listed = drives?.some((d) => d.path === drive) ?? false;
   return (
-    <div className="mt-3 border-t border-[var(--color-border)] pt-3 text-sm" data-testid="auto-save-backup-console">
+    <div className="mt-3 border-t border-[var(--color-border)] pt-3 text-sm" data-testid={`${testId}`}>
       <label className="flex items-center gap-2">
         <input
           type="checkbox"
           checked={on}
           disabled={!on && !first}
           onChange={(e) => onChange(e.target.checked ? (first ?? "") : "")}
-          data-testid="auto-save-backup-console-toggle"
+          data-testid={`${testId}-toggle`}
         />
         {tr("saves_auto_console_copy", undefined, "Also keep a copy on a PS5 drive")}
       </label>
@@ -115,24 +122,24 @@ export function ConsoleCopyChoice({
         )}
       </p>
       {!connected ? (
-        <p className="mt-1 text-xs text-[var(--color-muted)]" data-testid="auto-save-backup-console-no-console">
+        <p className="mt-1 text-xs text-[var(--color-muted)]" data-testid={`${testId}-no-console`}>
           {tr("saves_auto_console_no_console", undefined, "Connect to a PS5 to choose its drive.")}
         </p>
       ) : loadError ? (
         <p className="mt-1 text-xs text-[var(--color-bad)]">{loadError}</p>
       ) : drives && drives.length === 0 ? (
-        <p className="mt-1 text-xs text-[var(--color-muted)]" data-testid="auto-save-backup-console-none">
+        <p className="mt-1 text-xs text-[var(--color-muted)]" data-testid={`${testId}-none`}>
           {tr("saves_auto_console_no_drive", undefined, "This PS5 has no M.2 or USB drive to copy to.")}
         </p>
       ) : null}
       {on && (
         <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-          <label htmlFor="saves-auto-console-drive" className="text-xs text-[var(--color-muted)]">
+          <label htmlFor={`${testId}-select`} className="text-xs text-[var(--color-muted)]">
             {tr("saves_auto_console_drive_label", undefined, "PS5 drive")}
           </label>
           <select
-            id="saves-auto-console-drive"
-            data-testid="auto-save-backup-console-drive"
+            id={`${testId}-select`}
+            data-testid={`${testId}-drive`}
             value={drive}
             onChange={(e) => onChange(e.target.value)}
             className="select w-auto! justify-self-start text-sm sm:justify-self-end"
@@ -148,10 +155,11 @@ export function ConsoleCopyChoice({
               </option>
             ))}
           </select>
+          {children}
         </div>
       )}
       {status && status.at > 0 && (
-        <p className="mt-2 text-xs text-[var(--color-muted)]" data-testid="auto-save-backup-console-status">
+        <p className="mt-2 text-xs text-[var(--color-muted)]" data-testid={`${testId}-status`}>
           {tr(
             "saves_auto_console_last",
             {
@@ -171,7 +179,7 @@ export function ConsoleCopyChoice({
 
 /** The console's drives for the copy, asked while the engine can make one and a console is
  *  connected. */
-function useConsoleDrives(enabled: boolean) {
+export function useConsoleDrives(enabled: boolean) {
   const host = useConnectionStore((s) => s.host);
   const addr = host?.trim() ? hostOf(host.trim()) : "";
   const [drives, setDrives] = useState<ConsoleDrive[] | null>(null);
@@ -386,6 +394,14 @@ export default function AutoBackupCard() {
           onChange={(console_drive) => {
             if (console_drive !== settings.console_drive) void set({ console_drive });
           }}
+        />
+      )}
+      {layoutSupported(settings) && (
+        <BackupLayoutChoice
+          testId="auto-save-backup-layout"
+          settings={settings}
+          status={status?.decrypted}
+          onChange={(patch) => void set(patch)}
         />
       )}
       {error && <p className="mt-2 text-xs text-[var(--color-bad)]">{error}</p>}

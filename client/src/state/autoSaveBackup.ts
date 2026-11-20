@@ -92,7 +92,12 @@ interface AutoSaveBackupState {
   error: string | null;
   refresh: () => Promise<void>;
   set: (
-    patch: Partial<Pick<SaveBackupSettings, "enabled" | "dir" | "keep" | "interval_minutes" | "console_drive">>,
+    patch: Partial<
+      Pick<
+        SaveBackupSettings,
+        "enabled" | "dir" | "keep" | "interval_minutes" | "console_drive" | "layout" | "game_names" | "decrypted_copy"
+      >
+    >,
   ) => Promise<void>;
   runNow: () => Promise<void>;
 }

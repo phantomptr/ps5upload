@@ -19,6 +19,24 @@ export interface SaveBackupSettings {
    *  backup, so saves outlive a reset of the internal storage; "" for none. An engine before
    *  12.6.5 leaves it out (it can't). */
   console_drive?: string;
+  /** How backups are arranged in the folder and on the PS5 drive (#886). An engine before
+   *  12.6.16 leaves it out (by game only). */
+  layout?: BackupLayout;
+  /** By user: a game's new folder carries the game's name. */
+  game_names?: boolean;
+  /** By user: each automatic backup of a PS5 save also leaves a decrypted copy. */
+  decrypted_copy?: boolean;
+}
+
+/** `by_game`: `<TITLE>/<file>`; `by_user`: `<name>_<id>/Encrypted/<PS5|PS4>/<TITLE>/<file>`. */
+export type BackupLayout = "by_game" | "by_user";
+
+/** What the decrypted copies made with the backups did. */
+export interface DecryptedCopyStatus {
+  at: number;
+  made: number;
+  failed: number;
+  note: string | null;
 }
 
 /** What the last copies to the PS5 drive did. */
@@ -52,6 +70,8 @@ export interface SaveBackupStatus {
   last_error: string | null;
   /** The last copies to the PS5 drive; null before any (absent from an older engine). */
   console_copy?: ConsoleCopyStatus | null;
+  /** The last decrypted copies made with the backups; null before any. */
+  decrypted?: DecryptedCopyStatus | null;
 }
 
 export interface SaveBackupView {
@@ -104,6 +124,15 @@ export interface ServerBackupSettings {
   hosts: string[];
   /** Console users to back up; empty: every user. */
   users: number[];
+  /** A drive in the PS5 itself (`/mnt/ext0` M.2, `/mnt/usb0` USB) that also gets a copy of each
+   *  backup (#885); "" for none. An engine before 12.6.16 leaves it out (it can't). */
+  console_drive?: string;
+  /** Versions of each save kept on that drive; 0: as many as `keep`. */
+  console_keep?: number;
+  /** How backups are arranged on the server and the PS5 drive (#886). */
+  layout?: BackupLayout;
+  game_names?: boolean;
+  decrypted_copy?: boolean;
 }
 
 export interface ServerBackupVerified {
@@ -126,6 +155,10 @@ export interface ServerBackupStatus {
   last_verified: ServerBackupVerified | null;
   /** Unix ms of the last time the consoles were looked at. */
   last_check_at: number;
+  /** The last copies to the PS5 drive; null before any (absent from an older engine). */
+  console_copy?: ConsoleCopyStatus | null;
+  /** The last decrypted copies made with the backups; null before any. */
+  decrypted?: DecryptedCopyStatus | null;
 }
 
 export interface ServerBackupView {
@@ -207,6 +240,14 @@ export const saveBackupApi = {
   /** Back up one user's save of a game now, every part of it (a snapshot while it runs). */
   now: (req: { addr: string; title_id: string; user_id: number }) =>
     call<{ ok: boolean; file: string }>("/now", { ...LONG, method: "POST", body: JSON.stringify(req) }),
+  /** "Save as a file for a friend or another PS5" straight into the user's Decrypted folder of
+   *  the backup folder (`local`) or the network share (`server`), #886. */
+  exportDecrypted: (req: { addr: string; folder: string; to: "local" | "server" }) =>
+    call<{ ok: boolean; path: string; file: string }>("/export", {
+      ...LONG,
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
   /** The console's M.2 and USB drives a copy of each backup can go to. */
   consoleDrives: async (addr: string) =>
     (await call<{ drives: ConsoleDrive[] }>(`/console/drives?addr=${encodeURIComponent(addr)}`)).drives,
