@@ -1613,6 +1613,11 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/cross_device_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-cross-device-selftest
 	@echo "✓ cross-mount renames are refused before they can panic the kernel"
+	@echo "Running game temp folder path self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o $(SELFTEST_DIR)/ps5upload-app-temp-path-selftest \
+		$(PAYLOAD_DIR)/tests/app_temp_path_selftest.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-app-temp-path-selftest
+	@echo "✓ a running game's temp folder (/app_temp<N>) is a place files may go"
 	@echo "Running Remote Play registry-key self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o $(SELFTEST_DIR)/ps5upload-rp-keys-selftest \
 		$(PAYLOAD_DIR)/tests/rp_keys_selftest.c
