@@ -142,6 +142,7 @@ import { formatBytes } from "../../lib/format";
 import { useSlowPathGuard } from "./slowPath";
 import { FoldSection } from "../../components/FoldSection";
 import { resumeSummary } from "../../lib/resumeSummary";
+import { helperTooOldText, showsHelperTooOld } from "../../lib/helperTooOld";
 import { progressFigures, resumedShown } from "../../lib/resumedProgress";
 import { useTr, type Translator } from "../../state/lang";
 import { formatNumber, formatDuration } from "../../lib/formatDate";
@@ -4378,6 +4379,7 @@ function PayloadReadinessBanner() {
   const tr = useTr();
   const status = useConnectionStore((s) => s.payloadStatus);
   const power = useConnectionStore((s) => s.power);
+  const helperTooOld = useConnectionStore((s) => s.helperTooOld);
   const navigate = useNavigate();
   if (status === "up") return null;
   // Asleep is not a fault: say so calmly, and that queued uploads wait for the wake.
@@ -4412,12 +4414,17 @@ function PayloadReadinessBanner() {
   // everywhere on Connection/Dashboard; "payload" here meant the same
   // thing but collided with the separate Payloads catalog. And these were
   // raw English in an otherwise fully-translated screen.
-  const title =
-    status === "down"
+  // A helper runs, but one too old for this app (#877): say so, not "isn't reachable".
+  const tooOld = showsHelperTooOld({ payloadStatus: status, helperTooOld });
+  const oldText = tooOld ? helperTooOldText(tr) : null;
+  const title = oldText
+    ? oldText.title
+    : status === "down"
       ? tr("upload_helper_down", undefined, "PS5 helper isn't reachable")
       : tr("upload_helper_unknown", undefined, "PS5 helper status unknown");
-  const detail =
-    status === "down"
+  const detail = oldText
+    ? oldText.detail
+    : status === "down"
       ? tr(
           "upload_helper_down_detail_v2",
           undefined,

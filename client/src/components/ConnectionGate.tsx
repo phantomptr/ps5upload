@@ -9,6 +9,7 @@ import { useConsoleSettingForHost } from "../state/consoleSettings";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { useConsoleWake } from "../lib/useConsoleWake";
 import { REST_MODE_NETWORK_SETTING_PATH } from "../lib/consolePower";
+import { helperTooOldText, showsHelperTooOld } from "../lib/helperTooOld";
 import { Button } from "./Button";
 import { EmptyState } from "./EmptyState";
 import { ShapesLoader } from "./ShapesLoader";
@@ -56,6 +57,7 @@ export function ConnectionGate({
   const engineStatus = useConnectionStore((s) => s.engineStatus);
   const helperStopped = useHelperStopped(host ?? "");
   const power = useConnectionStore((s) => s.power);
+  const helperTooOld = useConnectionStore((s) => s.helperTooOld);
 
   if (engineStatus === "down") {
     // The cause and the Restart button are in the notice every screen shows at the top
@@ -103,6 +105,26 @@ export function ConnectionGate({
             label={tr("gate_checking", "Checking your PS5…")}
           />
         </div>
+      );
+    }
+    if (showsHelperTooOld({ payloadStatus, helperTooOld })) {
+      // A helper answers, but one too old for this app (#877): not "isn't running".
+      const old = helperTooOldText(tr);
+      return (
+        <EmptyState
+          fill
+          icon={PlugZap}
+          title={old.title}
+          message={old.detail}
+          action={
+            <div className="flex flex-wrap items-start justify-center gap-2">
+              <SendHelperButton />
+              <Button variant="secondary" onClick={() => navigate("/connection")}>
+                {tr("gate_send_helper_cta", "Open Connection")}
+              </Button>
+            </div>
+          }
+        />
       );
     }
     if (helperStopped) {

@@ -2718,6 +2718,14 @@ installed_uninstall_confirm_registered:
   "This unmounts and removes the title from the home screen. Your source files/image on disk are not deleted.",
 installed_uninstall_still_present:
   "The PS5 accepted the uninstall, but {name} is still on the console. A large game can take a few minutes to remove: refresh in a moment. If it stays, delete it from the PS5's Settings → Storage.",
+installed_uninstall_confirm_smp:
+  "ShadowMount+ put this game on the home screen from a disk image. This removes it from the home screen, but ShadowMount+ adds it back on its next scan while the image is in one of its scan folders. Delete or move the image to keep it off. The image is not deleted.",
+installed_uninstall_smp_returns:
+  "{name} was removed from the home screen, but ShadowMount+ adds it back on its next scan while {image} is in one of its scan folders. Delete or move that image to keep it off.",
+installed_uninstall_unverified:
+  "The PS5 accepted the uninstall of {name}, but the app could not read the console's title list to confirm it is gone. Refresh in a moment and check the home screen.",
+library_unregistered_unverified: "Unregistered {id}, but the app could not read the console's title list to confirm its home-screen tile is gone. Refresh in a moment. The source files on disk were not touched.",
+library_unregistered_smp_returns: "Removed {id} from the home screen, but ShadowMount+ adds it back on its next scan while {image} is in one of its scan folders. Delete or move that image to keep it off.",
 installed_uninstall_confirm_pkg:
   "This removes the installed title from the PS5. You can reinstall it later from the package.",
 
@@ -2921,6 +2929,8 @@ gate_no_console_body: "Add your console's IP address on the Connection screen �
 gate_setup_cta: "Set up connection",
 gate_checking: "Checking your PS5…",
 gate_payload_down_title: "Helper isn't running on the PS5",
+helper_too_old_title: "An older PS5 helper is running",
+helper_too_old_detail: "The PS5 runs an older helper, which this app can't use. Send the helper from here to replace it. If a payload loader starts the helper when the PS5 boots, update the copy it uses.",
 gate_send_helper_cta: "Open Connection",
 picker_choose_folder: "Choose a folder",
 picker_choose_file: "Choose a file",
@@ -8846,6 +8856,7 @@ rp_users_add_hint: "To play as another user too, sign in to that user on the PS5
 "cs_card_firmware": "Firmware {fw}",
 "cs_card_helper_match": "Helper {v} · matches this app",
 "cs_card_helper_missing": "Helper not running",
+"cs_card_helper_old": "An older helper is running · send the helper to replace it",
 "cs_card_helper_newer": "Helper {v} · newer than this app",
 "cs_card_helper_pairing": "Helper runs · waiting to let this device in",
 "cs_card_helper_sending": "Sending the helper…",

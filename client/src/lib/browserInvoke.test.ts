@@ -652,6 +652,14 @@ describe("payload_check passes the status failure's reason and power through", (
     expect(statusFailureFields("null")).toEqual({});
     expect(statusFailureFields("")).toEqual({});
   });
+
+  it("passes helper_too_old through only when it is true (#877)", () => {
+    expect(
+      statusFailureFields('{"reason":"helper_not_ava1","helper_too_old":true}'),
+    ).toEqual({ reason: "helper_not_ava1", helper_too_old: true });
+    expect(statusFailureFields('{"helper_too_old":"true"}')).toEqual({});
+    expect(statusFailureFields('{"helper_too_old":false}')).toEqual({});
+  });
 });
 
 

@@ -97,6 +97,9 @@ export interface HostRuntime {
    *  the status poller from the same probe. `payloadStatus` still reads "down" while the
    *  console sleeps; this says why. */
   power: HostPower;
+  /** The last probe found a helper running that is too old for this app (#877), rather than
+   *  nothing listening. Only meaningful while `payloadStatus` is "down". */
+  helperTooOld: boolean;
 }
 
 export const EMPTY_HOST_RUNTIME: HostRuntime = {
@@ -107,6 +110,7 @@ export const EMPTY_HOST_RUNTIME: HostRuntime = {
   priorInstance: null,
   session: null,
   power: "unknown",
+  helperTooOld: false,
 };
 
 export interface ConnectionState {
@@ -152,6 +156,8 @@ export interface ConnectionState {
   session: SessionState | null;
   /** Mirror of the active console's power state (see HostRuntime.power). */
   power: HostPower;
+  /** Mirror of the active console's HostRuntime.helperTooOld. */
+  helperTooOld: boolean;
   /** True when a fresh payload-info probe is in flight and the
    *  currently-displayed payloadVersion / ps5Kernel may be stale.
    *  Set by Connection's handleSend on entry (the user just kicked
@@ -211,6 +217,7 @@ function mirrorRuntime(host: string, rt: HostRuntime) {
     priorInstance: rt.priorInstance,
     session: rt.session,
     power: rt.power,
+    helperTooOld: rt.helperTooOld,
   };
 }
 
@@ -227,6 +234,7 @@ const useLiveConnectionStore = create<ConnectionState>((set) => ({
   priorInstance: null,
   session: null,
   power: "unknown",
+  helperTooOld: false,
   payloadProbing: false,
   step1: "idle",
   step1Msg: "",

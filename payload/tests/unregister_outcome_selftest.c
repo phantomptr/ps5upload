@@ -105,6 +105,81 @@ int main(void) {
     /* An app.db row without an app folder (a shell entry) is not listed either. */
     p = (unregister_presence_t){.appdb_known = 1, .appdb_row = 1};
     assert(!unregister_still_listed(&p));
+    /* #879: what is left on the home screen counts. A visible app.db icon row with no folders
+     * (the game's folders deleted by hand) is a tile the user still sees: never "gone". Before
+     * #879 the helper judged by the PC app's list only and reported this as removed. */
+    p = (unregister_presence_t){.appdb_known = 1, .appdb_row = 1, .appdb_icon_visible = 1};
+    assert(!unregister_still_listed(&p));
+    assert(unregister_still_present(&p));
+    assert(!unregister_presence_unverified(&p));
+    /* A hidden row (a shell entry) is no tile. */
+    p = (unregister_presence_t){.appdb_known = 1, .appdb_row = 1, .appdb_icon_visible = 0};
+    assert(!unregister_still_present(&p));
+    /* Nothing listed and app.db unreadable: not checked, so not gone. */
+    p = (unregister_presence_t){.app_dir = 1, .appdb_known = 0};
+    assert(!unregister_still_present(&p));
+    assert(unregister_presence_unverified(&p));
+    p = (unregister_presence_t){.appmeta_dir = 1, .appdb_known = 0};
+    assert(!unregister_presence_unverified(&p)); /* listed: known to be there */
+
+    /* An unchecked result: an ACK that older engines read as "still there", and says why. */
+    {
+        unregister_outcome_t unchecked = {.api_called = 1, .sony_rc = 0, .still_present = 1,
+                                          .unverified = 1};
+        assert(unregister_verdict(&unchecked) == UNREGISTER_UNVERIFIED);
+        assert(reply(&unchecked, body, sizeof body) == 1);
+        assert(strcmp(body, "{\"sony_uninstall_rc\":0,\"still_present\":true,\"unverified\":true}") == 0);
+        unregister_toast(&unchecked, "PPSA01234", toast, sizeof toast);
+        assert(strstr(toast, "Uninstalled") == NULL && strstr(toast, "could not be checked") != NULL);
+    }
+
+    /* #879: who owns /user/app/<id>/mount.lnk. Before #879 every mount.lnk counted as ours, and
+     * an uninstall of a ShadowMount+ title took its bind and links away from under it. */
+    assert(unregister_tracker_owner(NULL, NULL) == UNREGISTER_TRACKER_NONE);
+    /* ShadowMount+ image title: mount.lnk under its mount root, mount_img.lnk the image. */
+    assert(unregister_tracker_owner("/mnt/shadowmnt/DOOM_1a2b3c4d", "/data/homebrew/DOOM.exfat") ==
+           UNREGISTER_TRACKER_SMP);
+    assert(unregister_tracker_owner("/mnt/shadowmnt/pfsc/DOOM_1a2b3c4d/PPSA01234-app", NULL) ==
+           UNREGISTER_TRACKER_SMP);
+    /* An image link that is not mount.lnk's own text is SMP's too. */
+    assert(unregister_tracker_owner("/mnt/elsewhere/DOOM", "/data/homebrew/DOOM.exfat") ==
+           UNREGISTER_TRACKER_SMP);
+    /* Ours: an image we mounted (both links the same) and a folder (no image link). */
+    assert(unregister_tracker_owner("/mnt/ps5upload/DOOM", "/mnt/ps5upload/DOOM") ==
+           UNREGISTER_TRACKER_OURS);
+    assert(unregister_tracker_owner("/data/homebrew/DOOM", NULL) == UNREGISTER_TRACKER_OURS);
+    assert(unregister_tracker_owner("", NULL) == UNREGISTER_TRACKER_OURS); /* unreadable: as before */
+    /* A path that only starts with the same letters is not SMP's root. */
+    assert(unregister_tracker_owner("/mnt/shadowmnt2/DOOM", NULL) == UNREGISTER_TRACKER_OURS);
+
+    /* #879: unregister takes off a bind at exactly the title's own path, nothing else. */
+    assert(unregister_bind_unmountable("/system_ex/app/PPSA01234", "/system_ex/app/PPSA01234",
+                                       "nullfs"));
+    /* nothing mounted there: statfs names the parent filesystem */
+    assert(!unregister_bind_unmountable("/system_ex/app/PPSA01234", "/system_ex", "exfatfs"));
+    /* another title's mount, even one whose id starts the same */
+    assert(!unregister_bind_unmountable("/system_ex/app/PPSA0123", "/system_ex/app/PPSA01234",
+                                        "nullfs"));
+    assert(!unregister_bind_unmountable("/system_ex/app/PPSA01234", "/system_ex/app/PPSA0123",
+                                        "nullfs"));
+    /* Sony's own mount of an installed copy */
+    assert(!unregister_bind_unmountable("/system_ex/app/PPSA01234", "/system_ex/app/PPSA01234",
+                                        "pfs"));
+
+    /* A ShadowMount+ title: the reply and the toast say it comes back while its image is there. */
+    {
+        unregister_outcome_t smp = {.api_called = 1, .sony_rc = 0, .still_present = 0, .smp = 1};
+        snprintf(smp.smp_image, sizeof smp.smp_image, "%s", "/data/homebrew/DOOM \"II\".exfat");
+        char big[1400];
+        assert(reply(&smp, big, sizeof big) == 1);
+        assert(strcmp(big, "{\"sony_uninstall_rc\":0,\"still_present\":false,\"managed_by\":"
+                           "\"shadowmount\",\"image\":\"/data/homebrew/DOOM \\\"II\\\".exfat\"}") == 0);
+        unregister_toast(&smp, "PPSA01234", toast, sizeof toast);
+        assert(strstr(toast, "ShadowMount+") != NULL && strstr(toast, "Uninstalled") == NULL);
+        /* too small for the image: refused, never cut */
+        assert(reply(&smp, body, sizeof body) == -1);
+    }
+
     /* The roots are the engine's. */
     assert(sizeof UNREGISTER_APP_ROOTS / sizeof UNREGISTER_APP_ROOTS[0] == 3);
     assert(strcmp(UNREGISTER_APP_ROOTS[0], "/user/app") == 0);

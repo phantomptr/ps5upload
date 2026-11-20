@@ -22,7 +22,7 @@ describe("appUnregister results", () => {
       sony_uninstall_rc: "0x00000000",
       still_present: false,
     });
-    await expect(appUnregister("192.0.2.8:9113", "CUSA33878")).resolves.toEqual({
+    await expect(appUnregister("192.0.2.8:9113", "CUSA33878")).resolves.toMatchObject({
       stillPresent: false,
     });
     expect(mockedInvoke).toHaveBeenCalledWith("ps5_app_unregister", {
@@ -57,7 +57,7 @@ describe("appUnregister results", () => {
       sony_uninstall_rc: "0x80B21B02",
       still_present: false,
     });
-    await expect(appUnregister("192.0.2.8", "PPSA01234")).resolves.toEqual({
+    await expect(appUnregister("192.0.2.8", "PPSA01234")).resolves.toMatchObject({
       stillPresent: false,
     });
   });
@@ -69,7 +69,7 @@ describe("appUnregister results", () => {
       sony_uninstall_rc: "0x00000000",
       still_present: true,
     });
-    await expect(appUnregister("192.0.2.8", "CUSA33878")).resolves.toEqual({
+    await expect(appUnregister("192.0.2.8", "CUSA33878")).resolves.toMatchObject({
       stillPresent: true,
     });
   });
@@ -81,8 +81,45 @@ describe("appUnregister results", () => {
       sony_uninstall_rc: "0x00000000",
       still_present: null,
     });
-    await expect(appUnregister("192.0.2.8", "CUSA33878")).resolves.toEqual({
+    await expect(appUnregister("192.0.2.8", "CUSA33878")).resolves.toMatchObject({
       stillPresent: false,
+    });
+  });
+
+  // #879: a ShadowMount+ title comes back on its next scan; an unread app.db is no "gone".
+  it("says when ShadowMount+ will add the title back, and from which image", async () => {
+    mockedInvoke.mockResolvedValue({
+      ok: true,
+      sony_uninstall_refused: false,
+      sony_uninstall_rc: "0x00000000",
+      still_present: false,
+      unverified: false,
+      managed_by: "shadowmount",
+      image: "/data/homebrew/DOOM.exfat",
+    });
+    await expect(appUnregister("192.0.2.8", "PPSA01234")).resolves.toEqual({
+      stillPresent: false,
+      unverified: false,
+      shadowMount: true,
+      image: "/data/homebrew/DOOM.exfat",
+    });
+  });
+
+  it("reports an unchecked removal as not confirmed", async () => {
+    mockedInvoke.mockResolvedValue({
+      ok: true,
+      sony_uninstall_refused: false,
+      sony_uninstall_rc: "0x00000000",
+      still_present: true,
+      unverified: true,
+      managed_by: null,
+      image: null,
+    });
+    await expect(appUnregister("192.0.2.8", "PPSA01234")).resolves.toEqual({
+      stillPresent: true,
+      unverified: true,
+      shadowMount: false,
+      image: null,
     });
   });
 

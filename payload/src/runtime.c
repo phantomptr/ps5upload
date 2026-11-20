@@ -3830,7 +3830,8 @@ static int handle_app_unregister(runtime_state_t *state, const char *request_bod
         pop_notification(toast);
     }
     {
-        char reply[96];
+        /* Room for a ShadowMount+ image path (#879). */
+        char reply[1400];
         size_t rlen = 0;
         int ack = unregister_reply(&outcome, reply, sizeof(reply), &rlen);
         if (ack < 0) {

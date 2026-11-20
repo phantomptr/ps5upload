@@ -1956,11 +1956,27 @@ function LibraryRowImpl({
     let okOutcome = true;
     let errMsg: string | null = null;
     try {
-      const { stillPresent } = await appUnregister(consoleAddr(host), entry.titleId);
+      const { stillPresent, unverified, shadowMount, image } = await appUnregister(
+        consoleAddr(host),
+        entry.titleId,
+      );
       audit("library_unregister", withConsolePrefix(host, entry.name), { context: entry.titleId });
       // #476: say so when the PS5 still lists the title, rather than claim the tile is gone.
+      // #879: nor when it could not be checked, or ShadowMount+ will add it back.
       setMountNote(
-        stillPresent
+        unverified
+          ? tr(
+              "library_unregistered_unverified",
+              { id: entry.titleId },
+              "Unregistered {id}, but the app could not read the console's title list to confirm its home-screen tile is gone. Refresh in a moment. The source files on disk were not touched.",
+            )
+          : shadowMount && !stillPresent
+          ? tr(
+              "library_unregistered_smp_returns",
+              { id: entry.titleId, image: image ?? entry.path },
+              "Removed {id} from the home screen, but ShadowMount+ adds it back on its next scan while {image} is in one of its scan folders. Delete or move that image to keep it off.",
+            )
+          : stillPresent
           ? tr(
               "library_unregistered_still_listed",
               { id: entry.titleId },

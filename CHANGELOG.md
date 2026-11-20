@@ -7,6 +7,15 @@ What's new in ps5upload, written for humans.
 ## Unreleased
 
 **Fixes**
+- **The PS5 helper starts again when it is sent twice at once (#877).** In 12.6.13, when a payload loader and you both started the helper within a few seconds, the second copy stepped aside, and if the first then failed to start, no helper was left running and the app said the helper isn't reachable. The second copy now waits for the first and takes over if the first doesn't come up.
+- **An older helper is named as one.** When the PS5 runs an older helper (for example one a payload loader starts when the PS5 boots), the app now says an older helper is running and offers to send the new one, instead of saying the helper isn't reachable.
+- **Uninstalling a game that ShadowMount+ put on the home screen (#879).** The app no longer takes apart ShadowMount+'s own mount when you uninstall such a game, and it tells you that ShadowMount+ will add the game back on its next scan while its image is still in a scan folder. The app also no longer reports an uninstall as done while the game's tile is still on the home screen, and says so when it could not check.
+- The helper only takes down a game's mount when it is one it made itself, never the console's own mount of an installed game.
+- Not yet tried on a console.
+
+## 12.6.13
+
+**Fixes**
 - **A resumed upload finishes sooner (#873).** After an interrupted upload was resumed, the PS5 checked everything it had written before the interruption only after the last byte arrived, which could take minutes for a large game. It now checks those bytes while the rest of the file is still arriving. Stopping an upload also no longer waits up to 30 seconds while the PS5 works out its free space.
 - **Sending the PS5 helper twice at the same moment no longer leaves the two fighting.** One starts, the other steps aside. A stuck helper no longer makes the next one wait about a minute instead of 10 seconds.
 - **Deleting a user always deletes the user you picked.** Users with very large id numbers could be mixed up in the saves list or could not be deleted at all.

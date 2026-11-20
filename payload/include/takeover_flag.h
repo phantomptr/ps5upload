@@ -81,16 +81,45 @@ int takeover_flag_poll_start(const char *dir, uint64_t my_nonce, int period_ms, 
  * crash or a power cut never keeps a helper from starting. The holder writes "pid monotonic_ms" into
  * the file.
  *
- * Returns a descriptor (>= 0) when this process holds the lock; TAKEOVER_START_BUSY when another
- * helper holds it and has for no longer than `max_age_ms` (the caller exits and touches nothing);
- * TAKEOVER_START_NO_LOCK when no lock could be had (no flock here, the file cannot be opened) or the
- * holder has been starting for longer than max_age_ms and is taken for stuck: the caller starts
- * without the lock, as every helper did before it existed. `holder_pid` (may be NULL) gets the
- * holder's pid when it is known, else 0.
+ * takeover_start_lock is one try. Returns a descriptor (>= 0) when this process holds the lock;
+ * TAKEOVER_START_BUSY when another helper holds it and has for no longer than `max_age_ms` (or its
+ * age cannot be read); TAKEOVER_START_NO_LOCK when no lock could be had (no flock here, the file
+ * cannot be opened) or the holder has been starting for longer than max_age_ms and is taken for
+ * stuck. `holder_pid` (may be NULL) gets the holder's pid when it is known, else 0.
  */
 #define TAKEOVER_START_NO_LOCK (-1)
 #define TAKEOVER_START_BUSY (-2)
 int takeover_start_lock(const char *dir, int max_age_ms, int *holder_pid);
+
+/* How takeover_start_lock_wait ended (takeover_start_info_t.outcome). */
+#define TAKEOVER_START_HELD 1     /* this process holds the lock */
+#define TAKEOVER_START_NO_FILE 2  /* the lock file could not be opened (flock_errno has the errno) */
+#define TAKEOVER_START_NO_FLOCK 3 /* flock failed other than "held" (flock_errno): no locks here */
+#define TAKEOVER_START_STUCK 4    /* the holder has been starting for over max_age_ms */
+
+typedef struct {
+    int outcome;
+    int flock_errno;
+    int waited;              /* another helper held the lock when this one first asked */
+    long long waited_ms;     /* how long this one waited (monotonic) */
+    int holder_pid;          /* the last holder seen, 0 when unknown */
+    long long holder_age_ms; /* its age when last read, -1 when unknown */
+} takeover_start_info_t;
+
+/*
+ * The start-up gate main() uses. A helper that finds another one starting WAITS for it and never
+ * leaves: the 12.6.13 helper left at once, so when the one starting then died or gave up before it
+ * served (or hung, for every resend in the next two minutes) nothing served at all. Once the lock is
+ * free this helper starts as any helper sent later would, so it takes over from the one that just
+ * started: of two sent together the later one runs, as before the lock existed (of three or more, the
+ * order the waiters go in is open), and two start-ups never overlap.
+ *
+ * Polls every `poll_ms`. Returns the lock descriptor, or TAKEOVER_START_NO_LOCK (start without it, as
+ * before) when there are no locks here or the holder is stuck: its own stamp says it began more than
+ * max_age_ms ago, or, its stamp unreadable, this helper has waited max_age_ms on it. Never returns
+ * BUSY. `info` (may be NULL) says what happened, for the log.
+ */
+int takeover_start_lock_wait(const char *dir, int max_age_ms, int poll_ms, takeover_start_info_t *info);
 
 /* Releases the lock (a descriptor from takeover_start_lock; negative is ignored). */
 void takeover_start_unlock(int fd);

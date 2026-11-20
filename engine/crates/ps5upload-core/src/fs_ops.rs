@@ -871,7 +871,7 @@ const SONY_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60
 /// acknowledged the refusal and carried Sony's code in the body, and put an
 /// "Unregistered" toast on the console either way: the app then dropped the
 /// game from its list and the next refresh brought it back (#476).
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct UnregisterOutcome {
     /// `sceAppInstUtilAppUninstall`'s return code from an older helper's ACK.
     /// 0 = accepted, or not reported. Non-zero = Sony refused.
@@ -884,6 +884,17 @@ pub struct UnregisterOutcome {
     /// registration torn down although Sony refused: the title is no longer
     /// listed, so it is not a failure ([`Self::refusal_stands`] is false).
     pub still_present: Option<bool>,
+    /// The helper could not read app.db (what the home screen draws), so it
+    /// cannot say the title is gone; `still_present` is `Some(true)` with it
+    /// (#879). False from older helpers.
+    pub unverified: bool,
+    /// `Some("shadowmount")`: ShadowMount+ registered the title from a disk
+    /// image. The helper left its mounts to it, and it registers the title
+    /// again on its next scan while the image is in one of its scan folders
+    /// (#879). `None` from older helpers and for every other title.
+    pub managed_by: Option<String>,
+    /// That image, when the helper read one.
+    pub image: Option<String>,
 }
 
 impl UnregisterOutcome {
@@ -912,9 +923,23 @@ impl UnregisterOutcome {
             .as_ref()
             .and_then(|v| v.get("still_present"))
             .and_then(|x| x.as_bool());
+        let text = |k: &str| {
+            v.as_ref()
+                .and_then(|v| v.get(k))
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
         Self {
             sony_uninstall_rc: rc,
             still_present,
+            unverified: v
+                .as_ref()
+                .and_then(|v| v.get("unverified"))
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false),
+            managed_by: text("managed_by"),
+            image: text("image"),
         }
     }
 }
@@ -1774,6 +1799,27 @@ mod tests {
         assert!(!gone.refusal_stands());
         let legacy = UnregisterOutcome::from_ack(br#"{"sony_uninstall_rc":2159155970}"#);
         assert!(legacy.refusal_stands(), "an older helper did not check");
+    }
+
+    /// #879: an unchecked result and a ShadowMount+ title are read from the ACK; older helpers
+    /// leave them unset.
+    #[test]
+    fn unverified_and_shadowmount_are_read_from_the_ack() {
+        let unchecked = UnregisterOutcome::from_ack(
+            br#"{"sony_uninstall_rc":0,"still_present":true,"unverified":true}"#,
+        );
+        assert!(unchecked.unverified);
+        assert_eq!(unchecked.still_present, Some(true));
+        let smp = UnregisterOutcome::from_ack(
+            br#"{"sony_uninstall_rc":0,"still_present":false,"managed_by":"shadowmount","image":"/data/homebrew/DOOM.exfat"}"#,
+        );
+        assert_eq!(smp.managed_by.as_deref(), Some("shadowmount"));
+        assert_eq!(smp.image.as_deref(), Some("/data/homebrew/DOOM.exfat"));
+        assert!(!smp.unverified);
+        let old = UnregisterOutcome::from_ack(br#"{"sony_uninstall_rc":0,"still_present":false}"#);
+        assert!(!old.unverified);
+        assert_eq!(old.managed_by, None);
+        assert_eq!(old.image, None);
     }
 
     use super::*;

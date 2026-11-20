@@ -1798,6 +1798,14 @@ export interface UnregisterResult {
    *  looked (a large game can take minutes). Keep it listed and refresh. False from a helper
    *  older than 7.1.6, which did not check. */
   stillPresent: boolean;
+  /** The helper could not read app.db (what the home screen draws): the removal is not
+   *  confirmed (#879). `stillPresent` is true with it. */
+  unverified: boolean;
+  /** ShadowMount+ registered the title from a disk image: it puts the title back on its next
+   *  scan while that image is in one of its scan folders (#879). */
+  shadowMount: boolean;
+  /** That image, when the helper named one. */
+  image: string | null;
 }
 
 /** Reverse of `appRegister` (tears down our nullfs at `/system_ex/app/<titleId>`), and the
@@ -1817,6 +1825,9 @@ export async function appUnregister(
     sony_uninstall_refused?: boolean;
     sony_uninstall_rc?: string;
     still_present?: boolean | null;
+    unverified?: boolean | null;
+    managed_by?: string | null;
+    image?: string | null;
   } | null>("ps5_app_unregister", {
     req: { addr, title_id: titleId },
   });
@@ -1826,7 +1837,12 @@ export async function appUnregister(
   if (res?.sony_uninstall_refused && res.still_present !== false) {
     throw new Error(`uninstall_refused:${res.sony_uninstall_rc ?? "unknown"}`);
   }
-  return { stillPresent: res?.still_present === true };
+  return {
+    stillPresent: res?.still_present === true,
+    unverified: res?.unverified === true,
+    shadowMount: res?.managed_by === "shadowmount",
+    image: res?.image || null,
+  };
 }
 
 // ─── Hardware monitoring ──────────────────────────────────────────────
@@ -5640,6 +5656,9 @@ export async function payloadCheck(ip: string): Promise<{
    *  `unreachable` (no DDP reply and no TCP answer), `awake` (DDP 200). Absent when the
    *  engine did not ask. */
   power?: "awake" | "rest" | "unreachable";
+  /** A helper answered but is too old for this app (the engine's `helper_too_old`, sent with
+   *  `reason` still `helper_not_ava1`). Absent when not, or from an engine too old to say. */
+  helperTooOld?: boolean;
 }> {
   const resp = await invoke<{
     reachable?: boolean;
@@ -5648,6 +5667,7 @@ export async function payloadCheck(ip: string): Promise<{
     error?: string;
     reason?: string;
     power?: string;
+    helper_too_old?: boolean;
     status?: {
       version?: string;
       ps5_kernel?: string;
@@ -5663,9 +5683,11 @@ export async function payloadCheck(ip: string): Promise<{
     (resp?.power === "awake" || resp?.power === "rest" || resp?.power === "unreachable")
       ? resp.power
       : undefined;
+  const helperTooOld = !resp?.reachable && resp?.helper_too_old === true;
   return {
     ...(reason !== undefined ? { reason } : {}),
     ...(power !== undefined ? { power } : {}),
+    ...(helperTooOld ? { helperTooOld } : {}),
     reachable: !!resp?.reachable,
     loaded: !!resp?.loaded,
     engineReachable: resp?.engine !== false,

@@ -609,28 +609,46 @@ int main(void) {
 
     /* One helper starts at a time (takeover_flag.h). Taken before anything that touches shared state
      * (the log file, the staging sweeps, the ownership record, the takeover flag, the ports): a helper
-     * sent while another is still starting leaves without touching any of it, so the one starting is
-     * not asked to exit, reaped or stripped of its record. Held until the transfer port serves; a
-     * helper sent after that takes over as always. */
+     * sent while another is still starting waits, touching none of it, so the one starting is not
+     * asked to exit, reaped or stripped of its record. It never leaves: if the one starting dies or
+     * gives up before it serves, this one starts instead (12.6.13 left at once, and then nothing
+     * served). Held until the transfer port serves; a helper sent after that, or one that waited,
+     * takes over as always. */
     int start_lock = -1;
-    {
-        int holder = 0;
-        start_lock = takeover_start_lock(PS5UPLOAD2_RUNTIME_DIR, START_LOCK_MAX_AGE_MS, &holder);
-        if (start_lock == TAKEOVER_START_BUSY) {
-            startup_trace("START_LOCK_BUSY");
-            fprintf(stderr,
-                    "[payload2] another helper (pid %d) is starting right now; this one leaves it to finish\n",
-                    holder);
-            return 0;
-        }
-        startup_trace(start_lock >= 0 ? "START_LOCK_HELD" : "START_LOCK_NONE");
-    }
+    takeover_start_info_t start_info;
+    startup_trace("START_LOCK_ASK");
+    start_lock = takeover_start_lock_wait(PS5UPLOAD2_RUNTIME_DIR, START_LOCK_MAX_AGE_MS, 200, &start_info);
+    startup_trace(start_lock >= 0 ? (start_info.waited ? "START_LOCK_HELD_AFTER_WAIT" : "START_LOCK_HELD")
+                                  : "START_LOCK_NONE");
 
     /* Now that the runtime root exists, capture stdout+stderr to a fetchable
      * file and detach stdin so the helper's own error diagnostics survive for
      * bug reports. */
     redirect_stdio_to_file();
     startup_trace("STDIO_REDIRECTED");
+    /* Logged here, not at the lock: before the redirect stderr is the sender's socket, gone by now. */
+    if (start_info.waited)
+        fprintf(stderr, "[payload2] start lock: helper pid %d was starting; waited %lld ms for it\n",
+                start_info.holder_pid, start_info.waited_ms);
+    switch (start_info.outcome) {
+    case TAKEOVER_START_NO_FILE:
+        fprintf(stderr, "[payload2] start lock: %s/start.lock cannot be opened (errno=%d); starting without it\n",
+                PS5UPLOAD2_RUNTIME_DIR, start_info.flock_errno);
+        break;
+    case TAKEOVER_START_NO_FLOCK:
+        fprintf(stderr, "[payload2] start lock: flock failed (errno=%d), no locks here; starting without it\n",
+                start_info.flock_errno);
+        break;
+    case TAKEOVER_START_STUCK:
+        fprintf(stderr,
+                "[payload2] start lock: helper pid %d has been starting for %lld ms, longer than any start "
+                "takes; taking it for stuck and starting without the lock\n",
+                start_info.holder_pid,
+                start_info.holder_age_ms >= 0 ? start_info.holder_age_ms : start_info.waited_ms);
+        break;
+    default:
+        break;
+    }
 
     /* Sweep orphan Tier-1 staging files. Crash-recovery only;
      * the desktop-side post-install delete handles steady-state. */

@@ -10,6 +10,7 @@ import type { MeshDevice } from "../../../api/mesh";
 import { compareVersions } from "../../../lib/semver";
 import { parsePS5Firmware } from "../../../lib/ps5Firmware";
 import { consoleAddr, hostOf } from "../../../lib/addr";
+import { showsHelperTooOld } from "../../../lib/helperTooOld";
 
 // ---- one console's card ----
 
@@ -32,6 +33,8 @@ export type HelperState =
   | "pairing"
   | "stopped"
   | "missing"
+  /** A helper runs, but one too old for this app (#877). */
+  | "old"
   | "unknown";
 
 /** Where the setup checklist stands: reach the console, run the helper, or nothing to do. */
@@ -90,7 +93,8 @@ export function cardStatus(i: CardInput): CardStatus {
   else if (up) {
     const cmp = (rt.payloadVersion && i.appVersion ? compareVersions(rt.payloadVersion, i.appVersion) : 0) ?? 0;
     helper = cmp < 0 ? "update" : cmp > 0 ? "newer" : "match";
-  } else if (i.stopped) helper = "stopped";
+  } else if (showsHelperTooOld(rt)) helper = "old";
+  else if (i.stopped) helper = "stopped";
   else if (rt.payloadStatus === "down") helper = "missing";
   else helper = "unknown";
   const ready = up && !pairing;
