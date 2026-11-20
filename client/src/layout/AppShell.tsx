@@ -8,6 +8,7 @@ import SessionBanner from "./SessionBanner";
 import RemotePlayBanner from "./RemotePlayBanner";
 import EngineDownBanner from "./EngineDownBanner";
 import MovedConsoleBanner, { useMovedConsoleWatch } from "./MovedConsoleBanner";
+import LinkDropBanner from "./LinkDropBanner";
 import { InstallAskHost } from "../components/InstallAskHost";
 import { PairingDialog } from "../screens/Connection/PairingDialog";
 import { useHelperReplaceGuard } from "../screens/Connection/useHelperReplaceGuard";
@@ -1943,6 +1944,7 @@ export default function AppShell() {
         <SessionBanner />
         <RemotePlayBanner />
         <MovedConsoleBanner />
+        <LinkDropBanner />
         <EngineDownBanner />
         <AndroidLocalNetworkBanner />
         <AndroidStorageAccessBanner />

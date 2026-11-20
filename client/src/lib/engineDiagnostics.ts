@@ -36,6 +36,12 @@ import { redactHost } from "./diagnosticBundle";
  *                 share), the mesh, and whether Detailed logs are on. The
  *                 engine builds it without keys, codes, tokens, names,
  *                 passwords or stream URLs.
+ *  - `link_history` — per console, how its connection has been holding up
+ *                 (`/api/ps5/link-history`, engine link_drops.rs): drops
+ *                 (timeout / refused), recoveries, helper restarts, USB drives
+ *                 appearing, the console's network type (cable or Wi-Fi: asked
+ *                 of the helper here when not known yet) and the "keeps
+ *                 dropping" hint. Times and kinds only, no addresses.
  */
 
 /** Per-request budget. The engine is loopback and answers from memory; a
@@ -43,9 +49,12 @@ import { redactHost } from "./diagnosticBundle";
  *  action a user takes precisely because things are already broken. */
 const TIMEOUT_MS = 2000;
 
-async function getJsonBounded<T>(path: string): Promise<T> {
+/** The link history may ask the console's helper for its network type: a little longer. */
+const LINK_TIMEOUT_MS = 6000;
+
+async function getJsonBounded<T>(path: string, ms = TIMEOUT_MS): Promise<T> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), ms);
   try {
     const res = await fetch(`${getEngineUrl()}${path}`, {
       signal: controller.signal,
@@ -74,6 +83,9 @@ export interface EngineDiagnostics {
   /** The engine's feature summary (see above); null when it could not be read (an older
    *  engine answers 404, named in `errors`). */
   features: Record<string, unknown> | null;
+  /** How each console's connection has been holding up, with its network type (see above).
+   *  `record` is null when it could not be read (an older engine answers 404). */
+  link_history: { console: string; record: unknown }[];
   /** Per-probe failures, so "not collected" is never read as "nothing there". */
   errors: Record<string, string>;
 }
@@ -82,9 +94,9 @@ export async function collectEngineDiagnostics(
   opts: { consoles?: string[]; redact?: boolean } = {},
 ): Promise<EngineDiagnostics> {
   const errors: Record<string, string> = {};
-  async function probe<T>(name: string, path: string): Promise<T | null> {
+  async function probe<T>(name: string, path: string, ms?: number): Promise<T | null> {
     try {
-      return await getJsonBounded<T>(path);
+      return await getJsonBounded<T>(path, ms);
     } catch (e) {
       errors[name] = e instanceof Error ? e.message : String(e);
       return null;
@@ -114,10 +126,22 @@ export async function collectEngineDiagnostics(
       return { console: label, entries };
     }),
   );
+  const link_history = await Promise.all(
+    hosts.map(async (host) => {
+      const label = redactHost(host, opts.redact ?? true);
+      const record = await probe<unknown>(
+        `link_history:${label}`,
+        `/api/ps5/link-history?addr=${encodeURIComponent(host)}&read_link=1`,
+        LINK_TIMEOUT_MS,
+      );
+      return { console: label, record };
+    }),
+  );
   return {
     jobs,
     install_sessions: sessions,
     install_history,
+    link_history,
     job_summaries: Array.isArray(summaries?.summaries) ? summaries.summaries : null,
     features: features && typeof features === "object" ? features : null,
     errors,

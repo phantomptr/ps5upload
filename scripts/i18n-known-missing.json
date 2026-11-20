@@ -1,6 +1,13 @@
 {
   "ar": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -16,7 +23,14 @@
     ]
   },
   "bn": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -36,7 +50,14 @@
     ]
   },
   "de": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -65,7 +86,14 @@
     ]
   },
   "es": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -88,7 +116,14 @@
     ]
   },
   "fa": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -106,7 +141,14 @@
     ]
   },
   "fr": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -128,7 +170,14 @@
     ]
   },
   "hi": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -148,7 +197,14 @@
     ]
   },
   "hu": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -174,7 +230,14 @@
     ]
   },
   "id": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -202,7 +265,14 @@
     ]
   },
   "it": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -230,7 +300,14 @@
     ]
   },
   "ja": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -247,7 +324,14 @@
     ]
   },
   "ko": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -266,7 +350,14 @@
     ]
   },
   "pl": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -289,7 +380,14 @@
     ]
   },
   "pt-BR": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -312,7 +410,14 @@
     ]
   },
   "ru": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -334,7 +439,14 @@
     ]
   },
   "th": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -355,7 +467,14 @@
     ]
   },
   "tr": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -380,7 +499,14 @@
     ]
   },
   "vi": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -404,7 +530,14 @@
     ]
   },
   "zh-CN": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -422,7 +555,14 @@
     ]
   },
   "zh-TW": {
-    "missing": [],
+    "missing": [
+      "link_drops_title",
+      "link_drops_body",
+      "link_drops_body_wired",
+      "link_drops_usb_title",
+      "link_drops_usb_body",
+      "link_drops_dismiss"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
