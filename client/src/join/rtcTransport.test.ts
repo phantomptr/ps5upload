@@ -18,7 +18,10 @@ import {
   parseInternetFragment,
   PING,
   PONG,
+  prejoinHub,
+  PREJOIN_KEEP_MS,
   Reassembler,
+  resetPrejoin,
   rtcTransport,
   sdpFingerprint,
   STUN_SERVERS,
@@ -322,6 +325,7 @@ describe("the WebRTC transport", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    resetPrejoin();
     FakeHub.all = [];
     FakePC.all = [];
     stages = [];
@@ -468,9 +472,11 @@ describe("the WebRTC transport", () => {
     hub.open();
     hub.say({ t: "joined", gid: "G2" });
     await vi.advanceTimersByTimeAsync(0);
-    // The try that met no room made no peer connection: this is the second one.
-    expect(FakePC.all).toHaveLength(2);
-    const pc = FakePC.all[1];
+    // Each try made its peer connection while the hub connected; the one that met no room closed
+    // its own.
+    expect(FakePC.all).toHaveLength(3);
+    expect(FakePC.all[1].closed).toBe(true);
+    const pc = FakePC.all[2];
     const dc = pc.channel!;
     expect(hub.signals("offer")).toHaveLength(1);
     hub.say({ t: "signal", from: "host", data: answer() });
@@ -538,6 +544,103 @@ describe("the WebRTC transport", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(stages[stages.length - 1], JSON.stringify(msg)).toEqual({ kind: "ended", why });
     }
+  });
+
+  it("makes the offer while the hub connects, and sends it with the candidates found meanwhile once joined", async () => {
+    const c = client();
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    // The hub not open yet: the peer connection and its offer are made already.
+    const hub = FakeHub.all[0];
+    const pc = FakePC.all[0];
+    expect(pc).toBeDefined();
+    expect(pc.localDescription?.type).toBe("offer");
+    pc.onicecandidate?.({ candidate: { candidate: "candidate:1 1 udp 1 192.0.2.1 5000 typ host", sdpMid: "0" } });
+    pc.onicecandidate?.({ candidate: { candidate: "candidate:2 1 udp 1 203.0.113.9 6000 typ srflx", sdpMid: "0" } });
+    expect(hub.sent).toEqual([]);
+    hub.open();
+    expect(hub.sent).toEqual([{ v: 1, t: "join", room: ROOM }]);
+    hub.say({ t: "joined", gid: "G" });
+    await vi.advanceTimersByTimeAsync(0);
+    // The offer first, then what was found, in order; later candidates as they come.
+    pc.onicecandidate?.({ candidate: { candidate: "candidate:3 1 udp 1 198.51.100.1 7000 typ srflx", sdpMid: "0" } });
+    expect(hub.sent.slice(1).map((m) => (m.data as { type: string; candidate?: string }).candidate ?? (m.data as { type: string }).type)).toEqual([
+      "offer",
+      "candidate:1 1 udp 1 192.0.2.1 5000 typ host",
+      "candidate:2 1 udp 1 203.0.113.9 6000 typ srflx",
+      "candidate:3 1 udp 1 198.51.100.1 7000 typ srflx",
+    ]);
+    // The ICE timeout runs from the offer, as before.
+    await vi.advanceTimersByTimeAsync(ICE_TIMEOUT_MS - 100);
+    expect(stages[stages.length - 1]).toEqual({ kind: "connecting" });
+    c.stop();
+  });
+
+  it("takes the hub socket the page opened early, joined already: the offer goes at once", async () => {
+    prejoinHub(INV, { WebSocketImpl: FakeHub as unknown as typeof WebSocket });
+    const early = FakeHub.all[0];
+    expect(early.url).toBe("ws://127.0.0.1:8787/ws");
+    early.open();
+    expect(early.sent).toEqual([{ v: 1, t: "join", room: ROOM }]);
+    early.say({ t: "joined", gid: "G" });
+    // The friend reads the page, types a name, presses Join.
+    await vi.advanceTimersByTimeAsync(20_000);
+    const c = client();
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeHub.all).toHaveLength(1);
+    const pc = FakePC.all[0];
+    expect(early.signals("offer")).toEqual([{ t: "signal", to: "host", data: { type: "offer", sdp: "v=0\r\nOFFER\r\n" } }]);
+    early.say({ t: "signal", from: "host", data: answer() });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pc.remote?.type).toBe("answer");
+    pc.channel!.open();
+    expect(early.sent[early.sent.length - 1]).toEqual({ t: "leave" });
+    expect(pc.channel!.texts[0]).toEqual({ hello: { name: "Ben", invite: KEY } });
+    // A resume later makes its own connection: the early socket was the first try's.
+    c.stop();
+  });
+
+  it("an early socket still connecting is taken as it is; one the hub refused or that waited too long is not", async () => {
+    // Still connecting when Join is pressed (a reload that resumes at once).
+    prejoinHub(INV, { WebSocketImpl: FakeHub as unknown as typeof WebSocket });
+    const c = client();
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeHub.all).toHaveLength(1);
+    FakeHub.all[0].open();
+    expect(FakeHub.all[0].sent).toEqual([{ v: 1, t: "join", room: ROOM }]);
+    FakeHub.all[0].say({ t: "joined", gid: "G" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeHub.all[0].signals("offer")).toHaveLength(1);
+    c.stop();
+
+    // No room (yet): a fresh try asks again, and says so if it is still not there.
+    FakeHub.all = [];
+    FakePC.all = [];
+    prejoinHub(INV, { WebSocketImpl: FakeHub as unknown as typeof WebSocket });
+    FakeHub.all[0].open();
+    FakeHub.all[0].say({ t: "error", why: "no_room" });
+    const c2 = client();
+    c2.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeHub.all).toHaveLength(2);
+    expect(FakeHub.all[0].closed).toBe(true);
+    c2.stop();
+
+    // Not taken in time: it leaves the room and closes.
+    FakeHub.all = [];
+    prejoinHub(INV, { WebSocketImpl: FakeHub as unknown as typeof WebSocket });
+    FakeHub.all[0].open();
+    FakeHub.all[0].say({ t: "joined", gid: "G" });
+    await vi.advanceTimersByTimeAsync(PREJOIN_KEEP_MS);
+    expect(FakeHub.all[0].sent[FakeHub.all[0].sent.length - 1]).toEqual({ t: "leave" });
+    expect(FakeHub.all[0].closed).toBe(true);
+    const c3 = client();
+    c3.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeHub.all).toHaveLength(2);
+    c3.stop();
   });
 
   it("a channel drop re-signals through the hub and resumes with the token", async () => {

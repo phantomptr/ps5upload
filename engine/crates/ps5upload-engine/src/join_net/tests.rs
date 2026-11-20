@@ -93,6 +93,20 @@ impl FakeHub {
         self.st.lock().unwrap().host_conns
     }
 
+    /// Says `v` to the host of `room`, as if the hub sent it.
+    pub(crate) fn tell_host(&self, room: &str, v: serde_json::Value) {
+        if let Some(tx) = self
+            .st
+            .lock()
+            .unwrap()
+            .rooms
+            .get(room)
+            .and_then(|r| r.1.clone())
+        {
+            let _ = tx.send(j(v));
+        }
+    }
+
     pub(crate) fn has_host(&self, room: &str) -> bool {
         self.st
             .lock()
@@ -183,6 +197,9 @@ async fn conn(mut s: WebSocket, hub: FakeHub) {
                             Some(("host", _)) => {
                                 if let Some((_, g)) = st.guests.get(&str_of("to")) {
                                     let _ = g.send(j(serde_json::json!({"t": "signal", "from": "host", "data": data})));
+                                } else {
+                                    // The real hub's answer (not fatal: the guest left a moment ago).
+                                    let _ = tx.send(j(serde_json::json!({"t": "error", "why": "no_peer"})));
                                 }
                             }
                             Some(("guest", gid)) => {

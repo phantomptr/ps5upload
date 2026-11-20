@@ -191,6 +191,93 @@ export function trackCodecs(caps: RTCRtpCapabilities | null | undefined): RTCRtp
 
 type HubMsg = { t?: string; gid?: string; why?: string; from?: string; data?: Record<string, unknown> };
 
+// ── The hub, early ──────────────────────────────────────────────────────────────────────────────
+
+/** How long a page keeps the place it took in the room early (prejoinHub) for the friend to press
+ *  Join: past it the socket goes (a room has few places) and Join connects as before. */
+export const PREJOIN_KEEP_MS = 60_000;
+
+interface Prejoin {
+  url: string;
+  room: string;
+  ws: WebSocket;
+  /** What the hub said before the first connect took the socket. */
+  msgs: HubMsg[];
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+let prejoined: Prejoin | null = null;
+
+function leaveSocket(ws: WebSocket): void {
+  ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+  try {
+    if (ws.readyState === 1) ws.send(JSON.stringify({ t: "leave" }));
+    ws.close(1000);
+  } catch {
+    // Already closing.
+  }
+}
+
+/** Opens the hub's socket and joins the invite's room as the page loads, while the friend reads
+ *  the page and types their name: the first connect (Join) takes it, joined already, and sends its
+ *  offer at once instead of first making the connection (a name lookup, TCP, TLS, the upgrade and
+ *  the join: four or five round trips to the hub). Only the hub sees it (the host's engine hears
+ *  of a guest, and nothing more, until the offer); kept PREJOIN_KEEP_MS at most. */
+export function prejoinHub(inv: InternetInvite, o: { WebSocketImpl?: typeof WebSocket; keepMs?: number } = {}): void {
+  const WS = o.WebSocketImpl ?? (typeof WebSocket === "undefined" ? undefined : WebSocket);
+  if (!WS || prejoined) return;
+  const url = hubSocketUrl(inv.hub);
+  let ws: WebSocket;
+  try {
+    ws = new WS(url);
+  } catch {
+    return;
+  }
+  const p: Prejoin = { url, room: inv.room, ws, msgs: [], timer: null };
+  prejoined = p;
+  const drop = () => {
+    if (prejoined !== p) return;
+    prejoined = null;
+    if (p.timer) clearTimeout(p.timer);
+    leaveSocket(ws);
+  };
+  ws.onopen = () => ws.send(JSON.stringify({ v: 1, t: "join", room: inv.room }));
+  ws.onmessage = (e: MessageEvent) => {
+    if (typeof e.data !== "string") return;
+    try {
+      p.msgs.push(JSON.parse(e.data) as HubMsg);
+    } catch {
+      // Not the hub's.
+    }
+  };
+  ws.onclose = drop;
+  ws.onerror = () => {
+    // onclose follows.
+  };
+  p.timer = setTimeout(drop, o.keepMs ?? PREJOIN_KEEP_MS);
+}
+
+/** The early socket for `url` and `room`, joined or on its way, with what the hub said so far;
+ *  null when there is none, or it met an error (a fresh try finds the room back or says why). */
+function takePrejoin(url: string, room: string): { ws: WebSocket; msgs: HubMsg[] } | null {
+  const p = prejoined;
+  if (!p) return null;
+  prejoined = null;
+  if (p.timer) clearTimeout(p.timer);
+  if (p.url !== url || p.room !== room || p.ws.readyState > 1 || p.msgs.some((m) => m.t === "error" || m.t === "closed")) {
+    leaveSocket(p.ws);
+    return null;
+  }
+  return { ws: p.ws, msgs: p.msgs };
+}
+
+/** Tests: forget an early socket. */
+export function resetPrejoin(): void {
+  const p = prejoined;
+  prejoined = null;
+  if (p?.timer) clearTimeout(p.timer);
+}
+
 /** The WebSocket-shaped transport for an internet invite. Each instance is one attempt. */
 export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): JoinTransport {
   const WS = o.WebSocketImpl ?? (typeof WebSocket === "undefined" ? undefined : WebSocket);
@@ -224,6 +311,11 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
     private early: RTCIceCandidateInit[] = [];
     /** Set while waiting for a restarting hub: until when it is worth trying again. */
     private hubBackUntil = 0;
+    /** The offer, made while the hub connects (null: it could not be made). */
+    private offerSdp: Promise<string | null> | null = null;
+    private offerSent = false;
+    /** This page's candidates found before the offer went: sent right behind it. */
+    private ownEarly: Record<string, unknown>[] = [];
     /** The video track, once the answer brought it (the session reads it when joined). */
     media: TrackMedia | null = null;
 
@@ -238,14 +330,25 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
         this.fail("no_webrtc");
         return;
       }
+      const url = o.signalUrl ?? hubSocketUrl(inv.hub);
+      // The page's early socket (prejoinHub), in the room already or on its way, when it has one.
+      const early = o.signalUrl || o.lan ? null : takePrejoin(url, inv.room);
       let hub: WebSocket;
-      try {
-        hub = new WS(o.signalUrl ?? hubSocketUrl(inv.hub));
-      } catch {
-        this.fail("no_hub");
-        return;
+      if (early) {
+        hub = early.ws;
+        log("hub: joined early");
+      } else {
+        try {
+          hub = new WS(url);
+        } catch {
+          this.fail("no_hub");
+          return;
+        }
       }
       this.hub = hub;
+      // The peer connection and its offer while the hub connects: ready to go once joined.
+      this.prepare();
+      if (this.readyState !== 0) return;
       hub.onopen = () => hub.send(JSON.stringify(o.lan ? { v: 1, t: "join", lan: true } : { v: 1, t: "join", room: inv.room }));
       hub.onmessage = (e: MessageEvent) => {
         if (typeof e.data !== "string") return;
@@ -272,6 +375,8 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
       hub.onerror = () => {
         // onclose follows.
       };
+      // What the hub said to the early socket (its `joined`) before this try took it.
+      for (const m of early?.msgs ?? []) this.onHub(m);
     }
 
     private signal(data: Record<string, unknown>): void {
@@ -284,7 +389,7 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
       switch (m.t) {
         case "joined":
           log(`hub: joined room as ${m.gid ?? "?"}`);
-          void this.offer();
+          void this.sendOffer();
           return;
         case "signal":
           if (m.from === "host" && m.data && typeof m.data === "object") void this.onSignal(m.data);
@@ -301,8 +406,11 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
       }
     }
 
-    private async offer(): Promise<void> {
+    /** The peer connection, its channel and tracks, and the offer (made now, sent once joined). */
+    private prepare(): void {
       if (!PC) return;
+      this.offerSent = false;
+      this.ownEarly = [];
       let pc: RTCPeerConnection;
       try {
         pc = new PC({ iceServers: [{ urls: STUN_SERVERS }] });
@@ -350,9 +458,14 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
         };
       }
       pc.onicecandidate = (e: RTCPeerConnectionIceEvent) => {
+        if (this.pc !== pc) return;
         const c = e.candidate;
         // The end of gathering (null or empty) needs nothing: the engine takes what came.
-        if (c && c.candidate) this.signal({ type: "candidate", candidate: c.candidate, sdpMid: c.sdpMid ?? "0" });
+        if (!c || !c.candidate) return;
+        const data = { type: "candidate", candidate: c.candidate, sdpMid: c.sdpMid ?? "0" };
+        // Found while the hub was still connecting: right behind the offer (never ahead of it).
+        if (this.offerSent) this.signal(data);
+        else this.ownEarly.push(data);
       };
       pc.oniceconnectionstatechange = () => {
         if (this.pc !== pc) return;
@@ -363,18 +476,32 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
           else this.dropped();
         }
       };
+      this.offerSdp = (async () => {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        // As made: the candidates gathered meanwhile follow it one by one, as before.
+        return pc.localDescription?.sdp ?? offer.sdp ?? "";
+      })().catch(() => {
+        if (this.pc === pc) this.fail("no_webrtc");
+        return null;
+      });
+    }
+
+    /** In the room: the offer (made while the hub connected), then the candidates found so far. */
+    private async sendOffer(): Promise<void> {
+      const pc = this.pc;
+      const made = this.offerSdp;
+      if (!pc || !made || this.offerSent) return;
+      this.clearTimer();
       this.timer = setTimeout(() => {
         this.timer = null;
         if (this.readyState === 0) this.fail("no_direct");
       }, iceTimeout);
-      try {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        if (this.pc !== pc) return;
-        this.signal({ type: "offer", sdp: pc.localDescription?.sdp ?? offer.sdp ?? "" });
-      } catch {
-        this.fail("no_webrtc");
-      }
+      const sdp = await made;
+      if (this.pc !== pc || sdp === null || this.readyState !== 0) return;
+      this.signal({ type: "offer", sdp });
+      this.offerSent = true;
+      for (const c of this.ownEarly.splice(0)) this.signal(c);
     }
 
     private async onSignal(d: Record<string, unknown>): Promise<void> {
@@ -531,6 +658,9 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
       this.pc = null;
       this.dc = null;
       this.media = null;
+      this.offerSdp = null;
+      this.offerSent = false;
+      this.ownEarly = [];
       try {
         dc?.close();
       } catch {

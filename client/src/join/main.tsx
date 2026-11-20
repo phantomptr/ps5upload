@@ -8,7 +8,7 @@ import "../lib/polyfills";
 import { createRoot } from "react-dom/client";
 import "../index.css";
 import { JoinFlow } from "./JoinFlow";
-import { hubSocketUrl, parseInternetFragment, rtcTransport, type JoinSocket } from "./rtcTransport";
+import { hubSocketUrl, parseInternetFragment, prejoinHub, rtcTransport, type JoinSocket } from "./rtcTransport";
 import { lanPage, lanTarget } from "./lanHint";
 import { hostPath } from "./netPath";
 import { joinTries, raceTransport } from "./pathRace";
@@ -21,6 +21,9 @@ const host = hash.get("n")?.trim() || null;
 // connection stays on it (ICE), and a link from a newer host names its page there (`lan`) for
 // when the hub can't be reached ("Open on this Wi-Fi").
 const net = parseInternetFragment(location.hash);
+// The hub's socket first, before React draws anything: in the room by the time the friend has
+// read the page and typed their name, so Join goes straight to the offer.
+if (net) prejoinHub(net);
 const root = createRoot(document.getElementById("root")!);
 if (net) {
   const transport = rtcTransport(net, { video: true, log: (m) => console.info(`[join] ${m}`) });

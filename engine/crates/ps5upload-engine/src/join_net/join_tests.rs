@@ -1233,3 +1233,156 @@ fn the_one_link_says_where_it_works() {
     let old = serde_json::json!({"url": "https://x/join/#room=r"});
     assert_eq!(share_json(lan, Some(&old), true)["works"], "anywhere");
 }
+
+/// A page's offer with a "join" data channel only (str0m's), from a made-up address.
+fn data_offer() -> String {
+    let mut g = str0m::Rtc::builder()
+        .set_crypto_provider(crate::join_net::crypto::provider())
+        .build(Instant::now());
+    let _ = g.add_local_candidate(str0m::Candidate::host(([192, 0, 2, 9], 9).into(), "udp").unwrap());
+    let mut api = g.sdp_api();
+    api.add_channel("join".into());
+    api.apply().unwrap().0.to_sdp_string()
+}
+
+/// The hub's `no_peer` (the engine signalled a guest that left a moment ago: an answer, a late
+/// candidate) is not the end of the connection. It was taken as an error: the room went to
+/// "error", the host's page showed the home network's link instead of the internet one, and the
+/// engine dropped the hub and hosted the room again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_signal_to_a_guest_that_left_keeps_the_room_hosted() {
+    let _turn = PARTY_TESTS.lock().await;
+    let hub = FakeHub::start().await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        hub_url: hub.url.clone(),
+        stun: Vec::new(),
+        upnp: false,
+        ..Settings::default()
+    });
+    let console = "10.77.0.43";
+    set_helper(console, Arc::new(FakeHelper::default()));
+    set_live(console, 1);
+    open_party(console).await;
+    let room = internet_invite(console).await["internet"]["room"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    until("hosted", || hub.has_host(&room)).await;
+    until_state(console, "hosted", |s| s["invite"]["internet"]["state"] == "hosted").await;
+    let conns = hub.host_conns();
+    // An offer from a guest the hub no longer has: the engine's answer meets `no_peer`.
+    hub.tell_host(
+        &room,
+        serde_json::json!({"t": "signal", "from": "gone", "data": {"type": "offer", "sdp": data_offer()}}),
+    );
+    until("the answer", || {
+        hub.st.lock().unwrap().host_frames.iter().any(|f| f["to"] == "gone")
+    })
+    .await;
+    // Past the first reconnect's backoff: still the one connection, hosted, the internet link.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let s = host_state(console).await;
+    assert_eq!(s["invite"]["internet"]["state"], "hosted", "{s}");
+    assert_eq!(s["invite"]["internet"]["offline"], false, "{s}");
+    assert!(s["invite"]["internet"]["error"].is_null(), "{s}");
+    assert_eq!(hub.host_conns(), conns, "no new connection to the hub");
+    close_party(console).await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_live(console, 0);
+}
+
+/// A STUN server on loopback that drops the first request it gets, then says the asker is at the
+/// next address of `at` for each request it answers (the last one from then on).
+async fn lossy_stun(at: Vec<std::net::SocketAddr>) -> std::net::SocketAddr {
+    let s = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr = s.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut b = [0u8; 1500];
+        let mut n_req = 0usize;
+        while let Ok((n, from)) = s.recv_from(&mut b).await {
+            n_req += 1;
+            if n < 20 || n_req == 1 {
+                continue;
+            }
+            let tx: [u8; 12] = b[8..20].try_into().unwrap();
+            let who = at[(n_req - 2).min(at.len() - 1)];
+            let _ = s
+                .send_to(&crate::join_net::stun::answer(tx, who), from)
+                .await;
+        }
+    });
+    addr
+}
+
+/// The outside (STUN) candidate: a lost first request is sent again (once, before, it cost the
+/// room its candidate for as long as it was open), the servers are asked again while the room is
+/// open (the router keeps the port's mapping), and a mapping that moved reaches a connecting guest
+/// at once and new guests in their answer, without the stale ones piling up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_stun_candidate_survives_a_lost_request_and_follows_a_moved_mapping() {
+    use crate::join_net::rtc::{self, Cmd};
+    let _turn = PARTY_TESTS.lock().await;
+    let at = |p: u16| std::net::SocketAddr::from(([203, 0, 113, 5], p));
+    let stun = lossy_stun(vec![at(40000), at(40001), at(40002)]).await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        stun: vec![stun.to_string()],
+        upnp: false,
+        ..Settings::default()
+    });
+    let net = rtc::net().await.unwrap();
+    let offer = data_offer;
+    let (sig, mut sig_rx) = tokio::sync::mpsc::unbounded_channel();
+    let t0 = Instant::now();
+    net.cmd
+        .send(Cmd::RoomOpen("stun-room".into(), crate::join_net::Kind::Join))
+        .unwrap();
+    net.cmd
+        .send(Cmd::Offer {
+            room: "stun-room".into(),
+            gid: "g1".into(),
+            sdp: offer(),
+            signal: sig.clone(),
+        })
+        .unwrap();
+    // The answer, then each outside address as it is found (trickled to the guest).
+    let mut found = Vec::new();
+    while found.len() < 3 {
+        let (_, m) = tokio::time::timeout(Duration::from_secs(10), sig_rx.recv())
+            .await
+            .expect("candidates within 10 s")
+            .unwrap();
+        let line = m["candidate"].as_str().or(m["sdp"].as_str()).unwrap_or("");
+        for p in 40000..40003u16 {
+            if line.contains(&format!("203.0.113.5 {p} typ srflx")) && !found.iter().any(|f: &(u16, Duration)| f.0 == p) {
+                found.push((p, t0.elapsed()));
+            }
+        }
+    }
+    eprintln!("stun candidates (port, time since the room opened): {found:?}");
+    assert_eq!(found.iter().map(|f| f.0).collect::<Vec<_>>(), [40000, 40001, 40002]);
+    // The first request was dropped: its retry 500 ms later found it.
+    assert!(found[0].1 < Duration::from_millis(1500), "{found:?}");
+    // A new guest's answer: the two newest outside addresses, not the stale first one.
+    net.cmd
+        .send(Cmd::Offer {
+            room: "stun-room".into(),
+            gid: "g2".into(),
+            sdp: offer(),
+            signal: sig.clone(),
+        })
+        .unwrap();
+    let answer = loop {
+        let (gid, m) = tokio::time::timeout(Duration::from_secs(5), sig_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        if gid == "g2" && m["type"] == "answer" {
+            break m["sdp"].as_str().unwrap().to_string();
+        }
+    };
+    assert!(answer.contains("203.0.113.5 40001 typ srflx"), "{answer}");
+    assert!(answer.contains("203.0.113.5 40002 typ srflx"), "{answer}");
+    assert!(!answer.contains("203.0.113.5 40000 typ srflx"), "{answer}");
+    net.cmd.send(Cmd::RoomClose("stun-room".into())).unwrap();
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
