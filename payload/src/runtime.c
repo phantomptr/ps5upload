@@ -103,6 +103,8 @@
 #include "trophy_fix.h"
 #include "game_fps.h"
 #include "ava1_server.h"
+#include "ava1_data.h"
+#include "helper_busy.h"
 
 /* The frame numbers the management table (mgmt_table.def) carries per method. They are not on any wire now:
  * the number a handler runs under is written to g_inflight_frame_type, so the fatal-signal breadcrumb in
@@ -10206,6 +10208,26 @@ static int handle_profile_set_local_username(const char *body) {
     return mgmt_reply(MGMT_FRAME_PROFILE_SET_LOCAL_USERNAME_ACK, resp, (uint64_t)len);
 }
 
+/* What a restart of this helper would stop now (helper_busy.h), read from the services themselves:
+ * no Sony call, only counters and flags under their own short locks. `caller` is the key of the
+ * device asking (NULL off an RPC worker): it is not counted among the other devices. */
+static void helper_busy_read(helper_busy_t *b, const uint8_t *caller) {
+    char root[1][AVA1_MAX_PATH + 1];
+    ava1_online_t online[8];
+    int n, i;
+    memset(b, 0, sizeof *b);
+    b->uploads = ava1_data_upload_roots(root, 1);
+    b->install = webui_pkg_installing() ? 1 : 0;
+    b->extract = archive_extract_running() ? 1 : 0;
+    b->convert = console_convert_building() ? 1 : 0;
+    b->dump = app_dump_running() ? 1 : 0;
+    b->input = vinput_is_open() ? 1 : 0;
+    b->pads = vpad_open_count();
+    n = ava1_server_online(online, (int)(sizeof online / sizeof online[0]));
+    for (i = 0; i < n; i++)
+        if (!caller || memcmp(online[i].key, caller, 32) != 0) b->other_devices++;
+}
+
 static int handle_status_frame(runtime_state_t *state) {
     /* Snapshot cross-thread fields under the mutex; keep the lock window to memory copies only. */
     uint64_t snap_instance_id, snap_started_at, snap_command_count;
@@ -10213,6 +10235,10 @@ static int handle_status_frame(runtime_state_t *state) {
     int snap_prior_verdict;
     int len;
     char body[2048];
+    char busy_json[256];
+    helper_busy_t busy;
+    helper_busy_read(&busy, ava1_server_rpc_peer());
+    if (helper_busy_json(&busy, busy_json, sizeof busy_json) < 0) snprintf(busy_json, sizeof busy_json, "null");
     const size_t body_cap = sizeof body;
     char kernel_version_raw[256];
     char kernel_version_esc[512];
@@ -10259,7 +10285,10 @@ static int handle_status_frame(runtime_state_t *state) {
                     * reapply interval in seconds. Lets the client display
                     * current settings without a separate round-trip. */
                    "\"fan_threshold\":%d,"
-                   "\"fan_reapply_sec\":%d}",
+                   "\"fan_reapply_sec\":%d,"
+                   /* What a restart would stop (helper_busy.h, 12.6.15): an app replaces this
+                    * helper by itself only while nothing is. Absent on older helpers. */
+                   "\"busy\":%s}",
                    PS5UPLOAD2_VERSION,
                    kernel_version_esc,
                    (unsigned long long)snap_instance_id,
@@ -10273,7 +10302,8 @@ static int handle_status_frame(runtime_state_t *state) {
                    ucred_elevated ? "true" : "false",
                    (int)AVA1_MAX_LANES,
                    fan_pinned,
-                   fan_reapply);
+                   fan_reapply,
+                   busy_json);
     /* Truncation-safe: if the fields ever grow past `body`, clamp rather than emit a body_len that
      * reads past the stack buffer. The node.status runner then fails to parse it, which is the right
      * failure mode. */
@@ -10456,8 +10486,24 @@ static void node_shutdown_fire(void *arg) { shutdown_common((runtime_state_t *)a
 
 /* node.shutdown (AVA1 method 5). The handler runs under the capture sink: its reply leaves only after
  * it returns. So the exit is DEFERRED to a short thread (like power.control): the caller receives the
- * acknowledgement first, then the instance stops (main.c runs ava1_payload_stop after the server loop). */
-static int handle_node_shutdown(runtime_state_t *state) {
+ * acknowledgement first, then the instance stops (main.c runs ava1_payload_stop after the server loop).
+ *
+ * {"if_idle":true} (12.6.15; an app replacing this helper by itself sends it): refused while a restart
+ * would stop something (helper_busy.h), with {"ok":false,"err":"helper_working","busy":"<what>"}, and the
+ * helper keeps running. No body, or anything else, is the plain shutdown every older caller sends. */
+static int handle_node_shutdown(runtime_state_t *state, const char *body, uint64_t body_len) {
+    if (helper_shutdown_if_idle(body, (size_t)body_len)) {
+        helper_busy_t busy;
+        const char *cause;
+        helper_busy_read(&busy, ava1_server_rpc_peer());
+        cause = helper_busy_cause(&busy);
+        if (cause) {
+            char reply[96];
+            int n = snprintf(reply, sizeof reply, "{\"ok\":false,\"err\":\"helper_working\",\"busy\":\"%s\"}", cause);
+            fprintf(stderr, "[payload2] shutdown if idle: refused, busy (%s)\n", cause);
+            return mgmt_reply(MGMT_FRAME_SHUTDOWN_ACK, reply, (uint64_t)(n > 0 ? n : 0));
+        }
+    }
     int rc = mgmt_reply(MGMT_FRAME_SHUTDOWN_ACK, "{}", 2);
     if (ava1_shutdown_defer(300, node_shutdown_fire, state) != 0) node_shutdown_fire(state);
     return rc;

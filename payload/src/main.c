@@ -4,6 +4,7 @@
 #include <ucontext.h>
 #include <time.h>
 #include <unistd.h>
+#include <errno.h>
 #include <sys/syscall.h>
 #include <sys/stat.h>   /* umask(), stat() */
 #include <fcntl.h>      /* open() for stderr capture */
@@ -34,6 +35,7 @@
 #include "archive_extract.h"
 #include "console_convert.h"
 #include "takeover_flag.h"
+#include "start_dedupe.h"
 #include "ava1_stop.h"
 #include "ava1_data.h"
 #include "ava1_app_gen.h"
@@ -514,6 +516,38 @@ static void redirect_stdio_to_file(void) {
             PS5UPLOAD2_VERSION, (long long)ts.tv_sec);
 }
 
+/* This helper's version where the app finds it in the ELF (12.6.15): the app and the engine read
+ * the helper they carry by it, a release build checks it equals the app's version, and a helper
+ * of another version than the app is never sent unattended. The ';' ends it. Written to
+ * startup.log at every start, which also keeps it in the image. */
+__attribute__((used)) const char ps5upload_helper_version_marker[] =
+    "PS5UPLOAD_HELPER_VERSION=" PS5UPLOAD2_VERSION ";";
+
+/* Two helpers sent together (start_dedupe.h): this one waited for the start lock, and the helper
+ * now serving is of the same or a newer version, began serving moments ago and answers on
+ * loopback. Then a second restart would only drop every connection again: 1, leave the start to
+ * it. Anything unsure (no record, older, long-running, not answering): 0, take over as always. */
+static int start_should_stand_down(void) {
+    serving_rec_t rec;
+    int complete = serving_record_read(PS5UPLOAD2_RUNTIME_DIR, &rec);
+    int alive = complete && rec.pid > 0 && (kill(rec.pid, 0) == 0 || errno == EPERM);
+    if (!start_dedupe_should_stand_down(&rec, complete, PS5UPLOAD2_VERSION, start_dedupe_mono_ms(),
+                                        (int)getpid(), alive))
+        return 0;
+    if (!start_dedupe_probe_serves((int)AVA1_DEFAULT_PORT, 3000)) {
+        fprintf(stderr,
+                "[payload2] start: helper pid %d (v%s) began serving moments ago but did not answer on loopback; "
+                "taking over\n",
+                rec.pid, rec.version);
+        return 0;
+    }
+    fprintf(stderr,
+            "[payload2] start: helper pid %d (v%s) began serving moments ago and answers; this one (v%s) was "
+            "sent at the same time and leaves the start to it\n",
+            rec.pid, rec.version, PS5UPLOAD2_VERSION);
+    return 1;
+}
+
 /* Starts the AVA1 side; only ever reached through takeover_gate_start (no other helper holds the port). */
 static int g_ava1_start_rc = 0;
 
@@ -648,6 +682,17 @@ int main(void) {
         break;
     default:
         break;
+    }
+    startup_trace(ps5upload_helper_version_marker);
+
+    /* Sent at the same moment as the helper that just started (it held the lock while this one
+     * waited): leave the start to it when it is as new and really serves, instead of a second
+     * restart right behind the first. Nothing shared has been touched yet. Only after a wait, and
+     * only with the lock held, so this never leaves a console with nobody serving. */
+    if (start_info.waited && start_lock >= 0 && start_should_stand_down()) {
+        startup_trace("START_STOOD_DOWN");
+        takeover_start_unlock(start_lock);
+        return 0;
     }
 
     /* Sweep orphan Tier-1 staging files. Crash-recovery only;
@@ -846,6 +891,16 @@ int main(void) {
         (void)runtime_clear_ownership(&state);
         return 1;
     }
+    /* Serving: say so for a helper sent at the same moment (start_dedupe.h), before it may go. */
+    {
+        serving_rec_t me;
+        memset(&me, 0, sizeof me);
+        me.pid = (int)getpid();
+        snprintf(me.version, sizeof me.version, "%s", PS5UPLOAD2_VERSION);
+        me.mono_ms = start_dedupe_mono_ms();
+        if (serving_record_write(PS5UPLOAD2_RUNTIME_DIR, &me) != 0)
+            fprintf(stderr, "[payload2] start: the serving record could not be written\n");
+    }
     /* Serving: the start is over, and a helper sent from now on takes over from this one. */
     takeover_start_unlock(start_lock);
     start_lock = -1;
@@ -942,6 +997,8 @@ int main(void) {
     }
 
     (void)runtime_clear_ownership(&state);
+    /* Only ours: a newer helper's record stays. */
+    serving_record_clear(PS5UPLOAD2_RUNTIME_DIR, (int)getpid());
     /* A dump stopped mid-decrypt may have left the kernel's vnode pager swapped: put it back. */
     app_dump_pager_emergency_restore();
     /* "Remove PS5Upload from this PS5" (node.uninstall): every service has stopped writing; the

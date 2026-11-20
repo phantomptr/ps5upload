@@ -132,7 +132,7 @@ MGMT_H0(AVA1_METHOD_RP_DEVICES, MGMT_FRAME_REMOTEPLAY_DEVICES, MGMT_FRAME_REMOTE
 /* ---- end Task 7 ---- */
 /* ---- P3 Task 4: node.shutdown, native fs.* and mounts (log.*, net.* and node.cleanup are routed in the Task 9 and Task 5 blocks) ---- */
 /* node.shutdown: Task 8's handler (reply first, exit 300 ms later, then ava1_payload_stop) */
-MGMT_H0(AVA1_METHOD_NODE_SHUTDOWN, MGMT_FRAME_SHUTDOWN, MGMT_FRAME_SHUTDOWN_ACK, 0, handle_node_shutdown, mgmt_call_empty)
+MGMT_H1(AVA1_METHOD_NODE_SHUTDOWN, MGMT_FRAME_SHUTDOWN, MGMT_FRAME_SHUTDOWN_ACK, 0, handle_node_shutdown, mgmt_call_shutdown)
 MGMT_N(AVA1_METHOD_FS_LIST, MGMT_FRAME_FS_LIST_DIR, MGMT_FRAME_FS_LIST_DIR_ACK, 0, mgmt_run_fs_list)
 MGMT_N(AVA1_METHOD_FS_STAT, MGMT_FRAME_FS_LIST_DIR, MGMT_FRAME_FS_LIST_DIR_ACK, 0, mgmt_run_fs_stat)
 MGMT_N(AVA1_METHOD_FS_FREESPACE, MGMT_FRAME_FS_LIST_VOLUMES, MGMT_FRAME_FS_LIST_VOLUMES_ACK, 0, mgmt_run_fs_freespace)
