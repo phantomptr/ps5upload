@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.15
 
 **New**
 - **Run Play Together on your own server (#881).** If you host the engine yourself (for example in Docker behind a reverse proxy with HTTPS), it can now run its own Play Together hub and serve the friends' pages itself. It is off unless you turn it on, it listens on its own port, and that port serves only the hub and the friends' pages, never the engine's controls. See SELF_HOSTING.md. Nothing changes for anyone who doesn't turn it on.
