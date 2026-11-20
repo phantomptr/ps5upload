@@ -761,6 +761,10 @@
               "host"
             ]
           },
+          "registration_only": {
+            "description": "Only take off a folder or image registration (#884): a helper from 12.6.16 on then\nrefuses, before touching anything, a title the console's own installer has installed\n(`unregister_title_installed:<where>`), instead of uninstalling that game. Older helpers\nignore it. Default false: the game page's Uninstall of a package install.",
+            "type": "boolean"
+          },
           "title_id": {
             "type": "string"
           }
