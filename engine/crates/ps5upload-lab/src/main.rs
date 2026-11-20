@@ -935,6 +935,13 @@ fn do_register(addr: &str, src_path: &str) -> Result<()> {
 
 fn do_unregister(addr: &str, title_id: &str) -> Result<()> {
     let outcome = app_unregister(addr, title_id)?;
+    if let Some(by) = outcome.managed_by.as_deref() {
+        println!(
+            "note: {by} registers {title_id} from {}; it comes back on its next scan while \
+             that image is in a scan folder",
+            outcome.image.as_deref().unwrap_or("its image")
+        );
+    }
     if outcome.refusal_stands() {
         println!(
             "unregistered: {title_id} (our teardown ok, but the console's own \
@@ -942,10 +949,15 @@ fn do_unregister(addr: &str, title_id: &str) -> Result<()> {
              Settings > Storage)",
             outcome.sony_uninstall_rc
         );
+    } else if outcome.unverified {
+        println!(
+            "unregistered: {title_id} (the console accepted, but the helper could not \
+             read app.db to check the home screen)"
+        );
     } else if outcome.still_present == Some(true) {
         println!(
-            "unregistered: {title_id} (the console accepted, but the title's folders \
-             are still there)"
+            "unregistered: {title_id} (the console accepted, but the title is still \
+             listed or on the home screen)"
         );
     } else {
         println!("unregistered: {title_id}");

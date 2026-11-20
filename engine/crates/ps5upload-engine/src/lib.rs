@@ -3466,8 +3466,12 @@ async fn ps5_app_register(
 /// Reverse of `app_register`, and the uninstall of a package install. A
 /// Sony refusal is an error (502) from a 7.1.6 helper; from an older one it is
 /// `sony_uninstall_refused` in an `ok` reply, which the client must check
-/// (#476). `still_present` says the title's folders were still there after
-/// Sony accepted (`null` from an older helper).
+/// (#476). `still_present` says the title was still listed, or still on the
+/// home screen, after Sony accepted (`null` from an older helper);
+/// `unverified` that app.db could not be read to check the home screen; and
+/// `managed_by: "shadowmount"` + `image` that ShadowMount+ registers it from
+/// that image and puts it back on its next scan while the image is in a scan
+/// folder (#879).
 #[derive(Debug, serde::Deserialize)]
 struct AppUnregisterReq {
     #[serde(alias = "console", alias = "host")]
@@ -3503,6 +3507,17 @@ async fn ps5_app_unregister(
     .and_then(|r| r)
     {
         Ok(outcome) => {
+            if let Some(by) = outcome.managed_by.as_deref() {
+                // #879: ShadowMount+ registers the title again while its image is in a scan
+                // folder; a bug report has to show that, whatever the result below.
+                crate::log_at!(
+                    Warn,
+                    "files",
+                    "app_unregister: {title_for_log} is registered by {by} from {}: it \
+                     comes back on its next scan while that image is in a scan folder",
+                    outcome.image.as_deref().unwrap_or("its image")
+                );
+            }
             // Our teardown succeeded. Sony's own uninstall is a SEPARATE
             // result and may have been refused — report it instead of
             // flattening both into a bare `ok: true`, which is what let a
@@ -3528,6 +3543,15 @@ async fn ps5_app_unregister(
                     started.elapsed().as_millis(),
                     outcome.sony_uninstall_rc
                 );
+            } else if outcome.unverified {
+                // #879: app.db could not be read, so the helper could not confirm it is gone.
+                crate::log_at!(
+                    Warn,
+                    "files",
+                    "app_unregister: {title_for_log} — Sony accepted in {} ms, but the \
+                     helper could not read app.db to confirm the title is off the home screen",
+                    started.elapsed().as_millis()
+                );
             } else if outcome.still_present == Some(true) {
                 // WARN so a bug report carries it: the game is still listed (#476).
                 crate::log_at!(
@@ -3552,6 +3576,9 @@ async fn ps5_app_unregister(
                     "sony_uninstall_refused": outcome.refusal_stands(),
                     "sony_uninstall_rc": format!("0x{:08X}", outcome.sony_uninstall_rc),
                     "still_present": outcome.still_present,
+                    "unverified": outcome.unverified,
+                    "managed_by": outcome.managed_by,
+                    "image": outcome.image,
                 })),
             )
                 .into_response()
