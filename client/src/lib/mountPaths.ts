@@ -51,6 +51,13 @@ export function smpMountImageBasename(mountPoint: string): string | null {
   return m ? m[1] : null;
 }
 
+/** True when a registered title's mount.lnk path lies under ShadowMount+'s image mount root:
+ *  SMP mounted it from a disk image and registers it again on its next scan (#879).
+ *  `/mnt/shadowmnt2/...` is not under it. */
+export function isSmpMountSource(path: string | null | undefined): boolean {
+  return !!path && (path === SMP_MOUNT_ROOT || path.startsWith(`${SMP_MOUNT_ROOT}/`));
+}
+
 /** A path's filename with any single trailing extension removed
  *  (`/mnt/usb0/homebrew/PPSA09016.exfat` → `PPSA09016`). Used to match a
  *  disk-image row against {@link smpMountImageBasename}. */

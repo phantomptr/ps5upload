@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isSmpMountSource,
   imageBasename,
   isRemovableMount,
   removableMountRoot,
@@ -82,5 +83,17 @@ describe("imageBasename", () => {
 
   it("leaves a dotted name's earlier dots alone", () => {
     expect(imageBasename("/data/homebrew/v1.2.exfat")).toBe("v1.2");
+  });
+});
+
+describe("isSmpMountSource", () => {
+  it("is true only under ShadowMount+'s image mount root", () => {
+    expect(isSmpMountSource("/mnt/shadowmnt/DOOM_1a2b3c4d")).toBe(true);
+    expect(isSmpMountSource("/mnt/shadowmnt/pfsc/DOOM_1a2b3c4d/PPSA01234-app")).toBe(true);
+    expect(isSmpMountSource("/mnt/shadowmnt2/DOOM")).toBe(false);
+    expect(isSmpMountSource("/mnt/ps5upload/DOOM")).toBe(false);
+    expect(isSmpMountSource("/data/homebrew/DOOM")).toBe(false);
+    expect(isSmpMountSource("")).toBe(false);
+    expect(isSmpMountSource(undefined)).toBe(false);
   });
 });

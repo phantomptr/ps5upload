@@ -29,6 +29,7 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { mgmtAddr, transferAddr } from "../../lib/addr";
 import { isBackportEligible } from "../../lib/backport";
 import { krakenGameFor, krakenTitleIds } from "../../lib/mounter";
+import { isSmpMountSource } from "../../lib/mountPaths";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { isTauriEnv } from "../../lib/tauriEnv";
@@ -210,6 +211,10 @@ export function OnThisPs5Card({
     }
   };
 
+  /** ShadowMount+ mounted this game from a disk image (#879): its registration points under
+   *  SMP's image mount root, and SMP registers it again on its next scan. */
+  const smpTitle = !krakenTitle && isSmpMountSource(title.source);
+
   const uninstall = async () => {
     if (krakenGame?.path) {
       await removeThroughKraken(krakenGame.path);
@@ -235,6 +240,12 @@ export function OnThisPs5Card({
               undefined,
               "Kraken Mount put this game on the home screen. Its page doesn't answer from this computer, so this only takes the title off the home screen, and Kraken Mount registers it again on its next scan while its package or folder is still in a scan folder. Delete or move that to keep it off.",
             )
+          : smpTitle
+          ? tr(
+              "installed_uninstall_confirm_smp",
+              undefined,
+              "ShadowMount+ put this game on the home screen from a disk image. This removes it from the home screen, but ShadowMount+ adds it back on its next scan while the image is in one of its scan folders. Delete or move the image to keep it off. The image is not deleted.",
+            )
           : t.origin === "registered"
           ? tr(
               "installed_uninstall_confirm_registered",
@@ -258,7 +269,26 @@ export function OnThisPs5Card({
         context: t.titleId,
       });
       if (probe.isStale()) return;
-      if (res.stillPresent) {
+      if (res.unverified) {
+        // #879: app.db could not be read: the removal is not confirmed, so never "done".
+        pushNotification("warning", withConsolePrefix(probe.host, t.titleName), {
+          body: tr(
+            "installed_uninstall_unverified",
+            { name: t.titleName },
+            `The PS5 accepted the uninstall of ${t.titleName}, but the app could not read the console's title list to confirm it is gone. Refresh in a moment and check the home screen.`,
+          ),
+        });
+      } else if (res.shadowMount && !res.stillPresent) {
+        // #879: ShadowMount+ registers it again on its next scan while its image is there.
+        const image = res.image ?? t.source ?? t.titleId;
+        pushNotification("warning", withConsolePrefix(probe.host, t.titleName), {
+          body: tr(
+            "installed_uninstall_smp_returns",
+            { name: t.titleName, image },
+            `${t.titleName} was removed from the home screen, but ShadowMount+ adds it back on its next scan while ${image} is in one of its scan folders. Delete or move that image to keep it off.`,
+          ),
+        });
+      } else if (res.stillPresent) {
         // #476: the PS5 accepted, but the game is still there: say so rather than drop it.
         pushNotification("warning", withConsolePrefix(probe.host, t.titleName), {
           body: tr(
