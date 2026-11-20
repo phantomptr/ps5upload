@@ -28,6 +28,14 @@ export type RedeployStatus = "unknown" | "up" | "down" | undefined;
  *  it is the case this feature exists for. The count resets on any "up". */
 export const MAX_REDEPLOYS_WITHOUT_RECOVERY = 3;
 
+/** After the brake, one more helper this long after the last one delivered, and again each time.
+ *
+ *  The brake used to be for good: a console that took three helpers without coming back was never
+ *  sent another until the user pressed Send, even hours later when whatever stopped it (a loader
+ *  still loading kstuff, a console still booting) was long over. One send every quarter hour
+ *  cannot become the loop the brake exists to stop. */
+export const REDEPLOY_GAVE_UP_RETRY_MS = 15 * 60_000;
+
 export type RedeployDecision = "redeploy" | "hold" | "rearm";
 
 /**
@@ -50,6 +58,9 @@ export function autoRedeployDecision(input: {
    *  helper cannot start until someone wakes it: probing it every 15 s all night only
    *  costs the console connects. The normal flow resumes once it reads awake again. */
   power?: HostPower;
+  /** How long ago the last helper was delivered to this console (null: none this run). Past the
+   *  brake, a send is allowed again once this reaches REDEPLOY_GAVE_UP_RETRY_MS. */
+  lastDeliveredAgoMs?: number | null;
 }): RedeployDecision {
   if (input.status === "up") return "rearm";
   // "unknown" is a console the user typed in but never deliberately
@@ -64,9 +75,38 @@ export function autoRedeployDecision(input: {
   if (input.stopped) return "hold";
   // Asleep: the wake is the user's to make, and the helper is sent after it.
   if (input.power === "rest") return "hold";
-  if (input.delivered >= MAX_REDEPLOYS_WITHOUT_RECOVERY) return "hold";
+  if (input.delivered >= MAX_REDEPLOYS_WITHOUT_RECOVERY) {
+    const ago = input.lastDeliveredAgoMs;
+    return ago != null && ago >= REDEPLOY_GAVE_UP_RETRY_MS ? "redeploy" : "hold";
+  }
   return "redeploy";
 }
+
+/** Whether the brake starts over: the console went to rest mode, or was off (no answer of any
+ *  kind for two ticks in a row). Either way the next helper goes to a console that woke or booted
+ *  again, which is not the one that would not take the last three. */
+export function redeployBrakeResets(input: { power?: HostPower; unreachableTicks: number }): boolean {
+  return input.power === "rest" || input.unreachableTicks >= 2;
+}
+
+/** Why the reconnect loop is not bringing a down console's helper back right now, for the screens
+ *  that say "Helper isn't running" (state/redeployStatus). Rest mode and "stopped by you" have
+ *  their own screens. */
+export type RedeployWhy =
+  /** Settings › This PS5 › Reconnect automatically is off. */
+  | { kind: "setting-off" }
+  /** A transfer to this console is running: never sent over it. */
+  | { kind: "busy" }
+  /** Nothing listens on the loader (:9021) or Payload Manager: nothing can take a helper. */
+  | { kind: "loader-closed" }
+  /** The loader just appeared (a console still booting): sent once it has been up `settleMs`. */
+  | { kind: "settling"; sendAt: number }
+  /** The helper's port still accepts connections: a slow helper is left alone for a while. */
+  | { kind: "alive" }
+  /** Sending now. */
+  | { kind: "sending" }
+  /** Three helpers did not bring it back: one more at `retryAt`. */
+  | { kind: "gave-up"; retryAt: number };
 
 /** How many redeploy ticks (15 s each) a helper that still accepts
  *  connections is left alone before the loop may replace it anyway.

@@ -1,8 +1,10 @@
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { Gamepad2, Moon, PlugZap, Power, ServerCrash, WifiOff } from "lucide-react";
 
 import { useConnectionStore } from "../state/connection";
 import { useHelperStopped } from "../state/helperStopped";
+import { redeployWhyText, useRedeployWhy } from "../state/redeployStatus";
 import { SendHelperButton } from "./SendHelperButton";
 import { useTr } from "../state/lang";
 import { useConsoleSettingForHost } from "../state/consoleSettings";
@@ -156,10 +158,18 @@ export function ConnectionGate({
         fill
         icon={PlugZap}
         title={tr("gate_payload_down_title", "Helper isn't running on the PS5")}
-        message={tr(
-          "gate_payload_down_body_v2",
-          "Your console is configured but the ps5upload helper isn't answering — it drops on every reboot or rest mode. Send it again to carry on.",
-        )}
+        body={
+          <>
+            <span>
+              {tr(
+                "gate_payload_down_body_v2",
+                "Your console is configured but the ps5upload helper isn't answering — it drops on every reboot or rest mode. Send it again to carry on.",
+              )}
+            </span>
+            {/* Why the app is not sending it by itself right now (state/redeployStatus). */}
+            <RedeployWhyNote host={host} />
+          </>
+        }
         action={
           // The helper is the one thing missing: send it from here.
           <div className="flex flex-wrap items-start justify-center gap-2">
@@ -174,6 +184,26 @@ export function ConnectionGate({
   }
 
   return <>{children}</>;
+}
+
+/** The reconnect loop's reason for not sending the helper by itself right now, if it has one. */
+function RedeployWhyNote({ host }: { host: string }) {
+  const tr = useTr();
+  const why = useRedeployWhy(host);
+  // The settling countdown reads the clock: render it again each few seconds while it shows.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (why?.kind !== "settling" && why?.kind !== "gave-up") return;
+    const id = window.setInterval(() => setTick((n) => n + 1), 5000);
+    return () => window.clearInterval(id);
+  }, [why?.kind]);
+  const text = redeployWhyText(tr, why);
+  if (!text) return null;
+  return (
+    <span className="mt-2 block text-xs text-[var(--color-muted)]" data-testid="gate-redeploy-why">
+      {text}
+    </span>
+  );
 }
 
 /** The rest-mode notice wired to this console's wake credentials and the reconnect setting. */

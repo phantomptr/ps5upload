@@ -9370,6 +9370,13 @@ helper_auto_wait_console_work: "This app updates the helper by itself once the P
 helper_auto_wait_unknown: "This helper can't say whether the PS5 is busy, so it isn't replaced by itself. Replace it when nothing is running on the PS5.",
 helper_auto_wait_loader: "Can't update the helper by itself: the PS5's payload loader (port 9021) isn't answering. Start the helper from your payload loader on the PS5, or load elfldr and it updates by itself.",
 helper_auto_wait_soon: "This app updates the helper by itself in a moment.",
+reconnect_why_setting_off: "Not sent by itself: Reconnect automatically is off for this PS5 (Settings for this PS5).",
+reconnect_why_busy: "A transfer to this PS5 is still running, so the helper isn't sent over it. It is sent by itself once that ends.",
+reconnect_why_loader_closed: "Not sent by itself: the PS5's payload loader (port 9021) isn't answering, so nothing can take the helper. Load elfldr on the PS5 (your jailbreak or autoloader does it) and the helper follows by itself.",
+reconnect_why_settling: "The PS5's loader just came up. The helper is sent by itself in about {seconds} s, once the console has finished starting.",
+reconnect_why_alive: "The helper still answers on its port, only not to this app. It gets a minute to recover before it is replaced.",
+reconnect_why_sending: "Sending the helper by itself now…",
+reconnect_why_gave_up: "Sent {count} times without the helper starting. The next try is in about {minutes} min, or press Send helper now.",
 };
 
 export default en;

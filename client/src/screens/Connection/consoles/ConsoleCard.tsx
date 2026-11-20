@@ -29,6 +29,7 @@ import { helperSendFor, useHelperSendStore } from "../../../state/helperSend";
 import { useHelperStopped } from "../../../state/helperStopped";
 import { sendHelperTo } from "../../../state/helperSendRuntime";
 import { useHelperAutoUpdateStore, type AutoUpdateView } from "../../../state/helperAutoUpdate";
+import { redeployWhyText, useRedeployWhy } from "../../../state/redeployStatus";
 import { meshFor, pollMesh, useMeshStore } from "../../../state/mesh";
 import { consoleOnTailnet } from "../../../state/useTailnet";
 import { useConsoleWake } from "../../../lib/useConsoleWake";
@@ -466,7 +467,8 @@ export interface ConsoleCardViewProps {
   error: string | null;
   /** The helper before this one did not end cleanly (another payload ended it, low memory). */
   priorKilled?: boolean;
-  /** An older helper: what its automatic update is waiting for (`autoUpdateNote`). */
+  /** An older helper: what its automatic update is waiting for (`autoUpdateNote`). A helper that
+   *  is not running: why the app is not sending it by itself (state/redeployStatus). */
   autoUpdateNote?: string | null;
   checklist: ReactNode;
   tailnetPanel: ReactNode;
@@ -542,7 +544,7 @@ export function ConsoleCardView(p: ConsoleCardViewProps) {
         ) : null}
       </div>
 
-      {p.autoUpdateNote && s.helper === "update" ? (
+      {p.autoUpdateNote && (s.helper === "update" || s.helper === "missing") ? (
         <p className="mt-2 text-xs text-[var(--color-muted)]" data-testid="console-card-auto-update">
           {p.autoUpdateNote}
         </p>
@@ -690,6 +692,7 @@ export function ConsoleCard({
   const stopped = useHelperStopped(host);
   const send = useHelperSendStore((st) => helperSendFor(st, host));
   const autoUpdate = useHelperAutoUpdateStore((st) => st.byHost[hostOf(host)]);
+  const redeployWhy = useRedeployWhy(host);
   const mesh = useMeshStore((s) => meshFor(s, host));
   const wake = useConsoleWake(host);
   const { guard, dialog: guardDialog } = useHelperReplaceGuard();
@@ -791,7 +794,9 @@ export function ConsoleCard({
         error={error}
         checklist={<SetupChecklist host={host} status={status} active />}
         priorKilled={up && runtime.priorInstance === "killed_externally"}
-        autoUpdateNote={autoUpdateNote(tr, autoUpdate)}
+        autoUpdateNote={
+          status.helper === "missing" ? redeployWhyText(tr, redeployWhy) : autoUpdateNote(tr, autoUpdate)
+        }
         tailnetPanel={<TailnetPanel host={host} startTest={testNonce} />}
         trusted={<TrustedDevices host={host} consoleName={profile.name} state={up ? mesh.state : null} />}
         stop={<StopHelperButton host={host} size="sm" />}
