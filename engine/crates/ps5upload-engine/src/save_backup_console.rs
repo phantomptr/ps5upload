@@ -226,7 +226,7 @@ pub(crate) fn check_drive(c: &dyn Drive, drive: &str) -> Result<(), String> {
 }
 
 /// What copying one backup to the console did.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Outcome {
     /// On the drive at this path, checked.
     Copied(String),
@@ -302,8 +302,10 @@ pub(crate) fn copy_one(
     Outcome::Copied(dest)
 }
 
-/// What the last copies to a PS5 drive did, for the Saves screen and a bug report.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+/// What the last copies to a PS5 drive did, for the Saves screen and a bug report. Kept across
+/// restarts with the network-share backups' status.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CopyStatus {
     /// Unix ms of the last copy (or skip).
     pub at: u64,
@@ -339,30 +341,50 @@ impl Copies {
         })
     }
 
-    /// Copies the backup `zip` of `title_id`, just made from `host`, to that console's drive.
-    /// Never fails: what happened goes in `status` (and the log).
-    pub fn copy(&mut self, c: &dyn Drive, host: &str, title_id: &str, zip: &Path) {
-        let ok = self
-            .checked
+    /// Whether `host`'s drive can take copies now (asked once per console and pass): a save due
+    /// only for its copy is not read off the console while the drive is away.
+    pub fn ready(&mut self, c: &dyn Drive, host: &str) -> bool {
+        self.checked_for(c, host).is_ok()
+    }
+
+    fn checked_for(&mut self, c: &dyn Drive, host: &str) -> Result<(), String> {
+        self.checked
             .entry(host.to_string())
             .or_insert_with(|| check_drive(c, &self.drive))
-            .clone();
+            .clone()
+    }
+
+    /// Notes a copy not tried because the drive is away (`ready` said no).
+    pub fn note_skipped(&mut self, c: &dyn Drive, host: &str) {
+        if let Err(why) = self.checked_for(c, host) {
+            self.status.at = local::now_ms();
+            self.status.skipped += 1;
+            self.status.note = Some(why);
+        }
+    }
+
+    /// Copies the backup `zip` of `title_id`, just made from `host`, to that console's drive.
+    /// Never fails: what happened goes in `status` (and the log), and is answered.
+    pub fn copy(&mut self, c: &dyn Drive, host: &str, title_id: &str, zip: &Path) -> Outcome {
+        let ok = self.checked_for(c, host);
         self.status.at = local::now_ms();
-        match copy_one(c, &self.drive, &ok, title_id, zip, self.keep) {
+        let out = copy_one(c, &self.drive, &ok, title_id, zip, self.keep);
+        match &out {
             Outcome::Copied(_) => self.status.copied += 1,
             Outcome::Skipped(why) => {
                 if self.status.skipped == 0 {
                     crate::log_info!("save backup: no copy on {host}: {why}");
                 }
                 self.status.skipped += 1;
-                self.status.note = Some(why);
+                self.status.note = Some(why.clone());
             }
             Outcome::Failed(why) => {
                 crate::log_warn!("save backup: copy on {host} {}: {why}", self.drive);
                 self.status.failed += 1;
-                self.status.note = Some(why);
+                self.status.note = Some(why.clone());
             }
         }
+        out
     }
 }
 
@@ -422,19 +444,64 @@ pub(crate) fn fetch(
     crate::save_backup_server::check_zip(dest).map(|_| ())
 }
 
-/// The drive the settings name, or Err when none is chosen.
-fn chosen_drive() -> Result<String, String> {
-    let d = local::settings().console_drive;
-    if d.trim().is_empty() {
+/// The drives the settings name: the automatic backups' and the network-share backups' (#885),
+/// once each.
+pub(crate) fn chosen_drives() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for d in [
+        local::settings().console_drive,
+        crate::save_backup_server::settings().console_drive,
+    ] {
+        let d = d.trim().to_string();
+        if !d.is_empty() && !out.contains(&d) {
+            out.push(d);
+        }
+    }
+    out
+}
+
+/// The copies of `title_id` on every drive of `drives`, newest first; a name on two drives is
+/// listed once, from the first.
+pub(crate) fn list_copies_on(c: &dyn Drive, drives: &[String], title_id: &str) -> Vec<BackupFile> {
+    let mut out: Vec<BackupFile> = Vec::new();
+    for d in drives {
+        for b in list_copies(c, d, title_id).unwrap_or_default() {
+            if !out.iter().any(|o| o.file == b.file) {
+                out.push(b);
+            }
+        }
+    }
+    out.sort_by(|a, b| b.stamp.cmp(&a.stamp));
+    out
+}
+
+/// The first of `drives` holding the copy `file` of `title_id`, or Err saying none does.
+pub(crate) fn drive_holding(
+    c: &dyn Drive,
+    drives: &[String],
+    title_id: &str,
+    file: &str,
+) -> Result<String, String> {
+    if drives.is_empty() {
         return Err("no PS5 drive is chosen for save backup copies".into());
     }
-    Ok(d)
+    drives
+        .iter()
+        .find(|d| {
+            list_copies(c, d, title_id)
+                .map(|l| l.iter().any(|b| b.file == file))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .ok_or_else(|| format!("no copy {file} on {}", drives.join(" or ")))
 }
 
 /// Copies the backup file `file` of `title_id` off the chosen drive on `host` into the local
 /// file `dest` (restoring one to another user, `save_copy`).
 pub(crate) fn fetch_to(host: &str, title_id: &str, file: &str, dest: &Path) -> Result<(), String> {
-    fetch(&Live(host), &chosen_drive()?, title_id, file, dest)
+    let c = Live(host);
+    let drive = drive_holding(&c, &chosen_drives(), title_id, file)?;
+    fetch(&c, &drive, title_id, file, dest)
 }
 
 /// Puts the copy `file` of `title_id` on the chosen drive back into the save folder `save_path`
@@ -446,7 +513,7 @@ fn restore(
     save_path: &str,
     user_id: u32,
 ) -> Result<(), String> {
-    let drive = chosen_drive()?;
+    let drive = drive_holding(&Live(host), &chosen_drives(), title_id, file)?;
     let tmp = make_temp_dir(title_id)?;
     let tmp_s = tmp.to_string_lossy().into_owned();
     let result = (|| {
@@ -513,33 +580,32 @@ pub struct ListQuery {
 }
 
 /// `GET /api/save-backup/console/list?addr=&title_id=` — `{drive, kind, backups}`: that game's
-/// backup copies on the chosen PS5 drive of that console, newest first (none when no drive is
-/// chosen, or it holds none).
+/// backup copies on the chosen PS5 drives of that console (the automatic backups' and the
+/// network-share backups'), newest first (none when no drive is chosen, or they hold none).
+/// `drive` and `kind` name the first chosen drive.
 pub async fn get_list(Query(q): Query<ListQuery>) -> Response {
-    let drive = local::settings().console_drive;
+    let drives = chosen_drives();
     let title = q.title_id.trim().to_ascii_uppercase();
     if !plain(&title) {
         return json_error(StatusCode::BAD_REQUEST, "unexpected title id");
     }
-    if drive.trim().is_empty() {
+    let Some(drive) = drives.first().cloned() else {
         return Json(json!({ "drive": "", "kind": "", "backups": [] })).into_response();
-    }
+    };
     let host = q.addr.trim().to_string();
-    let d = drive.clone();
-    match tokio::task::spawn_blocking(move || list_copies(&Live(&host), &d, &title)).await {
-        Ok(Ok(list)) => Json(json!({
+    match tokio::task::spawn_blocking(move || list_copies_on(&Live(&host), &drives, &title)).await {
+        Ok(list) => Json(json!({
             "drive": drive,
             "kind": drive_kind(&drive),
             "backups": list,
         }))
         .into_response(),
-        Ok(Err(e)) => json_error(StatusCode::BAD_GATEWAY, e),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 
 /// `POST /api/save-backup/console/restore` `{addr, title_id, file, save_path, user_id}` — puts a
-/// backup copy on the chosen PS5 drive back, with the refusals and the backup first of `restore`.
+/// backup copy on a chosen PS5 drive back, with the refusals and the backup first of `restore`.
 pub async fn post_restore(Json(b): Json<local::RestoreBody>) -> Response {
     let r = tokio::task::spawn_blocking(move || {
         restore(
@@ -559,25 +625,25 @@ pub async fn post_restore(Json(b): Json<local::RestoreBody>) -> Response {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
 
     /// A console with drives and files in memory.
     #[derive(Default)]
-    struct Fake {
-        vols: Vec<Volume>,
-        files: RefCell<BTreeMap<String, Vec<u8>>>,
-        deleted: RefCell<Vec<String>>,
-        uploads: RefCell<u32>,
+    pub(crate) struct Fake {
+        pub(crate) vols: Vec<Volume>,
+        pub(crate) files: RefCell<BTreeMap<String, Vec<u8>>>,
+        pub(crate) deleted: RefCell<Vec<String>>,
+        pub(crate) uploads: RefCell<u32>,
         /// The console garbles what it is sent.
-        corrupt: bool,
+        pub(crate) corrupt: bool,
         /// The console can't hash.
-        no_hash: bool,
+        pub(crate) no_hash: bool,
     }
 
-    fn vol(path: &str, from: &str) -> Volume {
+    pub(crate) fn vol(path: &str, from: &str) -> Volume {
         serde_json::from_value(json!({
             "path": path, "mount_from": from, "fs_type": "ufs",
             "total_bytes": 1u64 << 40, "free_bytes": 1u64 << 39, "writable": true,
@@ -585,7 +651,7 @@ mod tests {
         .unwrap()
     }
 
-    fn with_m2() -> Fake {
+    pub(crate) fn with_m2() -> Fake {
         Fake {
             vols: vec![
                 vol("/data", "/dev/ssd0.user"),

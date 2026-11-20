@@ -7830,6 +7830,8 @@ helper_copies_failed_body: "Still the old helper: {list}. The PS5 starts it agai
   "saves_server_none_yet": "No backup yet.",
   "saves_server_verified": "Newest verified: {file} ({size}, {n} files, SHA-256 {sha}…)",
   "saves_server_next": "Next: {when}",
+  "saves_server_console_keep": "Versions to keep on the PS5 drive",
+  "saves_server_console_note": "If the server can't be reached, the PS5 drive still gets its copy, and the server is tried again next time.",
   "save_backup_on_server": "On the server",
   "save_backup_before_restore": "Before a restore",
   "save_backup_before_copy": "Before a copy",

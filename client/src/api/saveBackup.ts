@@ -104,6 +104,11 @@ export interface ServerBackupSettings {
   hosts: string[];
   /** Console users to back up; empty: every user. */
   users: number[];
+  /** A drive in the PS5 itself (`/mnt/ext0` M.2, `/mnt/usb0` USB) that also gets a copy of each
+   *  backup (#885); "" for none. An engine before 12.6.16 leaves it out (it can't). */
+  console_drive?: string;
+  /** Versions of each save kept on that drive; 0: as many as `keep`. */
+  console_keep?: number;
 }
 
 export interface ServerBackupVerified {
@@ -126,6 +131,8 @@ export interface ServerBackupStatus {
   last_verified: ServerBackupVerified | null;
   /** Unix ms of the last time the consoles were looked at. */
   last_check_at: number;
+  /** The last copies to the PS5 drive; null before any (absent from an older engine). */
+  console_copy?: ConsoleCopyStatus | null;
 }
 
 export interface ServerBackupView {

@@ -36,6 +36,19 @@ export function clampHours(n: unknown): number {
   return Math.max(MIN_HOURS, Math.min(MAX_HOURS, v));
 }
 
+/** Whether the engine can also keep a copy of each network-share backup on a PS5 drive (#885):
+ *  an engine before 12.6.16 leaves `console_drive` out of its settings. */
+export function serverConsoleCopySupported(
+  settings: Pick<ServerBackupSettings, "console_drive"> | null,
+): boolean {
+  return typeof settings?.console_drive === "string";
+}
+
+/** Versions of each save kept on the PS5 drive: its own number, or (0, unset) the share's. */
+export function driveKeep(settings: Pick<ServerBackupSettings, "keep" | "console_keep">): number {
+  return settings.console_keep && settings.console_keep > 0 ? settings.console_keep : settings.keep;
+}
+
 interface ServerBackupState {
   settings: ServerBackupSettings | null;
   status: ServerBackupStatus | null;

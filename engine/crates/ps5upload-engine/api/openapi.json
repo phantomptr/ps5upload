@@ -9795,6 +9795,21 @@
       },
       "Patch": {
         "properties": {
+          "console_drive": {
+            "description": "The PS5 drive that also gets a copy of each backup (`/mnt/ext<N>`, `/mnt/usb<N>`); \"\" for\nnone (#885).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "console_keep": {
+            "description": "Versions of each save kept on that drive, 1 to 50; 0: as many as `keep`.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "every_hours": {
             "minimum": 0,
             "type": [
@@ -46357,7 +46372,7 @@
     },
     "/api/save-backup/console/list": {
       "get": {
-        "description": "`GET /api/save-backup/console/list?addr=&title_id=` — `{drive, kind, backups}`: that game's\nbackup copies on the chosen PS5 drive of that console, newest first (none when no drive is\nchosen, or it holds none).",
+        "description": "`GET /api/save-backup/console/list?addr=&title_id=` — `{drive, kind, backups}`: that game's\nbackup copies on the chosen PS5 drives of that console (the automatic backups' and the\nnetwork-share backups'), newest first (none when no drive is chosen, or they hold none).\n`drive` and `kind` name the first chosen drive.",
         "parameters": [
           {
             "in": "query",
@@ -46433,16 +46448,11 @@
             "$ref": "#/components/responses/Error",
             "description": "Engine error"
           },
-          "502": {
-            "$ref": "#/components/responses/Error",
-            "description": "The console or remote end failed"
-          },
           "default": {
             "$ref": "#/components/responses/Error",
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "`{drive, kind, backups}`: that game's backup copies on the chosen PS5 drive of that console, newest first (none when no drive is chosen, or it holds none)",
         "tags": [
           "saves"
         ],
@@ -46463,7 +46473,7 @@
     },
     "/api/save-backup/console/restore": {
       "post": {
-        "description": "`POST /api/save-backup/console/restore` `{addr, title_id, file, save_path, user_id}` — puts a\nbackup copy on the chosen PS5 drive back, with the refusals and the backup first of `restore`.",
+        "description": "`POST /api/save-backup/console/restore` `{addr, title_id, file, save_path, user_id}` — puts a\nbackup copy on a chosen PS5 drive back, with the refusals and the backup first of `restore`.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -46507,7 +46517,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "Puts a backup copy on the chosen PS5 drive back, with the refusals and the backup first of `restore`",
+        "summary": "Puts a backup copy on a chosen PS5 drive back, with the refusals and the backup first of `restore`",
         "tags": [
           "saves"
         ],

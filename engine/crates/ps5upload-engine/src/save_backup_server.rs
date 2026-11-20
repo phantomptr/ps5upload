@@ -9,6 +9,13 @@
 //! unpacked against its CRC. A copy that fails is removed from the server; a good one gets a
 //! `.sha256` file beside it, which a restore checks again before anything on the console changes.
 //!
+//! With a PS5 drive chosen (`console_drive`, #885), each backup also goes to
+//! `<drive>/ps5upload/save-backups` on the console it came from, checked as the automatic
+//! backups' copies are (`save_backup_console`), keeping `console_keep` versions there. The two
+//! places are reached one after the other and on their own: a server that can't be reached still
+//! leaves the drive with the copy (the server is tried again at the next pass), and a drive that
+//! is out never fails the server's backup. What each place holds is recorded apart.
+//!
 //! Restore copies a backup off the server and puts it back through the same path as a local one
 //! (`save_backup::restore_zip`), which backs up the save that is there now first.
 //!
@@ -42,6 +49,7 @@ use crate::save_backup::{
     self as local, done_key, json_error, now_ms, parse_backup_name, plain, stamp, BackupFile, Done,
     SETTLE_SECS,
 };
+use crate::save_backup_console::{Copies, Drive, Outcome};
 
 /// How often the scheduler looks: the running game on each console, and whether a pass is due.
 pub const TICK: Duration = Duration::from_secs(60);
@@ -82,6 +90,25 @@ pub struct ServerSettings {
     /// The console users to back up; empty: every user.
     #[serde(default)]
     pub users: Vec<u32>,
+    /// A drive in the PS5 itself (`/mnt/ext<N>` M.2, `/mnt/usb<N>` USB) that also gets a copy of
+    /// each backup this makes, in `ps5upload/save-backups` (#885); "" for none. The copy is made
+    /// even when the server can't be reached, and the server is tried again at the next pass.
+    #[serde(default)]
+    pub console_drive: String,
+    /// Versions of each save kept on that drive; 0: as many as `keep`.
+    #[serde(default)]
+    pub console_keep: u32,
+}
+
+impl ServerSettings {
+    /// Versions of each save kept on the PS5 drive.
+    pub fn drive_keep(&self) -> u32 {
+        if self.console_keep == 0 {
+            self.keep
+        } else {
+            local::clamp_keep(self.console_keep)
+        }
+    }
 }
 
 fn default_hours() -> u32 {
@@ -100,6 +127,8 @@ impl Default for ServerSettings {
             keep: local::DEFAULT_KEEP,
             hosts: Vec::new(),
             users: Vec::new(),
+            console_drive: String::new(),
+            console_keep: 0,
         }
     }
 }
@@ -145,6 +174,9 @@ pub struct ServerStatus {
     /// Unix ms of the last time every chosen console was looked at (with nothing to do, too).
     #[serde(default)]
     pub last_check_at: u64,
+    /// The last copies to the PS5 drive (`ServerSettings::console_drive`); None before any.
+    #[serde(default)]
+    pub console_copy: Option<crate::save_backup_console::CopyStatus>,
 }
 
 /// When a console was last backed up in full, and last tried.
@@ -163,6 +195,11 @@ struct Persisted {
     /// Console and save path → the save's time when it was last backed up to the server.
     #[serde(default)]
     done: Done,
+    /// Console and save path → the save's time when it was last copied to the PS5 drive: kept
+    /// apart from `done`, so a server that was away is tried again without the drive getting
+    /// the same save twice, and a drive that was away gets it without the server.
+    #[serde(default)]
+    console_done: Done,
     #[serde(default)]
     hosts: BTreeMap<String, HostRun>,
 }
@@ -204,6 +241,14 @@ pub struct Pick<'a> {
     pub settle: bool,
     /// Games running now: their saves are being written, so they wait.
     pub running: &'a BTreeSet<String>,
+    /// With a PS5 drive chosen, what is on it already: a save changed since its last copy there
+    /// is due as well, though the server has it (#885).
+    pub drive_done: Option<&'a Done>,
+}
+
+/// Whether `e` changed since its time in `done` (never there: changed).
+fn changed_since(host: &str, e: &SaveEntry, done: &Done) -> bool {
+    e.mtime > done.get(&done_key(host, &e.path)).copied().unwrap_or(0)
 }
 
 /// The saves of `host` that need a backup on the server: a game's, changed since its last one
@@ -224,7 +269,8 @@ pub fn due_saves<'a>(
             let apps = emulator_saves::titles_of(emulator_saves::app_of(e));
             emulator_saves::backs_up(e)
                 && e.mtime > 0
-                && e.mtime > done.get(&done_key(host, &e.path)).copied().unwrap_or(0)
+                && (changed_since(host, e, done)
+                    || pick.drive_done.is_some_and(|d| changed_since(host, e, d)))
                 && (pick.users.is_empty()
                     || emulator_saves::is_emulator_save(e)
                     || pick.users.contains(&(e.user_id as u32)))
@@ -586,44 +632,107 @@ pub async fn fetch_backup(
 
 // ── backing up ──────────────────────────────────────────────────────────
 
-/// Backs up one save to the server: off the console, zipped, written and verified.
+/// The name of a backup of `entry` made now: `<title>_user<8 hex>_<stamp>[_<tag>].zip`.
+fn backup_name(entry: &SaveEntry, tag: Option<&str>) -> String {
+    let st = match tag {
+        Some(t) => format!("{}_{t}", stamp(now_ms())),
+        None => stamp(now_ms()),
+    };
+    format!(
+        "{}{st}.zip",
+        auto_backup_stem(&entry.title_id, entry.user_id as u32)
+    )
+}
+
+/// Which places one save's backup goes to this time.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Sides {
+    /// The server (the save changed since its last backup there).
+    pub share: bool,
+    /// The PS5 drive (changed since its last copy there, and the drive is in).
+    pub drive: bool,
+}
+
+/// What one save's backup did in each place; None: that place was not due.
+#[derive(Debug, Default)]
+pub(crate) struct Sent {
+    pub share: Option<Result<Verified, String>>,
+    pub drive: Option<Outcome>,
+}
+
+/// Writes a backup zip to the server and verifies it there.
+pub(crate) type SendToShare<'a> = dyn Fn(&Path) -> Result<Verified, String> + 'a;
+
+/// Sends the backup zip `zip` of `title_id`, made from `host`, to the server (`share`) and to the
+/// PS5 drive (`drive`), each when given. Each on its own: one that fails (a server that can't be
+/// reached, a drive taken out) never stops or fails the other, and both outcomes are answered.
+pub(crate) fn deliver(
+    zip: &Path,
+    host: &str,
+    title_id: &str,
+    share: Option<&SendToShare>,
+    drive: Option<(&mut Copies, &dyn Drive)>,
+) -> Sent {
+    let share = share.map(|send| send(zip));
+    let drive = drive.map(|(copies, console)| {
+        // A write on the console: no other save operation runs there meanwhile.
+        let _op = local::save_op(&[host]);
+        copies.copy(console, host, title_id, zip)
+    });
+    Sent { share, drive }
+}
+
+/// Backs up one save: off the console and zipped (no other save operation on the console
+/// meanwhile), then sent where it is due (see [`deliver`]). Err only when no backup was made.
 fn back_up_one(
     s: &ServerSettings,
     host: &str,
     entry: &SaveEntry,
-    tag: Option<&str>,
-) -> Result<Verified, String> {
+    sides: Sides,
+    copies: Option<&mut Copies>,
+) -> Result<Sent, String> {
     let tmp = make_temp_dir(&entry.title_id)?;
     let tmp_s = tmp.to_string_lossy().into_owned();
     let result = (|| {
-        local::download_save(host, entry, &tmp, &|| Ok(()))?;
-        let zip = tmp.join("backup.zip");
-        let note = local::backup_note(
-            local::console_identity(host).as_deref(),
-            Some(entry.user_id as u32),
-        );
-        zip_folder_noted(&tmp, &entry.title_id, &zip, &note).map_err(|e| format!("zip: {e:#}"))?;
-        store_zip(s, entry, tag, &zip, &tmp.join("readback.zip"))
+        let name = backup_name(entry, None);
+        let zip = tmp.join(&name);
+        {
+            let _op = local::save_op(&[host]);
+            local::download_save(host, entry, &tmp, &|| Ok(()))?;
+            let note = local::backup_note(
+                local::console_identity(host).as_deref(),
+                Some(entry.user_id as u32),
+            );
+            zip_folder_noted(&tmp, &entry.title_id, &zip, &note)
+                .map_err(|e| format!("zip: {e:#}"))?;
+        }
+        let scratch = tmp.join("readback.zip");
+        let share = |z: &Path| store_zip(s, entry, &name, z, &scratch);
+        let console = crate::save_backup_console::Live(host);
+        Ok(deliver(
+            &zip,
+            host,
+            &entry.title_id,
+            sides.share.then_some(&share as &SendToShare),
+            copies
+                .filter(|_| sides.drive)
+                .map(|c| (c, &console as &dyn Drive)),
+        ))
     })();
     let _ = cleanup_temp_dir(&tmp_s);
     result
 }
 
-/// The backup zip `zip` of `entry`, written to the server and verified. `scratch` is a file to
-/// read it back into.
+/// The backup zip `zip` of `entry`, written to the server as `name` and verified. `scratch` is a
+/// file to read it back into.
 fn store_zip(
     s: &ServerSettings,
     entry: &SaveEntry,
-    tag: Option<&str>,
+    name: &str,
     zip: &Path,
     scratch: &Path,
 ) -> Result<Verified, String> {
     let user = entry.user_id as u32;
-    let st = match tag {
-        Some(t) => format!("{}_{t}", stamp(now_ms())),
-        None => stamp(now_ms()),
-    };
-    let name = format!("{}{st}.zip", auto_backup_stem(&entry.title_id, user));
     let result = rt().block_on(async {
         let (fs, folder) = open_target(&s.target).await?;
         store_verified(
@@ -632,7 +741,7 @@ fn store_zip(
             &folder,
             &entry.title_id,
             user,
-            &name,
+            name,
             s.keep,
             scratch,
         )
@@ -651,7 +760,7 @@ pub fn keep_on_server(entry: &SaveEntry, zip: &Path, tag: &str) -> Result<(), St
     let result = store_zip(
         &settings(),
         entry,
-        Some(tag),
+        &backup_name(entry, Some(tag)),
         zip,
         &tmp.join("readback.zip"),
     );
@@ -674,52 +783,108 @@ pub(crate) fn running_titles(host: &str) -> Result<BTreeSet<String>, String> {
 struct Tally {
     backed_up: u32,
     failed: u32,
+    /// Copies to the PS5 drive that failed (a drive that is away is not a failure).
+    drive_failed: u32,
     last_error: Option<String>,
     last_verified: Option<Verified>,
 }
 
-/// Backs up `host`'s due saves (see [`due_saves`]). Err when the console did not answer.
+impl Tally {
+    /// Everything that failed, in either place: what makes a pass try again soon.
+    fn failures(&self) -> u32 {
+        self.failed + self.drive_failed
+    }
+
+    /// Counts what one save's backup did, and records each place it reached.
+    fn count(&mut self, host: &str, entry: &SaveEntry, sent: Sent) {
+        if let Some(r) = sent.share {
+            match r {
+                Ok(v) => {
+                    crate::log_info!(
+                        "save backup to server: {} on {host} → {} ({} bytes, {} files, verified)",
+                        entry.title_id,
+                        v.file,
+                        v.size,
+                        v.entries
+                    );
+                    let mut g = lock();
+                    g.state
+                        .done
+                        .insert(done_key(host, &entry.path), entry.mtime);
+                    persist(&g);
+                    drop(g);
+                    self.backed_up += 1;
+                    self.last_verified = Some(v);
+                }
+                Err(e) => {
+                    crate::log_warn!("save backup to server: {} on {host}: {e}", entry.title_id);
+                    self.failed += 1;
+                    self.last_error = Some(format!("{}: {e}", entry.title_id));
+                }
+            }
+        }
+        match sent.drive {
+            Some(Outcome::Copied(_)) => {
+                let mut g = lock();
+                g.state
+                    .console_done
+                    .insert(done_key(host, &entry.path), entry.mtime);
+                persist(&g);
+            }
+            Some(Outcome::Failed(_)) => self.drive_failed += 1,
+            Some(Outcome::Skipped(_)) | None => {}
+        }
+    }
+}
+
+/// Backs up `host`'s due saves (see [`due_saves`]): to the server, and to the PS5 drive when one
+/// is chosen (`copies`). Err when the console did not answer.
 fn pass_host(
     s: &ServerSettings,
     host: &str,
     title: Option<&str>,
     settle: bool,
     tally: &mut Tally,
+    copies: &mut Option<Copies>,
 ) -> Result<(), String> {
     let saves = local::list_saves(host)?;
     // A game running now is still writing its save; one closed is not.
     let running = running_titles(host).unwrap_or_default();
     let now = (now_ms() / 1000) as i64;
-    let done = lock().state.done.clone();
+    let (done, drive_done) = {
+        let g = lock();
+        (g.state.done.clone(), g.state.console_done.clone())
+    };
     let pick = Pick {
         users: &s.users,
         title,
         settle,
         running: &running,
+        drive_done: copies.is_some().then_some(&drive_done),
     };
+    let console = crate::save_backup_console::Live(host);
     for entry in due_saves(host, &saves, &done, now, &pick) {
         // The server may be changed part-way through a long pass.
         if settings().target != s.target {
             break;
         }
-        match back_up_one(s, host, entry, None) {
-            Ok(v) => {
-                crate::log_info!(
-                    "save backup to server: {} on {host} → {} ({} bytes, {} files, verified)",
-                    entry.title_id,
-                    v.file,
-                    v.size,
-                    v.entries
-                );
-                let mut g = lock();
-                g.state
-                    .done
-                    .insert(done_key(host, &entry.path), entry.mtime);
-                persist(&g);
-                drop(g);
-                tally.backed_up += 1;
-                tally.last_verified = Some(v);
+        let share = changed_since(host, entry, &done);
+        let mut drive = false;
+        if let Some(c) = copies.as_mut() {
+            if changed_since(host, entry, &drive_done) {
+                // A drive that is away is noted and tried at the next pass; a save due only for
+                // its copy is not read off the console for nothing.
+                drive = c.ready(&console, host);
+                if !drive {
+                    c.note_skipped(&console, host);
+                }
             }
+        }
+        if !share && !drive {
+            continue;
+        }
+        match back_up_one(s, host, entry, Sides { share, drive }, copies.as_mut()) {
+            Ok(sent) => tally.count(host, entry, sent),
             Err(e) => {
                 crate::log_warn!("save backup to server: {} on {host}: {e}", entry.title_id);
                 tally.failed += 1;
@@ -754,10 +919,13 @@ fn begin() -> Option<PassRunning> {
     Some(PassRunning)
 }
 
-fn finish(trigger: &str, tally: Tally, checked: bool) {
+fn finish(trigger: &str, tally: Tally, checked: bool, copies: Option<Copies>) {
     let mut g = lock();
     let st = &mut g.state.status;
     st.running = false;
+    if let Some(c) = copies.filter(|c| c.status.at > 0) {
+        st.console_copy = Some(c.status);
+    }
     let now = now_ms();
     if checked {
         st.last_check_at = now;
@@ -786,6 +954,7 @@ pub fn tick() {
         return;
     };
     let mut tally = Tally::default();
+    let mut copies = Copies::new(&s.console_drive, s.drive_keep());
     let now = now_ms();
     let mut checked = false;
     for host in hosts_of(&s) {
@@ -830,9 +999,9 @@ pub fn tick() {
                 }
                 let mut any_failed = false;
                 for title in pending {
-                    let before = tally.failed;
-                    if pass_host(&s, &host, Some(&title), false, &mut tally).is_ok()
-                        && tally.failed == before
+                    let before = tally.failures();
+                    if pass_host(&s, &host, Some(&title), false, &mut tally, &mut copies).is_ok()
+                        && tally.failures() == before
                     {
                         if let Some(p) = lock().pending.get_mut(&host) {
                             p.remove(&title);
@@ -856,13 +1025,13 @@ pub fn tick() {
                 if !host_due(&run, now, s.every_hours) || local::console_busy(&host) {
                     continue;
                 }
-                let before = tally.failed;
-                let answered = pass_host(&s, &host, None, true, &mut tally).is_ok();
+                let before = tally.failures();
+                let answered = pass_host(&s, &host, None, true, &mut tally, &mut copies).is_ok();
                 let mut g = lock();
                 let r = g.state.hosts.entry(host.clone()).or_default();
                 if answered {
                     r.tried_ms = now;
-                    if tally.failed == before {
+                    if tally.failures() == before {
                         r.ok_ms = now;
                     }
                     checked = true;
@@ -876,7 +1045,7 @@ pub fn tick() {
     } else {
         "interval"
     };
-    finish(trigger, tally, checked);
+    finish(trigger, tally, checked, copies);
 }
 
 /// "Back up now": every chosen console's changed saves, whatever the mode.
@@ -889,13 +1058,14 @@ pub fn run_now() -> Result<(), String> {
         return Ok(());
     };
     let mut tally = Tally::default();
+    let mut copies = Copies::new(&s.console_drive, s.drive_keep());
     let mut checked = false;
     for host in hosts_of(&s) {
-        if pass_host(&s, &host, None, false, &mut tally).is_ok() {
+        if pass_host(&s, &host, None, false, &mut tally, &mut copies).is_ok() {
             checked = true;
         }
     }
-    finish("manual", tally, checked);
+    finish("manual", tally, checked, copies);
     Ok(())
 }
 
@@ -998,6 +1168,11 @@ pub struct Patch {
     pub keep: Option<u32>,
     pub hosts: Option<Vec<String>>,
     pub users: Option<Vec<u32>>,
+    /// The PS5 drive that also gets a copy of each backup (`/mnt/ext<N>`, `/mnt/usb<N>`); "" for
+    /// none (#885).
+    pub console_drive: Option<String>,
+    /// Versions of each save kept on that drive, 1 to 50; 0: as many as `keep`.
+    pub console_keep: Option<u32>,
 }
 
 /// Whether the engine can write in `target`: the folder is made, a small file written there
@@ -1025,6 +1200,7 @@ async fn writable(target: &str) -> Result<(), String> {
 pub async fn put_settings(Json(p): Json<Patch>) -> Response {
     let mut next = settings();
     let before = next.target.clone();
+    let drive_before = next.console_drive.clone();
     if let Some(t) = p.target {
         next.target = t.trim().to_string();
     }
@@ -1051,6 +1227,19 @@ pub async fn put_settings(Json(p): Json<Patch>) -> Response {
         u.sort_unstable();
         u.dedup();
         next.users = u;
+    }
+    if let Some(d) = p.console_drive {
+        let d = d.trim().trim_end_matches('/').to_string();
+        if !d.is_empty() && !crate::save_backup_console::drive_path_ok(&d) {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "console_drive must be a PS5 M.2 or USB drive (/mnt/ext0, /mnt/usb0, …) or empty",
+            );
+        }
+        next.console_drive = d;
+    }
+    if let Some(k) = p.console_keep {
+        next.console_keep = if k == 0 { 0 } else { local::clamp_keep(k) };
     }
     if next.mode != Mode::Off && next.target.is_empty() {
         return json_error(
@@ -1080,6 +1269,10 @@ pub async fn put_settings(Json(p): Json<Patch>) -> Response {
             g.state.done.clear();
             g.state.hosts.clear();
             g.pending_tried.clear();
+            persist(&g);
+        }
+        if next.console_drive != drive_before {
+            g.state.console_done.clear();
             persist(&g);
         }
     }
@@ -1248,6 +1441,7 @@ mod tests {
             title: None,
             settle: false,
             running: &none,
+            drive_done: None,
         };
         assert_eq!(
             paths(due_saves("h", &saves, &Done::new(), 2000, &all)),
@@ -1312,6 +1506,7 @@ mod tests {
             title: None,
             settle: false,
             running: &none,
+            drive_done: None,
         };
         // The emulator was closed: its games' saves are due, not the PS5 game's.
         let closed = Pick {
@@ -1380,6 +1575,7 @@ mod tests {
             title: None,
             settle: false,
             running: &none,
+            drive_done: None,
         };
         // Crux2 was closed: its cards and its saved states are due.
         let closed = Pick {
@@ -1588,6 +1784,198 @@ mod tests {
         std::fs::write(&bad, b"not a zip").unwrap();
         assert!(check_zip(&bad).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A backup zip named as the pass names one, made in `dir`.
+    fn named_zip(dir: &Path, name: &str) -> PathBuf {
+        let made = make_zip(dir, "PPSA01234", name.as_bytes());
+        let zip = dir.join(name);
+        std::fs::rename(&made, &zip).unwrap();
+        zip
+    }
+
+    /// #885: one run writes the share and the PS5 drive; either one failing (a share that can't
+    /// be reached, a drive that is out or garbles the copy) never stops or fails the other.
+    #[test]
+    fn a_run_reaches_the_share_and_the_ps5_drive_and_one_failing_spares_the_other() {
+        use crate::save_backup_console::tests::{vol, with_m2, Fake};
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = scratch("both-sides");
+        let fs = MemFs::new(&[]);
+        let host = "10.88.0.1";
+        let stem = auto_backup_stem("PPSA01234", 1);
+        let send = |name: &str, drive: &Fake, keep: u32| {
+            let zip = named_zip(&dir, name);
+            let share = |z: &Path| {
+                rt.block_on(store_verified(
+                    &fs,
+                    z,
+                    "/b",
+                    "PPSA01234",
+                    1,
+                    name,
+                    5,
+                    &dir.join("rb.zip"),
+                ))
+            };
+            let mut copies = Copies::new("/mnt/ext0", keep).unwrap();
+            let sent = deliver(
+                &zip,
+                host,
+                "PPSA01234",
+                Some(&share),
+                Some((&mut copies, drive)),
+            );
+            (sent, copies.status)
+        };
+        let on_drive = |name: &str| format!("/mnt/ext0/ps5upload/save-backups/PPSA01234/{name}");
+
+        // Both places get the same file.
+        let m2 = with_m2();
+        let first = format!("{stem}2026-11-17_101500.zip");
+        let (sent, _) = send(&first, &m2, 1);
+        assert_eq!(sent.share.unwrap().unwrap().file, first);
+        assert_eq!(sent.drive, Some(Outcome::Copied(on_drive(&first))));
+        assert!(fs.bytes(&format!("/b/PPSA01234/{first}")).is_some());
+
+        // The share can't be reached: the drive copy is still made (and keeps 1 version there).
+        fs.set_down(true);
+        let second = format!("{stem}2026-11-17_111500.zip");
+        let (sent, status) = send(&second, &m2, 1);
+        fs.set_down(false);
+        assert!(sent.share.unwrap().is_err());
+        assert_eq!(sent.drive, Some(Outcome::Copied(on_drive(&second))));
+        assert_eq!(status.copied, 1);
+        let files = m2.files.borrow();
+        assert!(files.contains_key(&on_drive(&second)));
+        assert!(!files.contains_key(&on_drive(&first)), "one version kept");
+        drop(files);
+        assert!(fs.bytes(&format!("/b/PPSA01234/{second}")).is_none());
+
+        // The drive is not plugged in: the share still gets a verified backup.
+        let away = Fake {
+            vols: vec![vol("/data", "/dev/ssd0.user")],
+            ..Fake::default()
+        };
+        let third = format!("{stem}2026-11-17_121500.zip");
+        let (sent, status) = send(&third, &away, 1);
+        assert!(sent.share.unwrap().is_ok());
+        assert!(matches!(sent.drive, Some(Outcome::Skipped(_))));
+        assert_eq!((status.skipped, status.failed), (1, 0));
+
+        // The drive garbles the copy: removed there and reported; the share still verified.
+        let bad = Fake {
+            corrupt: true,
+            ..with_m2()
+        };
+        let fourth = format!("{stem}2026-11-17_131500.zip");
+        let (sent, status) = send(&fourth, &bad, 1);
+        assert!(sent.share.unwrap().is_ok());
+        assert!(matches!(sent.drive, Some(Outcome::Failed(_))));
+        assert_eq!(status.failed, 1);
+        assert!(bad.files.borrow().is_empty());
+
+        // A place that is not due is not touched.
+        let fifth = format!("{stem}2026-11-17_141500.zip");
+        let zip = named_zip(&dir, &fifth);
+        let sent = deliver(&zip, host, "PPSA01234", None, None);
+        assert!(sent.share.is_none() && sent.drive.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What a run did in each place is recorded apart: a share that failed is tried again at the
+    /// next pass, while the drive, which has the save, does not get it twice.
+    #[test]
+    fn each_place_keeps_its_own_record_of_what_it_has() {
+        let host = "10.88.0.2";
+        let entry = save(
+            "/user/home/1/savedata_prospero/PPSA01234",
+            "PPSA01234",
+            1,
+            500,
+        );
+        let mut tally = Tally::default();
+        tally.count(
+            host,
+            &entry,
+            Sent {
+                share: Some(Err("connection reset".into())),
+                drive: Some(Outcome::Copied("/mnt/ext0/x".into())),
+            },
+        );
+        assert_eq!(
+            (tally.failed, tally.drive_failed, tally.failures()),
+            (1, 0, 1)
+        );
+        let key = done_key(host, &entry.path);
+        {
+            let g = lock();
+            assert_eq!(g.state.console_done.get(&key), Some(&500));
+            assert_eq!(g.state.done.get(&key), None);
+        }
+        // Next pass: due for the share only.
+        let (done, drive_done) = {
+            let g = lock();
+            (g.state.done.clone(), g.state.console_done.clone())
+        };
+        assert!(changed_since(host, &entry, &done));
+        assert!(!changed_since(host, &entry, &drive_done));
+        let none = BTreeSet::new();
+        let pick = Pick {
+            users: &[],
+            title: None,
+            settle: false,
+            running: &none,
+            drive_done: Some(&drive_done),
+        };
+        let saves = [entry.clone()];
+        assert_eq!(due_saves(host, &saves, &done, 9000, &pick).len(), 1);
+        // A drive copy that failed counts as a failure (tried again soon), a share that went
+        // through is recorded.
+        let mut tally = Tally::default();
+        tally.count(
+            host,
+            &entry,
+            Sent {
+                share: Some(Ok(Verified {
+                    title_id: "PPSA01234".into(),
+                    file: "f.zip".into(),
+                    ..Verified::default()
+                })),
+                drive: Some(Outcome::Failed("x".into())),
+            },
+        );
+        assert_eq!((tally.backed_up, tally.drive_failed), (1, 1));
+        assert_eq!(lock().state.done.get(&key), Some(&500));
+        // Both have it now: nothing is due.
+        let (done, drive_done) = {
+            let g = lock();
+            (g.state.done.clone(), g.state.console_done.clone())
+        };
+        let pick = Pick {
+            drive_done: Some(&drive_done),
+            ..pick
+        };
+        assert!(due_saves(host, &saves, &done, 9000, &pick).is_empty());
+    }
+
+    #[test]
+    fn the_ps5_drive_copy_settings_read_old_files_and_keep_their_own_versions() {
+        let s: ServerSettings =
+            serde_json::from_str(r#"{"mode":"after_close","target":"remote://a/b","keep":7}"#)
+                .unwrap();
+        assert_eq!(s.console_drive, "");
+        assert_eq!(s.drive_keep(), 7, "0 keeps as many as the share");
+        let s = ServerSettings {
+            console_keep: 1,
+            ..s
+        };
+        assert_eq!(s.drive_keep(), 1);
+        let s = ServerSettings {
+            console_keep: 999,
+            ..s
+        };
+        assert_eq!(s.drive_keep(), 50);
     }
 
     #[test]

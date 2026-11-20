@@ -119,8 +119,9 @@ export function SaveBackupsList({
   // Backups in a folder used before the current one still list (the engine reads them all).
   const readsLocal = !!settings?.dir.trim() || (settings?.old_dirs?.length ?? 0) > 0;
   const target = serverSettings?.target ?? "";
-  // The copies on the PS5's own drive, when one is chosen.
-  const consoleDrive = settings?.console_drive ?? "";
+  // The copies on the PS5's own drive, when one is chosen (for the automatic backups or the
+  // network-share backups: the engine lists both).
+  const consoleDrive = settings?.console_drive || serverSettings?.console_drive || "";
   const addr = hostOf(host);
   // By value: a new array of the same users each render must not list again.
   const userIds = users.map((u) => u.uid >>> 0).join(",");
