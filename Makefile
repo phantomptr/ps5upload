@@ -116,7 +116,7 @@ ADB ?= $(ANDROID_HOME)/platform-tools/adb
 .PHONY: ios-init ios-build run-ios android-deps android-init android-build android-deploy _android-install-if-device run-android run-android-background
 .PHONY: emu-create emu-start emu-stop emu-status emu-test
 .PHONY: send-payload gen-fixtures sweep validate validate-xl
-.PHONY: sync-version sync-version-check
+.PHONY: sync-version sync-version-check check-helper-version
 .PHONY: docker-engine docker-engine-run
 
 # Default target
@@ -600,6 +600,18 @@ check-no-ftx2:
 	@if git grep -n -I -i -E '$(CHECK_NO_FTX2_PATTERN)' -- $(CHECK_NO_FTX2_SCOPE) $(CHECK_NO_FTX2_EXCEPT); then \
 		echo "ERROR: FTX2 or port 9113/9114 found above (see the check-no-ftx2 notes in the Makefile)"; exit 1; \
 	else echo "✓ check-no-ftx2: clean"; fi
+
+# The helper this build carries must be this version (12.6.15): a stale payload/ps5upload.elf
+# embedded in the app was sent to consoles as "the current helper" and then replaced again and
+# again. The helper says its version in a marker (payload/src/main.c); the app and the engine read
+# it too and never send a helper of another version by themselves.
+check-helper-version:
+	@want="$$(tr -d '[:space:]' < VERSION)"; \
+	test -s "$(PAYLOAD_ELF)" || { echo "ERROR: $(PAYLOAD_ELF) is missing"; exit 1; }; \
+	got="$$(LC_ALL=C grep -a -o 'PS5UPLOAD_HELPER_VERSION=[0-9A-Za-z.+-]*;' "$(PAYLOAD_ELF)" | head -1 | sed 's/^PS5UPLOAD_HELPER_VERSION=//; s/;$$//')"; \
+	if [ -z "$$got" ]; then echo "ERROR: $(PAYLOAD_ELF) carries no version marker (a build from before 12.6.15, or not the helper)"; exit 1; fi; \
+	if [ "$$got" != "$$want" ]; then echo "ERROR: $(PAYLOAD_ELF) is helper v$$got but VERSION is $$want: run make payload"; exit 1; fi; \
+	echo "✓ check-helper-version: $(PAYLOAD_ELF) is v$$got"
 
 validate: check-no-ftx2 send-payload _wait-payload-ready
 	@echo ""

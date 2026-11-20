@@ -200,6 +200,9 @@ jobs:
           test -s payload/ps5upload.elf
           test -s payload/installer/ps5upload-installer.elf
           gzip -t payload/ps5upload.elf.gz payload/installer/ps5upload-installer.elf.gz
+          # The helper must be this release's version: a stale ELF embedded in the app is sent to
+          # consoles as the current helper (the app then never sends it by itself, and says so).
+          make check-helper-version
 
       - name: Gzip payloads for bundling
         run: |
