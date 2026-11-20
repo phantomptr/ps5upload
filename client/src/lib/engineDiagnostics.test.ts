@@ -110,3 +110,31 @@ describe("collectEngineDiagnostics — feature summary", () => {
     expect(d.errors.features).toMatch(/404/);
   });
 });
+
+describe("collectEngineDiagnostics — connection record", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("carries each console's drops and network type, asking for the type when not known", async () => {
+    const record = {
+      events: [{ kind: "drop", at_ms: 1, why: "timeout" }],
+      link: { kind: "wifi", iface: "wlan0", at_ms: 2 },
+      hint: null,
+      up: true,
+    };
+    const calls = stubFetch({
+      "/api/jobs": [],
+      "/api/pkg/install/sessions": [],
+      "/api/ps5/link-history?addr=192.168.0.99&read_link=1": record,
+    });
+    const d = await collectEngineDiagnostics({ consoles: ["192.168.0.99:9120"], redact: true });
+    expect(d.link_history).toEqual([{ console: "<IPv4>", record }]);
+    expect(calls).toContain("http://engine.test/api/ps5/link-history?addr=192.168.0.99&read_link=1");
+  });
+
+  it("an older engine without it is named, not silently empty", async () => {
+    stubFetch({ "/api/jobs": [], "/api/pkg/install/sessions": [] });
+    const d = await collectEngineDiagnostics({ consoles: ["10.0.0.5"], redact: false });
+    expect(d.link_history).toEqual([{ console: "10.0.0.5", record: null }]);
+    expect(d.errors["link_history:10.0.0.5"]).toMatch(/404/);
+  });
+});

@@ -1769,8 +1769,10 @@ static int handle_cleanup(runtime_state_t *state, const char *request_body, uint
 
 /* ── FS_LIST_VOLUMES handler ─────────────────────────────────────────────────
  *
- * Enumerates storage volumes using `getmntinfo(MNT_WAIT)`, the FreeBSD
- * primitive that returns every mounted filesystem in one syscall. The old
+ * Enumerates storage volumes using `getmntinfo(MNT_NOWAIT)` (through
+ * mntinfo_snapshot), the FreeBSD primitive that returns every mounted
+ * filesystem in one syscall, from the kernel's cached figures: it never waits
+ * on a drive (a USB disk spinning up, one another payload is mounting). The old
  * per-path lstat+statfs probe has been retired: it had to guess at paths
  * (it missed the PS5-specific `/mnt/ext1` layout until we listed `/mnt`),
  * and it reported placeholder tmpfs slots as if they were real drives.

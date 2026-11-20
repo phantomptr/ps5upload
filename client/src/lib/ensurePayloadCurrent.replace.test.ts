@@ -80,6 +80,15 @@ describe("replacing a running helper unasked", () => {
     expect(restoreMock).not.toHaveBeenCalled();
   });
 
+  it.each([[false], [true]])(
+    "leaves a helper that is running but slow to answer, as on a weak Wi-Fi link (force=%s)",
+    async (force) => {
+      payloadCheckMock.mockResolvedValue({ reachable: false, session: "down", reason: "status_slow" });
+      expect(await ensurePayloadCurrent(H, undefined, force)).toBe("no-push");
+      expect(restoreMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not stop other devices' work", async () => {
     answers("5.0.0");
     meshState[H] = { state: { busy: [{ device: {}, items: [{}] }] } };

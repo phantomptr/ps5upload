@@ -70,6 +70,7 @@
   "/api/ps5/health": "health",
   "/api/ps5/helper": "payloads",
   "/api/ps5/hw": "hardware",
+  "/api/ps5/link-history": "consoles",
   "/api/ps5/list-dir": "console-files",
   "/api/ps5/payload": "payloads",
   "/api/ps5/pkg": "install",
@@ -402,6 +403,9 @@
   },
   "GET /api/ps5/hw/temps": {
    "summary": "Console temperatures and clocks"
+  },
+  "GET /api/ps5/link-history": {
+   "summary": "How a console's connection has been holding up: drops, recoveries, helper restarts, USB drives"
   },
   "GET /api/ps5/list-dir": {
    "summary": "List a folder on the console"

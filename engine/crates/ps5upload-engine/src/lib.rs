@@ -79,6 +79,7 @@ mod install;
 mod join;
 mod join_net;
 mod link;
+mod link_drops;
 mod link_lz4;
 mod local_fs;
 mod log_dedup;
@@ -6969,6 +6970,7 @@ async fn ps5_volumes(
     Query(q): Query<AddrQuery>,
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+    let console = addr.clone();
     let result: Result<VolumeList, anyhow::Error> =
         tokio::task::spawn_blocking(move || list_volumes(&addr))
             .await
@@ -6976,6 +6978,8 @@ async fn ps5_volumes(
             .and_then(|inner| inner);
     match result {
         Ok(mut v) => {
+            // A USB drive appearing is part of the connection's record (link_drops).
+            link_drops::note_volumes(&console, &v);
             // What the app shows as likely to fit: on internal storage less than the free
             // figure, because the console holds back more as data is written.
             for vol in &mut v.volumes {
@@ -7029,6 +7033,9 @@ async fn ps5_status(
                 "status ok",
             );
             helper_mirror::note_console(&console);
+            // The connection's record (link_drops): a recovery after a drop, a helper that
+            // started over, and what to read in the background while it drops.
+            link_drops::after_status_ok(&console, &json);
             // A helper with the converter gets the zstd runtime it needs (background, once).
             convert_runtime::after_status(console_addr(&console), &json);
             spawn_console_upgrade_cleanup(console);
@@ -7042,6 +7049,7 @@ async fn ps5_status(
                 Some(&console),
                 format!("{e:#}"),
             );
+            link_drops::after_status_failed(&console, &e);
             let power = ps5upload_ava1::console::recent_power(&console);
             (
                 StatusCode::BAD_GATEWAY,
@@ -7083,6 +7091,41 @@ async fn ps5_connect_timings(Query(q): Query<AddrQuery>) -> impl IntoResponse {
         None => Json(serde_json::json!({
             "consoles": ps5upload_ava1::timings::all(),
         })),
+    }
+}
+
+#[derive(Deserialize)]
+struct LinkHistoryQuery {
+    addr: Option<String>,
+    /// `1`: ask the console's helper for its link (cable or Wi-Fi) when it is not known yet.
+    read_link: Option<String>,
+}
+
+/// GET /api/ps5/link-history?addr=IP[&read_link=1]
+///
+/// How the console's connection has been holding up, kept from the app's own status checks and
+/// volume reads (in memory, this engine run, the last day at most): `events` (oldest first)
+/// `drop` with `why` (`timeout`: the console stopped answering; `refused`: nothing listened on
+/// the helper's port; `other`), `back` (`after_ms`), `helper_restarted` (`prior`: how the new
+/// helper says the previous one ended), `drive_added` / `drive_removed` (a drive's mount point,
+/// `usb`); `link`: the console's link (`kind` `wired` / `wifi` / `unknown`, `iface`), read only
+/// while it drops or when `read_link=1` asks (one helper call); `hint`: `null`, or `kind`
+/// `keeps_dropping` (several drops close together, lately) or `usb_wifi` (the same, starting
+/// around when a USB drive appeared, on a console on Wi-Fi), with `drops`, `since_ms` (the first
+/// drop: key a dismissal on it), `last_ms` and `drive_at_ms`; `up`: the last check answered.
+/// Nothing here names an address. Sends nothing to the console without `read_link`.
+async fn ps5_link_history(
+    State(state): State<AppState>,
+    Query(q): Query<LinkHistoryQuery>,
+) -> impl IntoResponse {
+    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+    let read = q
+        .read_link
+        .as_deref()
+        .is_some_and(|v| v == "1" || v == "true");
+    match tokio::task::spawn_blocking(move || link_drops::report(&addr, read)).await {
+        Ok(r) => (StatusCode::OK, Json(r)).into_response(),
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
 }
 
@@ -13165,6 +13208,7 @@ fn build_app_and_mcp(
         .route("/api/activity/label", post(activity::label_handler))
         .route("/api/ps5/status", get(ps5_status))
         .route("/api/ps5/connect-timings", get(ps5_connect_timings))
+        .route("/api/ps5/link-history", get(ps5_link_history))
         .route("/api/ps5/port-check", get(ps5_port_check))
         .route("/api/ps5/toast", post(ps5_toast))
         .route("/api/ps5/readiness", get(ps5_readiness))

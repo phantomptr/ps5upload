@@ -49,7 +49,10 @@ device's Tailscale network (or probes one `addr`): tailnet and home address, whe
 answered, its identity key (`id`) and its entry on the console list. Asking pairs nothing and shows
 nothing on the PS5. `consoles_connect_timings` gives the last status check of each console phase by
 phase (session, connect, status call, path), for "why did it take so long to show as connected";
-it sends nothing to a console. Both are reads, so they stay in read-only mode.
+it sends nothing to a console. `consoles_link_history` gives how a console's connection has been
+holding up (drops, recoveries, helper restarts, USB drives appearing, the console's link once known,
+and a hint when it keeps dropping), for "why does the connection keep dropping"; it sends nothing
+to a console either. All three are reads, so they stay in read-only mode.
 
 **Share sends an app's things to a friend.** `share_create` makes a link (homebrew apps only: a
 retail game, its updates and add-ons are refused by the engine in any format; saves of any game,

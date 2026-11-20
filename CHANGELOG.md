@@ -14,6 +14,8 @@ What's new in ps5upload, written for humans.
 - **Friends join over the internet much sooner.** The friend's page connects to the hub as soon as it opens, and builds its connection while it does. With the hub far away, the time from pressing Join to being connected dropped from about 1.4 seconds to about 0.4 seconds in our tests.
 
 **Fixes**
+- **The app says when the connection to the PS5 keeps dropping.** When the PS5 drops in and out several times in a few minutes, a note says so, with what to try. When it started around when a USB drive was plugged into a PS5 on Wi-Fi, the note says that USB 3 drives can disturb 2.4 GHz Wi-Fi, and to try a cable, 5 GHz Wi-Fi, or moving the drive away from the console. Bug reports now include the recent drops and whether the PS5 is on a cable or Wi-Fi.
+- **A PS5 on a weak network no longer gets its helper replaced while it is running.** When the helper was running but slow to answer, the app could send a new one over it, which cut every connection and made the PS5 drop in and out even more.
 - **Internet invites no longer lose their outside address after one lost packet.** The address lookup is now retried and refreshed while a room is open, and it no longer pauses the stream of every friend already playing.
 - **A friend leaving while the host replies no longer breaks the room** for a moment and reconnects it.
 - **After the hub restarts, invites work again within about 5 seconds** instead of up to 30.

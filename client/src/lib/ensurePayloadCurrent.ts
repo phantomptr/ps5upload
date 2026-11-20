@@ -5,6 +5,7 @@ import { engineSendsHelper } from "./restoreMainPayload";
 import { guardElfldr, LISTENER_LOADER_HINT, STUCK_LOADER_MESSAGE, waitForLoader } from "./elfldrGuard";
 import { resetHelperSendGate, sendHelperOnce, sentAgoMs } from "./helperSendGate";
 import { compareVersions } from "./semver";
+import { checkShowsLiveHelper } from "./autoRedeploy";
 import { log } from "../state/logs";
 import { clearHelperStopped, isHelperStopped } from "../state/helperStopped";
 import { updateHelperCopiesAfterSend } from "../state/helperStoredCopiesRuntime";
@@ -148,6 +149,12 @@ async function ensurePayloadCurrentOnce(
       // A helper IS running and only wants pairing, which the pairing banner asks for. Replacing
       // it would stop it for every device that uses it, unasked.
       log.info("payload", `not sending the helper to ${host}: one is running there, waiting to be paired`);
+      return "no-push";
+    } else if (checkShowsLiveHelper(probe)) {
+      // Alive and talking, only slow to answer (`status_slow`): a weak link, usually Wi-Fi. A new
+      // helper replaces this one and drops every connection to it, which on a weak link makes the
+      // console drop in and out. Even a forced recovery leaves it: the retry adopts its job.
+      log.info("payload", `not sending the helper to ${host}: one is running there, only slow to answer`);
       return "no-push";
     }
   } catch {
