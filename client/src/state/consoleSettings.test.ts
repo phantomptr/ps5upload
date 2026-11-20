@@ -32,6 +32,7 @@ const DEFAULTS: ConsoleSettings = {
   rest_after_upload: false,
   auto_bring_up: false,
   auto_redeploy_on_wake: true,
+  auto_update_helper: true,
   install_path_fallback: false,
 };
 
@@ -54,6 +55,7 @@ function setDefaults(over: Partial<ConsoleSettings>) {
     keepPs5AwakeMode: d.keep_awake_mode,
     autoBringUp: d.auto_bring_up,
     autoRedeployOnWake: d.auto_redeploy_on_wake,
+    autoUpdateHelper: d.auto_update_helper,
   });
   useRestAfterUploadStore.setState({ enabled: d.rest_after_upload });
   useInstallPathFallbackStore.setState({ enabled: d.install_path_fallback });

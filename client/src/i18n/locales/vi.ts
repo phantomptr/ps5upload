@@ -2864,9 +2864,6 @@ library_mount_tooltip_smp: "Giao ảnh đĩa này cho ShadowMount+, nó sẽ g�
 
 
 
-helper_mismatch_title: "Trình trợ giúp PS5 là v{payload} còn ứng dụng này là v{app}",
-helper_mismatch_send: "Gửi trình trợ giúp",
-helper_mismatch_body_v3: "Không cần làm gì trên chính PS5: nhấn «Gửi trình trợ giúp» và ứng dụng này sẽ gửi trình trợ giúp phù hợp đến máy. Trước đó, các bản sửa lỗi và tính năng của phiên bản mới sẽ không hoạt động.",
 
 "joberr.direct_staged_file_missing_v2": "Lần tải lên này đã hoàn tất từ trước nên không còn gì để công bố — và tệp trên PS5 hiện đã mất hoặc sai kích thước. Hãy tải lên lại và chọn «Thay thế» thay vì «Tiếp tục».",
 "joberr.direct_tx_corrupt": "PS5 phát hiện lỗi hỏng giao thức trong lần truyền này. Hãy khởi động lại payload từ thẻ «Gửi payload» rồi thử lại.",
@@ -4391,8 +4388,6 @@ queue_stop_install_title: "Dừng lần cài này?",
 queue_stopping: "Đang dừng…",
 "collection.send_submit": "Gửi",
 queue_install_quiet: "PS5 không yêu cầu dữ liệu đã {min} phút. Đã hủy trên PS5? Dừng ở đây (⊘).",
-helper_mismatch_app_older: "Một thiết bị khác đã gửi trình trợ giúp mới hơn. Hãy cập nhật ứng dụng này cho khớp; gửi trình trợ giúp của ứng dụng này sẽ thay nó bằng bản cũ hơn cho mọi thiết bị.",
-helper_mismatch_update_app: "Cập nhật ứng dụng này",
 mesh_chip: "Thiết bị khác: {count}",
 mesh_another_device: "Một thiết bị khác",
 mesh_ev_restart: "{name} đang khởi động lại trình trợ giúp trên console này. Việc truyền tạm dừng và sẽ tiếp tục sau giây lát.",
@@ -7493,7 +7488,6 @@ helper_copies_updated_title: "Đã cập nhật helper",
 helper_copies_updated_body: "PS5 sẽ chạy helper {version} vào lần khởi động lại tới.",
 helper_copies_failed_title: "Không thể cập nhật trình trợ giúp mà PS5 chạy khi khởi động",
 helper_copies_failed_body: "Vẫn là trình trợ giúp cũ: {list}. PS5 sẽ chạy lại nó sau mỗi lần khởi động lại. Để sửa thủ công, tải ps5upload.elf {version} từ trang phát hành và chép đè lên tệp đó (màn hình Tệp, FTP hoặc ổ USB), hoặc tải lên lại trong Payload Manager với cùng tên. ({error})",
-helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình trợ giúp được giữ để khởi động ({list}). Nhấn «Gửi trình trợ giúp»: ứng dụng này gửi trình trợ giúp phù hợp và cập nhật luôn bản sao đó, để PS5 chạy bản mới sau khi khởi động lại.",
   hw_gpu_clock: "Xung nhịp GPU",
   hw_gpu_clock_hint: "Xung nhịp đồ họa SMU, đọc khi yêu cầu",
   hw_cpu_measured: "Xung CPU (đo được)",

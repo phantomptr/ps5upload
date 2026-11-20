@@ -126,6 +126,8 @@ export interface DiagnosticBundle {
     auto_resume: boolean;
     queue_auto_start: boolean;
     auto_redeploy_on_wake: boolean;
+    /** Replace an older helper by itself when nothing runs on the console (the default). */
+    auto_update_helper: boolean;
     system_file_read: boolean;
     /** The global log level in force. */
     log_level: string;
@@ -289,6 +291,7 @@ export function buildDiagnosticBundle(opts: {
       auto_resume: uploadSettings.autoResume,
       queue_auto_start: uploadSettings.queueAutoStart,
       auto_redeploy_on_wake: uploadSettings.autoRedeployOnWake,
+      auto_update_helper: uploadSettings.autoUpdateHelper,
       system_file_read: uploadSettings.systemFileRead,
       log_level: levels.level,
       log_levels: levels,

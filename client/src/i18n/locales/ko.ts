@@ -2879,9 +2879,6 @@ library_mount_tooltip_smp: "이 이미지를 ShadowMount+에 넘깁니다. 마�
 
 
 
-helper_mismatch_title: "PS5 헬퍼는 v{payload}, 이 앱은 v{app}입니다",
-helper_mismatch_send: "헬퍼 보내기",
-helper_mismatch_body_v3: "PS5 자체에서 할 일은 없습니다. 헬퍼 보내기를 누르면 이 앱이 맞는 헬퍼를 본체로 보냅니다. 그때까지는 새 버전의 수정 사항과 기능이 동작하지 않습니다.",
 
 "joberr.direct_staged_file_missing_v2": "이 업로드는 이미 완료되어 게시할 항목이 남아 있지 않았습니다. 게다가 PS5의 파일이 없거나 크기가 올바르지 않습니다. 다시 업로드하면서 '재개'가 아닌 '바꾸기'를 선택하세요.",
 "joberr.direct_tx_corrupt": "이 전송에서 PS5가 프로토콜 손상을 감지했습니다. '페이로드 전송' 탭에서 페이로드를 다시 시작한 후 재시도하세요.",
@@ -4406,8 +4403,6 @@ queue_stop_install_title: "이 설치를 중지할까요?",
 queue_stopping: "중지하는 중…",
 "collection.send_submit": "보내기",
 queue_install_quiet: "PS5가 {min}분 동안 데이터를 요청하지 않았습니다. PS5에서 취소했나요? 여기서 중지하세요 (⊘).",
-helper_mismatch_app_older: "다른 기기가 더 새로운 헬퍼를 보냈습니다. 이 앱을 업데이트해 맞추세요. 이 앱의 헬퍼를 보내면 모든 기기에서 더 오래된 헬퍼로 바뀝니다.",
-helper_mismatch_update_app: "이 앱 업데이트",
 mesh_chip: "다른 기기: {count}",
 mesh_another_device: "다른 기기",
 mesh_ev_restart: "{name}이(가) 이 본체의 헬퍼를 다시 시작하는 중입니다. 전송이 잠시 멈췄다가 곧 이어집니다.",
@@ -7508,7 +7503,6 @@ helper_copies_updated_title: "헬퍼를 업데이트했습니다",
 helper_copies_updated_body: "다음에 재시작하면 PS5가 헬퍼 {version}을(를) 실행합니다.",
 helper_copies_failed_title: "PS5가 부팅 시 실행하는 헬퍼를 업데이트하지 못했습니다",
 helper_copies_failed_body: "여전히 이전 헬퍼입니다: {list}. PS5는 재시작할 때마다 이를 다시 실행합니다. 직접 고치려면 릴리스 페이지에서 ps5upload.elf {version}을(를) 내려받아 해당 파일 위에 복사하거나(파일 화면, FTP 또는 USB 드라이브) Payload Manager에서 같은 이름으로 다시 업로드하세요. ({error})",
-helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사본을 실행했습니다({list}). 헬퍼 보내기를 누르면 이 앱이 맞는 헬퍼를 보내고 그 사본도 업데이트하므로, 재시작 후 PS5가 새 헬퍼를 실행합니다.",
   hw_gpu_clock: "GPU 클럭",
   hw_gpu_clock_hint: "SMU 그래픽 클럭, 요청 시 읽음",
   hw_cpu_measured: "CPU 클럭 (실측)",

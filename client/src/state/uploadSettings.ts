@@ -25,6 +25,7 @@ const KEY_QUEUE_AUTO_START = "ps5upload.queue_auto_start";
 const KEY_KEEP_PS5_AWAKE = "ps5upload.keep_ps5_awake";
 const KEY_AUTO_REDEPLOY_ON_WAKE = "ps5upload.auto_redeploy_on_wake";
 const KEY_AUTO_BRING_UP = "ps5upload.auto_bring_up";
+const KEY_AUTO_UPDATE_HELPER = "ps5upload.auto_update_helper";
 const KEY_SYSTEM_FILE_READ = "ps5upload.system_file_read";
 const KEY_WAKE_FOR_UPLOADS = "ps5upload.wake_for_uploads";
 const KEY_VERIFY_WRITES = "ps5upload.verify_writes";
@@ -151,6 +152,14 @@ function loadAutoRedeployOnWake(): boolean {
   return safeGetItem(KEY_AUTO_REDEPLOY_ON_WAKE) !== "false";
 }
 
+/** Replace an older helper with this app's by itself, when nothing runs on the console
+ *  (lib/helperAutoUpdate). Default ON: people kept having to send it after every app update. The
+ *  app-wide default; each console has its own (Settings › This PS5). */
+function loadAutoUpdateHelper(): boolean {
+  if (typeof window === "undefined") return true;
+  return safeGetItem(KEY_AUTO_UPDATE_HELPER) !== "false";
+}
+
 /** Bring a saved console up by itself (#479): once its loader (:9021) has settled and the
  *  helper is not running, run Quick bring-up (bring-up playlist → helper) unasked. Default
  *  OFF: it sends payloads nobody clicked. Stored as "true" only when the user opts in. */
@@ -204,6 +213,8 @@ interface UploadSettingsState {
    *  threshold and the upload port without a manual click. See
    *  loadAutoRedeployOnWake. */
   autoRedeployOnWake: boolean;
+  /** Replace an older helper by itself when it is safe. See loadAutoUpdateHelper. */
+  autoUpdateHelper: boolean;
   /** Run Quick bring-up by itself on a saved console whose loader is up and whose helper is
    *  not running, once per console boot (#479). See loadAutoBringUp. */
   autoBringUp: boolean;
@@ -222,6 +233,7 @@ interface UploadSettingsState {
   setKeepPs5AwakeMode: (mode: KeepPs5AwakeMode) => void;
   setAutoRedeployOnWake: (on: boolean) => void;
   setAutoBringUp: (on: boolean) => void;
+  setAutoUpdateHelper: (on: boolean) => void;
   setSystemFileRead: (on: boolean) => void;
 }
 
@@ -236,6 +248,7 @@ export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
   verifyWrites: loadVerifyWrites(),
   keepPs5AwakeMode: loadKeepPs5AwakeMode(),
   autoRedeployOnWake: loadAutoRedeployOnWake(),
+  autoUpdateHelper: loadAutoUpdateHelper(),
   autoBringUp: loadAutoBringUp(),
   systemFileRead: loadSystemFileRead(),
   setAlwaysOverwrite: (alwaysOverwrite) => {
@@ -290,6 +303,10 @@ export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
       autoRedeployOnWake ? "true" : "false",
     );
     set({ autoRedeployOnWake });
+  },
+  setAutoUpdateHelper: (autoUpdateHelper) => {
+    safeSetItem(KEY_AUTO_UPDATE_HELPER, autoUpdateHelper ? "true" : "false");
+    set({ autoUpdateHelper });
   },
   setAutoBringUp: (autoBringUp) => {
     safeSetItem(KEY_AUTO_BRING_UP, autoBringUp ? "true" : "false");

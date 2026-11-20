@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { create } from "zustand";
 import { Copy, Sparkles, X } from "lucide-react";
 
 import { useTr } from "../state/lang";
@@ -8,6 +9,8 @@ import { ReleaseNotesBody } from "./ReleaseNotesBody";
 import { Button } from "../components/Button";
 import { writeClipboard } from "../lib/clipboard";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
+import { pushNotification } from "../state/notifications";
+import { trStatic } from "../lib/trStatic";
 
 /** What the engine says about a newer release (engine_update.rs). */
 export interface EngineUpdate {
@@ -25,40 +28,137 @@ export const DOCKER_UPDATE_COMMAND =
   "docker compose pull && docker compose up -d && docker image prune -af --filter label=org.opencontainers.image.source=https://github.com/phantomptr/ps5upload";
 
 const DISMISSED_KEY = "ps5upload.web_update_dismissed";
+const NOTIFIED_KEY = "ps5upload.web_update_notified";
 
-/** Whether to show the bar for this answer: an update, not dismissed for that version. */
+/** Whether to show the update for this answer: an update, not dismissed for that version. */
 export function shouldShowWebUpdate(u: EngineUpdate | null, dismissed: string | null): boolean {
   return !!u?.available && !!u.latest && u.latest !== dismissed;
 }
 
+interface WebUpdateState {
+  update: EngineUpdate | null;
+  dismissed: string | null;
+  /** Asks the engine once per page load (the engine itself checks GitHub on its own schedule). */
+  load: () => void;
+  dismiss: (version: string) => void;
+}
+
+let loading = false;
+
+/** The web UI's update (a browser using a self-hosted engine): read once, shared by the Settings
+ *  row, the Settings dot and the update banner. */
+export const useWebUpdateStore = create<WebUpdateState>((set, get) => ({
+  update: null,
+  dismissed: safeGetItem(DISMISSED_KEY),
+  load() {
+    if (loading || get().update) return;
+    loading = true;
+    fetch(`${getEngineUrl()}/api/engine/update`, { signal: AbortSignal.timeout(20_000) })
+      .then((r) => (r.ok ? (r.json() as Promise<EngineUpdate>) : null))
+      .then((u) => {
+        set({ update: u });
+        // The bell gets it once per version, like the desktop app's update notice.
+        if (u?.available && u.latest && safeGetItem(NOTIFIED_KEY) !== u.latest) {
+          safeSetItem(NOTIFIED_KEY, u.latest);
+          pushNotification(
+            "info",
+            trStatic("update_notif_title", "Update available — v{ver}", { ver: u.latest }),
+            { link: "/settings" },
+          );
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        loading = false;
+      });
+  },
+  dismiss(version) {
+    safeSetItem(DISMISSED_KEY, version);
+    set({ dismissed: version });
+  },
+}));
+
+/** The update shown by the web UI now, or null. */
+export function webUpdateWaiting(s: Pick<WebUpdateState, "update" | "dismissed">): string | null {
+  return shouldShowWebUpdate(s.update, s.dismissed) ? (s.update?.latest ?? null) : null;
+}
+
+/** How to update where the engine runs, with the release's notes: Details in the web UI. */
+export function WebUpdateHowTo({
+  version,
+  update,
+  onClose,
+}: {
+  version: string;
+  update: EngineUpdate | null;
+  onClose: () => void;
+}) {
+  const tr = useTr();
+  const [copied, setCopied] = useState(false);
+  return (
+    <Modal open onClose={onClose} title={tr("whats_new_in", { version }, `What's new in v${version}`)} size="xl">
+      <div className="max-h-[60vh] overflow-auto p-4 text-sm">
+        <div className="mb-4 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3">
+          {update?.docker ? (
+            <>
+              <p className="mb-2">
+                {tr(
+                  "web_update_how_docker",
+                  undefined,
+                  "To update, run this in the folder with your compose file (Watchtower can also do it for you):",
+                )}
+              </p>
+              <div className="flex items-center gap-2">
+                <code className="min-w-0 flex-1 overflow-x-auto rounded bg-[var(--color-surface)] px-2 py-1 font-mono text-xs">
+                  {DOCKER_UPDATE_COMMAND}
+                </code>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => void writeClipboard(DOCKER_UPDATE_COMMAND).then((ok) => setCopied(ok))}
+                >
+                  <Copy size={13} />
+                  {copied ? "✓" : tr("copy", undefined, "Copy")}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <p>
+              {tr(
+                "web_update_how_app",
+                undefined,
+                "This page comes from PS5Upload on another computer. Update the app there, and this page updates with it.",
+              )}
+            </p>
+          )}
+        </div>
+        {update?.latest === version && <ReleaseNotesBody version={version} notes={update.notes ?? ""} />}
+      </div>
+    </Modal>
+  );
+}
+
 /**
- * The update bar for the web UI (a browser using a self-hosted engine). The desktop app has
- * UpdateToast, which downloads and installs; a page can't, so this one says what's new and how
- * to update where the engine runs: pull the new image, or update the app on that computer.
+ * The update row at the top of Settings in the web UI (a browser using a self-hosted engine). The
+ * desktop app has UpdateToast, which downloads and installs; a page can't, so this one says
+ * what's new and how to update where the engine runs: pull the new image, or update the app on
+ * that computer. A routine update shows only here, as a dot on Settings and in the bell
+ * (lib/updateNotice); the banner across the top is for a PS5 that runs a newer helper.
  */
 export function WebUpdateToast() {
   const tr = useTr();
-  const [update, setUpdate] = useState<EngineUpdate | null>(null);
-  const [dismissed, setDismissed] = useState<string | null>(() => safeGetItem(DISMISSED_KEY));
+  const update = useWebUpdateStore((s) => s.update);
+  const version = useWebUpdateStore(webUpdateWaiting);
+  const dismiss = useWebUpdateStore((s) => s.dismiss);
   const [showNotes, setShowNotes] = useState(false);
-  const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    let live = true;
-    fetch(`${getEngineUrl()}/api/engine/update`, { signal: AbortSignal.timeout(20_000) })
-      .then((r) => (r.ok ? (r.json() as Promise<EngineUpdate>) : null))
-      .then((u) => live && setUpdate(u))
-      .catch(() => undefined);
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  if (!shouldShowWebUpdate(update, dismissed) || !update?.latest) return null;
-  const version = update.latest;
+  if (!version) return null;
 
   return (
-    <div className="mx-3 mt-2 flex items-center gap-3 rounded-full border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] px-4 py-2 text-sm md:mx-6">
+    <div
+      data-testid="settings-update-row"
+      className="mb-4 flex items-center gap-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] px-4 py-2 text-sm"
+    >
       <Sparkles size={15} className="shrink-0 text-[var(--color-accent)]" />
       <span className="min-w-0 flex-1 truncate">
         <span className="font-medium text-[var(--color-text)]">
@@ -76,60 +176,12 @@ export function WebUpdateToast() {
       <button
         type="button"
         aria-label={tr("update_toast_dismiss", undefined, "Dismiss")}
-        onClick={() => {
-          safeSetItem(DISMISSED_KEY, version);
-          setDismissed(version);
-        }}
+        onClick={() => dismiss(version)}
         className="shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:text-[var(--color-text)]"
       >
         <X size={14} />
       </button>
-      {showNotes && (
-        <Modal
-          open
-          onClose={() => setShowNotes(false)}
-          title={tr("whats_new_in", { version }, `What's new in v${version}`)}
-          size="xl"
-        >
-          <div className="max-h-[60vh] overflow-auto p-4 text-sm">
-            <div className="mb-4 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3">
-              {update.docker ? (
-                <>
-                  <p className="mb-2">
-                    {tr(
-                      "web_update_how_docker",
-                      undefined,
-                      "To update, run this in the folder with your compose file (Watchtower can also do it for you):",
-                    )}
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <code className="min-w-0 flex-1 overflow-x-auto rounded bg-[var(--color-surface)] px-2 py-1 font-mono text-xs">
-                      {DOCKER_UPDATE_COMMAND}
-                    </code>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => void writeClipboard(DOCKER_UPDATE_COMMAND).then((ok) => setCopied(ok))}
-                    >
-                      <Copy size={13} />
-                      {copied ? "✓" : tr("copy", undefined, "Copy")}
-                    </Button>
-                  </div>
-                </>
-              ) : (
-                <p>
-                  {tr(
-                    "web_update_how_app",
-                    undefined,
-                    "This page comes from PS5Upload on another computer. Update the app there, and this page updates with it.",
-                  )}
-                </p>
-              )}
-            </div>
-            <ReleaseNotesBody version={version} notes={update.notes ?? ""} />
-          </div>
-        </Modal>
-      )}
+      {showNotes && <WebUpdateHowTo version={version} update={update} onClose={() => setShowNotes(false)} />}
     </div>
   );
 }

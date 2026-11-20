@@ -47,6 +47,17 @@ describe("check for updates", () => {
     });
   });
 
+  it("an update the check finds opens Settings, whose top row offers it (no banner shows it)", async () => {
+    const open = vi.fn();
+    useUpdateStore.setState({
+      phase: { kind: "idle" },
+      checkNow: async () => useUpdateStore.setState({ phase: { kind: "available", result: result("7.4.3", true) } }),
+    });
+    await checkForUpdatesNow(tr, open);
+    expect(open).toHaveBeenCalledOnce();
+    expect(useToastStore.getState().toasts).toEqual([]);
+  });
+
   it("with an update already found, opens Settings instead of checking again", async () => {
     const checkNow = vi.fn(async () => {});
     const open = vi.fn();

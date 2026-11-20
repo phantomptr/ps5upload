@@ -2881,9 +2881,6 @@ library_mount_tooltip_smp: "このイメージを ShadowMount+ に渡します�
 
 
 
-helper_mismatch_title: "PS5 ヘルパーは v{payload}、このアプリは v{app} です",
-helper_mismatch_send: "ヘルパーを送る",
-helper_mismatch_body_v3: "PS5 側で行うことはありません。「ヘルパーを送る」を押すと、このアプリが本体に合ったヘルパーを送ります。それまでは新しいバージョンの修正や機能は動作しません。",
 
 "joberr.direct_staged_file_missing_v2": "このアップロードはすでに完了していたため、公開するものが残っていません。さらに PS5 上のファイルが見つからないか、サイズが正しくありません。もう一度アップロードし、「再開」ではなく「置き換え」を選んでください。",
 "joberr.direct_tx_corrupt": "この転送で PS5 がプロトコルの破損を検出しました。「ペイロード送信」タブからペイロードを再起動して、もう一度お試しください。",
@@ -4408,8 +4405,6 @@ queue_stop_install_title: "このインストールを止めますか?",
 queue_stopping: "停止中…",
 "collection.send_submit": "送信",
 queue_install_quiet: "PS5 から {min} 分間データの要求がありません。PS5 でキャンセルしましたか?ここで止めてください (⊘)。",
-helper_mismatch_app_older: "別のデバイスがより新しいヘルパーを送信しました。このアプリを更新して合わせてください。このアプリのヘルパーを送ると、すべてのデバイスで古いヘルパーに置き換わります。",
-helper_mismatch_update_app: "このアプリを更新",
 mesh_chip: "他のデバイス: {count}",
 mesh_another_device: "別のデバイス",
 mesh_ev_restart: "{name} がこの本体のヘルパーを再起動しています。転送は一時停止し、すぐに再開します。",
@@ -7510,7 +7505,6 @@ helper_copies_updated_title: "ヘルパーを更新しました",
 helper_copies_updated_body: "次に再起動したとき、PS5 はヘルパー {version} を起動します。",
 helper_copies_failed_title: "PS5 が起動時に読み込むヘルパーを更新できませんでした",
 helper_copies_failed_body: "古いヘルパーのままです: {list}。PS5 は再起動のたびにこれを起動します。手動で直すには、リリースページから ps5upload.elf {version} をダウンロードしてそのファイルに上書きコピーする（ファイル画面、FTP、USB ドライブ）か、Payload Manager で同じ名前で再アップロードしてください。({error})",
-helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパーのコピーを起動しました ({list})。「ヘルパーを送る」を押すと、このアプリが合ったヘルパーを送り、そのコピーも更新するので、再起動後は新しいものが起動します。",
   hw_gpu_clock: "GPU クロック",
   hw_gpu_clock_hint: "SMU グラフィックスクロック（要求時に読み取り）",
   hw_cpu_measured: "CPU クロック（実測）",

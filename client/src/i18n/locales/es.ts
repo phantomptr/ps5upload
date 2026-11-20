@@ -2811,9 +2811,6 @@ library_mount_tooltip_smp: "Entregar esta imagen a ShadowMount+, que la monta y 
 
 
 
-helper_mismatch_title: "El ayudante de la PS5 es v{payload} pero esta app es v{app}",
-helper_mismatch_send: "Enviar ayudante",
-helper_mismatch_body_v3: "No hay nada que hacer en la propia PS5: pulsa Enviar ayudante y esta app envía a la consola el ayudante que corresponde. Hasta entonces, los arreglos y funciones de la versión nueva no funcionarán.",
 
 "joberr.direct_staged_file_missing_v2": "Esta subida ya había terminado, así que no quedaba nada por publicar, y ahora el archivo en la PS5 falta o tiene un tamaño incorrecto. Vuelve a subirlo y elige «Reemplazar» en lugar de «Reanudar».",
 "joberr.direct_tx_corrupt": "La PS5 detectó corrupción del protocolo en esta transferencia. Reinicia el payload desde la pestaña «Enviar payload» y vuelve a intentarlo.",
@@ -4342,8 +4339,6 @@ queue_stop_install_title: "¿Detener esta instalación?",
 queue_stopping: "Deteniendo…",
 "collection.send_submit": "Enviar",
 queue_install_quiet: "La PS5 no ha pedido datos desde hace {min} min. ¿La cancelaste en la PS5? Detenla aquí (⊘).",
-helper_mismatch_app_older: "Otro dispositivo envió un ayudante más nuevo. Actualiza esta app para que coincida; enviar el ayudante de esta app lo sustituiría por uno más antiguo para todos los dispositivos.",
-helper_mismatch_update_app: "Actualizar esta app",
 mesh_chip: "Otros dispositivos: {count}",
 mesh_another_device: "Otro dispositivo",
 mesh_ev_restart: "{name} está reiniciando el ayudante en esta consola. Las transferencias se pausan y continúan en un momento.",
@@ -7444,7 +7439,6 @@ helper_copies_updated_title: "Ayudante actualizado",
 helper_copies_updated_body: "Tu PS5 iniciará el ayudante {version} la próxima vez que se reinicie.",
 helper_copies_failed_title: "No se pudo actualizar el ayudante que tu PS5 inicia al arrancar",
 helper_copies_failed_body: "Sigue siendo el ayudante antiguo: {list}. La PS5 lo vuelve a iniciar tras cada reinicio. Para arreglarlo a mano, descarga ps5upload.elf {version} de la página de versiones y cópialo sobre ese archivo (pantalla Archivos, FTP o la unidad USB), o vuelve a subirlo en Payload Manager con el mismo nombre. ({error})",
-helper_mismatch_boot_copy: "Tu PS5 inició una copia antigua del ayudante que guarda para el arranque ({list}). Pulsa Enviar ayudante: esta app envía el ayudante que corresponde y también actualiza esa copia, así la PS5 inicia el nuevo tras reiniciar.",
   hw_gpu_clock: "Reloj de la GPU",
   hw_gpu_clock_hint: "Reloj gráfico del SMU, leído a petición",
   hw_cpu_measured: "Reloj de CPU (medido)",

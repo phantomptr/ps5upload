@@ -3367,9 +3367,6 @@ library_mount_tooltip_smp: "Add át ezt a képet a ShadowMount+-nak, amely csato
 
 
 
-helper_mismatch_title: "A PS5 segédprogram v{payload}, de ez az alkalmazás v{app}",
-helper_mismatch_send: "Segédprogram küldése",
-helper_mismatch_body_v3: "A PS5-ön magán nincs teendő: nyomd meg a „Segédprogram küldése” gombot, és ez az app elküldi a konzolra a hozzá illő segédprogramot. Addig az újabb verzió javításai és funkciói nem működnek.",
 
 "joberr.direct_staged_file_missing_v2": "Ez a feltöltés már befejeződött, így nem maradt semmi közzétehető — és a fájl a PS5-ön most hiányzik vagy rossz méretű. Töltsd fel újra, és a Folytatás helyett válaszd a Csere lehetőséget.",
 "joberr.direct_tx_corrupt": "A PS5 protokollhibát észlelt ebben az átvitelben. Indítsd újra a payloadot a Payload küldése fülről, és próbáld újra.",
@@ -4681,8 +4678,6 @@ queue_stop_install_title: "Leállítod ezt a telepítést?",
 queue_stopping: "Leállítás…",
 "collection.send_submit": "Küldés",
 queue_install_quiet: "A PS5 {min} perce nem kér adatot. Megszakítottad a PS5-ön? Állítsd le itt (⊘).",
-helper_mismatch_app_older: "Egy másik eszköz újabb segédprogramot küldött. Frissítsd ezt az alkalmazást, hogy egyezzen vele; ha ennek az alkalmazásnak a segédprogramját küldöd, az minden eszköz számára egy régebbire cserélné.",
-helper_mismatch_update_app: "Alkalmazás frissítése",
 mesh_chip: "Más eszközök: {count}",
 mesh_another_device: "Egy másik eszköz",
 mesh_ev_restart: "{name} újraindítja a segédprogramot ezen a konzolon. Az átvitelek szünetelnek, és egy pillanat múlva folytatódnak.",
@@ -7783,7 +7778,6 @@ helper_copies_updated_title: "Segéd frissítve",
 helper_copies_updated_body: "A PS5 a következő újraindításkor a(z) {version} segédet indítja.",
 helper_copies_failed_title: "Nem sikerült frissíteni a segédprogramot, amit a PS5 induláskor elindít",
 helper_copies_failed_body: "Még mindig a régi segédprogram: {list}. A PS5 minden újraindítás után újra elindítja. Kézi javításhoz töltsd le a ps5upload.elf {version} fájlt a kiadások oldaláról, és másold rá arra a fájlra (Fájlok képernyő, FTP vagy az USB-meghajtó), vagy töltsd fel újra a Payload Managerben ugyanazzal a névvel. ({error})",
-helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tárolt példányát indította el ({list}). Nyomd meg a „Segédprogram küldése” gombot: az app elküldi a hozzá illő segédprogramot, és azt a példányt is frissíti, így újraindítás után a PS5 az újat indítja.",
   hw_gpu_clock: "GPU-órajel",
   hw_gpu_clock_hint: "SMU grafikus órajel, kérésre olvasva",
   hw_cpu_measured: "CPU-órajel (mért)",

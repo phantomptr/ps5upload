@@ -2871,9 +2871,6 @@ library_mount_tooltip_smp: "Serahkan image ini ke ShadowMount+, yang memasang da
 
 
 
-helper_mismatch_title: "Helper PS5 v{payload}, tapi aplikasi ini v{app}",
-helper_mismatch_send: "Kirim helper",
-helper_mismatch_body_v3: "Tidak ada yang perlu dilakukan di PS5 itu sendiri: tekan Kirim helper dan aplikasi ini mengirim helper yang sesuai ke konsol. Sebelum itu, perbaikan dan fitur versi baru tidak akan berfungsi.",
 
 "joberr.direct_staged_file_missing_v2": "Unggahan ini sebenarnya sudah selesai, jadi tidak ada lagi yang perlu diterbitkan — dan berkas di PS5 kini hilang atau ukurannya salah. Unggah ulang dan pilih «Ganti», bukan «Lanjutkan».",
 "joberr.direct_tx_corrupt": "PS5 mendeteksi kerusakan protokol pada transfer ini. Mulai ulang payload dari tab «Kirim payload», lalu coba lagi.",
@@ -4398,8 +4395,6 @@ queue_stop_install_title: "Hentikan pemasangan ini?",
 queue_stopping: "Menghentikan…",
 "collection.send_submit": "Kirim",
 queue_install_quiet: "PS5 tidak meminta data selama {min} menit. Dibatalkan di PS5? Hentikan di sini (⊘).",
-helper_mismatch_app_older: "Perangkat lain mengirim helper yang lebih baru. Perbarui aplikasi ini agar sesuai; mengirim helper aplikasi ini akan menggantinya dengan versi lebih lama untuk semua perangkat.",
-helper_mismatch_update_app: "Perbarui aplikasi ini",
 mesh_chip: "Perangkat lain: {count}",
 mesh_another_device: "Perangkat lain",
 mesh_ev_restart: "{name} sedang memulai ulang helper di konsol ini. Transfer dijeda dan berlanjut sebentar lagi.",
@@ -7500,7 +7495,6 @@ helper_copies_updated_title: "Helper diperbarui",
 helper_copies_updated_body: "PS5 Anda akan menjalankan helper {version} saat dinyalakan ulang berikutnya.",
 helper_copies_failed_title: "Tidak dapat memperbarui helper yang dijalankan PS5 saat boot",
 helper_copies_failed_body: "Masih helper lama: {list}. PS5 menjalankannya lagi setiap restart. Untuk memperbaikinya manual, unduh ps5upload.elf {version} dari halaman rilis dan salin menimpa file itu (layar Files, FTP, atau drive USB), atau unggah lagi di Payload Manager dengan nama yang sama. ({error})",
-helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimpannya untuk boot ({list}). Tekan Kirim helper: aplikasi ini mengirim helper yang sesuai dan juga memperbarui salinan itu, sehingga PS5 menjalankan yang baru setelah restart.",
   hw_gpu_clock: "Clock GPU",
   hw_gpu_clock_hint: "Clock grafis SMU, dibaca sesuai permintaan",
   hw_cpu_measured: "Clock CPU (terukur)",
