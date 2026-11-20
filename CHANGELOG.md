@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.14
 
 **Fixes**
 - **The PS5 helper starts again when it is sent twice at once (#877).** In 12.6.13, when a payload loader and you both started the helper within a few seconds, the second copy stepped aside, and if the first then failed to start, no helper was left running and the app said the helper isn't reachable. The second copy now waits for the first and takes over if the first doesn't come up.
