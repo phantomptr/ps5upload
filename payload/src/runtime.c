@@ -68,6 +68,7 @@
 #include "sys_registry.h"
 #include "profile.h"
 #include "sony_api_lock.h"
+#include "app_temp_path.h"
 #include "statvfs_avail.h"
 #include "power_phase.h"
 #include "net_probe.h"
@@ -2187,6 +2188,8 @@ static int is_path_lexically_allowed(const char *p) {
     /* Accept exactly /data or /data/... */
     if (strcmp(p, "/data") == 0 || strncmp(p, "/data/", 6) == 0) return 1;
     if (strcmp(p, "/user") == 0 || strncmp(p, "/user/", 6) == 0) return 1;
+    /* A running game's temporary-data folder (#889): see app_temp_path.h. */
+    if (is_app_temp_path(p)) return 1;
     /* /mnt/ext<digit>[/...] and /mnt/usb<digit>[/...] */
     if (strncmp(p, "/mnt/ext", 8) == 0 || strncmp(p, "/mnt/usb", 8) == 0) {
         const char *q = p + 8;

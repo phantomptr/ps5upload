@@ -6,6 +6,11 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Fixes**
+- **Copying files into a running game's temporary folder works (#889).** Some games' add-on guides have you copy folders into the game's temporary folder on the internal drive while the game runs (`/app_temp0/...`). PS5Upload refused that with "console refused the transfer (9)", because that folder was not on the PS5 helper's list of places it may write to. It is now. Not yet tried on a console.
+
+## 12.6.16
+
 **New**
 - **The window opens where you left it.** The desktop app now remembers the main window's size, position and whether it was maximized. If that screen is no longer connected, or the window would not fit, it opens centred on your main screen at a size that fits.
 - **Network share backups can also keep a copy on a PS5 drive (#885).** "Backups to a network share" now has its own "Also keep a copy on a PS5 drive" option with a drive picker, and its own "Versions to keep on the PS5 drive" (for example 1 on the M.2). Each run updates both the share and the drive, from the engine, with no computer folder and no app open. If the share can't be reached, the drive still gets its copy and the share is tried again next time.
