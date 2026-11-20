@@ -25,6 +25,8 @@ interface CheckLike {
   reachable?: boolean;
   engineReachable?: boolean;
   session?: string | null;
+  /** A helper answered but is too old for this app (#877). */
+  helperTooOld?: boolean;
 }
 
 function isPower(v: unknown): v is "awake" | "rest" | "unreachable" {
@@ -41,7 +43,7 @@ export function reasonFromCheck(r: CheckLike | null | undefined): string | null 
  * The power state a `payloadCheck` result says, or null when it says nothing
  * about the console (the engine itself did not answer: keep what was known).
  *
- * - helper answering, or answering but wanting pairing → awake;
+ * - helper answering, answering but wanting pairing, or answering but too old → awake;
  * - `power` from the engine, when present and valid;
  * - the reason `console_rest_mode` → rest (an engine that names the reason but
  *   not the field);
@@ -51,7 +53,7 @@ export function reasonFromCheck(r: CheckLike | null | undefined): string | null 
 export function powerFromCheck(r: CheckLike | null | undefined): HostPower | null {
   if (!r) return null;
   if (r.engineReachable === false) return null;
-  if (r.reachable || r.session === "needs_pairing") return "awake";
+  if (r.reachable || r.session === "needs_pairing" || r.helperTooOld === true) return "awake";
   const power = (r as { power?: unknown }).power;
   if (isPower(power)) return power;
   if (reasonFromCheck(r) === REST_MODE_REASON) return "rest";

@@ -18,7 +18,8 @@ pub use ps5upload_core::ddp::Power;
 use ps5upload_core::ddp::{CODE_AWAKE, CODE_STANDBY};
 pub use ps5upload_core::mgmt::{
     AVA1_UNREACHABLE, CONSOLE_NOT_ANSWERING_MESSAGE, CONSOLE_REST_MODE, CONSOLE_REST_MODE_MESSAGE,
-    HELPER_NOT_AVA1, HELPER_NOT_AVA1_MESSAGE, NOT_PAIRED, NOT_PAIRED_MESSAGE,
+    HELPER_NOT_AVA1, HELPER_NOT_AVA1_MESSAGE, HELPER_TOO_OLD_MESSAGE, NOT_PAIRED,
+    NOT_PAIRED_MESSAGE,
 };
 
 /// How long one session attempt may take (nominal constant: an unreachable console must not
@@ -44,11 +45,6 @@ pub const HELPER_DOWN_LOADER_DOWN_MESSAGE: &str = "Nothing on the PS5 answers: n
     ps5upload helper nor a payload loader on port 9021. Run your jailbreak's loader first \
     (etaHEN, elfldr or the loader you use), then send the helper: Send helper in the app, or \
     load ps5upload.elf yourself.";
-/// A helper answered, but it is too old for this app.
-pub const HELPER_TOO_OLD_MESSAGE: &str = "An older ps5upload helper is running on the PS5; \
-    this app needs the one that ships with it. Press Send helper on the Connection screen, or \
-    load the ps5upload.elf of this version with your payload loader.";
-
 /// `helper_not_ava1` with the message that fits what was found: see the three constants.
 fn helper_not_ava1_because(detail: &'static str) -> UploadFailure {
     UploadFailure {
