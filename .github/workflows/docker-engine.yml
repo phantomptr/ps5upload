@@ -762,7 +762,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Wait until both images are published
-        timeout-minutes: 15
+        timeout-minutes: 12
         run: |
           set -euo pipefail
           for image in $IMAGES; do
