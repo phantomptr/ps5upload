@@ -677,8 +677,8 @@ jobs:
   # edit that clears the pre-release flag), never on the pre-release that
   # create-release publishes; and on a dispatch with promote=true, after that
   # run's own manifests are pushed. Nothing is rebuilt: the multi-arch manifest the
-  # tag run pushed as :<version> is re-tagged, for both images. Fails loudly
-  # if that manifest is missing (the tag run never finished).
+  # tag run pushed as :<version> is re-tagged, for both images. Waits while the
+  # tag run is still building, and fails loudly if a manifest never appears.
   promote:
     needs: [resolve, merge, merge-webui]
     # always(): on a `release` event merge and merge-webui are skipped (they build tag runs only).
@@ -697,6 +697,7 @@ jobs:
       TAG: ${{ needs.resolve.outputs.tag }}
       VERSION: ${{ needs.resolve.outputs.version }}
       MAJOR_MINOR: ${{ needs.resolve.outputs.major_minor }}
+      IMAGES: ${{ needs.resolve.outputs.image }} ${{ needs.resolve.outputs.image_webui }}
     steps:
       # `:latest` follows the release page, not this workflow's inputs. On a `promote=true`
       # dispatch the images are ready before publish.yml has made the release (publish ends
@@ -760,18 +761,31 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Wait until both images are published
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          for image in $IMAGES; do
+            for attempt in $(seq 1 20); do
+              if docker buildx imagetools inspect "${image}:${VERSION}" >/dev/null 2>&1; then
+                break
+              fi
+              if [ "$attempt" -eq 20 ]; then
+                echo "::error::${image}:${VERSION} was not published after 10 minutes: did the tag's docker-engine run fail? :latest was not moved. Once both images are out, re-run this job."
+                exit 1
+              fi
+              echo "${image}:${VERSION}: not there yet; waiting"
+              sleep 30
+            done
+          done
+
       - name: Retag both images as latest and major.minor
         env:
-          IMAGES: ${{ needs.resolve.outputs.image }} ${{ needs.resolve.outputs.image_webui }}
           MOVE_LATEST: ${{ steps.release.outputs.move_latest }}
           MOVE_LINE: ${{ steps.release.outputs.move_line }}
         run: |
           set -euo pipefail
           for image in $IMAGES; do
-            if ! docker buildx imagetools inspect "${image}:${VERSION}" >/dev/null; then
-              echo "::error::${image}:${VERSION} was never published — did the tag's docker-engine run finish?"
-              exit 1
-            fi
             tags=()
             if [ "$MOVE_LATEST" = true ]; then tags+=(-t "${image}:latest"); fi
             if [ "$MOVE_LINE" = true ]; then tags+=(-t "${image}:${MAJOR_MINOR}"); fi
