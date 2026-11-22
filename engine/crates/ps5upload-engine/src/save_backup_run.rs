@@ -369,7 +369,13 @@ pub struct Journal {
     cancel_local: Arc<AtomicBool>,
     /// The copy going now, per kind: the save, the place, its bytes written so far and its size.
     live: Mutex<BTreeMap<Which, Live>>,
+    /// When the record was last written: changes in between wait (at most `WRITE_EVERY`), so a
+    /// run of many small saves does not write the file a few times a second.
+    written: Mutex<Option<std::time::Instant>>,
 }
+
+/// How often a running run's record is written at most; a run's start and end always are.
+const WRITE_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
 
 type Live = (usize, Place, Arc<AtomicU64>, u64);
 
@@ -405,6 +411,7 @@ impl Journal {
             cancel_share: Arc::default(),
             cancel_local: Arc::default(),
             live: Mutex::default(),
+            written: Mutex::default(),
         };
         if changed {
             j.persist(&j.lock());
@@ -515,7 +522,7 @@ impl Journal {
                 let places = it.dests.len().max(1) as u64;
                 let item_size = it.size;
                 if let Some(d) = it.dests.get_mut(&place) {
-                    if d.step == Step::Copying && size > 0 {
+                    if d.step == Step::Copying && size > 0 && sent > 0 {
                         d.pct = Some((sent.saturating_mul(100) / size) as u8);
                         partial = item_size.saturating_mul(sent) / size / places;
                     }
@@ -567,7 +574,12 @@ impl RunRef<'_> {
         let out = f(run);
         if save {
             run.updated_at = now_ms();
-            self.j.persist(&b);
+            let mut w = self.j.written.lock().unwrap_or_else(|e| e.into_inner());
+            if w.is_none_or(|at| at.elapsed() >= WRITE_EVERY) {
+                *w = Some(std::time::Instant::now());
+                drop(w);
+                self.j.persist(&b);
+            }
         }
         out
     }
@@ -621,14 +633,29 @@ impl RunRef<'_> {
 
     /// Changes the state of save `i` in `place`.
     pub fn dest(&self, i: usize, place: Place, f: impl FnOnce(&mut DestStatus)) {
-        self.with(true, |r| {
-            if let Some(d) = r.items.get_mut(i).and_then(|it| it.dests.get_mut(&place)) {
-                f(d);
-                if d.step != Step::Copying {
-                    d.pct = None;
-                }
+        let named = self.with(true, |r| {
+            let Some(d) = r.items.get_mut(i).and_then(|it| it.dests.get_mut(&place)) else {
+                return false;
+            };
+            let before = d.file.clone();
+            f(d);
+            if d.step != Step::Copying {
+                d.pct = None;
             }
+            // A copy about to be written is named in the file at once: a run cut off while it is
+            // written has it removed before the save is copied again.
+            d.step == Step::Copying && d.file.is_some() && d.file != before
         });
+        if named {
+            self.write_now();
+        }
+    }
+
+    /// Writes the record now, whenever it was last written.
+    fn write_now(&self) {
+        let b = self.j.lock();
+        *self.j.written.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+        self.j.persist(&b);
     }
 
     /// How far the copy of save `i` to `place` is (kept in memory only).

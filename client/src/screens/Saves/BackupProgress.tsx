@@ -34,7 +34,10 @@ type Owners = ReadonlyArray<{ id: number; name: string | null }>;
 const POLL_MS = 2000;
 
 function usePageVisible(): boolean {
-  const [visible, setVisible] = useState(() => typeof document === "undefined" || document.visibilityState !== "hidden");
+  const [visible, setVisible] = useState(
+    () =>
+      typeof document === "undefined" || document.visibilityState !== "hidden",
+  );
   useEffect(() => {
     const on = () => setVisible(document.visibilityState !== "hidden");
     document.addEventListener("visibilitychange", on);
@@ -46,7 +49,11 @@ function usePageVisible(): boolean {
 /** The engine's record of `which`'s runs. Asked once (and again when `nudge` changes); while
  *  `follow` is on and a run runs, every few seconds while the page is shown. `supported` is false
  *  for an engine without runs (before 12.6.20). */
-export function useBackupRuns(which: BackupWhich, follow: boolean, nudge?: unknown) {
+export function useBackupRuns(
+  which: BackupWhich,
+  follow: boolean,
+  nudge?: unknown,
+) {
   const [view, setView] = useState<BackupRunsView | null>(null);
   const [supported, setSupported] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -107,12 +114,17 @@ export function useBackupRuns(which: BackupWhich, follow: boolean, nudge?: unkno
 }
 
 export function placeLabel(p: BackupPlace, tr: Tr): string {
-  if (p === "share") return tr("backup_place_share", undefined, "Network share");
+  if (p === "share")
+    return tr("backup_place_share", undefined, "Network share");
   if (p === "drive") return tr("backup_place_drive", undefined, "PS5 drive");
   return tr("backup_place_local", undefined, "This computer");
 }
 
-export function stepLabel(step: BackupStep, pct: number | null, tr: Tr): string {
+export function stepLabel(
+  step: BackupStep,
+  pct: number | null,
+  tr: Tr,
+): string {
   switch (step) {
     case "reading":
       return tr("backup_step_reading", undefined, "Reading from the PS5");
@@ -136,9 +148,17 @@ export function stepLabel(step: BackupStep, pct: number | null, tr: Tr): string 
 function whyLabel(code: string, tr: Tr): string {
   switch (code) {
     case "console_gone":
-      return tr("backup_why_console_gone", undefined, "the PS5 stopped answering");
+      return tr(
+        "backup_why_console_gone",
+        undefined,
+        "the PS5 stopped answering",
+      );
     case "interrupted":
-      return tr("backup_why_interrupted", undefined, "the app's engine stopped (closed or restarted)");
+      return tr(
+        "backup_why_interrupted",
+        undefined,
+        "the app's engine stopped (closed or restarted)",
+      );
     case "cancelled":
       return tr("backup_why_cancelled", undefined, "it was cancelled");
     default:
@@ -217,9 +237,15 @@ export function BackupRunBar({
   const note = running ? null : stoppedNote(runs.view);
   const hasRun = !!runs.view?.run;
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" data-testid={testId}>
+    <div
+      className="mt-2 flex flex-wrap items-center gap-2 text-xs"
+      data-testid={testId}
+    >
       {note && (
-        <p className="min-w-0 flex-1 basis-[14rem] text-[var(--color-warn)]" data-testid={`${testId}-stopped`}>
+        <p
+          className="min-w-0 flex-1 basis-[14rem] text-[var(--color-warn)]"
+          data-testid={`${testId}-stopped`}
+        >
           {stoppedText(note, tr)}
         </p>
       )}
@@ -241,7 +267,10 @@ export function BackupRunBar({
           leftIcon={<Activity size={12} />}
           onClick={onOpen}
           data-testid={`${testId}-open`}
-          aria-label={tr("backup_progress_open", undefined, "Backup progress") + ` (${which})`}
+          aria-label={
+            tr("backup_progress_open", undefined, "Backup progress") +
+            ` (${which})`
+          }
         >
           {tr("backup_progress_open", undefined, "Backup progress")}
         </Button>
@@ -255,7 +284,9 @@ function SaveTitle({ row, owners }: { row: Row; owners: Owners }) {
   const tr = useTr();
   const { name } = useSaveGameName(row.title_id);
   const owner = owners.find((o) => o.id >>> 0 === row.user_id >>> 0);
-  const who = owner?.name ?? tr("saves_user_other", { id: userHex(row.user_id) }, "Other user ({id})");
+  const who =
+    owner?.name ??
+    tr("saves_user_other", { id: userHex(row.user_id) }, "Other user ({id})");
   return (
     <>
       {name ? `${name} (${row.title_id})` : row.title_id}
@@ -277,17 +308,42 @@ function RowView({
 }) {
   const tr = useTr();
   const tone =
-    row.step === "failed" ? "text-[var(--color-bad)]" : row.step === "verified" ? "text-[var(--color-good)]" : "";
+    row.step === "failed"
+      ? "text-[var(--color-bad)]"
+      : row.step === "verified"
+        ? "text-[var(--color-good)]"
+        : "";
   return (
-    <li className="border-b border-[var(--color-border)] py-2 last:border-b-0" data-testid="backup-progress-row">
+    <li
+      className="border-b border-[var(--color-border)] py-2 last:border-b-0"
+      data-testid="backup-progress-row"
+    >
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="min-w-0 flex-1 basis-[12rem] truncate text-sm" title={row.path}>
-          {row.kind === "folder" ? row.path : <SaveTitle row={row} owners={owners} />}
+        <span
+          className="min-w-0 flex-1 basis-[12rem] truncate text-sm"
+          title={row.path}
+        >
+          {row.kind === "folder" ? (
+            row.path
+          ) : (
+            <SaveTitle row={row} owners={owners} />
+          )}
         </span>
-        {row.size > 0 && <span className="text-xs text-[var(--color-muted)]">{formatBytes(row.size)}</span>}
-        <span className={`text-xs ${tone}`}>{stepLabel(row.step, row.pct, tr)}</span>
+        {row.size > 0 && (
+          <span className="text-xs text-[var(--color-muted)]">
+            {formatBytes(row.size)}
+          </span>
+        )}
+        <span className={`text-xs ${tone}`}>
+          {stepLabel(row.step, row.pct, tr)}
+        </span>
         {canRetry && row.outcome === "failed" && (
-          <Button variant="ghost" size="sm" leftIcon={<RotateCcw size={12} />} onClick={onRetry}>
+          <Button
+            variant="ghost"
+            size="sm"
+            leftIcon={<RotateCcw size={12} />}
+            onClick={onRetry}
+          >
             {tr("backup_progress_retry", undefined, "Retry")}
           </Button>
         )}
@@ -302,7 +358,9 @@ function RowView({
         </div>
       )}
       {row.error && row.outcome !== "verified" && (
-        <p className="mt-1 break-words text-xs text-[var(--color-bad)]">{row.error}</p>
+        <p className="mt-1 break-words text-xs text-[var(--color-bad)]">
+          {row.error}
+        </p>
       )}
     </li>
   );
@@ -329,40 +387,80 @@ export function BackupProgressModal({
   const view = runs.view;
   const run = view?.run ?? null;
   useEffect(() => {
-    if (view?.run && view.summary) setSpeed(meter.current.sample(view.run.id, view.summary.bytes_done, view.now));
+    if (view?.run && view.summary)
+      setSpeed(
+        meter.current.sample(view.run.id, view.summary.bytes_done, view.now),
+      );
   }, [view]);
-  const all = overall(view ?? { run: null, summary: null, history: [], now: 0 }, speed);
+  const all = overall(
+    view ?? { run: null, summary: null, history: [], now: 0 },
+    speed,
+  );
   const shown = rows(run, which, filter);
   const failed = retryable(run);
   const note = stoppedNote(view);
   const running = run?.state === "running";
   const title =
     which === "share"
-      ? tr("backup_progress_title_share", undefined, "Backup progress: network share")
-      : tr("backup_progress_title_local", undefined, "Backup progress: automatic backups");
+      ? tr(
+          "backup_progress_title_share",
+          undefined,
+          "Backup progress: network share",
+        )
+      : tr(
+          "backup_progress_title_local",
+          undefined,
+          "Backup progress: automatic backups",
+        );
   const footer = (
     <>
       {running && (
-        <Button variant="secondary" leftIcon={<Square size={12} />} onClick={() => void runs.cancel()}>
+        <Button
+          variant="secondary"
+          leftIcon={<Square size={12} />}
+          onClick={() => void runs.cancel()}
+        >
           {tr("backup_progress_cancel", undefined, "Cancel backup")}
         </Button>
       )}
       {!running && failed.length > 0 && (
-        <Button variant="secondary" leftIcon={<RotateCcw size={12} />} onClick={() => void runs.again(failed)}>
-          {tr("backup_progress_retry_failed", { n: failed.length }, "Retry failed ({n})")}
+        <Button
+          variant="secondary"
+          leftIcon={<RotateCcw size={12} />}
+          onClick={() => void runs.again(failed)}
+        >
+          {tr(
+            "backup_progress_retry_failed",
+            { n: failed.length },
+            "Retry failed ({n})",
+          )}
         </Button>
       )}
-      {!running && note?.canContinue && (
-        <Button variant="primary" leftIcon={<Play size={12} />} onClick={() => void runs.again()}>
+      {/* Saves left (a run that stopped, or ones a Retry did not take up): Continue does them. */}
+      {!running && (view?.summary?.left ?? 0) > 0 && (
+        <Button
+          variant="primary"
+          leftIcon={<Play size={12} />}
+          onClick={() => void runs.again()}
+        >
           {tr("backup_progress_continue", undefined, "Continue backup")}
         </Button>
       )}
     </>
   );
   return (
-    <Modal open={open} onClose={onClose} title={title} titleIcon={<Activity size={16} />} size="xl" footer={footer}>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={title}
+      titleIcon={<Activity size={16} />}
+      size="xl"
+      footer={footer}
+    >
       <div data-testid={`backup-progress-${which}`}>
-        {runs.error && <p className="mb-2 text-xs text-[var(--color-bad)]">{runs.error}</p>}
+        {runs.error && (
+          <p className="mb-2 text-xs text-[var(--color-bad)]">{runs.error}</p>
+        )}
         {!run || !all ? (
           <p className="text-sm text-[var(--color-muted)]">
             {tr("backup_progress_none", undefined, "No backup has run yet.")}
@@ -371,48 +469,102 @@ export function BackupProgressModal({
           <>
             <div className="mb-1 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
               <span className="font-semibold">
-                {tr("backup_progress_saves", { done: all.done, total: all.total }, "{done} of {total} saves")}
+                {tr(
+                  "backup_progress_saves",
+                  { done: all.done, total: all.total },
+                  "{done} of {total} saves",
+                )}
               </span>
               <span className="text-[var(--color-muted)]">
                 {tr(
                   "backup_progress_bytes",
-                  { done: formatBytes(all.bytesDone), total: formatBytes(all.bytesTotal) },
+                  {
+                    done: formatBytes(all.bytesDone),
+                    total: formatBytes(all.bytesTotal),
+                  },
                   "{done} of {total}",
                 )}
               </span>
               {all.speed !== null && (
                 <span className="text-[var(--color-muted)]">
-                  {tr("backup_progress_speed", { speed: formatBytes(all.speed) }, "{speed}/s")}
+                  {tr(
+                    "backup_progress_speed",
+                    { speed: formatBytes(all.speed) },
+                    "{speed}/s",
+                  )}
                 </span>
               )}
               <span className="text-[var(--color-muted)]">
-                {tr("backup_progress_elapsed", { time: formatDuration(all.elapsedMs / 1000) }, "Elapsed {time}")}
+                {tr(
+                  "backup_progress_elapsed",
+                  { time: formatDuration(all.elapsedMs / 1000) },
+                  "Elapsed {time}",
+                )}
               </span>
               {all.leftMs !== null && (
                 <span className="text-[var(--color-muted)]">
-                  {tr("backup_progress_left", { time: formatDuration(all.leftMs / 1000) }, "About {time} left")}
+                  {tr(
+                    "backup_progress_left",
+                    { time: formatDuration(all.leftMs / 1000) },
+                    "About {time} left",
+                  )}
                 </span>
               )}
             </div>
             <ProgressBar
-              value={all.total > 0 ? (all.done + all.failed + all.skipped) / all.total : running ? null : 1}
+              value={
+                all.total > 0
+                  ? (all.done + all.failed + all.skipped) / all.total
+                  : running
+                    ? null
+                    : 1
+              }
               tone={all.failed > 0 ? "warn" : running ? "accent" : "good"}
               label={title}
             />
             <p className="mt-1 text-xs text-[var(--color-muted)]">
               {[
                 `${triggerLabel(run.trigger, tr)} · ${formatDate(run.started_at)} · ${stateLabel(run.state, tr)}`,
-                all.failed > 0 ? tr("backup_progress_failed_n", { n: all.failed }, "{n} failed") : null,
-                all.skipped > 0 ? tr("backup_progress_skipped_n", { n: all.skipped }, "{n} skipped") : null,
-                all.left > 0 ? tr("backup_progress_waiting_n", { n: all.left }, "{n} still to do") : null,
+                all.failed > 0
+                  ? tr(
+                      "backup_progress_failed_n",
+                      { n: all.failed },
+                      "{n} failed",
+                    )
+                  : null,
+                all.skipped > 0
+                  ? tr(
+                      "backup_progress_skipped_n",
+                      { n: all.skipped },
+                      "{n} skipped",
+                    )
+                  : null,
+                all.left > 0
+                  ? tr(
+                      "backup_progress_waiting_n",
+                      { n: all.left },
+                      "{n} still to do",
+                    )
+                  : null,
               ]
                 .filter(Boolean)
                 .join(" · ")}
             </p>
-            {note && <p className="mt-1 text-xs text-[var(--color-warn)]">{stoppedText(note, tr)}</p>}
+            {note && (
+              <p className="mt-1 text-xs text-[var(--color-warn)]">
+                {stoppedText(note, tr)}
+              </p>
+            )}
             {Object.entries(run.unreached).map(([host, why]) => (
-              <p key={host} className="mt-1 break-words text-xs text-[var(--color-bad)]">
-                {tr("backup_progress_unreached", { console: host, why }, "{console} could not be reached: {why}")}
+              <p
+                key={host}
+                className="mt-1 break-words text-xs text-[var(--color-bad)]"
+              >
+                {tr(
+                  "backup_progress_unreached",
+                  { console: host, why },
+                  "{console} could not be reached: {why}",
+                )}
               </p>
             ))}
             <div className="mt-3">
@@ -421,10 +573,34 @@ export function BackupProgressModal({
                 onChange={(v) => setFilter(v as RowFilter)}
                 ariaLabel={tr("backup_progress_filter", undefined, "Show")}
                 segments={[
-                  { value: "all", label: tr("backup_progress_filter_all", undefined, "All") },
-                  { value: "failed", label: tr("backup_progress_filter_failed", undefined, "Failed") },
-                  { value: "left", label: tr("backup_progress_filter_left", undefined, "To do") },
-                  { value: "verified", label: tr("backup_progress_filter_verified", undefined, "Verified") },
+                  {
+                    value: "all",
+                    label: tr("backup_progress_filter_all", undefined, "All"),
+                  },
+                  {
+                    value: "failed",
+                    label: tr(
+                      "backup_progress_filter_failed",
+                      undefined,
+                      "Failed",
+                    ),
+                  },
+                  {
+                    value: "left",
+                    label: tr(
+                      "backup_progress_filter_left",
+                      undefined,
+                      "To do",
+                    ),
+                  },
+                  {
+                    value: "verified",
+                    label: tr(
+                      "backup_progress_filter_verified",
+                      undefined,
+                      "Verified",
+                    ),
+                  },
                 ]}
               />
             </div>
@@ -460,7 +636,9 @@ export function BackupProgressModal({
                     },
                     "{when} ({why}): {ok} verified, {failed} failed, {left} left",
                   )}
-                  {h.reason_code && h.state !== "done" ? ` · ${whyLabel(h.reason_code, tr)}` : ""}
+                  {h.reason_code && h.state !== "done"
+                    ? ` · ${whyLabel(h.reason_code, tr)}`
+                    : ""}
                   {h.first_error ? ` · ${h.first_error}` : ""}
                 </li>
               ))}

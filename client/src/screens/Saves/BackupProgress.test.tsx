@@ -57,23 +57,40 @@ const stopped: BackupRunsView = {
 describe("a backup card's run bar (#895)", () => {
   it("says where a run stopped and offers Continue and the progress view", () => {
     const html = renderToStaticMarkup(
-      <BackupRunBar which="share" runs={runs(stopped)} running={false} onOpen={() => {}} testId="bar" />,
+      <BackupRunBar
+        which="share"
+        runs={runs(stopped)}
+        running={false}
+        onOpen={() => {}}
+        testId="bar"
+      />,
     );
-    expect(html).toContain("The last backup stopped after 7 of 66 saves: the PS5 stopped answering at");
+    expect(html).toContain(
+      "The last backup stopped after 7 of 66 saves: the PS5 stopped answering at",
+    );
     expect(html).toContain('data-testid="bar-continue"');
     expect(html).toContain("Backup progress");
   });
 
   it("offers no Continue while a run runs, nor for one that went through", () => {
     const running = renderToStaticMarkup(
-      <BackupRunBar which="share" runs={runs(stopped)} running onOpen={() => {}} testId="bar" />,
+      <BackupRunBar
+        which="share"
+        runs={runs(stopped)}
+        running
+        onOpen={() => {}}
+        testId="bar"
+      />,
     );
     expect(running).not.toContain("bar-continue");
     expect(running).toContain('data-testid="bar-open"');
     const done = renderToStaticMarkup(
       <BackupRunBar
         which="share"
-        runs={runs({ ...stopped, run: { ...stopped.run!, state: "done", reason_code: null } })}
+        runs={runs({
+          ...stopped,
+          run: { ...stopped.run!, state: "done", reason_code: null },
+        })}
         running={false}
         onOpen={() => {}}
         testId="bar"
@@ -86,7 +103,13 @@ describe("a backup card's run bar (#895)", () => {
   it("shows nothing with an engine that keeps no runs, or before any run", () => {
     expect(
       renderToStaticMarkup(
-        <BackupRunBar which="local" runs={runs(null, false)} running={false} onOpen={() => {}} testId="bar" />,
+        <BackupRunBar
+          which="local"
+          runs={runs(null, false)}
+          running={false}
+          onOpen={() => {}}
+          testId="bar"
+        />,
       ),
     ).toBe("");
     const none = renderToStaticMarkup(

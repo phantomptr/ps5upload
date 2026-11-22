@@ -21,8 +21,11 @@ export const PLACES: Record<BackupWhich, BackupPlace[]> = {
 export type RowOutcome = "verified" | "failed" | "skipped" | "left";
 
 export function itemOutcome(it: BackupRunItem): RowOutcome {
-  const dests = Object.values(it.dests).filter((d): d is BackupDestStatus => !!d);
-  if (it.step === "failed" || dests.some((d) => d.step === "failed")) return "failed";
+  const dests = Object.values(it.dests).filter(
+    (d): d is BackupDestStatus => !!d,
+  );
+  if (it.step === "failed" || dests.some((d) => d.step === "failed"))
+    return "failed";
   if (dests.length === 0) return it.step === "verified" ? "verified" : "left";
   if (dests.every((d) => d.step === "verified" || d.step === "skipped")) {
     return dests.every((d) => d.step === "skipped") ? "skipped" : "verified";
@@ -43,7 +46,12 @@ export interface Row {
   pct: number | null;
   error: string | null;
   outcome: RowOutcome;
-  places: Array<{ place: BackupPlace; step: BackupStep; pct: number | null; error: string | null }>;
+  places: Array<{
+    place: BackupPlace;
+    step: BackupStep;
+    pct: number | null;
+    error: string | null;
+  }>;
 }
 
 const BUSY: BackupStep[] = ["reading", "copying", "checking"];
@@ -117,7 +125,10 @@ export class SpeedMeter {
   }
 }
 
-export function overall(view: BackupRunsView, speed: number | null): Overall | null {
+export function overall(
+  view: BackupRunsView,
+  speed: number | null,
+): Overall | null {
   const run = view.run;
   const s = view.summary;
   if (!run || !s) return null;
@@ -126,7 +137,9 @@ export function overall(view: BackupRunsView, speed: number | null): Overall | n
   const elapsedMs = Math.max(0, end - run.started_at);
   const bytesLeft = Math.max(0, s.bytes_total - s.bytes_done);
   const leftMs =
-    running && speed && speed > 0 && bytesLeft > 0 ? Math.round((bytesLeft / speed) * 1000) : null;
+    running && speed && speed > 0 && bytesLeft > 0
+      ? Math.round((bytesLeft / speed) * 1000)
+      : null;
   return {
     done: s.verified,
     total: s.total,
@@ -145,12 +158,23 @@ export function overall(view: BackupRunsView, speed: number | null): Overall | n
 /** Which rows to show. */
 export type RowFilter = "all" | "failed" | "left" | "verified";
 
-export function rows(run: BackupRun | null, which: BackupWhich, filter: RowFilter = "all"): Row[] {
+export function rows(
+  run: BackupRun | null,
+  which: BackupWhich,
+  filter: RowFilter = "all",
+): Row[] {
   if (!run) return [];
   const out = run.items.map((it) => toRow(it, PLACES[which]));
   // The ones being backed up first, then failed, waiting, done.
-  const order: Record<string, number> = { busy: 0, failed: 1, left: 2, skipped: 3, verified: 4 };
-  const rank = (r: Row) => (BUSY.includes(r.step) ? order.busy : order[r.outcome]);
+  const order: Record<string, number> = {
+    busy: 0,
+    failed: 1,
+    left: 2,
+    skipped: 3,
+    verified: 4,
+  };
+  const rank = (r: Row) =>
+    BUSY.includes(r.step) ? order.busy : order[r.outcome];
   return out
     .filter((r) => filter === "all" || r.outcome === filter)
     .sort((a, b) => rank(a) - rank(b));
@@ -159,7 +183,9 @@ export function rows(run: BackupRun | null, which: BackupWhich, filter: RowFilte
 /** The saves Retry can do again: failed ones of a run that has ended. */
 export function retryable(run: BackupRun | null): string[] {
   if (!run || run.state === "running") return [];
-  return run.items.filter((it) => itemOutcome(it) === "failed").map((it) => it.id);
+  return run.items
+    .filter((it) => itemOutcome(it) === "failed")
+    .map((it) => it.id);
 }
 
 /** What the card says about a run that did not go through, with Continue: null when the last run
@@ -179,7 +205,8 @@ export interface StoppedNote {
 export function stoppedNote(view: BackupRunsView | null): StoppedNote | null {
   const run = view?.run;
   const s = view?.summary;
-  if (!run || !s || run.state === "running" || run.state === "done") return null;
+  if (!run || !s || run.state === "running" || run.state === "done")
+    return null;
   return {
     done: s.verified,
     total: s.total,
@@ -191,6 +218,9 @@ export function stoppedNote(view: BackupRunsView | null): StoppedNote | null {
 }
 
 /** Whether the view should keep asking the engine: while a run runs, and the page is shown. */
-export function shouldPoll(view: BackupRunsView | null, visible: boolean): boolean {
+export function shouldPoll(
+  view: BackupRunsView | null,
+  visible: boolean,
+): boolean {
   return visible && view?.run?.state === "running";
 }
