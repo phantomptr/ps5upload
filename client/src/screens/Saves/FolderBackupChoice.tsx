@@ -109,7 +109,8 @@ export function FolderBackupChoice({
         path: string;
         backups: FolderBackup[];
       }> = [];
-      for (const f of (await saveFoldersApi.list(from)) ?? [])
+      // Asked for this PS5: without it only backups from before they were kept per PS5 come back.
+      for (const f of (await saveFoldersApi.list(from, addr)) ?? [])
         out.push({ from, ...f });
       if (driveCopies && addr) {
         for (const f of (await saveFoldersApi
@@ -272,6 +273,9 @@ export function FolderBackupChoice({
                           {formatBytes(b.size)}
                           {b.tag === "beforerestore"
                             ? ` · ${tr("saves_folders_before_restore", undefined, "kept before a restore")}`
+                            : ""}
+                          {b.legacy
+                            ? ` · ${tr("saves_folders_legacy", undefined, "from before backups were kept per PS5")}`
                             : ""}
                         </span>
                         <Button

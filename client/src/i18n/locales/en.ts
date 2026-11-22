@@ -9576,6 +9576,7 @@ saves_folders_remove: "Stop backing up {path}",
 saves_folders_backups: "Folder backups",
 saves_folders_none: "No backup of this folder yet.",
 saves_folders_before_restore: "kept before a restore",
+saves_folders_legacy: "from before backups were kept per PS5",
 };
 
 export default en;

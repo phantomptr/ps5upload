@@ -302,6 +302,8 @@ export interface FolderBackup {
   size: number;
   /** `beforerestore`: the copy kept before a restore replaced the folder. */
   tag: string | null;
+  /** Made before folder backups were kept per PS5: listed for every PS5. */
+  legacy?: boolean;
 }
 
 export const saveFoldersApi = {
