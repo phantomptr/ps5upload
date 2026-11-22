@@ -10,6 +10,9 @@ What's new in ps5upload, written for humans.
 - **The check on the PS5 after an upload shows its progress (#873).** Before a big file counts as done, the PS5 reads it back from its drive to check it. When the drive can't keep up while the file is still arriving, part of that check is left for after the last byte, which on a 70–160 GB game can take several minutes, and the row said the PS5 had reported no progress. It now shows "Checking on the PS5: X of Y" with the time left, and the no-progress warning stays off while the check moves.
 - **A stopped upload that you resume isn't checked twice (#873).** The part the PS5 had already checked before the Stop isn't read again, as long as the helper wasn't restarted in between and the file hasn't changed since. Tried on a PS5: a 20 GB upload stopped at 10 GB and resumed checked only the new 10 GB.
 
+**Saves**
+- **Copy to another user works for games that name every save differently, like The Witcher 3.** These games never make a save slot with the same name for another user, so the copy used to stop and ask you to "save in the same slot", which could never work. The save's slots are now added to the other user and made theirs; their other saves of the game stay, and their save is backed up first. The same goes for Copy to another console, and for a user with no save of the game yet.
+
 **Other**
 - **Clear all in the notification bell (#911).** Thanks @Dang3rZone.
 - **Security:** updated the `url` library for a newly published advisory (RUSTSEC-2026-0592).
