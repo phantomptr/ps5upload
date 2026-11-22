@@ -21,6 +21,16 @@ const ENGINE_HOST_FS_COMMANDS = new Set([
   "request_storage_access",
 ]);
 
+/** The scan for PS5s. Against a remote engine it runs there: the engine is what reaches the
+ *  consoles it finds, and this device's own network may not be the engine's (#907). */
+const ENGINE_NETWORK_COMMANDS = new Set(["discover_ps5"]);
+
+/** Whether `cmd` goes to the engine over HTTP rather than to this app's native side. */
+export function goesToEngine(cmd: string): boolean {
+  if (!isTauriEnv()) return true;
+  return (ENGINE_HOST_FS_COMMANDS.has(cmd) || ENGINE_NETWORK_COMMANDS.has(cmd)) && !engineIsOnThisDevice();
+}
+
 /**
  * Drop-in replacement for Tauri's `invoke` that leaves a log breadcrumb for
  * every command. This is the single highest-leverage logging change in the
@@ -50,10 +60,11 @@ export async function invoke<T>(
 ): Promise<T> {
   try {
     let result: T;
-    if (!isTauriEnv() || (ENGINE_HOST_FS_COMMANDS.has(cmd) && !engineIsOnThisDevice())) {
+    if (goesToEngine(cmd)) {
       // Browser path — translate IPC → HTTP fetch. Also taken by the desktop
       // app for the in-app file browser when its engine is remote: the paths
-      // it picks are for the engine to open, so list the ENGINE's disk.
+      // it picks are for the engine to open, so list the ENGINE's disk. And
+      // for the PS5 scan, so what it finds is what the engine can reach.
       // `options` (Tauri Channel / transferable) has no browser equivalent;
       // commands that use it are native-only and already gated by isTauriEnv()
       // at their call sites, so they will reach BrowserUnsupportedError before
