@@ -187,9 +187,35 @@ pub fn dir_name(path: &str) -> String {
     format!("{tail}-{:08x}", fnv(path.as_bytes()) as u32)
 }
 
-/// `Folders/<dir_name>`: where a console folder's backups go in a place.
+/// `Folders/<dir_name>`: where a console folder's backups went before they were kept per PS5, of
+/// every PS5 together (still listed and restored from; never written to by a backup run).
 pub fn folder_rel(path: &str) -> String {
     format!("{DIR}/{}", dir_name(path))
+}
+
+/// The folder of one PS5's folder backups inside `Folders`: `PS5-<its id>`, the id the PS5 gives
+/// on the network (the same whatever its address, and on every computer that backs it up). None
+/// for an id with nothing usable in it.
+pub fn console_dir(id: &str) -> Option<String> {
+    let clean: String = id
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(32)
+        .collect::<String>()
+        .to_ascii_uppercase();
+    (!clean.is_empty()).then(|| format!("PS5-{clean}"))
+}
+
+/// Why a folder backup can't be made or found for a PS5 whose id is not known.
+pub const UNKNOWN_CONSOLE: &str =
+    "couldn't tell which PS5 this is (it did not answer on the network): folder backups are kept per PS5, so this one waits for the next backup";
+
+/// `Folders/PS5-<id>/<dir_name>`: where the backups of the console folder `path` made on the PS5
+/// `console` (its id) go, so two PS5s with the same folder never share, prune or restore each
+/// other's.
+pub fn folder_rel_on(path: &str, console: &str) -> Result<String, String> {
+    let c = console_dir(console).ok_or_else(|| UNKNOWN_CONSOLE.to_string())?;
+    Ok(format!("{DIR}/{c}/{}", dir_name(path)))
 }
 
 /// The name of a backup of a folder made now: `folder_<YYYY-MM-DD_HHMMSS>[_<tag>].zip`.
@@ -292,6 +318,18 @@ pub fn noted_path(zip: &Path) -> Option<String> {
         return None;
     }
     v.get("path").and_then(Value::as_str).map(str::to_string)
+}
+
+/// The PS5 a folder backup zip was made on, from its comment; None when it does not say.
+pub fn noted_console(zip: &Path) -> Option<String> {
+    let v: Value = serde_json::from_str(&zip_comment(zip).ok()?).ok()?;
+    if v.get("ps5upload").and_then(Value::as_str) != Some("folder-backup") {
+        return None;
+    }
+    v.get("console")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|c| !c.is_empty())
 }
 
 // ── zipping, checking ───────────────────────────────────────────────────
@@ -578,6 +616,9 @@ pub struct FolderBackup {
     pub size: u64,
     /// `beforerestore` for the copy kept before a restore.
     pub tag: Option<String>,
+    /// Made before folder backups were kept per PS5: it may be of any PS5 that has this folder.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub legacy: bool,
 }
 
 fn backups_of(files: Vec<(String, u64)>) -> Vec<FolderBackup> {
@@ -592,6 +633,7 @@ fn backups_of(files: Vec<(String, u64)>) -> Vec<FolderBackup> {
             tag: tag_of(&n).map(str::to_string),
             size,
             file: n,
+            legacy: false,
         })
         .collect();
     out.sort_by(|a, b| b.file.cmp(&a.file));
@@ -854,7 +896,20 @@ fn restore_with(
     if !ours(file) {
         return Err("unexpected backup name".into());
     }
-    let rel = folder_rel(&path);
+    // This PS5's own backups first; then one made before backups were kept per PS5 (of whichever
+    // PS5 had the folder: the person picked it). Another PS5's own backups are never looked at.
+    let own = console_id.map(|id| folder_rel_on(&path, id)).transpose()?;
+    let old = folder_rel(&path);
+    let holds = |rel: &str| place.list(rel).map(|l| l.iter().any(|(n, _)| n == file));
+    let (rel, legacy) = match &own {
+        Some(own) if holds(own)? => (own.clone(), false),
+        _ if holds(&old)? => (old.clone(), true),
+        Some(_) => return Err(format!("{file} is not one of this PS5's backups of {path}")),
+        None => return Err(UNKNOWN_CONSOLE.into()),
+    };
+    // What is there now is kept with this PS5's own backups (or with the old ones when this PS5
+    // can't be told).
+    let keep_rel = own.clone().unwrap_or_else(|| old.clone());
     let tmp = make_temp_dir("folder-restore")?;
     let tmp_s = tmp.to_string_lossy().into_owned();
     let result = (|| {
@@ -866,6 +921,11 @@ fn restore_with(
             Some(p) if p == path => {}
             Some(p) => return Err(format!("{file} is a backup of {p}, not {path}")),
             None => return Err(format!("{file} does not say which folder it is of")),
+        }
+        if let (false, Some(mine), Some(made_on)) = (legacy, console_id, noted_console(&zip)) {
+            if !made_on.eq_ignore_ascii_case(mine) {
+                return Err(format!("{file} was made on another PS5 ({made_on})"));
+            }
         }
         let unpacked = tmp.join("unpacked");
         std::fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;
@@ -893,7 +953,7 @@ fn restore_with(
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             keep_in
-                .keep(&rel, &name, &kept)
+                .keep(&keep_rel, &name, &kept)
                 .map_err(|e| format!("could not keep what is in {path} now first: {e}"))?;
         }
         match put_back(c, &path, &unpacked.join(&inner), there) {
@@ -986,23 +1046,51 @@ fn place_of<'a>(from: From, c: &'a dyn Drive) -> Result<Box<dyn Place + 'a>, Str
     })
 }
 
+/// The backups of the console folder `path` in `place` that the PS5 `console` (its id) may be
+/// given back: its own, then those made before backups were kept per PS5 (`legacy`), each
+/// newest first. Another PS5's own backups are never listed.
+fn backups_for(
+    place: &dyn Place,
+    path: &str,
+    console: Option<&str>,
+) -> Result<Vec<FolderBackup>, String> {
+    let mut out = match console {
+        Some(id) => backups_of(place.list(&folder_rel_on(path, id)?)?),
+        None => Vec::new(),
+    };
+    let mut old = backups_of(place.list(&folder_rel(path))?);
+    for b in &mut old {
+        b.legacy = true;
+    }
+    out.extend(old);
+    Ok(out)
+}
+
 /// `GET /api/save-backup/folders?from=share|local|drive&addr=` — each chosen console folder with
-/// its backups there, newest first: `{folders: [{path, backups: [{file, stamp, size, tag}]}]}`.
+/// the backups there that the PS5 at `addr` may be given back, newest first: `{console, folders:
+/// [{path, backups: [{file, stamp, size, tag, legacy?}]}]}`. Its own backups, then (`legacy:
+/// true`) those made before folder backups were kept per PS5, which may be of any PS5 with that
+/// folder. Without `addr`, or when the PS5 can't be told (`console` null), only those.
 pub async fn get_list(Query(q): Query<ListQuery>) -> Response {
     let r = tokio::task::spawn_blocking(move || {
         let host = q.addr.trim().to_string();
+        let console = (!host.is_empty())
+            .then(|| local::console_identity(&host))
+            .flatten();
         let drive = crate::save_backup_console::Live(&host);
         let place = place_of(q.from, &drive)?;
         let mut out = Vec::new();
         for path in chosen(q.from) {
-            let files = place.list(&folder_rel(&path))?;
-            out.push(json!({ "path": path, "backups": backups_of(files) }));
+            let backups = backups_for(place.as_ref(), &path, console.as_deref())?;
+            out.push(json!({ "path": path, "backups": backups }));
         }
-        Ok::<_, String>(out)
+        Ok::<_, String>((console, out))
     })
     .await;
     match r {
-        Ok(Ok(folders)) => Json(json!({ "folders": folders })).into_response(),
+        Ok(Ok((console, folders))) => {
+            Json(json!({ "console": console, "folders": folders })).into_response()
+        }
         Ok(Err(e)) => json_error(StatusCode::BAD_GATEWAY, e),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
@@ -1021,6 +1109,8 @@ pub struct RestoreBody {
 /// `POST /api/save-backup/folders/restore` — `{from, addr, path, file}`: puts a folder backup
 /// back where it came from, keeping what is there first (in the same place; the share or the
 /// backup folder here for one on a PS5 drive). No other save operation on the console meanwhile.
+/// Only this PS5's own backups, or one made before folder backups were kept per PS5: another
+/// PS5's is refused.
 pub async fn post_restore(Json(b): Json<RestoreBody>) -> Response {
     let r = tokio::task::spawn_blocking(move || {
         let host = b.addr.trim().to_string();
@@ -1535,6 +1625,90 @@ mod tests {
         // Names that are not ours, or folders the rules refuse, are refused outright.
         assert!(restore_with(&c, &place, &place, GRIM, "x.zip", None).is_err());
         assert!(restore_with(&c, &place, &place, "/data/ps5upload/ava", gname, None).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Folder backups are kept per PS5: a PS5 lists and gets back its own and the ones made
+    /// before that (marked legacy), never another PS5's of the same folder.
+    #[test]
+    fn a_restore_takes_this_ps5s_backups_and_the_old_ones_never_anothers() {
+        let dir = scratch("restore-per-ps5");
+        let place = LocalSide {
+            dir: dir.join("backups").to_string_lossy().into_owned(),
+        };
+        // folder_zip notes the PS5 "ABC".
+        let mine = folder_zip(&dir, GRIM, &[("Save/game.gdc", b"abc's")], None);
+        let a = "folder_2026-01-02_000000.zip";
+        store_here(
+            &place.dir,
+            &folder_rel_on(GRIM, "ABC").unwrap(),
+            a,
+            &mine,
+            5,
+        )
+        .unwrap();
+        let old = "folder_2025-12-01_000000.zip";
+        store_here(&place.dir, &folder_rel(GRIM), old, &mine, 5).unwrap();
+        // Two PS5s, two places; the old shared one apart from both.
+        assert_ne!(
+            folder_rel_on(GRIM, "abc").unwrap(),
+            folder_rel_on(GRIM, "DEF").unwrap()
+        );
+        assert_eq!(
+            folder_rel_on(GRIM, "a:b-c").unwrap(),
+            folder_rel_on(GRIM, "ABC").unwrap()
+        );
+        assert!(folder_rel_on(GRIM, "::").is_err());
+
+        // Listed for ABC: its own, then the old one marked.
+        let listed = backups_for(&place, GRIM, Some("ABC")).unwrap();
+        let names: Vec<(&str, bool)> = listed.iter().map(|b| (b.file.as_str(), b.legacy)).collect();
+        assert_eq!(names, vec![(a, false), (old, true)]);
+        // For DEF: only the old one; without an id: only the old one.
+        let listed = backups_for(&place, GRIM, Some("DEF")).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].legacy);
+        assert_eq!(backups_for(&place, GRIM, None).unwrap().len(), 1);
+
+        let c = FakeConsole::default();
+        c.files
+            .borrow_mut()
+            .insert(format!("{GRIM}/Save/game.gdc"), b"now".to_vec());
+        // DEF can't have ABC's own backup.
+        let e = restore_with(&c, &place, &place, GRIM, a, Some("DEF")).unwrap_err();
+        assert!(e.contains("not one of this PS5's backups"), "{e}");
+        assert_eq!(c.files.borrow()[&format!("{GRIM}/Save/game.gdc")], b"now");
+        // An old one it may: the person picked it. What was there is kept as DEF's own.
+        restore_with(&c, &place, &place, GRIM, old, Some("DEF")).unwrap();
+        assert_eq!(c.files.borrow()[&format!("{GRIM}/Save/game.gdc")], b"abc's");
+        let def = backups_for(&place, GRIM, Some("DEF")).unwrap();
+        assert!(def
+            .iter()
+            .any(|b| !b.legacy && b.tag.as_deref() == Some(BEFORE_RESTORE_TAG)));
+        // ABC gets its own back.
+        restore_with(&c, &place, &place, GRIM, a, Some("ABC")).unwrap();
+        // A zip of ABC's put by hand among DEF's own is refused by what it says inside.
+        store_here(
+            &place.dir,
+            &folder_rel_on(GRIM, "DEF").unwrap(),
+            a,
+            &mine,
+            5,
+        )
+        .unwrap();
+        let e = restore_with(&c, &place, &place, GRIM, a, Some("DEF")).unwrap_err();
+        assert!(e.contains("made on another PS5"), "{e}");
+        // A PS5 that can't be told gets only the old ones.
+        let e = restore_with(
+            &c,
+            &place,
+            &place,
+            GRIM,
+            "folder_2030-01-01_000000.zip",
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(e, UNKNOWN_CONSOLE);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
