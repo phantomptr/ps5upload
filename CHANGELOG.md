@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.21
 
 **Workshop**
 - **Clearer AMPR choices in Convert (#828).** The asset pack choice and the emulator now sit together under Asset packs, and only combinations that start are offered. A game that doesn't use AMPR shows no emulator options. zstd packs always get the emulator that reads zstd, and LZ4 packs always get ampr_emu 0.4.2.1, so a game can no longer end up with an emulator that can't read its packs (which made some converted games close at start). The engine corrects that mix too, including for "Add the AMPR emulator" on a game already in packs. "Rebuild AMPR index" is hidden for games in LZ4 packs, where it doesn't apply.
