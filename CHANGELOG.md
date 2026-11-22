@@ -4,6 +4,11 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+**Fixes**
+- **With the app using an engine on another computer, a PS5 added by its Tailscale address shows up (#907).** It was saved on the engine but never reached the app's list, so its card never appeared. The app now adds it straight away. The same goes for Add in Settings › Tailscale and in "Found on your Tailscale network". With a remote engine, the home network scan in Add a PS5 also runs on the engine's computer, so it no longer lists a PS5 as answering that the engine can't reach. Thanks to the reporter for the diagnosis.
+
 ## 12.6.19
 
 **New**
