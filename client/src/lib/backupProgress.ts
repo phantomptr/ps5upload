@@ -224,3 +224,19 @@ export function shouldPoll(
 ): boolean {
   return visible && view?.run?.state === "running";
 }
+
+/** Runs `fn` unless an earlier press under the same `guard` has not settled: Continue or Retry
+ *  pressed again before the first press's run shows sends nothing more (the engine answered the
+ *  second with "a backup is running", shown as an error). */
+export async function pressOnce(
+  guard: { current: boolean },
+  fn: () => Promise<void>,
+): Promise<void> {
+  if (guard.current) return;
+  guard.current = true;
+  try {
+    await fn();
+  } finally {
+    guard.current = false;
+  }
+}

@@ -49,7 +49,8 @@ export function changeForKind(item: ConvertItem, kind: Kind, canInstall: boolean
         : { kind: "image", format: "exfat", compress: false }
       : { kind };
   const packs = packsOf(item.build);
-  const build = kind === item.build?.kind || packs.kind === "none" ? base : withPacks(base, packs);
+  // The kind it already is (its segment picked again) keeps the build whole, packs included.
+  const build = item.build && kind === item.build.kind ? item.build : packs.kind === "none" ? base : withPacks(base, packs);
   const then = thenFor(kind, item.then, canInstall);
   return { build, then, host: then !== "keep" ? (item.host ?? host) : null };
 }

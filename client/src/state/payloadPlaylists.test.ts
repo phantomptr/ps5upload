@@ -122,4 +122,26 @@ describe("the playlist runner", () => {
     expect(sendConsolePayload).not.toHaveBeenCalled();
     expect(sendPayloadChecked).not.toHaveBeenCalled();
   });
+
+  it("a step sent to another console is not judged by this console's process list or boot", async () => {
+    const OTHER = "10.0.0.8";
+    // Sent to this console in its boot: it stays out here, but the other console gets its own.
+    rememberKernelSend(HOST, "kstuff", Date.now() - 60_000);
+    usePayloadPlaylistsStore.setState({
+      playlists: [
+        playlist([
+          { path: "/elf/ftpsrv.elf", sleepMs: 0, ip: OTHER },
+          { path: "/elf/kstuff.elf", sleepMs: 0, ip: OTHER },
+          step("/elf/kstuff.elf"),
+        ]),
+      ],
+    });
+    await usePayloadPlaylistsStore
+      .getState()
+      .run("p1", HOST, 9021, { auto: auto({ running: ["ftpsrv.elf", "payload.elf"] }) });
+    expect(sendPayloadChecked.mock.calls).toEqual([
+      [OTHER, "/elf/ftpsrv.elf", 9021],
+      [OTHER, "/elf/kstuff.elf", 9021],
+    ]);
+  });
 });

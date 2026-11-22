@@ -667,6 +667,11 @@ describe("a waiting game's own options (#669)", () => {
       zstd: { level: 5, runtime: "pinned", profileToml: "[p]" },
     });
     expect(changeForKind(item, "image", true, null).build).toEqual(packed);
+    // A folder's own segment picked again keeps its packs and plain-file choice.
+    const folder: ConvertBuild = { kind: "folder", zstd: { level: 19, runtime: "pinned" } };
+    expect(changeForKind(waitingItem({ build: folder }), "folder", true, null).build).toEqual(folder);
+    const unpacked: ConvertBuild = { kind: "folder", unpackPacks: true };
+    expect(changeForKind(waitingItem({ build: unpacked }), "folder", true, null).build).toEqual(unpacked);
   });
 
   it("a game on a server or the PS5 has no folder here to be saved next to", async () => {

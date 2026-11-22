@@ -18,6 +18,7 @@ import {
   rememberKernelSend,
   type AutoRunContext,
 } from "../lib/autoLoaderGuard";
+import { consoleStayedSince } from "../lib/loaderSettle";
 import { parseRemotePath } from "../lib/remotePath";
 import { useConnectionsStore } from "./connections";
 import { payloadSendRefusalText } from "../lib/payloadSendRefusal";
@@ -361,7 +362,13 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
         // An automatic run never sends what already runs there, nor a kernel patcher (kstuff)
         // a second time in one console boot: loading one twice can panic the console.
         if (opts?.auto) {
-          const decision = autoStepDecision(step, opts.auto, loadKernelSends(keyOf(stepHost)));
+          // The run's reading (process list, uptime) is of `host`: a step sent to another console
+          // (its own IP) is judged only by what is known of that one.
+          const ctx: AutoRunContext =
+            keyOf(stepHost) === key
+              ? opts.auto
+              : { running: null, bootMs: null, stayedSince: (t) => consoleStayedSince(stepHost, t) };
+          const decision = autoStepDecision(step, ctx, loadKernelSends(keyOf(stepHost)));
           if (!decision.send) {
             const stepName =
               step.payloadLabel || (step.path.split(/[\\/]/).pop() ?? step.payloadId ?? step.path);

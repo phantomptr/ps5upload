@@ -731,7 +731,12 @@ export async function sendPayloadChecked(
  * ps5upload helper image (`payload_is_helper`).
  */
 export async function loadConsolePayload(host: string, path: string): Promise<{ bytes: number }> {
-  return invoke<{ bytes: number }>("ps5_payload_load_console", { host, path });
+  const sent = await invoke<{ bytes: number }>("ps5_payload_load_console", { host, path });
+  // A kernel patcher (kstuff) loaded from Files counts too, as in sendPayloadChecked: the
+  // auto-run playlist does not send it again in this console boot (lib/autoLoaderGuard).
+  const patcher = kernelPatcherOf({ path });
+  if (patcher) rememberKernelSend(hostOf(host), patcher, Date.now());
+  return sent;
 }
 
 /**

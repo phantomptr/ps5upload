@@ -14,6 +14,7 @@ import { formatBytes } from "../../lib/format";
 import { formatDate, formatDuration } from "../../lib/formatDate";
 import {
   overall,
+  pressOnce,
   retryable,
   rows,
   shouldPoll,
@@ -97,17 +98,21 @@ export function useBackupRuns(
     }
     await refresh();
   }, [which, refresh]);
+  // One press at a time, until the run it started shows (a second press got "a backup is running").
+  const pressing = useRef(false);
   const again = useCallback(
-    async (ids?: string[]) => {
-      try {
-        setView(await saveBackupRunsApi.again(which, ids));
-        setError(null);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-      // The run starts in the background: ask again shortly to show it running.
-      window.setTimeout(() => void refresh(), 700);
-    },
+    (ids?: string[]) =>
+      pressOnce(pressing, async () => {
+        try {
+          setView(await saveBackupRunsApi.again(which, ids));
+          setError(null);
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e));
+        }
+        // The run starts in the background: ask again shortly to show it running.
+        await new Promise((r) => window.setTimeout(r, 700));
+        await refresh();
+      }),
     [which, refresh],
   );
   return { view, supported, error, refresh, cancel, again };
