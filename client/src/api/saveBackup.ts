@@ -179,6 +179,114 @@ export const serverBackupApi = {
     call<{ ok: boolean }>("/server/restore", { ...LONG, method: "POST", body: JSON.stringify(req) }),
 };
 
+/** Which backup a run is: the network share's or the automatic backups to a folder. */
+export type BackupWhich = "share" | "local";
+
+/** A place a backup goes to. */
+export type BackupPlace = "share" | "drive" | "local";
+
+/** Where one save (or one place of it) stands in a run. */
+export type BackupStep = "waiting" | "reading" | "copying" | "checking" | "verified" | "failed" | "skipped";
+
+export interface BackupDestStatus {
+  step: BackupStep;
+  /** While copying: 0 to 100. */
+  pct?: number;
+  error: string | null;
+  file: string | null;
+  tries: number;
+}
+
+/** One save (or console folder) of a run. */
+export interface BackupRunItem {
+  /** `<console>|<save path>`: what Retry names. */
+  id: string;
+  host: string;
+  /** `ps5`, `ps4`, `switch`, `ps2`, `ps1`, or `folder`. */
+  kind: string;
+  title_id: string;
+  user_id: number;
+  path: string;
+  /** Bytes as the console lists the save (0: unknown). */
+  size: number;
+  mtime: number;
+  step: BackupStep;
+  /** Why it could not be read off the PS5. */
+  error: string | null;
+  tries: number;
+  dests: Partial<Record<BackupPlace, BackupDestStatus>>;
+}
+
+export type BackupRunState = "running" | "done" | "stopped" | "cancelled" | "interrupted";
+
+export interface BackupRun {
+  id: string;
+  which: BackupWhich | null;
+  /** `manual`, `auto`, `interval`, `closed`, `continue`, `retry`. */
+  trigger: string;
+  started_at: number;
+  updated_at: number;
+  /** 0 while it runs. */
+  ended_at: number;
+  state: BackupRunState;
+  /** `console_gone`, `interrupted`, `cancelled`; null when it went through. */
+  reason_code: string | null;
+  reason: string | null;
+  items: BackupRunItem[];
+  /** Consoles that could not be looked at, with why. */
+  unreached: Record<string, string>;
+}
+
+export interface BackupPlaceCount {
+  verified: number;
+  failed: number;
+  skipped: number;
+  left: number;
+  first_error: string | null;
+}
+
+export interface BackupRunSummary {
+  id: string;
+  trigger: string;
+  started_at: number;
+  ended_at: number;
+  state: BackupRunState;
+  reason_code: string | null;
+  reason: string | null;
+  total: number;
+  verified: number;
+  failed: number;
+  skipped: number;
+  left: number;
+  read_failed: number;
+  bytes_total: number;
+  bytes_done: number;
+  first_error: string | null;
+  places: Partial<Record<BackupPlace, BackupPlaceCount>>;
+}
+
+/** `GET /api/save-backup/runs`: the last run whole and the last runs in short. An engine before
+ *  12.6.20 has no such route (the calls throw). */
+export interface BackupRunsView {
+  run: BackupRun | null;
+  summary: BackupRunSummary | null;
+  history: BackupRunSummary[];
+  /** The engine's clock (Unix ms) when it answered. */
+  now: number;
+}
+
+export const saveBackupRunsApi = {
+  view: (which: BackupWhich) => call<BackupRunsView>(`/runs?which=${which}`),
+  cancel: (which: BackupWhich) =>
+    call<{ cancelled: boolean }>("/runs/cancel", { method: "POST", body: JSON.stringify({ which }) }),
+  /** Continue the last run (`ids` left out) or Retry those saves of it. */
+  again: (which: BackupWhich, ids?: string[]) =>
+    call<BackupRunsView>("/runs/continue", {
+      method: "POST",
+      body: JSON.stringify(ids ? { which, ids } : { which }),
+    }),
+};
+
 /** A save of ProsperoEden, the Switch emulator (PPSA99008): `title_id` is the game's 16-hex-digit
  *  title ID and `user_id` its profile's first 7 hex digits (0 for the console's own save). */
 export interface SwitchSave {
