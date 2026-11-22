@@ -397,6 +397,10 @@ pub(crate) struct MemFs {
     /// A byte offset flipped in every file written from now on: a server that stores the
     /// wrong bytes, for read-back tests.
     corrupt_at: Arc<Mutex<Option<u64>>>,
+    /// The link drops each time this many bytes have been written in all (0: never): the write
+    /// that crosses the mark fails as a dropped connection, and the next one goes through.
+    drop_every: Arc<std::sync::atomic::AtomicU64>,
+    written: Arc<std::sync::atomic::AtomicU64>,
 }
 
 #[cfg(test)]
@@ -423,6 +427,8 @@ impl MemFs {
             keep_dirs: Arc::default(),
             free: Arc::default(),
             corrupt_at: Arc::default(),
+            drop_every: Arc::default(),
+            written: Arc::default(),
         }
     }
 
@@ -461,7 +467,16 @@ impl MemFs {
             keep_dirs: Arc::clone(&self.keep_dirs),
             free: Arc::clone(&self.free),
             corrupt_at: Arc::clone(&self.corrupt_at),
+            drop_every: Arc::clone(&self.drop_every),
+            written: Arc::clone(&self.written),
         }
+    }
+
+    /// The link drops once every `n` bytes written from now on (0: never), as a flaky link to a
+    /// NAS does: a big copy meets a drop more often than a small one.
+    pub fn drop_every_bytes(&self, n: u64) {
+        self.drop_every.store(n, Ordering::SeqCst);
+        self.written.store(0, Ordering::SeqCst);
     }
 
     /// What `free_space` answers from now on.
@@ -683,6 +698,14 @@ struct MemWriter<'a> {
 impl RemoteWriter for MemWriter<'_> {
     async fn write(&mut self, data: &[u8]) -> Result<(), RemoteError> {
         let (path, at) = (self.path.clone(), self.at);
+        let every = self.fs.drop_every.load(Ordering::SeqCst);
+        let n = data.len() as u64;
+        let before = self.fs.written.fetch_add(n, Ordering::SeqCst);
+        if let (Some(a), Some(b)) = (before.checked_div(every), (before + n).checked_div(every)) {
+            if a != b {
+                return Err(RemoteError::Io("connection reset by peer".into()));
+            }
+        }
         let flip = *self.fs.corrupt_at.lock().unwrap();
         self.fs.write(|| {
             let mut files = self.fs.files.lock().unwrap();

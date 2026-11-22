@@ -12132,6 +12132,27 @@
         ],
         "type": "object"
       },
+      "RunsBody": {
+        "properties": {
+          "ids": {
+            "description": "Retry: these saves of the last run (`Item::id`); none: Continue (what it left).",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "which": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "which"
+        ],
+        "type": "object"
+      },
       "RuntimeChoice": {
         "description": "Which ampr-emu-ng goes into a packed game.",
         "enum": [
@@ -47515,6 +47536,153 @@
         "x-ps5upload": {
           "access": "loopback",
           "response_schema": "none"
+        }
+      }
+    },
+    "/api/save-backup/runs": {
+      "get": {
+        "description": "`GET /api/save-backup/runs?which=share|local` — the last run whole (every save and its state\nin each place), how far it is, and the last runs in short: `{run, summary, history, now}`.",
+        "parameters": [
+          {
+            "description": "`share` (backups to a network share) or `local` (the automatic backups).",
+            "in": "query",
+            "name": "which",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The last run whole (every save and its state in each place), how far it is, and the last runs in short: `{run, summary, history, now}`",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/save-backup/runs/cancel": {
+      "post": {
+        "description": "`POST /api/save-backup/runs/cancel` — `{which}`: the run stops after the step it is on (a\ncopy being written is stopped and removed). `{cancelled}`: false when none was running.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "cancelled": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "`{which}`: the run stops after the step it is on (a copy being written is stopped and removed)",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-backup/runs/continue": {
+      "post": {
+        "description": "`POST /api/save-backup/runs/continue` — `{which, ids?}`: Continue the last run (each save in\nthe places it is not verified in yet; a copy it left unverified is removed and made again), or\nwith `ids` Retry those saves. In the background; answers the run's view.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "202": {
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
         }
       }
     },

@@ -116,6 +116,8 @@ mod rp_replay;
 mod rp_stream_api;
 mod save_backup;
 mod save_backup_console;
+mod save_backup_pass;
+mod save_backup_run;
 mod save_backup_server;
 mod save_copy;
 mod save_layout;
@@ -13498,6 +13500,16 @@ fn build_app_and_mcp(
         .route(
             "/api/save-backup/server/restore",
             post(save_backup_server::post_restore),
+        )
+        // What a backup run is doing and did, kept as it goes (#895).
+        .route("/api/save-backup/runs", get(save_backup_pass::get_runs))
+        .route(
+            "/api/save-backup/runs/cancel",
+            post(save_backup_pass::post_cancel),
+        )
+        .route(
+            "/api/save-backup/runs/continue",
+            post(save_backup_pass::post_continue),
         )
         .route("/api/save-backup/list", get(save_backup::get_list))
         // A copy of each backup on the PS5's own M.2 or USB drive.
