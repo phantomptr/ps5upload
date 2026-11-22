@@ -2844,7 +2844,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       const items = get().items;
       const added = items[items.length - 1];
       const done = wait(added.id);
-      get().startAdded(bare, [added.id]);
+      // "Add to queue" only adds, as it does for an upload: the row waits for Start.
+      if (input.start !== false) get().startAdded(bare, [added.id]);
       return { id: added.id, done };
     },
 

@@ -130,7 +130,7 @@ import {
 import { krakenRuns, useMounterFor } from "../../lib/mounter";
 import { useSmpState } from "../GameHub/SmpNeeded";
 import { STICKY_ACTIONS } from "./stickyActions";
-import { inStreamOrder } from "../../lib/streamSelection";
+import { streamPackages } from "./streamPackages";
 import { resolveUploadDest } from "../../lib/uploadDest";
 import { QueuePanel } from "./QueuePanel";
 import { RunningEngineJobs } from "../../components/RunningEngineJobs";
@@ -933,7 +933,9 @@ export default function UploadScreen({
     batchPkgs.length > 0 &&
     included.every((r) => r.status !== "inspecting") &&
     (batchRest.length === 0 || (!batchCheck.blocked && !batchUndecided));
-  const streamBatch = async (now: number) => {
+  // `start`: Stream & install starts the console's queue as any add does; Add to queue only adds
+  // the rows (packages as stream installs too), and they wait for Start queue.
+  const streamBatch = async (now: number, start = true) => {
     if (!canStreamBatch || !host) return;
     const pkgs = batchPkgs;
     const rest = batchRest;
@@ -948,29 +950,24 @@ export default function UploadScreen({
       if (item) ids.push(queueAdd(item));
     });
     batch.clear();
-    if (ids.length) queueStartAdded(hostOf(host), ids);
+    if (start && ids.length) queueStartAdded(hostOf(host), ids);
     // Games, then updates, then DLC (as Install Package's picker did before 8.7.0), each in the
-    // list's order. Each joins the console's queue as it is called, so they queue in that order;
-    // the promises settle only when each install ends (its outcome stays on its queue row).
+    // list's order.
     const lib = pkgLibraryStore(host).getState();
-    const planned = inStreamOrder(
-      pkgs.map((r) => {
-        const info = r.source?.kind === "pkg" ? r.source.pkgInfo : null;
-        return {
-          path: r.path,
-          category: info?.category ?? undefined,
-          contentId: info?.contentId || undefined,
-          size: info?.totalBytes ? info.totalBytes : null,
-        };
-      }),
-    );
     await Promise.all(
-      planned.map((p) =>
-        lib.installStream(p.path, host, {
-          category: p.category,
-          contentId: p.contentId,
-          sizeBytes: p.size,
+      streamPackages(
+        lib.installStream,
+        host,
+        pkgs.map((r) => {
+          const info = r.source?.kind === "pkg" ? r.source.pkgInfo : null;
+          return {
+            path: r.path,
+            category: info?.category ?? undefined,
+            contentId: info?.contentId || undefined,
+            size: info?.totalBytes ? info.totalBytes : null,
+          };
         }),
+        start,
       ),
     );
   };
@@ -1121,6 +1118,7 @@ export default function UploadScreen({
           restCount={batchRest.length}
           canStream={canStreamBatch}
           onStream={() => void streamBatch(Date.now())}
+          onQueueStream={() => void streamBatch(Date.now(), false)}
           onRemove={(id) => batch.remove(id)}
           onInclude={(id, v) => batch.setInclude(id, v)}
           onPassword={(id, pw) => batch.setPassword(id, pw)}
@@ -1413,20 +1411,32 @@ function Step2Options(props: {
     onQueueAllParts,
   } = props;
   // A package's main action (#81, #580's report): Stream & install from this computer, nothing
-  // copied to the PS5 first; queued on the console's queue, and the pick is done.
-  const streamThis =
+  // copied to the PS5 first; queued on the console's queue, and the pick is done. Add to queue
+  // queues the same stream install without starting the queue (`start` false).
+  const streamPkg =
     source?.kind === "pkg" && consoleHost
-      ? () => {
-          void pkgLibraryStore(consoleHost)
-            .getState()
-            .installStream(source.path, consoleHost, {
-              category: source.pkgInfo?.category ?? undefined,
-              contentId: source.pkgInfo?.contentId || undefined,
-              sizeBytes: source.pkgInfo?.totalBytes ?? null,
-            });
+      ? (start: boolean) => {
+          void Promise.all(
+            streamPackages(
+              pkgLibraryStore(consoleHost).getState().installStream,
+              consoleHost,
+              [
+                {
+                  path: source.path,
+                  category: source.pkgInfo?.category ?? undefined,
+                  contentId: source.pkgInfo?.contentId || undefined,
+                  size: source.pkgInfo?.totalBytes ?? null,
+                },
+              ],
+              start,
+            ),
+          );
           onClear();
         }
       : undefined;
+  const streamThis = streamPkg ? () => streamPkg(true) : undefined;
+  const addToQueue = () =>
+    streamPkg ? streamPkg(false) : onAddToQueue("overwrite");
   // The .pkg source is open in the package viewer.
   const [viewingPkg, setViewingPkg] = useState(false);
   const tr = useTr();
@@ -1961,7 +1971,7 @@ function Step2Options(props: {
                 primary: true,
                 onClick: () => {
                   setViewingPkg(false);
-                  onAddToQueue("overwrite");
+                  addToQueue();
                 },
               },
             ]}
@@ -2063,7 +2073,7 @@ function Step2Options(props: {
             don't reconcile), so it's hidden for image/file sources. */}
         <button
           type="button"
-          onClick={() => onAddToQueue("overwrite")}
+          onClick={addToQueue}
           disabled={
             detecting ||
             preflightBusy ||
@@ -2071,6 +2081,7 @@ function Step2Options(props: {
             archiveUndecided
           }
           className={ACTION_PLAIN}
+          data-testid="upload-add-to-queue"
           title={
             detecting
               ? tr(
@@ -2080,10 +2091,16 @@ function Step2Options(props: {
                 )
               : archiveUndecided
                 ? undecidedHint
-                : tr(
-                    "upload_add_to_queue_tooltip",
-                    "Add this upload to the queue without starting it",
-                  )
+                : streamPkg
+                  ? tr(
+                      "upload_add_stream_to_queue_tooltip",
+                      undefined,
+                      "Add a Stream & install to the queue without starting it. Nothing is copied to the PS5 first.",
+                    )
+                  : tr(
+                      "upload_add_to_queue_tooltip",
+                      "Add this upload to the queue without starting it",
+                    )
           }
         >
           {tr("upload_add_to_queue", "Add to queue")}

@@ -1202,6 +1202,8 @@ interface PkgLibraryState {
       contentId?: string;
       /** The package's size when the caller knows it (sizes the queue row). */
       sizeBytes?: number | null;
+      /** False: add the install to the console's queue without starting it ("Add to queue"). */
+      start?: boolean;
     },
   ) => Promise<{
     ok: boolean;
@@ -4060,6 +4062,7 @@ const makePkgLibraryStore = () =>
           category: opts?.category,
           contentId: opts?.contentId,
           sizeBytes: opts?.sizeBytes ?? null,
+          start: opts?.start,
         }).done;
       } finally {
         // Removed without running (Stop, Clear, refused): don't leak it.
