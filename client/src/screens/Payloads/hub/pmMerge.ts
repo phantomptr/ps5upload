@@ -186,16 +186,11 @@ export function groupCards(
   return { top, also, hidden };
 }
 
-/** How many payloads "On your PS5" shows once the saved list is merged: the cards left, plus
- *  each saved row, less the rows whose card is also shown (an integration such as ShadowMount+
- *  keeps its card). A matched card hidden on its row counts once, as its row. */
-export function payloadCount(
-  groups: CardGroups,
-  savedRows: number,
-  matched: ReadonlyMap<string, HubCard>,
-): number {
-  const shownTwice = new Set([...matched.values()].filter((c) => !groups.hidden.has(c.id)).map((c) => c.id));
-  return groups.top.length + groups.also.length + savedRows - shownTwice.size;
+/** The count "On your PS5" shows: what it lists, so the number matches what can be counted on
+ *  screen. Each saved Payload Manager row, plus each card shown (a card matched to a row is
+ *  hidden, except an integration's, which keeps its card for Manage and so is listed twice). */
+export function payloadCount(cardsShown: number, savedRows: number): number {
+  return cardsShown + savedRows;
 }
 
 /** Who started a running payload, as the card's one line says it. */

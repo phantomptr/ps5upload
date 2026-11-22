@@ -16,6 +16,10 @@ What's new in ps5upload, written for humans.
 **Docker**
 - **Folders the container can't use are named at startup.** If the data folder, the staging folder or a browse folder isn't writable (or readable) by the container's user, the log says which folder, that the container runs as user 65532, and the `chown` command that fixes it. The health check's data folder line gives the same fix.
 
+**Payloads**
+- **On your PS5 lists your payloads first.** The payloads saved in Payload Manager are now the tab's main list, "Your payloads", each with Launch, Load at boot, Stop and Delete. Payload Manager's own settings stay under Manage on its card, and the count at the top matches what is listed.
+- **A removed payload no longer shows as Installed.** Some payloads leave a folder or settings file behind when removed (LZ4 Compression's /data/LZ4Compression). That alone no longer counts as installed.
+
 **Other**
 - **Clear all in the notification bell (#911).** Thanks @Dang3rZone.
 - **Security:** updated the `url` library for a newly published advisory (RUSTSEC-2026-0592).
