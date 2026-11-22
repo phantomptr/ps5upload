@@ -6,6 +6,16 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Uploads**
+- **The check on the PS5 after an upload shows its progress (#873).** Before a big file counts as done, the PS5 reads it back from its drive to check it. When the drive can't keep up while the file is still arriving, part of that check is left for after the last byte, which on a 70–160 GB game can take several minutes, and the row said the PS5 had reported no progress. It now shows "Checking on the PS5: X of Y" with the time left, and the no-progress warning stays off while the check moves.
+- **A stopped upload that you resume isn't checked twice (#873).** The part the PS5 had already checked before the Stop isn't read again, as long as the helper wasn't restarted in between and the file hasn't changed since. Tried on a PS5: a 20 GB upload stopped at 10 GB and resumed checked only the new 10 GB.
+
+**Other**
+- **Clear all in the notification bell (#911).** Thanks @Dang3rZone.
+- **Security:** updated the `url` library for a newly published advisory (RUSTSEC-2026-0592).
+
+## 12.6.21
+
 **Workshop**
 - **Clearer AMPR choices in Convert (#828).** The asset pack choice and the emulator now sit together under Asset packs, and only combinations that start are offered. A game that doesn't use AMPR shows no emulator options. zstd packs always get the emulator that reads zstd, and LZ4 packs always get ampr_emu 0.4.2.1, so a game can no longer end up with an emulator that can't read its packs (which made some converted games close at start). The engine corrects that mix too, including for "Add the AMPR emulator" on a game already in packs. "Rebuild AMPR index" is hidden for games in LZ4 packs, where it doesn't apply.
 
