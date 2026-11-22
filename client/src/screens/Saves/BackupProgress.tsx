@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Activity, Play, RotateCcw, Square } from "lucide-react";
 
 import { Button, Modal, ProgressBar, SegmentedControl } from "../../components";
@@ -13,8 +13,8 @@ import {
 import { formatBytes } from "../../lib/format";
 import { formatDate, formatDuration } from "../../lib/formatDate";
 import {
-  oneAtATime,
   overall,
+  pressOnce,
   retryable,
   rows,
   shouldPoll,
@@ -99,9 +99,10 @@ export function useBackupRuns(
     await refresh();
   }, [which, refresh]);
   // One press at a time, until the run it started shows (a second press got "a backup is running").
-  const again = useMemo(
-    () =>
-      oneAtATime(async (ids?: string[]) => {
+  const pressing = useRef(false);
+  const again = useCallback(
+    (ids?: string[]) =>
+      pressOnce(pressing, async () => {
         try {
           setView(await saveBackupRunsApi.again(which, ids));
           setError(null);

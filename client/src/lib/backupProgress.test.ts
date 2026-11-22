@@ -8,8 +8,8 @@ import type {
 } from "../api/saveBackup";
 import {
   itemOutcome,
-  oneAtATime,
   overall,
+  pressOnce,
   retryable,
   rows,
   shouldPoll,
@@ -307,10 +307,12 @@ describe("Continue and Retry pressed twice (#895)", () => {
   it("sends once until the first press has settled, then again", async () => {
     let calls = 0;
     let finish: () => void = () => {};
-    const again = oneAtATime(async () => {
-      calls++;
-      await new Promise<void>((r) => (finish = r));
-    });
+    const guard = { current: false };
+    const again = () =>
+      pressOnce(guard, async () => {
+        calls++;
+        await new Promise<void>((r) => (finish = r));
+      });
     const first = again();
     void again();
     void again();
@@ -325,10 +327,12 @@ describe("Continue and Retry pressed twice (#895)", () => {
 
   it("is free again after a press that failed", async () => {
     let calls = 0;
-    const again = oneAtATime(async () => {
-      calls++;
-      throw new Error("HTTP 409");
-    });
+    const guard = { current: false };
+    const again = () =>
+      pressOnce(guard, async () => {
+        calls++;
+        throw new Error("HTTP 409");
+      });
     await expect(again()).rejects.toThrow("HTTP 409");
     await expect(again()).rejects.toThrow("HTTP 409");
     expect(calls).toBe(2);
