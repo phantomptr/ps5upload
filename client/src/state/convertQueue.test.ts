@@ -7,12 +7,16 @@ import {
   buildExtension,
   hydrateConvertQueue,
   imageBuildWith,
+  packsOf,
   pipelinePhaseChanged,
+  queueTags,
   savedItems,
   setConvertRunner,
   startAfterBuild,
   thenFor,
   useConvertQueue,
+  withPacks,
+  type ConvertBuild,
   type ConvertRunner,
 } from "./convertQueue";
 
@@ -308,5 +312,101 @@ describe("what happens after converting", () => {
   it("keeps the result when no console answers", () => {
     expect(thenFor("pkg", "stream", false)).toBe("keep");
     expect(thenFor("image", "upload", false)).toBe("keep");
+  });
+});
+
+describe("a queued game's asset packs (#905)", () => {
+  const zstdImage: ConvertBuild = {
+    kind: "image",
+    format: "ffpkg",
+    compress: true,
+    lz4: { zstdLevel: 19, zstdRuntime: "pinned", profileToml: "[p]" },
+  };
+
+  it("reads packs from an image or a folder, whichever field holds them", () => {
+    expect(packsOf(zstdImage)).toEqual({ kind: "zstd", level: 19, runtime: "pinned", profileToml: "[p]" });
+    expect(packsOf({ kind: "image", format: "exfat", compress: false, lz4: { installRuntime: true } })).toEqual({
+      kind: "lz4",
+      installRuntime: true,
+    });
+    expect(packsOf({ kind: "folder", zstd: { level: 1 } })).toEqual({ kind: "zstd", level: 1 });
+    expect(packsOf({ kind: "folder", lz4: { profileToml: "[q]" } })).toEqual({ kind: "lz4", profileToml: "[q]" });
+    expect(packsOf({ kind: "image", format: "exfat", compress: false })).toEqual({ kind: "none" });
+    expect(packsOf({ kind: "pkg" })).toEqual({ kind: "none" });
+    expect(packsOf(undefined)).toEqual({ kind: "none" });
+  });
+
+  it("puts packs on and off without touching the format, and moves them between image and folder", () => {
+    const plainImage: ConvertBuild = { kind: "image", format: "ffpkg", compress: true };
+    expect(withPacks(plainImage, { kind: "zstd" })).toEqual({ ...plainImage, lz4: { zstdLevel: 5 } });
+    expect(withPacks(zstdImage, { kind: "none" })).toEqual(plainImage);
+    expect(withPacks({ kind: "folder" }, packsOf(zstdImage))).toEqual({
+      kind: "folder",
+      zstd: { level: 19, runtime: "pinned", profileToml: "[p]" },
+    });
+    expect(withPacks({ kind: "image", format: "exfat", compress: false }, { kind: "zstd", level: 1 })).toEqual({
+      kind: "image",
+      format: "exfat",
+      compress: false,
+      lz4: { zstdLevel: 1 },
+    });
+    // Packs and "write the packs out as plain files" are one choice.
+    expect(
+      withPacks({ kind: "image", format: "exfat", compress: false, unpackPacks: true }, { kind: "zstd" }),
+    ).not.toHaveProperty("unpackPacks");
+    expect(withPacks({ kind: "folder", unpackPacks: true }, { kind: "none" })).toEqual({
+      kind: "folder",
+      unpackPacks: true,
+    });
+    expect(withPacks({ kind: "pkg" }, { kind: "zstd" })).toEqual({ kind: "pkg" });
+  });
+
+  it("shows the key choices on the row", () => {
+    const base = {
+      id: "c1",
+      source: "/g",
+      compression: "balanced" as const,
+      then: "keep" as const,
+      host: null,
+      status: "pending" as const,
+    };
+    expect(queueTags({ ...base, build: zstdImage, imageLevel: "smallest" })).toEqual([
+      { kind: "zstd", level: 19 },
+      { kind: "level", level: "smallest" },
+    ]);
+    expect(queueTags({ ...base, build: { kind: "image", format: "exfat", compress: false } })).toEqual([]);
+    expect(queueTags({ ...base, build: { kind: "folder", lz4: {} } })).toEqual([{ kind: "lz4" }]);
+    expect(queueTags({ ...base, build: { kind: "folder", unpackPacks: true } })).toEqual([{ kind: "unpack" }]);
+    expect(queueTags({ ...base, build: { kind: "pkg" }, language: "en-US" })).toEqual([
+      { kind: "language", code: "en-US" },
+    ]);
+  });
+
+  it("keeps packs set while waiting through a restart, and the build gets them", async () => {
+    const built: ConvertBuild[] = [];
+    setConvertRunner({
+      build: async (item) => {
+        built.push(item.build!);
+        return { ok: true, packagePath: "/out/G.ffpkg" };
+      },
+      handOff: async () => ({ ok: true }),
+    });
+    useConvertQueue.setState({ items: [], running: false, armed: false });
+    const q = useConvertQueue.getState();
+    q.add({
+      source: "/games/G",
+      compression: "balanced",
+      build: { kind: "image", format: "ffpkg", compress: false },
+      then: "keep",
+      host: null,
+    });
+    const first = useConvertQueue.getState().items[0];
+    // Set after it was queued, then the app restarts with the queue saved.
+    expect(q.update(first.id, { build: withPacks(first.build!, { kind: "zstd", level: 19 }) })).toBe(true);
+    const restored = hydrateConvertQueue(JSON.parse(JSON.stringify(savedItems(useConvertQueue.getState().items))));
+    useConvertQueue.setState({ items: restored });
+    await useConvertQueue.getState().start();
+    await flush();
+    expect(built).toEqual([{ kind: "image", format: "ffpkg", compress: false, lz4: { zstdLevel: 19 } }]);
   });
 });
