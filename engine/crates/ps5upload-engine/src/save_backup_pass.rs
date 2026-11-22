@@ -25,6 +25,7 @@ use crate::remote::{PutProgress, RemoteFs};
 use crate::save_backup::{self as local, done_key, Done};
 use crate::save_backup_console::{Copies, Drive, Outcome};
 use crate::save_backup_run::{self as journal, Item, Place, Run, RunRef, Step};
+use crate::save_folders as folders;
 use crate::save_layout::{self as layout, Arrange, Kind, Layout, Owner};
 
 // ── the console ─────────────────────────────────────────────────────────
@@ -43,6 +44,13 @@ pub(crate) trait Console {
     fn note(&self, host: &str, user: u32) -> String;
     /// The console's drives and files, for the PS5 drive copies.
     fn drive<'a>(&'a self, host: &'a str) -> Box<dyn Drive + 'a>;
+    /// What the console folder `path` holds now (`save_folders::signature`); Err when it can't
+    /// be read (#899).
+    fn folder_signature(&self, host: &str, path: &str) -> Result<i64, String>;
+    /// Copies the console folder `path` into `tmp` (as `tmp/<its name>`).
+    fn read_folder(&self, host: &str, path: &str, tmp: &Path) -> Result<(), String>;
+    /// The PS5's own id, for a folder backup's note.
+    fn console_id(&self, host: &str) -> Option<String>;
 }
 
 /// The console at a host, through the engine's own routes.
@@ -66,6 +74,16 @@ impl Console for Live {
     }
     fn drive<'a>(&'a self, host: &'a str) -> Box<dyn Drive + 'a> {
         Box::new(crate::save_backup_console::Live(host))
+    }
+    fn folder_signature(&self, host: &str, path: &str) -> Result<i64, String> {
+        let entries = folders::walk(&|p| local::folder_entries(host, p), path)?;
+        Ok(folders::signature(&entries))
+    }
+    fn read_folder(&self, host: &str, path: &str, tmp: &Path) -> Result<(), String> {
+        local::download(host, path, tmp, "folder")
+    }
+    fn console_id(&self, host: &str) -> Option<String> {
+        local::console_identity(host)
     }
 }
 
@@ -132,6 +150,34 @@ pub(crate) trait Dest {
     fn reset(&mut self) {}
     /// Removes `file`, a copy a run that stopped left unverified (only a backup's name).
     fn discard(&mut self, host: &str, file: &str);
+    /// Where the backup `name` of a console folder goes (`rel`: `Folders/<name>`, #899).
+    fn target_folder(&mut self, host: &str, rel: &str, name: &str) -> Result<String, String>;
+    /// Writes a console folder's backup `zip` to `rel/name` and checks it there.
+    fn send_folder(
+        &mut self,
+        host: &str,
+        zip: &Path,
+        rel: &str,
+        name: &str,
+        scratch: &Path,
+        report: &Report,
+    ) -> Sent;
+}
+
+/// What a backup is of: a save (whose, and its folders' names) or a console folder (`rel`: its
+/// backups' folder, `Folders/<name>`).
+pub(crate) enum What {
+    Save(Owner),
+    Folder(String),
+}
+
+impl What {
+    fn label(&self) -> &str {
+        match self {
+            What::Save(o) => &o.title_id,
+            What::Folder(rel) => rel,
+        }
+    }
 }
 
 /// Opens the server (its pooled session) and names the backup folder in it.
@@ -243,11 +289,53 @@ impl Dest for ShareDest<'_> {
         (self.forget)();
     }
 
+    fn target_folder(&mut self, _host: &str, rel: &str, name: &str) -> Result<String, String> {
+        let (fs, folder) = (self.open)()?;
+        let target = format!("{}/{name}", layout::join(&folder, rel));
+        self.at = Some((fs, folder, rel.to_string()));
+        Ok(target)
+    }
+
+    fn send_folder(
+        &mut self,
+        _host: &str,
+        zip: &Path,
+        rel: &str,
+        name: &str,
+        scratch: &Path,
+        report: &Report,
+    ) -> Sent {
+        let Some((fs, folder, _)) = self.at.clone() else {
+            return Sent::Failed("no place on the server".into());
+        };
+        let sent = Arc::clone(&report.sent);
+        let progress = PutProgress {
+            add: Box::new(move |n| {
+                sent.fetch_add(n, Ordering::Relaxed);
+            }),
+            cancel: Arc::clone(&report.cancel),
+        };
+        match self.rt.block_on(folders::store_on_server(
+            fs.as_ref(),
+            zip,
+            &folder,
+            rel,
+            name,
+            self.keep,
+            scratch,
+            &progress,
+            report.checking,
+        )) {
+            Ok(at) => Sent::Verified(at),
+            Err(e) => Sent::Failed(e),
+        }
+    }
+
     fn discard(&mut self, _host: &str, file: &str) {
         let Some(name) = file.rsplit('/').next() else {
             return;
         };
-        if !is_backup_name(name) {
+        if !is_backup_name(name) && !folders::ours(name) {
             return;
         }
         let Ok((fs, _)) = (self.open)() else {
@@ -314,7 +402,7 @@ impl Dest for DriveDest<'_> {
 
     fn discard(&mut self, host: &str, file: &str) {
         let name = file.rsplit('/').next().unwrap_or_default();
-        if !is_backup_name(name)
+        if !(is_backup_name(name) || folders::ours(name))
             || crate::save_backup_console::root_of(self.copies.drive())
                 .map(|r| !file.starts_with(&format!("{r}/")))
                 .unwrap_or(true)
@@ -323,6 +411,42 @@ impl Dest for DriveDest<'_> {
         }
         let _op = local::save_op(&[host]);
         let _ = self.console.drive(host).delete(file);
+    }
+
+    fn target_folder(&mut self, _host: &str, rel: &str, name: &str) -> Result<String, String> {
+        let root = crate::save_backup_console::root_of(self.copies.drive())?;
+        Ok(format!("{}/{name}", layout::join(&root, rel)))
+    }
+
+    fn send_folder(
+        &mut self,
+        host: &str,
+        zip: &Path,
+        rel: &str,
+        name: &str,
+        _scratch: &Path,
+        _report: &Report,
+    ) -> Sent {
+        let c = self.console.drive(host);
+        let out = match self.copies.unready(c.as_ref(), host) {
+            Some(why) => Sent::Skipped(why),
+            None => {
+                // A write on the console: no other save operation runs there meanwhile.
+                let _op = local::save_op(&[host]);
+                match crate::save_backup_console::root_of(self.copies.drive()).and_then(|root| {
+                    folders::store_on_drive(c.as_ref(), &root, rel, name, zip, self.copies.keep())
+                }) {
+                    Ok(p) => Sent::Verified(p),
+                    Err(e) => Sent::Failed(e),
+                }
+            }
+        };
+        self.copies.count(match &out {
+            Sent::Verified(_) => Ok(()),
+            Sent::Skipped(why) => Err((false, why.clone())),
+            Sent::Failed(why) => Err((true, why.clone())),
+        });
+        out
     }
 }
 
@@ -405,10 +529,42 @@ impl Dest for LocalDest {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if !is_backup_name(&name) || !p.starts_with(&self.dir) {
+        if !(is_backup_name(&name) || folders::ours(&name)) || !p.starts_with(&self.dir) {
             return;
         }
         let _ = std::fs::remove_file(p.with_extension("zip.ps5upload-tmp"));
+    }
+
+    fn target_folder(&mut self, _host: &str, rel: &str, name: &str) -> Result<String, String> {
+        if self.dir.trim().is_empty() {
+            return Err("automatic backup: no folder chosen".into());
+        }
+        Ok(local::local_path(&self.dir, rel)
+            .join(name)
+            .to_string_lossy()
+            .into_owned())
+    }
+
+    fn send_folder(
+        &mut self,
+        _host: &str,
+        zip: &Path,
+        rel: &str,
+        name: &str,
+        _scratch: &Path,
+        report: &Report,
+    ) -> Sent {
+        (report.checking)();
+        match folders::store_here(&self.dir, rel, name, zip, self.keep) {
+            Ok(p) => {
+                report.sent.store(
+                    std::fs::metadata(zip).map(|m| m.len()).unwrap_or(0),
+                    Ordering::Relaxed,
+                );
+                Sent::Verified(p)
+            }
+            Err(e) => Sent::Failed(e),
+        }
     }
 }
 
@@ -542,7 +698,12 @@ impl Ctx<'_, '_> {
         if run.cancelled() {
             return End::Cancelled;
         }
-        let tmp = match make_temp_dir(&entry.title_id) {
+        let prefix = if entry.kind == "folder" {
+            "folder"
+        } else {
+            entry.title_id.as_str()
+        };
+        let tmp = match make_temp_dir(prefix) {
             Ok(t) => t,
             Err(e) => {
                 run.failed(i, &e);
@@ -577,7 +738,18 @@ impl Ctx<'_, '_> {
     ) -> End {
         let run = self.run;
         let cancel = run.cancel_flag();
-        let name = backup_name(entry);
+        // A console folder (#899) or a save.
+        let folder = (entry.kind == "folder").then(|| {
+            entry
+                .path
+                .strip_prefix("folder:")
+                .unwrap_or(&entry.path)
+                .to_string()
+        });
+        let name = match &folder {
+            Some(_) => folders::backup_name(None),
+            None => backup_name(entry),
+        };
         let zip = tmp.join(&name);
         // Off the console and zipped, waiting for a PS5 that stops answering a few times.
         let mut tries = 0usize;
@@ -586,13 +758,23 @@ impl Ctx<'_, '_> {
             run.read_try(i);
             let read = {
                 let _op = local::save_op(&[host]);
-                let _ = std::fs::remove_dir_all(tmp.join(&entry.title_id));
                 let _ = std::fs::remove_file(&zip);
-                self.console.read_save(host, entry, tmp).and_then(|()| {
-                    let note = self.console.note(host, entry.user_id as u32);
-                    zip_folder_noted(tmp, &entry.title_id, &zip, &note)
-                        .map_err(|e| format!("zip: {e:#}"))
-                })
+                match &folder {
+                    Some(path) => folders::leaf_of(path).and_then(|leaf| {
+                        let _ = std::fs::remove_dir_all(tmp.join(&leaf));
+                        self.console.read_folder(host, path, tmp)?;
+                        let id = self.console.console_id(host);
+                        folders::zip_copy(tmp, &leaf, &zip, path, id.as_deref())
+                    }),
+                    None => {
+                        let _ = std::fs::remove_dir_all(tmp.join(&entry.title_id));
+                        self.console.read_save(host, entry, tmp).and_then(|()| {
+                            let note = self.console.note(host, entry.user_id as u32);
+                            zip_folder_noted(tmp, &entry.title_id, &zip, &note)
+                                .map_err(|e| format!("zip: {e:#}"))
+                        })
+                    }
+                }
             };
             match read {
                 Ok(()) => break,
@@ -611,10 +793,13 @@ impl Ctx<'_, '_> {
                 }
             }
         }
-        let owner = self.console.owner(host, entry, self.arrange);
+        let what = match &folder {
+            Some(path) => What::Folder(folders::folder_rel(path)),
+            None => What::Save(self.console.owner(host, entry, self.arrange)),
+        };
         let scratch = tmp.join("readback.zip");
         for place in due {
-            if let Some(end) = self.send_to(i, host, &owner, *place, &zip, &scratch) {
+            if let Some(end) = self.send_to(i, host, &what, *place, &zip, &scratch) {
                 return end;
             }
             if run
@@ -633,7 +818,7 @@ impl Ctx<'_, '_> {
         &mut self,
         i: usize,
         host: &str,
-        owner: &Owner,
+        what: &What,
         place: Place,
         zip: &Path,
         scratch: &Path,
@@ -667,7 +852,11 @@ impl Ctx<'_, '_> {
                 d.tries += 1;
             });
             let dest = &mut self.dests[di];
-            let sent = match dest.target(host, owner, &name) {
+            let target = match what {
+                What::Save(owner) => dest.target(host, owner, &name),
+                What::Folder(rel) => dest.target_folder(host, rel, &name),
+            };
+            let sent = match target {
                 Err(e) => Sent::Failed(e),
                 Ok(target) => {
                     run.dest(i, place, |d| {
@@ -681,18 +870,17 @@ impl Ctx<'_, '_> {
                         run.step(i, Step::Checking);
                         run.dest(i, place, |d| d.step = Step::Checking);
                     };
-                    let out = dest.send(
-                        host,
-                        owner,
-                        zip,
-                        &target,
-                        scratch,
-                        &Report {
-                            sent,
-                            checking: &checking,
-                            cancel: Arc::clone(&cancel),
-                        },
-                    );
+                    let report = Report {
+                        sent,
+                        checking: &checking,
+                        cancel: Arc::clone(&cancel),
+                    };
+                    let out = match what {
+                        What::Save(owner) => dest.send(host, owner, zip, &target, scratch, &report),
+                        What::Folder(rel) => {
+                            dest.send_folder(host, zip, rel, &name, scratch, &report)
+                        }
+                    };
                     run.unwatch();
                     out
                 }
@@ -725,7 +913,7 @@ impl Ctx<'_, '_> {
                     }
                     crate::log_warn!(
                         "save backup: {} on {host} to {place:?} (try {}): {why}",
-                        owner.title_id,
+                        what.label(),
                         tries + 1
                     );
                     self.dests[di].reset();
@@ -840,6 +1028,11 @@ pub(crate) fn carry_over(
             .entry(it.host.clone())
             .or_insert_with(|| console.list_saves(&it.host));
         let entry = match list {
+            // A console folder (#899): looked at again as it is now.
+            Ok(_) if it.kind == "folder" => console
+                .folder_signature(&it.host, &it.path)
+                .ok()
+                .map(|sig| folders::entry(&it.path, sig)),
             Ok(saves) => saves.iter().find(|e| e.path == it.path).cloned(),
             Err(e) => {
                 run.unreached(&it.host, e);
@@ -849,15 +1042,21 @@ pub(crate) fn carry_over(
         match entry {
             Some(e) => {
                 it.mtime = e.mtime;
-                it.size = e.size.max(0) as u64;
+                if it.kind != "folder" {
+                    it.size = e.size.max(0) as u64;
+                }
                 let host = it.host.clone();
                 let idx = run.add(vec![it]).start;
                 todo.push((idx, host, e));
             }
             None if list.is_ok() => {
-                // The save is gone from the console: nothing to back up.
+                // The save (or folder) is gone from the console: nothing to back up.
                 it.step = Step::Skipped;
-                it.error = Some("the save is no longer on the PS5".into());
+                it.error = Some(if it.kind == "folder" {
+                    "the folder is no longer on the PS5".into()
+                } else {
+                    "the save is no longer on the PS5".into()
+                });
                 for d in it.dests.values_mut() {
                     if d.step == Step::Waiting {
                         d.step = Step::Skipped;
@@ -944,13 +1143,82 @@ pub(crate) struct ShareOut {
     pub last_verified: Option<crate::save_backup_server::Verified>,
 }
 
-/// The saves of `host` due on the share or the PS5 drive (`copies`), as run items.
+/// The chosen console folders of `host` that changed since `main`'s record (#899), as run items;
+/// with a PS5 drive (`copies`), each due there too: since its own record when `drive_kept`, else
+/// whenever it is due in `main`. A folder that is not on this console is not due.
+pub(crate) fn plan_folders(
+    console: &dyn Console,
+    host: &str,
+    list: &[String],
+    main: Place,
+    records: &dyn Records,
+    copies: Option<&mut Copies>,
+    drive_kept: bool,
+) -> Vec<(Item, SaveEntry)> {
+    let done = records.done(main);
+    let drive_done = records.done(Place::Drive);
+    let drive = console.drive(host);
+    let mut copies = copies;
+    let mut out = Vec::new();
+    for path in list {
+        let Ok(sig) = console.folder_signature(host, path) else {
+            continue;
+        };
+        let e = folders::entry(path, sig);
+        let key = done_key(host, &e.path);
+        let mut places = Vec::new();
+        if done.get(&key) != Some(&sig) {
+            places.push(main);
+        }
+        let mut away = None;
+        if let Some(c) = copies.as_deref_mut() {
+            let due = if drive_kept {
+                drive_done.get(&key) != Some(&sig)
+            } else {
+                !places.is_empty()
+            };
+            if due {
+                match c.unready(drive.as_ref(), host) {
+                    None => places.push(Place::Drive),
+                    Some(why) => {
+                        c.note_skipped(drive.as_ref(), host);
+                        away = Some(why);
+                    }
+                }
+            }
+        }
+        if places.is_empty() && away.is_none() {
+            continue;
+        }
+        let mut item = journal::new_item(host, &e, key, &places);
+        item.path = path.clone();
+        if let Some(why) = away {
+            item.dests.insert(
+                Place::Drive,
+                journal::DestStatus {
+                    step: Step::Skipped,
+                    error: Some(why),
+                    ..Default::default()
+                },
+            );
+            if places.is_empty() {
+                item.step = Step::Skipped;
+            }
+        }
+        out.push((item, e));
+    }
+    out
+}
+
+/// The saves of `host` due on the share or the PS5 drive (`copies`), as run items; with
+/// `with_folders`, the chosen console folders too (#899).
 pub(crate) fn plan_share_host(
     p: &SharePass,
     copies: Option<&mut Copies>,
     host: &str,
     title: Option<&str>,
     settle: bool,
+    with_folders: bool,
 ) -> Result<Vec<(Item, SaveEntry)>, String> {
     use crate::save_backup_server::{due_saves, Pick};
     let saves = p.console.list_saves(host)?;
@@ -1006,6 +1274,18 @@ pub(crate) fn plan_share_host(
         }
         out.push((item, e.clone()));
     }
+    drop(drive);
+    if with_folders {
+        out.extend(plan_folders(
+            p.console,
+            host,
+            &p.s.folders,
+            Place::Share,
+            p.records,
+            copies,
+            true,
+        ));
+    }
     Ok(out)
 }
 
@@ -1017,8 +1297,18 @@ pub(crate) fn share_pass(p: &SharePass, run: RunRef<'_>, work: Work) -> ShareOut
     let todo: Vec<(usize, String, SaveEntry)> = match work {
         Work::Hosts(list, settle) => {
             let mut todo = Vec::new();
+            let mut folders_planned = BTreeSet::new();
             for (host, title) in list {
-                match plan_share_host(p, copies.as_mut(), host, title.as_deref(), settle) {
+                // A console's folders once per run, whichever games were closed there.
+                let with_folders = folders_planned.insert(host.clone());
+                match plan_share_host(
+                    p,
+                    copies.as_mut(),
+                    host,
+                    title.as_deref(),
+                    settle,
+                    with_folders,
+                ) {
                     Ok(items) => {
                         answered.insert(host.clone());
                         for (i, e) in add_items(&run, items) {
@@ -1193,6 +1483,9 @@ mod tests {
     use crate::save_backup_server::ServerSettings;
     use std::cell::{Cell, RefCell};
 
+    /// A folder's files: (path in it, bytes).
+    type Files = Vec<(String, Vec<u8>)>;
+
     /// A PS5 in memory: its saves (each one file of `bytes`), reads that fail as a console that
     /// is not answering, and a drive (`Fake`).
     pub(crate) struct FakeConsole {
@@ -1204,6 +1497,8 @@ mod tests {
         pub crash_after: Cell<Option<usize>>,
         pub reads: Cell<usize>,
         pub drive: Fake,
+        /// Console folders (#899): path → its files (path in it, bytes).
+        pub folders: RefCell<BTreeMap<String, Files>>,
     }
 
     const GONE: &str =
@@ -1284,6 +1579,38 @@ mod tests {
         fn drive<'a>(&'a self, _host: &'a str) -> Box<dyn Drive + 'a> {
             Box::new(DriveRef(&self.drive))
         }
+        fn folder_signature(&self, _host: &str, path: &str) -> Result<i64, String> {
+            if self.crashed() {
+                return Err(GONE.into());
+            }
+            let f = self.folders.borrow();
+            let files = f.get(path).ok_or("no such folder")?;
+            let entries: Vec<(String, u64, i64)> = files
+                .iter()
+                .map(|(r, b)| {
+                    let h = blake3::hash(b);
+                    let mut m = [0u8; 8];
+                    m.copy_from_slice(&h.as_bytes()[..8]);
+                    (r.clone(), b.len() as u64, i64::from_le_bytes(m))
+                })
+                .collect();
+            Ok(folders::signature(&entries))
+        }
+        fn read_folder(&self, _host: &str, path: &str, tmp: &Path) -> Result<(), String> {
+            if self.crashed() {
+                return Err(GONE.into());
+            }
+            let leaf = folders::leaf_of(path)?;
+            for (rel, b) in self.folders.borrow().get(path).ok_or("no such folder")? {
+                let to = tmp.join(&leaf).join(rel);
+                std::fs::create_dir_all(to.parent().unwrap()).map_err(|e| e.to_string())?;
+                std::fs::write(to, b).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        }
+        fn console_id(&self, _host: &str) -> Option<String> {
+            None
+        }
     }
 
     /// Bytes that do not compress (a save's encrypted image does not), from `seed`.
@@ -1332,6 +1659,7 @@ mod tests {
             crash_after: Cell::new(None),
             reads: Cell::new(0),
             drive: with_m2(),
+            folders: RefCell::default(),
         }
     }
 
@@ -1359,15 +1687,28 @@ mod tests {
         trigger: &str,
         work: Work,
     ) -> ShareOut {
+        pass_with(&settings(), c, fs, records, retry, journal, trigger, work)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pass_with(
+        s: &ServerSettings,
+        c: &FakeConsole,
+        fs: &MemFs,
+        records: &MemRecords,
+        retry: &Retry,
+        journal: &Journal,
+        trigger: &str,
+        work: Work,
+    ) -> ShareOut {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let server: Arc<dyn RemoteFs> = Arc::new(fs.share());
         let open = || Ok((Arc::clone(&server), "/b".to_string()));
         let forget = || {};
         let keep_going = || true;
         let after = |_: &str, _: &SaveEntry| {};
-        let s = settings();
         let p = SharePass {
-            s: &s,
+            s,
             console: c,
             records,
             retry,
@@ -1586,7 +1927,7 @@ mod tests {
                 after_share: &after,
             };
             let mut copies = Copies::new(&s.console_drive, s.drive_keep(), s.arrange());
-            let items = plan_share_host(&p, copies.as_mut(), HOST, None, false).unwrap();
+            let items = plan_share_host(&p, copies.as_mut(), HOST, None, false, true).unwrap();
             let todo: Vec<(usize, String, SaveEntry)> = add_items(&run, items)
                 .into_iter()
                 .map(|(i, e)| (i, HOST.to_string(), e))
@@ -1811,5 +2152,103 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("not plugged in"));
+    }
+
+    const GRIM: &str =
+        "/data/prospero-win/prefixes/grim-dawn/drive_c/users/prospero/Documents/My Games/Grim Dawn";
+
+    /// #899: a chosen console folder goes with the saves, to the share and the PS5 drive, in
+    /// `Folders/<name>/` whatever the layout; again only when it changed, keeping its versions.
+    #[test]
+    fn a_chosen_console_folder_is_backed_up_with_the_saves() {
+        for how in [Layout::ByGame, Layout::ByUser] {
+            let c = console(0, 0);
+            c.folders.borrow_mut().insert(
+                GRIM.into(),
+                vec![
+                    ("Save/main/player.gdc".into(), b"level 10".to_vec()),
+                    ("settings/options.txt".into(), b"a".to_vec()),
+                ],
+            );
+            // A folder chosen for another console is not on this one: not due, no error.
+            let s = ServerSettings {
+                layout: how,
+                folders: vec![GRIM.into(), "/data/not/here".into()],
+                ..settings()
+            };
+            let fs = MemFs::new(&[]);
+            let records = MemRecords::default();
+            let journal = Journal::open(None);
+            let hosts = all_hosts();
+            let go = |trigger: &str| {
+                pass_with(
+                    &s,
+                    &c,
+                    &fs,
+                    &records,
+                    &Retry::instant(),
+                    &journal,
+                    trigger,
+                    Work::Hosts(&hosts, false),
+                )
+            };
+            let out = go("manual");
+            assert_eq!(out.summary.total, 67, "{how:?}");
+            assert_eq!(out.summary.verified, 67);
+            let dir = format!("/b/{}", folders::folder_rel(GRIM));
+            let on_share = |fs: &MemFs| -> Vec<String> {
+                fs.paths()
+                    .into_iter()
+                    .filter(|p| p.starts_with(&format!("{dir}/")) && p.ends_with(".zip"))
+                    .collect()
+            };
+            assert_eq!(on_share(&fs).len(), 1, "{how:?}");
+            let zip = fs.bytes(&on_share(&fs)[0]).unwrap();
+            let local = std::env::temp_dir()
+                .join(format!("ps5u-folder-{}-{how:?}.zip", std::process::id()));
+            std::fs::write(&local, &zip).unwrap();
+            assert_eq!(folders::noted_path(&local).as_deref(), Some(GRIM));
+            let _ = std::fs::remove_file(&local);
+            let drive_dir = format!(
+                "/mnt/ext0/ps5upload/save-backups/{}/",
+                folders::folder_rel(GRIM)
+            );
+            assert_eq!(
+                c.drive
+                    .files
+                    .borrow()
+                    .keys()
+                    .filter(|p| p.starts_with(&drive_dir))
+                    .count(),
+                1
+            );
+            let run = journal.last(Which::Share).unwrap();
+            let it = run.items.iter().find(|i| i.kind == "folder").unwrap();
+            assert_eq!(it.path, GRIM);
+            assert_eq!(it.id, format!("{HOST}|folder:{GRIM}"));
+            // Nothing changed: nothing to do.
+            let journal2 = Journal::open(None);
+            let again = pass_with(
+                &s,
+                &c,
+                &fs,
+                &records,
+                &Retry::instant(),
+                &journal2,
+                "manual",
+                Work::Hosts(&hosts, false),
+            );
+            assert_eq!(again.summary.total, 0);
+            // It changed twice: backed up each time, two versions kept (Versions to keep: 2).
+            for n in [11, 12] {
+                std::thread::sleep(Duration::from_millis(1100));
+                c.folders.borrow_mut().get_mut(GRIM).unwrap()[0].1 =
+                    format!("level {n}").into_bytes();
+                let out = go("manual");
+                assert_eq!(out.summary.total, 1);
+                assert_eq!(out.summary.verified, 1);
+            }
+            assert_eq!(on_share(&fs).len(), 2, "{how:?}");
+        }
     }
 }

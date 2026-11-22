@@ -87,6 +87,11 @@ pub struct Settings {
     /// on any PS5) in the user's Decrypted folder, `keep` of them.
     #[serde(default)]
     pub decrypted_copy: bool,
+    /// Folders on the PS5 backed up with the saves (#899): a port's or an emulator's saves kept in
+    /// a folder of its own. Each is zipped whole into `Folders/<name>/` with the same versions to
+    /// keep (`save_folders`); empty: none.
+    #[serde(default)]
+    pub folders: Vec<String>,
 }
 
 impl Settings {
@@ -162,6 +167,7 @@ impl Default for Settings {
             layout: Layout::ByGame,
             game_names: false,
             decrypted_copy: false,
+            folders: Vec::new(),
         }
     }
 }
@@ -1208,6 +1214,17 @@ fn local_run(trigger: &str, ids: Option<&BTreeSet<String>>) -> Result<(), String
                     }
                     items.push((item, entry.clone()));
                 }
+                drop(drive);
+                // The chosen console folders too (#899).
+                items.extend(pass::plan_folders(
+                    &console,
+                    host,
+                    &s.folders,
+                    Place::Local,
+                    &records,
+                    copies.as_mut(),
+                    false,
+                ));
                 for (i, e) in pass::add_items(&run, items) {
                     todo.push((i, host.clone(), e));
                 }
@@ -2369,6 +2386,8 @@ pub struct SettingsPatch {
     pub game_names: Option<bool>,
     /// By user: a decrypted copy with each automatic backup of a PS5 save.
     pub decrypted_copy: Option<bool>,
+    /// Folders on the PS5 backed up with the saves (#899), each checked by `save_folders`.
+    pub folders: Option<Vec<String>>,
 }
 
 /// `hosts` with the additions and removals made, tidy.
@@ -2445,6 +2464,12 @@ pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
     }
     if let Some(d) = patch.decrypted_copy {
         next.decrypted_copy = d;
+    }
+    if let Some(f) = patch.folders {
+        match crate::save_folders::folders_ok(&f) {
+            Ok(f) => next.folders = f,
+            Err(e) => return json_error(StatusCode::BAD_REQUEST, e),
+        }
     }
     if let Some(h) = patch.hosts {
         next.hosts = hosts_with(h, Vec::new(), &[]);

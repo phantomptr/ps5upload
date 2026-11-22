@@ -26,6 +26,9 @@ export interface SaveBackupSettings {
   game_names?: boolean;
   /** By user: each automatic backup of a PS5 save also leaves a decrypted copy. */
   decrypted_copy?: boolean;
+  /** Folders on the PS5 backed up with the saves (#899). An engine before 12.6.20 leaves it out
+   *  (it can't). */
+  folders?: string[];
 }
 
 /** `by_game`: `<TITLE>/<file>`; `by_user`: `<name>_<id>/Encrypted/<PS5|PS4>/<TITLE>/<file>`. */
@@ -133,6 +136,8 @@ export interface ServerBackupSettings {
   layout?: BackupLayout;
   game_names?: boolean;
   decrypted_copy?: boolean;
+  /** Folders on the PS5 backed up with the saves (#899); absent from an older engine. */
+  folders?: string[];
 }
 
 export interface ServerBackupVerified {
@@ -285,6 +290,34 @@ export const saveBackupRunsApi = {
       method: "POST",
       body: JSON.stringify(ids ? { which, ids } : { which }),
     }),
+};
+
+/** Where folder backups are listed and restored from (#899). */
+export type FolderBackupFrom = "share" | "local" | "drive";
+
+export interface FolderBackup {
+  file: string;
+  /** `YYYY-MM-DD_HHMMSS` (UTC). */
+  stamp: string;
+  size: number;
+  /** `beforerestore`: the copy kept before a restore replaced the folder. */
+  tag: string | null;
+}
+
+export const saveFoldersApi = {
+  /** Each chosen console folder with its backups in `from`, newest first. */
+  list: async (from: FolderBackupFrom, addr = "") =>
+    (
+      await call<{ folders: Array<{ path: string; backups: FolderBackup[] }> }>(
+        `/folders?from=${from}&addr=${encodeURIComponent(addr)}`,
+      )
+    ).folders,
+  /** Whether a console folder may be chosen: the path made plain, or why not. */
+  check: (path: string) =>
+    call<{ ok: boolean; path?: string; error?: string }>(`/folders/check?path=${encodeURIComponent(path)}`),
+  /** Puts a folder backup back where it came from, keeping what is there first. */
+  restore: (req: { from: FolderBackupFrom; addr: string; path: string; file: string }) =>
+    call<{ ok: boolean }>("/folders/restore", { ...LONG, method: "POST", body: JSON.stringify(req) }),
 };
 
 /** A save of ProsperoEden, the Switch emulator (PPSA99008): `title_id` is the game's 16-hex-digit

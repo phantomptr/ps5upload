@@ -355,6 +355,28 @@ impl Copies {
         &self.drive
     }
 
+    /// Versions of each save (or folder) kept on the drive.
+    pub fn keep(&self) -> u32 {
+        self.keep
+    }
+
+    /// Counts a copy made apart from `copy` (a console folder's, #899): `Ok` copied, `Err(None)`
+    /// skipped, `Err(Some(why))` failed (`why` noted either way).
+    pub fn count(&mut self, r: Result<(), (bool, String)>) {
+        self.status.at = local::now_ms();
+        match r {
+            Ok(()) => self.status.copied += 1,
+            Err((failed, why)) => {
+                if failed {
+                    self.status.failed += 1;
+                } else {
+                    self.status.skipped += 1;
+                }
+                self.status.note = Some(why);
+            }
+        }
+    }
+
     fn checked_for(&mut self, c: &dyn Drive, host: &str) -> Result<(), String> {
         self.checked
             .entry(host.to_string())

@@ -24,6 +24,7 @@ import { userHex } from "./saveUsers";
 import { ConsoleCopyChoice, useConsoleDrives } from "./AutoBackupCard";
 import { BackupLayoutChoice, layoutSupported } from "./BackupLayoutChoice";
 import { BackupProgressModal, BackupRunBar, useBackupRuns } from "./BackupProgress";
+import { FolderBackupChoice, foldersSupported } from "./FolderBackupChoice";
 
 /** Backups to a network share (#592): where, when (every few hours or after a game is closed),
  *  which consoles and users, and how the last one went. The engine runs them and verifies each
@@ -239,6 +240,15 @@ export default function ServerBackupCard({
               settings={settings}
               status={status?.decrypted}
               onChange={(patch) => void set(patch)}
+            />
+          )}
+          {foldersSupported(settings) && (
+            <FolderBackupChoice
+              testId="server-save-backup-folders"
+              folders={settings.folders ?? []}
+              onChange={(folders) => void set({ folders })}
+              from="share"
+              driveCopies={!!settings.console_drive}
             />
           )}
           {copySupported && (

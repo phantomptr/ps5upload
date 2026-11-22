@@ -20,6 +20,7 @@ import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
 import { BackupLayoutChoice, layoutSupported } from "./BackupLayoutChoice";
 import { BackupProgressModal, BackupRunBar, useBackupRuns } from "./BackupProgress";
+import { FolderBackupChoice, foldersSupported } from "./FolderBackupChoice";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -411,6 +412,15 @@ export default function AutoBackupCard({
           settings={settings}
           status={status?.decrypted}
           onChange={(patch) => void set(patch)}
+        />
+      )}
+      {foldersSupported(settings) && settings.dir && (
+        <FolderBackupChoice
+          testId="auto-save-backup-folders"
+          folders={settings.folders ?? []}
+          onChange={(folders) => void set({ folders })}
+          from="local"
+          driveCopies={!!settings.console_drive}
         />
       )}
       {error && <p className="mt-2 text-xs text-[var(--color-bad)]">{error}</p>}

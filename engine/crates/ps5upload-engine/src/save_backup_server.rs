@@ -111,6 +111,11 @@ pub struct ServerSettings {
     /// PS5) in the user's Decrypted folder on the server, `keep` of them.
     #[serde(default)]
     pub decrypted_copy: bool,
+    /// Folders on the PS5 backed up with the saves (#899): a port's or an emulator's saves kept in
+    /// a folder of its own. Each is zipped whole into `Folders/<name>/` with the same versions to
+    /// keep (`save_folders`); empty: none.
+    #[serde(default)]
+    pub folders: Vec<String>,
 }
 
 impl ServerSettings {
@@ -153,6 +158,7 @@ impl Default for ServerSettings {
             layout: Layout::ByGame,
             game_names: false,
             decrypted_copy: false,
+            folders: Vec::new(),
         }
     }
 }
@@ -1302,6 +1308,8 @@ pub struct Patch {
     pub game_names: Option<bool>,
     /// By user: a decrypted copy with each backup of a PS5 save.
     pub decrypted_copy: Option<bool>,
+    /// Folders on the PS5 backed up with the saves (#899), each checked by `save_folders`.
+    pub folders: Option<Vec<String>>,
 }
 
 /// Whether the engine can write in `target`: the folder is made, a small file written there
@@ -1378,6 +1386,12 @@ pub async fn put_settings(Json(p): Json<Patch>) -> Response {
     }
     if let Some(d) = p.decrypted_copy {
         next.decrypted_copy = d;
+    }
+    if let Some(f) = p.folders {
+        match crate::save_folders::folders_ok(&f) {
+            Ok(f) => next.folders = f,
+            Err(e) => return json_error(StatusCode::BAD_REQUEST, e),
+        }
     }
     if next.mode != Mode::Off && next.target.is_empty() {
         return json_error(

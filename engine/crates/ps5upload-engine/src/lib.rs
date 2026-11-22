@@ -120,6 +120,7 @@ mod save_backup_pass;
 mod save_backup_run;
 mod save_backup_server;
 mod save_copy;
+mod save_folders;
 mod save_layout;
 mod save_sync;
 mod self_host;
@@ -13510,6 +13511,16 @@ fn build_app_and_mcp(
         .route(
             "/api/save-backup/runs/continue",
             post(save_backup_pass::post_continue),
+        )
+        // Console folders backed up with the saves (#899).
+        .route("/api/save-backup/folders", get(save_folders::get_list))
+        .route(
+            "/api/save-backup/folders/check",
+            get(save_folders::get_check),
+        )
+        .route(
+            "/api/save-backup/folders/restore",
+            post(save_folders::post_restore),
         )
         .route("/api/save-backup/list", get(save_backup::get_list))
         // A copy of each backup on the PS5's own M.2 or USB drive.

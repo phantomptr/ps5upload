@@ -95,7 +95,15 @@ interface AutoSaveBackupState {
     patch: Partial<
       Pick<
         SaveBackupSettings,
-        "enabled" | "dir" | "keep" | "interval_minutes" | "console_drive" | "layout" | "game_names" | "decrypted_copy"
+        | "enabled"
+        | "dir"
+        | "keep"
+        | "interval_minutes"
+        | "console_drive"
+        | "layout"
+        | "game_names"
+        | "decrypted_copy"
+        | "folders"
       >
     >,
   ) => Promise<void>;

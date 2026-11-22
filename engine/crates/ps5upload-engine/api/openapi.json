@@ -4627,6 +4627,15 @@
         ],
         "type": "object"
       },
+      "From": {
+        "description": "Where a folder backup is kept: the network share, the backup folder here, a PS5 drive.",
+        "enum": [
+          "share",
+          "local",
+          "drive"
+        ],
+        "type": "string"
+      },
       "FsChmodReq": {
         "properties": {
           "addr": {
@@ -9860,6 +9869,16 @@
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "folders": {
+            "description": "Folders on the PS5 backed up with the saves (#899), each checked by `save_folders`.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -16823,6 +16842,16 @@
               "null"
             ]
           },
+          "folders": {
+            "description": "Folders on the PS5 backed up with the saves (#899), each checked by `save_folders`.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "game_names": {
             "description": "By user: name a game's new folder after the game too.",
             "type": [
@@ -16873,6 +16902,31 @@
             "type": "array"
           }
         },
+        "type": "object"
+      },
+      "engine.save_folders.RestoreBody": {
+        "properties": {
+          "addr": {
+            "description": "The console (bare IP).",
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "from": {
+            "$ref": "#/components/schemas/From"
+          },
+          "path": {
+            "description": "The console folder the backup is of (and goes back to).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "addr",
+          "path",
+          "file"
+        ],
         "type": "object"
       },
       "engine.tailnet_discover.AddBody": {
@@ -46920,6 +46974,188 @@
               "console",
               "host"
             ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-backup/folders": {
+      "get": {
+        "description": "`GET /api/save-backup/folders?from=share|local|drive&addr=` — each chosen console folder with\nits backups there, newest first: `{folders: [{path, backups: [{file, stamp, size, tag}]}]}`.",
+        "parameters": [
+          {
+            "description": "`share`, `local` or `drive`.",
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/From"
+            }
+          },
+          {
+            "description": "The console (bare IP): needed for `drive`.",
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "folders": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Each chosen console folder with its backups there, newest first: `{folders: [{path, backups: [{file, stamp, size, tag}]}]}`",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-backup/folders/check": {
+      "get": {
+        "description": "`GET /api/save-backup/folders/check?path=` — `{ok, path}` (the path made plain) or `{ok:\nfalse, error}`: whether a console folder may be chosen.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "`{ok, path}` (the path made plain) or `{ok: false, error}`: whether a console folder may be chosen",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-backup/folders/restore": {
+      "post": {
+        "description": "`POST /api/save-backup/folders/restore` — `{from, addr, path, file}`: puts a folder backup\nback where it came from, keeping what is there first (in the same place; the share or the\nbackup folder here for one on a PS5 drive). No other save operation on the console meanwhile.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/engine.save_folders.RestoreBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [],
             "in": "body",
             "name": "addr",
             "required": true
