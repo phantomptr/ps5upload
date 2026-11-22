@@ -23,7 +23,10 @@ export function engineCaps(): Promise<EngineCaps> {
   if (capsCache && capsCache.url === url && Date.now() - capsCache.at < CAPS_TTL_MS) {
     return capsCache.caps;
   }
-  const caps = fetch(`${url}/api/version`, { signal: AbortSignal.timeout(5000) })
+  // Never throws where it is called (a screen's effect): a WebKit before Safari 16 has no
+  // AbortSignal.timeout, and that only means no caps.
+  const caps = Promise.resolve()
+    .then(() => fetch(`${url}/api/version`, { signal: AbortSignal.timeout(5000) }))
     .then((r) => (r.ok ? r.json() : null))
     .then((v: { caps?: Record<string, unknown> } | null) => ({
       payloadConsolePath: v?.caps?.payload_console_path === true,
