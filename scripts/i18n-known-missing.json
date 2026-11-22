@@ -1,9 +1,6 @@
 {
   "ar": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -19,10 +16,7 @@
     ]
   },
   "bn": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -42,10 +36,7 @@
     ]
   },
   "de": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -74,10 +65,7 @@
     ]
   },
   "es": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -100,10 +88,7 @@
     ]
   },
   "fa": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -121,10 +106,7 @@
     ]
   },
   "fr": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -146,10 +128,7 @@
     ]
   },
   "hi": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -169,10 +148,7 @@
     ]
   },
   "hu": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -198,10 +174,7 @@
     ]
   },
   "id": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -229,10 +202,7 @@
     ]
   },
   "it": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -260,10 +230,7 @@
     ]
   },
   "ja": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -280,10 +247,7 @@
     ]
   },
   "ko": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -302,10 +266,7 @@
     ]
   },
   "pl": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -328,10 +289,7 @@
     ]
   },
   "pt-BR": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -354,10 +312,7 @@
     ]
   },
   "ru": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -379,10 +334,7 @@
     ]
   },
   "th": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -403,10 +355,7 @@
     ]
   },
   "tr": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -431,10 +380,7 @@
     ]
   },
   "vi": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -458,10 +404,7 @@
     ]
   },
   "zh-CN": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -479,10 +422,7 @@
     ]
   },
   "zh-TW": {
-    "missing": [
-      "fpkg.ampr.emu_fixed_packs",
-      "fpkg.ampr.not_used"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
