@@ -6,6 +6,11 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Fixes**
+- **With the app using an engine on another computer, a PS5 added by its Tailscale address shows up (#907).** It was saved on the engine but never reached the app's list, so its card never appeared. The app now adds it straight away. The same goes for Add in Settings › Tailscale and in "Found on your Tailscale network". With a remote engine, the home network scan in Add a PS5 also runs on the engine's computer, so it no longer lists a PS5 as answering that the engine can't reach. Thanks to the reporter for the diagnosis.
+
+## 12.6.19
+
 **New**
 - **Backup progress, and continue after an interruption (#895).** Both backup cards have a Backup progress button: saves and size done, speed, time left, and each game and user's state on the network share, the PS5 drive and this computer, with Retry for failed ones and Cancel. The backup's state is kept by the app's engine, so after a crash, a disconnect or a closed app the card says where it stopped, with Continue backup to do only what is left. Earlier runs are listed too.
 - **Back up folders on the PS5 too (#899).** "Also back up these folders on the PS5" on both backup cards: pick a folder where an app keeps its saves (a port or an emulator, for example under /data), and it's zipped with every backup, with the same number of versions, kept per PS5, and can be restored to the same place (what is there is kept first). Trophies and play time are not included: they belong to your account and the console's database, and restoring them can break them.

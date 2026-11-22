@@ -11,19 +11,13 @@ import { Modal } from "../../../components/Modal";
 import { useTr, type Translator } from "../../../state/lang";
 import { useRosterStore } from "../../../state/roster";
 import { usePairingStore } from "../../../state/pairing";
-import { requestRosterPull } from "../../../state/rosterShare";
+import { takeEngineConsole } from "../../../state/rosterShare";
 import { discoverPs5, type DiscoveredHost } from "../../../api/ps5";
 import { addTailnetConsole, tailnetConsoles, type FoundConsoles } from "../../../api/tailnet";
 import { consoleIdentity } from "../../../api/ava1";
 import { cleanConsoleAddress, hostOf } from "../../../lib/addr";
 import { humanizeCaught } from "../../../lib/humanizeError";
 import { addAddress, addTarget, isTailnetIp, mergeFound, parseInvite, type FoundRow, type FoundSource, type Invite } from "./model";
-
-/** The console list is mirrored from the engine on focus (state/rosterShare.ts): ask for that now
- *  so a console the engine added shows at once. */
-function pullConsoleList() {
-  requestRosterPull();
-}
 
 /** Whether this device can scan a QR code itself (a camera and the browser's barcode reader). */
 export function canScanQr(): boolean {
@@ -424,7 +418,7 @@ export function AddConsoleSheet({
   const [pasted, setPasted] = useState("");
   const [scanningQr, setScanningQr] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** A console the engine added, selected once the list mirror brings it in. */
+  /** A console the engine added, selected once it is on the list (state/rosterShare.ts). */
   const [pending, setPending] = useState<{ id: string; invite: boolean } | null>(null);
 
   useEffect(() => {
@@ -528,8 +522,8 @@ export function AddConsoleSheet({
         // The engine keeps one entry per console, at its home address when it knows one.
         const r = await addTailnetConsole(value, name);
         pairAt = r.console.host || value;
-        setPending({ id: r.console.id, invite: fromInvite });
-        pullConsoleList();
+        // The list mirror brings it in; an app using another computer's engine adds it here.
+        setPending({ id: takeEngineConsole(r.console, value), invite: fromInvite });
       } else {
         const id = roster.add({ name: name || fallbackName(value), host: value });
         onAdded(id, fromInvite);
