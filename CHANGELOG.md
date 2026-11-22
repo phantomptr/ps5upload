@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.22
 
 **Uploads**
 - **The check on the PS5 after an upload shows its progress (#873).** Before a big file counts as done, the PS5 reads it back from its drive to check it. When the drive can't keep up while the file is still arriving, part of that check is left for after the last byte, which on a 70–160 GB game can take several minutes, and the row said the PS5 had reported no progress. It now shows "Checking on the PS5: X of Y" with the time left, and the no-progress warning stays off while the check moves.
