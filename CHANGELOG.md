@@ -21,6 +21,9 @@ What's new in ps5upload, written for humans.
 - **On your PS5 lists your payloads first.** The payloads saved in Payload Manager are now the tab's main list, "Your payloads", each with Launch, Load at boot, Stop and Delete. Payload Manager's own settings stay under Manage on its card, and the count at the top matches what is listed.
 - **A removed payload no longer shows as Installed.** Some payloads leave a folder or settings file behind when removed (LZ4 Compression's /data/LZ4Compression). That alone no longer counts as installed.
 
+**Saves**
+- **Copy to another user works for games that name every save differently, like The Witcher 3.** These games never make a save slot with the same name for another user, so the copy used to stop and ask you to "save in the same slot", which could never work. The save's slots are now added to the other user and made theirs; their other saves of the game stay, and their save is backed up first. The same goes for Copy to another console, and for a user with no save of the game yet.
+
 **Other**
 - **Clear all in the notification bell (#911).** Thanks @Dang3rZone.
 - **Security:** updated the `url` library for a newly published advisory (RUSTSEC-2026-0592).

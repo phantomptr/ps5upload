@@ -23,12 +23,12 @@ export type CopyEvent =
   | { type: "done" }
   | { type: "failed"; error: string };
 
-/** The dialog's next step. A user without a save of the game can only be picked for a backup
- *  (`anyTarget`): its images become theirs (#809); a copy needs a save of theirs to go into. */
-export function copyStep(s: CopyState, e: CopyEvent, anyTarget = false): CopyState {
+/** The dialog's next step. Any user can be picked: one without a save of the game gets the
+ *  save's images as theirs (#809), for a backup and a copy alike. */
+export function copyStep(s: CopyState, e: CopyEvent): CopyState {
   switch (e.type) {
     case "pick":
-      return s.step === "pick" && (e.target.save || anyTarget) ? { step: "confirm", target: e.target } : s;
+      return s.step === "pick" ? { step: "confirm", target: e.target } : s;
     case "back":
       return s.step === "confirm" || s.step === "failed" ? { step: "pick" } : s;
     case "start":
@@ -77,7 +77,6 @@ export function CopyToUserView({ game, source, targets, state, onPick, onConfirm
               <li key={t.uid}>
                 <button
                   type="button"
-                  disabled={!t.save && !restore}
                   data-testid="copy-user-target"
                   data-has-save={t.save ? "true" : "false"}
                   onClick={() => onPick(t)}
@@ -91,7 +90,7 @@ export function CopyToUserView({ game, source, targets, state, onPick, onConfirm
                         ? tr("saves_copy_has_save", undefined, "Has a save of this game")
                         : restore
                           ? tr("save_backup_restore_new_hint", undefined, "No save of this game yet. The backup becomes this user's save.")
-                          : tr("saves_copy_no_save", { game, name }, "Start {game} once as {name} and save, then come back.")}
+                          : tr("saves_copy_new_hint", undefined, "No save of this game yet. The copy becomes this user's save.")}
                     </span>
                   </span>
                 </button>
@@ -113,11 +112,17 @@ export function CopyToUserView({ game, source, targets, state, onPick, onConfirm
       <div className="flex flex-col gap-3" data-testid="copy-user-confirm">
         <p className="text-sm">
           {source.kind === "save"
-            ? tr(
-                "saves_copy_confirm",
-                { target, game, source: source.owner },
-                "Replace {target}'s save of {game} with {source}'s? {target}'s current save is backed up first.",
-              )
+            ? state.target.save
+              ? tr(
+                  "saves_copy_confirm",
+                  { target, game, source: source.owner },
+                  "Replace {target}'s save of {game} with {source}'s? {target}'s current save is backed up first.",
+                )
+              : tr(
+                  "saves_copy_new_confirm",
+                  { target, game, source: source.owner },
+                  "Give {target} {source}'s save of {game}? {target} has no save of this game yet, so nothing is replaced.",
+                )
             : state.target.save
               ? tr(
                   "save_backup_restore_to_user_confirm",
@@ -142,7 +147,9 @@ export function CopyToUserView({ game, source, targets, state, onPick, onConfirm
           >
             {state.target.save
               ? tr("saves_copy_replace", undefined, "Replace save")
-              : tr("save_backup_restore", undefined, "Restore")}
+              : restore
+                ? tr("save_backup_restore", undefined, "Restore")
+                : tr("copy", undefined, "Copy")}
           </Button>
         </div>
       </div>
@@ -224,7 +231,7 @@ export default function CopyToUserDialog({
 }) {
   const tr = useTr();
   const [state, setState] = useState<CopyState>({ step: "pick" });
-  const go = (e: CopyEvent) => setState((s) => copyStep(s, e, source.kind === "backup"));
+  const go = (e: CopyEvent) => setState((s) => copyStep(s, e));
   const confirm = async () => {
     if (state.step !== "confirm") return;
     const target = state.target;

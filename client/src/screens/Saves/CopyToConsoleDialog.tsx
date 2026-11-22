@@ -24,8 +24,8 @@ function placeName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
-/** Where a save can go on the other console. A PS5 save goes into a user's own save of the game,
- *  so one with none can't be picked. An emulator's goes into the same kind of folder, or, with none
+/** Where a save can go on the other console. A PS5 save goes to any user there: into their save
+ *  of the game, or, with none, as theirs. An emulator's goes into the same kind of folder, or, with none
  *  there yet, the same place it has here. */
 export function consoleTargets(
   entry: SaveEntry,
