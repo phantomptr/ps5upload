@@ -60,6 +60,27 @@ def problems(tree: str) -> list[str]:
         out.append("no supportsPictureInPicture: Remote Play could not float")
     if "android:windowSoftInputMode(" not in tree:
         out.append("no windowSoftInputMode: older Androids would not report the keyboard's inset")
+    # Android TV (#897): a TV refuses an app that requires hardware it lacks ("App not compatible").
+    if "android.intent.category.LEANBACK_LAUNCHER" not in tree:
+        out.append("no LEANBACK_LAUNCHER: the app would not show on a TV's home screen")
+    if "android:banner(" not in tree:
+        out.append("no banner: a TV's home screen would have no tile for the app")
+    features = feature_requirements(tree)
+    if "android.hardware.touchscreen" not in features:
+        out.append("touchscreen not declared optional: a TV refuses the app")
+    out += [f"requires {f}: a TV without it refuses the app" for f, required in sorted(features.items()) if required]
+    return out
+
+
+def feature_requirements(tree: str) -> dict[str, bool]:
+    """Each <uses-feature> by name: whether it is required (the default unless required=false)."""
+    out: dict[str, bool] = {}
+    for block in re.split(r"\n\s*E: ", tree):
+        if not block.startswith("uses-feature"):
+            continue
+        name = re.search(r'android:name\([^)]*\)="([^"]+)"', block)
+        if name:
+            out[name.group(1)] = not re.search(r"android:required\([^)]*\)=(false|0x0+)\b", block)
     return out
 
 
@@ -93,6 +114,14 @@ def self_test() -> None:
         f"{a}networkSecurityConfig(0x01010527)=@0x7f120008",
         f"{a}supportsPictureInPicture(0x010104f7)=true",
         f"{a}windowSoftInputMode(0x0101022b)=0x10",
+        f"{a}banner(0x10102fe)=@0x7f070001",
+        f'{a}name(0x01010003)="android.intent.category.LEANBACK_LAUNCHER" (Raw: "android.intent.category.LEANBACK_LAUNCHER")',
+        "E: uses-feature (line=3)",
+        f'{a}name(0x01010003)="android.hardware.touchscreen" (Raw: "android.hardware.touchscreen")',
+        f"{a}required(0x0101028e)=false",
+        "E: uses-feature (line=4)",
+        f'{a}name(0x01010003)="android.hardware.camera" (Raw: "android.hardware.camera")',
+        f"{a}required(0x0101028e)=false",
     ]
     good = "\n".join(lines)
     assert problems(good) == [], problems(good)
@@ -103,9 +132,16 @@ def self_test() -> None:
         ('="ps5upload"', "no ps5upload:// deep-link filter"),
         ("networkSecurityConfig", "no networkSecurityConfig"),
         ("supportsPictureInPicture", "no supportsPictureInPicture"),
+        ("LEANBACK_LAUNCHER", "no LEANBACK_LAUNCHER"),
+        ("banner(", "no banner"),
+        ("hardware.touchscreen", "touchscreen not declared optional"),
     ):
         tree = "\n".join(l for l in lines if needle not in l)
         assert any(p.startswith(expected) for p in problems(tree)), (needle, problems(tree))
+    # A feature without required=false is required.
+    camera = lines.index(f'{a}name(0x01010003)="android.hardware.camera" (Raw: "android.hardware.camera")')
+    tree = "\n".join(lines[: camera + 1])
+    assert "requires android.hardware.camera: a TV without it refuses the app" in problems(tree), problems(tree)
     print("verify-android-apk self-test ok")
 
 

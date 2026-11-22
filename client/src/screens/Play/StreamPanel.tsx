@@ -1201,6 +1201,8 @@ export function StreamPanel({
         <div
           ref={stage}
           tabIndex={0}
+          // The arrows are the game's here, never the page's (lib/tvNav).
+          data-own-arrows=""
           onKeyDown={(e) => onKey(e, true)}
           onKeyUp={(e) => onKey(e, false)}
           onBlur={(e) => {

@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { parseRunningJobs, unclaimedJobs } from "./engineJobs";
+import { fetchRunningJobs, parseRunningJobs, unclaimedJobs } from "./engineJobs";
 
 describe("engine jobs", () => {
   it("keeps only running jobs and reads their progress", () => {
@@ -35,5 +35,17 @@ describe("engine jobs", () => {
       { job_id: "b", status: "running", job: {} },
     ]);
     expect(unclaimedJobs(jobs, new Set(["a"])).map((j) => j.jobId)).toEqual(["b"]);
+  });
+
+  it("the poll cancels the body of a refused answer (WebView2 keeps unread ones)", async () => {
+    const res = new Response("busy", { status: 503 });
+    const cancel = vi.spyOn(res.body!, "cancel");
+    vi.stubGlobal("fetch", vi.fn(async () => res));
+    try {
+      expect(await fetchRunningJobs()).toEqual([]);
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

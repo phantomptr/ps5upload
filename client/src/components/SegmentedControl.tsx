@@ -1,6 +1,7 @@
 import { useId } from "react";
 import type { LucideIcon } from "lucide-react";
 import { haptic } from "../lib/haptics";
+import { tvNavActive } from "../lib/tvNav";
 
 export interface Segment {
   value: string;
@@ -44,6 +45,8 @@ export function SegmentedControl({
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // On a TV, Up and Down leave the row (lib/tvNav); Left and Right still pick.
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && tvNavActive()) return;
     let next = -1;
     if (e.key === "ArrowRight" || e.key === "ArrowDown") {
       next = (currentIndex + 1) % segments.length;

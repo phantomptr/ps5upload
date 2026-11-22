@@ -60,7 +60,9 @@ pub struct BuildRequest {
     /// `smallest`, or `stored` for no compression) overrides the default, Balanced.
     pub level: crate::kraken::Level,
     /// Narrows the package's PlayGo languages to this one (`fr-FR`, …; see
-    /// [`cnt_write::playgo_scenario_json`]). Absent, it declares all of them with `en-US` first.
+    /// [`cnt_write::playgo_scenario_json`]). Absent, it declares the game's own languages
+    /// ([`cnt_write::game_languages`]), or all of them with `en-US` as the default when the
+    /// game names none.
     pub language: Option<String>,
 }
 
@@ -474,8 +476,26 @@ fn build_mode(
     // The debug license the console's launch checks need (see `license`), generated for this
     // content id. A dump's own license files are never used: they belong to another console.
     extras.extend(cnt_write::license_extras(&content_id));
+    // The game's own languages (its dump's scenario is left out above as a stale copy, but its
+    // language list and default are the game's). Packages used to declare all 31 languages,
+    // Japanese first, with en-US as the default, whatever the game shipped with.
+    let own_scenario = source::read_small(
+        tree.as_mut(),
+        "sce_sys/playgo-scenario.json",
+        source::MAX_PARAM_BYTES,
+    )
+    .unwrap_or_default();
+    let game_languages = cnt_write::game_languages(&own_scenario, &param_json);
+    if let (None, Some(g)) = (request.language.as_deref(), &game_languages) {
+        progress(&format!(
+            "languages as the game declares them: {} ({} by default)",
+            g.supported.join(", "),
+            g.default
+        ));
+    }
     extras.push(cnt_write::playgo_scenario_extra(
         request.language.as_deref(),
+        game_languages.as_ref(),
     ));
     // What the container now carries, the image leaves out (see `CONTAINER_ONLY`).
     let mut carried: std::collections::HashSet<&str> = cnt_write::PRESENTATION

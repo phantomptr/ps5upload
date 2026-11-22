@@ -13,6 +13,9 @@ want invites to go through your own name.
 **The engine API has no password. Never put it on the internet.** Only the hub (below) may be
 published.
 
+For your own Tailscale control and relay server, see
+[Your own Tailscale server](#your-own-tailscale-server-control-and-relay).
+
 ## Two ways
 
 1. **The hub built into the engine** (simplest, when the engine already runs on a server with a
@@ -112,3 +115,44 @@ location / {
 - `curl -i https://play.example.com/api/join` answers `404`: the engine API is not there.
 - In the app, Settings › Play Together › Advanced shows the hub and the guest page address as set
   on the engine's server. A new invite starts with `https://play.example.com/join/`.
+
+## Your own Tailscale server (control and relay)
+
+The app's Tailscale works with a self-hosted control server such as Headscale, and with the relay
+(DERP) servers that server hands out. Use this when you would rather go through your own server
+than Tailscale's relays, for example when your ISP keeps falling back to a relay.
+
+**Sign in to your server:** before you sign in, open **Advanced › Control server** and enter its
+address (`https://hs.example.com`). Do it in **Settings › Tailscale** on each phone or computer,
+and in the PS5's Tailscale panel (Connection) for the console. Approve the new devices in your
+server if it asks. Changing the address later signs that device out.
+
+**Your own relay:** the app uses whichever relays your control server lists. With Headscale, turn
+on its built-in DERP server and leave out Tailscale's list:
+
+```yaml
+# headscale config.yaml
+derp:
+  server:
+    enabled: true
+    region_id: 999
+    region_code: "home"
+    region_name: "My relay"
+    stun_listen_addr: "0.0.0.0:3478"
+    ipv4: 203.0.113.10        # the server's public IPv4: the PS5 needs it (see below)
+  urls: []                    # no Tailscale relays
+  paths: []
+```
+
+Things that must be right, or the PS5 can't connect:
+
+- **Certificates:** the app trusts Let's Encrypt certificates only (as Tailscale's own clients
+  do), over TLS 1.2 or later. The relay always needs one (Headscale can get it itself, or put it
+  behind Caddy). The control server may also use a plain `http://` address, since Tailscale's
+  protocol encrypts that session itself, but then its built-in relay has no certificate either.
+- **An IPv4 address for each relay:** the PS5 can't look up names, so every relay in your map
+  needs its `ipv4`. The control server's own name is looked up by the app and handed to the PS5.
+- **Ports:** TCP 443 (or your control port) and UDP 3478 (STUN) open on the server. Direct
+  connections still go device to device; the relay is used only when they can't.
+
+Not supported: a plain WireGuard tunnel or config file. The app only speaks Tailscale's protocol.

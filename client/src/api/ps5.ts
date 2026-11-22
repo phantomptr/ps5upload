@@ -5,6 +5,7 @@
 // TCP send) stay in-process.
 
 import { trStatic } from "../lib/trStatic";
+import { discardBody } from "../lib/discardBody";
 import { requestStatusRecheck } from "../lib/statusRecheck";
 import { formatBytes } from "../lib/format";
 import {
@@ -2929,7 +2930,10 @@ export async function ddpStatus(host: string): Promise<DdpStatus> {
   const res = await engineFetch(
     `${getEngineUrl()}/api/ps5/power/ddp-status?host=${encodeURIComponent(host)}`,
   );
-  if (!res.ok) throw new Error(`ddp status failed (${res.status})`);
+  if (!res.ok) {
+    await discardBody(res);
+    throw new Error(`ddp status failed (${res.status})`);
+  }
   return (await res.json()) as DdpStatus;
 }
 
