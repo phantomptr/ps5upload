@@ -271,25 +271,23 @@ function OnPs5Body() {
   // answering (its summary reports what it read).
   const mounter = useMounterFor(addr);
   const krakenUp = !!(mounter?.kraken?.api || mounter?.kraken?.running);
-  const krakenInstalled = !!mounter?.kraken?.installed;
   const pmView = usePmView(addr);
   const pmAnswered = reports["payload-manager"] !== undefined || !!pmView?.present;
   const cards = useMemo(() => {
     const answering = new Set<string>();
     if (krakenUp) answering.add("kraken-mount");
     if (pmAnswered) answering.add("payload-manager");
-    let seen = markers;
-    const kraken = entries.find((e) => e.id === "kraken-mount")?.marker;
-    if (krakenInstalled && kraken && !markers.has(kraken)) seen = new Set([...markers, kraken]);
+    // Kraken Mount's config.toml (the snapshot's "installed") stays after it is removed, so it
+    // shows only while running, like any payload known by a file it writes (registry.ts).
     return detectHubCards({
       entries,
       processes: procs,
-      markers: seen,
+      markers,
       answering,
       pids: hushPid ? new Map([["hush", [hushPid]]]) : undefined,
       forceShow: openId,
     });
-  }, [entries, procs, markers, openId, hushPid, krakenUp, krakenInstalled, pmAnswered]);
+  }, [entries, procs, markers, openId, hushPid, krakenUp, pmAnswered]);
 
   const pmCardShown = cards.some((c) => c.id === "payload-manager");
   useEffect(() => {
@@ -398,18 +396,27 @@ function OnPs5Body() {
   // A link that opened a card (an old tab's URL, a notification) scrolls to it once.
   // Any id of a card standing for several entries (kstuff's builds) finds that card.
   const scrolledTo = useRef<string | null>(null);
-  // A card shown on Payload Manager's saved row instead opens Payload Manager's card.
+  // A card shown on its Payload Manager row only: the link scrolls to that row.
   const linked = openId
     ? (cards.find((c) => c.id === openId) ?? cards.find((c) => c.entryIds.includes(openId)))?.id ?? null
     : null;
-  const openCard = linked && groups?.hidden.has(linked) && pmCardShown ? "payload-manager" : linked;
+  const onRow = !!linked && !!groups?.hidden.has(linked);
+  const openCard = onRow ? null : linked;
   useEffect(() => {
-    if (!openId || !openCard || scrolledTo.current === openId) return;
-    scrolledTo.current = openId;
-    document
-      .querySelector(`[data-card="${CSS.escape(openCard)}"]`)
-      ?.scrollIntoView({ block: "start", behavior: "smooth" });
-  }, [openId, openCard]);
+    if (!openId || !linked || scrolledTo.current === openId) return;
+    const sel = onRow ? `[data-pm-card="${CSS.escape(linked)}"]` : `[data-card="${CSS.escape(linked)}"]`;
+    // A saved row renders a moment after the list is matched: look again shortly.
+    const go = () => {
+      const el = document.querySelector(sel);
+      if (!el) return false;
+      scrolledTo.current = openId;
+      el.scrollIntoView({ block: "start", behavior: "smooth" });
+      return true;
+    };
+    if (go()) return;
+    const t = window.setTimeout(go, 400);
+    return () => window.clearTimeout(t);
+  }, [openId, linked, onRow]);
 
   const setOpen = (id: string | null) => {
     const next = new URLSearchParams(params);
@@ -487,6 +494,7 @@ function OnPs5Body() {
         variants: c.variants,
         webUrl: port ? `http://${withPort(host.trim(), port)}/` : null,
         note: c.id === "kraken-mount" ? <KrakenUpdateNote kraken={mounter?.kraken} /> : undefined,
+        cardId: c.id,
       };
     }
     // The helper's own copy in the list: it is the helper this app is talking to.
@@ -570,7 +578,19 @@ function OnPs5Body() {
   };
 
   const loading = !procsLoaded || !markersLoaded;
-  const count = groups && pmList && matched ? payloadCount(groups, pmList.length, matched) : cards.length;
+  // Payload Manager's saved payloads are the tab's main list, while it answers.
+  const savedShown = pmCardShown && !!pmView?.present;
+  const savedRows = savedShown && pmView && !pmView.payloadsError ? pmView.payloads.length : 0;
+  const shownCards = groups ? [...groups.top, ...groups.also] : cards;
+  const count = payloadCount(shownCards.length, savedRows);
+  const savedList = savedShown ? (
+    <PayloadManagerPanel part="saved" running={pmRunning ?? undefined} onChanged={afterPmChange} />
+  ) : null;
+  const detectedHeading = savedShown ? (
+    <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+      {tr("hub_detected", undefined, "Found on this PS5")}
+    </h3>
+  ) : null;
 
   return (
     <div className="flex flex-col gap-3">
@@ -632,7 +652,13 @@ function OnPs5Body() {
         />
       ) : groups ? (
         <>
-          {groups.top.length > 0 && <ul className="flex flex-col gap-2.5">{groups.top.map(renderCard)}</ul>}
+          {savedList}
+          {groups.top.length > 0 && (
+            <section className="flex flex-col gap-2" data-testid="hub-detected">
+              {detectedHeading}
+              <ul className="flex flex-col gap-2.5">{groups.top.map(renderCard)}</ul>
+            </section>
+          )}
           {groups.also.length > 0 && (
             <section className="flex flex-col gap-2" data-testid="hub-also-running">
               <div>
@@ -655,7 +681,13 @@ function OnPs5Body() {
           )}
         </>
       ) : (
-        <ul className="flex flex-col gap-2.5">{cards.map(renderCard)}</ul>
+        <>
+          {savedList}
+          <section className="flex flex-col gap-2" data-testid="hub-detected">
+            {detectedHeading}
+            <ul className="flex flex-col gap-2.5">{cards.map(renderCard)}</ul>
+          </section>
+        </>
       )}
       {dialog}
     </div>
@@ -711,7 +743,9 @@ function IntegrationPanel({
   pmRunning?: Record<string, PmRunning>;
   onPmChanged?: () => void;
 }) {
-  if (id === "payload-manager") return <PayloadManagerPanel running={pmRunning} onChanged={onPmChanged} />;
+  if (id === "payload-manager") {
+    return <PayloadManagerPanel part="settings" running={pmRunning} onChanged={onPmChanged} />;
+  }
   if (id === "shadowmountplus") return <SmpPanel mgmtAddr={host.trim() ? mgmtAddr(host.trim()) : null} />;
   if (id === "nanodns") return <NanoDnsScreen />;
   return null;
@@ -764,6 +798,8 @@ function HubCardView({
       </Badge>
     ) : card.state === "installed" ? (
       <Badge tone="neutral">{tr("hub_state_installed", undefined, "Installed")}</Badge>
+    ) : card.state === "files" ? (
+      <Badge tone="neutral">{tr("hub_state_files", undefined, "Not running")}</Badge>
     ) : (
       <Badge tone="warn">{tr("hub_state_unknown", undefined, "Not found")}</Badge>
     );
@@ -776,7 +812,9 @@ function HubCardView({
         )
       : card.state === "installed"
         ? tr("hub_installed_detail", undefined, "On the console, not running.")
-        : card.state === "unknown"
+        : card.state === "files"
+          ? tr("hub_files_detail", undefined, "Its settings are on this PS5, but it isn't running.")
+          : card.state === "unknown"
           ? tr("hub_unknown_detail", undefined, "Not found on this PS5.")
           : null;
 

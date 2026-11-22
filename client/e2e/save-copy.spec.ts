@@ -135,13 +135,13 @@ test("Copy to another user, Back up now, then Restore to another user", async ({
   const ann = page.getByTestId("save-row").filter({ hasText: "Ann" });
   await expect(ann.getByTestId("save-backup-status")).toHaveText("Not backed up yet");
 
-  // Copy to › Another user on this PS5: Ben has a save and can be picked, Cy can't.
+  // Copy to › Another user on this PS5: Ben has a save; Cy has none, and the copy would become Cy's.
   await ann.getByRole("button", { name: "Move or share this save" }).click();
   await page.getByTestId("save-copy-to-user").click();
   const picker = page.getByTestId("copy-user-picker");
   await expect(picker.getByTestId("copy-user-target")).toHaveCount(2);
-  await expect(picker.getByText("Start PPSA01650 once as Cy and save, then come back.")).toBeVisible();
-  await expect(picker.locator('[data-has-save="false"]')).toBeDisabled();
+  await expect(picker.getByText("No save of this game yet. The copy becomes this user's save.")).toBeVisible();
+  await expect(picker.locator('[data-has-save="false"]')).toBeEnabled();
   await picker.locator('[data-has-save="true"]').click();
   await expect(page.getByTestId("copy-user-confirm")).toContainText("Replace Ben's save of PPSA01650 with Ann's?");
   await page.getByTestId("copy-user-replace").click();
@@ -227,7 +227,7 @@ test("Copy to another console: pick the console, then a user there with a save o
   await page.getByTestId("save-copy-to-console").click();
   await page.getByTestId("copy-console-target").filter({ hasText: "Away" }).click();
   const targets = page.getByTestId("copy-user-target");
-  await expect(targets.filter({ hasText: "Cy there" })).toBeDisabled();
+  await expect(targets.filter({ hasText: "Cy there" })).toBeEnabled();
   await targets.filter({ hasText: "Ben there" }).click();
   await page.getByTestId("copy-user-replace").click();
   await expect

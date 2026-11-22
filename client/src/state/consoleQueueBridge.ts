@@ -70,6 +70,9 @@ export interface EnqueueInstallInput {
   /** The package's size in bytes when the caller knows it (library entry, file listing, link
    *  probe). Becomes the row's `estimatedBytes`; unknown (0/null) stays unknown. */
   sizeBytes?: number | null;
+  /** False: only add the row; it waits for Start queue like any other row added with
+   *  "Add to queue". Default (true): the console's queue starts as `startAdded` says. */
+  start?: boolean;
 }
 
 export interface EnqueuedInstall {

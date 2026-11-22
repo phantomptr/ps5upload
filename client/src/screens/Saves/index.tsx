@@ -37,6 +37,7 @@ import {
 import { useRosterStore } from "../../state/roster";
 import { CopyToConsoleDialog, isEmulatorSave } from "./CopyToConsoleDialog";
 import CopyToUserDialog from "./CopyToUserDialog";
+import { partMissingText } from "./partMissing";
 import { canCopyToOtherUser, copyTargets, localUserCount } from "./copyTargets";
 import { saveImagesOf } from "./saveImages";
 import { saveFile } from "../../lib/rpCapture";
@@ -236,15 +237,9 @@ export default function SavesScreen() {
   const whoseName = (e: SaveEntry) =>
     ownerName(e) ?? tr("saves_user_other", { id: userHex(e.user_id) }, "Other user ({id})");
   /** The engine's refusal in plain words: the parts the target's save is missing. */
-  const missingText = (e: unknown, game: string, user: string) => {
+  const missingText = (e: unknown, game: string, user: string, from: "file" | "copy") => {
     if (!(e instanceof SaveCopyError) || e.missing.length === 0) return errorText(e);
-    const main = tr("saves_part_main", undefined, "main save");
-    const part = e.missing.map((m) => partLabel(m, main)).join(", ");
-    return tr(
-      "saves_part_missing",
-      { game, part, user },
-      "{user} doesn't have {game}'s {part} yet, and a save can only replace a save slot {user} already has. Start the game as {user}, save in the same slot, then try again.",
-    );
+    return partMissingText(tr, e.missing, game, user, from);
   };
   // A file for a friend or another PS5: every part of this save in one .zip.
   const doShare = async (entry: SaveEntry) => {
@@ -356,7 +351,7 @@ export default function SavesScreen() {
       void refresh();
     } catch (e) {
       // The file's name too: a backup beside the shared file is easy to pick instead (#633).
-      pushNotification("error", tr("saves_use_shared_failed_v2", { error: `${file.name}: ${missingText(e, game, user)}` }, "Could not load the save file: {error}"));
+      pushNotification("error", tr("saves_use_shared_failed_v2", { error: `${file.name}: ${missingText(e, game, user, "file")}` }, "Could not load the save file: {error}"));
     } finally {
       setOpenBusy(false);
       markBusy(target.path, false);
@@ -1356,7 +1351,7 @@ export default function SavesScreen() {
                   const game = await gameNameOf(copyFrom.title_id);
                   // The same error, said plainly (the parts the target is missing).
                   if (e instanceof Error) {
-                    e.message = missingText(e, game, t.name ?? tr("saves_user_other", { id: userHex(t.uid) }, "Other user ({id})"));
+                    e.message = missingText(e, game, t.name ?? tr("saves_user_other", { id: userHex(t.uid) }, "Other user ({id})"), "copy");
                   }
                   throw e;
                 }

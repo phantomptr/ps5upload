@@ -142,6 +142,17 @@ test("On your PS5 shows each saved running payload once, on its Payload Manager 
   // Payload Manager, its four saved payloads and elfldr, each counted once.
   await expect(root.getByText("6 on this PS5")).toBeVisible();
 
+  // The saved payloads are the tab's main list, not inside Payload Manager's card: its Manage
+  // holds its own settings and points up to the list.
+  const saved = root.getByTestId("pm-saved-list");
+  await expect(saved.getByText("Your payloads · 4")).toBeVisible();
+  await expect(saved.locator("li")).toHaveCount(4);
+  const pmPanel = root.locator('[data-card="payload-manager"]');
+  await expect(pmPanel.getByText("Load payloads at boot")).toBeVisible();
+  await expect(pmPanel.getByTestId("pm-saved-elsewhere")).toBeVisible();
+  await expect(pmPanel.getByTestId("pm-running-origin")).toHaveCount(0);
+  await expect(root.getByTestId("hub-detected")).toContainText("Found on this PS5");
+
   // kstuff and Kraken Mount on their rows, with the boot place the list gives them.
   const origins = root.getByTestId("pm-running-origin");
   await expect(origins).toHaveCount(2);

@@ -1,7 +1,8 @@
 // Moving a PS5 save to another account on the same console (#612): who it can go to.
 //
-// The engine only replaces the files in a save the console already made, so a user with no save
-// of the game is listed but can't be picked: they start the game once and save first.
+// A user with a save of the game gets theirs replaced; one with none (or lacking some of its
+// slots, as every user of a game that names each save its own way does) gets the save's images
+// whole, made theirs by the engine (save_copy.rs `copy_whole`).
 import type { ProfileUser, SaveEntry } from "../../api/ps5";
 import { userHex, userName } from "./saveUsers";
 
@@ -10,7 +11,7 @@ export interface CopyTarget {
   uid: number;
   /** Their name, or null when the console didn't name them. */
   name: string | null;
-  /** Their PS5 save of the game, or null: start the game once as them and save. */
+  /** Their PS5 save of the game, or null: the copy becomes their save. */
   save: SaveEntry | null;
 }
 

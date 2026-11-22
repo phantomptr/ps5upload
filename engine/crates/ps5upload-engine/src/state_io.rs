@@ -6,7 +6,7 @@ use std::io;
 use std::path::Path;
 
 /// `(uid, gid)` of this process, where the OS tells us (Linux `/proc`); `None` elsewhere.
-fn process_ids() -> Option<(u32, u32)> {
+pub(crate) fn process_ids() -> Option<(u32, u32)> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     let field = |name: &str| -> Option<u32> {
         status
@@ -69,9 +69,161 @@ pub fn describe(what: &str, path: &Path, err: &io::Error) -> String {
     format!("{what}: cannot write {dir}: {who}{theirs}. To fix: {fix}. ({err})")
 }
 
+/// What to do about a folder the engine's user cannot use. In a container that is a `chown` on the
+/// host folder mounted there (the images run as 65532:65532 unless `user:` says otherwise), the
+/// step a ZimaOS user had to find by hand.
+pub fn folder_fix(dir: &Path, ids: Option<(u32, u32)>, in_container: bool) -> String {
+    match (ids, in_container) {
+        (Some((u, g)), true) => format!(
+            "the container runs as user {u}:{g}{}; on the host, run `chown -R {u}:{g}` on the \
+             folder mounted at {}, or set the container's `user:` to that folder's owner",
+            if (u, g) == (65532, 65532) {
+                " (the image's default)"
+            } else {
+                ""
+            },
+            dir.display()
+        ),
+        (Some((u, g)), false) => format!(
+            "give the account running ps5upload (UID:GID {u}:{g}) access to {}",
+            dir.display()
+        ),
+        (None, _) => format!(
+            "give the account running ps5upload access to {}",
+            dir.display()
+        ),
+    }
+}
+
+/// The startup line for a folder the engine needs and cannot use. `need_write`: the engine writes
+/// there (its data and staging folders); otherwise it only reads (a browse root, often `:ro`).
+pub fn folder_message(
+    what: &str,
+    dir: &Path,
+    need_write: bool,
+    err: &io::Error,
+    ids: Option<(u32, u32)>,
+    in_container: bool,
+) -> String {
+    let verb = if need_write { "written to" } else { "read" };
+    let denied = err.kind() == io::ErrorKind::PermissionDenied || err.raw_os_error() == Some(30); // EROFS
+    if !denied {
+        return format!("{what} {} cannot be {verb} ({err})", dir.display());
+    }
+    format!(
+        "{what} {} cannot be {verb}. To fix: {}. ({err})",
+        dir.display(),
+        folder_fix(dir, ids, in_container)
+    )
+}
+
+/// Writes and removes a small file in `dir` (made first when missing).
+pub fn probe_write(dir: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let probe = dir.join(format!(".write-check-{}", std::process::id()));
+    std::fs::write(&probe, b"ok")?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
+}
+
+/// The folders the engine needs that it cannot use, worded for its log: the data folder and the
+/// staging folder must take writes, the browse roots must be readable. A folder that does not
+/// exist is left to the code that already reports it (an unmounted browse root, for one).
+pub fn startup_folder_problems() -> Vec<String> {
+    let ids = process_ids();
+    let in_container = crate::pkg_install::in_container();
+    let mut out = Vec::new();
+    let mut write_dirs: Vec<(&str, std::path::PathBuf)> = Vec::new();
+    if let Some(d) = crate::remote::store::data_dir() {
+        write_dirs.push(("The engine's data folder", d));
+    }
+    if let Some(s) = std::env::var_os("PS5UPLOAD_STAGING_DIR").filter(|v| !v.is_empty()) {
+        write_dirs.push(("The staging folder (PS5UPLOAD_STAGING_DIR)", s.into()));
+    }
+    for (what, dir) in write_dirs {
+        if let Err(e) = probe_write(&dir) {
+            out.push(folder_message(what, &dir, true, &e, ids, in_container));
+        }
+    }
+    let roots = std::env::var("PS5UPLOAD_BROWSE_ROOTS").unwrap_or_default();
+    for root in roots.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let dir = Path::new(root);
+        if !dir.is_dir() {
+            continue;
+        }
+        if let Err(e) = std::fs::read_dir(dir) {
+            out.push(folder_message(
+                "The browse folder (PS5UPLOAD_BROWSE_ROOTS)",
+                dir,
+                false,
+                &e,
+                ids,
+                in_container,
+            ));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_denied_folder_in_a_container_names_the_user_and_the_chown() {
+        let e = io::Error::from(io::ErrorKind::PermissionDenied);
+        let m = folder_message(
+            "The engine's data folder",
+            Path::new("/data"),
+            true,
+            &e,
+            Some((65532, 65532)),
+            true,
+        );
+        assert!(m.contains("/data cannot be written to"), "{m}");
+        assert!(m.contains("user 65532:65532"), "{m}");
+        assert!(m.contains("chown -R 65532:65532"), "{m}");
+        assert!(m.contains("`user:`"), "{m}");
+    }
+
+    #[test]
+    fn a_denied_folder_outside_a_container_has_no_docker_advice() {
+        let e = io::Error::from(io::ErrorKind::PermissionDenied);
+        let m = folder_message(
+            "x",
+            Path::new("/media/games"),
+            false,
+            &e,
+            Some((501, 20)),
+            false,
+        );
+        assert!(m.contains("/media/games cannot be read"), "{m}");
+        assert!(m.contains("501:20") && !m.contains("chown"), "{m}");
+    }
+
+    #[test]
+    fn another_failure_keeps_its_own_text() {
+        let e = io::Error::other("disk full");
+        let m = folder_message("x", Path::new("/data"), true, &e, Some((1, 1)), true);
+        assert!(m.contains("disk full") && !m.contains("To fix"), "{m}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_read_only_folder_fails_the_write_probe() {
+        use std::os::unix::fs::PermissionsExt;
+        if process_ids().map(|(u, _)| u) == Some(0) {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("ps5u-probe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(probe_write(&dir).is_ok());
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let r = probe_write(&dir);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(r.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    }
 
     #[test]
     fn a_permission_error_names_the_path_and_the_fix() {

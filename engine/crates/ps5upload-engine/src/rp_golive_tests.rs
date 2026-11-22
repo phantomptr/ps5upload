@@ -728,7 +728,13 @@ mod pretend {
         let s = pretend_session();
         // Never reads its input and never ends on its own.
         let ff = fake_ffmpeg(&dir, "exec sleep 300");
-        let r = start_run_with(one_site(), 160, ff.clone(), quick()).unwrap();
+        // A grace long enough that the checks below run while it is still stopping, however
+        // slow the machine (the diagnostics call can take a few hundred ms on a busy Mac).
+        let slow_stop = Timing {
+            stop_grace: Duration::from_secs(3),
+            ..quick()
+        };
+        let r = start_run_with(one_site(), 160, ff.clone(), slow_stop).unwrap();
         wait_for(&r, 5, "started", |v| v["phase"] == "starting").await;
         assert!(
             start_run_with(one_site(), 160, ff.clone(), quick()).is_none(),

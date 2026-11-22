@@ -2,7 +2,10 @@
 // catalogue, the process list and which marker files exist, and renders what comes back.
 //
 // A payload is "running" when a process with its name is up, "installed" when its marker
-// file is on the console. Payloads show up in the process list under their ELF's file name
+// is the payload file itself and that file is on the console. A marker that is only a file the
+// payload writes (a config, a log, a data folder) outlives the payload: removing LZ4 Compression
+// leaves /data/LZ4Compression behind. Such a marker never makes a payload "installed"; for an
+// integration it keeps the card (its panel edits those files) as "files", not running. Payloads show up in the process list under their ELF's file name
 // ("shadowmountplus.elf", "nanodns.elf", "pldmgr.elf"; measured on FW 13.60), so names are
 // compared without case or extension. A payload that never names itself shows as the loader
 // called it ("payload.elf" from elfldr): such a payload is found by other evidence, the pid
@@ -39,7 +42,8 @@ export interface HubEntry {
   name: string;
   /** Process names it runs under (any case, with or without ".elf"). */
   processNames: string[];
-  /** A file only it leaves on the console. */
+  /** A file only it leaves on the console: the payload file itself (`.elf`/`.bin`) or one it
+   *  writes (see `markerIsPayload`). */
   marker: string | null;
   /** Its web page's port, if it has one. */
   webPort: number | null;
@@ -171,7 +175,22 @@ export function normProcName(s: string): string {
   return s.trim().toLowerCase().replace(/\.(elf|bin)$/, "");
 }
 
-export type HubState = "running" | "installed" | "unknown";
+/** The marker is the payload file itself (kstuff's /data/kstuff.elf), so finding it means the
+ *  payload is there. Any other marker is a file the payload wrote, which stays after it is
+ *  removed. */
+export function markerIsPayload(marker: string | null): boolean {
+  return !!marker && /\.(elf|bin)$/i.test(marker.replace(/\/+$/, ""));
+}
+
+/** Whether an entry's marker is worth looking for: the payload file itself, or an integration's
+ *  own files (its panel edits them). A leftover data file of any other payload says nothing. */
+export function markerCounts(e: Pick<HubEntry, "id" | "marker">): boolean {
+  return !!e.marker && (markerIsPayload(e.marker) || isIntegration(e.id));
+}
+
+/** "files": an integration whose files are on the console but which isn't running, and whose
+ *  payload file can't be seen: it may have been removed. */
+export type HubState = "running" | "installed" | "files" | "unknown";
 
 export interface HubCard {
   /** The catalogue id, or `proc:<name>` for a payload the catalogue doesn't know. */
@@ -235,16 +254,18 @@ export function detectHubCards({
     );
     const integration = isIntegration(e.id) ? e.id : null;
     const answered = !!answering?.has(e.id);
-    const installed = !!e.marker && markers.has(e.marker);
+    const found = !!e.marker && markerCounts(e) && markers.has(e.marker);
+    const installed = found && markerIsPayload(e.marker);
     const forced = forceShow === e.id;
-    if (procs.length === 0 && !installed && !answered && !forced) continue;
+    if (procs.length === 0 && !found && !answered && !forced) continue;
     for (const p of procs) claimed.add(p.pid);
-    const state: HubState = procs.length > 0 || answered ? "running" : installed ? "installed" : "unknown";
+    const state: HubState =
+      procs.length > 0 || answered ? "running" : installed ? "installed" : found ? "files" : "unknown";
     // Two catalogue entries seen through the same process or marker are one thing on the
     // console (kstuff's two builds both run as kstuff.elf): one card naming both.
     const evidence = procs.length
       ? `p:${procs.map((p) => p.pid).sort((a, b) => a - b).join(",")}`
-      : installed && !answered
+      : found && !answered
         ? `m:${e.marker}`
         : `id:${e.id}`;
     const same = byEvidence.get(evidence);
@@ -317,16 +338,19 @@ export function detectHubCards({
     });
   }
   const rank = (c: HubCard) =>
-    (c.state === "running" ? 0 : c.state === "installed" ? 2 : 4) + (c.integration ? 0 : 1);
+    (c.state === "running" ? 0 : c.state === "installed" ? 2 : c.state === "files" ? 4 : 6) +
+    (c.integration ? 0 : 1);
   return [...cards, ...unknown.values()].sort(
     (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name),
   );
 }
 
-/** Group marker paths by folder, so each folder is listed once. */
+/** Group the marker paths worth looking for (`markerCounts`) by folder, so each folder is
+ *  listed once. */
 export function markerFolders(entries: readonly HubEntry[]): Map<string, string[]> {
   const out = new Map<string, string[]>();
   for (const e of entries) {
+    if (!markerCounts(e)) continue;
     const m = e.marker?.replace(/\/+$/, "");
     if (!m) continue;
     const slash = m.lastIndexOf("/");

@@ -16,10 +16,15 @@
 //! A game's save is often several images in its folder (`sdimg_STARBOARD`, `sdimg_sce_sdmemory`,
 //! …), and the console keeps its own backup copy of each (`sdimg_sce_bu_<name>`). They go
 //! together: every image of the game (never the console's backup copies) is in the one file, as a
-//! folder of its own, and each goes into the target's image of the same name. A target missing
-//! one of those images is refused before anything changes, naming what is missing: a game makes
-//! the same images for every account once it has saved, so this asks for one more start of the
-//! game at most, while putting in only some parts could leave a save the game can't read.
+//! folder of its own, and each goes into the target's image of the same name. Not every game
+//! makes the same images for every account: The Witcher 3 names each save of its own
+//! (`Manual.53db9.7ea54c00.4f3261a`), so another user never has one of the same name. A copy to
+//! a target missing any of them (or with no save of the game) sends the save as Restore to
+//! another user sends a backup: the source's encrypted images, backed up, go into the target's
+//! folder whole and are made theirs (`copy_whole`). A save file holds decrypted files only,
+//! which go into an image the target has: one missing is refused before anything changes, as
+//! is everything when the helper can't change a save's owner. Putting in only some parts could
+//! leave a save the game can't read.
 //!
 //! - **Share** (`POST /api/save-backup/share`): the file.
 //! - **Use a shared save** (`POST /api/save-backup/use-shared`): a file into a user's save.
@@ -717,11 +722,22 @@ pub fn match_parts(
     }
 }
 
+/// Why the parts a user lacks could not be added for them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Slots {
+    /// A shared save file: decrypted files, which only go into an image the user has.
+    File,
+    /// A copy or a backup: the images could be added whole and made theirs, but the helper on
+    /// the PS5 is too old to change a save's owner.
+    Helper,
+}
+
 /// The error for parts a user's save doesn't have yet.
-fn missing_error(title_id: &str, who: &str, missing: Vec<String>) -> Failed {
+fn missing_error(title_id: &str, who: &str, missing: Vec<String>, why: Slots) -> Failed {
     let labels: Vec<String> = missing.iter().map(|m| part_label(m)).collect();
-    // A game makes each save slot the first time it saves there (RDR2 has several, #729), and
-    // the console only knows the slots a user has: one can't be added from here.
+    // A game makes each save slot the first time it saves there (RDR2 has several, #729). Some
+    // give every save a name of its own (The Witcher 3: `Manual.53db9.7ea54c00.4f3261a`), so
+    // another user never gets a slot of the same name: saving again as them can't help there.
     let (what, how) = match labels.as_slice() {
         [one] if one == "main save" => ("main save".to_string(), "once"),
         [one] => (format!("save slot {one}"), "in that slot"),
@@ -735,12 +751,15 @@ fn missing_error(title_id: &str, who: &str, missing: Vec<String>) -> Failed {
         .next()
         .map(|c| c.to_uppercase().chain(cap).collect())
         .unwrap_or_default();
-    Failed {
-        msg: format!(
-            "{who_cap} doesn't have {title_id}'s {what} yet, and a save can only replace one {who} already has. Start the game as {who} and save {how}, then try again."
+    let msg = match why {
+        Slots::File => format!(
+            "{who_cap} doesn't have {title_id}'s {what} yet, and a save file can only go into save slots {who} already has. Start the game as {who} and save {how}, then try again. If the game gives every save a name of its own, use Copy to another user or Copy to another console on the PS5 the save is on instead."
         ),
-        missing,
-    }
+        Slots::Helper => format!(
+            "{who_cap} doesn't have {title_id}'s {what} yet, and the helper running on the PS5 is too old to add a save slot for {who}. Send the helper from this version of the app (Connection), then try again."
+        ),
+    };
+    Failed { msg, missing }
 }
 
 /// Put a shared save (`zip_bytes`) into the save folder `folder` of `user_id`: each image into
@@ -819,8 +838,8 @@ fn import_as(
             Err(e) if e == NO_MANIFEST => unlabelled_parts(&zip, &base.join(&title_id), &images)?,
             Err(e) => return Err(e.into()),
         };
-        let pairs =
-            match_parts(&parts, &images, compat).map_err(|m| missing_error(&title_id, who, m))?;
+        let pairs = match_parts(&parts, &images, compat)
+            .map_err(|m| missing_error(&title_id, who, m, Slots::File))?;
         checks(c, &title_id)?;
         // A part too big for its image is refused before anything changes.
         for (image, src) in &pairs {
@@ -915,6 +934,82 @@ fn target_save<'a>(
     })
 }
 
+/// `target_save`, None when the user has no save of the game at all.
+fn target_or_none<'a>(
+    saves: &'a [SaveEntry],
+    title_id: &str,
+    user: u32,
+) -> Result<Option<&'a SaveEntry>, String> {
+    match target_save(saves, title_id, user) {
+        Ok(to) => Ok(Some(to)),
+        Err(e) if e == no_target_save(title_id) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// The tag of the backup of the save a copy sends whole (`copy_whole`).
+pub const COPY_SOURCE_TAG: &str = "copysource";
+
+/// Whether a copy of `from` (on `src`) into `to` (on `dst`; None: no save of the game there) has
+/// to add save slots: Some(the images the target lacks) when it does. A save's files only go
+/// into an image the target has, so those are added whole and made theirs (`copy_whole`). Err,
+/// changing nothing, when the helper there can't do that.
+fn adds_slots(
+    src: &dyn Console,
+    dst: &dyn Console,
+    title_id: &str,
+    from: &SaveEntry,
+    to: Option<&SaveEntry>,
+) -> Result<Option<Vec<String>>, Failed> {
+    let images = src.images(&from.path)?;
+    let missing = match to {
+        Some(to) => lacking(&images, &dst.images(&to.path)?),
+        None => images,
+    };
+    if missing.is_empty() {
+        return Ok(None);
+    }
+    if !dst.can_make_owner() {
+        return Err(match to {
+            Some(_) => missing_error(title_id, "the other user", missing, Slots::Helper),
+            None => no_target_save(title_id).into(),
+        });
+    }
+    Ok(Some(missing))
+}
+
+/// Copies `from` (on `src`) into `to_user`'s saves on `dst` as whole images made theirs, for a
+/// target lacking some of its slots (a game that names every save its own way, like The Witcher
+/// 3, never makes the same slot for another user). The source is backed up (tagged
+/// `copysource`), and that backup goes in as Restore to another user puts one in: the target's
+/// slots of other names stay, theirs of the same name are replaced, and their save folder is
+/// backed up first and put back if a step fails.
+fn copy_whole(
+    src: &dyn Console,
+    dst: &dyn Console,
+    title_id: &str,
+    from: &SaveEntry,
+    to_user: u32,
+    added: Vec<String>,
+) -> Result<Done, Failed> {
+    crate::log_info!(
+        "save copy: {title_id} goes to user {to_user:08x} as whole images, adding {}",
+        added.join(", ")
+    );
+    let zip = src
+        .back_up(from, COPY_SOURCE_TAG)
+        .map_err(|e| format!("could not take a copy of the save to send: {e}"))?;
+    let file = zip
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let d = put_backup(dst, title_id, &file, &zip, to_user)?;
+    Ok(Done {
+        from: from.path.clone(),
+        ..d
+    })
+}
+
 /// Parts in `from` that `to` lacks (names), each image matched by name.
 fn lacking(from: &[String], to: &[String]) -> Vec<String> {
     from.iter().filter(|f| !to.contains(f)).cloned().collect()
@@ -952,12 +1047,14 @@ pub fn copy_to_user(c: &dyn Console, b: &CopyBody) -> Result<Done, Failed> {
     c.can_back_up()?;
     let saves = c.saves()?;
     let from = ps5_save_of(&saves, &title_id, b.from_user, "This user")?;
-    let to = target_save(&saves, &title_id, b.to_user)?;
+    let to = target_or_none(&saves, &title_id, b.to_user)?;
     checks(c, &title_id)?;
-    let missing = lacking(&c.images(&from.path)?, &c.images(&to.path)?);
-    if !missing.is_empty() {
-        return Err(missing_error(&title_id, "the other user", missing));
+    if let Some(added) = adds_slots(c, c, &title_id, from, to)? {
+        return copy_whole(c, c, &title_id, from, b.to_user, added);
     }
+    let Some(to) = to else {
+        return Err(no_target_save(&title_id).into());
+    };
     let (_, zip) = share(c, &from.path)?;
     let parts = import_as(
         c,
@@ -996,6 +1093,20 @@ pub fn restore_to_user(
     if from_user == to_user {
         return Err("This backup is already this user's: use Restore.".into());
     }
+    put_backup(c, &title_id, file, zip, to_user)
+}
+
+/// `restore_to_user` once the backup is known to be another user's (`title_id` checked
+/// already); `file` names the backup in what is done.
+fn put_backup(
+    c: &dyn Console,
+    title_id: &str,
+    file: &str,
+    zip: &Path,
+    to_user: u32,
+) -> Result<Done, Failed> {
+    let _op = hold(&[c]);
+    let title_id = title_id.to_string();
     // A backup made on another PS5 opens here too (a save image is not tied to the console that
     // made it: measured on FW 13.60, #809), so where it was made is not asked.
     let saves = c.saves()?;
@@ -1035,7 +1146,7 @@ pub fn restore_to_user(
         };
         if !missing.is_empty() && !c.can_make_owner() {
             return Err(match &to {
-                Some(_) => missing_error(&title_id, "the other user", missing),
+                Some(_) => missing_error(&title_id, "the other user", missing, Slots::Helper),
                 None => no_target_save(&title_id).into(),
             });
         }
@@ -1052,7 +1163,9 @@ pub fn restore_to_user(
                 &missing,
             )
             .map_err(|e| match (&to, e.msg == OWNER_UNSUPPORTED) {
-                (Some(_), true) => missing_error(&title_id, "the other user", missing),
+                (Some(_), true) => {
+                    missing_error(&title_id, "the other user", missing, Slots::Helper)
+                }
                 (None, true) => no_target_save(&title_id).into(),
                 _ => e,
             });
@@ -1737,13 +1850,15 @@ pub fn copy_to_console(
     let source = from.saves()?;
     let there = to.saves()?;
     let src = ps5_save_of(&source, &title_id, from_user, "This user")?;
-    let dst = target_save(&there, &title_id, to_user)?;
+    let dst = target_or_none(&there, &title_id, to_user)?;
     checks(from, &title_id)?;
     checks(to, &title_id)?;
-    let missing = lacking(&from.images(&src.path)?, &to.images(&dst.path)?);
-    if !missing.is_empty() {
-        return Err(missing_error(&title_id, "the other user", missing));
+    if let Some(added) = adds_slots(from, to, &title_id, src, dst)? {
+        return copy_whole(from, to, &title_id, src, to_user, added);
     }
+    let Some(dst) = dst else {
+        return Err(no_target_save(&title_id).into());
+    };
     let (_, zip) = share(from, &src.path)?;
     let parts = import_as(
         to,
@@ -2108,6 +2223,8 @@ mod tests {
         calls: RefCell<Vec<String>>,
         /// Image → the game file put in it.
         replaced: RefCell<BTreeMap<String, Vec<u8>>>,
+        /// What a backup of the save a copy sends whole (`copysource`) gives: a real zip.
+        source_zip: Option<PathBuf>,
     }
 
     impl Fake {
@@ -2135,6 +2252,7 @@ mod tests {
                 sys: 0,
                 calls: RefCell::default(),
                 replaced: RefCell::default(),
+                source_zip: None,
             }
         }
         fn both(images: &[&str]) -> Self {
@@ -2183,6 +2301,11 @@ mod tests {
         }
         fn back_up(&self, entry: &SaveEntry, tag: &str) -> Result<PathBuf, String> {
             self.log(format!("back_up {} {tag}", entry.path));
+            if tag == COPY_SOURCE_TAG {
+                if let Some(zip) = &self.source_zip {
+                    return Ok(zip.clone());
+                }
+            }
             Ok(PathBuf::from(format!(
                 "/backups/{T}_user{:08x}_x_{tag}.zip",
                 entry.user_id as u32
@@ -2420,7 +2543,9 @@ mod tests {
         assert_eq!(r[STAR], format!("{}/{STAR}", folder(A)).into_bytes());
     }
 
-    /// A part the target lacks refuses the copy before anything is read or written.
+    /// With a helper that can't change a save's owner, a part the target lacks refuses the copy
+    /// before anything is read or written, and says what would let it go ahead (not "save in
+    /// the same slot": a game that names every save its own way never makes that slot).
     #[test]
     fn copy_refuses_a_missing_part_before_changing_anything() {
         let c = Fake::two_users(&[MAIN, STAR], &[MAIN]);
@@ -2429,7 +2554,8 @@ mod tests {
         assert!(
             e.msg
                 .starts_with("The other user doesn't have PPSA01650's save slot STARBOARD yet")
-                && e.msg.contains("save in that slot"),
+                && e.msg.contains("too old to add a save slot")
+                && !e.msg.contains("save in that slot"),
             "{}",
             e.msg
         );
@@ -3099,5 +3225,173 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.msg.contains("Start the game once"), "{}", e.msg);
+    }
+
+    // The Witcher 3 names every save of its own: another user never has a slot of the same name.
+    const W_AUTO: &str = "sdimg_Auto.8559a.7ea54c00.4dd04c1";
+    const W_MANUAL: &str = "sdimg_Manual.53db9.7ea54c00.4f3261a";
+    const W_THEIRS: &str = "sdimg_Manual.11aa2.7ea54c00.5000001";
+
+    /// A copy into a user whose save has none of the source's slot names (The Witcher 3): the
+    /// source is backed up, and its images go into the target's folder whole and are made
+    /// theirs, the target's own save backed up first. Their slot of another name stays.
+    #[test]
+    fn a_copy_adds_the_slots_the_other_user_lacks_as_theirs() {
+        let tmp = make_temp_dir("copywhole").unwrap();
+        let c = Fake {
+            owner: true,
+            source_zip: Some(backup_zip(&tmp, &[W_AUTO, W_MANUAL])),
+            ..Fake::two_users(&[W_AUTO, W_MANUAL], &[W_THEIRS])
+        };
+        let d = copy_to_user(&c, &body(A, B)).unwrap();
+        assert_eq!(d.from, folder(A));
+        assert_eq!(d.to, folder(B));
+        assert_eq!(d.parts, vec![W_AUTO.to_string(), W_MANUAL.to_string()]);
+        assert_eq!(
+            c.calls(),
+            vec![
+                format!("back_up {} copysource", folder(A)),
+                format!("back_up {} beforecopy", folder(B)),
+                format!("put_added {}", folder(B)),
+                format!("owner {}/{W_AUTO}", folder(B)),
+                format!("owner {}/{W_MANUAL}", folder(B)),
+            ]
+        );
+        // Nothing was opened or filled: whole images, never the target's own slot.
+        assert!(c.replaced.borrow().is_empty());
+        assert!(!c.calls().iter().any(|x| x.contains(W_THEIRS)));
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
+
+    /// Some slots in common and some not: the whole save goes across (a game's slots go
+    /// together), the same names replaced, the rest added.
+    #[test]
+    fn a_copy_with_some_slots_in_common_sends_the_whole_save() {
+        let tmp = make_temp_dir("copywhole").unwrap();
+        let c = Fake {
+            owner: true,
+            source_zip: Some(backup_zip(&tmp, &[MAIN, STAR])),
+            ..Fake::two_users(&[MAIN, STAR], &[MAIN])
+        };
+        let d = copy_to_user(&c, &body(A, B)).unwrap();
+        assert_eq!(d.parts, vec![STAR.to_string(), MAIN.to_string()]);
+        let calls = c.calls();
+        assert_eq!(calls.iter().filter(|x| x.starts_with("owner ")).count(), 2);
+        assert!(calls.contains(&format!("back_up {} beforecopy", folder(B))));
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
+
+    /// A user with no save of the game gets the copy as theirs too; nothing of theirs to back up.
+    #[test]
+    fn a_copy_to_a_user_with_no_save_of_the_game_makes_it_theirs() {
+        let tmp = make_temp_dir("copywhole").unwrap();
+        let c = Fake {
+            saves: vec![entry(A, "ps5")],
+            owner: true,
+            source_zip: Some(backup_zip(&tmp, &[W_AUTO])),
+            ..Fake::two_users(&[W_AUTO], &[])
+        };
+        let d = copy_to_user(&c, &body(A, B)).unwrap();
+        assert_eq!(d.to, folder(B));
+        assert_eq!(
+            c.calls(),
+            vec![
+                format!("back_up {} copysource", folder(A)),
+                format!("put_added {}", folder(B)),
+                format!("owner {}/{W_AUTO}", folder(B)),
+            ]
+        );
+        // With no save database for them yet, refused before anything is put there.
+        let c = Fake {
+            saves: vec![entry(A, "ps5")],
+            owner: true,
+            no_database: true,
+            source_zip: Some(backup_zip(&tmp, &[W_AUTO])),
+            ..Fake::two_users(&[W_AUTO], &[])
+        };
+        let e = copy_to_user(&c, &body(A, B)).unwrap_err().msg;
+        assert!(e.contains("no saved data on this PS5 yet"), "{e}");
+        assert!(!c.calls().iter().any(|x| x.starts_with("put_")));
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
+
+    /// A failed change of owner during such a copy puts the target's save back.
+    #[test]
+    fn a_failed_whole_copy_puts_the_targets_save_back() {
+        let tmp = make_temp_dir("copywhole").unwrap();
+        let c = Fake {
+            owner: true,
+            fail_owner: Some(W_MANUAL.into()),
+            source_zip: Some(backup_zip(&tmp, &[W_AUTO, W_MANUAL])),
+            ..Fake::two_users(&[W_AUTO, W_MANUAL], &[W_THEIRS])
+        };
+        let e = copy_to_user(&c, &body(A, B)).unwrap_err().msg;
+        assert!(e.ends_with("The save there before was put back."), "{e}");
+        assert!(c.calls().last().unwrap().starts_with("put_back"));
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
+
+    /// The same names copy the old way: files into the target's images, no whole images.
+    #[test]
+    fn a_copy_with_every_slot_there_never_adds_images() {
+        let c = Fake {
+            owner: true,
+            ..Fake::both(&[W_AUTO, W_MANUAL])
+        };
+        copy_to_user(&c, &body(A, B)).unwrap();
+        let calls = c.calls();
+        assert!(!calls
+            .iter()
+            .any(|x| x.contains("copysource") || x.starts_with("owner ")));
+        assert_eq!(c.replaced.borrow().len(), 2);
+    }
+
+    /// Another console: the source backed up there, its images added and made theirs here.
+    #[test]
+    fn a_copy_to_another_console_adds_the_slots_the_user_there_lacks() {
+        let tmp = make_temp_dir("copywhole").unwrap();
+        let from = Fake {
+            source_zip: Some(backup_zip(&tmp, &[W_AUTO])),
+            ..Fake::two_users(&[W_AUTO], &[])
+        };
+        let to = Fake {
+            owner: true,
+            ..Fake::two_users(&[], &[W_THEIRS])
+        };
+        let d = copy_to_console(&from, &to, T, A, B).unwrap();
+        assert_eq!(d.from, folder(A));
+        assert_eq!(
+            from.calls(),
+            vec![format!("back_up {} copysource", folder(A))]
+        );
+        assert_eq!(
+            to.calls(),
+            vec![
+                format!("back_up {} beforecopy", folder(B)),
+                format!("put_added {}", folder(B)),
+                format!("owner {}/{W_AUTO}", folder(B)),
+            ]
+        );
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
+
+    /// A save file holds decrypted files, which only go into a slot the user has: the refusal
+    /// says so, and what to use for a game that names every save its own way.
+    #[test]
+    fn a_save_file_missing_a_slot_says_what_to_use_instead() {
+        let zip = shared_zip(&[W_MANUAL]);
+        let c = Fake {
+            owner: true,
+            ..Fake::two_users(&[W_MANUAL], &[W_THEIRS])
+        };
+        let e = import(&c, &folder(B), B, &zip, None, None).unwrap_err();
+        assert_eq!(e.missing, vec![W_MANUAL.to_string()]);
+        assert!(
+            e.msg.contains("a save file can only go into save slots")
+                && e.msg.contains("use Copy to another user"),
+            "{}",
+            e.msg
+        );
+        assert!(!c.wrote());
     }
 }

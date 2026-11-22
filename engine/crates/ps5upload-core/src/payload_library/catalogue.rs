@@ -38,9 +38,13 @@ pub(super) struct CatalogueEntry {
     /// to pick the canonical ELF when multiple are uploaded.
     /// Empty string = "first asset whose name ends in .elf".
     pub(super) asset_name_hint: &'static str,
-    /// File the payload writes to /data on first run, used by
-    /// `payloads_check_running` for "installed but not yet loaded"
-    /// detection. None = no canonical marker, fall back to ports.
+    /// A path only this payload puts on the console. Either the payload
+    /// file itself (an `.elf`, kstuff's /data/kstuff.elf): finding it
+    /// means the payload is there. Or a file or folder it writes (a
+    /// config, a log, a data folder): that stays after the payload is
+    /// removed, so the client never reads it as "installed" (it keeps an
+    /// integration's card, whose panel edits those files, as not
+    /// running). None = no marker.
     pub(super) on_console_marker_path: Option<&'static str>,
     /// Process name in PROC_LIST output, for "is it running" probe.
     /// None = no reliable process name (some payloads spawn under

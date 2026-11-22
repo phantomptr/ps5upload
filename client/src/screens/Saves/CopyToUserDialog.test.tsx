@@ -26,8 +26,6 @@ const view = (state: CopyState, source: CopySource = fromAnn) =>
 describe("Copy to another user dialog", () => {
   it("walks pick → confirm → busy → done, and back from a failure", () => {
     let s: CopyState = { step: "pick" };
-    // A user without a save of the game can't be picked.
-    expect(copyStep(s, { type: "pick", target: cy })).toBe(s);
     s = copyStep(s, { type: "pick", target: ben });
     expect(s).toEqual({ step: "confirm", target: ben });
     expect(copyStep(s, { type: "back" })).toEqual({ step: "pick" });
@@ -42,18 +40,25 @@ describe("Copy to another user dialog", () => {
     expect(copyStep(failed, { type: "back" })).toEqual({ step: "pick" });
   });
 
-  it("shows who has a save, and what the others must do", () => {
-    const html = view({ step: "pick" });
+  it("lets a copy go to a user with no save of the game, as theirs", () => {
+    const pick: CopyState = { step: "pick" };
+    expect(copyStep(pick, { type: "pick", target: cy })).toEqual({ step: "confirm", target: cy });
+    const html = view(pick);
     expect(html).toContain("Copy Ann&#x27;s save of Astro Bot to:");
     expect(html).toContain("Has a save of this game");
-    expect(html).toContain("Start Astro Bot once as Cy and save, then come back.");
-    expect(html.match(/disabled=""/g)?.length).toBe(1);
+    expect(html).toContain("No save of this game yet. The copy becomes this user&#x27;s save.");
+    expect(html).not.toContain('disabled=""');
+    const confirm = view({ step: "confirm", target: cy });
+    expect(confirm).toContain("Give Cy Ann&#x27;s save of Astro Bot?");
+    expect(confirm).toContain("nothing is replaced");
+    expect(confirm).not.toContain("Replace save");
+    expect(confirm).toContain(">Copy<");
   });
 
   it("lets a backup go to a user with no save of the game, as theirs (#809)", () => {
     const backup: CopySource = { kind: "backup", when: "1 Nov" };
     const pick: CopyState = { step: "pick" };
-    expect(copyStep(pick, { type: "pick", target: cy }, true)).toEqual({ step: "confirm", target: cy });
+    expect(copyStep(pick, { type: "pick", target: cy })).toEqual({ step: "confirm", target: cy });
     const html = view(pick, backup);
     expect(html).toContain("No save of this game yet. The backup becomes this user&#x27;s save.");
     expect(html).not.toContain('disabled=""');

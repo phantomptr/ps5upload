@@ -5,8 +5,9 @@ import { Button } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { saveBackupApi, serverBackupApi, type SaveBackupFile } from "../../api/saveBackup";
 import type { ProfileUser, SaveEntry } from "../../api/ps5";
-import { restoreBackupToUser, partLabel, SaveCopyError } from "../../api/saveShare";
+import { restoreBackupToUser, SaveCopyError } from "../../api/saveShare";
 import CopyToUserDialog, { targetName } from "../Saves/CopyToUserDialog";
+import { partMissingText } from "../Saves/partMissing";
 import { copyTargets, type CopyTarget } from "../Saves/copyTargets";
 import { formatBytes } from "../../lib/format";
 import { hostOf } from "../../lib/addr";
@@ -320,13 +321,8 @@ export function SaveBackupsList({
               });
             } catch (e) {
               if (e instanceof SaveCopyError && e.missing.length > 0) {
-                const main = tr("saves_part_main", undefined, "main save");
                 // The same error, said plainly (the parts the target is missing).
-                e.message = tr(
-                  "saves_part_missing",
-                  { game: game ?? save.title_id, part: e.missing.map((m) => partLabel(m, main)).join(", "), user: targetName(t, tr) },
-                  "{user} doesn't have {game}'s {part} yet, and a save can only replace a save slot {user} already has. Start the game as {user}, save in the same slot, then try again.",
-                );
+                e.message = partMissingText(tr, e.missing, game ?? save.title_id, targetName(t, tr), "copy");
               }
               throw e;
             }

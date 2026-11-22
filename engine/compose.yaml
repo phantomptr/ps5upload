@@ -59,7 +59,9 @@ services:
     # otherwise, and your bind mount is owned by someone else. Pick ONE:
     #   - run as the folder's owner: `user: "1234:77777"` (see `ls -ln` on the
     #     host folder), or
-    #   - `chown -R 65532:65532 /volume1/docker/ps5upload/data` on the host.
+    #   - `chown -R 65532:65532 /volume1/docker/ps5upload/data` on the host
+    #     (and the same for a media/packages folder the engine can't read).
+    # The container log names any mounted folder it can't use at startup.
     # (A USER_ID/GROUP_ID environment variable is not read by these images.)
     # user: "1234:77777"
 

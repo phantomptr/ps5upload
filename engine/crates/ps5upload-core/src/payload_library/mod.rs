@@ -607,6 +607,23 @@ mod tests {
     }
 
     #[test]
+    fn markers_are_data_paths_and_only_kstuffs_is_the_payload_file() {
+        // The client calls a payload "installed" only when its marker is the payload file itself
+        // (an .elf); a file it writes (LZ4 Compression's /data/LZ4Compression) outlives it.
+        let mut payload_files = Vec::new();
+        for entry in CATALOGUE {
+            let Some(m) = entry.on_console_marker_path else {
+                continue;
+            };
+            assert!(m.starts_with("/data/"), "{}: marker {m}", entry.id);
+            if m.ends_with(".elf") || m.ends_with(".bin") {
+                payload_files.push(entry.id);
+            }
+        }
+        assert_eq!(payload_files, ["kstuff-echostretch", "kstuff-lite-drakmor"]);
+    }
+
+    #[test]
     fn catalogue_hosts_allowed_and_loader_asset_pinned() {
         for entry in CATALOGUE {
             assert!(

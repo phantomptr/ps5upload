@@ -270,10 +270,14 @@ pub(crate) fn data_dir_check(
             CheckStatus::Fail,
             format!("{} cannot be written: {e}", dir.display()),
         )
-        .with_remedy(
-            "Make the folder writable for the account running ps5upload (in Docker, mount a \
-             writable volume and set PS5UPLOAD_DATA_DIR to it).",
-        ),
+        .with_remedy(format!(
+            "Make the folder writable: {}.",
+            crate::state_io::folder_fix(
+                dir,
+                crate::state_io::process_ids(),
+                crate::pkg_install::in_container()
+            )
+        )),
     }
 }
 
@@ -366,15 +370,7 @@ pub(crate) fn network_checks(addr: &str, helper_up: bool) -> Vec<HealthCheck> {
 
     let dir = crate::remote::store::data_dir();
     let write = match &dir {
-        Some(d) => {
-            let probe = d.join(format!(".health-write-{}", std::process::id()));
-            std::fs::create_dir_all(d)
-                .and_then(|()| std::fs::write(&probe, b"ok"))
-                .map(|()| {
-                    let _ = std::fs::remove_file(&probe);
-                })
-                .map_err(|e| e.to_string())
-        }
+        Some(d) => crate::state_io::probe_write(d).map_err(|e| e.to_string()),
         None => Err(String::new()),
     };
     out.push(data_dir_check(dir.as_deref(), write));
