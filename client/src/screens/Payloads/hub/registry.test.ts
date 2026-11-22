@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import type { PayloadInfo, ProcessInfo } from "../../../api/ps5";
-import { detectHubCards, entryFromCatalog, hubEntries, markerFolders, mergedName, normProcName } from "./registry";
+import {
+  detectHubCards,
+  entryFromCatalog,
+  hubEntries,
+  markerFolders,
+  markerIsPayload,
+  mergedName,
+  normProcName,
+} from "./registry";
 
 const proc = (pid: number, comm: string, kind: ProcessInfo["kind"] = "payload", extra: Partial<ProcessInfo> = {}): ProcessInfo => ({
   pid,
@@ -90,16 +98,29 @@ describe("On your PS5 detection", () => {
     expect(cards.some((c) => c.processes.some((p) => p.is_self || p.kind === "system"))).toBe(false);
   });
 
-  it("shows a payload whose marker is on the console as installed", () => {
+  it("shows a payload as installed only when its marker is the payload file itself", () => {
     const cards = detectHubCards({
       entries: hubEntries(CATALOG),
       processes: [],
-      markers: new Set(["/data/nanodns/nanodns.ini", "/data/klog/klog.log"]),
+      markers: new Set(["/data/kstuff.elf", "/data/nanodns/nanodns.ini", "/data/klog/klog.log"]),
     });
+    // kstuff's marker is its .elf; nanoDNS's ini and klogsrv's log stay after the payload is
+    // removed: nanoDNS keeps its card (its panel edits the ini) as not running, klogsrv has none.
     expect(cards.map((c) => [c.id, c.state])).toEqual([
-      ["nanodns", "installed"],
-      ["klogsrv", "installed"],
+      ["kstuff-echostretch", "installed"],
+      ["nanodns", "files"],
     ]);
+  });
+
+  it("never calls a payload installed for a data folder it leaves behind (LZ4 Compression)", () => {
+    const lz4 = info("lz4-compression", "LZ4 Compression (theghostonline)", null, "/data/LZ4Compression", [5920]);
+    const entries = hubEntries([...CATALOG, lz4]);
+    const markers = new Set(["/data/LZ4Compression"]);
+    expect(detectHubCards({ entries, processes: [], markers })).toEqual([]);
+    // Nor is the folder looked for.
+    expect([...markerFolders(entries).values()].flat()).not.toContain("/data/LZ4Compression");
+    expect(markerIsPayload("/data/LZ4Compression")).toBe(false);
+    expect(markerIsPayload("/data/kstuff.elf")).toBe(true);
   });
 
   it("leaves out what is neither running nor installed, unless a link opened it", () => {
@@ -136,9 +157,10 @@ describe("On your PS5 detection", () => {
       // Its process is not shown again as an uncatalogued payload.elf.
       expect(cards.some((c) => c.id === "proc:payload")).toBe(false);
     }
-    // Without the lock (Hush exited), its config marks it installed.
+    // Without the lock (Hush exited), its config keeps its card, not running: the config stays
+    // after Hush is removed, so it doesn't say "installed".
     const off = detectHubCards({ entries: hubEntries(null), processes: [], markers: new Set(["/data/hush/config.ini"]) });
-    expect(off.map((c) => [c.id, c.state])).toEqual([["hush", "installed"]]);
+    expect(off.map((c) => [c.id, c.state])).toEqual([["hush", "files"]]);
   });
 
   it("works without a catalogue (the browser build) for the integrations", () => {
@@ -201,12 +223,13 @@ describe("On your PS5 detection", () => {
       const cards = detectHubCards({ entries: hubEntries(null), processes: [proc(160, name)], markers: new Set() });
       expect(cards.map((c) => [c.id, c.name, c.state])).toEqual([["kraken-mount", "Kraken Mount", "running"]]);
     }
-    const installed = detectHubCards({
+    // Its config.toml stays after it is removed: not running, no card.
+    const left = detectHubCards({
       entries: hubEntries(null),
       processes: [],
       markers: new Set(["/data/krakenmount/config.toml"]),
     });
-    expect(installed.map((c) => [c.id, c.state])).toEqual([["kraken-mount", "installed"]]);
+    expect(left).toEqual([]);
   });
 
   it("gives Kraken Mount the one payload.elf left when its API answers", () => {

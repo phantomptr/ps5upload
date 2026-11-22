@@ -76,7 +76,13 @@ export interface PmRunning {
   webUrl: string | null;
   /** Anything else the card showed under its line (Kraken Mount's update note). */
   note?: ReactNode;
+  /** The "On your PS5" card this row stands in for, so a link to that card finds the row. */
+  cardId?: string;
 }
+
+/** Which part of the panel to show. "On your PS5" lists the saved payloads as the tab's main
+ *  list ("saved") and keeps Payload Manager's own settings in its card's Manage ("settings"). */
+export type PmPanelPart = "saved" | "settings";
 
 /** Boot-list entries that name no payload Payload Manager lists (a file deleted since, or one
  *  on a USB stick that isn't plugged in), with their place in the boot order (1-based, pauses
@@ -105,11 +111,13 @@ export function runningOrigin(tr: Translator, ours: boolean, bootN: number | nul
 /** The payloads stored in the console's Payload Manager (:8084): launch, delete, and the
  *  boot autoload list. Storing into it is on the Catalog tab's cards. `running` (by stored
  *  path) marks the ones running now, with their pid and Stop. `onChanged` runs after a
- *  change here (launch, delete, store, boot list), so what runs is read again. */
+ *  change here (launch, delete, store, boot list), so what runs is read again. `part` picks the
+ *  saved list or the settings (boot list, helper at boot, adding a payload). */
 export default function PayloadManagerPanel({
   running,
   onChanged,
-}: { running?: Readonly<Record<string, PmRunning>>; onChanged?: () => void } = {}) {
+  part,
+}: { running?: Readonly<Record<string, PmRunning>>; onChanged?: () => void; part: PmPanelPart }) {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const { confirm, dialog } = useConfirm();
@@ -394,6 +402,8 @@ export default function PayloadManagerPanel({
     );
   }
   if (!view.present) {
+    // The saved list is shown only while Payload Manager answers; its card explains the rest.
+    if (part === "saved") return null;
     return (
       <Callout tone="info" title={tr("pm_absent_title", undefined, "Payload Manager isn't running on this PS5")}>
         {tr(
@@ -450,6 +460,7 @@ export default function PayloadManagerPanel({
     return (
       <li
         key={p.path}
+        data-pm-card={live?.cardId}
         className="flex flex-wrap items-center gap-3 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3.5 py-2.5 text-sm"
       >
         <div className="min-w-[min(100%,14rem)] flex-1">
@@ -618,6 +629,53 @@ export default function PayloadManagerPanel({
     );
   };
 
+  if (part === "saved") {
+    const all = stored.length + onUsb.length;
+    return (
+      <section className="space-y-2" data-testid="pm-saved-list">
+        {dialog}
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+            {tr("pm_saved_header", { n: all }, `Your payloads · ${all}`)}
+          </h3>
+          <p className="mt-0.5 text-xs text-[var(--color-muted)]">
+            {tr(
+              "pm_saved_hint",
+              undefined,
+              "Kept in Payload Manager on the PS5. Its boot list and settings are under Manage on its card.",
+            )}
+          </p>
+        </div>
+        {view.payloadsError ? (
+          <ErrorCard
+            title={tr("pm_list_failed", undefined, "Couldn't list the stored payloads")}
+            detail={view.payloadsError}
+          />
+        ) : all === 0 ? (
+          <p className="text-sm text-[var(--color-muted)]">
+            {tr(
+              "pm_saved_empty",
+              undefined,
+              "Nothing is stored in Payload Manager yet. Add a payload under Manage on its card.",
+            )}
+          </p>
+        ) : (
+          <>
+            {stored.length > 0 && <ul className="grid gap-1.5">{stored.map(row)}</ul>}
+            {onUsb.length > 0 && (
+              <>
+                <h4 className="pt-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+                  {tr("pm_usb_header", { n: onUsb.length }, `On USB · ${onUsb.length}`)}
+                </h4>
+                <ul className="grid gap-1.5">{onUsb.map(row)}</ul>
+              </>
+            )}
+          </>
+        )}
+      </section>
+    );
+  }
+
   return (
     <div className="space-y-5">
       {dialog}
@@ -783,39 +841,14 @@ export default function PayloadManagerPanel({
         </p>
       </section>
 
-      {view.payloadsError && (
-        <ErrorCard
-          title={tr("pm_list_failed", undefined, "Couldn't list the stored payloads")}
-          detail={view.payloadsError}
-        />
-      )}
-
-      <section>
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <header className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-            {tr("pm_stored_header", { n: stored.length }, `Stored on the PS5 · ${stored.length}`)}
-          </header>
-        </div>
-        {stored.length === 0 ? (
-          <p className="text-sm text-[var(--color-muted)]">
-            {tr(
-              "pm_stored_empty_v2",
-              undefined,
-              "Nothing stored yet. “From this computer…” above keeps a payload file on the console.",
-            )}
-          </p>
-        ) : (
-          <ul className="grid gap-1.5">{stored.map(row)}</ul>
-        )}
-      </section>
-
-      {onUsb.length > 0 && (
-        <section>
-          <header className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-            {tr("pm_usb_header", { n: onUsb.length }, `On USB · ${onUsb.length}`)}
-          </header>
-          <ul className="grid gap-1.5">{onUsb.map(row)}</ul>
-        </section>
+      {view.payloads.length > 0 && (
+        <p className="text-xs text-[var(--color-muted)]" data-testid="pm-saved-elsewhere">
+          {tr(
+            "pm_saved_elsewhere",
+            undefined,
+            "The payloads it keeps are listed under Your payloads at the top of this tab.",
+          )}
+        </p>
       )}
 
       {autoload && unmatched.length > 0 && (
@@ -825,9 +858,9 @@ export default function PayloadManagerPanel({
           </header>
           <p className="mb-2 text-xs text-[var(--color-muted)]">
             {tr(
-              "pm_boot_unmatched_hint",
+              "pm_boot_unmatched_hint_v2",
               undefined,
-              "These boot-list entries name no payload listed above: a file deleted since, or one on a USB stick that isn't plugged in.",
+              "These boot-list entries name no payload under Your payloads: a file deleted since, or one on a USB stick that isn't plugged in.",
             )}
           </p>
           <ul className="grid gap-1.5">

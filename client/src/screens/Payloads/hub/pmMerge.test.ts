@@ -139,7 +139,7 @@ describe("cards once the saved list is known", () => {
     expect(g.top.map((c) => c.id)).toEqual(["payload-manager"]);
     expect(g.also.map((c) => c.id)).toEqual(["proc:elfldr"]);
     // Payload Manager, its four saved payloads and elfldr: what the tab shows, each once.
-    expect(payloadCount(g, SAVED.length, m)).toBe(6);
+    expect(payloadCount(g.top.length + g.also.length, SAVED.length)).toBe(6);
   });
 
   it("keeps a matched card that has its own panel at the top", () => {
@@ -149,8 +149,8 @@ describe("cards once the saved list is known", () => {
     expect(g.hidden.size).toBe(0);
     expect(g.top.map((c) => c.id)).toEqual(["payload-manager", "shadowmountplus"]);
     expect(g.also).toEqual([]);
-    // ShadowMount+ shows on its row and its card: counted once.
-    expect(payloadCount(g, 1, m)).toBe(2);
+    // ShadowMount+ is listed on its row and keeps its card (Manage): the count is what is listed.
+    expect(payloadCount(g.top.length + g.also.length, 1)).toBe(3);
   });
 
   it("says who started each running card", () => {
