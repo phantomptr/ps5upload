@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.19
 
 **New**
 - **Backup progress, and continue after an interruption (#895).** Both backup cards have a Backup progress button: saves and size done, speed, time left, and each game and user's state on the network share, the PS5 drive and this computer, with Retry for failed ones and Cancel. The backup's state is kept by the app's engine, so after a crash, a disconnect or a closed app the card says where it stopped, with Continue backup to do only what is left. Earlier runs are listed too.
