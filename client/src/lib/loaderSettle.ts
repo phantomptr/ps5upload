@@ -18,15 +18,19 @@ interface Seen {
   sawGone: boolean;
   /** This app's helper was seen answering, and the console has not gone since: it is not starting. */
   helperUpAt?: number;
+  /** When this app first heard of the console this run. */
+  watchedSince: number;
+  /** When the console was last seen gone this run. */
+  goneAt?: number;
 }
 
 const seen = new Map<string, Seen>();
 
-function rec(host: string): Seen {
+function rec(host: string, now = Date.now()): Seen {
   const k = consoleKey(host);
   let r = seen.get(k);
   if (!r) {
-    r = { sawGone: false };
+    r = { sawGone: false, watchedSince: now };
     seen.set(k, r);
   }
   return r;
@@ -34,27 +38,39 @@ function rec(host: string): Seen {
 
 /** The loader was probed: open or not. */
 export function noteLoader(host: string, open: boolean, now = Date.now()): void {
-  const r = rec(host);
+  const r = rec(host, now);
   if (open) {
     r.firstOpenAt ??= now;
   } else {
     r.firstOpenAt = undefined;
     r.helperUpAt = undefined;
     r.sawGone = true;
+    r.goneAt = now;
   }
 }
 
 /** The console is gone: rest mode, or no answer at all (off, another network, restarting). */
-export function noteConsoleGone(host: string): void {
-  const r = rec(host);
+export function noteConsoleGone(host: string, now = Date.now()): void {
+  const r = rec(host, now);
   r.firstOpenAt = undefined;
   r.helperUpAt = undefined;
   r.sawGone = true;
+  r.goneAt = now;
 }
 
 /** A helper answered on the console: it is running, not starting. */
 export function noteHelperUp(host: string, now = Date.now()): void {
-  rec(host).helperUpAt = now;
+  rec(host, now).helperUpAt = now;
+}
+
+/** Whether this app watched the console the whole time since `t` without it going away: true;
+ *  false when it went away since (off, rest mode, a restart); null when it was not watched then
+ *  (the app started later). The auto-run's same-boot test when the console's uptime is unknown. */
+export function consoleStayedSince(host: string, t: number): boolean | null {
+  const r = seen.get(consoleKey(host));
+  if (!r) return null;
+  if (r.goneAt !== undefined && r.goneAt >= t) return false;
+  return r.watchedSince <= t ? true : null;
 }
 
 /** When the loader was first seen open (undefined: not seen open since it was last gone). */

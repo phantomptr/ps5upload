@@ -16,6 +16,7 @@ import {
 import { Channel } from "@tauri-apps/api/core";
 import { getEngineUrl } from "../state/engine";
 import { hostOf } from "../lib/addr";
+import { kernelPatcherOf, rememberKernelSend } from "../lib/autoLoaderGuard";
 import { fetchConsoleStat } from "./consoleFiles";
 import { readWithRetries } from "../lib/pollRead";
 import { ENGINE_LONG_TIMEOUT_MS, ENGINE_TIMEOUT_MS, engineFetch, engineLongPost } from "../lib/engineFetch";
@@ -706,14 +707,20 @@ export async function sendPayloadChecked(
   // The web UI's send is made by the engine, which does this check itself. The question below
   // only exists in the desktop app: asked from a browser it failed every catalogue send with
   // "needs the desktop app".
-  if (!isTauriEnv()) return sendPayload(ip, elfPath, port);
-  const check = await invoke<{ ok?: boolean; status?: string }>("payload_send_check", {
-    ip,
-    path: elfPath,
-    port: port ?? null,
-  });
-  if (check?.ok === false) throw new PayloadSendRefused(check.status ?? "loader_busy");
-  return sendPayload(ip, elfPath, port);
+  if (isTauriEnv()) {
+    const check = await invoke<{ ok?: boolean; status?: string }>("payload_send_check", {
+      ip,
+      path: elfPath,
+      port: port ?? null,
+    });
+    if (check?.ok === false) throw new PayloadSendRefused(check.status ?? "loader_busy");
+  }
+  const sent = await sendPayload(ip, elfPath, port);
+  // A kernel patcher (kstuff) sent by hand counts too: the auto-run playlist does not send it
+  // again in this console boot (lib/autoLoaderGuard).
+  const patcher = kernelPatcherOf({ path: elfPath });
+  if (patcher) rememberKernelSend(hostOf(ip), patcher, Date.now());
+  return sent;
 }
 
 /**
@@ -725,6 +732,38 @@ export async function sendPayloadChecked(
  */
 export async function loadConsolePayload(host: string, path: string): Promise<{ bytes: number }> {
   return invoke<{ bytes: number }>("ps5_payload_load_console", { host, path });
+}
+
+/**
+ * A playlist step's payload stored on the console (#900): the engine reads `path` back through
+ * the helper and sends it to the loader the way it sends a file on this computer (the same
+ * refusals, loader lock, ELF check and size cap; `POST /api/payload/send {console_path}`). Only
+ * an engine whose `/api/version` caps say `payload_console_path` takes it.
+ */
+export async function sendConsolePayload(
+  host: string,
+  path: string,
+  port?: number,
+): Promise<{ viaPayloadManager: boolean }> {
+  const res = await engineFetch(`${getEngineUrl()}/api/payload/send`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ host, port: port ?? null, console_path: path }),
+    timeoutMs: 120_000,
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    message?: string;
+    status?: string;
+    via_payload_manager?: boolean;
+  };
+  if (res.status === 409 && body.error) {
+    throw new PayloadSendRefused(body.error, { message: body.message ?? null });
+  }
+  if (!res.ok) throw new Error(body.error ?? body.status ?? `HTTP ${res.status}`);
+  return {
+    viaPayloadManager: body.via_payload_manager === true || sentViaPayloadManager(body.status),
+  };
 }
 
 /** Whether payload_send's status says the loader port was dead and the file

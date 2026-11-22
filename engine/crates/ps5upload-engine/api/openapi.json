@@ -51998,6 +51998,9 @@
                   "properties": {
                     "caps": {
                       "properties": {
+                        "payload_console_path": {
+                          "type": "boolean"
+                        },
                         "rar": {}
                       },
                       "type": "object"

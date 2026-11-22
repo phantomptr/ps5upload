@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   appendStep,
+  consolePathOf,
+  consoleStepPath,
   DEFAULT_AUTO_LOADER,
+  isConsolePayloadName,
   isPayloadPath,
   isRepoStep,
   movePlaylistDown,
@@ -261,5 +264,29 @@ describe("auto-loader self-send guard", () => {
         ?.path,
     ).toBe("/x/ps5upload.elf");
     expect(playlistResendsOurHelper([step("/x/kstuff.elf")])).toBeNull();
+  });
+});
+
+describe("steps stored on the PS5 (#900)", () => {
+  it("round-trips a console path", () => {
+    expect(consoleStepPath(" /data/payloads/kstuff.elf ")).toBe("console:/data/payloads/kstuff.elf");
+    expect(consolePathOf("console:/data/payloads/kstuff.elf")).toBe("/data/payloads/kstuff.elf");
+  });
+
+  it("is not any other step", () => {
+    expect(consolePathOf("/Users/me/kstuff.elf")).toBeNull();
+    expect(consolePathOf("remote://nas-1a2b/kstuff.elf")).toBeNull();
+    expect(consolePathOf("console:data/x.elf")).toBeNull();
+    expect(consolePathOf(undefined)).toBeNull();
+  });
+
+  it("takes what the loader takes from the console", () => {
+    expect(isConsolePayloadName("KSTUFF.ELF")).toBe(true);
+    expect(isConsolePayloadName("x.bin")).toBe(true);
+    expect(isConsolePayloadName("x.js")).toBe(false);
+  });
+
+  it("a PS5 step that is our helper is still refused by the auto-loader", () => {
+    expect(stepSendsOurHelper(step("console:/data/ps5upload/ps5upload.elf"))).toBe(true);
   });
 });

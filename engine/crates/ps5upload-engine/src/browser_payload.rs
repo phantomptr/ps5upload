@@ -72,6 +72,10 @@ struct SendRequest {
     /// A payload of the library.
     #[serde(default)]
     payload_id: Option<String>,
+    /// A payload stored on the console itself (`/data/...`, a .elf or .bin): read back through the
+    /// helper, then sent like `path` (#900).
+    #[serde(default)]
+    console_path: Option<String>,
     /// With `payload_id`: this version of the local copy. Absent: whatever version is here.
     #[serde(default)]
     release: Option<String>,
@@ -420,6 +424,12 @@ async fn send_json(installs: PkgInstallStateHandle, body: &[u8]) -> Response {
             Err(e) => sent_response(Err(e.to_string())),
         };
     }
+    if let Some(on_console) = req.console_path.as_deref().map(str::trim) {
+        if req.path.is_some() || req.payload_id.is_some() {
+            return bad_request("give one of path, payload_id or console_path");
+        }
+        return send_console_file(installs, host, port, on_console.to_string()).await;
+    }
     let path = match (req.path, req.payload_id) {
         (Some(path), None) => {
             let ext_ok = std::path::Path::new(&path)
@@ -484,6 +494,57 @@ async fn send_json(installs: PkgInstallStateHandle, body: &[u8]) -> Response {
         }
         with_loader_lock(&host, port, || {
             send_payload_file(&host, &path, port, &mut stamp_helper)
+        })
+    })
+    .await
+    .map_err(|e| e.to_string());
+    sent_response(result)
+}
+
+/// Why a payload read from the console cannot be sent, in words for the person who chose it.
+fn console_file_problem(path: &str, code: &str) -> String {
+    match code {
+        "payload_not_elf" => format!("{path} on the PS5 is not an ELF payload."),
+        "payload_is_helper" => format!(
+            "{path} on the PS5 is ps5upload's helper. Send the helper from Connection instead."
+        ),
+        "payload_too_large" => format!(
+            "{path} on the PS5 is larger than a loader takes ({} MiB).",
+            crate::console_payload::PAYLOAD_MAX / (1024 * 1024)
+        ),
+        other => format!("Couldn't read {path} on the PS5: {other}"),
+    }
+}
+
+/// The JSON form's `console_path`: a payload on the console, read back through the helper and sent
+/// like a file on this machine, under the same refusals, loader lock and ELF check.
+async fn send_console_file(
+    installs: PkgInstallStateHandle,
+    host: String,
+    port: u16,
+    path: String,
+) -> Response {
+    if !path.starts_with('/') || !crate::console_payload::is_payload_name(&path) {
+        return bad_request("console_path must be a .elf or .bin file on the PS5");
+    }
+    if let Some(refused) = send_refused(&installs, &host, port, false) {
+        return refused;
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        if let Some(m) = away_refusal(&host) {
+            return Err(m);
+        }
+        let mgmt =
+            crate::pkg_install::normalize_mgmt_addr(&crate::install::console_id(host.trim()));
+        let bytes = crate::console_payload::read_console_file(&mgmt, &path).map_err(|e| {
+            let code = e.strip_prefix(&format!("read {path}: ")).unwrap_or(&e);
+            console_file_problem(&path, code)
+        })?;
+        if let Some(code) = crate::console_payload::refusal(&bytes) {
+            return Err(console_file_problem(&path, code));
+        }
+        with_loader_lock(&host, port, || {
+            send_payload_image(&host, port, &path, &bytes, &mut stamp_helper)
         })
     })
     .await
@@ -643,6 +704,51 @@ mod tests {
             .await;
             assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{body}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_console_path_is_alone_and_a_payload_file() {
+        for body in [
+            json!({"host": "127.0.0.1", "console_path": "/data/k.elf", "path": "/a.elf"}),
+            json!({"host": "127.0.0.1", "console_path": "/data/k.elf", "payload_id": "x"}),
+            json!({"host": "127.0.0.1", "console_path": "/data/k.pkg"}),
+            json!({"host": "127.0.0.1", "console_path": "data/k.elf"}),
+        ] {
+            let r = send(
+                Default::default(),
+                query(None),
+                json_headers(),
+                Bytes::from(body.to_string()),
+            )
+            .await;
+            assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{body}");
+        }
+    }
+
+    /// A console whose helper does not answer: the step fails with the file's name and why.
+    #[tokio::test]
+    async fn an_unreadable_console_path_says_so() {
+        let r = send(
+            Default::default(),
+            query(None),
+            json_headers(),
+            Bytes::from(json!({"host": "127.0.0.1", "console_path": "/data/k.elf"}).to_string()),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::BAD_GATEWAY);
+        let v = body_json(r).await;
+        let e = v["error"].as_str().unwrap();
+        assert!(e.starts_with("Couldn't read /data/k.elf on the PS5"), "{v}");
+    }
+
+    #[test]
+    fn console_file_problems_name_the_file() {
+        assert_eq!(
+            console_file_problem("/data/x.elf", "payload_not_elf"),
+            "/data/x.elf on the PS5 is not an ELF payload."
+        );
+        assert!(console_file_problem("/data/x.elf", "payload_too_large").contains("64 MiB"));
+        assert!(console_file_problem("/data/p.elf", "payload_is_helper").contains("helper"));
     }
 
     #[tokio::test]
