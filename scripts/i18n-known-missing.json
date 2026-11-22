@@ -1,27 +1,6 @@
 {
   "ar": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -37,28 +16,7 @@
     ]
   },
   "bn": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -78,28 +36,7 @@
     ]
   },
   "de": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -128,28 +65,7 @@
     ]
   },
   "es": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -172,28 +88,7 @@
     ]
   },
   "fa": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -211,28 +106,7 @@
     ]
   },
   "fr": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -254,28 +128,7 @@
     ]
   },
   "hi": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -295,28 +148,7 @@
     ]
   },
   "hu": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -342,28 +174,7 @@
     ]
   },
   "id": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -391,28 +202,7 @@
     ]
   },
   "it": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -440,28 +230,7 @@
     ]
   },
   "ja": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -478,28 +247,7 @@
     ]
   },
   "ko": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -518,28 +266,7 @@
     ]
   },
   "pl": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -562,28 +289,7 @@
     ]
   },
   "pt-BR": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -606,28 +312,7 @@
     ]
   },
   "ru": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -649,28 +334,7 @@
     ]
   },
   "th": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -691,28 +355,7 @@
     ]
   },
   "tr": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -737,28 +380,7 @@
     ]
   },
   "vi": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -782,28 +404,7 @@
     ]
   },
   "zh-CN": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -821,28 +422,7 @@
     ]
   },
   "zh-TW": {
-    "missing": [
-      "cleanup_err_kraken",
-      "cleanup_kept_kraken",
-      "cleanup_reason_kraken",
-      "fs_delete_kraken_warning",
-      "fs_extract_here_body",
-      "fs_extract_here_checking",
-      "fs_extract_here_conflicts",
-      "fs_extract_here_conflicts_hint",
-      "fs_extract_here_keep",
-      "fs_extract_here_list_failed",
-      "fs_extract_here_more",
-      "fs_extract_here_old_helper",
-      "fs_extract_here_password",
-      "fs_extract_here_replace",
-      "fs_extract_here_root",
-      "fs_extract_here_skip",
-      "fs_extract_where_here",
-      "fs_extract_where_label",
-      "fs_extract_where_new",
-      "pkg.kept_kraken"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
