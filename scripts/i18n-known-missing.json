@@ -1,6 +1,12 @@
 {
   "ar": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -16,7 +22,13 @@
     ]
   },
   "bn": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -36,7 +48,13 @@
     ]
   },
   "de": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -65,7 +83,13 @@
     ]
   },
   "es": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -88,7 +112,13 @@
     ]
   },
   "fa": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -106,7 +136,13 @@
     ]
   },
   "fr": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -128,7 +164,13 @@
     ]
   },
   "hi": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -148,7 +190,13 @@
     ]
   },
   "hu": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -174,7 +222,13 @@
     ]
   },
   "id": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -202,7 +256,13 @@
     ]
   },
   "it": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -230,7 +290,13 @@
     ]
   },
   "ja": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -247,7 +313,13 @@
     ]
   },
   "ko": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -266,7 +338,13 @@
     ]
   },
   "pl": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -289,7 +367,13 @@
     ]
   },
   "pt-BR": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -312,7 +396,13 @@
     ]
   },
   "ru": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -334,7 +424,13 @@
     ]
   },
   "th": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -355,7 +451,13 @@
     ]
   },
   "tr": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -380,7 +482,13 @@
     ]
   },
   "vi": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -404,7 +512,13 @@
     ]
   },
   "zh-CN": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -422,7 +536,13 @@
     ]
   },
   "zh-TW": {
-    "missing": [],
+    "missing": [
+      "cleanup_err_kraken",
+      "cleanup_kept_kraken",
+      "cleanup_reason_kraken",
+      "fs_delete_kraken_warning",
+      "pkg.kept_kraken"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",

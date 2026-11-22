@@ -398,3 +398,100 @@ int scr_path_allowed(char cat, const char *path, const char *tid) {
         return 0;
     }
 }
+
+/* ---- Kraken Mount's scan roots ---- */
+
+/* `path` with /user/data written as /data and trailing slashes dropped, into `out`. 0 when it is not
+ * absolute or too long. */
+static int kraken_norm(const char *path, char *out, size_t cap) {
+    char tmp[1024];
+    const char *p = path;
+    if (!p || p[0] != '/') return 0;
+    if (strncmp(p, "/user/data", 10) == 0 && (p[10] == '/' || p[10] == '\0')) {
+        if ((size_t)snprintf(tmp, sizeof tmp, "/data%s", p + 10) >= sizeof tmp) return 0;
+        p = tmp;
+    }
+    size_t n = strlen(p);
+    while (n > 1 && p[n - 1] == '/') n--;
+    if (n >= cap) return 0;
+    memmove(out, p, n);
+    out[n] = '\0';
+    return 1;
+}
+
+static int trim_char(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '[' || c == ']' || c == '"' || c == '\''; }
+
+int scr_kraken_scanpaths(const char *toml, size_t n, char out[][SCR_KRAKEN_ROOT_LEN], int max) {
+    int count = 0;
+    size_t i = 0;
+    if (!toml) return 0;
+    while (i < n && count < max) {
+        char line[1024];
+        size_t e = i;
+        while (e < n && toml[e] != '\n') e++;
+        size_t ll = e - i < sizeof line - 1 ? e - i : sizeof line - 1;
+        memcpy(line, toml + i, ll);
+        line[ll] = '\0';
+        i = e + 1;
+        char *s = line;
+        while (*s == ' ' || *s == '\t') s++;
+        if (!*s || *s == '#' || *s == '[') continue;
+        char *eq = strchr(s, '=');
+        if (!eq) continue;
+        char *ke = eq;
+        while (ke > s && (ke[-1] == ' ' || ke[-1] == '\t')) ke--;
+        if ((size_t)(ke - s) != 8 || strncmp(s, "scanpath", 8) != 0) continue;
+        char *hash = strstr(eq + 1, " #");
+        if (hash) *hash = '\0';
+        for (char *part = eq + 1; part && count < max;) {
+            char *comma = strchr(part, ',');
+            if (comma) *comma = '\0';
+            char *a = part, *b = part + strlen(part);
+            while (a < b && trim_char(*a)) a++;
+            while (b > a && trim_char(b[-1])) b--;
+            *b = '\0';
+            char norm[SCR_KRAKEN_ROOT_LEN];
+            if (kraken_norm(a, norm, sizeof norm)) {
+                int dup = 0;
+                for (int q = 0; q < count; q++)
+                    if (strcmp(out[q], norm) == 0) dup = 1;
+                if (!dup) memcpy(out[count++], norm, strlen(norm) + 1);
+            }
+            part = comma ? comma + 1 : NULL;
+        }
+    }
+    return count;
+}
+
+int scr_kraken_default_root(const char *dir) {
+    char d[SCR_KRAKEN_ROOT_LEN];
+    const char *r;
+    if (!kraken_norm(dir, d, sizeof d)) return 0;
+    if (strcmp(d, "/data/homebrew") == 0 || strcmp(d, "/data/etaHEN/games") == 0) return 1;
+    if (strncmp(d, "/mnt/ext", 8) == 0 && (d[8] == '0' || d[8] == '1')) r = d + 9;
+    else if (strncmp(d, "/mnt/usb", 8) == 0 && d[8] >= '0' && d[8] <= '7') r = d + 9;
+    else return 0;
+    return r[0] == '\0' || strcmp(r, "/homebrew") == 0 || strcmp(r, "/etaHEN/games") == 0;
+}
+
+int scr_kraken_keeps(const char *path, const char (*roots)[SCR_KRAKEN_ROOT_LEN], int nroots) {
+    char p[1024];
+    if (!kraken_norm(path, p, sizeof p)) return 0;
+    char *slash = strrchr(p, '/');
+    if (!slash || slash == p) return 0; /* nothing sits in "/" that it scans */
+    *slash = '\0';
+    if (nroots <= 0) return scr_kraken_default_root(p);
+    for (int i = 0; i < nroots; i++) {
+        char r[SCR_KRAKEN_ROOT_LEN];
+        if (kraken_norm(roots[i], r, sizeof r) && strcmp(r, p) == 0) return 1;
+    }
+    return 0;
+}
+
+int scr_kraken_mountable(const char *path, int is_dir) {
+    if (!path) return 0;
+    if (is_dir) return 1;
+    size_t n = strlen(path);
+    return n > 4 && path[n - 4] == '.' && (path[n - 3] | 0x20) == 'p' && (path[n - 2] | 0x20) == 'k' &&
+           (path[n - 1] | 0x20) == 'g';
+}

@@ -199,6 +199,7 @@ import { nameKey, type FsExistingEntry } from "../../state/fsUploadPlan";
 import { fsUploadDeps } from "../../state/fsUploadRuntime";
 import { useScrollLock } from "../../lib/useScrollLock";
 import { runBulkDelete as runBulkDeleteLoop } from "../../lib/bulkDelete";
+import { krakenKeptPaths } from "../../lib/krakenGuard";
 import { formatBytes } from "../../lib/format";
 import { useWindowedRows } from "../../lib/useWindowedRows";
 import { formatEtaSeconds } from "../../lib/uploadEta";
@@ -1153,14 +1154,31 @@ export default function FileSystemScreen() {
     }
   };
 
+  // A package or game folder Kraken Mount uses IS the game (#894): the confirmation says so.
+  const krakenWarning = async (names: string[]): Promise<string> => {
+    const items = names.map((n) => ({
+      path: joinPath(path, n),
+      isDir: (entries ?? []).some((x) => x.name === n && x.kind === "dir"),
+    }));
+    const kept = await krakenKeptPaths(host, items).catch(() => [] as string[]);
+    if (kept.length === 0) return "";
+    return `\n\n${tr(
+      "fs_delete_kraken_warning",
+      { n: kept.length },
+      "Kraken Mount uses {n} of these as games: deleting them removes those games from the PS5.",
+    )}`;
+  };
+
   const runDelete = async (name: string) => {
+    const kraken = await krakenWarning([name]);
     const ok = await confirmDialog({
       title: tr("fs_delete_confirm_title", { name }, `Delete "${name}"?`),
-      message: tr(
-        "fs_delete_confirm_body",
-        undefined,
-        "This removes the path recursively from your PS5. Can't be undone.",
-      ),
+      message:
+        tr(
+          "fs_delete_confirm_body",
+          undefined,
+          "This removes the path recursively from your PS5. Can't be undone.",
+        ) + kraken,
       confirmLabel: tr("delete", undefined, "Delete"),
       destructive: true,
     });
@@ -1757,17 +1775,19 @@ export default function FileSystemScreen() {
     if (fsBulk.op !== null) return;
     const names = [...selected];
     if (names.length === 0) return;
+    const kraken = await krakenWarning(names);
     const ok = await confirmDialog({
       title: tr(
         "fs_bulk_delete_confirm_title",
         { count: names.length },
         `Delete ${names.length} item${names.length === 1 ? "" : "s"}?`,
       ),
-      message: tr(
-        "fs_bulk_delete_confirm_body",
-        { path },
-        `Removes from ${path}. This can't be undone.`,
-      ),
+      message:
+        tr(
+          "fs_bulk_delete_confirm_body",
+          { path },
+          `Removes from ${path}. This can't be undone.`,
+        ) + kraken,
       confirmLabel: tr("delete", undefined, "Delete"),
       destructive: true,
     });

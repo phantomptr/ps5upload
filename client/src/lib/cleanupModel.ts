@@ -7,9 +7,10 @@ import type { CleanupApplyStatus, CleanupCategory, CleanupItem } from "../api/cl
 /** The order the groups are shown in. */
 export const CATEGORY_ORDER: CleanupCategory[] = ["A", "B", "C", "D", "E", "F", "G"];
 
-/** Can this item be ticked at all (G and anything the helper marks "none" are only listed). */
+/** Can this item be ticked at all (G, anything the helper marks "none" and Kraken Mount's games
+ *  are only listed). */
 export function isRemovable(item: CleanupItem): boolean {
-  return item.action !== "none" && item.cat !== "G";
+  return item.action !== "none" && item.cat !== "G" && !item.kept;
 }
 
 /** What removing it frees: the space it takes on the drive, or its size when that is unknown. */

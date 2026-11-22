@@ -52,6 +52,11 @@ describe("cleanup model", () => {
   it("ticks the defaults it can remove, never a 'worth a look' item", () => {
     expect([...initialSelection(items)].sort()).toEqual([2, 3, 6]);
     expect(isRemovable(items[4])).toBe(false);
+    // Kraken Mount's games (#894): listed, never ticked, even if an older helper says "delete"
+    const kept = item({ id: 9, cat: "C", default: true, kept: "kraken" });
+    expect(isRemovable(kept)).toBe(false);
+    expect(initialSelection([kept]).size).toBe(0);
+    expect(selectionTotals([kept], new Set([9])).count).toBe(0);
   });
 
   it("totals the selection per drive and flags downgrades", () => {

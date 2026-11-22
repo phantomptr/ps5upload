@@ -36,6 +36,10 @@ vi.mock("../api/ps5", () => ({
   pkgInstallStatus: vi.fn(async () => ({ phase: "done", verdict: "installed" })),
   // Package drives; tests that care set the list.
   listVolumes: vi.fn(async () => []),
+  // Kraken Mount check before a bulk delete (#894): no engine by default.
+  smpStatus: vi.fn(async () => {
+    throw new Error("no engine");
+  }),
   // The console queue (installs run through it) persists and mints tx ids.
   generateTxIdHex: () => Math.random().toString(16).slice(2).padEnd(12, "0"),
   uploadQueueSave: vi.fn(async () => {}),
@@ -1427,6 +1431,52 @@ describe("clearFinished", () => {
     expect(names).toEqual(["failed.pkg", "pending.pkg", "uploading.pkg"]);
     const deleted = mockedDelete.mock.calls.map((c) => c[1]).sort();
     expect(deleted).toEqual([`${DIR}/done1.pkg`, `${DIR}/done2.pkg`]);
+  });
+
+  it("never deletes a package Kraken Mount uses or one in a folder it scans (#894)", async () => {
+    const { smpStatus } = await import("../api/ps5");
+    const { resetKrakenGuardCache } = await import("../lib/krakenGuard");
+    resetKrakenGuardCache();
+    vi.mocked(smpStatus).mockResolvedValueOnce({
+      installed: false,
+      running: false,
+      config_ini: null,
+      autotune_ini: null,
+      debug_log_tail: null,
+      mounted_images: [],
+      errors: [],
+      kraken: {
+        installed: true,
+        running: true,
+        api: true,
+        version: "0.2.1",
+        waiting: null,
+        games: [
+          { title_id: "PPSA01234", title_name: "", path: `${DIR}/mounted.pkg`, kind: "pkg", status: "ready" },
+        ],
+        title_ids: ["PPSA01234"],
+        ampr: null,
+        settings: { inject_ampr: true, ampr_auto_update: true, scan_paths: [] },
+        scan_roots: ["/data/homebrew"],
+        errors: [],
+      },
+    });
+    const ok = { ok: true, message: "Installed." };
+    seed([
+      entry({ name: "mounted.pkg", lastResult: ok }),
+      entry({ name: "inroot.pkg", path: "/data/homebrew/inroot.pkg", lastResult: ok }),
+      entry({ name: "spent.pkg", lastResult: ok }),
+    ]);
+
+    await pkgLibraryStore(HOST).getState().clearFinished(HOST);
+
+    expect(mockedDelete.mock.calls.map((c) => c[1])).toEqual([`${DIR}/spent.pkg`]);
+    const left = pkgLibraryStore(HOST)
+      .getState()
+      .entries.map((e) => e.name)
+      .sort();
+    expect(left).toEqual(["inroot.pkg", "mounted.pkg"]);
+    resetKrakenGuardCache();
   });
 
   it("is a no-op (no deletes) when nothing is finished", async () => {

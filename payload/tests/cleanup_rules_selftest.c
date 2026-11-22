@@ -246,6 +246,57 @@ int main(void) {
         CHECK(scr_pkg_read(mem_read, &m, 0x400, &pi) == -1);
     }
 
+    /* Kraken Mount's scan roots (#894): what sits directly in one is a game, never a leftover */
+    {
+        static char roots[SCR_KRAKEN_ROOTS_MAX][SCR_KRAKEN_ROOT_LEN];
+        CHECK(scr_kraken_default_root("/data/homebrew"));
+        CHECK(scr_kraken_default_root("/user/data/homebrew/"));
+        CHECK(scr_kraken_default_root("/data/etaHEN/games"));
+        CHECK(scr_kraken_default_root("/mnt/usb3/homebrew"));
+        CHECK(scr_kraken_default_root("/mnt/usb7/etaHEN/games"));
+        CHECK(scr_kraken_default_root("/mnt/usb0"));
+        CHECK(scr_kraken_default_root("/mnt/ext1"));
+        CHECK(!scr_kraken_default_root("/mnt/usb8"));
+        CHECK(!scr_kraken_default_root("/mnt/usb0x"));
+        CHECK(!scr_kraken_default_root("/data"));
+        CHECK(!scr_kraken_default_root("/data/ps5upload/pkg_temp"));
+        CHECK(!scr_kraken_default_root("/mnt/usb0/games"));
+
+        CHECK(scr_kraken_keeps("/data/homebrew/Game.pkg", NULL, 0));
+        CHECK(scr_kraken_keeps("/user/data/homebrew/Game.pkg", NULL, 0));
+        CHECK(scr_kraken_keeps("/mnt/usb0/Game.pkg", NULL, 0));
+        CHECK(scr_kraken_keeps("/mnt/usb1/etaHEN/games/PPSA01234-app", NULL, 0));
+        CHECK(scr_kraken_keeps("/mnt/ext0/homebrew/x.pkg", NULL, 0));
+        /* one level deep only, as it scans */
+        CHECK(!scr_kraken_keeps("/mnt/usb0/old/Game.pkg", NULL, 0));
+        CHECK(!scr_kraken_keeps("/data/Game.pkg", NULL, 0));
+        CHECK(!scr_kraken_keeps("/data/ps5upload/downloads/Game.pkg", NULL, 0));
+        CHECK(!scr_kraken_keeps("relative/Game.pkg", NULL, 0));
+
+        const char *cfg = "# settings\n"
+                          "inject_ampr = true\n"
+                          "scanpath = [\"/mnt/usb0/games/\", '/data/pkgs' , \"relative\"] # mine\n"
+                          "[section]\n"
+                          "scanpath = \"/user/data/more\"\n"
+                          "scanpath=\"/data/pkgs\"\n"
+                          "scanpathx = \"/nope\"\n";
+        int nr = scr_kraken_scanpaths(cfg, strlen(cfg), roots, SCR_KRAKEN_ROOTS_MAX);
+        CHECK(nr == 3);
+        CHECK(nr == 3 && strcmp(roots[0], "/mnt/usb0/games") == 0);
+        CHECK(nr == 3 && strcmp(roots[1], "/data/pkgs") == 0);
+        CHECK(nr == 3 && strcmp(roots[2], "/data/more") == 0);
+        CHECK(scr_kraken_keeps("/mnt/usb0/games/Game.pkg", (const char (*)[SCR_KRAKEN_ROOT_LEN])roots, nr));
+        CHECK(scr_kraken_keeps("/user/data/more/a.pkg", (const char (*)[SCR_KRAKEN_ROOT_LEN])roots, nr));
+        /* its own lines replace the default list */
+        CHECK(!scr_kraken_keeps("/data/homebrew/Game.pkg", (const char (*)[SCR_KRAKEN_ROOT_LEN])roots, nr));
+        CHECK(scr_kraken_mountable("/data/homebrew/a.pkg", 0));
+        CHECK(scr_kraken_mountable("/data/homebrew/A.PKG", 0));
+        CHECK(scr_kraken_mountable("/data/homebrew/PPSA01234-app", 1));
+        CHECK(!scr_kraken_mountable("/data/homebrew/a.pkg.part", 0));
+        CHECK(!scr_kraken_mountable("/mnt/usb0/big.exfat", 0));
+        CHECK(scr_kraken_scanpaths("inject_ampr = false\n", 20, roots, SCR_KRAKEN_ROOTS_MAX) == 0);
+    }
+
     if (fails) return 1;
     printf("cleanup rules selftest: ok\n");
     return 0;

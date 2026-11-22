@@ -49,6 +49,7 @@ import {
 } from "../../state/spacePlanRun";
 import { runWalk } from "../DiskUsage/duTree";
 import { humanizeCaught } from "../../lib/humanizeError";
+import { krakenGuard } from "../../lib/krakenGuard";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -440,6 +441,7 @@ export function SpacePlanner({
           installed: async () => (await appsInstalled(addr)).titles,
           inventory: (id) => pkgInstalledInventory(addr, id),
           folderBytes: (p) => measureFolder(host, p),
+          krakenKeeps: () => krakenGuard(host),
         },
         (p, name) => {
           if (gen !== live.current) return;

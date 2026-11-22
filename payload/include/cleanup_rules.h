@@ -73,4 +73,30 @@ int scr_path_has_dot_parts(const char *path);
  * "/mnt/ext0", "/mnt/usb0"… 1 = skip. */
 int scr_walk_skip(const char *drive_root, const char *rel);
 
+/* Kraken Mount (a payload that mounts games from package files and game folders where they sit):
+ * clean-up never removes anything directly in a folder it scans, whether it runs now or not,
+ * because those files ARE the user's games (#894). It scans one level deep. */
+#define SCR_KRAKEN_ROOTS_MAX 32
+#define SCR_KRAKEN_ROOT_LEN 256
+/* Its folder: present once it has run on this console. */
+#define SCR_KRAKEN_DIR "/data/krakenmount"
+#define SCR_KRAKEN_CONFIG "/data/krakenmount/config.toml"
+
+/* The `scanpath` lines of its config.toml (a string or an array of strings on one line, `#`
+ * comments, trailing slashes dropped, absolute paths only). They replace its default roots when
+ * there are any. The count put in `out` (at most `max`). */
+int scr_kraken_scanpaths(const char *toml, size_t n, char out[][SCR_KRAKEN_ROOT_LEN], int max);
+
+/* 1 when `dir` is one of its default roots: /data/homebrew, /data/etaHEN/games, each extended and
+ * USB drive's homebrew and etaHEN/games, and the extended and USB drives' own roots. */
+int scr_kraken_default_root(const char *dir);
+
+/* 1 when `path` sits directly in a folder Kraken Mount scans: one of `roots` (its scanpath lines),
+ * or one of its default roots when `nroots` is 0. /user/data and /data are the same folder. */
+int scr_kraken_keeps(const char *path, const char (*roots)[SCR_KRAKEN_ROOT_LEN], int nroots);
+
+/* 1 for what it mounts: a folder or a .pkg file (any case). A .pkg.part, a disk image or any other
+ * file in its roots is not its game. */
+int scr_kraken_mountable(const char *path, int is_dir);
+
 #endif
