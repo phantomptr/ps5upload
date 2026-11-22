@@ -5,7 +5,7 @@ import { Button } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
 import { useRosterStore } from "../../state/roster";
-import { requestRosterPull } from "../../state/rosterShare";
+import { takeEngineConsole } from "../../state/rosterShare";
 import { DEVICES_READ_MS, DeviceList, orderDevices, peerRows } from "../Connection/TailnetDevices";
 import {
   addTailnetConsole,
@@ -86,8 +86,8 @@ export function TailscaleSettings() {
     setAdding(ip);
     setAddErr("");
     try {
-      await addTailnetConsole(ip, name.split(".")[0].replace(/-ps5u(-\d+)?$/, ""));
-      requestRosterPull(); // the console list mirror reads the engine's now
+      const r = await addTailnetConsole(ip, name.split(".")[0].replace(/-ps5u(-\d+)?$/, ""));
+      takeEngineConsole(r.console, ip); // the mirror reads the engine's list now, or it goes on here
     } catch (e) {
       setAddErr(
         tr(

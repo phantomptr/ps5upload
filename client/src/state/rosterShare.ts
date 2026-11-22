@@ -18,6 +18,7 @@
  * first contact the two lists are merged rather than one replacing the other. An app pointed at
  * another computer's engine (Settings) does not mirror: that engine's list is someone else's.
  */
+import { cleanConsoleAddress, hostOf } from "../lib/addr";
 import { backupBeforeChange } from "../lib/settingsBackup";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "../lib/safeStorage";
 import { isTauriEnv } from "../lib/tauriEnv";
@@ -133,10 +134,15 @@ export interface ShareApi {
 /** The app's own form of the list, with its keys (engine consoles_api.rs). */
 const URL_PATH = "/api/consoles/document";
 
+/** Whether this page's console list follows the engine's: always in the browser, and in an app
+ *  whose engine is its own. An app pointed at another computer's engine keeps its list to itself. */
+export function rosterMirrorsEngine(): boolean {
+  return !isTauriEnv() || isLoopbackUrl(getEngineUrl());
+}
+
 function shareBase(): string {
-  const url = getEngineUrl();
-  if (isTauriEnv() && !isLoopbackUrl(url)) throw new Error("the app is using another computer's engine");
-  return url;
+  if (!rosterMirrorsEngine()) throw new Error("the app is using another computer's engine");
+  return getEngineUrl();
 }
 
 /**
@@ -391,6 +397,27 @@ export async function seedDefaultConsole(
 const ROSTER_PULL_EVENT = "ps5upload:roster-pull";
 export function requestRosterPull(): void {
   if (typeof window !== "undefined") window.dispatchEvent(new Event(ROSTER_PULL_EVENT));
+}
+
+/**
+ * A console the engine just put on its own list (the Tailscale add): the roster id to open it by.
+ * Where the list mirrors, the mirror brings the engine's entry in under the engine's id, so this
+ * only asks for that now. An app using another computer's engine does not mirror (#907): the
+ * console goes on this list here, with the name and address the engine answered (the typed one
+ * when it gave none), or the entry already on it at that address is used.
+ */
+export function takeEngineConsole(c: { id: string; name?: string; host?: string }, typed: string): string {
+  if (rosterMirrorsEngine()) {
+    requestRosterPull();
+    return c.id;
+  }
+  const host = c.host?.trim() || cleanConsoleAddress(typed);
+  const key = (a: string) => hostOf(a).toLowerCase();
+  const hosts = new Set([key(host), key(cleanConsoleAddress(typed))].filter(Boolean));
+  const roster = useRosterStore.getState();
+  const existing = roster.profiles.find((p) => p.id === c.id || hosts.has(key(p.host)));
+  if (existing) return existing.id;
+  return roster.add({ name: c.name?.trim() || `PS5 (${host})`, host });
 }
 
 /** Starts sharing the console list with the engine; returns a stop. */

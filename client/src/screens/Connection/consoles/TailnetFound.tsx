@@ -10,7 +10,7 @@ import { Globe, Plus } from "lucide-react";
 import { Button } from "../../../components";
 import { useTr } from "../../../state/lang";
 import { useRosterStore } from "../../../state/roster";
-import { requestRosterPull } from "../../../state/rosterShare";
+import { takeEngineConsole } from "../../../state/rosterShare";
 import { selfTailnet } from "../../../state/useTailnet";
 import {
   addTailnetConsole,
@@ -145,8 +145,7 @@ export function TailnetFound({
     setErr("");
     try {
       const r = await addTailnetConsole(c.tailnet_ip, c.name);
-      setPending(r.console.id);
-      requestRosterPull();
+      setPending(takeEngineConsole(r.console, c.tailnet_ip));
     } catch (e) {
       setErr(
         tr(
