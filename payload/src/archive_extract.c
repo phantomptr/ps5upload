@@ -471,12 +471,16 @@ int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         status = AVA1_ERR_IO;
         goto unlock;
     }
-    if (!list && fsj_json_str(json, "top", top, EXTRACT_TOP_MAX) && strlen(top) >= EXTRACT_TOP_MAX - 1) {
+    /* fsj_json_str refuses a value that does not fit (or is malformed) and leaves `top` holding
+     * what it copied so far, unterminated: never pass that on (an over-read, and renames cut
+     * short, so an entry the user chose to leave out would be written over what is there). */
+    top[0] = 0;
+    if (!list && fsj_json_present(json, "top") && !fsj_json_str(json, "top", top, EXTRACT_TOP_MAX)) {
+        top[0] = 0;
         ava1_op_message(c, "fs_extract_bad_dest: too many names");
         status = AVA1_ERR_PROTOCOL;
         goto unlock;
     }
-    if (list) top[0] = 0;
     /* The extractor keeps a password in EXTRACT_PASSWORD_MAX bytes (XJ_PASSWORD,
      * payload/extractor/src/xjob.h) and cannot take a longer one: this accepted up to 1023, wrote
      * it to the request, and the extractor was started only to refuse the request it could not

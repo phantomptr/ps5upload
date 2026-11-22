@@ -465,7 +465,12 @@ impl Journal {
         });
         self.cancel_flag(which).store(false, Ordering::SeqCst);
         self.persist(&b);
-        Ok(RunRef { j: self, which })
+        Ok(RunRef {
+            j: self,
+            which,
+            id: side_id(&b, which),
+            finished: false,
+        })
     }
 
     /// Forgets the last run of `which` (one that ended with nothing in it), putting the one
@@ -551,10 +556,56 @@ pub fn global() -> &'static Journal {
     J.get_or_init(|| Journal::open(crate::save_backup::state_file(FILE)))
 }
 
+/// The id of the last run of `which`.
+fn side_id(b: &Book, which: Which) -> String {
+    b.side_ref(which)
+        .last
+        .as_ref()
+        .map(|r| r.id.clone())
+        .unwrap_or_default()
+}
+
+/// What a run reads as when the pass ended without finishing it (a panic, an early return).
+pub const ENDED_UNFINISHED: &str = "the backup stopped on an internal error";
+
 /// The run in progress: every change goes through here.
 pub struct RunRef<'a> {
     j: &'a Journal,
     which: Which,
+    /// The run this is (a run dropped unfinished is ended, and only that one).
+    id: String,
+    finished: bool,
+}
+
+/// A run dropped without [`RunRef::finish`] (a pass that panicked or returned early) would read
+/// as running for good, and every later run of its kind was refused ("a backup is running
+/// already") until the engine restarted: it ends as interrupted instead.
+impl Drop for RunRef<'_> {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.unwatch();
+        let mut b = self.j.lock();
+        let side = b.side(self.which);
+        let Some(run) = side
+            .last
+            .as_mut()
+            .filter(|r| r.id == self.id && r.state == RunState::Running)
+        else {
+            return;
+        };
+        run.updated_at = now_ms();
+        run.interrupt(ENDED_UNFINISHED);
+        let s = run.summary();
+        side.history.retain(|h| h.id != s.id);
+        side.history.insert(0, s);
+        side.history.truncate(HISTORY);
+        self.j.persist(&b);
+        self.j
+            .cancel_flag(self.which)
+            .store(false, Ordering::SeqCst);
+    }
 }
 
 impl RunRef<'_> {
@@ -638,13 +689,18 @@ impl RunRef<'_> {
                 return false;
             };
             let before = d.file.clone();
+            let before_step = d.step;
             f(d);
             if d.step != Step::Copying {
                 d.pct = None;
             }
             // A copy about to be written is named in the file at once: a run cut off while it is
-            // written has it removed before the save is copied again.
-            d.step == Step::Copying && d.file.is_some() && d.file != before
+            // written has it removed before the save is copied again. And its being verified is
+            // written at once too: left to the once-a-second write, an engine stopped just after
+            // read it back as a copy cut off, and Continue removed that good copy (the older
+            // ones already pruned).
+            (d.step == Step::Copying && d.file.is_some() && d.file != before)
+                || (d.step == Step::Verified && before_step != Step::Verified)
         });
         if named {
             self.write_now();
@@ -694,7 +750,8 @@ impl RunRef<'_> {
 
     /// Ends the run: `Done` unless it was cancelled or saves were left (then `Stopped` with
     /// `reason`). Busy saves (a cancel mid-copy) are waiting again.
-    pub fn finish(self, reason: Option<(String, String)>) -> Summary {
+    pub fn finish(mut self, reason: Option<(String, String)>) -> Summary {
+        self.finished = true;
         self.unwatch();
         let cancelled = self.cancelled();
         let mut b = self.j.lock();
@@ -784,6 +841,67 @@ mod tests {
         }
     }
 
+    /// A pass that panics (or returns early) drops its run unfinished: the run ends as
+    /// interrupted, and the next one may start (it was refused until the engine restarted).
+    #[test]
+    fn a_run_dropped_unfinished_ends_and_frees_the_next() {
+        let j = Journal::open(None);
+        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let run = j.begin(Which::Share, "interval").unwrap();
+            run.add(vec![new_item(
+                "h",
+                &entry("PPSA00001", 10),
+                "h|a".into(),
+                &[Place::Share],
+            )]);
+            run.step(0, Step::Copying);
+            panic!("a pass that fails");
+        }));
+        assert!(done.is_err());
+        let last = j.last(Which::Share).unwrap();
+        assert_eq!(last.state, RunState::Interrupted);
+        assert_eq!(last.reason.as_deref(), Some(ENDED_UNFINISHED));
+        assert_eq!(last.items[0].step, Step::Waiting);
+        assert_eq!(j.history(Which::Share)[0].id, last.id);
+        assert!(!j.cancel(Which::Share), "nothing runs");
+        let next = j.begin(Which::Share, "interval").unwrap();
+        // A finished run is left as it ended; one dropped after a discard leaves the one before.
+        let s = next.finish(None);
+        assert_eq!(s.state, RunState::Done);
+        assert_eq!(j.last(Which::Share).unwrap().state, RunState::Done);
+        let run = j.begin(Which::Share, "interval").unwrap();
+        j.discard(Which::Share);
+        drop(run);
+        assert_eq!(j.last(Which::Share).unwrap().state, RunState::Done);
+    }
+
+    /// A copy's being verified is on the disk at once, not a second later: an engine stopped in
+    /// between read it back as a copy cut off, and Continue removed that good copy.
+    #[test]
+    fn a_verified_copy_is_written_at_once() {
+        let path = temp("verified");
+        {
+            let j = Journal::open(Some(path.clone()));
+            let run = j.begin(Which::Share, "manual").unwrap();
+            run.add(vec![new_item(
+                "h",
+                &entry("PPSA00001", 10),
+                "h|a".into(),
+                &[Place::Share],
+            )]);
+            run.dest(0, Place::Share, |d| {
+                d.step = Step::Copying;
+                d.file = Some("/b/PPSA00001/x.zip".into());
+            });
+            run.dest(0, Place::Share, |d| d.step = Step::Verified);
+            std::mem::forget(run);
+        }
+        let last = Journal::open(Some(path)).last(Which::Share).unwrap();
+        let d = &last.items[0].dests[&Place::Share];
+        assert_eq!(d.step, Step::Verified);
+        assert!(last.items[0].left_places().is_empty());
+    }
+
     #[test]
     fn a_run_survives_an_engine_restart_as_interrupted() {
         let path = temp("restart");
@@ -803,7 +921,8 @@ mod tests {
                 d.file = Some("/b/PPSA00002/x.zip".into());
             });
             run.pct(1, Place::Share, 40);
-            // The engine stops here: no finish.
+            // The engine stops here: no finish, and nothing of the process runs after.
+            std::mem::forget(run);
         }
         let j = Journal::open(Some(path.clone()));
         let last = j.last(Which::Share).unwrap();
