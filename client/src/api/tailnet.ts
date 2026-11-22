@@ -4,6 +4,7 @@
 
 import { getEngineUrl } from "../state/engine";
 import { consoleAddr } from "../lib/addr";
+import { discardBody } from "../lib/discardBody";
 
 export type TailnetState =
   | "off"
@@ -238,7 +239,10 @@ export async function tailnetCheck(host: string): Promise<TailnetCheck | null> {
     const res = await fetch(`${getEngineUrl()}/api/tailnet/check?addr=${encodeURIComponent(consoleAddr(host))}`, {
       signal: AbortSignal.timeout(15_000),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      await discardBody(res);
+      return null;
+    }
     const body = (await res.json()) as TailnetCheck;
     return Array.isArray(body.home) ? body : null;
   } catch {
@@ -398,7 +402,10 @@ export async function tailnetVia(host: string): Promise<TailnetVia> {
     const res = await fetch(`${getEngineUrl()}/api/tailnet/via?addr=${encodeURIComponent(consoleAddr(host))}`, {
       signal: AbortSignal.timeout(10_000),
     });
-    if (!res.ok) return { via: "lan", latency_ms: -1 };
+    if (!res.ok) {
+      await discardBody(res);
+      return { via: "lan", latency_ms: -1 };
+    }
     return (await res.json()) as TailnetVia;
   } catch {
     return { via: "lan", latency_ms: -1 };

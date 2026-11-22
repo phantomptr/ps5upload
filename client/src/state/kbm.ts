@@ -7,6 +7,7 @@ import { create } from "zustand";
 import { getEngineUrl } from "./engine";
 import { KBM_MODES, type KbmCaps, type KbmMode, type KbmStatus } from "../lib/kbmInput";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
+import { discardBody } from "../lib/discardBody";
 import { DEFAULT_SHORTCUTS, readShortcut, type Shortcut, type ShortcutKind, type Shortcuts } from "../lib/kbmShortcuts";
 
 const KEY = "ps5upload.rp_kbm.v1";
@@ -123,7 +124,10 @@ export async function fetchKbmCaps(host: string): Promise<KbmConsoleCaps> {
   });
   try {
     const r = await fetch(`${getEngineUrl()}/api/ps5/vinput/caps?addr=${encodeURIComponent(host)}`);
-    if (!r.ok) return none("unreachable");
+    if (!r.ok) {
+      await discardBody(r);
+      return none("unreachable");
+    }
     const v = (await r.json()) as Record<string, unknown>;
     if (v.supported !== true) return none("helper_old");
     return {

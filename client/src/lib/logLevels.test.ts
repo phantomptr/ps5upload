@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_LOG_LEVEL, useDiagSettingsStore } from "../state/diagSettings";
 import { installWindowStub } from "../test-utils/storage";
@@ -48,6 +48,13 @@ describe("logLevels", () => {
   it("an engine from before levels leaves the local fallback", async () => {
     expect(await refreshLevels(engine([], () => ({ status: 404, json: { error: "no route" } })))).toBe(false);
     expect(useDiagSettingsStore.getState().engine).toBeNull();
+  });
+
+  it("a refused read cancels the body it does not read (WebView2 keeps unread ones)", async () => {
+    const res = new Response('{"error":"no route"}', { status: 404 });
+    const cancel = vi.spyOn(res.body!, "cancel");
+    expect(await refreshLevels((async () => res) as unknown as typeof fetch)).toBe(false);
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it("the reproduce button raises everything to debug for half an hour", async () => {
