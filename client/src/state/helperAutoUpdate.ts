@@ -19,6 +19,7 @@ import { sendInFlight, sentAgoMs } from "../lib/helperSendGate";
 import {
   AUTO_UPDATE_SETTLE_MS,
   helperAutoUpdateDecision,
+  helperAutoUpdateGate,
   OTHER_RESTART_WINDOW_MS,
   type AutoUpdateDecision,
   type AutoUpdateInput,
@@ -136,7 +137,7 @@ export function localInput(host: string, app: string | null, now = Date.now()): 
   const since = upSince.get(key);
   const tries = attemptsByPair.get(pairKey(key, rt?.payloadVersion ?? null, app));
   return {
-    enabled: consoleSettingFor(host, "auto_update_helper"),
+    enabled: helperAutoUpdateGate.available && consoleSettingFor(host, "auto_update_helper"),
     stopped: isHelperStopped(host),
     appVersion: app,
     helperVersion: rt?.payloadVersion ?? null,
@@ -243,6 +244,8 @@ function consoleName(host: string): string | null {
  *  time; never throws. */
 export async function evaluateAutoUpdate(host: string, cancelled: () => boolean = () => false): Promise<void> {
   const key = hostOf(host);
+  // Not in this build (#903): nothing is decided, shown or sent.
+  if (!helperAutoUpdateGate.available) return;
   if (!key || evaluating.has(key)) return;
   evaluating.add(key);
   try {

@@ -7,6 +7,11 @@ What's new in ps5upload, written for humans.
 ## Unreleased
 
 **Fixes**
+- **The PS5 helper is no longer replaced by itself (#903).** Two consoles crashed when the app sent a new helper over a running one by itself, and the cause isn't known yet. Automatic helper updates are switched off until it is. Sending the helper yourself works as before: press Send helper when the app says a newer one is available.
+
+## 12.6.17
+
+**Fixes**
 - **Copying files into a running game's temporary folder works (#889).** Some games' add-on guides have you copy folders into the game's temporary folder on the internal drive while the game runs (`/app_temp0/...`). PS5Upload refused that with "console refused the transfer (9)", because that folder was not on the PS5 helper's list of places it may write to. It is now. Not yet tried on a console.
 
 ## 12.6.16

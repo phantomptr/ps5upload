@@ -42,6 +42,7 @@ import { useTaskStore } from "./tasks";
 import { useToastStore } from "./toasts";
 import { useRemotePlayStore } from "./remotePlay";
 import { resetHelperSendGate } from "../lib/helperSendGate";
+import { helperAutoUpdateGate } from "../lib/helperAutoUpdate";
 
 const HOST = "192.168.1.20";
 
@@ -54,6 +55,9 @@ function helperUp(version: string) {
 }
 
 beforeEach(() => {
+  // These tests exercise the rules, so the feature is switched on here; see the last test for
+  // the shipped default.
+  helperAutoUpdateGate.available = true;
   resetHelperAutoUpdate();
   resetHelperSendGate();
   api.enabled.value = true;
@@ -74,7 +78,19 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  helperAutoUpdateGate.available = false;
   vi.clearAllMocks();
+});
+
+describe("automatic helper updates in this build (#903)", () => {
+  it("are off: an older helper is left alone and nothing is sent", async () => {
+    helperAutoUpdateGate.available = false;
+    await evaluateAutoUpdate(HOST);
+    expect(api.payloadCheck).not.toHaveBeenCalled();
+    expect(api.ensurePayloadCurrent).not.toHaveBeenCalled();
+    // Nor is a line shown on the console card for a setting that can't be turned on.
+    expect(useHelperAutoUpdateStore.getState().byHost[HOST]).toBeUndefined();
+  });
 });
 
 describe("the automatic update of an older helper", () => {
