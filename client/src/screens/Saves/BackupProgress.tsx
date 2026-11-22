@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, Play, RotateCcw, Square } from "lucide-react";
 
 import { Button, Modal, ProgressBar, SegmentedControl } from "../../components";
@@ -13,6 +13,7 @@ import {
 import { formatBytes } from "../../lib/format";
 import { formatDate, formatDuration } from "../../lib/formatDate";
 import {
+  oneAtATime,
   overall,
   retryable,
   rows,
@@ -97,17 +98,20 @@ export function useBackupRuns(
     }
     await refresh();
   }, [which, refresh]);
-  const again = useCallback(
-    async (ids?: string[]) => {
-      try {
-        setView(await saveBackupRunsApi.again(which, ids));
-        setError(null);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-      // The run starts in the background: ask again shortly to show it running.
-      window.setTimeout(() => void refresh(), 700);
-    },
+  // One press at a time, until the run it started shows (a second press got "a backup is running").
+  const again = useMemo(
+    () =>
+      oneAtATime(async (ids?: string[]) => {
+        try {
+          setView(await saveBackupRunsApi.again(which, ids));
+          setError(null);
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e));
+        }
+        // The run starts in the background: ask again shortly to show it running.
+        await new Promise((r) => window.setTimeout(r, 700));
+        await refresh();
+      }),
     [which, refresh],
   );
   return { view, supported, error, refresh, cancel, again };

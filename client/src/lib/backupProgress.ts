@@ -224,3 +224,21 @@ export function shouldPoll(
 ): boolean {
   return visible && view?.run?.state === "running";
 }
+
+/** `fn`, doing nothing while an earlier call has not settled: Continue or Retry pressed again
+ *  before the first press's run shows sends nothing more (the engine answered the second with
+ *  "a backup is running", shown as an error). */
+export function oneAtATime<A extends unknown[]>(
+  fn: (...args: A) => Promise<void>,
+): (...args: A) => Promise<void> {
+  let busy = false;
+  return async (...args: A) => {
+    if (busy) return;
+    busy = true;
+    try {
+      await fn(...args);
+    } finally {
+      busy = false;
+    }
+  };
+}

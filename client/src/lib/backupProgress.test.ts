@@ -8,6 +8,7 @@ import type {
 } from "../api/saveBackup";
 import {
   itemOutcome,
+  oneAtATime,
   overall,
   retryable,
   rows,
@@ -299,5 +300,37 @@ describe("backup card note", () => {
       false,
     );
     expect(shouldPoll(null, true)).toBe(false);
+  });
+});
+
+describe("Continue and Retry pressed twice (#895)", () => {
+  it("sends once until the first press has settled, then again", async () => {
+    let calls = 0;
+    let finish: () => void = () => {};
+    const again = oneAtATime(async () => {
+      calls++;
+      await new Promise<void>((r) => (finish = r));
+    });
+    const first = again();
+    void again();
+    void again();
+    expect(calls).toBe(1);
+    finish();
+    await first;
+    const third = again();
+    expect(calls).toBe(2);
+    finish();
+    await third;
+  });
+
+  it("is free again after a press that failed", async () => {
+    let calls = 0;
+    const again = oneAtATime(async () => {
+      calls++;
+      throw new Error("HTTP 409");
+    });
+    await expect(again()).rejects.toThrow("HTTP 409");
+    await expect(again()).rejects.toThrow("HTTP 409");
+    expect(calls).toBe(2);
   });
 });
