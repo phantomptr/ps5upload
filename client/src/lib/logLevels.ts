@@ -22,6 +22,7 @@ import {
 import { getEngineUrl } from "../state/engine";
 import { log, type LogLevel } from "../state/logs";
 import { safeGetItem, safeRemoveItem } from "./safeStorage";
+import { discardBody } from "./discardBody";
 
 /** How often the engine's setting is read again. */
 export const REFRESH_MS = 30 * 1000;
@@ -51,7 +52,10 @@ export function parseLevels(v: unknown): EngineLevels | null {
 export async function refreshLevels(fetchImpl: typeof fetch = fetch): Promise<boolean> {
   try {
     const r = await fetchImpl(`${getEngineUrl()}/api/logs/level`, { signal: AbortSignal.timeout(4000) });
-    if (!r.ok) return false;
+    if (!r.ok) {
+      await discardBody(r);
+      return false;
+    }
     const levels = parseLevels(await r.json());
     if (!levels) return false;
     useDiagSettingsStore.getState().setEngineLevels(levels);

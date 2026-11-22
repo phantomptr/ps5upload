@@ -25,6 +25,7 @@ import { gamepadsOf } from "../lib/nativePad";
 import { padKind, profileFor } from "../lib/padProfiles";
 import { describePads, padActive, padFromMessage, type PadInput } from "../lib/padFrom";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
+import { discardBody } from "../lib/discardBody";
 import { setGameMode } from "../lib/gameMode";
 import { setScreenWakeReason } from "../lib/androidScreenWake";
 import { setPadForwardReason } from "../lib/androidPadBridge";
@@ -614,7 +615,11 @@ export async function fetchRunningSession(): Promise<{
 }> {
   try {
     const r = await fetch(`${getEngineUrl()}/api/ps5/rp/session?passive=1`);
-    return r.ok ? await r.json() : { host: null };
+    if (!r.ok) {
+      await discardBody(r);
+      return { host: null };
+    }
+    return await r.json();
   } catch {
     return { host: null };
   }
