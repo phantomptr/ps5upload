@@ -2318,14 +2318,29 @@ pub(crate) async fn exfat_build_handler(
                 if let Some(module) =
                     ps5upload_fpkg::ampr_pack::image::emulator_needed_at(&mut *tree)
                 {
-                    let bytes =
-                        crate::ampr_trace::emulator(ampr_emu_build.as_deref()).map_err(|e| {
-                            format!(
+                    // A game written in the packs it is in gets the emulator that reads them,
+                    // whichever was asked for (#828).
+                    let packs = crate::remove_backport::packed(&mut *tree);
+                    let build =
+                        crate::ampr_trace::emulator_for_packs(packs, ampr_emu_build.as_deref());
+                    if build.unwrap_or("ampr_emu")
+                        != ampr_emu_build.as_deref().unwrap_or("ampr_emu")
+                    {
+                        crate::log_at!(
+                            Info,
+                            "convert",
+                            "image build: the game stays in {} packs, so it gets {}",
+                            packs.unwrap_or_default(),
+                            build.unwrap_or("ampr_emu")
+                        );
+                    }
+                    let bytes = crate::ampr_trace::emulator(build).map_err(|e| {
+                        format!(
                             "this game may need an AMPR emulator to start from an image, and it \
                          could not be fetched: {e}. Connect to the internet, or turn off \
                          \"Add the AMPR emulator\" in Convert's options"
                         )
-                        })?;
+                    })?;
                     tree = Box::new(
                         ps5upload_fpkg::ampr_pack::image::RuntimeInstalled::new_at(
                             tree, bytes, &module,
@@ -2336,7 +2351,7 @@ pub(crate) async fn exfat_build_handler(
                         Info,
                         "convert",
                         "image build: {} added as {module}",
-                        ampr_emu_build.as_deref().unwrap_or("ampr_emu")
+                        build.unwrap_or("ampr_emu")
                     );
                 }
             }

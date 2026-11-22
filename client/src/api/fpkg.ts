@@ -378,8 +378,9 @@ export const fpkg = {
    *  is `list`, `check` or `write`; done, `dest` is the index and `commit_ack` the
    *  {@link AmprIndexOutcome}. */
   /** The AMPR emulator added to a game where it stands: in a folder, or as a backport folder for
-   *  an image on the PS5. */
-  addAmprEmu: (source: string) => invoke<AmprEmuOutcome>("fpkg_ampr_emu", { source, build: useConvertPrefs.getState().amprEmuBuild }),
+   *  an image on the PS5. `build`: which one (Convert's setting when absent). */
+  addAmprEmu: (source: string, build?: AmprEmuBuild) =>
+    invoke<AmprEmuOutcome>("fpkg_ampr_emu", { source, build: build ?? useConvertPrefs.getState().amprEmuBuild }),
   /** A game in zstd packs gets the newest ampr-emu-ng where it stands (a backport folder for an
    *  image on the PS5). */
   updateZstdRuntime: (source: string) => invoke<ZstdRuntimeOutcome>("fpkg_zstd_runtime", { source }),

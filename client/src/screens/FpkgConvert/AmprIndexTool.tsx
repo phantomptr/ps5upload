@@ -24,8 +24,9 @@ import { useTr } from "../../state/lang";
 
 /** What the action does for a source, or why it is not offered. */
 export type AmprIndexPlan =
-  /** Not shown: no game checked, a package or archive (a build makes a fresh index), or a game
-   *  that does not read through libSceAmpr (it has no index to rebuild, #828). */
+  /** Not shown: no game checked, a package or archive (a build makes a fresh index), a game
+   *  that does not read through libSceAmpr (it has no index to rebuild, #828), or one in LZ4
+   *  packs (its index goes with the packs). */
   | "hidden"
   | "folder"
   | "console_folder"
@@ -51,6 +52,9 @@ export function amprIndexPlan(
     return "hidden";
   if (!inspection.ampr_packs || inspection.ampr_packs.kind === "no_ampr")
     return "hidden";
+  // A game in LZ4 packs: its index is tied to the packs' manifest, and the engine refuses to
+  // make it again (ampr_index::LZ4_PACKED). Converting it makes a fresh one.
+  if (inspection.packs === "lz4") return "hidden";
   const onConsole = s.startsWith("ps5://");
   if (/\.ffpfsc$/i.test(s)) return "compressed";
   if (IMAGE.test(s)) return onConsole ? "console_image" : "image";
