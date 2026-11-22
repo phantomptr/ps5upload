@@ -676,6 +676,13 @@ body {
   outline-offset: 1px;
 }
 
+/* Android TV (lib/tvNav): the remote moves focus, so the focused control is the
+ * only cursor there is. A thicker ring, read from across the room, on any focus. */
+:root[data-tv="1"] :where(a, button, input, select, textarea, summary, [role="button"], [role="menuitem"], [role="tab"], [tabindex]):focus {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
 /* Fields that already show focus their own way don't also get the heavy
  * ring: `.input` / `.select` turn accent-edged with a soft halo, and a
  * `.field-quiet` field sits in a `.field-shell` that lights up instead (the

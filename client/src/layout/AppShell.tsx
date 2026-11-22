@@ -1525,6 +1525,8 @@ function AndroidStorageAccessBanner() {
   const tr = useTr();
   const [visible, setVisible] = useState(false);
   const [checking, setChecking] = useState(false);
+  // No settings page opened (some TV boxes have none for file access).
+  const [noPage, setNoPage] = useState(false);
 
   const markDismissed = () => {
     try {
@@ -1599,6 +1601,15 @@ function AndroidStorageAccessBanner() {
                 "Grant All files access so PS5Upload can upload game folders, .zip dumps, and .pkg files from your phone.",
               )}
             </p>
+            {noPage && (
+              <p className="mt-1 text-xs text-[var(--color-warn)]">
+                {tr(
+                  "android_storage_no_settings",
+                  undefined,
+                  "This device has no settings page for file access. Uploading from it may not work; everything else does.",
+                )}
+              </p>
+            )}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
@@ -1608,7 +1619,8 @@ function AndroidStorageAccessBanner() {
             onClick={() =>
               void localFs
                 .requestAccess()
-                .catch(() => {})
+                .then(() => setNoPage(false))
+                .catch(() => setNoPage(true))
                 .finally(() => {
                   window.setTimeout(() => void checkAccess(), 750);
                 })

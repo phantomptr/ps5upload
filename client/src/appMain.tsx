@@ -22,6 +22,7 @@ import { installEngineLogBridge } from "./state/engineLogBridge";
 import { installEngineStartupEvents } from "./state/engineStartupEvents";
 import { installAccidentalReloadGuard } from "./lib/preventAccidentalReload";
 import { installSystemBack } from "./lib/systemBack";
+import { installTvNav } from "./lib/tvNav";
 import { installNumberInputWheelGuard } from "./lib/numberInputWheel";
 
 // Capture console.error / warn + unhandled promise rejections into
@@ -78,6 +79,9 @@ installAccidentalReloadGuard();
 
 // System Back closes what is open on top before it changes the page (phones have no Escape).
 installSystemBack();
+
+// Android TV: the remote's D-pad moves focus from control to control.
+installTvNav();
 
 // A mouse wheel over a focused number box (the upload speed limit) must not change it.
 installNumberInputWheelGuard();
