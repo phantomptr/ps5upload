@@ -15,7 +15,7 @@
  * and keeping that read here means a later report can include it even when
  * the helper is down again by then.
  *
- * In memory only, on purpose: up to 14 files of up to 256 KB is more than
+ * In memory only, on purpose: up to 16 files of up to 256 KB is more than
  * browser storage should hold, and the capture is retaken on every reconnect.
  */
 
