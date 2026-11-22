@@ -38,6 +38,9 @@ export interface BatchReviewProps {
   restCount?: number;
   canStream?: boolean;
   onStream?: () => void;
+  /** Add to queue with packages in the list: they join the queue as stream installs, and
+   *  nothing starts (the rest is added as uploads). */
+  onQueueStream?: () => void;
   onRemove: (id: string) => void;
   onInclude: (id: string, include: boolean) => void;
   onPassword: (id: string, password: string) => void;
@@ -291,9 +294,24 @@ export function BatchReview(p: BatchReviewProps) {
         <Button variant={streams ? "secondary" : "primary"} disabled={!p.canAdd} onClick={() => p.onAdd(true)}>
           {tr("batch_upload_now", { count: p.addCount }, "Upload {count} now")}
         </Button>
-        <Button disabled={!p.canAdd} onClick={() => p.onAdd(false)}>
-          {tr("batch_add", { count: p.addCount }, "Add {count} to queue")}
-        </Button>
+        {streams && p.onQueueStream ? (
+          <Button
+            disabled={!p.canStream}
+            onClick={p.onQueueStream}
+            title={tr(
+              "batch_add_stream_hint",
+              undefined,
+              "Packages join the queue as Stream & install, so nothing is copied to the PS5 first. Adds them without starting the queue.",
+            )}
+            data-testid="batch-add-stream"
+          >
+            {tr("batch_add", { count: (p.streamCount ?? 0) + (p.restCount ?? 0) }, "Add {count} to queue")}
+          </Button>
+        ) : (
+          <Button disabled={!p.canAdd} onClick={() => p.onAdd(false)}>
+            {tr("batch_add", { count: p.addCount }, "Add {count} to queue")}
+          </Button>
+        )}
       </div>
     </section>
   );

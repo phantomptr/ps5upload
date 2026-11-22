@@ -1729,6 +1729,31 @@ describe("install items", () => {
     expect(order).toEqual(["/src/Waiting", "/src/Game.pkg"]);
   });
 
+  it("a stream install added with start:false waits for Start even with auto-start on", async () => {
+    useUploadSettingsStore.setState({ queueAutoStart: true });
+    const s = useUploadQueueStore.getState();
+    const q = s.enqueueInstall({
+      host,
+      request: { via: "stream", source: "/queued.fpkg" },
+      displayName: "Q",
+      start: false,
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(useUploadQueueStore.getState().runningHosts[host]).toBeFalsy();
+    expect(calls).toEqual([]);
+    const row = useUploadQueueStore.getState().items.find((i) => i.id === q.id);
+    expect(row?.status).toBe("pending");
+    // It is a stream install, not an upload: Start runs it with nothing copied first.
+    expect(row?.install).toEqual({
+      via: "stream",
+      source: "/queued.fpkg",
+    });
+    void useUploadQueueStore.getState().startHost(host);
+    await slowWaitFor(() => calls.length === 1);
+    gate.get("/queued.fpkg")!({ ok: true });
+    expect((await q.done).ok).toBe(true);
+  });
+
   it("with auto-start off nothing runs until Start, then everything runs in order (#536)", async () => {
     useUploadSettingsStore.setState({ queueAutoStart: false });
     const order = recordOrder();
