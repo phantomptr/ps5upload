@@ -37,6 +37,7 @@ use ps5upload_core::saves::SaveEntry;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::save_backup_run::{self as runs, Place, Which};
 use crate::save_layout::{self as layout, Arrange, DecryptedStatus, Kind, Layout, Owner, Platform};
 
 /// How often the consoles are looked at, in minutes, unless the settings say otherwise.
@@ -86,6 +87,11 @@ pub struct Settings {
     /// on any PS5) in the user's Decrypted folder, `keep` of them.
     #[serde(default)]
     pub decrypted_copy: bool,
+    /// Folders on the PS5 backed up with the saves (#899): a port's or an emulator's saves kept in
+    /// a folder of its own. Each is zipped whole into `Folders/<name>/` with the same versions to
+    /// keep (`save_folders`); empty: none.
+    #[serde(default)]
+    pub folders: Vec<String>,
 }
 
 impl Settings {
@@ -161,6 +167,7 @@ impl Default for Settings {
             layout: Layout::ByGame,
             game_names: false,
             decrypted_copy: false,
+            folders: Vec::new(),
         }
     }
 }
@@ -266,6 +273,11 @@ fn state_dir() -> Option<PathBuf> {
     };
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
+}
+
+/// The file `name` in the engine's state folder; None when there is none (in tests).
+pub(crate) fn state_file(name: &str) -> Option<PathBuf> {
+    state_dir().map(|d| d.join(name))
 }
 
 pub(crate) fn load<T: for<'de> Deserialize<'de> + Default>(name: &str) -> T {
@@ -674,7 +686,7 @@ pub(crate) fn local_list(root: &str) -> impl Fn(&str) -> Result<layout::Entries,
 
 /// Deletes this save's oldest backups of kind `tag` in `dir` (either layout) so `keep` remain,
 /// never `just_made`. Only files named the way this app names its backups.
-fn prune_local(
+pub(crate) fn prune_local(
     dir: &str,
     title_id: &str,
     user: u32,
@@ -1095,82 +1107,205 @@ impl Drop for PassRunning {
 /// One pass over every console in the settings. Does nothing when the feature is off, no folder
 /// is set, or a pass is already running.
 pub fn run_pass() -> Result<(), String> {
+    local_run("auto", None)
+}
+
+/// Continue the last run (`ids` None: what it left) or Retry some of its saves (`ids`).
+pub(crate) fn run_again(ids: Option<BTreeSet<String>>) -> Result<(), String> {
+    let trigger = if ids.is_some() { "retry" } else { "continue" };
+    local_run(trigger, ids.as_ref())
+}
+
+/// The backup folder's record of what it holds (`DONE_FILE`).
+struct LocalRecords(Mutex<Done>);
+
+impl crate::save_backup_pass::Records for LocalRecords {
+    fn done(&self, place: Place) -> Done {
+        match place {
+            Place::Local => self.0.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            _ => Done::new(),
+        }
+    }
+
+    fn mark(&self, place: Place, key: &str, mtime: i64) {
+        if place != Place::Local {
+            return;
+        }
+        let mut done = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        done.insert(key.to_string(), mtime);
+        let _ = save(DONE_FILE, &*done);
+    }
+}
+
+/// A pass of the automatic backups into a new run (`trigger`): every console's saves that changed
+/// (`auto`, `manual`), or the last run again (`continue`, `retry` with `ids`).
+fn local_run(trigger: &str, ids: Option<&BTreeSet<String>>) -> Result<(), String> {
+    use crate::save_backup_pass::{self as pass, Ctx, Dest, DriveDest, LocalDest, Records, Retry};
     let s = settings();
     if !s.enabled || s.dir.trim().is_empty() {
-        return Ok(());
+        if trigger == "auto" || trigger == "manual" {
+            return Ok(());
+        }
+        return Err("turn the automatic backups on and choose a folder first".into());
+    }
+    let journal = runs::global();
+    let last = journal.last(Which::Local);
+    if matches!(trigger, "continue" | "retry") && last.is_none() {
+        return Err("there is no earlier backup to continue".into());
     }
     let Some(_running) = PassRunning::begin() else {
         return Ok(());
     };
-    let mut done: Done = load(DONE_FILE);
-    let (mut backed_up, mut failed, mut last_error) = (0u32, 0u32, None::<String>);
+    let run = journal.begin(Which::Local, trigger)?;
+    let records = LocalRecords(Mutex::new(load(DONE_FILE)));
+    let console = pass::Live;
     let mut copies = crate::save_backup_console::Copies::new(&s.console_drive, s.keep, s.arrange());
-    let mut decrypted = DecryptedStatus::default();
-    for host in &s.hosts {
-        if console_busy(host) {
-            continue;
-        }
-        // A console that does not answer (off, asleep, no helper) is simply not due now.
-        let Ok(list) = list_saves(host) else { continue };
-        // Nor one that can't say what runs: a save being written is never copied.
-        let Ok(running) = crate::save_backup_server::running_titles(host) else {
-            continue;
-        };
-        let now = (now_ms() / 1000) as i64;
-        for entry in needing_backup(host, &list, &done, now, &running) {
-            // The switch may be turned off part-way through a long pass.
-            if !settings().enabled {
-                break;
-            }
-            match back_up_one(host, entry, &s.dir, s.keep, None, &|| Ok(())) {
-                Ok(zip) => {
-                    done.insert(done_key(host, &entry.path), entry.mtime);
-                    let _ = save(DONE_FILE, &done);
-                    backed_up += 1;
-                    // A copy on the PS5's own drive too; never a reason the backup failed.
+    let todo: Vec<(usize, String, SaveEntry)> = match (&last, trigger) {
+        (Some(l), "continue" | "retry") => pass::carry_over(&console, &run, l, ids),
+        _ => {
+            let mut todo = Vec::new();
+            let done = records.done(Place::Local);
+            for host in &s.hosts {
+                if console_busy(host) {
+                    continue;
+                }
+                // A console that does not answer (off, asleep, no helper) is simply not due now.
+                let list = match list_saves(host) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        run.unreached(host, &e);
+                        continue;
+                    }
+                };
+                // Nor one that can't say what runs: a save being written is never copied.
+                let running = match crate::save_backup_server::running_titles(host) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        run.unreached(host, &e);
+                        continue;
+                    }
+                };
+                let now = (now_ms() / 1000) as i64;
+                let drive = crate::save_backup_pass::Console::drive(&console, host);
+                let mut items = Vec::new();
+                for entry in needing_backup(host, &list, &done, now, &running) {
+                    let mut places = vec![Place::Local];
+                    let mut away = None;
                     if let Some(c) = copies.as_mut() {
-                        c.copy(
-                            &crate::save_backup_console::Live(host),
-                            host,
-                            &owner_of(host, entry, s.arrange()),
-                            &zip,
+                        match c.unready(drive.as_ref(), host) {
+                            None => places.push(Place::Drive),
+                            Some(why) => {
+                                c.note_skipped(drive.as_ref(), host);
+                                away = Some(why);
+                            }
+                        }
+                    }
+                    let mut item =
+                        runs::new_item(host, entry, done_key(host, &entry.path), &places);
+                    if let Some(why) = away {
+                        item.dests.insert(
+                            Place::Drive,
+                            runs::DestStatus {
+                                step: runs::Step::Skipped,
+                                error: Some(why),
+                                ..Default::default()
+                            },
                         );
                     }
-                    // And a decrypted copy, when asked for; never a reason either.
-                    if wants_decrypted(s.decrypted_copy, s.arrange(), entry) {
-                        let r =
-                            export_decrypted_local(host, entry, &s.dir, s.game_names, Some(s.keep));
-                        if let Err(e) = &r {
-                            crate::log_warn!(
-                                "save backup: decrypted copy of {} on {host}: {e}",
-                                entry.title_id
-                            );
-                        }
-                        decrypted.record(&r);
-                    }
+                    items.push((item, entry.clone()));
                 }
-                Err(e) => {
-                    crate::log_warn!("save backup: {} on {host}: {e}", entry.title_id);
-                    last_error = Some(format!("{}: {e}", entry.title_id));
-                    failed += 1;
+                drop(drive);
+                // The chosen console folders too (#899).
+                items.extend(pass::plan_folders(
+                    &console,
+                    host,
+                    &s.folders,
+                    Place::Local,
+                    &records,
+                    copies.as_mut(),
+                    false,
+                ));
+                for (i, e) in pass::add_items(&run, items) {
+                    todo.push((i, host.clone(), e));
                 }
             }
+            todo
         }
+    };
+    let decrypted = std::cell::RefCell::new(DecryptedStatus::default());
+    let mut local_dest = LocalDest {
+        dir: s.dir.clone(),
+        keep: s.keep,
+        layout: s.layout,
+    };
+    let mut drive = copies.map(|copies| DriveDest {
+        copies,
+        console: &console,
+        layout: s.layout,
+    });
+    let retry = Retry::live();
+    let stopped = {
+        let mut dests: Vec<&mut dyn Dest> = vec![&mut local_dest];
+        if let Some(d) = drive.as_mut() {
+            dests.push(d);
+        }
+        let mut on_verified = |host: &str, entry: &SaveEntry, place: Place| {
+            records.mark(place, &done_key(host, &entry.path), entry.mtime);
+            // And a decrypted copy, when asked for; never a reason the backup failed.
+            if place == Place::Local && wants_decrypted(s.decrypted_copy, s.arrange(), entry) {
+                let r = export_decrypted_local(host, entry, &s.dir, s.game_names, Some(s.keep));
+                if let Err(e) = &r {
+                    crate::log_warn!(
+                        "save backup: decrypted copy of {} on {host}: {e}",
+                        entry.title_id
+                    );
+                }
+                decrypted.borrow_mut().record(&r);
+            }
+        };
+        let mut ctx = Ctx {
+            console: &console,
+            run: &run,
+            retry: &retry,
+            arrange: s.arrange(),
+            dests,
+            streak: BTreeMap::new(),
+            on_verified: &mut on_verified,
+        };
+        // The switch may be turned off part-way through a long pass.
+        pass::execute(&mut ctx, &todo, &|| settings().enabled)
+    };
+    let summary = run.finish(stopped);
+    if summary.total == 0 && trigger == "auto" {
+        // Nothing had changed: no run to show for it.
+        journal.discard(Which::Local);
     }
-    if backed_up > 0 || failed > 0 {
+    let here = summary
+        .places
+        .get(&Place::Local)
+        .cloned()
+        .unwrap_or_default();
+    let failed = here.failed + here.left;
+    if here.verified > 0 || failed > 0 {
         crate::log_info!(
-            "save backup: {backed_up} saved, {failed} failed ({})",
+            "save backup: {} saved, {failed} failed ({})",
+            here.verified,
             s.dir
         );
     }
+    let decrypted = decrypted.into_inner();
     set_status(|st| {
         st.running = false;
         st.last_at = now_ms();
-        st.backed_up = backed_up;
-        st.failed = failed;
-        st.last_error = last_error;
-        if let Some(c) = copies.filter(|c| c.status.at > 0) {
-            st.console_copy = Some(c.status);
+        st.backed_up = here.verified;
+        st.failed = failed.max(summary.read_failed);
+        st.last_error = summary
+            .first_error
+            .clone()
+            .or(here.first_error)
+            .or_else(|| summary.reason.clone());
+        if let Some(c) = drive.map(|d| d.copies.status).filter(|c| c.at > 0) {
+            st.console_copy = Some(c);
         }
         if decrypted.at > 0 {
             st.decrypted = Some(decrypted);
@@ -2251,6 +2386,8 @@ pub struct SettingsPatch {
     pub game_names: Option<bool>,
     /// By user: a decrypted copy with each automatic backup of a PS5 save.
     pub decrypted_copy: Option<bool>,
+    /// Folders on the PS5 backed up with the saves (#899), each checked by `save_folders`.
+    pub folders: Option<Vec<String>>,
 }
 
 /// `hosts` with the additions and removals made, tidy.
@@ -2328,6 +2465,12 @@ pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
     if let Some(d) = patch.decrypted_copy {
         next.decrypted_copy = d;
     }
+    if let Some(f) = patch.folders {
+        match crate::save_folders::folders_ok(&f) {
+            Ok(f) => next.folders = f,
+            Err(e) => return json_error(StatusCode::BAD_REQUEST, e),
+        }
+    }
     if let Some(h) = patch.hosts {
         next.hosts = hosts_with(h, Vec::new(), &[]);
     }
@@ -2381,7 +2524,7 @@ fn pass_due_after_change(before: &Settings, next: &Settings) -> bool {
 /// `POST /api/save-backup/run` — a pass now (in the background).
 pub async fn post_run() -> Response {
     tokio::task::spawn_blocking(|| {
-        if let Err(e) = run_pass() {
+        if let Err(e) = local_run("manual", None) {
             crate::log_warn!("save backup: {e}");
         }
     });

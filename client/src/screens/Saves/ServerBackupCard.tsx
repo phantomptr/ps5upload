@@ -23,6 +23,8 @@ import { useTr } from "../../state/lang";
 import { userHex } from "./saveUsers";
 import { ConsoleCopyChoice, useConsoleDrives } from "./AutoBackupCard";
 import { BackupLayoutChoice, layoutSupported } from "./BackupLayoutChoice";
+import { BackupProgressModal, BackupRunBar, useBackupRuns } from "./BackupProgress";
+import { FolderBackupChoice, foldersSupported } from "./FolderBackupChoice";
 
 /** Backups to a network share (#592): where, when (every few hours or after a game is closed),
  *  which consoles and users, and how the last one went. The engine runs them and verifies each
@@ -39,6 +41,7 @@ export default function ServerBackupCard({
   const loadConnections = useConnectionsStore((s) => s.load);
   const profiles = useRosterStore((s) => s.profiles);
   const [server, setServer] = useState("");
+  const [progressOpen, setProgressOpen] = useState(false);
   const copySupported = serverConsoleCopySupported(settings) && !!settings?.target;
   const consoleDrives = useConsoleDrives(copySupported);
 
@@ -52,6 +55,8 @@ export default function ServerBackupCard({
     const id = window.setInterval(() => void refresh(), 3000);
     return () => window.clearInterval(id);
   }, [running, refresh]);
+  // The last run's record (#895): asked again whenever a run starts or ends.
+  const runs = useBackupRuns("share", false, `${running}-${status?.last_at ?? 0}`);
   const targetConn = settings?.target ? parseRemotePath(settings.target)?.connectionId : undefined;
   // The saved folder's server is shown when it is loaded or changes. Not on every change of
   // `server`: that put the list back on it the moment another server was picked, so the folder
@@ -237,6 +242,15 @@ export default function ServerBackupCard({
               onChange={(patch) => void set(patch)}
             />
           )}
+          {foldersSupported(settings) && (
+            <FolderBackupChoice
+              testId="server-save-backup-folders"
+              folders={settings.folders ?? []}
+              onChange={(folders) => void set({ folders })}
+              from="share"
+              driveCopies={!!settings.console_drive}
+            />
+          )}
           {copySupported && (
             <ConsoleCopyChoice
               testId="server-save-backup-console"
@@ -317,7 +331,18 @@ export default function ServerBackupCard({
           {settings.mode === "interval" && nextAt !== null && nextAt > 0 && (
             <p>{tr("saves_server_next", { when: formatDate(new Date(nextAt)) }, "Next: {when}")}</p>
           )}
+          <BackupRunBar
+            which="share"
+            runs={runs}
+            running={running}
+            onOpen={() => setProgressOpen(true)}
+            onStarted={() => void refresh()}
+            testId="server-save-backup-run"
+          />
         </div>
+      )}
+      {progressOpen && (
+        <BackupProgressModal which="share" open onClose={() => setProgressOpen(false)} owners={owners} />
       )}
     </section>
   );
