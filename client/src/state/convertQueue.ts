@@ -9,7 +9,7 @@ import { create } from "zustand";
 import type { AmprLz4Options, FfpfscLevel, FpkgCompression, ImageFormat, ZstdPacks } from "../api/fpkg";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { useUploadSettingsStore } from "./uploadSettings";
-import type { AmprEmuBuild } from "./convertPrefs";
+import type { AmprEmuBuild, ZstdRuntime } from "./convertPrefs";
 
 export type ConvertThen = "keep" | "stream" | "upload";
 export type ConvertStatus = "pending" | "running" | "installing" | "handed" | "done" | "failed" | "cancelled";
@@ -40,6 +40,88 @@ export function imageBuildWith(
   lz4: AmprLz4Options | undefined,
 ): Extract<ConvertBuild, { kind: "image" }> {
   return lz4 ? { ...build, lz4 } : build;
+}
+
+/** A build's asset packs, whichever field holds them (an image's `lz4` carries zstd packs too,
+ *  a folder has `zstd` and `lz4`): what a queued game's options show and change (#905). */
+export interface BuildPacks {
+  kind: "none" | "lz4" | "zstd";
+  /** The zstd level, or the LZ4 level when one was set. */
+  level?: number;
+  runtime?: ZstdRuntime;
+  profileToml?: string;
+  installRuntime?: boolean;
+}
+
+/** zstd packs are made at this level unless another was picked (Convert's ③ starts there). */
+export const DEFAULT_ZSTD_LEVEL = 5;
+
+/** An object without its undefined fields: what is saved and compared stays plain. */
+function plain<T extends object>(o: T): T {
+  return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
+}
+
+export function packsOf(build: ConvertBuild | undefined): BuildPacks {
+  if (build?.kind === "image" && build.lz4) {
+    const l = build.lz4;
+    return l.zstdLevel
+      ? plain({ kind: "zstd" as const, level: l.zstdLevel, runtime: l.zstdRuntime, profileToml: l.profileToml })
+      : plain({ kind: "lz4" as const, level: l.level, profileToml: l.profileToml, installRuntime: l.installRuntime });
+  }
+  if (build?.kind === "folder" && build.zstd) {
+    const z = build.zstd;
+    return plain({ kind: "zstd" as const, level: z.level, runtime: z.runtime, profileToml: z.profileToml });
+  }
+  if (build?.kind === "folder" && build.lz4) {
+    const l = build.lz4;
+    return plain({ kind: "lz4" as const, level: l.level, profileToml: l.profileToml, installRuntime: l.installRuntime });
+  }
+  return { kind: "none" };
+}
+
+/** The build with these packs in place of its own (none: no packs). Packs and "write the packs
+ *  out as plain files" are one choice, so turning packs on drops the latter; a package has none. */
+export function withPacks(build: ConvertBuild, packs: BuildPacks): ConvertBuild {
+  if (build.kind === "pkg") return build;
+  const unpack = packs.kind === "none" && build.unpackPacks ? { unpackPacks: true } : {};
+  const level = packs.level ?? DEFAULT_ZSTD_LEVEL;
+  const lz4: AmprLz4Options | undefined =
+    packs.kind === "lz4"
+      ? plain({ level: packs.level, profileToml: packs.profileToml, installRuntime: packs.installRuntime })
+      : undefined;
+  if (build.kind === "image") {
+    const packed =
+      packs.kind === "zstd" ? plain({ zstdLevel: level, zstdRuntime: packs.runtime, profileToml: packs.profileToml }) : lz4;
+    return { kind: "image", format: build.format, compress: build.compress, ...unpack, ...(packed ? { lz4: packed } : {}) };
+  }
+  return {
+    kind: "folder",
+    ...unpack,
+    ...(packs.kind === "zstd" ? { zstd: plain({ level, runtime: packs.runtime, profileToml: packs.profileToml }) } : {}),
+    ...(lz4 ? { lz4 } : {}),
+  };
+}
+
+/** The few choices a queue row shows next to its file type, so a game set up wrongly is seen
+ *  before the queue runs (#905): its asset packs, packs written out as plain files, a .ffpfsc's
+ *  level and a package's one language. */
+export type QueueTag =
+  | { kind: "zstd"; level: number }
+  | { kind: "lz4" }
+  | { kind: "unpack" }
+  | { kind: "level"; level: FfpfscLevel }
+  | { kind: "language"; code: string };
+
+export function queueTags(item: ConvertItem): QueueTag[] {
+  const tags: QueueTag[] = [];
+  const b = item.build;
+  const packs = packsOf(b);
+  if (packs.kind === "zstd") tags.push({ kind: "zstd", level: packs.level ?? DEFAULT_ZSTD_LEVEL });
+  if (packs.kind === "lz4") tags.push({ kind: "lz4" });
+  if ((b?.kind === "image" || b?.kind === "folder") && b.unpackPacks) tags.push({ kind: "unpack" });
+  if (b?.kind === "image" && b.compress && item.imageLevel) tags.push({ kind: "level", level: item.imageLevel });
+  if ((!b || b.kind === "pkg") && item.language) tags.push({ kind: "language", code: item.language });
+  return tags;
 }
 
 /** What is done after converting, as it can be done: an image is never streamed (it is

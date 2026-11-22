@@ -2,6 +2,7 @@ import { resolveSets, type FakelibSet } from "../lib/backport";
 import type { BackportPack, PackFile } from "../lib/backportPack";
 import { getEngineUrl } from "./engine";
 import { ENGINE_LONG_TIMEOUT_MS, engineFetch } from "../lib/engineFetch";
+import { discardBody } from "../lib/discardBody";
 
 /* The backport library corpus.
  *
@@ -230,7 +231,10 @@ export async function startFakelibScan(
  *  so callers must keep the last snapshot rather than re-reading it. */
 export async function pollFakelibScan(id: string): Promise<ScanProgress | null> {
   const response = await engineFetch(`${getEngineUrl()}/api/fakelibs/scan/${encodeURIComponent(id)}`);
-  if (!response.ok) return null;
+  if (!response.ok) {
+    await discardBody(response);
+    return null;
+  }
   const b = (await response.json()) as Record<string, unknown>;
   return {
     done: !!b.done,

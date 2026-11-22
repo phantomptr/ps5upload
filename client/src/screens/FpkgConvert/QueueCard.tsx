@@ -9,7 +9,13 @@ import { useState } from "react";
 import { ArrowDown, ArrowUp, Send, SlidersHorizontal, X } from "lucide-react";
 
 import { Button, Card } from "../../components";
-import { buildExtension, type ConvertItem, type ConvertItemChange } from "../../state/convertQueue";
+import {
+  buildExtension,
+  queueTags,
+  type ConvertItem,
+  type ConvertItemChange,
+  type QueueTag,
+} from "../../state/convertQueue";
 import { isArchivePasswordError } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
 import { QueueItemOptions } from "./QueueItemOptions";
@@ -92,6 +98,24 @@ export function QueueCard(p: QueueCardProps) {
     failed: tr("cq_failed", undefined, "Failed"),
     cancelled: tr("cq_cancelled", undefined, "Cancelled"),
   };
+  const tagText = (t: QueueTag): string => {
+    switch (t.kind) {
+      case "zstd":
+        return tr("cq_tag_zstd", { level: t.level }, "zstd {level}");
+      case "lz4":
+        return tr("cq_tag_lz4", undefined, "LZ4");
+      case "unpack":
+        return tr("cq_tag_unpack", undefined, "unpacked");
+      case "level":
+        return t.level === "fast"
+          ? tr("cq_tag_level_fast", undefined, "fast")
+          : t.level === "smallest"
+            ? tr("cq_tag_level_smallest", undefined, "smallest")
+            : tr("cq_tag_level_balanced", undefined, "balanced");
+      case "language":
+        return t.code;
+    }
+  };
   const pending = p.items.filter((i) => i.status === "pending").length;
   const finished = p.items.some(
     (i) => i.status === "done" || i.status === "failed" || i.status === "handed" || i.status === "cancelled",
@@ -160,6 +184,16 @@ export function QueueCard(p: QueueCardProps) {
                     >
                       {i.build?.kind === "folder" ? tr("cq_ext_folder", undefined, "folder") : buildExtension(i.build)}
                     </span>
+                    {/* The key choices, so a game set up wrongly shows before the queue runs (#905). */}
+                    {queueTags(i).map((t) => (
+                      <span
+                        key={t.kind}
+                        className="shrink-0 rounded bg-[var(--color-surface-3)] px-1.5 py-px font-mono text-[10px] text-[var(--color-muted)]"
+                        data-testid={`cq-tag-${t.kind}`}
+                      >
+                        {tagText(t)}
+                      </span>
+                    ))}
                   </div>
                   <div
                     className={`truncate text-xs ${i.status === "failed" ? "text-[var(--color-bad)]" : "text-[var(--color-muted)]"}`}

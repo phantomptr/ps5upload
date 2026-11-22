@@ -24,6 +24,7 @@ import {
   type StreamStatus,
 } from "../../lib/goLive";
 import { openExternalUrl } from "../../lib/openExternalUrl";
+import { discardBody } from "../../lib/discardBody";
 import { isMobile } from "../../lib/platform";
 import { getEngineUrl, isLoopbackUrl } from "../../state/engine";
 import { useGoLiveStore } from "../../state/goLive";
@@ -770,6 +771,7 @@ function ObsTab() {
     const poll = async () => {
       try {
         const r = await fetch(`${engineUrl}/api/ps5/rp/live/status`);
+        if (!r.ok) await discardBody(r);
         const v = r.ok ? ((await r.json()) as LiveFeedStatus) : null;
         if (!gone) setStatus(v);
       } catch {

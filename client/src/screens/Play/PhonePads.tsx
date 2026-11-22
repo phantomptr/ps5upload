@@ -4,6 +4,7 @@ import { Check, Copy, RefreshCw, Smartphone, X } from "lucide-react";
 
 import { Button } from "../../components";
 import { writeClipboard } from "../../lib/clipboard";
+import { discardBody } from "../../lib/discardBody";
 import { getEngineUrl } from "../../state/engine";
 import { useTr } from "../../state/lang";
 import { netInviteNote, NetworkChoice, saveNetwork, savedNetwork, splitByNetwork, urlHost, type NetworkKind } from "./NetworkChoice";
@@ -110,7 +111,11 @@ async function call(path: string, body?: object): Promise<PadLinkState | null> {
       headers: body ? { "Content-Type": "application/json" } : undefined,
       body: body ? JSON.stringify(body) : undefined,
     });
-    return r.ok ? readPadLink(await r.json()) : null;
+    if (!r.ok) {
+      await discardBody(r);
+      return null;
+    }
+    return readPadLink(await r.json());
   } catch {
     return null;
   }

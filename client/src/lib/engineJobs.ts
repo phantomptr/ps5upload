@@ -1,4 +1,5 @@
 import { getEngineUrl } from "../state/engine";
+import { discardBody } from "./discardBody";
 
 /**
  * The engine's own list of running jobs (`GET /api/jobs`). Only its transfers are used here: an
@@ -65,7 +66,10 @@ export async function fetchRunningJobs(): Promise<RunningEngineJob[]> {
   const timer = setTimeout(() => controller.abort(), 3000);
   try {
     const res = await fetch(`${getEngineUrl()}/api/jobs`, { signal: controller.signal });
-    if (!res.ok) return [];
+    if (!res.ok) {
+      await discardBody(res);
+      return [];
+    }
     return parseRunningJobs(await res.json());
   } catch {
     return [];

@@ -240,6 +240,40 @@ fn gate_g2_a_built_package_verifies_and_round_trips() {
     );
 }
 
+/// A dump's own PlayGo scenario is left out as a stale copy, but the package keeps the game's
+/// languages and default from it (an EU game came up in Japanese when the package declared all
+/// 31 languages, Japanese first, with en-US as the default).
+#[test]
+fn a_package_keeps_the_games_own_languages() {
+    let source_dir = TempDir::new("lang-source");
+    let output_dir = TempDir::new("lang-out");
+    write_tree(source_dir.path());
+    std::fs::write(
+        source_dir.path().join("sce_sys/playgo-scenario.json"),
+        br#"{"scenarioDefaultLanguage":"en-GB","chunkDefaultLanguage":"en-GB","chunkSupportedLanguages":["en-GB","fr-FR","de-DE"]}"#,
+    )
+    .unwrap();
+    let request = BuildRequest {
+        time: Some((1_700_000_000, 0)),
+        seed: Some([7; 16]),
+        ..BuildRequest::new(source_dir.path(), output_dir.path())
+    };
+    let report = build::build(&request, &mut |_| {}).unwrap();
+    assert!(report.verify.ok());
+    let mut pkg = PkgFile::open(&report.path).unwrap();
+    let head = pkg.read_at(0, fih::HEADER_LEN).unwrap();
+    let parsed = fih::parse(&head).unwrap();
+    let container = cnt::read(&mut pkg, parsed.cnt_offset).unwrap();
+    let entry = container.entry(cnt::ids::PLAYGO_SCENARIO_JSON).unwrap();
+    let v: serde_json::Value = serde_json::from_slice(container.payload(entry)).unwrap();
+    assert_eq!(v["chunkDefaultLanguage"], "en-GB");
+    assert_eq!(v["scenarioDefaultLanguage"], "en-GB");
+    assert_eq!(
+        v["chunkSupportedLanguages"],
+        serde_json::json!(["en-GB", "fr-FR", "de-DE"])
+    );
+}
+
 #[test]
 fn a_second_build_reports_warnings_but_still_verifies() {
     let source_dir = TempDir::new("warn-source");
