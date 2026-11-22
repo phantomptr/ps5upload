@@ -332,6 +332,7 @@ webui_tile_result_t webui_tile_settle_with(const webui_tile_sweep_ops_t *o, int 
 #include "power_phase.h"
 #include "proc_identity.h"
 #include "register.h"
+#include "start_trace.h"
 #include "unregister_outcome.h"
 #include "webui_settings.h"
 
@@ -557,7 +558,9 @@ int webui_tile_ensure(uint16_t port, const char **why) {
     /* First: a removal had the icon keeper keep PSUP00001 hidden, and the register below changes
      * app.db, which wakes the keeper (seen on the Phat: it hid the new icon mid-register). */
     icon_keeper_note(WEBUI_TILE_TITLE_ID, 0);
+    start_trace("TILE_ENSURE_BEGIN");
     rc = webui_tile_ensure_with(&ops, &a, &reason);
+    start_tracef("TILE_ENSURE_END rc=%d planned=%s", rc, tile_action_name(a));
     if (rc == 0) {
         tile_now_registered();
         fprintf(stderr, "webui tile: ensure ok (planned: %s)\n", tile_action_name(a));

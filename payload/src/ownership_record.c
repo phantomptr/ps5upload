@@ -70,3 +70,25 @@ void ownership_record_merge(ownership_rec_t *fresh, const ownership_rec_t *snap)
     if (fresh->started == 0) fresh->started = snap->started;
     if (fresh->instance_id == 0) fresh->instance_id = snap->instance_id;
 }
+
+int ownership_exiting_note_current(const ownership_rec_t *exiting, int exiting_complete, uint64_t boottime) {
+    return exiting && exiting_complete && exiting->pid > 0 && exiting->started != 0 && boottime != 0 &&
+           exiting->started >= boottime;
+}
+
+int ownership_prior_pick(const ownership_rec_t *record, const ownership_rec_t *exiting, int exiting_complete,
+                         uint64_t boottime, int self_pid, ownership_rec_t *out) {
+    memset(out, 0, sizeof *out);
+    if (record && record->pid > 0 && record->pid != self_pid) {
+        *out = *record;
+        return OWNERSHIP_PRIOR_RECORD;
+    }
+    /* Only a whole note of this boot, of another process. The note outlives every clean exit (and
+     * a reboot), and its pid may since belong to anything: one from an earlier boot is never
+     * waited on. */
+    if (ownership_exiting_note_current(exiting, exiting_complete, boottime) && exiting->pid != self_pid) {
+        *out = *exiting;
+        return OWNERSHIP_PRIOR_EXITING;
+    }
+    return OWNERSHIP_PRIOR_NONE;
+}

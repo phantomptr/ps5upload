@@ -96,6 +96,19 @@ int runtime_sony_wait_pid(void);
  * indistinguishable from `killed_externally` to the next instance). May be
  * NULL to skip that step. */
 void runtime_arm_shutdown_watchdog(const runtime_state_t *state, int exit_code);
+/* Says, in <runtime dir>/exiting.txt (the ownership record's format), that this instance is
+ * stopping. Written at the start of the stop, before anything is torn down: the ownership record
+ * is removed at the END of the stop, and a helper started in between (the app stops the old one
+ * first, then sends the new one) found no record, so it did not wait for this process to be gone
+ * before it started its own Sony calls and mounts (#903). The next instance's reap reads it when
+ * the ownership record is gone. */
+void runtime_note_exiting(const runtime_state_t *state);
+/* The exit barrier (#903): takes sony_api_lock and keeps it until the process is gone, so the
+ * exit cuts no Sony call any other thread of ours is making (a call still running is waited for;
+ * the exit watchdog bounds the wait), then takes the kernel R/W lock for at most 2 s. Main calls
+ * it once, after ava1_payload_stop. The exit watchdog then knows the lock is held for the exit,
+ * not by a call. */
+void runtime_exit_barrier(void);
 int runtime_ensure_directories(void);
 /* 2.2.52 Tier-1 staging sweep. Removes *.pkg files in
  * PS5UPLOAD2_PKG_TEMP_DIR with mtime older than 24 h — orphans
