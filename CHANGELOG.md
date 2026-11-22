@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.17
 
 **Fixes**
 - **Copying files into a running game's temporary folder works (#889).** Some games' add-on guides have you copy folders into the game's temporary folder on the internal drive while the game runs (`/app_temp0/...`). PS5Upload refused that with "console refused the transfer (9)", because that folder was not on the PS5 helper's list of places it may write to. It is now. Not yet tried on a console.
