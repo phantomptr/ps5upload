@@ -2155,6 +2155,8 @@ engine_err_hint_windows: "常见原因:SmartScreen 或杀毒软件拦截了引�
 engine_err_hint_macos: "常见原因:安全或防火墙软件(Little Snitch、LuLu、带网页防护的杀毒软件)拦截了 ps5upload-engine。请允许它并重启应用。",
 engine_err_hint_other: "常见原因:防火墙或安全工具拦截了这台电脑到 ps5upload-engine 的连接,或者没有空闲端口。",
 engine_err_details: "最后的错误:{error}。日志:{log}",
+engine_err_app_control: "Windows 阻止了 PS5Upload 的引擎：智能应用控制（Smart App Control）或应用控制策略会拦截没有代码签名的程序，而此版本尚未签名。如果是单位或学校的电脑，请让管理员允许 PS5Upload 的文件夹。否则可以在“Windows 安全中心 > 应用和浏览器控制”中关闭智能应用控制（关闭后只有重置 Windows 才能重新开启），或在另一台电脑上运行 PS5Upload 的 Docker 版本，通过浏览器使用。",
+engine_err_virus: "Windows 安全中心或你的杀毒软件把 PS5Upload 的引擎当作威胁拦截了。没有代码签名的版本有时会被误报。请从隔离区恢复 ps5upload-engine 或允许它，然后重启应用。",
 engine_err_remote: "位于 {url} 的引擎未在 {seconds} 秒内响应。请检查它是否正在运行且可以连接。",
 engine_err_exited_status: "引擎在启动时停止了({detail})。日志:{log}",
 engine_err_exited: "引擎在启动时停止了。日志:{log}",

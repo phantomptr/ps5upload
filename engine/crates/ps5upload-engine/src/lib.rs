@@ -14633,6 +14633,11 @@ pub async fn run_cli() {
              set PS5UPLOAD_PKG_HOST_IP to this host's LAN IP."
         );
     }
+    // A mounted folder the engine's user cannot write (or read) fails later as a vague error in
+    // whatever touched it first. Name it, the user, and the fix, at startup.
+    for problem in state_io::startup_folder_problems() {
+        eprintln!("[ps5upload-engine] WARNING: {problem}");
+    }
     let allow_raw = std::env::var("PS5UPLOAD_ALLOW_IP").unwrap_or_default();
     let allow_ips = parse_allow_ips(&allow_raw);
     let invalid = invalid_allow_ip_entries(&allow_raw);

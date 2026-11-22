@@ -10,6 +10,12 @@ What's new in ps5upload, written for humans.
 - **The check on the PS5 after an upload shows its progress (#873).** Before a big file counts as done, the PS5 reads it back from its drive to check it. When the drive can't keep up while the file is still arriving, part of that check is left for after the last byte, which on a 70–160 GB game can take several minutes, and the row said the PS5 had reported no progress. It now shows "Checking on the PS5: X of Y" with the time left, and the no-progress warning stays off while the check moves.
 - **A stopped upload that you resume isn't checked twice (#873).** The part the PS5 had already checked before the Stop isn't read again, as long as the helper wasn't restarted in between and the file hasn't changed since. Tried on a PS5: a 20 GB upload stopped at 10 GB and resumed checked only the new 10 GB.
 
+**Windows**
+- **A clear message when Windows blocks the engine (#914).** Smart App Control and app-control policies only run code-signed programs, and PS5Upload's Windows builds aren't signed yet, so the engine couldn't start and the app showed a generic hint. It now says Windows blocked it and what you can do: ask your administrator to allow the PS5Upload folder, turn Smart App Control off, or use the Docker version from a browser. RAR extraction blocked the same way says so too.
+
+**Docker**
+- **Folders the container can't use are named at startup.** If the data folder, the staging folder or a browse folder isn't writable (or readable) by the container's user, the log says which folder, that the container runs as user 65532, and the `chown` command that fixes it. The health check's data folder line gives the same fix.
+
 **Other**
 - **Clear all in the notification bell (#911).** Thanks @Dang3rZone.
 - **Security:** updated the `url` library for a newly published advisory (RUSTSEC-2026-0592).

@@ -2035,6 +2035,8 @@ engine_err_hint_windows: "Common causes: SmartScreen or an antivirus blocked the
 engine_err_hint_macos: "Common cause: security or firewall software (Little Snitch, LuLu, an antivirus with web protection) blocks ps5upload-engine. Allow it and restart the app.",
 engine_err_hint_other: "Common causes: a firewall or security tool blocks this computer's own connections to ps5upload-engine, or no port was free.",
 engine_err_details: "Last error: {error}. Log: {log}",
+engine_err_app_control: "Windows blocked PS5Upload's engine: Smart App Control or an app-control policy stops programs that aren't code-signed, and this build isn't signed yet. On a work or school PC, ask your administrator to allow the PS5Upload folder. Otherwise you can turn Smart App Control off in Windows Security > App & browser control (once off, it can only be turned back on by resetting Windows), or run PS5Upload's Docker version on another computer and use it from a browser.",
+engine_err_virus: "Windows Security or your antivirus stopped PS5Upload's engine as a threat. Builds that aren't code-signed are sometimes flagged by mistake. Restore ps5upload-engine from quarantine or allow it, then restart the app.",
 engine_err_remote: "The engine at {url} didn't answer within {seconds} seconds. Check that it is running and reachable.",
 engine_err_exited_status: "The engine stopped while starting ({detail}). Log: {log}",
 engine_err_exited: "The engine stopped while starting. Log: {log}",

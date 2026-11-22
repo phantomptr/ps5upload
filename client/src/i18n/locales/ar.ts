@@ -2196,6 +2196,8 @@ engine_err_hint_windows: "الأسباب الشائعة: حظر SmartScreen أو
 engine_err_hint_macos: "السبب الشائع: برنامج أمان أو جدار حماية (Little Snitch أو LuLu أو مضاد فيروسات بحماية الويب) يحظر ps5upload-engine. اسمح له ثم أعد تشغيل التطبيق.",
 engine_err_hint_other: "الأسباب الشائعة: جدار حماية أو أداة أمان تحظر اتصالات هذا الكمبيوتر بنفسه مع ps5upload-engine، أو عدم توفر منفذ حر.",
 engine_err_details: "آخر خطأ: {error}. السجل: {log}",
+engine_err_app_control: "منع Windows محرك PS5Upload: يوقف Smart App Control أو سياسة التحكم في التطبيقات البرامج غير الموقّعة رقمياً، وهذا الإصدار غير موقّع بعد. على جهاز العمل أو المدرسة، اطلب من المسؤول السماح بمجلد PS5Upload. وإلا يمكنك إيقاف Smart App Control من أمان Windows > التحكم في التطبيقات والمستعرض (بعد إيقافه لا يمكن تشغيله مجدداً إلا بإعادة تعيين Windows)، أو تشغيل نسخة Docker من PS5Upload على كمبيوتر آخر واستخدامها من المتصفح.",
+engine_err_virus: "أوقف أمان Windows أو برنامج مكافحة الفيروسات محرك PS5Upload باعتباره تهديداً. أحياناً تُصنَّف الإصدارات غير الموقّعة رقمياً خطأً. استعد ps5upload-engine من العزل أو اسمح به، ثم أعد تشغيل التطبيق.",
 engine_err_remote: "لم يردّ المحرك على {url} خلال {seconds} ثانية. تأكد أنه يعمل ويمكن الوصول إليه.",
 engine_err_exited_status: "توقف المحرك أثناء البدء ({detail}). السجل: {log}",
 engine_err_exited: "توقف المحرك أثناء البدء. السجل: {log}",

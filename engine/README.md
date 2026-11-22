@@ -189,5 +189,12 @@ as, and the owner it found (#361). Fix it one of two ways:
   for example `user: "1234:77777"`; or
 - `chown -R 65532:65532 <host folder>` for the mount.
 
+The same goes for every folder you mount: `/data` and `PS5UPLOAD_STAGING_DIR` must be writable,
+and the folders in `PS5UPLOAD_BROWSE_ROOTS` readable, by that user. On ZimaOS, CasaOS and similar
+dashboards the app's folders are often created by root, so `chown -R 65532:65532` both the data
+folder and the media folder. The engine checks these folders when it starts and prints a
+`WARNING:` line in the container log for each one it cannot use, naming the folder, the user it
+runs as and the command to fix it; the console health check shows the data folder too.
+
 `USER_ID` / `GROUP_ID` environment variables are not read by these images; use `user:`.
 The account must also be allowed to write that folder in the NAS's own permission settings.

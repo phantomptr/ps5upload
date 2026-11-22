@@ -2198,6 +2198,8 @@ engine_err_hint_windows: "Nguyên nhân thường gặp: SmartScreen hoặc ph�
 engine_err_hint_macos: "Nguyên nhân thường gặp: phần mềm bảo mật hoặc tường lửa (Little Snitch, LuLu, phần mềm diệt virus có bảo vệ web) đang chặn ps5upload-engine. Hãy cho phép rồi khởi động lại ứng dụng.",
 engine_err_hint_other: "Nguyên nhân thường gặp: tường lửa hoặc công cụ bảo mật chặn kết nối của máy tính tới ps5upload-engine, hoặc không còn cổng trống.",
 engine_err_details: "Lỗi gần nhất: {error}. Nhật ký: {log}",
+engine_err_app_control: "Windows đã chặn engine của PS5Upload: Smart App Control hoặc chính sách kiểm soát ứng dụng chặn các chương trình không có chữ ký mã, và bản dựng này chưa được ký. Trên máy tính cơ quan hoặc trường học, hãy nhờ quản trị viên cho phép thư mục PS5Upload. Nếu không, bạn có thể tắt Smart App Control trong Bảo mật Windows > Kiểm soát ứng dụng và trình duyệt (đã tắt thì chỉ bật lại được bằng cách đặt lại Windows), hoặc chạy bản Docker của PS5Upload trên máy khác và dùng qua trình duyệt.",
+engine_err_virus: "Bảo mật Windows hoặc phần mềm diệt virus đã chặn engine của PS5Upload vì cho là mối đe dọa. Các bản dựng không có chữ ký mã đôi khi bị nhận nhầm. Hãy khôi phục ps5upload-engine từ khu cách ly hoặc cho phép nó, rồi khởi động lại ứng dụng.",
 engine_err_remote: "Engine tại {url} không trả lời trong {seconds} giây. Hãy kiểm tra engine đang chạy và kết nối được.",
 engine_err_exited_status: "Engine đã dừng khi khởi động ({detail}). Nhật ký: {log}",
 engine_err_exited: "Engine đã dừng khi khởi động. Nhật ký: {log}",

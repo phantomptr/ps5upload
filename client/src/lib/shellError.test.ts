@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { shellErrorCode, shellErrorText } from "./shellError";
+import { shellErrorCode, shellErrorText, windowsBlock } from "./shellError";
 
 // What `useTr()` does with a key the catalogue has not got: the fallback, filled.
 const tr = (_key: string, vars: Record<string, string | number> | undefined, fallback: string) =>
@@ -47,6 +47,25 @@ describe("shellErrorText", () => {
       new Date(at * 1000).toLocaleTimeString(),
     );
     expect(shellErrorText('{"code":"update_rate_limited","reset_at":0}', tr)).toContain("in a while");
+  });
+
+  it("says when Windows refused to run the engine, and keeps the raw error (#914)", () => {
+    const sac =
+      "engine failed to start: spawning engine: C:\\Users\\x\\AppData\\Local\\com.phantomptr.ps5upload\\engine\\ps5upload-engine.exe: An Application Control policy has blocked this file. (os error 4551)";
+    const text = shellErrorText(sac, tr);
+    expect(text).toContain("Smart App Control");
+    expect(text).toContain("administrator");
+    expect(text).toContain("(os error 4551)");
+    expect(windowsBlock(sac)).toBe("app_control");
+    expect(windowsBlock("spawning engine: x: This program is blocked by group policy. (os error 1260)")).toBe(
+      "app_control",
+    );
+    expect(windowsBlock("spawning engine: x: Operation did not complete successfully because the file contains a virus or potentially unwanted software. (os error 225)")).toBe("virus");
+    expect(shellErrorText("spawning engine: x (os error 225)", tr)).toContain("quarantine");
+    // Other numbers are not a block, and the RAR helper's refusal is already worded by the engine.
+    expect(windowsBlock("spawning engine: x (os error 2250)")).toBeNull();
+    expect(windowsBlock("Access is denied. (os error 5)")).toBeNull();
+    expect(windowsBlock("RAR extraction is blocked: ... ps5upload-unrar ... (os error 4551)")).toBeNull();
   });
 
   it("shows anything else as it is", () => {

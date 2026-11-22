@@ -1895,6 +1895,8 @@ engine_err_hint_windows: "علت‌های رایج: SmartScreen یا آنتی‌
 engine_err_hint_macos: "علت رایج: نرم‌افزار امنیتی یا دیوار آتش (Little Snitch، LuLu، آنتی‌ویروس با محافظت وب) ps5upload-engine را مسدود می‌کند. به آن اجازه دهید و برنامه را دوباره باز کنید.",
 engine_err_hint_other: "علت‌های رایج: دیوار آتش یا ابزار امنیتی اتصال‌های این رایانه به ps5upload-engine را مسدود می‌کند، یا پورت آزادی نبود.",
 engine_err_details: "آخرین خطا: {error}. گزارش: {log}",
+engine_err_app_control: "Windows موتور PS5Upload را مسدود کرد: Smart App Control یا یک سیاست کنترل برنامه، برنامه‌های بدون امضای کد را متوقف می‌کند و این نسخه هنوز امضا نشده است. در رایانهٔ محل کار یا مدرسه، از مدیر سیستم بخواهید پوشهٔ PS5Upload را مجاز کند. در غیر این صورت می‌توانید Smart App Control را در Windows Security > App & browser control خاموش کنید (پس از خاموش شدن، فقط با بازنشانی Windows دوباره روشن می‌شود)، یا نسخهٔ Docker برنامهٔ PS5Upload را روی رایانهٔ دیگری اجرا کرده و از مرورگر استفاده کنید.",
+engine_err_virus: "Windows Security یا آنتی‌ویروس شما موتور PS5Upload را به‌عنوان تهدید متوقف کرد. نسخه‌های بدون امضای کد گاهی به اشتباه شناسایی می‌شوند. ps5upload-engine را از قرنطینه بازگردانید یا مجاز کنید، سپس برنامه را دوباره اجرا کنید.",
 engine_err_remote: "موتور در {url} طی {seconds} ثانیه پاسخ نداد. بررسی کنید که در حال اجرا و در دسترس باشد.",
 engine_err_exited_status: "موتور هنگام راه‌اندازی متوقف شد ({detail}). گزارش: {log}",
 engine_err_exited: "موتور هنگام راه‌اندازی متوقف شد. گزارش: {log}",

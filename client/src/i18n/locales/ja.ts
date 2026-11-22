@@ -2215,6 +2215,8 @@ engine_err_hint_windows: "よくある原因: SmartScreen やウイルス対策�
 engine_err_hint_macos: "よくある原因: セキュリティソフトやファイアウォール (Little Snitch、LuLu、Web 保護付きウイルス対策ソフト) が ps5upload-engine をブロックしています。許可してアプリを再起動してください。",
 engine_err_hint_other: "よくある原因: ファイアウォールやセキュリティツールがこのコンピューターから ps5upload-engine への接続をブロックしている、または空きポートがなかった。",
 engine_err_details: "最後のエラー: {error}。ログ: {log}",
+engine_err_app_control: "Windows が PS5Upload のエンジンをブロックしました。Smart App Control またはアプリ制御ポリシーはコード署名のないプログラムを止めます。このビルドはまだ署名されていません。職場や学校の PC では、管理者に PS5Upload のフォルダーを許可するよう依頼してください。それ以外では、Windows セキュリティ > アプリとブラウザーの制御 で Smart App Control をオフにできます（一度オフにすると Windows をリセットしない限りオンに戻せません）。または別のコンピューターで PS5Upload の Docker 版を動かし、ブラウザーから使ってください。",
+engine_err_virus: "Windows セキュリティまたはウイルス対策ソフトが PS5Upload のエンジンを脅威として止めました。コード署名のないビルドは誤って検出されることがあります。ps5upload-engine を検疫から復元するか許可して、アプリを再起動してください。",
 engine_err_remote: "{url} のエンジンが {seconds} 秒以内に応答しませんでした。動作していて接続できるか確認してください。",
 engine_err_exited_status: "起動中にエンジンが停止しました ({detail})。ログ: {log}",
 engine_err_exited: "起動中にエンジンが停止しました。ログ: {log}",

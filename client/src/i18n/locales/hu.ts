@@ -1717,6 +1717,8 @@ engine_err_hint_windows: "Gyakori okok: a SmartScreen vagy egy vírusirtó letil
 engine_err_hint_macos: "Gyakori ok: biztonsági vagy tűzfalszoftver (Little Snitch, LuLu, webvédelemmel rendelkező vírusirtó) tiltja a ps5upload-engine programot. Engedélyezd, majd indítsd újra az alkalmazást.",
 engine_err_hint_other: "Gyakori okok: egy tűzfal vagy biztonsági eszköz tiltja a számítógép kapcsolatait a ps5upload-engine felé, vagy nem volt szabad port.",
 engine_err_details: "Utolsó hiba: {error}. Napló: {log}",
+engine_err_app_control: "A Windows letiltotta a PS5Upload motorját: a Smart App Control vagy egy alkalmazásvezérlési házirend leállítja a kódaláírás nélküli programokat, és ez a kiadás még nincs aláírva. Munkahelyi vagy iskolai gépen kérd meg a rendszergazdát, hogy engedélyezze a PS5Upload mappáját. Egyébként a Smart App Control kikapcsolható a Windows biztonság > Alkalmazás- és böngészővezérlés alatt (kikapcsolás után csak a Windows alaphelyzetbe állításával kapcsolható vissza), vagy futtasd a PS5Upload Docker-változatát egy másik gépen, és használd böngészőből.",
+engine_err_virus: "A Windows biztonság vagy a víruskereső fenyegetésként leállította a PS5Upload motorját. A kódaláírás nélküli kiadásokat néha tévesen jelölik meg. Állítsd vissza a ps5upload-engine-t a karanténból vagy engedélyezd, majd indítsd újra az alkalmazást.",
 engine_err_remote: "A(z) {url} címen lévő motor nem válaszolt {seconds} másodpercen belül. Ellenőrizd, hogy fut-e és elérhető-e.",
 engine_err_exited_status: "A motor leállt indítás közben ({detail}). Napló: {log}",
 engine_err_exited: "A motor leállt indítás közben. Napló: {log}",

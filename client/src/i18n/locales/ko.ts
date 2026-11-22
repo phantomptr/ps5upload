@@ -2213,6 +2213,8 @@ engine_err_hint_windows: "흔한 원인: SmartScreen이나 백신이 엔진 프�
 engine_err_hint_macos: "흔한 원인: 보안 또는 방화벽 소프트웨어(Little Snitch, LuLu, 웹 보호 기능이 있는 백신)가 ps5upload-engine을 차단합니다. 허용한 뒤 앱을 다시 시작하세요.",
 engine_err_hint_other: "흔한 원인: 방화벽이나 보안 도구가 이 컴퓨터에서 ps5upload-engine으로의 연결을 차단하거나, 빈 포트가 없었습니다.",
 engine_err_details: "마지막 오류: {error}. 로그: {log}",
+engine_err_app_control: "Windows가 PS5Upload 엔진을 차단했습니다. Smart App Control 또는 앱 제어 정책은 코드 서명이 없는 프로그램을 막는데, 이 빌드는 아직 서명되지 않았습니다. 회사나 학교 PC라면 관리자에게 PS5Upload 폴더를 허용해 달라고 요청하세요. 그렇지 않으면 Windows 보안 > 앱 및 브라우저 컨트롤에서 Smart App Control을 끌 수 있습니다(한 번 끄면 Windows를 초기화해야만 다시 켤 수 있음). 또는 다른 컴퓨터에서 PS5Upload Docker 버전을 실행해 브라우저로 사용하세요.",
+engine_err_virus: "Windows 보안 또는 백신이 PS5Upload 엔진을 위협으로 판단해 중지했습니다. 코드 서명이 없는 빌드는 가끔 잘못 탐지됩니다. 격리 항목에서 ps5upload-engine을 복원하거나 허용한 뒤 앱을 다시 시작하세요.",
 engine_err_remote: "{url}의 엔진이 {seconds}초 안에 응답하지 않았습니다. 실행 중이고 연결할 수 있는지 확인하세요.",
 engine_err_exited_status: "시작 중에 엔진이 멈췄습니다({detail}). 로그: {log}",
 engine_err_exited: "시작 중에 엔진이 멈췄습니다. 로그: {log}",

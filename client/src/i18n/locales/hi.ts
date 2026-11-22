@@ -2210,6 +2210,8 @@ engine_err_hint_windows: "आम कारण: SmartScreen या एंटी�
 engine_err_hint_macos: "आम कारण: सुरक्षा या फ़ायरवॉल सॉफ़्टवेयर (Little Snitch, LuLu, वेब सुरक्षा वाला एंटीवायरस) ps5upload-engine को रोक रहा है। इसे अनुमति दें और ऐप फिर से शुरू करें।",
 engine_err_hint_other: "आम कारण: फ़ायरवॉल या सुरक्षा टूल ps5upload-engine से इस कंप्यूटर के अपने कनेक्शन रोक रहा है, या कोई पोर्ट ख़ाली नहीं था।",
 engine_err_details: "आख़िरी त्रुटि: {error}। लॉग: {log}",
+engine_err_app_control: "Windows ने PS5Upload का इंजन रोक दिया: Smart App Control या कोई ऐप-कंट्रोल नीति बिना कोड-साइन वाले प्रोग्राम रोकती है, और यह बिल्ड अभी साइन नहीं है। ऑफ़िस या स्कूल के पीसी पर अपने एडमिन से PS5Upload फ़ोल्डर को अनुमति देने को कहें। नहीं तो Windows Security > App & browser control में Smart App Control बंद कर सकते हैं (एक बार बंद करने पर Windows रीसेट किए बिना फिर चालू नहीं होता), या किसी दूसरे कंप्यूटर पर PS5Upload का Docker संस्करण चलाकर ब्राउज़र से इस्तेमाल करें।",
+engine_err_virus: "Windows Security या आपके एंटीवायरस ने PS5Upload के इंजन को खतरा मानकर रोक दिया। बिना कोड-साइन वाले बिल्ड कभी-कभी गलती से पकड़े जाते हैं। क्वारंटाइन से ps5upload-engine वापस लाएँ या उसे अनुमति दें, फिर ऐप दोबारा शुरू करें।",
 engine_err_remote: "{url} पर इंजन ने {seconds} सेकंड में जवाब नहीं दिया। देखें कि वह चल रहा है और पहुँच में है।",
 engine_err_exited_status: "शुरू होते समय इंजन रुक गया ({detail})। लॉग: {log}",
 engine_err_exited: "शुरू होते समय इंजन रुक गया। लॉग: {log}",

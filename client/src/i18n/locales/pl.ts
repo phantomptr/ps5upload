@@ -1608,6 +1608,8 @@ engine_err_hint_windows: "Częste przyczyny: SmartScreen lub antywirus zablokowa
 engine_err_hint_macos: "Częsta przyczyna: oprogramowanie zabezpieczające lub zapora (Little Snitch, LuLu, antywirus z ochroną sieci) blokuje ps5upload-engine. Zezwól na to i uruchom aplikację ponownie.",
 engine_err_hint_other: "Częste przyczyny: zapora lub narzędzie zabezpieczające blokuje połączenia komputera z ps5upload-engine albo żaden port nie był wolny.",
 engine_err_details: "Ostatni błąd: {error}. Dziennik: {log}",
+engine_err_app_control: "Windows zablokował silnik PS5Upload: Smart App Control lub zasada kontroli aplikacji zatrzymuje programy bez podpisu kodu, a ta wersja nie jest jeszcze podpisana. Na komputerze służbowym lub szkolnym poproś administratora o zezwolenie na folder PS5Upload. W przeciwnym razie możesz wyłączyć Smart App Control w Zabezpieczenia Windows > Kontrola aplikacji i przeglądarki (po wyłączeniu da się go włączyć ponownie tylko przez zresetowanie Windows) albo uruchomić wersję Docker PS5Upload na innym komputerze i korzystać z niej w przeglądarce.",
+engine_err_virus: "Zabezpieczenia Windows lub antywirus zatrzymały silnik PS5Upload jako zagrożenie. Wersje bez podpisu kodu bywają oznaczane omyłkowo. Przywróć ps5upload-engine z kwarantanny lub zezwól na niego, a potem uruchom aplikację ponownie.",
 engine_err_remote: "Silnik pod adresem {url} nie odpowiedział w ciągu {seconds} s. Sprawdź, czy działa i jest osiągalny.",
 engine_err_exited_status: "Silnik zatrzymał się podczas uruchamiania ({detail}). Dziennik: {log}",
 engine_err_exited: "Silnik zatrzymał się podczas uruchamiania. Dziennik: {log}",

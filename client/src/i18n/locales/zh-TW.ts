@@ -2149,6 +2149,8 @@ engine_err_hint_windows: "常見原因:SmartScreen 或防毒軟體封鎖了引�
 engine_err_hint_macos: "常見原因:安全性或防火牆軟體(Little Snitch、LuLu、具網頁防護的防毒軟體)封鎖了 ps5upload-engine。請允許它並重新啟動應用程式。",
 engine_err_hint_other: "常見原因:防火牆或安全性工具封鎖了這台電腦到 ps5upload-engine 的連線,或者沒有可用的連接埠。",
 engine_err_details: "最後的錯誤:{error}。記錄:{log}",
+engine_err_app_control: "Windows 封鎖了 PS5Upload 的引擎：智慧型應用程式控制（Smart App Control）或應用程式控制原則會擋下沒有程式碼簽章的程式，而此版本尚未簽章。如果是公司或學校的電腦，請管理員允許 PS5Upload 的資料夾。否則可以在「Windows 安全性 > 應用程式與瀏覽器控制」中關閉智慧型應用程式控制（關閉後只有重設 Windows 才能再開啟），或在另一台電腦上執行 PS5Upload 的 Docker 版本，透過瀏覽器使用。",
+engine_err_virus: "Windows 安全性或你的防毒軟體把 PS5Upload 的引擎當成威脅攔截了。沒有程式碼簽章的版本有時會被誤判。請從隔離區還原 ps5upload-engine 或允許它，然後重新啟動應用程式。",
 engine_err_remote: "位於 {url} 的引擎未在 {seconds} 秒內回應。請檢查它是否正在執行且可以連線。",
 engine_err_exited_status: "引擎在啟動時停止了({detail})。記錄:{log}",
 engine_err_exited: "引擎在啟動時停止了。記錄:{log}",

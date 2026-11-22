@@ -2149,6 +2149,8 @@ engine_err_hint_windows: "Causas habituales: SmartScreen o un antivirus bloqueó
 engine_err_hint_macos: "Causa habitual: un software de seguridad o cortafuegos (Little Snitch, LuLu, un antivirus con protección web) bloquea ps5upload-engine. Permítelo y reinicia la app.",
 engine_err_hint_other: "Causas habituales: un cortafuegos o una herramienta de seguridad bloquea las conexiones del ordenador con ps5upload-engine, o no había ningún puerto libre.",
 engine_err_details: "Último error: {error}. Registro: {log}",
+engine_err_app_control: "Windows bloqueó el motor de PS5Upload: Smart App Control o una directiva de control de aplicaciones detiene los programas sin firma de código, y esta versión aún no está firmada. En un PC del trabajo o de clase, pide al administrador que permita la carpeta de PS5Upload. Si no, puedes desactivar Smart App Control en Seguridad de Windows > Control de aplicaciones y navegador (una vez desactivado, solo se puede volver a activar restableciendo Windows), o ejecutar la versión Docker de PS5Upload en otro ordenador y usarla desde un navegador.",
+engine_err_virus: "Seguridad de Windows o tu antivirus detuvo el motor de PS5Upload como amenaza. Las versiones sin firma de código a veces se marcan por error. Restaura ps5upload-engine de la cuarentena o permítelo y reinicia la app.",
 engine_err_remote: "El motor en {url} no respondió en {seconds} segundos. Comprueba que esté en marcha y accesible.",
 engine_err_exited_status: "El motor se detuvo al arrancar ({detail}). Registro: {log}",
 engine_err_exited: "El motor se detuvo al arrancar. Registro: {log}",

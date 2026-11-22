@@ -2204,6 +2204,8 @@ engine_err_hint_windows: "Häufige Ursachen: SmartScreen oder ein Virenschutz ha
 engine_err_hint_macos: "Häufige Ursache: Sicherheits- oder Firewall-Software (Little Snitch, LuLu, ein Virenschutz mit Webschutz) blockiert ps5upload-engine. Erlaube es und starte die App neu.",
 engine_err_hint_other: "Häufige Ursachen: Eine Firewall oder ein Sicherheitstool blockiert die Verbindungen des Computers zu ps5upload-engine, oder kein Port war frei.",
 engine_err_details: "Letzter Fehler: {error}. Protokoll: {log}",
+engine_err_app_control: "Windows hat die Engine von PS5Upload blockiert: Smart App Control oder eine App-Steuerungsrichtlinie stoppt Programme ohne Codesignatur, und dieser Build ist noch nicht signiert. Auf einem Arbeits- oder Schul-PC bitte den Administrator, den PS5Upload-Ordner freizugeben. Sonst kannst du Smart App Control unter Windows-Sicherheit > App- & Browsersteuerung ausschalten (einmal aus, lässt es sich nur durch Zurücksetzen von Windows wieder einschalten), oder die Docker-Version von PS5Upload auf einem anderen Computer betreiben und im Browser nutzen.",
+engine_err_virus: "Windows-Sicherheit oder dein Virenschutz hat die Engine von PS5Upload als Bedrohung gestoppt. Builds ohne Codesignatur werden manchmal fälschlich erkannt. Stelle ps5upload-engine aus der Quarantäne wieder her oder erlaube es, und starte die App neu.",
 engine_err_remote: "Die Engine unter {url} hat innerhalb von {seconds} Sekunden nicht geantwortet. Prüfe, ob sie läuft und erreichbar ist.",
 engine_err_exited_status: "Die Engine hat beim Start angehalten ({detail}). Protokoll: {log}",
 engine_err_exited: "Die Engine hat beim Start angehalten. Protokoll: {log}",

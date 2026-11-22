@@ -2205,6 +2205,8 @@ engine_err_hint_windows: "Penyebab umum: SmartScreen atau antivirus memblokir pr
 engine_err_hint_macos: "Penyebab umum: perangkat lunak keamanan atau firewall (Little Snitch, LuLu, antivirus dengan perlindungan web) memblokir ps5upload-engine. Izinkan lalu mulai ulang aplikasi.",
 engine_err_hint_other: "Penyebab umum: firewall atau alat keamanan memblokir koneksi komputer ini ke ps5upload-engine, atau tidak ada port yang kosong.",
 engine_err_details: "Galat terakhir: {error}. Log: {log}",
+engine_err_app_control: "Windows memblokir mesin PS5Upload: Smart App Control atau kebijakan kontrol aplikasi menghentikan program yang tidak ditandatangani kode, dan build ini belum ditandatangani. Di PC kantor atau sekolah, minta administrator mengizinkan folder PS5Upload. Jika tidak, kamu bisa mematikan Smart App Control di Keamanan Windows > Kontrol aplikasi & browser (setelah dimatikan, hanya bisa dinyalakan lagi dengan mereset Windows), atau jalankan versi Docker PS5Upload di komputer lain dan gunakan dari browser.",
+engine_err_virus: "Keamanan Windows atau antivirus menghentikan mesin PS5Upload sebagai ancaman. Build yang tidak ditandatangani kode kadang salah ditandai. Pulihkan ps5upload-engine dari karantina atau izinkan, lalu mulai ulang aplikasi.",
 engine_err_remote: "Mesin di {url} tidak menjawab dalam {seconds} detik. Pastikan mesin berjalan dan bisa dijangkau.",
 engine_err_exited_status: "Mesin berhenti saat menyala ({detail}). Log: {log}",
 engine_err_exited: "Mesin berhenti saat menyala. Log: {log}",

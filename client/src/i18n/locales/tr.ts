@@ -2203,6 +2203,8 @@ engine_err_hint_windows: "Yaygın nedenler: SmartScreen veya bir antivirüs moto
 engine_err_hint_macos: "Yaygın neden: güvenlik veya güvenlik duvarı yazılımı (Little Snitch, LuLu, web korumalı bir antivirüs) ps5upload-engine'i engelliyor. İzin verin ve uygulamayı yeniden başlatın.",
 engine_err_hint_other: "Yaygın nedenler: bir güvenlik duvarı veya güvenlik aracı bilgisayarın ps5upload-engine'e yaptığı bağlantıları engelliyor ya da boş bağlantı noktası yoktu.",
 engine_err_details: "Son hata: {error}. Günlük: {log}",
+engine_err_app_control: "Windows, PS5Upload motorunu engelledi: Smart App Control veya bir uygulama denetimi ilkesi kod imzası olmayan programları durdurur ve bu sürüm henüz imzalı değil. İş veya okul bilgisayarındaysan yöneticinden PS5Upload klasörüne izin vermesini iste. Aksi halde Smart App Control'ü Windows Güvenliği > Uygulama ve tarayıcı denetimi altından kapatabilirsin (bir kez kapatılınca yalnızca Windows sıfırlanarak yeniden açılabilir) ya da PS5Upload'ın Docker sürümünü başka bir bilgisayarda çalıştırıp tarayıcıdan kullanabilirsin.",
+engine_err_virus: "Windows Güvenliği veya antivirüs programın PS5Upload motorunu tehdit olarak durdurdu. Kod imzası olmayan sürümler bazen yanlışlıkla işaretlenir. ps5upload-engine'i karantinadan geri yükle veya izin ver, sonra uygulamayı yeniden başlat.",
 engine_err_remote: "{url} adresindeki motor {seconds} saniye içinde yanıt vermedi. Çalıştığını ve erişilebilir olduğunu denetleyin.",
 engine_err_exited_status: "Motor başlarken durdu ({detail}). Günlük: {log}",
 engine_err_exited: "Motor başlarken durdu. Günlük: {log}",

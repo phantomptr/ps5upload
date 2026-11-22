@@ -156,9 +156,40 @@ function codedText(e: Coded, tr: Tr): string | null {
   }
 }
 
+/** Windows refusing to run the engine program at all (#914): Smart App Control or an app-control
+ *  policy (os error 4551), a group policy (1260), or antivirus (225). The release isn't
+ *  code-signed yet, and the generic "SmartScreen or an antivirus" hint sent people looking in the
+ *  wrong place. The RAR helper's refusal is worded by the engine, so it is left alone here. */
+export function windowsBlock(raw: string): "app_control" | "virus" | null {
+  if (raw.includes("ps5upload-unrar")) return null;
+  if (/os error (4551|1260)\b|Application Control policy|blocked by group policy/i.test(raw)) {
+    return "app_control";
+  }
+  if (/os error 225\b|contains a virus/i.test(raw)) return "virus";
+  return null;
+}
+
+const WINDOWS_BLOCK: Record<"app_control" | "virus", [key: string, fallback: string]> = {
+  app_control: [
+    "engine_err_app_control",
+    "Windows blocked PS5Upload's engine: Smart App Control or an app-control policy stops programs that aren't code-signed, and this build isn't signed yet. On a work or school PC, ask your administrator to allow the PS5Upload folder. Otherwise you can turn Smart App Control off in Windows Security > App & browser control (once off, it can only be turned back on by resetting Windows), or run PS5Upload's Docker version on another computer and use it from a browser.",
+  ],
+  virus: [
+    "engine_err_virus",
+    "Windows Security or your antivirus stopped PS5Upload's engine as a threat. Builds that aren't code-signed are sometimes flagged by mistake. Restore ps5upload-engine from quarantine or allow it, then restart the app.",
+  ],
+};
+
 /** What to show for an error string from a shell command: its words when the shell coded it, and
  *  any other text as it is. */
 export function shellErrorText(raw: string, tr: Tr): string {
   const coded = parse(raw);
-  return (coded && codedText(coded, tr)) ?? raw;
+  const worded = coded && codedText(coded, tr);
+  if (worded) return worded;
+  const block = windowsBlock(raw);
+  if (block) {
+    const [key, fallback] = WINDOWS_BLOCK[block];
+    return `${tr(key, undefined, fallback)} (${raw})`;
+  }
+  return raw;
 }

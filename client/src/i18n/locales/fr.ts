@@ -2212,6 +2212,8 @@ engine_err_hint_windows: "Causes fréquentes : SmartScreen ou un antivirus a blo
 engine_err_hint_macos: "Cause fréquente : un logiciel de sécurité ou un pare-feu (Little Snitch, LuLu, un antivirus avec protection web) bloque ps5upload-engine. Autorisez-le et redémarrez l'application.",
 engine_err_hint_other: "Causes fréquentes : un pare-feu ou un outil de sécurité bloque les connexions de l'ordinateur vers ps5upload-engine, ou aucun port n'était libre.",
 engine_err_details: "Dernière erreur : {error}. Journal : {log}",
+engine_err_app_control: "Windows a bloqué le moteur de PS5Upload : Smart App Control ou une stratégie de contrôle des applications arrête les programmes sans signature de code, et cette version n'est pas encore signée. Sur un PC professionnel ou scolaire, demandez à l'administrateur d'autoriser le dossier de PS5Upload. Sinon, vous pouvez désactiver Smart App Control dans Sécurité Windows > Contrôle des applications et du navigateur (une fois désactivé, il ne peut être réactivé qu'en réinitialisant Windows), ou utiliser la version Docker de PS5Upload sur un autre ordinateur, depuis un navigateur.",
+engine_err_virus: "Sécurité Windows ou votre antivirus a arrêté le moteur de PS5Upload en le prenant pour une menace. Les versions sans signature de code sont parfois signalées par erreur. Restaurez ps5upload-engine depuis la quarantaine ou autorisez-le, puis redémarrez l'app.",
 engine_err_remote: "Le moteur à l'adresse {url} n'a pas répondu en {seconds} secondes. Vérifiez qu'il tourne et qu'il est joignable.",
 engine_err_exited_status: "Le moteur s'est arrêté au démarrage ({detail}). Journal : {log}",
 engine_err_exited: "Le moteur s'est arrêté au démarrage. Journal : {log}",

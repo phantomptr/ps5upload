@@ -239,6 +239,20 @@ only needs to be done once per install.
 - If your IT policy blocks "Run anyway", unzip + right-click
   `PS5Upload.exe` → **Properties** → check **Unblock** → **OK**.
 
+**Windows** — "the engine failed to start … An Application Control policy
+has blocked this file (os error 4551)":
+- Smart App Control (or an app-control policy on a managed PC) only runs
+  code-signed programs, and Windows builds aren't signed yet, so it stops
+  the app's engine (`ps5upload-engine.exe`). The app says so when it
+  happens.
+- On a work or school PC, ask your administrator to allow the PS5Upload
+  folder (`%LOCALAPPDATA%\com.phantomptr.ps5upload`).
+- Otherwise you can turn Smart App Control off in **Windows Security** →
+  **App & browser control**. Once off, Windows can only turn it back on
+  after a reset, so decide first. Or run the Docker version
+  ([engine/README.md](engine/README.md)) on another computer and use it
+  from a browser.
+
 **Linux** — no equivalent warning. Just `chmod +x` and launch.
 
 ### System requirements

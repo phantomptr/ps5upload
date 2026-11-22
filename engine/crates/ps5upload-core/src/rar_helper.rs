@@ -134,6 +134,18 @@ impl std::fmt::Display for RarError {
 
 impl std::error::Error for RarError {}
 
+/// Windows refused to run the helper: Smart App Control or an app-control policy (4551), a group
+/// policy (1260), or antivirus (225).
+pub const BLOCKED: &str = "RAR extraction is blocked: Windows (Smart App Control, an app-control \
+policy or antivirus) stopped ps5upload-unrar from running because this build is not code-signed \
+yet. Ask your administrator to allow the PS5Upload folder, or extract the archive first";
+
+/// Whether a spawn failure's OS code is Windows refusing to run the program. Only on Windows:
+/// the numbers mean nothing elsewhere.
+fn blocked_by_windows(code: Option<i32>, windows: bool) -> bool {
+    windows && matches!(code, Some(4551 | 1260 | 225))
+}
+
 fn helper_err(message: impl Into<String>) -> RarError {
     RarError {
         code: Code::Helper,
@@ -261,6 +273,8 @@ impl Process {
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 helper_err(MISSING)
+            } else if blocked_by_windows(e.raw_os_error(), cfg!(windows)) {
+                helper_err(format!("{BLOCKED} ({e})"))
             } else {
                 helper_err(format!(
                     "RAR support could not start ps5upload-unrar ({}): {e}",
@@ -528,6 +542,16 @@ impl Walk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_refusing_the_helper_is_recognised_only_on_windows() {
+        assert!(blocked_by_windows(Some(4551), true));
+        assert!(blocked_by_windows(Some(1260), true));
+        assert!(blocked_by_windows(Some(225), true));
+        assert!(!blocked_by_windows(Some(5), true));
+        assert!(!blocked_by_windows(None, true));
+        assert!(!blocked_by_windows(Some(4551), false));
+    }
 
     #[test]
     fn a_missing_helper_says_rar_support_is_not_installed() {
