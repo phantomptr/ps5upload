@@ -1448,7 +1448,13 @@ pub async fn get_runs(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     match journal::Which::parse(&q.which) {
-        Some(w) => axum::Json(journal::global().view(w)).into_response(),
+        // Off the async workers: the record's lock is held while a pass writes the file.
+        Some(w) => match tokio::task::spawn_blocking(move || journal::global().view(w)).await {
+            Ok(v) => axum::Json(v).into_response(),
+            Err(e) => {
+                local::json_error(axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        },
         None => bad_which(),
     }
 }
