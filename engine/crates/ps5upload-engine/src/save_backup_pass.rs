@@ -888,6 +888,11 @@ impl Ctx<'_, '_> {
             match sent {
                 Sent::Verified(file) => {
                     self.streak.insert(place, 0);
+                    crate::log_info!(
+                        "save backup: {} on {host} to {place:?} (try {}): verified",
+                        what.label(),
+                        tries + 1
+                    );
                     run.dest(i, place, |d| {
                         d.step = Step::Verified;
                         d.file = Some(file);
