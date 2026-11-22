@@ -48,10 +48,13 @@ pub fn build_main<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     };
     // WebKitGTK refuses a page's microphone unless the app answers its permission request, so
     // Remote Play's mic (talking in party chat) failed on Linux with NotAllowedError. The
-    // other platforms ask the user through the system as before.
+    // other platforms ask the user through the system as before. The camera likewise: Play's
+    // picture from a capture device (#893) and Join a friend's QR scan read video inputs.
     #[cfg(target_os = "linux")]
     let builder = builder.on_permission_request(|_, kind| match kind {
-        tauri::webview::PermissionKind::Microphone => tauri::webview::PermissionResponse::Allow,
+        tauri::webview::PermissionKind::Microphone | tauri::webview::PermissionKind::Camera => {
+            tauri::webview::PermissionResponse::Allow
+        }
         _ => tauri::webview::PermissionResponse::Default,
     });
     // Whether WebKit's compositing is off this launch (linux_gpu.rs): Remote Play then draws

@@ -229,6 +229,47 @@ describe("DualSense in Firefox before its own mapping (non-standard)", () => {
   });
 });
 
+describe("DualShock 4", () => {
+  // A PS4-format game on the PS5 still gets the touchpad click as the PS5's touchpad button.
+  it("standard layout: button 17 is the touchpad click", () => {
+    const g = pad({
+      id: "Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 09cc)",
+      mapping: "standard",
+      nButtons: 18,
+      buttons: [17],
+      axes: [0, 0, 0, 0],
+    });
+    expect(play(g, () => STANDARD_PROFILE).buttons).toBe(PadButton.TOUCHPAD);
+    // As the desktop app's own reader sends it (18 buttons, the click last).
+    const native = pad({ id: "Wireless Controller (Bluetooth)", mapping: "standard", buttons: [16, 17], axes: [0, 0, 0, 0] });
+    expect(play(native, () => STANDARD_PROFILE).buttons).toBe(PadButton.PS | PadButton.TOUCHPAD);
+  });
+
+  it("non-standard (Firefox, Safari): every model's touchpad click is mapped on macOS and Windows", () => {
+    // □ b0, ✕ b1, ○ b2, △ b3 ... PS b12, touchpad b13, as on a DualSense.
+    for (const product of ["05c4", "09cc", "0ba0"]) {
+      const id = `054c-${product}-Wireless Controller`;
+      const rest = [0, 0, 0, -1, -1, 0, HAT_REST];
+      for (const platform of ["m", "w"] as const) {
+        resetKnownProfiles();
+        expect(play(pad({ id, axes: rest, buttons: [13] }), known(platform)).buttons, `${product} ${platform}`).toBe(PadButton.TOUCHPAD);
+        resetKnownProfiles();
+        expect(play(pad({ id, axes: rest, buttons: [1, 12] }), known(platform)).buttons, `${product} ${platform}`).toBe(
+          PadButton.CROSS | PadButton.PS,
+        );
+      }
+    }
+  });
+
+  it("the table gives each model's touchpad a source (the Linux app reads it natively instead)", () => {
+    const touchpadAt = 17; // ✕ ○ □ △ L1 R1 L2 R2 Create Options L3 R3 ↑ ↓ ← → PS, touchpad
+    for (const product of ["05c4", "09cc", "0ba0"]) {
+      const map = tableMapping({ vendor: "054c", product, name: "Wireless Controller" }, "m");
+      expect(map?.split(",")[touchpadAt], product).toMatch(/^b\d+$/);
+    }
+  });
+});
+
 describe("Switch Pro Controller, non-standard (Safari's HID reading)", () => {
   // Raw buttons by position: b0 bottom (B), b1 right (A), b2 left (Y), b3 top (X).
   const id = "57e-2009-Pro Controller";

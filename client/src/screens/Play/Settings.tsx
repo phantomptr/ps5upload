@@ -14,6 +14,7 @@ import { askMotion, motionAvailable } from "../../lib/motion";
 import { dualSenseBlocked, dualSenseCapable } from "../../lib/dualSense";
 import { connectWebHidTouchpad, webHidTouchpadAvailable, webHidTouchpadConnected } from "../../lib/padTouchpad";
 import { MicSetting } from "./MicControl";
+import { CaptureSetting } from "./CaptureSetting";
 import { ControllerSetup } from "./ControllerSetup";
 import { ButtonRemap } from "./ButtonRemap";
 import { RpNetworkSettings } from "./NetworkExtras";
@@ -332,6 +333,7 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
   if (tab === "picture") {
     return (
       <div className="space-y-6">
+        <CaptureSetting running={running} />
         <Section>
           <div className="grid grid-cols-2 gap-3">
             <Select
@@ -729,7 +731,7 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
   );
 }
 
-/** In a browser with WebHID (Chrome, Edge): let it read a DualSense's touchpad, which the
+/** In a browser with WebHID (Chrome, Edge): let it read a DualSense or DualShock 4 touchpad, which the
  *  Gamepad API never gives. The browser asks which controller first, so this needs a click.
  *  The app reads the touchpad by itself and shows nothing here. */
 function WebHidTouchpad() {
@@ -739,17 +741,17 @@ function WebHidTouchpad() {
   if (on) {
     return (
       <p className="text-xs text-[var(--color-muted)]" data-testid="rp-hid-touchpad-on">
-        {tr("rp_hid_touchpad_on", undefined, "The DualSense touchpad is read in this browser.")}
+        {tr("rp_hid_touchpad_on", undefined, "The controller touchpad is read in this browser.")}
       </p>
     );
   }
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button size="sm" onClick={() => void connectWebHidTouchpad().then(setOn)} data-testid="rp-hid-touchpad">
-        {tr("rp_hid_touchpad", undefined, "Use the DualSense touchpad")}
+        {tr("rp_hid_touchpad", undefined, "Use the controller touchpad")}
       </Button>
       <span className="text-xs text-[var(--color-muted)]">
-        {tr("rp_hid_touchpad_hint", undefined, "The browser asks which controller: pick the DualSense.")}
+        {tr("rp_hid_touchpad_hint", undefined, "The browser asks which controller: pick your DualSense or DualShock 4.")}
       </span>
     </div>
   );

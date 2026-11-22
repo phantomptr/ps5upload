@@ -9,6 +9,7 @@ import {
   saveCapture,
 } from "../lib/rpCapture";
 import { useRemotePlayStore } from "./remotePlay";
+import { captureRecording, captureSnapshot } from "./capturePicture";
 import { log } from "./logs";
 
 /** What the last screenshot or clip came to, shown on the picture for a moment. */
@@ -83,7 +84,8 @@ export const useRpCaptureStore = create<CaptureState>((set, get) => {
       if (!stream) return;
       const name = captureFileName(target?.name ?? "", new Date(), "png");
       try {
-        const blob = await stream.snapshot();
+        // The picture on show: a capture device's when it is (#893), else Remote Play's.
+        const blob = await (captureSnapshot() ?? stream.snapshot());
         if (!blob) throw new Error("no picture yet");
         await save("shot", blob, name);
       } catch {
@@ -112,7 +114,7 @@ export const useRpCaptureStore = create<CaptureState>((set, get) => {
       if (rec) return get().stopRecording();
       const { stream, target, prefs } = useRemotePlayStore.getState();
       const type = typeof MediaRecorder !== "undefined" ? recorderType((m) => MediaRecorder.isTypeSupported(m)) : null;
-      const media = type ? stream?.captureMedia(prefs.fps) : null;
+      const media = !type || !stream ? null : (captureRecording(() => stream.captureMedia(prefs.fps)) ?? stream.captureMedia(prefs.fps));
       if (!stream || !type || !media) {
         notify({ kind: "error", what: "clip" });
         return;
