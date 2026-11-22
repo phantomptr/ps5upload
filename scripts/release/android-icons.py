@@ -7,7 +7,9 @@ PS5Upload logo on every device:
 
 - adaptive icon (Android 8+, what nearly every phone uses): the logo on a transparent
   foreground layer, sized to sit inside the launcher's safe zone, over a white background;
-- legacy square and round icons (older launchers): the logo on a full-bleed white tile/disc.
+- legacy square and round icons (older launchers): the logo on a full-bleed white tile/disc;
+- the Android TV banner (drawable-xhdpi/tv_banner.png, 320x180): the horizontal lockup on white,
+  which the TV home screen shows in place of the launcher icon.
 
 Run it again only when the logo changes:  python3 scripts/release/android-icons.py
 """
@@ -17,6 +19,7 @@ from PIL import Image, ImageChops, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "client/src-tauri/icons/sources/macos_squircle_1024.png"
+LOCKUP = ROOT / "branding/png/lockup-horizontal-black.png"
 OUT = ROOT / "client/src-tauri/icons/android"
 
 # Launcher icon sizes per density (legacy icon, 48dp) and the adaptive layer (108dp).
@@ -56,7 +59,22 @@ def centred(canvas: Image.Image, img: Image.Image) -> Image.Image:
     return canvas
 
 
+def tv_banner() -> None:
+    """320x180 at xhdpi (Android TV's banner size): the lockup inside a 10% margin, on white."""
+    w, h = 320, 180
+    lockup = Image.open(LOCKUP).convert("RGBA")
+    box = lockup.getchannel("A").getbbox()
+    assert box, "the lockup is empty"
+    lockup = lockup.crop(box)
+    scale = min(w * 0.8 / lockup.width, h * 0.8 / lockup.height)
+    lockup = lockup.resize((round(lockup.width * scale), round(lockup.height * scale)), Image.LANCZOS)
+    d = OUT / "drawable-xhdpi"
+    d.mkdir(parents=True, exist_ok=True)
+    centred(Image.new("RGBA", (w, h), (255, 255, 255, 255)), lockup).save(d / "tv_banner.png")
+
+
 def main() -> None:
+    tv_banner()
     mark = logo()
     for name, k in DENSITIES.items():
         d = OUT / f"mipmap-{name}"

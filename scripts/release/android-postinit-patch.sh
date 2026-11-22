@@ -68,6 +68,8 @@
 #     open the app's settings once Android stops asking. See step (13) below.
 # 14) System Back goes to the page first, which closes what is open on top. See step (14) below.
 # 15) Storage on Android 7 to 10: the runtime prompt (PS5UploadStorage). See step (15) below.
+# 16) Android TV and Google TV (#897): no touch or phone hardware required, the TV banner, and
+#     PS5UploadTv so the page moves focus with the remote's D-pad. See step (16) below.
 #
 # A WebView renderer crash is handled in wry's generated RustWebViewClient, which this script
 # cannot patch (it is written during the Rust build): see client/.cargo/config.toml.
@@ -1154,6 +1156,10 @@ members = '''
   private fun setPadsActive(active: Boolean) {
     if (active == padsActive) return
     padsActive = active
+    if (!active && padTouchDown) {
+      padTouchDown = false
+      padWebView?.evaluateJavascript("window.__ps5uPadTouch&&window.__ps5uPadTouch({click:false})", null)
+    }
     // Nothing is tracked while inactive, so what the page holds would go stale.
     if (!active) pads.keys.toList().forEach { padGone(it) }
   }
@@ -1251,7 +1257,34 @@ members = '''
       }
       sendPad(pad)
     }
+    if (padTouchClick(event)) return true
     return super.dispatchGenericMotionEvent(event)
+  }
+
+  // A PlayStation controller's touchpad (DualShock 4, DualSense) is a device of its own on
+  // Android, a touchpad or mouse rather than part of the pad, so its click never comes as a pad
+  // key. While pads are forwarded, its press goes to the page as the touchpad click
+  // (window.__ps5uPadTouch, lib/padTouchpad.ts) and is not also a click or a cursor move on it.
+  private var padTouchDown = false
+
+  private fun padTouchClick(event: android.view.MotionEvent): Boolean {
+    if (!padsActive) return false
+    val device = event.device ?: return false
+    if (device.vendorId != 0x054c || isPad(event.source)) return false
+    val pointer = (event.source and android.view.InputDevice.SOURCE_MOUSE) == android.view.InputDevice.SOURCE_MOUSE ||
+      (event.source and android.view.InputDevice.SOURCE_TOUCHPAD) == android.view.InputDevice.SOURCE_TOUCHPAD
+    if (!pointer) return false
+    val down = (event.buttonState and android.view.MotionEvent.BUTTON_PRIMARY) != 0
+    if (down != padTouchDown) {
+      padTouchDown = down
+      padWebView?.evaluateJavascript("window.__ps5uPadTouch&&window.__ps5uPadTouch({click:$down})", null)
+    }
+    return true
+  }
+
+  override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
+    if (padTouchClick(event)) return true
+    return super.dispatchTouchEvent(event)
   }
 '''
 brace = src.index("{", src.index("class MainActivity"))
@@ -1830,6 +1863,91 @@ brace = src.index("{", src.index("class MainActivity"))
 src = src[:brace + 1] + members + src[brace + 1:]
 open(path, "w", encoding="utf-8").write(src)
 print("patched MainActivity.kt with the storage prompt (PS5UploadStorage)")
+PY
+fi
+
+# --- (16) Android TV and Google TV (#897) --------------------------------
+# A TV refuses an app ("App not compatible") that requires hardware it lacks. Android counts a
+# touchscreen as required unless the manifest says otherwise, and permissions imply more:
+# RECORD_AUDIO a microphone, CAMERA autofocus, the Wi-Fi permissions Wi-Fi (a TV box on
+# Ethernet may have none). Each is declared optional here; the features that use them say so
+# when the hardware is missing. The template already adds LEANBACK_LAUNCHER and leanback
+# required=false; the TV home screen also wants a banner (320x180 at xhdpi, written by
+# scripts/release/android-icons.py and copied with the launcher icons above).
+python3 - "$manifest" <<'PY'
+import re, sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+features = [
+    "android.hardware.touchscreen",
+    "android.hardware.faketouch",
+    "android.hardware.microphone",
+    "android.hardware.camera.autofocus",
+    "android.hardware.wifi",
+    "android.software.leanback",
+]
+missing = [f for f in features if f'android:name="{f}"' not in src]
+if missing:
+    block = "".join(f'\n    <uses-feature android:name="{f}" android:required="false" />' for f in missing)
+    new = re.sub(r"(<manifest\b[^>]*>)", lambda m: m.group(1) + block, src, count=1)
+    if new == src:
+        sys.exit("::error::could not find <manifest> tag to add the TV features")
+    src = new
+    print("declared optional:", ", ".join(missing))
+if "android.intent.category.LEANBACK_LAUNCHER" not in src:
+    new = src.replace(
+        '<category android:name="android.intent.category.LAUNCHER" />',
+        '<category android:name="android.intent.category.LAUNCHER" />\n'
+        '                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />',
+        1,
+    )
+    if new == src:
+        sys.exit("::error::could not find the LAUNCHER category to add LEANBACK_LAUNCHER")
+    src = new
+    print("added LEANBACK_LAUNCHER")
+if "android:banner=" not in src:
+    new = re.sub(r"(<application\b)", r'\1 android:banner="@drawable/tv_banner"', src, count=1)
+    if new == src:
+        sys.exit("::error::could not find <application> tag to add the TV banner")
+    src = new
+    print("added the TV banner")
+open(path, "w", encoding="utf-8").write(src)
+PY
+if [ ! -f "$gen/res/drawable-xhdpi/tv_banner.png" ]; then
+  echo "::error::tv_banner.png missing: run scripts/release/android-icons.py" >&2
+  exit 1
+fi
+
+# The page asks PS5UploadTv.isTv() and then moves focus with the D-pad itself
+# (client/src/lib/tvNav.ts): the WebView only sends arrow keys, which scroll. The WebView also
+# takes focus at start, or the remote's first presses reach nothing.
+if [ -n "$mainactivity" ]; then
+  python3 - "$mainactivity" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+if "PS5UploadTv" in src:
+    print("MainActivity.kt already exposes PS5UploadTv — skipping")
+    sys.exit(0)
+anchor = "    super.onWebViewCreate(webView)\n"
+if anchor not in src:
+    sys.exit("::error::onWebViewCreate not found in MainActivity.kt")
+src = src.replace(anchor, anchor + '''    // Android TV: D-pad focus in the page (step 16).
+    val tv = packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK) ||
+      (getSystemService(android.content.Context.UI_MODE_SERVICE) as android.app.UiModeManager)
+        .currentModeType == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION
+    webView.addJavascriptInterface(object {
+      @android.webkit.JavascriptInterface
+      fun isTv(): Boolean = tv
+    }, "PS5UploadTv")
+    if (tv) {
+      webView.isFocusable = true
+      webView.isFocusableInTouchMode = true
+      webView.requestFocus()
+    }
+''', 1)
+open(path, "w", encoding="utf-8").write(src)
+print("patched MainActivity.kt to expose PS5UploadTv")
 PY
 fi
 

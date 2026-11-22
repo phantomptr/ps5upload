@@ -8,14 +8,26 @@ import {
   payloadPlaylistsLoad,
   payloadPlaylistsSave,
   payloadsLocalInventory,
+  sendConsolePayload,
   sendPayloadChecked,
 } from "../api/ps5";
+import {
+  autoStepDecision,
+  kernelPatcherOf,
+  loadKernelSends,
+  rememberKernelSend,
+  type AutoRunContext,
+} from "../lib/autoLoaderGuard";
+import { consoleStayedSince } from "../lib/loaderSettle";
+import { parseRemotePath } from "../lib/remotePath";
+import { useConnectionsStore } from "./connections";
 import { payloadSendRefusalText } from "../lib/payloadSendRefusal";
 import { log } from "./logs";
 import { trStatic } from "../lib/trStatic";
 import { importedPlaylists, type PlaylistExport } from "../lib/playlistShare";
 import {
   appendStep,
+  consolePathOf,
   DEFAULT_AUTO_LOADER,
   isRepoStep,
   movePlaylistDown,
@@ -105,7 +117,10 @@ interface PlaylistState {
   updateStep: (id: string, index: number, patch: Partial<PlaylistStep>) => void;
 
   // Run control
-  run: (id: string, host: string, port: number) => Promise<void>;
+  /** `opts.auto`: an automatic run (the auto-loader, an unattended bring-up). Each step is
+   *  checked against what the console runs first (lib/autoLoaderGuard autoStepDecision); a
+   *  person's Run sends every step. */
+  run: (id: string, host: string, port: number, opts?: { auto?: AutoRunContext }) => Promise<void>;
   /** Stop the run owned by `host` (the console the run was launched against).
    *  Other consoles' runs are untouched. */
   stop: (host: string) => void;
@@ -293,7 +308,7 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
       scheduleSave();
     },
 
-    async run(id, host, port) {
+    async run(id, host, port, opts) {
       const playlist = get().playlists.find((p) => p.id === id);
       if (!playlist) return;
       // A run is owned by the console it's launched against. Only block if
@@ -344,6 +359,30 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
           host,
         });
 
+        // An automatic run never sends what already runs there, nor a kernel patcher (kstuff)
+        // a second time in one console boot: loading one twice can panic the console.
+        if (opts?.auto) {
+          // The run's reading (process list, uptime) is of `host`: a step sent to another console
+          // (its own IP) is judged only by what is known of that one.
+          const ctx: AutoRunContext =
+            keyOf(stepHost) === key
+              ? opts.auto
+              : { running: null, bootMs: null, stayedSince: (t) => consoleStayedSince(stepHost, t) };
+          const decision = autoStepDecision(step, ctx, loadKernelSends(keyOf(stepHost)));
+          if (!decision.send) {
+            const stepName =
+              step.payloadLabel || (step.path.split(/[\\/]/).pop() ?? step.payloadId ?? step.path);
+            log.info(
+              "playlist",
+              decision.why === "running"
+                ? `step ${i + 1} (${stepName}) not sent to ${stepHost}: it is already running`
+                : `step ${i + 1} (${stepName}) not sent to ${stepHost}: a kernel patcher sent since this console started is never sent again automatically (Run sends it)`,
+            );
+            successCount++;
+            continue;
+          }
+        }
+
         try {
           // Repo-sourced step (#129): the copy saved in the app's library. The app doesn't
           // download payloads, so with none the step fails and says to pick the file (the
@@ -381,9 +420,18 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
             }
           }
           if (!isLive()) return;
-          // A step on a saved server is copied here first (the loader sends local bytes), and
-          // the copy goes once it is sent.
-          await withLocalCopy(sendPath, (local) => sendPayloadChecked(stepHost, local, stepPort));
+          const onConsole = consolePathOf(sendPath);
+          if (onConsole) {
+            // A payload stored on the PS5 (#900): the engine reads it there and sends it.
+            await sendConsolePayload(stepHost, onConsole, stepPort);
+          } else {
+            await ensureShareSaved(sendPath);
+            // A step on a saved server is copied here first (the loader sends local bytes), and
+            // the copy goes once it is sent.
+            await withLocalCopy(sendPath, (local) => sendPayloadChecked(stepHost, local, stepPort));
+          }
+          const patcher = kernelPatcherOf(step);
+          if (patcher) rememberKernelSend(keyOf(stepHost), patcher, Date.now());
           successCount++;
         } catch (e) {
           const errMsg = payloadSendRefusalText(e);
@@ -485,6 +533,26 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
     },
   };
 });
+
+/** A step on a network share names the share by this device's id for it: one saved on another
+ *  device (an imported playlist) or removed since is not here, and the step says so. */
+async function ensureShareSaved(path: string): Promise<void> {
+  const remote = parseRemotePath(path);
+  if (!remote) return;
+  const store = useConnectionsStore.getState();
+  if (!store.loaded) await store.load().catch(() => {});
+  const now = useConnectionsStore.getState();
+  // Not known (the engine did not answer): the copy below says what went wrong.
+  if (!now.loaded || now.connections.some((c) => c.id === remote.connectionId)) return;
+  const name = remote.path.split("/").filter(Boolean).pop() ?? path;
+  throw new Error(
+    trStatic(
+      "playlist_step_share_missing",
+      "The network share for {name} isn't saved on this device. Add it in Shared Folders, or choose the file again.",
+      { name },
+    ),
+  );
+}
 
 /** Sleep that resolves early if `signal` aborts. AbortError is
  *  swallowed — caller treats both timer-fire and abort the same way

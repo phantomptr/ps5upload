@@ -285,6 +285,23 @@ pub(crate) fn copy_one(
     Outcome::Copied(dest)
 }
 
+/// Where `copy_one` puts the backup `file` of `owner`'s save on `drive`, arranged `how` (the run's
+/// record names it before the copy is made).
+pub(crate) fn copy_target(
+    c: &dyn Drive,
+    drive: &str,
+    owner: &Owner,
+    how: Layout,
+    file: &str,
+) -> Result<String, String> {
+    if !ours(&owner.title_id, file) {
+        return Err("unexpected backup name".into());
+    }
+    let root = root_of(drive)?;
+    let rel = layout::place(&drive_list(c, &root), how, Kind::Encrypted, owner)?;
+    Ok(format!("{}/{file}", layout::join(&root, &rel)))
+}
+
 /// What the last copies to a PS5 drive did, for the Saves screen and a bug report. Kept across
 /// restarts with the network-share backups' status.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -327,10 +344,37 @@ impl Copies {
         })
     }
 
-    /// Whether `host`'s drive can take copies now (asked once per console and pass): a save due
-    /// only for its copy is not read off the console while the drive is away.
-    pub fn ready(&mut self, c: &dyn Drive, host: &str) -> bool {
-        self.checked_for(c, host).is_ok()
+    /// Why `host`'s drive can't take copies now (asked once per console and pass); None when it
+    /// can. A save due only for its copy is not read off the console while the drive is away.
+    pub fn unready(&mut self, c: &dyn Drive, host: &str) -> Option<String> {
+        self.checked_for(c, host).err()
+    }
+
+    /// The drive, such as `/mnt/ext0`.
+    pub fn drive(&self) -> &str {
+        &self.drive
+    }
+
+    /// Versions of each save (or folder) kept on the drive.
+    pub fn keep(&self) -> u32 {
+        self.keep
+    }
+
+    /// Counts a copy made apart from `copy` (a console folder's, #899): `Ok` copied, `Err(None)`
+    /// skipped, `Err(Some(why))` failed (`why` noted either way).
+    pub fn count(&mut self, r: Result<(), (bool, String)>) {
+        self.status.at = local::now_ms();
+        match r {
+            Ok(()) => self.status.copied += 1,
+            Err((failed, why)) => {
+                if failed {
+                    self.status.failed += 1;
+                } else {
+                    self.status.skipped += 1;
+                }
+                self.status.note = Some(why);
+            }
+        }
     }
 
     fn checked_for(&mut self, c: &dyn Drive, host: &str) -> Result<(), String> {

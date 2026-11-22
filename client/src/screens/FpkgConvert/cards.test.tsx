@@ -525,6 +525,24 @@ describe("QueueCard adding", () => {
     expect(html).toContain(".exfat");
     expect(html).toMatch(/data-testid="cq-ext"[^>]*>folder</);
   });
+
+  it("shows each queued game's packs on its row, so one without zstd is seen before the run (#905)", () => {
+    const item = (id: string, build: ConvertBuild): ConvertItem => ({
+      id,
+      source: `/games/${id}`,
+      compression: "balanced",
+      then: "keep",
+      host: null,
+      status: "pending",
+      build,
+    });
+    const html = card([
+      item("zstd", { kind: "image", format: "ffpkg", compress: false, lz4: { zstdLevel: 19 } }),
+      item("none", { kind: "image", format: "ffpkg", compress: false }),
+    ]);
+    expect(html).toMatch(/data-testid="cq-tag-zstd"[^>]*>zstd 19</);
+    expect(html.match(/cq-tag-zstd/g)).toHaveLength(1);
+  });
 });
 
 describe("queued game choices (#518)", () => {
@@ -608,6 +626,52 @@ describe("a waiting game's own options (#669)", () => {
     expect(folder).not.toContain("Game language");
     expect(folder).toContain("Output folder");
     expect(folder).toContain("Keep the folder");
+  });
+
+  it("shows a waiting image's or folder's asset packs, and a package has none (#905)", async () => {
+    const zstd = await options(
+      waitingItem({ build: { kind: "image", format: "ffpkg", compress: true, lz4: { zstdLevel: 19 } } }),
+    );
+    expect(zstd).toContain('data-testid="cq-packs"');
+    expect(zstd).toContain("Asset packs");
+    expect(zstd).toMatch(/data-testid="cq-zstd-level"/);
+    expect(zstd).toMatch(/<option value="19" selected="">19<\/option>/);
+    const plain = await options(waitingItem({ build: { kind: "image", format: "exfat", compress: false } }));
+    expect(plain).toContain('data-testid="cq-packs"');
+    expect(plain).not.toContain("cq-zstd-level");
+    // LZ4 is offered only to keep the choice the game was checked for.
+    expect(plain).not.toContain(">LZ4<");
+    const folder = await options(waitingItem({ source: "/dl/game.exfat", build: { kind: "folder", zstd: { level: 1 } } }));
+    expect(folder).toContain("cq-zstd-level");
+    expect(await options(waitingItem({ build: { kind: "pkg" } }))).not.toContain("cq-packs");
+  });
+
+  it("changing packs, format or kind keeps the rest of the game's build (#905)", async () => {
+    const { changeForPacks, changeForKind } = await import("./QueueItemOptions");
+    const packed: ConvertBuild = {
+      kind: "image",
+      format: "ffpkg",
+      compress: true,
+      lz4: { zstdLevel: 5, zstdRuntime: "pinned", profileToml: "[p]" },
+    };
+    expect(changeForPacks(packed, "zstd", 19)).toEqual({
+      build: { ...packed, lz4: { zstdLevel: 19, zstdRuntime: "pinned", profileToml: "[p]" } },
+    });
+    expect(changeForPacks(packed, "none")).toEqual({ build: { kind: "image", format: "ffpkg", compress: true } });
+    expect(changeForPacks({ kind: "image", format: "exfat", compress: false }, "zstd")).toEqual({
+      build: { kind: "image", format: "exfat", compress: false, lz4: { zstdLevel: 5 } },
+    });
+    const item = waitingItem({ source: "/dl/game.exfat", build: packed });
+    expect(changeForKind(item, "folder", true, null).build).toEqual({
+      kind: "folder",
+      zstd: { level: 5, runtime: "pinned", profileToml: "[p]" },
+    });
+    expect(changeForKind(item, "image", true, null).build).toEqual(packed);
+    // A folder's own segment picked again keeps its packs and plain-file choice.
+    const folder: ConvertBuild = { kind: "folder", zstd: { level: 19, runtime: "pinned" } };
+    expect(changeForKind(waitingItem({ build: folder }), "folder", true, null).build).toEqual(folder);
+    const unpacked: ConvertBuild = { kind: "folder", unpackPacks: true };
+    expect(changeForKind(waitingItem({ build: unpacked }), "folder", true, null).build).toEqual(unpacked);
   });
 
   it("a game on a server or the PS5 has no folder here to be saved next to", async () => {

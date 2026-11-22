@@ -8,7 +8,17 @@ import { Toggle } from "../../components/Toggle";
 import { parentDir } from "../../lib/outputPlace";
 import { PLAYGO_LANGUAGES } from "../../lib/playgoLanguages";
 import { useConvertPrefs } from "../../state/convertPrefs";
-import { thenFor, type ConvertBuild, type ConvertItem, type ConvertItemChange, type ConvertThen } from "../../state/convertQueue";
+import {
+  DEFAULT_ZSTD_LEVEL,
+  packsOf,
+  thenFor,
+  withPacks,
+  type BuildPacks,
+  type ConvertBuild,
+  type ConvertItem,
+  type ConvertItemChange,
+  type ConvertThen,
+} from "../../state/convertQueue";
 import { isArchiveSource, isFolderableSource, isInPlaceArchive } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
 import { CompressionTiles } from "./CompressionTiles";
@@ -29,16 +39,88 @@ export function kindsFor(source: string, isDir?: boolean): Kind[] {
   return kinds;
 }
 
-/** The change for choosing `kind`: an image keeps its own format choice when it was one. */
+/** The change for choosing `kind`: an image keeps its own format choice when it was one, and an
+ *  image or folder keeps the asset packs it had (#905: they are no longer lost on the way). */
 export function changeForKind(item: ConvertItem, kind: Kind, canInstall: boolean, host: string | null): ConvertItemChange {
-  const build: ConvertBuild =
+  const base: ConvertBuild =
     kind === "image"
       ? item.build?.kind === "image"
         ? item.build
         : { kind: "image", format: "exfat", compress: false }
       : { kind };
+  const packs = packsOf(item.build);
+  // The kind it already is (its segment picked again) keeps the build whole, packs included.
+  const build = item.build && kind === item.build.kind ? item.build : packs.kind === "none" ? base : withPacks(base, packs);
   const then = thenFor(kind, item.then, canInstall);
   return { build, then, host: then !== "keep" ? (item.host ?? host) : null };
+}
+
+/** zstd levels as Convert's ③ offers them. */
+const ZSTD_LEVELS = [1, 5, 19];
+
+/** The change for picking packs on a waiting game: a new kind starts from its own defaults; the
+ *  same kind keeps its profile and runtime. */
+export function changeForPacks(build: ConvertBuild, kind: BuildPacks["kind"], level?: number): ConvertItemChange {
+  const now = packsOf(build);
+  const lvl = level !== undefined ? { level } : {};
+  const packs: BuildPacks = kind === now.kind ? { ...now, ...lvl } : { kind, ...lvl };
+  return { build: withPacks(build, packs) };
+}
+
+/** A queued image's or folder's asset packs (#905): seen and changed while the game waits. zstd
+ *  packs can be picked for any PS5 game; LZ4 packs only stay or go, since whether a game can
+ *  take them is known only once it is checked under ①. */
+function PacksChoice({ build, onChange }: { build: ConvertBuild; onChange: (change: ConvertItemChange) => void }) {
+  const tr = useTr();
+  const packs = packsOf(build);
+  const kinds: BuildPacks["kind"][] = packs.kind === "lz4" ? ["none", "lz4", "zstd"] : ["none", "zstd"];
+  const label: Record<BuildPacks["kind"], string> = {
+    none: tr("cq_packs_none", undefined, "None"),
+    lz4: tr("cq_packs_lz4", undefined, "LZ4"),
+    zstd: tr("cq_packs_zstd", undefined, "zstd"),
+  };
+  return (
+    <div className="flex flex-col gap-1" data-testid="cq-packs">
+      <span className="text-xs text-[var(--color-muted)]">{tr("cq_packs", undefined, "Asset packs")}</span>
+      <SegmentedControl
+        value={packs.kind}
+        ariaLabel={tr("cq_packs", undefined, "Asset packs")}
+        segments={kinds.map((k) => ({ value: k, label: label[k] }))}
+        onChange={(k) => onChange(changeForPacks(build, k as BuildPacks["kind"]))}
+      />
+      {packs.kind === "zstd" && (
+        <label className="mt-1 flex items-center gap-2 text-xs">
+          <span>{tr("fpkg.image.zstd_level", undefined, "Compression level")}</span>
+          <select
+            className="select w-auto!"
+            data-testid="cq-zstd-level"
+            value={packs.level ?? DEFAULT_ZSTD_LEVEL}
+            onChange={(e) => onChange(changeForPacks(build, "zstd", Number(e.target.value)))}
+          >
+            {ZSTD_LEVELS.map((l) => (
+              <option key={l} value={l}>
+                {l}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {packs.kind === "zstd" && (
+        <span className="text-xs text-[var(--color-muted)]">
+          {tr(
+            "cq_packs_zstd_note",
+            undefined,
+            "The zstd runtime goes in with the packs. A game that can't take them stops with a message when its turn comes.",
+          )}
+        </span>
+      )}
+      {packs.profileToml && (
+        <span className="text-xs text-[var(--color-muted)]" data-testid="cq-packs-profile">
+          {tr("cq_packs_profile", undefined, "Uses the pack profile picked when this game was added.")}
+        </span>
+      )}
+    </div>
+  );
 }
 
 /** The change for "Save next to its source" on one game: back to the Output folder when off. A
@@ -121,9 +203,16 @@ export function QueueItemOptions({
         <ImageChoice
           format={item.build.format}
           compress={item.build.compress}
-          onChoice={(format, compress) => onChange({ build: { kind: "image", format, compress } })}
+          // Only the format and compression change: the game's asset packs stay (#905).
+          onChoice={(format, compress) =>
+            item.build?.kind === "image" && onChange({ build: { ...item.build, format, compress } })
+          }
           level={{ value: item.imageLevel ?? rememberedLevel, onChange: (imageLevel) => onChange({ imageLevel }) }}
         />
+      )}
+
+      {(item.build?.kind === "image" || item.build?.kind === "folder") && (
+        <PacksChoice build={item.build} onChange={onChange} />
       )}
 
       {kind === "pkg" && (

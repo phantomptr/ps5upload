@@ -31,11 +31,11 @@ import { startPayloadUpdateNotices } from "../lib/payloadUpdateNotices";
 import { useConsoleHandoff } from "./useConsoleHandoff";
 import {
   autoRunStillLoaded,
-  bootEpochMs,
   distinctPayloads,
   loadAutoRun,
   rememberAutoRun,
 } from "../lib/autoLoaderGuard";
+import { autoRunContext, consoleBootAndProcesses } from "../state/autoRunContext";
 import { capturePayloadBlackBox } from "../lib/ps5Snapshot";
 import {
   BLACK_BOX_SETTLE_MS,
@@ -43,7 +43,7 @@ import {
 } from "../lib/payloadBlackBox";
 import { startUpdateChecks, useUpdateStore } from "../state/update";
 import { engineApi } from "../api/engine";
-import { fetchHwPower, payloadCheck, portCheck, procListGet } from "../api/ps5";
+import { payloadCheck, portCheck } from "../api/ps5";
 import { keepAwakeTargets, powerFromCheck } from "../lib/consolePower";
 import { sessionNeedsAttention } from "../lib/consoleSession";
 import { installActivityWiring } from "../state/activityWiring";
@@ -219,21 +219,6 @@ const AUTO_LOADER_COOLDOWN_MS = 90_000;
 const AUTO_REDEPLOY_INTERVAL_MS = 30_000;
 
 
-/** What is running on a console and when it booted, or nulls when it cannot be asked. */
-async function consoleBootAndProcesses(
-  host: string,
-): Promise<{ boot: number | null; names: string[] | null }> {
-  const [power, procs] = await Promise.all([
-    fetchHwPower(host).catch(() => null),
-    procListGet(mgmtAddr(host)).catch(() => null),
-  ]);
-  const uptime = power?.operating_time_sec ?? 0;
-  return {
-    boot: uptime > 0 ? bootEpochMs(Date.now(), uptime) : null,
-    names: procs?.ok ? procs.procs.map((p) => p.name) : null,
-  };
-}
-
 /** How long after the playlist ends its payloads are looked for: one-shot payloads have
  *  exited by then, so only the ones that stay are remembered. */
 const AUTO_LOADER_SETTLE_MS = 20_000;
@@ -260,7 +245,11 @@ async function runAutoLoaderOnce(
   log.info("connection", `auto-loader: running "${playlistName}" on ${host}`);
   autoLoadersRunning.add(key);
   try {
-    await usePayloadPlaylistsStore.getState().run(playlistId, host, PS5_LOADER_PORT);
+    // Each step is checked too: nothing already running is sent again, and a kernel patcher
+    // (kstuff) sent since this console started is never sent twice (lib/autoLoaderGuard).
+    await usePayloadPlaylistsStore.getState().run(playlistId, host, PS5_LOADER_PORT, {
+      auto: await autoRunContext(host, before),
+    });
   } finally {
     autoLoadersRunning.delete(key);
   }
@@ -1090,7 +1079,7 @@ function useAutoRedeployDownHelpers() {
             "connection",
             `auto bring-up: ${host}'s loader is up and its helper is not running — bringing it up`,
           );
-          await bringUp.run(host, trRef.current, { autoLoader: false });
+          await bringUp.run(host, trRef.current, { autoLoader: false, unattended: true });
           // Payloads may have reached the loader even when it failed: count every attempt
           // against the brake below.
           delivered = true;
@@ -1525,6 +1514,8 @@ function AndroidStorageAccessBanner() {
   const tr = useTr();
   const [visible, setVisible] = useState(false);
   const [checking, setChecking] = useState(false);
+  // No settings page opened (some TV boxes have none for file access).
+  const [noPage, setNoPage] = useState(false);
 
   const markDismissed = () => {
     try {
@@ -1599,6 +1590,15 @@ function AndroidStorageAccessBanner() {
                 "Grant All files access so PS5Upload can upload game folders, .zip dumps, and .pkg files from your phone.",
               )}
             </p>
+            {noPage && (
+              <p className="mt-1 text-xs text-[var(--color-warn)]">
+                {tr(
+                  "android_storage_no_settings",
+                  undefined,
+                  "This device has no settings page for file access. Uploading from it may not work; everything else does.",
+                )}
+              </p>
+            )}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
@@ -1608,7 +1608,8 @@ function AndroidStorageAccessBanner() {
             onClick={() =>
               void localFs
                 .requestAccess()
-                .catch(() => {})
+                .then(() => setNoPage(false))
+                .catch(() => setNoPage(true))
                 .finally(() => {
                   window.setTimeout(() => void checkAccess(), 750);
                 })

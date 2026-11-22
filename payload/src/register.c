@@ -33,6 +33,7 @@
 #include "plog.h"
 #include "unregister_outcome.h"
 #include "install_guard.h"
+#include "start_trace.h"
 #include "shell_builtin.h" /* mntinfo_snapshot */
 #include "content_db.h"
 #include "sony_api_lock.h"
@@ -946,7 +947,12 @@ static int remount_rw(const char *mnt) {
         IOV_STR("fspath"), IOV_STR(mnt),
         IOV_STR("from"),   IOV_STR(sfs.f_mntfromname),
     };
-    return nmount(iov, sizeof(iov) / sizeof(iov[0]), MNT_UPDATE);
+    /* A crash with /system_ex just made writable is the "Repairing Console Storage" case (#903):
+     * the trace shows whether one happened here. */
+    start_tracef("REMOUNT_RW_BEGIN %s fstype=%s from=%s", mnt, sfs.f_fstypename, sfs.f_mntfromname);
+    int rc = nmount(iov, sizeof(iov) / sizeof(iov[0]), MNT_UPDATE);
+    start_tracef("REMOUNT_RW_END %s rc=%d errno=%d", mnt, rc, rc != 0 ? errno : 0);
+    return rc;
 }
 
 /* Bind-mount `src_path` at `/system_ex/app/<title_id>/` via nullfs.
@@ -1004,13 +1010,14 @@ static int mount_title_nullfs(const char *title_id, const char *src_path,
     struct statfs dst_stat;
     if (statfs(dst, &dst_stat) == 0 &&
         strcmp(dst_stat.f_mntonname, dst) == 0) {
-        if (unmount(dst, 0) != 0 && errno != EINVAL && errno != ENOENT) {
+        if (start_trace_unmount(dst, 0, "register_preclean") != 0 && errno != EINVAL && errno != ENOENT) {
             /* Forced only for a nullfs: an earlier registration (ours, ShadowMount+'s). Anything
              * else mounted here and busy is Sony's own mount of an installed copy of this title,
              * in use; forcing that off takes live content out from under the console
              * (unregister_title has the same rule). */
             if (strcmp(dst_stat.f_fstypename, "nullfs") != 0 ||
-                (unmount(dst, MNT_FORCE) != 0 && errno != EINVAL && errno != ENOENT)) {
+                (start_trace_unmount(dst, MNT_FORCE, "register_preclean") != 0 && errno != EINVAL &&
+                 errno != ENOENT)) {
                 if (err_out) *err_out = "register_preclean_unmount_failed";
                 return -1;
             }
@@ -1029,7 +1036,10 @@ static int mount_title_nullfs(const char *title_id, const char *src_path,
     iov[4].iov_base = kfspath;  iov[4].iov_len = sizeof(kfspath);
     iov[5].iov_base = dst;      iov[5].iov_len = strlen(dst) + 1;
 
-    if (nmount(iov, 6, 0) != 0) {
+    start_tracef("NULLFS_BIND_BEGIN %s", dst);
+    int bind_rc = nmount(iov, 6, 0);
+    start_tracef("NULLFS_BIND_END %s rc=%d errno=%d", dst, bind_rc, bind_rc != 0 ? errno : 0);
+    if (bind_rc != 0) {
         if (err_out) *err_out = "register_nullfs_nmount_failed";
         return -1;
     }
@@ -1040,7 +1050,7 @@ static int mount_title_nullfs(const char *title_id, const char *src_path,
         /* Roll back -- the mount succeeded structurally but the bind
          * did not surface our eboot.bin. Leaving the mount in place
          * would cause later launch failures with no clear cause. */
-        (void)unmount(dst, MNT_FORCE);
+        (void)start_trace_unmount(dst, MNT_FORCE, "register_rollback");
         if (err_out) *err_out = "register_nullfs_post_no_eboot";
         return -1;
     }
@@ -1067,10 +1077,10 @@ static int unmount_title_nullfs(const char *title_id) {
     /* unmount then MNT_FORCE. Either rc=0 OR errno in (EINVAL, ENOENT)
      * is acceptable -- both mean "nothing mounted here" which is our
      * desired end state. */
-    int rc = unmount(dst, 0);
+    int rc = start_trace_unmount(dst, 0, "unregister");
     if (rc == 0) return 0;
     if (errno == EINVAL || errno == ENOENT) return 0;
-    rc = unmount(dst, MNT_FORCE);
+    rc = start_trace_unmount(dst, MNT_FORCE, "unregister");
     if (rc == 0) return 0;
     if (errno == EINVAL || errno == ENOENT) return 0;
     return -1;
@@ -1474,9 +1484,12 @@ int register_title_from_path(const char *src_path,
     if (g_reg.app_inst_util_initialize) {
         (void)g_reg.app_inst_util_initialize();
     }
+    start_tracef("APP_INSTALL_BEGIN %s via=%s", title_id,
+                 g_reg.app_install_title_dir ? "AppInstallTitleDir" : "AppInstallAll");
     int res = g_reg.app_install_title_dir
         ? g_reg.app_install_title_dir(title_id, REG_APP_BASE "/", 0)
         : g_reg.app_install_all(NULL);
+    start_tracef("APP_INSTALL_END %s rc=0x%08x", title_id, (unsigned)res);
     fprintf(stderr, "[register] %s %s rc=0x%08x\n",
             g_reg.app_install_title_dir ? "AppInstallTitleDir" : "AppInstallAll",
             title_id, (unsigned)res);

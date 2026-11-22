@@ -19,7 +19,9 @@ this short-lived ELF instead. The helper carries it as bytes (`payload/Makefile`
 Files in `/data/ps5upload/extract/` (see `src/xreq.h` and `payload/src/archive_extract.c`):
 
 - `request.json` — written by the helper (mode 0600), read and **deleted** by the extractor at
-  start (it can hold the archive's password);
+  start (it can hold the archive's password). `"list":true` asks only for the archive's top-level
+  names (nothing is written; "Extract here" compares them with the folder first); `"top"` renames
+  or leaves out top-level entries (`"from/to/from2/"`: `from` becomes `to`, `from2` is left out);
 - `status.json` — rewritten by the extractor (through a temporary file and a rename in the same
   folder) at most every 250 ms: state, files and bytes done/total, the current file, the counts,
   and on failure a cause token (`fs_extract_no_space: ...`, `fs_extract_wrong_password`, ...);

@@ -4,6 +4,7 @@ import { hostOf } from "../lib/addr";
 import { PS5_LOADER_PORT } from "./connection";
 import { bringUpPlaylistIdForHost } from "./consoleSettings";
 import { sendHelperAndWait } from "./helperSendRuntime";
+import { autoRunContext } from "./autoRunContext";
 import type { Translator } from "./lang";
 import { log } from "./logs";
 import type { PlaylistRunStatus } from "../lib/playlistOps";
@@ -47,7 +48,13 @@ interface BringUpState {
   run: (
     host: string,
     tr: Translator,
-    opts?: { autoLoader?: boolean; guard?: (host: string) => Promise<boolean> },
+    opts?: {
+      autoLoader?: boolean;
+      guard?: (host: string) => Promise<boolean>;
+      /** Started by the app, not by a person: the bring-up playlist sends nothing that is
+       *  already running, and no kernel patcher twice in one console boot (lib/autoLoaderGuard). */
+      unattended?: boolean;
+    },
   ) => Promise<void>;
   reset: (host: string) => void;
 }
@@ -106,7 +113,12 @@ export const useBringUpStore = create<BringUpState>((set, get) => ({
         // records failure in per-host run status rather than throwing. It also
         // returns at once when this console is already mid-run (that run is
         // the one to wait for) and leaves "idle" behind a Stop.
-        await pl.run(playlist.id, h, PS5_LOADER_PORT);
+        await pl.run(
+          playlist.id,
+          h,
+          PS5_LOADER_PORT,
+          opts?.unattended ? { auto: await autoRunContext(h) } : undefined,
+        );
         const rs = await settledPlaylistRun(h);
         if (rs.kind === "failed") {
           const step = "stepIndex" in rs ? rs.stepIndex + 1 : 0;
@@ -152,7 +164,8 @@ export const useBringUpStore = create<BringUpState>((set, get) => ({
           "connection",
           `bring-up: running auto-loader "${post.name}" on ${h}`,
         );
-        void plg.run(post.id, h, PS5_LOADER_PORT);
+        // The auto-run playlist: nothing already running goes again (lib/autoLoaderGuard).
+        void autoRunContext(h).then((auto) => plg.run(post.id, h, PS5_LOADER_PORT, { auto }));
       }
 
       put({ kind: "done", host: bare });

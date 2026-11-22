@@ -36,10 +36,14 @@ skipped = []
 passed = 0
 
 
-def run(root, archive, dest, password=None, merge=False, replace=False, env=None, cancel=False, wait=True):
+def run(root, archive, dest, password=None, merge=False, replace=False, env=None, cancel=False, wait=True, list_only=False, top=None):
     req = {"id": "t1", "archive": archive, "dest": dest, "merge": merge, "replace": replace}
     if password is not None:
         req["password"] = password
+    if list_only:
+        req["list"] = True
+    if top is not None:
+        req["top"] = top
     rq, st, cn = (os.path.join(root, n) for n in ("request.json", "status.json", "cancel"))
     with open(rq, "w") as f:
         json.dump(req, f)
@@ -513,6 +517,92 @@ def test_conflicts(root):
     check("merge replace", s["state"] == "done" and s["skipped"] == 1, s)
     check("merge replace", open(os.path.join(dest, "keep.txt"), "rb").read() == b"from archive", "not replaced")
     check("merge replace", os.path.isdir(os.path.join(dest, "dir")), "a folder was replaced by a file")
+
+
+def test_list_top_level(root):
+    """Extract here (#891): the archive's top-level names, read without writing anything."""
+    arc = os.path.join(root, "l.zip")
+    with zipfile.ZipFile(arc, "w") as z:
+        z.writestr("Game/sce_sys/param.json", b"{}")
+        z.writestr("Game/eboot.bin", b"x")
+        z.writestr("readme.txt", b"hi")
+        z.writestr("./notes/a.txt", b"a")
+        z.writestr("../evil.txt", b"no")
+    dest = os.path.join(root, "here")
+    os.makedirs(dest)
+    s = run(root, arc, dest, list_only=True)
+    check("list zip", s["state"] == "done" and s["message"] == "", s)
+    check("list zip", sorted(s["top"].split("/")) == ["Game", "notes", "readme.txt"], s)
+    check("list zip", sorted(s["top_dirs"].split("/")) == ["Game", "notes"], s)
+    check("list zip", s["top_more"] is False and s["files"] == 0 and s["created_dest"] is False, s)
+    check("list zip", os.listdir(dest) == [], "a listing wrote something")
+    # a listing never makes the folder, nor needs room
+    s = run(root, arc, os.path.join(root, "nowhere"), list_only=True, env={"XTEST_FREE": "1"})
+    check("list no dest", s["state"] == "done" and not os.path.exists(os.path.join(root, "nowhere")), s)
+    # a compressed tar is read through
+    src = make_src(root)
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as t:
+        t.add(src, arcname="pack")
+    tgz = os.path.join(root, "l.tar.gz")
+    with open(tgz, "wb") as f:
+        f.write(gzip.compress(raw.getvalue()))
+    s = run(root, tgz, dest, list_only=True)
+    check("list tgz", s["state"] == "done" and s["top"] == "pack" and s["top_dirs"] == "pack", s)
+    check("list tgz", os.listdir(dest) == [], "a listing wrote something")
+    # a lone .gz is one file named after the archive
+    one = os.path.join(root, "data.bin.gz")
+    with open(one, "wb") as f:
+        f.write(gzip.compress(b"z" * 1000))
+    s = run(root, one, dest, list_only=True)
+    check("list gz", s["state"] == "done" and s["top"] == "data.bin" and s["top_dirs"] == "", s)
+    if SEVENZIP:
+        sevenzip("a", "-mx=5", os.path.join(root, "l.7z"), "sub", "a.txt", cwd=src)
+        s = run(root, os.path.join(root, "l.7z"), dest, list_only=True)
+        check("list 7z", s["state"] == "done" and sorted(s["top"].split("/")) == ["a.txt", "sub"], s)
+    copy_fixtures(root, ["rar4.rar"])
+    s = run(root, os.path.join(root, "rar4.rar"), dest, list_only=True)
+    check("list rar", s["state"] == "done" and s["top"] != "", s)
+    check("list rar", os.listdir(dest) == [], "a listing wrote something")
+
+
+def test_top_level_renames(root):
+    """Extract here (#891): Keep both renames the incoming entry, Skip leaves it out."""
+    arc = os.path.join(root, "r.zip")
+    with zipfile.ZipFile(arc, "w") as z:
+        z.writestr("Game/eboot.bin", b"new eboot")
+        z.writestr("Game/extra.txt", b"extra")
+        z.writestr("readme.txt", b"new readme")
+        z.writestr("fresh.txt", b"fresh")
+    dest = os.path.join(root, "here")
+    os.makedirs(os.path.join(dest, "Game"))
+    with open(os.path.join(dest, "Game", "eboot.bin"), "wb") as f:
+        f.write(b"mine")
+    with open(os.path.join(dest, "readme.txt"), "wb") as f:
+        f.write(b"my readme")
+    # Keep both: the incoming Game goes to "Game (2)", readme.txt to "readme (2).txt"
+    s = run(root, arc, dest, merge=True, top="Game/Game (2)/readme.txt/readme (2).txt")
+    check("keep both", s["state"] == "done" and s["skipped"] == 0 and s["files"] == 4, s)
+    check("keep both", open(os.path.join(dest, "Game", "eboot.bin"), "rb").read() == b"mine", "the old one was touched")
+    check("keep both", not os.path.exists(os.path.join(dest, "Game", "extra.txt")), "merged into the old folder")
+    check("keep both", open(os.path.join(dest, "Game (2)", "eboot.bin"), "rb").read() == b"new eboot", "not renamed")
+    check("keep both", open(os.path.join(dest, "readme (2).txt"), "rb").read() == b"new readme", "not renamed")
+    check("keep both", open(os.path.join(dest, "readme.txt"), "rb").read() == b"my readme", "the old one was touched")
+    # Skip existing: what is there stays, nothing is added into it, the rest comes out
+    dest2 = os.path.join(root, "here2")
+    os.makedirs(os.path.join(dest2, "Game"))
+    with open(os.path.join(dest2, "readme.txt"), "wb") as f:
+        f.write(b"my readme")
+    s = run(root, arc, dest2, merge=True, top="Game//readme.txt/")
+    check("skip", s["state"] == "done" and s["skipped"] == 3 and s["files"] == 1, s)
+    check("skip", os.listdir(os.path.join(dest2, "Game")) == [], "wrote into a folder left out")
+    check("skip", open(os.path.join(dest2, "readme.txt"), "rb").read() == b"my readme", "replaced a file left out")
+    check("skip", open(os.path.join(dest2, "fresh.txt"), "rb").read() == b"fresh", "the rest did not come out")
+    # a "to" that is not a name stays inside the folder
+    dest3 = os.path.join(root, "here3")
+    os.makedirs(dest3)
+    s = run(root, arc, dest3, merge=True, top="readme.txt/..")
+    check("bad rename", s["state"] == "done" and not os.path.exists(os.path.join(root, "readme.txt")), s)
 
 
 def test_cancel(root):

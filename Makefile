@@ -1465,6 +1465,13 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/takeover_lock_selftest.c $(PAYLOAD_DIR)/src/takeover_flag.c $(PAYLOAD_DIR)/src/start_dedupe.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-takeover-lock-selftest
 	@echo "✓ two helpers starting together run one after the other, or the second leaves the start to a same-or-newer one that answers; a holder that dies, hangs or has no flock never leaves nobody serving; the busy report and if_idle read right"
+	@echo "Running start/stop trace self-test (host build, #903)..."
+	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror \
+		-DSTART_TRACE_MAX=300 -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-start-trace-selftest \
+		$(PAYLOAD_DIR)/tests/start_trace_selftest.c $(PAYLOAD_DIR)/src/start_trace.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-start-trace-selftest
+	@echo "✓ every start/stop step is one whole line on the disk before the next step, with its pid; an unmount is bracketed"
 	@echo "Running prior-instance verdict self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-instance-verdict-selftest \

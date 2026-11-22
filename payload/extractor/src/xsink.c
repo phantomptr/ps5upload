@@ -89,6 +89,7 @@ static uint64_t free_bytes(xjob_t *j, int *known) {
 
 int xs_check_space(xjob_t *j, uint64_t need) {
     int known;
+    if (j->list) return 0; /* nothing is written */
     uint64_t have = free_bytes(j, &known);
     if (!known) return 0; /* nothing to go on: the writes find out */
     if (have < need + XJ_SPACE_MARGIN) {
@@ -100,6 +101,7 @@ int xs_check_space(xjob_t *j, uint64_t need) {
 
 int xs_open_dest(xjob_t *j) {
     struct stat st;
+    if (j->list) return 0; /* nothing is written */
     if (lstat(j->dest, &st) == 0) {
         if (!j->merge) return xj_fail(j, "fs_extract_destination_exists");
         if (!S_ISDIR(st.st_mode)) return xj_fail(j, "fs_extract_bad_dest: not a folder");
@@ -153,6 +155,64 @@ static void set_current(xjob_t *j, const char *rel) {
 
 static unsigned tmp_seq;
 
+/* Whether the '/'-separated `list` holds the `n` bytes at `name`. */
+static int in_list(const char *list, const char *name, size_t n) {
+    const char *p = list;
+    while (*p) {
+        size_t m = strcspn(p, "/");
+        if (m == n && memcmp(p, name, n) == 0) return 1;
+        p += m;
+        if (*p == '/') p++;
+    }
+    return 0;
+}
+
+/* Appends the `n` bytes at `name` to the '/'-separated `list` of `cap` bytes. 0, or -1 (full). */
+static int put_list(char *list, size_t cap, const char *name, size_t n) {
+    size_t at = strlen(list);
+    if (at + (at ? 1 : 0) + n + 1 > cap) return -1;
+    if (at) list[at++] = '/';
+    memcpy(list + at, name, n);
+    list[at + n] = 0;
+    return 0;
+}
+
+/* list: `rel`'s first component, once, into j->top (and j->top_dirs when it is a folder). */
+static void add_top(xjob_t *j, const char *rel, int kind) {
+    size_t n = strcspn(rel, "/");
+    int dir = rel[n] == '/' || kind == XE_DIR;
+    if (!n) return;
+    if (!in_list(j->top, rel, n) && put_list(j->top, sizeof j->top, rel, n) != 0) {
+        j->top_more = 1;
+        return;
+    }
+    if (dir && !in_list(j->top_dirs, rel, n) && put_list(j->top_dirs, sizeof j->top_dirs, rel, n) != 0) j->top_more = 1;
+}
+
+int xs_map_top(const xjob_t *j, char *rel, size_t cap) {
+    size_t n = strcspn(rel, "/");
+    const char *p = j->top_map;
+    while (*p) {
+        size_t fl = strcspn(p, "/");
+        const char *to = p + fl;
+        size_t tl;
+        if (*to != '/') return 0; /* a "from" without its "to": not a pair */
+        to++;
+        tl = strcspn(to, "/");
+        if (fl == n && memcmp(p, rel, n) == 0) {
+            size_t rest = strlen(rel + n);
+            if (tl == 0) return 1;
+            if (tl + rest + 1 > cap) return -1;
+            memmove(rel + tl, rel + n, rest + 1);
+            memcpy(rel, to, tl);
+            return 0;
+        }
+        p = to + tl;
+        if (*p == '/') p++;
+    }
+    return 0;
+}
+
 int xs_begin(xjob_t *j, xentry_t *e, const char *name, int kind, uint64_t size, int64_t mtime) {
     char rel[XJ_PATH];
     struct stat st;
@@ -166,6 +226,28 @@ int xs_begin(xjob_t *j, xentry_t *e, const char *name, int kind, uint64_t size, 
     }
     rc = xs_safe_name(name, rel, sizeof rel);
     if (rc == -2) return XS_SKIP; /* "./": the destination itself */
+    if (rc == 0 && j->list) {
+        add_top(j, rel, kind);
+        if (kind == XE_FILE) j->files_done++;
+        if (j->progress) j->progress(j, 0);
+        return XS_SKIP;
+    }
+    if (rc == 0 && j->top_map[0]) {
+        rc = xs_map_top(j, rel, sizeof rel);
+        if (rc == 0) {
+            /* the new name is held to the same rules as the archive's own */
+            char again[XJ_PATH];
+            rc = xs_safe_name(rel, again, sizeof again) == 0 && strcmp(again, rel) == 0 ? 0 : -1;
+        }
+        if (rc == 1) {
+            /* left out: what is already there by that name stays as it is */
+            if (kind == XE_FILE) {
+                j->skipped++;
+                j->files_done++;
+            }
+            return XS_SKIP;
+        }
+    }
     if (rc != 0 || strlen(j->dest) + 1 + strlen(rel) + 32 > sizeof e->final_path) {
         j->unsafe++;
         return XS_SKIP;

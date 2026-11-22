@@ -151,13 +151,15 @@ int xreq_parse(const char *json, xjob_t *j) {
     j->has_password = rc == 1;
     if (get_bool(json, "merge", &j->merge) < 0) return -1;
     if (get_bool(json, "replace", &j->replace) < 0) return -1;
+    if (get_bool(json, "list", &j->list) < 0) return -1;
+    if (get_str(json, "top", j->top_map, sizeof j->top_map) < 0) return -1;
     return 0;
 }
 
 int xreq_read_file(const char *path, xjob_t *j) {
     char *buf;
     ssize_t n;
-    size_t at = 0, cap = 16384;
+    size_t at = 0, cap = 65536;
     int fd = open(path, O_RDONLY), rc;
     if (fd < 0) return -1;
     buf = malloc(cap);
@@ -214,6 +216,16 @@ int xstatus_format(char *out, size_t cap, const xjob_t *j, const char *state, lo
     if (at + 12 >= cap) return -1;
     at += (size_t)snprintf(out + at, cap - at, ",\"message\":");
     put_str(out, cap, &at, j->cause);
+    if (j->list) {
+        if (at + 12 >= cap) return -1;
+        at += (size_t)snprintf(out + at, cap - at, ",\"top\":");
+        put_str(out, cap, &at, j->top);
+        if (at + 16 >= cap) return -1;
+        at += (size_t)snprintf(out + at, cap - at, ",\"top_dirs\":");
+        put_str(out, cap, &at, j->top_dirs);
+        if (at + 20 >= cap) return -1;
+        at += (size_t)snprintf(out + at, cap - at, ",\"top_more\":%s", j->top_more ? "true" : "false");
+    }
     if (at + 2 >= cap) return -1;
     out[at++] = '}';
     out[at++] = '\n';
@@ -221,11 +233,28 @@ int xstatus_format(char *out, size_t cap, const xjob_t *j, const char *state, lo
     return (int)at;
 }
 
+static int xstatus_put(const char *path, char *tmp, size_t tcap, const char *buf, int len);
+
 int xstatus_write(const char *path, const xjob_t *j, const char *state, long pid) {
-    char buf[4096], tmp[XJ_PATH + 8];
-    int len = xstatus_format(buf, sizeof buf, j, state, pid), fd;
-    if (len <= 0) return -1;
-    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    /* A listing's names take up to XJ_TOP bytes, escaped up to six times over. On the heap: the
+     * feeder thread of a compressed tar writes the status too. */
+    char small[4096], *buf = small, tmp[XJ_PATH + 8];
+    size_t cap = sizeof small;
+    int len, rc;
+    if (j->list) {
+        cap = 4096 + 12 * (size_t)XJ_TOP;
+        buf = malloc(cap);
+        if (!buf) return -1;
+    }
+    len = xstatus_format(buf, cap, j, state, pid);
+    rc = len <= 0 ? -1 : xstatus_put(path, tmp, sizeof tmp, buf, len);
+    if (buf != small) free(buf);
+    return rc;
+}
+
+static int xstatus_put(const char *path, char *tmp, size_t tcap, const char *buf, int len) {
+    int fd;
+    snprintf(tmp, tcap, "%s.tmp", path);
     fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0666);
     if (fd < 0) return -1;
     if (write(fd, buf, (size_t)len) != len) {

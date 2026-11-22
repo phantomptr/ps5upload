@@ -84,7 +84,8 @@ pub struct Layout {
     pub xpad: bool,
 }
 
-/// A controller in the W3C standard layout: 17 buttons (0-1) and 4 axes (-1-1).
+/// A controller in the W3C standard layout: 17 buttons (0-1), 18 with a PlayStation pad's
+/// touchpad click, and 4 axes (-1-1).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Standard {
     pub buttons: Vec<f64>,
@@ -243,6 +244,35 @@ pub fn dualsense_standard(buf: &[u8]) -> Option<Standard> {
         0x31 if buf.len() >= 78 => (&buf[2..6], buf[6], buf[7], [buf[9], buf[10], buf[11]]),
         _ => return None,
     };
+    Some(sony_standard(sticks, l2, r2, b))
+}
+
+/// A DualShock 4 input report, report id first, in the W3C standard layout, for the same
+/// Windows reader. USB report 0x01 (64 bytes) and Bluetooth's short report 0x01 (10 bytes, or
+/// any other length where Windows pads it to the pad's longest) have the state right after the
+/// id; Bluetooth's full report 0x11 (78) two bytes later (SDL's `PS4StatePacket_t`). The button
+/// bytes are laid out as on a DualSense. `adapter`: Sony's wireless adapter, which reports with
+/// no pad paired to it (byte 31 bit 2): then nothing is held.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn ds4_standard(buf: &[u8], adapter: bool) -> Option<Standard> {
+    let at = match buf.first()? {
+        0x01 if buf.len() == 64 && adapter && buf[31] & 0x04 != 0 => {
+            return Some(sony_standard(&[128; 4], 0, 0, [8, 0, 0]));
+        }
+        0x01 if buf.len() >= 10 => 1,
+        0x11 if buf.len() >= 78 => 3,
+        _ => return None,
+    };
+    let s = &buf[at..];
+    Some(sony_standard(&s[0..4], s[7], s[8], [s[4], s[5], s[6]]))
+}
+
+/// A DualSense's or DualShock 4's state in the standard layout: the sticks (lx, ly, rx, ry),
+/// the analog triggers, and the three button bytes (hat + face, shoulders, PS + touchpad),
+/// which both pads lay out the same way. Button 17 is the touchpad click, as Chromium adds it
+/// for PlayStation pads.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn sony_standard(sticks: &[u8], l2: u8, r2: u8, b: [u8; 3]) -> Standard {
     let range = AbsRange {
         min: 0,
         max: 255,
@@ -255,7 +285,7 @@ pub fn dualsense_standard(buf: &[u8]) -> Option<Standard> {
     // A trigger is its analog byte. Its digital bit comes on early in the pull, so taking the
     // larger of the two sent every pull as a full one; the bit counts only when the byte says 0.
     let trig = |v: u8, digital: f64| if v > 0 { f64::from(v) / 255.0 } else { digital };
-    Some(Standard {
+    Standard {
         buttons: vec![
             bit(b[0], 0x20), // cross
             bit(b[0], 0x40), // circle
@@ -274,9 +304,10 @@ pub fn dualsense_standard(buf: &[u8]) -> Option<Standard> {
             dir([5, 6, 7]),
             dir([1, 2, 3]),
             bit(b[2], 0x01), // PS
+            bit(b[2], 0x02), // touchpad click
         ],
         axes: sticks.iter().map(|&v| stick(range, i32::from(v))).collect(),
-    })
+    }
 }
 
 /// The Windows app's DualSense reader (#643): WebView2's Gamepad API saw no controller for
@@ -290,7 +321,7 @@ pub fn dualsense_standard(buf: &[u8]) -> Option<Standard> {
 pub mod hid_reader {
     use super::*;
     use crate::commands::pad_touchpad::reader::host;
-    use crate::commands::pad_touchpad::{DUALSENSE_PIDS, SONY_VID};
+    use crate::commands::pad_touchpad::{is_touchpad_pad, DS4_ADAPTER_PID, DS4_PIDS, SONY_VID};
     use std::ffi::CString;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -307,6 +338,7 @@ pub mod hid_reader {
     struct Pad {
         path: CString,
         dev: hidapi::HidDevice,
+        product: u16,
         slot: u32,
         id: String,
         state: Option<Standard>,
@@ -372,16 +404,16 @@ pub mod hid_reader {
         None
     }
 
-    /// DualSense game pad collections not open yet: (path, name).
-    fn find(open: &[Pad]) -> Vec<(CString, String, hidapi::HidDevice)> {
+    /// DualSense and DualShock 4 game pad collections not open yet: (path, name, product).
+    fn find(open: &[Pad]) -> Vec<(CString, String, u16, hidapi::HidDevice)> {
         let known: Vec<CString> = open.iter().map(|p| p.path.clone()).collect();
         host::with_api(move |api| {
             let _ = api.reset_devices();
             let _ = api.add_devices(SONY_VID, 0);
-            let found: Vec<(CString, String)> = api
+            let found: Vec<(CString, String, u16)> = api
                 .device_list()
                 .filter(|d| {
-                    DUALSENSE_PIDS.contains(&d.product_id())
+                    is_touchpad_pad(d.product_id())
                         && (d.usage_page() == 0 || (d.usage_page() == 1 && d.usage() == 5))
                         && !known.iter().any(|k| k.as_c_str() == d.path())
                 })
@@ -389,21 +421,25 @@ pub mod hid_reader {
                     let name = d
                         .product_string()
                         .filter(|s| !s.is_empty())
-                        .unwrap_or("DualSense Wireless Controller")
+                        .unwrap_or(if DS4_PIDS.contains(&d.product_id()) {
+                            "Wireless Controller"
+                        } else {
+                            "DualSense Wireless Controller"
+                        })
                         .to_string();
                     let bus = match d.bus_type() {
                         hidapi::BusType::Bluetooth => " (Bluetooth)",
                         hidapi::BusType::Usb => " (USB)",
                         _ => "",
                     };
-                    (d.path().to_owned(), format!("{name}{bus}"))
+                    (d.path().to_owned(), format!("{name}{bus}"), d.product_id())
                 })
                 .collect();
             found
                 .into_iter()
-                .filter_map(|(path, name)| {
+                .filter_map(|(path, name, product)| {
                     let dev = api.open_path(&path).ok()?;
-                    Some((path, name, dev))
+                    Some((path, name, product, dev))
                 })
                 .collect::<Vec<_>>()
         })
@@ -427,7 +463,7 @@ pub mod hid_reader {
                 }
                 if enumeration_due(known, changed_at.elapsed(), enumerated_at.elapsed()) {
                     enumerated_at = Instant::now();
-                    for (path, id, dev) in find(&pads) {
+                    for (path, id, product, dev) in find(&pads) {
                         let slot = (0..)
                             .find(|s| !pads.iter().any(|p| p.slot == *s))
                             .unwrap_or(0);
@@ -435,6 +471,7 @@ pub mod hid_reader {
                         pads.push(Pad {
                             path,
                             dev,
+                            product,
                             slot,
                             id,
                             state: None,
@@ -462,7 +499,12 @@ pub mod hid_reader {
                     match p.dev.read_timeout(&mut buf, wait) {
                         Ok(0) => break,
                         Ok(n) => {
-                            if let Some(st) = dualsense_standard(&buf[..n]) {
+                            let st = if DS4_PIDS.contains(&p.product) {
+                                ds4_standard(&buf[..n], p.product == DS4_ADAPTER_PID)
+                            } else {
+                                dualsense_standard(&buf[..n])
+                            };
+                            if let Some(st) = st {
                                 p.state = Some(st);
                             }
                             wait = 0;
@@ -982,7 +1024,8 @@ mod tests {
         for id in [0x01, 0x31] {
             let st =
                 dualsense_standard(&ds_full(id, 0, 128, 128, 0x20 | 1, 0x01 | 0x10, 0x01)).unwrap();
-            assert_eq!(st.buttons.len(), 17);
+            assert_eq!(st.buttons.len(), 18);
+            assert_eq!(st.buttons[17], 0.0, "touchpad not clicked");
             assert_eq!(st.buttons[0], 1.0, "cross");
             assert_eq!(st.buttons[1], 0.0);
             assert_eq!(st.buttons[4], 1.0, "L1");
@@ -1033,6 +1076,68 @@ mod tests {
         assert_eq!(st.buttons[6], 1.0);
         assert_eq!(dualsense_standard(&[0x01; 4]), None);
         assert_eq!(dualsense_standard(&[]), None);
+    }
+
+    #[test]
+    fn the_dualsense_touchpad_click_is_button_17() {
+        for id in [0x01, 0x31] {
+            let st = dualsense_standard(&ds_full(id, 128, 128, 0, 8, 0, 0x02)).unwrap();
+            assert_eq!(st.buttons[17], 1.0);
+            assert_eq!(st.buttons[16], 0.0, "not PS");
+        }
+        let short = [0x01, 128, 128, 128, 128, 8, 0, 0x02, 0, 0];
+        assert_eq!(dualsense_standard(&short).unwrap().buttons[17], 1.0);
+    }
+
+    /// A DualShock 4 report: USB 0x01 (64) / Bluetooth 0x11 (78) with the state at 1 / 3.
+    fn ds4_full(id: u8, lx: u8, l2: u8, b0: u8, b1: u8, b2: u8) -> Vec<u8> {
+        let (len, at) = if id == 0x11 { (78, 3) } else { (64, 1) };
+        let mut v = vec![0u8; len];
+        v[0] = id;
+        v[at..at + 4].copy_from_slice(&[lx, 128, 128, 128]);
+        v[at + 4] = b0;
+        v[at + 5] = b1;
+        v[at + 6] = b2;
+        v[at + 7] = l2;
+        v
+    }
+
+    #[test]
+    fn a_dualshock4_report_reads_as_the_standard_layout_with_its_touchpad_click() {
+        for id in [0x01, 0x11] {
+            // Cross, d-pad down (hat 4), Options, touchpad click; stick left; L2 full.
+            let st = ds4_standard(&ds4_full(id, 0, 255, 0x20 | 4, 0x20, 0x02), false).unwrap();
+            assert_eq!(st.buttons.len(), 18);
+            assert_eq!(st.buttons[0], 1.0, "cross");
+            assert_eq!(st.buttons[9], 1.0, "Options");
+            assert_eq!(st.buttons[6], 1.0, "L2");
+            assert_eq!(&st.buttons[12..16], &[0.0, 1.0, 0.0, 0.0], "down");
+            assert_eq!(st.buttons[16], 0.0, "not PS");
+            assert_eq!(st.buttons[17], 1.0, "touchpad click");
+            assert_eq!(st.axes[0], -1.0);
+        }
+        // Bluetooth's short report, 10 bytes or padded by Windows: the same bytes.
+        let short = [0x01, 128, 128, 128, 128, 8, 0, 0x03, 0, 0];
+        let mut padded = short.to_vec();
+        padded.resize(547, 0);
+        for buf in [&short[..], &padded[..]] {
+            let st = ds4_standard(buf, false).unwrap();
+            assert_eq!(st.buttons[16], 1.0, "PS");
+            assert_eq!(st.buttons[17], 1.0, "touchpad click");
+        }
+        assert_eq!(ds4_standard(&[0x01, 0, 0], false), None);
+        assert_eq!(ds4_standard(&[0x31; 78], false), None);
+    }
+
+    #[test]
+    fn the_dualshock4_adapter_with_no_pad_holds_nothing() {
+        let mut b = ds4_full(0x01, 0, 255, 0x20, 0, 0x02);
+        b[31] = 0x04;
+        let st = ds4_standard(&b, true).unwrap();
+        assert!(st.buttons.iter().all(|&v| v == 0.0));
+        assert!(st.axes.iter().all(|&v| v == 0.0));
+        // Not the adapter: the same byte means nothing.
+        assert_eq!(ds4_standard(&b, false).unwrap().buttons[17], 1.0);
     }
     use std::collections::HashMap;
 

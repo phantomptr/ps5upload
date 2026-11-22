@@ -111,6 +111,7 @@ import { RpBlockerNotice, RpBlockerPhase } from "./RpBlockers";
 import { RpKeyboardBox } from "./RpKeyboardBox";
 import { RpPasscodeBox } from "./RpPasscodeBox";
 import { pressClosedSettings, SETTINGS_OPENER, SettingsDrawer } from "./SettingsDrawer";
+import { CaptureVideo } from "./CaptureVideo";
 import { beforeRemotePlay, useRpBlockers } from "../../state/rpBlockers";
 import { useRpQualityStore } from "../../state/rpQuality";
 
@@ -1114,6 +1115,21 @@ export function StreamPanel({
   const touchLayout: TouchLayout = !compact ? "overlay-bar" : portraitFull ? "deck" : "overlay";
   const touchHere = showTouch && (!compact || full);
   const touchOverPicture = touchHere && touchLayout !== "deck";
+  // Where the picture sits in the stage (the Remote Play picture, or a capture device's).
+  const placeStyle: React.CSSProperties | undefined =
+    portraitFull && touchHere
+      ? { top: PICTURE_TOP, bottom: "auto", height: "56.25vw" }
+      : full
+        ? {
+            // Both sides by the same amount, so the picture stays in the middle: a notch has the
+            // same inset each side, and an iPhone Duo's column of system icons is on one side
+            // only and can sit over the picture. Nothing top and bottom: an open Duo held
+            // sideways has large insets there, and they left the picture far shorter than the
+            // screen (#675). A video player draws under them too.
+            paddingLeft: PICTURE_SIDE,
+            paddingRight: PICTURE_SIDE,
+          }
+        : undefined;
   // Sideways in full screen the controller has the menu button (bottom middle), not the handle.
   const touchMenu = compact && full && touchHere && touchLayout === "overlay";
   // The touch screen as the PS5 mouse's touchpad, where the console has a native mouse.
@@ -1201,6 +1217,8 @@ export function StreamPanel({
         <div
           ref={stage}
           tabIndex={0}
+          // The arrows are the game's here, never the page's (lib/tvNav).
+          data-own-arrows=""
           onKeyDown={(e) => onKey(e, true)}
           onKeyUp={(e) => onKey(e, false)}
           onBlur={(e) => {
@@ -1253,22 +1271,10 @@ export function StreamPanel({
             // The picture layer, under everything drawn over it. It never takes a pointer: the
             // stage's handlers get every press, and controls over it are hit first everywhere.
             className="rp-place pointer-events-none absolute inset-0 z-0 flex items-center justify-center"
-            style={
-              portraitFull && touchHere
-                ? { top: PICTURE_TOP, bottom: "auto", height: "56.25vw" }
-                : full
-                  ? {
-                      // Both sides by the same amount, so the picture stays in the middle: a notch
-                      // has the same inset each side, and an iPhone Duo's column of system icons
-                      // is on one side only and can sit over the picture. Nothing top and bottom:
-                      // an open Duo held sideways has large insets there, and they left the picture
-                      // far shorter than the screen (#675). A video player draws under them too.
-                      paddingLeft: PICTURE_SIDE,
-                      paddingRight: PICTURE_SIDE,
-                    }
-                  : undefined
-            }
+            style={placeStyle}
           />
+          {/* A capture device's picture in its place (#893), the same size and shape. */}
+          {running && !pip && !androidPip && <CaptureVideo host={profile?.host ?? null} fit={prefs.fit} placeStyle={placeStyle} />}
 
           <LaunchStatus />
           <RpBlockerPhase host={profile?.host ?? null} />

@@ -40,6 +40,7 @@
 #include "ava1_data.h"
 #include "ava1_app_gen.h"
 #include "sony_api_lock.h"
+#include "start_trace.h"
 
 #include "proc_identity.h"
 #include "webui_api.h"
@@ -130,6 +131,7 @@ static void *late_sweep_main(void *arg) {
     if (g_state && *(volatile int *)&g_state->shutdown_requested) return NULL;
     int n = runtime_sweep_our_instances();
     if (n > 0) fprintf(stderr, "[payload2] late sweep: ended %d stray instance(s) of ours\n", n);
+    if (n > 0) start_tracef("LATE_SWEEP killed=%d", n);
     archive_extract_sweep_request(); /* one that was too young to judge at the start */
     return NULL;
 }
@@ -418,40 +420,14 @@ void runtime_apply_ucred_jailbreak(void) {
     pthread_mutex_unlock(&kernel_rw_lock);
 }
 
-/* File-based startup trace. Writes to /data/ps5upload2/startup.log
- * so a stuck startup can be diagnosed without depending on the
- * mgmt port coming up (which is exactly what we're trying to
- * diagnose). The user can FTP into /data/ps5upload2/ and read this
- * file from any other tool with FS access (e.g. ftpsrv payload).
+/* File-based startup trace (start_trace.h): /data/ps5upload/startup.log, one line per stage with
+ * this process's pid and version, each written and fsynced before the step goes on, so a stuck
+ * start, or a console that went down while a helper started or stopped (#903), shows the last
+ * stage reached. Falls back to /data/ps5upload_startup.log before the runtime root exists.
  *
- * Best-effort: if /data/ps5upload2/ doesn't exist yet, the open
- * call fails and we silently move on. No allocations, no locks —
- * safe to call from anywhere in the startup path including the
- * pre-runtime_init window. */
-static void startup_trace(const char *stage) {
-    /* /data/ps5upload/ is created by an earlier payload run (or by
-     * runtime_ensure_directories below); on a brand-new console it
-     * may not exist yet on the very first ENTER_MAIN call, so we fall
-     * back to /data/ which is always writable.
-     *
-     * Earlier path "/data/ps5upload2/..." was a stale-name bug (the
-     * runtime root is /data/ps5upload without the "2"); the trace was
-     * silently never written, hiding a separate startup crash for
-     * weeks. Keep this path consistent with PS5UPLOAD2_RUNTIME_ROOT. */
-    FILE *fp = fopen(PS5UPLOAD2_RUNTIME_ROOT "/startup.log", "a");
-    if (!fp) {
-        fp = fopen("/data/ps5upload_startup.log", "a");
-        if (!fp) return;
-    }
-    struct timespec ts;
-    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
-        ts.tv_sec = time(NULL);
-        ts.tv_nsec = 0;
-    }
-    fprintf(fp, "%lld.%03ld %s\n",
-            (long long)ts.tv_sec, (long)(ts.tv_nsec / 1000000), stage);
-    fclose(fp);
-}
+ * (The path was once "/data/ps5upload2/..." by mistake and the trace was silently never written,
+ * hiding a separate startup crash for weeks: keep it on PS5UPLOAD2_RUNTIME_ROOT.) */
+static void startup_trace(const char *stage) { start_trace(stage); }
 
 /* Detach the payload's stdio from whoever launched it.
  *
@@ -654,6 +630,10 @@ int main(void) {
     start_lock = takeover_start_lock_wait(PS5UPLOAD2_RUNTIME_DIR, START_LOCK_MAX_AGE_MS, 200, &start_info);
     startup_trace(start_lock >= 0 ? (start_info.waited ? "START_LOCK_HELD_AFTER_WAIT" : "START_LOCK_HELD")
                                   : "START_LOCK_NONE");
+    if (start_info.waited || start_lock < 0)
+        start_tracef("START_LOCK outcome=%d holder_pid=%d holder_age_ms=%lld waited_ms=%lld errno=%d",
+                     start_info.outcome, start_info.holder_pid, start_info.holder_age_ms, start_info.waited_ms,
+                     start_info.flock_errno);
 
     /* Now that the runtime root exists, capture stdout+stderr to a fetchable
      * file and detach stdin so the helper's own error diagnostics survive for
@@ -697,9 +677,13 @@ int main(void) {
 
     /* Sweep orphan Tier-1 staging files. Crash-recovery only;
      * the desktop-side post-install delete handles steady-state. */
+    startup_trace("SWEEP_PKG_TEMP");
     runtime_sweep_stale_pkg_temp();
+    startup_trace("SWEEP_PFSC"); /* may unmount and detach an LVD unit a dead helper left */
     fs_pfsc_sweep();
+    startup_trace("SWEEP_EXTRACT");
     archive_extract_sweep();
+    startup_trace("SWEEP_CONVERT");
     console_convert_sweep();
     startup_trace("SWEEP_DONE");
 
@@ -831,6 +815,7 @@ int main(void) {
         int persisted = hw_fan_load_persisted();
         if (persisted >= HW_FAN_THRESHOLD_MIN && persisted <= HW_FAN_THRESHOLD_MAX) {
             const char *err = NULL;
+            start_tracef("FAN_RESTORE_BEGIN threshold=%d", persisted); /* an ioctl */
             if (hw_fan_set_threshold((uint8_t)persisted, &err) == 0) {
                 startup_trace("FAN_RESTORED");
                 printf("fan: restored persisted threshold %d°C (reapply=%ds)\n",
@@ -854,6 +839,7 @@ int main(void) {
     startup_trace("WAKE_WATCHDOG_STARTED");
     /* Icons hidden through ps5upload stay hidden when the system shows them on launch (#450). */
     icon_keeper_start();
+    startup_trace("ICON_KEEPER_STARTED");
     /* A newer instance that finds this one serving AVA1 asks it to exit through a flag file
      * (takeover.c); poll it once a second. Failure only costs the graceful takeover: the new
      * instance escalates to the reap. */
@@ -867,13 +853,16 @@ int main(void) {
     /* Probe the real descriptor ceiling before the server threads exist: the probe opens descriptors
      * until the kernel refuses, and a thread that opens or accepts meanwhile fails. */
     ava1_fd_limits_probe();
+    startup_trace("FD_PROBE_DONE");
     if (runtime_mgmt_install(&state) != 0) fprintf(stderr, "ava1: management table not installed\n");
+    startup_trace("AVA1_GATE_ASK");
     /* Never two helpers with AVA1 at once (the 2026-10-03 Pro outage: the prior instance was
      * not reaped and its AVA1 server and data layer ran beside the new one; the console hung).
      * The takeover has asked the prior instance to leave; give it a bounded time to release
      * :9120, and if something still answers there start neither the server nor the data layer. */
     int ava1_up = takeover_gate_start((int)AVA1_DEFAULT_PORT, 15000, 100, start_ava1_cb, NULL);
     if (!ava1_up) {
+        startup_trace("AVA1_GATE_REFUSED");
         fprintf(stderr,
                 "ava1: REFUSING TO START: port %d is still answered by another process 15 s after the takeover; "
                 "not starting the server or the data layer beside it. This helper exits: send the payload again "
@@ -965,42 +954,66 @@ int main(void) {
      * node.shutdown or the takeover flag (runtime_request_shutdown), then tears down. */
     runtime_wait_for_shutdown(&state);
     startup_trace("SHUTDOWN_REQUESTED");
+    /* Say who is leaving before anything else: the record of this instance goes away at the end of
+     * the stop, and a helper started meanwhile (the app stops this one first, then sends the new
+     * one) must still find this process and wait for it to be gone (runtime_reap_prior_instance). */
+    runtime_note_exiting(&state);
 
     /* Arm a watchdog so that, however we shut down from here, the process cannot hang forever (e.g. on
      * an uninterruptible Sony API). A lingering process is exactly what the next resend would duplicate.
      * Healthy shutdown exits via the return below long before this fires. Armed FIRST: everything
      * after it (a file write, a thread join) can hang too. */
     runtime_arm_shutdown_watchdog(&state, rc == 0 ? 0 : 1);
+    startup_trace("STOP_WATCHDOG_ARMED");
     /* Leave the tailnet first: the next instance wants the same UDP port (41641). */
     tailnet_node_shutdown();
+    startup_trace("STOP_TAILNET_DONE");
 
     /* Persist tracked play time before we go. The watcher only saves every
      * 60s, so a payload swap in between would otherwise drop the current
      * session — which is most of what a short session IS. */
     activity_flush();
+    startup_trace("STOP_ACTIVITY_DONE");
     /* Leaves a running game's overlay mounted for the next helper to adopt. */
     fakelib_overlay_stop();
+    startup_trace("STOP_FAKELIB_DONE");
     /* Lets go of every key and button the PC held on the console and removes its virtual devices. */
     vinput_stop();
+    startup_trace("STOP_VINPUT_DONE");
     /* Puts Play Together's virtual controllers at rest and removes them (a takeover's new helper
      * makes them again when the engine re-opens its slots). */
     vpad_stop();
+    startup_trace("STOP_VPAD_DONE");
 
     /* The AVA1 half: stop accepting, wait for the sessions (2 s) and for any in-flight Sony call
      * (this does NOT return while one runs: only the exit watchdog armed above (8 s, or up to 60 s while a Sony call runs) can end the
      * process then), then stop the data layer so journals are closed and durable jobs resume. */
     webui_stop(); /* bounded: joins its workers within 2 s, detaches a stuck one */
+    startup_trace("STOP_WEBUI_DONE");
 
     {
         int sr = ava1_payload_stop(2000, 3000);
         if (sr) fprintf(stderr, "ava1: stop was slow (0x%x): sessions or a Sony call outlived the soft wait\n", sr);
+        start_tracef("STOP_AVA1_DONE rc=0x%x", (unsigned)sr);
     }
+
+    /* The exit barrier (#903). ava1_payload_stop saw the Sony lock free once, which proves nothing
+     * about the next moment: the threads this stop does not end (the tile, the icon keeper, the
+     * watchers) may start a Sony call right after, and the exit would cut it. Taken here and never
+     * given back: a thread that asks for it from now on waits, and dies waiting, outside any Sony
+     * call. A call still running is waited for (the exit watchdog armed above bounds that, and its
+     * note makes the next helper wait instead of killing this one). Then the kernel R/W lock, for a
+     * moment at most, so no multi-step kernel write is half done when the process goes. */
+    runtime_exit_barrier();
 
     (void)runtime_clear_ownership(&state);
     /* Only ours: a newer helper's record stays. */
     serving_record_clear(PS5UPLOAD2_RUNTIME_DIR, (int)getpid());
     /* A dump stopped mid-decrypt may have left the kernel's vnode pager swapped: put it back. */
     app_dump_pager_emergency_restore();
+    /* The last line: the record of the exit this helper made itself. (After the wipe below nothing
+     * may be written: it would make the folders again.) */
+    startup_trace(hu_requested() ? "EXIT_UNINSTALL" : "EXIT");
     /* "Remove PS5Upload from this PS5" (node.uninstall): every service has stopped writing; the
      * helper's folders go last. Nothing is logged from here on: stderr lives in them. */
     if (hu_requested()) hu_wipe();

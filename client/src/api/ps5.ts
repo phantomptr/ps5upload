@@ -5,6 +5,7 @@
 // TCP send) stay in-process.
 
 import { trStatic } from "../lib/trStatic";
+import { discardBody } from "../lib/discardBody";
 import { requestStatusRecheck } from "../lib/statusRecheck";
 import { formatBytes } from "../lib/format";
 import {
@@ -15,6 +16,7 @@ import {
 import { Channel } from "@tauri-apps/api/core";
 import { getEngineUrl } from "../state/engine";
 import { hostOf } from "../lib/addr";
+import { kernelPatcherOf, rememberKernelSend } from "../lib/autoLoaderGuard";
 import { fetchConsoleStat } from "./consoleFiles";
 import { readWithRetries } from "../lib/pollRead";
 import { ENGINE_LONG_TIMEOUT_MS, ENGINE_TIMEOUT_MS, engineFetch, engineLongPost } from "../lib/engineFetch";
@@ -705,14 +707,20 @@ export async function sendPayloadChecked(
   // The web UI's send is made by the engine, which does this check itself. The question below
   // only exists in the desktop app: asked from a browser it failed every catalogue send with
   // "needs the desktop app".
-  if (!isTauriEnv()) return sendPayload(ip, elfPath, port);
-  const check = await invoke<{ ok?: boolean; status?: string }>("payload_send_check", {
-    ip,
-    path: elfPath,
-    port: port ?? null,
-  });
-  if (check?.ok === false) throw new PayloadSendRefused(check.status ?? "loader_busy");
-  return sendPayload(ip, elfPath, port);
+  if (isTauriEnv()) {
+    const check = await invoke<{ ok?: boolean; status?: string }>("payload_send_check", {
+      ip,
+      path: elfPath,
+      port: port ?? null,
+    });
+    if (check?.ok === false) throw new PayloadSendRefused(check.status ?? "loader_busy");
+  }
+  const sent = await sendPayload(ip, elfPath, port);
+  // A kernel patcher (kstuff) sent by hand counts too: the auto-run playlist does not send it
+  // again in this console boot (lib/autoLoaderGuard).
+  const patcher = kernelPatcherOf({ path: elfPath });
+  if (patcher) rememberKernelSend(hostOf(ip), patcher, Date.now());
+  return sent;
 }
 
 /**
@@ -723,7 +731,44 @@ export async function sendPayloadChecked(
  * ps5upload helper image (`payload_is_helper`).
  */
 export async function loadConsolePayload(host: string, path: string): Promise<{ bytes: number }> {
-  return invoke<{ bytes: number }>("ps5_payload_load_console", { host, path });
+  const sent = await invoke<{ bytes: number }>("ps5_payload_load_console", { host, path });
+  // A kernel patcher (kstuff) loaded from Files counts too, as in sendPayloadChecked: the
+  // auto-run playlist does not send it again in this console boot (lib/autoLoaderGuard).
+  const patcher = kernelPatcherOf({ path });
+  if (patcher) rememberKernelSend(hostOf(host), patcher, Date.now());
+  return sent;
+}
+
+/**
+ * A playlist step's payload stored on the console (#900): the engine reads `path` back through
+ * the helper and sends it to the loader the way it sends a file on this computer (the same
+ * refusals, loader lock, ELF check and size cap; `POST /api/payload/send {console_path}`). Only
+ * an engine whose `/api/version` caps say `payload_console_path` takes it.
+ */
+export async function sendConsolePayload(
+  host: string,
+  path: string,
+  port?: number,
+): Promise<{ viaPayloadManager: boolean }> {
+  const res = await engineFetch(`${getEngineUrl()}/api/payload/send`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ host, port: port ?? null, console_path: path }),
+    timeoutMs: 120_000,
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    message?: string;
+    status?: string;
+    via_payload_manager?: boolean;
+  };
+  if (res.status === 409 && body.error) {
+    throw new PayloadSendRefused(body.error, { message: body.message ?? null });
+  }
+  if (!res.ok) throw new Error(body.error ?? body.status ?? `HTTP ${res.status}`);
+  return {
+    viaPayloadManager: body.via_payload_manager === true || sentViaPayloadManager(body.status),
+  };
 }
 
 /** Whether payload_send's status says the loader port was dead and the file
@@ -1473,6 +1518,18 @@ export interface FsExtractOptions {
   password?: string;
   merge?: boolean;
   replace?: boolean;
+  /** Top-level entries of the archive put under another name (`to`), or left out (`to` empty):
+   *  "Extract here" with Keep both or Skip existing (#891). */
+  top?: { from: string; to: string }[];
+}
+
+/** An archive's top-level names, read on the console without extracting anything. */
+export interface ExtractListing {
+  top: string[];
+  /** Those of `top` that are folders. */
+  dirs: string[];
+  /** More names than the console could report (the rest are not known). */
+  more: boolean;
 }
 
 /** Extract an archive on the console (.zip, .7z, .rar, tar.*, the first volume of a split one)
@@ -1490,8 +1547,29 @@ export async function fsExtract(
   if (opts.password) body.password = opts.password;
   if (opts.merge) body.merge = true;
   if (opts.replace) body.replace = true;
+  if (opts.top && opts.top.length > 0) body.top = opts.top;
   // Thousands of files take far longer than a minute (#712): followed to the end, not timed out.
   return toExtractResult(await fsLongOp("/api/ps5/fs/extract", body));
+}
+
+/** The top-level names of an archive on the console (`dir` is the folder it would be extracted
+ *  into, which must exist): "Extract here" compares them with that folder before it starts. A
+ *  helper or engine older than this throws (`fs_extract_list_unsupported`, or the folder refused
+ *  as `fs_extract_destination_exists`) and never extracts. */
+export async function fsExtractList(
+  transferAddr: string,
+  path: string,
+  dir: string,
+  opts: { password?: string } = {},
+): Promise<ExtractListing> {
+  const opId = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
+  const body: Record<string, unknown> = { addr: toMgmtAddr(transferAddr), path, dest: dir, list: true, op_id: opId };
+  if (opts.password) body.password = opts.password;
+  const r = await fsLongOp("/api/ps5/fs/extract", body);
+  if (r.listed !== true) throw new Error("fs_extract_list_unsupported");
+  const names = (v: unknown) =>
+    Array.isArray(v) ? v.filter((n): n is string => typeof n === "string" && n !== "") : [];
+  return { top: names(r.top), dirs: names(r.top_dirs), more: r.top_more === true };
 }
 
 export interface FsDirEntry {
@@ -2929,7 +3007,10 @@ export async function ddpStatus(host: string): Promise<DdpStatus> {
   const res = await engineFetch(
     `${getEngineUrl()}/api/ps5/power/ddp-status?host=${encodeURIComponent(host)}`,
   );
-  if (!res.ok) throw new Error(`ddp status failed (${res.status})`);
+  if (!res.ok) {
+    await discardBody(res);
+    throw new Error(`ddp status failed (${res.status})`);
+  }
   return (await res.json()) as DdpStatus;
 }
 

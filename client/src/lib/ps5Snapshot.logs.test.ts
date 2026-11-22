@@ -51,6 +51,17 @@ describe("helper log collection", () => {
     expect([...reads].sort()).toEqual(["/data/ps5upload/startup.log", "/data/ps5upload/stderr.log"]);
   });
 
+  /* #903: the start/stop trace's earlier part comes too, so a crash report shows the steps of
+   * both helpers of a takeover after the file has moved to .old. */
+  it("collects the start/stop trace and its earlier part", async () => {
+    const reads = consoleWith({ "/data/ps5upload": ["startup.log", "startup.log.old"] });
+    const { payload_logs } = await buildPs5Snapshot({ redact: true });
+    expect([...reads].sort()).toEqual(["/data/ps5upload/startup.log", "/data/ps5upload/startup.log.old"]);
+    const names = payload_logs.map((f) => f.name);
+    expect(names).toContain("startup.log");
+    expect(names).toContain("startup_old.log");
+  });
+
   it("still tries a file when its directory cannot be listed", async () => {
     const reads = consoleWith({}, ["/data/shadowmount"]);
     await buildPs5Snapshot({ redact: true });

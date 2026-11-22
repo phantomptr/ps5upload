@@ -29,6 +29,8 @@ extern "C" {
 #define XJ_NAME 256
 #define XJ_CAUSE 384
 #define XJ_PASSWORD 256
+/* The top-level names of a listing, and a request's renames of top-level entries ("Extract here"). */
+#define XJ_TOP 8192
 
 /* Room kept free on the destination's drive beyond what the files need. */
 #define XJ_SPACE_MARGIN (64ull << 20)
@@ -42,6 +44,17 @@ typedef struct xjob {
     int has_password;
     int merge;   /* the destination may exist: write into it */
     int replace; /* an existing file is replaced (else kept and counted as skipped) */
+    /* Only name the archive's top-level entries (into `top`); nothing is written, and the
+     * destination is neither made nor checked for room. */
+    int list;
+    /* Renames of top-level entries, "from/to/from/to..." ('/' never occurs in one name). An empty
+     * `to` leaves that entry out (counted as skipped). Applied to the name made safe. */
+    char top_map[XJ_TOP];
+    /* list: the distinct top-level names, '/' separated, those of them that are folders, and
+     * whether more did not fit. */
+    char top[XJ_TOP];
+    char top_dirs[XJ_TOP];
+    int top_more;
 
     /* Progress. A total of 0 means "not known yet". */
     uint64_t files_total, bytes_total;
@@ -112,6 +125,10 @@ int xs_end(xjob_t *j, xentry_t *e, int ok);
  * replaced. 0; -2 when nothing is left (".", "./"): the destination itself; -1 when it cannot be
  * (absolute, `..`, a drive letter, a component longer than 255 bytes, too long a path). */
 int xs_safe_name(const char *name, char *out, size_t cap);
+
+/* The safe name `rel` (in place, `cap` bytes) after the request's top-level renames: 0 keep (maybe
+ * renamed), 1 leave the entry out, -1 the new name does not fit. */
+int xs_map_top(const xjob_t *j, char *rel, size_t cap);
 
 /* ---- the back ends ---- */
 

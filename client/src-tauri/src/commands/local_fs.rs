@@ -447,40 +447,65 @@ mod android {
             .l()
             .map_err(|e| format!("uri obj: {e}"))?;
 
-        // intent = new Intent(ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, uri), API 30+;
-        // below that ACTION_APPLICATION_DETAILS_SETTINGS, which holds the storage permission.
-        let action = if sdk_int(&mut env).unwrap_or(30) < 30 {
-            "android.settings.APPLICATION_DETAILS_SETTINGS"
+        // ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, API 30+; below that
+        // ACTION_APPLICATION_DETAILS_SETTINGS, which holds the storage permission. Some devices
+        // (Android TV and Google TV boxes) have no all-files page: startActivity throws
+        // ActivityNotFoundException, and the app's own settings page is the fallback.
+        let details = "android.settings.APPLICATION_DETAILS_SETTINGS";
+        let first = if sdk_int(&mut env).unwrap_or(30) < 30 {
+            details
         } else {
             "android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION"
         };
-        let action = env.new_string(action).map_err(|e| format!("action: {e}"))?;
-        let intent = env
-            .new_object(
-                "android/content/Intent",
-                "(Ljava/lang/String;Landroid/net/Uri;)V",
-                &[JValue::Object(&action), JValue::Object(&uri)],
-            )
-            .map_err(|e| format!("new Intent: {e}"))?;
+        match open_settings(&mut env, &context, first, &uri) {
+            Ok(()) => Ok(()),
+            Err(e) if first != details => {
+                open_settings(&mut env, &context, details, &uri).map_err(|e2| format!("{e}; {e2}"))
+            }
+            Err(e) => Err(e),
+        }
+    }
 
-        // The Context here may not be an Activity, so the launch needs
-        // FLAG_ACTIVITY_NEW_TASK.
-        const FLAG_ACTIVITY_NEW_TASK: i32 = 0x1000_0000;
-        env.call_method(
-            &intent,
-            "addFlags",
-            "(I)Landroid/content/Intent;",
-            &[JValue::Int(FLAG_ACTIVITY_NEW_TASK)],
-        )
-        .map_err(|e| format!("addFlags: {e}"))?;
-        env.call_method(
-            &context,
-            "startActivity",
-            "(Landroid/content/Intent;)V",
-            &[JValue::Object(&intent)],
-        )
-        .map_err(|e| format!("startActivity: {e}"))?;
-        Ok(())
+    /// `context.startActivity(new Intent(action, uri))`. A Java exception (no activity handles
+    /// the action) is cleared here: left pending, the next JNI call on this thread aborts the app.
+    fn open_settings(
+        env: &mut jni::JNIEnv,
+        context: &JObject,
+        action: &str,
+        uri: &JObject,
+    ) -> Result<(), String> {
+        let r = (|| -> Result<(), String> {
+            let action = env.new_string(action).map_err(|e| format!("action: {e}"))?;
+            let intent = env
+                .new_object(
+                    "android/content/Intent",
+                    "(Ljava/lang/String;Landroid/net/Uri;)V",
+                    &[JValue::Object(&action), JValue::Object(uri)],
+                )
+                .map_err(|e| format!("new Intent: {e}"))?;
+            // The Context here may not be an Activity, so the launch needs
+            // FLAG_ACTIVITY_NEW_TASK.
+            const FLAG_ACTIVITY_NEW_TASK: i32 = 0x1000_0000;
+            env.call_method(
+                &intent,
+                "addFlags",
+                "(I)Landroid/content/Intent;",
+                &[JValue::Int(FLAG_ACTIVITY_NEW_TASK)],
+            )
+            .map_err(|e| format!("addFlags: {e}"))?;
+            env.call_method(
+                context,
+                "startActivity",
+                "(Landroid/content/Intent;)V",
+                &[JValue::Object(&intent)],
+            )
+            .map_err(|e| format!("startActivity: {e}"))?;
+            Ok(())
+        })();
+        if r.is_err() {
+            let _ = env.exception_clear();
+        }
+        r
     }
 
     /// `Environment.getExternalStoragePublicDirectory(DIRECTORY_DOWNLOADS)`: None on any failure.

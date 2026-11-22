@@ -73,6 +73,8 @@ export function BrowseMenu(props: {
   onThisDevice?: () => void;
   /** List the saved servers (and Add a connection). */
   servers?: boolean;
+  /** Offer this computer/device too (default). False: the saved servers only. */
+  local?: boolean;
 }) {
   const tr = useTr();
   const ref = useRef<HTMLDivElement>(null);
@@ -129,7 +131,7 @@ export function BrowseMenu(props: {
             </span>
           </button>
         </>
-      ) : (
+      ) : props.local === false ? null : (
         <button type="button" role="menuitem" className={item} onClick={props.onLocal}>
           <HardDrive size={14} className="text-[var(--color-muted)]" />
           {isMobile()
@@ -137,7 +139,9 @@ export function BrowseMenu(props: {
             : tr("browse_this_computer", undefined, "This computer…")}
         </button>
       )}
-      {servers && props.connections.length > 0 && <div className="my-1 border-t border-[var(--color-border)]" />}
+      {servers && props.connections.length > 0 && props.local !== false && (
+        <div className="my-1 border-t border-[var(--color-border)]" />
+      )}
       {servers && props.connections.map((c) => {
         const offline = props.status[c.id] === "offline";
         return (
@@ -161,7 +165,9 @@ export function BrowseMenu(props: {
       })}
       {servers && (
         <>
-          <div className="my-1 border-t border-[var(--color-border)]" />
+          {(props.local !== false || props.connections.length > 0) && (
+            <div className="my-1 border-t border-[var(--color-border)]" />
+          )}
           <button type="button" role="menuitem" className={item} onClick={props.onAdd}>
             <Plus size={14} className="text-[var(--color-muted)]" />
             {tr("browse_add_connection", undefined, "Add a connection…")}

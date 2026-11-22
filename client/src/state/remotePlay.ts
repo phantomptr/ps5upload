@@ -25,10 +25,11 @@ import { gamepadsOf } from "../lib/nativePad";
 import { padKind, profileFor } from "../lib/padProfiles";
 import { describePads, padActive, padFromMessage, type PadInput } from "../lib/padFrom";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
+import { discardBody } from "../lib/discardBody";
 import { setGameMode } from "../lib/gameMode";
 import { setScreenWakeReason } from "../lib/androidScreenWake";
 import { setPadForwardReason } from "../lib/androidPadBridge";
-import { padMotion, padTouchState, setPadTouchpad } from "../lib/padTouchpad";
+import { installPadTouchReceiver, padMotion, padTouchState, setPadTouchpad } from "../lib/padTouchpad";
 import { DualSenseEffects, dualSenseCapable, findDualSense } from "../lib/dualSense";
 import { applyControls } from "../lib/gameControls";
 import { DEFAULT_PICTURE, readPicture, type PictureTools } from "../lib/rpPicture";
@@ -41,6 +42,7 @@ import { trStatic } from "../lib/trStatic";
 import { currentControls, rpControls } from "./gameControls";
 import { useKbmStore } from "./kbm";
 import { emitPadKbm, readKbmStatus } from "../lib/kbmInput";
+import { CAPTURE_LIGHT, captureWanted } from "../lib/capturePicture";
 
 /** How Remote Play looks and behaves on this device. */
 export interface RpPrefs {
@@ -223,6 +225,21 @@ export interface RpTarget {
   rpKey: string;
 }
 
+/** The capture device's sound plays in place of Remote Play's (state/capturePicture.ts). */
+let captureSound = false;
+
+/** Remote Play's volume: none while muted or while a capture device's sound plays instead. */
+function rpVolume(p: Pick<RpPrefs, "muted" | "volume">): number {
+  return p.muted || captureSound ? 0 : p.volume;
+}
+
+/** The capture device's sound took over from Remote Play's (on) or gave it back (off). */
+export function setCaptureSound(on: boolean): void {
+  captureSound = on;
+  const s = useRemotePlayStore.getState();
+  s.stream?.setVolume(rpVolume(s.prefs));
+}
+
 /** The fixed-for-a-session settings a restart may change for that session alone. */
 export type SessionQuality = Partial<Pick<RpPrefs, "res" | "codec" | "bitrateKbps" | "pictureHere">>;
 
@@ -392,7 +409,17 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
     const cur = get().stream;
     if (cur && cur.currentPhase !== "ended") return;
     const { prefs } = get();
-    const quality = opts?.quality ?? null;
+    // The picture from a capture device (#893, state/capturePicture.ts): the console is asked
+    // for the lightest stream, which carries the controls and a picture to fall back to. A page
+    // joining a running session asks for nothing, as always.
+    const light = !opts?.attach && captureWanted(t.host);
+    const quality: SessionQuality | null = light
+      ? { ...(opts?.quality ?? {}), res: CAPTURE_LIGHT.res, bitrateKbps: CAPTURE_LIGHT.bitrateKbps }
+      : (opts?.quality ?? null);
+    if (light) {
+      log.info("remote-play", "picture from a capture device: Remote Play at 720p, 30 fps, 3 Mbps");
+      void import("./capturePicture").catch(() => {});
+    }
     const [width, height] = (quality?.res ?? prefs.res).split("x").map(Number);
     // A DualSense here: the session starts in DualSense mode (triggers and haptics). Only the
     // desktop app looks (and only it waits for the answer).
@@ -418,7 +445,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       rpKey: t.rpKey,
       width,
       height,
-      fps: prefs.fps,
+      fps: light ? CAPTURE_LIGHT.fps : prefs.fps,
       keepAliveS: prefs.keepAliveS,
       audioBufferMs: audioBufferFor(prefs),
       lowLatency: prefs.lowLatency,
@@ -533,7 +560,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       gamepads: rpGamepads,
     });
     padInputs.clear();
-    stream.setVolume(prefs.muted ? 0 : prefs.volume);
+    stream.setVolume(rpVolume(prefs));
     set({ stream, target: t, phase: "connecting", error: null, stats: null, light: null, keyboard: null, passcode: null, sessionQuality: quality, pictureHere: pictureHere !== false });
     await stream.start();
   },
@@ -562,7 +589,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
     set({ prefs });
     const s = get().stream;
     if (s) {
-      s.setVolume(prefs.muted ? 0 : prefs.volume);
+      s.setVolume(rpVolume(prefs));
       s.setAudioBuffer(audioBufferFor(prefs));
       s.setFit(prefs.fit);
       s.setReplay(prefs.replayS);
@@ -597,9 +624,11 @@ useRemotePlayStore.subscribe((s) => setScreenWakeReason("remote-play", !!s.strea
 // Controllers are the page's while there is a stream (lib/androidPadBridge).
 useRemotePlayStore.subscribe((s) => setPadForwardReason("remote-play", !!s.stream && s.pictureHere));
 
-// A DualSense's touchpad (lib/padTouchpad.ts) is read while a stream plays; each change sends the
-// pad at once, like a key, so a quick tap is not lost between two frames.
+// A DualSense's or DualShock 4's touchpad (lib/padTouchpad.ts) is read while a stream plays; each
+// change sends the pad at once, like a key, so a quick tap is not lost between two frames. The
+// Android app sends the touchpad's press itself.
 setPadTouchpad(false, () => useRemotePlayStore.getState().stream?.sendPad());
+installPadTouchReceiver();
 useRemotePlayStore.subscribe((s) => setPadTouchpad(!!s.stream && s.phase === "playing" && s.pictureHere));
 
 /** The session the engine is running, if any (it outlives a reload of this page). */
@@ -614,7 +643,11 @@ export async function fetchRunningSession(): Promise<{
 }> {
   try {
     const r = await fetch(`${getEngineUrl()}/api/ps5/rp/session?passive=1`);
-    return r.ok ? await r.json() : { host: null };
+    if (!r.ok) {
+      await discardBody(r);
+      return { host: null };
+    }
+    return await r.json();
   } catch {
     return { host: null };
   }

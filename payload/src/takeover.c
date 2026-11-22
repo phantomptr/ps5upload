@@ -9,6 +9,7 @@
 #include "config.h"
 #include "ava1_app_gen.h"
 #include "takeover_flag.h"
+#include "start_trace.h"
 
 /* How long a new instance waits for the old one to release its ports. The old instance may be
  * flushing a multi-GiB commit; 10 s covers the common big-upload tail without making a healthy
@@ -58,17 +59,20 @@ int runtime_try_takeover(runtime_state_t *state) {
             state->prior_asked = 1;
             state->startup_reason = PS5UPLOAD2_STARTUP_TAKEOVER;
         }
+        start_tracef("TAKEOVER port_free prior_pid=%d asked=%d", prior, state->prior_asked);
         return 0;
     }
     {
         /* The old instance is still serving AVA1. */
         int ports[1] = {(int)AVA1_DEFAULT_PORT};
         state->prior_asked = 1;
+        start_tracef("TAKEOVER_FLAG_WAIT port=%d prior_pid=%d", (int)AVA1_DEFAULT_PORT, state->prior_rec_pid);
         if (takeover_flag_request(PS5UPLOAD2_RUNTIME_DIR, state->takeover_nonce, ports, 1,
                                   TAKEOVER_PORT_RELEASE_ATTEMPTS,
                                   TAKEOVER_PORT_RELEASE_INTERVAL_US) != 0) {
             fprintf(stderr, "[payload2] takeover timed out: ava1 port %d still occupied\n",
                     (int)AVA1_DEFAULT_PORT);
+            start_trace("TAKEOVER_FLAG_TIMEOUT");
             return -1;
         }
         state->startup_reason = PS5UPLOAD2_STARTUP_TAKEOVER;

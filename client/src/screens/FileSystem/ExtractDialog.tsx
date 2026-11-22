@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { FileArchive, HardDrive, Usb } from "lucide-react";
 
-import { fsListDir, volumeForPath, type Volume } from "../../api/ps5";
+import { fsExtractList, fsListDir, volumeForPath, type ExtractListing, type Volume } from "../../api/ps5";
 import { Button, Checkbox, Input, Modal, SegmentedControl } from "../../components";
 import { formatBytes } from "../../lib/format";
 import { archiveFolderName, freeFolderName, validFolderName } from "../../lib/archiveName";
-import { cleanConsolePath } from "../../lib/consolePath";
+import { cleanConsolePath, keepBothName } from "../../lib/consolePath";
 import { humanizeCaught } from "../../lib/humanizeError";
 import { useTr } from "../../state/lang";
 import { ConsoleFolderBrowser, DestButton } from "./ConsoleFolderBrowser";
@@ -16,12 +16,22 @@ export type ExtractMode = "new" | "merge" | "replace";
 export interface ExtractChoice {
   /** The folder the new folder goes in: the archive's own by default, or another one, on any drive. */
   parent: string;
-  /** The new folder's name, inside `parent`. */
+  /** The new folder's name, inside `parent` ("" for Extract here). */
   folder: string;
   merge: boolean;
   replace: boolean;
   password: string;
+  /** Extract here (#891): straight into `parent`, no new folder. */
+  here?: boolean;
+  /** Extract here: top-level entries put under another name (Keep both) or left out (Skip). */
+  top?: { from: string; to: string }[];
 }
+
+/** Where the archive goes: a new folder (the default), or straight into the folder. */
+export type ExtractWhere = "new" | "here";
+
+/** What Extract here does with a top-level entry already in the folder. */
+export type HereConflict = "replace" | "keep" | "skip";
 
 /** What to do once the archive is out: delete it (only when everything came out). */
 export interface ExtractAfter {
@@ -40,8 +50,58 @@ export function extractPath(parent: string, name: string): string {
 
 /** The folder an extract writes into. The console writes each file beside its final name, so a
  *  folder on another drive never needs a move between drives. */
-export function extractDest(choice: Pick<ExtractChoice, "parent" | "folder">): string {
-  return extractPath(choice.parent, choice.folder);
+export function extractDest(choice: Pick<ExtractChoice, "parent" | "folder" | "here">): string {
+  return choice.here ? cleanConsolePath(choice.parent) : extractPath(choice.parent, choice.folder);
+}
+
+/** Whether the console takes `dir` as a folder to extract straight into: never a drive's own top
+ *  folder (/data, /mnt/usb0), as with any extract (the helper's fsj_path_is_root). */
+export function extractHereAllowed(dir: string): boolean {
+  const parts = cleanConsolePath(dir).split("/").filter(Boolean);
+  return parts[0] === "mnt" ? parts.length >= 3 : parts.length >= 2;
+}
+
+/** The archive's top-level entries already in the folder. */
+export function hereConflicts(top: string[], exists: (n: string) => boolean): string[] {
+  return top.filter((n) => exists(n));
+}
+
+/**
+ * The job for Extract here: into `parent`, writing into it (merge). With conflicts, `policy`
+ * decides: Replace overwrites files of the same name (a folder merges into the one there), Keep
+ * both puts each incoming entry under a free name ("a (2).txt"), Skip leaves those entries out.
+ * Without a policy (no conflicts) nothing there is ever overwritten.
+ */
+export function hereChoice(
+  parent: string,
+  listing: Pick<ExtractListing, "top" | "dirs">,
+  conflicts: string[],
+  policy: HereConflict | null,
+  exists: (n: string) => boolean,
+  password: string,
+): ExtractChoice {
+  const base: ExtractChoice = { parent, folder: "", here: true, merge: true, replace: false, password };
+  if (conflicts.length === 0 || !policy) return base;
+  if (policy === "replace") return { ...base, replace: true };
+  if (policy === "skip") return { ...base, top: conflicts.map((from) => ({ from, to: "" })) };
+  const used = new Set<string>(listing.top);
+  const top = conflicts.map((from) => {
+    const dir = listing.dirs.includes(from);
+    let to = from;
+    for (let n = 2; n < 10_000 && (exists(to) || used.has(to)); n++) to = keepBothName(from, n, dir);
+    used.add(to);
+    return { from, to };
+  });
+  return { ...base, top };
+}
+
+/** Why a listing failed, as the dialog says it. */
+export function listErrorKind(message: string): "password" | "wrong_password" | "old_helper" | "other" {
+  if (message.includes("fs_extract_password_required")) return "password";
+  if (message.includes("fs_extract_wrong_password")) return "wrong_password";
+  if (message.includes("fs_extract_list_unsupported") || message.includes("fs_extract_destination_exists"))
+    return "old_helper";
+  return "other";
 }
 
 /**
@@ -91,6 +151,7 @@ export function ExtractDialog({
   addr = "",
   volumes = [],
   listNames,
+  listTop,
   passwordAsk = null,
   initial = null,
   archiveBytes = 0,
@@ -111,6 +172,9 @@ export function ExtractDialog({
   volumes?: Volume[];
   /** The names in another folder (default: listed on the console; tests pass their own). */
   listNames?: (dir: string) => Promise<string[]>;
+  /** The archive's top-level names, for Extract here (default: read on the console; tests pass
+   *  their own). */
+  listTop?: (parent: string, password: string) => Promise<ExtractListing>;
   passwordAsk?: "required" | "wrong" | null;
   /** The choice of the run that needs a password: kept as it was. */
   initial?: ExtractChoice | null;
@@ -128,12 +192,21 @@ export function ExtractDialog({
   const [browsing, setBrowsing] = useState(false);
   const [names, setNames] = useState<string[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  const [where, setWhere] = useState<ExtractWhere>(() => (initial?.here ? "here" : "new"));
+  /** Extract here: reading the archive's names, the conflicts found, or why it could not. */
+  const [checking, setChecking] = useState(false);
+  const [hereAsk, setHereAsk] = useState<{ listing: ExtractListing; conflicts: string[] } | null>(null);
+  const [hereError, setHereError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setParent(initial?.parent ?? dir);
     setBrowsing(false);
-    setFolder(initial?.folder ?? archiveFolderName(name));
+    setWhere(initial?.here ? "here" : "new");
+    setChecking(false);
+    setHereAsk(null);
+    setHereError(null);
+    setFolder(initial?.folder || archiveFolderName(name));
     setMode(initial ? (initial.replace ? "replace" : initial.merge ? "merge" : "new") : "new");
     setPassword("");
     if (!initial) setDeleteArchive(false);
@@ -167,10 +240,17 @@ export function ExtractDialog({
   }, [open, asking, elsewhere, shown, parent, addr]);
 
   const existsAt = namesAt(parent, dir, exists, names);
-  const okName = validFolderName(folder.trim());
-  const taken = okName && !asking && !!existsAt && existsAt(folder.trim());
-  const blocked = !okName || (asking && password === "") || (!asking && (!existsAt || !!listError));
-  const target = extractPath(parent, folder.trim());
+  const here = where === "here";
+  const hereOk = extractHereAllowed(parent);
+  const okName = here || validFolderName(folder.trim());
+  const taken = !here && okName && !asking && !!existsAt && existsAt(folder.trim());
+  const blocked =
+    !okName ||
+    checking ||
+    (asking && password === "") ||
+    (!asking && (!existsAt || !!listError)) ||
+    (!asking && here && !hereOk);
+  const target = here ? cleanConsolePath(parent) : extractPath(parent, folder.trim());
   const targetVolume = volumeForPath(volumes, parent);
   const freeBytes = targetVolume ? targetVolume.free_bytes : null;
 
@@ -181,12 +261,56 @@ export function ExtractDialog({
       return;
     }
     if (!existsAt) return;
+    if (here) {
+      void checkHere(existsAt);
+      return;
+    }
     onConfirm(extractChoice(parent, folder.trim(), mode, existsAt, password), { deleteArchive });
+  };
+
+  // Extract here: the archive's top-level names against the folder's, asked about once, before
+  // anything is written. Nothing there is overwritten unless Replace is picked.
+  const checkHere = async (existsNow: (n: string) => boolean) => {
+    setChecking(true);
+    setHereError(null);
+    setHereAsk(null);
+    const read =
+      listTop ?? ((p: string, pw: string) => fsExtractList(addr, extractPath(dir, name), p, { password: pw || undefined }));
+    try {
+      const listing = await read(parent, password);
+      const conflicts = hereConflicts(listing.top, existsNow);
+      if (conflicts.length === 0) {
+        onConfirm(hereChoice(parent, listing, [], null, existsNow, password), { deleteArchive });
+        return;
+      }
+      setHereAsk({ listing, conflicts });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const kind = listErrorKind(msg);
+      setHereError(
+        kind === "password"
+          ? tr("fs_extract_here_password", undefined, "This archive is password-protected. Enter its password, then Extract.")
+          : kind === "wrong_password"
+            ? tr("fs_extract_password_wrong", undefined, "That password is wrong. Enter it again.")
+            : kind === "old_helper"
+              ? tr("fs_extract_here_old_helper", undefined, "The helper on this PS5 is too old for Extract here. Update the helper, or extract into a new folder.")
+              : tr("fs_extract_here_list_failed", { error: humanizeCaught(e) }, "Couldn't read what is in the archive: {error}"),
+      );
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const settleHere = (policy: HereConflict) => {
+    if (!hereAsk || !existsAt) return;
+    onConfirm(hereChoice(parent, hereAsk.listing, hereAsk.conflicts, policy, existsAt, password), { deleteArchive });
   };
 
   const pick = (p: string) => {
     setParent(p);
     setListError(null);
+    setHereAsk(null);
+    setHereError(null);
   };
 
   return (
@@ -222,12 +346,31 @@ export function ExtractDialog({
         ) : (
           <>
             <p className="text-[var(--color-text-muted)]">
-              {tr(
-                "fs_extract_body_v2",
-                undefined,
-                "The console extracts it into a new folder and keeps the archive. Nothing goes through this computer.",
-              )}
+              {here
+                ? tr(
+                    "fs_extract_here_body",
+                    undefined,
+                    "The console extracts it straight into this folder and keeps the archive. Nothing goes through this computer.",
+                  )
+                : tr(
+                    "fs_extract_body_v2",
+                    undefined,
+                    "The console extracts it into a new folder and keeps the archive. Nothing goes through this computer.",
+                  )}
             </p>
+            <SegmentedControl
+              ariaLabel={tr("fs_extract_where_label", undefined, "Where the files go")}
+              value={where}
+              onChange={(v) => {
+                setWhere(v as ExtractWhere);
+                setHereAsk(null);
+                setHereError(null);
+              }}
+              segments={[
+                { value: "new", label: tr("fs_extract_where_new", undefined, "Into a new folder") },
+                { value: "here", label: tr("fs_extract_where_here", undefined, "Extract here") },
+              ]}
+            />
             <div className="flex flex-col gap-2" data-testid="fs-extract-location">
               <div className="flex items-center gap-2">
                 <span className="shrink-0 text-xs font-semibold text-[var(--color-muted)]">
@@ -286,16 +429,76 @@ export function ExtractDialog({
                 <p className="text-xs text-[var(--color-text-muted)]">{tr("loading", undefined, "Loading…")}</p>
               )}
             </div>
-            <Input
-              label={tr("fs_extract_folder", undefined, "Folder")}
-              value={folder}
-              onChange={(e) => setFolder(e.target.value)}
-              error={okName ? undefined : tr("fs_extract_folder_bad", undefined, "Use one folder name, without “/”.")}
-              hint={target}
-              autoComplete="off"
-              spellCheck={false}
-              data-testid="fs-extract-folder"
-            />
+            {!here && (
+              <Input
+                label={tr("fs_extract_folder", undefined, "Folder")}
+                value={folder}
+                onChange={(e) => setFolder(e.target.value)}
+                error={okName ? undefined : tr("fs_extract_folder_bad", undefined, "Use one folder name, without “/”.")}
+                hint={target}
+                autoComplete="off"
+                spellCheck={false}
+                data-testid="fs-extract-folder"
+              />
+            )}
+            {here && !hereOk && (
+              <p role="alert" className="text-xs text-[var(--color-danger,inherit)]" data-testid="fs-extract-here-root">
+                {tr(
+                  "fs_extract_here_root",
+                  undefined,
+                  "Files can't be extracted straight into a drive's top folder. Pick a folder on it, or extract into a new folder.",
+                )}
+              </p>
+            )}
+            {here && checking && (
+              <p className="text-xs text-[var(--color-text-muted)]" data-testid="fs-extract-here-checking">
+                {tr("fs_extract_here_checking", undefined, "Checking what is in the archive…")}
+              </p>
+            )}
+            {here && hereError && (
+              <p role="alert" className="text-xs text-[var(--color-danger,inherit)]" data-testid="fs-extract-here-error">
+                {hereError}
+              </p>
+            )}
+            {here && hereAsk && (
+              <div className="flex flex-col gap-2" data-testid="fs-extract-here-conflicts">
+                <p>
+                  {tr(
+                    "fs_extract_here_conflicts",
+                    { n: hereAsk.conflicts.length, names: hereAsk.conflicts.slice(0, 3).join(", ") },
+                    "{n} of the archive's items are already in this folder ({names}). What should happen to them?",
+                  )}
+                </p>
+                {hereAsk.listing.more && (
+                  <p className="text-xs text-[var(--color-text-muted)]">
+                    {tr(
+                      "fs_extract_here_more",
+                      undefined,
+                      "The archive has more items than could be checked. Files already here that weren't checked are kept as they are.",
+                    )}
+                  </p>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  {/* Keep both first and focused: Enter never overwrites unasked. */}
+                  <Button size="sm" variant="primary" autoFocus onClick={() => settleHere("keep")} data-testid="fs-extract-here-keep">
+                    {tr("fs_extract_here_keep", undefined, "Keep both")}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => settleHere("skip")} data-testid="fs-extract-here-skip">
+                    {tr("fs_extract_here_skip", undefined, "Skip existing")}
+                  </Button>
+                  <Button size="sm" variant="danger" onClick={() => settleHere("replace")} data-testid="fs-extract-here-replace">
+                    {tr("fs_extract_here_replace", undefined, "Replace")}
+                  </Button>
+                </div>
+                <p className="text-xs text-[var(--color-text-muted)]">
+                  {tr(
+                    "fs_extract_here_conflicts_hint",
+                    undefined,
+                    "Keep both gives the incoming items a new name. Skip existing leaves those items out. Replace overwrites files with the same name, and folders are merged; that can't be undone.",
+                  )}
+                </p>
+              </div>
+            )}
             {taken && (
               <div className="flex flex-col gap-2" data-testid="fs-extract-exists">
                 <p>

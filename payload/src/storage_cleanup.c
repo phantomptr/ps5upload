@@ -61,6 +61,7 @@ typedef struct {
     uint8_t is_dir;
     uint8_t def;         /* ticked by default */
     uint8_t game_backup; /* A: the game runs from a backup (a mount stub in user/app) */
+    uint8_t kept;        /* sits in a folder Kraken Mount scans: its game, listed and never removed */
     char title_id[10];
     char path[SC_PATH];
     char name[96];
@@ -113,6 +114,33 @@ static struct {
 /* What the scan thread works with (only it touches these). */
 static sc_title_t *g_titles;
 static int g_ntitles;
+
+/* Kraken Mount's scan roots (#894), read by the scan and again by the apply (never both at once):
+ * g_kraken_on once /data/krakenmount exists, whether it runs now or not; g_kraken_n 0 = its
+ * default roots. */
+static int g_kraken_on;
+static char g_kraken_roots[SCR_KRAKEN_ROOTS_MAX][SCR_KRAKEN_ROOT_LEN];
+static int g_kraken_n;
+
+static void kraken_load(void) {
+    struct stat st;
+    g_kraken_on = lstat(SCR_KRAKEN_DIR, &st) == 0 && S_ISDIR(st.st_mode);
+    g_kraken_n = 0;
+    if (!g_kraken_on) return;
+    int fd = open(SCR_KRAKEN_CONFIG, O_RDONLY);
+    if (fd < 0) return;
+    char *buf = malloc(64 * 1024);
+    if (buf) {
+        ssize_t n = read(fd, buf, 64 * 1024);
+        if (n > 0) g_kraken_n = scr_kraken_scanpaths(buf, (size_t)n, g_kraken_roots, SCR_KRAKEN_ROOTS_MAX);
+        free(buf);
+    }
+    close(fd);
+}
+
+static int kraken_keeps(const char *path, int is_dir) {
+    return g_kraken_on && scr_kraken_mountable(path, is_dir) && scr_kraken_keeps(path, (const char (*)[SCR_KRAKEN_ROOT_LEN])g_kraken_roots, g_kraken_n);
+}
 
 static uint64_t now_ms(void) {
     struct timespec ts;
@@ -830,6 +858,7 @@ static void *scan_main(void *arg) {
     fprintf(stderr, "[cleanup] scan: %d titles from app.db (%s), patch removal %s\n", g_ntitles,
             ok ? "read" : "unreadable", G.can_sony ? "available" : "not exported");
     int nroots = drive_roots(roots, 12);
+    kraken_load();
     scan_updates();
     set_phase("packages");
     if (!G.scan_cancel) scan_packages(roots, nroots);
@@ -841,6 +870,21 @@ static void *scan_main(void *arg) {
     if (!G.scan_cancel) scan_leftovers();
     set_phase("duplicates");
     if (!G.scan_cancel) scan_duplicates(roots, nroots);
+    {
+        /* Kraken Mount's games stay listed, so the user sees why they are kept, but never removable */
+        int kept = 0;
+        pthread_mutex_lock(&g_mu);
+        for (int i = 0; i < G.n_items; i++) {
+            if (!kraken_keeps(G.items[i].path, G.items[i].is_dir)) continue;
+            G.items[i].kept = 1;
+            G.items[i].action = 0;
+            G.items[i].def = 0;
+            kept++;
+        }
+        pthread_mutex_unlock(&g_mu);
+        if (kept) fprintf(stderr, "[cleanup] scan: %d item(s) kept for Kraken Mount (%s roots)\n", kept,
+                          g_kraken_n ? "its own" : "default");
+    }
     {
         struct statvfs v;
         if (statvfs("/user", &v) == 0) {
@@ -964,6 +1008,7 @@ static void json_item(jb_t *j, const sc_item_t *it, int idx) {
     }
     if (it->game_drive[0]) jb_f(j, ",\"game_drive\":\"%s\"", it->game_drive);
     if (it->game_backup) jb_s(j, ",\"game_backup\":true");
+    if (it->kept) jb_s(j, ",\"kept\":\"kraken\"");
     jb_f(j,
          ",\"bytes\":%llu,\"alloc_bytes\":%llu,\"files\":%u,\"is_dir\":%s,\"mtime\":%lld,\"default\":%s,"
          "\"action\":\"%s\"}",
@@ -1067,6 +1112,11 @@ static int wait_gone(const char *path, uint32_t ms) {
 
 static void apply_one(sc_item_t *it, int idx) {
     const char *why = NULL;
+    /* checked again now: Kraken Mount may have arrived since the scan */
+    if (it->kept || kraken_keeps(it->path, it->is_dir)) {
+        finish_item(it, 2, "kraken", 0);
+        return;
+    }
     if (!it->action) {
         finish_item(it, 2, "not_removable", 0);
         return;
@@ -1145,6 +1195,7 @@ static void apply_one(sc_item_t *it, int idx) {
 static void *apply_main(void *arg) {
     (void)arg;
     proc_name_set_self("ps5upload-clean");
+    kraken_load();
     for (int i = 0;; i++) {
         pthread_mutex_lock(&g_mu);
         int n = G.apply_n, cancel = G.apply_cancel;

@@ -68,6 +68,8 @@
 #include "sys_registry.h"
 #include "profile.h"
 #include "sony_api_lock.h"
+#include "kernel_rw_lock.h"
+#include "start_trace.h"
 #include "app_temp_path.h"
 #include "statvfs_avail.h"
 #include "power_phase.h"
@@ -1223,6 +1225,58 @@ void runtime_classify_prior_instance(runtime_state_t *state) {
  * Written by the exit watchdog, read by the next instance's reap. */
 #define SONY_WAIT_PATH PS5UPLOAD2_RUNTIME_DIR "/exit_sony_wait"
 
+/* runtime_note_exiting (runtime.h): the stopping instance's own record, kept until the next
+ * instance has dealt with it. */
+#define EXITING_NOTE_PATH PS5UPLOAD2_RUNTIME_DIR "/exiting.txt"
+
+void runtime_note_exiting(const runtime_state_t *state) {
+    char rec[256];
+    int n, fd;
+    if (!state) return;
+    n = ownership_record_format(rec, sizeof rec, state->instance_id, 0, state->startup_reason,
+                                state->started_at_unix, (int)getpid());
+    if (n < 0) return;
+    /* In place, not through a rename: the reader takes only complete lines (ownership_record_parse),
+     * and a torn note reads as none, as before this note existed. */
+    fd = open(EXITING_NOTE_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    if (write(fd, rec, (size_t)n) == n) (void)fsync(fd);
+    close(fd);
+}
+
+/* Removes the exiting note once it has done its job: torn, of an earlier boot, of this process, or
+ * of a process that is gone. One of a process of this boot that still runs stays (the reap left it
+ * alone; the late sweep and the next start see it). */
+static void exiting_note_clear_if_gone(void) {
+    ownership_rec_t note;
+    int ok = ownership_record_read(EXITING_NOTE_PATH, &note, 0);
+    if (!ownership_exiting_note_current(&note, ok, runtime_system_boottime_unix()) || note.pid == (int)getpid() ||
+        kill((pid_t)note.pid, 0) != 0)
+        (void)unlink(EXITING_NOTE_PATH);
+}
+
+/* Set once main holds sony_api_lock for the exit (runtime_exit_barrier): the exit watchdog must not
+ * read the held lock as a Sony call in flight. */
+static volatile int g_exit_barrier_held = 0;
+
+void runtime_exit_barrier(void) {
+    int krw = 0;
+    start_trace("EXIT_BARRIER_ASK");
+    pthread_mutex_lock(&sony_api_lock);
+    g_exit_barrier_held = 1;
+    /* The kernel R/W lock is innermost (kernel_rw_lock.h): taken after the Sony lock, never
+     * before. A thread inside a kernel R/W sequence gets 2 s to finish it; the exit goes on either
+     * way (a sequence of ours is never left waiting on this thread). */
+    for (int i = 0; i < 200; i++) {
+        if (pthread_mutex_trylock(&kernel_rw_lock) == 0) {
+            krw = 1;
+            break;
+        }
+        usleep(10000);
+    }
+    start_tracef("EXIT_BARRIER_HELD kernel_rw=%s", krw ? "held" : "busy_going_on");
+}
+
 void runtime_sony_wait_clear(void) { (void)unlink(SONY_WAIT_PATH); }
 
 static void sony_wait_mark(void) {
@@ -1247,7 +1301,17 @@ int runtime_sony_wait_pid(void) {
     return atoi(buf);
 }
 
+static void reap_prior_instance(runtime_state_t *state);
+
 void runtime_reap_prior_instance(runtime_state_t *state) {
+    reap_prior_instance(state);
+    /* The note of an instance that is gone has done its job; one of a process that still runs
+     * (left alone above) stays for the late sweep and the next start. */
+    exiting_note_clear_if_gone();
+    start_trace("REAP_PRIOR_END");
+}
+
+static void reap_prior_instance(runtime_state_t *state) {
     if (!state) return;
     /* Read the whole record once, retried once, and fill what a lost read dropped from the snapshot
      * taken before the takeover. The predecessor unlinks the record as it hands over; reading pid
@@ -1258,8 +1322,24 @@ void runtime_reap_prior_instance(runtime_state_t *state) {
         ownership_rec_t snap = {state->prior_rec_pid, state->prior_rec_started, 0};
         ownership_record_merge(&rec, &snap);
     }
-    int prior = rec.pid > 0 ? rec.pid : -1;
     int me = (int)getpid();
+    {
+        /* No record: the prior may have removed it at the end of its stop and still be running
+         * (#903: the app stops the old helper, then sends this one). Its exiting note says so. */
+        ownership_rec_t note, pick;
+        int note_ok = ownership_record_read(EXITING_NOTE_PATH, &note, 0);
+        int from = ownership_prior_pick(&rec, &note, note_ok, runtime_system_boottime_unix(), me, &pick);
+        if (from == OWNERSHIP_PRIOR_EXITING) {
+            rec = pick;
+            /* It is leaving by itself: give it the grace of an instance that was asked. */
+            state->prior_asked = 1;
+            fprintf(stderr, "[payload2] reap: no ownership record; pid %d said it is exiting\n", rec.pid);
+        }
+        start_tracef("REAP_PRIOR pid=%d from=%s asked=%d", rec.pid,
+                     from == OWNERSHIP_PRIOR_RECORD ? "record" : from == OWNERSHIP_PRIOR_EXITING ? "exiting_note" : "none",
+                     state->prior_asked);
+    }
+    int prior = rec.pid > 0 ? rec.pid : -1;
     /* Diagnostic (also exercises proc_name_by_pid on every startup so the
      * kinfo offsets are validated on this firmware even when there's nothing
      * to reap). Goes to stderr → stderr.log → bug bundle. */
@@ -1321,6 +1401,7 @@ void runtime_reap_prior_instance(runtime_state_t *state) {
         struct timespec t0, now;
         int gone = 0, told = 0;
         int grace_ms = state->prior_asked ? REAP_GRACE_MS : REAP_GRACE_UNASKED_MS;
+        start_tracef("REAP_WAIT pid=%d grace_ms=%d", prior, grace_ms);
         clock_gettime(CLOCK_MONOTONIC, &t0);
         for (;;) {
             long long elapsed;
@@ -1350,6 +1431,7 @@ void runtime_reap_prior_instance(runtime_state_t *state) {
         }
         if (gone) {
             fprintf(stderr, "[payload2] prior instance pid=%d exited by itself\n", prior);
+            start_tracef("REAP_PRIOR_GONE pid=%d", prior);
             return;
         }
         fprintf(stderr, "[payload2] prior instance pid=%d is still alive after %d ms of grace%s\n", prior,
@@ -1358,6 +1440,7 @@ void runtime_reap_prior_instance(runtime_state_t *state) {
 
     fprintf(stderr, "[payload2] reaping crashed prior instance pid=%d (name=%s)\n",
             prior, their_name);
+    start_tracef("REAP_SIGKILL pid=%d name=%s", prior, their_name);
     kill((pid_t)prior, SIGKILL);
 
     /* Confirm it actually died (poll ~1 s). A survivor is kernel-wedged. */
@@ -1448,6 +1531,7 @@ int runtime_sweep_our_instances(void) {
         fprintf(stderr,
                 "[payload2] sweep: SIGKILL pid=%d name=%s (another instance of ours)\n",
                 (int)pid, name);
+        start_tracef("SWEEP_SIGKILL pid=%d name=%s", (int)pid, name);
         if (kill(pid, SIGKILL) == 0) {
             killed++;
             if (killed_pid_count < (int)(sizeof(killed_pids) / sizeof(killed_pids[0]))) {
@@ -1528,8 +1612,15 @@ static void *runtime_shutdown_watchdog(void *arg) {
             clock_gettime(CLOCK_MONOTONIC, &now);
             elapsed = (long long)(now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000;
             if (elapsed < WATCHDOG_BASE_MS) continue;
-            busy = pthread_mutex_trylock(&sony_api_lock) != 0;
-            held = !busy;
+            /* Main holding it for the exit (runtime_exit_barrier) is no call in flight: no other
+             * thread can be inside one then. */
+            if (g_exit_barrier_held) {
+                busy = 0;
+                held = 0;
+            } else {
+                busy = pthread_mutex_trylock(&sony_api_lock) != 0;
+                held = !busy;
+            }
             d = ava1_exit_decide(elapsed, busy, WATCHDOG_BASE_MS, WATCHDOG_CEILING_MS);
             if (d == AVA1_EXIT_OK) break;
             if (d == AVA1_EXIT_FORCED) {
@@ -1564,6 +1655,8 @@ static void *runtime_shutdown_watchdog(void *arg) {
     }
     fprintf(stderr, "[payload2] shutdown watchdog fired — forcing _exit(%d)\n",
             g_watchdog_exit_code);
+    /* Not after the wipe below: a line then would make the removed folder again. */
+    if (!hu_requested()) start_tracef("EXIT_WATCHDOG code=%d", g_watchdog_exit_code);
     /* A dump decrypting right now may have the kernel's vnode pager swapped: put it back, or every
      * file mmap on the console keeps going through the self pager after we are gone. */
     app_dump_pager_emergency_restore();
@@ -2493,7 +2586,7 @@ static int fs_mount_try_unmount(const char *mount_point) {
         /* Plain unmount first. EINVAL / ENOENT ⇒ "already gone" —
          * treat as success on the first pass; on later passes it
          * means a previous pass cleared the last layer. */
-        if (unmount(mount_point, 0) == 0) continue;
+        if (start_trace_unmount(mount_point, 0, "fs_mount_try_unmount") == 0) continue;
         last_errno = errno;
         if (errno == EINVAL || errno == ENOENT) {
             errno = 0;
@@ -2502,7 +2595,7 @@ static int fs_mount_try_unmount(const char *mount_point) {
         /* Busy → escalate to MNT_FORCE for this pass. If the
          * forced unmount also fails, bail — one more pass with the
          * same input would just repeat the failure. */
-        if (unmount(mount_point, MNT_FORCE) == 0) continue;
+        if (start_trace_unmount(mount_point, MNT_FORCE, "fs_mount_try_unmount") == 0) continue;
         last_errno = errno;
         if (errno == EINVAL || errno == ENOENT) {
             errno = 0;
@@ -2567,8 +2660,11 @@ static int fs_mount_detach_lvd(int unit_id) {
     fs_mount_lvd_detach_t req;
     memset(&req, 0, sizeof(req));
     req.device_id = unit_id;
+    start_tracef("LVD_DETACH_BEGIN unit=%d", unit_id);
     int rc = ioctl(fd, FS_MOUNT_LVD_IOC_DETACH, &req);
+    int detach_errno = errno;
     close(fd);
+    start_tracef("LVD_DETACH_END unit=%d rc=%d errno=%d", unit_id, rc, rc != 0 ? detach_errno : 0);
     if (rc != 0) return -1;
     char devname[32];
     snprintf(devname, sizeof(devname), "/dev/lvd%d", unit_id);
@@ -2680,7 +2776,10 @@ int fs_pfsc_mount_ro(const char *image, const char *tag, const char *note, char 
     iov[n].iov_base = errmsg;
     iov[n].iov_len = sizeof(errmsg);
     n++;
-    if (nmount(iov, (unsigned)n, MNT_RDONLY) != 0) {
+    start_tracef("NMOUNT_BEGIN pfs %s on %s", devname, mp);
+    int pfsc_rc = nmount(iov, (unsigned)n, MNT_RDONLY);
+    start_tracef("NMOUNT_END %s rc=%d errno=%d", mp, pfsc_rc, pfsc_rc != 0 ? errno : 0);
+    if (pfsc_rc != 0) {
         snprintf(err, err_cap, "fs_unpack_mount_failed: %s", errmsg[0] ? errmsg : strerror(errno));
         (void)fs_mount_detach_lvd(req.device_id);
         rmdir(mp);
@@ -3393,7 +3492,10 @@ static int fs_mount_request(runtime_state_t *state, const char *request_body,
     } else {
         nmount_flags = read_only ? (unsigned int)MNT_RDONLY : 0u;
     }
-    if (nmount(iov, (unsigned)iovlen, (int)nmount_flags) != 0) {
+    start_tracef("NMOUNT_BEGIN image unit=%d on %s flags=0x%x", unit_id, mount_point, nmount_flags);
+    int image_rc = nmount(iov, (unsigned)iovlen, (int)nmount_flags);
+    start_tracef("NMOUNT_END %s rc=%d errno=%d", mount_point, image_rc, image_rc != 0 ? errno : 0);
+    if (image_rc != 0) {
         char errbuf[320];
         int len = snprintf(errbuf, sizeof(errbuf),
                            "fs_mount_nmount_failed: %s",
@@ -7800,8 +7902,10 @@ static int save_do_unmount(int *written_back, char *kept, size_t kept_sz) {
         pthread_mutex_lock(&sony_api_lock);
         sceFsInitUmountSaveDataOpt(&uopt);
         errno = 0;
+        start_trace("SAVE_UMOUNT_BEGIN");
         int rc = sceFsUmountSaveData(&uopt, SAVE_MOUNT_POINT, 0, 0);
         int ue = errno; /* read before sync() can overwrite it */
+        start_tracef("SAVE_UMOUNT_END rc=%d errno=%d", rc, rc < 0 ? ue : 0);
         pthread_mutex_unlock(&sony_api_lock);
         sync();
         /* EINVAL / ENOENT: not mounted (a reboot, or someone else unmounted it). */
@@ -7887,8 +7991,10 @@ static int save_release_orphan(void) {
     pthread_mutex_lock(&sony_api_lock); /* Sony calls: one at a time with the others */
     sceFsInitUmountSaveDataOpt(&uopt);
     errno = 0;
+    start_trace("SAVE_UMOUNT_ORPHAN_BEGIN");
     int rc = sceFsUmountSaveData(&uopt, SAVE_MOUNT_POINT, 0, 0);
     int ue = errno; /* read before sync() can overwrite it */
+    start_tracef("SAVE_UMOUNT_ORPHAN_END rc=%d errno=%d", rc, rc < 0 ? ue : 0);
     pthread_mutex_unlock(&sony_api_lock);
     sync();
     if ((rc < 0 && ue != EINVAL && ue != ENOENT) || save_mount_point_busy()) {
@@ -8011,8 +8117,10 @@ static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps
      * so every other thread keeps the signal blocked (sigpipe_guard.h). g_save_mtx: one at a time. */
     sigpipe_window_t sp;
     sigpipe_default_open(&sp);
+    start_trace("SAVE_MOUNT_BEGIN");
     int ret = sceFsMountSaveData(&mopt, copy, SAVE_MOUNT_POINT, key);
     int e = errno;
+    start_tracef("SAVE_MOUNT_END rc=0x%x errno=%d", (unsigned)ret, ret < 0 ? e : 0);
     sigpipe_default_close(&sp);
     pthread_mutex_unlock(&sony_api_lock);
     memset(key, 0, sizeof key);
@@ -8195,10 +8303,10 @@ static int handle_usb_eject(runtime_state_t *state, const char *body,
             n = snprintf(resp, sizeof(resp), "{\"ok\":false,\"err\":\"usb_eject_not_mounted\"}");
         } else {
             sync();
-            int rc_un = unmount(mp, 0);
+            int rc_un = start_trace_unmount(mp, 0, "usb_eject");
             if (rc_un != 0 && errno == EBUSY && force[0] == '1') {
                 sync();
-                rc_un = unmount(mp, MNT_FORCE);
+                rc_un = start_trace_unmount(mp, MNT_FORCE, "usb_eject");
             }
             if (rc_un == 0) {
                 n = snprintf(resp, sizeof(resp), "{\"ok\":true,\"err\":null}");
@@ -8327,7 +8435,9 @@ static int handle_pkg_direct_mount(runtime_state_t *state, const char *body,
     }
     /* Best-effort mkdir of the mount point. */
     int created_mp = (mkdir(mount_point, 0755) == 0);
+    start_tracef("PKG_DIRECT_MOUNT_BEGIN on %s", mount_point);
     int rc = p_sceFsMountGamePkg(pkg_path, mount_point, 0);
+    start_tracef("PKG_DIRECT_MOUNT_END rc=0x%x", (unsigned)rc);
     pthread_mutex_unlock(&sony_api_lock);
     if (rc != 0 && created_mp) {
         /* Clean up the empty mount-point dir we just made so a
@@ -8433,7 +8543,9 @@ static int handle_ufs_fsck(runtime_state_t *state, const char *body,
      * write-mode repair and flag 0 is read-only check. The opts
      * pointer is documented as "implementation-specific" — we pass
      * NULL which works for the simple checks we need. */
+    start_tracef("UFS_FSCK_BEGIN %s repair=%d", device, repair);
     int rc = p_sceFsUfsFsck(device, repair ? 1 : 0, NULL);
+    start_tracef("UFS_FSCK_END rc=0x%x", (unsigned)rc);
     pthread_mutex_unlock(&sony_api_lock);
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
@@ -8481,8 +8593,10 @@ static int handle_lwfs_mount(runtime_state_t *state, const char *body,
         return mgmt_reply(MGMT_FRAME_LWFS_MOUNT_ACK, err, strlen(err));
     }
     int created_mp = (mkdir(mount_point, 0755) == 0);
+    start_tracef("LWFS_MOUNT_BEGIN on %s", mount_point);
     int rc = p_sceFsMountLwfs(patch_path, mount_point,
                               title_id[0] ? title_id : NULL, 0);
+    start_tracef("LWFS_MOUNT_END rc=0x%x", (unsigned)rc);
     pthread_mutex_unlock(&sony_api_lock);
     if (rc != 0 && created_mp) {
         (void)rmdir(mount_point);

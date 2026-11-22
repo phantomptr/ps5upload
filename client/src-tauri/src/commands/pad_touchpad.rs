@@ -1,4 +1,5 @@
-//! A DualSense's touchpad while Remote Play plays (#589).
+//! A DualSense's or DualShock 4's touchpad while Remote Play plays (#589; the DualShock 4's
+//! click, which some systems' Gamepad API leaves out, from a Discord report).
 //!
 //! The webview's Gamepad API gives buttons and sticks but never the fingers on the touchpad,
 //! and the Mac's WKWebView (like WebKitGTK) has no WebHID. So the desktop app reads the
@@ -31,6 +32,16 @@ use serde::Serialize;
 pub const SONY_VID: u16 = 0x054c;
 /// DualSense, DualSense Edge.
 pub const DUALSENSE_PIDS: [u16; 2] = [0x0ce6, 0x0df2];
+/// DualShock 4 (first and second model) and Sony's wireless adapter for it.
+pub const DS4_PIDS: [u16; 3] = [0x05c4, 0x09cc, 0x0ba0];
+/// Sony's DualShock 4 wireless adapter: it reports even with no controller paired to it.
+pub const DS4_ADAPTER_PID: u16 = 0x0ba0;
+
+/// A controller whose touchpad the app reads: a DualSense or a DualShock 4.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn is_touchpad_pad(product: u16) -> bool {
+    DUALSENSE_PIDS.contains(&product) || DS4_PIDS.contains(&product)
+}
 
 /// One finger on the touchpad: its tracking id and where it is (x 0-1919, y 0-1079).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +89,58 @@ pub fn parse_dualsense_report(buf: &[u8]) -> Option<TouchReport> {
         fingers: [finger(32), finger(36)],
         click: state[9] & 0x02 != 0,
     })
+}
+
+/// The touchpad in a DualShock 4 input report, report id first, in the DualSense's space
+/// (x 0-1919, y 0-1079; the DualShock 4's own y runs 0-941), so the page reads both the same.
+///
+/// USB report 0x01 (64 bytes) and Bluetooth's full report 0x11 (78 bytes) carry the state two
+/// bytes apart (SDL's `PS4StatePacket_t`): state byte 6 holds PS (bit 0) and the touchpad click
+/// (bit 1); bytes 34-37 and 38-41 are the two fingers, laid out as on a DualSense. Bluetooth's
+/// short report 0x01 (10 bytes, the mode a pad starts in; on Windows padded to the pad's longest
+/// report, so any length but USB's 64) has the click in the same byte and no fingers. `adapter`:
+/// the report comes through Sony's wireless adapter, which says so when no pad is paired to it
+/// (byte 31 bit 2), and then reports nothing pressed.
+pub fn parse_ds4_report(buf: &[u8], adapter: bool) -> Option<TouchReport> {
+    let (state, full) = match buf.first()? {
+        0x01 if buf.len() == 64 => {
+            if adapter && buf[31] & 0x04 != 0 {
+                return Some(TouchReport::default());
+            }
+            (&buf[1..], true)
+        }
+        0x01 if buf.len() >= 10 => (&buf[1..], false),
+        0x11 if buf.len() >= 78 => (&buf[3..], true),
+        _ => return None,
+    };
+    let finger = |at: usize| {
+        if !full {
+            return None;
+        }
+        let b = &state[at..at + 4];
+        if b[0] & 0x80 != 0 {
+            return None;
+        }
+        let y = u32::from(b[2] >> 4) | (u32::from(b[3]) << 4);
+        Some(Finger {
+            id: b[0] & 0x7f,
+            x: u16::from(b[1]) | (u16::from(b[2] & 0x0f) << 8),
+            y: ((y.min(941) * 1079 + 470) / 941) as u16,
+        })
+    };
+    Some(TouchReport {
+        fingers: [finger(34), finger(38)],
+        click: state[6] & 0x02 != 0,
+    })
+}
+
+/// The touchpad in an input report from the controller with this product id.
+pub fn parse_touch_report(product: u16, buf: &[u8]) -> Option<TouchReport> {
+    if DS4_PIDS.contains(&product) {
+        parse_ds4_report(buf, product == DS4_ADAPTER_PID)
+    } else {
+        parse_dualsense_report(buf)
+    }
 }
 
 /// The motion sensors in a DualSense input report (same reports as the touchpad): gyro (pitch,
@@ -468,20 +531,23 @@ pub(crate) mod reader {
                 let _ = api.reset_devices();
                 let _ = api.add_devices(SONY_VID, 0);
                 // The game pad collection (a platform that does not say which is which: any).
-                let path = api
-                    .device_list()
-                    .find(|d| {
-                        DUALSENSE_PIDS.contains(&d.product_id())
-                            && (d.usage_page() == 0 || (d.usage_page() == 1 && d.usage() == 5))
-                    })
-                    .map(|d| d.path().to_owned())?;
+                // A DualSense first: its touchpad comes with motion and the triggers.
+                let pick = |pids: &[u16]| {
+                    api.device_list()
+                        .find(|d| {
+                            pids.contains(&d.product_id())
+                                && (d.usage_page() == 0 || (d.usage_page() == 1 && d.usage() == 5))
+                        })
+                        .map(|d| (d.path().to_owned(), d.product_id()))
+                };
+                let (path, product) = pick(&DUALSENSE_PIDS).or_else(|| pick(&DS4_PIDS))?;
                 let dev = api.open_path(&path).map_err(|e| e.to_string());
-                Some((path, dev))
+                Some((path, product, dev))
             }) else {
                 // No HID access at all on this machine.
                 return;
             };
-            let Some((path, dev)) = opened else {
+            let Some((path, product, dev)) = opened else {
                 if !wait(&stop, Duration::from_secs(1)) {
                     break;
                 }
@@ -492,7 +558,7 @@ pub(crate) mod reader {
                 Err(e) => {
                     // Linux without a udev rule for it, say: tell the log once per device.
                     if refused.as_ref() != Some(&path) {
-                        eprintln!("[pad-touchpad] cannot open the DualSense: {e}");
+                        eprintln!("[pad-touchpad] cannot open the controller: {e}");
                         refused = Some(path);
                     }
                     if !wait(&stop, Duration::from_secs(2)) {
@@ -502,8 +568,12 @@ pub(crate) mod reader {
                 }
             };
             refused = None;
-            eprintln!("[pad-touchpad] reading the DualSense touchpad");
-            read(&app, &dev, &stop);
+            let ds4 = DS4_PIDS.contains(&product);
+            eprintln!(
+                "[pad-touchpad] reading the {} touchpad",
+                if ds4 { "DualShock 4" } else { "DualSense" }
+            );
+            read(&app, &dev, product, &stop);
         }
     }
 
@@ -520,7 +590,9 @@ pub(crate) mod reader {
 
     /// Read reports until stopped or the controller goes away; the page is left with no finger,
     /// no click and no motion either way, and the triggers are let go.
-    fn read(app: &AppHandle, dev: &hidapi::HidDevice, stop: &AtomicBool) {
+    fn read(app: &AppHandle, dev: &hidapi::HidDevice, product: u16, stop: &AtomicBool) {
+        // Motion and the triggers are a DualSense's only (a DualShock 4 gives its touchpad).
+        let dualsense = DUALSENSE_PIDS.contains(&product);
         let mut buf = [0u8; 128];
         let mut follower = Follower::default();
         let mut sent = TouchEvent::default();
@@ -543,15 +615,20 @@ pub(crate) mod reader {
                 Ok(n) => n,
                 Err(_) => break,
             };
-            let Some(r) = parse_dualsense_report(&buf[..n]) else {
+            let Some(r) = parse_touch_report(product, &buf[..n]) else {
                 continue;
             };
-            transport = Some(if buf[0] == 0x31 {
-                Transport::Bluetooth
-            } else {
-                Transport::Usb
-            });
-            if let Some(m) = parse_dualsense_motion(&buf[..n]) {
+            if dualsense {
+                transport = Some(if buf[0] == 0x31 {
+                    Transport::Bluetooth
+                } else {
+                    Transport::Usb
+                });
+            }
+            if let Some(m) = dualsense
+                .then(|| parse_dualsense_motion(&buf[..n]))
+                .flatten()
+            {
                 let cal = *cal.get_or_insert_with(|| calibration(dev));
                 let t = clock.us(m.ticks);
                 if motion_at.is_none_or(|at| at.elapsed() >= MOTION_EVERY) {
@@ -864,5 +941,102 @@ mod tests {
         // 6 ticks later, across the wrap: 2 µs.
         assert_eq!(c.us(3), 2);
         assert_eq!(c.us(3 + 3000), 1002);
+    }
+
+    /// A DualShock 4 report with the state at `off` (USB 1, Bluetooth 0x11 3).
+    fn ds4(id: u8, len: usize, off: usize, click: bool, f1: [u8; 4], f2: [u8; 4]) -> Vec<u8> {
+        let mut b = vec![0u8; len];
+        b[0] = id;
+        b[off + 6] = 0x01 | if click { 0x02 } else { 0 }; // PS held too
+        b[off + 34..off + 38].copy_from_slice(&f1);
+        b[off + 38..off + 42].copy_from_slice(&f2);
+        b
+    }
+
+    #[test]
+    fn a_dualshock4_usb_report_gives_the_click_and_fingers_in_dualsense_space() {
+        let b = ds4(
+            0x01,
+            64,
+            1,
+            true,
+            finger(true, 4, 1919, 941),
+            finger(true, 5, 0, 0),
+        );
+        let r = parse_touch_report(0x09cc, &b).unwrap();
+        assert!(r.click);
+        assert_eq!(
+            r.fingers[0],
+            Some(Finger {
+                id: 4,
+                x: 1919,
+                y: 1079
+            })
+        );
+        assert_eq!(r.fingers[1], Some(Finger { id: 5, x: 0, y: 0 }));
+        // Halfway down is halfway down.
+        let b = ds4(0x01, 64, 1, false, finger(true, 1, 960, 470), UP);
+        let r = parse_touch_report(0x05c4, &b).unwrap();
+        assert!(!r.click);
+        assert_eq!(
+            r.fingers,
+            [
+                Some(Finger {
+                    id: 1,
+                    x: 960,
+                    y: 539
+                }),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn a_dualshock4_bluetooth_report_reads_three_bytes_in() {
+        let b = ds4(0x11, 78, 3, true, finger(true, 2, 100, 200), UP);
+        let r = parse_touch_report(0x09cc, &b).unwrap();
+        assert!(r.click);
+        assert_eq!(r.fingers[0].map(|f| (f.id, f.x)), Some((2, 100)));
+        // Not read as a DualSense's: report 0x11 is no DualSense report.
+        assert_eq!(parse_dualsense_report(&b), None);
+    }
+
+    #[test]
+    fn a_dualshock4_short_report_gives_the_click_and_no_phantom_finger() {
+        // Bluetooth's start-up report: 10 bytes, or padded by Windows to the pad's longest.
+        for len in [10, 78, 128] {
+            let mut b = vec![0u8; len];
+            b[0] = 0x01;
+            b[7] = 0x02;
+            let r = parse_touch_report(0x05c4, &b).unwrap();
+            assert!(r.click, "{len}");
+            assert_eq!(r.fingers, [None, None], "{len}");
+            b[7] = 0x01; // PS only
+            assert!(!parse_touch_report(0x05c4, &b).unwrap().click, "{len}");
+        }
+        assert_eq!(parse_touch_report(0x05c4, &[0x01, 0, 0]), None);
+    }
+
+    #[test]
+    fn the_dualshock4_adapter_with_no_pad_reports_nothing() {
+        let mut b = ds4(0x01, 64, 1, true, finger(true, 0, 10, 10), UP);
+        b[31] |= 0x04;
+        assert_eq!(
+            parse_touch_report(DS4_ADAPTER_PID, &b),
+            Some(TouchReport::default())
+        );
+        b[31] &= !0x04;
+        assert!(parse_touch_report(DS4_ADAPTER_PID, &b).unwrap().click);
+    }
+
+    #[test]
+    fn both_controllers_have_their_touchpad_read() {
+        for pid in [0x0ce6, 0x0df2, 0x05c4, 0x09cc, 0x0ba0] {
+            assert!(is_touchpad_pad(pid));
+        }
+        assert!(!is_touchpad_pad(0x0268)); // DualShock 3: no touchpad
+                                           // A DualSense report still reads as one.
+        let r = parse_touch_report(0x0ce6, &usb(true, UP, UP)).unwrap();
+        assert!(r.click);
     }
 }

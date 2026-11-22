@@ -116,8 +116,11 @@ mod rp_replay;
 mod rp_stream_api;
 mod save_backup;
 mod save_backup_console;
+mod save_backup_pass;
+mod save_backup_run;
 mod save_backup_server;
 mod save_copy;
+mod save_folders;
 mod save_layout;
 mod save_sync;
 mod self_host;
@@ -3016,16 +3019,36 @@ struct FsExtractReq {
     merge: bool,
     #[serde(default)]
     replace: bool,
+    /// Only list the archive's top-level names (nothing is written): "Extract here" compares
+    /// them with the folder before it starts (#891).
+    #[serde(default)]
+    list: bool,
+    /// Top-level entries to rename (`to`) or leave out (`to` empty or absent) while extracting.
+    #[serde(default)]
+    top: Vec<FsExtractTop>,
     #[serde(default)]
     op_id: u64,
 }
 
-/// POST /api/ps5/fs/extract `{addr, path, dest, password?, merge?, replace?, op_id}` — extract an
-/// archive on the console into `dest` there (the helper's extractor payload does the decoding).
-/// Progress and cancel go through `op-status`/`op-cancel` with the same `op_id`. 200 `{ok, path,
-/// files, dirs, bytes, skipped, unsafe, links}`; 409 when cancelled; 502 with the helper's cause
-/// otherwise (`fs_extract_password_required`, `fs_extract_no_space: ...`, ...). The password is
-/// never logged.
+#[derive(Deserialize)]
+struct FsExtractTop {
+    from: String,
+    #[serde(default)]
+    to: Option<String>,
+}
+
+/// POST /api/ps5/fs/extract `{addr, path, dest, password?, merge?, replace?, list?, top?, op_id}`
+/// — extract an archive on the console into `dest` there (the helper's extractor payload does the
+/// decoding). Progress and cancel go through `op-status`/`op-cancel` with the same `op_id`. 200
+/// `{ok, path, files, dirs, bytes, skipped, unsafe, links}`; 409 when cancelled; 502 with the
+/// helper's cause otherwise (`fs_extract_password_required`, `fs_extract_no_space: ...`, ...).
+/// The password is never logged.
+///
+/// "Extract here" (#891): `list: true` only reads the archive's top-level names and answers
+/// `{ok, path, listed: true, top: [names], top_dirs: [the folders among them], top_more}` (`dest` is the folder, `merge` false: a
+/// helper older than this refuses that folder rather than extract, and `listed` stays absent).
+/// `top: [{from, to}]` then renames those top-level entries while extracting with `merge`, or
+/// leaves them out when `to` is empty.
 async fn ps5_fs_extract(
     State(_state): State<AppState>,
     Json(req): Json<FsExtractReq>,
@@ -3039,22 +3062,37 @@ async fn ps5_fs_extract(
         return helper_stop::stopping_refusal();
     };
     let op_id = req.op_id;
+    let pairs: Vec<(String, String)> = req
+        .top
+        .into_iter()
+        .map(|t| (t.from, t.to.unwrap_or_default()))
+        .collect();
+    let top = match ps5upload_core::fs_ops::encode_top_renames(&pairs) {
+        Ok(t) => t,
+        Err(e) => return json_err(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
+    };
+    let list = req.list;
     let x = ps5upload_core::fs_ops::ExtractRequest {
         path: req.path,
         dest: req.dest,
         password: req.password.filter(|p| !p.is_empty()),
-        merge: req.merge,
-        replace: req.replace,
+        // A listing goes without merge: an older helper then refuses the folder that is there.
+        merge: req.merge && !list,
+        replace: req.replace && !list,
+        list,
+        top: if list { None } else { top },
     };
     let started = std::time::Instant::now();
     crate::log_at!(
         Info,
         "files",
-        "fs_extract: addr={addr} path={} dest={} merge={} replace={} password={} op_id={op_id}",
+        "fs_extract: addr={addr} path={} dest={} merge={} replace={} list={} renames={} password={} op_id={op_id}",
         x.path,
         x.dest,
         x.merge,
         x.replace,
+        x.list,
+        pairs.len(),
         x.password.is_some()
     );
     let path_for_log = x.path.clone();
@@ -3069,8 +3107,24 @@ async fn ps5_fs_extract(
     .map_err(anyhow::Error::from)
     .and_then(|r| r)
     {
+        Ok(done) if list => {
+            if !done.listed {
+                // An older helper did not list (it refuses the folder that is there instead).
+                return json_err(StatusCode::NOT_IMPLEMENTED, "fs_extract_list_unsupported")
+                    .into_response();
+            }
+            Json(serde_json::json!({
+                "ok": true,
+                "path": done.path,
+                "listed": true,
+                "top": done.top_names(),
+                "top_dirs": done.top_dir_names(),
+                "top_more": done.top_more,
+            }))
+            .into_response()
+        }
         Ok(done) => {
-            crate::log_at!(Info, "files", 
+            crate::log_at!(Info, "files",
                 "fs_extract ok: {path_for_log} -> {} ({} files, {} bytes, {} skipped, {} unsafe, {} links) in {} ms",
                 done.path,
                 done.files,
@@ -12496,7 +12550,12 @@ async fn engine_version() -> impl IntoResponse {
             // Capability flags the UI feature-detects. `rar` is desktop-only
             // (UnRAR is a helper program, which neither phone app has), so the
             // client hides the .rar option when this is false.
-            "caps": { "rar": cfg!(not(any(target_os = "android", target_os = "ios"))) },
+            // `payload_console_path`: POST /api/payload/send takes `console_path`, a payload
+            // stored on the PS5 (#900); the playlists offer "Add from the PS5…" only then.
+            "caps": {
+                "rar": cfg!(not(any(target_os = "android", target_os = "ios"))),
+                "payload_console_path": true,
+            },
             // `PS5_ADDR`, when the operator set one: the web UI lists it for a first browser, so
             // the console the setup named is not typed in again.
             "default_console": std::env::var("PS5_ADDR")
@@ -13498,6 +13557,26 @@ fn build_app_and_mcp(
         .route(
             "/api/save-backup/server/restore",
             post(save_backup_server::post_restore),
+        )
+        // What a backup run is doing and did, kept as it goes (#895).
+        .route("/api/save-backup/runs", get(save_backup_pass::get_runs))
+        .route(
+            "/api/save-backup/runs/cancel",
+            post(save_backup_pass::post_cancel),
+        )
+        .route(
+            "/api/save-backup/runs/continue",
+            post(save_backup_pass::post_continue),
+        )
+        // Console folders backed up with the saves (#899).
+        .route("/api/save-backup/folders", get(save_folders::get_list))
+        .route(
+            "/api/save-backup/folders/check",
+            get(save_folders::get_check),
+        )
+        .route(
+            "/api/save-backup/folders/restore",
+            post(save_folders::post_restore),
         )
         .route("/api/save-backup/list", get(save_backup::get_list))
         // A copy of each backup on the PS5's own M.2 or USB drive.

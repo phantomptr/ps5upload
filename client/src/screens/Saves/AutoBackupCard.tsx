@@ -19,6 +19,8 @@ import {
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
 import { BackupLayoutChoice, layoutSupported } from "./BackupLayoutChoice";
+import { BackupProgressModal, BackupRunBar, useBackupRuns } from "./BackupProgress";
+import { FolderBackupChoice, foldersSupported } from "./FolderBackupChoice";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -206,9 +208,15 @@ export function useConsoleDrives(enabled: boolean) {
 
 /** The automatic save backup's switch, folder, how often and how many versions it keeps. The
  *  engine runs the backups (with no window open in Docker); this card changes its settings. */
-export default function AutoBackupCard() {
+export default function AutoBackupCard({
+  owners = [],
+}: {
+  /** The users with saves on the console shown (named where the console names them). */
+  owners?: ReadonlyArray<{ id: number; name: string | null }>;
+} = {}) {
   const tr = useTr();
   const { settings, status, error, refresh, set, runNow } = useAutoSaveBackupStore();
+  const [progressOpen, setProgressOpen] = useState(false);
   const [dirDraft, setDirDraft] = useState("");
   const desktop = isTauriEnv();
   const copySupported = consoleCopySupported(settings);
@@ -227,6 +235,8 @@ export default function AutoBackupCard() {
     const id = window.setInterval(() => void refresh(), 3000);
     return () => window.clearInterval(id);
   }, [running, refresh]);
+  // The last run's record (#895): asked again whenever a run starts or ends.
+  const runs = useBackupRuns("local", false, `${running}-${status?.last_at ?? 0}`);
 
   // The first read failed (the engine is down or refused): say so, with a way to try again.
   if (!settings) {
@@ -404,6 +414,15 @@ export default function AutoBackupCard() {
           onChange={(patch) => void set(patch)}
         />
       )}
+      {foldersSupported(settings) && settings.dir && (
+        <FolderBackupChoice
+          testId="auto-save-backup-folders"
+          folders={settings.folders ?? []}
+          onChange={(folders) => void set({ folders })}
+          from="local"
+          driveCopies={!!settings.console_drive}
+        />
+      )}
       {error && <p className="mt-2 text-xs text-[var(--color-bad)]">{error}</p>}
       {(running || (status && status.last_at > 0)) && (
         <p className="mt-2 text-xs text-[var(--color-muted)]">
@@ -420,6 +439,19 @@ export default function AutoBackupCard() {
               )}
           {!running && status?.last_error ? ` ${status.last_error}` : ""}
         </p>
+      )}
+      {settings.dir && (
+        <BackupRunBar
+          which="local"
+          runs={runs}
+          running={running}
+          onOpen={() => setProgressOpen(true)}
+          onStarted={() => void refresh()}
+          testId="auto-save-backup-run"
+        />
+      )}
+      {progressOpen && (
+        <BackupProgressModal which="local" open onClose={() => setProgressOpen(false)} owners={owners} />
       )}
     </section>
   );

@@ -33,6 +33,14 @@ extern "C" {
     fn ownership_record_parse(text: *const c_char, len: usize, r: *mut Rec) -> c_int;
     fn ownership_record_read(path: *const c_char, r: *mut Rec, retry_ms: c_int) -> c_int;
     fn ownership_record_merge(fresh: *mut Rec, snap: *const Rec);
+    fn ownership_prior_pick(
+        record: *const Rec,
+        exiting: *const Rec,
+        exiting_complete: c_int,
+        boottime: u64,
+        self_pid: c_int,
+        out: *mut Rec,
+    ) -> c_int;
     fn t10_reap_decision(
         ours: c_int,
         rec: u64,
@@ -168,6 +176,61 @@ fn a_snapshot_of_a_different_pid_is_never_mixed_in() {
     };
     unsafe { ownership_record_merge(&mut fresh, &snap) };
     assert_eq!((fresh.pid, fresh.started), (251, 0));
+}
+
+/// #903: the app stops the old helper, then sends the new one. The old one removes its ownership
+/// record at the END of its stop, so a new helper started meanwhile found none and did not wait for
+/// the old process to be gone. The exiting note (written as the stop begins) names it then.
+#[test]
+fn an_exiting_helper_without_a_record_is_still_waited_for() {
+    const NONE: c_int = 0;
+    const RECORD: c_int = 1;
+    const EXITING: c_int = 2;
+    let me = 300;
+    let rec = Rec {
+        pid: 250,
+        started: 1_700_000_000,
+        instance_id: 1,
+    };
+    let note = Rec {
+        pid: 260,
+        started: 1_700_000_100,
+        instance_id: 2,
+    };
+    let empty = Rec::default();
+    let boot = 1_699_999_000u64;
+    let pick_at = |r: &Rec, n: &Rec, complete: c_int, boottime: u64| {
+        let mut out = Rec {
+            pid: -9,
+            started: 9,
+            instance_id: 9,
+        };
+        let from = unsafe { ownership_prior_pick(r, n, complete, boottime, me, &mut out) };
+        (from, out)
+    };
+    let pick = |r: &Rec, n: &Rec, complete: c_int| pick_at(r, n, complete, boot);
+    // The record names the prior: it decides, as before the note existed.
+    assert_eq!(pick(&rec, &note, 1), (RECORD, rec));
+    // No record (removed at the end of the stop): the note names the process still exiting.
+    assert_eq!(pick(&empty, &note, 1), (EXITING, note));
+    // A torn note, one without a start time (the boot-session guard needs it), or this process's
+    // own: nothing to wait for.
+    assert_eq!(pick(&empty, &note, 0), (NONE, empty));
+    let no_start = Rec { started: 0, ..note };
+    assert_eq!(pick(&empty, &no_start, 1), (NONE, empty));
+    let mine = Rec { pid: me, ..note };
+    assert_eq!(pick(&empty, &mine, 1), (NONE, empty));
+    // A record of this very process (written, then a second reap): the note decides.
+    let own_rec = Rec { pid: me, ..rec };
+    assert_eq!(pick(&own_rec, &note, 1), (EXITING, note));
+    // Neither: none, and `out` is zeroed.
+    assert_eq!(pick(&empty, &empty, 0), (NONE, empty));
+    // The note outlives a clean exit and a reboot, and its pid may be anything after one: a note
+    // of an earlier boot, or with the boot time unknown, is never waited on.
+    assert_eq!(pick_at(&empty, &note, 1, note.started + 1), (NONE, empty));
+    assert_eq!(pick_at(&empty, &note, 1, 0), (NONE, empty));
+    // The record is used as before whatever the boot time (the reap's own guard judges it).
+    assert_eq!(pick_at(&rec, &note, 1, 0), (RECORD, rec));
 }
 
 #[test]

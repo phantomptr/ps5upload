@@ -2,9 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Play Together: Scan QR in Join a friend reads the invite's QR code. -->
+	<!-- Play Together: Scan QR in Join a friend reads the invite's QR code. Play's picture from a
+	     capture device (#893) reads a video input the same way. -->
 	<key>NSCameraUsageDescription</key>
-	<string>Scan the QR code of a friend's Play Together invite.</string>
+	<string>Show the picture from a capture device in Play, and scan the QR code of a friend's Play Together invite.</string>
 	<!-- Remote Play voice chat (experimental): the page asks for the mic; macOS shows this. -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Talk to other players through your PS5 while you use Remote Play.</string>

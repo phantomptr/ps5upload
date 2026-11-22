@@ -38,6 +38,47 @@ pub const PS5_LOADER_PORT: u16 = 9021;
 pub const EVICT_BUDGET: Duration = Duration::from_secs(5);
 /// Grace period for FreeBSD to recycle :9120 after the old helper exits.
 pub const EVICT_GRACE: Duration = Duration::from_millis(600);
+/// The helper's own port. While it accepts connections, the old helper has not finished stopping.
+const HELPER_PORT: u16 = 9120;
+/// How long to wait for a helper that agreed to stop to close its port (#903). Its stop takes up to
+/// about 5 s; one that is wedged is left to the new helper's takeover after this.
+const EXIT_WAIT: Duration = Duration::from_secs(20);
+/// After its port closes, the old helper still finishes its last system calls and removes its
+/// record: a new one must not start Sony calls or mount changes meanwhile (#903).
+const EXIT_SETTLE: Duration = Duration::from_secs(3);
+
+/// Waits until `port` on `host` stops accepting connections, at most `limit`. True when it did.
+fn wait_port_closed(host: &str, port: u16, limit: Duration, poll: Duration) -> bool {
+    let started = std::time::Instant::now();
+    loop {
+        if !port_is_open(&join_host_port(host, port), Duration::from_millis(800)) {
+            return true;
+        }
+        if started.elapsed() >= limit {
+            return false;
+        }
+        std::thread::sleep(poll);
+    }
+}
+
+/// After a helper agreed to stop: wait until it has really gone before the new one is streamed.
+/// Two helpers doing Sony calls or mount changes at once can crash the console (#903), and an
+/// older helper deletes its record before it has finished exiting, so the new one cannot tell.
+fn wait_old_helper_gone(host: &str) {
+    let gone = wait_port_closed(host, HELPER_PORT, EXIT_WAIT, Duration::from_millis(250));
+    crate::clog!(
+        Info,
+        "payload",
+        "old helper on {host}: port {}; waiting {}s more before sending the new one",
+        if gone {
+            "closed"
+        } else {
+            "still open after 20 s"
+        },
+        EXIT_SETTLE.as_secs()
+    );
+    std::thread::sleep(EXIT_SETTLE);
+}
 
 /// Why a `dpi-ensure` failed, in a form a UI can branch on. Prose is a bad
 /// contract: 5.17.6 collapsed three unrelated causes into one message that
@@ -398,11 +439,15 @@ fn connect_evict_stream(
 /// nothing: a new helper that finds an old one alive takes over by itself.
 fn evict_running_helper(host: String) {
     let (tx, rx) = std::sync::mpsc::channel();
+    let h = host.clone();
     std::thread::spawn(move || {
-        let _ = tx.send(shutdown_running_payload(&host));
+        let _ = tx.send(shutdown_running_payload(&h));
     });
-    let _ = rx.recv_timeout(EVICT_BUDGET);
+    let answered = rx.recv_timeout(EVICT_BUDGET);
     std::thread::sleep(EVICT_GRACE);
+    if answered.is_ok() {
+        wait_old_helper_gone(&host);
+    }
 }
 
 /// A send that reached the console.
@@ -712,10 +757,14 @@ fn evict_running_helper_with(host: &str, evict: Evict) -> Result<(), String> {
     std::thread::spawn(move || {
         let _ = tx.send(shutdown_running_payload_with(&h, true));
     });
-    if let Ok(ShutdownOutcome::Busy(why)) = rx.recv_timeout(EVICT_BUDGET) {
+    let outcome = rx.recv_timeout(EVICT_BUDGET);
+    if let Ok(ShutdownOutcome::Busy(why)) = outcome {
         return Err(format!("{HELPER_BUSY_TOKEN}: {why}"));
     }
     std::thread::sleep(EVICT_GRACE);
+    if matches!(outcome, Ok(ShutdownOutcome::Acked)) {
+        wait_old_helper_gone(host);
+    }
     Ok(())
 }
 
@@ -856,6 +905,39 @@ pub fn send_payload_file(
 
 #[cfg(test)]
 mod tests {
+
+    /// #903: the new helper is sent only once the old one's port has closed.
+    #[test]
+    fn waits_for_the_old_helpers_port_to_close() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let closer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(600));
+            drop(l);
+        });
+        let t = std::time::Instant::now();
+        assert!(super::wait_port_closed(
+            "127.0.0.1",
+            port,
+            Duration::from_secs(5),
+            Duration::from_millis(50)
+        ));
+        assert!(
+            t.elapsed() >= Duration::from_millis(500),
+            "returned before the port closed"
+        );
+        closer.join().unwrap();
+        // A port that stays open: gives up at the limit.
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        assert!(!super::wait_port_closed(
+            "127.0.0.1",
+            port,
+            Duration::from_millis(300),
+            Duration::from_millis(50)
+        ));
+    }
+
     use super::*;
 
     #[test]

@@ -1200,7 +1200,7 @@ export default function SavesScreen() {
       />
 
       <ConnectionGate require="payload">
-        <AutoBackupCard />
+        <AutoBackupCard owners={owners} />
         <ServerBackupCard owners={owners} />
         {hasOtherConsole && host?.trim() ? <SaveSyncCard key={host.trim()} host={host.trim()} /> : null}
         <MoveFromPs4 />

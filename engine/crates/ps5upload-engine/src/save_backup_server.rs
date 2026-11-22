@@ -35,9 +35,7 @@ use axum::extract::Query;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use ps5upload_core::save_archive::{
-    auto_backup_stem, backup_tag, cleanup_temp_dir, make_temp_dir, zip_folder_noted,
-};
+use ps5upload_core::save_archive::{auto_backup_stem, backup_tag, cleanup_temp_dir, make_temp_dir};
 use ps5upload_core::saves::SaveEntry;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -49,7 +47,10 @@ use crate::save_backup::{
     self as local, done_key, json_error, now_ms, parse_backup_name, plain, stamp, BackupFile, Done,
     SETTLE_SECS,
 };
-use crate::save_backup_console::{Copies, Drive, Outcome};
+use crate::save_backup_pass::{
+    self as pass, share_pass, Records, Retry, ShareOut, SharePass, Work,
+};
+use crate::save_backup_run::{self as runs, Place, RunRef, Which};
 use crate::save_layout::{self as layout, Arrange, DecryptedStatus, Kind, Layout, Owner};
 
 /// How often the scheduler looks: the running game on each console, and whether a pass is due.
@@ -110,6 +111,11 @@ pub struct ServerSettings {
     /// PS5) in the user's Decrypted folder on the server, `keep` of them.
     #[serde(default)]
     pub decrypted_copy: bool,
+    /// Folders on the PS5 backed up with the saves (#899): a port's or an emulator's saves kept in
+    /// a folder of its own. Each is zipped whole into `Folders/<name>/` with the same versions to
+    /// keep (`save_folders`); empty: none.
+    #[serde(default)]
+    pub folders: Vec<String>,
 }
 
 impl ServerSettings {
@@ -152,6 +158,7 @@ impl Default for ServerSettings {
             layout: Layout::ByGame,
             game_names: false,
             decrypted_copy: false,
+            folders: Vec::new(),
         }
     }
 }
@@ -372,7 +379,7 @@ fn hosts_of(s: &ServerSettings) -> Vec<String> {
 // ── the server ──────────────────────────────────────────────────────────
 
 /// The session for `target` and the folder inside it.
-async fn open_target(target: &str) -> Result<(Arc<dyn RemoteFs>, String), String> {
+pub(crate) async fn open_target(target: &str) -> Result<(Arc<dyn RemoteFs>, String), String> {
     let rp = remote::path::parse(target.trim()).map_err(|e| e.to_string())?;
     let r = remote::pool::global().map_err(|e| e.to_string())?;
     let fs = r
@@ -384,7 +391,7 @@ async fn open_target(target: &str) -> Result<(Arc<dyn RemoteFs>, String), String
 }
 
 /// Forget the pooled session for `target` (it may have broken), so the next use signs in again.
-fn drop_session(target: &str) {
+pub(crate) fn drop_session(target: &str) {
     if let (Ok(rp), Ok(r)) = (remote::path::parse(target.trim()), remote::pool::global()) {
         r.pool.invalidate(&rp.connection_id);
     }
@@ -585,6 +592,38 @@ pub async fn store_verified(
     keep: u32,
     scratch: &Path,
 ) -> Result<Verified, String> {
+    store_verified_with(
+        fs,
+        zip,
+        folder,
+        rel,
+        title_id,
+        user_id,
+        name,
+        keep,
+        scratch,
+        &quiet_progress(),
+        &|| {},
+    )
+    .await
+}
+
+/// [`store_verified`], the write reporting to `progress` (and stopping when it is cancelled), and
+/// `checking` called once the copy is written, before it is read back.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn store_verified_with(
+    fs: &dyn RemoteFs,
+    zip: &Path,
+    folder: &str,
+    rel: &str,
+    title_id: &str,
+    user_id: u32,
+    name: &str,
+    keep: u32,
+    scratch: &Path,
+    progress: &PutProgress,
+    checking: &dyn Fn(),
+) -> Result<Verified, String> {
     if !plain(title_id) || !plain(name) || !name.ends_with(".zip") {
         return Err("unexpected backup name".into());
     }
@@ -603,9 +642,10 @@ pub async fn store_verified(
         .await
         .map_err(|e| format!("make {dir} on the server: {e}"))?;
     let target = format!("{dir}/{name}");
-    crate::download_relay::place(fs, zip, &target, &quiet_progress())
+    crate::download_relay::place(fs, zip, &target, progress)
         .await
         .map_err(|e| format!("write {target}: {e}"))?;
+    checking();
     match verify_on_server(fs, &target, size, &sum, scratch).await {
         Ok(n) if n == entries => {}
         Ok(n) => {
@@ -733,86 +773,6 @@ fn backup_name(entry: &SaveEntry, tag: Option<&str>) -> String {
     )
 }
 
-/// Which places one save's backup goes to this time.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Sides {
-    /// The server (the save changed since its last backup there).
-    pub share: bool,
-    /// The PS5 drive (changed since its last copy there, and the drive is in).
-    pub drive: bool,
-}
-
-/// What one save's backup did in each place; None: that place was not due.
-#[derive(Debug, Default)]
-pub(crate) struct Sent {
-    pub share: Option<Result<Verified, String>>,
-    pub drive: Option<Outcome>,
-}
-
-/// Writes a backup zip to the server and verifies it there.
-pub(crate) type SendToShare<'a> = dyn Fn(&Path) -> Result<Verified, String> + 'a;
-
-/// Sends the backup zip `zip` of `owner`'s save, made from `host`, to the server (`share`) and to the
-/// PS5 drive (`drive`), each when given. Each on its own: one that fails (a server that can't be
-/// reached, a drive taken out) never stops or fails the other, and both outcomes are answered.
-pub(crate) fn deliver(
-    zip: &Path,
-    host: &str,
-    owner: &Owner,
-    share: Option<&SendToShare>,
-    drive: Option<(&mut Copies, &dyn Drive)>,
-) -> Sent {
-    let share = share.map(|send| send(zip));
-    let drive = drive.map(|(copies, console)| {
-        // A write on the console: no other save operation runs there meanwhile.
-        let _op = local::save_op(&[host]);
-        copies.copy(console, host, owner, zip)
-    });
-    Sent { share, drive }
-}
-
-/// Backs up one save: off the console and zipped (no other save operation on the console
-/// meanwhile), then sent where it is due (see [`deliver`]). Err only when no backup was made.
-fn back_up_one(
-    s: &ServerSettings,
-    host: &str,
-    entry: &SaveEntry,
-    sides: Sides,
-    copies: Option<&mut Copies>,
-) -> Result<Sent, String> {
-    let owner = local::owner_of(host, entry, s.arrange());
-    let tmp = make_temp_dir(&entry.title_id)?;
-    let tmp_s = tmp.to_string_lossy().into_owned();
-    let result = (|| {
-        let name = backup_name(entry, None);
-        let zip = tmp.join(&name);
-        {
-            let _op = local::save_op(&[host]);
-            local::download_save(host, entry, &tmp, &|| Ok(()))?;
-            let note = local::backup_note(
-                local::console_identity(host).as_deref(),
-                Some(entry.user_id as u32),
-            );
-            zip_folder_noted(&tmp, &entry.title_id, &zip, &note)
-                .map_err(|e| format!("zip: {e:#}"))?;
-        }
-        let scratch = tmp.join("readback.zip");
-        let share = |z: &Path| store_zip(s, &owner, &name, z, &scratch);
-        let console = crate::save_backup_console::Live(host);
-        Ok(deliver(
-            &zip,
-            host,
-            &owner,
-            sides.share.then_some(&share as &SendToShare),
-            copies
-                .filter(|_| sides.drive)
-                .map(|c| (c, &console as &dyn Drive)),
-        ))
-    })();
-    let _ = cleanup_temp_dir(&tmp_s);
-    result
-}
-
 /// The backup zip `zip` of `owner`'s save, written to the server as `name` (where the server
 /// folder's layout puts it) and verified. `scratch` is a file to read it back into.
 fn store_zip(
@@ -933,138 +893,6 @@ pub(crate) fn running_titles(host: &str) -> Result<BTreeSet<String>, String> {
         .collect())
 }
 
-#[derive(Default)]
-struct Tally {
-    backed_up: u32,
-    failed: u32,
-    /// Copies to the PS5 drive that failed (a drive that is away is not a failure).
-    drive_failed: u32,
-    last_error: Option<String>,
-    last_verified: Option<Verified>,
-    /// The decrypted copies made with the backups (`ServerSettings::decrypted_copy`).
-    decrypted: DecryptedStatus,
-}
-
-impl Tally {
-    /// Everything that failed, in either place: what makes a pass try again soon.
-    fn failures(&self) -> u32 {
-        self.failed + self.drive_failed
-    }
-
-    /// Counts what one save's backup did, and records each place it reached.
-    fn count(&mut self, host: &str, entry: &SaveEntry, sent: Sent) {
-        if let Some(r) = sent.share {
-            match r {
-                Ok(v) => {
-                    crate::log_info!(
-                        "save backup to server: {} on {host} → {} ({} bytes, {} files, verified)",
-                        entry.title_id,
-                        v.file,
-                        v.size,
-                        v.entries
-                    );
-                    let mut g = lock();
-                    g.state
-                        .done
-                        .insert(done_key(host, &entry.path), entry.mtime);
-                    persist(&g);
-                    drop(g);
-                    self.backed_up += 1;
-                    self.last_verified = Some(v);
-                }
-                Err(e) => {
-                    crate::log_warn!("save backup to server: {} on {host}: {e}", entry.title_id);
-                    self.failed += 1;
-                    self.last_error = Some(format!("{}: {e}", entry.title_id));
-                }
-            }
-        }
-        match sent.drive {
-            Some(Outcome::Copied(_)) => {
-                let mut g = lock();
-                g.state
-                    .console_done
-                    .insert(done_key(host, &entry.path), entry.mtime);
-                persist(&g);
-            }
-            Some(Outcome::Failed(_)) => self.drive_failed += 1,
-            Some(Outcome::Skipped(_)) | None => {}
-        }
-    }
-}
-
-/// Backs up `host`'s due saves (see [`due_saves`]): to the server, and to the PS5 drive when one
-/// is chosen (`copies`). Err when the console did not answer.
-fn pass_host(
-    s: &ServerSettings,
-    host: &str,
-    title: Option<&str>,
-    settle: bool,
-    tally: &mut Tally,
-    copies: &mut Option<Copies>,
-) -> Result<(), String> {
-    let saves = local::list_saves(host)?;
-    // A game running now is still writing its save; one closed is not.
-    let running = running_titles(host).unwrap_or_default();
-    let now = (now_ms() / 1000) as i64;
-    let (done, drive_done) = {
-        let g = lock();
-        (g.state.done.clone(), g.state.console_done.clone())
-    };
-    let pick = Pick {
-        users: &s.users,
-        title,
-        settle,
-        running: &running,
-        drive_done: copies.is_some().then_some(&drive_done),
-    };
-    let console = crate::save_backup_console::Live(host);
-    for entry in due_saves(host, &saves, &done, now, &pick) {
-        // The server may be changed part-way through a long pass.
-        if settings().target != s.target {
-            break;
-        }
-        let share = changed_since(host, entry, &done);
-        let mut drive = false;
-        if let Some(c) = copies.as_mut() {
-            if changed_since(host, entry, &drive_done) {
-                // A drive that is away is noted and tried at the next pass; a save due only for
-                // its copy is not read off the console for nothing.
-                drive = c.ready(&console, host);
-                if !drive {
-                    c.note_skipped(&console, host);
-                }
-            }
-        }
-        if !share && !drive {
-            continue;
-        }
-        match back_up_one(s, host, entry, Sides { share, drive }, copies.as_mut()) {
-            Ok(sent) => {
-                let on_share = matches!(sent.share, Some(Ok(_)));
-                tally.count(host, entry, sent);
-                // A decrypted copy beside it, when asked for: never a reason the backup failed.
-                if on_share && local::wants_decrypted(s.decrypted_copy, s.arrange(), entry) {
-                    let r = export_decrypted(host, entry, Some(s.keep));
-                    if let Err(e) = &r {
-                        crate::log_warn!(
-                            "save backup to server: decrypted copy of {} on {host}: {e}",
-                            entry.title_id
-                        );
-                    }
-                    tally.decrypted.record(&r);
-                }
-            }
-            Err(e) => {
-                crate::log_warn!("save backup to server: {} on {host}: {e}", entry.title_id);
-                tally.failed += 1;
-                tally.last_error = Some(format!("{}: {e}", entry.title_id));
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Holds a pass running and clears that however the pass ends: a panic used to leave it set, and
 /// every later tick then returned at once, with no backup and no error until a restart.
 struct PassRunning;
@@ -1089,32 +917,120 @@ fn begin() -> Option<PassRunning> {
     Some(PassRunning)
 }
 
-fn finish(trigger: &str, tally: Tally, checked: bool, copies: Option<Copies>) {
+/// The share's and its PS5 drive copies' records of what each holds, kept with the status.
+struct Kept;
+
+impl Records for Kept {
+    fn done(&self, place: Place) -> Done {
+        let g = lock();
+        match place {
+            Place::Share => g.state.done.clone(),
+            Place::Drive => g.state.console_done.clone(),
+            Place::Local => Done::new(),
+        }
+    }
+
+    fn mark(&self, place: Place, key: &str, mtime: i64) {
+        let mut g = lock();
+        match place {
+            Place::Share => g.state.done.insert(key.to_string(), mtime),
+            Place::Drive => g.state.console_done.insert(key.to_string(), mtime),
+            Place::Local => return,
+        };
+        persist(&g);
+    }
+}
+
+/// A pass with the live consoles and server into `run` (see `save_backup_pass::share_pass`);
+/// with the decrypted copies made beside the backups.
+fn live_pass(s: &ServerSettings, run: RunRef<'_>, work: Work) -> (ShareOut, DecryptedStatus) {
+    let target = s.target.clone();
+    let decrypted = std::cell::RefCell::new(DecryptedStatus::default());
+    let open = || rt().block_on(open_target(&target));
+    let forget = || drop_session(&target);
+    // The server may be changed part-way through a long pass.
+    let keep_going = || settings().target == target;
+    let after_share = |host: &str, entry: &SaveEntry| {
+        // A decrypted copy beside it, when asked for: never a reason the backup failed.
+        if local::wants_decrypted(s.decrypted_copy, s.arrange(), entry) {
+            let r = export_decrypted(host, entry, Some(s.keep));
+            if let Err(e) = &r {
+                crate::log_warn!(
+                    "save backup to server: decrypted copy of {} on {host}: {e}",
+                    entry.title_id
+                );
+            }
+            decrypted.borrow_mut().record(&r);
+        }
+    };
+    let retry = Retry::live();
+    let p = SharePass {
+        s,
+        console: &pass::Live,
+        records: &Kept,
+        retry: &retry,
+        rt: rt(),
+        open: &open,
+        forget: &forget,
+        keep_going: &keep_going,
+        after_share: &after_share,
+    };
+    let out = share_pass(&p, run, work);
+    (out, decrypted.into_inner())
+}
+
+/// Ends a pass: the status the Saves screen shows (also to an app that does not read the runs).
+fn finish(trigger: &str, out: &ShareOut, decrypted: DecryptedStatus) {
     let mut g = lock();
     let st = &mut g.state.status;
     st.running = false;
-    if let Some(c) = copies.filter(|c| c.status.at > 0) {
-        st.console_copy = Some(c.status);
+    if let Some(c) = out.copies.clone() {
+        st.console_copy = Some(c);
     }
-    if tally.decrypted.at > 0 {
-        st.decrypted = Some(tally.decrypted.clone());
+    if decrypted.at > 0 {
+        st.decrypted = Some(decrypted);
     }
     let now = now_ms();
-    if checked {
+    if !out.answered.is_empty() {
         st.last_check_at = now;
     }
-    if tally.backed_up > 0 || tally.failed > 0 {
+    let sum = &out.summary;
+    let share = sum.places.get(&Place::Share).cloned().unwrap_or_default();
+    // Not on the share: failed there, or never got there (not read off the console, or left
+    // when the run stopped). An app that reads only this counts them all as failed.
+    let failed = share.failed + share.left;
+    if share.verified > 0 || failed > 0 || sum.read_failed > 0 {
         st.last_at = now;
         st.last_trigger = trigger.to_string();
-        st.backed_up = tally.backed_up;
-        st.verified = tally.backed_up;
-        st.failed = tally.failed;
-        st.last_error = tally.last_error;
-        if tally.last_verified.is_some() {
-            st.last_verified = tally.last_verified;
+        st.backed_up = share.verified;
+        st.verified = share.verified;
+        st.failed = failed.max(sum.read_failed);
+        st.last_error = sum
+            .first_error
+            .clone()
+            .or(share.first_error)
+            .or_else(|| sum.reason.clone());
+        if out.last_verified.is_some() {
+            st.last_verified = out.last_verified.clone();
         }
     }
     persist(&g);
+}
+
+/// After a run in after-close mode: the games whose saves are not on the share yet are tried
+/// again at a later tick (`RETRY_MS`), not only when that game is closed again (#896).
+fn keep_missing(s: &ServerSettings, out: &ShareOut, now: u64) {
+    if s.mode != Mode::AfterClose {
+        return;
+    }
+    let mut g = lock();
+    for (host, titles) in &out.missing {
+        g.pending
+            .entry(host.clone())
+            .or_default()
+            .extend(titles.iter().cloned());
+        g.pending_tried.insert(host.clone(), now);
+    }
 }
 
 /// One look: the running games (after-close mode) and any pass that is due.
@@ -1126,10 +1042,10 @@ pub fn tick() {
     let Some(_running) = begin() else {
         return;
     };
-    let mut tally = Tally::default();
-    let mut copies = Copies::new(&s.console_drive, s.drive_keep(), s.arrange());
     let now = now_ms();
     let mut checked = false;
+    // Console → the games to back up there (None: every changed save).
+    let mut work: Vec<(String, Option<String>)> = Vec::new();
     for host in hosts_of(&s) {
         match s.mode {
             Mode::Off => {}
@@ -1166,79 +1082,119 @@ pub fn tick() {
                         g.pending_tried.get(&host).copied(),
                     )
                 };
+                checked = true;
                 if pending.is_empty() || !pending_due(tried, now) {
-                    checked = true;
                     continue;
                 }
-                let mut any_failed = false;
-                for title in pending {
-                    let before = tally.failures();
-                    if pass_host(&s, &host, Some(&title), false, &mut tally, &mut copies).is_ok()
-                        && tally.failures() == before
-                    {
-                        if let Some(p) = lock().pending.get_mut(&host) {
-                            p.remove(&title);
-                        }
-                    } else {
-                        any_failed = true;
-                    }
-                }
-                {
-                    let mut g = lock();
-                    if any_failed {
-                        g.pending_tried.insert(host.clone(), now);
-                    } else {
-                        g.pending_tried.remove(&host);
-                    }
-                }
-                checked = true;
+                work.extend(pending.into_iter().map(|t| (host.clone(), Some(t))));
             }
             Mode::Interval => {
                 let run = lock().state.hosts.get(&host).copied().unwrap_or_default();
                 if !host_due(&run, now, s.every_hours) || local::console_busy(&host) {
                     continue;
                 }
-                let before = tally.failures();
-                let answered = pass_host(&s, &host, None, true, &mut tally, &mut copies).is_ok();
-                let mut g = lock();
-                let r = g.state.hosts.entry(host.clone()).or_default();
-                if answered {
-                    r.tried_ms = now;
-                    if tally.failures() == before {
-                        r.ok_ms = now;
-                    }
-                    checked = true;
-                }
-                persist(&g);
+                work.push((host.clone(), None));
             }
         }
+    }
+    if work.is_empty() {
+        if checked {
+            lock().state.status.last_check_at = now;
+        }
+        return;
     }
     let trigger = if s.mode == Mode::AfterClose {
         "closed"
     } else {
         "interval"
     };
-    finish(trigger, tally, checked, copies);
+    let journal = runs::global();
+    let Ok(run) = journal.begin(Which::Share, trigger) else {
+        return;
+    };
+    let settle = s.mode == Mode::Interval;
+    let (out, decrypted) = live_pass(&s, run, Work::Hosts(&work, settle));
+    if out.summary.total == 0 {
+        // Nothing had changed: no run to show for it.
+        journal.discard(Which::Share);
+    }
+    {
+        let mut g = lock();
+        for (host, title) in &work {
+            let missing = out.missing.get(host);
+            match (s.mode, title) {
+                (Mode::AfterClose, Some(t)) => {
+                    let failed = missing.is_some_and(|m| m.contains(&t.to_ascii_uppercase()))
+                        || !out.answered.contains(host);
+                    if failed {
+                        g.pending_tried.insert(host.clone(), now);
+                    } else if let Some(p) = g.pending.get_mut(host) {
+                        p.remove(t);
+                    }
+                }
+                (Mode::Interval, _) => {
+                    let r = g.state.hosts.entry(host.clone()).or_default();
+                    if out.answered.contains(host) {
+                        r.tried_ms = now;
+                        if missing.is_none() {
+                            r.ok_ms = now;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if s.mode == Mode::AfterClose {
+            // A console whose games all went is not held back by an old failure.
+            let cleared: Vec<String> = g
+                .pending
+                .iter()
+                .filter(|(_, t)| t.is_empty())
+                .map(|(h, _)| h.clone())
+                .collect();
+            for h in cleared {
+                g.pending_tried.remove(&h);
+            }
+        }
+        persist(&g);
+    }
+    finish(trigger, &out, decrypted);
 }
 
 /// "Back up now": every chosen console's changed saves, whatever the mode.
 pub fn run_now() -> Result<(), String> {
+    run_with("manual", None)
+}
+
+/// Continue the last run (`ids` None: what it left) or Retry some of its saves (`ids`).
+pub fn run_again(ids: Option<BTreeSet<String>>) -> Result<(), String> {
+    let trigger = if ids.is_some() { "retry" } else { "continue" };
+    run_with(trigger, ids.as_ref())
+}
+
+fn run_with(trigger: &str, ids: Option<&BTreeSet<String>>) -> Result<(), String> {
     let s = settings();
     if s.target.trim().is_empty() {
         return Err("choose a server folder for the backups first".into());
     }
+    let journal = runs::global();
+    let last = journal.last(Which::Share);
+    if trigger != "manual" && last.is_none() {
+        return Err("there is no earlier backup to continue".into());
+    }
     let Some(_running) = begin() else {
         return Ok(());
     };
-    let mut tally = Tally::default();
-    let mut copies = Copies::new(&s.console_drive, s.drive_keep(), s.arrange());
-    let mut checked = false;
-    for host in hosts_of(&s) {
-        if pass_host(&s, &host, None, false, &mut tally, &mut copies).is_ok() {
-            checked = true;
-        }
-    }
-    finish("manual", tally, checked, copies);
+    let run = journal.begin(Which::Share, trigger)?;
+    let hosts: Vec<(String, Option<String>)> =
+        hosts_of(&s).into_iter().map(|h| (h, None)).collect();
+    let work = match (&last, trigger) {
+        (Some(l), "continue" | "retry") => Work::Carry(l, ids),
+        _ => Work::Hosts(&hosts, false),
+    };
+    let (out, decrypted) = live_pass(&s, run, work);
+    keep_missing(&s, &out, now_ms());
+    finish(trigger, &out, decrypted);
     Ok(())
 }
 
@@ -1352,6 +1308,8 @@ pub struct Patch {
     pub game_names: Option<bool>,
     /// By user: a decrypted copy with each backup of a PS5 save.
     pub decrypted_copy: Option<bool>,
+    /// Folders on the PS5 backed up with the saves (#899), each checked by `save_folders`.
+    pub folders: Option<Vec<String>>,
 }
 
 /// Whether the engine can write in `target`: the folder is made, a small file written there
@@ -1428,6 +1386,12 @@ pub async fn put_settings(Json(p): Json<Patch>) -> Response {
     }
     if let Some(d) = p.decrypted_copy {
         next.decrypted_copy = d;
+    }
+    if let Some(f) = p.folders {
+        match crate::save_folders::folders_ok(&f) {
+            Ok(f) => next.folders = f,
+            Err(e) => return json_error(StatusCode::BAD_REQUEST, e),
+        }
     }
     if next.mode != Mode::Off && next.target.is_empty() {
         return json_error(
@@ -2123,185 +2087,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A backup zip named as the pass names one, made in `dir`.
-    fn named_zip(dir: &Path, name: &str) -> PathBuf {
-        let made = make_zip(dir, "PPSA01234", name.as_bytes());
-        let zip = dir.join(name);
-        std::fs::rename(&made, &zip).unwrap();
-        zip
-    }
-
-    /// #885: one run writes the share and the PS5 drive; either one failing (a share that can't
-    /// be reached, a drive that is out or garbles the copy) never stops or fails the other.
-    #[test]
-    fn a_run_reaches_the_share_and_the_ps5_drive_and_one_failing_spares_the_other() {
-        use crate::save_backup_console::tests::{vol, with_m2, Fake};
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let dir = scratch("both-sides");
-        let fs = MemFs::new(&[]);
-        let host = "10.88.0.1";
-        let stem = auto_backup_stem("PPSA01234", 1);
-        let by_game = Owner {
-            title_id: "PPSA01234".into(),
-            user: 1,
-            ..Owner::default()
-        };
-        let send = |name: &str, drive: &Fake, keep: u32| {
-            let zip = named_zip(&dir, name);
-            let share = |z: &Path| {
-                rt.block_on(store_verified(
-                    &fs,
-                    z,
-                    "/b",
-                    "PPSA01234",
-                    "PPSA01234",
-                    1,
-                    name,
-                    5,
-                    &dir.join("rb.zip"),
-                ))
-            };
-            let mut copies = Copies::new("/mnt/ext0", keep, Arrange::default()).unwrap();
-            let sent = deliver(
-                &zip,
-                host,
-                &by_game,
-                Some(&share),
-                Some((&mut copies, drive)),
-            );
-            (sent, copies.status)
-        };
-        let on_drive = |name: &str| format!("/mnt/ext0/ps5upload/save-backups/PPSA01234/{name}");
-
-        // Both places get the same file.
-        let m2 = with_m2();
-        let first = format!("{stem}2026-11-17_101500.zip");
-        let (sent, _) = send(&first, &m2, 1);
-        assert_eq!(sent.share.unwrap().unwrap().file, first);
-        assert_eq!(sent.drive, Some(Outcome::Copied(on_drive(&first))));
-        assert!(fs.bytes(&format!("/b/PPSA01234/{first}")).is_some());
-
-        // The share can't be reached: the drive copy is still made (and keeps 1 version there).
-        fs.set_down(true);
-        let second = format!("{stem}2026-11-17_111500.zip");
-        let (sent, status) = send(&second, &m2, 1);
-        fs.set_down(false);
-        assert!(sent.share.unwrap().is_err());
-        assert_eq!(sent.drive, Some(Outcome::Copied(on_drive(&second))));
-        assert_eq!(status.copied, 1);
-        let files = m2.files.borrow();
-        assert!(files.contains_key(&on_drive(&second)));
-        assert!(!files.contains_key(&on_drive(&first)), "one version kept");
-        drop(files);
-        assert!(fs.bytes(&format!("/b/PPSA01234/{second}")).is_none());
-
-        // The drive is not plugged in: the share still gets a verified backup.
-        let away = Fake {
-            vols: vec![vol("/data", "/dev/ssd0.user")],
-            ..Fake::default()
-        };
-        let third = format!("{stem}2026-11-17_121500.zip");
-        let (sent, status) = send(&third, &away, 1);
-        assert!(sent.share.unwrap().is_ok());
-        assert!(matches!(sent.drive, Some(Outcome::Skipped(_))));
-        assert_eq!((status.skipped, status.failed), (1, 0));
-
-        // The drive garbles the copy: removed there and reported; the share still verified.
-        let bad = Fake {
-            corrupt: true,
-            ..with_m2()
-        };
-        let fourth = format!("{stem}2026-11-17_131500.zip");
-        let (sent, status) = send(&fourth, &bad, 1);
-        assert!(sent.share.unwrap().is_ok());
-        assert!(matches!(sent.drive, Some(Outcome::Failed(_))));
-        assert_eq!(status.failed, 1);
-        assert!(bad.files.borrow().is_empty());
-
-        // A place that is not due is not touched.
-        let fifth = format!("{stem}2026-11-17_141500.zip");
-        let zip = named_zip(&dir, &fifth);
-        let sent = deliver(&zip, host, &by_game, None, None);
-        assert!(sent.share.is_none() && sent.drive.is_none());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// What a run did in each place is recorded apart: a share that failed is tried again at the
-    /// next pass, while the drive, which has the save, does not get it twice.
-    #[test]
-    fn each_place_keeps_its_own_record_of_what_it_has() {
-        let host = "10.88.0.2";
-        let entry = save(
-            "/user/home/1/savedata_prospero/PPSA01234",
-            "PPSA01234",
-            1,
-            500,
-        );
-        let mut tally = Tally::default();
-        tally.count(
-            host,
-            &entry,
-            Sent {
-                share: Some(Err("connection reset".into())),
-                drive: Some(Outcome::Copied("/mnt/ext0/x".into())),
-            },
-        );
-        assert_eq!(
-            (tally.failed, tally.drive_failed, tally.failures()),
-            (1, 0, 1)
-        );
-        let key = done_key(host, &entry.path);
-        {
-            let g = lock();
-            assert_eq!(g.state.console_done.get(&key), Some(&500));
-            assert_eq!(g.state.done.get(&key), None);
-        }
-        // Next pass: due for the share only.
-        let (done, drive_done) = {
-            let g = lock();
-            (g.state.done.clone(), g.state.console_done.clone())
-        };
-        assert!(changed_since(host, &entry, &done));
-        assert!(!changed_since(host, &entry, &drive_done));
-        let none = BTreeSet::new();
-        let pick = Pick {
-            users: &[],
-            title: None,
-            settle: false,
-            running: &none,
-            drive_done: Some(&drive_done),
-        };
-        let saves = [entry.clone()];
-        assert_eq!(due_saves(host, &saves, &done, 9000, &pick).len(), 1);
-        // A drive copy that failed counts as a failure (tried again soon), a share that went
-        // through is recorded.
-        let mut tally = Tally::default();
-        tally.count(
-            host,
-            &entry,
-            Sent {
-                share: Some(Ok(Verified {
-                    title_id: "PPSA01234".into(),
-                    file: "f.zip".into(),
-                    ..Verified::default()
-                })),
-                drive: Some(Outcome::Failed("x".into())),
-            },
-        );
-        assert_eq!((tally.backed_up, tally.drive_failed), (1, 1));
-        assert_eq!(lock().state.done.get(&key), Some(&500));
-        // Both have it now: nothing is due.
-        let (done, drive_done) = {
-            let g = lock();
-            (g.state.done.clone(), g.state.console_done.clone())
-        };
-        let pick = Pick {
-            drive_done: Some(&drive_done),
-            ..pick
-        };
-        assert!(due_saves(host, &saves, &done, 9000, &pick).is_empty());
-    }
-
     #[test]
     fn the_ps5_drive_copy_settings_read_old_files_and_keep_their_own_versions() {
         let s: ServerSettings =
@@ -2331,5 +2116,44 @@ mod tests {
         assert_eq!(s.every_hours, DEFAULT_HOURS);
         assert_eq!(clamp_hours(0), 1);
         assert_eq!(clamp_hours(10_000), 168);
+    }
+
+    /// #896: with "After a game is closed", a game whose save did not reach the share in a Back up
+    /// now is tried again at a later tick, not only once that game is closed again.
+    #[test]
+    fn a_save_the_share_missed_is_tried_again_after_close_mode_too() {
+        let host = "10.88.0.9";
+        let out = ShareOut {
+            summary: runs::Summary::default(),
+            answered: [host.to_string()].into(),
+            missing: [(host.to_string(), ["PPSA01234".to_string()].into())].into(),
+            copies: None,
+            last_verified: None,
+        };
+        let interval = ServerSettings {
+            mode: Mode::Interval,
+            ..ServerSettings::default()
+        };
+        keep_missing(&interval, &out, 1_000);
+        assert!(
+            !lock().pending.contains_key(host),
+            "interval mode retries by itself"
+        );
+        let s = ServerSettings {
+            mode: Mode::AfterClose,
+            ..ServerSettings::default()
+        };
+        keep_missing(&s, &out, 1_000);
+        let (pending, tried) = {
+            let g = lock();
+            (
+                g.pending.get(host).cloned(),
+                g.pending_tried.get(host).copied(),
+            )
+        };
+        assert!(pending.unwrap().contains("PPSA01234"));
+        // Not at once (the server may be away for the night), but after RETRY_MS.
+        assert!(!pending_due(tried, 1_000 + 60_000));
+        assert!(pending_due(tried, 1_000 + RETRY_MS));
     }
 }

@@ -270,6 +270,55 @@ pub struct ExtractRequest {
     /// An existing file is replaced (else kept and counted in `skipped`).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub replace: bool,
+    /// Only list the archive's top-level names ([`ExtractResult::top`]); nothing is written.
+    /// Sent with `merge` false and `dest` the folder that is already there, so a helper older
+    /// than this refuses it instead of extracting.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub list: bool,
+    /// Renames of top-level entries, encoded by [`encode_top_renames`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top: Option<String>,
+}
+
+/// The extractor's room for top-level renames and listed names (`XJ_TOP`, payload/extractor).
+pub const EXTRACT_TOP_MAX: usize = 8191;
+
+/// Whether `name` can be one top-level entry's name: one component, not `.`/`..`, no control
+/// characters, at most 255 bytes.
+pub fn valid_top_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.chars().any(char::is_control)
+}
+
+/// Top-level renames for the extractor ("Extract here", #891): each `(from, to)` puts the
+/// archive's top-level entry `from` at `to`; `to` empty leaves it out. Encoded as
+/// `from/to/from/to...` (a name never holds '/'). Refused when a name is not one
+/// ([`valid_top_name`]) or the whole does not fit the extractor.
+pub fn encode_top_renames(pairs: &[(String, String)]) -> Result<Option<String>> {
+    if pairs.is_empty() {
+        return Ok(None);
+    }
+    let mut out = String::new();
+    for (from, to) in pairs {
+        if !valid_top_name(from) || (!to.is_empty() && !valid_top_name(to)) {
+            bail!("fs_extract_bad_name: {from}");
+        }
+        if !out.is_empty() {
+            out.push('/');
+        }
+        out.push_str(from);
+        out.push('/');
+        out.push_str(to);
+    }
+    if out.len() > EXTRACT_TOP_MAX {
+        bail!("fs_extract_too_many_names");
+    }
+    Ok(Some(out))
 }
 
 /// What [`archive_extract`] wrote. `unsafe` counts entries refused for escaping the folder (an
@@ -289,6 +338,37 @@ pub struct ExtractResult {
     pub unsafe_entries: u64,
     #[serde(default)]
     pub links: u64,
+    /// A listing ([`ExtractRequest::list`]): the archive's top-level names, '/' separated.
+    #[serde(default)]
+    pub top: String,
+    /// A listing: those of [`Self::top`] that are folders, '/' separated.
+    #[serde(default)]
+    pub top_dirs: String,
+    /// A listing: more names than the extractor could hold.
+    #[serde(default)]
+    pub top_more: bool,
+    /// The helper answered a listing (an older one never does).
+    #[serde(default)]
+    pub listed: bool,
+}
+
+fn split_names(s: &str) -> Vec<String> {
+    s.split('/')
+        .filter(|n| !n.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+impl ExtractResult {
+    /// A listing's names.
+    pub fn top_names(&self) -> Vec<String> {
+        split_names(&self.top)
+    }
+
+    /// A listing's names that are folders.
+    pub fn top_dir_names(&self) -> Vec<String> {
+        split_names(&self.top_dirs)
+    }
 }
 
 /// Extract an archive on the console into a folder there (.zip, .7z, .rar, .tar and .tar.gz/.bz2/.xz/
@@ -317,6 +397,67 @@ pub fn archive_extract(
         Ok(resp) => serde_json::from_slice(&resp).context("decode ARCHIVE_EXTRACT result"),
         Err(e) if is_cancel(&e, "fs_extract_cancelled") => bail!("cancelled"),
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod extract_top_tests {
+    use super::*;
+
+    #[test]
+    fn top_renames_encode_as_pairs_and_refuse_what_is_not_a_name() {
+        assert_eq!(encode_top_renames(&[]).unwrap(), None);
+        let pairs = vec![
+            ("Game".to_string(), "Game (2)".to_string()),
+            ("readme.txt".to_string(), String::new()),
+        ];
+        assert_eq!(
+            encode_top_renames(&pairs).unwrap().as_deref(),
+            Some("Game/Game (2)/readme.txt/")
+        );
+        for bad in ["", ".", "..", "a/b", "a\\b", "a\nb"] {
+            assert!(
+                encode_top_renames(&[(bad.to_string(), "x".to_string())]).is_err(),
+                "{bad:?}"
+            );
+            if !bad.is_empty() {
+                assert!(
+                    encode_top_renames(&[("x".to_string(), bad.to_string())]).is_err(),
+                    "{bad:?}"
+                );
+            }
+        }
+        let many: Vec<(String, String)> = (0..400)
+            .map(|i| (format!("{i:0>20}"), format!("{i:0>20} (2)")))
+            .collect();
+        assert!(encode_top_renames(&many).is_err());
+    }
+
+    #[test]
+    fn a_listing_reads_back_its_names() {
+        let r: ExtractResult = serde_json::from_str(
+            r#"{"path":"/data/x","top":"Game/readme.txt","top_dirs":"Game","top_more":false,"listed":true}"#,
+        )
+        .unwrap();
+        assert!(r.listed);
+        assert_eq!(r.top_names(), vec!["Game", "readme.txt"]);
+        assert_eq!(r.top_dir_names(), vec!["Game"]);
+        let old: ExtractResult = serde_json::from_str(r#"{"path":"/data/x","files":3}"#).unwrap();
+        assert!(!old.listed && old.top_names().is_empty());
+    }
+
+    #[test]
+    fn a_listing_is_sent_without_merge() {
+        let req = ExtractRequest {
+            path: "/data/a.zip".into(),
+            dest: "/data/here".into(),
+            list: true,
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["list"], true);
+        assert!(v.get("merge").is_none());
+        assert!(v.get("top").is_none());
     }
 }
 

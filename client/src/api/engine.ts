@@ -7,6 +7,38 @@
 
 import { getEngineUrl } from "../state/engine";
 
+/** What the engine says it can do (`/api/version` caps). An engine too old to say has none. */
+export interface EngineCaps {
+  /** `POST /api/payload/send` takes `console_path`: playlist steps stored on the PS5 (#900). */
+  payloadConsolePath: boolean;
+}
+
+const NO_CAPS: EngineCaps = { payloadConsolePath: false };
+let capsCache: { url: string; at: number; caps: Promise<EngineCaps> } | null = null;
+const CAPS_TTL_MS = 60_000;
+
+/** The engine's caps, asked at most once a minute per engine address; none when it can't say. */
+export function engineCaps(): Promise<EngineCaps> {
+  const url = getEngineUrl();
+  if (capsCache && capsCache.url === url && Date.now() - capsCache.at < CAPS_TTL_MS) {
+    return capsCache.caps;
+  }
+  // Never throws where it is called (a screen's effect): a WebKit before Safari 16 has no
+  // AbortSignal.timeout, and that only means no caps.
+  const caps = Promise.resolve()
+    .then(() => fetch(`${url}/api/version`, { signal: AbortSignal.timeout(5000) }))
+    .then((r) => (r.ok ? r.json() : null))
+    .then((v: { caps?: Record<string, unknown> } | null) => ({
+      payloadConsolePath: v?.caps?.payload_console_path === true,
+    }))
+    .catch(() => {
+      capsCache = null;
+      return NO_CAPS;
+    });
+  capsCache = { url, at: Date.now(), caps };
+  return caps;
+}
+
 export const engineApi = {
   /** Lightweight engine liveness probe. Unlike `/api/ps5/status` (which
    *  round-trips to the PS5 and fails if the console is off), this hits

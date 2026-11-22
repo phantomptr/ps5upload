@@ -122,3 +122,61 @@ export function krakenOutdated(kraken: KrakenStatus | null | undefined): string 
   if (!v) return null;
   return compareVersions(v, KRAKEN_MIN_VERSION) === -1 ? v : null;
 }
+
+// ─── Kraken Mount's games are never cleaned up (#894) ────────────────
+//
+// A `.pkg` Kraken Mount mounts IS the game: deleting it, moving it or "freeing" it takes the game
+// away. What its API lists is kept, and so is every package file or folder directly in a folder it
+// scans (one level deep), whether it runs now or not: when it is stopped those files are still the
+// user's games. Mirrors `KrakenKeep` in engine/crates/ps5upload-core/src/console_cleanup.rs and
+// `scr_kraken_keeps` in payload/src/cleanup_rules.c.
+
+const USB = [0, 1, 2, 3, 4, 5, 6, 7];
+
+/** Its default scan roots (engine `kraken::default_scan_roots`). */
+export const KRAKEN_DEFAULT_ROOTS: readonly string[] = [
+  "/data/homebrew",
+  "/data/etaHEN/games",
+  ...[0, 1].flatMap((n) => [`/mnt/ext${n}/homebrew`, `/mnt/ext${n}/etaHEN/games`]),
+  ...USB.map((n) => `/mnt/usb${n}/homebrew`),
+  ...USB.map((n) => `/mnt/usb${n}/etaHEN/games`),
+  ...USB.map((n) => `/mnt/usb${n}`),
+  "/mnt/ext0",
+  "/mnt/ext1",
+];
+
+/** `/user/data` written as `/data`, without trailing slashes. */
+function krakenNorm(path: string): string {
+  let p = path.trim();
+  if (p === "/user/data" || p.startsWith("/user/data/")) p = `/data${p.slice("/user/data".length)}`;
+  p = p.replace(/\/+$/, "");
+  return p || "/";
+}
+
+function isInside(path: string, dir: string): boolean {
+  return path.length > dir.length && path.startsWith(dir) && path[dir.length] === "/";
+}
+
+/** Whether `path` (a file, or a folder when `isDir`) on the console is a game Kraken Mount uses:
+ *  one its API lists, inside one, a folder holding one, or a `.pkg` or folder directly in a folder
+ *  it scans. `kraken` is the engine's snapshot; `undefined` (not known: no snapshot, an older
+ *  engine) counts its default roots, as if it were there. `null` or a snapshot saying it never
+ *  ran here counts only what its API lists. */
+export function krakenKeepsPath(
+  path: string,
+  kraken: KrakenStatus | null | undefined,
+  isDir = false,
+): boolean {
+  const p = krakenNorm(path);
+  if (!p.startsWith("/") || p === "/") return false;
+  const games = (kraken?.games ?? []).map((g) => krakenNorm(g.path)).filter((g) => g !== "/");
+  if (games.some((g) => g === p || isInside(p, g) || (isDir && isInside(g, p)))) return true;
+  const present = kraken === undefined || !!kraken?.installed || !!kraken?.running;
+  if (!present) return false;
+  const own = kraken?.scan_roots ?? [];
+  const roots = (own.length > 0 ? own : KRAKEN_DEFAULT_ROOTS).map(krakenNorm);
+  const slash = p.lastIndexOf("/");
+  if (slash <= 0) return false;
+  const mountable = isDir || p.toLowerCase().endsWith(".pkg");
+  return mountable && roots.includes(p.slice(0, slash));
+}

@@ -1,6 +1,6 @@
-// A DualSense's touchpad for Remote Play (#589). The Gamepad API gives a controller's buttons
-// and sticks but never the fingers on its touchpad, so they are read from the controller's own
-// input reports:
+// A DualSense's or DualShock 4's touchpad for Remote Play (#589). The Gamepad API gives a
+// controller's buttons and sticks but never the fingers on its touchpad (and on some systems not
+// even a DualShock 4's touchpad click), so they are read from the controller's own input reports:
 //
 //   - the desktop app (macOS, Windows, Linux) reads them natively (src-tauri
 //     commands/pad_touchpad.rs) while a stream plays and sends `pad-touchpad` events;
@@ -64,6 +64,12 @@ export function touchFromRaw(raw: readonly [number, number] | null | undefined):
 export const SONY_VID = 0x054c;
 /** DualSense, DualSense Edge. */
 export const DUALSENSE_PIDS = [0x0ce6, 0x0df2] as const;
+/** DualShock 4 (first and second model) and Sony's wireless adapter for it. */
+export const DS4_PIDS = [0x05c4, 0x09cc, 0x0ba0] as const;
+/** Sony's DualShock 4 wireless adapter: it reports even with no controller paired to it. */
+export const DS4_ADAPTER_PID = 0x0ba0;
+/** The controllers whose touchpad is read. */
+export const TOUCHPAD_PIDS: readonly number[] = [...DUALSENSE_PIDS, ...DS4_PIDS];
 
 export interface Finger {
   id: number;
@@ -90,6 +96,37 @@ export function parseDualSenseReport(b: Uint8Array): TouchReport | null {
     return { id: b[p] & 0x7f, x: b[p + 1] | ((b[p + 2] & 0x0f) << 8), y: (b[p + 2] >> 4) | (b[p + 3] << 4) };
   };
   return { fingers: [finger(32), finger(36)], click: (b[o + 9] & 0x02) !== 0 };
+}
+
+/** The touchpad in a DualShock 4 input report, report id first, in the DualSense's space (x
+ *  0-1919, y 0-1079; the DualShock 4's own y runs 0-941). USB 0x01 (64 bytes) and Bluetooth
+ *  0x11 (78) have the state 1 and 3 bytes in: the click at state byte 6 bit 1, the fingers at
+ *  34 and 38. Bluetooth's short 0x01 (10 bytes, or padded) gives the click alone. Sony's adapter
+ *  with no pad paired says so at byte 31 bit 2: nothing then. Same as commands/pad_touchpad.rs. */
+export function parseDs4Report(b: Uint8Array, adapter = false): TouchReport | null {
+  let o: number;
+  let full = true;
+  if (b[0] === 0x01 && b.length === 64) {
+    if (adapter && b[31] & 0x04) return { fingers: [null, null], click: false };
+    o = 1;
+  } else if (b[0] === 0x01 && b.length >= 10) {
+    o = 1;
+    full = false;
+  } else if (b[0] === 0x11 && b.length >= 78) o = 3;
+  else return null;
+  const finger = (at: number): Finger | null => {
+    const p = o + at;
+    if (!full || b[p] & 0x80) return null;
+    const y = Math.min((b[p + 2] >> 4) | (b[p + 3] << 4), 941);
+    return { id: b[p] & 0x7f, x: b[p + 1] | ((b[p + 2] & 0x0f) << 8), y: Math.floor((y * 1079 + 470) / 941) };
+  };
+  return { fingers: [finger(34), finger(38)], click: (b[o + 6] & 0x02) !== 0 };
+}
+
+/** The touchpad in an input report from the controller with this product id. */
+export function parseTouchReport(productId: number, b: Uint8Array): TouchReport | null {
+  if ((DS4_PIDS as readonly number[]).includes(productId)) return parseDs4Report(b, productId === DS4_ADAPTER_PID);
+  return parseDualSenseReport(b);
 }
 
 /** Follows the first finger down until it lifts (a second finger never makes the point jump),
@@ -158,6 +195,22 @@ function setNative(on: boolean): void {
   });
 }
 
+// ── The Android app ────────────────────────────────────────────────────────────────────────
+
+declare global {
+  interface Window {
+    __ps5uPadTouch?: (s: { click?: boolean }) => void;
+  }
+}
+
+/** Android gives a PlayStation controller's touchpad as a device of its own (a touchpad or a
+ *  mouse), so its press never comes as a pad key: the app sends it here instead, while pads are
+ *  forwarded (MainActivity, step 9 of scripts/release/android-postinit-patch.sh). */
+export function installPadTouchReceiver(): void {
+  if (typeof window === "undefined" || window.__ps5uPadTouch) return;
+  window.__ps5uPadTouch = (s) => update({ touch: state.touch, click: !!s?.click });
+}
+
 // ── A browser with WebHID ──────────────────────────────────────────────────────────────────
 
 interface HidInputReportEventLike extends Event {
@@ -189,8 +242,7 @@ export function webHidTouchpadAvailable(): boolean {
 const watched = new WeakSet<HidDeviceLike>();
 let hidDevices = 0;
 
-const isDualSense = (d: HidDeviceLike) =>
-  d.vendorId === SONY_VID && (DUALSENSE_PIDS as readonly number[]).includes(d.productId);
+const hasTouchpad = (d: HidDeviceLike) => d.vendorId === SONY_VID && TOUCHPAD_PIDS.includes(d.productId);
 
 async function watch(d: HidDeviceLike): Promise<boolean> {
   if (watched.has(d)) return true;
@@ -207,7 +259,7 @@ async function watch(d: HidDeviceLike): Promise<boolean> {
     const bytes = new Uint8Array(e.data.byteLength + 1);
     bytes[0] = e.reportId;
     bytes.set(new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength), 1);
-    const r = parseDualSenseReport(bytes);
+    const r = parseTouchReport(d.productId, bytes);
     if (!r) return;
     const n = follower.next(r);
     update({ touch: touchFromRaw(n.touch), click: n.click });
@@ -220,22 +272,22 @@ async function reopenGranted(): Promise<void> {
   const h = hid();
   if (!h) return;
   try {
-    for (const d of await h.getDevices()) if (isDualSense(d)) await watch(d);
+    for (const d of await h.getDevices()) if (hasTouchpad(d)) await watch(d);
   } catch {
     // Not allowed here (a permissions policy, say).
   }
 }
 
-/** Ask the browser for the DualSense (call from a click). True when one is being read. */
+/** Ask the browser for the controller (call from a click). True when one is being read. */
 export async function connectWebHidTouchpad(): Promise<boolean> {
   const h = hid();
   if (!h) return false;
   try {
     const picked = await h.requestDevice({
-      filters: DUALSENSE_PIDS.map((productId) => ({ vendorId: SONY_VID, productId })),
+      filters: TOUCHPAD_PIDS.map((productId) => ({ vendorId: SONY_VID, productId })),
     });
     let ok = false;
-    for (const d of picked) if (isDualSense(d) && (await watch(d))) ok = true;
+    for (const d of picked) if (hasTouchpad(d) && (await watch(d))) ok = true;
     return ok;
   } catch {
     return false;

@@ -17,7 +17,7 @@ use crate::pkg_install::PkgInstallStateHandle;
 /// from here would replace the running helper behind the app's back (Connection does that).
 const HELPER_MARKER: &[u8] = b"AVA1TRUST";
 /// The loader's ceiling (payload_lifecycle's ELF_SEND_MAX_BYTES).
-const PAYLOAD_MAX: u64 = 64 * 1024 * 1024;
+pub(crate) const PAYLOAD_MAX: u64 = 64 * 1024 * 1024;
 const READ_CHUNK: u64 = 2 * 1024 * 1024;
 const LOADER_RETRY: Duration = Duration::from_secs(8);
 const LOADER_POLL: Duration = Duration::from_millis(250);
@@ -54,7 +54,7 @@ pub fn refusal(bytes: &[u8]) -> Option<&'static str> {
 }
 
 /// The file, read through the helper in 2 MiB pieces; `payload_too_large` past the cap.
-fn read_console_file(mgmt: &str, path: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn read_console_file(mgmt: &str, path: &str) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     loop {
         let piece = ps5upload_core::fs_ops::fs_read(mgmt, path, out.len() as u64, READ_CHUNK)

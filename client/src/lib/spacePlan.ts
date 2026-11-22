@@ -342,6 +342,8 @@ export interface LeftoverSource {
   path: string;
   name?: string;
   title_id?: string;
+  /** Kraken Mount uses it (#894): never offered. */
+  kept?: string;
 }
 
 /** The parts of a Library entry the planner reads. */
@@ -385,6 +387,9 @@ export interface CandidateInput {
   /** Title ids (upper case) running now: never moved or uninstalled under the player. */
   running: Set<string>;
   lastPlayed: (titleId: string | null | undefined) => number | null;
+  /** Whether Kraken Mount uses a path (it mounts it, or it sits in a folder Kraken Mount scans):
+   *  such a package or game folder IS the game, so it is never moved or removed (#894). */
+  krakenKeeps?: (path: string, isDir: boolean) => boolean;
 }
 
 /** Image kinds that hold a game (.ffpfs holds save data). */
@@ -405,6 +410,7 @@ export function buildCandidates(input: CandidateInput): SpaceCandidate[] {
   //    (A) stay in the Clean up list: removing one takes the game back a version.
   for (const l of input.leftovers) {
     if (l.drive !== token || l.cat === "A" || l.cat === "G" || l.action === "none" || !l.default) continue;
+    if (l.kept || input.krakenKeeps?.(l.path, false)) continue;
     out.push({
       id: `leftover:${l.id}`,
       kind: "leftover",
@@ -425,6 +431,7 @@ export function buildCandidates(input: CandidateInput): SpaceCandidate[] {
     if (!sameDrive(vol, input.target) || insideImage(e.path)) continue;
     if (e.kind === "image" && !GAME_IMAGES.has(e.imageFormat ?? "")) continue;
     if (input.inUse.paths.has(e.path)) continue;
+    if (input.krakenKeeps?.(e.path, e.kind === "game")) continue;
     if (e.kind === "image" && input.inUse.imageNames.has(leafName(e.path))) continue;
     if (e.titleId && input.running.has(e.titleId.toUpperCase())) continue;
     const bytes = e.kind === "image" ? e.size : (input.folderBytes[e.path] ?? 0);

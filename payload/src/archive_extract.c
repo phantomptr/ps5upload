@@ -50,6 +50,9 @@ extern unsigned int ps5upload_extractor_elf_len;
 /* After Stop: the extractor stops within one buffer; this long without it ending, it is killed. */
 #define EXTRACT_KILL_AFTER_MS 10000
 #define EXTRACT_KILL_WAIT_MS 10000 /* for a killed extractor to be gone before its folder is removed */
+/* The extractor's XJ_TOP: a listing's names, and a request's top-level renames ("Extract here"). */
+#define EXTRACT_TOP_MAX 8192
+#define EXTRACT_REQUEST_MAX (16384 + 12 * EXTRACT_TOP_MAX)
 
 static pthread_mutex_t g_busy = PTHREAD_MUTEX_INITIALIZER;
 static int g_running;
@@ -92,29 +95,35 @@ static int put_jstr(char *out, size_t cap, size_t *at, const char *s) {
     return 0;
 }
 
-static int write_request(const char *id, const char *src, const char *dest, const char *password, int merge, int replace) {
-    char *buf = malloc(8192);
+static int write_request(const char *id, const char *src, const char *dest, const char *password, int merge, int replace,
+                         int list, const char *top) {
+    const size_t cap = EXTRACT_REQUEST_MAX;
+    char *buf = malloc(cap);
     size_t at = 0;
     int fd, rc = -1;
     if (!buf) return -1;
-    at = (size_t)snprintf(buf, 8192, "{\"id\":\"%s\",\"archive\":", id);
-    if (put_jstr(buf, 8192, &at, src) != 0) goto out;
-    at += (size_t)snprintf(buf + at, 8192 - at, ",\"dest\":");
-    if (put_jstr(buf, 8192, &at, dest) != 0) goto out;
+    at = (size_t)snprintf(buf, cap, "{\"id\":\"%s\",\"archive\":", id);
+    if (put_jstr(buf, cap, &at, src) != 0) goto out;
+    at += (size_t)snprintf(buf + at, cap - at, ",\"dest\":");
+    if (put_jstr(buf, cap, &at, dest) != 0) goto out;
     if (password) {
-        at += (size_t)snprintf(buf + at, 8192 - at, ",\"password\":");
-        if (put_jstr(buf, 8192, &at, password) != 0) goto out;
+        at += (size_t)snprintf(buf + at, cap - at, ",\"password\":");
+        if (put_jstr(buf, cap, &at, password) != 0) goto out;
     }
-    at += (size_t)snprintf(buf + at, 8192 - at, ",\"merge\":%s,\"replace\":%s}\n", merge ? "true" : "false",
-                           replace ? "true" : "false");
-    if (at >= 8192) goto out;
+    if (top && top[0]) {
+        at += (size_t)snprintf(buf + at, cap - at, ",\"top\":");
+        if (put_jstr(buf, cap, &at, top) != 0) goto out;
+    }
+    at += (size_t)snprintf(buf + at, cap - at, ",\"merge\":%s,\"replace\":%s,\"list\":%s}\n", merge ? "true" : "false",
+                           replace ? "true" : "false", list ? "true" : "false");
+    if (at >= cap) goto out;
     (void)unlink(EXTRACT_REQUEST);
     fd = open(EXTRACT_REQUEST, O_WRONLY | O_CREAT | O_EXCL, 0600);
     if (fd < 0) goto out;
     rc = write(fd, buf, at) == (ssize_t)at ? 0 : -1;
     close(fd);
 out:
-    memset(buf, 0, 8192); /* the password */
+    memset(buf, 0, cap); /* the password */
     free(buf);
     return rc;
 }
@@ -366,10 +375,10 @@ static int follow(ava1_op_ctx_t *c, const char *id, xstatus_t *s, const char *de
 }
 
 int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t n) {
-    char src[1024], dest[1024], name[256], id[40], *password = NULL;
+    char src[1024], dest[1024], name[256], id[40], *password = NULL, *top = NULL;
     const char *json = (const char *)args;
     const char *slash;
-    uint64_t merge = 0, replace = 0;
+    uint64_t merge = 0, replace = 0, list = 0;
     struct stat st;
     xstatus_t s;
     int dest_existed, status = AVA1_ERR_IO, r;
@@ -417,8 +426,12 @@ int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
     }
     (void)fsj_json_u64(json, "merge", &merge);
     (void)fsj_json_u64(json, "replace", &replace);
+    /* list: only the archive's top-level names, nothing written ("Extract here" compares them with
+     * the folder before it starts). A helper older than this ignores it and refuses the folder that
+     * is already there (the apps send merge false), so a listing never extracts anything. */
+    (void)fsj_json_u64(json, "list", &list);
     dest_existed = lstat(dest, &st) == 0;
-    if (dest_existed && !merge) {
+    if (dest_existed && !merge && !list) {
         ava1_op_message(c, "fs_extract_destination_exists");
         return AVA1_ERR_PATH;
     }
@@ -450,6 +463,23 @@ int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
     if (!fsj_json_str(json, "password", password, 1024)) {
         free(password);
         password = NULL;
+    }
+    /* Renames of top-level entries ("from/to/..."), passed to the extractor as they are. */
+    top = malloc(EXTRACT_TOP_MAX);
+    if (!top) {
+        ava1_op_message(c, "fs_extract_no_memory");
+        status = AVA1_ERR_IO;
+        goto unlock;
+    }
+    /* fsj_json_str refuses a value that does not fit (or is malformed) and leaves `top` holding
+     * what it copied so far, unterminated: never pass that on (an over-read, and renames cut
+     * short, so an entry the user chose to leave out would be written over what is there). */
+    top[0] = 0;
+    if (!list && fsj_json_present(json, "top") && !fsj_json_str(json, "top", top, EXTRACT_TOP_MAX)) {
+        top[0] = 0;
+        ava1_op_message(c, "fs_extract_bad_dest: too many names");
+        status = AVA1_ERR_PROTOCOL;
+        goto unlock;
     }
     /* The extractor keeps a password in EXTRACT_PASSWORD_MAX bytes (XJ_PASSWORD,
      * payload/extractor/src/xjob.h) and cannot take a longer one: this accepted up to 1023, wrote
@@ -483,7 +513,7 @@ int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         snprintf(id, sizeof id, "%02x%02x%02x%02x%02x%02x%02x%02x", rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5],
                  rnd[6], rnd[7]);
     }
-    if (write_request(id, src, dest, password, (int)merge, (int)replace) != 0) {
+    if (write_request(id, src, dest, password, (int)merge, (int)replace, (int)list, top) != 0) {
         ava1_op_message(c, "fs_extract_write_failed: request");
         goto unlock;
     }
@@ -496,7 +526,44 @@ int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
     }
     r = follow(c, id, &s, dest);
     (void)unlink(EXTRACT_REQUEST); /* never started: the password is not left on disk */
-    if (r == 1) {
+    if (r == 1 && list) {
+        /* The names, from the extractor's last status (heap: up to EXTRACT_TOP_MAX of them). */
+        char *st_buf = malloc(EXTRACT_REQUEST_MAX), *names = malloc(EXTRACT_TOP_MAX), *dirs = malloc(EXTRACT_TOP_MAX),
+             *resp = malloc(EXTRACT_REQUEST_MAX);
+        if (st_buf && names && dirs && resp && read_small(EXTRACT_STATUS, st_buf, EXTRACT_REQUEST_MAX) > 0) {
+            size_t at = 0;
+            char more[8] = "";
+            (void)fsj_json_str(st_buf, "top", names, EXTRACT_TOP_MAX);
+            (void)fsj_json_str(st_buf, "top_dirs", dirs, EXTRACT_TOP_MAX);
+            {
+                /* top_more is a bare true/false */
+                const char *m = strstr(st_buf, "\"top_more\":");
+                if (m) snprintf(more, sizeof more, "%s", strncmp(m + 11, "true", 4) == 0 ? "true" : "false");
+            }
+            int ok;
+            at = (size_t)snprintf(resp, EXTRACT_REQUEST_MAX, "{\"path\":");
+            ok = put_jstr(resp, EXTRACT_REQUEST_MAX, &at, dest) == 0;
+            if (ok) {
+                at += (size_t)snprintf(resp + at, EXTRACT_REQUEST_MAX - at, ",\"top\":");
+                ok = put_jstr(resp, EXTRACT_REQUEST_MAX, &at, names) == 0;
+            }
+            if (ok) {
+                at += (size_t)snprintf(resp + at, EXTRACT_REQUEST_MAX - at, ",\"top_dirs\":");
+                ok = put_jstr(resp, EXTRACT_REQUEST_MAX, &at, dirs) == 0;
+            }
+            if (ok) {
+                at += (size_t)snprintf(resp + at, EXTRACT_REQUEST_MAX - at, ",\"top_more\":%s,\"listed\":true}",
+                                       more[0] ? more : "false");
+                if (at < EXTRACT_REQUEST_MAX) (void)ava1_op_set_result(c, resp, at);
+            }
+        }
+        free(st_buf);
+        free(names);
+        free(dirs);
+        free(resp);
+        ava1_op_message(c, "%s", "");
+        status = AVA1_STATUS_OK;
+    } else if (r == 1) {
         char resp[1600];
         size_t at = 0;
         at = (size_t)snprintf(resp, sizeof resp, "{\"path\":");
@@ -528,6 +595,7 @@ unlock:
         memset(password, 0, 1024);
         free(password);
     }
+    free(top);
     __atomic_store_n(&g_running, 0, __ATOMIC_SEQ_CST);
     pthread_mutex_unlock(&g_busy);
     return status;

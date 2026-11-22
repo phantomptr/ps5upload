@@ -223,6 +223,10 @@ async function fetchPayloadLogs(host: string): Promise<{
     // The helper's own captured stderr — its rich per-failure diagnostics.
     ["/data/ps5upload/stderr.log", "stderr.log"],
     ["/data/ps5upload/startup.log", "startup.log"],
+    // Its earlier part: the helper moves startup.log here past 256 KiB. Each line of both is on the
+    // disk before the step it names runs, so after a console crash the last line of the newer one
+    // is the step the helper reached (#903).
+    ["/data/ps5upload/startup.log.old", "startup_old.log"],
     // Rest/wake transitions only (the helper's power phase, each line flushed to disk): what the
     // helper held and did as the console went to rest and woke, kept apart from stderr.log's rotation.
     ["/data/ps5upload/power.log.old", "power_old.log"],
@@ -273,10 +277,10 @@ async function fetchPayloadLogs(host: string): Promise<{
     return present.get(path.slice(0, slash))?.get(path.slice(slash + 1)) ?? 0;
   };
 
-  // Bound total work/size: up to 14 files, 256 KB each. The console serves a read in 48 KiB
+  // Bound total work/size: up to 16 files, 256 KB each. The console serves a read in 48 KiB
   // pages (the engine joins them). A log that has outgrown the cap is read from the END: the
   // newest lines are the ones that explain a crash, and the head of a long stderr.log is old news.
-  for (const [path, name] of fixed.filter(([p]) => exists(p)).slice(0, 14)) {
+  for (const [path, name] of fixed.filter(([p]) => exists(p)).slice(0, 16)) {
     try {
       const size = sizeOf(path);
       const tail = size > PAYLOAD_LOG_CAP;

@@ -40,6 +40,10 @@ export interface CleanupItem {
   default: boolean;
   /** sony: Sony's own update removal; delete: the files are deleted; none: listed only. */
   action: "sony" | "delete" | "none";
+  /** kraken: a package or game folder Kraken Mount uses (it mounts it, or it sits in a folder
+   *  Kraken Mount scans). Listed so the user sees why, never removed. Absent from older helpers
+   *  and engines. */
+  kept?: "kraken";
 }
 
 export interface CleanupScan {
