@@ -184,7 +184,9 @@ and keeps the address and the name. For the PS5, turn off key expiry in Tailscal
 (open the PS5 under Machines › **Disable key expiry**) so it never has to.
 
 Using **Headscale**? Put its address under **Advanced › Control server** before you sign in. If
-your tailnet needs approval for new devices, approve them in its admin page.
+your tailnet needs approval for new devices, approve them in its admin page. To relay through your
+own server instead of Tailscale's, see
+[SELF_HOSTING.md](SELF_HOSTING.md#your-own-tailscale-server-control-and-relay).
 
 - **Keep the PS5 on.** In rest mode the PS5 drops off Tailscale, and waking it works only on its
   home network, so leave it on (or wake it at home) before you go. It rejoins Tailscale after a
