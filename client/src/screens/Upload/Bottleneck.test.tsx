@@ -83,6 +83,18 @@ describe("a console that has every byte and reports nothing new (#873)", () => {
     expect(html).toContain('data-testid="console-quiet-line"');
     expect(html).toContain("The PS5 has reported no progress for 14 min.");
   });
+  it("says how much of the read-back is done when the helper reports it", () => {
+    const GiB = 1024 ** 3;
+    const html = renderToStaticMarkup(
+      <JobLiveNotes
+        live={live({ verifying: true, verifyLeft: 100 * GiB, verifyTotal: 156 * GiB })}
+      />,
+    );
+    expect(html).toContain('data-testid="verifying-count"');
+    expect(html).toContain("Checking on the PS5: 56.0 GiB of 156 GiB");
+    expect(html).not.toContain("Verifying on the PS5…");
+    expect(html).not.toContain("console-quiet-line");
+  });
   it("says nothing while the console is getting on with it", () => {
     expect(
       renderToStaticMarkup(<JobLiveNotes live={live({ verifying: true })} />),

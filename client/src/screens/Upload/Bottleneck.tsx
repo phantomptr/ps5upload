@@ -122,17 +122,42 @@ export function SettlingLine({ live }: { live: JobLive }) {
 }
 
 /** Every byte is on the console and it is reading the last large files back from its drive to
- *  check them (#783). */
+ *  check them (#783). A helper that says how much it has left (#873) gets "X of Y" and, once the
+ *  pace is known, the time left: on a large game this takes minutes. */
 export function VerifyingLine({ live }: { live: JobLive }) {
   const tr = useTr();
+  const total = live.verifyTotal ?? 0;
+  const checked = Math.max(0, total - (live.verifyLeft ?? 0));
+  const { etaSeconds } = useRateEta("verify", checked, total);
   if (!live.verifying || live.settling) return null;
+  if (total <= 0) {
+    return (
+      <div
+        className="flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--color-muted)]"
+        data-testid="verifying-line"
+      >
+        <Loader2 size={12} className="animate-spin" aria-hidden />
+        <span>{tr("upload_phase_verifying", undefined, "Verifying on the PS5…")}</span>
+      </div>
+    );
+  }
+  const done = formatBytes(checked);
+  const all = formatBytes(total);
   return (
     <div
       className="flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--color-muted)]"
       data-testid="verifying-line"
     >
       <Loader2 size={12} className="animate-spin" aria-hidden />
-      <span>{tr("upload_phase_verifying", undefined, "Verifying on the PS5…")}</span>
+      <span data-testid="verifying-count">
+        {tr(
+          "upload_phase_verifying_count",
+          { done, total: all },
+          `Checking on the PS5: ${done} of ${all}`,
+        )}
+        {etaSeconds !== null &&
+          ` · ${tr("upload_phase_settling_eta", { time: formatEtaSeconds(etaSeconds) }, `about ${formatEtaSeconds(etaSeconds)} left`)}`}
+      </span>
     </div>
   );
 }

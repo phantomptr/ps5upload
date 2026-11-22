@@ -20,6 +20,9 @@
 //   verifying                     every byte is on the console and it is reading the last large
 //                                 files back from its drive to check them (#783): "Verifying on the
 //                                 console"
+//   verify_left_bytes/_total_bytes with `verifying`, from a helper that says (#873): bytes it still
+//                                 has to read back, and the most it had since the last byte: "Checking
+//                                 on the PS5: X of Y" and a time left
 //   console_quiet_ms              once the console has every byte (#873): how long since it last
 //                                 confirmed anything new. Small while it gets on with the files;
 //                                 past a minute the row says so ("The PS5 has reported no
@@ -46,6 +49,10 @@ export interface JobLive {
   settling: boolean;
   /** Every byte is on the console and it is reading the last large files back to check them. */
   verifying?: boolean;
+  /** While verifying: bytes the console still has to read back, and the most it had since the
+   *  last byte. Absent when the helper does not say (the line then shows no figures). */
+  verifyLeft?: number;
+  verifyTotal?: number;
   /** While settling: files the console still has to make permanent, and the most it had. Absent
    *  when the engine does not send the counts (the line then shows no number). */
   settleLeft?: number;
@@ -71,6 +78,8 @@ export interface JobLiveFields {
   bottleneck?: string | null;
   settling?: boolean | null;
   verifying?: boolean | null;
+  verify_left_bytes?: number | null;
+  verify_total_bytes?: number | null;
   settle_files_left?: number | null;
   settle_files_total?: number | null;
   console_quiet_ms?: number | null;
@@ -141,6 +150,8 @@ export function jobLiveFromSnapshot(
   const settleTotal = counted
     ? Math.max(settleLeft, Number(snap.settle_files_total) || 0)
     : 0;
+  const verifyTotal = verifying ? Math.max(0, Number(snap.verify_total_bytes) || 0) : 0;
+  const verifyLeft = Math.min(verifyTotal, Math.max(0, Number(snap.verify_left_bytes) || 0));
   return {
     skipping,
     skipDoneBytes,
@@ -155,6 +166,7 @@ export function jobLiveFromSnapshot(
     bottleneck,
     settling,
     ...(verifying ? { verifying } : {}),
+    ...(verifyTotal > 0 ? { verifyLeft, verifyTotal } : {}),
     ...(counted ? { settleLeft, settleTotal } : {}),
     ...(quietMs ? { quietMs } : {}),
     ...(unsettled ? { unsettled } : {}),

@@ -121,8 +121,10 @@ pub fn bytes_done(p: &Progress, opened: &Opened) -> u64 {
 pub const QUIET_AFTER: Duration = Duration::from_secs(60);
 
 /// What the console has confirmed of a job: durable bytes, finished files, files still to
-/// save in place, and whether it is saving them. Any change is the console getting on with it.
-pub type Confirmed = (u64, u64, u32, bool);
+/// save in place, whether it is saving them, and the bytes it has still to read back (its
+/// `Status.readback_left`, AVA1 1.0.12; 0 from an older helper). Any change is the console
+/// getting on with it: a read-back that advances is not a quiet console.
+pub type Confirmed = (u64, u64, u32, bool, u64);
 
 /// The stretch after the last byte: how long ago the console acknowledged it, and how long
 /// since it last confirmed anything new. Pure (the caller brings the clock).
@@ -212,6 +214,9 @@ struct Counters {
     rates: Mutex<RateHistory>,
     /// The job asked the console to read its large files back (JF_READBACK, #783).
     readback: AtomicBool,
+    /// While the console reads back after the last byte: the most it said it had left to
+    /// read (the "of" in "X of Y checked"); 0 outside that stretch.
+    verify_peak: AtomicU64,
     /// The job's name for the log lines about the stretch after its last byte ("": none).
     label: String,
     quiet: Mutex<QuietWatch>,
@@ -314,6 +319,7 @@ impl Bridge {
             resumed_out: cfg.progress_bytes_resumed.clone(),
             rates: Mutex::new(RateHistory::new(Instant::now())),
             readback: AtomicBool::new(false),
+            verify_peak: AtomicU64::new(0),
             label,
             quiet: Mutex::default(),
             session: Mutex::new(Weak::new()),
@@ -344,6 +350,19 @@ impl Bridge {
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Arc::downgrade(s);
     }
+}
+
+/// The read-back after the last byte as (bytes left, bytes in all) for the row's "X of Y": what
+/// the console last said it has left (`Status.readback_left`) and the most it said since the
+/// stretch began, kept in `peak`. (0, 0) outside the stretch and from a helper that does not say
+/// (AVA1 before 1.0.12), so the row shows no figures.
+pub fn verify_counts(verifying: bool, left: u64, peak: &AtomicU64) -> (u64, u64) {
+    if !verifying || left == 0 && peak.load(Ordering::Relaxed) == 0 {
+        peak.store(0, Ordering::Relaxed);
+        return (0, 0);
+    }
+    let total = peak.fetch_max(left, Ordering::Relaxed).max(left);
+    (left, total)
 }
 
 /// Every byte of the job is durable on the console but not every file is done: with the
@@ -389,8 +408,16 @@ impl Counters {
                 p.unswept.load(Ordering::Relaxed)
             )
         } else if verifying(p, self.readback.load(Ordering::Relaxed)) {
-            "it has made every byte durable and is reading the large files back from its drive"
-                .into()
+            match p.readback_left.load(Ordering::Relaxed) {
+                0 => "it has made every byte durable and is reading the large files back from its \
+                      drive"
+                    .into(),
+                left => format!(
+                    "it has made every byte durable and is reading the large files back from its \
+                     drive, {} MiB still to read",
+                    left >> 20
+                ),
+            }
         } else if durable >= total {
             "it has made every byte durable and is putting the files in place".into()
         } else {
@@ -425,6 +452,7 @@ impl Counters {
             p.files_durable.load(Ordering::Relaxed),
             p.unswept.load(Ordering::Relaxed),
             p.settling.load(Ordering::Relaxed),
+            p.readback_left.load(Ordering::Relaxed),
         );
         let now = Instant::now();
         let mut w = self.quiet.lock().unwrap_or_else(|e| e.into_inner());
@@ -518,10 +546,15 @@ impl Counters {
             );
             l.settling
                 .store(p.settling.load(Ordering::Relaxed), Ordering::Relaxed);
-            l.verifying.store(
-                !last && verifying(p, self.readback.load(Ordering::Relaxed)),
-                Ordering::Relaxed,
+            let verifying_now = !last && verifying(p, self.readback.load(Ordering::Relaxed));
+            l.verifying.store(verifying_now, Ordering::Relaxed);
+            let (left, total) = verify_counts(
+                verifying_now,
+                p.readback_left.load(Ordering::Relaxed),
+                &self.verify_peak,
             );
+            l.verify_left_bytes.store(left, Ordering::Relaxed);
+            l.verify_total_bytes.store(total, Ordering::Relaxed);
             l.unswept
                 .store(p.unswept.load(Ordering::Relaxed), Ordering::Relaxed);
             l.unswept_peak
@@ -599,6 +632,60 @@ mod live_tests {
         p.settling.store(false, Ordering::Relaxed);
         p.files_durable.store(3, Ordering::Relaxed);
         assert!(!verifying(&p, true), "every file done");
+    }
+
+    /// #873: the read-back after the last byte reads as "X of Y": Y is the most the console said
+    /// it had left since the stretch began, X what it says now. Nothing from an older helper.
+    #[test]
+    fn the_read_back_after_the_last_byte_counts_down_from_its_peak() {
+        let peak = AtomicU64::new(0);
+        assert_eq!(
+            verify_counts(false, 500, &peak),
+            (0, 0),
+            "bytes still arriving"
+        );
+        assert_eq!(
+            verify_counts(true, 0, &peak),
+            (0, 0),
+            "an older helper says nothing"
+        );
+        assert_eq!(verify_counts(true, 400, &peak), (400, 400));
+        assert_eq!(verify_counts(true, 250, &peak), (250, 400));
+        assert_eq!(
+            verify_counts(true, 0, &peak),
+            (0, 400),
+            "all read, the commit is next"
+        );
+        // A file read back wrong is sent again (not verifying), then read back anew.
+        assert_eq!(verify_counts(false, 300, &peak), (0, 0));
+        assert_eq!(verify_counts(true, 120, &peak), (120, 120));
+    }
+
+    /// #873: a read-back that advances keeps the console from counting as quiet.
+    #[test]
+    fn a_read_back_that_advances_is_not_a_quiet_console() {
+        let mut w = QuietWatch::default();
+        let t0 = Instant::now();
+        let s = Duration::from_secs;
+        let after = QUIET_AFTER;
+        assert_eq!(w.observe(t0, true, (100, 0, 0, false, 900), after), None);
+        for k in 1..20u64 {
+            assert_eq!(
+                w.observe(
+                    t0 + s(30 * k),
+                    true,
+                    (100, 0, 0, false, 900 - 40 * k),
+                    after
+                ),
+                None
+            );
+        }
+        assert!(w.quiet_for(t0 + s(30 * 19)) < after);
+        assert_eq!(
+            w.observe(t0 + s(30 * 19 + 61), true, (100, 0, 0, false, 140), after),
+            Some(QuietNote::Quiet(s(61))),
+            "stopped advancing: quiet again"
+        );
     }
 
     #[test]
@@ -721,14 +808,14 @@ mod live_tests {
         let after = s(60);
         let mut w = QuietWatch::default();
         // Bytes still on their way: nothing to time.
-        assert_eq!(w.observe(t0, false, (10, 0, 0, false), after), None);
+        assert_eq!(w.observe(t0, false, (10, 0, 0, false, 0), after), None);
         assert_eq!(w.since_all_sent(t0 + s(5)), Duration::ZERO);
         assert_eq!(w.quiet_for(t0 + s(5)), Duration::ZERO);
         // The last byte is acknowledged; the console keeps confirming files for two minutes.
         let t1 = t0 + s(10);
-        assert_eq!(w.observe(t1, true, (100, 0, 0, false), after), None);
+        assert_eq!(w.observe(t1, true, (100, 0, 0, false, 0), after), None);
         for k in 1..=120u64 {
-            let note = w.observe(t1 + s(k), true, (100, k, 0, false), after);
+            let note = w.observe(t1 + s(k), true, (100, k, 0, false, 0), after);
             assert_eq!(
                 note, None,
                 "a console that is getting on with it is not quiet"
@@ -739,37 +826,37 @@ mod live_tests {
         // Then it confirms nothing: said once, at the limit.
         let t2 = t1 + s(120);
         assert_eq!(
-            w.observe(t2 + s(59), true, (100, 120, 0, false), after),
+            w.observe(t2 + s(59), true, (100, 120, 0, false, 0), after),
             None
         );
         assert_eq!(
-            w.observe(t2 + s(60), true, (100, 120, 0, false), after),
+            w.observe(t2 + s(60), true, (100, 120, 0, false, 0), after),
             Some(QuietNote::Quiet(s(60)))
         );
         assert_eq!(
-            w.observe(t2 + s(300), true, (100, 120, 0, false), after),
+            w.observe(t2 + s(300), true, (100, 120, 0, false, 0), after),
             None
         );
         assert_eq!(w.quiet_for(t2 + s(300)), s(300));
         // It moves again (a file done, or the files left to save going down): said, and the
         // next quiet stretch is a new one.
         assert_eq!(
-            w.observe(t2 + s(310), true, (100, 121, 0, false), after),
+            w.observe(t2 + s(310), true, (100, 121, 0, false, 0), after),
             Some(QuietNote::MovedAgain(s(310)))
         );
         assert_eq!(w.quiet_for(t2 + s(311)), s(1));
         assert_eq!(
-            w.observe(t2 + s(369), true, (100, 121, 0, false), after),
+            w.observe(t2 + s(369), true, (100, 121, 0, false, 0), after),
             None
         );
         assert_eq!(
-            w.observe(t2 + s(370), true, (100, 121, 0, false), after),
+            w.observe(t2 + s(370), true, (100, 121, 0, false, 0), after),
             Some(QuietNote::Quiet(s(60)))
         );
         assert_eq!(w.longest(), s(300));
         // A file is asked for again: bytes move, so this is not that stretch any more.
         assert_eq!(
-            w.observe(t2 + s(400), false, (40, 120, 0, false), after),
+            w.observe(t2 + s(400), false, (40, 120, 0, false, 0), after),
             None
         );
         assert_eq!(w.quiet_for(t2 + s(401)), Duration::ZERO);

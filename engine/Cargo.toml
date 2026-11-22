@@ -40,7 +40,7 @@ version = "12.6.20"
 # (`make ava1-version-check` fails when they differ). ava1-chaos (a fault-injecting TCP proxy for
 # the lab and tests) is not published and does not depend on ava1, so the path dep adds no
 # second ava1 to the graph.
-ava1 = "=1.0.11"
+ava1 = "=1.0.12"
 ava1-chaos = { path = "../third_party/ava1/crates/ava1-chaos" }
 anyhow = "1.0"
 # "multipart" is for the backport library import (fakelibs_api.rs): users pick
@@ -103,6 +103,9 @@ strip = true
 # there is nothing upstream to take. See third_party/unrar/README.md and
 # docs/unrar-upstream-bug.md.
 [patch.crates-io]
+# AVA1 1.0.12 (#873: read-back progress) is not on crates.io yet: built from the submodule until it is
+# published, then this line goes.
+ava1 = { path = "../third_party/ava1/crates/ava1" }
 unrar = { path = "../third_party/unrar" }
 # 32-bit fix: archive sizes stay u64 (third_party/sevenz-rust2/README.md, #434).
 sevenz-rust2 = { path = "../third_party/sevenz-rust2" }
