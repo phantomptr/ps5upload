@@ -13,6 +13,7 @@ What's new in ps5upload, written for humans.
 
 **Fixes**
 - **Copying files into a running game's temporary folder works (#889).** Some games' add-on guides have you copy folders into the game's temporary folder on the internal drive while the game runs (`/app_temp0/...`). PS5Upload refused that with "console refused the transfer (9)", because that folder was not on the PS5 helper's list of places it may write to. It is now. Not yet tried on a console.
+- **The Docker images' `:latest` moves even when a release is promoted right after it is published (#898).** Promoting a release moves `:latest` and `:<major.minor>` to it, but if the release was promoted before its images had finished building, that step failed and `:latest` stayed on the previous version (12.6.16 stayed on 12.6.15), so `docker compose pull` got nothing new. It now waits for both images first.
 
 ## 12.6.16
 

@@ -55,11 +55,16 @@ export const engineApi = {
       const res = await fetch(`${getEngineUrl()}/api/version`, {
         signal: controller.signal,
       });
+      // Cancel the unused body stream: in Chromium/WebView2 on Windows, leaving a
+      // fetch Response unconsumed retains its 2 MB Mojo DataPipe shared-memory
+      // mapping off the V8 heap (~1.44 GB/hr at the 5 s probe cadence).
+      await res.body?.cancel().catch(() => {});
       if (res.status !== 404) return res.ok;
       // An older self-hosted engine.
       const old = await fetch(`${getEngineUrl()}/api/jobs`, {
         signal: controller.signal,
       });
+      await old.body?.cancel().catch(() => {});
       return old.ok;
     } catch {
       return false;
