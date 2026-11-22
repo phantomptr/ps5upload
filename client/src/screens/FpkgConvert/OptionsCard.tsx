@@ -11,14 +11,10 @@ import type { OutputPlace } from "../../lib/outputPlace";
 import { useTr } from "../../state/lang";
 import { CompressionTiles } from "./CompressionTiles";
 import {
+  AmprSection,
   FullVerifyOption,
   ImageChoice,
-  Lz4Option,
-  PacksNote,
   UnpackOption,
-  ZstdOption,
-  lz4Offered,
-  zstdOffered,
   type Lz4Choice,
   type UnpackChoice,
 } from "./ImageOptions";
@@ -190,9 +186,7 @@ export function OptionsCard(props: OptionsCardProps) {
             </div>
             {/* A PS5 game can have its folder in packs, as an image: LZ4 for a game that reads
                 through AMPR, zstd for any PS5 game. */}
-            {lz4Offered(props.image?.lz4) && <Lz4Option lz4={props.image.lz4} folder />}
-            {zstdOffered(props.image?.lz4) && <ZstdOption lz4={props.image.lz4} folder />}
-            <PacksNote lz4={props.image?.lz4} />
+            <AmprSection lz4={props.image?.lz4} folder packsNote />
             {props.unpack && <UnpackOption unpack={props.unpack} />}
           </div>
         ) : ps4Package ? (

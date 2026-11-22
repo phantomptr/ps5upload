@@ -6,6 +6,11 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Workshop**
+- **Clearer AMPR choices in Convert (#828).** The asset pack choice and the emulator now sit together under Asset packs, and only combinations that start are offered. A game that doesn't use AMPR shows no emulator options. zstd packs always get the emulator that reads zstd, and LZ4 packs always get ampr_emu 0.4.2.1, so a game can no longer end up with an emulator that can't read its packs (which made some converted games close at start). The engine corrects that mix too, including for "Add the AMPR emulator" on a game already in packs. "Rebuild AMPR index" is hidden for games in LZ4 packs, where it doesn't apply.
+
+## 12.6.20
+
 **Fixes**
 - **With the app using an engine on another computer, a PS5 added by its Tailscale address shows up (#907).** It was saved on the engine but never reached the app's list, so its card never appeared. The app now adds it straight away. The same goes for Add in Settings › Tailscale and in "Found on your Tailscale network". With a remote engine, the home network scan in Add a PS5 also runs on the engine's computer, so it no longer lists a PS5 as answering that the engine can't reach. Thanks to the reporter for the diagnosis.
 

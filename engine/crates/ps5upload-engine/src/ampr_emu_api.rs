@@ -198,6 +198,8 @@ fn attach_console_image(
     if exists(&format!("{folder}/{at}")) {
         return Err(format!("{folder} already has an AMPR emulator in {target}"));
     }
+    let build =
+        crate::ampr_trace::emulator_for_packs(crate::remove_backport::packed(tree.as_mut()), build);
     let runtime = crate::ampr_trace::emulator(build)?;
     let write_index = !has_index(tree.as_ref()) && !exists(&format!("{folder}/{INDEX}"));
     let copy = existing.is_none().then_some((own_dir.as_str(), target));
@@ -225,6 +227,9 @@ fn attach_folder(
 ) -> Result<AmprEmuOutcome, String> {
     let mut tree = ps5upload_fpkg::source::open(source).map_err(|e| e.to_string())?;
     let module = needed(tree.as_mut())?;
+    // A game in packs gets the emulator that reads them, whichever was asked for (#828).
+    let build =
+        crate::ampr_trace::emulator_for_packs(crate::remove_backport::packed(tree.as_mut()), build);
     let runtime = crate::ampr_trace::emulator(build)?;
     let write_index = !has_index(tree.as_ref());
     let files = writes(tree.as_mut(), &module, &runtime, None, write_index, now())?;

@@ -42,6 +42,9 @@ describe("Rebuild AMPR index: what it does for each source", () => {
     expect(amprIndexPlan("/games/PPSA01234", null)).toBe("hidden");
     // A game that doesn't read through AMPR has no index: no button at all (#828).
     expect(amprIndexPlan("/games/PPSA01234", inspection("no_ampr"))).toBe("hidden");
+    // A game in LZ4 packs: its index goes with the packs, and the engine refuses to remake it.
+    expect(amprIndexPlan("/games/PPSA01234", { ...inspection("ok"), packs: "lz4" })).toBe("hidden");
+    expect(amprIndexPlan("/games/PPSA01234", { ...inspection("ok"), packs: "zstd" })).toBe("folder");
     expect(amprIndexPlan("/games/PPSA01234", inspection(null))).toBe("hidden");
     expect(amprIndexPlan("/games/PPSA01234", inspection("runtime"))).toBe("folder");
   });

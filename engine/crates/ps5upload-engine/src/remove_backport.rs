@@ -180,7 +180,7 @@ pub(crate) fn blocked(tree: &mut dyn SourceTree) -> Option<String> {
 
 /// How the game's files are packed, when they are: the pack set's own list names the backport
 /// libraries, so they cannot be left out while the packs are kept.
-fn packed(tree: &mut dyn SourceTree) -> Option<&'static str> {
+pub(crate) fn packed(tree: &mut dyn SourceTree) -> Option<&'static str> {
     if ps5upload_fpkg::source::lz4_packed(tree).unwrap_or(false) {
         Some("lz4")
     } else if ps5_dump_forge_zstd::reader::detect(tree) {

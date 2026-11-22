@@ -243,6 +243,21 @@ pub(crate) fn release_runtime() -> Result<Vec<u8>, String> {
     )
 }
 
+/// Which emulator a game in `packs` (`lz4`, `zstd`, or none) gets when `asked` was chosen: one
+/// still in zstd packs gets ampr-emu-ng, since drakmor's ampr_emu reads LZ4 packs only and the
+/// game would not start; one in LZ4 packs gets ampr_emu, which they are made for; a plain game
+/// the one asked for (#828).
+pub(crate) fn emulator_for_packs<'a>(
+    packs: Option<&str>,
+    asked: Option<&'a str>,
+) -> Option<&'a str> {
+    match packs {
+        Some("zstd") => Some("ampr-emu-ng"),
+        Some("lz4") => Some("ampr_emu"),
+        _ => asked,
+    }
+}
+
 /// The emulator a game gets: ampr-emu-ng when asked for by name, else drakmor's ampr_emu.
 pub(crate) fn emulator(build: Option<&str>) -> Result<Vec<u8>, String> {
     match build {
@@ -625,6 +640,26 @@ pub(crate) async fn profile_delete(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_packed_game_gets_the_emulator_that_reads_its_packs() {
+        // zstd packs: never drakmor's ampr_emu, which reads LZ4 packs only (#828).
+        assert_eq!(
+            emulator_for_packs(Some("zstd"), Some("ampr_emu")),
+            Some("ampr-emu-ng")
+        );
+        assert_eq!(emulator_for_packs(Some("zstd"), None), Some("ampr-emu-ng"));
+        assert_eq!(
+            emulator_for_packs(Some("lz4"), Some("ampr-emu-ng")),
+            Some("ampr_emu")
+        );
+        // A plain game: the one asked for.
+        assert_eq!(
+            emulator_for_packs(None, Some("ampr-emu-ng")),
+            Some("ampr-emu-ng")
+        );
+        assert_eq!(emulator_for_packs(None, None), None);
+    }
 
     #[test]
     fn title_ids_are_checked() {

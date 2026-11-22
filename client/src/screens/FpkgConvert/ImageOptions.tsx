@@ -29,9 +29,6 @@ export interface Lz4Choice {
    *  zstd packs don't take. */
   profileMeasured?: boolean;
   onProfile: (profile: { name: string; text: string } | null) => void;
-  /** Install ampr_emu 0.4.2.1 into the image (offered when `readiness.kind` is `runtime`). */
-  installRuntime: boolean;
-  onInstallRuntime: (on: boolean) => void;
   /** Which packs: LZ4 (the game's own emulator) or zstd (ampr-emu-ng goes in). Either goes into
    *  any image, compressed into a .ffpfsc or not, and into a folder. */
   kind: "lz4" | "zstd";
@@ -40,6 +37,10 @@ export interface Lz4Choice {
   onZstdLevel: (level: number) => void;
   /** A PS4 game: no asset packs at all (ampr-emu-ng is a PS5 library). */
   ps4?: boolean;
+  /** The packs the game is in now, if any (the check's `packs`). */
+  packed?: "lz4" | "zstd" | null;
+  /** "Unpack the asset packs" is ticked: the game is written as plain files. */
+  unpacking?: boolean;
 }
 
 /** Whether zstd packs are offered: for any PS5 game. One that doesn't read through AMPR gets
@@ -57,14 +58,52 @@ export function lz4Offered(lz4: Lz4Choice | undefined): lz4 is Lz4Choice {
 /** The zstd levels offered, as ps5-dump-forge offers them. */
 const ZSTD_LEVELS = [1, 5, 19];
 
-/** Packs are refused for this game unless the engine installs the runtime, which is on. */
+/** What the check found about the game's own emulator: `runtime` when a refusal comes without
+ *  a kind (an older engine). */
+export function readinessKind(r: AmprPacksReadiness): "ok" | "runtime" | "no_ampr" {
+  return r.kind ?? (r.refusal ? "runtime" : "ok");
+}
+
+/** LZ4 packs for this game put ampr_emu 0.4.2.1 in: its own emulator is missing or can't read
+ *  them. Not a choice: without it the packs would not start (#828). */
+export function installRuntimeFor(lz4: Lz4Choice): boolean {
+  return readinessKind(lz4.readiness) === "runtime";
+}
+
+/** Why the chosen packs can't be made for this game, or null. */
 export function lz4Refused(lz4: Lz4Choice): string | null {
   if (!lz4.readiness.refusal) return null;
   // zstd packs bring their own emulator, so the game's own doesn't matter: only a PS4 game is
   // out.
   if (lz4.kind === "zstd" && zstdOffered(lz4)) return null;
-  if (lz4.readiness.kind === "runtime" && lz4.installRuntime) return null;
+  // LZ4 packs for a game whose own emulator can't read them bring ampr_emu 0.4.2.1.
+  if (lz4.kind === "lz4" && installRuntimeFor(lz4)) return null;
   return lz4.readiness.refusal;
+}
+
+/** The AMPR emulator of an image or folder, by the packs chosen (#828):
+ *  - `none`: nothing to choose (no AMPR, or the game keeps the emulator it has);
+ *  - `choose`: no packs, and the game reads through AMPR with no emulator: add one, either kind;
+ *  - `fixed`: only one emulator works, so it is that one: ampr-emu-ng with zstd packs (drakmor's
+ *    ampr_emu reads LZ4 packs only), ampr_emu with LZ4 packs. `added`: `always` when the packs
+ *    bring it, `switch` when it goes in only with "Add the AMPR emulator" on (a game kept in
+ *    the packs it is in, written as it is). */
+export type EmulatorRule =
+  | { kind: "none" }
+  | { kind: "choose" }
+  | { kind: "fixed"; build: AmprEmuBuild; added: "always" | "switch" };
+
+export function emulatorRule(lz4: Lz4Choice | undefined): EmulatorRule {
+  if (!lz4 || lz4.ps4) return { kind: "none" };
+  if (lz4Active(lz4)) {
+    if (lz4.kind === "zstd") return { kind: "fixed", build: "ampr-emu-ng", added: "always" };
+    return installRuntimeFor(lz4) ? { kind: "fixed", build: "ampr_emu", added: "always" } : { kind: "none" };
+  }
+  if (!lz4.readiness.emulator_missing) return { kind: "none" };
+  // Written as it is, packs and all: the emulator has to read those packs.
+  if (lz4.packed && !lz4.unpacking)
+    return { kind: "fixed", build: lz4.packed === "zstd" ? "ampr-emu-ng" : "ampr_emu", added: "switch" };
+  return { kind: "choose" };
 }
 
 /** What an image build is told when packs are on, or nothing. Packs go into any image, plain or
@@ -73,7 +112,7 @@ export function packOptions(lz4: Lz4Choice | undefined, profileToml?: string): A
   if (!lz4 || !lz4Active(lz4)) return undefined;
   return lz4.kind === "zstd"
     ? { zstdLevel: lz4.zstdLevel, zstdRuntime: useConvertPrefs.getState().zstdRuntime, profileToml }
-    : { profileToml, installRuntime: lz4.installRuntime };
+    : { profileToml, installRuntime: installRuntimeFor(lz4) };
 }
 
 /** Whether a pack format is on: for any image (any format, compressed or not) and a folder. */
@@ -102,7 +141,7 @@ export function folderLz4Options(
   profileToml?: string,
 ): AmprLz4Options | undefined {
   return lz4 && folderPacks(lz4) && lz4.kind === "lz4"
-    ? { profileToml, installRuntime: lz4.installRuntime }
+    ? { profileToml, installRuntime: installRuntimeFor(lz4) }
     : undefined;
 }
 
@@ -273,24 +312,20 @@ export function ZstdOption({ lz4, folder }: { lz4: Lz4Choice; folder?: boolean }
 export function Lz4Option({ lz4, folder }: { lz4: Lz4Choice; folder?: boolean }) {
   const tr = useTr();
   const refusal = lz4Refused({ ...lz4, kind: "lz4" });
-  const kind = lz4.readiness.kind ?? (lz4.readiness.refusal ? "runtime" : "ok");
-  // LZ4 packs are what is picked. "Put ampr_emu 0.4.2.1 into the image" is only about them, so
-  // it shows under them alone (#828).
   const chosen = lz4.on && lz4.kind === "lz4";
-  // A game whose own emulator can't read packs can still take them, with ampr_emu 0.4.2.1 put in.
-  const fixable = kind === "runtime";
+  // A game whose own emulator can't read packs gets ampr_emu 0.4.2.1 with them: said under LZ4
+  // packs picked, never a separate box to untick (#828).
+  const runtime = installRuntimeFor(lz4);
   return (
     <div className="space-y-1" data-testid="lz4-option">
       <label className="flex cursor-pointer items-start gap-2.5 text-xs">
         <input
           type="checkbox"
-          checked={chosen && (!refusal || fixable)}
-          disabled={!!refusal && !fixable}
+          checked={chosen && !refusal}
+          disabled={!!refusal}
           onChange={(e) => {
             lz4.onKind("lz4");
             lz4.onToggle(e.target.checked);
-            // Picking LZ4 for such a game puts in the emulator that reads them (untickable below).
-            if (e.target.checked && fixable && !lz4.installRuntime) lz4.onInstallRuntime(true);
           }}
           className="checkbox mt-px h-4 w-4 shrink-0"
         />
@@ -313,62 +348,27 @@ export function Lz4Option({ lz4, folder }: { lz4: Lz4Choice; folder?: boolean })
           </span>
         </span>
       </label>
-      {fixable && chosen && (
-        <label className="flex cursor-pointer items-start gap-2.5 text-xs" data-testid="lz4-install-runtime">
-          <input
-            type="checkbox"
-            checked={lz4.installRuntime}
-            onChange={(e) => {
-              lz4.onInstallRuntime(e.target.checked);
-              // This game's own emulator can't read packs: without ampr_emu 0.4.2.1 none are
-              // made, so LZ4 packs go off with it (ticking them again puts it back in).
-              if (!e.target.checked) lz4.onToggle(false);
-            }}
-            className="checkbox mt-px h-4 w-4 shrink-0"
-          />
-          <span className="min-w-0">
-            <span className="block font-medium text-[var(--color-text)]">
-              {folder
-                ? tr("fpkg.folder.lz4_install_runtime", undefined, "Put ampr_emu 0.4.2.1 into the folder")
-                : tr("fpkg.image.lz4_install_runtime", undefined, "Put ampr_emu 0.4.2.1 into the image")}
-            </span>
-            <span className="mt-0.5 block leading-relaxed text-[var(--color-muted)]">
-              {folder
-                ? tr(
-                    "fpkg.folder.lz4_install_runtime_body",
-                    { reason: lz4.readiness.refusal ?? "" },
-                    "{reason}. The folder gets drakmor's ampr_emu 0.4.2.1 as fakelib/libSceAmpr.sprx (fetched once from its GitHub release and checked against a known digest); the game's own copy stays beside it as libSceAmpr.sprx.orig.",
-                  )
-                : tr(
-                    "fpkg.image.lz4_install_runtime_body",
-                    { reason: lz4.readiness.refusal ?? "" },
-                    "{reason}. The image gets drakmor's ampr_emu 0.4.2.1 as fakelib/libSceAmpr.sprx (fetched once from its GitHub release and checked against a known digest); the game's own copy stays beside it as libSceAmpr.sprx.orig.",
-                  )}
-            </span>
-          </span>
-        </label>
-      )}
-      {refusal && fixable ? (
-        // The checkbox above fixes this one: say so, rather than that packs are unavailable (#449).
-        chosen && (
-        <div className="text-xs text-[var(--color-warn)]">
-          {folder
-            ? tr(
-                "fpkg.folder.lz4_needs_runtime",
-                { reason: refusal },
-                "Tick “Put ampr_emu 0.4.2.1 into the folder” above to use packs: {reason}",
-              )
-            : tr(
-                "fpkg.image.lz4_needs_runtime",
-                { reason: refusal },
-                "Tick “Put ampr_emu 0.4.2.1 into the image” above to use packs: {reason}",
-              )}
-        </div>
-        )
-      ) : refusal ? (
+      {refusal ? (
         <div className="text-xs text-[var(--color-warn)]">
           {tr("fpkg.image.lz4_unavailable", { reason: refusal }, "Not available for this game: {reason}")}
         </div>
+      ) : runtime ? (
+        // The emulator that reads them goes in with them: said once they are picked.
+        chosen && (
+          <div className="ms-6 text-xs leading-relaxed text-[var(--color-muted)]" data-testid="lz4-install-runtime">
+            {folder
+              ? tr(
+                  "fpkg.folder.lz4_install_runtime_body",
+                  { reason: lz4.readiness.refusal ?? "" },
+                  "{reason}. The folder gets drakmor's ampr_emu 0.4.2.1 as fakelib/libSceAmpr.sprx (fetched once from its GitHub release and checked against a known digest); the game's own copy stays beside it as libSceAmpr.sprx.orig.",
+                )
+              : tr(
+                  "fpkg.image.lz4_install_runtime_body",
+                  { reason: lz4.readiness.refusal ?? "" },
+                  "{reason}. The image gets drakmor's ampr_emu 0.4.2.1 as fakelib/libSceAmpr.sprx (fetched once from its GitHub release and checked against a known digest); the game's own copy stays beside it as libSceAmpr.sprx.orig.",
+                )}
+          </div>
+        )
       ) : (
         lz4.readiness.runtime_version && (
           <div className="text-xs text-[var(--color-muted)]">
@@ -447,9 +447,8 @@ function PacksWarning() {
   );
 }
 
-/** One muted line where the pack options would be, saying why they aren't: no game checked
- *  yet (`lz4` absent), or a game that doesn't read through AMPR. Nothing when every pack option
- *  is offered. */
+/** One muted line where the asset packs would be, saying why they aren't: no game checked yet
+ *  (`lz4` absent), or a PS4 game. Nothing when packs are offered. */
 export function PacksNote({ lz4 }: { lz4: Lz4Choice | undefined }) {
   const tr = useTr();
   // A folder takes the same packs as an image.
@@ -459,20 +458,13 @@ export function PacksNote({ lz4 }: { lz4: Lz4Choice | undefined }) {
         undefined,
         "Asset packs (LZ4, zstd) appear here once a PS5 game is checked.",
       )
-    : lz4.readiness.kind === "no_ampr" && lz4.ps4
+    : lz4.ps4
       ? tr(
           "fpkg.image.packs_no_ampr",
           undefined,
           "Asset packs: not offered, this game doesn't read its files through AMPR.",
         )
-      : lz4.readiness.kind === "no_ampr"
-        ? // zstd packs are offered above.
-          tr(
-            "fpkg.image.lz4_no_ampr",
-            undefined,
-            "LZ4 asset packs: not offered, this game doesn't read its files through AMPR.",
-          )
-        : null;
+      : null;
   if (!text) return null;
   return (
     <p className="text-xs text-[var(--color-muted)]" data-testid="packs-note">
@@ -534,9 +526,10 @@ function WhichImageHelp() {
 
 /** Some libSceAmpr games with no emulator fail to start from an image (Alembic's two on a console),
  *  others run (LEGO Horizon Adventures reaches its menu with or without one, on the Pro), and
- *  ShadowMount+ doesn't add one. On by default. Only for an image without packs: the engine
- *  leaves it out for packs, which bring their own emulator (#828). */
-function AmprEmuOption() {
+ *  ShadowMount+ doesn't add one. On by default. Only for an image without new packs: the engine
+ *  leaves it out for packs, which bring their own emulator (#828). `fixed`: the game stays in
+ *  the packs it is in, so only the emulator that reads them is offered. */
+function AmprEmuOption({ fixed, packed }: { fixed?: AmprEmuBuild; packed?: "lz4" | "zstd" | null }) {
   const tr = useTr();
   const on = useConvertPrefs((s) => s.addAmprEmu);
   const set = useConvertPrefs((s) => s.setAddAmprEmu);
@@ -554,7 +547,18 @@ function AmprEmuOption() {
           "For an image without asset packs: this game reads its files through AMPR and has no emulator. Some such games won't start from an image without one, and others run fine. Adds drakmor's ampr_emu 0.4.2.1 as fakelib/libSceAmpr.sprx, fetched once from its GitHub release and checked against a known digest. Asset packs bring their own emulator instead.",
         )}
       />
-      {on && <AmprEmuBuildChoice build={build} onBuild={setBuild} />}
+      {on &&
+        (fixed ? (
+          <div className="text-xs text-[var(--color-muted)]" data-testid="ampr-emu-fixed">
+            {tr(
+              "fpkg.ampr.emu_fixed_packs",
+              { kind: packed === "zstd" ? "zstd" : "LZ4", emulator: fixed === "ampr-emu-ng" ? AMPR_EMU_NG : AMPR_EMU },
+              "This game stays in its {kind} packs, so it gets {emulator}, the emulator that reads them.",
+            )}
+          </div>
+        ) : (
+          <AmprEmuBuildChoice build={build} onBuild={setBuild} />
+        ))}
     </div>
   );
 }
@@ -562,6 +566,38 @@ function AmprEmuOption() {
 /** Product names, the same in every language. */
 const AMPR_EMU = "ampr_emu 0.4.2.1";
 const AMPR_EMU_NG = "ampr-emu-ng";
+
+/** Everything AMPR for one game, in one place and in order (#828): the asset packs first, then
+ *  only the emulator that goes with them. A game that doesn't read through AMPR gets one line
+ *  saying so, and zstd packs only (they bring their own runtime); a PS4 game, or no game
+ *  checked yet (`packsNote`), one line. The emulator switch is an image's: a folder build adds
+ *  one only when it writes packs out as plain files. */
+export function AmprSection({ lz4, folder, packsNote }: { lz4?: Lz4Choice; folder?: boolean; packsNote?: boolean }) {
+  const tr = useTr();
+  if (!lz4 || lz4.ps4) return lz4 || packsNote ? <PacksNote lz4={lz4} /> : null;
+  const rule = emulatorRule(lz4);
+  return (
+    <div
+      role="group"
+      aria-label={tr("cq_packs", undefined, "Asset packs")}
+      className="space-y-2 rounded-[var(--radius-card)] border border-[var(--color-border)] px-3 py-2.5"
+      data-testid="ampr-section"
+    >
+      <div className="text-xs font-medium text-[var(--color-muted)]">{tr("cq_packs", undefined, "Asset packs")}</div>
+      {lz4.readiness.kind === "no_ampr" && (
+        <p className="text-xs text-[var(--color-muted)]" data-testid="ampr-not-used">
+          {tr("fpkg.ampr.not_used", undefined, "This game doesn't use AMPR, so it needs no AMPR emulator.")}
+        </p>
+      )}
+      {lz4Offered(lz4) && <Lz4Option lz4={lz4} folder={folder} />}
+      {zstdOffered(lz4) && <ZstdOption lz4={lz4} folder={folder} />}
+      {!folder && rule.kind === "choose" && <AmprEmuOption />}
+      {!folder && rule.kind === "fixed" && rule.added === "switch" && (
+        <AmprEmuOption fixed={rule.build} packed={lz4.packed} />
+      )}
+    </div>
+  );
+}
 
 /** Which emulator a game gets: drakmor's, or quer3q's, which also reads zstd packs. */
 export function AmprEmuBuildChoice({
@@ -610,9 +646,6 @@ export function ImageChoice({
   const tr = useTr();
   const setFormat = (f: ImageFormat) => onChoice(f, compress);
   const setCompress = (c: boolean) => onChoice(format, c);
-  const packing = lz4Active(lz4);
-  // zstd packs bring ampr-emu-ng, and the engine ignores the emulator toggle with them.
-  const zstdChosen = !!lz4?.on && lz4.kind === "zstd";
   const options: { id: ImageFormat; label: string; body: string }[] = [
     {
       id: "ffpkg",
@@ -684,10 +717,7 @@ export function ImageChoice({
         </span>
       </label>
       {compress && <FfpfscLevelOption own={level} />}
-      {lz4?.readiness.emulator_missing && !packing && !zstdChosen && <AmprEmuOption />}
-      {lz4Offered(lz4) && <Lz4Option lz4={lz4} />}
-      {zstdOffered(lz4) && <ZstdOption lz4={lz4} />}
-      {(lz4 || packsNote) && <PacksNote lz4={lz4} />}
+      <AmprSection lz4={lz4} packsNote={packsNote} />
       <VerifyChunkOption />
       <p className="text-xs leading-relaxed text-[var(--color-muted)]">
         {tr(
