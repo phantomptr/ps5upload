@@ -17,6 +17,7 @@ import { RemovePs5Upload } from "./RemovePs5Upload";
 import { GroupHeading, Section } from "./SettingsLayout";
 import { settingsConsoleId } from "./settingsTabs";
 import { settingsVisibility } from "./visibility";
+import { helperAutoUpdateGate } from "../../lib/helperAutoUpdate";
 
 /**
  * Settings › This PS5: one console's own settings, with a picker that starts on the selected
@@ -148,7 +149,7 @@ function Ps5SettingsBody({ profile }: { profile: PS5Profile }) {
               )}
             />
           )}
-          {show.reconnectAfterRest && (
+          {show.reconnectAfterRest && helperAutoUpdateGate.available && (
             <Toggle
               checked={s.auto_update_helper}
               onChange={(on) => setConsoleSetting(id, "auto_update_helper", on)}

@@ -129,6 +129,11 @@ export function helperAge(helper: string | null, app: string | null): "older" | 
 
 const NEVER_FOR_AGE = { current: "current", newer: "newer", unknown: "unknown-version" } as const;
 
+/** Whether automatic helper updates exist in this build at all. Off since 12.6.18: two consoles
+ *  crashed when a helper was replaced (#903) and the cause is not known yet. Sending the helper by
+ *  hand is unchanged. Tests switch it on to exercise the rules. */
+export const helperAutoUpdateGate = { available: false };
+
 export function helperAutoUpdateDecision(i: AutoUpdateInput): AutoUpdateDecision {
   const wait = (why: WaitReason): AutoUpdateDecision => ({ kind: "wait", why });
   const never = (why: NeverReason): AutoUpdateDecision => ({ kind: "never", why });

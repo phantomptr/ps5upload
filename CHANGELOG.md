@@ -4,6 +4,11 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+**Fixes**
+- **The PS5 helper is no longer replaced by itself (#903).** Two consoles crashed when the app sent a new helper over a running one by itself, and the cause isn't known yet. Automatic helper updates are switched off until it is. Sending the helper yourself works as before: press Send helper when the app says a newer one is available.
+
 ## 12.6.17
 
 **Fixes**
