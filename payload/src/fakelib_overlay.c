@@ -20,6 +20,7 @@
 
 #include "proc_identity.h"
 #include "config.h"
+#include "start_trace.h"
 #include <signal.h>
 #define OVERLAY_PATH_MAX 1024
 /* The overlay in place right now: "<pid>\n<title id>\n<target>\n". Written when it is mounted and
@@ -121,7 +122,10 @@ static int mount_overlay(const char *source, const char *target) {
         IOVEC_ENTRY("from"), IOVEC_ENTRY(source),
         IOVEC_ENTRY("fspath"), IOVEC_ENTRY(target),
     };
-    return nmount(iov, IOVEC_SIZE(iov), 0);
+    start_tracef("UNIONFS_MOUNT_BEGIN %s", target);
+    int rc = nmount(iov, IOVEC_SIZE(iov), 0);
+    start_tracef("UNIONFS_MOUNT_END %s rc=%d errno=%d", target, rc, rc != 0 ? errno : 0);
+    return rc;
 }
 
 static void record_write(pid_t pid, const char *title_id, const char *target) {
@@ -164,7 +168,7 @@ static void cleanup_mount(void) {
     g_overlay.mounted_on[0] = '\0';
     g_overlay.mounted_pid = 0;
     pthread_mutex_unlock(&g_overlay.mutex);
-    if (target[0]) (void)unmount(target, MNT_FORCE);
+    if (target[0]) (void)start_trace_unmount(target, MNT_FORCE, "fakelib_cleanup");
     (void)unlink(OVERLAY_RECORD);
 }
 
@@ -207,7 +211,7 @@ static void adopt_left_overlay(int kq) {
         return;
     }
     fprintf(stderr, "[fakelib] the overlay left for %s outlived its game; taking it down\n", title_id);
-    (void)unmount(target, MNT_FORCE);
+    (void)start_trace_unmount(target, MNT_FORCE, "fakelib_adopt");
     (void)unlink(OVERLAY_RECORD);
 }
 

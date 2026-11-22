@@ -39,4 +39,20 @@ int ownership_record_read(const char *path, ownership_rec_t *r, int retry_ms);
  * snapshot. A different pid is never mixed in. */
 void ownership_record_merge(ownership_rec_t *fresh, const ownership_rec_t *snapshot);
 
+/* Which instance the reap is about (#903). The ownership record (merged with the snapshot taken
+ * before the takeover) when it names another process; else the exiting note
+ * (<runtime dir>/exiting.txt, written by an instance as its stop begins, same format) when it is
+ * complete, written in this boot (started_at_unix >= `boottime`, kern.boottime; 0 = unknown, and
+ * then never) and names another process: an instance that removed its record at the end of its
+ * stop may still be running, and the new one must wait for it to be gone; else none. `out` gets
+ * the one chosen (zeroed for none). */
+#define OWNERSHIP_PRIOR_NONE 0
+#define OWNERSHIP_PRIOR_RECORD 1
+#define OWNERSHIP_PRIOR_EXITING 2
+int ownership_prior_pick(const ownership_rec_t *record, const ownership_rec_t *exiting, int exiting_complete,
+                         uint64_t boottime, int self_pid, ownership_rec_t *out);
+
+/* 1 when the exiting note is whole and of this boot (see above). */
+int ownership_exiting_note_current(const ownership_rec_t *exiting, int exiting_complete, uint64_t boottime);
+
 #endif
