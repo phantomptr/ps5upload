@@ -9,6 +9,10 @@ export interface PlaylistStep {
   /** Absolute path on the host to a payload file
    *  (.elf/.bin/.js/.lua/.jar — whatever your loader accepts).
    *
+   *  Or a payload kept elsewhere (#900): `console:/data/...` is a .elf/.bin on the PS5 the
+   *  playlist runs against (the engine reads it through the helper), and
+   *  `remote://<share-id>/<path>` a file on a saved network share (copied here when it runs).
+   *
    *  For a REPO-SOURCED step (#129, from before the app stopped downloading
    *  payloads) this may be empty at rest: the runner resolves `payloadId`
    *  to the copy saved in the app's payload library at send time. */
@@ -349,4 +353,25 @@ export function playlistResendsOurHelper(
   steps: PlaylistStep[],
 ): PlaylistStep | null {
   return steps.find(stepSendsOurHelper) ?? null;
+}
+
+/** A step whose payload is stored on the PS5 itself (#900). */
+export const CONSOLE_STEP_PREFIX = "console:";
+
+/** The step path for a payload at `path` on the console. */
+export function consoleStepPath(path: string): string {
+  return `${CONSOLE_STEP_PREFIX}${path.trim()}`;
+}
+
+/** The console path of a `console:` step, or null for any other step. */
+export function consolePathOf(stepPath: string | null | undefined): string | null {
+  if (typeof stepPath !== "string" || !stepPath.startsWith(CONSOLE_STEP_PREFIX)) return null;
+  const p = stepPath.slice(CONSOLE_STEP_PREFIX.length).trim();
+  return p.startsWith("/") ? p : null;
+}
+
+/** What the console's loader takes from a file on the console: .elf and .bin (engine
+ *  console_payload::is_payload_name). */
+export function isConsolePayloadName(name: string): boolean {
+  return /\.(elf|bin)$/i.test(name.trim());
 }

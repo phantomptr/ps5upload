@@ -628,6 +628,21 @@ playlist_step_up: "Move up",
 playlist_step_down: "Move down",
 playlist_step_remove: "Remove step",
 playlist_add_step: "Add step",
+playlist_add_from_ps5: "Add from the PS5…",
+playlist_add_from_ps5_title:
+  "Add a payload stored on the PS5. It is read from the console the playlist runs on.",
+playlist_add_from_share: "Add from a network share…",
+playlist_add_from_share_title:
+  "Add a payload from a saved network share. It is copied from the share each time the playlist runs.",
+playlist_step_ps5_badge: "PS5",
+playlist_step_share_badge: "Share",
+playlist_ps5_picker_title: "Choose a payload on the PS5",
+playlist_ps5_picker_hint:
+  "The step sends this file from the PS5 the playlist runs on, so it works from any device.",
+playlist_ps5_picker_empty: "No folders or payloads (.elf, .bin) here.",
+playlist_ps5_picker_add: "Add step",
+playlist_step_share_missing:
+  "The network share for {name} isn't saved on this device. Add it in Shared Folders, or choose the file again.",
 playlist_step_repo_badge: "Repo",
 keep_awake_on: "Keep this device awake while PS5 Upload is open",
 queue_title: "Queue",

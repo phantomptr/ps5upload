@@ -9,10 +9,12 @@ import {
   Download,
   FilePlus,
   FolderOpen,
+  HardDrive,
   ListPlus,
   Pencil,
   Play,
   Plus,
+  Server,
   Square,
   Trash2,
   Upload,
@@ -25,12 +27,19 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Button, ErrorCard, Modal, Spinner, Badge, Select, Toggle } from "../../components";
 import { ConsoleChip } from "../../components/ConsoleChip";
 import { useTr } from "../../state/lang";
-import { BrowseButton } from "../../components/BrowseButton";
+import { BrowseButton, BrowseMenu, PathLabel } from "../../components/BrowseButton";
+import { useNavigate } from "react-router";
+import { engineCaps } from "../../api/engine";
+import { useConnectionsStore } from "../../state/connections";
+import { isRemotePath } from "../../lib/remotePath";
+import { ConsolePayloadPicker } from "./ConsolePayloadPicker";
 import {
   runStatusForHost,
   usePayloadPlaylistsStore,
 } from "../../state/payloadPlaylists";
 import {
+  consolePathOf,
+  consoleStepPath,
   isPayloadPath,
   sanitiseSleepMs,
   type Playlist,
@@ -797,6 +806,54 @@ function PlaylistCard({
     if (path) updateStep(playlist.id, index, { path, payloadId: undefined, payloadLabel: undefined });
   };
 
+  // #900: steps stored on the PS5 (an engine that can read them there) or on a saved share.
+  const [canFromPs5, setCanFromPs5] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void engineCaps().then((c) => {
+      if (live) setCanFromPs5(c.payloadConsolePath);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  const [ps5PickerOpen, setPs5PickerOpen] = useState(false);
+  const [shareMenuOpen, setShareMenuOpen] = useState(false);
+  const shareMenuRef = useRef<HTMLDivElement | null>(null);
+  const connections = useConnectionsStore((s) => s.connections);
+  const connectionsLoaded = useConnectionsStore((s) => s.loaded);
+  const connectionStatus = useConnectionsStore((s) => s.status);
+  const loadConnections = useConnectionsStore((s) => s.load);
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (shareMenuOpen && !connectionsLoaded) void loadConnections().catch(() => {});
+  }, [shareMenuOpen, connectionsLoaded, loadConnections]);
+  useEffect(() => {
+    if (!shareMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (shareMenuRef.current && !shareMenuRef.current.contains(e.target as Node)) setShareMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setShareMenuOpen(false);
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [shareMenuOpen]);
+  const addFromShare = async (connectionId: string) => {
+    setShareMenuOpen(false);
+    const picked = await pickPaths({
+      mode: "file",
+      filters: [
+        { name: "Payload", extensions: ["elf", "bin", "js", "lua", "jar"] },
+        { name: "All files", extensions: ["*"] },
+      ],
+      source: { connectionId },
+    });
+    for (const path of picked) addStep(playlist.id, { path, sleepMs: 0 });
+  };
+
   const canRun = playlist.steps.length > 0 && !!host?.trim() && !anyRunning;
 
   return (
@@ -1039,6 +1096,24 @@ function PlaylistCard({
                       {tr("first_run_choose_file", undefined, "Choose file…")}
                     </Button>
                   </div>
+                ) : consolePathOf(step.path) ? (
+                  // #900: a payload stored on the PS5 the playlist runs on.
+                  <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <Badge tone="neutral" variant="outline">
+                      {tr("playlist_step_ps5_badge", undefined, "PS5")}
+                    </Badge>
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs" title={consolePathOf(step.path) ?? ""}>
+                      {consolePathOf(step.path)}
+                    </span>
+                  </div>
+                ) : isRemotePath(step.path) ? (
+                  // #900: a payload on a saved network share, shown by the share's name.
+                  <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <Badge tone="neutral" variant="outline">
+                      {tr("playlist_step_share_badge", undefined, "Share")}
+                    </Badge>
+                    <PathLabel path={step.path} className="min-w-0 flex-1 font-mono text-xs" />
+                  </div>
                 ) : (
                   <div className="min-w-0 flex-1 truncate font-mono text-xs">
                     {step.path}
@@ -1159,7 +1234,58 @@ function PlaylistCard({
         </ol>
       )}
 
-      <div className="mt-2 flex justify-end gap-2">
+      <div className="mt-2 flex flex-wrap justify-end gap-2">
+        {canFromPs5 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            leftIcon={<HardDrive size={12} />}
+            onClick={() => setPs5PickerOpen(true)}
+            disabled={anyRunning || !host?.trim()}
+            title={
+              !host?.trim()
+                ? tr("playlist_need_host", undefined, "Set a PS5 IP at the top of the screen first")
+                : tr(
+                    "playlist_add_from_ps5_title",
+                    undefined,
+                    "Add a payload stored on the PS5. It is read from the console the playlist runs on.",
+                  )
+            }
+          >
+            {tr("playlist_add_from_ps5", undefined, "Add from the PS5…")}
+          </Button>
+        )}
+        <div ref={shareMenuRef} className="relative">
+          <Button
+            variant="ghost"
+            size="sm"
+            leftIcon={<Server size={12} />}
+            onClick={() => setShareMenuOpen((v) => !v)}
+            disabled={anyRunning}
+            aria-haspopup="menu"
+            aria-expanded={shareMenuOpen}
+            title={tr(
+              "playlist_add_from_share_title",
+              undefined,
+              "Add a payload from a saved network share. It is copied from the share each time the playlist runs.",
+            )}
+          >
+            {tr("playlist_add_from_share", undefined, "Add from a network share…")}
+          </Button>
+          {shareMenuOpen && (
+            <BrowseMenu
+              connections={connections}
+              status={connectionStatus}
+              local={false}
+              onLocal={() => setShareMenuOpen(false)}
+              onPickServer={(id) => void addFromShare(id)}
+              onAdd={() => {
+                setShareMenuOpen(false);
+                navigate("/shared-folders?add=1");
+              }}
+            />
+          )}
+        </div>
         <Button
           variant="ghost"
           size="sm"
@@ -1170,6 +1296,17 @@ function PlaylistCard({
           {tr("playlist_add_step", undefined, "Add step")}
         </Button>
       </div>
+      {ps5PickerOpen && (
+        <ConsolePayloadPicker
+          open
+          host={host}
+          onClose={() => setPs5PickerOpen(false)}
+          onPick={(path) => {
+            setPs5PickerOpen(false);
+            addStep(playlist.id, { path: consoleStepPath(path), sleepMs: 0 });
+          }}
+        />
+      )}
 
     </article>
   );

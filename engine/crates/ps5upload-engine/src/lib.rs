@@ -12496,7 +12496,12 @@ async fn engine_version() -> impl IntoResponse {
             // Capability flags the UI feature-detects. `rar` is desktop-only
             // (UnRAR is a helper program, which neither phone app has), so the
             // client hides the .rar option when this is false.
-            "caps": { "rar": cfg!(not(any(target_os = "android", target_os = "ios"))) },
+            // `payload_console_path`: POST /api/payload/send takes `console_path`, a payload
+            // stored on the PS5 (#900); the playlists offer "Add from the PS5…" only then.
+            "caps": {
+                "rar": cfg!(not(any(target_os = "android", target_os = "ios"))),
+                "payload_console_path": true,
+            },
             // `PS5_ADDR`, when the operator set one: the web UI lists it for a first browser, so
             // the console the setup named is not typed in again.
             "default_console": std::env::var("PS5_ADDR")
