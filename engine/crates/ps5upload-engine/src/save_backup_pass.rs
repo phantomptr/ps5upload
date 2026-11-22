@@ -1166,6 +1166,10 @@ pub(crate) fn plan_folders(
     let mut copies = copies;
     let mut out = Vec::new();
     for path in list {
+        // Checked again here: a setting read from disk may predate a rule.
+        if folders::folder_path_ok(path).is_err() {
+            continue;
+        }
         let Ok(sig) = console.folder_signature(host, path) else {
             continue;
         };

@@ -88,7 +88,14 @@ pub fn folder_path_ok(path: &str) -> Result<String, String> {
     }
     let under = |dir: &str| lower == dir || lower.starts_with(&format!("{dir}/"));
     // The helper's own folder (its keys, records and saved shares); /data is /user/data.
-    if under("/data/ps5upload") || under("/user/data/ps5upload") {
+    // A folder that holds it counts too: /user/data is /data, a whole drive, and restoring it would
+    // empty the helper's folder with the rest.
+    let holds = |dir: &str| dir.starts_with(&format!("{lower}/"));
+    if under("/data/ps5upload")
+        || under("/user/data/ps5upload")
+        || holds("/data/ps5upload")
+        || holds("/user/data/ps5upload")
+    {
         return Err("PS5Upload's own folder on the PS5 can't be backed up".into());
     }
     // The installed games, and the console's own folders under /user.
@@ -124,7 +131,12 @@ pub fn folder_path_ok(path: &str) -> Result<String, String> {
         return Err("save data folders are backed up as saves already".into());
     }
     // The copies of the backups on a PS5 drive.
-    if parts[0] == "mnt" && parts.get(2) == Some(&"ps5upload") {
+    // Any case: a USB drive is exFAT, where PS5Upload and ps5upload are the same folder.
+    if parts[0] == "mnt"
+        && parts
+            .get(2)
+            .is_some_and(|d| d.eq_ignore_ascii_case("ps5upload"))
+    {
         return Err("the backups' own folder can't be backed up".into());
     }
     Ok(p.to_string())
@@ -138,7 +150,8 @@ pub fn folders_ok(list: &[String]) -> Result<Vec<String>, String> {
             continue;
         }
         let p = folder_path_ok(f)?;
-        if !out.iter().any(|o| o.eq_ignore_ascii_case(&p)) {
+        // Exactly: /data is case-sensitive, and /data/Saves and /data/saves are two folders.
+        if !out.contains(&p) {
             out.push(p);
         }
     }
@@ -257,8 +270,10 @@ pub fn signature(entries: &[(String, u64, i64)]) -> i64 {
     for (p, s, m) in sorted {
         text.push_str(&format!("{p}\u{0}{s}\u{0}{m}\n"));
     }
-    // Never 0: a record with no time is "never backed up".
-    (fnv(text.as_bytes()) as i64).max(1)
+    // Never 0: a record with no time is "never backed up". The top bit goes first: read signed,
+    // half of all hashes are negative and `.max(1)` made each of them 1, so a change was missed
+    // whenever the old and the new signature both came out negative.
+    ((fnv(text.as_bytes()) >> 1) as i64).max(1)
 }
 
 /// The zip comment of a folder's backup: which folder, from which PS5.
@@ -807,8 +822,9 @@ impl Console for LiveConsole<'_> {
 }
 
 /// Empties the console folder `path` (keeping the folder) and uploads the files of `src` into it.
-fn put_back(c: &dyn Console, path: &str, src: &Path) -> Result<(), String> {
-    let names = c.entries(path).unwrap_or_default();
+/// `there`: the folder is there (and was kept first); else nothing in it is removed.
+fn put_back(c: &dyn Console, path: &str, src: &Path, there: bool) -> Result<(), String> {
+    let names = if there { c.entries(path)? } else { Vec::new() };
     for e in names {
         let Some(name) = e.get("name").and_then(Value::as_str) else {
             continue;
@@ -860,7 +876,13 @@ fn restore_with(
         // What is there now is kept first.
         let current = tmp.join("current");
         std::fs::create_dir_all(&current).map_err(|e| e.to_string())?;
-        let there = c.entries(&path).is_ok();
+        // Only "not there" counts as not there: a timeout or a busy helper read as that skipped
+        // keeping what is there, and the folder was then emptied all the same.
+        let there = match c.entries(&path) {
+            Ok(_) => true,
+            Err(e) if ps5upload_core::fs_ops::is_not_found(&e) => false,
+            Err(e) => return Err(format!("could not look at {path} now: {e}")),
+        };
         if there {
             c.download(&path, &current)
                 .map_err(|e| format!("could not copy what is in {path} now: {e}"))?;
@@ -874,11 +896,11 @@ fn restore_with(
                 .keep(&rel, &name, &kept)
                 .map_err(|e| format!("could not keep what is in {path} now first: {e}"))?;
         }
-        match put_back(c, &path, &unpacked.join(&inner)) {
+        match put_back(c, &path, &unpacked.join(&inner), there) {
             Ok(()) => Ok(()),
             Err(e) => {
                 if there {
-                    let _ = put_back(c, &path, &current.join(&leaf));
+                    let _ = put_back(c, &path, &current.join(&leaf), true);
                 }
                 Err(format!("putting {file} back failed: {e}"))
             }
@@ -1094,6 +1116,10 @@ mod tests {
                 "save data",
             ),
             ("/mnt/ext0/ps5upload/save-backups", "backups' own"),
+            ("/mnt/usb0/PS5Upload/save-backups", "backups' own"),
+            // /user/data is /data: it holds the helper's own folder.
+            ("/user/data", "own folder"),
+            ("/user/data/", "own folder"),
         ] {
             let e = folder_path_ok(bad).unwrap_err();
             assert!(e.contains(why), "{bad}: {e}");
@@ -1104,6 +1130,25 @@ mod tests {
             vec![GRIM.to_string()]
         );
         assert!(folders_ok(&[GRIM.into(), "/data/ps5upload".into()]).is_err());
+        // Two folders that differ in case are two folders on /data.
+        assert_eq!(
+            folders_ok(&["/data/Saves".into(), "/data/saves".into()])
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    /// Every rewrite of a file changes the signature (the hash's top bit used to fold half of
+    /// all signatures into 1, so most rewrites went unseen).
+    #[test]
+    fn each_rewrite_changes_the_signature() {
+        let mut seen = std::collections::HashSet::new();
+        for mtime in 1000..1100 {
+            let s = signature(&[("save.dat".to_string(), 4096, mtime)]);
+            assert!(s >= 1);
+            assert!(seen.insert(s), "mtime {mtime} gave a signature seen before");
+        }
     }
 
     #[test]
@@ -1320,10 +1365,16 @@ mod tests {
         files: RefCell<BTreeMap<String, Vec<u8>>>,
         /// Uploads that fail (half done) before one goes through.
         fail_upload: std::cell::Cell<u32>,
+        /// Listings that fail (the console busy) before one goes through.
+        fail_entries: std::cell::Cell<u32>,
     }
 
     impl Console for FakeConsole {
         fn entries(&self, path: &str) -> Result<Vec<Value>, String> {
+            if self.fail_entries.get() > 0 {
+                self.fail_entries.set(self.fail_entries.get() - 1);
+                return Err("timed out".into());
+            }
             let prefix = format!("{path}/");
             let mut names: BTreeMap<String, bool> = BTreeMap::new();
             for p in self.files.borrow().keys() {
@@ -1335,7 +1386,7 @@ mod tests {
                 }
             }
             if names.is_empty() {
-                return Err("no such folder".into());
+                return Err("fs_list_dir_failed_errno_2".into());
             }
             Ok(names
                 .into_iter()
@@ -1484,6 +1535,39 @@ mod tests {
         // Names that are not ours, or folders the rules refuse, are refused outright.
         assert!(restore_with(&c, &place, &place, GRIM, "x.zip", None).is_err());
         assert!(restore_with(&c, &place, &place, "/data/ps5upload/ava", gname, None).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A console that could not be asked what the folder holds (busy, timed out) is not a folder
+    /// that is not there: nothing is removed without a copy kept first.
+    #[test]
+    fn a_folder_that_could_not_be_looked_at_is_left_alone() {
+        let dir = scratch("restore-unasked");
+        let place = LocalSide {
+            dir: dir.join("backups").to_string_lossy().into_owned(),
+        };
+        let good = folder_zip(&dir, GRIM, &[("Save/game.gdc", b"backup")], None);
+        let gname = "folder_2026-01-01_000000.zip";
+        store_here(&place.dir, &folder_rel(GRIM), gname, &good, 5).unwrap();
+        let c = FakeConsole::default();
+        c.files
+            .borrow_mut()
+            .insert(format!("{GRIM}/Save/game.gdc"), b"now".to_vec());
+        c.files
+            .borrow_mut()
+            .insert(format!("{GRIM}/notes.txt"), b"mine".to_vec());
+        c.fail_entries.set(1);
+        let e = restore_with(&c, &place, &place, GRIM, gname, None).unwrap_err();
+        assert!(e.contains("could not look at"), "{e}");
+        let files = c.files.borrow().clone();
+        assert_eq!(files[&format!("{GRIM}/Save/game.gdc")], b"now");
+        assert_eq!(files[&format!("{GRIM}/notes.txt")], b"mine");
+        // A folder that is not there at all is made from the backup.
+        let fresh = "/data/retro/saves";
+        let z = folder_zip(&dir, fresh, &[("a.srm", b"x")], None);
+        store_here(&place.dir, &folder_rel(fresh), gname, &z, 5).unwrap();
+        restore_with(&c, &place, &place, fresh, gname, None).unwrap();
+        assert_eq!(c.files.borrow()[&format!("{fresh}/a.srm")], b"x");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
