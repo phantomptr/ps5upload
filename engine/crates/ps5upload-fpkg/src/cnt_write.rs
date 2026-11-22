@@ -124,12 +124,69 @@ pub const SCENARIO_LANGUAGES: [&str; 31] = [
 /// supported: a game that asks PlayGo which languages it has (Battlefield 6 imports
 /// `scePlayGoGetLanguageMask`) is then told that one. An unknown code is ignored.
 pub fn playgo_scenario_json(language: Option<&str>) -> Vec<u8> {
-    let chosen = language.and_then(|l| SCENARIO_LANGUAGES.iter().find(|k| **k == l));
-    let list: &[&str] = match chosen {
+    let chosen = language.and_then(known_language);
+    let list: &[&str] = match &chosen {
         Some(l) => std::slice::from_ref(l),
         None => &SCENARIO_LANGUAGES,
     };
-    let default = chosen.copied().unwrap_or("en-US");
+    scenario_json(list, chosen.unwrap_or("en-US"))
+}
+
+/// One of [`SCENARIO_LANGUAGES`], by its code.
+fn known_language(code: &str) -> Option<&'static str> {
+    SCENARIO_LANGUAGES.iter().copied().find(|k| *k == code)
+}
+
+/// The languages a game ships with and the one it starts in, as the game itself declares them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GameLanguages {
+    pub supported: Vec<&'static str>,
+    pub default: &'static str,
+}
+
+/// The game's own languages, so a package keeps them rather than a made-up set.
+///
+/// A dump carries the `sce_sys/playgo-scenario.json` of the package it was installed from, but
+/// that file is one packaging generates (see `sdk_rules`), so it is never copied. Its language
+/// list and default are what the game shipped with: an EU copy declares its own languages and
+/// default, where the generated document declared all 31 (Japanese first) with `en-US` as the
+/// default. Read from that file when it names any known language; else the default language
+/// from `param.json`'s `localizedParameters` with every language supported; else `None` (the
+/// generated document, as before).
+pub fn game_languages(scenario: &[u8], param_json: &[u8]) -> Option<GameLanguages> {
+    if let Some(v) = crate::source::parse_param_json(scenario) {
+        let mut supported: Vec<&'static str> = Vec::new();
+        let listed = v.get("chunkSupportedLanguages").and_then(|a| a.as_array());
+        for code in listed.into_iter().flatten().filter_map(|l| l.as_str()) {
+            if let Some(k) = known_language(code) {
+                if !supported.contains(&k) {
+                    supported.push(k);
+                }
+            }
+        }
+        if let Some(first) = supported.first().copied() {
+            let default = ["chunkDefaultLanguage", "scenarioDefaultLanguage"]
+                .iter()
+                .filter_map(|key| v.get(*key)?.as_str().and_then(known_language))
+                .find(|d| supported.contains(d))
+                .unwrap_or(first);
+            return Some(GameLanguages { supported, default });
+        }
+    }
+    let param = crate::source::parse_param_json(param_json)?;
+    let default = param
+        .get("localizedParameters")?
+        .get("defaultLanguage")?
+        .as_str()
+        .and_then(known_language)?;
+    Some(GameLanguages {
+        supported: SCENARIO_LANGUAGES.to_vec(),
+        default,
+    })
+}
+
+/// The scenario document supporting `list`, starting in `default`.
+fn scenario_json(list: &[&str], default: &str) -> Vec<u8> {
     let names = list
         .iter()
         .map(|l| format!(r#""{l}":{{"title":"Scenario #0","description":"Scenario #0"}}"#))
@@ -146,12 +203,17 @@ pub fn playgo_scenario_json(language: Option<&str>) -> Vec<u8> {
     .into_bytes()
 }
 
-/// The PlayGo scenario entry; see [`playgo_scenario_json`].
-pub fn playgo_scenario_extra(language: Option<&str>) -> ExtraEntry {
+/// The PlayGo scenario entry; see [`playgo_scenario_json`]. A language chosen for the package
+/// wins; without one, the game's own languages (`game`, see [`game_languages`]) when known.
+pub fn playgo_scenario_extra(language: Option<&str>, game: Option<&GameLanguages>) -> ExtraEntry {
+    let data = match (language.and_then(known_language), game) {
+        (None, Some(g)) => scenario_json(&g.supported, g.default),
+        _ => playgo_scenario_json(language),
+    };
     ExtraEntry {
         id: crate::cnt::ids::PLAYGO_SCENARIO_JSON,
         name: "playgo-scenario.json",
-        data: playgo_scenario_json(language),
+        data,
         key_index: None,
     }
 }
@@ -929,6 +991,55 @@ mod tests {
         // A code the console doesn't know leaves the package as it always was.
         assert_eq!(
             playgo_scenario_json(Some("xx-XX")),
+            playgo_scenario_json(None)
+        );
+    }
+
+    /// An EU dump's own scenario: the package keeps its languages and default (Discord report:
+    /// an EU game converted from an image came up in Japanese, the package having declared all
+    /// 31 languages, Japanese first, with en-US as the default).
+    #[test]
+    fn the_games_own_languages_are_kept() {
+        let own = br#"{"scenarioCount":1,"scenarioDefaultId":0,"scenarioDefaultLanguage":"en-GB","scenarios":[{"id":0,"type":"playmode"}],"chunkDefaultLanguage":"en-GB","chunkSupportedLanguages":["en-GB","fr-FR","de-DE","xx-XX","fr-FR"]}"#;
+        let param = br#"{"localizedParameters":{"defaultLanguage":"en-US"}}"#;
+        let game = game_languages(own, param).unwrap();
+        assert_eq!(game.supported, ["en-GB", "fr-FR", "de-DE"]);
+        assert_eq!(game.default, "en-GB");
+        let v: serde_json::Value =
+            serde_json::from_slice(&playgo_scenario_extra(None, Some(&game)).data).unwrap();
+        assert_eq!(v["scenarioDefaultLanguage"], "en-GB");
+        assert_eq!(v["chunkDefaultLanguage"], "en-GB");
+        assert_eq!(
+            v["chunkSupportedLanguages"],
+            serde_json::json!(["en-GB", "fr-FR", "de-DE"])
+        );
+        assert!(v["scenarios"][0].get("ja-JP").is_none());
+        // A language chosen for the package still wins.
+        let chosen: serde_json::Value =
+            serde_json::from_slice(&playgo_scenario_extra(Some("de-DE"), Some(&game)).data)
+                .unwrap();
+        assert_eq!(
+            chosen["chunkSupportedLanguages"],
+            serde_json::json!(["de-DE"])
+        );
+        // A default the game's list doesn't hold falls back to its first language.
+        let odd = br#"{"chunkDefaultLanguage":"ja-JP","chunkSupportedLanguages":["fr-FR"]}"#;
+        assert_eq!(game_languages(odd, b"").unwrap().default, "fr-FR");
+    }
+
+    /// No scenario of its own: `param.json`'s default language with every language, and with
+    /// neither, the document LibProsperoPkg writes, as before.
+    #[test]
+    fn without_a_scenario_the_param_default_or_the_reference() {
+        let param =
+            br#"{"localizedParameters":{"defaultLanguage":"en-GB","en-GB":{"titleName":"X"}}}"#;
+        let game = game_languages(b"", param).unwrap();
+        assert_eq!(game.supported.len(), 31);
+        assert_eq!(game.default, "en-GB");
+        assert!(game_languages(b"", b"{}").is_none());
+        assert!(game_languages(br#"{"chunkSupportedLanguages":[]}"#, b"not json").is_none());
+        assert_eq!(
+            playgo_scenario_extra(None, None).data,
             playgo_scenario_json(None)
         );
     }
