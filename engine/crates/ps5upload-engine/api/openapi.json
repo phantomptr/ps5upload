@@ -47045,7 +47045,7 @@
     },
     "/api/save-backup/folders": {
       "get": {
-        "description": "`GET /api/save-backup/folders?from=share|local|drive&addr=` — each chosen console folder with\nits backups there, newest first: `{folders: [{path, backups: [{file, stamp, size, tag}]}]}`.",
+        "description": "`GET /api/save-backup/folders?from=share|local|drive&addr=` — each chosen console folder with\nthe backups there that the PS5 at `addr` may be given back, newest first: `{console, folders:\n[{path, backups: [{file, stamp, size, tag, legacy?}]}]}`. Its own backups, then (`legacy:\ntrue`) those made before folder backups were kept per PS5, which may be of any PS5 with that\nfolder. Without `addr`, or when the PS5 can't be told (`console` null), only those.",
         "parameters": [
           {
             "description": "`share`, `local` or `drive`.",
@@ -47072,6 +47072,7 @@
               "application/json": {
                 "schema": {
                   "properties": {
+                    "console": {},
                     "folders": {}
                   },
                   "type": "object"
@@ -47097,7 +47098,6 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "Each chosen console folder with its backups there, newest first: `{folders: [{path, backups: [{file, stamp, size, tag}]}]}`",
         "tags": [
           "saves"
         ],
@@ -47166,7 +47166,7 @@
     },
     "/api/save-backup/folders/restore": {
       "post": {
-        "description": "`POST /api/save-backup/folders/restore` — `{from, addr, path, file}`: puts a folder backup\nback where it came from, keeping what is there first (in the same place; the share or the\nbackup folder here for one on a PS5 drive). No other save operation on the console meanwhile.",
+        "description": "`POST /api/save-backup/folders/restore` — `{from, addr, path, file}`: puts a folder backup\nback where it came from, keeping what is there first (in the same place; the share or the\nbackup folder here for one on a PS5 drive). No other save operation on the console meanwhile.\nOnly this PS5's own backups, or one made before folder backups were kept per PS5: another\nPS5's is refused.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -47866,6 +47866,10 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
           },
           "default": {
             "$ref": "#/components/responses/Error",
