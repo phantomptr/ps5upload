@@ -10,9 +10,19 @@ import { fpkg, type AmprEmuOutcome, type FpkgInspection } from "../../api/fpkg";
 import { Button } from "../../components";
 import { isRemotePath } from "../../lib/remotePath";
 import { isArchiveSource } from "../../state/fpkgConversion";
+import { useConvertPrefs, type AmprEmuBuild } from "../../state/convertPrefs";
 import { useTr } from "../../state/lang";
 
 const IMAGE = /\.(exfat|ffpkg|ufs2|ffpfs|ffpfsc)$/i;
+
+/** The emulator a game gets where it stands: one in asset packs gets the one that reads them
+ *  (ampr-emu-ng for zstd packs, which drakmor's ampr_emu can't read; ampr_emu for LZ4 packs),
+ *  a plain game Convert's setting (#828). */
+export function amprEmuBuildFor(inspection: FpkgInspection | null, setting: AmprEmuBuild): AmprEmuBuild {
+  if (inspection?.packs === "zstd") return "ampr-emu-ng";
+  if (inspection?.packs === "lz4") return "ampr_emu";
+  return setting;
+}
 
 /** Whether the button is offered for `source`, as checked under ①. */
 export function amprEmuOffered(source: string, inspection: FpkgInspection | null): boolean {
@@ -26,10 +36,13 @@ export function amprEmuOffered(source: string, inspection: FpkgInspection | null
 
 export function AmprEmuTool({
   source,
+  inspection,
   locked,
   onAdded,
 }: {
   source: string;
+  /** The check of `source`: a packed game gets the emulator that reads its packs. */
+  inspection: FpkgInspection | null;
   /** A build is running: one job at a time on this screen. */
   locked: boolean;
   /** The game changed: check it again. */
@@ -65,7 +78,7 @@ export function AmprEmuTool({
           setBusy(true);
           setFailed(null);
           fpkg
-            .addAmprEmu(started.trim())
+            .addAmprEmu(started.trim(), amprEmuBuildFor(inspection, useConvertPrefs.getState().amprEmuBuild))
             .then((outcome) => {
               // Another game was picked meanwhile: this answer is not about what is shown now.
               if (shown.current !== started) return;
