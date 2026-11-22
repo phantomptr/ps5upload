@@ -95,3 +95,26 @@ for (const [name, width, height] of [
     await main.getByRole("tab", { name: /Settings/ }).click();
     await expect(main.getByText("7 days")).toBeVisible();
   });
+
+test("Clear all in the bell panel empties the list the Notifications screen shows", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await seed(page);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const bell = page.getByRole("button", { name: "Open notifications" }).locator("visible=true");
+  await expect(bell).toHaveCount(1, { timeout: 30_000 });
+  await bell.click();
+  const panel = page.getByTestId("notifications-panel").locator("visible=true");
+  await expect(panel.getByRole("listitem")).toHaveCount(8);
+
+  // All twelve go, not only the eight the panel shows; with nothing left the button goes too.
+  await panel.getByRole("button", { name: "Clear all" }).click();
+  await expect(panel.getByRole("listitem")).toHaveCount(0);
+  await expect(panel.getByText(/No notifications yet/)).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Clear all" })).toHaveCount(0);
+  await expect(bell.getByTestId("notifications-badge")).toHaveCount(0);
+
+  await panel.getByRole("button", { name: "See all" }).click();
+  await expect(page).toHaveURL(/\/notifications$/);
+  await expect(page.getByRole("main").getByTestId("notifications-app-list").getByRole("listitem")).toHaveCount(0);
+});
