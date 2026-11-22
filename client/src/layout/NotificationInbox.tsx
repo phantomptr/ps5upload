@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { ArrowRight, Bell, Tv, X } from "lucide-react";
+import { ArrowRight, Bell, Trash2, Tv, X } from "lucide-react";
 
 import { useNotificationsStore } from "../state/notifications";
 import { useTr } from "../state/lang";
@@ -75,6 +75,7 @@ export default function NotificationInbox({
   const entries = useNotificationsStore((s) => s.entries);
   const markRead = useNotificationsStore((s) => s.markRead);
   const remove = useNotificationsStore((s) => s.remove);
+  const clear = useNotificationsStore((s) => s.clear);
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -160,18 +161,31 @@ export default function NotificationInbox({
                 {tr("notif_tab_app", undefined, "This app")}
               </span>
             </h3>
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                triggerRef.current?.focus();
-              }}
-              aria-label={tr("close", undefined, "Close")}
-              title={tr("close", undefined, "Close")}
-              className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] max-md:p-2.5"
-            >
-              <X size={14} />
-            </button>
+            <div className="flex shrink-0 items-center gap-1">
+              {/* Every notice, as the screen's Clear all: update notices pile up between visits. */}
+              {entries.length > 0 && (
+                <button
+                  type="button"
+                  onClick={clear}
+                  className="inline-flex min-h-8 items-center gap-1 rounded-full px-2 text-xs text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] max-md:min-h-11"
+                >
+                  <Trash2 size={12} aria-hidden />
+                  {tr("notifications_clear", undefined, "Clear all")}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  triggerRef.current?.focus();
+                }}
+                aria-label={tr("close", undefined, "Close")}
+                title={tr("close", undefined, "Close")}
+                className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] max-md:p-2.5"
+              >
+                <X size={14} />
+              </button>
+            </div>
           </header>
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain md:max-h-96">
             {peek.length === 0 ? (
