@@ -103,9 +103,6 @@ strip = true
 # there is nothing upstream to take. See third_party/unrar/README.md and
 # docs/unrar-upstream-bug.md.
 [patch.crates-io]
-# AVA1 1.0.12 (#873: read-back progress) is not on crates.io yet: built from the submodule until it is
-# published, then this line goes.
-ava1 = { path = "../third_party/ava1/crates/ava1" }
 unrar = { path = "../third_party/unrar" }
 # 32-bit fix: archive sizes stay u64 (third_party/sevenz-rust2/README.md, #434).
 sevenz-rust2 = { path = "../third_party/sevenz-rust2" }

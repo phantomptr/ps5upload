@@ -230,7 +230,5 @@ opt-level = 3
 # the engine workspace, embedded next to the engine by build.rs/engine.rs), never
 # linked into this app or the engine. See LICENSES/UnRAR-exception.md.
 [patch.crates-io]
-# AVA1 1.0.12 (#873) is not on crates.io yet: built from the submodule until it is published.
-ava1 = { path = "../../third_party/ava1/crates/ava1" }
 # 32-bit fix: archive sizes stay u64 (third_party/sevenz-rust2/README.md, #434).
 sevenz-rust2 = { path = "../../third_party/sevenz-rust2" }
