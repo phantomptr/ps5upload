@@ -1711,6 +1711,14 @@ pub(crate) fn merge_live_notes(
     // Every byte is on the console and it is reading the last large files back (#783).
     if n.verifying.load(Relaxed) && !n.settling.load(Relaxed) {
         o.insert("verifying".into(), true.into());
+        // How much it has left to read back, of the most it had (#873): absent from a helper
+        // that does not say, so the row shows no figures.
+        let total = n.verify_total_bytes.load(Relaxed);
+        if total > 0 {
+            let left = n.verify_left_bytes.load(Relaxed).min(total);
+            o.insert("verify_left_bytes".into(), left.into());
+            o.insert("verify_total_bytes".into(), total.into());
+        }
     }
     // The stretch after the last byte (#873): how long ago the console acknowledged it, and
     // how long since it last confirmed anything new. A client tells a console that is getting
@@ -15806,6 +15814,21 @@ mod helpers_tests {
         n.verifying.store(true, Relaxed);
         let v = merge_live_notes(Some(&n), running.clone());
         assert_eq!(v["verifying"], true);
+        // #873: no figures from a helper that does not say what is left to read back, then
+        // what is left of the most it had
+        assert!(v.get("verify_left_bytes").is_none() && v.get("verify_total_bytes").is_none());
+        n.verify_left_bytes.store(3 << 30, Relaxed);
+        n.verify_total_bytes.store(10 << 30, Relaxed);
+        let v = merge_live_notes(Some(&n), running.clone());
+        assert_eq!(
+            (
+                v["verify_left_bytes"].as_u64(),
+                v["verify_total_bytes"].as_u64()
+            ),
+            (Some(3 << 30), Some(10 << 30))
+        );
+        n.verify_left_bytes.store(0, Relaxed);
+        n.verify_total_bytes.store(0, Relaxed);
         // #873: nothing about the stretch after the last byte while bytes are on their way,
         // then how long ago it was acknowledged and how long the console has been quiet
         assert!(v.get("all_sent_ms").is_none() && v.get("console_quiet_ms").is_none());

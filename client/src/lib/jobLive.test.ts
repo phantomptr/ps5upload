@@ -74,6 +74,26 @@ describe("job live notes", () => {
     expect(both?.verifying).toBeUndefined();
   });
 
+  it("carries what the read-back has left only while verifying, within its total (#873)", () => {
+    expect(
+      jobLiveFromSnapshot({ verifying: true, verify_left_bytes: 30, verify_total_bytes: 100 }),
+    ).toMatchObject({ verifying: true, verifyLeft: 30, verifyTotal: 100 });
+    expect(
+      jobLiveFromSnapshot({ verifying: true, verify_left_bytes: 300, verify_total_bytes: 100 }),
+    ).toMatchObject({ verifyLeft: 100, verifyTotal: 100 });
+    // an older helper sends no figures
+    expect(jobLiveFromSnapshot({ verifying: true })).not.toHaveProperty("verifyTotal");
+    // never outside the read-back
+    expect(
+      jobLiveFromSnapshot({
+        settling: true,
+        verifying: true,
+        verify_left_bytes: 30,
+        verify_total_bytes: 100,
+      }),
+    ).not.toHaveProperty("verifyTotal");
+  });
+
   it("says the console is quiet only from a minute on (#873)", () => {
     expect(jobLiveFromSnapshot({ console_quiet_ms: 5_000 })).toBeUndefined();
     expect(jobLiveFromSnapshot({ verifying: true, console_quiet_ms: 59_999 })).not.toHaveProperty(

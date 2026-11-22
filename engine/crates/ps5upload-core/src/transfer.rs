@@ -227,6 +227,11 @@ pub struct LiveNotes {
     /// Every byte is on the console and it is reading the last large files back to check them
     /// (`TransferConfig::verify_writes` on a helper that can): "Verifying on the console".
     pub verifying: std::sync::atomic::AtomicBool,
+    /// With `verifying`: bytes the console still has to read back and the most it had in this
+    /// stretch (AVA1 1.0.12's `Status.readback_left`): "Checking on the PS5: X of Y". Both 0
+    /// when the helper does not say.
+    pub verify_left_bytes: std::sync::atomic::AtomicU64,
+    pub verify_total_bytes: std::sync::atomic::AtomicU64,
     /// The files the console still reports unswept while `settling` (0 outside it), and the
     /// most it reported: the numerator and denominator of "Finishing on the console: N left".
     pub unswept: std::sync::atomic::AtomicU32,
