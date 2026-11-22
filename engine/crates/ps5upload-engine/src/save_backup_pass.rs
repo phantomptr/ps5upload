@@ -1051,10 +1051,17 @@ pub(crate) fn carry_over(
             .or_insert_with(|| console.list_saves(&it.host));
         let entry = match list {
             // A console folder (#899): looked at again as it is now.
-            Ok(_) if it.kind == "folder" => console
-                .folder_signature(&it.host, &it.path)
-                .ok()
-                .map(|sig| folders::entry(&it.path, sig)),
+            Ok(_) if it.kind == "folder" => match console.folder_signature(&it.host, &it.path) {
+                Ok(sig) => Some(folders::entry(&it.path, sig)),
+                // Only "not found" is a folder that is gone: one that could not be read now (a
+                // dropped link, a busy helper) stays left, with why, for the next Continue.
+                Err(e) if !ps5upload_core::fs_ops::is_not_found(&e) => {
+                    it.error = Some(e);
+                    run.add(vec![it]);
+                    continue;
+                }
+                Err(_) => None,
+            },
             Ok(saves) => saves.iter().find(|e| e.path == it.path).cloned(),
             Err(e) => {
                 run.unreached(&it.host, e);
@@ -1527,6 +1534,8 @@ mod tests {
         pub folders: RefCell<BTreeMap<String, Files>>,
         /// The PS5's own id; None: it can't be told.
         pub id: RefCell<Option<String>>,
+        /// What looking at any folder fails with now (None: it works).
+        pub folder_err: RefCell<Option<String>>,
     }
 
     const GONE: &str =
@@ -1611,8 +1620,11 @@ mod tests {
             if self.crashed() {
                 return Err(GONE.into());
             }
+            if let Some(e) = self.folder_err.borrow().clone() {
+                return Err(e);
+            }
             let f = self.folders.borrow();
-            let files = f.get(path).ok_or("no such folder")?;
+            let files = f.get(path).ok_or("fs_list_dir_failed_errno_2")?;
             let entries: Vec<(String, u64, i64)> = files
                 .iter()
                 .map(|(r, b)| {
@@ -1689,6 +1701,7 @@ mod tests {
             drive: with_m2(),
             folders: RefCell::default(),
             id: RefCell::new(Some(PS5_ID.into())),
+            folder_err: RefCell::default(),
         }
     }
 
@@ -2349,5 +2362,46 @@ mod tests {
         let it = run.items.iter().find(|i| i.kind == "folder").unwrap();
         assert_eq!(it.step, crate::save_backup_run::Step::Failed);
         assert_eq!(it.error.as_deref(), Some(folders::UNKNOWN_CONSOLE));
+    }
+
+    /// Continue: a folder that could not be looked at now (the link dropped) stays left, with
+    /// why; only one that is not there any more is skipped as gone.
+    #[test]
+    fn continue_skips_a_folder_only_when_it_is_gone() {
+        let c = console(0, 0);
+        c.folders
+            .borrow_mut()
+            .insert(GRIM.into(), vec![("a".into(), b"x".to_vec())]);
+        let journal = Journal::open(None);
+        let run = journal.begin(Which::Share, "manual").unwrap();
+        run.add(vec![journal::new_item(
+            HOST,
+            &folders::entry(GRIM, 1),
+            format!("{HOST}|{}", folders::item_path(GRIM)),
+            &[Place::Share],
+        )]);
+        run.finish(Some(("console_gone".into(), "gone".into())));
+        let last = journal.last(Which::Share).unwrap();
+        assert_eq!(last.items[0].outcome(), Outcome::Left);
+
+        *c.folder_err.borrow_mut() = Some("connection reset by peer".into());
+        let again = journal.begin(Which::Share, "continue").unwrap();
+        assert!(carry_over(&c, &again, &last, None).is_empty());
+        let it = again.item(0).unwrap();
+        assert_eq!(it.outcome(), Outcome::Left);
+        assert_eq!(it.error.as_deref(), Some("connection reset by peer"));
+        again.finish(None);
+
+        *c.folder_err.borrow_mut() = None;
+        c.folders.borrow_mut().clear();
+        let again = journal.begin(Which::Share, "continue").unwrap();
+        assert!(carry_over(&c, &again, &last, None).is_empty());
+        let it = again.item(0).unwrap();
+        assert_eq!(it.step, Step::Skipped);
+        assert_eq!(
+            it.error.as_deref(),
+            Some("the folder is no longer on the PS5")
+        );
+        again.finish(None);
     }
 }
