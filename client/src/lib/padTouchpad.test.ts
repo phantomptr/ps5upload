@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  DS4_ADAPTER_PID,
   Follower,
+  installPadTouchReceiver,
   applyPadTouchForTest,
   padTouchState,
+  parseDs4Report,
   parseDualSenseReport,
+  parseTouchReport,
   resetPadTouchpadForTest,
   setPadTouchpad,
   touchFromRaw,
@@ -57,6 +61,56 @@ describe("parseDualSenseReport", () => {
   });
 });
 
+/** A DualShock 4 report: USB 0x01 (64 bytes, state at 1) or Bluetooth 0x11 (78, state at 3). */
+function ds4(id: number, click: boolean, f1: number[], f2: number[]): Uint8Array {
+  const [len, off] = id === 0x11 ? [78, 3] : [64, 1];
+  const b = new Uint8Array(len);
+  b[0] = id;
+  b[off + 6] = 0x01 | (click ? 0x02 : 0); // PS held too
+  b.set(f1, off + 34);
+  b.set(f2, off + 38);
+  return b;
+}
+
+describe("parseDs4Report", () => {
+  it("reads the click and the fingers from USB and Bluetooth, in the DualSense's space", () => {
+    for (const id of [0x01, 0x11]) {
+      const r = parseTouchReport(0x09cc, ds4(id, true, finger(true, 3, 1919, 941), finger(true, 4, 960, 470)));
+      expect(r).toEqual({
+        fingers: [
+          { id: 3, x: 1919, y: 1079 },
+          { id: 4, x: 960, y: 539 },
+        ],
+        click: true,
+      });
+      // Back in the console's space: the DualShock 4's own numbers.
+      expect(touchFromRaw([r!.fingers[0]!.x, r!.fingers[0]!.y])).toEqual([1919, 941]);
+    }
+  });
+
+  it("gives a short Bluetooth report's click without a phantom finger", () => {
+    for (const len of [10, 78, 547]) {
+      const b = new Uint8Array(len);
+      b[0] = 0x01;
+      b[7] = 0x02;
+      expect(parseDs4Report(b)).toEqual({ fingers: [null, null], click: true });
+    }
+  });
+
+  it("reads nothing from the adapter with no pad paired", () => {
+    const b = ds4(0x01, true, finger(true, 0, 5, 5), UP);
+    b[31] = 0x04;
+    expect(parseTouchReport(DS4_ADAPTER_PID, b)).toEqual({ fingers: [null, null], click: false });
+    expect(parseTouchReport(0x05c4, b)?.click).toBe(true);
+  });
+
+  it("keeps a DualSense report a DualSense's", () => {
+    expect(parseTouchReport(0x0ce6, usb(true, UP, UP))?.click).toBe(true);
+    expect(parseTouchReport(0x0ce6, ds4(0x11, true, UP, UP))).toBeNull();
+    expect(parseDs4Report(new Uint8Array([0x01, 0, 0]))).toBeNull();
+  });
+});
+
 describe("Follower", () => {
   it("follows the first finger until it lifts, then reports the lift before another", () => {
     const f = new Follower();
@@ -91,6 +145,19 @@ describe("the touchpad state", () => {
     applyPadTouchForTest({ touch: null, click: false });
     expect(sent).toHaveBeenCalledTimes(3);
     expect(padTouchState()).toEqual({ touch: null, click: false });
+  });
+
+  it("takes the Android app's touchpad press", () => {
+    const sent = vi.fn();
+    setPadTouchpad(false, sent);
+    vi.stubGlobal("window", {});
+    installPadTouchReceiver();
+    window.__ps5uPadTouch?.({ click: true });
+    expect(padTouchState()).toEqual({ touch: null, click: true });
+    window.__ps5uPadTouch?.({ click: false });
+    expect(padTouchState().click).toBe(false);
+    expect(sent).toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
   });
 
   it("offers WebHID only in a browser that has it", () => {

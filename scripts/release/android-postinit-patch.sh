@@ -1154,6 +1154,10 @@ members = '''
   private fun setPadsActive(active: Boolean) {
     if (active == padsActive) return
     padsActive = active
+    if (!active && padTouchDown) {
+      padTouchDown = false
+      padWebView?.evaluateJavascript("window.__ps5uPadTouch&&window.__ps5uPadTouch({click:false})", null)
+    }
     // Nothing is tracked while inactive, so what the page holds would go stale.
     if (!active) pads.keys.toList().forEach { padGone(it) }
   }
@@ -1251,7 +1255,34 @@ members = '''
       }
       sendPad(pad)
     }
+    if (padTouchClick(event)) return true
     return super.dispatchGenericMotionEvent(event)
+  }
+
+  // A PlayStation controller's touchpad (DualShock 4, DualSense) is a device of its own on
+  // Android, a touchpad or mouse rather than part of the pad, so its click never comes as a pad
+  // key. While pads are forwarded, its press goes to the page as the touchpad click
+  // (window.__ps5uPadTouch, lib/padTouchpad.ts) and is not also a click or a cursor move on it.
+  private var padTouchDown = false
+
+  private fun padTouchClick(event: android.view.MotionEvent): Boolean {
+    if (!padsActive) return false
+    val device = event.device ?: return false
+    if (device.vendorId != 0x054c || isPad(event.source)) return false
+    val pointer = (event.source and android.view.InputDevice.SOURCE_MOUSE) == android.view.InputDevice.SOURCE_MOUSE ||
+      (event.source and android.view.InputDevice.SOURCE_TOUCHPAD) == android.view.InputDevice.SOURCE_TOUCHPAD
+    if (!pointer) return false
+    val down = (event.buttonState and android.view.MotionEvent.BUTTON_PRIMARY) != 0
+    if (down != padTouchDown) {
+      padTouchDown = down
+      padWebView?.evaluateJavascript("window.__ps5uPadTouch&&window.__ps5uPadTouch({click:$down})", null)
+    }
+    return true
+  }
+
+  override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
+    if (padTouchClick(event)) return true
+    return super.dispatchTouchEvent(event)
   }
 '''
 brace = src.index("{", src.index("class MainActivity"))
