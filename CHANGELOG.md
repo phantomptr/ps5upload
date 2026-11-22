@@ -6,6 +6,30 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**New**
+- **Backup progress, and continue after an interruption (#895).** Both backup cards have a Backup progress button: saves and size done, speed, time left, and each game and user's state on the network share, the PS5 drive and this computer, with Retry for failed ones and Cancel. The backup's state is kept by the app's engine, so after a crash, a disconnect or a closed app the card says where it stopped, with Continue backup to do only what is left. Earlier runs are listed too.
+- **Back up folders on the PS5 too (#899).** "Also back up these folders on the PS5" on both backup cards: pick a folder where an app keeps its saves (a port or an emulator, for example under /data), and it's zipped with every backup, with the same number of versions, kept per PS5, and can be restored to the same place (what is there is kept first). Trophies and play time are not included: they belong to your account and the console's database, and restoring them can break them.
+- **Extract here (#891).** The Extract dialog can unpack straight into the current folder. If something with the same name is already there, it asks once: Keep both, Skip existing or Replace.
+- **Playlist steps from the PS5 or a network share (#900).** "Add from the PS5…" and "Add from a network share…" add payloads stored on the console or on a saved share, so automatic playlists don't need a copy of each payload on the device you connect from.
+- **Picture from a capture device in Play (#893).** On the desktop app, Settings › Picture can take the picture (and, if you like, the sound) from an HDMI capture device while Remote Play keeps handling the controller, keyboard and mouse at a low setting.
+- **Android TV and Google TV (#897).** The Android app installs and shows on a TV's home screen, and can be used with the remote's arrows, OK and Back.
+- **Your own Tailscale server.** SELF_HOSTING.md now explains how to use your own control and relay server with the app's Tailscale support (#901).
+
+**Fixes**
+- **Network share backups no longer fall behind the PS5-drive copy (#896).** A copy to the share was tried only once, so a single dropped connection while a big save was written failed that save for the whole run. Copies are now retried, saves the share missed are tried again later, and the card shows what reached each place and why anything failed.
+- **Workshop: queued games keep their zstd setting (#905).** Games added to the queue while another was being built, or whose image format was changed in "Settings for this game", lost their asset packs. The queue's settings now show and let you change the packs, and each row shows a tag like "zstd 19".
+- **Converting to a package keeps the game's own languages.** A package made from a dump listed every language with Japanese first, so some games came up in Japanese. It now uses the languages the game itself declares.
+- **Clean up never offers Kraken Mount's games (#894).** Package files Kraken Mount mounts, or that sit in the folders it scans, are kept and marked "Used by Kraken Mount"; Clear finished, deleting a package after install and the space planner leave them alone too.
+- **DualShock 4 touchpad press works in Remote Play.** The app's own controller readers only knew the DualSense, so pressing a DS4's touchpad (for example to open a game's menu) never reached the console.
+- **Automatic playlists never load kstuff twice.** A kernel patcher that was already sent since the console started isn't sent again automatically, even when the console can't show that it is running.
+- **Replacing the PS5 helper is safer (#903).** A new helper now waits until the old one has completely stopped, and a stopping helper finishes its system calls before it exits. Every start and stop step is written to a log on the PS5 that survives a crash, and bug reports include it. Automatic helper updates stay off for now.
+- **The Windows app no longer slowly uses up memory** while left open: status checks that never read their reply are now closed (#904, thanks ivmreg).
+- **Docker: `:latest` moves even when a release is promoted right after it's published** (#902, thanks AstroBoot-Dev).
+- **Older Macs and iPhones:** the Playlists screen no longer crashes on systems older than macOS 13 / iOS 16.
+- Many smaller fixes from a review of all of the above. The PS5 helper changes in this release were tried on a console before release.
+
+## 12.6.18
+
 **Fixes**
 - **The PS5 helper is no longer replaced by itself (#903).** Two consoles crashed when the app sent a new helper over a running one by itself, and the cause isn't known yet. Automatic helper updates are switched off until it is. Sending the helper yourself works as before: press Send helper when the app says a newer one is available.
 
@@ -13,7 +37,6 @@ What's new in ps5upload, written for humans.
 
 **Fixes**
 - **Copying files into a running game's temporary folder works (#889).** Some games' add-on guides have you copy folders into the game's temporary folder on the internal drive while the game runs (`/app_temp0/...`). PS5Upload refused that with "console refused the transfer (9)", because that folder was not on the PS5 helper's list of places it may write to. It is now. Not yet tried on a console.
-- **The Docker images' `:latest` moves even when a release is promoted right after it is published (#898).** Promoting a release moves `:latest` and `:<major.minor>` to it, but if the release was promoted before its images had finished building, that step failed and `:latest` stayed on the previous version (12.6.16 stayed on 12.6.15), so `docker compose pull` got nothing new. It now waits for both images first.
 
 ## 12.6.16
 
