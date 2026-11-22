@@ -136,6 +136,7 @@ import { startPs5ToPs5 } from "../api/ava1";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { createQueueLeader } from "../lib/queueLeader";
 import { isJobUnknownError } from "../lib/pollRead";
+import { krakenGuard } from "../lib/krakenGuard";
 
 /** The engine job id currently uploading on each console (bare host key).
  *  runOne records it so stopHost/stop can ask the engine to TRULY cancel the
@@ -1296,7 +1297,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       row.sourceKind === "pkg"
         ? row.deletePkgAfterInstall !== false
         : row.install?.via === "library" && useInstallSettingsStore.getState().autoRemoveAfterInstall;
-    if (stagedByUs && path) {
+    // Never a package Kraken Mount uses: that file is the game (#894).
+    if (stagedByUs && path && !(await krakenGuard(h))(path)) {
       await fsDelete(mgmtAddr(h), path).catch(() => {});
     }
     void pkgLibraryStore(row.addr).getState().refresh(h);
@@ -1996,7 +1998,10 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
               // installer release the file first (it can hold it for a beat
               // after the title registers — the cause of "fs_delete_failed"),
               // then retry a couple of times instead of a single attempt.
-              if (item.deletePkgAfterInstall !== false) {
+              if (
+                item.deletePkgAfterInstall !== false &&
+                !(await krakenGuard(hostOf(item.addr)))(finalDest)
+              ) {
                 await sleep(800);
                 for (let attempt = 0; attempt < 3; attempt++) {
                   try {

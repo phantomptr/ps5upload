@@ -14,8 +14,12 @@
 //! engine is still preparing.
 //!
 //! Errors are `{error, reason}`: `reason` is the helper's token (`busy`, `install_running`,
-//! `unknown_scan`, `scan_expired`, `scan_not_done`, `unknown_apply`, `bad_request`), or
-//! `unsupported` when the helper is older than this feature (501).
+//! `unknown_scan`, `scan_expired`, `scan_not_done`, `unknown_apply`, `bad_request`), `kraken`
+//! when every item asked for is a game Kraken Mount uses (409), or `unsupported` when the helper
+//! is older than this feature (501).
+//!
+//! Kraken Mount's games (#894): the scan's items it uses come back `"kept":"kraken"` with
+//! `action: "none"`, and an apply leaves them out (`ps5upload_core::console_cleanup`).
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -55,7 +59,7 @@ pub(crate) struct CancelBody {
 /// HTTP status for a helper refusal token.
 fn status_for(reason: &str) -> StatusCode {
     match reason {
-        "busy" | "install_running" | "scan_not_done" => StatusCode::CONFLICT,
+        "busy" | "install_running" | "scan_not_done" | "kraken" => StatusCode::CONFLICT,
         "unknown_scan" | "unknown_apply" => StatusCode::NOT_FOUND,
         "scan_expired" => StatusCode::GONE,
         "bad_request" => StatusCode::BAD_REQUEST,
@@ -117,7 +121,7 @@ pub(crate) async fn scan_status(
     Query(q): Query<AddrQuery>,
 ) -> Response {
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
-    run(move || cc::scan_status(&addr, id)).await
+    run(move || cc::scan_status_marked(&addr, id)).await
 }
 
 pub(crate) async fn apply(
@@ -153,7 +157,7 @@ pub(crate) async fn apply(
         req.item_ids.len()
     );
     let ids = req.item_ids;
-    run(move || cc::apply_start(&addr, id, &ids)).await
+    run(move || cc::apply_start_guarded(&addr, id, &ids)).await
 }
 
 pub(crate) async fn apply_status(
@@ -182,6 +186,7 @@ mod tests {
     fn refusals_map_to_http_statuses() {
         assert_eq!(status_for("busy"), StatusCode::CONFLICT);
         assert_eq!(status_for("install_running"), StatusCode::CONFLICT);
+        assert_eq!(status_for("kraken"), StatusCode::CONFLICT);
         assert_eq!(status_for("unknown_scan"), StatusCode::NOT_FOUND);
         assert_eq!(status_for("scan_expired"), StatusCode::GONE);
         assert_eq!(status_for("unsupported"), StatusCode::NOT_IMPLEMENTED);

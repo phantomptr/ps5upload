@@ -8,6 +8,19 @@ import { formatBytes } from "./format";
 
 export type CleanupT = (key: string, vars?: Record<string, string | number>) => string;
 
+/** Kraken Mount's wording (#894) is not among the console page's `cw_*` keys yet: there `t` answers
+ *  the key itself, so the English text stands in. */
+const KRAKEN_EN: Record<string, string> = {
+  cleanup_kept_kraken: "Used by Kraken Mount, kept",
+  cleanup_reason_kraken: "used by Kraken Mount",
+  cleanup_err_kraken: "Nothing was removed: Kraken Mount uses everything you picked, and deleting it would remove the game.",
+};
+
+function krakenText(t: CleanupT, key: keyof typeof KRAKEN_EN & string): string {
+  const s = t(key);
+  return s && s !== key ? s : KRAKEN_EN[key];
+}
+
 export function driveName(t: CleanupT, drive: string): string {
   const d = driveParts(drive);
   if (d.kind === "internal") return t("cw_cleanup_drive_internal");
@@ -101,7 +114,8 @@ export function stateText(t: CleanupT, item: CleanupItem): string {
 
 /** The details under an item's name: why it is listed, versions, where the game is. */
 export function itemDetails(t: CleanupT, item: CleanupItem): string {
-  const bits: string[] = [stateText(t, item)];
+  const bits: string[] = item.kept === "kraken" ? [krakenText(t, "cleanup_kept_kraken")] : [];
+  bits.push(stateText(t, item));
   if (item.version) bits.push(t("cw_cleanup_version", { version: item.version }));
   if (item.installed_version && item.cat === "C")
     bits.push(t("cw_cleanup_installed_version", { version: item.installed_version }));
@@ -136,6 +150,8 @@ export function reasonText(t: CleanupT, reason: string, code?: string): string {
       return t("cw_cleanup_reason_delete_failed", { code: code ?? "" });
     case "not_supported":
       return t("cw_cleanup_reason_not_supported");
+    case "kraken":
+      return krakenText(t, "cleanup_reason_kraken");
     default:
       return t("cw_cleanup_reason_not_allowed");
   }
@@ -172,6 +188,8 @@ export function refusalText(t: CleanupT, reason: string): string | null {
       return t("cw_cleanup_err_busy");
     case "install_running":
       return t("cw_cleanup_err_install_running");
+    case "kraken":
+      return krakenText(t, "cleanup_err_kraken");
     case "scan_expired":
       return t("cw_cleanup_err_expired");
     case "unknown_scan":

@@ -4671,6 +4671,10 @@
           "dest": {
             "type": "string"
           },
+          "list": {
+            "description": "Only list the archive's top-level names (nothing is written): \"Extract here\" compares\nthem with the folder before it starts (#891).",
+            "type": "boolean"
+          },
           "merge": {
             "type": "boolean"
           },
@@ -4689,11 +4693,35 @@
           },
           "replace": {
             "type": "boolean"
+          },
+          "top": {
+            "description": "Top-level entries to rename (`to`) or leave out (`to` empty or absent) while extracting.",
+            "items": {
+              "$ref": "#/components/schemas/FsExtractTop"
+            },
+            "type": "array"
           }
         },
         "required": [
           "path",
           "dest"
+        ],
+        "type": "object"
+      },
+      "FsExtractTop": {
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "from"
         ],
         "type": "object"
       },
@@ -34449,7 +34477,7 @@
     },
     "/api/ps5/fs/extract": {
       "post": {
-        "description": "POST /api/ps5/fs/extract `{addr, path, dest, password?, merge?, replace?, op_id}` — extract an\narchive on the console into `dest` there (the helper's extractor payload does the decoding).\nProgress and cancel go through `op-status`/`op-cancel` with the same `op_id`. 200 `{ok, path,\nfiles, dirs, bytes, skipped, unsafe, links}`; 409 when cancelled; 502 with the helper's cause\notherwise (`fs_extract_password_required`, `fs_extract_no_space: ...`, ...). The password is\nnever logged.",
+        "description": "POST /api/ps5/fs/extract `{addr, path, dest, password?, merge?, replace?, list?, top?, op_id}`\n— extract an archive on the console into `dest` there (the helper's extractor payload does the\ndecoding). Progress and cancel go through `op-status`/`op-cancel` with the same `op_id`. 200\n`{ok, path, files, dirs, bytes, skipped, unsafe, links}`; 409 when cancelled; 502 with the\nhelper's cause otherwise (`fs_extract_password_required`, `fs_extract_no_space: ...`, ...).\nThe password is never logged.\n\n\"Extract here\" (#891): `list: true` only reads the archive's top-level names and answers\n`{ok, path, listed: true, top: [names], top_dirs: [the folders among them], top_more}` (`dest` is the folder, `merge` false: a\nhelper older than this refuses that folder rather than extract, and `listed` stays absent).\n`top: [{from, to}]` then renames those top-level entries while extracting with `merge`, or\nleaves them out when `to` is empty.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -34465,19 +34493,48 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "properties": {
-                    "bytes": {},
-                    "dirs": {},
-                    "files": {},
-                    "links": {},
-                    "ok": {
-                      "type": "boolean"
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "listed": {
+                          "type": "boolean"
+                        },
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "path": {},
+                        "top": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "top_dirs": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "top_more": {}
+                      },
+                      "type": "object"
                     },
-                    "path": {},
-                    "skipped": {},
-                    "unsafe": {}
-                  },
-                  "type": "object"
+                    {
+                      "properties": {
+                        "bytes": {},
+                        "dirs": {},
+                        "files": {},
+                        "links": {},
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "path": {},
+                        "skipped": {},
+                        "unsafe": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
                 }
               }
             },
@@ -34513,6 +34570,10 @@
               }
             },
             "description": "Conflict"
+          },
+          "501": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not implemented"
           },
           "502": {
             "$ref": "#/components/responses/Error",

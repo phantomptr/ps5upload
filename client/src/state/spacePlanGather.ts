@@ -17,6 +17,8 @@ export interface GatherDeps {
   inventory: (titleId: string) => Promise<InstalledPkgArtifact[]>;
   /** A folder's recursive size, null when it could not be read in full. */
   folderBytes: (path: string) => Promise<number | null>;
+  /** What Kraken Mount uses on the console (#894); left out = nothing is checked. */
+  krakenKeeps?: () => Promise<(path: string, isDir?: boolean) => boolean>;
 }
 
 export interface GatherInput {
@@ -69,7 +71,11 @@ export async function gatherSpacePlan(
   }
 
   onPhase("games");
-  const [library, installed] = await Promise.all([deps.library(), deps.installed()]);
+  const [library, installed, keeps] = await Promise.all([
+    deps.library(),
+    deps.installed(),
+    deps.krakenKeeps ? deps.krakenKeeps() : Promise.resolve(undefined),
+  ]);
   const inUsePaths = new Set<string>();
   const imageNames = new Set<string>();
   for (const t of installed) {
@@ -114,6 +120,7 @@ export async function gatherSpacePlan(
       collectionIds: input.collectionIds,
       running: input.running,
       lastPlayed: input.lastPlayed,
+      ...(keeps ? { krakenKeeps: (p: string, isDir: boolean) => keeps(p, isDir) } : {}),
     });
 
   // Measure only the folders that could move: a folder's own entry says 0 bytes.

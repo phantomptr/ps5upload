@@ -62,6 +62,7 @@ import {
   usePkgStorageStore,
 } from "../lib/pkgStorage";
 import { transferScreenBusy } from "../lib/ps5Transfers";
+import { krakenGuard } from "../lib/krakenGuard";
 import { useInstallSettingsStore } from "./installSettings";
 import { useConnectionStore } from "./connection";
 import { log } from "./logs";
@@ -1874,7 +1875,10 @@ export async function finalizePkgInstallSuccess(args: {
   // fs_delete_failed" toast), then a retrying delete; if it STILL fails,
   // we log and drop the row anyway rather than alarm the user mid-success
   // (the leftover is harmless staging that "Clear finished" sweeps).
-  if (autoRemove) {
+  if (autoRemove && (await krakenGuard(host))(path)) {
+    // A package Kraken Mount uses is the game itself (#894): kept, whatever Auto Delete says.
+    log.info("install", `kept after install, Kraken Mount uses it: ${path}`);
+  } else if (autoRemove) {
     log.info("install", `auto-deleting staged pkg after install: ${path}`);
     await sleep(800);
     try {
@@ -2446,7 +2450,7 @@ export async function runPkgInstall(
       // `finalize`). We staged this copy, so its cleanup is ours, and only
       // after a CONFIRMED install. Best-effort: a failed delete must never turn
       // a successful install into an error.
-      if (deleteStaging) {
+      if (deleteStaging && !(await krakenGuard(host))(localPs5Path)) {
         await fsDelete(mgmtAddr(host), localPs5Path).catch(() => {});
       }
     } else if (result.unverified) {
@@ -4477,8 +4481,22 @@ async function bulkDelete(
   pred: (e: PkgEntry) => boolean,
 ): Promise<void> {
   if (!host?.trim()) return;
+  // Never a package Kraken Mount mounts, or one in a folder it scans: that file IS the game (#894).
+  const keeps = await krakenGuard(host);
   const prev = get().entries;
-  const targets = prev.filter(pred);
+  const kept = prev.filter((e) => pred(e) && keeps(e.path));
+  const targets = prev.filter((e) => pred(e) && !keeps(e.path));
+  if (kept.length > 0) {
+    log.info("pkg", `bulk delete kept ${kept.length} package(s) Kraken Mount uses`);
+    pushNotification(
+      "info",
+      tx(
+        "pkg.kept_kraken",
+        { n: kept.length },
+        "{n} package(s) were kept: Kraken Mount uses them, so deleting them would remove the game.",
+      ),
+    );
+  }
   if (targets.length === 0) return;
   const targetPaths = new Set(targets.map((e) => e.path));
   // Optimistic: drop all targets up front.

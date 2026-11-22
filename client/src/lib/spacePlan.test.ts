@@ -322,6 +322,21 @@ describe("buildCandidates", () => {
     expect(c[0].bytes).toBe(6 * GB);
   });
 
+  it("never offers what Kraken Mount uses: its packages and game folders are the games (#894)", () => {
+    const c = buildCandidates(
+      base({
+        leftovers: [item(1, { path: "/data/homebrew/1.pkg" }), item(2, { kept: "kraken" }), item(3)],
+        library: [
+          { kind: "game", name: "Mounted", path: "/data/homebrew/PPSA01234", volume: "/data", size: 0 },
+          { kind: "game", name: "Mine", path: "/data/games/PPSA05555", volume: "/data", size: 0 },
+        ],
+        folderBytes: { "/data/homebrew/PPSA01234": 10 * GB, "/data/games/PPSA05555": 10 * GB },
+        krakenKeeps: (p) => p.startsWith("/data/homebrew/"),
+      }),
+    );
+    expect(c.map((x) => x.id).sort()).toEqual(["leftover:3", "move:/data/games/PPSA05555"]);
+  });
+
   it("offers to move Library games on this drive that nothing runs from", () => {
     const c = buildCandidates(
       base({

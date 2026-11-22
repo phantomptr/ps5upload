@@ -754,6 +754,19 @@ static int ExtractOpened(xjob_t *j, IInArchive *arc, const CArcInfo *info, CPass
     if (!GetStr(arc, 0, kpidPath, inner) || inner.IsEmpty()) DefaultItemName(j->archive, inner);
     if (IsTarName(inner, j->archive)) return ExtractTarIn(j, arc, pw);
   }
+  if (j->list) {
+    // Names only: the items' headers, nothing decoded (a solid archive would decode everything).
+    UInt32 n = 0;
+    if (arc->GetNumberOfItems(&n) != S_OK) return xj_fail(j, "fs_extract_corrupt: items");
+    j->files_total = n;
+    for (UInt32 i = 0; i < n; i++) {
+      AString name;
+      if (!GetStr(arc, i, kpidPath, name) || name.IsEmpty()) DefaultItemName(j->archive, name);
+      xentry_t e;
+      if (xs_begin(j, &e, name.Ptr(), ItemKind(arc, i), 0, -1) == XS_FAIL) return -1;
+    }
+    return 0;
+  }
   // A stream format's one item has no reliable size (gzip keeps it modulo 4 GiB): checked per write.
   bool anyEncrypted = false;
   if (Prepare(j, arc, !stream, &anyEncrypted) != 0) return -1;

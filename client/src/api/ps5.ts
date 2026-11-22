@@ -1513,6 +1513,18 @@ export interface FsExtractOptions {
   password?: string;
   merge?: boolean;
   replace?: boolean;
+  /** Top-level entries of the archive put under another name (`to`), or left out (`to` empty):
+   *  "Extract here" with Keep both or Skip existing (#891). */
+  top?: { from: string; to: string }[];
+}
+
+/** An archive's top-level names, read on the console without extracting anything. */
+export interface ExtractListing {
+  top: string[];
+  /** Those of `top` that are folders. */
+  dirs: string[];
+  /** More names than the console could report (the rest are not known). */
+  more: boolean;
 }
 
 /** Extract an archive on the console (.zip, .7z, .rar, tar.*, the first volume of a split one)
@@ -1530,8 +1542,29 @@ export async function fsExtract(
   if (opts.password) body.password = opts.password;
   if (opts.merge) body.merge = true;
   if (opts.replace) body.replace = true;
+  if (opts.top && opts.top.length > 0) body.top = opts.top;
   // Thousands of files take far longer than a minute (#712): followed to the end, not timed out.
   return toExtractResult(await fsLongOp("/api/ps5/fs/extract", body));
+}
+
+/** The top-level names of an archive on the console (`dir` is the folder it would be extracted
+ *  into, which must exist): "Extract here" compares them with that folder before it starts. A
+ *  helper or engine older than this throws (`fs_extract_list_unsupported`, or the folder refused
+ *  as `fs_extract_destination_exists`) and never extracts. */
+export async function fsExtractList(
+  transferAddr: string,
+  path: string,
+  dir: string,
+  opts: { password?: string } = {},
+): Promise<ExtractListing> {
+  const opId = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
+  const body: Record<string, unknown> = { addr: toMgmtAddr(transferAddr), path, dest: dir, list: true, op_id: opId };
+  if (opts.password) body.password = opts.password;
+  const r = await fsLongOp("/api/ps5/fs/extract", body);
+  if (r.listed !== true) throw new Error("fs_extract_list_unsupported");
+  const names = (v: unknown) =>
+    Array.isArray(v) ? v.filter((n): n is string => typeof n === "string" && n !== "") : [];
+  return { top: names(r.top), dirs: names(r.top_dirs), more: r.top_more === true };
 }
 
 export interface FsDirEntry {
