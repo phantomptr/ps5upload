@@ -1399,6 +1399,12 @@ pub(crate) fn share_pass(p: &SharePass, run: RunRef<'_>, work: Work) -> ShareOut
     let mut missing: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for i in 0..run.count() {
         let Some(it) = run.item(i) else { continue };
+        // A console folder has no game to wait for: it is looked at again in every pass (its
+        // record says it is not backed up), so it never goes on the after-close retry list,
+        // where it went as a game with no title.
+        if it.kind == "folder" {
+            continue;
+        }
         let on_share = it
             .dests
             .get(&Place::Share)
