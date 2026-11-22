@@ -3016,16 +3016,36 @@ struct FsExtractReq {
     merge: bool,
     #[serde(default)]
     replace: bool,
+    /// Only list the archive's top-level names (nothing is written): "Extract here" compares
+    /// them with the folder before it starts (#891).
+    #[serde(default)]
+    list: bool,
+    /// Top-level entries to rename (`to`) or leave out (`to` empty or absent) while extracting.
+    #[serde(default)]
+    top: Vec<FsExtractTop>,
     #[serde(default)]
     op_id: u64,
 }
 
-/// POST /api/ps5/fs/extract `{addr, path, dest, password?, merge?, replace?, op_id}` — extract an
-/// archive on the console into `dest` there (the helper's extractor payload does the decoding).
-/// Progress and cancel go through `op-status`/`op-cancel` with the same `op_id`. 200 `{ok, path,
-/// files, dirs, bytes, skipped, unsafe, links}`; 409 when cancelled; 502 with the helper's cause
-/// otherwise (`fs_extract_password_required`, `fs_extract_no_space: ...`, ...). The password is
-/// never logged.
+#[derive(Deserialize)]
+struct FsExtractTop {
+    from: String,
+    #[serde(default)]
+    to: Option<String>,
+}
+
+/// POST /api/ps5/fs/extract `{addr, path, dest, password?, merge?, replace?, list?, top?, op_id}`
+/// — extract an archive on the console into `dest` there (the helper's extractor payload does the
+/// decoding). Progress and cancel go through `op-status`/`op-cancel` with the same `op_id`. 200
+/// `{ok, path, files, dirs, bytes, skipped, unsafe, links}`; 409 when cancelled; 502 with the
+/// helper's cause otherwise (`fs_extract_password_required`, `fs_extract_no_space: ...`, ...).
+/// The password is never logged.
+///
+/// "Extract here" (#891): `list: true` only reads the archive's top-level names and answers
+/// `{ok, path, listed: true, top: [names], top_dirs: [the folders among them], top_more}` (`dest` is the folder, `merge` false: a
+/// helper older than this refuses that folder rather than extract, and `listed` stays absent).
+/// `top: [{from, to}]` then renames those top-level entries while extracting with `merge`, or
+/// leaves them out when `to` is empty.
 async fn ps5_fs_extract(
     State(_state): State<AppState>,
     Json(req): Json<FsExtractReq>,
@@ -3039,22 +3059,37 @@ async fn ps5_fs_extract(
         return helper_stop::stopping_refusal();
     };
     let op_id = req.op_id;
+    let pairs: Vec<(String, String)> = req
+        .top
+        .into_iter()
+        .map(|t| (t.from, t.to.unwrap_or_default()))
+        .collect();
+    let top = match ps5upload_core::fs_ops::encode_top_renames(&pairs) {
+        Ok(t) => t,
+        Err(e) => return json_err(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
+    };
+    let list = req.list;
     let x = ps5upload_core::fs_ops::ExtractRequest {
         path: req.path,
         dest: req.dest,
         password: req.password.filter(|p| !p.is_empty()),
-        merge: req.merge,
-        replace: req.replace,
+        // A listing goes without merge: an older helper then refuses the folder that is there.
+        merge: req.merge && !list,
+        replace: req.replace && !list,
+        list,
+        top: if list { None } else { top },
     };
     let started = std::time::Instant::now();
     crate::log_at!(
         Info,
         "files",
-        "fs_extract: addr={addr} path={} dest={} merge={} replace={} password={} op_id={op_id}",
+        "fs_extract: addr={addr} path={} dest={} merge={} replace={} list={} renames={} password={} op_id={op_id}",
         x.path,
         x.dest,
         x.merge,
         x.replace,
+        x.list,
+        pairs.len(),
         x.password.is_some()
     );
     let path_for_log = x.path.clone();
@@ -3069,8 +3104,24 @@ async fn ps5_fs_extract(
     .map_err(anyhow::Error::from)
     .and_then(|r| r)
     {
+        Ok(done) if list => {
+            if !done.listed {
+                // An older helper did not list (it refuses the folder that is there instead).
+                return json_err(StatusCode::NOT_IMPLEMENTED, "fs_extract_list_unsupported")
+                    .into_response();
+            }
+            Json(serde_json::json!({
+                "ok": true,
+                "path": done.path,
+                "listed": true,
+                "top": done.top_names(),
+                "top_dirs": done.top_dir_names(),
+                "top_more": done.top_more,
+            }))
+            .into_response()
+        }
         Ok(done) => {
-            crate::log_at!(Info, "files", 
+            crate::log_at!(Info, "files",
                 "fs_extract ok: {path_for_log} -> {} ({} files, {} bytes, {} skipped, {} unsafe, {} links) in {} ms",
                 done.path,
                 done.files,

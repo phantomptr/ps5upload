@@ -2244,6 +2244,7 @@ export default function FileSystemScreen() {
         password: choice.password || undefined,
         merge: choice.merge,
         replace: choice.replace,
+        top: choice.top,
       });
       task.done();
       // Another folder than the archive's: offer it again next time, under Recent.
@@ -2276,7 +2277,8 @@ export default function FileSystemScreen() {
       }
       if (deleted) extra.push(tr("fs_extract_deleted", undefined, "The archive was deleted."));
       // What came out decides the next step: packages to install, or a game folder to register.
-      const next = await extractedNext(addr, into);
+      // Not for Extract here: the folder held other things before.
+      const next = choice.here ? { packages: 0, game: false } : await extractedNext(addr, into);
       if (next.packages > 0)
         extra.push(
           tr("fs_extract_next_pkgs_v2", { n: next.packages }, `It holds ${next.packages} package(s): install them from Upload & Install, or from their row here.`),
