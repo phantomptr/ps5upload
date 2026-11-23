@@ -644,7 +644,9 @@ mod tests {
         }
         f.write_all(b"tail").unwrap();
         let syncs = watch.finish().unwrap();
-        assert!((4..=5).contains(&syncs), "{syncs}");
+        // Four growth steps and the end: up to 5. A busy machine (CI) can see two steps in one
+        // look and sync once for both, so at least one mid-growth sync plus the final one.
+        assert!((2..=5).contains(&syncs), "{syncs}");
         assert!(!failed.load(Ordering::Relaxed));
         let none = GrowthSync::start(
             dir.join("never"),

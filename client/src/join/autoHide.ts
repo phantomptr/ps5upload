@@ -119,3 +119,66 @@ export function useAutoHide(
   const toggle = useCallback(() => ctl.current?.toggle(), []);
   return { shown: !enabled || pinned || shown, poke, hide, toggle };
 }
+
+/** How long "pick a user on the TV" holds the buttons (or its note) over the picture. */
+export const PICK_HINT_MS = 30_000;
+
+/**
+ * Whether the "pick a user on the TV" hint still holds the screen: on while picking, for
+ * PICK_HINT_MS. The engine learns of a pick only from PS then ✕, so a pick made another way
+ * leaves picking on; after this the hint goes like the other buttons (#916). A new picking
+ * spell starts the time again.
+ */
+export class PickHint {
+  private picking = false;
+  private over = false;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(
+    private readonly onChange: () => void,
+    private readonly ms = PICK_HINT_MS,
+  ) {}
+
+  get shown(): boolean {
+    return this.picking && !this.over;
+  }
+
+  set(picking: boolean): void {
+    if (picking === this.picking) return;
+    this.picking = picking;
+    this.over = false;
+    this.stop();
+    if (picking) {
+      this.timer = setTimeout(() => {
+        this.timer = null;
+        this.over = true;
+        this.onChange();
+      }, this.ms);
+    }
+  }
+
+  stop(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+  }
+
+  /** Back to not picking, so the next `set(true)` arms the timer again. */
+  reset(): void {
+    this.stop();
+    this.picking = false;
+    this.over = false;
+  }
+}
+
+export function usePickHint(picking: boolean): boolean {
+  const [, bump] = useState(0);
+  const [hint] = useState(() => new PickHint(() => bump((n) => n + 1)));
+  // In an effect, so React's development double run (cleanup, then the effect again) re-arms
+  // the timer instead of leaving it cleared.
+  useEffect(() => {
+    hint.set(picking);
+    bump((n) => n + 1);
+  }, [hint, picking]);
+  useEffect(() => () => hint.reset(), [hint]);
+  return hint.shown;
+}

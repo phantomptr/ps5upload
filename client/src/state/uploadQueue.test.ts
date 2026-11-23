@@ -1754,6 +1754,21 @@ describe("install items", () => {
     expect((await q.done).ok).toBe(true);
   });
 
+  it("Stream & install on a package already waiting from Add to queue starts it", async () => {
+    useUploadSettingsStore.setState({ queueAutoStart: true });
+    const s = useUploadQueueStore.getState();
+    const req = { via: "stream" as const, source: "/twice.fpkg" };
+    const first = s.enqueueInstall({ host, request: req, displayName: "T", start: false });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(calls).toEqual([]);
+    const again = useUploadQueueStore.getState().enqueueInstall({ host, request: req, displayName: "T" });
+    expect(again.id).toBe(first.id);
+    await slowWaitFor(() => calls.length === 1);
+    gate.get("/twice.fpkg")!({ ok: true });
+    expect((await again.done).ok).toBe(true);
+    expect((await first.done).ok).toBe(true);
+  });
+
   it("with auto-start off nothing runs until Start, then everything runs in order (#536)", async () => {
     useUploadSettingsStore.setState({ queueAutoStart: false });
     const order = recordOrder();

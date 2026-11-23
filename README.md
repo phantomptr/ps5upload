@@ -674,8 +674,8 @@ Thank you to everyone who has supported PS5Upload. Every coffee keeps it going. 
 the website list you too, under Thanks & Support.)
 
 <!-- supporters:start (scripts/supporters.mjs) -->
-BigPapii420 · clincher · Heng · Ice · Marv530e · mikekay1 · San · Dennis · gabuscus · Slappula · b1ackcoffee · Bud · DM · drsam · f0d · GorFMan · Joe Szymkowicz · John Malpas · Khairul Hazziq Zufar Che Zulkifly · kheops · LEO · Lucky · MagneTo · Peejay571 · PS5FOREVA · Ronnie K. · Mohd Rahimi Samsuddin · B3aver08 · Beetle · David Rabilero · Florian · Gr33k420 · hernanr1993 · JB · Joey Lam · kuttenkop de kutjelikker · Mehmet · Niko · Ry · StrijderNL · thanks · TOPMUSICMAN8 · Ferko · GerardoPTC · AciDFliX · Angry Cj · Griffdaddy · K3n1ch1V · here · Marc · Mayankk! · Pedro Madureira · reo · Rubén · Snowcone Wizard · Turcan Vadim · Zeiko
+Sponge Bob · BigPapii420 · clincher · Heng · Ice · Marv530e · mikekay1 · San · Dennis · gabuscus · Slappula · b1ackcoffee · Bud · DM · drsam · f0d · GorFMan · Joe Szymkowicz · John Malpas · Khairul Hazziq Zufar Che Zulkifly · kheops · LEO · Lucky · MagneTo · Peejay571 · PS5FOREVA · Ronnie K. · Mohd Rahimi Samsuddin · B3aver08 · Beetle · David Rabilero · Florian · Gr33k420 · hernanr1993 · JB · Joey Lam · kuttenkop de kutjelikker · Mehmet · Niko · Ry · StrijderNL · thanks · TOPMUSICMAN8 · Ferko · GerardoPTC · AciDFliX · Angry Cj · Griffdaddy · K3n1ch1V · here · Kornakkel · Marc · Mayankk! · Pedro Madureira · reo · Rubén · Snowcone Wizard · Turcan Vadim · Zeiko
 
-…and 9 anonymous supporters. Thank you all! 💛
+…and 11 anonymous supporters. Thank you all! 💛
 
 <!-- supporters:end -->

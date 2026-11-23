@@ -11,7 +11,7 @@ import { EightBitDoHint } from "../screens/Play/PadHint";
 import { TouchControls } from "../screens/Play/TouchControls";
 import { useTr } from "../state/lang";
 import { devicePad, useJoinSession, type JoinSession } from "./session";
-import { useAutoHide } from "./autoHide";
+import { useAutoHide, usePickHint } from "./autoHide";
 import { PadCheck } from "./PadCheck";
 import { OpenOnWifi } from "./OpenOnWifi";
 import type { NetPath } from "./netPath";
@@ -301,7 +301,10 @@ export function JoinView({
   // Picking a user on the TV holds the buttons up for a mouse. On touch they're a card in the
   // middle of the picture, right over the console's user menu (#649), so they stay away and a
   // small note at the top says what to do.
-  const chrome = useAutoHide(autoHide, reconnecting || (picking && !touch) || barHover || barFocus, touch);
+  // Only for a while (#916): when the console never tells us the pick happened (a pick made
+  // some other way than PS then ✕), the hint would otherwise sit over the game for good.
+  const pickHint = usePickHint(picking);
+  const chrome = useAutoHide(autoHide, reconnecting || (pickHint && !touch) || barHover || barFocus, touch);
   const { poke } = chrome;
   const hold = useRef<{ id: number; x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const endHold = () => {
@@ -798,7 +801,7 @@ export function JoinView({
           </p>
         )}
 
-        {picking && !onSeat && touch && !chrome.shown && !reconnecting && (
+        {pickHint && !onSeat && touch && !chrome.shown && !reconnecting && (
           <p
             className="pointer-events-none absolute left-1/2 top-2 z-20 -translate-x-1/2 whitespace-nowrap rounded-full bg-white/90 px-2.5 py-1 text-xs font-medium text-black"
             data-testid="join-picking-note"
