@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.25
 
 **Downloads from your servers**
 - **An FTP download that drops mid-file picks up where it stopped.** If the connection to the server was cut partway through a file, the copy failed with "ended early on the server" (or a stream to the PS5 failed with "short remote read") instead of carrying on. It now signs in again and continues from that byte.
