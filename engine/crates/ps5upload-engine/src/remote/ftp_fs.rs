@@ -849,6 +849,10 @@ impl RemoteFile for FtpFile {
             if !matches!(tokio::time::timeout(STEP, stream.finish()).await, Ok(Ok(_))) {
                 return Ok(out);
             }
+        } else if (got as u64) < len {
+            // The data connection ended before the file did (dropped by the server or a router):
+            // it has nothing more to give, so the next read starts a fresh transfer from `at`.
+            return Ok(out);
         } else {
             s.open = Some((stream, self.path.clone(), at));
         }
@@ -1610,6 +1614,103 @@ mod tests {
         fs.list(GLOB_DIR, None).await.unwrap();
         assert_eq!(fs.counters().0, sign_ins);
         drop(held);
+    }
+
+    /// A server whose first RETR sends only the first `cut` bytes of `body` and closes the data
+    /// connection (a NAS or router dropping it mid-file); every later RETR (with REST) is whole.
+    async fn dropping_server(body: &'static [u8], cut: usize) -> u16 {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let ctl = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = ctl.local_addr().unwrap().port();
+        let retrs = Arc::new(AtomicUsize::new(0));
+        tokio::spawn(async move {
+            while let Ok((sock, _)) = ctl.accept().await {
+                let retrs = Arc::clone(&retrs);
+                tokio::spawn(async move {
+                    let (rd, mut wr) = sock.into_split();
+                    let mut rd = BufReader::new(rd);
+                    let mut data: Option<tokio::net::TcpListener> = None;
+                    let mut rest = 0usize;
+                    wr.write_all(b"220 ready\r\n").await.ok();
+                    let mut line = String::new();
+                    while matches!(rd.read_line(&mut line).await, Ok(n) if n > 0) {
+                        let l = line.trim_end_matches(['\r', '\n']).to_string();
+                        line.clear();
+                        let (cmd, arg) = l.split_once(' ').unwrap_or((l.as_str(), ""));
+                        let reply = match cmd.to_ascii_uppercase().as_str() {
+                            "USER" => "331 Password required".to_string(),
+                            "PASS" => "230 OK".into(),
+                            "TYPE" => "200 OK".into(),
+                            "PWD" => "257 \"/\" is the current folder".into(),
+                            "SIZE" => format!("213 {}", body.len()),
+                            "REST" => {
+                                rest = arg.parse().unwrap();
+                                "350 Restarting".into()
+                            }
+                            "PASV" => {
+                                let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                                let p = l.local_addr().unwrap().port();
+                                data = Some(l);
+                                format!(
+                                    "227 Entering Passive Mode (127,0,0,1,{},{})",
+                                    p / 256,
+                                    p % 256
+                                )
+                            }
+                            "RETR" => {
+                                let Some(l) = data.take() else {
+                                    wr.write_all(b"425 No data connection\r\n").await.ok();
+                                    continue;
+                                };
+                                wr.write_all(b"150 Opening data connection\r\n").await.ok();
+                                let (mut d, _) = l.accept().await.unwrap();
+                                let first = retrs.fetch_add(1, Ordering::SeqCst) == 0;
+                                let end = if first { cut } else { body.len() };
+                                d.write_all(&body[rest.min(end)..end]).await.ok();
+                                drop(d);
+                                rest = 0;
+                                if first {
+                                    "426 Connection closed; transfer aborted".into()
+                                } else {
+                                    "226 Transfer complete".into()
+                                }
+                            }
+                            "QUIT" => {
+                                wr.write_all(b"221 Goodbye\r\n").await.ok();
+                                break;
+                            }
+                            _ => "500 Unknown command".into(),
+                        };
+                        wr.write_all(format!("{reply}\r\n").as_bytes()).await.ok();
+                    }
+                });
+            }
+        });
+        port
+    }
+
+    /// A data connection the server dropped part way gave a short read, and was then kept to
+    /// read on from: every later read of the file came back empty, and a copy failed with the
+    /// file "ended early" where a fresh transfer from that byte would have finished it.
+    #[tokio::test]
+    async fn a_transfer_cut_short_is_not_read_on_from() {
+        static BODY: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+        let port = dropping_server(BODY, 10).await;
+        let mut conn = crate::remote::store::conn("t", crate::remote::store::Protocol::Ftp);
+        conn.host = "127.0.0.1".into();
+        conn.port = port;
+        conn.user = "t".into();
+        let secret = Secret::Password {
+            password: "t".into(),
+        };
+        let fs = FtpFs::connect(&conn, &secret, false).await.unwrap();
+        let f = fs.open("/f.bin").await.unwrap();
+        assert_eq!(f.size(), BODY.len() as u64);
+        let first = f.read_at(0, BODY.len() as u64).await.unwrap();
+        assert_eq!(first, &BODY[..10]);
+        let rest = f.read_at(10, BODY.len() as u64 - 10).await.unwrap();
+        assert_eq!(rest, &BODY[10..], "the rest of the file came back empty");
     }
 
     /// The same against a real Pure-FTPd: in `<dir>`, make the report's folder
