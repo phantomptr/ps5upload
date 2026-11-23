@@ -4,6 +4,15 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+**Play Together**
+- **"Press PS, then pick Quick Play on the TV" no longer stays over a friend's game (#916).** The app only learns that a friend picked a user when it sees PS and then ✕, so a pick made any other way left that hint, and the buttons with it, on top of the picture in full screen for the whole session. It now holds the screen for 30 seconds at most, then hides like the other buttons.
+
+**Other**
+- **Thank you** to Sponge Bob, Kornakkel and two anonymous supporters, now on the Thanks & Support page.
+- Two Remote Play messages no longer name another app.
+
 ## 12.6.23
 
 **Uploads**

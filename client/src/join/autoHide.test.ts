@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AutoHide, HIDE_AFTER_MS } from "./autoHide";
+import { AutoHide, HIDE_AFTER_MS, PICK_HINT_MS, PickHint } from "./autoHide";
 
 describe("AutoHide", () => {
   beforeEach(() => vi.useFakeTimers());
@@ -123,5 +123,48 @@ describe("AutoHide on touch: a pin let go", () => {
     a.set(true, true, true);
     a.set(true, false, true);
     expect(a.visible).toBe(true);
+  });
+});
+
+describe("PickHint (#916)", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("holds the screen while picking, then lets go after a while", () => {
+    let changes = 0;
+    const h = new PickHint(() => changes++);
+    expect(h.shown).toBe(false);
+    h.set(true);
+    expect(h.shown).toBe(true);
+    vi.advanceTimersByTime(PICK_HINT_MS - 1);
+    expect(h.shown).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(h.shown).toBe(false);
+    expect(changes).toBe(1);
+    // Still picking: stays gone.
+    h.set(true);
+    expect(h.shown).toBe(false);
+  });
+
+  it("a new picking spell starts the time again", () => {
+    const h = new PickHint(() => {});
+    h.set(true);
+    vi.advanceTimersByTime(PICK_HINT_MS);
+    h.set(false);
+    expect(h.shown).toBe(false);
+    h.set(true);
+    expect(h.shown).toBe(true);
+    vi.advanceTimersByTime(PICK_HINT_MS / 2);
+    expect(h.shown).toBe(true);
+  });
+
+  it("picked before the time is up: no late change", () => {
+    let changes = 0;
+    const h = new PickHint(() => changes++);
+    h.set(true);
+    h.set(false);
+    vi.advanceTimersByTime(PICK_HINT_MS * 2);
+    expect(changes).toBe(0);
+    expect(h.shown).toBe(false);
   });
 });

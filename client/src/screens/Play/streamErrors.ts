@@ -26,7 +26,7 @@ export function streamErrorMessage(tr: Tr, e: StreamError): string {
       return tr(
         "rp_err_in_use",
         undefined,
-        "Another device is using Remote Play on this PS5, or the PS5 is still finishing a session. Close Remote Play on that device (the PS Remote Play app, chiaki), then press Start.",
+        "Another device is using Remote Play on this PS5, or the PS5 is still finishing a session. Close Remote Play on that device, then press Start.",
       );
     case "console_ended":
       return tr("rp_err_console_ended", { reason: e.detail }, `The PS5 ended the stream: ${e.detail}`);
