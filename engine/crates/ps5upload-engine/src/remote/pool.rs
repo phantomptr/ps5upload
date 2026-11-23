@@ -147,7 +147,8 @@ impl Pool {
     {
         let fs = self.fs(store, id).await?;
         match f(fs).await {
-            Err(e) if is_transient(&e) => {
+            // A stop the user asked for reads like a lost connection; it is neither.
+            Err(e) if is_transient(&e) && e.to_string() != "cancelled" => {
                 self.invalidate(id);
                 let fs = self.fs(store, id).await?;
                 f(fs).await
@@ -522,6 +523,32 @@ mod tests {
             r.pool.fs(&r.store, "gone-0000").await,
             Err(RemoteError::UnknownConnection(_))
         ));
+    }
+
+    /// A walk the user stopped is not a dropped connection: the session stays, and the server
+    /// is not signed in to again after the cancel.
+    #[tokio::test]
+    async fn a_cancelled_walk_does_not_sign_in_again() {
+        let r = remote_with(MemFs::new(&[("/g/a", b"x")]), None);
+        let id = r
+            .store
+            .add(conn("NAS", Protocol::Smb), Secret::None)
+            .unwrap()
+            .conn
+            .id;
+        let stop = std::sync::atomic::AtomicBool::new(true);
+        let e = r
+            .pool
+            .with_fs(&r.store, &id, |fs| {
+                let stop = &stop;
+                async move { fs.walk_until("/g", 10, stop).await }
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(e.to_string(), "cancelled");
+        assert_eq!(r.pool.connects(), 1);
+        r.pool.fs(&r.store, &id).await.unwrap();
+        assert_eq!(r.pool.connects(), 1, "the session was thrown away");
     }
 
     #[tokio::test]

@@ -624,6 +624,10 @@ async fn copy_all(job: CopyJob<'_>) -> Result<(u64, u64), String> {
         work.push((remote.clone(), local.clone(), entry));
     }
     for (remote, local, entry) in work {
+        // Checked per file too: a folder of empty files never enters the read loop below.
+        if job.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
         let file = job
             .pool
             .with_fs(&job.store, &job.id, |fs| {
@@ -936,7 +940,10 @@ pub(crate) async fn inspect_folder(r: &Remote, remote: &str) -> Response {
                 .map_err(|e| e.to_string())?
                 .map_err(|e| format!("{e:#}"))?;
         inspected.path = remote.to_string();
-        inspected.total_size = walked.iter().map(|(_, e)| e.size).sum();
+        // Saturating: a server reporting absurd sizes must not panic the engine.
+        inspected.total_size = walked
+            .iter()
+            .fold(0u64, |t, (_, e)| t.saturating_add(e.size));
         inspected.file_count = walked.len() as u64;
         inspected.skipped_paths = Vec::new();
         Ok(json!({ "ok": true, "result": inspected, "wrapped_hint": null }))

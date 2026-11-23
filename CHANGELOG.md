@@ -6,6 +6,16 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Downloads from your servers**
+- **An FTP download that drops mid-file picks up where it stopped.** If the connection to the server was cut partway through a file, the copy failed with "ended early on the server" (or a stream to the PS5 failed with "short remote read") instead of carrying on. It now signs in again and continues from that byte.
+- **Stopping a server-folder copy while its file list is still loading stops right away.** It used to sign in to the server again first, which held up the stop on a slow or sleeping server and could end with a sign-in error instead of "cancelled".
+- Stop also takes effect between empty files, and a server that reports impossible file sizes can no longer crash the size count.
+
+**Security**
+- The SSH library used for SFTP servers is updated to the release that fixes a known timing weakness in RSA (RUSTSEC-2023-0071), and a cookie library to its fixed release.
+
+## 12.6.24
+
 **Play Together**
 - **"Press PS, then pick Quick Play on the TV" no longer stays over a friend's game (#916).** The app only learns that a friend picked a user when it sees PS and then ✕, so a pick made any other way left that hint, and the buttons with it, on top of the picture in full screen for the whole session. It now holds the screen for 30 seconds at most, then hides like the other buttons.
 
