@@ -11,9 +11,6 @@
 # (CI=true), so the workflow can never pass by not running a check.
 #
 # Accepted findings live here, each with its reason, so a new one fails the scan:
-#   RUSTSEC-2023-0071  rsa: Marvin timing attack. No fixed release exists. Pulled in by
-#                      russh for SFTP sources; we only sign with a local key, never decrypt
-#                      attacker-chosen ciphertext over the network.
 # Gitleaks false positives (AES test vectors, a test archive password, the old Wake
 # example key) are listed by fingerprint in .gitleaksignore.
 
@@ -45,7 +42,7 @@ if cargo audit --version >/dev/null 2>&1; then
     echo "-- $dir"
     # Warnings (unmaintained, unsound, yanked) are printed but do not fail: they are
     # mostly Linux GTK crates under Tauri that we cannot change. Vulnerabilities fail.
-    if ! (cd "$dir" && cargo audit --ignore RUSTSEC-2023-0071); then
+    if ! (cd "$dir" && cargo audit); then
       failed+=("cargo audit ($dir)")
     fi
   done
