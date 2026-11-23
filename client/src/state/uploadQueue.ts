@@ -2822,7 +2822,14 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       // The same install again (a second click, or the same package from
       // another screen) joins the one already queued: one run, one result
       // for every caller.
-      if (existing) return { id: existing.id, done: wait(existing.id) };
+      if (existing) {
+        // Waiting from "Add to queue" and now asked to run (Stream & install on the same
+        // package): start it, as a new row would be.
+        if (input.start !== false && existing.status === "pending") {
+          get().startAdded(hostOf(input.host), [existing.id]);
+        }
+        return { id: existing.id, done: wait(existing.id) };
+      }
       const bare = hostOf(input.host);
       get().add({
         sourceKind: "install",

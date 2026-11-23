@@ -161,12 +161,24 @@ export class PickHint {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
   }
+
+  /** Back to not picking, so the next `set(true)` arms the timer again. */
+  reset(): void {
+    this.stop();
+    this.picking = false;
+    this.over = false;
+  }
 }
 
 export function usePickHint(picking: boolean): boolean {
   const [, bump] = useState(0);
   const [hint] = useState(() => new PickHint(() => bump((n) => n + 1)));
-  hint.set(picking);
-  useEffect(() => () => hint.stop(), [hint]);
+  // In an effect, so React's development double run (cleanup, then the effect again) re-arms
+  // the timer instead of leaving it cleared.
+  useEffect(() => {
+    hint.set(picking);
+    bump((n) => n + 1);
+  }, [hint, picking]);
+  useEffect(() => () => hint.reset(), [hint]);
   return hint.shown;
 }
