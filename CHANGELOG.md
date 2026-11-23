@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.23
 
 **Uploads**
 - **Add to queue streams packages too.** On Upload & Install, Add to queue used to copy a .pkg or .fpkg to the PS5 before installing it. It now adds it as a Stream & install, the same as the main button, but waits for Start queue. To copy a package first, use Upload & install.
