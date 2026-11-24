@@ -7086,6 +7086,7 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "rp_phone_be": "Dieses Gerät als Controller nutzen",
 "rp_err_keys2": "Die PS5 hat die Kopplung dieser App nicht angenommen. Kopple erneut: Spielen einrichten › Koppeln.",
 "rp_err_in_use": "Ein anderes Gerät nutzt Remote Play auf dieser PS5, oder die PS5 beendet noch eine Sitzung. Schließe Remote Play auf dem anderen Gerät und drücke dann Start.",
+"rp_err_console_took_over": "Die PS5 hat den Stream beendet, weil etwas anderes ihn übernommen hat: Ein Controller an der Konsole wurde benutzt, ein anderes Gerät hat Remote Play gestartet oder die PS5 wurde ausgeschaltet. Drücke Start, um hier weiterzuspielen.",
 "rp_err_console_ended": "Die PS5 hat den Stream beendet: {reason}",
 "rp_err_no_session": "Der Stream endete, während diese Seite weg war. Drücke Start, um weiterzuspielen.",
 "rp_err_other": "Der Stream wurde beendet.",

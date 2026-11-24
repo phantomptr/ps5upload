@@ -7037,6 +7037,7 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "rp_phone_be": "将此设备作为它的手柄",
 "rp_err_keys2": "PS5 未接受此应用的配对。请重新配对：设置畅玩 › 配对。",
 "rp_err_in_use": "另一台设备正在这台 PS5 上使用远程游玩，或者 PS5 仍在结束会话。请关闭那台设备上的远程游玩，然后按开始。",
+"rp_err_console_took_over": "PS5 结束了串流，因为别的东西接管了它：主机旁的手柄被使用、另一台设备开始了远程游玩，或 PS5 被关闭。按“开始”在这里继续玩。",
 "rp_err_console_ended": "PS5 结束了串流：{reason}",
 "rp_err_no_session": "串流在此页面离开时已结束。按开始可再次游玩。",
 "rp_err_other": "串流已停止。",

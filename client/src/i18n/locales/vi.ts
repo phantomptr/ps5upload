@@ -7080,6 +7080,7 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_phone_be": "Dùng thiết bị này làm tay cầm của nó",
 "rp_err_keys2": "PS5 không chấp nhận ghép đôi của ứng dụng này. Hãy ghép đôi lại: Thiết lập Chơi › Ghép đôi.",
 "rp_err_in_use": "Một thiết bị khác đang dùng Remote Play trên PS5 này, hoặc PS5 vẫn đang kết thúc một phiên. Hãy đóng Remote Play trên thiết bị đó, rồi nhấn Bắt đầu.",
+"rp_err_console_took_over": "PS5 đã kết thúc luồng vì thứ khác đã chiếm lấy: tay cầm ở máy được dùng, thiết bị khác bắt đầu Remote Play, hoặc PS5 đã tắt. Nhấn Bắt đầu để chơi lại ở đây.",
 "rp_err_console_ended": "PS5 đã kết thúc luồng: {reason}",
 "rp_err_no_session": "Luồng đã kết thúc khi trang này vắng mặt. Nhấn Bắt đầu để chơi lại.",
 "rp_err_other": "Luồng đã dừng.",

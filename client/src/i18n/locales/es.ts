@@ -7031,6 +7031,7 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "rp_phone_be": "Usar este dispositivo como su mando",
 "rp_err_keys2": "La PS5 no aceptó el emparejamiento de esta app. Empareja de nuevo: Configurar Jugar › Emparejar.",
 "rp_err_in_use": "Otro dispositivo está usando Remote Play en esta PS5, o la PS5 aún está terminando una sesión. Cierra Remote Play en ese dispositivo y pulsa Iniciar.",
+"rp_err_console_took_over": "La PS5 terminó la transmisión porque otra cosa la tomó: se usó un mando en la consola, otro dispositivo inició Remote Play o la PS5 se apagó. Pulsa Iniciar para volver a jugar aquí.",
 "rp_err_console_ended": "La PS5 terminó la transmisión: {reason}",
 "rp_err_no_session": "La transmisión terminó mientras esta página no estaba. Pulsa Iniciar para volver a jugar.",
 "rp_err_other": "La transmisión se detuvo.",

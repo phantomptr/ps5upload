@@ -7094,6 +7094,7 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "rp_phone_be": "Utiliser cet appareil comme sa manette",
 "rp_err_keys2": "La PS5 n'a pas accepté l'association de cette app. Associez à nouveau : Configurer Jouer › Appairer.",
 "rp_err_in_use": "Un autre appareil utilise Remote Play sur cette PS5, ou la PS5 termine encore une session. Fermez Remote Play sur cet appareil, puis appuyez sur Démarrer.",
+"rp_err_console_took_over": "La PS5 a arrêté le flux parce que quelque chose d'autre l'a repris : une manette a été utilisée sur la console, un autre appareil a lancé la lecture à distance, ou la PS5 s'est éteinte. Appuyez sur Démarrer pour rejouer ici.",
 "rp_err_console_ended": "La PS5 a mis fin au streaming : {reason}",
 "rp_err_no_session": "Le streaming s'est terminé pendant l'absence de cette page. Appuyez sur Démarrer pour rejouer.",
 "rp_err_other": "Le flux s'est arrêté.",

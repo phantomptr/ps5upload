@@ -7031,6 +7031,7 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "rp_phone_be": "Usa questo dispositivo come suo controller",
 "rp_err_keys2": "La PS5 non ha accettato l'associazione di questa app. Associa di nuovo: Configura Gioca › Abbina.",
 "rp_err_in_use": "Un altro dispositivo sta usando Remote Play su questa PS5, oppure la PS5 sta ancora chiudendo una sessione. Chiudi Remote Play su quel dispositivo, poi premi Avvia.",
+"rp_err_console_took_over": "La PS5 ha chiuso lo stream perché qualcos'altro l'ha preso: è stato usato un controller sulla console, un altro dispositivo ha avviato Riproduzione remota o la PS5 è stata spenta. Premi Avvia per giocare di nuovo qui.",
 "rp_err_console_ended": "La PS5 ha chiuso lo streaming: {reason}",
 "rp_err_no_session": "Lo streaming è finito mentre questa pagina non c'era. Premi Avvia per giocare ancora.",
 "rp_err_other": "Lo stream si è interrotto.",

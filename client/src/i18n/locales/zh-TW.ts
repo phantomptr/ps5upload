@@ -7031,6 +7031,7 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "rp_phone_be": "將此裝置當作它的控制器",
 "rp_err_keys2": "PS5 未接受此應用程式的配對。請重新配對：設定暢玩 › 配對。",
 "rp_err_in_use": "另一台裝置正在這台 PS5 上使用遙控遊玩，或 PS5 仍在結束工作階段。請關閉那台裝置上的遙控遊玩，然後按開始。",
+"rp_err_console_took_over": "PS5 結束了串流，因為別的東西接管了它：主機旁的控制器被使用、另一台裝置開始了遙控遊玩，或 PS5 被關閉。按「開始」在這裡繼續玩。",
 "rp_err_console_ended": "PS5 結束了串流：{reason}",
 "rp_err_no_session": "串流在此頁面離開時已結束。按開始可再次遊玩。",
 "rp_err_other": "串流已停止。",
