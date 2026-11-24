@@ -302,3 +302,31 @@ test("the PIN shown on the PS5 pairs without the helper", async ({ page }) => {
   await page.getByTestId("pin-pair-go").click();
   await expect(step).toHaveAttribute("data-state", "ok", { timeout: 15_000 });
 });
+
+test("a PS5 without the helper is told Remote Play still works and goes straight to the PIN (#921)", async ({ page }) => {
+  await consoleHalfSetUp(page);
+  await page.route(
+    (url) => url.pathname === "/api/ps5/status" || url.pathname === "/api/ps5/remoteplay/readiness",
+    (route) => route.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ error: "no helper" }) }),
+  );
+  await page.goto("/play/setup", { waitUntil: "domcontentloaded" });
+  const stock = page.getByTestId("play-setup-stock");
+  await expect(stock).toBeVisible({ timeout: 15_000 });
+  await expect(stock).toContainText("Enable Remote Play");
+  await stock.getByTestId("play-setup-stock-pin").click();
+  // The account field says what to type when the app can't read it.
+  await expect(page.getByTestId("pin-pair-account-hint")).toBeVisible();
+  await page.getByTestId("pin-pair-pin").fill("87654321");
+  await page.getByTestId("pin-pair-account").fill("0x1122334455667788");
+  await page.getByTestId("pin-pair-go").click();
+  await expect(page.locator('[data-step="pair"]')).toHaveAttribute("data-state", "ok", { timeout: 15_000 });
+  // Paired: the callout has done its job.
+  await expect(stock).toHaveCount(0);
+});
+
+test("with the helper answering, the no-helper note stays away", async ({ page }) => {
+  await consoleHalfSetUp(page);
+  await page.goto("/play/setup", { waitUntil: "domcontentloaded" });
+  await expect(page.locator('[data-step="connect"]')).toHaveAttribute("data-state", "ok", { timeout: 15_000 });
+  await expect(page.getByTestId("play-setup-stock")).toHaveCount(0);
+});

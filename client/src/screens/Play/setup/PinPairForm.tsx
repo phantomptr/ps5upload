@@ -137,6 +137,15 @@ export function PinPairForm({
           {tr("play_setup_pair", undefined, "Pair")}
         </Button>
       </form>
+      {account.trim() === "" && (
+        <p className="text-xs text-[var(--color-muted)]" data-testid="pin-pair-account-hint">
+          {tr(
+            "rp_pin_pair_account_hint",
+            undefined,
+            "With the helper running, the app fills this in. Without it, type the PSN account ID of the user you play as: hex (0x…), decimal or base64.",
+          )}
+        </p>
+      )}
       {account.trim() !== "" && accountIdToPairingB64(account) === null && (
         <p className="text-xs text-[var(--color-bad)]">
           {tr("rp_pin_pair_bad_account", undefined, "That is not an account ID. Accounts shows it for each user (0x…).")}
