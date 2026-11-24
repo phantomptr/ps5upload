@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.26
 
 **Cheats**
 - **PS4 games' cheats can be switched on (#920).** In a PS4 game, the app looked for the game's code in the wrong place, so every switch answered "the game's code is not loaded yet". It now uses the PS4 game's own code. As before, nothing is written unless every location holds the cheat's original bytes, so a cheat for another version of the game is still refused.
