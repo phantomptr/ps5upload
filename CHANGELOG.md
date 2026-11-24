@@ -6,6 +6,14 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Cheats**
+- **PS4 games' cheats can be switched on (#920).** In a PS4 game, the app looked for the game's code in the wrong place, so every switch answered "the game's code is not loaded yet". It now uses the PS4 game's own code. As before, nothing is written unless every location holds the cheat's original bytes, so a cheat for another version of the game is still refused.
+
+**Play**
+- **A PS5 that isn't jailbroken can use Remote Play (#921).** Play › Set up now says so when the helper isn't answering and opens pairing with the PIN the PS5 shows, with a note on what to type for the account ID. Play Together, starting a game from the app and the console checks still need the helper.
+
+## 12.6.25
+
 **Downloads from your servers**
 - **An FTP download that drops mid-file picks up where it stopped.** If the connection to the server was cut partway through a file, the copy failed with "ended early on the server" (or a stream to the PS5 failed with "short remote read") instead of carrying on. It now signs in again and continues from that byte.
 - **Stopping a server-folder copy while its file list is still loading stops right away.** It used to sign in to the server again first, which held up the stop on a slow or sleeping server and could end with a sign-in error instead of "cancelled".
