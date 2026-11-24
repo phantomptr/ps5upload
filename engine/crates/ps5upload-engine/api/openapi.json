@@ -6931,7 +6931,7 @@
             ]
           },
           "state": {
-            "description": "`installed`                 — these exact bytes are already on the console\n`different_version_installed` — the title has this kind of artifact, but not this build\n`base_missing`              — a patch/add-on with no base game to apply to\n`not_installed`             — nothing for this title in this category\n`unknown`                   — the console couldn't be read; never act on this",
+            "description": "`installed`                 — these exact bytes are already on the console\n`different_version_installed` — the title has this kind of artifact, but not this build\n`base_missing`              — an update with no base game to apply to (add-ons are not checked)\n`not_installed`             — nothing for this title in this category\n`unknown`                   — the console couldn't be read; never act on this",
             "type": "string"
           },
           "title_id": {
