@@ -17,15 +17,17 @@ export function stagedPkgAction(entry: Pick<PkgEntry, "status" | "installedHere"
  * the result look the same wherever it was started.
  *
  * `confirmWithoutBase` is asked first when the console doesn't have the base
- * game: Sony's installer accepts an update or DLC then and applies nothing.
- * Returns null when the user declined.
+ * game and this is an update: Sony's installer accepts one then and applies
+ * nothing. An add-on is never asked about: it installs into its own folder, and
+ * its title id need not be the game's (#924). Returns null when the user declined.
  */
 export async function installStagedPkg(opts: {
   host: string;
-  entry: Pick<PkgEntry, "path">;
+  entry: Pick<PkgEntry, "path"> & Partial<Pick<PkgEntry, "category">>;
   baseInstalled: boolean;
   confirmWithoutBase: () => Promise<boolean>;
 }): Promise<InstallResult | null> {
-  if (!opts.baseInstalled && !(await opts.confirmWithoutBase())) return null;
+  const addOn = opts.entry.category?.toLowerCase().endsWith("ac") ?? false;
+  if (!opts.baseInstalled && !addOn && !(await opts.confirmWithoutBase())) return null;
   return pkgLibraryStore(opts.host).getState().install(opts.entry.path, opts.host);
 }

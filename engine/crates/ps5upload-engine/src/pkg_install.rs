@@ -1692,7 +1692,7 @@ pub struct PreflightQuery {
 pub struct InstallPreflightResponse {
     /// `installed`                 — these exact bytes are already on the console
     /// `different_version_installed` — the title has this kind of artifact, but not this build
-    /// `base_missing`              — a patch/add-on with no base game to apply to
+    /// `base_missing`              — an update with no base game to apply to (add-ons are not checked)
     /// `not_installed`             — nothing for this title in this category
     /// `unknown`                   — the console couldn't be read; never act on this
     pub state: &'static str,
@@ -1753,10 +1753,12 @@ fn install_preflight(
     resp.installed_version = read_installed_app_ver(&normalize_mgmt_addr(addr), &title_id)
         .filter(|v| !v.trim().is_empty());
 
-    // A patch or add-on applies to a base that must already be there. Sony
-    // accepts the request without one and then writes nothing, which used to
-    // surface as a 10-minute stall — the answer is knowable now, so say it now.
-    if category != "gd" {
+    // A patch applies to a base that must already be there. Sony accepts the
+    // request without one and then writes nothing, which used to surface as a
+    // 10-minute stall — the answer is knowable now, so say it now. An add-on is
+    // not checked: its title id need not be the game's (#924), and it installs
+    // into its own folder either way.
+    if category == "gp" {
         let base_present = inventory.artifacts.iter().any(|a| a.kind == "base");
         if !base_present {
             resp.state = "base_missing";

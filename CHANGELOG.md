@@ -6,6 +6,20 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Install**
+- **PS4 add-ons install even when their title ID differs from the game's (#924).** Some games use a different title ID for their add-ons than for the game itself (Dead or Alive 5 Last Round: game CUSA01778, add-ons CUSA01601). The app refused those add-ons with "the base game is not on this PS5", even though the PS5 installs them fine. Add-ons are no longer checked for a base game; the PS5 decides. Updates still are, because the PS5 accepts an update without its game and then installs nothing.
+
+**Files**
+- **Long names are readable on a phone (#923).** On a narrow screen a long file or folder name now wraps onto up to three lines, with its type and size underneath, instead of being cut off after a few characters. Wider windows keep one line per row.
+
+**Play**
+- **"Server shutting down" is explained.** When the PS5 ends the stream because something else took over (a controller at the console was used, another device started Remote Play, or the PS5 was turned off), the app now says that in plain words and tells you to press Start to play here again.
+
+**Your servers**
+- **Editing a server while it signs in uses the new settings.** If you changed or removed a server connection while the app was signing in to it, that sign-in could be kept with the old settings. It is now dropped, and the next use signs in with what you saved.
+
+## 12.6.26
+
 **Cheats**
 - **PS4 games' cheats can be switched on (#920).** In a PS4 game, the app looked for the game's code in the wrong place, so every switch answered "the game's code is not loaded yet". It now uses the PS4 game's own code. As before, nothing is written unless every location holds the cheat's original bytes, so a cheat for another version of the game is still refused.
 

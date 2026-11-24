@@ -46,6 +46,18 @@ describe("installing a staged update or DLC from the game page", () => {
     expect(install).toHaveBeenCalledOnce();
   });
 
+  it("never asks about an add-on, whose title id need not be the game's (#924)", async () => {
+    const confirm = vi.fn(async () => false);
+    await installStagedPkg({
+      host: "h",
+      entry: { path: "/data/pkg/ac/EP0006-CUSA01601_00-DOA5LRCOSTUME001.pkg", category: "ac" },
+      baseInstalled: false,
+      confirmWithoutBase: confirm,
+    });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(install).toHaveBeenCalledOnce();
+  });
+
   it("offers no button while the package is queued or installing", () => {
     expect(stagedPkgAction({ status: "queued" })).toBe("busy");
     expect(stagedPkgAction({ status: "installing" })).toBe("busy");

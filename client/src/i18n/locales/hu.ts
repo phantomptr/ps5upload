@@ -7370,6 +7370,7 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "rp_phone_be": "Eszköz használata kontrollerként",
 "rp_err_keys2": "A PS5 nem fogadta el ennek az alkalmazásnak a párosítását. Párosítsd újra: A Játék beállítása › Párosítás.",
 "rp_err_in_use": "Egy másik eszköz használja a Remote Playt ezen a PS5-ön, vagy a PS5 még befejez egy munkamenetet. Zárd be a Remote Playt azon az eszközön, majd nyomd meg az Indítás gombot.",
+"rp_err_console_took_over": "A PS5 befejezte a streamet, mert valami más vette át: a konzolnál használtak egy kontrollert, egy másik eszköz indított Remote Playt, vagy a PS5 kikapcsolt. Nyomd meg a Start gombot, hogy itt játssz tovább.",
 "rp_err_console_ended": "A PS5 befejezte a streamet: {reason}",
 "rp_err_no_session": "A stream véget ért, amíg ez az oldal nem volt itt. Az újabb játékhoz nyomd meg az Indítás gombot.",
 "rp_err_other": "A stream leállt.",

@@ -7093,6 +7093,7 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_phone_be": "Usar este dispositivo como controle dele",
 "rp_err_keys2": "O PS5 não aceitou o pareamento deste app. Pareie de novo: Configurar Jogar › Parear.",
 "rp_err_in_use": "Outro dispositivo está usando o Remote Play neste PS5, ou o PS5 ainda está encerrando uma sessão. Feche o Remote Play nesse dispositivo e toque em Iniciar.",
+"rp_err_console_took_over": "O PS5 encerrou a transmissão porque outra coisa assumiu: um controle foi usado no console, outro dispositivo iniciou a Reprodução Remota ou o PS5 foi desligado. Pressione Iniciar para jogar aqui de novo.",
 "rp_err_console_ended": "O PS5 encerrou a transmissão: {reason}",
 "rp_err_no_session": "A transmissão terminou enquanto esta página estava fora. Toque em Iniciar para jogar de novo.",
 "rp_err_other": "A transmissão parou.",

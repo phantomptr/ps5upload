@@ -1,7 +1,7 @@
 //! Signed-in sessions, one per saved connection, reused while browsing and streaming.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -90,6 +90,9 @@ pub struct Pool {
     connector: Box<dyn Connector>,
     entries: Mutex<Sessions>,
     connects: AtomicUsize,
+    /// Bumped by every `invalidate`: a sign-in that started before an edit or delete must not
+    /// keep its session (made with the old settings) after it.
+    generation: AtomicU64,
 }
 
 impl Pool {
@@ -98,6 +101,7 @@ impl Pool {
             connector,
             entries: Mutex::new(HashMap::new()),
             connects: AtomicUsize::new(0),
+            generation: AtomicU64::new(0),
         }
     }
 
@@ -113,6 +117,7 @@ impl Pool {
 
     /// The session for connection `id`, signing in if there is none (or it went idle).
     pub async fn fs(&self, store: &Store, id: &str) -> Result<Arc<dyn RemoteFs>, RemoteError> {
+        let started = self.generation.load(Ordering::SeqCst);
         let Some((conn, secret)) = store.get(id) else {
             self.invalidate(id);
             return Err(RemoteError::UnknownConnection(id.to_string()));
@@ -132,8 +137,11 @@ impl Pool {
             .await
             .map_err(|e| scrub(e, &secret))?;
         self.connects.fetch_add(1, Ordering::SeqCst);
-        self.lock()
-            .insert(id.to_string(), (Arc::clone(&fs), Instant::now()));
+        let mut entries = self.lock();
+        // Checked under the lock `invalidate` takes, so an edit can't slip in between.
+        if self.generation.load(Ordering::SeqCst) == started {
+            entries.insert(id.to_string(), (Arc::clone(&fs), Instant::now()));
+        }
         Ok(fs)
     }
 
@@ -159,7 +167,9 @@ impl Pool {
 
     /// Forget the session: the connection was edited or deleted, or the session broke.
     pub fn invalidate(&self, id: &str) {
-        self.lock().remove(id);
+        let mut entries = self.lock();
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        entries.remove(id);
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Sessions> {
@@ -523,6 +533,71 @@ mod tests {
             r.pool.fs(&r.store, "gone-0000").await,
             Err(RemoteError::UnknownConnection(_))
         ));
+    }
+
+    /// Signs in only when told to, so a test can edit the connection mid sign-in.
+    struct GatedConnector {
+        fs: Arc<MemFs>,
+        entered: Arc<tokio::sync::Notify>,
+        go: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl Connector for GatedConnector {
+        async fn connect(
+            &self,
+            _conn: &Connection,
+            _secret: &Secret,
+        ) -> Result<Arc<dyn RemoteFs>, RemoteError> {
+            self.entered.notify_one();
+            self.go.notified().await;
+            let fake = testing::FakeConnector {
+                fs: Arc::clone(&self.fs),
+                fail: None,
+            };
+            fake.connect(_conn, _secret).await
+        }
+    }
+
+    /// A sign-in that read the old settings and finishes after the connection was edited does
+    /// not leave its session to be reused with the new ones.
+    #[tokio::test]
+    async fn a_sign_in_overtaken_by_an_edit_is_not_kept() {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let go = Arc::new(tokio::sync::Notify::new());
+        let store = Arc::new(Store::open(&crate::remote::store::test_dir()).unwrap());
+        let pool = Arc::new(Pool::new(Box::new(GatedConnector {
+            fs: Arc::new(MemFs::new(&[("/a", b"x")])),
+            entered: Arc::clone(&entered),
+            go: Arc::clone(&go),
+        })));
+        let id = store
+            .add(conn("NAS", Protocol::Smb), Secret::None)
+            .unwrap()
+            .conn
+            .id;
+        let (p, s, i) = (Arc::clone(&pool), Arc::clone(&store), id.clone());
+        let first = tokio::spawn(async move { p.fs(&s, &i).await.map(|_| ()) });
+        entered.notified().await;
+        pool.invalidate(&id); // the edit
+        go.notify_one();
+        first.await.unwrap().unwrap();
+        assert_eq!(pool.connects(), 1);
+        let (p, s, i) = (Arc::clone(&pool), Arc::clone(&store), id.clone());
+        let mut second = tokio::spawn(async move { p.fs(&s, &i).await.map(|_| ()) });
+        // Reusing the overtaken session signs in to nothing, so wait for whichever comes first:
+        // a regression then fails the count below instead of waiting forever.
+        tokio::select! {
+            _ = entered.notified() => {
+                go.notify_one();
+                second.await.unwrap().unwrap();
+            }
+            r = &mut second => r.unwrap().unwrap(),
+        }
+        assert_eq!(pool.connects(), 2, "the overtaken session was reused");
+        // With nothing in between, the new session is kept as before.
+        pool.fs(&store, &id).await.unwrap();
+        assert_eq!(pool.connects(), 2);
     }
 
     /// A walk the user stopped is not a dropped connection: the session stays, and the server

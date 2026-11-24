@@ -7085,6 +7085,7 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_phone_be": "Bu cihazı kumandası olarak kullan",
 "rp_err_keys2": "PS5 bu uygulamanın eşleşmesini kabul etmedi. Yeniden eşleştir: Oyna'yı kur › Eşleştir.",
 "rp_err_in_use": "Başka bir cihaz bu PS5'te Remote Play kullanıyor ya da PS5 hâlâ bir oturumu bitiriyor. O cihazda Remote Play'i kapatıp Başlat'a bas.",
+"rp_err_console_took_over": "PS5 yayını bitirdi çünkü başka bir şey devraldı: konsolda bir kumanda kullanıldı, başka bir cihaz Remote Play başlattı ya da PS5 kapandı. Burada yeniden oynamak için Başlat'a bas.",
 "rp_err_console_ended": "PS5 yayını bitirdi: {reason}",
 "rp_err_no_session": "Bu sayfa yokken yayın bitti. Yeniden oynamak için Başlat'a bas.",
 "rp_err_other": "Yayın durdu.",

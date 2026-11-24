@@ -65,3 +65,16 @@ describe("streamErrorMessage", () => {
     );
   });
 });
+
+describe("a session the PS5 handed to something else", () => {
+  it("says it was taken over, not Sony's server words (#769)", () => {
+    const m = streamErrorMessage(tr, { code: "console_ended", detail: "Server shutting down" });
+    expect(m).toMatch(/took it over/);
+    expect(m).not.toMatch(/Server shutting down/);
+  });
+
+  it("passes any other reason through as the PS5 gave it", () => {
+    const m = streamErrorMessage(tr, { code: "console_ended", detail: "Remote Play turned off" });
+    expect(m).toBe("The PS5 ended the stream: Remote Play turned off");
+  });
+});

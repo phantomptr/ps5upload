@@ -537,11 +537,13 @@ pub fn base_check_applies(category: &str, title_id: &str) -> Option<&'static str
     if package_type_for_verify(category, title_id).starts_with("PS5") {
         return None;
     }
+    // Only an update needs its game: Sony accepts one without it and applies nothing. An add-on
+    // installs into its own folder, and its title id need not be the game's: Dead or Alive 5
+    // Last Round's add-ons are CUSA01601 while the game is CUSA01778, and the PS5 installs them
+    // (#924). The console decides those.
     let c = category.to_ascii_lowercase();
     if c.ends_with("gp") || c.ends_with("dp") {
         Some("gp")
-    } else if c.ends_with("ac") {
-        Some("ac")
     } else {
         None
     }
@@ -3687,7 +3689,9 @@ mod tests {
         assert_eq!(package_type_for_verify("gp", "PPSA00001"), "PS5DP");
         assert_eq!(package_type_for_verify("PS5AC", "XXXX00001"), "PS5AC");
         assert_eq!(base_check_applies("gp", "CUSA00001"), Some("gp"));
-        assert_eq!(base_check_applies("PS4AC", "CUSA00001"), Some("ac"));
+        // An add-on's title id need not be its game's (#924), so the PS5 decides.
+        assert_eq!(base_check_applies("PS4AC", "CUSA00001"), None);
+        assert_eq!(base_check_applies("ac", "CUSA01601"), None);
         assert_eq!(base_check_applies("gd", "CUSA00001"), None);
         // A PS5 update can carry the whole app (measured), so the PS5 decides.
         assert_eq!(base_check_applies("gp", "PPSA00001"), None);

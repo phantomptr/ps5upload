@@ -7087,6 +7087,7 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "rp_phone_be": "Gunakan perangkat ini sebagai kontrolernya",
 "rp_err_keys2": "PS5 tidak menerima pemasangan aplikasi ini. Pasangkan lagi: Siapkan Main › Pasangkan.",
 "rp_err_in_use": "Perangkat lain sedang memakai Remote Play di PS5 ini, atau PS5 masih mengakhiri sesi. Tutup Remote Play di perangkat itu, lalu tekan Mulai.",
+"rp_err_console_took_over": "PS5 menghentikan stream karena hal lain mengambil alih: kontroler di konsol dipakai, perangkat lain memulai Remote Play, atau PS5 dimatikan. Tekan Start untuk bermain di sini lagi.",
 "rp_err_console_ended": "PS5 mengakhiri streaming: {reason}",
 "rp_err_no_session": "Streaming berakhir saat halaman ini tidak ada. Tekan Mulai untuk bermain lagi.",
 "rp_err_other": "Streaming berhenti.",

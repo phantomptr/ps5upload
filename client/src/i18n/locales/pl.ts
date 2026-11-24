@@ -7315,6 +7315,7 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_phone_be": "Użyj tego urządzenia jako jego kontrolera",
 "rp_err_keys2": "PS5 nie przyjęła parowania tej aplikacji. Sparuj ponownie: Skonfiguruj Graj › Sparuj.",
 "rp_err_in_use": "Inne urządzenie używa Remote Play na tej PS5 albo PS5 wciąż kończy sesję. Zamknij Remote Play na tamtym urządzeniu, a potem naciśnij Start.",
+"rp_err_console_took_over": "PS5 zakończyła stream, bo przejęło go coś innego: użyto kontrolera przy konsoli, inne urządzenie uruchomiło Remote Play albo PS5 się wyłączyła. Naciśnij Start, aby znów grać tutaj.",
 "rp_err_console_ended": "PS5 zakończyła strumień: {reason}",
 "rp_err_no_session": "Strumień skończył się, gdy tej strony nie było. Naciśnij Start, aby znów grać.",
 "rp_err_other": "Strumień się zatrzymał.",
