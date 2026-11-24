@@ -328,7 +328,11 @@ pub(crate) async fn update_connection(r: &Remote, id: &str, body: ConnectionBody
         return remote_err(&RemoteError::UnknownConnection(id.to_string()));
     }
     r.pool.invalidate(id);
-    match r.store.update(id, conn, secret) {
+    let updated = r.store.update(id, conn, secret);
+    // Again once the new settings are stored: a sign-in that read the old ones in between
+    // must not leave its session behind (Pool::fs checks the generation).
+    r.pool.invalidate(id);
+    match updated {
         Ok(v) => Json(login_start(r, v).await).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
@@ -336,7 +340,9 @@ pub(crate) async fn update_connection(r: &Remote, id: &str, body: ConnectionBody
 
 pub(crate) async fn delete_connection(r: &Remote, id: &str) -> Response {
     r.pool.invalidate(id);
-    match r.store.remove(id) {
+    let removed = r.store.remove(id);
+    r.pool.invalidate(id);
+    match removed {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(_) => remote_err(&RemoteError::UnknownConnection(id.to_string())),
     }
