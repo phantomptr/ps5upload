@@ -723,7 +723,8 @@ test("a stream the console ended says why, and the Start button is back", async 
   await page.goto("/play", { waitUntil: "domcontentloaded" });
   await expect(page.getByRole("heading", { name: "Play", exact: true })).toBeVisible({ timeout: 30_000 });
   await page.getByTestId("rp-start").click();
-  await expect(page.getByText("The PS5 ended the stream: Server shutting down")).toBeVisible({ timeout: 20_000 });
+  // "Server shutting down" is the PS5's word for "something else took over": said in plain words.
+  await expect(page.getByText(/something else took it over/)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId("rp-start")).toBeVisible();
 });
 
