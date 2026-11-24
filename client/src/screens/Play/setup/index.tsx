@@ -7,6 +7,7 @@ import { Button, Callout, PageHeader, Toggle } from "../../../components";
 import { mgmtAddr, transferAddr } from "../../../lib/addr";
 import { humanizePs5Error } from "../../../lib/humanizeError";
 import { pairConsole } from "../../../lib/pairConsole";
+import { useConnectionStore } from "../../../state/connection";
 import { useTr } from "../../../state/lang";
 import { usePlaySetupMarks } from "../../../state/playSetup";
 import { blockerNames } from "../../../state/rpBlockers";
@@ -61,6 +62,10 @@ export default function PlaySetupScreen() {
   };
 
   const r = s.readiness;
+  // A console the app can't reach through the helper (not jailbroken, or the helper not sent):
+  // Remote Play itself needs no helper, only the PIN pairing (#921).
+  const noHelper = useConnectionStore((c) => c.engineStatus === "up" && c.payloadStatus === "down");
+  const showStock = noHelper && !!s.host && !!s.profileId && s.states.pair !== "ok";
   const serviceOff = !!r && r.service_enabled === 0;
   const userWaitNow = userWait(r);
   const steps: Record<SetupKey, { title: string; body: string; act?: ReactNode; always?: ReactNode }> = {
@@ -309,6 +314,33 @@ export default function PlaySetupScreen() {
             />
           </div>
         </div>
+        {showStock && (
+          <Callout
+            tone="info"
+            title={tr("play_setup_stock_title", undefined, "PS5 not jailbroken? Remote Play still works")}
+          >
+            <div className="space-y-2" data-testid="play-setup-stock">
+              <p>
+                {tr(
+                  "play_setup_stock_body",
+                  undefined,
+                  "On a PS5 signed in to PSN, turn on Settings › System › Remote Play › Enable Remote Play, then pair with the PIN it shows under Link Device. The steps below that need the helper can stay open. Play Together, starting a game from here and the console's own checks need a jailbroken PS5 with the helper.",
+                )}
+              </p>
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() => {
+                  setOpened("pair");
+                  setPinPair(true);
+                }}
+                data-testid="play-setup-stock-pin"
+              >
+                {tr("play_setup_pair_with_pin", undefined, "Pair with the PIN shown on the PS5")}
+              </Button>
+            </div>
+          </Callout>
+        )}
         <ol className="space-y-2">
           {SETUP_ORDER.map((key, i) => {
             const st = s.states[key];
@@ -366,7 +398,7 @@ export default function PlaySetupScreen() {
           {tr(
             "play_setup_other_apps",
             undefined,
-            "Want Sony's PS Remote Play app or chiaki-ng instead? Accounts › Remote Play makes the PIN they ask for.",
+            "Want Sony's PS Remote Play app instead? Accounts › Remote Play makes the PIN it asks for.",
           )}
         </p>
         <Toggle
