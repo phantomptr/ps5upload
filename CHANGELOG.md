@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.27
 
 **Install**
 - **PS4 add-ons install even when their title ID differs from the game's (#924).** Some games use a different title ID for their add-ons than for the game itself (Dead or Alive 5 Last Round: game CUSA01778, add-ons CUSA01601). The app refused those add-ons with "the base game is not on this PS5", even though the PS5 installs them fine. Add-ons are no longer checked for a base game; the PS5 decides. Updates still are, because the PS5 accepts an update without its game and then installs nothing.
