@@ -207,6 +207,43 @@ static int json_bool(const char *json, const char *key, int *out) {
 
 /* ── Running-game detection ──────────────────────────────────────── */
 
+static int module_info(pid_t pid, uint32_t handle, uint64_t *base, uint64_t *size, char *path,
+                       size_t path_cap);
+static int game_mem_read(pid_t pid, intptr_t addr, uint8_t *out, size_t len);
+
+/* Where a PS4 executable is loaded in a PS4 game's process on the PS5. */
+#define PS4_EBOOT_BASE ((intptr_t)0x400000)
+
+/* The load address cheat offsets are relative to: the game's executable.
+ *
+ * For a PS5 game that is dynlib handle 0. In a PS4 game's process (#920, Rayman Legends
+ * CUSA00284 on FW 11.60) handle 0 is not the game's eboot.bin: it reported a 336 KiB module
+ * at 0x6988c000 while the game's code was at 0x400000, so every offset past that module's end
+ * read zeros and the toggle said "the game's code is not loaded yet". So for a PS4 title whose
+ * handle 0 is not an eboot.bin, the executable at 0x400000 is used when it can be read. A wrong
+ * guess writes nothing: every location's bytes must equal the cheat's original bytes first. */
+static intptr_t game_exe_base(pid_t pid, const char *title) {
+    intptr_t b = locked_mapbase(pid, 0);
+    if (!title || strncmp(title, "CUSA", 4) != 0 || b == PS4_EBOOT_BASE) return b;
+    uint64_t mb = 0, ms = 0;
+    char path[256] = "";
+    if (module_info(pid, 0, &mb, &ms, path, sizeof path) == 0) {
+        const char *leaf = strrchr(path, '/');
+        leaf = leaf ? leaf + 1 : path;
+        if (strcasecmp(leaf, "eboot.bin") == 0) return b;
+    }
+    uint8_t probe[16];
+    if (game_mem_read(pid, PS4_EBOOT_BASE, probe, sizeof probe) != 0) return b;
+    static pid_t told;
+    if (told != pid) {
+        told = pid;
+        fprintf(stderr, "[cheats] %s: PS4 game, handle 0 is %s at 0x%llx; using 0x%lx\n", title,
+                path[0] ? path : "(no path)", (unsigned long long)mb,
+                (unsigned long)PS4_EBOOT_BASE);
+    }
+    return PS4_EBOOT_BASE;
+}
+
 /* Find the pid + base address of the running big app (game).
  * Walks sysctl(KERN_PROC_PROC) and uses sceKernelGetAppInfo to find
  * a non-NPXS app. Returns pid (>0) on success, 0 if no game running.
@@ -243,7 +280,7 @@ static pid_t find_running_game(char *title_out, size_t title_cap,
                 snprintf(title_out, title_cap, "%s", tid);
             }
             if (base_out) {
-                *base_out = locked_mapbase(pid, 0);
+                *base_out = game_exe_base(pid, tid);
             }
         }
         ptr += ki_structsize;
@@ -2777,8 +2814,10 @@ static int exe_gate_locked(uint64_t now) {
 }
 
 static intptr_t pass_base(pid_t pid) {
-    if (g_base_pid != pid || g_base <= 0) {
-        g_base = locked_mapbase(pid, 0);
+    /* A PS4 game's address is looked for again until its code is there (game_exe_base). */
+    int ps4_pending = strncmp(g_sess.title, "CUSA", 4) == 0 && g_base != PS4_EBOOT_BASE;
+    if (g_base_pid != pid || g_base <= 0 || ps4_pending) {
+        g_base = game_exe_base(pid, g_sess.title);
         g_base_pid = pid;
     }
     return g_base > 0 ? g_base : 0;
