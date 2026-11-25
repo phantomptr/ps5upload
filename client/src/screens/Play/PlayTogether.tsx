@@ -913,7 +913,10 @@ export function JoinAsks({
   const a = asks[0];
   return (
     <div
-      className={`pointer-events-auto absolute left-1/2 top-28 z-40 flex w-max max-w-[min(32rem,calc(100%-2rem))] -translate-x-1/2 flex-wrap items-center gap-2 bg-black/85 px-4 py-2 text-sm text-white shadow-lg ${
+      // On a phone the picture is small (about 190 px tall): the request starts at its top and
+      // may be nearly as wide, so its two buttons stay inside the picture (German wrapped them
+      // out of it).
+      className={`pointer-events-auto absolute left-1/2 top-28 z-40 flex w-max max-w-[min(32rem,calc(100%-2rem))] -translate-x-1/2 flex-wrap items-center gap-2 bg-black/85 px-4 py-2 text-sm text-white shadow-lg phone:top-2 phone:max-w-[calc(100%-1rem)] phone:justify-center phone:gap-x-2 phone:gap-y-1 phone:rounded-2xl phone:px-3 phone:py-1.5 phone:text-xs ${
         seatNext || nextProfile ? "rounded-2xl" : "rounded-full"
       }`}
       data-testid="pt-ask"
