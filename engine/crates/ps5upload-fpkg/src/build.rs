@@ -244,6 +244,17 @@ pub struct BuildControl<'a> {
     pub sample: Option<u64>,
 }
 
+/// Whether `id` is a content id's characters only (`UP0000-PPSA00000_00-0123456789ABCDEF`:
+/// letters, digits, `-`, `_`), so it can name the package file. The id comes from the game's own
+/// param.json or param.sfo: one like `../../../../tmp/AAAA…` put the package outside the
+/// folder chosen for it.
+pub fn content_id_is_plain(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 /// Build the package. `progress` receives short phase lines.
 pub fn build(request: &BuildRequest, progress: &mut dyn FnMut(&str)) -> Result<BuildReport> {
     build_controlled(request, progress, &mut BuildControl::default())
@@ -341,6 +352,12 @@ fn build_mode(
         return format_err(format!(
             "content id {content_id:?} is {} characters, not 36",
             content_id.len()
+        ));
+    }
+    if !content_id_is_plain(&content_id) {
+        return format_err(format!(
+            "content id {content_id:?} has characters a content id never has \
+             (only letters, digits, - and _)"
         ));
     }
     // The packaged copy has to name the id the package is built under, both in `contentId`

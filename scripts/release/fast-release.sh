@@ -206,9 +206,23 @@ fi
 echo "PR #$PR merged"
 
 step "5. Tag v$V (pre-release) and publish"
-gh workflow run release-tag.yml --ref main -f version="$V" -f prerelease=true -f force="$FORCE"
-sleep 8
-TAG_RUN="$(gh run list --workflow release-tag.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+# This dispatch's own run, never the newest run that happens to be listed: a run not registered
+# yet left the previous release's (finished, green) run as the newest, and "tagged" was printed
+# for a tag that a failing release-tag never made. Run ids only grow, so a run newer than the
+# newest before the dispatch is this one; gh also prints the new run's URL when GitHub gives it.
+BEFORE="$(gh run list --workflow release-tag.yml --limit 1 --json databaseId --jq '.[0].databaseId // 0')"
+[[ "$BEFORE" =~ ^[0-9]+$ ]] || fail "could not read the release-tag runs"
+DISPATCH="$(gh workflow run release-tag.yml --ref main -f version="$V" -f prerelease=true -f force="$FORCE" 2>&1)" \
+  || fail "could not dispatch release-tag: $DISPATCH"
+TAG_RUN="$(grep -oE '/actions/runs/[0-9]+' <<<"$DISPATCH" | head -n 1 | sed 's#.*/##' || true)"
+for _ in $(seq 1 30); do
+  [ -n "$TAG_RUN" ] && break
+  sleep 5
+  TAG_RUN="$(gh run list --workflow release-tag.yml --limit 5 --json databaseId \
+    --jq "[.[] | select(.databaseId > $BEFORE)] | min_by(.databaseId) | .databaseId // empty" || true)"
+done
+[ -n "$TAG_RUN" ] || fail "no release-tag run appeared for the dispatch: gh run list --workflow release-tag.yml"
+echo "release-tag run $TAG_RUN"
 gh run watch "$TAG_RUN" --exit-status --interval 15 >/dev/null || fail "release-tag failed: gh run view $TAG_RUN --log-failed"
 echo "tagged v$V"
 PUB=""

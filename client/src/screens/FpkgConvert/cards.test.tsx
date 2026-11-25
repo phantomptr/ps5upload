@@ -70,40 +70,31 @@ describe("CompressionTiles", () => {
 describe("MakeCard", () => {
   it("does not ask to check an archive, which is looked at when it is unpacked", () => {
     const html = renderToStaticMarkup(
-      <MakeCard make="pkg" onMake={() => {}} kernel="11.00" contentId={null} checked={false} archive />,
+      <MakeCard make="pkg" onMake={() => {}} checked={false} archive />,
     );
     expect(html).not.toContain("Check a game");
     expect(html).toContain("after it is unpacked");
   });
 
-  it("explains both, and marks the image for a PS5 game the firmware will not play as a package", () => {
-    const fw = renderToStaticMarkup(
-      <MakeCard make="pkg" onMake={() => {}} kernel="r229358/releases/14.00" contentId="UP9000-PPSA03671_00-X" checked />,
-    );
+  it("explains both, and marks the package once a game is checked", () => {
+    const fw = renderToStaticMarkup(<MakeCard make="pkg" onMake={() => {}} checked />);
     expect(fw).toContain("A package (.pkg)");
     expect(fw).toContain("A game image");
-    expect(fw).toContain("Recommended on FW 14.00");
-    expect(fw).toContain("not play on FW 14.00");
-    // Up to 13.60 an installed PS5 package plays (with a fake-package kstuff): the package is the
-    // ordinary choice, not the image.
-    const fw1360 = renderToStaticMarkup(
-      <MakeCard make="pkg" onMake={() => {}} kernel="r229358/releases/13.60" contentId="UP9000-PPSA03671_00-X" checked />,
-    );
-    expect(fw1360).not.toContain("Recommended on FW");
-    expect(fw1360).toContain("plays on firmware up to 13.60");
+    expect(fw.match(/Recommended/g)).toHaveLength(1);
+    expect(fw).toContain("plays on firmware up to 13.60");
     const ps4 = renderToStaticMarkup(
-      <MakeCard make="pkg" onMake={() => {}} kernel="r229358/releases/13.60" contentId="UP9000-CUSA01234_00-X" checked />,
+      <MakeCard make="pkg" onMake={() => {}} checked />,
     );
     expect(ps4).not.toContain("Recommended on FW");
     expect(ps4.match(/Recommended/g)).toHaveLength(1);
-    const none = renderToStaticMarkup(<MakeCard make="pkg" onMake={() => {}} kernel={null} contentId={null} checked={false} />);
+    const none = renderToStaticMarkup(<MakeCard make="pkg" onMake={() => {}} checked={false} />);
     expect(none).not.toContain("Recommended");
     expect(none).toContain("Check a game under");
   });
 
   it("with Kraken Mount running, marks the package (mounted, not installed) and says images aren't mounted", () => {
     const k = renderToStaticMarkup(
-      <MakeCard make="pkg" onMake={() => {}} kernel="r229358/releases/13.60" contentId="UP9000-PPSA03671_00-X" checked kraken />,
+      <MakeCard make="pkg" onMake={() => {}} checked kraken />,
     );
     expect(k).not.toContain("Recommended on FW");
     expect(k.match(/Recommended/g)).toHaveLength(1);
@@ -111,14 +102,14 @@ describe("MakeCard", () => {
     expect(k).toContain("a package made here is mounted from a drive, not installed");
     expect(k).toContain("Kraken Mount, running on this PS5, mounts it");
     const img = renderToStaticMarkup(
-      <MakeCard make="image" onMake={() => {}} kernel={null} contentId={null} checked={false} kraken />,
+      <MakeCard make="image" onMake={() => {}} checked={false} kraken />,
     );
     expect(img).toContain("does not mount images");
   });
 
   it("offers a game folder as a third choice, never marked as recommended", () => {
     const out = renderToStaticMarkup(
-      <MakeCard make="folder" onMake={() => {}} kernel="r229358/releases/9.60" contentId="UP9000-PPSA03671_00-X" checked />,
+      <MakeCard make="folder" onMake={() => {}} checked />,
     );
     expect((out.match(/role="radio"/g) ?? []).length).toBe(3);
     expect(out).toContain("A game folder");
@@ -158,7 +149,7 @@ describe("OptionsCard for a folder", () => {
 describe("A PS4 game's package", () => {
   it("is offered as a PS4 package under ②", () => {
     const out = renderToStaticMarkup(
-      <MakeCard make="pkg" onMake={() => {}} kernel="r229358/releases/13.60" contentId="UP9000-CUSA01234_00-X" checked ps4 />,
+      <MakeCard make="pkg" onMake={() => {}} checked ps4 />,
     );
     expect(out).toContain("A PS4 package (.pkg)");
     expect(out).toContain("A PS4 fake package the PS5 installs");
@@ -697,7 +688,7 @@ describe("a waiting game's own options (#669)", () => {
 
   it("while a game is being made, ② and ③ are open and say they are for the next game", () => {
     const make = renderToStaticMarkup(
-      <MakeCard make="folder" onMake={() => {}} kernel={null} contentId={null} checked={false} forNext />,
+      <MakeCard make="folder" onMake={() => {}} checked={false} forNext />,
     );
     expect(make).toContain('data-testid="next-game-note"');
     expect(make).not.toMatch(/<button[^>]* disabled=""/);

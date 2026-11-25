@@ -58,7 +58,6 @@ import {
   Toggle,
 } from "../../components";
 import { BrowseButton } from "../../components/BrowseButton";
-import { FakeGameFirmwareNotice } from "../../components/FakeGameFirmwareNotice";
 import {
   DOC_ANCHORS,
   faqLink,
@@ -153,9 +152,6 @@ function PkgRow({
 }) {
   const tr = useTr();
   const navigate = useNavigate();
-  const kernel = useConnectionStore(
-    (s) => s.runtimeByHost[hostOf(host)]?.ps5Kernel ?? null,
-  );
   // After the console refused this package from its own storage, Retry with Stream is offered
   // beside Install when the engine says that is safe for this package.
   const streamOffered = !!entry.lastResult?.retryWithStream && !!onRetryStream;
@@ -587,15 +583,6 @@ function PkgRow({
       {/* Windows: the console could not reach this computer, and the engine knows why. */}
       {!busy && !entry.lastResult?.ok && entry.lastResult?.netDiag && (
         <NetworkFixActions diag={entry.lastResult.netDiag} />
-      )}
-      {/* A fake PS5 GAME on firmware above 13.60 installs but cannot be
-          played. Not shown for a retail-signed package, PS4, or homebrew. */}
-      {!installed && entry.authenticity !== "retail" && (
-        <FakeGameFirmwareNotice
-          compact
-          kernel={kernel}
-          contentId={entry.contentId || entry.titleId}
-        />
       )}
     </li>
   );

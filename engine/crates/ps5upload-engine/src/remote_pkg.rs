@@ -218,7 +218,7 @@ fn origin_changed_on_200(
 }
 
 /// `bytes 5-9/100` as (5, Some(100)); a `*` total is `None`.
-fn parse_content_range(value: &str) -> Option<(u64, Option<u64>)> {
+pub(crate) fn parse_content_range(value: &str) -> Option<(u64, Option<u64>)> {
     let spec = value.trim().strip_prefix("bytes")?.trim_start();
     let (range, total) = spec.split_once('/')?;
     let start = range.split_once('-')?.0.trim().parse().ok()?;

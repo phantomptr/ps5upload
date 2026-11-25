@@ -87,4 +87,37 @@ describe("a guest's decoder", () => {
     made[0].init.error(new Error("late"));
     expect(problems).toEqual(["decode"]);
   });
+
+  it("makes no new one once stopped: a late picture or header leaves nothing open", async () => {
+    const { p } = await setUp();
+    p.stop();
+    expect(made[0].state).toBe("closed");
+    // Messages already on their way when the guest left.
+    p.onMessage(KEY);
+    p.onMessage(HEADER);
+    await flush();
+    expect(made).toHaveLength(1);
+  });
+
+  it("makes no H.265 decoder when stopped while its codec was looked up", async () => {
+    let answer: (v: { supported: boolean }) => void = () => {};
+    vi.stubGlobal(
+      "VideoDecoder",
+      class extends FakeDecoder {
+        static isConfigSupported = () => new Promise<{ supported: boolean }>((r) => (answer = r));
+      },
+    );
+    const p = new WatchPlayer(() => {}, "player");
+    p.setHevc(true);
+    // An H.265 VPS/SPS/PPS header.
+    p.onMessage(
+      new Uint8Array([0, 0, 0, 0, 1, 0x40, 0x01, 0x0c, 0, 0, 0, 1, 0x42, 0x01, 0x01, 0x01, 0x60, 0, 0, 0, 1, 0x44, 0x01, 0xc0])
+        .buffer,
+    );
+    await flush();
+    p.stop();
+    answer({ supported: true });
+    await flush();
+    expect(made).toHaveLength(0);
+  });
 });

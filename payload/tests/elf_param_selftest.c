@@ -415,6 +415,26 @@ int main(void) {
         CHECK(n == 2);
     }
 
+    /* A module param too short for both SDK fields (0x14..0x17 bytes) is not a site: the patcher
+     * reads and writes the PS5 field at 0x14 of every site, which here lies past the segment and,
+     * at the end of the file, past the file. */
+    for (uint64_t short_sz = 0x14; short_sz < 0x18; short_sz++) {
+        elf_reset(1);
+        elf_put_segment(0, PT_SCE_MODULE_PARAM, 0x200, short_sz,
+                        SCE_MODULE_PARAM_MAGIC, SCE_PARAM_PS4_SDK_OFFSET, 0x10000040u);
+        CHECK(g_len == 0x200 + short_sz); /* the segment ends the file */
+        n = elf_find_param_sites(g_elf, g_len, sites, 8, &st);
+        CHECK(n == 0);
+    }
+    /* 0x18 holds both: still a site. */
+    {
+        elf_reset(1);
+        elf_put_segment(0, PT_SCE_MODULE_PARAM, 0x200, 0x18,
+                        SCE_MODULE_PARAM_MAGIC, SCE_PARAM_PS4_SDK_OFFSET, 0x10000040u);
+        n = elf_find_param_sites(g_elf, g_len, sites, 8, &st);
+        CHECK(n == 1);
+    }
+
     printf("elf_param_selftest: %s\n", failures == 0 ? "ALL PASS" : "FAILED");
     return failures == 0 ? 0 : 1;
 }

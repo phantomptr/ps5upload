@@ -41,11 +41,9 @@ export function parsePS5Firmware(kernel: string | null | undefined): string | nu
   return null;
 }
 
-/** The newest firmware on which a PS5 fake (FPKG) GAME is playable. Above it
- *  the package still installs, but the game does not start. 11.60 until November 2026, when a
- *  kstuff build with fake-package support up to 13.60 was released (11.61 to 13.60 need that
- *  build; the fake-package note says so). PS4 fake packages and PS5 homebrew apps are not
- *  affected. */
+/** The newest firmware a PS5 fake (FPKG) GAME is known to play on: 13.60, since a kstuff build
+ *  with fake-package support up to it was released in November 2026 (11.61 to 13.60 need that
+ *  build). No public jailbreak goes above it, so nothing warns about firmware past it. */
 export const LAST_PS5_FAKE_GAME_FIRMWARE = "13.60";
 
 /** True when `id` (a content id such as `UP4433-PPSA17221_00-MINECRAFTPS50000`
@@ -55,24 +53,6 @@ export const LAST_PS5_FAKE_GAME_FIRMWARE = "13.60";
  *  unrecognised id is not a game: the warning needs positive evidence. */
 export function isPs5GameId(id: string | null | undefined): boolean {
   return !!id && /(?:^|[^A-Z0-9])PPSA\d{5}(?![0-9])/.test(id.toUpperCase());
-}
-
-/** The console's firmware ("13.60") when a PS5 fake GAME package with this id
- *  would install but not be playable there, else null. That needs all of:
- *  a PS5 game id (not PS4, not homebrew) AND a parseable firmware strictly
- *  above LAST_PS5_FAKE_GAME_FIRMWARE. An unparseable kernel string never produces a warning. */
-export function ps5FakeGameUnplayableFirmware(
-  kernel: string | null | undefined,
-  contentOrTitleId: string | null | undefined,
-): string | null {
-  if (!isPs5GameId(contentOrTitleId)) return null;
-  const fw = parsePS5Firmware(kernel);
-  if (!fw) return null;
-  const toNum = (v: string) => {
-    const [maj, min] = v.split(".");
-    return Number(maj) * 100 + Number(min);
-  };
-  return toNum(fw) > toNum(LAST_PS5_FAKE_GAME_FIRMWARE) ? fw : null;
 }
 
 /** The newest firmware where a PS5 fake GAME played with any kstuff that loads fake packages.

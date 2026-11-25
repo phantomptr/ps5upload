@@ -189,9 +189,49 @@ static void flags_what_was_cut(void) {
     CHECK(jb.over && strcmp(buf, "0123456789ab") == 0);
 }
 
+/* A paired-form value in a pretty-printed SHN: the whitespace around it is not part of it, and one
+ * too long for the buffer is reported cut and fills it (cheats.c then refuses "value too long"). It
+ * used to be cut first and trimmed after, so a cut value passed for a whole one. */
+static void xml_text_measures_without_whitespace(void) {
+    char out[256], small[32];
+    CHECK(cheats_xml_text("<Cheatline><ValueOn>\n      90 90 \n   </ValueOn></Cheatline>", "ValueOn", out,
+                          sizeof out) == 0);
+    CHECK(strcmp(out, "90 90") == 0);
+    CHECK(cheats_xml_text("<Cheatline><Offset a=\"1\">0x10</Offset>", "Offset", small, sizeof small) == 0);
+    CHECK(strcmp(small, "0x10") == 0);
+    CHECK(cheats_xml_text("<Cheatline><ValueOn>90</Cheatline>", "ValueOn", out, sizeof out) == -1);
+    CHECK(out[0] == '\0');
+    CHECK(cheats_xml_text("<Cheatline/>", "ValueOn", out, sizeof out) == -1);
+
+    /* 20 spaces of indentation, then 300 hex digits. */
+    char *xml = malloc(512);
+    CHECK(xml != NULL);
+    if (!xml) return;
+    size_t at = (size_t)snprintf(xml, 512, "<ValueOn>\n");
+    memset(xml + at, ' ', 20);
+    at += 20;
+    memset(xml + at, 'A', 300);
+    at += 300;
+    snprintf(xml + at, 512 - at, "\n</ValueOn>");
+    CHECK(cheats_xml_text(xml, "ValueOn", out, sizeof out) == 1);
+    CHECK(strlen(out) + 1 == sizeof out); /* full: the caller's "too long" check trips */
+    CHECK(out[0] == 'A');
+    /* Exactly what fits, indented: whole. */
+    at = (size_t)snprintf(xml, 512, "<ValueOn>\n");
+    memset(xml + at, ' ', 20);
+    at += 20;
+    memset(xml + at, 'B', 254);
+    at += 254;
+    snprintf(xml + at, 512 - at, "\n</ValueOn>");
+    CHECK(cheats_xml_text(xml, "ValueOn", out, sizeof out) == 0);
+    CHECK(strlen(out) == 254 && out[0] == 'B' && out[253] == 'B');
+    free(xml);
+}
+
 int main(void) {
     xml_attr_finds_whole_names();
     xml_attr_stops_at_the_end();
+    xml_text_measures_without_whitespace();
     list_ends_whole_at_any_size();
     type_is_escaped();
     flags_what_was_cut();

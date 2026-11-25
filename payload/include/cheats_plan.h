@@ -89,4 +89,11 @@ int cheat_plan_apply(cheat_loc_t *locs, int n, int turn_on,
  * canonical user limit, and not wrapping. */
 int cheat_addr_ok(intptr_t addr, int len);
 
+/* Whether a loaded module of the game's process may take a physical write: one of the game's
+ * own. A module loaded from its /app0, or dynlib handle 0 when that is its executable (a path
+ * ending in eboot.bin, or a path that could not be read, as handle 0 always was). Handle 0 by
+ * number alone is not enough: in a PS4 game's process (#920) it is another module, and a
+ * physical write there lands in every process that maps the page. */
+int cheat_module_is_game(uint64_t handle, const char *path);
+
 #endif /* PS5UPLOAD_CHEATS_PLAN_H */

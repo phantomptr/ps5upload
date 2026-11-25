@@ -12,11 +12,7 @@ import {
   isHomebrewRefusal,
   type RefusalOutcome,
 } from "./launchRefusal";
-import {
-  LAST_PS5_FAKE_GAME_FIRMWARE,
-  ps5FakeGameNeedsNewKstuff,
-  ps5FakeGameUnplayableFirmware,
-} from "./ps5Firmware";
+import { ps5FakeGameNeedsNewKstuff } from "./ps5Firmware";
 import { fetchRunningGames, type RunningGame } from "./runningGames";
 import { useStaleHostGuard } from "./staleHostGuard";
 import { useMakeWay } from "./useMakeWay";
@@ -89,14 +85,6 @@ export function useGameLaunch(
       const kernel =
         useConnectionStore.getState().runtimeByHost[hostOf(launchHost)]
           ?.ps5Kernel;
-      const fw = ps5FakeGameUnplayableFirmware(kernel, titleId);
-      if (fw) {
-        return `${body} ${tr(
-          "fakegame.fw.launch_v3",
-          { fw, last: LAST_PS5_FAKE_GAME_FIRMWARE },
-          `On firmware above ${LAST_PS5_FAKE_GAME_FIRMWARE} (this console is on ${fw}) a PS5 game installed from a fake package doesn't start. PS4 packages are fine.`,
-        )}`;
-      }
       // 11.61 to 13.60: a fake PS5 game starts only with the newer kstuff (November 2026).
       const kfw = ps5FakeGameNeedsNewKstuff(kernel, titleId);
       if (!kfw) return body;

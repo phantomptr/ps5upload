@@ -778,7 +778,10 @@ impl AvaTransport {
                 .await?;
             let r = gen::FsReadResult::decode(&r)?;
             let got = r.data.len();
-            out.extend_from_slice(&r.data);
+            // Never more than was asked: a reply over it made `want - out.len()` underflow
+            // (a panic in a debug build, a read on to the end of the file in a release one).
+            let take = got.min(usize::try_from(left).unwrap_or(usize::MAX));
+            out.extend_from_slice(&r.data[..take]);
             if r.eof != 0 || got == 0 || want == 0 {
                 break;
             }

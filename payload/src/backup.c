@@ -472,6 +472,11 @@ static int restore_from_manifest(const char *snap_dir, int *restored) {
          * is_path_allowed checks both the lexical form and the realpath()
          * resolved form (symlink-escape). */
         if (!is_path_allowed(original)) continue;
+        /* The name is a file inside this snapshot: one path component, never "." or "..",
+         * so a hand-edited manifest cannot make the restore read from outside the snapshot. */
+        if (!snap_basename[0] || strchr(snap_basename, '/') || strcmp(snap_basename, ".") == 0 ||
+            strcmp(snap_basename, "..") == 0)
+            continue;
         char src[1024];
         snprintf(src, sizeof(src), "%s/%s", snap_dir, snap_basename);
         int c = copy_file(src, original);

@@ -456,7 +456,7 @@ static int phys_write_allowed(pid_t pid, intptr_t addr, size_t len, char *why, s
             path[0] = '\0';
             if (h.path) (void)kernel_copyout(h.path, path, sizeof(path) - 1);
             path[sizeof(path) - 1] = '\0';
-            int game_module = (h.handle == 0) || strstr(path, "/app0/") != NULL;
+            int game_module = cheat_module_is_game(h.handle, path);
             if (!game_module) {
                 if (why) snprintf(why, why_cap, "inside %s", path[0] ? path : "a system module");
                 verdict = 0;
@@ -794,35 +794,9 @@ static void xml_open_tag_copy(const char *start, const char *end, char *buf, siz
     buf[n] = '\0';
 }
 
-/* Extract text between <tag>...</tag>. */
-static int xml_text(const char *start, const char *tag_name,
-                    char *out, size_t cap) {
-    if (!start || !tag_name || !out || cap == 0) return -1;
-    out[0] = '\0';
-    char open_tag[64];
-    char close_tag[64];
-    snprintf(open_tag, sizeof(open_tag), "<%s", tag_name);
-    snprintf(close_tag, sizeof(close_tag), "</%s>", tag_name);
-
-    const char *p = strstr(start, open_tag);
-    if (!p) return -1;
-    p += strlen(open_tag);
-    while (*p && *p != '>') p++;  /* skip attrs */
-    if (*p == '>') p++;
-
-    const char *end = strstr(p, close_tag);
-    if (!end) return -1;
-
-    size_t len = (size_t)(end - p);
-    if (len >= cap) len = cap - 1;
-    memcpy(out, p, len);
-    out[len] = '\0';
-
-    /* Trim whitespace */
-    while (len > 0 && isspace((unsigned char)out[len-1])) out[--len] = '\0';
-    while (isspace((unsigned char)out[0])) memmove(out, out+1, strlen(out));
-
-    return 0;
+/* Extract text between <tag>...</tag> (include/cheats_xml_attr.h): 1 when it did not fit. */
+static int xml_text(const char *start, const char *tag_name, char *out, size_t cap) {
+    return cheats_xml_text(start, tag_name, out, cap);
 }
 
 /* Find next occurrence of <TagName in xml text starting from cursor.
@@ -962,8 +936,11 @@ static int parse_shn_file(const char *xml, size_t xml_len,
             if (sec_str[0]) e->section = atoi(sec_str);
 
             /* Try child tags (paired form) */
-            if (!e->offset_str[0])
-                xml_text(cl_full, "Offset", e->offset_str, sizeof(e->offset_str));
+            /* An offset too long to hold is not cut into another address: it becomes one that does
+             * not parse, so the cheat is refused (resolve_mod_locs). */
+            if (!e->offset_str[0] &&
+                xml_text(cl_full, "Offset", e->offset_str, sizeof(e->offset_str)) == 1)
+                snprintf(e->offset_str, sizeof(e->offset_str), "too long");
             if (!e->on_str[0])
                 xml_text(cl_full, "ValueOn", e->on_str, sizeof(e->on_str));
             if (!e->off_str[0])
@@ -1537,6 +1514,18 @@ static void xml_applied_forget(pid_t pid) {
         if (g_xml_applied[i].rec && g_xml_applied[i].pid == pid) xml_applied_free(&g_xml_applied[i]);
 }
 
+/* 1 when one more entry applied to `pid` can be recorded (an earlier game session's records are
+ * let go first, as xml_applied_find does). */
+static int xml_applied_room(pid_t pid) {
+    int room = 0;
+    for (int i = 0; i < XML_APPLIED_MAX; i++) {
+        xml_applied_t *a = &g_xml_applied[i];
+        if (a->rec && a->pid != pid) xml_applied_free(a);
+        if (!a->rec) room = 1;
+    }
+    return room;
+}
+
 static int xml_applied_add(pid_t pid, const char *path, int entry, const cheat_loc_t *locs, int n,
                            uint32_t handle, uint64_t mbase, uint64_t msize) {
     xml_applied_t *a = NULL;
@@ -2008,13 +1997,27 @@ static int xml_apply_on(pid_t pid, const char *title, cheat_mod_t *mod, const xm
         if (err) snprintf(err, err_cap, "patch has no lines");
         rc = -1;
     }
+    /* Only what can be recorded is written: without its record, turning it off finds nothing to
+     * put back, says it is off and leaves the bytes in the game. */
+    if (rc == 0 && !xml_applied_room(pid)) {
+        if (err) snprintf(err, err_cap, "%d game patches are on already; turn one off first; nothing was written",
+                          XML_APPLIED_MAX);
+        rc = -1;
+    }
     if (rc == 0) {
         hook_before_write(hk);
         rc = cheat_plan_apply(locs, n, 1, NULL, 0, &ops, err, err_cap);
     }
-    if (rc == 0 && xml_applied_add(pid, mod->xml_path, mod->xml_entry, locs, n, handle, mbase, msize) != 0)
-        fprintf(stderr, "[cheats] %s #%d applied but not recorded; restart the game to remove it\n",
-                mod->xml_path, mod->xml_entry);
+    if (rc == 0 && xml_applied_add(pid, mod->xml_path, mod->xml_entry, locs, n, handle, mbase, msize) != 0) {
+        /* Out of memory for the record: take the patch out again (what is there now is its bytes). */
+        for (int i = 0; i < n; i++) memcpy(locs[i].cur, locs[i].on, (size_t)locs[i].len);
+        char undo_err[160] = "";
+        int undo = cheat_plan_apply(locs, n, 0, NULL, 0, &ops, undo_err, sizeof undo_err);
+        fprintf(stderr, "[cheats] %s #%d applied but not recorded; %s\n", mod->xml_path, mod->xml_entry,
+                undo == 0 ? "taken out again" : "restart the game to remove it");
+        if (err) snprintf(err, err_cap, "out of memory; %s", undo == 0 ? "nothing was left written" : undo_err);
+        rc = -1;
+    }
     free(locs);
     return rc;
 }

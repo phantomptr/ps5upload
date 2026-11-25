@@ -25,6 +25,23 @@ describe("buildPs5Snapshot (disconnected)", () => {
     expect(Object.keys(snapshot.errors)).toHaveLength(0);
   });
 
+  it("a console not probed yet gets no status of the selected one", async () => {
+    useConnectionStore.setState({
+      host: "10.0.0.2",
+      payloadStatus: "down",
+      payloadVersion: "12.6.28",
+      ps5Kernel: "r229358/releases/13.60",
+      ucredElevated: true,
+      runtimeByHost: {},
+    });
+    const { snapshot } = await buildPs5Snapshot({ redact: false, host: "10.0.0.9" });
+    expect(snapshot.host).toBe("10.0.0.9");
+    expect(snapshot.payload_version).toBeNull();
+    expect(snapshot.ps5_kernel).toBeNull();
+    expect(snapshot.ucred_elevated).toBeNull();
+    expect(snapshot.connected).toBe(false);
+  });
+
   it("treats payload 'up' with an empty host as disconnected", async () => {
     useConnectionStore.setState({ host: "", payloadStatus: "up" });
     const { snapshot } = await buildPs5Snapshot({ redact: false });

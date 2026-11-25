@@ -39,7 +39,7 @@ const GAME_FILE = /\.(pkg|exfat|ffpkg|ffpfs|ffpfsc)$/i;
 type IconType = ComponentType<{ size?: number; className?: string }>;
 
 /** One action of a Files row. The desktop layout draws it as an icon button;
- *  below `sm` (a phone) the same list sits behind the row's ⋮ menu, in the
+ *  in the phone layout (below `sm`, or a phone held sideways) the same list sits behind the row's ⋮ menu, in the
  *  same order, so both run the very same handler. */
 export interface RowAction {
   id: string;
@@ -338,7 +338,7 @@ export function buildRowActions(e: RowEntry, ctx: RowActionsContext): RowAction[
   return actions;
 }
 
-/** A row's desktop action buttons (hidden below `sm`). */
+/** A row's desktop action buttons (hidden in the phone layout). */
 export function RowActionButtons({
   entry,
   ctx,
@@ -372,13 +372,14 @@ export function RowActionsMenu({
   );
 }
 
-/** The row's actions as the desktop icon buttons. Hidden below `sm`, where
- *  `RowActionsTrigger` stands in for them. */
+/** The row's actions as the desktop icon buttons. Hidden in the phone layout
+ *  (below `sm`, or a phone held sideways: the `phone:` variant in index.css),
+ *  where `RowActionsTrigger` stands in for them. */
 export function RowActionButtonList({ actions }: { actions: RowAction[] }) {
   return (
     <div
       data-testid="fs-row-actions"
-      className="ms-2 hidden shrink-0 items-center gap-1 sm:flex"
+      className="ms-2 hidden shrink-0 items-center gap-1 roomy:flex"
     >
       {actions.filter((a) => !a.menuOnly).map((a) => (
         <button
@@ -401,7 +402,7 @@ export function RowActionButtonList({ actions }: { actions: RowAction[] }) {
   );
 }
 
-/** The ⋮ that opens a row's actions on a phone (below `sm` only). */
+/** The ⋮ that opens a row's actions in the phone layout (`phone:` in index.css). */
 export function RowActionsTrigger({
   label,
   open,
@@ -424,7 +425,7 @@ export function RowActionsTrigger({
       // tap that should close it would close it and the click reopen it.
       onMouseDown={(ev) => ev.stopPropagation()}
       onClick={(ev) => onToggle(ev.currentTarget.getBoundingClientRect())}
-      className="-me-1 shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] sm:hidden"
+      className="-me-1 shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] roomy:hidden"
     >
       <MoreVertical size={16} />
     </button>

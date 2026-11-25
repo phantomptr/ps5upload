@@ -156,14 +156,31 @@ export function startSaveBackupSync(): () => void {
   // What this client has told the engine about: only that can be taken off again. Several clients
   // can share one engine, and each has its own roster.
   let told: string[] = [];
+  // One list on its way at a time: `told` changes only when one lands, so a console deleted while
+  // the first list was on its way was worked out against the old `told` and never taken off (and
+  // two lists landing out of order could leave the older one as what the engine has).
+  let inFlight = false;
+  let again = false;
   const push = (profiles: readonly { host: string }[]) => {
     const hosts = backupHosts(profiles);
     const key = hosts.join(",");
     if (key === sent) return;
+    if (inFlight) {
+      again = true;
+      return;
+    }
     sent = key;
     if (retry) clearTimeout(retry);
     retry = null;
     const removed = told.filter((h) => !hosts.includes(h));
+    inFlight = true;
+    const landed = () => {
+      inFlight = false;
+      if (again && !stopped) {
+        again = false;
+        push(useRosterStore.getState().profiles);
+      }
+    };
     void saveBackupApi.set({ add_hosts: hosts, remove_hosts: removed }).then(
       () => {
         told = hosts;
@@ -181,7 +198,7 @@ export function startSaveBackupSync(): () => void {
           push(useRosterStore.getState().profiles);
         }, Math.min(RETRY_MAX_MS, RETRY_FIRST_MS * 2 ** Math.min(failures, 8)));
       },
-    );
+    ).finally(landed);
   };
   void (async () => {
     try {

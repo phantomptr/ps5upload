@@ -16,8 +16,7 @@ import { Folder, FolderSearch, HardDrive, Hammer, Send } from "lucide-react";
 import { fpkg, type AmprLz4Options, type FpkgEstimates, type FpkgInspection, type ZstdPacks } from "../../api/fpkg";
 import { appLaunch } from "../../api/ps5";
 import { Button, Callout, Card, PageHeader } from "../../components";
-import { FakeGameFirmwareNotice } from "../../components/FakeGameFirmwareNotice";
-import { hostOf, transferAddr } from "../../lib/addr";
+import { transferAddr } from "../../lib/addr";
 import { createLatest } from "../../lib/latest";
 import { openLocalPath } from "../../lib/openLocalPath";
 import { pickPath } from "../../lib/pickPath";
@@ -148,9 +147,6 @@ export default function WorkshopScreen() {
   const kraken = krakenIsTheMounter(mounterProbe.status === "checking" ? null : mounterProbe.status);
   const [mountRun, setMountRun] = useState<MountRun>(IDLE_MOUNT_RUN);
   const mountClash = useMountClashAsk(host);
-  const kernel = useConnectionStore((s) =>
-    host ? (s.runtimeByHost[hostOf(host)]?.ps5Kernel ?? null) : null,
-  );
 
   const outputDir = useConvertPrefs((s) => s.outputDir);
   const setOutputDir = useConvertPrefs((s) => s.setOutputDir);
@@ -1185,12 +1181,6 @@ export default function WorkshopScreen() {
         }
       />
 
-      {/* Building still works (it runs on this computer), but a PS5 fake GAME
-          installs and then can't be played on firmware above 13.60. Said
-          before the user spends an hour converting; silent for PS4, for
-          homebrew and when the firmware is unknown. */}
-      <FakeGameFirmwareNotice kernel={kernel} contentId={inspection?.content_id} />
-
       {/* One column at every width (the user asked for it): the steps read top to bottom,
           ① to ⑤, and each card takes the window's whole width. */}
       <div className="flex min-w-0 flex-col gap-3">
@@ -1204,8 +1194,6 @@ export default function WorkshopScreen() {
               if (m === "folder") setThen("keep");
             }}
             // While a game is being made, what is checked under ① is that game, not the next.
-            kernel={locked ? null : kernel}
-            contentId={locked ? null : inspection?.content_id}
             checked={!locked && inspection !== null}
             archive={!locked && isArchiveSource(src)}
             forNext={locked}

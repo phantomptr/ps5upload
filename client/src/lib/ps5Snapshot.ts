@@ -1,6 +1,6 @@
 import { invoke } from "./invokeLogged";
 
-import { useConnectionStore } from "../state/connection";
+import { EMPTY_HOST_RUNTIME, useConnectionStore } from "../state/connection";
 import { hostOf, mgmtAddr, transferAddr } from "./addr";
 import { redactHost } from "./diagnosticBundle";
 import { blackBoxFor, recordBlackBox } from "./payloadBlackBox";
@@ -337,7 +337,12 @@ export async function buildPs5Snapshot(opts: {
 }): Promise<Ps5SnapshotResult> {
   const live = useConnectionStore.getState();
   const host = (opts.host ?? live.host)?.trim() ?? "";
-  const rt = opts.host && hostOf(opts.host) !== hostOf(live.host) ? live.runtimeByHost[hostOf(opts.host)] : undefined;
+  // Another console with no record yet (never probed) is unknown, not the selected one: its
+  // version and kernel went into the report, and its "up" let a full read of the other one run.
+  const rt =
+    opts.host && hostOf(opts.host) !== hostOf(live.host)
+      ? (live.runtimeByHost[hostOf(opts.host)] ?? EMPTY_HOST_RUNTIME)
+      : undefined;
   const conn = rt
     ? {
         ...live,

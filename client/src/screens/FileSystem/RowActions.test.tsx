@@ -103,13 +103,13 @@ describe("Files row: the phone ⋮ menu and the desktop buttons", () => {
     });
   });
 
-  it("desktop buttons hide below sm and the ⋮ shows only there", () => {
+  it("desktop buttons hide in the phone layout (narrow or sideways) and the ⋮ shows only there (#931)", () => {
     const desktop = renderToStaticMarkup(<RowActionButtonList actions={fileActions()} />);
-    expect(desktop).toMatch(/class="[^"]*\bhidden\b[^"]*\bsm:flex\b/);
+    expect(desktop).toMatch(/class="[^"]*\bhidden\b[^"]*\broomy:flex\b/);
     const trigger = renderToStaticMarkup(
       <RowActionsTrigger label="Actions for a.pkg" open={false} onToggle={() => {}} />,
     );
-    expect(trigger).toContain("sm:hidden");
+    expect(trigger).toContain("roomy:hidden");
     expect(trigger).toContain('aria-haspopup="menu"');
     expect(trigger).toContain('aria-expanded="false"');
     expect(trigger).toContain('aria-label="Actions for a.pkg"');

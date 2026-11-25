@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 static int hex_val(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -93,6 +94,16 @@ int cheat_addr_ok(intptr_t addr, int len) {
     uint64_t a = (uint64_t)addr;
     uint64_t end = a + (uint64_t)len;
     return a >= 0x10000ULL && end > a && end <= 0x800000000000ULL;
+}
+
+int cheat_module_is_game(uint64_t handle, const char *path) {
+    if (!path) path = "";
+    if (strstr(path, "/app0/") != NULL) return 1;
+    if (handle != 0) return 0;
+    if (!path[0]) return 1;
+    const char *leaf = strrchr(path, '/');
+    leaf = leaf ? leaf + 1 : path;
+    return strcasecmp(leaf, "eboot.bin") == 0;
 }
 
 static int overlaps(intptr_t a, int alen, intptr_t b, int blen) {

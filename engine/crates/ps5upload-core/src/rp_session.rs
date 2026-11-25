@@ -117,6 +117,11 @@ fn hex16(s: &str) -> Result<[u8; KEY_SIZE]> {
     if s.len() != KEY_SIZE * 2 {
         bail!("expected {} hex chars, got {}", KEY_SIZE * 2, s.len());
     }
+    // Before slicing: a non-ASCII character (a key typed into the API, or one a console sent)
+    // put a two-byte slice inside it, and the parse panicked instead of refusing it.
+    if !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        bail!("not hex");
+    }
     let mut out = [0u8; KEY_SIZE];
     for (i, b) in out.iter_mut().enumerate() {
         *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|_| anyhow!("not hex"))?;
@@ -1455,5 +1460,15 @@ mod tests {
     fn creds_reject_mis_sized_hex() {
         assert!(SessionCreds::from_hex("00", "00").is_err());
         assert!(SessionCreds::from_hex(&"a".repeat(32), &"b".repeat(32)).is_ok());
+    }
+
+    /// 32 bytes that are not 32 hex digits are refused, not a panic (a slice inside `€`).
+    #[test]
+    fn creds_refuse_non_ascii_keys() {
+        let odd = format!("a€{}", "0".repeat(28));
+        assert_eq!(odd.len(), 32);
+        assert!(SessionCreds::from_hex(&odd, &"b".repeat(32)).is_err());
+        assert!(SessionCreds::from_hex(&"a".repeat(32), &odd).is_err());
+        assert!(SessionCreds::from_hex(&format!("+{}", "a".repeat(31)), &"b".repeat(32)).is_err());
     }
 }

@@ -98,8 +98,7 @@ running.
 **Q: Which firmware limits apply to what I install?**
 - **PS5 fake *game* packages play on firmware up to 13.60.** Above 11.60 (11.61, 12.xx, 13.xx)
   they need a kstuff build with fake-package support for that firmware, released in November
-  2026; with an older kstuff the package installs, but the game does not start. Above 13.60 they
-  install but do not start. PS4 fake packages work and PS5 homebrew apps launch. The note at the
+  2026; with an older kstuff the package installs, but the game does not start. PS4 fake packages work and PS5 homebrew apps launch. The note at the
   top of **Upload & Install** says so before you send anything.
 - On **13.60**, Stream & install is the dependable route.
 
@@ -2079,8 +2078,8 @@ refuses to start the title. Check these in order.
    kstuff build that supports fake packages on that firmware, released in
    November 2026. With an older kstuff the package installs, but the game does
    not start: load the newer kstuff, reboot if an older one was running, and
-   launch again. Above 13.60 an installed PS5 fake package does not start, and
-   the app warns about that on Install and Convert. You can also mount the
+   launch again; when a launch fails on these firmware versions, the app says
+   so. You can also mount the
    package with Kraken Mount instead: with Kraken Mount running on the PS5,
    Upload & Install puts the `.pkg` in a folder it scans, and the game plays
    straight from the package, with nothing installed. PS4 packages are fine,

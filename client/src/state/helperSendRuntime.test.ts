@@ -77,6 +77,27 @@ describe("sendHelperTo and the copies the PS5 starts at boot", () => {
   });
 });
 
+describe("the new helper answering", () => {
+  const H = "192.168.0.9";
+  type OnUp = (h: string, s: { payloadVersion: string; ps5Kernel: string; ucredElevated: boolean; priorInstance: null }) => void;
+  const up = { payloadVersion: "5.37.1", ps5Kernel: "r229358/releases/13.60", ucredElevated: true, priorInstance: null };
+
+  it("is this console's own record too, so going to another tab and back still shows it", async () => {
+    runHelperSend.mockResolvedValue("ok");
+    updateHelperCopiesAfterSend.mockResolvedValue([]);
+    useConnectionStore.getState().setHost(H);
+    useConnectionStore.getState().setHostStatus(H, { payloadStatus: "down", payloadVersion: "5.30.0" });
+    await sendHelperTo(H, tr);
+    (runHelperSend.mock.calls[0][1] as { onUp: OnUp }).onUp(H, up);
+    expect(useConnectionStore.getState().payloadVersion).toBe("5.37.1");
+    useConnectionStore.getState().setHost("192.168.0.10");
+    useConnectionStore.getState().setHost(H);
+    expect(useConnectionStore.getState().payloadStatus).toBe("up");
+    expect(useConnectionStore.getState().payloadVersion).toBe("5.37.1");
+    expect(useConnectionStore.getState().runtimeByHost[H]?.ps5Kernel).toBe(up.ps5Kernel);
+  });
+});
+
 describe("sendHelperAndWait", () => {
   const H = "192.168.0.9";
   beforeEach(() => {

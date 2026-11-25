@@ -729,6 +729,28 @@ struct WebdavInner {
     auth: Arc<Auth>,
 }
 
+/// Whether a 206's `Content-Range` (when it has one) starts where the read asked. A server or a
+/// proxy that answers another range sent bytes that were copied as if they came from `offset`:
+/// a package or a copied file with the wrong bytes in it, reported done.
+fn partial_answers(
+    content_range: Option<&str>,
+    offset: u64,
+    host: &str,
+) -> Result<(), RemoteError> {
+    let Some(value) = content_range else {
+        return Ok(());
+    };
+    match crate::remote_pkg::parse_content_range(value) {
+        Some((start, _)) if start == offset => Ok(()),
+        Some((start, _)) => Err(RemoteError::Io(format!(
+            "{host}: asked for bytes from {offset}, the server answered from {start}"
+        ))),
+        None => Err(RemoteError::Io(format!(
+            "{host}: a partial answer with an unreadable Content-Range ({value:?})"
+        ))),
+    }
+}
+
 #[async_trait::async_trait]
 impl RemoteFile for WebdavFile {
     fn size(&self) -> u64 {
@@ -760,7 +782,13 @@ impl RemoteFile for WebdavFile {
                 resp = send()?;
             }
             match resp.status().as_u16() {
-                206 => {}
+                206 => {
+                    let range = resp
+                        .headers()
+                        .get("content-range")
+                        .and_then(|v| v.to_str().ok());
+                    partial_answers(range, offset, &inner.host)?;
+                }
                 // The server ignored the range: usable only from the start, and only up to len.
                 200 if offset == 0 => {}
                 200 => {
@@ -1039,6 +1067,18 @@ mod typed_host_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 206 for another range than the one asked is refused, not copied as if it were it.
+    #[test]
+    fn a_partial_answer_from_another_offset_is_refused() {
+        assert!(partial_answers(Some("bytes 100-199/1000"), 100, "nas").is_ok());
+        assert!(partial_answers(Some("bytes 100-199/*"), 100, "nas").is_ok());
+        // No Content-Range: taken as asked, as the package fetcher does.
+        assert!(partial_answers(None, 100, "nas").is_ok());
+        let e = partial_answers(Some("bytes 0-99/1000"), 100, "nas").unwrap_err();
+        assert!(e.to_string().contains("answered from 0"), "{e}");
+        assert!(partial_answers(Some("pages 1-2"), 100, "nas").is_err());
+    }
 
     #[test]
     fn an_untrusted_certificate_is_told_from_other_failures() {

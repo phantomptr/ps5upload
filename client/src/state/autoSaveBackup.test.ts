@@ -72,6 +72,22 @@ describe("giving the engine the console list", () => {
     stop();
   });
 
+  it("a console removed while the first list is on its way is still taken off", async () => {
+    useRosterStore.setState({ profiles: [{ host: "10.0.0.2" }, { host: "10.0.0.3" }] as never });
+    let land: (v: unknown) => void = () => {};
+    set.mockImplementationOnce(() => new Promise((r) => (land = r))).mockResolvedValue({});
+    const stop = startSaveBackupSync();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(set).toHaveBeenCalledTimes(1);
+    // Deleted before the engine answered the first list.
+    useRosterStore.setState({ profiles: [{ host: "10.0.0.2" }] as never });
+    await vi.advanceTimersByTimeAsync(0);
+    land({});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(set).toHaveBeenLastCalledWith({ add_hosts: ["10.0.0.2"], remove_hosts: ["10.0.0.3"] });
+    stop();
+  });
+
   it("stops trying when stopped", async () => {
     set.mockRejectedValue(new Error("engine not up"));
     const stop = startSaveBackupSync();

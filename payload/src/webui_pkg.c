@@ -606,13 +606,15 @@ static int op_pkg_install(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size
     size_t at = 0;
     (void)arg;
     (void)n;
+    /* Before the check: `out` reads both, and with another buffer not allocated they were read
+     * (and `staged` handed to unlink) uninitialised. */
+    if (staged) staged[0] = '\0';
+    if (job) job[0] = '\0';
     if (!src || !norm || !staged || !job) {
         ava1_op_message(c, "pkg_install_internal");
         status = AVA1_ERR_INTERNAL;
         goto out;
     }
-    staged[0] = '\0';
-    job[0] = '\0';
     if (!fsj_json_str((const char *)args, "path", src, 1024) || !src[0]) {
         ava1_op_message(c, "pkg_install_missing_path");
         status = AVA1_ERR_PROTOCOL;

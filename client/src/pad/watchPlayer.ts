@@ -351,6 +351,10 @@ export class WatchPlayer {
   private software = false;
   private video: VideoDecoder | null = null;
   private opening = false;
+  /** `stop` ran: nothing new is opened. A message already on its way, a rebuild for a closed
+   *  decoder, or an H.265 codec lookup still running made a decoder that nothing closed, and a
+   *  phone has few hardware decoders to spare for the next join. */
+  private stopped = false;
   private sawKey = false;
   private keyAsk: KeyAsker;
   private readonly ownStats = new PictureStats("webcodecs");
@@ -526,7 +530,7 @@ export class WatchPlayer {
   /** One binary message from the engine. */
   onMessage(buf: ArrayBuffer): void {
     const b = new Uint8Array(buf);
-    if (b.length < 1) return;
+    if (b.length < 1 || this.stopped) return;
     const kind = b[0];
     const payload = b.subarray(1);
     // The media player took the picture over: the video is its, the sound stays here.
@@ -547,8 +551,8 @@ export class WatchPlayer {
     this.opening = true;
     try {
       const codec = this.hevc ? await hevcFor(header) : avcCodecString(header);
-      // The media player took over while this was looked up.
-      if (this.mse) return;
+      // The media player took over, or the player was stopped, while this was looked up.
+      if (this.mse || this.stopped) return;
       if (!codec) {
         this.problemShown = true;
         this.onProblem("no_hevc");
@@ -643,7 +647,7 @@ export class WatchPlayer {
   /** The decoder failed, or the browser took it back (a hidden page's hardware decoder): a new one
    *  from the header, and the next keyframe. Without this the picture stays frozen for good. */
   private rebuild(): void {
-    if (this.mse) return;
+    if (this.mse || this.stopped) return;
     this.video = null;
     this.sawKey = false;
     if (!this.header) return;
@@ -769,6 +773,7 @@ export class WatchPlayer {
   }
 
   stop(): void {
+    this.stopped = true;
     try {
       this.video?.close();
     } catch {
