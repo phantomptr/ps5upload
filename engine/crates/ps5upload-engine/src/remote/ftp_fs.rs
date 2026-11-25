@@ -161,6 +161,34 @@ fn plain_dos_line(line: &str) -> Option<Entry> {
     })
 }
 
+/// The most links of one folder whose real size is asked for (one command each).
+const MAX_LINKS_SIZED: usize = 64;
+
+/// The names in a listing that are symbolic links. A link's listed size is the link's own (the
+/// length of the path it holds), not its file's: an upload planned with it sent that many bytes
+/// of the file and ended as done.
+fn listed_links(lines: &[String], mlsd: bool) -> Vec<String> {
+    let is_link = |line: &str| {
+        if mlsd {
+            let facts = line.split_once(' ').map_or(line, |(facts, _)| facts);
+            facts.split(';').any(|f| {
+                let f = f.to_ascii_lowercase();
+                f.starts_with("type=") && (f.contains("symlink") || f.contains("slink"))
+            })
+        } else {
+            let mode = line.split_whitespace().next().unwrap_or("");
+            mode.len() >= 10 && mode.starts_with('l')
+        }
+    };
+    lines
+        .iter()
+        .filter(|l| is_link(l))
+        // The name as the listing's entry has it.
+        .filter_map(|l| parse_listing(std::slice::from_ref(l), mlsd).pop())
+        .map(|e| e.name)
+        .collect()
+}
+
 /// Turn a directory listing into entries: MLSD lines when the server speaks it, else the
 /// Unix `ls -l` or Windows `DIR` lines `LIST` returns. `.` and `..` are dropped.
 pub fn parse_listing(lines: &[String], mlsd: bool) -> Vec<Entry> {
@@ -674,7 +702,24 @@ impl FtpFs {
                 s.list(arg).await
             };
             match listed {
-                Ok(lines) => Ok(parse_listing(&lines, mlsd)),
+                Ok(lines) => {
+                    let mut entries = parse_listing(&lines, mlsd);
+                    // A link to a file is listed with the file's size, which SIZE gives (it
+                    // follows the link). A link to a folder, or a server without SIZE, stays
+                    // as listed.
+                    let links = listed_links(&lines, mlsd);
+                    for name in links.iter().take(MAX_LINKS_SIZED) {
+                        let full = format!("{}/{name}", dir.trim_end_matches('/'));
+                        let Ok(size) = s.size(full.as_str()).await else {
+                            continue;
+                        };
+                        let link = entries.iter_mut().find(|e| !e.is_dir && &e.name == name);
+                        if let Some(e) = link {
+                            e.size = size as u64;
+                        }
+                    }
+                    Ok(entries)
+                }
                 Err(FtpError::UnexpectedResponse(r)) if r.status.code() == 550 => {
                     Err(RemoteError::NotFound(format!("{dir} not found")))
                 }
@@ -1170,6 +1215,27 @@ mod tests {
             "{got:?}"
         );
         assert!(got.contains(&("folder name", true, 0)), "{got:?}");
+    }
+
+    /// A link is told from the listing (its size there is the link's own), under the name its
+    /// entry has, so its file's size can be asked for.
+    #[test]
+    fn the_links_of_a_listing_are_named() {
+        let ls = lines(&[
+            "-rw-r--r--    1 1000     1000     53687091200 Nov 06 12:00 game.pkg",
+            "lrwxrwxrwx    1 1000     1000           17 Nov 06 12:00 latest.pkg -> /pool/game v2.pkg",
+            "drwxr-xr-x    2 1000     1000         4096 Nov 06 12:00 lib",
+        ]);
+        assert_eq!(listed_links(&ls, false), ["latest.pkg"]);
+        let listed = parse_listing(&ls, false);
+        assert!(triples(&listed).contains(&("latest.pkg", false, 17)));
+        let mlsd = lines(&[
+            "type=file;size=10; a.bin",
+            "type=OS.unix=symlink;size=9; link to a.bin",
+            "type=OS.unix=slink:/pool/a.bin;size=11; other",
+            "type=dir; lib",
+        ]);
+        assert_eq!(listed_links(&mlsd, true), ["link to a.bin", "other"]);
     }
 
     fn triples(got: &[Entry]) -> Vec<(&str, bool, u64)> {

@@ -108,6 +108,26 @@ impl SourceFs for RemoteSourceFs {
                 async move { fs.open(&path).await }
             }))
             .map_err(io_err)?;
+        // The sizes an upload plans with are the listing's (`metadata`, from `known`). A file
+        // that opens at another size is not the file that was planned: a link whose listed
+        // length is the link's own (FTP, and SFTP for a link to something other than a file),
+        // or a file changed since. Sent anyway, it arrived cut to the listed length and the
+        // upload ended as done.
+        let listed = self
+            .known
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&path)
+            .copied();
+        if let Some((listed, false, _)) = listed {
+            if listed != file.size() {
+                return Err(std::io::Error::other(format!(
+                    "{path} is {} bytes, but its folder listed it as {listed} (a link, or a \
+                     file that changed since): not sent, so it is not left cut short",
+                    file.size()
+                )));
+            }
+        }
         let file = super::pool::retrying(
             Arc::clone(&self.pool),
             Arc::clone(&self.store),
@@ -387,6 +407,30 @@ mod tests {
             f.read_to_end(&mut rest).unwrap();
             assert_eq!(rest, b"3456789");
             assert!(fs.open(Path::new("/g/nope")).is_err());
+        })
+        .await
+        .unwrap();
+    }
+
+    /// An upload plans with the sizes a listing gave. A file that then opens at another size
+    /// (a link listed with its own length, a file changed since) is refused: it used to be
+    /// sent cut to the listed length, and the upload ended as done.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_file_that_opens_at_another_size_than_listed_is_refused() {
+        let mem = MemFs::new(&[("/g/link.bin", b"1234567"), ("/g/same.bin", b"abc")]);
+        let server = mem.share();
+        let fs = setup_with(mem).await;
+        tokio::task::spawn_blocking(move || {
+            fs.read_dir(Path::new("/g")).unwrap();
+            assert_eq!(fs.metadata(Path::new("/g/link.bin")).unwrap().len, 7);
+            // What the name really opens is longer than its listing said.
+            server.add(&[("/g/link.bin", &[9u8; 100])]);
+            let e = fs.open(Path::new("/g/link.bin")).err().expect("refused");
+            assert!(e.to_string().contains("listed it as 7"), "{e}");
+            // A file as listed opens, and one never listed has nothing to disagree with.
+            assert!(fs.open(Path::new("/g/same.bin")).is_ok());
+            server.add(&[("/h/new.bin", b"xy")]);
+            assert!(fs.open(Path::new("/h/new.bin")).is_ok());
         })
         .await
         .unwrap();
