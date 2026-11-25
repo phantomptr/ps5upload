@@ -5,7 +5,7 @@
 #
 #   docker build --platform linux/amd64 -t ps5upload-hub .
 
-FROM rust:1.99.1-alpine3.24 AS build
+FROM rust:1.99.1-alpine3.24@sha256:44819b27be4c97b0e4d7203bd2e02c4820f97700211b6a37fb4c246a2de59383 AS build
 RUN apk add --no-cache musl-dev
 WORKDIR /src
 COPY deploy/workspace.toml Cargo.toml
@@ -17,7 +17,7 @@ RUN cargo build --release --locked -p ps5upload-hub \
  && cp target/release/ps5upload-hub /ps5upload-hub
 
 # No shell, no package manager, runs as an unprivileged user.
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=build /ps5upload-hub /usr/local/bin/ps5upload-hub
 USER nonroot
 ENV HUB_HTTP_LISTEN=0.0.0.0:8080
