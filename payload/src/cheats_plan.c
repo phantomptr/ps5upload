@@ -106,6 +106,21 @@ int cheat_module_is_game(uint64_t handle, const char *path) {
     return strcasecmp(leaf, "eboot.bin") == 0;
 }
 
+int cheat_patch_base_ok(uint64_t handle, const char *path, char *why, size_t why_cap) {
+    if (why && why_cap) why[0] = '\0';
+    if (cheat_module_is_game(handle, path)) return 1;
+    if (why && why_cap) {
+        if (handle == 0)
+            snprintf(why, why_cap,
+                     "the game's executable is not where this patch looks for it (that module is %s); "
+                     "nothing was written",
+                     path);
+        else
+            snprintf(why, why_cap, "%s is not one of the game's own modules; nothing was written", path);
+    }
+    return 0;
+}
+
 static int overlaps(intptr_t a, int alen, intptr_t b, int blen) {
     return a < b + (intptr_t)blen && b < a + (intptr_t)alen;
 }

@@ -1868,9 +1868,17 @@ static int xml_apply_on(pid_t pid, const char *title, cheat_mod_t *mod, const xm
         }
         return -1;
     }
-    char exe[256] = "";
+    char exe[256] = "", base_path[256] = "", why[320] = "";
     uint64_t mbase = 0, msize = 0;
     (void)module_info(pid, 0, &mbase, &msize, exe, sizeof exe);
+    /* The patch's base must be one of the game's own modules, as for every other cheat write
+     * (phys_write_allowed). In a PS4 game's process handle 0 is another module (#920): a patch
+     * with no AppElf took it as the game's code and, with no original bytes to compare, wrote into
+     * it. Said before the AppElf check, whose "the game runs <that module>" would mislead. */
+    if (!gp_elf_is_module(m.app_elf) && !cheat_patch_base_ok(0, exe, why, sizeof why)) {
+        if (err) snprintf(err, err_cap, "%s", why);
+        return -1;
+    }
     if (!gp_elf_is_module(m.app_elf) && !gp_elf_ok(m.app_elf, exe)) {
         const char *b = strrchr(exe, '/');
         if (err) snprintf(err, err_cap, "this patch is for %s; the game runs %s", m.app_elf, b ? b + 1 : exe);
@@ -1882,9 +1890,14 @@ static int xml_apply_on(pid_t pid, const char *title, cheat_mod_t *mod, const xm
         hook_wait(hk);
         return -1;
     }
-    if (module_info(pid, handle, &mbase, &msize, NULL, 0) != 0 || !mbase || !msize) {
+    if (module_info(pid, handle, &mbase, &msize, base_path, sizeof base_path) != 0 || !mbase || !msize) {
         if (err) snprintf(err, err_cap, "the game's code is not loaded yet; try again");
         hook_wait(hk);
+        return -1;
+    }
+    /* Again on the module the lines are placed in (a .prx AppElf, or handle 0 read just now). */
+    if (!cheat_patch_base_ok(handle, base_path, why, sizeof why)) {
+        if (err) snprintf(err, err_cap, "%s", why);
         return -1;
     }
 

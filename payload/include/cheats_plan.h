@@ -96,4 +96,10 @@ int cheat_addr_ok(intptr_t addr, int len);
  * physical write there lands in every process that maps the page. */
 int cheat_module_is_game(uint64_t handle, const char *path);
 
+/* Whether an XML game patch may take the module with dynlib `handle`, loaded from `path`, as the
+ * base its lines are placed in and bounded by: cheat_module_is_game's rule, so a PS4 game's handle
+ * 0 that is not its eboot.bin is refused whatever way the write would go (physical or debugger).
+ * 1, or 0 with `why` (may be NULL) saying so. */
+int cheat_patch_base_ok(uint64_t handle, const char *path, char *why, size_t why_cap);
+
 #endif /* PS5UPLOAD_CHEATS_PLAN_H */

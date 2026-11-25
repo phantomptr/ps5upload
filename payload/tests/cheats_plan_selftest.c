@@ -167,6 +167,29 @@ static void test_module_is_game(void) {
     CHECK(!cheat_module_is_game(3, ""));
 }
 
+/* An XML game patch's base module goes by the same rule (it used to take handle 0 by number). */
+static void test_patch_base_ok(void) {
+    char why[320];
+    CHECK(cheat_patch_base_ok(0, "/app0/eboot.bin", why, sizeof why) && why[0] == '\0');
+    CHECK(cheat_patch_base_ok(0, "/mnt/sandbox/pfsmnt/CUSA00284-app0/eboot.bin", why, sizeof why));
+    CHECK(cheat_patch_base_ok(0, "", why, sizeof why)); /* unreadable path: as handle 0 always was */
+    CHECK(cheat_patch_base_ok(5, "/app0/sce_module/libgame.prx", NULL, 0));
+    /* #920: a PS4 game's handle 0 is another module (Rayman Legends, CUSA00284 on 11.60). */
+    CHECK(!cheat_patch_base_ok(0, "/system/common/lib/libScePlayGo.sprx", why, sizeof why));
+    CHECK(strstr(why, "libScePlayGo.sprx") != NULL && strstr(why, "nothing was written") != NULL);
+    /* A .prx AppElf that resolves to a system library. */
+    CHECK(!cheat_patch_base_ok(9, "/system/common/lib/libSceGnmDriver.sprx", why, sizeof why));
+    CHECK(strstr(why, "is not one of the game's own modules") != NULL);
+    CHECK(!cheat_patch_base_ok(9, "/system/common/lib/libSceGnmDriver.sprx", NULL, 0));
+    /* A small buffer is cut, never overrun. */
+    {
+        char tiny[8];
+        memset(tiny, 'x', sizeof tiny);
+        CHECK(!cheat_patch_base_ok(0, "/system/common/lib/libc.sprx", tiny, sizeof tiny));
+        CHECK(tiny[sizeof tiny - 1] == '\0');
+    }
+}
+
 static void test_addr_ok(void) {
     CHECK(cheat_addr_ok(0x1FAD908, 9));
     CHECK(!cheat_addr_ok(0, 4));
@@ -384,6 +407,7 @@ int main(void) {
     test_order_mc4_zero_cave();
     test_addr_ok();
     test_module_is_game();
+    test_patch_base_ok();
     test_apply_mock();
     if (failures) {
         fprintf(stderr, "cheats_plan_selftest: %d failure(s)\n", failures);
