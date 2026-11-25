@@ -32,6 +32,23 @@ use crate::net::resolve_connect_targets;
 /// as a fresh process once the sender half-closes the socket.
 pub const PS5_LOADER_PORT: u16 = 9021;
 
+/// What a loader takes, by file extension. A send of a file by its path reads whatever the
+/// process can, and a port other than :9021 has no ELF check: without this, a send could stream
+/// any file of this computer (a key, a document) to any address.
+pub const PAYLOAD_EXTENSIONS: &[&str] = &["elf", "bin", "js", "lua", "jar"];
+
+/// Whether `path` names a payload file by its extension ([`PAYLOAD_EXTENSIONS`], any case).
+pub fn is_payload_file_name(path: &str) -> bool {
+    std::path::Path::new(path.trim())
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| {
+            PAYLOAD_EXTENSIONS
+                .iter()
+                .any(|ok| e.eq_ignore_ascii_case(ok))
+        })
+}
+
 /// The longest the running helper is given to answer `node.shutdown` while a connection to the
 /// loader waits. The call itself is bounded at 2 s once a session exists; finding out there is
 /// no session can take a few seconds more.
@@ -884,13 +901,20 @@ fn refuse_second_mounter(
     Ok(())
 }
 
-/// [`send_payload_image`] for a file on this machine.
+/// [`send_payload_image`] for a file on this machine. Only a payload file
+/// ([`is_payload_file_name`]) is read: every way a path reaches a send (the engine's
+/// `/api/payload/send`, the desktop app's own socket when the engine is down) comes here.
 pub fn send_payload_file(
     host: &str,
     path: &str,
     port: u16,
     stamp: &mut dyn FnMut(&mut Vec<u8>),
 ) -> Result<SentPayload, String> {
+    if !is_payload_file_name(path) {
+        return Err(format!(
+            "{path} is not a payload file: send a .elf, .bin, .js, .lua or .jar file"
+        ));
+    }
     let size = std::fs::metadata(path)
         .map_err(|e| format!("open {path}: {e}"))?
         .len();
@@ -1483,6 +1507,39 @@ mod tests {
         let e =
             send_payload_file("127.0.0.1", "/no/such/file.elf", 1, &mut no_stamp()).unwrap_err();
         assert!(e.contains("/no/such/file.elf"), "{e}");
+    }
+
+    /// A path that is not a payload file is never read or sent, to any port: the send by path
+    /// would otherwise hand any file of this computer to any address (the desktop app's own
+    /// socket had no such check when the engine was down).
+    #[test]
+    fn only_a_payload_file_is_read_and_sent() {
+        let (port, h) = listen_once();
+        let p = temp_file("id_rsa", b"-----BEGIN OPENSSH PRIVATE KEY-----");
+        let e =
+            send_payload_file("127.0.0.1", p.to_str().unwrap(), port, &mut no_stamp()).unwrap_err();
+        assert!(e.contains("not a payload file"), "{e}");
+        let p = temp_file("notes.txt", b"\x7FELF and more");
+        let e =
+            send_payload_file("127.0.0.1", p.to_str().unwrap(), port, &mut no_stamp()).unwrap_err();
+        assert!(e.contains("not a payload file"), "{e}");
+        // Nothing reached the listener: unblock it and see it got nothing.
+        drop(std::net::TcpStream::connect(("127.0.0.1", port)).unwrap());
+        assert!(h.join().unwrap().is_empty());
+
+        for ok in ["a.elf", "A.BIN", "x.Js", "/d/y.lua", "z.jar"] {
+            assert!(is_payload_file_name(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "elf",
+            "a.elf.txt",
+            "a.so",
+            "/home/u/.ssh/id_ed25519",
+            "a.",
+        ] {
+            assert!(!is_payload_file_name(bad), "{bad}");
+        }
     }
 
     #[test]
