@@ -111,8 +111,8 @@ pub async fn save_archive_zip(req: SaveArchiveZipReq) -> Result<String, String> 
         .unwrap_or("ps5upload-save-archive.zip");
     let dest_buf = super::save_dest::resolve_save_dest(&req.dest_zip, fallback)?;
     let dest = dest_buf.to_string_lossy().into_owned();
-    let result = tokio::task::spawn_blocking(move || {
-        zip_folder_noted(
+    tokio::task::spawn_blocking(move || {
+        zip_replacing(
             Path::new(&req.src_dir),
             &req.inner_root,
             dest_buf.as_path(),
@@ -120,16 +120,29 @@ pub async fn save_archive_zip(req: SaveArchiveZipReq) -> Result<String, String> 
         )
     })
     .await
-    .map_err(|e| format!("zip task: {e}"))?;
-    if let Err(e) = result {
-        // On failure (typically ENOSPC mid-write), remove the
-        // half-written .zip so the user doesn't see a corrupt file
-        // at their picked path. Best-effort — if the unlink itself
-        // fails, the original error is still what surfaces.
-        let _ = std::fs::remove_file(&dest);
-        return Err(format!("zip: {e:#}"));
-    }
+    .map_err(|e| format!("zip task: {e}"))??;
     Ok(dest)
+}
+
+/// The zip written beside `dest` and renamed over it only once it is whole. A failed zip (a full
+/// disk, or no `<inner_root>/` downloaded) used to truncate and then delete the file the user
+/// picked to replace, often an older backup of the same save; now that file stays as it was, and
+/// a failed new file leaves nothing behind.
+fn zip_replacing(src_dir: &Path, inner_root: &str, dest: &Path, note: &str) -> Result<(), String> {
+    if !src_dir.join(inner_root).is_dir() {
+        return Err(format!(
+            "zip: expected `{inner_root}/` under {}",
+            src_dir.display()
+        ));
+    }
+    let (replacing, file) = super::save_text_file::ReplacingFile::create(dest)
+        .map_err(|e| format!("create {}: {e}", dest.display()))?;
+    drop(file);
+    zip_folder_noted(src_dir, inner_root, replacing.path(), note)
+        .map_err(|e| format!("zip: {e:#}"))?;
+    replacing
+        .commit()
+        .map_err(|e| format!("save {}: {e}", dest.display()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -183,6 +196,85 @@ mod tests {
         assert!(scratch_dir(tmp.to_str().unwrap()).is_err());
         assert!(scratch_dir(tmp.join("other").to_str().unwrap()).is_err());
         assert!(scratch_dir("/ps5upload-save-x").is_err());
+    }
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let d =
+            std::env::temp_dir().join(format!("ps5upload-zip-test-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn a_failed_zip_leaves_the_picked_file_as_it_was() {
+        let dir = scratch("nofolder");
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let out = dir.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let dest = out.join("CUSA12345.zip");
+        std::fs::write(&dest, b"older backup").unwrap();
+        // Nothing was downloaded as <title_id>/: the old backup used to be deleted.
+        assert!(zip_replacing(&src, "CUSA12345", &dest, "").is_err());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"older backup");
+        assert_eq!(names_in(&out), ["CUSA12345.zip"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_zip_that_fails_part_way_leaves_the_picked_file_as_it_was() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("partway");
+        let save = dir.join("src").join("CUSA12345");
+        std::fs::create_dir_all(&save).unwrap();
+        std::fs::write(save.join("a.bin"), b"a").unwrap();
+        let locked = save.join("b.bin");
+        std::fs::write(&locked, b"b").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::File::open(&locked).is_ok() {
+            // Running as root: nothing can fail to open here.
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let out = dir.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let dest = out.join("CUSA12345.zip");
+        std::fs::write(&dest, b"older backup").unwrap();
+        assert!(zip_replacing(&dir.join("src"), "CUSA12345", &dest, "").is_err());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"older backup");
+        assert_eq!(names_in(&out), ["CUSA12345.zip"]);
+        let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_whole_zip_replaces_the_picked_file() {
+        let dir = scratch("whole");
+        let save = dir.join("src").join("CUSA12345");
+        std::fs::create_dir_all(&save).unwrap();
+        std::fs::write(save.join("a.bin"), b"a").unwrap();
+        let out = dir.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let dest = out.join("CUSA12345.zip");
+        std::fs::write(&dest, b"older backup").unwrap();
+        zip_replacing(&dir.join("src"), "CUSA12345", &dest, "note").unwrap();
+        assert_eq!(
+            ps5upload_core::save_archive::zip_comment(&dest).unwrap(),
+            "note"
+        );
+        assert_eq!(names_in(&out), ["CUSA12345.zip"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

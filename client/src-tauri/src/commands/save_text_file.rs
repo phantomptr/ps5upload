@@ -85,6 +85,11 @@ impl ReplacingFile {
         }
     }
 
+    /// Where the bytes go until `commit`, for a writer that opens the file by its path.
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// All written: this is now the destination.
     pub(super) fn commit(mut self) -> std::io::Result<()> {
         if let Some(dest) = self.dest.take() {
