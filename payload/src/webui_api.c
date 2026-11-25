@@ -582,7 +582,11 @@ static void r_fs_rename(const char *b, size_t n, uint8_t *out, int fd) {
                 size_t cl = ol < sizeof cause ? ol : sizeof cause;
                 size_t bl = 0;
                 if (cl) memcpy(cause, out, cl);
-                (void)rename_once(tmp, from, out, &bl);
+                /* When that fails too (a drive that stopped answering), the file is left under the
+                 * in-between name, which starts with a dot: said in the log, so it can be found. */
+                if (rename_once(tmp, from, out, &bl) != AVA1_STATUS_OK)
+                    fprintf(stderr, "webui: rename of %s failed and it could not be put back: it is now %s\n",
+                            from, tmp);
                 if (st < 0) send_bad(fd, "bad_path");
                 else send_status_error(fd, st, cause, cl);
             }
