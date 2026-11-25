@@ -804,77 +804,11 @@ int mntinfo_snapshot(struct statfs **out) {
     return n;
 }
 
-/* Encode a mount_point to a filesystem-safe tracker filename (no
- * extension). Two formats coexist for backward compatibility:
- *
- *   - Legacy /mnt/ps5upload/<name> mounts use the leaf <name> as the
- *     key (matches files written by every payload up through 2.2.24).
- *   - User-chosen mount paths (anywhere `is_path_allowed` accepts —
- *     /mnt/ext1/games/foo, /data/mounts/bar, etc.) hex-escape every
- *     non-alphanumeric byte. So `/mnt/ext1/games/foo` becomes
- *     `mnt_2fext1_2fgames_2ffoo` (the `_2f` triplet is the hex of
- *     '/'; `_5f` would be the hex of a literal underscore).
- *
- * Why hex-escape rather than a flat `/` → `_` substitution: paths
- * `/mnt/ext1/foo_bar` and `/mnt/ext1/foo/bar` would both encode to
- * `mnt_ext1_foo_bar` under a flat substitution — silently
- * colliding. With per-byte hex escaping every distinct mount_point
- * has a distinct key, no matter how many underscores its segments
- * contain. The triplet form (`_HH`) is one byte longer per escaped
- * char but stays well within the 256-byte key buffer for any
- * realistic PS5 path.
- *
- * The legacy format is stable across upgrades — existing PS5s with
- * trackers from earlier versions keep showing source-image strings
- * in the Volumes tab without re-mount. */
+/* A mount point's tracker file name (no extension): include/image_mount.h, where the host
+ * self-test covers it. A /mnt/ps5upload/<name> mount keeps its leaf, any other mount point is
+ * hex-escaped, and one too long for a file name ends in a hash. */
 static void mount_tracker_key(const char *mount_point, char *out, size_t out_cap) {
-    if (!out || out_cap == 0) return;
-    out[0] = '\0';
-    if (!mount_point) return;
-    const size_t base_len = strlen(FS_MOUNT_BASE);
-    /* Legacy: /mnt/ps5upload/<name> with non-empty leaf. Use the leaf
-     * as the key so trackers written by 2.2.24 and earlier still
-     * resolve. The leaf is constrained by handle_fs_mount to contain
-     * no slashes / dots, so it's safe to use verbatim. Defensive
-     * extra check: if the "leaf" actually contains a slash (a path
-     * like /mnt/ps5upload/foo/bar can reach this code via a future
-     * caller that bypasses handle_fs_mount's name validation), fall
-     * through to the hex-escape branch so the tracker key stays
-     * collision-free instead of silently producing `foo/bar.src` —
-     * a path-traversal-shaped filename whose stat()/open() then
-     * fails on a non-existent intermediate directory. */
-    if (strncmp(mount_point, FS_MOUNT_BASE "/", base_len + 1) == 0 &&
-        mount_point[base_len + 1] != '\0' &&
-        strchr(mount_point + base_len + 1, '/') == NULL) {
-        snprintf(out, out_cap, "%s", mount_point + base_len + 1);
-        return;
-    }
-    /* New: hex-escape every non-alphanumeric byte, skipping a single
-     * leading slash. Each escaped byte takes 3 chars (`_` + 2 hex
-     * digits), so we need 3 bytes of headroom per escaped char plus
-     * 1 for the NUL. Stop early if the buffer would overflow rather
-     * than truncate mid-escape (a partial `_5` would be ambiguous). */
-    static const char HEX[] = "0123456789abcdef";
-    size_t i = (mount_point[0] == '/') ? 1u : 0u;
-    size_t j = 0;
-    while (mount_point[i] != '\0') {
-        unsigned char c = (unsigned char)mount_point[i++];
-        const int needs_escape =
-            !((c >= 'a' && c <= 'z') ||
-              (c >= 'A' && c <= 'Z') ||
-              (c >= '0' && c <= '9') ||
-              c == '-' || c == '.');
-        if (needs_escape) {
-            if (j + 4 > out_cap) break; /* room for "_HH\0" */
-            out[j++] = '_';
-            out[j++] = HEX[(c >> 4) & 0xF];
-            out[j++] = HEX[c & 0xF];
-        } else {
-            if (j + 2 > out_cap) break; /* room for "X\0" */
-            out[j++] = (char)c;
-        }
-    }
-    out[j] = '\0';
+    image_mount_tracker_key(mount_point, out, out_cap);
 }
 
 /* Read the .src tracker written at mount time. Returns 1 on success
@@ -957,8 +891,10 @@ static void mount_tracker_write(const char *mount_point, const char *src_path) {
      * a stable per-thread integer suffix. The suffix only needs to
      * disambiguate concurrent writers — collisions across distinct
      * (process, thread) pairs are vanishingly unlikely on PS5. */
-    n = snprintf(tracker_tmp, sizeof(tracker_tmp), "%s.tmp.%d.%lx",
-                 tracker, (int)getpid(),
+    /* Not "<tracker>.tmp...": added to a long key that made a name over 255 bytes, which cannot be
+     * created, and the mount was left with no tracker. */
+    n = snprintf(tracker_tmp, sizeof(tracker_tmp), "%s/.tracker-tmp.%d.%lx",
+                 PS5UPLOAD2_MOUNTS_DIR, (int)getpid(),
                  (unsigned long)(uintptr_t)pthread_self());
     if (n < 0 || (size_t)n >= sizeof(tracker_tmp)) return;
     int fd = open(tracker_tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
