@@ -216,6 +216,7 @@ update_err_no_bundle: "Cette version ne propose pas de téléchargement pour vot
 update_err_unsafe_url: "PS5Upload ne fait pas confiance à l'adresse de la mise à jour : rien n'a été téléchargé.",
 update_err_bad_name: "Le nom de fichier de la mise à jour n'est pas valide : rien n'a été téléchargé.",
 update_err_bad_checksum: "Cette version indique une somme de contrôle incorrecte pour ce fichier : rien n'a été téléchargé.",
+update_err_no_checksum: "Cette version n'indique aucune somme de contrôle pour ce fichier : rien n'a été téléchargé.",
 update_err_too_large: "Le fichier est trop volumineux pour être une version de PS5Upload : il n'a pas été téléchargé.",
 update_err_interrupted: "La connexion a été perdue. Réessayez : le téléchargement reprend là où il s'est arrêté.",
 update_err_checksum: "Le téléchargement ne correspond pas à la somme de contrôle de cette version. Il a été supprimé et rien n'a été installé. Réessayez.",

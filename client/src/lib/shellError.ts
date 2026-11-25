@@ -46,6 +46,10 @@ const SIMPLE: Record<string, [key: string, fallback: string]> = {
     "update_err_bad_checksum",
     "The release lists a broken checksum for this file, so nothing was downloaded.",
   ],
+  update_no_checksum: [
+    "update_err_no_checksum",
+    "This release lists no checksum for this file, so nothing was downloaded.",
+  ],
   update_too_large: ["update_err_too_large", "The file is too large to be a PS5Upload release, so it wasn't downloaded."],
   update_interrupted: [
     "update_err_interrupted",

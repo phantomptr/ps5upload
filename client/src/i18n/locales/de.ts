@@ -222,6 +222,7 @@ update_err_no_bundle: "Diese Version enthält keinen Download für dein System."
 update_err_unsafe_url: "PS5Upload vertraut der Update-Adresse nicht, daher wurde nichts heruntergeladen.",
 update_err_bad_name: "Der Dateiname des Updates ist ungültig, daher wurde nichts heruntergeladen.",
 update_err_bad_checksum: "Diese Version nennt eine fehlerhafte Prüfsumme für die Datei, daher wurde nichts heruntergeladen.",
+update_err_no_checksum: "Diese Version nennt keine Prüfsumme für die Datei, daher wurde nichts heruntergeladen.",
 update_err_too_large: "Die Datei ist zu groß für eine PS5Upload-Version und wurde nicht heruntergeladen.",
 update_err_interrupted: "Die Verbindung wurde unterbrochen. Versuche es erneut: Der Download macht dort weiter, wo er aufgehört hat.",
 update_err_checksum: "Der Download passt nicht zur Prüfsumme dieser Version. Er wurde gelöscht, nichts wurde installiert. Versuche es erneut.",

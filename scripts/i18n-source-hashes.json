@@ -8577,6 +8577,7 @@
   "update_err_interrupted": "73a914a1 IXfCGlRKm2zAswKty2aEBFivI_O9cEssoaUBkPadhPTdrZfLV2xy4NOIXBh5",
   "update_err_network": "10b7285d qBWPp7ZAV8FQb7ARmGbK9SJ7rM_xUD-qjXgq27TWAv8XBQ5RgImhxPDAVRHE",
   "update_err_no_bundle": "bf80cd32 Ak1NJidO9c_JHX1z1KcocaULMIOQeZYRiNqI07tww14Hb6tmB4ZGnZu44-fy",
+  "update_err_no_checksum": "eb31bd8a b0v14dcA_ZBt3TSARtKs-DlPKjggADQKyDVJV_-puaTb8471Dd4SC_8wFJuS",
   "update_err_no_manifest": "d878f878 La0t-TrIUyKAD-e8LSxus6GPOfplAzjK8hFT5oRL6gumU_TLzt45O2NSLEy-",
   "update_err_not_apk": "990fa0bf TcDdT1eyLACIYwiqU7WZy1eNZJfu1HIg1taVXIJqS4goud0SfezPQbh2YH_w",
   "update_err_rate_limited": "116468bb E0963iwsFfuLp2wel67wvF-iV5XjAduI66N0jy7BS6NB1IVMm9e389Vdvdmt",

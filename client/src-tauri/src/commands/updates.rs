@@ -37,12 +37,15 @@
 //!
 //! `sha256` (since 10.2) has the same keys as `assets`; `update_download` checks the file
 //! against it before the update is offered for install, and deletes a file that does not
-//! match. A manifest without it (an older release) is downloaded unchecked, as before.
+//! match. The URL and the hash are the ones `update_check` read from the manifest itself, not
+//! what the renderer hands back; a file the manifest publishes no hash for is not downloaded,
+//! and an install starts only a file that matched its hash and still does.
 //!
 //! Missing platforms → the renderer reports "up to date" to users on
 //! that arch (same as if no new version exists for them).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
@@ -156,9 +159,87 @@ fn expected_sha256(raw: Option<&str>) -> Result<Option<String>, String> {
     }
 }
 
-/// Writes one line to stderr without panicking when it is gone (a `println!` would).
-fn log_line(args: std::fmt::Arguments<'_>) {
-    let _ = std::io::Write::write_fmt(&mut std::io::stderr(), args);
+// ── what a check offered, and what a download checked ───────────────────
+
+/// The release files `update_check` offered in this run, newest last: URL and the manifest's
+/// SHA-256 for it (empty when it publishes none). The renderer hands the URL and the hash back
+/// to `update_download`; taken at its word, a page script could point the updater at any file
+/// on a pinned host (any GitHub release of anyone) with a hash to match, and have it installed.
+static OFFERED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// How many offers (and checked downloads) are kept: a check per channel, again after a while.
+const OFFERS_KEPT: usize = 8;
+
+fn remember_offer(url: &str, sha256: &str) {
+    if url.is_empty() {
+        return;
+    }
+    let mut offered = OFFERED.lock().unwrap_or_else(|e| e.into_inner());
+    offered.retain(|(u, _)| u != url);
+    offered.push((url.to_string(), sha256.to_string()));
+    let over = offered.len().saturating_sub(OFFERS_KEPT);
+    offered.drain(..over);
+}
+
+/// The SHA-256 a download of `url` must match: the one the release published for the file a
+/// check offered. Refused: a URL no check offered (`update_unsafe_url`), a file the release
+/// gives no checksum for (`update_no_checksum`; every release since 10.2 has one), a checksum
+/// that is not one (`update_bad_checksum`).
+pub(crate) fn offered_sha256(url: &str) -> Result<String, String> {
+    let sha = OFFERED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .rev()
+        .find(|(u, _)| u == url)
+        .map(|(_, sha)| sha.clone())
+        .ok_or_else(|| coded("update_unsafe_url", serde_json::json!({ "url": url })))?;
+    expected_sha256(Some(&sha))?
+        .ok_or_else(|| coded("update_no_checksum", serde_json::json!({ "url": url })))
+}
+
+/// The file name a download of `url` is saved under: the last part of the URL, as
+/// `update_check` gives it.
+pub(crate) fn offered_file_name(url: &str) -> &str {
+    url.rsplit('/').next().unwrap_or("")
+}
+
+/// Downloads that matched their release's SHA-256 in this run: path and hash. An install starts
+/// only one of these, hashed again first ([`check_verified`]).
+static VERIFIED: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
+
+pub(crate) fn remember_verified(path: &Path, sha256: &str) {
+    let mut verified = VERIFIED.lock().unwrap_or_else(|e| e.into_inner());
+    verified.retain(|(p, _)| p != path);
+    verified.push((path.to_path_buf(), sha256.to_string()));
+    let over = verified.len().saturating_sub(OFFERS_KEPT);
+    verified.drain(..over);
+}
+
+/// Ok when `path` is a download that matched its release's SHA-256 and still does: what an
+/// install may start. Reads the whole file, so not on an async worker.
+pub(crate) fn check_verified(path: &Path) -> Result<(), String> {
+    let want = VERIFIED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .rev()
+        .find(|(p, _)| p == path)
+        .map(|(_, sha)| sha.clone())
+        .ok_or_else(|| format!("{} was not checked against its release", path.display()))?;
+    let got = super::update_fetch::sha256_file(path).map_err(|e| {
+        coded(
+            "update_disk",
+            serde_json::json!({ "detail": format!("{}: {e}", path.display()) }),
+        )
+    })?;
+    if got != want {
+        return Err(coded(
+            "update_checksum",
+            serde_json::json!({ "expected": want, "actual": got }),
+        ));
+    }
+    Ok(())
 }
 
 /// Platform key used in the manifest. Matches the format tauri-plugin-
@@ -659,7 +740,8 @@ pub async fn update_check(app: AppHandle, channel: Option<String>) -> Result<Upd
             )
         })?;
     let (download_url, sha256) = pick_asset(&manifest, &keys);
-    let download_filename = download_url.rsplit('/').next().unwrap_or("").to_string();
+    let download_filename = offered_file_name(&download_url).to_string();
+    remember_offer(&download_url, &sha256);
     Ok(UpdateCheck {
         available,
         current_version,
@@ -723,8 +805,8 @@ pub struct UpdateDownload {
     /// That install asks for the user's password (a `.deb` / `.rpm` through pkexec), so it is
     /// never started on quit or by the automatic install; `install_command` is the fallback.
     pub needs_password: bool,
-    /// The file matched the SHA-256 the release manifest published. False only when the
-    /// manifest published none (a release before 10.2); a mismatch is an error instead.
+    /// The file matched the SHA-256 the release manifest published: always, since a file
+    /// without one is not downloaded and a mismatch is an error. Kept for the renderer.
     pub verified: bool,
 }
 
@@ -798,20 +880,6 @@ struct DownloadProgress {
 /// Content-Length.
 const DOWNLOAD_MAX_BYTES: u64 = 500 * 1024 * 1024;
 
-/// The size a server gives for `url` without sending it, when it says.
-async fn published_size(client: &reqwest::Client, url: &str) -> Option<u64> {
-    let resp = client.head(url).send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    resp.headers()
-        .get(reqwest::header::CONTENT_LENGTH)?
-        .to_str()
-        .ok()?
-        .parse()
-        .ok()
-}
-
 /// What the renderer gets for the update file now at `target`. `reveal` is best-effort: the file
 /// is complete on disk, so a file manager that fails to open (a sandboxed session, no display
 /// server) must not read as a failed download. A copy that installs the file itself shows
@@ -852,6 +920,10 @@ async fn finished_download(
 /// there is reused when it matches the release; a transfer that was cut off carries on where it
 /// stopped (`update_fetch`). Progress goes out as `DOWNLOAD_PROGRESS_EVENT`, and
 /// `update_download_cancel` stops it.
+///
+/// `url` must be the file a check offered, and the file must match the SHA-256 the manifest
+/// published for it ([`offered_sha256`]). `sha256`, the renderer's copy of that hash, is not
+/// what counts.
 #[tauri::command]
 pub async fn update_download(
     app: AppHandle,
@@ -859,10 +931,11 @@ pub async fn update_download(
     filename: String,
     sha256: Option<String>,
 ) -> Result<UpdateDownload, String> {
-    let expected = expected_sha256(sha256.as_deref())?;
+    let _ = sha256;
     if url.is_empty() {
         return Err(code_only("update_no_bundle"));
     }
+    let expected = offered_sha256(&url)?;
     // Mirror the manifest-fetch scheme requirement. The download URL
     // comes from the remote manifest and we verify TLS via rustls, but
     // if a future misconfiguration ever let a plain-http URL slip into
@@ -884,7 +957,8 @@ pub async fn update_download(
     //   - NUL rules out C-string early-terminators (would still fail on
     //     create, but the error would be confusing).
     //   - leading dot rules out hidden-file shenanigans.
-    if !is_plain_file_name(&filename) {
+    // The name the check gave for this URL, and nothing else: the install plan goes by it.
+    if !is_plain_file_name(&filename) || filename != offered_file_name(&url) {
         return Err(coded(
             "update_bad_name",
             serde_json::json!({ "name": filename }),
@@ -915,27 +989,18 @@ pub async fn update_download(
 
     // A complete copy from a prior run: we stream to `<target>.part` and rename only after the
     // file checked out, so `target` existing at all means an earlier call finished. It is reused
-    // when it matches the published checksum (a release before 10.2 publishes none: when it has
-    // the size the server gives, or the server gives none, without which every click would
-    // download the same bundle again). One that does not match (a different build under the same
-    // name, a damaged file) is deleted and downloaded again.
+    // when it matches the published checksum; one that does not (a different build under the
+    // same name, a damaged file) is deleted and downloaded again.
     if let Ok(meta) = std::fs::metadata(&target) {
-        let reuse = match &expected {
-            Some(exp) => {
-                let t = target.clone();
-                tokio::task::spawn_blocking(move || super::update_fetch::sha256_file(&t))
-                    .await
-                    .ok()
-                    .and_then(Result::ok)
-                    .is_some_and(|actual| actual == *exp)
-            }
-            None => match published_size(&client, &url).await {
-                Some(size) => size == meta.len(),
-                None => meta.len() > 0,
-            },
-        };
+        let t = target.clone();
+        let reuse = tokio::task::spawn_blocking(move || super::update_fetch::sha256_file(&t))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .is_some_and(|actual| actual == expected);
         if reuse {
-            return finished_download(target, meta.len(), expected.is_some()).await;
+            remember_verified(&target, &expected);
+            return finished_download(target, meta.len(), true).await;
         }
         let _ = std::fs::remove_file(&target);
     }
@@ -953,17 +1018,11 @@ pub async fn update_download(
         &url,
         &part,
         DOWNLOAD_MAX_BYTES,
-        expected.as_deref(),
+        Some(&expected),
         active.cancel_signal(),
         &mut report,
     )
     .await?;
-    if expected.is_none() {
-        log_line(format_args!(
-            "[updates] the manifest publishes no SHA-256 for {filename} (a release before 10.2): not verified, sha256={}\n",
-            done.sha256
-        ));
-    }
     // In the updates folder this is now the one update waiting: earlier versions' downloads go.
     let in_updates_folder = super::update_files::updates_dir(&app).is_ok_and(|d| d == dl_dir);
     let (from, to) = (part, target.clone());
@@ -978,7 +1037,8 @@ pub async fn update_download(
     .map_err(|e| e.to_string())
     .and_then(|r| r.map_err(|e| e.to_string()))
     .map_err(|detail| coded("update_disk", serde_json::json!({ "detail": detail })))?;
-    finished_download(target, done.bytes, expected.is_some()).await
+    remember_verified(&target, &done.sha256);
+    finished_download(target, done.bytes, true).await
 }
 
 /// A bare file name to save an update as: no path separators, no `.` / `..`, no hidden file,
@@ -1145,6 +1205,75 @@ mod checksum_tests {
             pick_asset(&m, &["linux-x86_64".into()]),
             ("https://github.com/z.zip".to_string(), a)
         );
+    }
+
+    fn code_of(e: &str) -> String {
+        let v: serde_json::Value = serde_json::from_str(e).unwrap_or_default();
+        v["code"].as_str().unwrap_or(e).to_string()
+    }
+
+    /// A download takes only the file a check offered, with the hash the manifest published for
+    /// it: the renderer's word for the URL or the hash counts for nothing.
+    #[test]
+    fn a_download_is_only_of_a_file_a_check_offered_with_its_hash() {
+        let url = "https://github.com/phantomptr/ps5upload/releases/download/v9/offered-a.zip";
+        // Never offered: not downloaded, whatever hash comes with it.
+        assert_eq!(
+            code_of(&offered_sha256(url).unwrap_err()),
+            "update_unsafe_url"
+        );
+        // Offered with no checksum (a release before 10.2): not downloaded unchecked.
+        remember_offer(url, "");
+        assert_eq!(
+            code_of(&offered_sha256(url).unwrap_err()),
+            "update_no_checksum"
+        );
+        // With a broken one: refused as that.
+        remember_offer(url, "abc");
+        assert_eq!(
+            code_of(&offered_sha256(url).unwrap_err()),
+            "update_bad_checksum"
+        );
+        // The newest offer for the URL is what counts, normalised.
+        remember_offer(url, &"AB".repeat(32));
+        assert_eq!(offered_sha256(url).unwrap(), "ab".repeat(32));
+        assert_eq!(offered_file_name(url), "offered-a.zip");
+        // Another release's file on the same host was never offered.
+        let other = "https://github.com/someone/else/releases/download/v1/offered-a.zip";
+        assert_eq!(
+            code_of(&offered_sha256(other).unwrap_err()),
+            "update_unsafe_url"
+        );
+    }
+
+    /// An install starts only a download that matched its release's hash, and only while it
+    /// still does: a file put or changed in the updates folder afterwards is refused.
+    #[test]
+    fn an_install_starts_only_a_checked_file_that_is_unchanged() {
+        use sha2::Digest;
+        let dir = std::env::temp_dir().join(format!("ps5upload-verified-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("PS5Upload-9.9.9-mac-arm64.dmg");
+        std::fs::write(&file, b"the release").unwrap();
+        // Never checked.
+        assert!(check_verified(&file).is_err());
+        let sha: String = sha2::Sha256::digest(b"the release")
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        remember_verified(&file, &sha);
+        assert_eq!(check_verified(&file), Ok(()));
+        // Changed since: refused, as a checksum mismatch.
+        std::fs::write(&file, b"something else").unwrap();
+        assert_eq!(
+            code_of(&check_verified(&file).unwrap_err()),
+            "update_checksum"
+        );
+        // Another file in the same folder was never checked.
+        let other = dir.join("PS5Upload-9.9.9-mac-x64.dmg");
+        std::fs::write(&other, b"the release").unwrap();
+        assert!(check_verified(&other).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

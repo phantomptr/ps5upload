@@ -222,6 +222,7 @@ update_err_no_bundle: "Bản phát hành này không có tệp tải về cho h�
 update_err_unsafe_url: "PS5Upload không tin địa chỉ cập nhật này nên chưa tải gì về.",
 update_err_bad_name: "Tên tệp cập nhật không hợp lệ nên chưa tải gì về.",
 update_err_bad_checksum: "Bản phát hành này ghi mã kiểm tra sai cho tệp nên chưa tải gì về.",
+update_err_no_checksum: "Bản phát hành này không ghi mã kiểm tra cho tệp nên chưa tải gì về.",
 update_err_too_large: "Tệp quá lớn để là một bản phát hành PS5Upload nên không được tải về.",
 update_err_interrupted: "Mất kết nối. Hãy thử lại: lượt tải tiếp tục từ chỗ đã dừng.",
 update_err_checksum: "Tệp tải về không khớp mã kiểm tra của bản phát hành này. Tệp đã bị xóa và chưa cài gì. Hãy thử lại.",

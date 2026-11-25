@@ -352,6 +352,7 @@ update_err_no_bundle: "To wydanie nie ma pliku do pobrania dla twojego systemu."
 update_err_unsafe_url: "PS5Upload nie ufa adresowi aktualizacji, więc nic nie pobrano.",
 update_err_bad_name: "Nazwa pliku aktualizacji jest nieprawidłowa, więc nic nie pobrano.",
 update_err_bad_checksum: "To wydanie podaje błędną sumę kontrolną tego pliku, więc nic nie pobrano.",
+update_err_no_checksum: "To wydanie nie podaje sumy kontrolnej tego pliku, więc nic nie pobrano.",
 update_err_too_large: "Plik jest za duży jak na wydanie PS5Upload, więc go nie pobrano.",
 update_err_interrupted: "Połączenie zostało przerwane. Spróbuj ponownie: pobieranie wznowi się od miejsca przerwania.",
 update_err_checksum: "Pobrany plik nie zgadza się z sumą kontrolną tego wydania. Został usunięty i nic nie zainstalowano. Spróbuj ponownie.",

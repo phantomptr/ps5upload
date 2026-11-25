@@ -956,11 +956,14 @@ pub async fn update_install_on_quit(
     };
     let (download, dir) = downloaded_update(&app, &path)?;
     // Off the main thread: this runs whenever a transfer starts or ends while an update waits,
-    // and the plan probes the app's folder with a write and, on Linux, asks the package database.
+    // the file is hashed again (only a download that matched its release is ever armed), and the
+    // plan probes the app's folder with a write and, on Linux, asks the package database.
     let probe = download.clone();
-    let armed = tauri::async_runtime::spawn_blocking(move || installs_quietly(&probe))
-        .await
-        .map_err(|e| format!("update_install_on_quit: {e}"))?;
+    let armed = tauri::async_runtime::spawn_blocking(move || {
+        super::updates::check_verified(&probe).map(|()| installs_quietly(&probe))
+    })
+    .await
+    .map_err(|e| format!("update_install_on_quit: {e}"))??;
     let record = record_for(&app, &download, version.as_deref());
     *on_quit_slot() = armed.then_some(Armed {
         download,
@@ -976,8 +979,13 @@ pub fn install_armed_on_quit() {
     let Some(armed) = on_quit_slot().take() else {
         return;
     };
-    let result = match plan(&armed.download) {
-        Some(p) if !p.needs_password() && armed.download.is_file() => {
+    // Hashed again: the file waited on disk since it was armed.
+    let result = match (
+        plan(&armed.download),
+        super::updates::check_verified(&armed.download),
+    ) {
+        (_, Err(e)) => Err(e),
+        (Some(p), Ok(())) if !p.needs_password() => {
             record_and_start(&p, false, &armed.dir, &armed.record)
         }
         _ => Err("the armed update can no longer be installed".into()),
@@ -1009,10 +1017,14 @@ pub async fn update_install(
 ) -> Result<(), String> {
     let (download, dir) = downloaded_update(&app, &path)?;
     let probe = download.clone();
-    let plan = tauri::async_runtime::spawn_blocking(move || plan(&probe))
-        .await
-        .map_err(|e| format!("update_install: {e}"))?
-        .ok_or_else(|| super::shell_error::code_only("update_cannot_self_install"))?;
+    // Only a download that matched its release's SHA-256, hashed again now: the file sat in the
+    // updates folder since, and this runs it.
+    let plan = tauri::async_runtime::spawn_blocking(move || {
+        super::updates::check_verified(&probe)?;
+        plan(&probe).ok_or_else(|| super::shell_error::code_only("update_cannot_self_install"))
+    })
+    .await
+    .map_err(|e| format!("update_install: {e}"))??;
     if let Plan::LinuxPackage {
         package, manager, ..
     } = &plan

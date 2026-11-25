@@ -222,6 +222,7 @@ update_err_no_bundle: "이 릴리스에는 사용 중인 시스템용 다운로�
 update_err_unsafe_url: "PS5Upload가 신뢰하지 않는 업데이트 주소라서 아무것도 다운로드하지 않았습니다.",
 update_err_bad_name: "업데이트 파일 이름이 올바르지 않아 아무것도 다운로드하지 않았습니다.",
 update_err_bad_checksum: "이 릴리스에 적힌 체크섬이 손상되어 아무것도 다운로드하지 않았습니다.",
+update_err_no_checksum: "이 릴리스에 이 파일의 체크섬이 없어 아무것도 다운로드하지 않았습니다.",
 update_err_too_large: "PS5Upload 릴리스라고 하기에는 파일이 너무 커서 다운로드하지 않았습니다.",
 update_err_interrupted: "연결이 끊겼습니다. 다시 시도하세요. 다운로드는 멈춘 곳에서 이어집니다.",
 update_err_checksum: "다운로드가 이 릴리스의 체크섬과 일치하지 않습니다. 파일을 삭제했고 아무것도 설치하지 않았습니다. 다시 시도하세요.",
