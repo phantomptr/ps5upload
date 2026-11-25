@@ -11,8 +11,8 @@ import UploadScreen from "../Upload";
  * Upload & Install (route /send): every way something gets onto the console, on one page, top
  * to bottom.
  *
- * 0. The fake-package (FPKG) note, first: PS5 fake packages do not run on firmware later than
- *    11.60 yet, which matters before anything is sent.
+ * 0. The fake-package (FPKG) note, first: PS5 fake games play up to 13.60, and above 11.60 only
+ *    with a kstuff build that supports fake packages there, which matters before anything is sent.
  * 1. From this computer or a saved server: the drop zone is the one way in. Pick or drop
  *    anything (a package, a game folder or dump, an image, an archive, any file); the app works
  *    out what it is and offers what fits it, a package's Stream & install included. It also

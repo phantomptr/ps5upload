@@ -18,18 +18,18 @@ const html = (kernel: string | null, id: string | null, compact = false) =>
   renderToStaticMarkup(<FakeGameFirmwareNotice kernel={kernel} contentId={id} compact={compact} />);
 
 describe("FakeGameFirmwareNotice", () => {
-  it("says it installs but isn't playable, for a PS5 game on 13.60", () => {
-    const out = html(K("13.60"), PS5_GAME);
-    expect(out).toContain("Installed, this PS5 game won&#x27;t start on FW 13.60");
-    expect(out).toContain("PS5 fake packages install on firmware above 11.60 but don&#x27;t start");
-    expect(out).toContain("Kraken Mount");
-    expect(out).toContain("A53");
+  it("says it installs but isn't playable, for a PS5 game above 13.60", () => {
+    const out = html(K("14.00"), PS5_GAME);
+    expect(out).toContain("Installed, this PS5 game won&#x27;t start on FW 14.00");
+    expect(out).toContain("PS5 fake packages play on firmware up to 13.60");
     expect(out).toContain("PS4 packages and PS5 homebrew apps are fine");
   });
   it("renders the one-line form for a list row", () => {
-    expect(html(K("11.61"), PS5_GAME, true)).toContain("above 11.60");
+    expect(html(K("13.61"), PS5_GAME, true)).toContain("up to 13.60");
   });
-  it("renders nothing for 11.60, PS4, homebrew or an unknown firmware", () => {
+  it("renders nothing up to 13.60 (fake-package kstuff, November 2026), PS4, homebrew or an unknown firmware", () => {
+    expect(html(K("13.60"), PS5_GAME)).toBe("");
+    expect(html(K("12.00"), PS5_GAME)).toBe("");
     expect(html(K("11.60"), PS5_GAME)).toBe("");
     expect(html(K("13.60"), "UP9000-CUSA00207_00-BLOODBORNE000000")).toBe("");
     expect(html(K("13.60"), "IV0002-ITEM00001_00-ITEMZFLOWIV00000")).toBe("");

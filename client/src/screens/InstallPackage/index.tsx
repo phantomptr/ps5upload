@@ -588,7 +588,7 @@ function PkgRow({
       {!busy && !entry.lastResult?.ok && entry.lastResult?.netDiag && (
         <NetworkFixActions diag={entry.lastResult.netDiag} />
       )}
-      {/* A fake PS5 GAME on firmware above 11.60 installs but cannot be
+      {/* A fake PS5 GAME on firmware above 13.60 installs but cannot be
           played. Not shown for a retail-signed package, PS4, or homebrew. */}
       {!installed && entry.authenticity !== "retail" && (
         <FakeGameFirmwareNotice

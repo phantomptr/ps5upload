@@ -172,7 +172,7 @@ export function useGameLaunch(
       } catch (e) {
         if (probe.isStale()) return;
         if (e instanceof HomebrewRefused) {
-          // Not this game's fault and not the 11.60 fake-package limit: the console is
+          // Not this game's fault and not the fake-package firmware limit: the console is
           // refusing every non-Sony title, so name the cause instead.
           pushNotification(
             "error",
