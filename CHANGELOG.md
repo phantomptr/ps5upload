@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.29
 
 **Fake packages (FPKG)**
 - **The "won't start" warning for fake PS5 games is gone.** Fake PS5 games now play up to firmware 13.60, the newest a public jailbreak reaches, so the warning could no longer appear anywhere. The fake-package note keeps its payload list, and a failed launch on 11.61 to 13.60 still says a fake package needs the November 2026 kstuff. Convert marks the package as the usual choice once a game is checked.
