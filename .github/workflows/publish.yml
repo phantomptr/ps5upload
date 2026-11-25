@@ -522,6 +522,21 @@ jobs:
           ./scripts/release/azure-sign.ps1 "engine/target/$env:RUST_TARGET/release/ps5upload-engine.exe"
           ./scripts/release/azure-sign.ps1 "engine/target/$env:RUST_TARGET/release/ps5upload-unrar.exe"
 
+      # Tauri downloads these itself with no checksum (the appimage plugin from a moving
+      # "continuous" release). Pinned URLs and SHA-256s, put in its cache first, so the build
+      # runs only these files.
+      - name: Fetch the AppImage tools (pinned, checksummed; Linux only)
+        if: matrix.platform == 'linux'
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          case "$ARCH" in
+            x64)   tools_arch=x86_64 ;;
+            arm64) tools_arch=aarch64 ;;
+            *) echo "::error::no AppImage tools for $ARCH"; exit 1 ;;
+          esac
+          ./scripts/release/appimage-tools.sh "$tools_arch"
+
       - name: Diagnose linuxdeploy (Linux only)
         if: matrix.platform == 'linux'
         env:
@@ -530,12 +545,12 @@ jobs:
         run: |
           set +e
           cd "$RUNNER_TEMP"
-          url="https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous"
           case "$ARCH" in
-            x64)   asset=linuxdeploy-x86_64.AppImage ;;
-            arm64) asset=linuxdeploy-aarch64.AppImage ;;
+            x64)   tools_arch=x86_64 ;;
+            arm64) tools_arch=aarch64 ;;
           esac
-          curl --retry 3 --fail -L -o linuxdeploy "$url/$asset"
+          # The build's own linuxdeploy, verified by the step above (a copy: the bundler patches its file).
+          cp "${XDG_CACHE_HOME:-$HOME/.cache}/tauri/linuxdeploy-07333c6-$tools_arch.AppImage" linuxdeploy
           chmod +x linuxdeploy
           echo "=== linuxdeploy --version (direct) ==="
           ./linuxdeploy --version
