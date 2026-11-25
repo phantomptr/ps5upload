@@ -767,7 +767,13 @@ fn plan_files_watched(
 
         // The same release stored twice is filed beside its twin and marked DUPLICATE. Which
         // copy is canonical must not depend on the marker, or the two would swap forever.
+        //
+        // A file already in the title's folder is named before one coming in: it keeps the
+        // name it has, and a name is only taken once its file was named here. Named after a
+        // newcomer that sorts first by its path, it had its own name planned for the newcomer
+        // too, and that move then failed on every run ("destination appeared").
         let mut ordered = members.clone();
+        let here = key(&dest_dir);
         ordered.sort_by_key(|f| {
             let stem = f
                 .path
@@ -777,6 +783,7 @@ fn plan_files_watched(
             (
                 f.info.kind.clone(),
                 stem.contains(DUPLICATE_TAG),
+                f.path.parent().map(key).as_ref() != Some(&here),
                 f.path.clone(),
             )
         });
@@ -1909,6 +1916,39 @@ mod tests {
             .iter()
             .filter(|m| m.duplicate)
             .all(|m| m.to.contains("DUPLICATE") && m.duplicate_of.is_some()));
+    }
+
+    /// A package already filed keeps its name, and another build of the same release coming
+    /// in from a folder that sorts before it gets a name of its own. The newcomer was planned
+    /// onto the filed one's name, and that move failed on every run.
+    #[test]
+    fn a_newcomer_is_never_planned_onto_a_filed_packages_name() {
+        let l = lib("filed-first");
+        let c = l.0.join("fpkg");
+        let i = info(
+            "RDR2",
+            "CUSA03041",
+            "UP1004-CUSA03041_00-REDEMPTION000002",
+            "patch",
+            "1.32",
+        );
+        // Where one such package is filed, learned from a plan of it alone.
+        put(&c.join("Incoming"), "one.pkg", 74);
+        let t = [("one", i.clone()), ("two", i.clone()), ("RDR2", i)];
+        let first = plan_with(&LocalTree, &c, &table(&t));
+        assert_eq!(first.moves.len(), 1, "{first:?}");
+        let filed = first.moves[0].to.clone();
+        assert!(filed.starts_with("PS4/"), "{filed}");
+        let filed_at = c.join(&filed);
+        std::fs::create_dir_all(filed_at.parent().unwrap()).unwrap();
+        std::fs::rename(c.join("Incoming/one.pkg"), &filed_at).unwrap();
+        // Another build of it (another size) arrives in "Incoming", which sorts before "PS4".
+        put(&c.join("Incoming"), "two.pkg", 10);
+        let p = plan_with(&LocalTree, &c, &table(&t));
+        assert_eq!(p.moves.len(), 1, "{p:?}");
+        assert_eq!(p.moves[0].from, "Incoming/two.pkg");
+        assert_ne!(p.moves[0].to, filed, "planned onto the filed package");
+        assert!(!c.join(&p.moves[0].to).exists());
     }
 
     #[test]
