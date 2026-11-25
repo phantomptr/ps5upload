@@ -137,6 +137,7 @@ import { isTauriEnv } from "../lib/tauriEnv";
 import { createQueueLeader } from "../lib/queueLeader";
 import { isJobUnknownError } from "../lib/pollRead";
 import { krakenGuard } from "../lib/krakenGuard";
+import { humanizePs5Error } from "../lib/humanizeError";
 
 /** The engine job id currently uploading on each console (bare host key).
  *  runOne records it so stopHost/stop can ask the engine to TRULY cancel the
@@ -1850,7 +1851,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
             mountWarnings.push(
               tx(
                 "queue_register_failed",
-                { error: e instanceof Error ? e.message : String(e) },
+                // The helper's reason in words where it has them (a system app's title ID, …).
+                { error: humanizePs5Error(e instanceof Error ? e.message : String(e)) },
                 "Couldn't add it to the home screen automatically: {error}. You can still do it from the Library.",
               ),
             );
