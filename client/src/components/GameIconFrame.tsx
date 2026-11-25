@@ -43,16 +43,20 @@ export function CoverCaption({
   title,
   meta,
   titleAttr,
+  titleEndRoom = false,
 }: {
   title: ReactNode;
   meta?: ReactNode;
   /** Full title for the tooltip when the visible one is clamped. */
   titleAttr?: string;
+  /** A button sits over the end of the title's first line (a card's ⋯): the title ends before
+   *  it, and the meta line under it keeps the whole width. */
+  titleEndRoom?: boolean;
 }) {
   return (
     <div className="min-w-0 px-1 pt-2.5">
       <div
-        className="line-clamp-2 text-sm leading-5 font-medium tracking-[-0.005em]"
+        className={`line-clamp-2 text-sm leading-5 font-medium tracking-[-0.005em] ${titleEndRoom ? "pe-9" : ""}`}
         title={titleAttr}
       >
         {title}

@@ -497,14 +497,18 @@ export const CollectionCard = memo(function CollectionCard({
           </div>
         )}
       </div>
-      <div className="flex min-w-0 items-start gap-1">
+      {/* The ⋯ sits over the end of the title's line, not beside the whole caption: beside it,
+          a phone's two-column card had no room for the line under the title ("1 copy" was cut to
+          "1…"). */}
+      <div className="relative min-w-0" data-testid="collection-card-caption">
         <button
           type="button"
           onClick={open}
-          className={`min-w-0 flex-1 ${focusRing}`}
+          className={`block w-full min-w-0 text-start ${focusRing}`}
           tabIndex={-1}
         >
           <CoverCaption
+            titleEndRoom={!selecting}
             title={game.title}
             titleAttr={`${game.title} · ${game.game_id}`}
             meta={
@@ -554,7 +558,7 @@ export const CollectionCard = memo(function CollectionCard({
           />
         </button>
         {!selecting && (
-          <div className="shrink-0 pt-1.5">
+          <div className="absolute end-0 top-0 pt-1.5">
             <GameQuickActions
               game={game}
               onOpen={onOpen}
