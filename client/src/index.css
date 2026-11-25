@@ -1441,6 +1441,14 @@ textarea.input {
 .input::placeholder {
   color: var(--color-muted);
 }
+/* Right-to-left languages: what is written left to right whatever the language (a path, an
+ * address, an ID, a size with its unit: the app's monospace and tabular text) keeps its own
+ * order. Without this "/data/games" read "data/games/" and "512 B" read "B 512". Text in the
+ * language itself is untouched: each element takes the direction of its first letter. */
+:root[dir="rtl"] :where(.font-mono, code, kbd, samp, pre, .tabular-nums) {
+  unicode-bidi: plaintext;
+}
+
 /* A hint longer than its field ends in "…", not mid-word ("…content ID o" on a phone). Only
  * while the hint shows: typed text is never touched. */
 :where(input, textarea):placeholder-shown {

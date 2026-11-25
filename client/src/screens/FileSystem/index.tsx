@@ -279,6 +279,7 @@ import { Modal } from "../../components/Modal";
 import { childToReveal, REVEAL_MS } from "../../lib/revealChild";
 import { useBackDismiss, useScreenBack } from "../../lib/systemBack";
 import { usePhoneLayout, usePhoneTopBar } from "../../lib/phoneLayout";
+import { ltr } from "../../i18n";
 import NotificationInbox from "../../layout/NotificationInbox";
 import { createLongPress } from "../../lib/longPress";
 import { backUpTarget, filesBackStep, folderTitle } from "./phoneFiles";
@@ -3409,7 +3410,8 @@ export default function FileSystemScreen() {
         const external = v.path.startsWith("/mnt/usb") || v.path.startsWith("/mnt/ext");
         return {
           icon: external ? Usb : HardDrive,
-          label: `${v.path} · ${formatBytes(v.free_bytes)} ${tr("fs_free", "free")}`,
+          // The path and the size keep their order in a right-to-left language ("/data", not "data/").
+          label: `${ltr(v.path)} · ${ltr(formatBytes(v.free_bytes))} ${tr("fs_free", "free")}`,
           run: () => setPath(v.path),
           current: currentVolumePath === v.path,
         };
@@ -4947,7 +4949,8 @@ export default function FileSystemScreen() {
                           }
                           disabled={!isDir}
                         >
-                          {e.name}
+                          {/* A name keeps its own order in a right-to-left language ("(1).pkg"). */}
+                          <bdi>{e.name}</bdi>
                         </button>
                         <div className="flex items-center gap-2 roomy:contents" data-testid="fs-row-meta">
                           {(() => {
