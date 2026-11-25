@@ -72,12 +72,17 @@ export function FoldSection({
             aria-hidden
             className={`shrink-0 text-[var(--color-muted)] transition-transform rtl:rotate-180 ${open ? "rotate-90 rtl:rotate-90" : ""}`}
           />
-          <span>{title}</span>
-          {!open && summary != null && (
-            <span className="truncate text-sm font-normal text-[var(--color-muted)]">
-              · {summary}
-            </span>
-          )}
+          {/* Side by side from `sm` up. On a phone the summary goes under the title: beside it,
+              the two shared the row and a three-word title broke into three lines. */}
+          <span className="min-w-0 flex-1 sm:flex sm:items-baseline sm:gap-2" data-testid="fold-heading-text">
+            <span className="block sm:max-w-full sm:shrink-0">{title}</span>
+            {!open && summary != null && (
+              <span className="block min-w-0 truncate text-sm font-normal text-[var(--color-muted)]">
+                <span className="max-sm:hidden">· </span>
+                {summary}
+              </span>
+            )}
+          </span>
         </button>
       </h2>
       {open && <div className="mt-3 grid gap-4">{children}</div>}
