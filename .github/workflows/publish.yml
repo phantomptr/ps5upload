@@ -1449,6 +1449,53 @@ jobs:
         with:
           subject-path: release/*
 
+      # prerelease=false makes this release GitHub's "latest", which the stable updater
+      # (releases/latest/download/latest.json), the iPhone source and the site all follow.
+      # release-tag.yml only ever asks that for a version newer than every tag, but a hand
+      # dispatch for an older tag would move all of them back: that one is published as a full
+      # release and latest stays where it is. A lookup that fails is not a "no".
+      - name: Never move latest to an older version
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL_RELEASE: ${{ github.event.inputs.prerelease == 'false' }}
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$FULL_RELEASE" != true ]; then
+            echo "make_latest=legacy" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          err="$RUNNER_TEMP/latest-lookup.err"
+          latest_tag=""
+          found=0
+          for attempt in 1 2 3; do
+            if latest_tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>"$err")"; then
+              found=1
+              break
+            fi
+            if grep -q 'HTTP 404' "$err"; then
+              latest_tag=""
+              found=1
+              break
+            fi
+            echo "latest release lookup failed (attempt $attempt):" >&2
+            cat "$err" >&2
+            sleep $((attempt * 10))
+          done
+          if [ "$found" -ne 1 ]; then
+            echo "::error::could not read the latest release (GitHub API error above); not publishing over it."
+            exit 1
+          fi
+          latest="${latest_tag#v}"
+          if [ -n "$latest" ] && [ "$latest" != "$TAG_VERSION" ] \
+              && [ "$(printf '%s\n%s\n' "$TAG_VERSION" "$latest" | sort -V | head -n 1)" = "$TAG_VERSION" ]; then
+            echo "::warning::$TAG_VERSION is older than the latest release ($latest_tag): published as a full release, latest stays on $latest_tag"
+            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "make_latest=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
@@ -1463,7 +1510,7 @@ jobs:
           # having run it on a console. Only a dispatch that says
           # prerelease=false (release-tag.yml, when asked) publishes it as the latest.
           prerelease: ${{ github.event.inputs.prerelease != 'false' }}
-          make_latest: ${{ github.event.inputs.prerelease == 'false' && 'true' || 'legacy' }}
+          make_latest: ${{ steps.latest.outputs.make_latest }}
           files: release/*
 
   # The site's release snapshot and iPhone source (pages.yml) are rebuilt once the release is out.
