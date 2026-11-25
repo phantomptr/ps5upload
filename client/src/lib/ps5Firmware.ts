@@ -74,3 +74,28 @@ export function ps5FakeGameUnplayableFirmware(
   };
   return toNum(fw) > toNum(LAST_PS5_FAKE_GAME_FIRMWARE) ? fw : null;
 }
+
+/** The newest firmware where a PS5 fake GAME played with any kstuff that loads fake packages.
+ *  Above it, up to LAST_PS5_FAKE_GAME_FIRMWARE, the game starts only with a kstuff build that
+ *  supports fake packages on that firmware (released November 2026). */
+export const LAST_PS5_FAKE_GAME_FIRMWARE_OLD_KSTUFF = "11.60";
+
+/** The console's firmware when a PS5 fake GAME there needs the November 2026 (or newer) kstuff
+ *  to start: a PS5 game id and a firmware above 11.60, up to LAST_PS5_FAKE_GAME_FIRMWARE. Else
+ *  null (also for an unknown firmware). Used to explain a launch that failed. */
+export function ps5FakeGameNeedsNewKstuff(
+  kernel: string | null | undefined,
+  contentOrTitleId: string | null | undefined,
+): string | null {
+  if (!isPs5GameId(contentOrTitleId)) return null;
+  const fw = parsePS5Firmware(kernel);
+  if (!fw) return null;
+  const toNum = (v: string) => {
+    const [maj, min] = v.split(".");
+    return Number(maj) * 100 + Number(min);
+  };
+  const n = toNum(fw);
+  return n > toNum(LAST_PS5_FAKE_GAME_FIRMWARE_OLD_KSTUFF) && n <= toNum(LAST_PS5_FAKE_GAME_FIRMWARE)
+    ? fw
+    : null;
+}
