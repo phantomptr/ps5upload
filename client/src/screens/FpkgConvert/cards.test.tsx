@@ -78,12 +78,19 @@ describe("MakeCard", () => {
 
   it("explains both, and marks the image for a PS5 game the firmware will not play as a package", () => {
     const fw = renderToStaticMarkup(
-      <MakeCard make="pkg" onMake={() => {}} kernel="r229358/releases/13.60" contentId="UP9000-PPSA03671_00-X" checked />,
+      <MakeCard make="pkg" onMake={() => {}} kernel="r229358/releases/14.00" contentId="UP9000-PPSA03671_00-X" checked />,
     );
     expect(fw).toContain("A package (.pkg)");
     expect(fw).toContain("A game image");
-    expect(fw).toContain("Recommended on FW 13.60");
-    expect(fw).toContain("not play on FW 13.60");
+    expect(fw).toContain("Recommended on FW 14.00");
+    expect(fw).toContain("not play on FW 14.00");
+    // Up to 13.60 an installed PS5 package plays (with a fake-package kstuff): the package is the
+    // ordinary choice, not the image.
+    const fw1360 = renderToStaticMarkup(
+      <MakeCard make="pkg" onMake={() => {}} kernel="r229358/releases/13.60" contentId="UP9000-PPSA03671_00-X" checked />,
+    );
+    expect(fw1360).not.toContain("Recommended on FW");
+    expect(fw1360).toContain("plays on firmware up to 13.60");
     const ps4 = renderToStaticMarkup(
       <MakeCard make="pkg" onMake={() => {}} kernel="r229358/releases/13.60" contentId="UP9000-CUSA01234_00-X" checked />,
     );

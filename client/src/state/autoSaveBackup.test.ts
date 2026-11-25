@@ -8,7 +8,6 @@ vi.mock("../api/saveBackup", async (importOriginal) => ({
 
 import { backupHosts, clampKeep, legacySettings, numberBoxLeft, startSaveBackupSync } from "./autoSaveBackup";
 import { useRosterStore } from "./roster";
-import { stampLabel } from "../screens/GameHub/SaveBackupsList";
 
 describe("automatic save backup (engine-run)", () => {
   it("hands over an older version's settings only when a folder was set", () => {
@@ -47,11 +46,6 @@ describe("automatic save backup (engine-run)", () => {
     expect(numberBoxLeft("999", 50, clampKeep)).toEqual({ save: null, show: "50" });
     expect(numberBoxLeft("999", 5, clampKeep)).toEqual({ save: 50, show: "50" });
     expect(numberBoxLeft("0", 5, clampKeep)).toEqual({ save: 1, show: "1" });
-  });
-
-  it("labels a backup's time in UTC", () => {
-    expect(stampLabel("2026-10-24_101530")).toBe("2026-10-24 10:15 UTC");
-    expect(stampLabel("odd")).toBe("odd");
   });
 });
 

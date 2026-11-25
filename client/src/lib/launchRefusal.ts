@@ -2,7 +2,7 @@
 //
 // Sony's launcher returns 0x80940033 for every homebrew or fake-package title when the
 // console's fake-package support is not loaded: on FW 13.60 that is kstuff. It is not a
-// problem with the one game, so "re-register" or "fake packages above 11.60" send people
+// problem with the one game, so "re-register" or "fake packages on newer firmware" send people
 // the wrong way. Two causes are fixable from here:
 //   - kstuff is not running: say so, since nothing else will start until it is loaded;
 //   - kstuff is running but the game's folder came from ps5upload 6.0-6.1.2, which kept

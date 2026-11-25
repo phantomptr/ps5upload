@@ -12,6 +12,10 @@ const CY = 0x30000000;
 const folder = (u: number) => `/user/home/${u.toString(16)}/savedata_prospero/${T}`;
 const BACKUP = `${T}_user10000000_2026-10-30_120000.zip`;
 
+// Backup times show in the device's own time zone (#928): pin one so the text is known.
+// 12:00 UTC is 09:00 in São Paulo (UTC-3, no daylight saving).
+test.use({ timezoneId: "America/Sao_Paulo", locale: "en-US" });
+
 function mockEngine() {
   const calls = { copyConsole: [] as unknown[], copy: [] as unknown[], restoreTo: [] as unknown[], now: [] as unknown[], open: [] as unknown[] };
   let backedUp = false;
@@ -158,11 +162,11 @@ test("Copy to another user, Back up now, then Restore to another user", async ({
   // Restore… lists that backup as one row, with Restore to another user.
   await ann.getByTestId("save-restore-pick").click();
   const dialog = page.getByTestId("save-restore-dialog");
-  await expect(dialog.getByText(/2026-10-30 12:00 UTC/)).toHaveCount(1);
+  await expect(dialog.getByText(/Oct 30, 2026, 9:00\sAM/)).toHaveCount(1);
   await dialog.getByTestId("save-backup-restore-to-user").click();
   await page.locator('[data-testid="copy-user-target"][data-has-save="true"]').click();
   await page.getByTestId("copy-user-replace").click();
-  await expect(page.getByTestId("copy-user-done")).toContainText("now has the backup from 2026-10-30 12:00 UTC");
+  await expect(page.getByTestId("copy-user-done")).toContainText(/now has the backup from Oct 30, 2026, 9:00\sAM/);
   expect(calls.restoreTo).toEqual([{ addr: HOST, title_id: T, file: BACKUP, to_user: BEN, server: false }]);
 });
 

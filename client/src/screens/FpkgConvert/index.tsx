@@ -1186,7 +1186,7 @@ export default function WorkshopScreen() {
       />
 
       {/* Building still works (it runs on this computer), but a PS5 fake GAME
-          installs and then can't be played on firmware above 11.60. Said
+          installs and then can't be played on firmware above 13.60. Said
           before the user spends an hour converting; silent for PS4, for
           homebrew and when the firmware is unknown. */}
       <FakeGameFirmwareNotice kernel={kernel} contentId={inspection?.content_id} />

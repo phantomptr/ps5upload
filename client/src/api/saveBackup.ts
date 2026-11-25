@@ -322,8 +322,8 @@ export const saveFoldersApi = {
     call<{ ok: boolean }>("/folders/restore", { ...LONG, method: "POST", body: JSON.stringify(req) }),
 };
 
-/** A save of ProsperoEden, the Switch emulator (PPSA99008): `title_id` is the game's 16-hex-digit
- *  title ID and `user_id` its profile's first 7 hex digits (0 for the console's own save). */
+/** A Switch emulator's per-game save. `user_id` keeps the profile's first 7 hex digits
+ *  in its lower 28 bits; bit 28 separates EglantinePS5 backups from ProsperoEden. */
 export interface SwitchSave {
   title_id: string;
   user_id: number;
@@ -331,7 +331,9 @@ export interface SwitchSave {
   size: number;
   mtime: number;
   kind: "switch";
-  /** ProsperoEden runs now; null when the console did not say. */
+  /** Omitted by engines that only know ProsperoEden. */
+  emulator?: string;
+  /** This save's emulator runs now; null when the console did not say. */
   running: boolean | null;
 }
 
@@ -405,7 +407,7 @@ export const saveBackupApi = {
   /** The newest backup of each game and user in the backup folder. */
   latest: async () =>
     (await call<{ latest: Array<{ title_id: string; user_id: number; stamp: string }> }>("/latest")).latest,
-  /** ProsperoEden's saves on a console (bare IP): none when it is not installed. */
+  /** Switch emulators' saves on a console (bare IP): none when neither has saved. */
   switchSaves: (addr: string) =>
     call<{ saves: SwitchSave[]; running: boolean | null }>(`/switch?addr=${encodeURIComponent(addr)}`),
   /** The PlayStation 2 emulators' and PSSwanStation's cards and saved states on a console (bare

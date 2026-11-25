@@ -23,7 +23,7 @@ export function NextGameNote() {
  * ② What to make: a package the PS5 installs, a game image ShadowMount+ mounts, or (#469) the
  * game's files back as a plain folder. They are explained side by side, and the one of the
  * first two that suits the game on the connected console is marked: a PS5 game on firmware
- * above 11.60 installs as a package but will not play, so the image is the way; otherwise the
+ * above 13.60 installs as a package but will not play, so the image is the way; otherwise the
  * package is the ordinary choice. The folder is never marked: it is a way back, not a way in.
  * For a PS4 game the package is a PS4 fake package, which the engine writes from the game.
  */
@@ -87,14 +87,14 @@ export function MakeCard({
           title: tr("fpkg.make.pkg_title", undefined, "A package (.pkg)"),
           body: kraken
             ? tr(
-                "fpkg.make.pkg_body_kraken",
+                "fpkg.make.pkg_body_kraken_v2",
                 undefined,
-                "Kraken Mount, running on this PS5, mounts it from a drive's homebrew folder and shows it on the home screen: nothing is installed, and it plays where an installed PS5 package does not. It can still be installed instead.",
+                "Kraken Mount, running on this PS5, mounts it from a drive's homebrew folder and shows it on the home screen, with nothing installed. It can still be installed instead.",
               )
             : tr(
-                "fpkg.make.pkg_body_v2",
+                "fpkg.make.pkg_body_v3",
                 undefined,
-                "Installs on the PS5 like a game from the store, streamed from here or uploaded first. PS4 games play on any firmware. An installed PS5 game plays on 11.60 and below; on newer firmware mount it with Kraken Mount (support for installing there is coming).",
+                "Installs on the PS5 like a game from the store, streamed from here or uploaded first. PS4 games play on any firmware. An installed PS5 game plays on firmware up to 13.60; above 11.60 it needs a kstuff build with fake-package support for that firmware (November 2026 or newer).",
               ),
         },
     {

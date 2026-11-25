@@ -129,3 +129,30 @@ test("Saves shows no Switch group when ProsperoEden has no saves", async ({ page
   await expect(page.locator('[data-title-id="PPSA01234"]')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("switch-saves")).toHaveCount(0);
 });
+
+
+test("Eglantine and Eden show independent groups and backup histories", async ({ page }) => {
+  const eglantineRoot = "/data/eglantineps5/user/nand/user/save/0000000000000000";
+  const saves = [
+    { title_id: GAME, user_id: 0x01f1e1d1, path: `${ROOT}/${PROFILE}/${GAME}`, size: 17, mtime: 1761800000, kind: "switch", emulator: "ProsperoEden", running: true },
+    { title_id: GAME, user_id: 0x11f1e1d1, path: `${eglantineRoot}/${PROFILE}/${GAME}`, size: 20, mtime: 1761800000, kind: "switch", emulator: "EglantinePS5", running: false },
+    { title_id: GAME, user_id: 0x10000000, path: `${eglantineRoot}/${"0".repeat(32)}/${GAME}`, size: 3, mtime: 1761800000, kind: "switch", emulator: "EglantinePS5", running: false },
+  ];
+  const { handler } = mockEngine(saves, true);
+  await page.addInitScript((h) => window.localStorage.setItem("ps5upload.host", h), HOST);
+  await page.route((url) => url.pathname.startsWith("/api/"), handler);
+  await page.goto("/saves", { waitUntil: "domcontentloaded" });
+  const eden = page.locator('[data-testid="switch-saves"][data-emulator="ProsperoEden"]');
+  const eglantine = page.locator('[data-testid="switch-saves"][data-emulator="EglantinePS5"]');
+  await expect(eglantine.getByRole("heading", { name: "Switch / Switch 2 games (EglantinePS5)" })).toBeVisible({ timeout: 30_000 });
+  await expect(eglantine.getByText("Switch / Switch 2", { exact: true })).toBeVisible();
+  await expect(eden.getByTestId("switch-saves-note")).toHaveText("ProsperoEden is running. Close it before restoring.");
+  await expect(eglantine.getByTestId("switch-saves-note")).toHaveText("Close EglantinePS5 before restoring.");
+  const rows = eglantine.getByTestId("switch-save");
+  await expect(rows.nth(0)).toContainText("Profile 1F1E1D1");
+  await expect(rows.nth(1)).toContainText("Console");
+  // Eden's backup of the exact same game and profile must not appear under Eglantine.
+  await expect(eden.getByRole("button", { name: "Restore", exact: true })).toHaveCount(1);
+  await expect(eglantine.getByRole("button", { name: "Restore", exact: true })).toHaveCount(0);
+  await expect(rows.nth(0)).toContainText("No backups yet.");
+});

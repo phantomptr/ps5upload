@@ -16,9 +16,9 @@ test("Upload & Install opens with the FPKG note and one drop zone", async ({ pag
   await page.goto("/send", { waitUntil: "domcontentloaded" });
   await expect(page.getByRole("heading", { name: "Upload & Install" })).toBeVisible({ timeout: 30_000 });
 
-  // The FPKG note comes before the drop zone and points to Kraken Mount without opening.
+  // The FPKG note comes before the drop zone and gives the firmware rule without opening.
   const note = page.getByTestId("fpkg-note");
-  await expect(note).toContainText("Mount them with Kraken Mount instead");
+  await expect(note).toContainText("PS5 fake packages play on firmware up to 13.60");
   await expect(note).toContainText("PS4 fake packages are fine");
   const drop = page.getByTestId("send-drop");
   const [noteBox, dropBox] = [await note.boundingBox(), await drop.boundingBox()];

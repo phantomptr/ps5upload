@@ -14,6 +14,7 @@ import {
 } from "./launchRefusal";
 import {
   LAST_PS5_FAKE_GAME_FIRMWARE,
+  ps5FakeGameNeedsNewKstuff,
   ps5FakeGameUnplayableFirmware,
 } from "./ps5Firmware";
 import { fetchRunningGames, type RunningGame } from "./runningGames";
@@ -89,11 +90,20 @@ export function useGameLaunch(
         useConnectionStore.getState().runtimeByHost[hostOf(launchHost)]
           ?.ps5Kernel;
       const fw = ps5FakeGameUnplayableFirmware(kernel, titleId);
-      if (!fw) return body;
+      if (fw) {
+        return `${body} ${tr(
+          "fakegame.fw.launch_v3",
+          { fw, last: LAST_PS5_FAKE_GAME_FIRMWARE },
+          `On firmware above ${LAST_PS5_FAKE_GAME_FIRMWARE} (this console is on ${fw}) a PS5 game installed from a fake package doesn't start. PS4 packages are fine.`,
+        )}`;
+      }
+      // 11.61 to 13.60: a fake PS5 game starts only with the newer kstuff (November 2026).
+      const kfw = ps5FakeGameNeedsNewKstuff(kernel, titleId);
+      if (!kfw) return body;
       return `${body} ${tr(
-        "fakegame.fw.launch_v2",
-        { fw, last: LAST_PS5_FAKE_GAME_FIRMWARE },
-        `On firmware above ${LAST_PS5_FAKE_GAME_FIRMWARE} (this console is on ${fw}) a PS5 game installed from a fake package doesn't start. Mount the package with Kraken Mount instead; support for installed packages on newer firmware is coming. PS4 packages are fine.`,
+        "fakegame.fw.launch_kstuff",
+        { fw: kfw },
+        `If this game was installed from a fake package: on FW ${kfw} it starts only with a kstuff build that supports fake packages there (November 2026 or newer). Load that kstuff, then press Play again.`,
       )}`;
     },
     [tr],
@@ -172,7 +182,7 @@ export function useGameLaunch(
       } catch (e) {
         if (probe.isStale()) return;
         if (e instanceof HomebrewRefused) {
-          // Not this game's fault and not the 11.60 fake-package limit: the console is
+          // Not this game's fault and not the fake-package firmware limit: the console is
           // refusing every non-Sony title, so name the cause instead.
           pushNotification(
             "error",

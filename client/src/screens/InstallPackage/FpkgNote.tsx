@@ -8,8 +8,8 @@ import { useTr } from "../../state/lang";
  * What a fake package (FPKG) needs, stated rather than detected: no header marker separates a
  * fake package from a retail one, so the note names the requirement and lets the reader decide
  * whether it applies. The firmware limit is on the folded line, so it is read before anyone
- * installs: PS5 fake packages install on firmware later than 11.60 but do not run there yet;
- * PS4 fake packages are fine. The load order is behind the fold.
+ * installs: PS5 fake games play up to 13.60, and above 11.60 only with a kstuff build that
+ * supports fake packages there (November 2026); PS4 fake packages are fine. The load order is behind the fold.
  */
 export function FpkgNote({ className = "mb-4" }: { className?: string }) {
   const tr = useTr();
@@ -26,8 +26,8 @@ export function FpkgNote({ className = "mb-4" }: { className?: string }) {
           </span>
           <span>
             {tr(
-              "pkglib.fpkgsupport.firmware_v2",
-              "PS5 fake packages install on firmware above 11.60 but don't start yet. Mount them with Kraken Mount instead; full support for installing them there (through the A53 patches) is coming. PS4 fake packages are fine.",
+              "pkglib.fpkgsupport.firmware_v3",
+              "PS5 fake packages play on firmware up to 13.60. Above 11.60 they need a kstuff build with fake-package support for that firmware (released November 2026): with an older kstuff the package installs, but the game doesn't start. PS4 fake packages are fine.",
             )}
           </span>
         </span>
@@ -47,7 +47,10 @@ export function FpkgNote({ className = "mb-4" }: { className?: string }) {
           <ol className="ms-4 flex list-decimal flex-col gap-1">
             <li>
               <strong className="text-[var(--color-text)]">kstuff</strong>{" "}
-              {tr("pkglib.fpkgsupport.kstuff", "— the build with PS5 fake-package support")}
+              {tr(
+                "pkglib.fpkgsupport.kstuff_v2",
+                "— the build with PS5 fake-package support for your firmware (above 11.60: the November 2026 build or newer)",
+              )}
             </li>
             <li className="break-words">
               <strong className="text-[var(--color-text)]">a53_ppr_install_fast.elf</strong>{" "}

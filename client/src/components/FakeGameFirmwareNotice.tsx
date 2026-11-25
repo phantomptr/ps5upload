@@ -6,10 +6,10 @@ import { useTr } from "../state/lang";
 import { Callout } from "./Callout";
 
 /**
- * A fake PS5 game package on firmware above 11.60 installs but does not start: Kraken Mount
- * mounts it instead, and support for installed packages there (the A53 patches) is coming. Renders nothing for a PS4 package, for PS5 homebrew (IV…/ITEM…), for
- * 11.60 and older, or when the firmware can't be read: the warning needs a
- * PS5 game id AND a known firmware above the line.
+ * A fake PS5 game package on firmware above LAST_PS5_FAKE_GAME_FIRMWARE installs but does not
+ * start. Renders nothing for a PS4 package, for PS5 homebrew (IV…/ITEM…), for that firmware and
+ * older, or when the firmware can't be read: the warning needs a PS5 game id AND a known
+ * firmware above the line.
  */
 export function FakeGameFirmwareNotice({
   kernel,
@@ -30,9 +30,9 @@ export function FakeGameFirmwareNotice({
   const fw = ps5FakeGameUnplayableFirmware(kernel, contentId);
   if (!fw) return null;
   const body = tr(
-    "fakegame.fw.body_v2",
+    "fakegame.fw.body_v3",
     { fw, last: LAST_PS5_FAKE_GAME_FIRMWARE },
-    `PS5 fake packages install on firmware above ${LAST_PS5_FAKE_GAME_FIRMWARE} but don't start. Mount the package with Kraken Mount instead: the game plays straight from the .pkg, nothing installed. Full support for installed packages on newer firmware (through the A53 patches) is coming. PS4 packages and PS5 homebrew apps are fine.`,
+    `PS5 fake packages play on firmware up to ${LAST_PS5_FAKE_GAME_FIRMWARE}. On FW ${fw} the package installs, but the game doesn't start. PS4 packages and PS5 homebrew apps are fine.`,
   );
   const help = inRouter ? (
     <Link

@@ -35,9 +35,9 @@
   archives and any other file, and works out what each is. PS4 `.pkg` and PS5 fake packages
   (base, update, DLC) install from your computer (**Stream & install** or **Upload & install**),
   a NAS/SMB share, a USB drive or a link. If the PS5 refuses one route, the app offers another.
-  On firmware above 11.60 an installed PS5 fake package does not start yet: mount it with
-  **Kraken Mount** instead (Upload & Install offers it when Kraken Mount runs), and full support
-  for installed packages there, through the A53 patches, is coming. PS4 fake packages are fine.
+  An installed PS5 fake package plays on firmware up to 13.60; above 11.60 it needs a kstuff build
+  with fake-package support for that firmware (November 2026 or newer). **Kraken Mount** can mount
+  the package instead (Upload & Install offers it when Kraken Mount runs). PS4 fake packages are fine.
 - **Games.** One grid with every game once: your copies in your folders (including folders on
   a NAS, scanned in place) grouped with their updates and DLC, what each PS5 has installed, and
   the games on its drives. Play (or close) an installed game right from its card. Each game's

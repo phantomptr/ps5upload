@@ -19,13 +19,12 @@ import { humanizeCaught } from "../../lib/humanizeError";
 /** The profile folder's number as the engine gives it (its first 7 hex digits; 0 for the
  *  console's own save), as a label's id. */
 export function profileHex(userId: number): string {
-  return (userId >>> 0).toString(16).toUpperCase().padStart(7, "0");
+  return (userId & 0x0fffffff).toString(16).toUpperCase().padStart(7, "0");
 }
 
-/** The Switch games' saves of ProsperoEden (PPSA99008), with their backups: shown only when the
+/** The Switch emulators' per-game saves, grouped by their writer: shown only when the
  *  console has one. No game names are known, so each shows its 16-hex-digit title ID. */
 export default function SwitchSaves({ host, refreshKey }: { host: string; refreshKey: number }) {
-  const tr = useTr();
   const [saves, setSaves] = useState<SwitchSave[]>([]);
 
   useEffect(() => {
@@ -42,15 +41,37 @@ export default function SwitchSaves({ host, refreshKey }: { host: string; refres
   }, [host, refreshKey]);
 
   if (saves.length === 0) return null;
+  const emulators = [...new Set(saves.map((s) => s.emulator || "ProsperoEden"))];
+  return (
+    <>
+      {emulators.map((emulator) => (
+        <SwitchSaveGroup
+          key={emulator}
+          host={host}
+          emulator={emulator}
+          saves={saves.filter((s) => (s.emulator || "ProsperoEden") === emulator)}
+        />
+      ))}
+    </>
+  );
+}
+
+function SwitchSaveGroup({ host, saves, emulator }: {
+  host: string;
+  saves: SwitchSave[];
+  emulator: string;
+}) {
+  const tr = useTr();
+  const platform = emulator === "EglantinePS5" ? "Switch / Switch 2" : "Switch";
   const running = saves.some((s) => s.running === true);
   const games = [...new Set(saves.map((s) => s.title_id))].sort();
 
   return (
-    <section className="surface-panel mt-3 p-5" data-testid="switch-saves">
+    <section className="surface-panel mt-3 p-5" data-testid="switch-saves" data-emulator={emulator}>
       <header className="mb-1 flex items-center gap-2">
         <Gamepad2 size={16} aria-hidden />
         <h3 className="text-sm font-semibold">
-          {tr("saves_switch_title", undefined, "Switch games (ProsperoEden)")}
+          {tr("saves_switch_title", { emulator, platform }, "{platform} games ({emulator})")}
         </h3>
       </header>
       <p
@@ -63,10 +84,10 @@ export default function SwitchSaves({ host, refreshKey }: { host: string; refres
         {running
           ? tr(
               "saves_switch_running",
-              undefined,
-              "ProsperoEden is running. Close it before restoring.",
+              { emulator },
+              "{emulator} is running. Close it before restoring.",
             )
-          : tr("saves_switch_close_note", undefined, "Close ProsperoEden before restoring.")}
+          : tr("saves_switch_close_note", { emulator }, "Close {emulator} before restoring.")}
       </p>
       <div className="space-y-3">
         {games.map((game) => (
@@ -74,7 +95,7 @@ export default function SwitchSaves({ host, refreshKey }: { host: string; refres
             <div className="mb-1 flex items-center gap-2">
               <code className="text-sm font-semibold">{game}</code>
               <span className="rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-xs">
-                {tr("saves_switch_badge", undefined, "Switch")}
+                {tr("saves_switch_badge", { platform }, "{platform}")}
               </span>
             </div>
             <ul className="space-y-2">
@@ -106,7 +127,7 @@ function SwitchSaveRow({ host, save }: { host: string; save: SwitchSave }) {
     kind: save.kind,
   };
   const profile =
-    save.user_id === 0
+    (save.user_id & 0x0fffffff) === 0
       ? tr("saves_switch_console", undefined, "Console")
       : tr("saves_switch_profile", { id: profileHex(save.user_id) }, "Profile {id}");
 

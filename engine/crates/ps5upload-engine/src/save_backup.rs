@@ -1741,8 +1741,15 @@ pub(crate) fn save_writer<'a>(
     user_id: u32,
 ) -> Result<Writer<'a>, String> {
     let ps2 = crate::ps2_saves::place_of(save_path);
+    let switch = crate::emulator_saves::place_of(save_path);
     let fits = match &ps2 {
         Some(p) => p.emulator.app == title_id && p.user as u32 == user_id,
+        None if switch.is_some() => {
+            save_path.ends_with(&format!("/{title_id}"))
+                && switch
+                    .as_ref()
+                    .is_some_and(|(_, user)| *user as u32 == user_id)
+        }
         None => save_path.ends_with(&format!("/{title_id}")),
     };
     if !fits {
@@ -1753,10 +1760,10 @@ pub(crate) fn save_writer<'a>(
             app: p.emulator.app,
             emulator: Some(p.emulator.name),
         }
-    } else if crate::emulator_saves::is_save_path(save_path) {
+    } else if let Some((emulator, _)) = switch {
         Writer {
-            app: crate::emulator_saves::APP,
-            emulator: Some("ProsperoEden"),
+            app: emulator.app,
+            emulator: Some(emulator.name),
         }
     } else {
         Writer {
@@ -3460,6 +3467,36 @@ mod tests {
             parse_backup_name(&sw.title_id, &name),
             Some((sw.user_id as u32, "1970-01-01_000000".to_string()))
         );
+    }
+
+    #[test]
+    fn eglantine_waits_for_its_own_writer_and_restores_only_its_profile() {
+        let path = "/data/eglantineps5/user/nand/user/save/0000000000000000/1F1E1D1C1B1A19181716151413121110/0100F2C0115B6000";
+        let entry = SaveEntry {
+            title_id: "0100F2C0115B6000".into(),
+            user_id: 0x11f1_e1d1,
+            path: path.into(),
+            size: 17,
+            mtime: 1000,
+            kind: "switch".into(),
+        };
+        let writer = save_writer(path, &entry.title_id, entry.user_id as u32).unwrap();
+        assert_eq!(
+            (writer.app, writer.emulator),
+            (crate::emulator_saves::EGLANTINE_APP, Some("EglantinePS5"))
+        );
+        assert!(save_writer(path, &entry.title_id, 0x01f1_e1d1).is_err());
+        assert!(save_writer(path, "0100000000000000", entry.user_id as u32).is_err());
+        let saves = [entry];
+        let busy = [crate::emulator_saves::EGLANTINE_APP.to_string()].into();
+        assert!(needing_backup("h", &saves, &Done::new(), 2000, &busy).is_empty());
+        for app in [crate::emulator_saves::APP, crate::emulator_saves::MIRROR] {
+            let busy = [app.to_string()].into();
+            assert_eq!(
+                needing_backup("h", &saves, &Done::new(), 2000, &busy).len(),
+                1
+            );
+        }
     }
 
     #[test]

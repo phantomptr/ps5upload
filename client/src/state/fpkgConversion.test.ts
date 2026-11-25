@@ -1166,7 +1166,7 @@ describe("fpkg pipeline", () => {
     const { pushNotification } = await import("./notifications");
     vi.mocked(pushNotification).mockClear();
     const was = (conn as { ps5Kernel?: string | null }).ps5Kernel;
-    (conn as { ps5Kernel?: string | null }).ps5Kernel = "r229358/releases/13.60";
+    (conn as { ps5Kernel?: string | null }).ps5Kernel = "r229358/releases/14.00";
     inspect.mockResolvedValueOnce({ content_id: "UP9000-PPSA03671_00-X" });
     jobStatus
       .mockResolvedValueOnce({ status: "done", dest: "/out/.ps5upload-extract-x2/G", bytes_sent: 1 })

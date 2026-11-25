@@ -642,7 +642,13 @@ export function JoinView({
     onPointerLeave: () => setBarHover(false),
   };
 
-  const box = full || !inApp ? "fixed inset-0 z-[200] bg-black" : "relative aspect-video w-full overflow-hidden rounded-[var(--radius-card)] bg-black shadow-[var(--shadow-2)]";
+  // In the app's Play screen the box is 16:9 and no taller than the window leaves under the
+  // page's header (#929: a 1080p window had the picture's bottom below the window), as the host's
+  // own picture box (StreamPanel), never under 20rem wide.
+  const box =
+    full || !inApp
+      ? "fixed inset-0 z-[200] bg-black"
+      : "relative mx-auto aspect-video w-full max-w-[max(20rem,calc((100dvh_-_22rem)*16/9))] overflow-hidden rounded-[var(--radius-card)] bg-black shadow-[var(--shadow-2)]";
 
   return (
     <div className="space-y-2">
