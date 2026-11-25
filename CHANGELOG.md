@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.28
 
 **Fake packages (FPKG)**
 - **Fake PS5 games play up to firmware 13.60.** A kstuff build with fake-package support up to 13.60 came out in November 2026. The app no longer warns that an installed fake PS5 game won't start on 11.61, 12.xx or 13.xx: the warning now appears only above 13.60. The fake-package note, Convert, the Payloads list, the FAQ and the README say that firmware above 11.60 needs that November 2026 kstuff (or newer). Convert again suggests a package, not an image, for a PS5 game on 13.60.
