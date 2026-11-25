@@ -368,10 +368,11 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
 /// table's own claim: only the records the table has room for are looked at (a count of
 /// four billion once meant that many empty lookups per name, with no way to stop it).
 fn flt_holds(flt: &[u8], count: usize, hash: u64, ino: u64) -> bool {
-    let records = flt.get(0x40..).unwrap_or_default().chunks_exact(16);
-    records.take(count).any(|rec| {
-        u64::from_le_bytes(rec[..8].try_into().unwrap()) == hash
-            && (u64::from_le_bytes(rec[8..].try_into().unwrap()) & 0xFF_FFFF) == ino
+    let (records, _) = flt.get(0x40..).unwrap_or_default().as_chunks::<16>();
+    records.iter().take(count).any(|rec| {
+        let (name, node) = rec.split_at(8);
+        u64::from_le_bytes(name.try_into().unwrap()) == hash
+            && (u64::from_le_bytes(node.try_into().unwrap()) & 0xFF_FFFF) == ino
     })
 }
 
