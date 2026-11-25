@@ -274,6 +274,41 @@ fn a_package_keeps_the_games_own_languages() {
     );
 }
 
+/// A game whose param.json names a content id with a path in it (36 characters, like a real
+/// one) is refused: the id names the package file, which landed outside the chosen folder.
+#[test]
+fn a_content_id_with_a_path_in_it_is_refused() {
+    let source_dir = TempDir::new("cid-source");
+    let output_dir = TempDir::new("cid-out");
+    write_tree(source_dir.path());
+    let escaped = format!("../fpkg-writer-{}-cid-escaped", std::process::id());
+    let id = format!("{escaped}{}", "A".repeat(36 - escaped.len()));
+    assert_eq!(id.len(), 36);
+    std::fs::write(
+        source_dir.path().join("sce_sys/param.json"),
+        format!(
+            "{{\"contentId\":\"{id}\",\"contentVersion\":\"01.001.000\",\"titleId\":\"PPSA01234\",\"applicationCategoryType\":0,\"attributePub\":0}}"
+        ),
+    )
+    .unwrap();
+    let request = BuildRequest {
+        time: Some((1_700_000_000, 0)),
+        seed: Some([7; 16]),
+        ..BuildRequest::new(source_dir.path(), output_dir.path())
+    };
+    let Err(e) = build::build(&request, &mut |_| {}) else {
+        panic!("a content id with a path in it was built");
+    };
+    let e = e.to_string();
+    assert!(e.contains("characters a content id never has"), "{e}");
+    let outside = output_dir.path().join(format!("{id}.pkg"));
+    let outside_partial = output_dir.path().join(format!("{id}.pkg.partial"));
+    assert!(!outside.exists() && !outside_partial.exists());
+    assert!(build::content_id_is_plain(CONTENT_ID));
+    assert!(!build::content_id_is_plain(""));
+    assert!(!build::content_id_is_plain("UP0000-PPSA01234_00\\X"));
+}
+
 #[test]
 fn a_second_build_reports_warnings_but_still_verifies() {
     let source_dir = TempDir::new("warn-source");

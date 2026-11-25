@@ -534,7 +534,13 @@ pub(crate) async fn fpkg_build_handler(
         .clone()
         .filter(|n| !n.trim().is_empty())
         .or_else(|| req.content_id.clone().filter(|c| !c.trim().is_empty()))
-        .or_else(|| inspection.content_id.clone());
+        // The game's own id names the file only when it is a plain name (never `../x`).
+        .or_else(|| {
+            inspection
+                .content_id
+                .clone()
+                .filter(|c| build::content_id_is_plain(c))
+        });
     let stem = match stem {
         Some(s) if req.keep_both => Some(
             crate::folder_build::keep_both_stem(&s, |c| {
@@ -829,7 +835,13 @@ async fn ps4_package_build(
         .name
         .clone()
         .filter(|n| !n.trim().is_empty())
-        .or_else(|| inspection.content_id.clone())
+        // The param.sfo's id names the file only when it is a plain name (never `../x`).
+        .or_else(|| {
+            inspection
+                .content_id
+                .clone()
+                .filter(|c| build::content_id_is_plain(c))
+        })
         .or_else(|| {
             source_path
                 .file_stem()
