@@ -5808,7 +5808,10 @@ static int handle_cheats_toggle(runtime_state_t *state, const char *body) {
                            err, sizeof(err));
     cheat_inc_cmd_count(state);
 
-    char resp[512];
+    /* Holds the longest reason whole: 255 bytes that are all quotes or backslashes double when
+     * escaped. At 512 such a reply did not fit, and the length snprintf returned (what it would
+     * have written) had mgmt_reply send up to 23 bytes from past the end of this buffer. */
+    char resp[2 * 256 + 2 + 64];
     int len;
     if (rc == 0) {
         char tid_esc[CHEATS_TITLE_ID_LEN * 6 + 1];
@@ -5825,7 +5828,11 @@ static int handle_cheats_toggle(runtime_state_t *state, const char *body) {
         len = snprintf(resp, sizeof(resp),
                        "{\"ok\":false,\"err\":\"%s\"}", err_esc);
     }
-    return mgmt_reply(MGMT_FRAME_CHEATS_TOGGLE_ACK, resp, (uint64_t)(len > 0 ? len : 0));
+    if (len < 0 || (size_t)len >= sizeof(resp)) {
+        const char *e = "{\"ok\":false,\"err\":\"reply too long\"}";
+        return mgmt_reply(MGMT_FRAME_CHEATS_TOGGLE_ACK, e, strlen(e));
+    }
+    return mgmt_reply(MGMT_FRAME_CHEATS_TOGGLE_ACK, resp, (uint64_t)len);
 }
 
 static int handle_cheats_delete(runtime_state_t *state, const char *body) {
