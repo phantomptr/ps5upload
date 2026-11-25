@@ -228,7 +228,9 @@ export function TabBottomNav() {
                 <Icon size={21} strokeWidth={1.8} className="nav-pill-icon" aria-hidden />
                 {showPlaying && <PlayingDot />}
               </span>
-              <span className="max-w-full truncate px-0.5">{base}</span>
+              {/* Tight letters and no side padding: at 360 px a tab is 52 px wide, and "Console"
+                  in the open tab's bolder letters needs nearly all of it. */}
+              <span className="max-w-full truncate tracking-tight">{base}</span>
             </Link>
           );
         })}
@@ -261,7 +263,7 @@ export function TabBottomNav() {
               />
             )}
           </span>
-          <span className="max-w-full truncate px-0.5">{tr("v5_tab_more", undefined, "More")}</span>
+          <span className="max-w-full truncate tracking-tight">{tr("v5_tab_more", undefined, "More")}</span>
         </Link>
       </nav>
     </>
