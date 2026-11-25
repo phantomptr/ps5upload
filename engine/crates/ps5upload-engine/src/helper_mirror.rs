@@ -525,7 +525,10 @@ async fn ftp_tail(
         .await
         .map_err(|e| format!("read: {e}"))?;
     let mut buf = Vec::new();
-    stream
+    // The tail asked for and no more: a server that ignores REST (or sends without end) would
+    // otherwise be read whole into memory.
+    (&mut stream)
+        .take(max)
         .read_to_end(&mut buf)
         .await
         .map_err(|e| format!("read: {e}"))?;

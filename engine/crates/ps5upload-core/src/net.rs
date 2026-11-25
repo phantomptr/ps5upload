@@ -81,6 +81,53 @@ pub(crate) fn resolve_connect_targets(addr: &str) -> Result<Vec<SocketAddr>> {
     Ok(out)
 }
 
+/// Everything `r` gives until it ends, refused with `InvalidData` past `cap` bytes. For a reply
+/// whose length the other side decides (a console's HTTP answer, a download): read whole without
+/// a limit, a peer that keeps sending fills this computer's memory.
+pub fn read_to_end_capped<R: io::Read>(r: R, cap: u64) -> io::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    read_to_end_capped_into(r, cap, &mut out)?;
+    Ok(out)
+}
+
+/// [`read_to_end_capped`] into `out`, which keeps what arrived when the read fails (a reply cut
+/// short by a reset can still be the whole answer).
+pub fn read_to_end_capped_into<R: io::Read>(r: R, cap: u64, out: &mut Vec<u8>) -> io::Result<()> {
+    use io::Read as _;
+    let start = out.len() as u64;
+    r.take(cap.saturating_add(1)).read_to_end(out)?;
+    if out.len() as u64 - start > cap {
+        out.truncate((start + cap) as usize);
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("the reply is larger than {cap} bytes"),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod capped_read_tests {
+    use super::*;
+
+    #[test]
+    fn a_reply_up_to_the_cap_is_read_whole() {
+        assert_eq!(read_to_end_capped(&b"abc"[..], 3).unwrap(), b"abc");
+        assert_eq!(read_to_end_capped(&b""[..], 0).unwrap(), b"");
+    }
+
+    #[test]
+    fn a_reply_past_the_cap_is_refused_after_reading_no_more_than_one_byte_over() {
+        // An endless reply: stops at once instead of growing without end.
+        let e = read_to_end_capped(io::repeat(b'x'), 1024).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData);
+        assert!(e.to_string().contains("1024"), "{e}");
+        let mut kept = b"head".to_vec();
+        assert!(read_to_end_capped_into(io::repeat(b'y'), 8, &mut kept).is_err());
+        assert_eq!(kept, b"headyyyyyyyy");
+    }
+}
+
 #[cfg(test)]
 mod transient_resource_error_tests {
     //! Pin the WSAENOBUFS-class classification. The bug this guards against:

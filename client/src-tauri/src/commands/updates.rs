@@ -547,6 +547,32 @@ mod is_newer_tests {
 /// default-unlimited body buffer.
 const MANIFEST_MAX_BYTES: usize = 64 * 1024;
 
+/// Hard cap on the releases list the pre-release channel reads: ten releases with their notes
+/// and asset lists come to some tens of KiB.
+const RELEASE_LIST_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+/// A response body, refused past `max` bytes. The Content-Length check is only an early-out:
+/// it is absent for chunked transfer-encoding, and `resp.bytes()` / `resp.json()` would then
+/// buffer the entire body before any cap fires. The running total is what holds the limit.
+async fn read_capped(resp: reqwest::Response, max: usize) -> Result<Vec<u8>, String> {
+    if let Some(len) = resp.content_length() {
+        if len > max as u64 {
+            return Err(code_only("update_too_large"));
+        }
+    }
+    let mut stream = resp.bytes_stream();
+    use futures_util::StreamExt;
+    let mut body: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| network_error(&e))?;
+        if body.len().saturating_add(chunk.len()) > max {
+            return Err(code_only("update_too_large"));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 /// Ask the releases API for the newest release of any kind and return its
 /// `latest.json` asset URL.
 ///
@@ -575,7 +601,8 @@ async fn prerelease_manifest_url(client: &reqwest::Client) -> Result<String, Str
     if !resp.status().is_success() {
         return Err(http_error(&resp));
     }
-    let releases: Vec<Release> = resp.json().await.map_err(|e| {
+    let body = read_capped(resp, RELEASE_LIST_MAX_BYTES).await?;
+    let releases: Vec<Release> = serde_json::from_slice(&body).map_err(|e| {
         coded(
             "update_bad_manifest",
             serde_json::json!({ "detail": e.to_string() }),
@@ -632,27 +659,7 @@ async fn fetch_manifest(channel: UpdateChannel) -> Result<Manifest, String> {
     if !resp.status().is_success() {
         return Err(http_error(&resp));
     }
-    // Bound the body before JSON parsing. The Content-Length pre-check is
-    // only an early-out: content_length() is None for chunked
-    // transfer-encoding, so a Some-only guard is bypassable and
-    // `resp.bytes()` would then buffer the entire body before any cap
-    // fires. Stream with a running-total cap (mirroring update_download)
-    // so an absent Content-Length cannot defeat the limit.
-    if let Some(len) = resp.content_length() {
-        if len as usize > MANIFEST_MAX_BYTES {
-            return Err(code_only("update_too_large"));
-        }
-    }
-    let mut stream = resp.bytes_stream();
-    use futures_util::StreamExt;
-    let mut body: Vec<u8> = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| network_error(&e))?;
-        if body.len().saturating_add(chunk.len()) > MANIFEST_MAX_BYTES {
-            return Err(code_only("update_too_large"));
-        }
-        body.extend_from_slice(&chunk);
-    }
+    let body = read_capped(resp, MANIFEST_MAX_BYTES).await?;
     serde_json::from_slice::<Manifest>(&body).map_err(|e| {
         coded(
             "update_bad_manifest",
@@ -1325,6 +1332,28 @@ mod checksum_tests {
 #[cfg(test)]
 mod tests {
     use super::{is_plain_file_name, is_safe_update_url};
+
+    /// A body with no Content-Length (chunked) that never ends is refused at the cap. The
+    /// pre-release channel's release list was read whole with `resp.json()`.
+    #[tokio::test]
+    async fn an_endless_answer_is_refused_at_the_cap() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut head = [0u8; 1024];
+            let _ = sock.read(&mut head).await;
+            let _ = sock
+                .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+                .await;
+            let chunk = format!("4000\r\n{}\r\n", "x".repeat(0x4000));
+            while sock.write_all(chunk.as_bytes()).await.is_ok() {}
+        });
+        let resp = reqwest::get(format!("http://{addr}/")).await.unwrap();
+        let e = super::read_capped(resp, 64 * 1024).await.unwrap_err();
+        assert!(e.contains("update_too_large"), "{e}");
+    }
 
     #[test]
     fn update_file_names_are_bare_names() {

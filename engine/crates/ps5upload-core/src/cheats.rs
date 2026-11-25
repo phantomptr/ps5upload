@@ -421,6 +421,9 @@ fn patch_xml_title(xml: &str) -> String {
         .replace("&amp;", "&")
 }
 
+/// The largest patch file read from the archive.
+const PATCH_FILE_MAX: u64 = 1024 * 1024;
+
 /// Every patch file of the release archive.
 fn parse_patch_archive(zip_bytes: &[u8]) -> Result<Vec<PatchFile>> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes))?;
@@ -430,11 +433,17 @@ fn parse_patch_archive(zip_bytes: &[u8]) -> Result<Vec<PatchFile>> {
         let Some(name) = file.name().ok().and_then(|n| patch_archive_name(&n)) else {
             continue;
         };
-        if file.size() > 1024 * 1024 {
+        if file.size() > PATCH_FILE_MAX {
             continue;
         }
-        let mut bytes = Vec::with_capacity(file.size() as usize);
-        file.read_to_end(&mut bytes)?;
+        // The size is the archive's own word: what the entry inflates to is held to it too.
+        let mut bytes = Vec::new();
+        (&mut file)
+            .take(PATCH_FILE_MAX + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > PATCH_FILE_MAX {
+            continue;
+        }
         let title = patch_xml_title(&String::from_utf8_lossy(&bytes));
         out.push((name, title, bytes));
     }
@@ -498,15 +507,21 @@ fn tree_entry_from_path(path: &str, prefix: &str) -> Option<(String, &'static st
     Some((filename.to_string(), format))
 }
 
+/// The most one cheat or patch download may be.
+const REPO_FETCH_MAX: u64 = 64 * 1024 * 1024;
+
 fn repo_fetch(url: &str) -> Result<Vec<u8>> {
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(20)))
         .build();
     let agent = ureq::Agent::new_with_config(config);
     let resp = agent.get(url).header("User-Agent", "ps5upload").call()?;
-    let mut buf = Vec::with_capacity(32 * 1024);
-    resp.into_body().into_reader().read_to_end(&mut buf)?;
-    Ok(buf)
+    // The largest thing fetched is the game-patch archive (a few MiB); a server that keeps
+    // sending is refused at the cap instead of filling memory.
+    Ok(crate::net::read_to_end_capped(
+        resp.into_body().into_reader(),
+        REPO_FETCH_MAX,
+    )?)
 }
 
 /// Parse one line of `filename=game_title` format.
