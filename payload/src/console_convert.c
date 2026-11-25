@@ -54,6 +54,10 @@ extern unsigned int ps5upload_convert_elf_len;
 #ifndef CONVERT_KILL_AFTER_MS
 #define CONVERT_KILL_AFTER_MS 10000
 #endif
+/* For a killed converter to be gone before its unfinished output is removed. */
+#ifndef CONVERT_KILL_WAIT_MS
+#define CONVERT_KILL_WAIT_MS 10000
+#endif
 /* The console's idle timer is reset this often while a build runs, so it does not enter rest
  * mode on its own in the middle of one (rest mode ends every payload). */
 #ifndef CONVERT_POWER_TICK_MS
@@ -587,6 +591,12 @@ static int follow(ava1_op_ctx_t *c, const char *id, const char *dest, const cc_b
         } else if (cancel_sent && now_ms() - cancel_at > CONVERT_KILL_AFTER_MS) {
             fprintf(stderr, "convert: the converter (pid %llu) did not stop; killing it\n", (unsigned long long)s->pid);
             if (pid_signallable(s->pid)) (void)kill((pid_t)s->pid, SIGKILL);
+            /* Until it is really gone, not a fixed half second (as archive_extract.c waits): a
+             * process inside a long write to a slow drive ends only when that write returns, and
+             * the caller removes the unfinished output next. Removed under a writer still putting
+             * files into it, part of it stayed on the drive with nothing left to clear it. Bounded,
+             * so a pid that never goes away cannot hold the job (and its lock) for good. */
+            for (int i = 0; i < CONVERT_KILL_WAIT_MS / 100 && pid_alive(s->pid); i++) sleep_ms(100);
             sleep_ms(500);
             ava1_op_message(c, "convert_cancelled");
             free(cur_buf);
