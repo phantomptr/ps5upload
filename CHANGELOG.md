@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.30
 
 **Files on phones**
 - **Back closes what's open first (#932).** On Android, Back used to leave Files even with a menu open. Now it closes the open menu or dialog, then leaves selection, then goes up one folder, and only leaves Files at the top of a drive.
