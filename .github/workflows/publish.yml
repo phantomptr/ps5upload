@@ -72,6 +72,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           submodules: true
           ref: ${{ github.event.inputs.tag || github.ref_name }}
 
@@ -275,6 +276,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           submodules: true
           ref: ${{ github.event.inputs.tag || github.ref_name }}
 
@@ -756,6 +758,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           submodules: true
           ref: ${{ github.event.inputs.tag || github.ref_name }}
 
@@ -924,6 +927,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           submodules: true
           ref: ${{ github.event.inputs.tag || github.ref_name }}
 
@@ -1032,6 +1036,7 @@ jobs:
       # Only the LICENSE (create-release ships the repo's copy) and the scan scripts.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           ref: ${{ github.event.inputs.tag || github.ref_name }}
           sparse-checkout: |
             /LICENSE
@@ -1113,6 +1118,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           submodules: true
           ref: ${{ github.event.inputs.tag || github.ref_name }}
 
