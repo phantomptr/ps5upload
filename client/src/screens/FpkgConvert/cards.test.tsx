@@ -78,7 +78,9 @@ describe("MakeCard", () => {
 
   it("explains both, and marks the package once a game is checked", () => {
     const fw = renderToStaticMarkup(<MakeCard make="pkg" onMake={() => {}} checked />);
-    expect(fw).toContain("A package (.pkg)");
+    expect(fw).toContain("A fake package (FPKG, .pkg)");
+    // It says in words what a .pkg is: a fake package (FPKG) that installs on the PS5.
+    expect(fw).toContain("A fake package (FPKG). It installs on the PS5");
     expect(fw).toContain("A game image");
     expect(fw.match(/Recommended/g)).toHaveLength(1);
     expect(fw).toContain("plays on firmware up to 13.60");
@@ -98,7 +100,7 @@ describe("MakeCard", () => {
     );
     expect(k).not.toContain("Recommended on FW");
     expect(k.match(/Recommended/g)).toHaveLength(1);
-    expect(k).toMatch(/A package \(\.pkg\)[\s\S]*?Recommended/);
+    expect(k).toMatch(/A fake package \(FPKG, \.pkg\)[\s\S]*?Recommended/);
     expect(k).toContain("a package made here is mounted from a drive, not installed");
     expect(k).toContain("Kraken Mount, running on this PS5, mounts it");
     const img = renderToStaticMarkup(
@@ -151,9 +153,9 @@ describe("A PS4 game's package", () => {
     const out = renderToStaticMarkup(
       <MakeCard make="pkg" onMake={() => {}} checked ps4 />,
     );
-    expect(out).toContain("A PS4 package (.pkg)");
+    expect(out).toContain("A PS4 fake package (FPKG, .pkg)");
     expect(out).toContain("A PS4 fake package the PS5 installs");
-    expect(out).not.toContain("A package (.pkg)");
+    expect(out).not.toContain("A fake package (FPKG, .pkg)");
     expect((out.match(/role="radio"/g) ?? []).length).toBe(3);
   });
 

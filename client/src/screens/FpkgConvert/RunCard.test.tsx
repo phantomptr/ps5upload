@@ -204,7 +204,7 @@ describe("RunCard", () => {
     it("asks what to do after (what to make is chosen under ②)", () => {
       const out = idle({});
       expect(out).not.toContain(">Make<");
-      expect(out).not.toContain("A package (.pkg)");
+      expect(out).not.toContain("A fake package (FPKG, .pkg)");
       expect(options(out, "After converting")).toEqual(["Keep the package", "Stream & install", "Upload & install"]);
       expect(button(out, "Add this game to the queue")?.disabled).toBe(false);
     });

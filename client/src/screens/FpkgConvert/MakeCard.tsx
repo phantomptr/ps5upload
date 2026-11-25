@@ -57,7 +57,7 @@ export function MakeCard({
       ? {
           id: "pkg",
           icon: Package,
-          title: tr("fpkg.make.ps4_pkg_title", undefined, "A PS4 package (.pkg)"),
+          title: tr("fpkg.make.ps4_pkg_title_v2", undefined, "A PS4 fake package (FPKG, .pkg)"),
           body: tr(
             "fpkg.make.ps4_pkg_body",
             undefined,
@@ -67,17 +67,17 @@ export function MakeCard({
       : {
           id: "pkg",
           icon: Package,
-          title: tr("fpkg.make.pkg_title", undefined, "A package (.pkg)"),
+          title: tr("fpkg.make.pkg_title_v2", undefined, "A fake package (FPKG, .pkg)"),
           body: kraken
             ? tr(
-                "fpkg.make.pkg_body_kraken_v2",
+                "fpkg.make.pkg_body_kraken_v3",
                 undefined,
-                "Kraken Mount, running on this PS5, mounts it from a drive's homebrew folder and shows it on the home screen, with nothing installed. It can still be installed instead.",
+                "A fake package (FPKG). Kraken Mount, running on this PS5, mounts it from a drive's homebrew folder and shows it on the home screen, with nothing installed. It can still be installed instead.",
               )
             : tr(
-                "fpkg.make.pkg_body_v3",
+                "fpkg.make.pkg_body_v4",
                 undefined,
-                "Installs on the PS5 like a game from the store, streamed from here or uploaded first. PS4 games play on any firmware. An installed PS5 game plays on firmware up to 13.60; above 11.60 it needs a kstuff build with fake-package support for that firmware (November 2026 or newer).",
+                "A fake package (FPKG). It installs on the PS5 like a game from the store, streamed from here or uploaded first. PS4 games play on any firmware. An installed PS5 game plays on firmware up to 13.60; above 11.60 it needs a kstuff build with fake-package support for that firmware (November 2026 or newer).",
               ),
         },
     {
