@@ -109,7 +109,9 @@ export function SnapshotsPanel({ prefill }: { prefill?: SnapshotPrefill | null }
   // Several items picked in Files: one snapshot each, named after each item.
   const [batch, setBatch] = useState<string[]>(() => (prefill && prefill.paths.length > 1 ? prefill.paths : []));
   const [busy, setBusy] = useState(false);
-  const [actionMsg, setActionMsg] = useState<string | null>(null);
+  // What the last action did. `warn`: it was only partly done (a restore that left files out),
+  // so it is not shown as a success.
+  const [actionMsg, setActionMsg] = useState<{ text: string; warn?: boolean } | null>(null);
 
   const reqIdRef = useRef(0);
 
@@ -129,7 +131,8 @@ export function SnapshotsPanel({ prefill }: { prefill?: SnapshotPrefill | null }
     try {
       const list = await backupList(addr);
       if (myId !== reqIdRef.current) return;
-      setEntries(list.snapshots);
+      // An answer with no list (a helper that could not read its snapshots) is an empty list.
+      setEntries(list.snapshots ?? []);
     } catch (e) {
       if (myId !== reqIdRef.current) return;
       setError(humanizePs5Error(String(e)));
@@ -186,13 +189,13 @@ export function SnapshotsPanel({ prefill }: { prefill?: SnapshotPrefill | null }
       setError(humanizePs5Error(String(e)));
     } finally {
       if (done > 0)
-        setActionMsg(
-          tr(
+        setActionMsg({
+          text: tr(
             "fs_snapshot_batch_ok",
             { count: done, files, bytes: formatBytes(bytes) },
             `Made ${done} snapshots: ${files} files (${formatBytes(bytes)})`,
           ),
-        );
+        });
       setBusy(false);
       if (done > 0) refresh();
     }
@@ -208,13 +211,13 @@ export function SnapshotsPanel({ prefill }: { prefill?: SnapshotPrefill | null }
         { kind: "backup-snapshot", origin: "backup", label: tr("backup_task_snapshot", { tag: tag.trim() }, "Backup {tag}"), consoleId: addr },
         () => backupSnapshot(tag.trim(), path.trim(), addr),
       );
-      setActionMsg(
-        tr(
+      setActionMsg({
+        text: tr(
           "backup_snapshot_ok",
           { files: result.files, bytes: formatBytes(result.bytes) },
           `Snapshotted ${result.files} files (${formatBytes(result.bytes)})`,
         ),
-      );
+      });
       setTag("");
       setPath("");
       refresh();
@@ -248,8 +251,9 @@ export function SnapshotsPanel({ prefill }: { prefill?: SnapshotPrefill | null }
           () => backupRestore(entry.tag, entry.timestamp, addr),
         );
         const missed = (result.skipped ?? 0) + (result.failed ?? 0);
-        setActionMsg(
-          result.partial && missed > 0
+        const partial = !!result.partial && missed > 0;
+        setActionMsg({
+          text: partial
             ? tr(
                 "backup_restore_partial",
                 { count: result.restored, missed },
@@ -260,7 +264,8 @@ export function SnapshotsPanel({ prefill }: { prefill?: SnapshotPrefill | null }
                 { count: result.restored },
                 `Restored ${result.restored} files`,
               ),
-        );
+          warn: partial,
+        });
       } catch (e) {
         setError(humanizePs5Error(String(e)));
       } finally {
@@ -289,7 +294,7 @@ export function SnapshotsPanel({ prefill }: { prefill?: SnapshotPrefill | null }
       setError(null);
       try {
         await backupDelete(entry.tag, entry.timestamp, addr);
-        setActionMsg(tr("backup_delete_ok", undefined, "Snapshot deleted"));
+        setActionMsg({ text: tr("backup_delete_ok", undefined, "Snapshot deleted") });
         refresh();
       } catch (e) {
         setError(humanizePs5Error(String(e)));
@@ -305,8 +310,18 @@ export function SnapshotsPanel({ prefill }: { prefill?: SnapshotPrefill | null }
       {error && <div className="mb-4"><ErrorCard title={error} onRetry={() => void refresh()} onDismiss={() => setError(null)} /></div>}
 
       {actionMsg && (
-        <div className="rounded-[var(--radius-card)] border border-[var(--color-good)]/30 bg-[var(--color-good)]/10 px-4 py-3 text-sm text-[var(--color-good)]">
-          {actionMsg}
+        <div
+          role="status"
+          data-testid="backup-action-msg"
+          data-tone={actionMsg.warn ? "warn" : "good"}
+          className={
+            "rounded-[var(--radius-card)] border px-4 py-3 text-sm " +
+            (actionMsg.warn
+              ? "border-[var(--color-warn)]/40 bg-[var(--color-warn-soft)] text-[var(--color-warn)]"
+              : "border-[var(--color-good)]/30 bg-[var(--color-good)]/10 text-[var(--color-good)]")
+          }
+        >
+          {actionMsg.text}
         </div>
       )}
 
@@ -474,6 +489,8 @@ export function SnapshotsPanel({ prefill }: { prefill?: SnapshotPrefill | null }
                     onClick={() => handleRestore(entry)}
                     disabled={busy}
                     title={tr("backup_restore", undefined, "Restore")}
+                    aria-label={tr("backup_restore", undefined, "Restore")}
+                    data-testid="backup-restore"
                   >
                     <RotateCcw size={14} />
                   </Button>
@@ -483,6 +500,7 @@ export function SnapshotsPanel({ prefill }: { prefill?: SnapshotPrefill | null }
                     onClick={() => handleDelete(entry)}
                     disabled={busy}
                     title={tr("backup_delete", undefined, "Delete")}
+                    aria-label={tr("backup_delete", undefined, "Delete")}
                     className="text-[var(--color-bad)] hover:text-[var(--color-bad)]"
                   >
                     <Trash2 size={14} />
