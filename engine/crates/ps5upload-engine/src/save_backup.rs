@@ -3611,7 +3611,7 @@ mod tests {
             .unwrap_err();
             assert!(
                 e.contains("not a save folder") || e.contains("not a title ID"),
-                "{path:?} {title:?}: {e}"
+                "{path:?} {title:?}: refused for another reason"
             );
         }
         let ok = "/user/home/1/savedata_prospero/PPSA01234";
