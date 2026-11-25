@@ -6,6 +6,19 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Fake packages (FPKG)**
+- **Fake PS5 games play up to firmware 13.60.** A kstuff build with fake-package support up to 13.60 came out in November 2026. The app no longer warns that an installed fake PS5 game won't start on 11.61, 12.xx or 13.xx: the warning now appears only above 13.60. The fake-package note, Convert, the Payloads list, the FAQ and the README say that firmware above 11.60 needs that November 2026 kstuff (or newer). Convert again suggests a package, not an image, for a PS5 game on 13.60.
+- **A fake PS5 game that won't start says why.** On 11.61 to 13.60, a launch that fails now adds that a game from a fake package needs the November 2026 kstuff, so load it and press Play again.
+
+**Play Together**
+- **A friend sees the whole picture (#929).** On some Windows PCs a friend's picture was zoomed into its top-left corner, and on a wide window the bottom could fall below the screen. The friend's player now shows the whole picture, fitted to the window.
+
+**Saves**
+- **Backup times show in your own time zone (#928).** Save backup times were shown in UTC. They now show in the device's local time, in the app's language. Backup names don't change.
+- **EglantinePS5 Switch saves are backed up (#927, thanks EnriqueWood).** Automatic backups, Back up now and Restore now include EglantinePS5's Switch and Switch 2 saves, listed in their own group. Restore waits until EglantinePS5 is closed, and its saves never mix with ProsperoEden's, in backups or when two consoles sync.
+
+## 12.6.27
+
 **Install**
 - **PS4 add-ons install even when their title ID differs from the game's (#924).** Some games use a different title ID for their add-ons than for the game itself (Dead or Alive 5 Last Round: game CUSA01778, add-ons CUSA01601). The app refused those add-ons with "the base game is not on this PS5", even though the PS5 installs them fine. Add-ons are no longer checked for a base game; the PS5 decides. Updates still are, because the PS5 accepts an update without its game and then installs nothing.
 
