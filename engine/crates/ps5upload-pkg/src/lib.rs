@@ -134,7 +134,8 @@ pub fn extract_from_ffpkg(
     } else if inode.is_dir() {
         let target = dest_dir.join(leaf_name);
         create_dir_all(&target).map_err(Ufs2Error::Io)?;
-        extract_dir_recursive(&mut img, &inode, &target, &mut result, 0)?;
+        let mut walked = std::collections::HashSet::from([inode.number]);
+        extract_dir_recursive(&mut img, &inode, &target, &mut result, 0, &mut walked)?;
     } else {
         return Err(Ufs2Error::NotFound {
             component: format!("{leaf_name} (not a file or directory)"),
@@ -184,17 +185,18 @@ fn is_safe_child_name(name: &str) -> bool {
     )
 }
 
-fn extract_dir_recursive(
-    img: &mut Ufs2Image<std::fs::File>,
+fn extract_dir_recursive<R: Read + Seek>(
+    img: &mut Ufs2Image<R>,
     dir: &ufs2::Inode,
     dest: &Path,
     result: &mut FfpkgExtractResult,
     depth: u32,
+    walked: &mut std::collections::HashSet<u64>,
 ) -> Result<(), Ufs2Error> {
-    // Bound recursion against a hostile image with a directory cycle or
-    // pathological nesting (the block-pointer walk has cycle detection, but
-    // the directory tree didn't). "." / ".." are already skipped by
-    // is_safe_child_name, so a cycle requires a crafted non-dotdot entry.
+    // Bound recursion against pathological nesting. A directory cycle is refused on its own
+    // (`walked`): an entry naming its own directory or an ancestor is not stopped by the depth
+    // cap alone, as two such entries in one directory double the work at every level. "." / ".."
+    // are already skipped by is_safe_child_name, so a cycle requires a crafted non-dotdot entry.
     if depth > FFPKG_EXTRACT_MAX_DEPTH {
         return Err(Ufs2Error::WalkTooDeep {
             max: FFPKG_EXTRACT_MAX_DEPTH,
@@ -212,8 +214,15 @@ fn extract_dir_recursive(
         let child_path = dest.join(&e.name);
         let child_inode = img.read_inode(e.inode)?;
         if child_inode.is_dir() {
+            // Every directory is walked once: one reached again is a cycle (or a directory
+            // linked twice), refused before anything more is written.
+            if !walked.insert(child_inode.number) {
+                return Err(Ufs2Error::DirectoryCycle {
+                    inode: child_inode.number,
+                });
+            }
             create_dir_all(&child_path).map_err(Ufs2Error::Io)?;
-            extract_dir_recursive(img, &child_inode, &child_path, result, depth + 1)?;
+            extract_dir_recursive(img, &child_inode, &child_path, result, depth + 1, walked)?;
         } else if child_inode.is_file() {
             let written = extract_file(img, &child_inode, &child_path)?;
             result.file_count += 1;
@@ -2282,6 +2291,75 @@ mod tests {
         d.push(format!("ps5upload-pkg-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&d);
         d
+    }
+
+    /// A 4 KiB-block image whose root directory (inode 2) lists, besides `.` and `..`, the entries
+    /// `names`, each a directory entry pointing back at inode 2 itself.
+    fn looping_root(names: &[&str]) -> ufs2::Ufs2Image<std::io::Cursor<Vec<u8>>> {
+        const BS: usize = 4096;
+        // Inode table in fragments 1..5 (64 inodes of 256 bytes), the root's entries in 5.
+        let mut image = vec![0u8; 6 * BS];
+        let root = BS + 2 * 256;
+        image[root..root + 2].copy_from_slice(&0x41edu16.to_le_bytes());
+        image[root + 16..root + 24].copy_from_slice(&(BS as u64).to_le_bytes());
+        image[root + 112..root + 120].copy_from_slice(&5u64.to_le_bytes());
+        let mut entries: Vec<&str> = vec![".", ".."];
+        entries.extend(names);
+        let mut at = 5 * BS;
+        for (i, name) in entries.iter().enumerate() {
+            let len = if i + 1 == entries.len() {
+                6 * BS - at
+            } else {
+                (8 + name.len() + 1).next_multiple_of(4)
+            };
+            image[at..at + 4].copy_from_slice(&2u32.to_le_bytes());
+            image[at + 4..at + 6].copy_from_slice(&(len as u16).to_le_bytes());
+            image[at + 6] = 4; // DT_DIR
+            image[at + 7] = name.len() as u8;
+            image[at + 8..at + 8 + name.len()].copy_from_slice(name.as_bytes());
+            at += len;
+        }
+        let sb = ufs2::Superblock {
+            block_size: BS as u32,
+            fragment_size: BS as u32,
+            size_fragments: 6,
+            cg_count: 1,
+            inodes_per_cg: 64,
+            fragments_per_cg: 6,
+            iblkno: 1,
+            volume_name: String::new(),
+        };
+        ufs2::Ufs2Image::from_parts(std::io::Cursor::new(image), sb)
+    }
+
+    /// A directory that lists itself is refused at once. Two such entries in one directory used
+    /// to double the work at each of the 64 levels the depth cap allowed: an extract that never
+    /// ended, making folders all the while.
+    #[test]
+    fn a_directory_that_contains_itself_is_refused() {
+        for names in [&["loop"][..], &["a", "b"][..]] {
+            let mut img = looping_root(names);
+            let root = img.read_inode(2).unwrap();
+            assert!(root.is_dir());
+            let dest = tempdir().join(format!("cycle-{}", names.len()));
+            let _ = std::fs::remove_dir_all(&dest);
+            std::fs::create_dir_all(&dest).unwrap();
+            let mut result = FfpkgExtractResult {
+                file_count: 0,
+                bytes_written: 0,
+                sample_paths: Vec::new(),
+            };
+            let mut walked = std::collections::HashSet::from([root.number]);
+            let e = extract_dir_recursive(&mut img, &root, &dest, &mut result, 0, &mut walked)
+                .unwrap_err();
+            assert!(
+                matches!(e, Ufs2Error::DirectoryCycle { inode: 2 }),
+                "{names:?}: {e}"
+            );
+            // Nothing was made for the entry that loops.
+            assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0, "{names:?}");
+            let _ = std::fs::remove_dir_all(&dest);
+        }
     }
 
     #[test]
