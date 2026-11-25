@@ -4560,7 +4560,7 @@ export default function FileSystemScreen() {
                         className="input input-sm flex-1"
                       />
                     ) : (
-                      <div className="flex min-w-0 flex-1 flex-col sm:flex-row sm:items-center sm:gap-3">
+                      <div className="flex min-w-0 flex-1 flex-col roomy:flex-row roomy:items-center roomy:gap-3">
                         <button
                           type="button"
                           data-fs-open=""
@@ -4570,15 +4570,16 @@ export default function FileSystemScreen() {
                           title={e.name}
                           className={
                             // On a phone a long name wraps (up to three lines) instead of being cut off
-                            // early, with the tag and size on the line below (#923).
-                            "min-w-0 truncate text-start text-sm max-sm:line-clamp-3 max-sm:whitespace-normal max-sm:[overflow-wrap:anywhere] sm:flex-1 " +
+                            // early, with the tag and size on the line below (#923); a phone held
+                            // sideways too (#931).
+                            "min-w-0 truncate text-start text-sm phone:line-clamp-3 phone:whitespace-normal phone:[overflow-wrap:anywhere] roomy:flex-1 " +
                             (isDir ? "font-medium hover:text-[var(--color-accent)]" : "")
                           }
                           disabled={!isDir}
                         >
                           {e.name}
                         </button>
-                        <div className="flex items-center gap-2 sm:contents" data-testid="fs-row-meta">
+                        <div className="flex items-center gap-2 roomy:contents" data-testid="fs-row-meta">
                           {(() => {
                             const tag = gameFormatTag(e.name, isDir);
                             if (!tag) return null;
@@ -4588,7 +4589,7 @@ export default function FileSystemScreen() {
                                 className={
                                   "shrink-0 rounded border border-[var(--glass-edge)] px-1 text-[10px] leading-4 font-medium text-[var(--color-muted)] sm:text-[11px] " +
                                   // A folder already shows its icon: the word only where there is room.
-                                  (tag === "folder" ? "hidden sm:inline" : "")
+                                  (tag === "folder" ? "hidden roomy:inline" : "")
                                 }
                               >
                                 {gameFormatLabel(tag, tr("fs_tag_folder", undefined, "Folder"))}
@@ -4599,7 +4600,7 @@ export default function FileSystemScreen() {
                             className={
                               "shrink-0 text-xs text-[var(--color-muted)] tabular-nums " +
                               // A folder's dash would be a line of its own on a phone.
-                              (isDir ? "max-sm:hidden" : "")
+                              (isDir ? "phone:hidden" : "")
                             }
                           >
                             {isDir ? "—" : formatBytes(e.size)}

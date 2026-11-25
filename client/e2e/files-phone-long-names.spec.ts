@@ -2,13 +2,17 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 
 // #923: on a phone, long file names were cut off after a few characters because the tag, size and
 // buttons share the name's line. There the name now wraps and the tag and size sit below it; wider
-// windows keep one line per row.
+// windows keep one line per row. #931: a phone held sideways is wider than `sm`, but it keeps the
+// phone layout too (wrapped name, size below, actions behind ⋮), not the desktop row of buttons.
 
 const HOST = "192.168.0.5";
 const LONG = "Dead.or.Alive.5.Last.Round.CUSA01778.v1.19.All.DLC.Backport.Fixed.pkg";
 const FILES = [LONG, "b-second.bin"];
+// Too long for one line even across a phone held sideways.
+const HUGE =
+  "Marvels.Spider-Man.2.Digital.Deluxe.Edition.PPSA03016.v1.004.000.All.DLC.Backport.Fixed.By.Somebody.With.A.Very.Long.Release.Group.Name.exfat";
 
-async function openFiles(page: Page) {
+async function openFiles(page: Page, files: string[] = FILES) {
   await page.addInitScript((files) => {
     const w = window as unknown as Record<string, unknown>;
     const calls: string[] = [];
@@ -38,7 +42,7 @@ async function openFiles(page: Page) {
       plugins: {},
     };
     w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-  }, FILES);
+  }, files);
   await page.addInitScript((host) => {
     window.localStorage.setItem("ps5upload.host", host);
   }, HOST);
@@ -80,6 +84,61 @@ test.describe("phone width", () => {
   });
 });
 
+async function expectPhoneRow(page: Page, name: ReturnType<Page["getByRole"]>) {
+  const fits = await name.evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
+  expect(fits).toBe(true);
+  const nameBox = await name.boundingBox();
+  const meta = name.locator("xpath=following-sibling::div[1]");
+  const metaBox = await meta.boundingBox();
+  if (!nameBox || !metaBox) throw new Error("no box");
+  expect(nameBox.height).toBeGreaterThan(24);
+  expect(metaBox.y).toBeGreaterThanOrEqual(nameBox.y + nameBox.height - 1);
+  await expect(meta).toContainText("1000 B");
+  // No inline action buttons in this row: only the ⋮, which holds them all.
+  const row = name.locator("xpath=ancestor::li[1]");
+  await expect(row.getByTestId("fs-row-actions")).toBeHidden();
+  const visibleButtons = await row
+    .locator("button:visible")
+    .evaluateAll((els) => els.map((el) => el.getAttribute("aria-label") ?? el.getAttribute("title") ?? ""));
+  expect(visibleButtons).toEqual([LONG, `Actions for ${LONG}`]);
+  const more = row.getByRole("button", { name: `Actions for ${LONG}` });
+  await more.click();
+  const menu = page.getByTestId("fs-row-menu");
+  await expect(menu.getByRole("menuitem", { name: "Rename", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Delete", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+}
+
+for (const viewport of [
+  { width: 915, height: 412 },
+  { width: 844, height: 390 },
+]) {
+  test.describe(`phone held sideways ${viewport.width}x${viewport.height}`, () => {
+    test.use({ viewport, hasTouch: true, isMobile: true });
+
+    test("keeps the phone row: the name wraps, size below, actions behind ⋮ (#931)", async ({ page }) => {
+      const name = await openFiles(page, [...FILES, HUGE]);
+      expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+      await expectPhoneRow(page, name);
+      // A name too long for one line really wraps (the 44 px touch height alone is not proof).
+      const huge = page.getByRole("main").getByRole("button", { name: HUGE, exact: true });
+      const lines = await huge.evaluate((el) => {
+        const style = getComputedStyle(el);
+        return {
+          lines: el.getBoundingClientRect().height / parseFloat(style.lineHeight),
+          fits: el.scrollWidth <= el.clientWidth + 1,
+          whiteSpace: style.whiteSpace,
+        };
+      });
+      expect(lines.fits).toBe(true);
+      expect(lines.whiteSpace).toBe("normal");
+      expect(lines.lines).toBeGreaterThanOrEqual(1.9);
+      if (process.env.FS_SHOT) await page.screenshot({ path: process.env.FS_SHOT });
+    });
+  });
+}
+
 test.describe("desktop width", () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
@@ -91,5 +150,10 @@ test.describe("desktop width", () => {
     if (!nameBox || !sizeBox) throw new Error("no box");
     expect(nameBox.height).toBeLessThan(28);
     expect(Math.abs(sizeBox.y + sizeBox.height / 2 - (nameBox.y + nameBox.height / 2))).toBeLessThan(6);
+    // The actions stay buttons on the row, and there is no ⋮.
+    const row = name.locator("xpath=ancestor::li[1]");
+    await expect(row.getByTestId("fs-row-actions")).toBeVisible();
+    await expect(row.getByRole("button", { name: "Rename", exact: true })).toBeVisible();
+    await expect(row.getByTestId("fs-row-more")).toBeHidden();
   });
 });

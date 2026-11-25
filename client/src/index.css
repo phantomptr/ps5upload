@@ -1,5 +1,22 @@
 @import "tailwindcss";
 
+/* `phone:` — the phone layout: narrower than `sm`, or a touch screen held sideways (about
+ * 390-430 px tall; same height test as PHONE_LANDSCAPE_QUERY in screens/Play/immersive.ts).
+ * `roomy:` is exactly the rest. A sideways phone is wider than `sm`, so `sm:` / `max-sm:` alone
+ * gave it the desktop row with every action as a button and no room for the name (#931). */
+@custom-variant phone {
+  @media not all and (min-width: 40rem), (pointer: coarse) and (max-height: 520px) {
+    @slot;
+  }
+}
+@custom-variant roomy {
+  @media (min-width: 40rem) {
+    @media not all and (pointer: coarse) and (max-height: 520px) {
+      @slot;
+    }
+  }
+}
+
 /*
  * ─── ps5upload design system — "Sense" ───────────────────────────────────
  *
