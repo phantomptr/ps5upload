@@ -3973,6 +3973,10 @@
       },
       "ExtractCleanupReq": {
         "properties": {
+          "kept": {
+            "description": "The folder is one an unpack with `free_archive` kept (`<archive>.unpacked`): removed\nonly when asked for by this, once what was made from the game in it is finished.",
+            "type": "boolean"
+          },
           "path": {
             "description": "The game path an unpack reported, or its unpack folder.",
             "type": "string"
@@ -3985,6 +3989,10 @@
       },
       "ExtractReq": {
         "properties": {
+          "free_archive": {
+            "description": "DESTROYS THE ARCHIVE: its own space is given back while it unpacks, so the job fits on\na drive with no room for both. A `.zip` is cut short behind each file as it is unpacked\nand a multi-part `.rar` loses each part as it is finished; anything else is deleted the\nmoment the unpack has finished and been checked. Ask `/api/fpkg/extract/free-check`\nfirst. Off unless set.",
+            "type": "boolean"
+          },
           "output_dir": {
             "type": [
               "string",
@@ -4643,6 +4651,31 @@
           "file_count",
           "skipped_paths",
           "meta_source"
+        ],
+        "type": "object"
+      },
+      "FreeCheckReq": {
+        "properties": {
+          "output_dir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "password": {
+            "description": "RAR only; never logged.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "description": "A `.zip`, `.7z`, `.rar` (the first part of a multi-part set), tar or `.zst` on this\ncomputer.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
         ],
         "type": "object"
       },
@@ -23213,7 +23246,7 @@
     },
     "/api/fpkg/extract": {
       "post": {
-        "description": "POST /api/fpkg/extract — unpack a game archive into the output folder, as a job. Done's\n`dest` is the game found inside (a folder or an image), which the build then reads; the\nunpack folder is removed by `/api/fpkg/extract/cleanup`, on failure, or by a later run.",
+        "description": "POST /api/fpkg/extract — unpack a game archive into the output folder, as a job. Done's\n`dest` is the game found inside (a folder or an image), which the build then reads; the\nunpack folder is removed by `/api/fpkg/extract/cleanup`, on failure, or by a later run.\n\nWith `free_archive` the archive is deleted as it is unpacked (`archive_free`): everything\nthat can be checked is checked first and refused with nothing changed (400, or 409 while\nsomething else uses the archive). The game is unpacked into `<archive>.unpacked` in the\noutput folder, which nothing removes but `/api/fpkg/extract/cleanup` with `kept`. A job\nthat fails with part of the archive gone has `error_reason: \"archive_partly_deleted\"` and\nthe folder holding what was unpacked in `error_detail`.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -23243,6 +23276,10 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
           "500": {
             "$ref": "#/components/responses/Error",
             "description": "Engine error"
@@ -23269,7 +23306,7 @@
     },
     "/api/fpkg/extract/cleanup": {
       "post": {
-        "description": "POST /api/fpkg/extract/cleanup — remove an unpack folder once its build is over.",
+        "description": "POST /api/fpkg/extract/cleanup — remove an unpack folder once its build is over. A folder\nan unpack with `free_archive` made is removed only with `kept`, and only one this engine\nmade since it started; any other path is refused.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -23314,6 +23351,69 @@
           }
         },
         "summary": "Remove an unpack folder once its build is over",
+        "tags": [
+          "workshop"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/fpkg/extract/free-check": {
+      "post": {
+        "description": "POST /api/fpkg/extract/free-check — whether an archive can be unpacked with its own space\ngiven back (`free_archive` on `/api/fpkg/extract`), and how: `mode` is `entries` (a `.zip`:\nfreed file by file), `parts` (a multi-part `.rar`: part by part) or `end` (anything else:\ndeleted once the unpack is finished and checked). `game` is `folder` or `image`. Changes\nnothing. 400 with the plain reason when it can't be done.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FreeCheckReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "archive_bytes": {},
+                    "free": {},
+                    "game": {},
+                    "mode": {},
+                    "needed": {},
+                    "parts": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "same_drive": {},
+                    "unpacked": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
         "tags": [
           "workshop"
         ],

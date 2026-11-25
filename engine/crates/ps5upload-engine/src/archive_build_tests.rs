@@ -520,3 +520,243 @@ async fn archives_that_cannot_be_built_from_are_refused_before_a_job() {
     );
     let _ = std::fs::remove_dir_all(&r);
 }
+
+// ── unpacking with the archive's space given back (`archive_free`) ───────────────────────────
+
+mod free {
+    use super::*;
+    use crate::archive_free::{free_check_handler, FreeCheckReq};
+    use crate::fpkg_api::{
+        fpkg_extract_cleanup_handler, fpkg_extract_handler, ExtractCleanupReq, ExtractReq,
+    };
+
+    async fn answer(resp: axum::response::Response) -> (StatusCode, serde_json::Value) {
+        let status = resp.status();
+        let text = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let body = serde_json::from_slice(&text).unwrap_or(serde_json::Value::Null);
+        (status, body)
+    }
+
+    async fn check(archive: &Path, out: &Path) -> (StatusCode, serde_json::Value) {
+        let req: FreeCheckReq = serde_json::from_value(serde_json::json!({
+            "source": archive.display().to_string(),
+            "output_dir": out.display().to_string(),
+        }))
+        .unwrap();
+        answer(free_check_handler(Json(req)).await.into_response()).await
+    }
+
+    /// The request's answer, and the job's end when one started: the game's path, or the
+    /// failure with its reason.
+    async fn unpack(
+        archive: &Path,
+        out: &Path,
+        free_archive: bool,
+    ) -> (
+        StatusCode,
+        serde_json::Value,
+        Option<Result<String, (String, Option<String>)>>,
+    ) {
+        let (state, jobs) = state();
+        let req: ExtractReq = serde_json::from_value(serde_json::json!({
+            "source": archive.display().to_string(),
+            "output_dir": out.display().to_string(),
+            "free_archive": free_archive,
+        }))
+        .unwrap();
+        let (status, body) = answer(
+            fpkg_extract_handler(State(state), Json(req))
+                .await
+                .into_response(),
+        )
+        .await;
+        if status != StatusCode::ACCEPTED {
+            return (status, body, None);
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(120);
+        loop {
+            let end = jobs.lock().unwrap().values().find_map(|j| match j {
+                JobState::Done { dest, .. } => Some(Ok(dest.clone())),
+                JobState::Failed {
+                    error,
+                    error_reason,
+                    ..
+                } => Some(Err((error.clone(), error_reason.clone()))),
+                _ => None,
+            });
+            if let Some(end) = end {
+                return (status, body, Some(end));
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the unpack did not end"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    async fn cleanup(path: &Path, kept: bool) -> StatusCode {
+        let req: ExtractCleanupReq = serde_json::from_value(serde_json::json!({
+            "path": path.display().to_string(),
+            "kept": kept,
+        }))
+        .unwrap();
+        fpkg_extract_cleanup_handler(Json(req))
+            .await
+            .into_response()
+            .status()
+    }
+
+    /// Names in `dir`, sorted.
+    fn names(dir: &Path) -> Vec<String> {
+        let mut out: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_zip_is_unpacked_into_a_folder_that_stays_and_the_archive_is_gone() {
+        let r = root("free-zip");
+        let (out, dl) = (r.join("out"), r.join("dl"));
+        std::fs::create_dir_all(&dl).unwrap();
+        let archive = dl.join("Game.zip");
+        write_zip(
+            &archive,
+            &entries("PPSA01234-app/"),
+            Some("PPSA01234-app/data/empty/"),
+        );
+        let (status, body) = check(&archive, &out).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["mode"], "entries");
+        assert_eq!(body["game"], "folder");
+        assert_eq!(body["parts"], 1);
+        assert!(archive.is_file(), "the check changes nothing");
+
+        let (status, body, end) = unpack(&archive, &out, true).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        let game = PathBuf::from(end.unwrap().unwrap_or_else(|e| panic!("{e:?}")));
+        let kept = out.join("Game.unpacked");
+        assert_eq!(game, kept.join("PPSA01234-app"));
+        read_back(&game, true);
+        // The archive is gone, with nothing of this left beside it.
+        assert_eq!(names(&dl), Vec::<String>::new());
+        // The folder is no scratch folder: only asked for by name does it go.
+        assert_eq!(cleanup(&game, false).await, StatusCode::BAD_REQUEST);
+        crate::fpkg_api::sweep_output_leftovers(&out);
+        assert!(game.is_dir());
+        assert_eq!(cleanup(&game, true).await, StatusCode::OK);
+        assert!(!kept.exists());
+        // A second ask finds nothing of ours there.
+        assert_eq!(cleanup(&game, true).await, StatusCode::BAD_REQUEST);
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_7z_and_a_game_image_in_a_zip_are_told_apart_by_the_check() {
+        let r = root("free-7z");
+        let out = r.join("out");
+        let archive = r.join("Game.7z");
+        write_7z(&archive, &entries(""), true);
+        let (status, body) = check(&archive, &out).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["mode"], "end");
+        let (status, body, end) = unpack(&archive, &out, true).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        let game = PathBuf::from(end.unwrap().unwrap_or_else(|e| panic!("{e:?}")));
+        assert_eq!(game, out.join("Game.unpacked"));
+        read_back(&game, false);
+        assert!(!archive.exists());
+
+        let img = r.join("Img.zip");
+        write_zip(&img, &[("x/Game.exfat".into(), vec![7; 4096])], None);
+        let (status, body) = check(&img, &out).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["game"], "image");
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_archive_in_use_or_with_no_single_game_is_refused_and_left_whole() {
+        let r = root("free-refuse");
+        let out = r.join("out");
+        let archive = r.join("Game.zip");
+        write_zip(&archive, &entries(""), None);
+        let bytes = std::fs::read(&archive).unwrap();
+
+        // A build (or an upload) reading it: not now.
+        let reading = crate::image_edit_in_place::Reading::take(&archive).unwrap();
+        let (status, body, _) = unpack(&archive, &out, true).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        drop(reading);
+        // An unpack the usual way is refused while it is being freed, too.
+        let claim = crate::image_edit_in_place::Claim::take(&archive).unwrap();
+        let (status, body, _) = unpack(&archive, &out, false).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        drop(claim);
+
+        let two = r.join("Two.zip");
+        let files: Vec<(String, Vec<u8>)> = ["a/", "b/"]
+            .iter()
+            .flat_map(|dir| {
+                game()
+                    .into_iter()
+                    .map(move |(p, d)| (format!("{dir}{p}"), d))
+            })
+            .collect();
+        write_zip(&two, &files, None);
+        let (status, body, _) = unpack(&two, &out, true).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("more than one game"),
+            "{body}"
+        );
+        let (status, _) = check(&two, &out).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        assert_eq!(std::fs::read(&archive).unwrap(), bytes);
+        assert!(two.is_file());
+        // Nothing was unpacked anywhere, and no claim file is left beside the archives.
+        assert!(names(&out).is_empty(), "{:?}", names(&out));
+        assert_eq!(names(&r), ["Game.zip", "Two.zip", "out"]);
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_two_part_rar_loses_its_parts_and_gives_the_game() {
+        if !rar_helper_here() {
+            return;
+        }
+        let r = root("free-rar");
+        let (out, dl) = (r.join("out"), r.join("dl"));
+        std::fs::create_dir_all(&dl).unwrap();
+        let files = entries("");
+        let split = files
+            .iter()
+            .position(|(p, _)| p == "Data2/big.bin")
+            .unwrap();
+        let first = write_rar_parts(&dl, "Game", &files, split);
+        let (status, body) = check(&first, &out).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["mode"], "parts");
+        assert_eq!(body["parts"], 2);
+        // Its second part alone is not where to start.
+        let (status, _) = check(&dl.join("Game.part2.rar"), &out).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, body, end) = unpack(&first, &out, true).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        let game = PathBuf::from(end.unwrap().unwrap_or_else(|e| panic!("{e:?}")));
+        read_back(&game, false);
+        assert_eq!(names(&dl), Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&r);
+    }
+}

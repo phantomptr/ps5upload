@@ -327,7 +327,7 @@ pub(crate) fn resolve_engine_path(raw: &str) -> PathBuf {
     }
 }
 
-fn output_dir(requested: Option<&str>) -> PathBuf {
+pub(crate) fn output_dir(requested: Option<&str>) -> PathBuf {
     match requested {
         Some(dir) if !dir.trim().is_empty() => resolve_engine_path(dir),
         _ => default_output_dir(),
@@ -4265,11 +4265,25 @@ pub(crate) struct ExtractReq {
     /// RAR only; never logged.
     #[serde(default)]
     password: Option<String>,
+    /// DESTROYS THE ARCHIVE: its own space is given back while it unpacks, so the job fits on
+    /// a drive with no room for both. A `.zip` is cut short behind each file as it is unpacked
+    /// and a multi-part `.rar` loses each part as it is finished; anything else is deleted the
+    /// moment the unpack has finished and been checked. Ask `/api/fpkg/extract/free-check`
+    /// first. Off unless set.
+    #[serde(default)]
+    free_archive: bool,
 }
 
 /// POST /api/fpkg/extract — unpack a game archive into the output folder, as a job. Done's
 /// `dest` is the game found inside (a folder or an image), which the build then reads; the
 /// unpack folder is removed by `/api/fpkg/extract/cleanup`, on failure, or by a later run.
+///
+/// With `free_archive` the archive is deleted as it is unpacked (`archive_free`): everything
+/// that can be checked is checked first and refused with nothing changed (400, or 409 while
+/// something else uses the archive). The game is unpacked into `<archive>.unpacked` in the
+/// output folder, which nothing removes but `/api/fpkg/extract/cleanup` with `kept`. A job
+/// that fails with part of the archive gone has `error_reason: "archive_partly_deleted"` and
+/// the folder holding what was unpacked in `error_detail`.
 pub(crate) async fn fpkg_extract_handler(
     State(state): State<AppState>,
     Json(req): Json<ExtractReq>,
@@ -4289,35 +4303,82 @@ pub(crate) async fn fpkg_extract_handler(
             .into_response();
     }
     let password = req.password.filter(|p| !p.is_empty());
-    let size = {
+    // The archive given up as it unpacks: checked and claimed whole before anything starts.
+    let freeing = if req.free_archive {
         let (source, password, out) = (source.clone(), password.clone(), out.clone());
-        tokio::task::spawn_blocking(move || {
+        let prepared = tokio::task::spawn_blocking(move || {
             sweep_output_leftovers(&out);
-            archive_extract::unpacked_size(&source, password.as_deref())
+            crate::archive_free::Freeing::prepare(&source, password.as_deref(), &out)
         })
-        .await
-    };
-    let total = match size {
-        Ok(Ok(total)) => total,
-        Ok(Err(e)) => return json_err(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
-        Err(join) => {
-            return json_err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("the archive listing failed: {join}"),
-            )
-            .into_response()
+        .await;
+        match prepared {
+            Ok(Ok(freeing)) => Some(freeing),
+            Ok(Err((status, why))) => return json_err(status, why).into_response(),
+            Err(join) => {
+                return json_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("the archive check failed: {join}"),
+                )
+                .into_response()
+            }
         }
+    } else {
+        None
     };
-    if let Some(message) = build::free_bytes(&out).and_then(|free| extract_shortfall(free, total)) {
-        return json_err(StatusCode::BAD_REQUEST, message).into_response();
-    }
+    // Read until the unpack ends: nothing may start freeing it (or editing it) meanwhile.
+    let reading = if freeing.is_none() {
+        match crate::image_edit_in_place::Reading::take(&source) {
+            Ok(r) => Some(r),
+            Err(why) => return json_err(StatusCode::CONFLICT, why).into_response(),
+        }
+    } else {
+        None
+    };
+    let total = if let Some(freeing) = &freeing {
+        freeing.total()
+    } else {
+        let size = {
+            let (source, password, out) = (source.clone(), password.clone(), out.clone());
+            tokio::task::spawn_blocking(move || {
+                sweep_output_leftovers(&out);
+                archive_extract::unpacked_size(&source, password.as_deref())
+            })
+            .await
+        };
+        let total = match size {
+            Ok(Ok(total)) => total,
+            Ok(Err(e)) => {
+                return json_err(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response()
+            }
+            Err(join) => {
+                return json_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("the archive listing failed: {join}"),
+                )
+                .into_response()
+            }
+        };
+        if let Some(message) =
+            build::free_bytes(&out).and_then(|free| extract_shortfall(free, total))
+        {
+            return json_err(StatusCode::BAD_REQUEST, message).into_response();
+        }
+        total
+    };
 
     let job_id = Uuid::new_v4();
-    let dest = out.join(format!("{EXTRACT_PREFIX}{job_id}"));
-    active_extracts()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(dest.clone());
+    let dest = match &freeing {
+        // A folder that stays: once the archive is gone it holds the only copy of the game.
+        Some(freeing) => freeing.dest_in(&out),
+        None => {
+            let dest = out.join(format!("{EXTRACT_PREFIX}{job_id}"));
+            active_extracts()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(dest.clone());
+            dest
+        }
+    };
     crate::workshop_api::note_run(job_id, "extract", &source);
     crate::workshop_api::note_unpack(&dest, &source);
     let cancel = register_workshop_job(job_id);
@@ -4377,17 +4438,44 @@ pub(crate) async fn fpkg_extract_handler(
             job_id,
             started_at_ms,
         );
-        // Until the game is found, the folder is this job's to remove (a panic included).
-        let mut unpacking = Unpacking(Some(dest.clone()));
+        let _reading = reading;
+        // Until the game is found, the folder is this job's to remove (a panic included). Not
+        // one unpacked with the archive given up: what is in it may be all there is.
+        let mut unpacking = Unpacking(freeing.is_none().then(|| dest.clone()));
         let mut progress = |done: u64, _total: u64| {
             bytes.store(done, Ordering::Relaxed);
             // Called every MiB on the unpacking thread: a pause holds it here, and a RAR's
             // helper process, its pipe full, waits with it (#631). A cancel is seen just after.
             ps5upload_fpkg::workshop::checkpoint(&cancel);
         };
-        let outcome =
-            archive_extract::extract(&source, &dest, password.as_deref(), &mut progress, &cancel)
-                .and_then(|()| archive_extract::find_game(&dest));
+        let outcome = match &freeing {
+            Some(freeing) => {
+                crate::engine_log::record(
+                    "warn",
+                    format!(
+                        "fpkg: unpacking {} with its space given back ({}): the archive is deleted",
+                        source.display(),
+                        freeing.mode()
+                    ),
+                );
+                freeing.run(&dest, password.as_deref(), &mut progress, &cancel)
+            }
+            None => archive_extract::extract(
+                &source,
+                &dest,
+                password.as_deref(),
+                &mut progress,
+                &cancel,
+            )
+            .and_then(|()| archive_extract::find_game(&dest))
+            .map_err(|error| crate::archive_free::Failure {
+                error: format!("{error:#}"),
+                reason: None,
+                detail: None,
+            }),
+        };
+        // The claims on the archive end with the unpack.
+        drop(freeing);
         let completed_at_ms = now_ms();
         drop(ticker);
         match outcome {
@@ -4420,9 +4508,12 @@ pub(crate) async fn fpkg_extract_handler(
                     },
                 );
             }
-            Err(error) => {
+            Err(failure) => {
                 drop(unpacking);
-                crate::engine_log::record("warn", format!("fpkg: unpack failed: {error:#}"));
+                crate::engine_log::record(
+                    "warn",
+                    format!("fpkg: unpack failed: {}", failure.error),
+                );
                 set_job(
                     &state_for_job.jobs,
                     &state_for_job.events_tx,
@@ -4431,9 +4522,9 @@ pub(crate) async fn fpkg_extract_handler(
                         started_at_ms,
                         completed_at_ms,
                         elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        error: format!("{error:#}"),
-                        error_reason: None,
-                        error_detail: None,
+                        error: failure.error,
+                        error_reason: failure.reason,
+                        error_detail: failure.detail,
                         error_console: None,
                         error_space: None,
                     },
@@ -4456,13 +4547,39 @@ pub(crate) async fn fpkg_extract_handler(
 pub(crate) struct ExtractCleanupReq {
     /// The game path an unpack reported, or its unpack folder.
     path: String,
+    /// The folder is one an unpack with `free_archive` kept (`<archive>.unpacked`): removed
+    /// only when asked for by this, once what was made from the game in it is finished.
+    #[serde(default)]
+    kept: bool,
 }
 
-/// POST /api/fpkg/extract/cleanup — remove an unpack folder once its build is over.
+/// POST /api/fpkg/extract/cleanup — remove an unpack folder once its build is over. A folder
+/// an unpack with `free_archive` made is removed only with `kept`, and only one this engine
+/// made since it started; any other path is refused.
 pub(crate) async fn fpkg_extract_cleanup_handler(
     Json(req): Json<ExtractCleanupReq>,
 ) -> impl IntoResponse {
     let path = resolve_engine_path(&req.path);
+    if req.kept {
+        let Some(root) = crate::archive_free::kept_root_of(&path) else {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                format!("{} is not a kept unpack folder", path.display()),
+            )
+            .into_response();
+        };
+        return match tokio::task::spawn_blocking(move || {
+            crate::archive_free::release(&root).map_err(|e| format!("{}: {e}", root.display()))
+        })
+        .await
+        {
+            Ok(Ok(())) => Json(serde_json::json!({ "ok": true })).into_response(),
+            Ok(Err(e)) => json_err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+            Err(join) => {
+                json_err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()).into_response()
+            }
+        };
+    }
     let Some(root) = extract_root_of(&path) else {
         return json_err(
             StatusCode::BAD_REQUEST,

@@ -398,6 +398,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/fpkg/estimate"),
     ("POST", "/api/fpkg/extract"),
     ("POST", "/api/fpkg/extract/cleanup"),
+    ("POST", "/api/fpkg/extract/free-check"),
     ("POST", "/api/fpkg/inspect"),
     ("POST", "/api/fpkg/zstd-runtime"),
     ("POST", "/api/game/inspect"),
