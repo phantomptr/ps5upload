@@ -794,35 +794,9 @@ static void xml_open_tag_copy(const char *start, const char *end, char *buf, siz
     buf[n] = '\0';
 }
 
-/* Extract text between <tag>...</tag>. */
-static int xml_text(const char *start, const char *tag_name,
-                    char *out, size_t cap) {
-    if (!start || !tag_name || !out || cap == 0) return -1;
-    out[0] = '\0';
-    char open_tag[64];
-    char close_tag[64];
-    snprintf(open_tag, sizeof(open_tag), "<%s", tag_name);
-    snprintf(close_tag, sizeof(close_tag), "</%s>", tag_name);
-
-    const char *p = strstr(start, open_tag);
-    if (!p) return -1;
-    p += strlen(open_tag);
-    while (*p && *p != '>') p++;  /* skip attrs */
-    if (*p == '>') p++;
-
-    const char *end = strstr(p, close_tag);
-    if (!end) return -1;
-
-    size_t len = (size_t)(end - p);
-    if (len >= cap) len = cap - 1;
-    memcpy(out, p, len);
-    out[len] = '\0';
-
-    /* Trim whitespace */
-    while (len > 0 && isspace((unsigned char)out[len-1])) out[--len] = '\0';
-    while (isspace((unsigned char)out[0])) memmove(out, out+1, strlen(out));
-
-    return 0;
+/* Extract text between <tag>...</tag> (include/cheats_xml_attr.h): 1 when it did not fit. */
+static int xml_text(const char *start, const char *tag_name, char *out, size_t cap) {
+    return cheats_xml_text(start, tag_name, out, cap);
 }
 
 /* Find next occurrence of <TagName in xml text starting from cursor.
@@ -962,8 +936,11 @@ static int parse_shn_file(const char *xml, size_t xml_len,
             if (sec_str[0]) e->section = atoi(sec_str);
 
             /* Try child tags (paired form) */
-            if (!e->offset_str[0])
-                xml_text(cl_full, "Offset", e->offset_str, sizeof(e->offset_str));
+            /* An offset too long to hold is not cut into another address: it becomes one that does
+             * not parse, so the cheat is refused (resolve_mod_locs). */
+            if (!e->offset_str[0] &&
+                xml_text(cl_full, "Offset", e->offset_str, sizeof(e->offset_str)) == 1)
+                snprintf(e->offset_str, sizeof(e->offset_str), "too long");
             if (!e->on_str[0])
                 xml_text(cl_full, "ValueOn", e->on_str, sizeof(e->on_str));
             if (!e->off_str[0])
