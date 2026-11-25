@@ -9257,6 +9257,89 @@
         ],
         "type": "object"
       },
+      "NameEntry": {
+        "description": "One name a package holds: `key` is the language (`en-US`; empty for a PS5 package's\ntop-level `titleName`) or the `param.sfo` key (`TITLE`, `TITLE_03`).",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "name"
+        ],
+        "type": "object"
+      },
+      "NameResponse": {
+        "allOf": [
+          {
+            "properties": {
+              "max_bytes": {
+                "description": "The longest name accepted, in UTF-8 bytes.",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "max_bytes"
+            ],
+            "type": "object"
+          },
+          {
+            "$ref": "#/components/schemas/Names"
+          }
+        ],
+        "description": "What `GET /api/pkg/name` answers."
+      },
+      "Names": {
+        "description": "A package's names as it holds them.",
+        "properties": {
+          "content_id": {
+            "type": "string"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/NameEntry"
+            },
+            "type": "array"
+          },
+          "name": {
+            "description": "The name the console shows unless its language has another: the default language's\n(`TITLE` on PS4).",
+            "type": "string"
+          },
+          "other_names": {
+            "description": "How many entries hold a name other than `name`.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "refusal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Refusal"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the name can't be changed; `None` when it can."
+          }
+        },
+        "required": [
+          "platform",
+          "content_id",
+          "name",
+          "entries",
+          "other_names",
+          "refusal"
+        ],
+        "type": "object"
+      },
       "NetInterface": {
         "properties": {
           "flags": {
@@ -10500,6 +10583,13 @@
         ],
         "type": "object"
       },
+      "Platform": {
+        "enum": [
+          "ps5",
+          "ps4"
+        ],
+        "type": "string"
+      },
       "PlayerBody": {
         "properties": {
           "addr": {
@@ -11565,6 +11655,22 @@
         ],
         "type": "object"
       },
+      "Refusal": {
+        "description": "Why a package's name can't be changed. `code` is for the app to word: `retail` (signed by\nits publisher), `patch` (a delta update, which holds no name of its own to change),\n`no_name`, or `unsupported` (anything else; `reason` says what).",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "reason"
+        ],
+        "type": "object"
+      },
       "RegisterResult": {
         "description": "Response shape from APP_REGISTER_ACK.",
         "properties": {
@@ -11889,6 +11995,68 @@
         },
         "required": [
           "id"
+        ],
+        "type": "object"
+      },
+      "RenameRequest": {
+        "properties": {
+          "all_languages": {
+            "description": "Give every language this name. Otherwise only the entries that hold the package's\ncurrent default name change, and a language with its own name keeps it.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The new name: at most 127 bytes of UTF-8, no line breaks.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The package, on the engine's computer.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "name"
+        ],
+        "type": "object"
+      },
+      "RenameResponse": {
+        "description": "What `POST /api/pkg/name` answers.",
+        "properties": {
+          "changed": {
+            "description": "How many of its name entries changed (0: it already had this name).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "The name it has now.",
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "previous": {
+            "description": "The name it had.",
+            "type": "string"
+          },
+          "warning": {
+            "description": "Set when the change is in the package and checked, but the removal of its undo journal\ncould not be confirmed saved.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "written_bytes": {
+            "description": "Bytes written into the package.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "platform",
+          "previous",
+          "name",
+          "changed",
+          "written_bytes"
         ],
         "type": "object"
       },
@@ -28765,6 +28933,115 @@
         "x-ps5upload": {
           "access": "loopback",
           "response_schema": "literal"
+        }
+      }
+    },
+    "/api/pkg/name": {
+      "get": {
+        "description": "`GET /api/pkg/name?path=`: the names a package on this computer holds (one per language)\nand whether they can be changed. `refusal` is set when they can't: `code` is `retail` for an\nofficial package, `patch` for a delta update, `no_name`, or `unsupported` with the reason.",
+        "parameters": [
+          {
+            "description": "The package, on the engine's computer.",
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NameResponse"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The names a package on this computer holds (one per language) and whether they can be changed",
+        "tags": [
+          "install"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "struct"
+        }
+      },
+      "post": {
+        "description": "`POST /api/pkg/name` `{path, name, all_languages}`: gives a fake package on this computer\nanother name, in place. 409 while the package is in use (an install, an upload or a build\nreads it, or another program has it open); 400 with the reason when it can't be done (an\nofficial package, a name that does not fit). On any failure the file is as it was.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenameResponse"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Gives a fake package on this computer another name, in place",
+        "tags": [
+          "install"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "struct"
         }
       }
     },

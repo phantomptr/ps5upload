@@ -564,6 +564,26 @@ fn info_of(c: &Cnt, has_image: bool) -> Ps4Info {
     }
 }
 
+/// Whether a PS4 package's image is one made with the usual all-zero passcode, which only a
+/// fake package is: `None` when the file holds no image (a licence add-on), else whether the
+/// image's superblock carries the signature those keys make. Reads the superblock only.
+pub(crate) fn zero_passcode_image(
+    file: &mut PkgFile,
+    len: u64,
+    content_id: &str,
+) -> Result<Option<bool>> {
+    let (flags, at, _, has_image) = image_place(file, len)?;
+    if !has_image {
+        return Ok(None);
+    }
+    let sb = file.read_at(at, BLOCK as usize)?;
+    if le64(&sb, 8) != PFS_MAGIC {
+        return Ok(Some(false));
+    }
+    let ekpfs = package_key(content_id, crate::crypto::DEFAULT_PASSCODE, 1);
+    Ok(Some(outer_keys(&ekpfs, flags & NEW_CRYPT != 0, &sb).1))
+}
+
 /// A PS4 package's kind and `param.sfo`, from its container alone (a few KiB, no keys needed).
 pub fn peek(reader: Box<dyn ReadSeek>, len: u64) -> Result<Ps4Info> {
     let mut file = PkgFile::from_reader(reader, len);

@@ -99,6 +99,7 @@ mod pad_link;
 mod payload_updates_api;
 mod payloads_api;
 mod pkg_install;
+mod pkg_name_api;
 mod pkg_sidecar;
 mod pldmgr_api;
 mod profile_image;

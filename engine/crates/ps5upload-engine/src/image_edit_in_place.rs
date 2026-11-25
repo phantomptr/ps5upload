@@ -83,14 +83,14 @@ pub(crate) struct Refusal {
 }
 
 impl Refusal {
-    fn new(reason: impl Into<String>) -> Self {
+    pub(crate) fn new(reason: impl Into<String>) -> Self {
         Self {
             reason: reason.into(),
             busy: false,
         }
     }
 
-    fn busy(reason: impl Into<String>) -> Self {
+    pub(crate) fn busy(reason: impl Into<String>) -> Self {
         Self {
             reason: reason.into(),
             busy: true,
@@ -224,8 +224,7 @@ impl Drop for Reading {
 
 /// Why `path` can't be read or written by another job now: an in-place edit of it (or of an
 /// image inside it) runs. `None` when nothing edits it.
-#[cfg(test)]
-fn busy(path: &Path) -> Option<String> {
+pub(crate) fn busy(path: &Path) -> Option<String> {
     let k = key(path);
     let users = lock_users();
     users
@@ -1141,6 +1140,79 @@ fn apply_stopping(
         notes,
         warning,
     })
+}
+
+/// A file on this computer changed in place by bytes planned elsewhere (a package's name,
+/// `pkg_name_api`), with what an image edit has: the claim (no build, upload or other edit of
+/// it meanwhile), an OS lock while it is written, the undo journal beside it, and the file put
+/// back as it was when it does not check out.
+///
+/// `plan` reads the file and says what to write (nothing: there is nothing to do; a refusal:
+/// why not, `busy` when something else uses the file); `check` reads
+/// the written file back from disk and says what is wrong with it. `Ok` carries what `plan`
+/// returned and, when only the journal's removal could not be confirmed saved, a warning.
+pub(crate) fn patch_checked<P>(
+    path: &Path,
+    plan: impl FnOnce() -> Result<(Vec<Write>, P), Refusal>,
+    check: impl FnOnce(&P) -> Result<(), String>,
+) -> Result<(P, Option<String>), Refusal> {
+    let _claim = Claim::take(path).map_err(Refusal::busy)?;
+    settle(path).map_err(Refusal::new)?;
+    let stamp = Stamp::of(path).map_err(|e| Refusal::new(format!("{}: {e}", path.display())))?;
+    let (writes, planned) = plan()?;
+    if writes.is_empty() {
+        return Ok((planned, None));
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| Refusal::new(format!("opening {} to change it: {e}", path.display())))?;
+    // Another program (or another PS5Upload) reading or writing it would see it half changed.
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            return Err(Refusal::busy(format!(
+                "{} is open in another program; close it and try again",
+                path.display()
+            )))
+        }
+        Err(std::fs::TryLockError::Error(e)) => {
+            return Err(Refusal::new(format!("locking {}: {e}", path.display())))
+        }
+    }
+    if Stamp::of(path).ok().as_ref() != Some(&stamp) {
+        return Err(Refusal::busy(format!(
+            "{} changed while the change was planned; nothing was written",
+            path.display()
+        )));
+    }
+    let never = AtomicBool::new(false);
+    let mut no_source = |_, _, _: &mut [u8]| -> io::Result<()> {
+        Err(io::Error::other("this change reads no other file"))
+    };
+    let applied = patch::apply(&mut file, path, &writes, &mut no_source, &never, SYNCS)
+        .map_err(|e| Refusal::new(format!("changing {}: {e}", path.display())))?;
+    // From here every way out but a commit restores the file, a panic included.
+    let pending = Pending {
+        applied: Some(applied),
+    };
+    // The OS lock goes before the check, which opens the file again by its path (on Windows a
+    // held lock would refuse that). The claim stays until this returns.
+    let _ = file.unlock();
+    if let Err(e) = check(&planned) {
+        return Err(Refusal::new(match pending.rollback() {
+            Ok(()) => format!("{e}; the file was put back as it was"),
+            Err(r) => format!(
+                "the change was not kept ({e}), and putting the file back failed ({r}): its undo \
+                 journal {} stays, and the next time the file is opened here it is restored",
+                patch::journal_path(path).display()
+            ),
+        }));
+    }
+    let warning = pending.commit(path, SYNCS.dir).map_err(Refusal::new)?;
+    drop(file);
+    Ok((planned, warning))
 }
 
 /// Tests elsewhere in the engine: `edits` written into `image` and verified, then the engine

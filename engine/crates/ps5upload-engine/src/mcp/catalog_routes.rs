@@ -493,6 +493,8 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/pkg/links"),
     ("POST", "/api/pkg/links/open"),
     ("POST", "/api/pkg/links/stop"),
+    ("GET", "/api/pkg/name"),
+    ("POST", "/api/pkg/name"),
     ("POST", "/api/pkg/parse-split"),
     ("POST", "/api/pkg/payload-restore"),
     ("POST", "/api/pkg/remote/download/cancel"),

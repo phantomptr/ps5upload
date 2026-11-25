@@ -1011,6 +1011,11 @@ pub fn api_router(state: PkgInstallStateHandle) -> Router {
         )
         .route("/api/files/upload/{id}", delete(pkg_upload_delete_handler))
         .route("/api/pkg/parse-split", post(parse_split_handler))
+        // The name a fake package gives its game, read and changed in the package (#937).
+        .route(
+            "/api/pkg/name",
+            get(crate::pkg_name_api::get_handler).post(crate::pkg_name_api::set_handler),
+        )
         // Read-only UFS2 image inspector for .ffpkg / .ufs files.
         // Lets the renderer surface "what's in this image?" before
         // a multi-GB upload. See ps5upload_pkg::ufs2 for the parser.
@@ -2178,6 +2183,26 @@ pub(crate) async fn install_start_handler(
                  cancel it first."
             ),
         );
+    }
+
+    // A package being renamed in place (`pkg_name_api`) is never served half written: the
+    // rename claims the file before it looks for sessions (`serving`), and this looks for the
+    // claim once the session is in the table, so one of the two always sees the other.
+    {
+        let parts = session.parts.clone();
+        let renamed = tokio::task::spawn_blocking(move || {
+            parts
+                .iter()
+                .find_map(|p| crate::image_edit_in_place::busy(p))
+        })
+        .await
+        .unwrap_or(None);
+        if let Some(why) = renamed {
+            let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            sessions.remove(&session_id);
+            persist::save(&sessions);
+            return json_err(StatusCode::CONFLICT, &why);
+        }
     }
 
     // Serve-only (Stream beta): the session + its /pkg-host/ listener are now
@@ -3733,20 +3758,29 @@ async fn resolve_parts_and_meta(req: &InstallStartRequest) -> Result<ResolvedSou
     // each split part) from disk. On a cold or network-hosted pkg that's
     // blocking I/O; run it OFF the async reactor so concurrent install-starts
     // across consoles can't park reactor worker threads. (Mirrors parse_handler.)
+    //
+    // A package on this computer may have been renamed in place (`pkg_name_api`): a rename
+    // that runs now refuses the install, and one a crash interrupted is undone before the
+    // package is read, so the console is never served it half changed.
     if let Some(p) = &req.split_root {
         let p = p.clone();
-        let m: SplitPkgMetadata =
-            tokio::task::spawn_blocking(move || parse_split_pkg(std::path::Path::new(&p)))
-                .await
-                .map_err(|e| format!("split pkg parse task panicked/cancelled: {e}"))?
-                .map_err(|e| format!("{e}"))?;
+        let m: SplitPkgMetadata = tokio::task::spawn_blocking(move || {
+            let path = std::path::Path::new(&p);
+            crate::image_edit_in_place::before_open(path)?;
+            parse_split_pkg(path).map_err(|e| format!("{e}"))
+        })
+        .await
+        .map_err(|e| format!("split pkg parse task panicked/cancelled: {e}"))??;
         Ok((m.parts, m.part_sizes, m.total_size, m.head, None))
     } else if let Some(p) = &req.path {
         let p = p.clone();
-        let meta = tokio::task::spawn_blocking(move || parse_pkg(std::path::Path::new(&p)))
-            .await
-            .map_err(|e| format!("pkg parse task panicked/cancelled: {e}"))?
-            .map_err(|e| format!("{e}"))?;
+        let meta = tokio::task::spawn_blocking(move || {
+            let path = std::path::Path::new(&p);
+            crate::image_edit_in_place::before_open(path)?;
+            parse_pkg(path).map_err(|e| format!("{e}"))
+        })
+        .await
+        .map_err(|e| format!("pkg parse task panicked/cancelled: {e}"))??;
         let size = meta.size;
         Ok((vec![meta.path.clone()], vec![size], size, meta, None))
     } else {
@@ -4436,6 +4470,35 @@ fn gc_old_sessions(map: &mut HashMap<String, InstallSession>, now: u64, max_age:
     before - map.len()
 }
 
+/// Why the package at `path` (a file on this computer) can't be changed now: a console is
+/// installing from it, or it is shared as an install link. `None` when no session serves it.
+/// "Installing" is what [`is_rival`] means by it: a session that has not ended and that a
+/// console fetched from, or the app asked about, within the last `RIVAL_ACTIVE_WINDOW_SEC`.
+pub(crate) fn serving(state: &PkgInstallState, path: &std::path::Path) -> Option<String> {
+    let real = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let me = real(path);
+    let now = now_unix();
+    let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+    sessions
+        .values()
+        .filter(|s| !s.cancelled && s.remote.is_none())
+        .filter(|s| {
+            s.shared_link
+                || (s.terminal_status.is_none()
+                    && now.saturating_sub(s.last_activity_unix.max(s.created_at_unix))
+                        < RIVAL_ACTIVE_WINDOW_SEC)
+        })
+        .find(|s| s.parts.iter().any(|p| real(p) == me))
+        .map(|s| {
+            if s.shared_link {
+                "this package is shared as an install link: stop sharing it first".to_string()
+            } else {
+                "a PS5 is installing from this package: wait for the install to end, or stop it"
+                    .to_string()
+            }
+        })
+}
+
 /// Whether `other` is a live install of the same package to the same console as `new`.
 fn is_rival(other: &InstallSession, new: &InstallSession, now: u64) -> bool {
     !other.cancelled
@@ -4584,7 +4647,7 @@ mod persist_tests {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     // ── payload-restore (web UI helper redeploy) ──
 
     /// The browser build's `restoreMainPayload` posts here. An empty address
@@ -5118,7 +5181,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         assert!(!out.starts_with('.'));
     }
 
-    fn dummy_session(parts: Vec<(PathBuf, u64)>) -> InstallSession {
+    pub(crate) fn dummy_session(parts: Vec<(PathBuf, u64)>) -> InstallSession {
         let total: u64 = parts.iter().map(|(_, s)| s).sum();
         InstallSession {
             id: "test".into(),
@@ -5153,6 +5216,44 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
             shared_link: false,
             shared_any: false,
         }
+    }
+
+    /// A package is "being installed from" while a session that has not ended was fetched
+    /// from (or asked about) lately, and for as long as it is shared as a link: `serving`
+    /// keeps a rename off it (`pkg_name_api`). Another package's session never does.
+    #[test]
+    fn serving_names_the_session_that_reads_a_package() {
+        let dir = std::env::temp_dir().join(format!("ps5upload-serving-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a.pkg"), dir.join("b.pkg"));
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
+        let state = PkgInstallState::default();
+        let put = |change: &dyn Fn(&mut InstallSession)| {
+            let mut s = dummy_session(vec![(a.clone(), 1)]);
+            change(&mut s);
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.clear();
+            sessions.insert("s".into(), s);
+        };
+        assert_eq!(serving(&state, &a), None, "no session at all");
+        put(&|_| {});
+        assert!(serving(&state, &a).unwrap().contains("installing from"));
+        assert_eq!(serving(&state, &b), None, "another package");
+        // The same file by another spelling of its path.
+        assert!(serving(&state, &dir.join(".").join("a.pkg")).is_some());
+        put(&|s| s.cancelled = true);
+        assert_eq!(serving(&state, &a), None, "stopped");
+        put(&|s| s.last_activity_unix = now_unix() - RIVAL_ACTIVE_WINDOW_SEC - 1);
+        assert_eq!(serving(&state, &a), None, "nothing fetched it lately");
+        put(&|s| {
+            s.shared_link = true;
+            s.last_activity_unix = 0;
+        });
+        assert!(serving(&state, &a)
+            .unwrap()
+            .contains("shared as an install link"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A long install must not be reaped while the console is still pulling.

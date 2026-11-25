@@ -142,7 +142,7 @@ fn inner_mount_ok(image_len: u64, image: &[u8], layout: &crate::naps::Layout) ->
 
 /// Every check that needs only the header and the container — the two things both
 /// verifiers read whole.
-fn container_report(fih_block: &[u8], fih: &fih::Fih, cnt: &cnt::Cnt) -> Report {
+pub(crate) fn container_report(fih_block: &[u8], fih: &fih::Fih, cnt: &cnt::Cnt) -> Report {
     let mut r = Report {
         content_id: cnt.content_id.clone(),
         checks: Vec::new(),
@@ -202,6 +202,17 @@ fn container_report(fih_block: &[u8], fih: &fih::Fih, cnt: &cnt::Cnt) -> Report 
     }
 
     r
+}
+
+/// The checks that need only a PS5 package's header and its container: every digest and
+/// descriptor the container carries about itself. Nothing of the image is read, so it costs the
+/// container's size whatever the package's (a rename is checked with it before and after).
+pub fn container_checks(path: &Path) -> Result<Report> {
+    let mut file = PkgFile::open(path)?;
+    let fih_block = file.read_at(0, BLOCK as usize)?;
+    let fih = fih::parse(&fih_block)?;
+    let cnt = cnt::read(&mut file, fih.cnt_offset)?;
+    Ok(container_report(&fih_block, &fih, &cnt))
 }
 
 pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {

@@ -51,6 +51,7 @@ pub mod pfs_source;
 pub mod pfsc;
 pub mod pfsc_reader;
 pub mod pfsimage;
+pub mod pkg_name;
 pub mod pkg_source;
 pub mod plan;
 pub mod playgo;
