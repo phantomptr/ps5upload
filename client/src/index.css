@@ -700,6 +700,22 @@ body {
   outline-offset: 3px;
 }
 
+/* Play Together's guest screens (the /join page, the joined game; #926): black, maybe on a TV
+ * across the room. A thick white ring, clear of the button by a dark gap. */
+[data-join-ui] :where(a, button, input, select, textarea, summary, [role="button"], [tabindex]):focus-visible,
+:root[data-tv="1"] [data-join-ui] :where(a, button, input, select, textarea, summary, [role="button"], [tabindex]):focus {
+  outline: 3px solid #fff;
+  outline-offset: 3px;
+}
+:root[data-tv="1"] [data-join-ui] :where(a, button, input, select, textarea, summary, [role="button"], [tabindex]):focus {
+  outline-width: 4px;
+}
+/* The game's own focus spot (JoinView): the keys play there, nothing to ring. */
+[data-join-game]:focus,
+[data-join-game]:focus-visible {
+  outline: none !important;
+}
+
 /* Fields that already show focus their own way don't also get the heavy
  * ring: `.input` / `.select` turn accent-edged with a soft halo, and a
  * `.field-quiet` field sits in a `.field-shell` that lights up instead (the

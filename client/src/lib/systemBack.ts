@@ -12,6 +12,7 @@ import { useEffect, useRef } from "react";
 import { closeTopModal, onModalStackChange, openModalCount, registerBackDismiss } from "./focusTrap";
 import { isMobile } from "./platform";
 import { isTauriEnv } from "./tauriEnv";
+import { isTvDevice } from "./tvNav";
 
 declare global {
   interface Window {
@@ -86,6 +87,7 @@ let installed = false;
 export function installSystemBack(): void {
   if (installed || typeof window === "undefined") return;
   installed = true;
-  if (isTauriEnv()) installAppBack();
+  // The TV bridge is the Android app's (MainActivity), which asks __ps5uBack too.
+  if (isTauriEnv() || isTvDevice()) installAppBack();
   else if (isMobile()) installBrowserBack();
 }

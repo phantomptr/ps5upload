@@ -45,9 +45,16 @@ export default function PlayScreen() {
   useEffect(() => {
     if (receiveParam) navigate(`/share?receive=${encodeURIComponent(receiveParam)}`, { replace: true });
   }, [receiveParam, navigate]);
+  // /play?mode=friend: Join a friend, the form empty (the TV's Join Play Together card, #926).
+  const friendParam = params.get("mode") === "friend";
   const [mode, setMode] = useState<PlayMode>(() =>
-    joined || joinParam ? "friend" : "mine",
+    joined || joinParam || friendParam ? "friend" : "mine",
   );
+  useEffect(() => {
+    if (!friendParam) return;
+    setMode("friend");
+    setParams({}, { replace: true });
+  }, [friendParam, setParams]);
   // Play together is the same stream as Play my PS5 with its invite panel (StreamPanel stays
   // mounted between the two, so switching never touches the stream). The stream bar's button
   // and the menu switch here and back.

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { FOCUSABLE_SELECTOR } from "./focusTrap";
-import { handleTvKey, installTvNav, isTvDevice, keepsArrow, tvNavActive } from "./tvNav";
+import { handleTvKey, installArrowNav, installTvNav, isTvDevice, keepsArrow, resetTvNavForTest, tvNavActive } from "./tvNav";
 
 /*
  * Vitest runs in node (no jsdom in the client): a small fake DOM with what tvNav touches —
@@ -228,6 +228,7 @@ describe("installTvNav", () => {
   }
   afterEach(() => {
     listeners.length = 0;
+    resetTvNavForTest();
   });
 
   it("is off away from a TV, and when the bridge fails", () => {
@@ -251,5 +252,24 @@ describe("installTvNav", () => {
     // Once only.
     expect(installTvNav(w)).toBe(true);
     expect(listeners).toHaveLength(1);
+  });
+
+  it("the /join page moves focus with the arrows on any device, but does not mark it a TV", () => {
+    const { w, doc } = fakeWindow(false);
+    installArrowNav(w);
+    expect(tvNavActive(doc as unknown as Document)).toBe(false);
+    expect(listeners).toHaveLength(1);
+    listeners[0](new FakeKey("ArrowDown") as unknown as KeyboardEvent);
+    expect(doc.activeElement?.attrs.name).toBe("files");
+    // Once only, with installTvNav too.
+    installArrowNav(w);
+    installTvNav(fakeWindow(true).w);
+    expect(listeners).toHaveLength(1);
+  });
+
+  it("the /join page in the TV app is marked a TV (the big focus ring)", () => {
+    const { w, doc } = fakeWindow(true);
+    installArrowNav(w);
+    expect(tvNavActive(doc as unknown as Document)).toBe(true);
   });
 });

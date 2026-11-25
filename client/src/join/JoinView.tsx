@@ -4,6 +4,8 @@ import { Expand, EyeOff, Gamepad2, LogOut, Minimize, MoreHorizontal, RotateCw, U
 import type { JoinStage } from "../lib/joinClient";
 import { delayTone, playerColor } from "../lib/joinProtocol";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
+import { registerBackDismiss } from "../lib/focusTrap";
+import { tvNavActive } from "../lib/tvNav";
 import { gamepadsOf } from "../lib/nativePad";
 import { isWeak8BitDo, padPlatform, type PadKind } from "../lib/padMappings";
 import { padKind } from "../lib/padProfiles";
@@ -199,7 +201,38 @@ export const HOLD_MS = 450;
 /** A finger that moves further than this (px) is not holding. */
 const HOLD_SLOP = 14;
 
-const coarsePointer = () => typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
+/** A touch screen. Never on a TV (#926): it has a remote, and a TV's WebView may still say coarse. */
+const coarsePointer = () =>
+  typeof window !== "undefined" && !tvNavActive() && !!window.matchMedia?.("(pointer: coarse)").matches;
+
+/** Where the focus is, for Back and Esc (#926): on the game (the picture's own focus spot, or
+ *  nothing at all, where keys play), on the view's own buttons, or elsewhere on the page. */
+export type FocusWhere = "game" | "controls" | "page";
+
+type FocusNode = { closest?(sel: string): unknown } | null;
+
+export function focusWhere(
+  active: FocusNode,
+  body: unknown,
+  view: { contains(n: never): boolean } | null,
+): FocusWhere {
+  if (!active || active === body || active.closest?.("[data-join-game]")) return "game";
+  return view?.contains(active as never) ? "controls" : "page";
+}
+
+/** What one press of Back does while in the game (#926), the first that applies: close the
+ *  controller check, then the first-time guide; from the game, show the buttons and put the focus
+ *  on them; from the buttons, leave full screen. Null: nothing here, Back goes on as usual (the
+ *  app's previous screen, the browser's previous page). */
+export type BackStep = "close-check" | "close-guide" | "show-controls" | "leave-full" | null;
+
+export function backStep(o: { checking: boolean; guide: boolean; where: FocusWhere; full: boolean }): BackStep {
+  if (o.checking) return "close-check";
+  if (o.guide) return "close-guide";
+  if (o.where === "game") return "show-controls";
+  if (o.full) return "leave-full";
+  return null;
+}
 
 const TONE_COLOR = {
   good: "var(--color-good,#32d074)",
@@ -224,9 +257,11 @@ function Waiting({ text, body, onCancel }: { text: string; body?: string; onCanc
         {text}
       </p>
       {body && <p className="max-w-sm text-sm text-white/60">{body}</p>}
+      {/* The one thing to press here: a TV's remote is on it at once (#926). */}
       <button
         type="button"
         onClick={onCancel}
+        autoFocus
         className="rounded-full bg-white/15 px-4 py-2 text-sm hover:bg-white/25"
         data-testid="join-cancel"
       >
@@ -269,6 +304,9 @@ export function JoinView({
   const { stage, status } = snap;
   const host = snap.host ?? tr("join_host_fallback", undefined, "your friend");
   const screen = useRef<HTMLDivElement>(null);
+  // The whole view (its buttons), and the game's own focus spot: there the keys play (#926).
+  const view = useRef<HTMLDivElement>(null);
+  const game = useRef<HTMLDivElement>(null);
   const [full, setFull] = useState(false);
   const [guided, setGuided] = useState(() => safeGetItem(GUIDED_KEY) === "1");
   const [portrait, setPortrait] = useState(() => typeof window !== "undefined" && window.innerHeight > window.innerWidth);
@@ -375,18 +413,32 @@ export function JoinView({
     return () => mq.removeEventListener?.("change", turn);
   }, [inApp, live, onFullscreen]);
 
+  // The app on a TV (#926): the game fills the screen from the start, as a TV app's does. Back
+  // shows the buttons, Back again leaves full screen; Full screen is among the buttons.
+  useEffect(() => {
+    if (!inApp || !live || !tvNavActive() || fullNow.current) return;
+    setFull(true);
+    void onFullscreen?.(true);
+  }, [inApp, live, onFullscreen]);
+
   // Esc shows the buttons and leaves full screen (the desktop app's window has no Esc of its
   // own; a browser that kept Esc for the page gets it here). A guest's Esc is never the pad's.
+  // Without full screen it moves between the game and its buttons (#926), and it closes the
+  // controller check first.
   useEffect(() => {
     if (!live) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      if (checking) return void latestBack.current();
       poke();
-      if (full) setFull(false);
+      if (full) return setFull(false);
+      const at = focusWhere(document.activeElement, document.body, view.current);
+      if (at === "game") latestBack.current();
+      else if (at === "controls") game.current?.focus({ preventScroll: true });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [live, full, poke]);
+  }, [live, full, poke, checking]);
 
   // System Back on a phone in full screen: back to the picture's place, still playing, as the
   // host's player does (StreamPanel). Same state as the page's own entry: the router sees no
@@ -419,6 +471,120 @@ export function JoinView({
     return () => document.removeEventListener("fullscreenchange", onChange);
   }, [full]);
 
+  // ── A TV's remote, a keyboard (#926) ──────────────────────────────────────────────────────
+  // The game has a focus spot of its own (data-join-game, over the picture): there, and with
+  // nothing focused, the arrows and Enter play. Back (the remote's, the app's system Back, the
+  // browser's) works through backStep; Esc as before, and between the game and its buttons.
+  const tv = tvNavActive();
+  const guideOpen = live && showsGuide({ player: livePlayer, guided, movedOff, reconnecting }) && !status?.playsAs;
+  const setFullscreen = async (next: boolean) => {
+    setFull(next);
+    await onFullscreen?.(next);
+  };
+  const focusGame = () => game.current?.focus({ preventScroll: true });
+  const dismissGuide = () => {
+    safeSetItem(GUIDED_KEY, "1");
+    setGuided(true);
+    setMovedOff(false);
+  };
+  /** The buttons over the picture, the focus on the first (Reconnecting's Leave while that shows). */
+  const showControls = () => {
+    poke();
+    const sel = reconnecting ? '[data-testid="join-reconnecting-leave"]' : '[data-testid="join-bar"] button';
+    view.current?.querySelector<HTMLElement>(sel)?.focus({ preventScroll: true });
+  };
+  const closeCheck = () => {
+    // Back on the button it was opened from, else the game.
+    const opener = view.current?.querySelector<HTMLElement>('[data-testid="join-check-open"]');
+    if (opener) opener.focus({ preventScroll: true });
+    else focusGame();
+    setChecking(false);
+  };
+  const whereNow = () => focusWhere(document.activeElement, document.body, view.current);
+  const [where, setWhere] = useState<FocusWhere>("game");
+  useEffect(() => {
+    if (!live) return;
+    const read = () => setWhere(whereNow());
+    // On focusout the next element has the focus only a moment later.
+    const later = () => window.setTimeout(read, 0);
+    read();
+    document.addEventListener("focusin", read);
+    document.addEventListener("focusout", later);
+    return () => {
+      document.removeEventListener("focusin", read);
+      document.removeEventListener("focusout", later);
+    };
+  }, [live]);
+  const runBack = (): boolean => {
+    const step = live ? backStep({ checking, guide: guideOpen, where: whereNow(), full }) : null;
+    switch (step) {
+      case "close-check":
+        closeCheck();
+        return true;
+      case "close-guide":
+        dismissGuide();
+        focusGame();
+        return true;
+      case "show-controls":
+        showControls();
+        return true;
+      case "leave-full":
+        void setFullscreen(false);
+        return true;
+      default:
+        return false;
+    }
+  };
+  const latestBack = useRef(runBack);
+  useEffect(() => {
+    latestBack.current = runBack;
+  });
+  // The app's system Back (lib/systemBack) comes here while a step applies. Not on a phone: there
+  // Back leaves full screen at once (below), and the buttons come with a long press.
+  const backHere = inApp && !touch && live && backStep({ checking, guide: guideOpen, where, full }) !== null;
+  useEffect(() => {
+    if (!backHere) return;
+    return registerBackDismiss(() => void latestBack.current());
+  }, [backHere]);
+  // The /join page: the browser's Back (a TV's remote) comes here first, through an extra entry
+  // in its history; when no step applies it goes on back, out of the page.
+  const guardHistory = !inApp && live && !touch;
+  useEffect(() => {
+    if (!guardHistory) return;
+    const entry = window.location.href;
+    window.history.pushState(window.history.state, "");
+    let held = true;
+    const onPop = () => {
+      held = false;
+      if (!latestBack.current()) return window.history.back();
+      window.history.pushState(window.history.state, "");
+      held = true;
+    };
+    window.addEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      if (held && window.location.href === entry) window.history.back();
+    };
+  }, [guardHistory]);
+  // In the game, the focus starts on it (so the remote's arrows play), or on the guide's Got it on a
+  // TV (its OK would press the cross button in the game). Never away from a control the guest is on.
+  const joinedNow = stage.kind === "joined";
+  useEffect(() => {
+    if (!joinedNow) return;
+    const a = document.activeElement;
+    if (a && a !== document.body) return;
+    const ok = tv && guideOpen ? view.current?.querySelector<HTMLElement>('[data-testid="join-guide-ok"]') : null;
+    if (ok) ok.focus({ preventScroll: true });
+    else focusGame();
+    // When the game starts, not as the guide comes and goes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinedNow]);
+  // A press on the controller is the game's: off the buttons, which then hide again.
+  useEffect(() => {
+    if (pad.pressed && live && !checking && whereNow() === "controls") focusGame();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pad.pressed]);
+
   const leave = () => {
     session.leave();
     onLeave();
@@ -426,7 +592,10 @@ export function JoinView({
 
   if (stage.kind === "connecting" || stage.kind === "asking") {
     return (
-      <div className={inApp ? "rounded-[var(--radius-card)] bg-neutral-900 text-white" : "flex min-h-[100dvh] flex-col items-center justify-center gap-4 bg-black text-white"}>
+      <div
+        className={inApp ? "rounded-[var(--radius-card)] bg-neutral-900 text-white" : "flex min-h-[100dvh] flex-col items-center justify-center gap-4 bg-black text-white"}
+        data-join-ui=""
+      >
         {stage.kind === "connecting" && hubDown && lanUrl && <OpenOnWifi href={lanUrl} />}
         <Waiting
           text={
@@ -453,6 +622,7 @@ export function JoinView({
         }
         data-testid="join-ended"
         data-why={stage.why}
+        data-join-ui=""
       >
         <Users size={28} className="text-white/60" />
         <p className="max-w-sm text-base" data-testid="join-ended-text">
@@ -465,6 +635,7 @@ export function JoinView({
             <button
               type="button"
               onClick={onAgain}
+              autoFocus
               className="rounded-full bg-white px-4 py-2 text-sm font-medium text-black"
               data-testid="join-again"
             >
@@ -473,7 +644,13 @@ export function JoinView({
                 : tr("join_again", undefined, "Ask to join again")}
             </button>
           )}
-          <button type="button" onClick={onLeave} className="rounded-full bg-white/15 px-4 py-2 text-sm" data-testid="join-done">
+          <button
+            type="button"
+            onClick={onLeave}
+            autoFocus={!again}
+            className="rounded-full bg-white/15 px-4 py-2 text-sm"
+            data-testid="join-done"
+          >
             {tr("join_done", undefined, "Done")}
           </button>
         </div>
@@ -492,11 +669,7 @@ export function JoinView({
   // Seated in the profile the host chose: nothing to pick on the TV.
   const playsAs = status?.playsAs ?? null;
   const leftS = reconnecting ? (stage.deadline - now) / 1000 : 0;
-  const toggleFull = async () => {
-    const next = !full;
-    setFull(next);
-    await onFullscreen?.(next);
-  };
+  const toggleFull = () => setFullscreen(!full);
   // A phone in the app, the game in its small box: the buttons go in a bar under the picture
   // (big, nothing over the game) and turning the phone sideways goes full screen, as the host's
   // player does. Full screen keeps them over the picture, hidden until asked for.
@@ -631,7 +804,8 @@ export function JoinView({
     "data-testid": "join-bar",
     "data-shown": chrome.shown ? "1" : "0",
     onFocus: (e: React.FocusEvent<HTMLDivElement>) => {
-      if ((e.target as Element).matches?.(":focus-visible")) setBarFocus(true);
+      // On a TV any focus is the remote's (#926).
+      if (tv || (e.target as Element).matches?.(":focus-visible")) setBarFocus(true);
     },
     onBlur: (e: React.FocusEvent<HTMLDivElement>) => {
       if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setBarFocus(false);
@@ -650,11 +824,16 @@ export function JoinView({
       ? "fixed inset-0 z-[200] bg-black"
       : "relative mx-auto aspect-video w-full max-w-[max(20rem,calc((100dvh_-_22rem)*16/9))] overflow-hidden rounded-[var(--radius-card)] bg-black shadow-[var(--shadow-2)]";
 
+  // Full screen in the app covers the app: the remote's arrows stay inside, as in a dialog.
+  const fullInApp = inApp && full;
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" ref={view} data-join-ui="">
       <div
         className={`${box} select-none text-white [-webkit-touch-callout:none]`}
         style={{ touchAction: "none" }}
+        role={fullInApp ? "dialog" : undefined}
+        aria-modal={fullInApp ? true : undefined}
+        aria-label={fullInApp ? tr("pad_fill", undefined, "Full screen") : undefined}
         onPointerMove={(e) => {
           if (e.pointerType === "mouse") return poke();
           const h = hold.current;
@@ -755,7 +934,7 @@ export function JoinView({
           </p>
         )}
 
-        {checking && <PadCheck onClose={() => setChecking(false)} />}
+        {checking && <PadCheck onClose={closeCheck} />}
 
         {showTouch && <TouchControls stream={session} layout="overlay" onMenu={() => (chrome.shown ? chrome.hide() : poke())} />}
 
@@ -795,6 +974,12 @@ export function JoinView({
                     </span>
                   </span>
                 )}
+            {/* A TV's remote has no pointer: Back is how the buttons come (#926). */}
+            {tv && (
+              <span className="max-w-[14rem] border-l border-white/20 pl-2 text-white/70" data-testid="join-tv-back">
+                {tr("join_tv_back_hint", undefined, "Press Back on the remote for the buttons.")}
+              </span>
+            )}
           </div>
         )}
 
@@ -839,9 +1024,8 @@ export function JoinView({
             <button
               type="button"
               onClick={() => {
-                safeSetItem(GUIDED_KEY, "1");
-                setGuided(true);
-                setMovedOff(false);
+                dismissGuide();
+                focusGame();
               }}
               className="mt-3 rounded-full bg-white px-3 py-1 text-xs font-medium text-black"
               data-testid="join-guide-ok"
@@ -891,6 +1075,18 @@ export function JoinView({
             </span>
           </div>
         )}
+
+        {/* The game's own focus spot (#926): with the focus here the arrows and Enter play, as with
+            none. Last, so Shift+Tab goes back to the buttons; it takes no touches or clicks. */}
+        <div
+          ref={game}
+          tabIndex={0}
+          data-own-arrows=""
+          data-join-game=""
+          aria-label={tr("join_game_label", { host }, `${host}'s game`)}
+          className="pointer-events-none absolute inset-0 outline-none"
+          data-testid="join-game"
+        />
       </div>
       {below && (
         // Under the picture on a phone: big, easy to hit, nothing over the game.

@@ -16,6 +16,8 @@ import { ConsoleCard, ConsoleMeshPoll } from "./ConsoleCard";
 import { AddConsoleSheet } from "./AddConsoleSheet";
 import { TailnetFound } from "./TailnetFound";
 import { parseInvite } from "./model";
+import { TvJoinCard } from "../../Play/TvJoinCard";
+import { tvNavActive } from "../../../lib/tvNav";
 
 /** A link that opens one console's card (`?console=<id>`, maybe `&devices=1`): the console to pick
  *  at the top first (null when it is already picked, or not on the list), and the address without
@@ -72,7 +74,11 @@ export default function ConsolesScreen() {
   const invite = useMemo(() => parseInvite(params.get("invite") ?? ""), [params]);
   const focusId = params.get("console");
   const wantDevices = params.get("devices") === "1";
-  const [addOpen, setAddOpen] = useState(() => profiles.length === 0 || !!invite || params.get("add") === "1");
+  // A new install opens Add a PS5 at once; not on a TV (#926), where the first thing is usually a
+  // friend's game (TvJoinCard), and Add a PS5 is one button away.
+  const [addOpen, setAddOpen] = useState(
+    () => (profiles.length === 0 && !tvNavActive()) || !!invite || params.get("add") === "1",
+  );
 
   useEffect(() => {
     getAppVersion()
@@ -145,6 +151,8 @@ export default function ConsolesScreen() {
         }
       />
       <div className="grid gap-4" data-testid="consoles-list">
+        {/* A TV (#926): a guest with no PS5 of their own joins a friend's game from here. */}
+        <TvJoinCard />
         {profiles.length === 0 ? <EmptyConsoles onAdd={() => setAddOpen(true)} /> : null}
         <TailnetFound
           appTailnet={appTailnet}

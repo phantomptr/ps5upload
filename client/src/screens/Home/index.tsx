@@ -40,6 +40,7 @@ import { RecentGames } from "./RecentGames";
 import { greetingPart } from "./greeting";
 import { initials, useGreetedUser } from "./consoleUser";
 import { mgmtAddr } from "../../lib/addr";
+import { TvJoinCard } from "../Play/TvJoinCard";
 import {
   evaluateOperationReadiness,
   helperNotConnected,
@@ -132,6 +133,8 @@ export default function HomeScreen() {
 
   return (
     <div className="app-page">
+      {/* A TV (#926): joining a friend's game first. Nothing else changes. */}
+      <TvJoinCard className="mb-6" />
       <header className="mb-7 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <div className="mb-1 flex min-w-0 items-center gap-2.5" data-testid="home-greeting">

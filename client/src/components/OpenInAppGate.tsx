@@ -68,7 +68,7 @@ export function OpenInAppGate({ appLink, children }: { appLink: string; children
   };
 
   return (
-    <div className="flex min-h-[100dvh] items-center justify-center bg-black px-6 text-white" data-testid="open-in-gate">
+    <div className="flex min-h-[100dvh] items-center justify-center bg-black px-6 text-white" data-testid="open-in-gate" data-join-ui="">
       <div className="w-full max-w-sm space-y-4 rounded-2xl border border-white/10 bg-neutral-900 p-6">
         {phase === "ask" ? (
           <>
@@ -81,6 +81,8 @@ export function OpenInAppGate({ appLink, children }: { appLink: string; children
             <button
               type="button"
               onClick={toApp}
+              // The first thing to press, for a TV's remote or a keyboard (#926).
+              autoFocus
               className="w-full rounded-full bg-white py-2.5 text-sm font-semibold text-black"
               data-testid="open-in-app"
             >
@@ -110,6 +112,7 @@ export function OpenInAppGate({ appLink, children }: { appLink: string; children
             <button
               type="button"
               onClick={() => (location.href = appLink)}
+              autoFocus
               className="w-full rounded-full bg-white py-2.5 text-sm font-semibold text-black"
               data-testid="open-in-again"
             >
