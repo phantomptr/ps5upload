@@ -4,6 +4,49 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+**Upload & Install**
+- **Change a fake package's name before installing it (#937).** Pick one package and edit "Name on the PS5". The name is changed inside the package, in place, without rebuilding it, and checked afterwards. Packages signed by Sony, split packages and packages on a server are refused.
+
+**Convert**
+- **Free an archive's space while it unpacks (dangerous, off by default).** For a drive with no room for the archive and the unpacked game together. A .zip is freed file by file, a .7z block by block, and a multi-part .rar part by part; other archives are deleted once unpacked and checked. The archive is deleted for good: if anything fails on the way, you keep only what was unpacked so far. It asks every time, and it is for one game only.
+- **".pkg" now says what it is:** a fake package (FPKG).
+
+**Accounts**
+- **Renaming a user works again (#940).** The console refused every rename with error 0x800D0208, because the name was sent with the wrong size. Names are limited to 16 bytes, and a refusal now says why instead of blaming missing privileges.
+
+**Files and the phone layout (#936)**
+- **Selecting no longer moves the rows.** On a phone the tick box appears at the end of the row, where ⋮ was.
+- **One short top bar.** On Android phones the back and forward arrows are gone (the system Back does that) and the bar is shorter; in Files the bell moves into the Files bar. iPhones keep the arrows.
+- **The bottom More menu has every action** the row's ⋮ has when one item is selected.
+
+**Save Data**
+- **Backup times on the console's own page are right (#928).** They showed three hours off for some time zones.
+- **Restoring a "before restore" backup can no longer delete that same backup.**
+- Copying an emulator save to a console that has no folder for it yet now works.
+
+**Fixes found in an audit**
+- A finished Convert output that could not be renamed at the end is no longer deleted when you start the same build again.
+- A folder upload from an SFTP or FTP server sends linked files whole, not their first few bytes.
+- Two downloads of the same file into one folder can no longer delete the finished copy.
+- Damaged or crafted packages and images are refused instead of crashing the engine or filling the disk. Extracting from an .ffpkg refuses a path with ".." in it.
+- A game folder whose ID belongs to a system app can no longer be registered over that app.
+- The shell's recursive chmod no longer follows links out of the folder.
+- A cancelled Remote Play PIN stops working on the console right away.
+- An image mounted at a long or oddly written path can be listed and unmounted again.
+- Notifications saved on the console read back correctly after a restart.
+
+**Look and wording**
+- Clipped labels fixed on phones and in long languages (bottom tabs, Files selection bar, Workshop choices, "1 copy" on game cards, the sidebar in German).
+- Arabic and Persian: paths, names and sizes keep their order.
+- A partial backup restore shows as a warning, not a success. Small close buttons are easier to hit.
+- Counts read right for one item ("Checks passed: 1").
+- Translations of the newest texts were reviewed in all 21 languages.
+
+**Website**
+- New screenshots from a made-up console with invented games, and the pages, README and FAQ cover the last ten releases.
+
 ## 12.6.30
 
 **Files on phones**
