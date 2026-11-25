@@ -10,6 +10,8 @@ import CopyToUserDialog, { targetName } from "../Saves/CopyToUserDialog";
 import { partMissingText } from "../Saves/partMissing";
 import { copyTargets, type CopyTarget } from "../Saves/copyTargets";
 import { formatBytes } from "../../lib/format";
+import { formatDate } from "../../lib/formatDate";
+import { stampMs } from "../Saves/backupStatus";
 import { hostOf } from "../../lib/addr";
 import { pushNotification } from "../../state/notifications";
 import { useAutoSaveBackupStore } from "../../state/autoSaveBackup";
@@ -19,10 +21,13 @@ import { useTr } from "../../state/lang";
 /** How many versions a save shows before "show all". */
 const SHOWN = 3;
 
-/** `2026-10-24_101500` → `2026-10-24 10:15 UTC` (a snapshot's `_snap` after it is dropped). */
-export function stampLabel(stamp: string): string {
-  const m = /^(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})\d{2}(?:_[a-z]+)?$/.exec(stamp);
-  return m ? `${m[1]} ${m[2]}:${m[3]} UTC` : stamp;
+/** A backup stamp (`2026-10-24_101500`, UTC as the engine names it; a snapshot's `_snap` is
+ *  ignored) as a date and time in this device's time zone and the app's language (#928).
+ *  The stamp itself is the backup's name and is never changed; anything else shows as is. */
+export function stampLabel(stamp: string, lang?: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}_\d{6}(?:_[a-z]+)?$/.test(stamp)) return stamp;
+  const ms = stampMs(stamp);
+  return ms === null ? stamp : formatDate(ms, "datetime", lang) || stamp;
 }
 
 /** A backup in this computer's backup folder, on the network share (#592), or the copy on the
