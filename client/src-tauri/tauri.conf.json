@@ -34,7 +34,8 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "**"
+          "$TEMP/ps5upload-save-*/**",
+          "**/sce_sys/icon0.png"
         ]
       }
     }

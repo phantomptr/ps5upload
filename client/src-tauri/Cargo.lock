@@ -4879,6 +4879,7 @@ dependencies = [
  "evdev",
  "flate2",
  "futures-util",
+ "glob",
  "hidapi",
  "image",
  "jni 0.21.1",
