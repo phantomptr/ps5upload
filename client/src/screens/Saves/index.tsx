@@ -1373,7 +1373,7 @@ export default function SavesScreen() {
               </span>
               <button
                 type="button"
-                className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-text)] phone:-me-2 phone:inline-grid phone:min-w-10 phone:place-items-center"
                 aria-label={tr("saves_copy_tip_dismiss", undefined, "Dismiss")}
                 title={tr("saves_copy_tip_dismiss", undefined, "Dismiss")}
                 onClick={hideTip}
@@ -1951,7 +1951,7 @@ function HowSavesWork({ onDismiss }: { onDismiss: () => void }) {
       </div>
       <button
         type="button"
-        className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-text)]"
+        className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-text)] phone:-me-2 phone:inline-grid phone:min-w-10 phone:place-items-center"
         aria-label={tr("saves_copy_tip_dismiss", undefined, "Dismiss")}
         title={tr("saves_copy_tip_dismiss", undefined, "Dismiss")}
         onClick={onDismiss}

@@ -4199,6 +4199,9 @@ export default function FileSystemScreen() {
                         <button
                           type="button"
                           onClick={() => setPath(c.path)}
+                          // The first crumb is only an icon: its name is the path it opens.
+                          aria-label={i === 0 ? c.path : undefined}
+                          title={i === 0 ? c.path : undefined}
                           {...(i < arr.length - 1 ? dropProps(c.path) : {})}
                           className={
                             (dropTarget === c.path ? "ring-2 ring-[var(--color-accent)] " : "") +

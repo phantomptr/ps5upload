@@ -69,7 +69,7 @@ export function PlayCard() {
     >
       <button
         type="button"
-        className="absolute end-3 top-3 rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
+        className="absolute end-3 top-3 rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] phone:end-1.5 phone:top-1.5 phone:grid phone:min-w-11 phone:place-items-center"
         aria-label={tr("play_home_hide", undefined, "Hide from Home")}
         title={tr("play_home_hide", undefined, "Hide from Home")}
         onClick={() => setHidden(true)}
