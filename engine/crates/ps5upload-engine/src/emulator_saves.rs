@@ -1,10 +1,10 @@
-//! The saves of ProsperoEden, the Switch emulator for the PS5 (PPSA99008, or PPSA99016 for its
-//! mirror), for the automatic save backups. The emulator keeps them as plain files, not as PS5
-//! save images, one folder per profile and game:
-//! `/data/prosperoeden/user/nand/user/save/0000000000000000/<profile>/<game>/`, the
-//! profile as 32 hex digits (all zeros: a game's save for the whole console) and the game as its
-//! 16-hex-digit title ID. That place is fixed in the emulator: the game files folder chosen in its
-//! settings moves the games, keys and firmware, never the saves.
+//! The saves of the Switch emulators ProsperoEden (PPSA99008, or PPSA99016 for its mirror)
+//! and EglantinePS5 (PPSA98515), for the automatic save backups. Both keep plain files rather
+//! than PS5 save images, one folder per profile and game:
+//! `/data/prosperoeden/user/nand/user/save/0000000000000000/<profile>/<game>/`, with
+//! the same layout under `/data/eglantineps5` for EglantinePS5. A profile is 32 hex digits
+//! (all zeros for a game's console-wide save); a game is its 16-hex-digit title ID. These
+//! locations are fixed: the game files setting moves games, keys and firmware, never saves.
 //!
 //! Each such folder that holds a file is listed among a console's saves (`kind` "switch",
 //! `title_id` the game's), so it is backed up, kept and restored as a PS5 save is, with two
@@ -33,6 +33,48 @@ pub const MIRROR: &str = "PPSA99016";
 pub const KIND: &str = "switch";
 /// Where it keeps every profile's saves.
 pub const ROOT: &str = "/data/prosperoeden/user/nand/user/save/0000000000000000";
+/// EglantinePS5 keeps the same save layout in its own data folder.
+pub const EGLANTINE_APP: &str = "PPSA98515";
+pub const EGLANTINE_ROOT: &str = "/data/eglantineps5/user/nand/user/save/0000000000000000";
+/// The lower 28 bits keep the existing profile number. Bit 28 separates Eglantine's backups
+/// (names, retention and listings) from ProsperoEden's, even for the same profile and game.
+const EGLANTINE_USER: i32 = 0x1000_0000;
+
+#[derive(Clone, Copy)]
+pub(crate) struct Emulator {
+    pub app: &'static str,
+    pub name: &'static str,
+    root: &'static str,
+    user_namespace: i32,
+}
+
+const EMULATORS: [Emulator; 2] = [
+    Emulator {
+        app: APP,
+        name: "ProsperoEden",
+        root: ROOT,
+        user_namespace: 0,
+    },
+    Emulator {
+        app: EGLANTINE_APP,
+        name: "EglantinePS5",
+        root: EGLANTINE_ROOT,
+        user_namespace: EGLANTINE_USER,
+    },
+];
+
+/// An exact per-game save path, its writer, and its backup user number.
+pub(crate) fn place_of(path: &str) -> Option<(Emulator, i32)> {
+    EMULATORS.iter().find_map(|emulator| {
+        let (profile, game) = path
+            .strip_prefix(emulator.root)?
+            .strip_prefix('/')?
+            .split_once('/')?;
+        (is_profile(profile) && is_game(game))
+            .then(|| (*emulator, user_of(profile) | emulator.user_namespace))
+    })
+}
+
 /// How many folders down a game's save is looked into for its newest file.
 pub const DEPTH: u32 = 4;
 
@@ -56,12 +98,9 @@ pub fn is_emulator_save(e: &SaveEntry) -> bool {
     e.kind == KIND || crate::ps2_saves::is_kind(&e.kind)
 }
 
-/// `path` is a save folder of the emulator, `ROOT/<profile>/<game>`, and nothing past it.
+/// `path` is exactly a per-game save folder under either emulator's root.
 pub fn is_save_path(path: &str) -> bool {
-    path.strip_prefix(ROOT)
-        .and_then(|rest| rest.strip_prefix('/'))
-        .and_then(|rest| rest.split_once('/'))
-        .is_some_and(|(profile, game)| is_profile(profile) && is_game(game))
+    place_of(path).is_some()
 }
 
 /// The kind of emulator's save `path` is the folder of; None for a PS5 save's.
@@ -73,11 +112,11 @@ pub fn kind_of_path(path: &str) -> Option<&'static str> {
     }
 }
 
-/// The app that writes the save: ProsperoEden for its saves, the game itself for a PS5 one. (A
+/// The app that writes the save: its Switch emulator, or the game itself for a PS5 save. (A
 /// PlayStation or PlayStation 2 emulator's saves are under its own title already.)
 pub fn app_of(e: &SaveEntry) -> &str {
     if e.kind == KIND {
-        APP
+        place_of(&e.path).map_or(APP, |(emulator, _)| emulator.app)
     } else {
         &e.title_id
     }
@@ -144,19 +183,30 @@ fn all_pages(page: &dyn Fn(u64) -> Result<DirListing, String>) -> Result<Vec<Dir
 
 /// [`list`], with `ls` giving the entries of a folder on the console.
 pub fn saves_in(ls: &dyn Fn(&str) -> Result<Vec<DirEntry>, String>) -> Vec<SaveEntry> {
+    EMULATORS
+        .iter()
+        .flat_map(|emulator| saves_at(ls, *emulator))
+        .collect()
+}
+
+fn saves_at(
+    ls: &dyn Fn(&str) -> Result<Vec<DirEntry>, String>,
+    emulator: Emulator,
+) -> Vec<SaveEntry> {
     let mut out = Vec::new();
-    let Ok(profiles) = ls(ROOT) else {
+    let root = emulator.root;
+    let Ok(profiles) = ls(root) else {
         return out;
     };
     for p in profiles
         .iter()
         .filter(|p| p.kind == "dir" && is_profile(&p.name))
     {
-        let Ok(games) = ls(&format!("{ROOT}/{}", p.name)) else {
+        let Ok(games) = ls(&format!("{root}/{}", p.name)) else {
             continue;
         };
         for g in games.iter().filter(|g| g.kind == "dir" && is_game(&g.name)) {
-            let path = format!("{ROOT}/{}/{}", p.name, g.name);
+            let path = format!("{root}/{}/{}", p.name, g.name);
             // A folder not read whole waits for the next look: its newest time could miss the
             // file the game wrote.
             let Ok((size, mtime, files)) = measure(ls, &path, g.mtime, DEPTH) else {
@@ -169,7 +219,7 @@ pub fn saves_in(ls: &dyn Fn(&str) -> Result<Vec<DirEntry>, String>) -> Vec<SaveE
             }
             out.push(SaveEntry {
                 title_id: g.name.clone(),
-                user_id: user_of(&p.name),
+                user_id: user_of(&p.name) | emulator.user_namespace,
                 path,
                 size: size as i64,
                 mtime,
@@ -225,6 +275,8 @@ pub struct SwitchQuery {
 pub struct SwitchSave {
     #[serde(flatten)]
     pub save: SaveEntry,
+    /// The emulator that owns this save folder.
+    pub emulator: &'static str,
     /// The emulator runs now (its saves cannot be restored meanwhile); None when the console did
     /// not say.
     pub running: Option<bool>,
@@ -240,24 +292,36 @@ pub async fn get_switch(Query(q): Query<SwitchQuery>) -> Response {
     }
     let r = tokio::task::spawn_blocking(move || {
         let saves = list(&host);
-        // Only asked when there is something to restore.
-        let running = if saves.is_empty() {
+        // Asked once for each emulator that has saves, independently of the other emulator.
+        let mut running = std::collections::BTreeMap::new();
+        let saves = saves
+            .into_iter()
+            .map(|save| {
+                let (emulator, _) = place_of(&save.path).expect("listed Switch save path");
+                let run = *running.entry(emulator.app).or_insert_with(|| {
+                    crate::save_backup::running_of(&host, &titles_of(emulator.app))
+                        .map(|t| t.is_some())
+                        .ok()
+                });
+                SwitchSave {
+                    save,
+                    emulator: emulator.name,
+                    running: run,
+                }
+            })
+            .collect::<Vec<_>>();
+        let any_running = if saves.is_empty() || saves.iter().any(|s| s.running.is_none()) {
             None
         } else {
-            crate::save_backup::running_of(&host, &titles_of(APP))
-                .map(|t| t.is_some())
-                .ok()
+            Some(saves.iter().any(|s| s.running == Some(true)))
         };
-        (saves, running)
+        (saves, any_running)
     })
     .await;
     match r {
         Ok((saves, running)) => Json(json!({
             "running": running,
             "saves": saves
-                .into_iter()
-                .map(|save| SwitchSave { save, running })
-                .collect::<Vec<_>>(),
         }))
         .into_response(),
         Err(e) => crate::save_backup::json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
@@ -379,6 +443,7 @@ mod tests {
         let save = saves_in(&ls_of(&fs)).remove(0);
         let v = serde_json::to_value(SwitchSave {
             save,
+            emulator: "ProsperoEden",
             running: Some(true),
         })
         .unwrap();
@@ -386,6 +451,81 @@ mod tests {
         assert_eq!(v["kind"], KIND);
         assert_eq!(v["user_id"], 0x1F1_E1D1);
         assert_eq!(v["running"], true);
+    }
+
+    #[test]
+    fn eglantine_and_eden_keep_the_same_game_and_profile_separate() {
+        let mut fs = console();
+        for (path, entries) in console() {
+            fs.insert(path.replacen(ROOT, EGLANTINE_ROOT, 1), entries);
+        }
+        let saves = saves_in(&ls_of(&fs));
+        assert_eq!(saves.len(), 4);
+        let eden = &saves[0];
+        let eglantine = &saves[2];
+        assert_eq!(eglantine.title_id, eden.title_id);
+        assert_eq!(eglantine.size, eden.size);
+        assert_eq!(eglantine.mtime, 500);
+        assert_eq!(eglantine.user_id, eden.user_id | EGLANTINE_USER);
+        assert_eq!(saves[3].user_id, EGLANTINE_USER); // console-wide save
+        assert_eq!(app_of(eglantine), EGLANTINE_APP);
+        assert_eq!(titles_of(app_of(eglantine)), [EGLANTINE_APP]);
+        assert_eq!(titles_of(app_of(eden)), [APP, MIRROR]);
+        let name = |save: &SaveEntry| {
+            ps5upload_core::save_archive::auto_backup_stem(&save.title_id, save.user_id as u32)
+        };
+        assert_ne!(name(eden), name(eglantine));
+        // The keep limit must never prune the other emulator's version of this profile.
+        let files: Vec<_> = [eden, eglantine]
+            .into_iter()
+            .flat_map(|save| {
+                ["2026-11-01_000000", "2026-11-02_000000"].map(|stamp| crate::save_layout::Found {
+                    dir: GAME.into(),
+                    name: format!("{}{stamp}.zip", name(save)),
+                    size: 1,
+                })
+            })
+            .collect();
+        for save in [eden, eglantine] {
+            let old = crate::save_layout::to_prune(&files, GAME, save.user_id as u32, None, 1);
+            assert_eq!(old.len(), 1);
+            assert_eq!(old[0].name, format!("{}2026-11-01_000000.zip", name(save)));
+        }
+
+        assert!(saves
+            .iter()
+            .all(|s| is_save_path(&s.path) && kind_of_path(&s.path) == Some(KIND)));
+        let json = serde_json::to_value(SwitchSave {
+            save: eglantine.clone(),
+            emulator: "EglantinePS5",
+            running: Some(false),
+        })
+        .unwrap();
+        assert_eq!(json["emulator"], "EglantinePS5");
+        assert_eq!(json["running"], false);
+    }
+
+    #[test]
+    fn eglantine_is_optional_and_its_paths_are_exact() {
+        let mut fs: BTreeMap<_, _> = console()
+            .into_iter()
+            .map(|(p, e)| (p.replacen(ROOT, EGLANTINE_ROOT, 1), e))
+            .collect();
+        assert_eq!(saves_in(&ls_of(&fs)).len(), 2);
+        let path = format!("{EGLANTINE_ROOT}/{P1}/{GAME}");
+        for bad in [
+            format!("{path}/slot_00"),
+            format!("{path}.backup-20261124"),
+            format!("{EGLANTINE_ROOT}/{P1}/../{GAME}"),
+            path.replacen("/data/eglantineps5/", "/data/eglantineps5-other/", 1),
+        ] {
+            assert!(place_of(&bad).is_none(), "{bad}");
+        }
+        fs.insert(path.clone(), vec![]);
+        assert_eq!(saves_in(&ls_of(&fs)).len(), 1);
+        fs.insert(path.clone(), vec![entry("slots", "dir", 0, 500)]);
+        fs.remove(&format!("{path}/slots"));
+        assert_eq!(saves_in(&ls_of(&fs)).len(), 1); // unreadable subfolder
     }
 
     #[test]

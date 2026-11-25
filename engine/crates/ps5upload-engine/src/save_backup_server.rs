@@ -1710,6 +1710,52 @@ mod tests {
     }
 
     #[test]
+    fn eglantine_close_and_running_do_not_select_edens_saves() {
+        let profile = "1F1E1D1C1B1A19181716151413121110";
+        let game = "0100F2C0115B6000";
+        let saves = [emulator_saves::ROOT, emulator_saves::EGLANTINE_ROOT].map(|root| SaveEntry {
+            kind: emulator_saves::KIND.into(),
+            ..save(&format!("{root}/{profile}/{game}"), game, 1, 1000)
+        });
+        let none = BTreeSet::new();
+        let pick = Pick {
+            users: &[1],
+            title: Some(emulator_saves::EGLANTINE_APP),
+            settle: false,
+            running: &none,
+            drive_done: None,
+        };
+        let due = due_saves("h", &saves, &Done::new(), 2000, &pick);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].path, saves[1].path);
+        let running = [emulator_saves::EGLANTINE_APP.to_string()].into();
+        assert!(due_saves(
+            "h",
+            &saves,
+            &Done::new(),
+            2000,
+            &Pick {
+                running: &running,
+                ..pick
+            }
+        )
+        .is_empty());
+        let due = due_saves(
+            "h",
+            &saves,
+            &Done::new(),
+            2000,
+            &Pick {
+                title: None,
+                running: &running,
+                ..pick
+            },
+        );
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].path, saves[0].path);
+    }
+
+    #[test]
     fn ps2_saves_go_with_their_emulator() {
         let ps2 = |path: &str, user| SaveEntry {
             kind: crate::ps2_saves::KIND.into(),
