@@ -110,7 +110,7 @@ export class RootErrorBoundary extends Component<Props, State> {
                 {componentStack ? `\n\n${componentStack}` : ""}
               </pre>
             </details>
-            <div className="mt-4 flex gap-2">
+            <div className="mt-4 flex flex-wrap gap-2" data-testid="errorboundary-actions">
               <button
                 type="button"
                 onClick={() =>

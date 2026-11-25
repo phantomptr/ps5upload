@@ -1,3 +1,4 @@
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { RootErrorBoundary } from "./ErrorBoundary";
@@ -32,5 +33,16 @@ describe("RootErrorBoundary", () => {
     const next = RootErrorBoundary.getDerivedStateFromError(err);
     expect(next.err).toBe(err);
     expect(next.err).toBeInstanceOf(Error);
+  });
+
+  it("the fallback's three buttons wrap on a narrow phone instead of squeezing", () => {
+    // At 360 px they shared one row: "Reload window" broke after every few letters and
+    // "Report this crash" ran off the card.
+    const boundary = new RootErrorBoundary({ children: null });
+    boundary.state = { err: new Error("boom"), componentStack: "" };
+    const html = renderToStaticMarkup(<>{boundary.render()}</>);
+    const actions = html.match(/<div class="([^"]*)" data-testid="errorboundary-actions">/);
+    expect(actions?.[1].split(" ")).toEqual(expect.arrayContaining(["flex", "flex-wrap"]));
+    expect(html).toContain("boom");
   });
 });
