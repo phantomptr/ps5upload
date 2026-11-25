@@ -449,6 +449,22 @@ static void t_key_file(void) {
     CHECK(n == 64 && strcmp(before, after) != 0);
 }
 
+/* A shares file that cannot be read to its end is an error, never "the shares read so far": with
+ * those taken for all of them, the next save wrote the file back without the rest. A folder in the
+ * file's place opens and then fails every read. */
+static void t_read_error(void) {
+    smb_share_t *v = calloc(SMB_SHARES_MAX, sizeof *v);
+    if (!v) abort();
+    unlink(g_file);
+    CHECK(mkdir(g_file, 0700) == 0);
+    CHECK(smb_shares_load(v, SMB_SHARES_MAX) == SMB_SHARES_E_IO);
+    call(webui_smb_shares, "{}");
+    CHECK(g_status == 500 && strstr(g_body, "io_error"));
+    CHECK(rmdir(g_file) == 0);
+    CHECK(smb_shares_load(v, SMB_SHARES_MAX) == 0);
+    free(v);
+}
+
 int main(void) {
     snprintf(g_dir, sizeof g_dir, "/tmp/ps5upload-webui-smb-%d", (int)getpid());
     snprintf(g_file, sizeof g_file, "%s/shares.jsonl", g_dir);
@@ -464,6 +480,7 @@ int main(void) {
     t_status();
     t_job_status();
     t_key_file();
+    t_read_error();
     unlink(g_file);
     unlink(g_key);
     rmdir(g_dir);

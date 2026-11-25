@@ -274,7 +274,21 @@ static int load_locked(smb_share_t *out, int max, const uint8_t key[32]) {
         close(fd);
         return SMB_SHARES_E_IO;
     }
-    while (len < FILE_MAX_BYTES && (got = read(fd, buf + len, FILE_MAX_BYTES - len)) > 0) len += (size_t)got;
+    /* To the end of the file, or not at all. A read that failed partway used to count as the end:
+     * the shares read so far were taken for all of them, and the next save or remove wrote the
+     * file back without the rest. */
+    while (len < FILE_MAX_BYTES) {
+        got = read(fd, buf + len, FILE_MAX_BYTES - len);
+        if (got < 0 && errno == EINTR) continue;
+        if (got < 0) {
+            close(fd);
+            crypto_wipe(buf, len);
+            free(buf);
+            return SMB_SHARES_E_IO;
+        }
+        if (got == 0) break;
+        len += (size_t)got;
+    }
     close(fd);
     buf[len] = '\0';
     p = buf;
