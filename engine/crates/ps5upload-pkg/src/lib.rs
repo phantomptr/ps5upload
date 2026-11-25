@@ -107,12 +107,19 @@ pub fn extract_from_ffpkg(
     inner_path: &str,
     dest_dir: &Path,
 ) -> Result<FfpkgExtractResult, Ufs2Error> {
-    let mut img = Ufs2Image::open(ffpkg_path)?;
     let components: Vec<&str> = inner_path
         .trim_matches('/')
         .split('/')
         .filter(|s| !s.is_empty())
         .collect();
+    // The last component names what is written under `dest_dir`, and the image has real "."
+    // and ".." entries: "sce_sys/.." would resolve and then write beside `dest_dir`, not in it.
+    if let Some(bad) = components.iter().find(|c| !is_safe_child_name(c)) {
+        return Err(Ufs2Error::NotFound {
+            component: format!("{bad} (not a name inside the image)"),
+        });
+    }
+    let mut img = Ufs2Image::open(ffpkg_path)?;
     let inode = if components.is_empty() {
         img.read_inode(ufs2::ROOT_INODE)?
     } else {
@@ -2360,6 +2367,30 @@ mod tests {
             assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0, "{names:?}");
             let _ = std::fs::remove_dir_all(&dest);
         }
+    }
+
+    /// "." and ".." are real entries in the image, so they would resolve: "sce_sys/.." is the
+    /// root, written as `dest/..`, beside the folder that was chosen. Refused before the image
+    /// is even opened.
+    #[test]
+    fn an_extract_path_with_a_dot_component_is_refused() {
+        let nowhere = Path::new("/nonexistent/image.ffpkg");
+        let dest = tempdir().join("dot-component");
+        for inner in [
+            "..",
+            "sce_sys/..",
+            "sce_sys/../..",
+            ".",
+            "a/./b",
+            "a\\..\\b",
+        ] {
+            let e = extract_from_ffpkg(nowhere, inner, &dest).unwrap_err();
+            assert!(matches!(e, Ufs2Error::NotFound { .. }), "{inner}: {e}");
+        }
+        assert!(!dest.exists());
+        // A plain path gets as far as opening the image.
+        let e = extract_from_ffpkg(nowhere, "sce_sys/icon0.png", &dest).unwrap_err();
+        assert!(matches!(e, Ufs2Error::Io(_)), "{e}");
     }
 
     #[test]
