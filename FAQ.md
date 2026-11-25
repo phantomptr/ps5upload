@@ -201,6 +201,13 @@ own server instead of Tailscale's, see
   friend who isn't at my place play together").
 - **The web UI:** see the next question.
 
+**Q: How do I select several files on a phone?**
+Long-press a row in **Files** (or ⋮ → **Select**). The top bar then shows how many are selected
+and **Select all**, and a bar at the bottom has **Copy**, **Move**, **Rename**, **Delete** and
+**More**. The phone's Back button leaves selection. On a phone the top of Files is one compact bar
+that stays in place while you scroll: the folder's name, Search, the drive switcher and ⋮, with
+the path under it. Tablets and computers keep their checkboxes and toolbar.
+
 **Q: Can I add my PS5 from a phone that was never at home?**
 Yes, when the PS5 is on Tailscale (set up once, at home, from another device: see above).
 
@@ -304,6 +311,13 @@ is you on the TV. If there's only one user on the console, add one first.
 - **Some games count the stream's user as a player too**, even though it presses nothing, so a
   two-player game may have no place left for a friend. Friends' controllers are checked the same way
   as always (they pick **Quick Play** on the TV), but this setup hasn't been tried with every game.
+
+**Q: Can a friend join Play Together from a TV?**
+Yes (12.6.30). The invite's join page works in a TV's browser with nothing but the remote: the
+arrows move between buttons, OK presses one, and Back closes what is open, then shows the
+buttons, then leaves full screen. On Android TV or Google TV, the Android app's first screen has
+**Join Play Together**, and the game opens in full screen. During the game the remote's arrows
+and OK play the game.
 
 **Q: Can a friend who isn't at my place play together, or use a phone controller?**
 Play Together, yes: with an **internet invite** (11.6.0). Your friend needs nothing installed;
@@ -2196,6 +2210,10 @@ carries a random code, there is no folder listing, and only the packages you sha
 reached. A link lasts until you stop it (one at a time, or **Stop all**) or the app quits;
 nothing stays published after that. **Copy all links** copies every one at once.
 
+**Q: My updated PS4 game showed version 01.00 and was offered its update again.**
+Fixed in 12.6.30. The app now reads a PS4 game's version where its update keeps it, so the game's
+page, update installs and cheat matching see the real version (01.32, say, instead of 01.00).
+
 **Q: What does Organize collection do, and can I undo it?**
 It organizes packages, images (`.exfat`, `.ffpkg`, `.ffpfs`, `.ffpfsc`) and extracted game folders
 under `Platform / Game ID - Title`, relative to each configured collection root. Packages and
@@ -2298,6 +2316,14 @@ game does not start. PS4 fake packages are fine. What is installing or waiting s
 and in the progress bar, and keeps going when you open another screen. Installs from a link or
 an archive (**From a Link or an Archive**) and from the PS5 or a USB drive (**Already on the
 PS5**) are in the small "Or install a package" row under the drop zone.
+
+**Q: Can I change the name a game installs under?**
+Yes, for fake packages. Pick the package in **Upload & Install** and its card shows **Name on the
+PS5**. Type the new name and press **Change name**, then install. The name is changed inside the
+package file itself (a few kilobytes are rewritten, nothing is copied), and a box applies it to
+every language the package has a name in. A game that is already installed keeps its name until
+you install it again. Official packages, split packages, and packages on a server or already on
+the PS5 keep their name, and the card says why.
 
 **Q: Stream & install or Upload & install: which one?**
 Use **Stream & install** unless you have a reason not to. Use **Upload & install** when the PS5
@@ -2489,6 +2515,13 @@ Yes. While a game is being made, pick or drop more under **① Game** (also **On
 in order. With **Start the queue when you add something** on (Settings › Uploads, the default)
 nothing else is needed; off, they wait until you press **Convert N queued**. A game set to
 install still goes on to **Upload & Install**'s queue once it is made.
+
+**Q: My game is in asset packs. Can I make an ordinary package from it?**
+Yes. In **Workshop → Convert**, choose **A fake package (FPKG, .pkg)** for a game kept in zstd or
+LZ4 asset packs, and **Unpack the asset packs** is already ticked: the package holds every file as
+a plain file again, so it is about as large as the game was before packing. **Leave out the AMPR
+emulator**, under it, is off unless you tick it: it isn't known yet whether every game runs
+without the emulator.
 
 **Q: Can I pause a conversion, or make it use less of my computer?**
 Yes, both. While a game is being made (or an archive unpacked) in Workshop, ④ has **Pause** beside
