@@ -812,7 +812,9 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
             return 0;
         }
         char val[1024] = {0};
-        size_t vl = sizeof(val);
+        /* One byte short of the buffer: a value that fills all of it has no NUL, and the "%s"
+         * below then read on past the end of `val`. */
+        size_t vl = sizeof(val) - 1;
         if (sysctlbyname(argv[1], val, &vl, NULL, 0) != 0) {
             len = shell_appendf(&out, &cap, len,
                                  "sysctl: %s: %s\n", argv[1], strerror(errno));
