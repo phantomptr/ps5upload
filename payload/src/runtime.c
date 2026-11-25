@@ -3368,9 +3368,14 @@ static int fs_mount_request(runtime_state_t *state, const char *request_body,
              * (or a log trawl) can tell whether LVD refused a policy
              * check or MD refused a sector-size, etc. */
             char errbuf[256];
+            /* strerror answers from one buffer of its own: two calls in one snprintf printed the
+             * same text twice (md's, or lvd's), so the reason LVD refused was lost. Copied out
+             * first. */
+            char lvd_why[96];
+            snprintf(lvd_why, sizeof(lvd_why), "%s", strerror(lvd_errno));
             int el = snprintf(errbuf, sizeof(errbuf),
-                              "fs_mount_attach_failed: lvd=%s md=%s",
-                              strerror(lvd_errno), strerror(md_errno));
+                              "fs_mount_attach_failed: lvd=%s (%d) md=%s (%d)",
+                              lvd_why, lvd_errno, strerror(md_errno), md_errno);
             if (el < 0) el = 0;
             if ((size_t)el >= sizeof(errbuf)) el = (int)sizeof(errbuf) - 1;
             return mgmt_reply(MGMT_FRAME_ERROR, errbuf, (uint64_t)el);
