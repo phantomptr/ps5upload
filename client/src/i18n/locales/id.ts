@@ -5291,7 +5291,7 @@ install_path_fallback_label: "Pasang lewat path file saat PS5 tidak bisa menjang
 "installed_fix_permissions_done": "Izin diperbaiki: setiap file di folder game ini sekarang 0777. Tekan Mainkan.",
 "installed_fix_permissions_short": "Perbaiki izin",
 "installed_launch_homebrew_refused": "PS5 menolak menjalankan game ini (0x80940033). Konsol sedang tidak menjalankan homebrew atau game paket palsu: muat ulang kstuff (atau reboot dan jalankan jailbreak lagi), lalu tekan Mainkan lagi.",
-"fakegame.fw.launch_kstuff": "Jika game ini dipasang dari paket palsu: di FW {fw} game hanya mulai dengan build kstuff yang mendukung paket palsu di sana (November 2026 atau lebih baru). Muat kstuff itu, lalu tekan Main lagi.",
+"fakegame.fw.launch_kstuff": "Jika game ini dipasang dari paket palsu: di FW {fw} game hanya mulai dengan build kstuff yang mendukung paket palsu di sana (November 2026 atau lebih baru). Muat kstuff itu, lalu tekan Mainkan lagi.",
 "installed_launch_no_kstuff": "PS5 menolak menjalankan game ini (0x80940033) karena kstuff tidak berjalan. Tanpanya, konsol tidak menjalankan homebrew atau game paket palsu apa pun. Muat kstuff (autoloader-mu, atau Koneksi → Siapkan) lalu tekan Mainkan lagi.",
 job_why_lanes: "Koneksi: rata-rata {avg}, paling banyak {max}; chunk {chunk}",
 job_why_loading: "Memuat…",

@@ -1845,7 +1845,7 @@ upload_pkg_copy_hint: "Skopiowano, nie zainstalowano. Kraken Mount znajduje paki
 upload_pkg_copy_kraken: "Skopiowano, nie zainstalowano. Na tej PS5 działa Kraken Mount, więc ustawiono folder, który skanuje.",
 upload_pkg_name_title: "Nazwa na PS5",
 upload_pkg_name_save: "Zmień nazwę",
-upload_pkg_name_all: "Użyj tej nazwy we wszystkich językach ({count} ma inną nazwę)",
+upload_pkg_name_all: "Użyj tej nazwy we wszystkich językach (inna nazwa w {count})",
 upload_pkg_name_hint: "Zmienia nazwę w samym pliku pakietu, zanim go zainstalujesz. Już zainstalowana gra zachowuje nazwę, dopóki nie zainstalujesz jej ponownie.",
 upload_pkg_name_saved: "Nazwa zmieniona.",
 upload_pkg_name_retail: "To oficjalny pakiet, więc jego nazwy nie można zmienić: nazwę obejmuje podpis wydawcy.",
@@ -9549,7 +9549,7 @@ rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim 
 "saves_folders_none": "Brak jeszcze kopii tego folderu.",
 "saves_folders_before_restore": "zachowana przed przywróceniem",
 "saves_folders_legacy": "sprzed rozdzielenia kopii według PS5",
-backup_restore_partial: "Przywrócono {count} plików; {missed} nie udało się przywrócić",
+backup_restore_partial: "Przywrócone pliki: {count}; nie udało się przywrócić: {missed}",
 };
 
 export default pl;

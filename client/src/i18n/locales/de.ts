@@ -8101,7 +8101,7 @@ helper_copies_failed_body: "Weiterhin der alte Helfer: {list}. Die PS5 startet i
 "join_show_controls": "Steuerelemente einblenden",
 "join_hide_controls": "Ausblenden",
 "join_hold_hint": "Bild gedrückt halten, um die Tasten einzublenden",
-"join_tv_back_hint": "Drücke auf der Fernbedienung Zurück, um die Tasten einzublenden.",
+"join_tv_back_hint": "Drücke auf der Fernbedienung Zurück, um die Schaltflächen einzublenden.",
 "join_game_label": "Spiel von {host}",
 "tv_join_body": "Einen Link oder Code von einem Freund bekommen? Spiele auf seiner PS5 an diesem Fernseher.",
 "tv_join_button": "Bei Zusammen spielen mitmachen",
