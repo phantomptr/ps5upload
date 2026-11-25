@@ -24,6 +24,7 @@
  * part of ps5upload, GPL-3.0-or-later.
  */
 
+#include "appinfo_version.h"
 #include "cheats.h"
 #include "cheats_list.h"
 #include "cheats_json.h"
@@ -1408,16 +1409,19 @@ static int resolve_mod_locs(pid_t pid, intptr_t base, const cheat_mod_t *mod, ch
 /* ── XML game patches (#527) ─────────────────────────────────────── */
 
 /* The game's version as the console reports it: appinfo.db's CONTENT_VERSION ("01.004.000") and
- * APP_VER ("01.04"), else the installed param.json's contentVersion. */
+ * a PS4 game's version ("01.32": the higher of VERSION and APP_VER, see appinfo_version.h), else
+ * the installed param.json's contentVersion. */
 typedef struct {
     char content[32];
-    char app[32];
+    char app[32];     /* the PS4 version picked from VERSION and APP_VER */
+    char version[32]; /* VERSION as read, for that pick */
 } game_ver_t;
 
 static int game_ver_row(void *ctx, int ncol, const char *const *vals) {
     game_ver_t *v = (game_ver_t *)ctx;
     if (ncol < 2 || !vals[0] || !vals[1]) return 0;
     if (strcmp(vals[0], "CONTENT_VERSION") == 0) snprintf(v->content, sizeof v->content, "%s", vals[1]);
+    else if (strcmp(vals[0], "VERSION") == 0) snprintf(v->version, sizeof v->version, "%s", vals[1]);
     else if (strcmp(vals[0], "APP_VER") == 0) snprintf(v->app, sizeof v->app, "%s", vals[1]);
     return 0;
 }
@@ -1430,9 +1434,15 @@ static void game_versions(const char *title, game_ver_t *v) {
         if (!((title[i] >= 'A' && title[i] <= 'Z') || (title[i] >= '0' && title[i] <= '9'))) return;
     char sql[200];
     snprintf(sql, sizeof sql,
-             "SELECT key, val FROM tbl_appinfo WHERE titleId='%s' AND key IN ('CONTENT_VERSION','APP_VER')",
+             "SELECT key, val FROM tbl_appinfo WHERE titleId='%s' AND key IN (" APPINFO_VERSION_SQL_KEYS ")",
              title);
     (void)content_db_select_text(CONTENT_DB_APPINFO, sql, 8, v, game_ver_row);
+    {
+        /* A PS4 update raises VERSION and leaves APP_VER at the base game's "01.00" (#934). */
+        char app[sizeof v->app];
+        snprintf(app, sizeof app, "%s", appinfo_version_pick(NULL, v->version, v->app));
+        memcpy(v->app, app, sizeof app);
+    }
     if (v->content[0] || v->app[0]) return;
     char path[128];
     snprintf(path, sizeof path, "/system_ex/app/%s/sce_sys/param.json", title);

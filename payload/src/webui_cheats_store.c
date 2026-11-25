@@ -7,6 +7,7 @@
 #include <strings.h>
 #include <sys/stat.h>
 
+#include "appinfo_version.h"
 #include "webui_codec.h"
 
 int webui_cheat_format_ok(const char *fmt) {
@@ -121,7 +122,8 @@ static int version_ok(char *v) {
 int webui_cheat_appinfo_version(const char *json, size_t n, char *out, size_t cap) {
     const char *arr;
     size_t alen, i = 1;
-    char key[32], val[64], app_ver[64] = "";
+    char key[32], val[64], version[64] = "", app_ver[64] = "";
+    const char *pick;
     if (cap) out[0] = '\0';
     if (!json || cap < 2 || webui_json_array(json, n, "rows", &arr, &alen) != 1) return 0;
     while (i < alen) {
@@ -139,12 +141,15 @@ int webui_cheat_appinfo_version(const char *json, size_t n, char *out, size_t ca
                 memcpy(out, val, strlen(val) + 1);
                 return 1;
             }
+            if (strcmp(key, "VERSION") == 0) memcpy(version, val, strlen(val) + 1);
             if (strcmp(key, "APP_VER") == 0) memcpy(app_ver, val, strlen(val) + 1);
         }
         i += len;
     }
-    if (app_ver[0]) {
-        memcpy(out, app_ver, strlen(app_ver) + 1);
+    /* A PS4 update raises VERSION and leaves APP_VER at the base game's "01.00" (#934). */
+    pick = appinfo_version_pick(NULL, version, app_ver);
+    if (pick[0]) {
+        memcpy(out, pick, strlen(pick) + 1);
         return 1;
     }
     return 0;

@@ -32,8 +32,9 @@ const char *webui_cheat_store_query(const char *query, char fmt[WEBUI_CHEAT_FMT_
 int webui_cheat_target(const char *root, const char *fmt, const char *name, char *out, size_t cap);
 
 /* The game's version from an APP_INFO_QUERY reply ({"ok":true,"rows":[{"key":..,"val":..}..]}):
- * CONTENT_VERSION (PS5, "01.000.016") first, else APP_VER (PS4, "01.05"), the same forms the cheat
- * files name their target version in. Only digits and dots, 1..cap-1 bytes. 1 found, else 0 and "". */
+ * CONTENT_VERSION (PS5, "01.000.016") first, else the higher of VERSION and APP_VER (PS4, "01.32":
+ * an update raises VERSION, appinfo_version.h), the same forms the cheat files name their target
+ * version in. Only digits and dots, 1..cap-1 bytes. 1 found, else 0 and "". */
 int webui_cheat_appinfo_version(const char *json, size_t n, char *out, size_t cap);
 
 #endif

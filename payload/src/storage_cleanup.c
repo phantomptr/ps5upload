@@ -31,6 +31,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "appinfo_version.h"
 #include "ava1_op.h"
 #include "cheats_list.h" /* cheats_utf8_char_len */
 #include "cleanup_rules.h"
@@ -367,14 +368,16 @@ static int installed(const char *tid) {
     return G.appdb_ok ? 0 : 1;
 }
 
-/* Installed versions from appinfo.db (CONTENT_VERSION, else APP_VER). */
+/* Installed versions from appinfo.db (CONTENT_VERSION, else the higher of VERSION and APP_VER:
+ * appinfo_version.h). */
 typedef struct {
-    char content[16], app[16];
+    char content[16], version[16], app[16];
 } sc_ver_t;
 static int ver_row(void *ctx, int ncol, const char *const *vals) {
     sc_ver_t *v = ctx;
     if (ncol < 2 || !vals[0] || !vals[1]) return 0;
     if (strcmp(vals[0], "CONTENT_VERSION") == 0) snprintf(v->content, sizeof v->content, "%s", vals[1]);
+    else if (strcmp(vals[0], "VERSION") == 0) snprintf(v->version, sizeof v->version, "%s", vals[1]);
     else if (strcmp(vals[0], "APP_VER") == 0) snprintf(v->app, sizeof v->app, "%s", vals[1]);
     return 0;
 }
@@ -385,9 +388,9 @@ static void installed_version(const char *tid, char *out, size_t cap) {
     out[0] = '\0';
     if (!scr_is_title_id(tid)) return;
     snprintf(sql, sizeof sql,
-             "SELECT key, val FROM tbl_appinfo WHERE titleId='%s' AND key IN ('CONTENT_VERSION','APP_VER')", tid);
+             "SELECT key, val FROM tbl_appinfo WHERE titleId='%s' AND key IN (" APPINFO_VERSION_SQL_KEYS ")", tid);
     (void)content_db_select_text(CONTENT_DB_APPINFO, sql, 8, &v, ver_row);
-    snprintf(out, cap, "%s", v.content[0] ? v.content : v.app);
+    snprintf(out, cap, "%s", appinfo_version_pick(v.content, v.version, v.app));
 }
 
 /* ---- items ---- */
