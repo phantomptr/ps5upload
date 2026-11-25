@@ -222,17 +222,18 @@ export async function sendHelperTo(
         if (conn().host === h) conn().setStatus({ payloadProbing: on });
       },
       onUp: (h, status) => {
-        if (conn().host !== h) return;
-        conn().setStatus({
+        // The console's own record, mirrored to the screens while it is the selected one: the
+        // flat fields alone were put back to the record's old "down" by a switch to another
+        // tab and back, hiding the new helper until the next status poll.
+        conn().setHostStatus(h, {
           payloadStatus: "up",
-          payloadStatusHost: h,
           payloadVersion: status.payloadVersion,
           ps5Kernel: status.ps5Kernel,
           ucredElevated: status.ucredElevated,
           priorInstance: status.priorInstance,
           power: "awake",
-          payloadProbing: false,
         });
+        if (conn().host === h) conn().setStatus({ payloadProbing: false });
       },
       onOk: (h, msg) => {
         if (conn().host === h) conn().setStep2("ok", msg);
