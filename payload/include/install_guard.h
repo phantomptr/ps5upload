@@ -56,6 +56,25 @@ static inline int install_guard_valid_id(const char *id) {
     return 1;
 }
 
+/* Why a folder with this title id (read from its own param.json / param.sfo, so any text at all)
+ * may not be registered, or NULL when it may.
+ *
+ *   - "register_title_id_unsafe": not a title id (4 letters + 5 digits). Every check below this
+ *     one, the #884 guard included (install_guard_check answers "not installed" for such an id),
+ *     and every path and query built from the id expect that shape.
+ *   - "register_system_title": one of the console's own apps (NPXS...: the browser is NPXS20001).
+ *     /system_ex/app/<id> is then a real system folder, not a mount of ours: a register bound the
+ *     user's folder over it and asked Sony's installer to install that id, and a later unregister,
+ *     finding our tracker, asked it to UNINSTALL the system app. The helper refuses to uninstall or
+ *     hide a system title everywhere else (webui_app_refusal, content_db); here too. */
+static inline const char *install_guard_register_id_refusal(const char *id) {
+    if (!install_guard_valid_id(id)) return "register_title_id_unsafe";
+    if ((id[0] == 'N' || id[0] == 'n') && (id[1] == 'P' || id[1] == 'p') &&
+        (id[2] == 'X' || id[2] == 'x') && (id[3] == 'S' || id[3] == 's'))
+        return "register_system_title";
+    return NULL;
+}
+
 /* An extended-storage mount root: exactly /mnt/ext<digits>. */
 static inline int install_guard_is_ext_volume(const char *mnt) {
     if (!mnt || strncmp(mnt, "/mnt/ext", 8) != 0) return 0;

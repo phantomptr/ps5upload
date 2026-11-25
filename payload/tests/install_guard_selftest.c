@@ -98,6 +98,21 @@ int main(void) {
              getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", (int)getpid());
     install_guard_hit_t hit;
 
+    /* ── the id a folder gives itself ─────────────────────────────────────── */
+    assert(install_guard_register_id_refusal("PPSA03595") == NULL);
+    assert(install_guard_register_id_refusal("CUSA00900") == NULL);
+    assert(install_guard_register_id_refusal("PSUP00001") == NULL); /* the Minion tile */
+    assert(install_guard_register_id_refusal("LAPY20001") == NULL); /* homebrew */
+    assert(strcmp(install_guard_register_id_refusal("NPXS20001"), "register_system_title") == 0);
+    assert(strcmp(install_guard_register_id_refusal("npxs40087"), "register_system_title") == 0);
+    {
+        static const char *const bad[] = { NULL, "", "PPSA0359", "PPSA035955", "PPSA0359A", "PP5A03595",
+                                           "PPSA 3595", "' OR 1=1", "PPSA03595_00", "..", "a/b" };
+        for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++)
+            assert(strcmp(install_guard_register_id_refusal(bad[i]), "register_title_id_unsafe") == 0);
+    }
+    printf("✓ a folder that names itself a system app, or gives no title id, is not registered\n");
+
     /* ── the reported layout: the game on M.2 ─────────────────────────────── */
     fresh_root();
     touch("/mnt/ext1/user/app/PPSA03595/app.pkg");
@@ -181,6 +196,9 @@ int main(void) {
         const char *body = fn_body("int register_title_from_path(const char *src_path,");
         long guard = pos_in(body, "register_title_installed_by_console(");
         assert(guard >= 0 && "register_title_from_path does not check for the console's install");
+        /* and the id itself is judged first: the install check answers "no" for one it cannot read */
+        long id_rule = pos_in(body, "install_guard_register_id_refusal(");
+        assert(id_rule >= 0 && id_rule < guard && "register_title_from_path does not judge the title id first");
         const char *writes[] = {"patch_drm_type_to_standard(", "mkdir_p(user_app)",
                                 "copy_dir_recursive(", "copy_file_bytes(", "mkdir_p(user_appmeta)",
                                 "copy_sce_sys_to_appmeta(", "mount_title_nullfs(", "write_link_file(",
@@ -198,7 +216,9 @@ int main(void) {
         const char *body = fn_body("int register_remount_nullfs(const char *title_id, const char *src_path,");
         long guard = pos_in(body, "register_title_installed_by_console(");
         long bind = pos_in(body, "mount_title_nullfs(");
+        long id_rule = pos_in(body, "install_guard_register_id_refusal(");
         assert(guard >= 0 && bind > guard);
+        assert(id_rule >= 0 && id_rule < bind);
     }
     {
         const char *body = fn_body("int unregister_title_ex(const char *title_id, int registration_only,");
