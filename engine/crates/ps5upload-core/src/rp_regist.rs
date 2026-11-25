@@ -118,7 +118,9 @@ pub fn credential_from_regist_key(regist_key_hex: &str) -> Result<u64> {
 
 fn parse_hex(s: &str) -> Option<Vec<u8>> {
     let s = s.trim();
-    if !s.len().is_multiple_of(2) {
+    // Hex digits only, before slicing in twos: a non-ASCII character put a slice inside it,
+    // which panicked (`u8::from_str_radix` also takes a leading `+`).
+    if !s.len().is_multiple_of(2) || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     (0..s.len())
@@ -697,6 +699,9 @@ mod tests {
         assert!(credential_from_regist_key("zz").is_err());
         // Valid hex, but the bytes are not hex *text*.
         assert!(credential_from_regist_key("ffffffff").is_err());
+        // An even number of bytes that are not all hex digits: refused, never a panic.
+        assert!(credential_from_regist_key("a€bc").is_err());
+        assert!(credential_from_regist_key("+31+32").is_err());
     }
 
     #[test]
