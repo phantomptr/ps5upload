@@ -162,8 +162,12 @@ void notif_init(void) {
         unsigned long long seq = 0, ts = 0;
         int level = 0;
         size_t mlen = 0;
-        int got = fscanf(f, "%llu %llu %d %zu\n", &seq, &ts, &level, &mlen);
-        if (got != 4) break;
+        /* No "\n" at the end of the format: in scanf that is "any run of whitespace", and it ate
+         * the spaces, tabs and newlines a message STARTS with. The fread below then ran on into the
+         * next entry's header, and that entry and every one after it came back wrong or not at all.
+         * Exactly one byte ends the header line. */
+        int got = fscanf(f, "%llu %llu %d %zu", &seq, &ts, &level, &mlen);
+        if (got != 4 || fgetc(f) != '\n') break;
         if (mlen >= NOTIF_MSG_MAX) mlen = NOTIF_MSG_MAX - 1;
 
         notif_entry_t *entry = &s_ring[s_write_idx];

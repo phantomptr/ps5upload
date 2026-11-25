@@ -237,6 +237,25 @@ static void test_small_buffers(void) {
     }
 }
 
+/* A message that starts with a space, a tab or a line break comes back as it was saved, and so do
+ * the ones after it: the saved length says where it ends, and nothing before it is skipped. */
+static void test_leading_whitespace(void) {
+    static const char *const msgs[] = { " one space first", "\nline break first", "\t\ttabs first",
+                                        "   ", "\n", " \n 9 9 0 3\nabc", "after them" };
+    const size_t n = sizeof(msgs) / sizeof(msgs[0]);
+    wipe();
+    for (size_t i = 0; i < n; i++) CHECK(notif_send(msgs[i], NOTIF_LEVEL_INFO) == 0);
+    char before[8192];
+    snprintf(before, sizeof(before), "%s", list_since(0));
+    restart();
+    CHECK(s_count == n);
+    for (size_t i = 0; i < n && i < s_count; i++) {
+        CHECK(strcmp(s_ring[i].message, msgs[i]) == 0);
+        CHECK(s_ring[i].seq == i + 1);
+    }
+    CHECK(strcmp(list_since(0), before) == 0);
+}
+
 /* Cut at any byte: whatever loads is a prefix of what was saved, with no crash and no garbage. */
 static void test_truncated_anywhere(void) {
     wipe();
@@ -339,6 +358,7 @@ int main(void) {
     test_long_message();
     test_bad_utf8_lists_clean();
     test_small_buffers();
+    test_leading_whitespace();
     test_truncated_anywhere();
     test_damaged();
     test_failed_write_keeps_the_store();
