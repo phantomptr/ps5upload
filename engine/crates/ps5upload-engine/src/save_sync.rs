@@ -312,7 +312,15 @@ pub fn items_of(saves: &[SaveEntry], user: u32) -> BTreeMap<String, SaveEntry> {
     for e in sorted {
         let key = if crate::emulator_saves::is_emulator_save(e) {
             if e.kind == crate::emulator_saves::KIND {
-                format!("{}:{}", e.kind, e.title_id)
+                // Two Switch emulators keep saves of the same game apart: ProsperoEden's keep the
+                // key they always had (so existing sync records still match), the others carry
+                // their app, so one emulator's save is never copied over another's.
+                match crate::emulator_saves::place_of(&e.path) {
+                    Some((emu, _)) if emu.app != crate::emulator_saves::APP => {
+                        format!("{}:{}:{}", e.kind, emu.app, e.title_id)
+                    }
+                    _ => format!("{}:{}", e.kind, e.title_id),
+                }
             } else {
                 format!("{}:{}:{}", e.kind, e.title_id, e.user_id)
             }
@@ -1621,6 +1629,33 @@ mod tests {
             ["PPSA01234", "switch:0100000000010000"]
         );
         assert_eq!(items["PPSA01234"].kind, "ps5");
+    }
+
+    #[test]
+    fn two_switch_emulators_with_the_same_game_sync_apart() {
+        let mut eden = save("0100000000010000", 0x0123456, "switch", 5);
+        eden.path = format!(
+            "{}/0123456789abcdef0123456789abcdef/0100000000010000",
+            crate::emulator_saves::ROOT
+        );
+        let mut egl = save("0100000000010000", 0x1012_3456, "switch", 5);
+        egl.path = format!(
+            "{}/0123456789abcdef0123456789abcdef/0100000000010000",
+            crate::emulator_saves::EGLANTINE_ROOT
+        );
+        let both = items_of(&[eden.clone(), egl.clone()], 1);
+        assert_eq!(
+            both.keys().cloned().collect::<Vec<_>>(),
+            [
+                "switch:0100000000010000",
+                "switch:PPSA98515:0100000000010000"
+            ]
+        );
+        assert_eq!(both["switch:0100000000010000"].path, eden.path);
+        // One emulator on each console: never paired with each other.
+        let a = items_of(&[eden], 1);
+        let b = items_of(&[egl], 1);
+        assert!(a.keys().all(|k| !b.contains_key(k)));
     }
 
     #[test]
