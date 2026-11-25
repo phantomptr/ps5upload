@@ -71,7 +71,7 @@ pub(super) struct CatalogueEntry {
 ///
 /// Sources for the entries:
 ///
-///   - kstuff-echostretch: covers FW 1.00 → 12.x via runtime NID
+///   - kstuff-echostretch: covers FW 1.00 → 13.60 via runtime NID
 ///     resolution; the same binary works on every supported firmware
 ///     revision. Best default when firmware coverage matters most.
 ///   - kstuff-lite-drakmor: fork of EchoStretch/kstuff-lite tuned for
@@ -113,7 +113,7 @@ pub(super) const CATALOGUE: &[CatalogueEntry] = &[
         id: "kstuff-echostretch",
         display_name: "kstuff-lite (EchoStretch)",
         role: "Kernel exploit + R/W primitive",
-        description: "Kernel patcher for the full PS5 firmware range. Resolves kernel symbols at runtime via the SDK's NID table, so the same binary covers FW 1.00 → 12.x. Required by ShadowMountPlus and most other privileged payloads. Load this first.",
+        description: "Kernel patcher for the full PS5 firmware range. Resolves kernel symbols at runtime via the SDK's NID table, so the same binary covers FW 1.00 → 13.60. Required by ShadowMountPlus and most other privileged payloads. Load this first.",
         repo_host: "github.com",
         repo_owner: "EchoStretch",
         repo_name: "kstuff-lite",
