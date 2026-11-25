@@ -74,7 +74,9 @@ pub fn parse_app_ver(v: &str) -> Option<u32> {
     }
     let major: u32 = major.parse().ok()?;
     let minor: u32 = minor.parse().ok()?;
-    Some(major * 100 + minor)
+    // A version too large to compare (a package's or the console's own text) is no version,
+    // not a sum that wraps round to a small one.
+    major.checked_mul(100)?.checked_add(minor)
 }
 
 /// Compare the version before the install, the version after, and the version
@@ -130,6 +132,10 @@ mod tests {
         assert_eq!(parse_app_ver("01.09"), Some(109));
         assert_eq!(parse_app_ver("10.50"), Some(1050));
         assert_eq!(parse_app_ver(" 01.09 "), Some(109));
+        // Too large to compare: no version, never one that wrapped round.
+        assert_eq!(parse_app_ver("42949673.00"), None);
+        assert_eq!(parse_app_ver("42949672.99"), None);
+        assert_eq!(parse_app_ver("42949672.95"), Some(u32::MAX));
         for bad in ["", "1", "01.", ".09", "a.bc", "01.0x", "01-09"] {
             assert_eq!(parse_app_ver(bad), None, "should reject {bad:?}");
         }
