@@ -7,6 +7,35 @@ What's new in ps5upload, written for humans.
 ## Unreleased
 
 **Fake packages (FPKG)**
+- **The "won't start" warning for fake PS5 games is gone.** Fake PS5 games now play up to firmware 13.60, the newest a public jailbreak reaches, so the warning could no longer appear anywhere. The fake-package note keeps its payload list, and a failed launch on 11.61 to 13.60 still says a fake package needs the November 2026 kstuff. Convert marks the package as the usual choice once a game is checked.
+
+**Files**
+- **Long names stay readable on a phone held sideways (#931).** In landscape, rows showed every action button and cut the name to nothing. A sideways phone now gets the same rows as upright: the name wraps, its type and size sit below, and the actions are behind ⋮. Computers keep one line per row.
+
+**Saves**
+- **Using a received save keeps the file.** "Use this save" on a save someone sent you deleted the received file, even when the save was refused. It now reads the file where it is.
+- **A failed backup zip no longer deletes the file you chose to replace.** The new zip is written in full first, then put over the old one.
+- **Backup clean-up only touches its own temporary folders.**
+- **A console removed while the backup list was being sent is no longer backed up.**
+- **Restoring a backup on the PS5 only reads files inside that backup.**
+
+**Cheats and the PS5 helper**
+- **Cheats never write into a system module mistaken for the game.** In some PS4 games another module sits where the game's own was expected; game patches no longer write there.
+- **A game patch that can't be recorded is not left in the game**, so turning it off always takes it out. An over-long cheat value is refused instead of written cut short.
+- **SDK Changer** no longer patches past the end of a short file, and stops 32 folders deep instead of running out of memory on a very deep game folder.
+
+**Fixes found in an audit**
+- Remote Play keys with a stray character are refused instead of crashing the engine.
+- WebDAV servers that answer with the wrong part of a file are caught, so a copy or install never gets wrong bytes.
+- A game whose content ID looks like a path can no longer place the built package outside the folder you chose.
+- A Play Together friend's player opens no new video decoder after it stopped (phones have only a few).
+- A bug report for a console that hasn't been checked yet no longer shows another console's details.
+- After sending the helper, every console's own status updates right away, not after the next check.
+- Release tooling never marks an older version as the latest.
+
+## 12.6.28
+
+**Fake packages (FPKG)**
 - **Fake PS5 games play up to firmware 13.60.** A kstuff build with fake-package support up to 13.60 came out in November 2026. The app no longer warns that an installed fake PS5 game won't start on 11.61, 12.xx or 13.xx: the warning now appears only above 13.60. The fake-package note, Convert, the Payloads list, the FAQ and the README say that firmware above 11.60 needs that November 2026 kstuff (or newer). Convert again suggests a package, not an image, for a PS5 game on 13.60.
 - **A fake PS5 game that won't start says why.** On 11.61 to 13.60, a launch that fails now adds that a game from a fake package needs the November 2026 kstuff, so load it and press Play again.
 
