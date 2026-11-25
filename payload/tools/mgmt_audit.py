@@ -377,7 +377,13 @@ def check_sonylock():
 SONY_WRAPPERS = {"sys_time_get", "sys_time_set", "notif_send"}
 SONYLEAF_RE = re.compile(r"\b(p_sce(?:Application|LncUtil|AppInstUtil)\w*|sceSystemService\w+|sceNotification\w+|sceUserService\w+|sceRegMgr\w+|sceKernelSendNotificationRequest)\s*\(")
 # Functions that make a Sony call with no lock and no locking caller, and why that is safe.
-SONYLEAF_ALLOW = {}
+SONYLEAF_ALLOW = {
+    # src/vinput_dev.c is built into the keyboard-and-mouse companion (payload/vinput, its own ELF and
+    # process), not into the helper: the helper's sony_api_lock does not exist there, and the companion
+    # makes its Sony calls from one thread.
+    "foreground_user": "vinput companion process, not the helper",
+    "vinput_dev_init": "vinput companion process, not the helper",
+}
 
 
 def sonyleaf_findings(funcs, wrappers=SONY_WRAPPERS, allow=SONYLEAF_ALLOW):
