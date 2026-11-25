@@ -332,17 +332,8 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
             if d.name == "." || d.name == ".." {
                 continue;
             }
-            let want = flt::hash_path(&d.name);
-            let found = (0..count).any(|i| {
-                let e = 0x40 + i * 16;
-                flt.get(e..e + 16).is_some_and(|rec| {
-                    u64::from_le_bytes(rec[..8].try_into().unwrap()) == want
-                        && (u64::from_le_bytes(rec[8..].try_into().unwrap()) & 0xFF_FFFF)
-                            == d.ino as u64
-                })
-            });
             checked += 1;
-            ok &= found;
+            ok &= flt_holds(&flt, count, flt::hash_path(&d.name), d.ino as u64);
         }
         r.push(
             "outer flat-path table hashes the uroot names",
@@ -370,6 +361,18 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
         None => r.push("si zip present", false, "no trailing STORED ZIP"),
     }
     Ok(r)
+}
+
+/// Whether the flat-path table `flt` (a 0x40-byte header, then 16-byte records of a name's
+/// hash and its inode) maps `hash` to `ino` in its first `count` records. `count` is the
+/// table's own claim: only the records the table has room for are looked at (a count of
+/// four billion once meant that many empty lookups per name, with no way to stop it).
+fn flt_holds(flt: &[u8], count: usize, hash: u64, ino: u64) -> bool {
+    let records = flt.get(0x40..).unwrap_or_default().chunks_exact(16);
+    records.take(count).any(|rec| {
+        u64::from_le_bytes(rec[..8].try_into().unwrap()) == hash
+            && (u64::from_le_bytes(rec[8..].try_into().unwrap()) & 0xFF_FFFF) == ino
+    })
 }
 
 /// Verify a package without holding it: every block is read and decrypted on demand, and
@@ -526,8 +529,18 @@ fn verify_streaming_inner(
     // The game's data comes first; everything past it is the format's own (the layout
     // descriptor, the superblock, every table and directory) and is always swept. Only the
     // data is sampled; no pfs_image.dat found means every block is swept.
-    let uroot_bytes = read_block(&mut file, nodes[2].direct[0].block as u64)?;
-    let uroot = outer::OuterImage::parse_dirents(&uroot_bytes, nodes[2].size);
+    // Inode 1 is the flat-path table and inode 2 the root folder. An image whose superblock
+    // counts fewer inodes than that is damaged: reported, not indexed past its end.
+    let (Some(flt_node), Some(uroot_node)) = (nodes.get(1), nodes.get(2)) else {
+        r.push(
+            "outer image holds its flat-path table and root folder",
+            false,
+            format!("{} inode(s)", nodes.len()),
+        );
+        return Ok(r);
+    };
+    let uroot_bytes = read_block(&mut file, uroot_node.direct[0].block as u64)?;
+    let uroot = outer::OuterImage::parse_dirents(&uroot_bytes, uroot_node.size);
     let data = uroot
         .iter()
         .find(|d| d.name == "pfs_image.dat")
@@ -604,22 +617,18 @@ fn verify_streaming_inner(
     );
     {
         // The flat-path table hashes each uroot name to the inode its dirent records.
-        let flt = read_block(&mut file, nodes[1].direct[0].block as u64)?;
+        let flt = read_block(&mut file, flt_node.direct[0].block as u64)?;
         let count = crate::le32(&flt, 0x2C) as usize;
         let mut checked = 0usize;
         let mut ok = count > 0;
         for entry in uroot.iter().filter(|d| !d.name.starts_with('.')) {
-            let want = flt::hash_path(&entry.name);
-            let found = (0..count).any(|i| {
-                let at = 0x40 + i * 16;
-                flt.get(at..at + 16).is_some_and(|rec| {
-                    u64::from_le_bytes(rec[..8].try_into().unwrap()) == want
-                        && (u64::from_le_bytes(rec[8..].try_into().unwrap()) & 0xFF_FFFF)
-                            == u64::from(entry.ino)
-                })
-            });
             checked += 1;
-            ok &= found;
+            ok &= flt_holds(
+                &flt,
+                count,
+                flt::hash_path(&entry.name),
+                u64::from(entry.ino),
+            );
         }
         r.push(
             "outer flat-path table hashes the uroot names",
@@ -648,3 +657,6 @@ fn verify_streaming_inner(
     }
     Ok(r)
 }
+
+#[cfg(test)]
+mod tests;
