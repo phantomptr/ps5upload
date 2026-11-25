@@ -673,16 +673,30 @@ int activity_get_json(char *buf, size_t cap, size_t *written) {
                 (long long)e->last_launch_ts,
                 (long long)e->last_seen_ts,
                 active ? "true" : "false");
-        if (more < 0 || (size_t)(n + more) >= cap) break;
+        /* An entry goes in whole or not at all, with room left for the "]}" after the last one:
+         * a reply that filled up after an entry's first half was closed as it stood, an open
+         * object inside the list, which the engine could not parse (or, with no room for the
+         * "]}", the whole list was answered as an error). */
+        const int mark = n;
+        if (more < 0 || (size_t)(n + more) + 4 >= cap) {
+            n = mark;
+            break;
+        }
         n += more;
 
         int nm = append_name_field(buf + n, cap - (size_t)n,
                                    name_map_find(&names, e->title_id));
-        if (nm < 0) break;
+        if (nm < 0 || (size_t)(n + nm) + 4 >= cap) {
+            n = mark;
+            break;
+        }
         n += nm;
 
         int close = snprintf(buf + n, cap - (size_t)n, "}");
-        if (close < 0 || (size_t)(n + close) >= cap) break;
+        if (close < 0 || (size_t)(n + close) + 4 >= cap) {
+            n = mark;
+            break;
+        }
         n += close;
     }
 
@@ -829,6 +843,9 @@ static int playtime_row(void *ctx_, int ncol, const char *const *vals) {
     int more = snprintf(ctx->buf + ctx->n, ctx->cap - (size_t)ctx->n,
                         "%s{\"title_id\":\"%s\",\"total_seconds\":%lld",
                         ctx->emitted ? "," : "", esc, fg_time);
+    /* A row goes in whole or not at all (as in activity_get_json): `mark` takes back its first
+     * half when the rest does not fit. */
+    const int mark = ctx->n;
     if (more < 0 || (size_t)(ctx->n + more) + 32 >= ctx->cap) {
         ctx->overflow = 1;
         return 1; /* stop */
@@ -838,6 +855,7 @@ static int playtime_row(void *ctx_, int ncol, const char *const *vals) {
     int nm = append_name_field(ctx->buf + ctx->n, ctx->cap - (size_t)ctx->n,
                                name_map_find(ctx->names, tid));
     if (nm < 0 || (size_t)(ctx->n + nm) + 32 >= ctx->cap) {
+        ctx->n = mark;
         ctx->overflow = 1;
         return 1;
     }
@@ -845,6 +863,7 @@ static int playtime_row(void *ctx_, int ncol, const char *const *vals) {
 
     int close = snprintf(ctx->buf + ctx->n, ctx->cap - (size_t)ctx->n, "}");
     if (close < 0 || (size_t)(ctx->n + close) + 32 >= ctx->cap) {
+        ctx->n = mark;
         ctx->overflow = 1;
         return 1;
     }
