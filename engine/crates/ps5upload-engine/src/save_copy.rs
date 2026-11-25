@@ -787,21 +787,21 @@ pub fn import(
     )
 }
 
-/// A shared save's zip: in memory (one made here a moment ago) or a file taken over from the
-/// caller (one that came over the network, which can be large).
+/// A shared save's zip: in memory (one made here a moment ago) or a file on disk (one that came
+/// over the network, which can be large). The file is only read, where it is: it can be the
+/// user's own copy (Share's received save), which a move into the scratch folder deleted along
+/// with the scratch folder, used or refused.
 enum ZipIn<'a> {
     Bytes(&'a [u8]),
     File(&'a Path),
 }
 
 impl ZipIn<'_> {
-    fn write_to(&self, dest: &Path) -> std::io::Result<()> {
+    /// The zip on disk: `scratch`, written, for bytes; the file itself for a file.
+    fn on_disk(&self, scratch: &Path) -> std::io::Result<PathBuf> {
         match self {
-            ZipIn::Bytes(b) => std::fs::write(dest, b),
-            ZipIn::File(p) => std::fs::rename(p, dest).or_else(|_| {
-                std::fs::copy(p, dest)?;
-                std::fs::remove_file(p)
-            }),
+            ZipIn::Bytes(b) => std::fs::write(scratch, b).map(|()| scratch.to_path_buf()),
+            ZipIn::File(p) => Ok(p.to_path_buf()),
         }
     }
 }
@@ -825,9 +825,8 @@ fn import_as(
     let tmp = make_temp_dir(&title_id)?;
     let tmp_s = tmp.to_string_lossy().into_owned();
     let result = (|| {
-        let zip = tmp.join("shared.zip");
-        zip_in
-            .write_to(&zip)
+        let zip = zip_in
+            .on_disk(&tmp.join("shared.zip"))
             .map_err(|e| format!("save the file: {e}"))?;
         let unpacked = tmp.join("x");
         std::fs::create_dir_all(&unpacked).map_err(|e| format!("unpack: {e}"))?;
@@ -2068,13 +2067,15 @@ mod tests {
     }
 
     #[test]
-    fn a_zip_taken_from_a_file_leaves_nothing_behind() {
+    fn a_zip_from_a_file_is_read_where_it_is() {
         let tmp = make_temp_dir("zipin-test").unwrap();
-        let (from, to) = (tmp.join("a"), tmp.join("b"));
+        let (from, scratch) = (tmp.join("a"), tmp.join("b"));
         std::fs::write(&from, b"zip").unwrap();
-        ZipIn::File(&from).write_to(&to).unwrap();
-        assert!(!from.exists());
-        assert_eq!(std::fs::read(&to).unwrap(), b"zip");
+        assert_eq!(ZipIn::File(&from).on_disk(&scratch).unwrap(), from);
+        assert_eq!(std::fs::read(&from).unwrap(), b"zip");
+        assert!(!scratch.exists());
+        assert_eq!(ZipIn::Bytes(b"z").on_disk(&scratch).unwrap(), scratch);
+        assert_eq!(std::fs::read(&scratch).unwrap(), b"z");
         let _ = cleanup_temp_dir(&tmp.to_string_lossy());
     }
 
@@ -2663,6 +2664,43 @@ mod tests {
     /// A shared save of `T` from A's save (every image in `images`).
     fn shared_zip(images: &[&str]) -> Vec<u8> {
         share(&Fake::both(images), &folder(A)).unwrap().1
+    }
+
+    /// A save file on disk (Share's received save) is still there after it was used, and after
+    /// a refusal: it is the user's only copy. It used to be moved into the scratch folder and
+    /// deleted with it.
+    #[test]
+    fn a_save_file_on_disk_is_kept_used_or_refused() {
+        let dir = make_temp_dir("keepfile").unwrap();
+        let file = dir.join("received.zip");
+        std::fs::write(&file, shared_zip(&[MAIN, STAR])).unwrap();
+        let c = Fake::both(&[MAIN, STAR]);
+        let used = import_as(
+            &c,
+            &folder(B),
+            B,
+            "this user",
+            ZipIn::File(&file),
+            None,
+            None,
+        );
+        assert!(used.is_ok(), "{:?}", used.err().map(|f| f.msg));
+        assert!(file.is_file(), "the received save was deleted by using it");
+        let other = dir.join("other.zip");
+        std::fs::write(&other, zip_of(&[("Pictures/a.png", b"x")])).unwrap();
+        let c = Fake::both(&[MAIN, STAR]);
+        assert!(import_as(
+            &c,
+            &folder(B),
+            B,
+            "this user",
+            ZipIn::File(&other),
+            None,
+            None
+        )
+        .is_err());
+        assert!(other.is_file(), "a refused save file was deleted");
+        let _ = cleanup_temp_dir(&dir.to_string_lossy());
     }
 
     /// A save backup picked as a save file (#633) is called that, noted (10.6.0 on) or not, and
