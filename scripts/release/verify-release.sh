@@ -14,7 +14,7 @@
 # continue-on-error) and only warn here.
 #
 # --promote runs `gh release edit vX.Y.Z --prerelease=false --latest` once every check
-# passes. That also fires docker-engine.yml's `promote` job (:latest and :<major.minor>), and it
+# passes, and refuses a version older than the current latest release. That also fires docker-engine.yml's `promote` job (:latest and :<major.minor>), and it
 # redeploys the website (its release snapshot and iPhone source list promoted releases only).
 # Promote only after the release has been tried on real hardware.
 
@@ -110,6 +110,30 @@ fi
 (( warn )) || echo "verify-release: complete"
 
 if (( promote )); then
+  # Never backwards. `--latest` moves GitHub's "latest" pointer even onto an older version, and
+  # everything stable follows that pointer: the desktop updater (releases/latest/download/
+  # latest.json), the iPhone source, the website, and docker-engine.yml's promote job, whose
+  # own never-backwards check compares against that same pointer and so would move :latest
+  # back too. Promoting an old pre-release after a newer one is out is a mistake to stop here.
+  latest_err="$(mktemp)"
+  if latest_tag="$(gh api "repos/{owner}/{repo}/releases/latest" --jq .tag_name 2>"$latest_err")"; then
+    latest="${latest_tag#v}"
+    if [[ "$latest" != "$version" ]] \
+        && [[ "$(printf '%s\n%s\n' "$version" "$latest" | sort -V | head -n 1)" == "$version" ]]; then
+      rm -f "$latest_err"
+      echo "verify-release: NOT promoted: $tag is older than the latest release, $latest_tag." >&2
+      echo "  Promoting it would move the stable channel (updater, iPhone source, site, :latest) back." >&2
+      echo "  To publish it without moving latest: gh release edit $tag --prerelease=false --latest=false" >&2
+      exit 1
+    fi
+  elif ! grep -q 'HTTP 404' "$latest_err"; then
+    # No answer is not "there is no latest": do not guess.
+    cat "$latest_err" >&2
+    rm -f "$latest_err"
+    echo "verify-release: NOT promoted: could not read the latest release (above)" >&2
+    exit 1
+  fi
+  rm -f "$latest_err"
   gh release edit "$tag" --prerelease=false --latest
   echo "promoted $tag to the latest release"
   # The website's release snapshot and the iPhone (AltStore) source list promoted releases only:
