@@ -3990,7 +3990,7 @@
       "ExtractReq": {
         "properties": {
           "free_archive": {
-            "description": "DESTROYS THE ARCHIVE: its own space is given back while it unpacks, so the job fits on\na drive with no room for both. A `.zip` is cut short behind each file as it is unpacked\nand a multi-part `.rar` loses each part as it is finished; anything else is deleted the\nmoment the unpack has finished and been checked. Ask `/api/fpkg/extract/free-check`\nfirst. Off unless set.",
+            "description": "DESTROYS THE ARCHIVE: its own space is given back while it unpacks, so the job fits on\na drive with no room for both. A `.zip` is cut short behind each file as it is\nunpacked, a `.7z` of several blocks behind each block, and a multi-part `.rar` loses\neach part as it is finished; anything else is deleted the moment the unpack has\nfinished and been checked. Ask `/api/fpkg/extract/free-check` first. Off unless set.",
             "type": "boolean"
           },
           "output_dir": {
@@ -23362,7 +23362,7 @@
     },
     "/api/fpkg/extract/free-check": {
       "post": {
-        "description": "POST /api/fpkg/extract/free-check — whether an archive can be unpacked with its own space\ngiven back (`free_archive` on `/api/fpkg/extract`), and how: `mode` is `entries` (a `.zip`:\nfreed file by file), `parts` (a multi-part `.rar`: part by part) or `end` (anything else:\ndeleted once the unpack is finished and checked). `game` is `folder` or `image`. Changes\nnothing. 400 with the plain reason when it can't be done.",
+        "description": "POST /api/fpkg/extract/free-check — whether an archive can be unpacked with its own space\ngiven back (`free_archive` on `/api/fpkg/extract`), and how: `mode` is `entries` (a `.zip`:\nfreed file by file), `blocks` (a `.7z` of more than one block: block by block), `parts` (a\nmulti-part `.rar`: part by part) or `end` (anything else: deleted once the unpack is\nfinished and checked). `parts` counts the blocks or parts (1 otherwise); `game` is `folder`\nor `image`. Changes nothing. 400 with the plain reason when it can't be done.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -23384,10 +23384,7 @@
                     "game": {},
                     "mode": {},
                     "needed": {},
-                    "parts": {
-                      "minimum": 0,
-                      "type": "integer"
-                    },
+                    "parts": {},
                     "same_drive": {},
                     "unpacked": {}
                   },

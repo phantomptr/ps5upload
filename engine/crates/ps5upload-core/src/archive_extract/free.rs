@@ -7,13 +7,18 @@
 //! - **`.zip`** ([`FreeMode::Entries`]): every file in a zip is compressed on its own and the
 //!   list of them is at the end. The list is read into memory, then the files are unpacked from
 //!   the last one in the archive to the first, and the archive is cut short behind each one.
+//! - **A `.7z` of more than one block** ([`FreeMode::Blocks`]): a `.7z` packs its files in
+//!   blocks, each a stream of its own, with the list of them at the end. The blocks are
+//!   unpacked from the last to the first, and the archive is cut short behind each one. How
+//!   many blocks there are is the packer's choice: one per file when it was made "non-solid",
+//!   a few large ones otherwise.
 //! - **A multi-part `.rar`** ([`FreeMode::Parts`]): the parts are read in order, first to
 //!   last, and a part is deleted once every file that starts in it (or before it) is unpacked
 //!   and the reader has moved on to a later part.
-//! - **Everything else** ([`FreeMode::End`]: a `.7z`, a one-file `.rar`, a tar or `.zst`): the
-//!   data is one stream read from the front, and a file can't be cut at the front. Nothing is
-//!   freed while it unpacks; the archive is deleted the moment the unpack has finished and
-//!   been checked, before whatever is made from it starts.
+//! - **Everything else** ([`FreeMode::End`]: a `.7z` in one block, a one-file `.rar`, a tar or
+//!   `.zst`): the data is one stream read from the front, and a file can't be cut at the
+//!   front. Nothing is freed while it unpacks; the archive is deleted the moment the unpack
+//!   has finished and been checked, before whatever is made from it starts.
 //!
 //! The rules it keeps:
 //!
@@ -59,6 +64,8 @@ pub const CUT_EVERY: u64 = 64 << 20;
 pub enum FreeMode {
     /// File by file, as each is unpacked (a `.zip`).
     Entries,
+    /// Block by block, as each is unpacked (a `.7z` of more than one block).
+    Blocks,
     /// Part by part, as each is finished (a multi-part `.rar`).
     Parts,
     /// All at once, when the unpack has finished and been checked.
@@ -69,6 +76,7 @@ impl FreeMode {
     pub fn name(self) -> &'static str {
         match self {
             FreeMode::Entries => "entries",
+            FreeMode::Blocks => "blocks",
             FreeMode::Parts => "parts",
             FreeMode::End => "end",
         }
@@ -122,6 +130,16 @@ struct ZipStep {
     zstd: bool,
 }
 
+/// One block of a `.7z`: where it is and what it holds.
+#[derive(Debug, Clone)]
+struct SevenStep {
+    block: usize,
+    /// Where its packed bytes start: the archive is cut here once it is unpacked.
+    start: u64,
+    /// The size of its files, unpacked.
+    unpacked: u64,
+}
+
 /// A multi-part RAR set's files, and where each part's own begin.
 #[derive(Debug, Clone)]
 struct RarSteps {
@@ -138,6 +156,8 @@ pub struct FreePlan {
     pub kind: ArchiveKind,
     /// Every file of the archive, first to last (one, unless it is a multi-part set).
     pub parts: Vec<PathBuf>,
+    /// The pieces it is freed in: a `.7z`'s blocks, a set's parts; else 1.
+    pub pieces: usize,
     /// The size of all of them.
     pub archive_bytes: u64,
     /// The size of everything unpacked.
@@ -149,7 +169,10 @@ pub struct FreePlan {
     pub game: GameKind,
     stamps: Vec<Stamp>,
     dirs: Vec<String>,
+    /// Files with no data of their own (a `.7z` lists them apart from its blocks).
+    empty_files: Vec<String>,
     zip: Vec<ZipStep>,
+    seven: Vec<SevenStep>,
     rar: Option<RarSteps>,
     cut_every: u64,
 }
@@ -447,6 +470,10 @@ pub fn same_drive(a: &Path, b: &Path) -> bool {
 /// Why this one file can't be cut or deleted here, or `Ok`: it has to be a plain file with one
 /// name, on a drive of this computer that can be written, in a folder that can be written.
 fn check_place(path: &Path) -> Result<()> {
+    // A phone's storage is reached through layers this has not been tried on: not offered.
+    if cfg!(any(target_os = "android", target_os = "ios")) {
+        bail!("an archive's space can't be freed as it unpacks on a phone or tablet");
+    }
     let meta =
         std::fs::symlink_metadata(path).with_context(|| format!("read {}", path.display()))?;
     if meta.file_type().is_symlink() {
@@ -631,13 +658,16 @@ fn base_plan(archive: &Path, kind: ArchiveKind) -> Result<FreePlan> {
         mode: FreeMode::End,
         kind,
         parts: vec![archive.to_path_buf()],
+        pieces: 1,
         archive_bytes: stamp.len,
         unpacked: 0,
         peak_beside: 0,
         game: GameKind::Folder,
         stamps: vec![stamp],
         dirs: Vec::new(),
+        empty_files: Vec::new(),
         zip: Vec::new(),
+        seven: Vec::new(),
         rar: None,
         cut_every: CUT_EVERY,
     })
@@ -683,10 +713,14 @@ fn plan_with(archive: &Path, password: Option<&str>, wants: Wants) -> Result<Fre
                     dirs.push(rel);
                 } else {
                     plan.unpacked = plan.unpacked.saturating_add(e.size());
+                    if !e.has_stream() {
+                        plan.empty_files.push(rel.clone());
+                    }
                     files.push(rel);
                 }
             }
             listed(&mut plan, &files, dirs, wants)?;
+            plan_7z_blocks(archive, &header, &mut plan)?;
         }
         ArchiveKind::Tar => {
             let layout = crate::tar_archive::tar_layout(archive)
@@ -716,6 +750,68 @@ fn listed(plan: &mut FreePlan, files: &[String], dirs: Vec<String>, wants: Wants
         plan.game = game_in_names(files.iter().map(String::as_str))?;
     }
     plan.dirs = dirs;
+    Ok(())
+}
+
+/// Turns the plan of a `.7z` into one freed block by block, when its blocks allow it: more
+/// than one, each one's packed bytes after the one before, and all of them before the list
+/// at the end. Any other layout stays a plan that deletes the archive at the end.
+fn plan_7z_blocks(
+    archive: &Path,
+    header: &sevenz_rust2::Archive,
+    plan: &mut FreePlan,
+) -> Result<()> {
+    if header.blocks.len() < 2 {
+        return Ok(());
+    }
+    // Where the list of files starts, from the archive's first 32 bytes.
+    let mut start_header = [0u8; 32];
+    File::open(archive)
+        .and_then(|mut f| f.read_exact(&mut start_header))
+        .with_context(|| format!("read {}", archive.display()))?;
+    let mut offset = [0u8; 8];
+    offset.copy_from_slice(&start_header[12..20]);
+    let Some(list_start) =
+        sevenz_rust2::SIGNATURE_HEADER_SIZE.checked_add(u64::from_le_bytes(offset))
+    else {
+        return Ok(());
+    };
+    let mut unpacked = vec![0u64; header.blocks.len()];
+    for (file, block) in header.files.iter().zip(&header.stream_map.file_block_index) {
+        if let Some(b) = block.filter(|b| *b < unpacked.len()) {
+            unpacked[b] = unpacked[b].saturating_add(file.size());
+        }
+    }
+    let mut steps = Vec::with_capacity(header.blocks.len());
+    let mut last_end = sevenz_rust2::SIGNATURE_HEADER_SIZE;
+    for (block, unpacked) in unpacked.into_iter().enumerate() {
+        let Some((start, end)) = header.block_pack_range(block) else {
+            return Ok(());
+        };
+        if start < last_end || end < start || end > list_start {
+            return Ok(());
+        }
+        last_end = end;
+        steps.push(SevenStep {
+            block,
+            start,
+            unpacked,
+        });
+    }
+    // Last in the archive first.
+    steps.reverse();
+    let (mut len, mut written, mut peak) = (plan.archive_bytes, 0u64, 0u64);
+    for (n, s) in steps.iter().enumerate() {
+        written = written.saturating_add(s.unpacked);
+        peak = peak.max((written.saturating_add(len)).saturating_sub(plan.archive_bytes));
+        if n + 1 == steps.len() || len.saturating_sub(s.start) >= plan.cut_every {
+            len = s.start;
+        }
+    }
+    plan.peak_beside = peak;
+    plan.mode = FreeMode::Blocks;
+    plan.pieces = steps.len();
+    plan.seven = steps;
     Ok(())
 }
 
@@ -869,6 +965,7 @@ fn plan_rar(
     }
     plan.peak_beside = peak;
     plan.mode = FreeMode::Parts;
+    plan.pieces = parts.len();
     plan.parts = parts;
     plan.stamps = stamps;
     plan.rar = Some(RarSteps { files, starts });
@@ -984,6 +1081,7 @@ pub fn consume(
     }
     match plan.mode {
         FreeMode::Entries => consume_zip(plan, &mut sink, found),
+        FreeMode::Blocks => consume_7z_blocks(plan, &mut sink, found),
         FreeMode::Parts => consume_rar_parts(plan, password, &mut sink, found),
         FreeMode::End => {
             let unpacked = match plan.kind {
@@ -1042,6 +1140,170 @@ fn in_use_elsewhere(archive: &Path) -> Result<()> {
     Ok(())
 }
 
+/// One archive file being cut short from its end as what it held is unpacked.
+struct Cutter {
+    /// The handle the cuts are made through, kept for the length of the unpack.
+    file: File,
+    /// The archive's own path, and where what is left of it is now.
+    archive: PathBuf,
+    at: PathBuf,
+    /// Any of it is gone.
+    cut: bool,
+    len: u64,
+}
+
+impl Cutter {
+    /// Opens `archive` for cutting, refusing one another program is using.
+    fn open(archive: &Path, len: u64) -> Result<Cutter> {
+        in_use_elsewhere(archive)?;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(archive)
+            .with_context(|| format!("open {} to free it", archive.display()))?;
+        // Held for the length of the unpack: another program that locks what it reads is
+        // seen. Not on Windows, where a lock taken through one handle refuses reads through
+        // any other, this unpack's own included (`in_use_elsewhere` asks there instead).
+        #[cfg(not(windows))]
+        if let Err(std::fs::TryLockError::WouldBlock) = file.try_lock() {
+            bail!("{} is in use by another program", archive.display());
+        }
+        Ok(Cutter {
+            file,
+            archive: archive.to_path_buf(),
+            at: archive.to_path_buf(),
+            cut: false,
+            len,
+        })
+    }
+
+    /// A failure now, with what became of the archive so far.
+    fn failed(&self, error: anyhow::Error) -> ConsumeError {
+        ConsumeError {
+            error,
+            left: self.cut.then(|| vec![self.at.clone()]),
+        }
+    }
+
+    /// Whether enough is unpacked behind `start` to cut there now (always at the `last`).
+    fn due(&self, start: u64, last: bool, every: u64) -> bool {
+        last || self.len.saturating_sub(start) >= every
+    }
+
+    /// Everything from `start` on is unpacked into `dest`: made sure to be on the drive
+    /// first, then gone from the archive. Before its first bytes go, the archive is renamed.
+    fn cut_at(&mut self, start: u64, dest: &Path) -> Result<()> {
+        barrier(dest).with_context(|| format!("flush {}", dest.display()))?;
+        if !self.cut {
+            let to = partial_name(&self.archive);
+            std::fs::rename(&self.archive, &to)
+                .with_context(|| format!("rename {} before freeing it", self.archive.display()))?;
+            sync_dir(to.parent().unwrap_or(Path::new(".")));
+            self.at = to;
+            self.cut = true;
+        }
+        self.file
+            .set_len(start)
+            .with_context(|| format!("free the unpacked end of {}", self.at.display()))?;
+        self.len = start;
+        Ok(())
+    }
+
+    /// Everything is unpacked: what is left of the archive goes, then `found` has its look.
+    fn finish(
+        self,
+        found: &mut dyn FnMut() -> Result<()>,
+    ) -> std::result::Result<Outcome, ConsumeError> {
+        let Cutter { file, at, .. } = self;
+        drop(file);
+        let mut out = Outcome::default();
+        if remove_path_retrying(&at).is_err() {
+            out.not_removed.push(at);
+        }
+        found().map_err(|error| ConsumeError {
+            error,
+            left: Some(out.not_removed.clone()),
+        })?;
+        Ok(out)
+    }
+}
+
+fn consume_7z_blocks(
+    plan: &FreePlan,
+    sink: &mut Sink,
+    found: &mut dyn FnMut() -> Result<()>,
+) -> std::result::Result<Outcome, ConsumeError> {
+    let whole = |error: anyhow::Error| ConsumeError { error, left: None };
+    let archive = &plan.parts[0];
+    let header = super::read_7z_header(archive).map_err(whole)?;
+    let mut source = std::io::BufReader::new(
+        File::open(archive)
+            .with_context(|| format!("open {}", archive.display()))
+            .map_err(whole)?,
+    );
+    let mut cutter = Cutter::open(archive, plan.archive_bytes).map_err(whole)?;
+    // Files with no data are in no block: made now.
+    for rel in &plan.empty_files {
+        sink.file_checked(rel, &mut std::io::empty(), Some(0), None)
+            .map_err(whole)?;
+    }
+    let password = sevenz_rust2::Password::from("");
+    let threads = crate::transfer::sevenz_decode_threads();
+    for (n, step) in plan.seven.iter().enumerate() {
+        // The closure's error type is 7z's; ours are carried out beside it.
+        let mut failure: Option<anyhow::Error> = None;
+        let walked =
+            sevenz_rust2::BlockDecoder::new(threads, step.block, &header, &password, &mut source)
+                .for_each_entries(&mut |entry, rd| {
+                    let step = (|| -> Result<()> {
+                        let Some(rel) = sanitize_7z_entry(entry.name()) else {
+                            bail!("the archive has an unsafe entry path: {:?}", entry.name());
+                        };
+                        if entry.is_directory() {
+                            std::io::copy(rd, &mut std::io::sink())?;
+                            return sink.dir(&rel);
+                        }
+                        let crc = entry.has_crc.then_some(entry.crc as u32);
+                        sink.file_checked(&rel, rd, Some(entry.size()), crc)
+                    })();
+                    match step {
+                        Ok(()) => Ok(true),
+                        Err(e) => {
+                            failure = Some(e);
+                            Ok(false)
+                        }
+                    }
+                });
+        if let Some(e) = failure {
+            return Err(cutter.failed(e));
+        }
+        walked
+            .map_err(|e| super::seven_err(archive, e))
+            .map_err(|e| cutter.failed(e))?;
+        if cutter.due(step.start, n + 1 == plan.seven.len(), plan.cut_every) {
+            cutter
+                .cut_at(step.start, sink.dest)
+                .map_err(|e| cutter.failed(e))?;
+        }
+    }
+    drop(source);
+    // Every file the list names has to be out: a walk that ends short of it is a gap in
+    // the reader, found here with the archive gone, and said so.
+    if sink.done != sink.total {
+        let short = anyhow!(
+            "unpacked {} of the {} bytes the 7z lists",
+            sink.done.saturating_sub(plan.unpacked),
+            plan.unpacked
+        );
+        let mut gone = cutter.failed(short);
+        let Cutter { file, at, .. } = cutter;
+        drop(file);
+        let _ = remove_path_retrying(&at);
+        gone.left = Some(Vec::new());
+        return Err(gone);
+    }
+    cutter.finish(found)
+}
+
 fn consume_zip(
     plan: &FreePlan,
     sink: &mut Sink,
@@ -1049,32 +1311,9 @@ fn consume_zip(
 ) -> std::result::Result<Outcome, ConsumeError> {
     let whole = |error: anyhow::Error| ConsumeError { error, left: None };
     let archive = &plan.parts[0];
-    in_use_elsewhere(archive).map_err(whole)?;
     let mut z = open_zip(archive).map_err(whole)?;
-    let cutter = std::fs::OpenOptions::new()
-        .write(true)
-        .open(archive)
-        .with_context(|| format!("open {} to free it", archive.display()))
-        .map_err(whole)?;
-    // Held for the length of the unpack: another program that locks what it reads is seen.
-    // Not on Windows, where a lock taken through one handle refuses reads through any other,
-    // this unpack's own included (`in_use_elsewhere` asks there instead).
-    #[cfg(not(windows))]
-    if let Err(std::fs::TryLockError::WouldBlock) = cutter.try_lock() {
-        return Err(whole(anyhow!(
-            "{} is in use by another program",
-            archive.display()
-        )));
-    }
-    // Where what is left of the archive is now, and whether any of it is gone.
-    let mut at = archive.clone();
-    let mut cut = false;
-    let mut len = plan.archive_bytes;
+    let mut cutter = Cutter::open(archive, plan.archive_bytes).map_err(whole)?;
     for (n, step) in plan.zip.iter().enumerate() {
-        let failed = |error: anyhow::Error, at: &Path, cut: bool| ConsumeError {
-            error,
-            left: cut.then(|| vec![at.to_path_buf()]),
-        };
         let unpacked = if step.zstd {
             z.by_index_raw(step.index)
                 .map_err(|e| anyhow!("read zip entry {}: {e}", step.index))
@@ -1089,40 +1328,15 @@ fn consume_zip(
                     sink.file_checked(&step.rel, &mut from, Some(step.size), Some(step.crc))
                 })
         };
-        unpacked.map_err(|e| failed(e, &at, cut))?;
-        if n + 1 < plan.zip.len() && len.saturating_sub(step.header_start) < plan.cut_every {
-            continue;
+        unpacked.map_err(|e| cutter.failed(e))?;
+        if cutter.due(step.header_start, n + 1 == plan.zip.len(), plan.cut_every) {
+            cutter
+                .cut_at(step.header_start, sink.dest)
+                .map_err(|e| cutter.failed(e))?;
         }
-        // Everything from this file on is unpacked: on the drive first, then gone from here.
-        barrier(sink.dest)
-            .with_context(|| format!("flush {}", sink.dest.display()))
-            .map_err(|e| failed(e, &at, cut))?;
-        if !cut {
-            let to = partial_name(archive);
-            std::fs::rename(archive, &to)
-                .with_context(|| format!("rename {} before freeing it", archive.display()))
-                .map_err(|e| failed(e, &at, cut))?;
-            sync_dir(to.parent().unwrap_or(Path::new(".")));
-            at = to;
-            cut = true;
-        }
-        cutter
-            .set_len(step.header_start)
-            .with_context(|| format!("free the unpacked end of {}", at.display()))
-            .map_err(|e| failed(e, &at, cut))?;
-        len = step.header_start;
     }
     drop(z);
-    drop(cutter);
-    let mut out = Outcome::default();
-    if remove_path_retrying(&at).is_err() {
-        out.not_removed.push(at.clone());
-    }
-    found().map_err(|error| ConsumeError {
-        error,
-        left: Some(out.not_removed.clone()),
-    })?;
-    Ok(out)
+    cutter.finish(found)
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]

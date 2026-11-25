@@ -235,7 +235,9 @@ export function FreeArchiveOption({
     const how =
       found.mode === "entries"
         ? tr("fpkg.free.how_entries", undefined, "A .zip is freed file by file as it unpacks.")
-        : found.mode === "parts"
+        : found.mode === "blocks"
+          ? tr("fpkg.free.how_blocks", { count: found.parts }, "This .7z is in {count} blocks. Each block is deleted once everything in it is unpacked, starting from the end of the archive.")
+          : found.mode === "parts"
           ? tr(
               "fpkg.free.how_parts",
               { count: found.parts },

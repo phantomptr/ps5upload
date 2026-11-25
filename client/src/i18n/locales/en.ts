@@ -4839,6 +4839,7 @@ gate_engine_down_body_v2: "This screen needs the app's engine, which is not answ
 "fpkg.free.not_needed": "Not needed here: an image or a folder is made straight from this archive with nothing unpacked, so there is no extra space to free. It applies when a package is made.",
 "fpkg.free.refused": "Not available: {reason}",
 "fpkg.free.how_entries": "A .zip is freed file by file as it unpacks.",
+"fpkg.free.how_blocks": "This .7z is in {count} blocks. Each block is deleted once everything in it is unpacked, starting from the end of the archive.",
 "fpkg.free.how_parts": "This archive has {count} parts. Each part is deleted once everything in it is unpacked; a file that runs across several parts keeps them until it is whole.",
 "fpkg.free.confirm_title": "Delete this archive while it unpacks?",
 "fpkg.free.confirm_title_end": "Delete this archive once it is unpacked?",

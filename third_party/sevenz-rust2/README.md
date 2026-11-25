@@ -1,4 +1,4 @@
-# sevenz-rust2 0.23.0 — vendored, with one fix
+# sevenz-rust2 0.23.0 — vendored, with one fix and one addition
 
 Upstream: <https://github.com/hasenbanck/sevenz-rust2> (Apache-2.0).
 Only `src/`, `Cargo.toml` and the licence are vendored; upstream's examples,
@@ -44,3 +44,13 @@ come out with the CRC checked.
 
 Reported upstream: <https://github.com/hasenbanck/sevenz-rust2/issues/148>. Drop this copy once
 upstream ships the same fix.
+
+## The addition: `Archive::block_pack_range`
+
+`Archive::block_pack_range(block)` gives the file offsets of a block's packed bytes (the
+offset of its first packed stream, and the offset just past its last). Upstream keeps what it
+is worked out from (`StreamMap::block_first_pack_stream_index`, `pack_stream_offsets`,
+`Block::packed_streams`) private to the crate. The engine needs it to unpack a `.7z` from its
+last block backwards and cut the archive short behind each one
+(`ps5upload-core/src/archive_extract/free.rs`). It reads nothing and changes no behaviour; if
+this copy is dropped, that code needs another way to learn the offsets.

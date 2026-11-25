@@ -673,6 +673,20 @@ mod free {
         read_back(&game, false);
         assert!(!archive.exists());
 
+        // Not solid, every file is a block of its own: freed block by block.
+        let blocks = r.join("Blocks.7z");
+        write_7z(&blocks, &entries(""), false);
+        let (status, body) = check(&blocks, &out).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["mode"], "blocks");
+        assert!(body["parts"].as_u64().unwrap() > 1, "{body}");
+        let (status, body, end) = unpack(&blocks, &out, true).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        let game = PathBuf::from(end.unwrap().unwrap_or_else(|e| panic!("{e:?}")));
+        assert_eq!(game, out.join("Blocks.unpacked"));
+        read_back(&game, false);
+        assert!(!blocks.exists());
+
         let img = r.join("Img.zip");
         write_zip(&img, &[("x/Game.exfat".into(), vec![7; 4096])], None);
         let (status, body) = check(&img, &out).await;

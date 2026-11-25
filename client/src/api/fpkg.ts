@@ -227,12 +227,13 @@ export interface WorkshopRun {
 
 /** How an archive gives its own space back while it unpacks (the engine's free-check). */
 export interface ArchiveFreeCheck {
-  /** `entries`: a .zip, freed file by file. `parts`: a multi-part .rar, part by part. `end`:
-   *  anything else, where nothing is freed until the unpack is finished and checked. */
-  mode: "entries" | "parts" | "end";
+  /** `entries`: a .zip, freed file by file. `blocks`: a .7z of more than one block, block by
+   *  block. `parts`: a multi-part .rar, part by part. `end`: anything else, where nothing is
+   *  freed until the unpack is finished and checked. */
+  mode: "entries" | "blocks" | "parts" | "end";
   /** The one game in it: a game folder, or a game image or package. */
   game: "folder" | "image";
-  /** How many files the archive is (one, unless it is a multi-part set). */
+  /** The pieces it is freed in: a .7z's blocks, a set's parts; else one. */
   parts: number;
   archive_bytes: number;
   unpacked: number;

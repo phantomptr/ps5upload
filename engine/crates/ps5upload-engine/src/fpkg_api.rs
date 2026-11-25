@@ -4266,10 +4266,10 @@ pub(crate) struct ExtractReq {
     #[serde(default)]
     password: Option<String>,
     /// DESTROYS THE ARCHIVE: its own space is given back while it unpacks, so the job fits on
-    /// a drive with no room for both. A `.zip` is cut short behind each file as it is unpacked
-    /// and a multi-part `.rar` loses each part as it is finished; anything else is deleted the
-    /// moment the unpack has finished and been checked. Ask `/api/fpkg/extract/free-check`
-    /// first. Off unless set.
+    /// a drive with no room for both. A `.zip` is cut short behind each file as it is
+    /// unpacked, a `.7z` of several blocks behind each block, and a multi-part `.rar` loses
+    /// each part as it is finished; anything else is deleted the moment the unpack has
+    /// finished and been checked. Ask `/api/fpkg/extract/free-check` first. Off unless set.
     #[serde(default)]
     free_archive: bool,
 }

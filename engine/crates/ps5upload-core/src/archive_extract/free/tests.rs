@@ -521,23 +521,183 @@ fn a_link_a_second_name_and_a_read_only_file_are_refused() {
 fn sevenz_bytes(files: &[(&str, Vec<u8>)]) -> Vec<u8> {
     let mut w = sevenz_rust2::ArchiveWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
     for (name, bytes) in files {
-        w.push_archive_entry(
-            sevenz_rust2::ArchiveEntry::new_file(name),
-            Some(std::io::Cursor::new(bytes.clone())),
-        )
-        .unwrap();
+        // An empty file is listed with no data of its own, as 7-Zip writes it.
+        let data = (!bytes.is_empty()).then(|| std::io::Cursor::new(bytes.clone()));
+        w.push_archive_entry(sevenz_rust2::ArchiveEntry::new_file(name), data)
+            .unwrap();
     }
     w.finish().unwrap().into_inner()
 }
 
-/// A `.7z` is one stream from the front: it is whole until the unpack is over and the game
-/// found, then deleted at once.
+/// The same files in one solid block.
+fn sevenz_solid_bytes(files: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    use sevenz_rust2::{ArchiveEntry, SourceReader};
+    let mut w = sevenz_rust2::ArchiveWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+    let entries: Vec<ArchiveEntry> = files
+        .iter()
+        .map(|(n, _)| ArchiveEntry::new_file(n))
+        .collect();
+    let readers: Vec<SourceReader<std::io::Cursor<Vec<u8>>>> = files
+        .iter()
+        .map(|(_, b)| SourceReader::new(std::io::Cursor::new(b.clone())))
+        .collect();
+    w.push_archive_entries(entries, readers).unwrap();
+    w.finish().unwrap().into_inner()
+}
+
+/// A `.7z` whose files are each a block of their own is unpacked from its last block
+/// backwards, and cut short behind each one.
 #[test]
-fn a_7z_is_deleted_only_once_everything_is_unpacked_and_the_game_found() {
-    let tmp = Scratch::new("7z");
+fn a_7z_of_several_blocks_is_unpacked_from_its_end_and_shrinks_as_it_goes() {
+    let tmp = Scratch::new("7z-blocks");
     let archive = tmp.path("Game.7z");
     let files = game();
     let bytes = sevenz_bytes(&files);
+    std::fs::write(&archive, &bytes).unwrap();
+    let plan = plan_with(&archive, None, EACH).unwrap();
+    assert_eq!(plan.mode, FreeMode::Blocks);
+    // The empty file has no block.
+    assert_eq!(plan.pieces, 4);
+    assert_eq!(plan.empty_files, ["Game/data/empty.bin"]);
+    assert!(plan.peak_beside < plan.unpacked, "{}", plan.peak_beside);
+
+    let dest = tmp.path("out");
+    let partial = tmp.path("Game.7z.partial-deleted");
+    let mut sizes = Vec::new();
+    consume(
+        &plan,
+        &dest,
+        None,
+        &mut |_, _| {
+            let len = std::fs::metadata(&archive)
+                .or_else(|_| std::fs::metadata(&partial))
+                .map(|m| m.len())
+                .unwrap_or(0);
+            sizes.push(len);
+        },
+        &no_stop(),
+        &mut || Ok(()),
+    )
+    .unwrap();
+    assert_eq!(tree(&dest), want(&files));
+    assert!(sizes.windows(2).all(|w| w[1] <= w[0]), "{sizes:?}");
+    sizes.dedup();
+    assert!(sizes.len() >= 3, "cut as it went: {sizes:?}");
+    assert!(!archive.exists() && !partial.exists());
+    nothing_left_beside(&archive);
+
+    // Stopped half way: what is out is whole, and what is left is renamed and no archive.
+    std::fs::write(&archive, &bytes).unwrap();
+    let plan = plan_with(&archive, None, EACH).unwrap();
+    let dest = tmp.path("out2");
+    let stop = no_stop();
+    let unpacked = plan.unpacked;
+    let err = consume(
+        &plan,
+        &dest,
+        None,
+        &mut |done, _| {
+            if done >= unpacked + 150_000 {
+                stop.store(true, Ordering::Relaxed);
+            }
+        },
+        &stop,
+        &mut || Ok(()),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("cancelled"), "{err}");
+    assert_eq!(err.left.as_deref(), Some(&[partial.clone()][..]));
+    assert!(!archive.exists());
+    let left = std::fs::metadata(&partial).unwrap().len();
+    assert!(left > 0 && left < bytes.len() as u64, "{left}");
+    let have = tree(&dest);
+    assert!(
+        have.contains_key("Game/data/sub/b.bin"),
+        "{:?}",
+        have.keys()
+    );
+    for (name, bytes) in &have {
+        assert_eq!(Some(bytes), want(&files).get(name), "{name}");
+    }
+}
+
+/// Blocks of several files each (a solid archive packed with a block size limit): every file
+/// of a block is out before the block goes.
+#[test]
+fn a_7z_of_two_solid_blocks_is_freed_one_block_at_a_time() {
+    use sevenz_rust2::{ArchiveEntry, SourceReader};
+    let tmp = Scratch::new("7z-solid-blocks");
+    let archive = tmp.path("Game.7z");
+    let files: Vec<(&str, Vec<u8>)> = game().into_iter().filter(|(_, b)| !b.is_empty()).collect();
+    let mut w = sevenz_rust2::ArchiveWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+    for half in files.chunks(2) {
+        let entries: Vec<ArchiveEntry> = half
+            .iter()
+            .map(|(n, _)| ArchiveEntry::new_file(n))
+            .collect();
+        let readers: Vec<SourceReader<std::io::Cursor<Vec<u8>>>> = half
+            .iter()
+            .map(|(_, b)| SourceReader::new(std::io::Cursor::new(b.clone())))
+            .collect();
+        w.push_archive_entries(entries, readers).unwrap();
+    }
+    let bytes = w.finish().unwrap().into_inner();
+    std::fs::write(&archive, &bytes).unwrap();
+    let plan = plan_with(&archive, None, EACH).unwrap();
+    assert_eq!((plan.mode, plan.pieces), (FreeMode::Blocks, 2));
+    let dest = tmp.path("out");
+    let partial = tmp.path("Game.7z.partial-deleted");
+    let mut sizes = Vec::new();
+    consume(
+        &plan,
+        &dest,
+        None,
+        &mut |_, _| {
+            let len = std::fs::metadata(&archive)
+                .or_else(|_| std::fs::metadata(&partial))
+                .map(|m| m.len())
+                .unwrap_or(0);
+            sizes.push(len);
+        },
+        &no_stop(),
+        &mut || Ok(()),
+    )
+    .unwrap();
+    assert_eq!(tree(&dest), want(&files));
+    sizes.dedup();
+    // Whole, then without its last block.
+    assert_eq!(sizes.len(), 2, "{sizes:?}");
+    assert!(sizes[1] < sizes[0]);
+    assert!(!archive.exists() && !partial.exists());
+}
+
+/// With the usual threshold a small `.7z` of several blocks is cut once, at its end.
+#[test]
+fn a_small_7z_of_several_blocks_comes_out_whole() {
+    let tmp = Scratch::new("7z-once");
+    let archive = tmp.path("Game.7z");
+    let files = game();
+    std::fs::write(&archive, sevenz_bytes(&files)).unwrap();
+    let plan = plan(&archive, None).unwrap();
+    assert_eq!(plan.mode, FreeMode::Blocks);
+    assert_eq!(plan.peak_beside, plan.unpacked);
+    let dest = tmp.path("out");
+    consume(&plan, &dest, None, &mut |_, _| {}, &no_stop(), &mut || {
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(tree(&dest), want(&files));
+    assert!(!archive.exists());
+}
+
+/// A `.7z` in one block is one stream from the front: it is whole until the unpack is over
+/// and the game found, then deleted at once.
+#[test]
+fn a_7z_in_one_block_is_deleted_only_once_everything_is_unpacked_and_the_game_found() {
+    let tmp = Scratch::new("7z");
+    let archive = tmp.path("Game.7z");
+    let files = game();
+    let bytes = sevenz_solid_bytes(&files);
     std::fs::write(&archive, &bytes).unwrap();
     let plan = plan(&archive, None).unwrap();
     assert_eq!(plan.mode, FreeMode::End);
