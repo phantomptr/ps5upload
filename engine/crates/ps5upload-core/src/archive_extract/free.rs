@@ -1120,23 +1120,36 @@ fn partial_name(path: &Path) -> PathBuf {
 }
 
 /// Refuses an archive another program has open, where the system can say: Windows opens a
-/// file for nobody else only while nobody else has it. Elsewhere the lock the unpack holds on
-/// it is the check.
+/// file for nobody else only while nobody else has it. A scanner or the indexer often has a
+/// file open for a moment, so it is asked a few times. Elsewhere the lock the unpack holds
+/// on the archive is the check.
+#[cfg(windows)]
 fn in_use_elsewhere(archive: &Path) -> Result<()> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
+    use std::os::windows::fs::OpenOptionsExt;
+    const TRIES: u32 = 5;
+    let mut why = String::new();
+    for attempt in 0..TRIES {
+        let alone = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .share_mode(0)
-            .open(archive)
-            .map_err(|e| anyhow!("{} is in use by another program ({e})", archive.display()))?;
+            .open(archive);
+        match alone {
+            Ok(_) => return Ok(()),
+            Err(e) => why = e.to_string(),
+        }
+        if attempt + 1 < TRIES {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
     }
-    #[cfg(not(windows))]
-    {
-        let _ = archive;
-    }
+    Err(anyhow!(
+        "{} is in use by another program ({why})",
+        archive.display()
+    ))
+}
+
+#[cfg(not(windows))]
+fn in_use_elsewhere(_: &Path) -> Result<()> {
     Ok(())
 }
 
@@ -1153,7 +1166,10 @@ struct Cutter {
 }
 
 impl Cutter {
-    /// Opens `archive` for cutting, refusing one another program is using.
+    /// Opens `archive` for cutting, refusing one another program is using. Called before
+    /// the unpack opens the archive to read it: on Windows the check for another user is an
+    /// open that shares the file with nobody, which this unpack's own reading handle would
+    /// fail as surely as anyone else's.
     fn open(archive: &Path, len: u64) -> Result<Cutter> {
         in_use_elsewhere(archive)?;
         let file = std::fs::OpenOptions::new()
@@ -1235,12 +1251,13 @@ fn consume_7z_blocks(
     let whole = |error: anyhow::Error| ConsumeError { error, left: None };
     let archive = &plan.parts[0];
     let header = super::read_7z_header(archive).map_err(whole)?;
+    // Before this unpack's own handle to read it through: see `Cutter::open`.
+    let mut cutter = Cutter::open(archive, plan.archive_bytes).map_err(whole)?;
     let mut source = std::io::BufReader::new(
         File::open(archive)
             .with_context(|| format!("open {}", archive.display()))
             .map_err(whole)?,
     );
-    let mut cutter = Cutter::open(archive, plan.archive_bytes).map_err(whole)?;
     // Files with no data are in no block: made now.
     for rel in &plan.empty_files {
         sink.file_checked(rel, &mut std::io::empty(), Some(0), None)
@@ -1311,8 +1328,9 @@ fn consume_zip(
 ) -> std::result::Result<Outcome, ConsumeError> {
     let whole = |error: anyhow::Error| ConsumeError { error, left: None };
     let archive = &plan.parts[0];
-    let mut z = open_zip(archive).map_err(whole)?;
+    // Before this unpack's own handle to read it through: see `Cutter::open`.
     let mut cutter = Cutter::open(archive, plan.archive_bytes).map_err(whole)?;
+    let mut z = open_zip(archive).map_err(whole)?;
     for (n, step) in plan.zip.iter().enumerate() {
         let unpacked = if step.zstd {
             z.by_index_raw(step.index)
