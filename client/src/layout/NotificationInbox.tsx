@@ -67,8 +67,10 @@ export default function NotificationInbox({
   /** Opens up (footers, the default) or down (a top bar). */
   placement?: "above" | "below";
   /** "plain" is the quiet bell of the phone top bar; "orb" the white round
-   *  button of the desktop top bar. */
-  variant?: "plain" | "orb";
+   *  button of the desktop top bar; "row" sits among the icon buttons of a
+   *  screen's own header on a phone (Files, #936), and its panel hangs under
+   *  that header, as wide as it (the nearest positioned ancestor). */
+  variant?: "plain" | "orb" | "row";
 } = {}) {
   const tr = useTr();
   const navigate = useNavigate();
@@ -118,7 +120,7 @@ export default function NotificationInbox({
   const unreadLabel = tr("notifications_unread_count", { count: unread }, "Unread notifications: {count}");
 
   return (
-    <div ref={wrapperRef} className="relative">
+    <div ref={wrapperRef} className={variant === "row" ? "shrink-0" : "relative"}>
       <button
         ref={triggerRef}
         type="button"
@@ -130,7 +132,9 @@ export default function NotificationInbox({
         className={
           variant === "orb"
             ? "icon-orb-button relative"
-            : "relative flex items-center justify-center rounded-full p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] max-md:h-11 max-md:w-11"
+            : variant === "row"
+              ? "relative grid h-10 w-10 shrink-0 place-items-center rounded-full text-[var(--color-text)] hover:bg-[var(--color-surface-3)] aria-expanded:bg-[var(--color-surface-3)]"
+              : "relative flex items-center justify-center rounded-full p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] max-md:h-11 max-md:w-11"
         }
       >
         <Bell size={18} />
@@ -151,7 +155,12 @@ export default function NotificationInbox({
           role="dialog"
           aria-label={tr("notifications_title", undefined, "Notifications")}
           data-testid="notifications-panel"
-          className={`anim-rise glass-float elev-2 absolute flex w-[22rem] max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-[var(--radius-card)] ${panelPlacementClass(placement)} ${panelAnchorClass(align)} ${PANEL_SHEET}`}
+          className={
+            "anim-rise elev-2 absolute flex flex-col overflow-hidden rounded-[var(--radius-card)] " +
+            (variant === "row"
+              ? "float-solid inset-x-0 top-full mt-2 max-h-[calc(100dvh-var(--safe-top)-var(--safe-bottom)-12rem)]"
+              : `glass-float w-[22rem] max-w-[calc(100vw-1rem)] ${panelPlacementClass(placement)} ${panelAnchorClass(align)} ${PANEL_SHEET}`)
+          }
           style={{ zIndex: 60, ...fit }}
         >
           <header className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--color-border)] px-3 py-2">

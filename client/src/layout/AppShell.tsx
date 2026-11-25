@@ -1840,8 +1840,14 @@ export default function AppShell() {
           and the Bug report). */}
       {isTauriEnv() && <CaptureViewer />}
       {/* v5 mobile top bar — kept slim; primary nav is the bottom
-          tab bar. Only renders below md. */}
-      <div className="h-top-bar flex shrink-0 items-center gap-2.5 pb-2 pt-[calc(var(--safe-top)_+_0.5rem)] md:hidden">
+          tab bar. Only renders below md. In the phone layout it is as short as its bell is
+          comfortable to tap, and has no arrows (#936, NavigationControls). A screen that shows
+          the bell in a header of its own takes this bar's place (`html[data-screen-bar]`,
+          index.css). */}
+      <div
+        data-top-bar=""
+        className="h-top-bar flex shrink-0 items-center gap-2.5 pb-2 pt-[calc(var(--safe-top)_+_0.5rem)] phone:pb-0.5 phone:pt-[calc(var(--safe-top)_+_0.125rem)] md:hidden"
+      >
         <NavigationControls />
         <AppLogo size={28} />
         {/* One word that never breaks (on a 320 px phone it wrapped its last letter onto a
@@ -1875,7 +1881,8 @@ export default function AppShell() {
             tabIndex={-1}
             className="flex min-w-0 flex-1 flex-col overflow-hidden outline-none"
           >
-            <div className="flex min-w-0 items-center gap-3 px-3 md:px-6 md:pt-[calc(var(--safe-top)_+_1rem)]">
+            {/* A phone held sideways is short: less room over this row there. */}
+            <div className="flex min-w-0 items-center gap-3 px-3 md:px-6 md:pt-[calc(var(--safe-top)_+_1rem)] phone:md:pt-[calc(var(--safe-top)_+_0.375rem)]">
               {/* Browser-style history for a desktop app: route and workspace-tab
                   changes are first-class views, so users can retrace a workflow
                   without reopening More or rebuilding a search. */}

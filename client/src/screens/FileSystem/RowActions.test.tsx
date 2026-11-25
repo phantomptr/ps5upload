@@ -27,6 +27,7 @@ import {
   RowMenuList,
   menuPlacement,
   rowActionMenuItems,
+  selectionMoreItems,
   type RowAction,
   type RowActionsContext,
 } from "./RowActions";
@@ -340,6 +341,110 @@ describe("Files selection bar", () => {
     expect(SELECTION_ACTION).toContain("max-sm:whitespace-nowrap");
     expect(SELECTION_ACTION).toContain("max-sm:shrink-0");
     expect(html).toContain('aria-label="Clear selection"');
+  });
+});
+
+describe("selectionMoreItems: More in the phone's bar of selection actions (#936)", () => {
+  const tr = ((key: string, _vars?: unknown, fallback?: string) =>
+    fallback ?? key) as unknown as RowActionsContext["tr"];
+  const ctx = (): RowActionsContext => ({
+    tr,
+    desktopApp: false,
+    hasHost: true,
+    downloadActive: false,
+    downloadingName: null,
+    entryBusy: false,
+    pkgInstalling: false,
+    installingPkgName: null,
+    viewable: () => false,
+    download: vi.fn(),
+    rename: vi.fn(),
+    replace: vi.fn(),
+    properties: vi.fn(),
+    view: vi.fn(),
+    preview: vi.fn(),
+    crc32: vi.fn(),
+    verify: vi.fn(),
+    install: vi.fn(),
+    remove: vi.fn(),
+    snapshot: vi.fn(),
+    space: vi.fn(),
+  });
+  const item = (label: string, run = vi.fn()) => ({ icon: Pencil, label, run });
+
+  it("one item: the row's own actions follow the selection's, less the bar's Rename and Delete", () => {
+    const c = ctx();
+    const folder = { name: "games", kind: "dir", size: 0 };
+    const row = buildRowActions(folder, c);
+    // What the row's ⋮ lists.
+    expect(row.map((a) => a.id)).toEqual(["rename", "properties", "space", "snapshot", "delete"]);
+    const items = selectionMoreItems({
+      always: [item("Cut")],
+      several: [item("Snapshot…")],
+      sole: row,
+      done: vi.fn(),
+    });
+    expect(items.map((it) => it.label)).toEqual([
+      "Cut",
+      "Properties & permissions",
+      "What takes space?",
+      "Snapshot…",
+    ]);
+    // Every row action is in the menu or a button of the bar: nothing only ⋮ can reach.
+    const labels = new Set(items.map((it) => it.label));
+    for (const a of row) expect(labels.has(a.label) || ["rename", "delete"].includes(a.id)).toBe(true);
+  });
+
+  it("one item: picking a row action leaves selection mode, then runs the row's handler on it", () => {
+    const c = ctx();
+    const order: string[] = [];
+    c.space = vi.fn(() => order.push("space"));
+    const folder = { name: "games", kind: "dir", size: 0 };
+    const cut = vi.fn();
+    const done = vi.fn(() => order.push("done"));
+    const items = selectionMoreItems({
+      always: [item("Cut", cut)],
+      several: [],
+      sole: buildRowActions(folder, c),
+      done,
+    });
+    items.find((it) => it.label === "What takes space?")!.run();
+    expect(order).toEqual(["done", "space"]);
+    expect(c.space).toHaveBeenCalledWith(folder);
+    // The selection's own actions keep the selection.
+    items.find((it) => it.label === "Cut")!.run();
+    expect(cut).toHaveBeenCalledTimes(1);
+    expect(done).toHaveBeenCalledTimes(1);
+  });
+
+  it("a file: its package and file actions are there, disabled ones stay disabled", () => {
+    const c = { ...ctx(), pkgInstalling: true };
+    const items = selectionMoreItems({
+      always: [item("Cut")],
+      several: [item("Snapshot…")],
+      sole: buildRowActions({ name: "game.pkg", kind: "file", size: 101502976 }, c),
+      done: vi.fn(),
+    });
+    expect(items.map((it) => it.label)).toEqual([
+      "Cut",
+      "Properties & permissions",
+      "Replace file",
+      "Install",
+      "Snapshot…",
+    ]);
+    expect(items.find((it) => it.label === "Install")!.disabled).toBe(true);
+    // No label twice (the menu keys its items by label).
+    expect(new Set(items.map((it) => it.label)).size).toBe(items.length);
+  });
+
+  it("several items, or none: only what applies to a selection", () => {
+    const items = selectionMoreItems({
+      always: [item("Cut"), item("Set permissions (777)")],
+      several: [item("Snapshot…")],
+      sole: null,
+      done: vi.fn(),
+    });
+    expect(items.map((it) => it.label)).toEqual(["Cut", "Set permissions (777)", "Snapshot…"]);
   });
 });
 

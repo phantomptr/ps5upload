@@ -2,7 +2,7 @@
 // selection actions that takes the bottom navigation's place while selecting. Tablets and
 // computers never show either (`roomy:hidden`); they keep the page header and the selection bar.
 
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import { CheckCheck, FolderOpen, MoreVertical, Search, X } from "lucide-react";
 
 import { Spinner } from "../../components";
@@ -65,6 +65,7 @@ export function PhoneFolderRow({
   moreLabel,
   moreOpen,
   onMore,
+  bell,
   disabled,
 }: {
   title: string;
@@ -79,6 +80,8 @@ export function PhoneFolderRow({
   moreLabel: string;
   moreOpen: boolean;
   onMore: (box: DOMRect) => void;
+  /** The notification bell, when this header stands in for the app's top bar. */
+  bell?: ReactNode;
   /** No console to act on. */
   disabled: boolean;
 }) {
@@ -104,6 +107,7 @@ export function PhoneFolderRow({
           testId="fs-phone-drives"
         />
       )}
+      {bell}
       <IconButton
         icon={MoreVertical}
         label={moreLabel}

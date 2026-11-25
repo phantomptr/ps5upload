@@ -79,6 +79,48 @@ export function rowActionMenuItems(actions: RowAction[]): RowMenuItem[] {
   }));
 }
 
+/** The row actions the phone's bar of selection actions shows as its own buttons. */
+const IN_SELECTION_BAR: ReadonlySet<string> = new Set(["rename", "delete"]);
+
+/**
+ * The More menu of the phone's bar of selection actions (#936).
+ *
+ * With exactly one item selected it lists what that row's ⋮ lists (`sole`: its actions), less
+ * the ones the bar already has as buttons, so a long press reaches everything ⋮ does. Each of
+ * them leaves selection mode first (`done`), as the bar's own Rename does: it acts on the one
+ * item, and what it does (a rename, a dialog) is not about a selection any more. With several
+ * selected, the actions for one item are not there: `several` is what takes their place.
+ */
+export function selectionMoreItems({
+  always,
+  several,
+  sole,
+  done,
+}: {
+  /** For any selection (Cut, permissions). */
+  always: RowMenuItem[];
+  /** Only without `sole`: what a single row's own actions cover otherwise. */
+  several: RowMenuItem[];
+  /** The one selected row's actions (buildRowActions), or null for none or several. */
+  sole: RowAction[] | null;
+  done: () => void;
+}): RowMenuItem[] {
+  if (!sole) return [...always, ...several];
+  const taken = new Set(always.map((it) => it.label));
+  return [
+    ...always,
+    ...rowActionMenuItems(sole.filter((a) => !IN_SELECTION_BAR.has(a.id)))
+      .filter((it) => !taken.has(it.label))
+      .map((it) => ({
+        ...it,
+        run: () => {
+          done();
+          it.run();
+        },
+      })),
+  ];
+}
+
 const BUTTON =
   "rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-1 disabled:opacity-30";
 const TONE: Record<NonNullable<RowAction["tone"]>, string> = {
@@ -376,6 +418,36 @@ export function RowActionsMenu({
   );
 }
 
+/** More in the phone's bar of selection actions, against that button's box (see
+ *  selectionMoreItems). `sole` is the one selected row, or null for none or several. */
+export function SelectionMoreMenu({
+  always,
+  several,
+  sole,
+  ctx,
+  done,
+  anchor,
+  onClose,
+}: {
+  always: RowMenuItem[];
+  several: RowMenuItem[];
+  sole: RowEntry | null;
+  ctx: RowActionsContext;
+  done: () => void;
+  anchor: { left: number; right: number; top: number; bottom: number };
+  onClose: () => void;
+}) {
+  return (
+    <RowMenu
+      x={anchor.right}
+      y={anchor.bottom}
+      anchor={anchor}
+      onClose={onClose}
+      items={selectionMoreItems({ always, several, sole: sole ? buildRowActions(sole, ctx) : null, done })}
+    />
+  );
+}
+
 /** The row's actions as the desktop icon buttons. Hidden in the phone layout
  *  (below `sm`, or a phone held sideways: the `phone:` variant in index.css),
  *  where `RowActionsTrigger` stands in for them. */
@@ -417,7 +489,9 @@ export function RowActionsTrigger({
   open: boolean;
   /** Called with the trigger's box, for the menu to sit against. */
   onToggle: (anchor: DOMRect) => void;
-  /** Selection mode on a phone: a tap selects the row, the bar at the bottom has the actions. */
+  /** Selection mode on a phone: a tap selects the row, the bar at the bottom has the actions.
+   *  Not shown, and out of reach of a tap or the keyboard, but it keeps its room: the row's
+   *  box sits there meanwhile, and nothing in the row moves. */
   hidden?: boolean;
 }) {
   return (
@@ -432,7 +506,7 @@ export function RowActionsTrigger({
       // tap that should close it would close it and the click reopen it.
       onMouseDown={(ev) => ev.stopPropagation()}
       onClick={(ev) => onToggle(ev.currentTarget.getBoundingClientRect())}
-      className={`-me-1 shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] roomy:hidden ${hidden ? "hidden" : ""}`}
+      className={`-me-1 shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] roomy:hidden ${hidden ? "invisible" : ""}`}
     >
       <MoreVertical size={16} />
     </button>
