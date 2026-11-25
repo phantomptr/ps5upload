@@ -58,7 +58,7 @@ export interface OptionsCardProps {
     lz4?: Lz4Choice;
   };
   /** The game is in asset packs and no pack option is on: offer to write plain files again
-   *  (an image or a folder). */
+   *  (an image, a folder, or a package, which also offers to leave the AMPR emulator out). */
   unpack?: UnpackChoice;
   onLanguage?: (code: string) => void;
   /** A game is being made: this card sets what the next game added uses (#669). */
@@ -209,6 +209,9 @@ export function OptionsCard(props: OptionsCardProps) {
               disabled={props.locked}
             />
           </div>
+        )}
+        {props.unpack && props.make !== "image" && props.make !== "folder" && !ps4Package && (
+          <UnpackOption unpack={props.unpack} />
         )}
         {props.onLanguage && props.make !== "image" && props.make !== "folder" && !ps4Package && (
           <div className="flex flex-col gap-1">

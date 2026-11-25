@@ -19,9 +19,10 @@ export type ConvertStatus = "pending" | "running" | "installing" | "handed" | "d
  *  package). An image's `lz4`: pack the game's data into asset packs first (LZ4, or zstd with
  *  `zstdLevel`), in any format, compressed or not. A folder's `zstd` / `lz4`: its files in zstd
  *  or LZ4 packs (then a game folder can be the source too). `unpackPacks`: a game in asset
- *  packs written as plain files again (a game folder can then be a folder's source too). */
+ *  packs written as plain files again (a game folder can then be a folder's source too); a
+ *  package of it can also leave the AMPR emulator out (`leaveOutAmprEmu`, #933). */
 export type ConvertBuild =
-  | { kind: "pkg" }
+  | { kind: "pkg"; unpackPacks?: boolean; leaveOutAmprEmu?: boolean }
   | { kind: "image"; format: ImageFormat; compress: boolean; lz4?: AmprLz4Options; unpackPacks?: boolean }
   | { kind: "folder"; zstd?: ZstdPacks; lz4?: AmprLz4Options; unpackPacks?: boolean };
 
@@ -109,6 +110,7 @@ export type QueueTag =
   | { kind: "zstd"; level: number }
   | { kind: "lz4" }
   | { kind: "unpack" }
+  | { kind: "no-emulator" }
   | { kind: "level"; level: FfpfscLevel }
   | { kind: "language"; code: string };
 
@@ -118,7 +120,8 @@ export function queueTags(item: ConvertItem): QueueTag[] {
   const packs = packsOf(b);
   if (packs.kind === "zstd") tags.push({ kind: "zstd", level: packs.level ?? DEFAULT_ZSTD_LEVEL });
   if (packs.kind === "lz4") tags.push({ kind: "lz4" });
-  if ((b?.kind === "image" || b?.kind === "folder") && b.unpackPacks) tags.push({ kind: "unpack" });
+  if (b?.unpackPacks) tags.push({ kind: "unpack" });
+  if (b?.kind === "pkg" && b.unpackPacks && b.leaveOutAmprEmu) tags.push({ kind: "no-emulator" });
   if (b?.kind === "image" && b.compress && item.imageLevel) tags.push({ kind: "level", level: item.imageLevel });
   if ((!b || b.kind === "pkg") && item.language) tags.push({ kind: "language", code: item.language });
   return tags;

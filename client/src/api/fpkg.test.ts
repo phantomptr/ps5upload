@@ -52,3 +52,35 @@ describe("fpkg.buildImage", () => {
     );
   });
 });
+
+describe("fpkg.build", () => {
+  // #933: a package of a game in asset packs can hold its plain files and leave the emulator out.
+  it("sends unpacking and leaving out the AMPR emulator, with the emulator choice", async () => {
+    const { useConvertPrefs } = await import("../state/convertPrefs");
+    useConvertPrefs.setState({ addAmprEmu: true, amprEmuBuild: "ampr_emu" });
+    await fpkg.build({ source: "/games/P", unpackPacks: true, leaveOutAmprEmu: true });
+    expect(invoke).toHaveBeenLastCalledWith(
+      "fpkg_build",
+      expect.objectContaining({
+        source: "/games/P",
+        unpackPacks: true,
+        leaveOutAmprEmu: true,
+        addAmprEmu: true,
+        amprEmuBuild: "ampr_emu",
+      }),
+    );
+    // A queued game's own emulator choice wins over the setting.
+    await fpkg.build({ source: "/games/P", unpackPacks: true, amprEmu: { add: false, build: "ampr-emu-ng" } });
+    const own = vi.mocked(invoke).mock.lastCall?.[1] as Record<string, unknown>;
+    expect(own).toMatchObject({ unpackPacks: true, addAmprEmu: false, amprEmuBuild: "ampr-emu-ng" });
+    expect(own).not.toHaveProperty("leaveOutAmprEmu");
+  });
+
+  it("leaves a plain package's call as it was", async () => {
+    await fpkg.build({ source: "/games/G", leaveOutAmprEmu: true });
+    const args = vi.mocked(invoke).mock.lastCall?.[1] as Record<string, unknown>;
+    for (const key of ["unpackPacks", "leaveOutAmprEmu", "addAmprEmu", "amprEmuBuild"]) {
+      expect(args).not.toHaveProperty(key);
+    }
+  });
+});

@@ -258,6 +258,56 @@ describe("OptionsCard for an image", () => {
   });
 });
 
+describe("OptionsCard for a package of a game in asset packs (#933)", () => {
+  const props = {
+    outputDir: "/out",
+    onChangeOutput: () => {},
+    onOutputTyped: () => {},
+    canBrowse: true,
+    compression: "balanced" as const,
+    onCompression: () => {},
+    estimates: undefined,
+    locked: false,
+  };
+  const pkgUnpack = (on: boolean, leaveOut = false) => ({
+    kind: "zstd" as const,
+    on,
+    onToggle: () => {},
+    leaveOutEmulator: { on: leaveOut, onToggle: () => {} },
+  });
+  it("offers the plain files beside the compression, and leaving the emulator out only under them", () => {
+    const on = renderToStaticMarkup(<OptionsCard {...props} make="pkg" unpack={pkgUnpack(true)} />);
+    expect(on).toMatch(/data-testid="unpack-option"[^>]*>\s*<input[^>]*checked/);
+    expect(on).toContain("the package holds every file as a plain file");
+    expect(on).toContain('role="radiogroup"');
+    expect(on).toContain('data-testid="leave-out-ampr-emu"');
+    expect(on).toContain("Leave out the AMPR emulator");
+    expect(on).not.toMatch(/data-testid="leave-out-ampr-emu"[^>]*>\s*<input[^>]*checked/);
+    const left = renderToStaticMarkup(<OptionsCard {...props} make="pkg" unpack={pkgUnpack(true, true)} />);
+    expect(left).toMatch(/data-testid="leave-out-ampr-emu"[^>]*>\s*<input[^>]*checked/);
+    // Unticked, the packs go in as they are and the emulator has to stay.
+    const off = renderToStaticMarkup(<OptionsCard {...props} make="pkg" unpack={pkgUnpack(false, true)} />);
+    expect(off).toContain('data-testid="unpack-option"');
+    expect(off).not.toMatch(/data-testid="unpack-option"[^>]*>\s*<input[^>]*checked/);
+    expect(off).not.toContain("leave-out-ampr-emu");
+  });
+  it("offers no emulator choice for an image, and nothing for a PS4 package", () => {
+    const image = renderToStaticMarkup(
+      <OptionsCard
+        {...props}
+        make="image"
+        image={{ format: "ffpkg", compress: false, onChoice: () => {} }}
+        unpack={{ kind: "lz4", on: true, onToggle: () => {} }}
+      />,
+    );
+    expect(image).toContain('data-testid="unpack-option"');
+    expect(image).toContain("no longer needs ShadowMount+ to read packs");
+    expect(image).not.toContain("leave-out-ampr-emu");
+    const ps4 = renderToStaticMarkup(<OptionsCard {...props} make="pkg" ps4 unpack={pkgUnpack(true)} />);
+    expect(ps4).not.toContain("unpack-option");
+  });
+});
+
 describe("OptionsCard verification", () => {
   const props = {
     outputDir: "/out",
@@ -670,6 +720,17 @@ describe("a waiting game's own options (#669)", () => {
     expect(changeForKind(waitingItem({ build: folder }), "folder", true, null).build).toEqual(folder);
     const unpacked: ConvertBuild = { kind: "folder", unpackPacks: true };
     expect(changeForKind(waitingItem({ build: unpacked }), "folder", true, null).build).toEqual(unpacked);
+    // #933: plain files go along into another kind; leaving the emulator out is a package's own.
+    const pkg: ConvertBuild = { kind: "pkg", unpackPacks: true, leaveOutAmprEmu: true };
+    expect(changeForKind(waitingItem({ source: "/dl/game.exfat", build: pkg }), "folder", true, null).build).toEqual({
+      kind: "folder",
+      unpackPacks: true,
+    });
+    expect(changeForKind(waitingItem({ source: "/dl/game.exfat", build: unpacked }), "pkg", true, null).build).toEqual({
+      kind: "pkg",
+      unpackPacks: true,
+    });
+    expect(changeForKind(waitingItem({ build: pkg }), "pkg", true, null).build).toEqual(pkg);
   });
 
   it("a game on a server or the PS5 has no folder here to be saved next to", async () => {

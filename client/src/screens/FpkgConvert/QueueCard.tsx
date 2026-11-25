@@ -106,6 +106,8 @@ export function QueueCard(p: QueueCardProps) {
         return tr("cq_tag_lz4", undefined, "LZ4");
       case "unpack":
         return tr("cq_tag_unpack", undefined, "unpacked");
+      case "no-emulator":
+        return tr("cq_tag_no_emulator", undefined, "no AMPR emulator");
       case "level":
         return t.level === "fast"
           ? tr("cq_tag_level_fast", undefined, "fast")

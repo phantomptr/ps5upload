@@ -221,6 +221,10 @@ export default function WorkshopScreen() {
   const [lz4Profile, setLz4Profile] = useState<{ name: string; text: string; measured?: boolean } | null>(null);
   // A game in asset packs written as plain files again; the game's own, off for the next one.
   const [unpackPacks, setUnpackPacks] = useState(false);
+  // The same for a package (#933): on for each new game, since a package is installed and read
+  // by the console itself; its AMPR emulator stays unless the user leaves it out.
+  const [pkgUnpack, setPkgUnpack] = useState(true);
+  const [leaveOutEmu, setLeaveOutEmu] = useState(false);
   const [packKind, setPackKind] = useState<"lz4" | "zstd">("lz4");
   const [emuAddedTo, setEmuAddedTo] = useState<string | null>(null);
   const [zstdUpdatedTo, setZstdUpdatedTo] = useState<string | null>(null);
@@ -242,6 +246,8 @@ export default function WorkshopScreen() {
     zstd?: ZstdPacks,
     /** Write this game's asset packs out as plain files (the game under ①, when ticked). */
     unpack?: boolean,
+    /** With `unpack`, a package's: leave its AMPR emulator out. */
+    leaveOutAmprEmu?: boolean,
   ): boolean | QueueSkip => {
     // A later part of a multi-part archive is read through its first part.
     if (isRarLaterVolume(src)) return "later-part";
@@ -276,7 +282,9 @@ export default function WorkshopScreen() {
               ? { ...build, lz4 }
               : build.kind === "folder" && unpack
               ? { ...build, unpackPacks: true }
-              : build,
+              : build.kind === "pkg" && unpack
+                ? { kind: "pkg", unpackPacks: true, ...(leaveOutAmprEmu ? { leaveOutAmprEmu: true } : {}) }
+                : build,
       imageDest:
         build.kind === "image"
           ? { volume: u.destinationVolume, subpath: u.destinationSubpath || DEFAULT_IMAGE_SUBPATH }
@@ -453,6 +461,8 @@ export default function WorkshopScreen() {
       setLz4On(false);
       setLz4Profile(null);
       setUnpackPacks(false);
+      setPkgUnpack(true);
+      setLeaveOutEmu(false);
       void check(path);
     },
     [check, reset, setSource, setPassword],
@@ -663,6 +673,9 @@ export default function WorkshopScreen() {
         language: language || undefined,
         keepBoth: out.keepBoth,
         update,
+        ...(pkgUnpackOn && !update
+          ? { unpackPacks: true, ...(pkgLeavesOutEmu ? { leaveOutAmprEmu: true } : {}) }
+          : {}),
       },
       {
         install,
@@ -709,6 +722,8 @@ export default function WorkshopScreen() {
     setLz4On(false);
     setLz4Profile(null);
     setUnpackPacks(false);
+    setPkgUnpack(true);
+    setLeaveOutEmu(false);
     setInspection(null);
     setEstimates(null);
     setChecking(false);
@@ -798,6 +813,19 @@ export default function WorkshopScreen() {
       ? { kind: inspection.packs, on: unpackPacks, onToggle: setUnpackPacks }
       : undefined;
   const unpackOn = !!unpackChoice?.on;
+  // A package of a packed game (#933): its files plain unless unticked, and under that the
+  // choice to leave its AMPR emulator out.
+  const pkgUnpackChoice: UnpackChoice | undefined =
+    inspection?.packs && build.kind === "pkg" && !inspection.ps4_game
+      ? {
+          kind: inspection.packs,
+          on: pkgUnpack,
+          onToggle: setPkgUnpack,
+          leaveOutEmulator: { on: leaveOutEmu, onToggle: setLeaveOutEmu },
+        }
+      : undefined;
+  const pkgUnpackOn = !!pkgUnpackChoice?.on;
+  const pkgLeavesOutEmu = pkgUnpackOn && leaveOutEmu;
   // "Remove backport libraries" is for an image or folder of the one game checked, when its
   // fakelib holds any; not with an update merged in (the merged game is another source).
   const backport =
@@ -1217,7 +1245,7 @@ export default function WorkshopScreen() {
               // A game's own: nothing to offer until the next game is checked.
               lz4: locked ? undefined : lz4Choice,
             }}
-            unpack={locked ? undefined : unpackChoice}
+            unpack={locked ? undefined : (unpackChoice ?? pkgUnpackChoice)}
             language={locked ? nextLanguage : language}
             onLanguage={locked ? setNextLanguage : setLanguage}
             onCompression={setCompression}
@@ -1318,7 +1346,8 @@ export default function WorkshopScreen() {
                     ? folderLz4Options(lz4Choice, packProfile)
                     : undefined,
                 build.kind === "folder" ? folderPackOptions(lz4Choice, packProfile) : undefined,
-                unpackOn,
+                build.kind === "pkg" ? pkgUnpackOn : unpackOn,
+                build.kind === "pkg" && pkgLeavesOutEmu,
               );
               if (r === "not-image" || r === "not-folder" || r === "later-part") setError(skippedText(r, 1));
               else if (!r) setError(tr("cq_already", undefined, "This game is already in the queue."));

@@ -2384,6 +2384,13 @@ pub async fn fpkg_build(
     keep_both: Option<bool>,
     // A PS4 update merged into the PS4 game `source` first: a PS4 package of the merged game.
     update: Option<String>,
+    // A game in asset packs is packaged as plain files (#933).
+    unpack_packs: Option<bool>,
+    // With unpack_packs: the AMPR emulator choice, as an image build takes it.
+    add_ampr_emu: Option<bool>,
+    ampr_emu_build: Option<String>,
+    // With unpack_packs: the AMPR emulator is left out of the package.
+    leave_out_ampr_emu: Option<bool>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/fpkg/build");
@@ -2400,6 +2407,10 @@ pub async fn fpkg_build(
             "full_verify": full_verify.unwrap_or(false),
             "keep_both": keep_both.unwrap_or(false),
             "update": update,
+            "unpack_packs": unpack_packs.unwrap_or(false),
+            "add_ampr_emu": add_ampr_emu.unwrap_or(true),
+            "ampr_emu_build": ampr_emu_build,
+            "leave_out_ampr_emu": leave_out_ampr_emu.unwrap_or(false),
         }),
     )
     .await

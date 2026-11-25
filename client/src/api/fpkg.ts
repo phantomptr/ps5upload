@@ -204,6 +204,13 @@ export interface FpkgBuildRequest {
   /** A PS4 update merged into the PS4 game `source` first: the PS4 package is the game at the
    *  update's version. */
   update?: string;
+  /** A game in asset packs is packaged as plain files (#933). */
+  unpackPacks?: boolean;
+  /** With `unpackPacks`: the AMPR emulator choice (a queued game's own; the settings when
+   *  absent), as an image or folder build takes it. */
+  amprEmu?: { add: boolean; build: AmprEmuBuild };
+  /** With `unpackPacks`: the AMPR emulator is left out of the package. */
+  leaveOutAmprEmu?: boolean;
 }
 
 /** `stored` = no compression: the fallback for a console that refuses a compressed package. */
@@ -236,6 +243,15 @@ export const fpkg = {
       fullVerify: req.fullVerify ?? false,
       keepBoth: req.keepBoth ?? false,
       update: req.update,
+      // Only when unpacking: a plain package's call stays as it was.
+      ...(req.unpackPacks
+        ? {
+            unpackPacks: true,
+            addAmprEmu: req.amprEmu?.add ?? useConvertPrefs.getState().addAmprEmu,
+            amprEmuBuild: req.amprEmu?.build ?? useConvertPrefs.getState().amprEmuBuild,
+            ...(req.leaveOutAmprEmu ? { leaveOutAmprEmu: true } : {}),
+          }
+        : {}),
     }),
   /** Unpack a .zip / .7z / .rar into an unpack folder in `outputDir`, as a job; the job's
    *  `dest` is the game found inside. A RAR's password goes with it, never stored. */

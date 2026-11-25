@@ -274,6 +274,30 @@ describe("engine-backed commands the web UI depends on (#300)", () => {
     expect(JSON.parse(String(calls[0].init.body))).toMatchObject({ source: "/game.pkg", update: "/update.pkg" });
   });
 
+  it("sends a package build's unpacking and AMPR emulator choices (#933)", async () => {
+    const calls = captureFetch({ job_id: "j" });
+    await browserInvoke("fpkg_build", {
+      source: "/packed",
+      unpackPacks: true,
+      addAmprEmu: false,
+      amprEmuBuild: "ampr-emu-ng",
+      leaveOutAmprEmu: true,
+    });
+    expect(JSON.parse(String(calls[0].init.body))).toMatchObject({
+      source: "/packed",
+      unpack_packs: true,
+      add_ampr_emu: false,
+      ampr_emu_build: "ampr-emu-ng",
+      leave_out_ampr_emu: true,
+    });
+    await browserInvoke("fpkg_build", { source: "/plain" });
+    expect(JSON.parse(String(calls[1].init.body))).toMatchObject({
+      unpack_packs: false,
+      add_ampr_emu: true,
+      leave_out_ampr_emu: false,
+    });
+  });
+
   it("keeps since_seq=0 rather than dropping it as falsy", async () => {
     // Dropping it would make the engine replay the whole notification
     // backlog on every poll instead of returning only new rows.

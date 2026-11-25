@@ -102,6 +102,7 @@ async function build(item: ConvertItem) {
   }
   // A console dump is swapped for its package inside the build (never installed beside it).
   const swap = item.source.startsWith("ps5://") && item.then !== "keep" && !!item.host;
+  const pkg = item.build?.kind === "pkg" ? item.build : undefined;
   await conv.start(
     {
       source: item.source,
@@ -110,6 +111,16 @@ async function build(item: ConvertItem) {
       firmware: item.firmware,
       language: item.language,
       keepBoth: item.keepBoth,
+      // A game in asset packs packaged as plain files, with the emulator choice it was added with.
+      ...(pkg?.unpackPacks
+        ? {
+            unpackPacks: true,
+            ...(item.addAmprEmu !== undefined && item.amprEmuBuild
+              ? { amprEmu: { add: item.addAmprEmu, build: item.amprEmuBuild } }
+              : {}),
+            ...(pkg.leaveOutAmprEmu ? { leaveOutAmprEmu: true } : {}),
+          }
+        : {}),
     },
     {
       install: swap,
