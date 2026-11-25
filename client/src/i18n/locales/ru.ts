@@ -9224,6 +9224,7 @@ rp_users_add_hint: "Чтобы играть и за другого пользо�
 "saves_folders_none": "Копий этой папки пока нет.",
 "saves_folders_before_restore": "сохранено перед восстановлением",
 "saves_folders_legacy": "из времени, когда копии ещё не разделялись по PS5",
+backup_restore_partial: "Восстановлено файлов: {count}; не удалось восстановить: {missed}",
 };
 
 export default ru;

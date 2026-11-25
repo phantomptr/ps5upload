@@ -1254,7 +1254,7 @@ test-payload: payload
 		-o $(SELFTEST_DIR)/ps5upload-backup-selftest \
 		$(PAYLOAD_DIR)/tests/backup_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-backup-selftest
-	@echo "✓ a snapshot restores byte for byte, the newest five are kept, the list stays valid and inside its buffer"
+	@echo "✓ a snapshot restores byte for byte, the newest five are kept, the list stays valid and inside its buffer; a restore that put nothing back is not ok"
 	@echo "Running file replace self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-atomic-file-selftest \

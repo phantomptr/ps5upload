@@ -9279,6 +9279,7 @@ rp_users_add_hint: "Um auch als anderer Benutzer zu spielen, melde dich auf der 
 "saves_folders_none": "Von diesem Ordner gibt es noch keine Sicherung.",
 "saves_folders_before_restore": "vor einer Wiederherstellung behalten",
 "saves_folders_legacy": "aus der Zeit vor Sicherungen pro PS5",
+backup_restore_partial: "{count} Dateien wiederhergestellt; {missed} konnten nicht wiederhergestellt werden",
 };
 
 export default de;

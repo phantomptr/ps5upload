@@ -9273,6 +9273,7 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "saves_folders_none": "Thư mục này chưa có bản sao lưu.",
 "saves_folders_before_restore": "giữ lại trước khi khôi phục",
 "saves_folders_legacy": "từ trước khi bản sao lưu được tách theo từng PS5",
+backup_restore_partial: "Đã khôi phục {count} tệp; không thể khôi phục {missed} tệp",
 };
 
 export default vi;

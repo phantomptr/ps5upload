@@ -3369,6 +3369,7 @@ schedule_fired_body: "Schedule fired.",
   backup_working: "Working...",
   backup_snapshot_ok: "Snapshotted {files} files ({bytes})",
   backup_restore_ok: "Restored {count} files",
+  backup_restore_partial: "Restored {count} files; {missed} could not be restored",
   backup_delete_ok: "Snapshot deleted",
   backup_restore_confirm_title: "Restore snapshot?",
   backup_restore_confirm_msg:

@@ -9549,6 +9549,7 @@ rp_users_add_hint: "برای بازی به‌عنوان کاربری دیگر ن
 "saves_folders_none": "هنوز پشتیبانی از این پوشه نیست.",
 "saves_folders_before_restore": "نگه‌داشته پیش از بازگردانی",
 "saves_folders_legacy": "از پیش از نگه‌داری پشتیبان‌ها برای هر PS5",
+backup_restore_partial: "{count} فایل بازگردانی شد؛ {missed} مورد بازگردانی نشد",
 };
 
 export default fa;

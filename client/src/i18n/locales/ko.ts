@@ -9288,6 +9288,7 @@ rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사�
 "saves_folders_none": "이 폴더의 백업이 아직 없습니다.",
 "saves_folders_before_restore": "복원 전에 보관됨",
 "saves_folders_legacy": "PS5별로 보관하기 전의 백업",
+backup_restore_partial: "{count}개 파일을 복원했습니다. {missed}개는 복원하지 못했습니다",
 };
 
 export default ko;

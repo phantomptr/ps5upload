@@ -9271,6 +9271,7 @@ rp_users_add_hint: "অন্য ব্যবহারকারী হিসে�
 "saves_folders_none": "এই ফোল্ডারের এখনও কোনো ব্যাকআপ নেই।",
 "saves_folders_before_restore": "পুনরুদ্ধারের আগে রাখা",
 "saves_folders_legacy": "প্রতিটি PS5-এর জন্য আলাদা ব্যাকআপ রাখার আগের",
+backup_restore_partial: "{count}টি ফাইল পুনরুদ্ধার করা হয়েছে; {missed}টি পুনরুদ্ধার করা যায়নি",
 };
 
 export default bn;

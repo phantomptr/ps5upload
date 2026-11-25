@@ -9278,6 +9278,7 @@ rp_users_add_hint: "Başka bir kullanıcıyla da oynamak için PS5'te o kullanı
 "saves_folders_none": "Bu klasörün henüz yedeği yok.",
 "saves_folders_before_restore": "geri yüklemeden önce tutuldu",
 "saves_folders_legacy": "yedekler PS5 başına tutulmadan önceki",
+backup_restore_partial: "{count} dosya geri yüklendi; {missed} dosya geri yüklenemedi",
 };
 
 export default tr;

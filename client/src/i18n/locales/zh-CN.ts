@@ -9230,6 +9230,7 @@ rp_users_add_hint: "若也想以其他用户游玩，请在 PS5 上登录该用�
 "saves_folders_none": "这个文件夹还没有备份。",
 "saves_folders_before_restore": "恢复前保留",
 "saves_folders_legacy": "按 PS5 分别保存之前的备份",
+backup_restore_partial: "已恢复 {count} 个文件；{missed} 个无法恢复",
 };
 
 export default zh_CN;

@@ -9271,6 +9271,7 @@ rp_users_add_hint: "للعب باسم مستخدم آخر أيضًا، سجّل 
 "saves_folders_none": "لا توجد نسخة احتياطية لهذا المجلد بعد.",
 "saves_folders_before_restore": "محفوظة قبل استعادة",
 "saves_folders_legacy": "من قبل حفظ النسخ لكل PS5 على حدة",
+backup_restore_partial: "تمت استعادة {count} ملفًا؛ تعذّرت استعادة {missed}",
 };
 
 export default ar;

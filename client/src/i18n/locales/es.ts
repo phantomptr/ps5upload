@@ -9224,6 +9224,7 @@ rp_users_add_hint: "Para jugar también como otro usuario, inicia sesión con es
 "saves_folders_none": "Todavía no hay copia de esta carpeta.",
 "saves_folders_before_restore": "guardada antes de restaurar",
 "saves_folders_legacy": "de antes de guardar copias por PS5",
+backup_restore_partial: "Se restauraron {count} archivos; {missed} no se pudieron restaurar",
 };
 
 export default es;

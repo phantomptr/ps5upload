@@ -31413,10 +31413,13 @@
               "application/json": {
                 "schema": {
                   "properties": {
+                    "failed": {},
                     "ok": {
                       "type": "boolean"
                     },
+                    "partial": {},
                     "restored": {},
+                    "skipped": {},
                     "tag": {}
                   },
                   "type": "object"

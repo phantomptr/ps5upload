@@ -9224,6 +9224,7 @@ rp_users_add_hint: "Per giocare anche come un altro utente, accedi con quell’u
 "saves_folders_none": "Ancora nessun backup di questa cartella.",
 "saves_folders_before_restore": "conservato prima di un ripristino",
 "saves_folders_legacy": "di prima dei backup separati per PS5",
+backup_restore_partial: "{count} file ripristinati; impossibile ripristinarne {missed}",
 };
 
 export default it;

@@ -9287,6 +9287,7 @@ rp_users_add_hint: "Pour jouer aussi avec un autre utilisateur, connectez-vous �
 "saves_folders_none": "Aucune copie de ce dossier pour l’instant.",
 "saves_folders_before_restore": "conservée avant une restauration",
 "saves_folders_legacy": "d’avant les copies par PS5",
+backup_restore_partial: "{count} fichiers restaurés ; {missed} n'ont pas pu être restaurés",
 };
 
 export default fr;

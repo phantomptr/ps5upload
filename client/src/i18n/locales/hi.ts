@@ -9285,6 +9285,7 @@ rp_users_add_hint: "किसी दूसरे उपयोगकर्ता 
 "saves_folders_none": "इस फ़ोल्डर का अभी कोई बैकअप नहीं है।",
 "saves_folders_before_restore": "पुनर्स्थापना से पहले रखा गया",
 "saves_folders_legacy": "हर PS5 के लिए अलग बैकअप रखने से पहले का",
+backup_restore_partial: "{count} फ़ाइलें पुनर्स्थापित की गईं; {missed} पुनर्स्थापित नहीं की जा सकीं",
 };
 
 export default hi;

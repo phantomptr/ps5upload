@@ -9563,6 +9563,7 @@ rp_users_add_hint: "Ha másik felhasználóként is játszanál, jelentkezz be a
 "saves_folders_none": "Erről a mappáról még nincs mentés.",
 "saves_folders_before_restore": "visszaállítás előtt megtartva",
 "saves_folders_legacy": "abból az időből, mielőtt a mentések PS5-önként külön kerültek",
+backup_restore_partial: "{count} fájl visszaállítva; {missed} nem állítható vissza",
 };
 
 export default hu;

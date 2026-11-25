@@ -9224,6 +9224,7 @@ rp_users_add_hint: "若也想以其他使用者遊玩，請在 PS5 上登入該�
 "saves_folders_none": "這個資料夾還沒有備份。",
 "saves_folders_before_restore": "還原前保留",
 "saves_folders_legacy": "按 PS5 分別保存之前的備份",
+backup_restore_partial: "已還原 {count} 個檔案；{missed} 個無法還原",
 };
 
 export default zh_TW;

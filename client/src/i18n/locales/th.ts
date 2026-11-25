@@ -9278,6 +9278,7 @@ rp_users_add_hint: "หากต้องการเล่นในฐานะ
 "saves_folders_none": "โฟลเดอร์นี้ยังไม่มีข้อมูลสำรอง",
 "saves_folders_before_restore": "เก็บไว้ก่อนกู้คืน",
 "saves_folders_legacy": "จากก่อนที่จะแยกข้อมูลสำรองตาม PS5",
+backup_restore_partial: "กู้คืน {count} ไฟล์แล้ว กู้คืนไม่ได้ {missed} ไฟล์",
 };
 
 export default th;

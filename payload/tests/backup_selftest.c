@@ -402,6 +402,23 @@ static void damaged_manifest(void) {
     CHECK(same_text(ok_dst, "good bytes"));
     CHECK(access(denied_dst, F_OK) != 0);
 
+    /* Every line is counted once, and the reply says what did not come back. */
+    {
+        backup_restore_counts_t c = { -1, -1, -1 };
+        char reply[512];
+        g_denied = 1;
+        int rc = backup_restore_ex("t5", 2000, &c);
+        g_denied = 0;
+        CHECK(rc == 0);
+        CHECK(c.restored == 1);
+        CHECK(c.skipped == 4); /* no tab (twice), a denied path, a path outside the roots */
+        CHECK(c.failed == 1);  /* missing-file: not in the snapshot */
+        CHECK(backup_restore_reply(reply, sizeof reply, "t5", rc, &c) > 0);
+        CHECK(strstr(reply, "\"ok\":true") != NULL);
+        CHECK(strstr(reply, "\"restored\":1,\"skipped\":4,\"failed\":1,\"partial\":true") != NULL);
+        CHECK(strstr(reply, "\"err\":\"\"") != NULL);
+    }
+
     /* No snapshot, or a bad tag: a refusal, nothing restored. */
     CHECK(backup_restore("t5", 9999, &restored) == -1);
     CHECK(backup_restore("../t5", 2000, &restored) == -1);
@@ -414,6 +431,64 @@ static void damaged_manifest(void) {
     CHECK(restored == 0);
     unlink(p);
     CHECK(backup_restore("t5", 2000, &restored) == -1);
+}
+
+/* A restore that put nothing back is not a success: it used to reply ok:true with restored:0, and
+ * the app said "Restored 0 files" as if it had worked. */
+static void restore_of_nothing_is_not_ok(void) {
+    char snap[1024], p[1200], text[2048], reply[512];
+    backup_restore_counts_t c;
+    int rc;
+
+    snprintf(snap, sizeof snap, "%s/t8/4000", BACKUPS_ROOT);
+    snprintf(p, sizeof p, "%s/t8", BACKUPS_ROOT);
+    mkdir(p, 0777);
+    mkdir(snap, 0777);
+    snprintf(p, sizeof p, "%s/evil", snap);
+    put(p, "evil bytes");
+
+    /* Every entry skipped or failed. */
+    snprintf(text, sizeof text,
+             "evil\t/outside/the/roots\n"
+             "missing\t%s/restored-nothing\n",
+             g_root);
+    snprintf(p, sizeof p, "%s/.manifest", snap);
+    put(p, text);
+    rc = backup_restore_ex("t8", 4000, &c);
+    CHECK(rc == 0);
+    CHECK(c.restored == 0 && c.skipped == 1 && c.failed == 1);
+    CHECK(backup_restore_reply(reply, sizeof reply, "t8", rc, &c) > 0);
+    CHECK(strstr(reply, "\"ok\":false") != NULL);
+    CHECK(strstr(reply, "\"restored\":0") != NULL);
+    CHECK(strstr(reply, "\"partial\":false") != NULL);
+    CHECK(strstr(reply, "nothing was restored: 1 file(s) could not be written back, 1 entry was skipped") != NULL);
+
+    /* Nothing listed at all (blank lines only). */
+    put(p, "\n\n");
+    rc = backup_restore_ex("t8", 4000, &c);
+    CHECK(rc == 0);
+    CHECK(c.restored == 0 && c.skipped == 0 && c.failed == 0);
+    CHECK(backup_restore_reply(reply, sizeof reply, "t8", rc, &c) > 0);
+    CHECK(strstr(reply, "\"ok\":false") != NULL);
+    CHECK(strstr(reply, "the snapshot lists no files") != NULL);
+
+    /* No snapshot: ok:false, the old reason. */
+    rc = backup_restore_ex("t8", 4001, &c);
+    CHECK(rc == -1);
+    CHECK(c.restored == 0);
+    CHECK(backup_restore_reply(reply, sizeof reply, "t8", rc, &c) > 0);
+    CHECK(strstr(reply, "\"ok\":false") != NULL);
+    CHECK(strstr(reply, "snapshot not found or restore failed") != NULL);
+
+    /* Everything restored: ok, not partial. */
+    snprintf(text, sizeof text, "evil\t%s/restored-all\n", g_root);
+    put(p, text);
+    rc = backup_restore_ex("t8", 4000, &c);
+    CHECK(rc == 0 && c.restored == 1 && c.skipped == 0 && c.failed == 0);
+    CHECK(backup_restore_reply(reply, sizeof reply, "t8", rc, &c) > 0);
+    CHECK(strcmp(reply, "{\"ok\":true,\"tag\":\"t8\",\"restored\":1,\"skipped\":0,\"failed\":0,"
+                        "\"partial\":false,\"err\":\"\"}") == 0);
+    CHECK(backup_delete("t8", 4000) == 0);
 }
 
 /* Two paths that flatten to one name ("a/b_c" and "a_b/c"), and two long paths whose names are cut
@@ -536,6 +611,7 @@ int main(void) {
     list_survives_strange_folders();
     list_stays_inside_its_buffer();
     damaged_manifest();
+    restore_of_nothing_is_not_ok();
     same_flat_name_keeps_both();
     long_manifest_lines();
     (void)rm_rf(tmpl);

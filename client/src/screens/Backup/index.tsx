@@ -247,12 +247,19 @@ export function SnapshotsPanel({ prefill }: { prefill?: SnapshotPrefill | null }
           { kind: "backup-restore", origin: "backup", label: tr("backup_task_restore", { tag: entry.tag }, "Restore {tag}"), consoleId: addr },
           () => backupRestore(entry.tag, entry.timestamp, addr),
         );
+        const missed = (result.skipped ?? 0) + (result.failed ?? 0);
         setActionMsg(
-          tr(
-            "backup_restore_ok",
-            { count: result.restored },
-            `Restored ${result.restored} files`,
-          ),
+          result.partial && missed > 0
+            ? tr(
+                "backup_restore_partial",
+                { count: result.restored, missed },
+                `Restored ${result.restored} files; ${missed} could not be restored`,
+              )
+            : tr(
+                "backup_restore_ok",
+                { count: result.restored },
+                `Restored ${result.restored} files`,
+              ),
         );
       } catch (e) {
         setError(humanizePs5Error(String(e)));

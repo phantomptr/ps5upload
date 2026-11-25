@@ -455,6 +455,12 @@ export interface BackupRestoreResult {
   ok: boolean;
   tag: string;
   restored: number;
+  /** Entries not used (outside the allowed folders, damaged); absent from an older engine. */
+  skipped?: number;
+  /** Files that could not be written back. */
+  failed?: number;
+  /** Some files came back and some did not. */
+  partial?: boolean;
 }
 
 /** Snapshot a file or directory tree under a backup tag. */

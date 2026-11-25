@@ -9290,6 +9290,7 @@ rp_users_add_hint: "別のユーザーでもプレイするには、PS5 でそ�
 "saves_folders_none": "このフォルダーのバックアップはまだありません。",
 "saves_folders_before_restore": "復元前に保存",
 "saves_folders_legacy": "PS5 ごとの保存より前のもの",
+backup_restore_partial: "{count}個のファイルを復元しました。{missed}個は復元できませんでした",
 };
 
 export default ja;

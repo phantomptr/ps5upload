@@ -9286,6 +9286,7 @@ rp_users_add_hint: "Para jogar também como outro usuário, entre com esse usuá
 "saves_folders_none": "Ainda não há backup desta pasta.",
 "saves_folders_before_restore": "guardado antes de uma restauração",
 "saves_folders_legacy": "de antes dos backups serem separados por PS5",
+backup_restore_partial: "{count} arquivos restaurados; {missed} não puderam ser restaurados",
 };
 
 export default pt_BR;

@@ -46,8 +46,38 @@ pub struct BackupRestoreResult {
     pub tag: String,
     #[serde(default)]
     pub restored: i32,
+    /// Manifest entries not used (outside the writable folders, damaged). 0 from an older helper,
+    /// which did not count them.
+    #[serde(default)]
+    pub skipped: i32,
+    /// Files that could not be written back (missing in the snapshot, a write error).
+    #[serde(default)]
+    pub failed: i32,
+    /// Some files came back and some did not (`ok` is still true).
+    #[serde(default)]
+    pub partial: bool,
     #[serde(default)]
     pub err: String,
+}
+
+/// The restore's verdict: an error when the helper said it failed, or when nothing was restored.
+/// An older helper answered ok:true with restored:0 when every entry was skipped or failed; that
+/// is no success either.
+fn restore_verdict(parsed: BackupRestoreResult) -> Result<BackupRestoreResult> {
+    if !parsed.ok {
+        bail!(
+            "restore failed: {}",
+            if parsed.err.is_empty() {
+                "unknown error"
+            } else {
+                &parsed.err
+            }
+        );
+    }
+    if parsed.restored <= 0 {
+        bail!("restore failed: nothing was restored");
+    }
+    Ok(parsed)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,18 +163,7 @@ pub fn backup_restore(addr: &str, tag: &str, timestamp: i64) -> Result<BackupRes
             deadline: BACKUP_DEADLINE,
         },
     )?;
-    let parsed: BackupRestoreResult = serde_json::from_slice(&resp)?;
-    if !parsed.ok {
-        bail!(
-            "restore failed: {}",
-            if parsed.err.is_empty() {
-                "unknown error"
-            } else {
-                &parsed.err
-            }
-        );
-    }
-    Ok(parsed)
+    restore_verdict(serde_json::from_slice(&resp)?)
 }
 
 pub fn backup_delete(addr: &str, tag: &str, timestamp: i64) -> Result<()> {
@@ -245,5 +264,40 @@ mod tests {
 
         let l: BackupList = serde_json::from_str(r#"{"snapshots":[]}"#).unwrap();
         assert!(l.snapshots.is_empty());
+    }
+
+    fn restore(json: &str) -> Result<BackupRestoreResult> {
+        restore_verdict(serde_json::from_str(json).unwrap())
+    }
+
+    #[test]
+    fn a_partial_restore_keeps_its_counts() {
+        let r = restore(
+            r#"{"ok":true,"tag":"t","restored":2,"skipped":1,"failed":3,"partial":true,"err":""}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (r.restored, r.skipped, r.failed, r.partial),
+            (2, 1, 3, true)
+        );
+    }
+
+    #[test]
+    fn a_restore_of_nothing_is_an_error() {
+        let e = restore(
+            r#"{"ok":false,"tag":"t","restored":0,"skipped":2,"failed":0,"partial":false,
+                "err":"nothing was restored: 0 file(s) could not be written back, 2 entries were skipped (outside the allowed folders or damaged)"}"#,
+        )
+        .unwrap_err();
+        assert!(format!("{e:#}").contains("2 entries were skipped"), "{e:#}");
+        // An older helper said ok:true with restored:0 for the same thing.
+        let e = restore(r#"{"ok":true,"tag":"t","restored":0,"err":""}"#).unwrap_err();
+        assert!(format!("{e:#}").contains("nothing was restored"), "{e:#}");
+        // An older helper's whole restore still parses, with zero for the new counts.
+        let r = restore(r#"{"ok":true,"tag":"t","restored":3,"err":""}"#).unwrap();
+        assert_eq!(
+            (r.restored, r.skipped, r.failed, r.partial),
+            (3, 0, 0, false)
+        );
     }
 }

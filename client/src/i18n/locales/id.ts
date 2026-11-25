@@ -9280,6 +9280,7 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "saves_folders_none": "Belum ada cadangan folder ini.",
 "saves_folders_before_restore": "disimpan sebelum pemulihan",
 "saves_folders_legacy": "dari sebelum cadangan disimpan per PS5",
+backup_restore_partial: "{count} berkas dipulihkan; {missed} tidak dapat dipulihkan",
 };
 
 export default id;

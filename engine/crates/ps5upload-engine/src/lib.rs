@@ -9590,6 +9590,9 @@ async fn backup_restore_handler(
                 "ok": true,
                 "tag": result.tag,
                 "restored": result.restored,
+                "skipped": result.skipped,
+                "failed": result.failed,
+                "partial": result.partial,
             })),
         )
             .into_response(),

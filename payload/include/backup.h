@@ -22,8 +22,27 @@ int backup_snapshot(const char *tag, const char *src_path,
 int backup_list(const char *tag_filter, char *buf, size_t cap,
                 size_t *written);
 
-/* Restore a snapshot by tag+timestamp. Returns 0 on success. */
+/* What a restore did with the snapshot's manifest lines. */
+typedef struct {
+    int restored; /* files written back to their paths */
+    int skipped;  /* lines not used: no tab, a path outside the writable roots, a bad name, too long */
+    int failed;   /* files that could not be copied back (missing in the snapshot, a write error) */
+} backup_restore_counts_t;
+
+/* Restore a snapshot by tag+timestamp. Returns 0 when its manifest was read to the end (whatever
+ * each line came to: see `out`), -1 when the snapshot or its manifest is missing, BACKUP_CANCELLED.
+ * `out` (may be NULL) holds the counts so far in every case. */
+int backup_restore_ex(const char *tag, int64_t timestamp, backup_restore_counts_t *out);
+
+/* backup_restore_ex with only the restored count. */
 int backup_restore(const char *tag, int64_t timestamp, int *out_restored);
+
+/* The BACKUP_RESTORE reply for a restore that returned `rc` with `c`: `tag_json` is the tag already
+ * JSON-escaped. ok is true only when at least one file was restored; "partial" is true when some
+ * lines were not restored too. A restore that restored nothing (an empty manifest, every line
+ * skipped or failed) is ok:false with a reason in "err". Returns the length written (snprintf). */
+int backup_restore_reply(char *out, size_t cap, const char *tag_json, int rc,
+                         const backup_restore_counts_t *c);
 
 /* Delete a snapshot by tag+timestamp. Returns 0 on success. */
 int backup_delete(const char *tag, int64_t timestamp);

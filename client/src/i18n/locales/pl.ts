@@ -9508,6 +9508,7 @@ rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim 
 "saves_folders_none": "Brak jeszcze kopii tego folderu.",
 "saves_folders_before_restore": "zachowana przed przywróceniem",
 "saves_folders_legacy": "sprzed rozdzielenia kopii według PS5",
+backup_restore_partial: "Przywrócono {count} plików; {missed} nie udało się przywrócić",
 };
 
 export default pl;
