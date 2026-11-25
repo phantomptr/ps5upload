@@ -421,6 +421,9 @@ async fn sign_in(t: &Target) -> Result<Ftp, RemoteError> {
     // A NAS behind a router often names its private address for passive data; use the one
     // we connected to instead.
     ftp.set_passive_nat_workaround(true);
+    // Names go both ways as the server's bytes: one that is not UTF-8 (Latin-1 from an older
+    // system) read as lossy UTF-8 could not be asked for again, so the file failed to open.
+    ftp.set_encoding(super::name_bytes::Lossless).await;
     if implicit {
         // The library secures only the control connection here; the data connections want this.
         for command in ["PBSZ 0", "PROT P"] {
@@ -1488,6 +1491,109 @@ mod tests {
         "/torrents/[PS5] Hellblade - Senua’s Sacrifice [RUS text, RUS sound, USA, v01.003.000, ffpfsc]";
     const GLOB_FILE: &str = "PPSA00000_Game_v01.003.000_FW10.ffpfsc";
     const GLOB_SIZE: u64 = 13_851_336_704;
+
+    /// A file named in Latin-1 (not UTF-8), as an older NAS keeps it.
+    const LATIN1_PATH: &[u8] = b"/caf\xE9.bin";
+    const LATIN1_BODY: &[u8] = b"hello";
+
+    /// A server whose root holds [`LATIN1_PATH`]: it answers SIZE and RETR only for those exact
+    /// bytes, as a real one does.
+    async fn latin1_server() -> u16 {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let ctl = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = ctl.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((sock, _)) = ctl.accept().await {
+                tokio::spawn(async move {
+                    let (rd, mut wr) = sock.into_split();
+                    let mut rd = BufReader::new(rd);
+                    let mut data: Option<tokio::net::TcpListener> = None;
+                    wr.write_all(b"220 ready\r\n").await.ok();
+                    let mut line = Vec::new();
+                    while matches!(rd.read_until(b'\n', &mut line).await, Ok(n) if n > 0) {
+                        let l = line.strip_suffix(b"\r\n").unwrap_or(&line).to_vec();
+                        line.clear();
+                        let sp = l.iter().position(|&b| b == b' ').unwrap_or(l.len());
+                        let cmd = String::from_utf8_lossy(&l[..sp]).to_ascii_uppercase();
+                        let arg = l.get(sp + 1..).unwrap_or_default();
+                        let ours = arg == LATIN1_PATH;
+                        let reply = match cmd.as_str() {
+                            "USER" => "331 Password required".to_string(),
+                            "PASS" => "230 OK".into(),
+                            "TYPE" => "200 OK".into(),
+                            "PWD" => "257 \"/\" is the current folder".into(),
+                            "CWD" if arg == b"/" => "250 OK".into(),
+                            "SIZE" if ours => format!("213 {}", LATIN1_BODY.len()),
+                            "REST" => "350 Restarting".into(),
+                            "PASV" => {
+                                let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                                let p = l.local_addr().unwrap().port();
+                                data = Some(l);
+                                format!(
+                                    "227 Entering Passive Mode (127,0,0,1,{},{})",
+                                    p / 256,
+                                    p % 256
+                                )
+                            }
+                            "LIST" | "RETR" if cmd == "LIST" || ours => {
+                                let Some(l) = data.take() else {
+                                    wr.write_all(b"425 No data connection\r\n").await.ok();
+                                    continue;
+                                };
+                                wr.write_all(b"150 Opening data connection\r\n").await.ok();
+                                let (mut d, _) = l.accept().await.unwrap();
+                                if cmd == "LIST" {
+                                    let mut row =
+                                        b"-rw-r--r--    1 1000  1000  5 Nov  8 04:11 ".to_vec();
+                                    row.extend_from_slice(&LATIN1_PATH[1..]);
+                                    row.extend_from_slice(b"\r\n");
+                                    d.write_all(&row).await.ok();
+                                } else {
+                                    d.write_all(LATIN1_BODY).await.ok();
+                                }
+                                drop(d);
+                                "226 Transfer complete".into()
+                            }
+                            "QUIT" => {
+                                wr.write_all(b"221 Goodbye\r\n").await.ok();
+                                break;
+                            }
+                            "SIZE" | "MDTM" | "RETR" | "CWD" => "550 No such file".into(),
+                            _ => "500 Unknown command".into(),
+                        };
+                        wr.write_all(format!("{reply}\r\n").as_bytes()).await.ok();
+                    }
+                });
+            }
+        });
+        port
+    }
+
+    /// A file named in Latin-1 listed as lossy UTF-8 (`caf\u{FFFD}.bin`), which no server has:
+    /// opening it failed. The name keeps its bytes, and the file opens and reads by it.
+    #[tokio::test]
+    async fn a_name_that_is_not_utf8_lists_and_opens() {
+        let port = latin1_server().await;
+        let mut conn = crate::remote::store::conn("t", crate::remote::store::Protocol::Ftp);
+        conn.host = "127.0.0.1".into();
+        conn.port = port;
+        conn.user = "t".into();
+        let secret = Secret::Password {
+            password: "t".into(),
+        };
+        let fs = FtpFs::connect(&conn, &secret, false).await.unwrap();
+        let page = fs.list("/", None).await.unwrap();
+        assert_eq!(page.entries.len(), 1, "{:?}", triples(&page.entries));
+        let name = page.entries[0].name.clone();
+        assert!(!name.contains('\u{FFFD}'), "{name:?}");
+        assert_eq!(
+            super::super::name_bytes::encode(&format!("/{name}")),
+            LATIN1_PATH
+        );
+        let f = fs.open(&format!("/{name}")).await.unwrap();
+        assert_eq!(f.size(), LATIN1_BODY.len() as u64);
+        assert_eq!(f.read_at(0, f.size()).await.unwrap(), LATIN1_BODY);
+    }
 
     /// A server that, like Pure-FTPd (and the Keenetic router's FTP server of the report), reads a
     /// LIST argument as a glob: `[PS5]` is a character class, so listing the folder by its path

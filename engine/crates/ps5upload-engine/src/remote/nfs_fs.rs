@@ -109,8 +109,10 @@ impl Xdr {
     fn opaque(self, b: &[u8]) -> Self {
         self.u32(b.len() as u32).fixed(b)
     }
+    /// A directory handle and a name in it, the name as the bytes the server listed
+    /// ([`super::name_bytes`]).
     fn dir_op(self, dir: &[u8], name: &str) -> Self {
-        self.opaque(dir).opaque(name.as_bytes())
+        self.opaque(dir).opaque(&super::name_bytes::encode(name))
     }
 }
 
@@ -170,8 +172,11 @@ impl<'a> In<'a> {
     fn skip_padding(&mut self, n: usize) {
         self.take((4 - n % 4) % 4);
     }
+    /// A name or path the server sent, every byte kept: a name that is not UTF-8 (Latin-1 from
+    /// an older system) read lossily could not be looked up again, and the folder holding it
+    /// failed to list ([`super::name_bytes`]).
     fn text(&mut self) -> String {
-        String::from_utf8_lossy(&self.opaque(4096)).into_owned()
+        super::name_bytes::decode(&self.opaque(4096))
     }
 }
 
@@ -837,7 +842,10 @@ impl Inner {
             return Ok(h.clone());
         }
         let reply = self
-            .mount_call(MNT, Xdr::default().opaque(export.as_bytes()))
+            .mount_call(
+                MNT,
+                Xdr::default().opaque(&super::name_bytes::encode(export)),
+            )
             .await?;
         let mut i = In::new(&reply);
         match i.u32() {
@@ -1777,7 +1785,12 @@ mod tests {
         mount: bool,
         nfs: bool,
         map: Vec<((u32, u32), u16)>,
+        /// The export holds one file named in Latin-1 (`LATIN1_NAME`, not UTF-8), listed
+        /// without its attributes, so the client must look it up by the exact bytes.
+        latin1: bool,
     }
+
+    const LATIN1_NAME: &[u8] = b"caf\xE9.bin";
 
     impl Fake {
         /// The accept_stat and results for a call, PROG_UNAVAIL for a program it doesn't serve.
@@ -1799,6 +1812,47 @@ mod tests {
                 ),
                 MOUNT if self.mount && proc == EXPORT => {
                     (0, Xdr::default().u32(1).opaque(b"/PS4 NFS").u32(0).u32(0).0)
+                }
+                NFS if self.latin1 && proc == READDIRPLUS => (
+                    0,
+                    Xdr::default()
+                        .u32(0)
+                        .u32(0)
+                        .fixed(&[0; 8])
+                        .u32(1)
+                        .u64(1)
+                        .opaque(LATIN1_NAME)
+                        .u64(1)
+                        .u32(0) // no attributes: looked up by name
+                        .u32(0)
+                        .u32(0)
+                        .u32(1)
+                        .0,
+                ),
+                NFS if self.latin1 && proc == GETATTR => {
+                    let file = Xdr::default()
+                        .u32(0)
+                        .u32(1) // a regular file
+                        .fixed(&[0; 16])
+                        .u64(5)
+                        .fixed(&[0; 56]);
+                    (0, file.0)
+                }
+                NFS if self.latin1 && proc == LOOKUP => {
+                    let mut i = In::new(args);
+                    i.opaque(64); // the folder's handle
+                    if i.opaque(255) != LATIN1_NAME {
+                        return (0, Xdr::default().u32(2).0); // NFS3ERR_NOENT
+                    }
+                    let file = Xdr::default()
+                        .u32(0)
+                        .opaque(b"file-handle")
+                        .u32(1)
+                        .u32(1) // a regular file
+                        .fixed(&[0; 16])
+                        .u64(5)
+                        .fixed(&[0; 56]);
+                    (0, file.0)
                 }
                 NFS if self.nfs && proc == READDIRPLUS => (
                     0,
@@ -1932,6 +1986,33 @@ mod tests {
         let listed = fs.list("/", None).await.unwrap();
         assert_eq!(listed.entries.len(), 1);
         assert_eq!(listed.entries[0].name, "game");
+    }
+
+    /// A file named in Latin-1 on an older NAS: its name was read as lossy UTF-8, so looking it
+    /// up (which a listing without attributes does) failed and the whole folder could not be
+    /// listed. The name now keeps its bytes and is asked for exactly as listed.
+    #[tokio::test]
+    async fn a_name_that_is_not_utf8_lists_and_is_found_again() {
+        let both = Fake {
+            mount: true,
+            nfs: true,
+            latin1: true,
+            ..Fake::default()
+        }
+        .tcp()
+        .await;
+        let fs = NfsFs::connect_via(&nfs_conn(both), closed_port().await)
+            .await
+            .unwrap();
+        let listed = fs.list("/", None).await.unwrap();
+        assert_eq!(listed.entries.len(), 1);
+        let entry = &listed.entries[0];
+        assert!(!entry.is_dir);
+        assert_eq!(entry.size, 5);
+        assert!(!entry.name.contains('\u{FFFD}'), "{:?}", entry.name);
+        assert_eq!(super::super::name_bytes::encode(&entry.name), LATIN1_NAME);
+        let found = fs.stat(&format!("/{}", entry.name)).await.unwrap();
+        assert_eq!(found.size, 5);
     }
 
     /// #796: NFS at 2049 and the mount service on a port of its own, which only the portmapper
