@@ -1,13 +1,12 @@
+// @ts-expect-error -- the app tsconfig has no node types; Vitest runs this under Node.
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 // System Back on a phone closes what is open on top (lib/systemBack), but only what registered
 // for it. The Files row menu did not, and Back left the Files tab with the menu still up (#932).
 // Every menu has to take part: through useBackDismiss, or a modal surface's focus trap.
 
-const SRC = fileURLToPath(new URL("..", import.meta.url));
+const SRC = new URL("../", import.meta.url);
 
 /** Menus that handle Back another way. */
 const OWN_BACK: Record<string, string> = {
@@ -15,19 +14,23 @@ const OWN_BACK: Record<string, string> = {
   "screens/Play/StreamPanel.tsx": "popstate",
 };
 
-function sources(dir: string): string[] {
-  return readdirSync(dir).flatMap((name) => {
-    const p = join(dir, name);
-    if (statSync(p).isDirectory()) return name === "console" ? [] : sources(p);
-    return /\.tsx$/.test(name) && !/\.test\.tsx$/.test(name) ? [p] : [];
+/** The app's .tsx files (not tests, not the console's own page), relative to src/. */
+function sources(rel = ""): string[] {
+  return (readdirSync(new URL(rel, SRC)) as string[]).flatMap((name) => {
+    const path = rel + name;
+    if (statSync(new URL(path, SRC)).isDirectory()) return name === "console" ? [] : sources(`${path}/`);
+    return /\.tsx$/.test(name) && !/\.test\.tsx$/.test(name) ? [path] : [];
   });
 }
 
 describe("system Back reaches every menu", () => {
   it("each file that draws a menu registers it for Back", () => {
-    const missing = sources(SRC)
-      .filter((p) => readFileSync(p, "utf8").includes('role="menu"'))
-      .map((p) => ({ rel: relative(SRC, p).split("\\").join("/"), text: readFileSync(p, "utf8") }))
+    const menus = sources()
+      .map((rel) => ({ rel, text: readFileSync(new URL(rel, SRC), "utf8") as string }))
+      .filter(({ text }) => text.includes('role="menu"'));
+    // The scan sees them at all (the Files row menu among them).
+    expect(menus.map((m) => m.rel)).toContain("screens/FileSystem/RowActions.tsx");
+    const missing = menus
       .filter(({ rel, text }) => {
         const own = OWN_BACK[rel];
         if (own) return !text.includes(own);

@@ -83,7 +83,12 @@ export function PhoneFolderRow({
   disabled: boolean;
 }) {
   return (
-    <div className="flex min-h-11 items-center gap-0.5 roomy:hidden" data-testid="fs-phone-row">
+    <div
+      // Held sideways, the path sits beside this row instead of under it (the header's height is
+      // what a short screen has least of).
+      className="flex min-h-11 items-center gap-0.5 roomy:hidden landscape:max-w-[55%] landscape:shrink-0"
+      data-testid="fs-phone-row"
+    >
       <FolderOpen size={18} className="ms-1.5 me-1 shrink-0 text-[var(--color-accent-bright)]" aria-hidden />
       <h1 className="min-w-0 flex-1 truncate text-base font-semibold" data-testid="fs-phone-title">
         {title}
@@ -127,7 +132,10 @@ export function PhoneSelectionRow({
   onSelectAll: () => void;
 }) {
   return (
-    <div className="flex min-h-11 items-center gap-0.5 roomy:hidden" data-testid="fs-phone-selection">
+    <div
+      className="flex min-h-11 items-center gap-0.5 roomy:hidden landscape:max-w-[55%] landscape:shrink-0"
+      data-testid="fs-phone-selection"
+    >
       <IconButton icon={X} label={cancelLabel} onClick={onCancel} />
       <span
         className="min-w-0 flex-1 truncate ps-1 text-base font-semibold tabular-nums"

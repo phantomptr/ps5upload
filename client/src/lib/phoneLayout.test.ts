@@ -1,10 +1,10 @@
+// @ts-expect-error -- the app tsconfig has no node types; Vitest runs this under Node.
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { PHONE_LAYOUT_QUERY } from "./phoneLayout";
 
-const css = readFileSync(fileURLToPath(new URL("../index.css", import.meta.url)), "utf8");
+const css: string = readFileSync(new URL("../index.css", import.meta.url), "utf8");
 
 describe("the phone layout's query", () => {
   it("is the `phone:` variant's, so the script and the styles agree on what a phone is", () => {

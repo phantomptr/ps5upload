@@ -2,13 +2,16 @@
 // on a phone (#936), as a phone's own file managers do.
 //
 // The browser can report the same press as a `contextmenu` event too (Android does, about when the
-// hold is long enough), so either one ends the press, once. The tap that lifts the finger is not
-// a tap: the click after a long press is swallowed, or it would also open the folder under it.
+// hold is long enough), so either one ends the press, once. The finger lifting is not a tap: the
+// click right after a long press is swallowed wherever it lands, or it would open the folder under
+// it, or press a button of the bar that selecting just put under the finger.
 
 /** How long a finger holds still before it counts (Android's own long press is 400-500 ms). */
 export const LONG_PRESS_MS = 500;
 /** How far a finger may drift and still be holding still. More is a scroll. */
 export const LONG_PRESS_SLOP_PX = 10;
+/** How long after the finger lifts its click may still arrive. */
+const CLICK_AFTER_MS = 600;
 
 export interface LongPress<T> {
   /** A pointer went down on `target`. Only a finger (touch) starts a press. */
@@ -19,53 +22,57 @@ export interface LongPress<T> {
   /** The browser's own long press (`contextmenu`) for the press under way. True when it was
    *  this press's, and its menu should not open. */
   contextMenu(): boolean;
-  /** Call for each click: true for the one right after a long press, to swallow. */
+  /** Call for each click: true for the one the finger lifting after a long press makes. */
   takeClick(): boolean;
   /** Stop any timer (unmount). */
   dispose(): void;
 }
 
-type Timers = {
+type Clock = {
   set: (fn: () => void, ms: number) => unknown;
   clear: (id: unknown) => void;
+  now: () => number;
 };
 
-const realTimers: Timers = {
+const realClock: Clock = {
   set: (fn, ms) => setTimeout(fn, ms),
   clear: (id) => clearTimeout(id as ReturnType<typeof setTimeout>),
+  now: () => Date.now(),
 };
 
 export function createLongPress<T>(
   onLongPress: (target: T) => void,
-  options: { ms?: number; slop?: number; timers?: Timers } = {},
+  options: { ms?: number; slop?: number; clock?: Clock } = {},
 ): LongPress<T> {
   const ms = options.ms ?? LONG_PRESS_MS;
   const slop = options.slop ?? LONG_PRESS_SLOP_PX;
-  const timers = options.timers ?? realTimers;
+  const clock = options.clock ?? realClock;
   let press: { target: T; x: number; y: number; fired: boolean } | null = null;
   let timer: unknown = null;
-  let swallowClick = false;
+  /** After a long press: until when its click may come (while the finger is still down: always). */
+  let swallowUntil: number | null = null;
 
   const stopTimer = () => {
-    if (timer !== null) timers.clear(timer);
+    if (timer !== null) clock.clear(timer);
     timer = null;
   };
   const fire = () => {
     stopTimer();
     if (!press || press.fired) return;
     press.fired = true;
-    swallowClick = true;
+    swallowUntil = Infinity;
     onLongPress(press.target);
   };
+  const swallowing = () => swallowUntil !== null && clock.now() <= swallowUntil;
 
   return {
     down(target, x, y, pointerType) {
       stopTimer();
-      swallowClick = false;
+      swallowUntil = null;
       press = null;
       if (pointerType !== "touch") return;
       press = { target, x, y, fired: false };
-      timer = timers.set(fire, ms);
+      timer = clock.set(fire, ms);
     },
     move(x, y) {
       if (!press || press.fired) return;
@@ -76,18 +83,19 @@ export function createLongPress<T>(
     },
     end() {
       stopTimer();
+      if (press?.fired) swallowUntil = clock.now() + CLICK_AFTER_MS;
       press = null;
     },
     contextMenu() {
-      // Already a long press (the timer won): its menu stays shut even after the finger lifted.
-      if (swallowClick) return true;
+      // Already a long press (the timer won): its menu stays shut, even just after the lift.
+      if (swallowing()) return true;
       if (!press) return false;
       fire();
       return true;
     },
     takeClick() {
-      const swallow = swallowClick;
-      swallowClick = false;
+      const swallow = swallowing();
+      swallowUntil = null;
       return swallow;
     },
     dispose() {

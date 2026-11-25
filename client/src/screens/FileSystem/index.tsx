@@ -3164,7 +3164,25 @@ export default function FileSystemScreen() {
       }),
     ),
   );
-  useEffect(() => () => longPress.dispose(), [longPress]);
+  useEffect(() => {
+    const end = () => longPress.end();
+    // The finger lifting after a long press is not a tap on whatever is under it now (the row,
+    // or the bar of actions that selecting just put there).
+    const onClick = (ev: MouseEvent) => {
+      if (!longPress.takeClick()) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+    };
+    window.addEventListener("pointerup", end, true);
+    window.addEventListener("pointercancel", end, true);
+    window.addEventListener("click", onClick, true);
+    return () => {
+      window.removeEventListener("pointerup", end, true);
+      window.removeEventListener("pointercancel", end, true);
+      window.removeEventListener("click", onClick, true);
+      longPress.dispose();
+    };
+  }, [longPress]);
 
   // What the row actions (desktop buttons and the phone ⋮ menu) need.
   const [properties, setProperties] = useState<{
@@ -4070,10 +4088,11 @@ export default function FileSystemScreen() {
 
               On a phone this sits in a compact header pinned over the list (#936): the open
               folder with search, the drive and ⋮ on top (or the selection, while selecting),
-              the path under it. Wider windows keep the page header and the drive chips. */}
+              the path under it (beside it on a phone held sideways, where height is short).
+              Wider windows keep the page header and the drive chips. */}
           <div
             data-testid="fs-header"
-            className="phone:sticky phone:top-0 phone:z-30 phone:mb-2 phone:rounded-[var(--radius-card)] phone:border phone:border-[var(--glass-edge)] phone:bg-[var(--color-float)] phone:p-1 phone:shadow-[var(--edge-highlight),var(--shadow-2)] phone:backdrop-blur-xl"
+            className="phone:sticky phone:top-0 phone:z-30 phone:mb-2 phone:rounded-[var(--radius-card)] phone:border phone:border-[var(--glass-edge)] phone:bg-[var(--color-float)] phone:p-1 phone:shadow-[var(--edge-highlight),var(--shadow-2)] phone:backdrop-blur-xl phone:landscape:flex phone:landscape:items-center phone:landscape:gap-2"
           >
             {phoneSelecting ? (
               <PhoneSelectionRow
@@ -4106,7 +4125,7 @@ export default function FileSystemScreen() {
                 disabled={!host?.trim()}
               />
             )}
-            <div className="mb-2 flex items-center gap-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-1.5 py-0.5 text-xs sm:mb-4 sm:px-2.5 sm:py-1.5 shadow-[var(--edge-highlight),var(--shadow-1)] phone:mb-0!">
+            <div className="mb-2 flex items-center gap-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-1.5 py-0.5 text-xs sm:mb-4 sm:px-2.5 sm:py-1.5 shadow-[var(--edge-highlight),var(--shadow-1)] phone:mb-0! phone:landscape:min-w-0 phone:landscape:flex-1 phone:landscape:py-0.5!">
               <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
                 <button
                   type="button"
@@ -4793,13 +4812,17 @@ export default function FileSystemScreen() {
                       else openEntry(e);
                     }}
                     // Drag rows out of the window onto this computer (desktop app), or onto
-                    // another folder here to move them (Alt/Option in the desktop app).
-                    draggable={canDragOut || dragMoveWorks}
+                    // another folder here to move them (Alt/Option in the desktop app). Not in
+                    // the phone layout: there a held finger selects, and a draggable row turns
+                    // the hold into a drag that cancels it (#936).
+                    draggable={!phone && (canDragOut || dragMoveWorks)}
                     {...(isDir ? dropProps(joinPath(path, e.name)) : {})}
                     onDragStart={dragStart(e, isSelected)}
                     onDoubleClick={(ev) => {
                       if ((ev.target as HTMLElement).closest("input,button"))
                         return;
+                      // Selecting on a phone, two quick taps tick and untick the row.
+                      if (phoneSelecting) return;
                       openEntry(e);
                     }}
                     onContextMenu={(ev) => {
@@ -4815,15 +4838,7 @@ export default function FileSystemScreen() {
                       if (phone && !isRenaming) longPress.down(e.name, ev.clientX, ev.clientY, ev.pointerType);
                     }}
                     onPointerMove={(ev) => longPress.move(ev.clientX, ev.clientY)}
-                    onPointerUp={() => longPress.end()}
-                    onPointerCancel={() => longPress.end()}
                     onClickCapture={(ev) => {
-                      // The finger lifting after a long press is not a tap on what is under it.
-                      if (longPress.takeClick()) {
-                        ev.preventDefault();
-                        ev.stopPropagation();
-                        return;
-                      }
                       // Selecting on a phone, a tap anywhere on the row ticks it; the checkbox
                       // and a rename field keep their own clicks.
                       if (!phoneSelecting || (ev.target as HTMLElement).closest("input")) return;
@@ -4883,8 +4898,10 @@ export default function FileSystemScreen() {
                           className={
                             // On a phone a long name wraps (up to three lines) instead of being cut off
                             // early, with the tag and size on the line below (#923); a phone held
-                            // sideways too (#931).
-                            "min-w-0 truncate text-start text-sm phone:line-clamp-3 phone:whitespace-normal phone:[overflow-wrap:anywhere] roomy:flex-1 " +
+                            // sideways too (#931). A file's name (a disabled button) lets a phone's
+                            // taps and long presses through to the row (#936): a disabled button
+                            // swallows them.
+                            "min-w-0 truncate text-start text-sm phone:line-clamp-3 phone:whitespace-normal phone:[overflow-wrap:anywhere] phone:disabled:pointer-events-none roomy:flex-1 " +
                             (isDir ? "font-medium hover:text-[var(--color-accent)]" : "")
                           }
                           disabled={!isDir}

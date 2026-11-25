@@ -83,9 +83,13 @@ test("phone width: row names show, ⋮ opens the row's actions, the selection ba
   await expect(main.locator(`input[value="${LONG}"]`)).toBeVisible();
   await page.keyboard.press("Escape");
 
-  // Selecting a row: "1 selected" on one line.
+  // Selecting a row (#936: the boxes show in selection mode, here by ⋮ → Select, the way
+  // without a long press): "1 selected" on one line, in the header.
+  await expect(main.locator("li input[type=checkbox]").first()).toBeHidden();
+  await main.getByTestId("fs-phone-more").click();
+  await page.getByTestId("fs-row-menu").getByRole("menuitem", { name: "Select", exact: true }).click();
   await main.locator("li input[type=checkbox]").first().check();
-  const count = main.getByTestId("fs-selection-bar").getByText("1 selected");
+  const count = main.getByTestId("fs-phone-count").getByText("1 selected");
   await expect(count).toBeVisible();
   const countBox = await count.boundingBox();
   expect(countBox?.height ?? 99).toBeLessThan(30);

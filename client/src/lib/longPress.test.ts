@@ -6,11 +6,12 @@ function setup() {
   const fired: string[] = [];
   let pending: { fn: () => void; at: number } | null = null;
   let now = 0;
-  const timers = {
+  const clock = {
     set: (fn: () => void, ms: number) => (pending = { fn, at: now + ms }),
     clear: () => void (pending = null),
+    now: () => now,
   };
-  const lp = createLongPress<string>((t) => fired.push(t), { timers });
+  const lp = createLongPress<string>((t) => fired.push(t), { clock });
   const wait = (ms: number) => {
     now += ms;
     if (pending && pending.at <= now) {
@@ -41,6 +42,16 @@ describe("long press", () => {
     wait(LONG_PRESS_MS);
     lp.end();
     expect(lp.takeClick()).toBe(true);
+    expect(lp.takeClick()).toBe(false);
+  });
+
+  it("lets a later tap through when the lift made no click (Android after its own long press)", () => {
+    const { lp, wait } = setup();
+    lp.down("a", 0, 0, "touch");
+    wait(LONG_PRESS_MS);
+    lp.end();
+    wait(2000);
+    // A tap on the bar of actions: no pointer went down on a row first.
     expect(lp.takeClick()).toBe(false);
   });
 
