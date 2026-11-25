@@ -13,6 +13,12 @@
 //! - a game that doesn't read through libSceAmpr keeps whatever it has;
 //! - `ampr_commands.bin` and the emulator's logs are left out (the journal's file ids follow
 //!   the old index's order), and a fresh `ampr_emu.index` lists every file written.
+//!
+//! A package can instead leave the emulator out ([`open_without_emulator`]): an installed
+//! package is a real PFS the console's own libSceAmpr reads, and Spider-Man 2 (a libSceAmpr
+//! backport) played on FW 5.10 from one of ours with `fakelib/libSceAmpr.sprx` left out and an
+//! `ampr_emu.index` in it. One game on one firmware, so it is the user's choice, never the
+//! default.
 
 use std::collections::HashMap;
 
@@ -111,6 +117,27 @@ impl SourceTree for Plain {
     }
 }
 
+/// What an unpack does with the game's AMPR emulator.
+#[derive(Clone, Copy)]
+enum EmulatorChoice<'a> {
+    /// The game's own stays, whatever it is.
+    Keep,
+    /// The game's own goes when it only suits packs, and a libSceAmpr game with none gets this.
+    Chosen(&'a Emulator<'a>),
+    /// Every emulator file in `fakelib` and `fakelib2` is left out ([`is_emulator_file`]).
+    LeaveOut,
+}
+
+/// The AMPR emulator's module where a game loads it from, and the copy of a game's own an
+/// earlier build kept beside it (`libSceAmpr.sprx.orig`), in any letter case.
+fn is_emulator_file(path: &str) -> bool {
+    let p = path.to_ascii_lowercase();
+    ["fakelib/", "fakelib2/"].iter().any(|dir| {
+        p.strip_prefix(dir)
+            .is_some_and(|name| name == "libsceampr.sprx" || name == "libsceampr.sprx.orig")
+    })
+}
+
 /// `tree` with its asset packs decoded, or why it has none to decode. `emulator` is what
 /// replaces an emulator that has to go; `None` (Convert's "Add the AMPR emulator" is off)
 /// leaves the game's own where it is. Every record of the new `ampr_emu.index` gets `mtime`: a
@@ -118,6 +145,30 @@ impl SourceTree for Plain {
 pub(crate) fn open(
     tree: Box<dyn SourceTree>,
     emulator: Option<&Emulator>,
+    mtime: i64,
+) -> Result<Box<dyn SourceTree>, String> {
+    unpack(
+        tree,
+        emulator.map_or(EmulatorChoice::Keep, EmulatorChoice::Chosen),
+        mtime,
+    )
+}
+
+/// `tree` with its asset packs decoded as [`open`] decodes it, and the AMPR emulator left out:
+/// every `libSceAmpr.sprx` (and `.orig` copy) in its `fakelib` and `fakelib2`, so nothing is
+/// fetched. A game that reads through libSceAmpr still gets a fresh `ampr_emu.index`, as every
+/// package of such a game carries one; any other game gets none. For a package only: an image
+/// or folder is played from ShadowMount+'s mount, where some libSceAmpr games need an emulator.
+pub(crate) fn open_without_emulator(
+    tree: Box<dyn SourceTree>,
+    mtime: i64,
+) -> Result<Box<dyn SourceTree>, String> {
+    unpack(tree, EmulatorChoice::LeaveOut, mtime)
+}
+
+fn unpack(
+    tree: Box<dyn SourceTree>,
+    choice: EmulatorChoice,
     mtime: i64,
 ) -> Result<Box<dyn SourceTree>, String> {
     let mut kinds = Vec::new();
@@ -158,13 +209,17 @@ pub(crate) fn open(
     };
     let mut generated: HashMap<String, Vec<u8>> = HashMap::new();
     let mut replaced: Option<String> = None;
-    let action = match emulator {
-        Some(e) => runtime_action(ampr, current.as_ref().map(|c| (c.0, c.1.as_deref())), e.ng),
-        // The user turned emulators off: the game's own stays, whatever it is.
-        None => RuntimeAction::Untouched,
+    let leave_out = matches!(choice, EmulatorChoice::LeaveOut);
+    let action = match choice {
+        EmulatorChoice::Chosen(e) => {
+            runtime_action(ampr, current.as_ref().map(|c| (c.0, c.1.as_deref())), e.ng)
+        }
+        // The user turned emulators off (the game's own stays, whatever it is), or the
+        // package leaves them out: nothing goes in.
+        EmulatorChoice::Keep | EmulatorChoice::LeaveOut => RuntimeAction::Untouched,
     };
-    match (action, emulator) {
-        (RuntimeAction::Install, Some(e)) => {
+    match (action, choice) {
+        (RuntimeAction::Install, EmulatorChoice::Chosen(e)) => {
             let bytes = (e.fetch)().map_err(|why| {
                 format!(
                     "this game reads its files through AMPR and has no emulator, and one could \
@@ -181,7 +236,7 @@ pub(crate) fn open(
             generated.insert(at.clone(), bytes);
             replaced = Some(at);
         }
-        (RuntimeAction::Replace, Some(e)) => {
+        (RuntimeAction::Replace, EmulatorChoice::Chosen(e)) => {
             let at = module.clone().unwrap_or_else(|| emulator_home(&*tree));
             let was = current.as_ref().map(named).unwrap_or_default();
             match (e.fetch)() {
@@ -209,8 +264,9 @@ pub(crate) fn open(
                 crate::log_at!(
                     Info,
                     "convert",
-                    "unpack packs: {} at {path} stays",
-                    named(c)
+                    "unpack packs: {} at {path} {}",
+                    named(c),
+                    if leave_out { "is left out" } else { "stays" }
                 );
             }
         }
@@ -218,7 +274,9 @@ pub(crate) fn open(
     let mut left_out = Vec::new();
     let mut files: Vec<SourceFile> = Vec::with_capacity(tree.files().len() + 2);
     for f in tree.files() {
-        if LEFT_OUT.iter().any(|n| f.path.eq_ignore_ascii_case(n)) {
+        if LEFT_OUT.iter().any(|n| f.path.eq_ignore_ascii_case(n))
+            || (leave_out && is_emulator_file(&f.path))
+        {
             left_out.push(f.path.clone());
         } else if !f.path.eq_ignore_ascii_case(ampr_index::NAME)
             && !replaced
@@ -234,20 +292,29 @@ pub(crate) fn open(
             size: generated.get(at).map_or(0, |b| b.len() as u64),
         });
     }
-    let index = ampr_index::build(&ampr_index::listing(&files), mtime)?;
-    files.push(SourceFile {
-        path: ampr_index::NAME.to_string(),
-        size: index.len() as u64,
-    });
-    generated.insert(ampr_index::NAME.to_string(), index);
+    // With no emulator left, only a libSceAmpr game keeps an index (the one a package of it
+    // always carries).
+    let indexed = !leave_out || ampr;
+    if indexed {
+        let index = ampr_index::build(&ampr_index::listing(&files), mtime)?;
+        files.push(SourceFile {
+            path: ampr_index::NAME.to_string(),
+            size: index.len() as u64,
+        });
+        generated.insert(ampr_index::NAME.to_string(), index);
+    }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     crate::log_at!(
         Info,
         "convert",
-        "unpack packs: {} packs decoded, {} plain files, a new {} lists them{}",
+        "unpack packs: {} packs decoded, {} plain files{}{}",
         kinds.join(" and "),
         files.len(),
-        ampr_index::NAME,
+        if indexed {
+            format!(", a new {} lists them", ampr_index::NAME)
+        } else {
+            String::new()
+        },
         if left_out.is_empty() {
             String::new()
         } else {
@@ -262,7 +329,7 @@ pub(crate) fn open(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::zstd_runtime::PackRuntime;
     use ps5upload_fpkg::sample::VerifyMode;
@@ -271,7 +338,7 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     /// drakmor's ampr_emu as [`ng::classify`] knows it, at `version`.
-    fn ampr_emu(version: &str) -> Vec<u8> {
+    pub(crate) fn ampr_emu(version: &str) -> Vec<u8> {
         let mut m = format!("\0\0ampr_emu {version} (c) Drakmor\0").into_bytes();
         m.extend_from_slice(&[0u8; 32]);
         m
@@ -306,7 +373,7 @@ mod tests {
         );
     }
 
-    fn game(root: &Path, ampr: bool) -> PathBuf {
+    pub(crate) fn game(root: &Path, ampr: bool) -> PathBuf {
         let src = root.join("PPSA99996-app");
         std::fs::create_dir_all(src.join("sce_sys")).unwrap();
         std::fs::create_dir_all(src.join("data/sub")).unwrap();
@@ -315,11 +382,7 @@ mod tests {
             eboot[1000..1014].copy_from_slice(b"libSceAmpr.prx");
         }
         std::fs::write(src.join("eboot.bin"), eboot).unwrap();
-        std::fs::write(
-            src.join("sce_sys/param.json"),
-            b"{\"titleId\":\"PPSA99996\"}",
-        )
-        .unwrap();
+        std::fs::write(src.join("sce_sys/param.json"), PARAM).unwrap();
         let text: Vec<u8> = (0..1_000_000u32)
             .flat_map(|i| format!("asset {} ", i % 89).into_bytes())
             .take(700_000)
@@ -341,7 +404,7 @@ mod tests {
     }
 
     /// `src` as a folder in zstd packs at `to`, with a journal and a log as a run leaves them.
-    fn zstd_packed(src: &Path, to: &Path) {
+    pub(crate) fn zstd_packed(src: &Path, to: &Path) {
         let open = || -> Result<Box<dyn SourceTree>, String> {
             Ok(Box::new(
                 FolderSource::open(src).map_err(|e| e.to_string())?,
@@ -362,6 +425,24 @@ mod tests {
         .unwrap();
         std::fs::write(to.join("ampr_commands.bin"), b"journal").unwrap();
         std::fs::write(to.join("ampr_emu.log"), b"log").unwrap();
+    }
+
+    /// The fixture game's `param.json`: with a content id, as a package needs one.
+    pub(crate) const PARAM: &[u8] = br#"{"contentId":"UP0000-PPSA99996_00-UNPACKTEST000000","contentVersion":"01.000.000","titleId":"PPSA99996","applicationCategoryType":0}"#;
+
+    /// A scratch folder that goes when the test ends, passed or failed.
+    pub(crate) struct Scratch(pub(crate) PathBuf);
+
+    impl Scratch {
+        pub(crate) fn new(name: &str) -> Self {
+            Self(temp(name))
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     fn temp(name: &str) -> PathBuf {
@@ -582,5 +663,224 @@ mod tests {
         );
         assert!(tree.files().iter().any(|f| f.path == ampr_index::NAME));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A package of the game at `src` read through `reader`, at Kraken's fast level: the
+    /// package, opened as the game it holds.
+    fn package(
+        src: &Path,
+        out: &Path,
+        reader: ps5upload_fpkg::build::SourceReader,
+    ) -> Box<dyn SourceTree> {
+        std::fs::create_dir_all(out).unwrap();
+        let mut request = ps5upload_fpkg::build::BuildRequest::new(src, out);
+        request.level = ps5upload_fpkg::kraken::Level::Fast;
+        request.reader = Some(reader);
+        let built = ps5upload_fpkg::build::build(&request, &mut |_| {})
+            .unwrap_or_else(|e| panic!("{}: {e}", src.display()));
+        ps5upload_fpkg::source::open(&built.path).unwrap()
+    }
+
+    /// Unpacking as Convert does it, `emulator` replacing one that only suits packs (`None`:
+    /// nothing may be fetched).
+    fn unpacking(emulator: Option<Vec<u8>>) -> ps5upload_fpkg::build::SourceReader {
+        ps5upload_fpkg::build::SourceReader(std::sync::Arc::new(move |tree| {
+            let fetch = || match &emulator {
+                Some(bytes) => Ok(bytes.clone()),
+                None => panic!("the game's own emulator is kept: nothing is fetched"),
+            };
+            open(
+                tree,
+                Some(&Emulator {
+                    ng: false,
+                    fetch: &fetch,
+                }),
+                7,
+            )
+        }))
+    }
+
+    /// Unpacking with the AMPR emulator left out.
+    fn unpacking_without_emulator() -> ps5upload_fpkg::build::SourceReader {
+        ps5upload_fpkg::build::SourceReader(std::sync::Arc::new(|tree| {
+            open_without_emulator(tree, 7)
+        }))
+    }
+
+    fn names_of(tree: &dyn SourceTree) -> Vec<String> {
+        tree.files().iter().map(|f| f.path.clone()).collect()
+    }
+
+    /// The game's own files in the package byte for byte, and none of the packs, their
+    /// indexes, the run's journal or its log.
+    fn assert_packaged_plain(pkg: &mut dyn SourceTree, src: &Path) {
+        for name in [
+            "eboot.bin",
+            "data/sub/table.bin",
+            "data/settings.json",
+            "data/empty.bin",
+        ] {
+            assert_eq!(
+                pkg.read(name).unwrap(),
+                std::fs::read(src.join(name)).unwrap(),
+                "{name}"
+            );
+        }
+        let names = names_of(pkg);
+        for n in &names {
+            let lower = n.to_ascii_lowercase();
+            assert!(
+                !lower.starts_with("ampr_zstd") && !lower.starts_with("ampr_assets"),
+                "{n} in {names:?}"
+            );
+            assert!(
+                lower != "ampr_commands.bin" && lower != "ampr_emu.log",
+                "{n} in {names:?}"
+            );
+        }
+    }
+
+    /// The package's `ampr_emu.index` lists exactly the files it carries, at their sizes.
+    fn assert_index_lists_the_package(pkg: &mut dyn SourceTree) {
+        let listed = ampr_index::parse(&pkg.read(ampr_index::NAME).unwrap()).unwrap();
+        let mut got: Vec<(String, u64)> = listed.into_iter().map(|e| (e.path, e.size)).collect();
+        let mut want: Vec<(String, u64)> = pkg
+            .files()
+            .iter()
+            .filter(|f| f.path != ampr_index::NAME)
+            .map(|f| (f.path.clone(), f.size))
+            .collect();
+        got.sort();
+        want.sort();
+        assert_eq!(got, want);
+    }
+
+    /// "Unpack the asset packs" for a package (#933): a zstd-packed libSceAmpr game packaged
+    /// as its plain files, byte for byte, with ampr-emu-ng (it came with the packs) replaced
+    /// by the chosen emulator and an index of what the package carries. With the emulator left
+    /// out: no `libSceAmpr.sprx` (nor a kept `.orig`), nothing fetched, and the index kept.
+    #[test]
+    fn a_zstd_packed_game_packages_as_plain_files() {
+        let scratch = Scratch::new("pkg-zstd");
+        let root = &scratch.0;
+        let src = game(root, true);
+        let packed = root.join("packed");
+        zstd_packed(&src, &packed);
+        std::fs::write(packed.join("fakelib/libSceAmpr.sprx.orig"), b"OLD").unwrap();
+        assert!(packed.join("ampr_zstd-000.pak").is_file());
+        assert!(!packed.join("data/sub/table.bin").exists());
+
+        let emu = ampr_emu("0.4.2.1");
+        let mut kept = package(&packed, &root.join("kept"), unpacking(Some(emu.clone())));
+        assert_packaged_plain(&mut *kept, &src);
+        assert_eq!(kept.read("fakelib/libSceAmpr.sprx").unwrap(), emu);
+        assert_index_lists_the_package(&mut *kept);
+
+        let mut bare = package(&packed, &root.join("bare"), unpacking_without_emulator());
+        assert_packaged_plain(&mut *bare, &src);
+        let names = names_of(&*bare);
+        assert!(!names.iter().any(|n| is_emulator_file(n)), "{names:?}");
+        assert_index_lists_the_package(&mut *bare);
+    }
+
+    /// The same for an LZ4-packed image of a libSceAmpr game: its ampr_emu, new enough, is
+    /// kept as it is, or left out when asked.
+    #[test]
+    fn an_lz4_packed_game_packages_as_plain_files() {
+        use crate::image_build::{build_packed, ImageFormat, Lz4Packs, DEFAULT_VERIFY_CHUNK};
+        let scratch = Scratch::new("pkg-lz4");
+        let root = &scratch.0;
+        let src = game(root, true);
+        // ampr_emu 0.4.2.1 with pack support, which LZ4 packs need.
+        let mut module = vec![0u8; 4096];
+        module[100..108].copy_from_slice(b"AMPRPAK4");
+        module[200..217].copy_from_slice(b"ampr_assets.index");
+        module[300..321].copy_from_slice(b"\x000.4.2.1 (c) Drakmor\0");
+        std::fs::create_dir_all(src.join("fakelib")).unwrap();
+        std::fs::write(src.join("fakelib/libSceAmpr.sprx"), &module).unwrap();
+        let image = root.join("PPSA99996-lz4.exfat");
+        build_packed(
+            ImageFormat::Exfat,
+            None,
+            ps5upload_fpkg::ffpfsc_block::Level::default(),
+            &mut FolderSource::open(&src).unwrap(),
+            &image,
+            &Lz4Packs {
+                profile: Some(ps5upload_fpkg::ampr_pack::default_profile(9, 16)),
+                level: 9,
+                block_shift: 16,
+            },
+            VerifyMode::Fast {
+                seed: 1,
+                seam: false,
+            },
+            DEFAULT_VERIFY_CHUNK,
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        let mut packed = ps5upload_fpkg::source::open(&image).unwrap();
+        assert_eq!(
+            ps5upload_fpkg::source::packed_kind(&mut *packed).unwrap(),
+            Some("lz4")
+        );
+        assert!(!names_of(&*packed).iter().any(|n| n == "data/sub/table.bin"));
+
+        let mut kept = package(&image, &root.join("kept"), unpacking(None));
+        assert_packaged_plain(&mut *kept, &src);
+        assert_eq!(kept.read("fakelib/libSceAmpr.sprx").unwrap(), module);
+        assert_index_lists_the_package(&mut *kept);
+
+        let mut bare = package(&image, &root.join("bare"), unpacking_without_emulator());
+        assert_packaged_plain(&mut *bare, &src);
+        let names = names_of(&*bare);
+        assert!(!names.iter().any(|n| is_emulator_file(n)), "{names:?}");
+        assert_index_lists_the_package(&mut *bare);
+    }
+
+    /// A game that doesn't read through libSceAmpr was given ampr-emu-ng only to read its
+    /// packs: unpacked into a package it keeps it unless left out, and left out it has no
+    /// emulator and no index.
+    #[test]
+    fn a_game_without_ampr_packages_with_nothing_of_the_emulator_left() {
+        let scratch = Scratch::new("pkg-noampr");
+        let root = &scratch.0;
+        let src = game(root, false);
+        let packed = root.join("packed");
+        zstd_packed(&src, &packed);
+
+        let mut kept = package(&packed, &root.join("kept"), unpacking(None));
+        assert_packaged_plain(&mut *kept, &src);
+        assert_eq!(
+            kept.read("fakelib/libSceAmpr.sprx").unwrap(),
+            b"NG EMULATOR"
+        );
+
+        let mut bare = package(&packed, &root.join("bare"), unpacking_without_emulator());
+        assert_packaged_plain(&mut *bare, &src);
+        let names = names_of(&*bare);
+        assert!(!names.iter().any(|n| is_emulator_file(n)), "{names:?}");
+        assert!(!names.iter().any(|n| n == ampr_index::NAME), "{names:?}");
+    }
+
+    #[test]
+    fn the_emulators_files_are_named_in_any_case() {
+        for yes in [
+            "fakelib/libSceAmpr.sprx",
+            "FAKELIB/libsceampr.SPRX",
+            "fakelib2/libSceAmpr.sprx",
+            "fakelib/libSceAmpr.sprx.orig",
+        ] {
+            assert!(is_emulator_file(yes), "{yes}");
+        }
+        for no in [
+            "fakelib/libScePlayGo.sprx",
+            "libSceAmpr.sprx",
+            "data/fakelib/libSceAmpr.sprx",
+            "fakelib/sub/libSceAmpr.sprx",
+            "ampr_emu.index",
+        ] {
+            assert!(!is_emulator_file(no), "{no}");
+        }
     }
 }

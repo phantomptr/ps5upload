@@ -1339,6 +1339,17 @@
       },
       "BuildReq": {
         "properties": {
+          "add_ampr_emu": {
+            "description": "With `unpack_packs`: replace or add the game's AMPR emulator as an image build does.\nOn unless turned off.",
+            "type": "boolean"
+          },
+          "ampr_emu_build": {
+            "description": "With `unpack_packs`: which emulator, `ampr_emu` (the default) or `ampr-emu-ng`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "compression": {
             "description": "`fast`, `balanced` (the default) or `smallest`: how hard the Kraken encoder works.",
             "type": [
@@ -1375,6 +1386,10 @@
               "null"
             ]
           },
+          "leave_out_ampr_emu": {
+            "description": "With `unpack_packs`: leave the AMPR emulator out of the package (every\n`libSceAmpr.sprx` in `fakelib` and `fakelib2`, and a kept `.orig` copy), so the game\nreads its plain files through the console's own libSceAmpr. `add_ampr_emu` and\n`ampr_emu_build` then do nothing. A libSceAmpr game still gets a fresh `ampr_emu.index`.\nOff by default: one backported game played from a package without its emulator on FW\n5.10, which is not every game on every firmware. Refused (400) without `unpack_packs`:\npacks are read only through the emulator.",
+            "type": "boolean"
+          },
           "name": {
             "description": "Output file stem; the content id by default.",
             "type": [
@@ -1396,6 +1411,10 @@
           },
           "source": {
             "type": "string"
+          },
+          "unpack_packs": {
+            "description": "For a game in LZ4 or zstd asset packs: package it as plain files, as an image build's\n`unpack_packs` writes them. Every packed file goes in under its own name, decoded as the\npackage is written (no copy on disk), the pack volumes and their indexes are left out,\nand the package's `ampr_emu.index` lists the files it carries. A libSceAmpr game whose\nemulator is ampr-emu-ng, an old ampr_emu or unknown gets the one `ampr_emu_build` names\n(`add_ampr_emu` off leaves it). Refused (400) for a game that is not in packs. Without\nit a packed game is packaged as it is, packs and all.",
+            "type": "boolean"
           },
           "update": {
             "description": "A PS4 update to merge into the PS4 game `source` first (`ps5upload_fpkg::ps4_merge`):\nthe package is the game at the update's version.",

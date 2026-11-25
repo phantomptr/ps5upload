@@ -208,6 +208,53 @@ pub(crate) struct BuildReq {
     /// the package is the game at the update's version.
     #[serde(default)]
     update: Option<String>,
+    /// For a game in LZ4 or zstd asset packs: package it as plain files, as an image build's
+    /// `unpack_packs` writes them. Every packed file goes in under its own name, decoded as the
+    /// package is written (no copy on disk), the pack volumes and their indexes are left out,
+    /// and the package's `ampr_emu.index` lists the files it carries. A libSceAmpr game whose
+    /// emulator is ampr-emu-ng, an old ampr_emu or unknown gets the one `ampr_emu_build` names
+    /// (`add_ampr_emu` off leaves it). Refused (400) for a game that is not in packs. Without
+    /// it a packed game is packaged as it is, packs and all.
+    #[serde(default)]
+    unpack_packs: bool,
+    /// With `unpack_packs`: replace or add the game's AMPR emulator as an image build does.
+    /// On unless turned off.
+    #[serde(default = "default_add_ampr_emu")]
+    add_ampr_emu: bool,
+    /// With `unpack_packs`: which emulator, `ampr_emu` (the default) or `ampr-emu-ng`.
+    #[serde(default)]
+    ampr_emu_build: Option<String>,
+    /// With `unpack_packs`: leave the AMPR emulator out of the package (every
+    /// `libSceAmpr.sprx` in `fakelib` and `fakelib2`, and a kept `.orig` copy), so the game
+    /// reads its plain files through the console's own libSceAmpr. `add_ampr_emu` and
+    /// `ampr_emu_build` then do nothing. A libSceAmpr game still gets a fresh `ampr_emu.index`.
+    /// Off by default: one backported game played from a package without its emulator on FW
+    /// 5.10, which is not every game on every firmware. Refused (400) without `unpack_packs`:
+    /// packs are read only through the emulator.
+    #[serde(default)]
+    leave_out_ampr_emu: bool,
+}
+
+/// Why a package build's `unpack_packs` / `leave_out_ampr_emu` can't go ahead for a game in
+/// `packs` (the inspection's, `None` for a plain game), in a sentence; `None` when it can.
+fn package_unpack_refusal(
+    unpack: bool,
+    leave_out_emulator: bool,
+    packs: Option<&str>,
+) -> Option<&'static str> {
+    if leave_out_emulator && !unpack {
+        return Some(
+            "leaving out the AMPR emulator goes with unpacking the asset packs: a game in packs \
+             reads them only through its emulator",
+        );
+    }
+    if unpack && packs.is_none() {
+        return Some(
+            "this game is not in asset packs (it has no ampr_assets.index or ampr_zstd.index \
+             pack set): there is nothing to unpack",
+        );
+    }
+    None
 }
 
 /// The language a build asked for, trimmed; none when blank.
@@ -509,6 +556,21 @@ pub(crate) async fn fpkg_build_handler(
         }
     };
 
+    if let Some(why) =
+        package_unpack_refusal(req.unpack_packs, req.leave_out_ampr_emu, inspection.packs)
+    {
+        return json_err(StatusCode::BAD_REQUEST, why).into_response();
+    }
+    // A packed game read as plain files: decoded as the package is written, its emulator
+    // replaced or left out as asked.
+    let reader = req.unpack_packs.then(|| {
+        build::SourceReader(if req.leave_out_ampr_emu {
+            open_unpacked_without_emulator()
+        } else {
+            open_unpacked(req.add_ampr_emu, req.ampr_emu_build.clone())
+        })
+    });
+
     // A PS4 game (or one with its update merged in) becomes a PS4 package; without param.json
     // there is no PS5 title to package (#596).
     if inspection.ps4_game || inspection.ps4_kind.is_some() || update.is_some() {
@@ -674,6 +736,7 @@ pub(crate) async fn fpkg_build_handler(
         if let Some(level) = req.compression.as_deref().and_then(|v| v.parse().ok()) {
             request.level = level;
         }
+        request.reader = reader;
         // Each stage reports its own bytes; a new one starts from nothing.
         let mut on_stage = |s: build::Stage| {
             bytes.store(0, Ordering::Relaxed);
@@ -1735,6 +1798,13 @@ fn open_unpacked(add: bool, build: Option<String>) -> OpenUnpacked {
         });
         crate::unpack_packs::open(tree, emulator.as_ref(), mtime)
     })
+}
+
+/// [`OpenUnpacked`] for a package that leaves the AMPR emulator out (`leave_out_ampr_emu`):
+/// nothing is fetched.
+fn open_unpacked_without_emulator() -> OpenUnpacked {
+    let mtime = now_ms() as i64 / 1000;
+    Arc::new(move |tree| crate::unpack_packs::open_without_emulator(tree, mtime))
 }
 
 /// One change for an edited copy of an image: `{"op":"delete","path":…}` removes a file or

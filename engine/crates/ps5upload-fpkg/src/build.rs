@@ -64,6 +64,27 @@ pub struct BuildRequest {
     /// ([`cnt_write::game_languages`]), or all of them with `en-US` as the default when the
     /// game names none.
     pub language: Option<String>,
+    /// Read the game through this instead of as it is on disk: the engine's "unpack the asset
+    /// packs" hands back a packed game's files as plain files, decoded as the package is
+    /// written. Everything after it (the checks, the `ampr_emu.index` made from the files
+    /// packaged, the plan) sees only what it gives.
+    pub reader: Option<SourceReader>,
+}
+
+/// The game as the build reads it, made from the source as it was opened, or why it can't be.
+pub type ReadSource = dyn Fn(Box<dyn source::SourceTree>) -> std::result::Result<Box<dyn source::SourceTree>, String>
+    + Send
+    + Sync;
+
+/// A game as the package build reads it, made from the source as it was opened: see
+/// [`BuildRequest::reader`].
+#[derive(Clone)]
+pub struct SourceReader(pub std::sync::Arc<ReadSource>);
+
+impl std::fmt::Debug for SourceReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SourceReader")
+    }
 }
 
 impl BuildRequest {
@@ -89,6 +110,7 @@ impl BuildRequest {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or_default(),
             language: None,
+            reader: None,
         }
     }
 }
@@ -301,8 +323,13 @@ fn build_mode(
     mode: Mode,
 ) -> Result<BuildReport> {
     enter(control, Stage::Check);
+    let opened = source::open(&request.source)?;
+    let opened = match &request.reader {
+        Some(reader) => (reader.0)(opened).map_err(crate::Error::Format)?,
+        None => opened,
+    };
     // An unsigned executable would install and then never start: it goes in fake-signed.
-    let (mut tree, signing) = crate::fself::wrap(source::open(&request.source)?);
+    let (mut tree, signing) = crate::fself::wrap(opened);
     if let Some(line) = signing.describe() {
         progress(&line);
     }
