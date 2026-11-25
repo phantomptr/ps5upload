@@ -446,7 +446,12 @@ fn update_zstd_runtime(source: &str) -> Result<ZstdRuntimeOutcome, String> {
             let have = console_file(&addr, &full)?;
             // No backport runtime yet and the image's own is already this one: nothing to do (a
             // backport would only copy the game's modules for the same runtime).
-            if have.is_none() && tree.read(&module).ok().as_deref() == Some(r.bytes.as_slice()) {
+            // Read only when it is the runtime's size: the image's own claim of a size is
+            // never taken as how much to read.
+            let cap = r.bytes.len() as u64;
+            let image_has_it = ps5upload_fpkg::source::read_small(tree.as_mut(), &module, cap)
+                .is_ok_and(|own| own == r.bytes);
+            if have.is_none() && image_has_it {
                 return Ok(ZstdRuntimeOutcome {
                     kind: "backport",
                     folder,
