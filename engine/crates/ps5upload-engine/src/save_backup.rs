@@ -2084,7 +2084,7 @@ pub(crate) fn put_in_place(
     let folder = place.as_ref().map_or(save_path, |p| p.folder);
     // Every name first, then the deletes: a page asked for after a delete would skip some.
     let replaced = (|| {
-        let names = folder_entries(host, folder)?;
+        let names = save_folder_entries(host, save_path, folder)?;
         for e in names {
             let Some(name) = e.get("name").and_then(Value::as_str) else {
                 continue;
@@ -2136,11 +2136,35 @@ pub(crate) fn put_in_place(
 fn holds_nothing(host: &str, save_path: &str) -> Result<bool, String> {
     let place = crate::ps2_saves::place_of(save_path);
     let folder = place.as_ref().map_or(save_path, |p| p.folder);
-    Ok(!folder_entries(host, folder)?.iter().any(|e| {
-        e.get("name").and_then(Value::as_str).is_some_and(|name| {
-            name != "." && name != ".." && place.as_ref().is_none_or(|p| p.holds(name))
-        })
-    }))
+    Ok(!save_folder_entries(host, save_path, folder)?
+        .iter()
+        .any(|e| {
+            e.get("name").and_then(Value::as_str).is_some_and(|name| {
+                name != "." && name != ".." && place.as_ref().is_none_or(|p| p.holds(name))
+            })
+        }))
+}
+
+/// The entries of `folder`, the folder the save at `save_path` is kept in, before a save is put
+/// into it.
+fn save_folder_entries(host: &str, save_path: &str, folder: &str) -> Result<Vec<Value>, String> {
+    let emulator = crate::emulator_saves::kind_of_path(save_path).is_some();
+    listed_or_not_there(folder_entries(host, folder), emulator)
+}
+
+/// A save folder's listing, with "there is no such folder" read as an empty one for an
+/// emulator's save: its folder is an ordinary one the upload makes, and a console the game was
+/// never played on has none yet (copying or syncing a save to it stopped here, at the listing).
+/// A PS5 or PS4 save's folder has to be there (the console refuses a new one under its save
+/// root), and any other failure is no answer at all: both stay errors.
+fn listed_or_not_there(
+    listing: Result<Vec<Value>, String>,
+    emulator: bool,
+) -> Result<Vec<Value>, String> {
+    match listing {
+        Err(e) if emulator && ps5upload_core::fs_ops::is_not_found(&e) => Ok(Vec::new()),
+        other => other,
+    }
 }
 
 // ── PS4 saves onto the PS5 ──────────────────────────────────────────────
@@ -3021,6 +3045,21 @@ mod tests {
         assert!(made.exists());
         assert!(!older.exists(), "the others of its kind are still pruned");
         let _ = cleanup_temp_dir(&d);
+    }
+
+    /// An emulator's save goes to a console that has no folder for it yet (the upload makes
+    /// it): the listing's "no such folder" is an empty folder there. For a PS5 save, and for
+    /// any other failure, the listing's error stands and nothing is deleted or uploaded.
+    #[test]
+    fn a_missing_folder_is_empty_only_for_an_emulators_save() {
+        let missing = || Err::<Vec<Value>, String>("fs_list_dir_failed_errno_2".into());
+        assert_eq!(listed_or_not_there(missing(), true), Ok(Vec::new()));
+        assert!(listed_or_not_there(missing(), false).is_err());
+        for other in ["fs_list_dir_failed_errno_20", "HTTP 502", "timed out"] {
+            assert!(listed_or_not_there(Err(other.into()), true).is_err());
+        }
+        let some = vec![json!({"name": "a"})];
+        assert_eq!(listed_or_not_there(Ok(some.clone()), true), Ok(some));
     }
 
     /// #886: a backup folder holding both layouts lists, finds, dates and prunes them as one.
