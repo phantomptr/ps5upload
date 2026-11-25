@@ -361,6 +361,9 @@ pub fn inspect_ffpkg(path: &Path) -> Result<FfpkgInspection, Ufs2Error> {
     })
 }
 
+/// The most entries a `param.sfo` is read with (a real one has a few dozen).
+pub const MAX_SFO_ENTRIES: usize = 256;
+
 /// Parse the string keys from a PARAM.SFO blob. Reuses the same
 /// layout the PKG parser already understands (PSF magic at +0,
 /// key/data tables, entries with format codes).
@@ -380,6 +383,11 @@ fn parse_sfo_string_keys(
     let key_table_off = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
     let data_table_off = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
     let entry_count = u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]) as usize;
+    // A real param.sfo has a few dozen entries. Each entry's value is copied out, and an entry
+    // may claim the whole file as its value: thousands of them made gigabytes of copies.
+    if entry_count > MAX_SFO_ENTRIES {
+        return Err("SFO entry count out of range".into());
+    }
     let mut out = std::collections::HashMap::new();
     let table_off: usize = 20;
     for i in 0..entry_count {
@@ -1072,7 +1080,7 @@ pub fn sfo_params(buf: &[u8]) -> Result<Vec<(String, SfoValue)>, &'static str> {
     let keys_off = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]) as usize;
     let data_off = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]) as usize;
     let n = u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]) as usize;
-    if keys_off > buf.len() || data_off > buf.len() || n > 256 {
+    if keys_off > buf.len() || data_off > buf.len() || n > MAX_SFO_ENTRIES {
         return Err("SFO offsets / count out of range");
     }
     if 0x14 + n * 0x10 > buf.len() {
@@ -2245,6 +2253,22 @@ mod tests {
         sfo.extend_from_slice(&keys);
         sfo.extend_from_slice(&data);
         sfo
+    }
+
+    /// A param.sfo that counts more entries than any real one is refused before its values are
+    /// copied out: each entry may claim the whole file, so thousands of them were gigabytes.
+    #[test]
+    fn an_sfo_with_too_many_entries_is_refused() {
+        let entries = MAX_SFO_ENTRIES + 1;
+        let mut sfo = vec![0u8; 20 + entries * 16 + 16];
+        sfo[..4].copy_from_slice(b"\0PSF");
+        let tables = (20 + entries * 16) as u32;
+        sfo[8..12].copy_from_slice(&tables.to_le_bytes());
+        sfo[12..16].copy_from_slice(&tables.to_le_bytes());
+        sfo[16..20].copy_from_slice(&(entries as u32).to_le_bytes());
+        assert!(parse_sfo_string_keys(&sfo).is_err());
+        sfo[16..20].copy_from_slice(&(MAX_SFO_ENTRIES as u32).to_le_bytes());
+        assert!(parse_sfo_string_keys(&sfo).is_ok());
     }
 
     #[test]

@@ -142,6 +142,10 @@ pub fn parse_param_sfo_bytes(bytes: &[u8]) -> Result<FolderInspectResult> {
     })
 }
 
+/// The most entries a `param.sfo` is read with (a real one has a few dozen; the package
+/// reader's limit too).
+pub const MAX_SFO_ENTRIES: usize = 256;
+
 /// Parse the string keys from a PARAM.SFO blob.
 ///
 /// PSF layout: 20-byte header (magic `\x00PSF`, version, key-table offset,
@@ -153,7 +157,8 @@ pub fn parse_param_sfo_bytes(bytes: &[u8]) -> Result<FolderInspectResult> {
 /// entries (`PARENTAL_LEVEL` uint32, etc.) are silently skipped.
 ///
 /// All offset arithmetic uses checked math to prevent integer-overflow panics
-/// on truncated / malicious SFO blobs.
+/// on truncated / malicious SFO blobs, and a blob that counts more than
+/// [`MAX_SFO_ENTRIES`] entries is refused.
 pub fn parse_sfo_string_keys(
     bytes: &[u8],
 ) -> std::result::Result<std::collections::HashMap<String, String>, String> {
@@ -166,6 +171,11 @@ pub fn parse_sfo_string_keys(
     let key_table_off = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
     let data_table_off = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
     let entry_count = u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]) as usize;
+    // A real param.sfo has a few dozen entries. Each entry's value is copied out, and an entry
+    // may claim the whole file as its value: thousands of them made gigabytes of copies.
+    if entry_count > MAX_SFO_ENTRIES {
+        return Err("SFO entry count out of range".into());
+    }
     let mut out = std::collections::HashMap::new();
     let table_off: usize = 20;
     for i in 0..entry_count {
@@ -573,6 +583,21 @@ mod tests {
             Some("EP0000-CUSA12345_00-MYPS4GAME0000001")
         );
         assert_eq!(r.content_version.as_deref(), Some("01.02"));
+    }
+
+    /// More entries than any real param.sfo has: refused before any value is copied out.
+    #[test]
+    fn parse_sfo_rejects_too_many_entries() {
+        let entries = MAX_SFO_ENTRIES + 1;
+        let mut sfo = vec![0u8; 20 + entries * 16 + 16];
+        sfo[..4].copy_from_slice(b"\0PSF");
+        let tables = (20 + entries * 16) as u32;
+        sfo[8..12].copy_from_slice(&tables.to_le_bytes());
+        sfo[12..16].copy_from_slice(&tables.to_le_bytes());
+        sfo[16..20].copy_from_slice(&(entries as u32).to_le_bytes());
+        assert!(parse_sfo_string_keys(&sfo).is_err());
+        sfo[16..20].copy_from_slice(&(MAX_SFO_ENTRIES as u32).to_le_bytes());
+        assert!(parse_sfo_string_keys(&sfo).is_ok());
     }
 
     #[test]
