@@ -2478,15 +2478,13 @@ pub(crate) enum InstalledState {
     Unknown,
 }
 
+/// The version is the PS4 form (`01.32`, [`read_installed_app_ver`]).
 pub(crate) fn read_installed_state(mgmt_addr: &str, title_id: &str) -> InstalledState {
-    match ps5upload_core::diagnostics::appinfo_query(mgmt_addr, title_id, Some("APP_VER")) {
+    use ps5upload_core::diagnostics::{appinfo_query, APPINFO_APP_VERSION_KEYS};
+    match appinfo_query(mgmt_addr, title_id, Some(APPINFO_APP_VERSION_KEYS)) {
         Err(_) => InstalledState::Unknown,
         Ok(rows) => rows
-            .rows
-            .into_iter()
-            .find(|r| r.key == "APP_VER")
-            .map(|r| r.val)
-            .filter(|v| !v.trim().is_empty())
+            .app_version()
             .map_or(InstalledState::Absent, InstalledState::Installed),
     }
 }
@@ -2739,17 +2737,16 @@ pub(crate) fn artifact_wait_loop(
     }
 }
 
-/// Read a title's installed `APP_VER`, or `None` when it cannot be read (title
-/// absent, payload too old, console busy). `None` deliberately means "unknown"
-/// and never "failed" — see patch_verify, which stays inconclusive on it.
+/// Read a title's installed app version (`01.32`): the higher of appinfo.db's `VERSION` and
+/// `APP_VER`, since an installed PS4 update raises `VERSION` and leaves `APP_VER` at the base
+/// game's (#934). `None` when it cannot be read (title absent, payload too old, console busy).
+/// `None` deliberately means "unknown" and never "failed" — see patch_verify, which stays
+/// inconclusive on it.
 pub(crate) fn read_installed_app_ver(mgmt_addr: &str, title_id: &str) -> Option<String> {
-    let rows =
-        ps5upload_core::diagnostics::appinfo_query(mgmt_addr, title_id, Some("APP_VER")).ok()?;
-    rows.rows
-        .into_iter()
-        .find(|r| r.key == "APP_VER")
-        .map(|r| r.val)
-        .filter(|v| !v.trim().is_empty())
+    use ps5upload_core::diagnostics::{appinfo_query, APPINFO_APP_VERSION_KEYS};
+    appinfo_query(mgmt_addr, title_id, Some(APPINFO_APP_VERSION_KEYS))
+        .ok()?
+        .app_version()
 }
 
 /// What the wait for a patch to take effect found.

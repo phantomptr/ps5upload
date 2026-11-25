@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Users } from "lucide-react";
 
 import { useTr } from "../state/lang";
@@ -68,6 +68,16 @@ export function JoinFlow({
   const [name, setName] = useState(() => lastName(defaultName(typeof navigator === "undefined" ? "" : navigator.userAgent)));
   const [session, setSession] = useState<JoinSession | null>(null);
   const [round, setRound] = useState(0);
+  // When the name step shows (after the "Open in the app?" question too), a TV's remote or a
+  // keyboard starts on Join, or on the name when there is none yet (#926). Not the name on a
+  // touch screen, where its keyboard would cover the page.
+  const form = useCallback((el: HTMLFormElement | null) => {
+    if (!el) return;
+    const touch = typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
+    const named = !!el.querySelector<HTMLInputElement>('[data-testid="join-name"]')?.value.trim();
+    const id = named ? "join-go" : touch ? null : "join-name";
+    if (id) el.querySelector<HTMLElement>(`[data-testid="${id}"]`)?.focus({ preventScroll: true });
+  }, []);
 
   const go = (n: string) => {
     // Remembered on this device: the next invite has it filled in.
@@ -115,8 +125,9 @@ export function JoinFlow({
 
   const shownHost = host ?? tr("join_host_fallback", undefined, "your friend");
   const nameStep = (
-    <div className="flex min-h-[100dvh] items-center justify-center bg-black px-6 text-white" data-testid="join-name-step">
+    <div className="flex min-h-[100dvh] items-center justify-center bg-black px-6 text-white" data-testid="join-name-step" data-join-ui="">
       <form
+        ref={form}
         className="w-full max-w-sm space-y-4 rounded-2xl border border-white/10 bg-neutral-900 p-6"
         onSubmit={(e) => {
           e.preventDefault();

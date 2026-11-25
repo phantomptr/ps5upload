@@ -2,8 +2,8 @@
  * /api/cheats/store query and file name are checked strictly (a plain base name with the format's
  * extension, never a path), the target folders are made when missing, and the bytes land through
  * wf_receive_file as a same-folder temp + rename: a cut-off body leaves the old file and no temp.
- * The appinfo reply reader prefers CONTENT_VERSION over APP_VER. File tests run in a fresh mkdtemp
- * directory. Build: see the root Makefile test-payload. */
+ * The appinfo reply reader prefers CONTENT_VERSION, else the higher of VERSION and APP_VER (#934).
+ * File tests run in a fresh mkdtemp directory. Build: see the root Makefile test-payload. */
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "appinfo_version.h"
 #include "webui_cheats_store.h"
 #include "webui_files.h"
 
@@ -203,6 +204,37 @@ static void versions(void) {
     CHECK(webui_cheat_appinfo_version(nested, strlen(nested), v, sizeof v) == 1 && strcmp(v, "02.10") == 0);
     CHECK(webui_cheat_appinfo_version("{\"ok\":false,\"error\":\"x\"}", 25, v, sizeof v) == 0);
     CHECK(webui_cheat_appinfo_version(ps5, strlen(ps5), v, 4) == 0); /* does not fit */
+
+    /* #934: an updated PS4 game keeps APP_VER at the base's 01.00 and says its update in VERSION. */
+    const char *rdr2 = "{\"ok\":true,\"title_id\":\"CUSA03041\",\"rows\":[{\"key\":\"APP_VER\",\"val\":\"01.00\"},"
+                       "{\"key\":\"VERSION\",\"val\":\"01.32\"}],\"source\":\"sqlite\",\"error\":null}";
+    const char *app_higher = "{\"ok\":true,\"rows\":[{\"key\":\"VERSION\",\"val\":\"01.00\"},{\"key\":\"APP_VER\",\"val\":\"01.09\"}]}";
+    const char *only_version = "{\"ok\":true,\"rows\":[{\"key\":\"VERSION\",\"val\":\"01.26\"}]}";
+    const char *ps5_with_version = "{\"ok\":true,\"rows\":[{\"key\":\"VERSION\",\"val\":\"01.32\"},"
+                                   "{\"key\":\"CONTENT_VERSION\",\"val\":\"01.500.000\"}]}";
+    CHECK(webui_cheat_appinfo_version(rdr2, strlen(rdr2), v, sizeof v) == 1 && strcmp(v, "01.32") == 0);
+    CHECK(webui_cheat_appinfo_version(app_higher, strlen(app_higher), v, sizeof v) == 1 && strcmp(v, "01.09") == 0);
+    CHECK(webui_cheat_appinfo_version(only_version, strlen(only_version), v, sizeof v) == 1 && strcmp(v, "01.26") == 0);
+    CHECK(webui_cheat_appinfo_version(ps5_with_version, strlen(ps5_with_version), v, sizeof v) == 1 &&
+          strcmp(v, "01.500.000") == 0);
+}
+
+static void version_pick(void) {
+    CHECK(strcmp(appinfo_version_pick("01.000.016", "01.32", "01.00"), "01.000.016") == 0);
+    CHECK(strcmp(appinfo_version_pick(NULL, "01.32", "01.00"), "01.32") == 0);
+    CHECK(strcmp(appinfo_version_pick("", "01.00", "01.09"), "01.09") == 0);
+    CHECK(strcmp(appinfo_version_pick(NULL, "01.05", "01.05"), "01.05") == 0);
+    CHECK(strcmp(appinfo_version_pick(NULL, "", "01.00"), "01.00") == 0);
+    CHECK(strcmp(appinfo_version_pick(NULL, "01.26", NULL), "01.26") == 0);
+    CHECK(strcmp(appinfo_version_pick(NULL, NULL, NULL), "") == 0);
+    CHECK(appinfo_version_cmp("01.32", "01.05") > 0);
+    CHECK(appinfo_version_cmp("1.10", "1.9") > 0);
+    CHECK(appinfo_version_cmp("01.05", "1.5") == 0);
+    CHECK(appinfo_version_cmp("01.00", "01.00.001") < 0);
+    CHECK(appinfo_version_cmp(" 01.05", "01.05") == 0);
+    CHECK(appinfo_version_cmp("abc", "01.00") < 0);
+    CHECK(appinfo_version_cmp("", "") == 0);
+    CHECK(appinfo_version_cmp("99999999999999999999", "1") > 0); /* no overflow */
 }
 
 int main(void) {
@@ -211,6 +243,7 @@ int main(void) {
     queries();
     store();
     versions();
+    version_pick();
     if (failures) {
         fprintf(stderr, "webui_cheats_store_selftest: %d failure(s)\n", failures);
         return 1;

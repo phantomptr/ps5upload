@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { activateFocusTrap, closeTopModal, openModalCount, registerBackDismiss } from "./focusTrap";
+import {
+  activateFocusTrap,
+  backStepCount,
+  closeTopModal,
+  openModalCount,
+  registerBackDismiss,
+  registerScreenBack,
+} from "./focusTrap";
 import { installAppBack, installBrowserBack } from "./systemBack";
 
 // No jsdom in this repo: just enough of `document`, KeyboardEvent and a window's history.
@@ -165,6 +172,63 @@ describe("Back in a phone's browser", () => {
     expect(h.back).not.toHaveBeenCalled();
     under();
     vi.runAllTimers();
+    off();
+  });
+});
+
+describe("a screen's own steps (Files: leave selection mode, go up a folder)", () => {
+  it("come after every surface, newest step first, and leave the history alone until none is left", () => {
+    const w = {} as Window;
+    installAppBack(w);
+    const did: string[] = [];
+    const up = registerScreenBack(() => did.push("up"));
+    const menu = registerBackDismiss(() => did.push("menu"));
+    const select = registerScreenBack(() => did.push("end selection"));
+    // A screen step is not a dialog: focus is not kept inside one for it (lib/tvNav).
+    expect(openModalCount()).toBe(1);
+    expect(backStepCount()).toBe(3);
+    expect(w.__ps5uBack?.()).toBe(true);
+    menu();
+    expect(w.__ps5uBack?.()).toBe(true);
+    select();
+    expect(w.__ps5uBack?.()).toBe(true);
+    up();
+    expect(did).toEqual(["menu", "end selection", "up"]);
+    expect(w.__ps5uBack?.()).toBe(false);
+    expect(closeTopModal()).toBe(false);
+  });
+
+  it("hold a history entry in a phone's browser, and take it again while the screen has more", () => {
+    vi.useFakeTimers();
+    const pop = new Set<() => void>();
+    const h = { state: null, pushState: vi.fn(), back: vi.fn() };
+    const w = {
+      location: { href: "http://nas/files" },
+      history: h,
+      addEventListener: (_t: string, fn: () => void) => void pop.add(fn),
+      removeEventListener: (_t: string, fn: () => void) => void pop.delete(fn),
+    } as unknown as Window;
+    const off = installBrowserBack(w);
+    let depth = 2;
+    let undo: (() => void) | null = registerScreenBack(() => {
+      depth -= 1;
+      if (depth === 0) {
+        undo?.();
+        undo = null;
+      }
+    });
+    vi.runAllTimers();
+    expect(h.pushState).toHaveBeenCalledTimes(1);
+    pop.forEach((f) => f());
+    vi.runAllTimers();
+    // Still a folder to go up to: Back stays with the screen.
+    expect(depth).toBe(1);
+    expect(h.pushState).toHaveBeenCalledTimes(2);
+    pop.forEach((f) => f());
+    vi.runAllTimers();
+    expect(depth).toBe(0);
+    expect(h.pushState).toHaveBeenCalledTimes(2);
+    expect(h.back).not.toHaveBeenCalled();
     off();
   });
 });

@@ -40,7 +40,9 @@ export function kindsFor(source: string, isDir?: boolean): Kind[] {
 }
 
 /** The change for choosing `kind`: an image keeps its own format choice when it was one, and an
- *  image or folder keeps the asset packs it had (#905: they are no longer lost on the way). */
+ *  image or folder keeps the asset packs it had (#905: they are no longer lost on the way).
+ *  Writing a packed game's files out plain goes along into any kind (#933); leaving its AMPR
+ *  emulator out is a package's choice only, so it stays behind. */
 export function changeForKind(item: ConvertItem, kind: Kind, canInstall: boolean, host: string | null): ConvertItemChange {
   const base: ConvertBuild =
     kind === "image"
@@ -49,8 +51,9 @@ export function changeForKind(item: ConvertItem, kind: Kind, canInstall: boolean
         : { kind: "image", format: "exfat", compress: false }
       : { kind };
   const packs = packsOf(item.build);
+  const plain: ConvertBuild = item.build?.unpackPacks && !base.unpackPacks ? { ...base, unpackPacks: true } : base;
   // The kind it already is (its segment picked again) keeps the build whole, packs included.
-  const build = item.build && kind === item.build.kind ? item.build : packs.kind === "none" ? base : withPacks(base, packs);
+  const build = item.build && kind === item.build.kind ? item.build : packs.kind === "none" ? plain : withPacks(base, packs);
   const then = thenFor(kind, item.then, canInstall);
   return { build, then, host: then !== "keep" ? (item.host ?? host) : null };
 }

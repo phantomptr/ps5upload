@@ -20,6 +20,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "appinfo_version.h"
 #include "archive_extract.h"
 #include "ava1_data.h"
 #include "console_convert.h"
@@ -1321,7 +1322,7 @@ static void r_apps_info(const char *b, size_t n, uint8_t *out, int fd) {
             return;
         }
         k = snprintf(req, sizeof req,
-                     "{\"title_id\":\"%s\",\"keys\":\"CONTENT_VERSION,APP_VER,#_size,#_last_access_time,#_install_time\"}",
+                     "{\"title_id\":\"%s\",\"keys\":\"" APPINFO_VERSION_KEYS ",#_size,#_last_access_time,#_install_time\"}",
                      tid); /* letters and digits only */
         st = call_text(AVA1_METHOD_APP_INFO_QUERY, req, (size_t)k, out, &ol, &t, &tl);
         if (st != AVA1_STATUS_OK || !tl || t[0] != '{') continue;
@@ -1929,6 +1930,12 @@ static void spawn_lan_apply(void) {
     if (rc != 0) fprintf(stderr, "webui: cannot start the rebind thread (%d); LAN applies at the next start\n", rc);
 }
 
+/* The downloads (GET /dl/<ticket>/<name>, serve_download): with the streamed uploads these are the
+ * transfers the server runs on at most all but one worker (webui_cfg_t.long_for). */
+static int api_long_for(const webui_req_t *r) {
+    return strcmp(r->method, "GET") == 0 && strncmp(r->path, "/dl/", 4) == 0;
+}
+
 /* Starts the :9180 server with the saved LAN setting (main.c at helper start, and turning Minion
  * back on). 0 when it runs (or already ran), -1 when it could not start (logged). */
 int webui_api_server_start(void) {
@@ -1944,6 +1951,7 @@ int webui_api_server_start(void) {
     wc.route = webui_api_route;
     wc.stream_for = webui_api_stream_for;
     wc.stream = webui_api_stream;
+    wc.long_for = api_long_for;
     if (webui_start(&wc) != 0) {
         if (webui_running()) return 0; /* another start won the race */
         fprintf(stderr, "webui: server did not start\n");
@@ -2275,7 +2283,7 @@ static void r_cheats_engine(const char *b, size_t n, uint8_t *out, int fd) {
 }
 
 /* {title_id}: the game's installed version, read like the PC app reads it (APP_INFO_QUERY's
- * CONTENT_VERSION, else APP_VER): {"version":"01.05"} or {"version":null} when appinfo.db does not
+ * CONTENT_VERSION, else the higher of VERSION and APP_VER): {"version":"01.05"} or {"version":null} when appinfo.db does not
  * say (the page then lists every version's cheats). Never an error for an unknown version. */
 static void r_cheats_version(const char *b, size_t n, uint8_t *out, int fd) {
     char title[32], req[96], ver[32], json[64];
@@ -2283,7 +2291,7 @@ static void r_cheats_version(const char *b, size_t n, uint8_t *out, int fd) {
     size_t ol, tl;
     int st, k;
     if (need_title(fd, b, n, title, sizeof title) != 0) return;
-    k = snprintf(req, sizeof req, "{\"title_id\":\"%s\",\"keys\":\"CONTENT_VERSION,APP_VER\"}", title);
+    k = snprintf(req, sizeof req, "{\"title_id\":\"%s\",\"keys\":\"" APPINFO_VERSION_KEYS "\"}", title);
     st = call_text(AVA1_METHOD_APP_INFO_QUERY, req, (size_t)k, out, &ol, &t, &tl);
     if (st == AVA1_STATUS_OK && webui_cheat_appinfo_version((const char *)t, tl, ver, sizeof ver) == 1)
         k = snprintf(json, sizeof json, "{\"version\":\"%s\"}", ver); /* digits and dots only */

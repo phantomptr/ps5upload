@@ -117,13 +117,38 @@ export function handleTvKey(e: KeyboardEvent, doc: Document = document): boolean
 }
 
 let installed = false;
+let listening = false;
+
+/** Arrows move focus from now on (once per page). */
+function listen(w: Window): void {
+  if (listening) return;
+  listening = true;
+  // Bubble phase: controls that use the arrows themselves have had them first.
+  w.addEventListener("keydown", (e) => void handleTvKey(e, w.document));
+}
 
 /** Once, at start-up: on a TV, arrows move focus. Returns whether it is on. */
 export function installTvNav(w: Window | undefined = typeof window === "undefined" ? undefined : window): boolean {
   if (installed || !w || !isTvDevice(w)) return installed;
   installed = true;
   w.document.documentElement.dataset.tv = "1";
-  // Bubble phase: controls that use the arrows themselves have had them first.
-  w.addEventListener("keydown", (e) => void handleTvKey(e, w.document));
+  listen(w);
   return true;
+}
+
+/**
+ * Once, at start-up, on a page that is only a few buttons (the /join page, #926): arrows move
+ * focus on every device, so a TV's browser and its remote reach every button. The game's own
+ * part of the page keeps the arrows (data-own-arrows), as text fields keep Left and Right.
+ */
+export function installArrowNav(w: Window | undefined = typeof window === "undefined" ? undefined : window): void {
+  if (!w) return;
+  if (isTvDevice(w)) w.document.documentElement.dataset.tv = "1";
+  listen(w);
+}
+
+/** Test hook. */
+export function resetTvNavForTest(): void {
+  installed = false;
+  listening = false;
 }

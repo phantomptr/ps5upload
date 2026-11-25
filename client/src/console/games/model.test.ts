@@ -119,6 +119,16 @@ describe("games model", () => {
     });
     expect(i).toEqual({ version: "01.000.016", sizeBytes: 1073741824, lastPlayed: Date.UTC(2026, 9, 20, 12) });
     expect(parseInfo({ rows: [{ key: "APP_VER", val: "01.05" }] }).version).toBe("01.05");
+    // #934: an updated PS4 game keeps APP_VER at the base's 01.00 and says 01.32 in VERSION.
+    expect(
+      parseInfo({
+        ok: true,
+        rows: [
+          { key: "APP_VER", val: "01.00" },
+          { key: "VERSION", val: "01.32" },
+        ],
+      }).version,
+    ).toBe("01.32");
     expect(parseInfo(null)).toEqual({ version: null, sizeBytes: null, lastPlayed: null });
     expect(parseInfoTime("1760000000")).toBe(1760000000000);
     expect(parseInfoTime("1760000000000")).toBe(1760000000000);

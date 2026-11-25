@@ -529,8 +529,6 @@ pub struct ConsoleQuery {
     addr: String,
 }
 
-/// A title's installed version, normalized like the collection's: `APP_VER` (PS4) or
-/// `CONTENT_VERSION` (PS5). `None` when it could not be read.
 /// The console's titles: upper-case title ID → the path it was registered from, if any. A title
 /// whose app folder is on the internal or an extended drive counts too: the installed-apps list
 /// counts those, and two reads that disagreed made a game on the M.2 drive flip between
@@ -662,21 +660,16 @@ pub(crate) fn read_title(
     t
 }
 
-/// The installed version: `APP_VER` (PS4) or `CONTENT_VERSION` (PS5), normalized. `Ok(None)`
-/// when the console has neither; `Err` when it could not be asked.
+/// The installed version, normalized: `CONTENT_VERSION` (PS5), else the higher of `VERSION` and
+/// `APP_VER` (PS4: an update raises `VERSION` and leaves `APP_VER` at the base's, #934).
+/// `Ok(None)` when the console has none; `Err` when it could not be asked. Any helper answers
+/// these keys, so this needs no helper update.
 fn installed_version(addr: &str, title_id: &str) -> Result<Option<String>, String> {
+    use ps5upload_core::diagnostics::{appinfo_query, APPINFO_VERSION_KEYS};
     let rows =
-        ps5upload_core::diagnostics::appinfo_query(addr, title_id, Some("APP_VER,CONTENT_VERSION"))
-            .map_err(|e| format!("{e:#}"))?;
-    let get = |k: &str| {
-        rows.rows
-            .iter()
-            .find(|r| r.key == k)
-            .map(|r| r.val.trim().to_string())
-            .filter(|v| !v.is_empty())
-    };
-    Ok(get("APP_VER")
-        .or_else(|| get("CONTENT_VERSION"))
+        appinfo_query(addr, title_id, Some(APPINFO_VERSION_KEYS)).map_err(|e| format!("{e:#}"))?;
+    Ok(rows
+        .installed_version()
         .map(|v| ps5upload_pkg::kind::normalize_version(&v)))
 }
 

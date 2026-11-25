@@ -40,6 +40,7 @@ jobs:
       # workflow_run runs on the default branch: this is main's classifier, whatever the run was for.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           sparse-checkout: scripts/release/gate-failures.mjs
           sparse-checkout-cone-mode: false
 

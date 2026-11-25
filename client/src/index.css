@@ -700,6 +700,22 @@ body {
   outline-offset: 3px;
 }
 
+/* Play Together's guest screens (the /join page, the joined game; #926): black, maybe on a TV
+ * across the room. A thick white ring, clear of the button by a dark gap. */
+[data-join-ui] :where(a, button, input, select, textarea, summary, [role="button"], [tabindex]):focus-visible,
+:root[data-tv="1"] [data-join-ui] :where(a, button, input, select, textarea, summary, [role="button"], [tabindex]):focus {
+  outline: 3px solid #fff;
+  outline-offset: 3px;
+}
+:root[data-tv="1"] [data-join-ui] :where(a, button, input, select, textarea, summary, [role="button"], [tabindex]):focus {
+  outline-width: 4px;
+}
+/* The game's own focus spot (JoinView): the keys play there, nothing to ring. */
+[data-join-game]:focus,
+[data-join-game]:focus-visible {
+  outline: none !important;
+}
+
 /* Fields that already show focus their own way don't also get the heavy
  * ring: `.input` / `.select` turn accent-edged with a soft halo, and a
  * `.field-quiet` field sits in a `.field-shell` that lights up instead (the
@@ -1165,6 +1181,11 @@ body {
    of the screen, and these fixed bars would take up a good part of it. */
 html[data-keyboard] [data-bottom-nav],
 html[data-keyboard] [data-testid="activity-pill"] { display: none !important; }
+/* Selecting in Files on a phone (#936): the selection's actions take the bottom bar's place. The
+   same query as the `phone:` variant, where that bar of actions shows. */
+@media not all and (min-width: 40rem), (pointer: coarse) and (max-height: 520px) {
+  html[data-selection-bar] [data-bottom-nav] { display: none !important; }
+}
 /* The tabs down a column the system leaves empty (an iPhone Duo folded, TabNav.tsx useSideRail):
    under its icons, at the bottom where a thumb reaches, and the page gets its height back. */
 .tab-rail-probe {

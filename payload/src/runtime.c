@@ -5499,23 +5499,26 @@ static int handle_backup_restore(runtime_state_t *state, const char *body) {
     char tag[64] = {0};
     extract_json_string_field(body, "tag", tag, sizeof(tag));
     int64_t ts = (int64_t)extract_json_uint64_field(body, "timestamp");
-    int restored = 0;
-    const char *err = "";
-    int rc = -1;
-    if (tag[0] && ts > 0) {
-        rc = backup_restore(tag, ts, &restored);
-        if (rc == BACKUP_CANCELLED)
-            return mgmt_reply(MGMT_FRAME_ERROR, "backup_cancelled", 16);
-        if (rc != 0) err = "snapshot not found or restore failed";
-    } else {
-        err = "missing tag or timestamp";
-    }
+    backup_restore_counts_t counts = { 0, 0, 0 };
     char tesc[160];
     json_escape_into(tag, tesc, sizeof(tesc));
     char resp[512];
-    int len = snprintf(resp, sizeof(resp),
-        "{\"ok\":%s,\"tag\":\"%s\",\"restored\":%d,\"err\":\"%s\"}",
-        rc == 0 ? "true" : "false", tesc, restored, err);
+    int len;
+    if (tag[0] && ts > 0) {
+        int rc = backup_restore_ex(tag, ts, &counts);
+        if (rc == BACKUP_CANCELLED)
+            return mgmt_reply(MGMT_FRAME_ERROR, "backup_cancelled", 16);
+        /* ok only when something was restored: a restore that wrote nothing back (every entry
+         * skipped or failed, or none listed) used to say ok:true with restored:0. */
+        len = backup_restore_reply(resp, sizeof(resp), tesc, rc, &counts);
+    } else {
+        len = snprintf(resp, sizeof(resp),
+            "{\"ok\":false,\"tag\":\"%s\",\"restored\":0,\"err\":\"missing tag or timestamp\"}", tesc);
+    }
+    if (len < 0 || (size_t)len >= sizeof(resp)) {
+        len = snprintf(resp, sizeof(resp), "{\"ok\":false,\"restored\":%d,\"err\":\"reply too long\"}",
+                       counts.restored);
+    }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);

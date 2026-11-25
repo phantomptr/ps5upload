@@ -4743,7 +4743,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-exfat"
-version = "12.6.28"
+version = "12.6.29"
 dependencies = [
  "ps5-dump-forge-patch",
  "ps5upload-fpkg",
@@ -4752,14 +4752,14 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-patch"
-version = "12.6.28"
+version = "12.6.29"
 dependencies = [
  "crc32fast",
 ]
 
 [[package]]
 name = "ps5-dump-forge-pfs"
-version = "12.6.28"
+version = "12.6.29"
 dependencies = [
  "flate2",
  "ps5-dump-forge-patch",
@@ -4768,7 +4768,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-ufs2"
-version = "12.6.28"
+version = "12.6.29"
 dependencies = [
  "ps5-dump-forge-patch",
  "ps5upload-fpkg",
@@ -4777,7 +4777,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-zstd"
-version = "12.6.28"
+version = "12.6.29"
 dependencies = [
  "crc32fast",
  "getrandom 0.4.3",
@@ -4788,7 +4788,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-archive"
-version = "12.6.28"
+version = "12.6.29"
 dependencies = [
  "anyhow",
  "crc32fast",
@@ -4798,7 +4798,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-ava1"
-version = "12.6.28"
+version = "12.6.29"
 dependencies = [
  "anyhow",
  "ava1",
@@ -4817,7 +4817,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-convert-core"
-version = "12.6.28"
+version = "12.6.29"
 dependencies = [
  "blake3",
  "libc",
@@ -4834,7 +4834,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-core"
-version = "12.6.28"
+version = "12.6.29"
 dependencies = [
  "aes 0.9.2",
  "aes-gcm 0.11.0",
@@ -4868,7 +4868,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-desktop"
-version = "12.6.28"
+version = "12.6.29"
 dependencies = [
  "anyhow",
  "ava1",
@@ -4879,6 +4879,7 @@ dependencies = [
  "evdev",
  "flate2",
  "futures-util",
+ "glob",
  "hidapi",
  "image",
  "jni 0.21.1",
@@ -4909,7 +4910,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-engine"
-version = "12.6.28"
+version = "12.6.29"
 dependencies = [
  "aes 0.9.2",
  "aes-gcm 0.11.0",
@@ -4973,7 +4974,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-fpkg"
-version = "12.6.28"
+version = "12.6.29"
 dependencies = [
  "aes 0.9.2",
  "crc32fast",
@@ -4996,7 +4997,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-hub"
-version = "12.6.28"
+version = "12.6.29"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -5010,7 +5011,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-pkg"
-version = "12.6.28"
+version = "12.6.29"
 dependencies = [
  "aes 0.9.2",
  "blake3",
@@ -5022,7 +5023,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-tailnet"
-version = "12.6.28"
+version = "12.6.29"
 dependencies = [
  "cc",
 ]
@@ -6444,9 +6445,9 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "suppaftp"
-version = "12.1.0"
+version = "12.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d79f066c76927a775d61b5642e0b712a17582ebe7f62b7e5abba246e619878f7"
+checksum = "2b58fcf921745cca6f0127c9f822069947da8c6dbeff52e9004750bcc448171f"
 dependencies = [
  "async-trait",
  "chrono",

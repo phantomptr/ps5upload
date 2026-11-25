@@ -402,31 +402,66 @@ export interface UnpackChoice {
   kind: "lz4" | "zstd";
   on: boolean;
   onToggle: (on: boolean) => void;
+  /** A package's (#933): leave the AMPR emulator out once the files are plain. Absent for an
+   *  image or folder, which ShadowMount+ mounts, where some AMPR games need the emulator. */
+  leaveOutEmulator?: { on: boolean; onToggle: (on: boolean) => void };
 }
 
 export function UnpackOption({ unpack }: { unpack: UnpackChoice }) {
   const tr = useTr();
+  const kind = unpack.kind === "zstd" ? "zstd" : "LZ4";
+  const leaveOut = unpack.leaveOutEmulator;
   return (
-    <label className="flex cursor-pointer items-start gap-2.5 text-xs" data-testid="unpack-option">
-      <input
-        type="checkbox"
-        checked={unpack.on}
-        onChange={(e) => unpack.onToggle(e.target.checked)}
-        className="checkbox mt-px h-4 w-4 shrink-0"
-      />
-      <span className="min-w-0">
-        <span className="block font-medium text-[var(--color-text)]">
-          {tr("fpkg.unpack_packs", undefined, "Unpack the asset packs (plain files again)")}
+    <div className="flex flex-col gap-2">
+      <label className="flex cursor-pointer items-start gap-2.5 text-xs" data-testid="unpack-option">
+        <input
+          type="checkbox"
+          checked={unpack.on}
+          onChange={(e) => unpack.onToggle(e.target.checked)}
+          className="checkbox mt-px h-4 w-4 shrink-0"
+        />
+        <span className="min-w-0">
+          <span className="block font-medium text-[var(--color-text)]">
+            {tr("fpkg.unpack_packs", undefined, "Unpack the asset packs (plain files again)")}
+          </span>
+          <span className="mt-0.5 block leading-relaxed text-[var(--color-muted)]">
+            {leaveOut
+              ? tr(
+                  "fpkg.unpack_packs_pkg_body",
+                  { kind },
+                  "This game is in {kind} asset packs. Ticked, the package holds every file as a plain file and leaves the packs out, so it is about as large as the game was before packing. An emulator that only suits packs is replaced by the one chosen in the options. Unticked, the packs go in as they are, and only the emulator can read them.",
+                )
+              : tr(
+                  "fpkg.unpack_packs_body",
+                  { kind },
+                  "This game is in {kind} asset packs. Ticked, every packed file is written as a plain file again and the packs are left out, so the game is as large as it was before packing and no longer needs ShadowMount+ to read packs. It gets a fresh ampr_emu.index, and a game that reads its files through AMPR whose emulator only suits packs gets the emulator chosen in the options. Unticked, the game is written as it is, packs and all.",
+                )}
+          </span>
         </span>
-        <span className="mt-0.5 block leading-relaxed text-[var(--color-muted)]">
-          {tr(
-            "fpkg.unpack_packs_body",
-            { kind: unpack.kind === "zstd" ? "zstd" : "LZ4" },
-            "This game is in {kind} asset packs. Ticked, every packed file is written as a plain file again and the packs are left out, so the game is as large as it was before packing and no longer needs ShadowMount+ to read packs. It gets a fresh ampr_emu.index, and a game that reads its files through AMPR whose emulator only suits packs gets the emulator chosen in the options. Unticked, the game is written as it is, packs and all.",
-          )}
-        </span>
-      </span>
-    </label>
+      </label>
+      {leaveOut && unpack.on && (
+        <label className="ms-6 flex cursor-pointer items-start gap-2.5 text-xs" data-testid="leave-out-ampr-emu">
+          <input
+            type="checkbox"
+            checked={leaveOut.on}
+            onChange={(e) => leaveOut.onToggle(e.target.checked)}
+            className="checkbox mt-px h-4 w-4 shrink-0"
+          />
+          <span className="min-w-0">
+            <span className="block font-medium text-[var(--color-text)]">
+              {tr("fpkg.leave_out_ampr_emu", undefined, "Leave out the AMPR emulator")}
+            </span>
+            <span className="mt-0.5 block leading-relaxed text-[var(--color-muted)]">
+              {tr(
+                "fpkg.leave_out_ampr_emu_body",
+                undefined,
+                "The package then has no fakelib/libSceAmpr.sprx, and the game reads its files through the PS5's own system library. This has been tried with one game, on firmware 5.10. If the game doesn't start, make the package again with this off.",
+              )}
+            </span>
+          </span>
+        </label>
+      )}
+    </div>
   );
 }
 

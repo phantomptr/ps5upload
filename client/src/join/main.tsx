@@ -13,6 +13,10 @@ import { lanPage, lanTarget } from "./lanHint";
 import { hostPath } from "./netPath";
 import { joinTries, raceTransport } from "./pathRace";
 import { fpOf } from "../lib/joinProtocol";
+import { installArrowNav } from "../lib/tvNav";
+
+// A TV's remote (#926): the arrows move from button to button, OK presses one.
+installArrowNav();
 
 const hash = new URLSearchParams(location.hash.slice(1));
 const host = hash.get("n")?.trim() || null;

@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload-desktop"
-version = "12.6.28"
+version = "12.6.29"
 description = "The all-in-one PS5 companion app."
 license = "GPL-3.0-or-later"
 edition = "2021"
@@ -173,6 +173,11 @@ tokio = { version = "1", features = ["signal"] }
 # Linux: the WebKitGTK version this process runs with (linux_gpu.rs). Already in the tree
 # through wry.
 webkit2gtk-sys = "2"
+
+[dev-dependencies]
+# Matches the asset protocol's scope patterns the way Tauri does (asset_scope_tests in lib.rs).
+# Already in the tree through Tauri.
+glob = "0.3"
 
 [features]
 # Default: build Tauri-native (no custom features yet)

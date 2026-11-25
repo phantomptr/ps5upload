@@ -523,7 +523,9 @@ pub async fn payload_send_check(ip: String, path: String, port: Option<u16>) -> 
     if port.unwrap_or(PS5_LOADER_PORT) != PS5_LOADER_PORT {
         return serde_json::json!({ "ok": true });
     }
-    let helper = file_is_helper(&path).await;
+    // Only a payload file is opened: the probe reads its first 512 KiB.
+    let helper = ps5upload_core::payload_lifecycle::is_payload_file_name(&path)
+        && file_is_helper(&path).await;
     let url = format!("{}/api/payload/send-check", crate::engine::url());
     let Ok(client) = crate::engine_http::engine_client_builder()
         .timeout(Duration::from_secs(20))

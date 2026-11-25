@@ -132,6 +132,37 @@ describe("the Convert queue's runner (bug: a queued image came out as a .pkg)", 
     expect(calls[0].args[4]).toEqual({ host: "10.0.0.2", volume: "/mnt/ext0", subpath: "homebrew", deleteAfter: true });
   });
 
+  it("keeps a queued package's choice to unpack its asset packs and leave out the emulator (#933)", async () => {
+    useConvertQueue.getState().add({
+      source: "/games/Packed-app",
+      compression: "balanced",
+      build: { kind: "pkg", unpackPacks: true, leaveOutAmprEmu: true },
+      then: "keep",
+      host: null,
+      addAmprEmu: false,
+      amprEmuBuild: "ampr-emu-ng",
+    });
+    useConvertQueue.getState().add({
+      source: "/games/Plain-app",
+      compression: "balanced",
+      build: { kind: "pkg" },
+      then: "keep",
+      host: null,
+    });
+    await useConvertQueue.getState().start();
+    await flush();
+    expect(calls.map((c) => c.kind)).toEqual(["pkg", "pkg"]);
+    expect(calls[0].args[0]).toMatchObject({
+      source: "/games/Packed-app",
+      unpackPacks: true,
+      leaveOutAmprEmu: true,
+      amprEmu: { add: false, build: "ampr-emu-ng" },
+    });
+    const plain = calls[1].args[0] as Record<string, unknown>;
+    expect(plain).not.toHaveProperty("unpackPacks");
+    expect(plain).not.toHaveProperty("leaveOutAmprEmu");
+  });
+
   it("still builds a package for an item queued as one (and for older items with no choice)", async () => {
     useConvertQueue.getState().add({ source: "/games/Old-app", compression: "balanced", then: "keep", host: null });
     await useConvertQueue.getState().start();

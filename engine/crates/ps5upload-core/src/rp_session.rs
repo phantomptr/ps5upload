@@ -92,6 +92,8 @@ type Aes128CfbDec = cfb_mode::Decryptor<aes::Aes128>;
 pub(crate) const SESSION_PORT: u16 = 9295;
 pub(crate) const KEY_SIZE: usize = 16;
 pub(crate) const RP_VERSION: &str = "1.0";
+/// The most of a session start reply that is read: it is a few hundred bytes of headers.
+const RP_REPLY_MAX: u64 = 1024 * 1024;
 
 /// The two secrets a pairing produces, both needed to open a session.
 #[derive(Clone)]
@@ -243,7 +245,9 @@ pub(crate) fn session_init_for_wake(
     let _ = stream.shutdown(Shutdown::Write);
 
     let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).map_err(|e| {
+    // The console's answer is a few hundred bytes of headers: the cap keeps a peer that keeps
+    // sending from filling memory.
+    crate::net::read_to_end_capped_into(&mut stream, RP_REPLY_MAX, &mut raw).map_err(|e| {
         crate::core_debug!(
             "rp session init: {host}: reading the reply failed after {} ms ({} bytes in): {e}",
             t0.elapsed().as_millis(),

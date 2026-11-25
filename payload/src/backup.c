@@ -434,12 +434,13 @@ int backup_list(const char *tag_filter, char *buf, size_t cap,
     return 0;
 }
 
-static int restore_from_manifest(const char *snap_dir, int *restored) {
+/* Every line that is not blank is counted once in `c`: restored, skipped or failed. A restore that
+ * restored none of them must not read as a success (backup_restore_reply). */
+static int restore_from_manifest(const char *snap_dir, backup_restore_counts_t *c) {
     char mpath[1024];
     snprintf(mpath, sizeof(mpath), "%s/.manifest", snap_dir);
     FILE *f = fopen(mpath, "r");
     if (!f) return -1;
-    int n = 0;
     /* A line is a name (up to 511 bytes in older snapshots), a tab and a path (up to 1023): longer
      * than the 1100 bytes this buffer was. A longer line came back from fgets in two pieces, and
      * the first piece, name and a path cut short, was restored: the file's bytes written to a path
@@ -456,12 +457,17 @@ static int restore_from_manifest(const char *snap_dir, int *restored) {
         if (L == LINE_CAP - 1 && line[L - 1] != '\n') {
             int ch;
             while ((ch = fgetc(f)) != EOF && ch != '\n') {}
+            c->skipped++;
             continue;
         }
         while (L > 0 && (line[L - 1] == '\n' || line[L - 1] == '\r'))
             line[--L] = 0;
+        if (L == 0) continue;
         char *tab = strchr(line, '\t');
-        if (!tab) continue;
+        if (!tab) {
+            c->skipped++;
+            continue;
+        }
         *tab = 0;
         const char *snap_basename = line;
         const char *original = tab + 1;
@@ -471,32 +477,39 @@ static int restore_from_manifest(const char *snap_dir, int *restored) {
          * ../ components to write outside the intended game-data area.
          * is_path_allowed checks both the lexical form and the realpath()
          * resolved form (symlink-escape). */
-        if (!is_path_allowed(original)) continue;
+        if (!is_path_allowed(original)) {
+            c->skipped++;
+            continue;
+        }
         /* The name is a file inside this snapshot: one path component, never "." or "..",
          * so a hand-edited manifest cannot make the restore read from outside the snapshot. */
         if (!snap_basename[0] || strchr(snap_basename, '/') || strcmp(snap_basename, ".") == 0 ||
-            strcmp(snap_basename, "..") == 0)
+            strcmp(snap_basename, "..") == 0) {
+            c->skipped++;
             continue;
+        }
         char src[1024];
         snprintf(src, sizeof(src), "%s/%s", snap_dir, snap_basename);
-        int c = copy_file(src, original);
-        if (c == 0) {
-            n++;
+        int rc = copy_file(src, original);
+        if (rc == 0) {
+            c->restored++;
             mgmt_op_progress(1, 0);
-        } else if (c == BACKUP_CANCELLED) {
+        } else if (rc == BACKUP_CANCELLED) {
             fclose(f);
             free(line);
-            if (restored) *restored = n;
             return BACKUP_CANCELLED; /* the files restored so far stay restored */
+        } else {
+            c->failed++;
         }
     }
     fclose(f);
     free(line);
-    if (restored) *restored = n;
     return 0;
 }
 
-int backup_restore(const char *tag, int64_t timestamp, int *out_restored) {
+int backup_restore_ex(const char *tag, int64_t timestamp, backup_restore_counts_t *out) {
+    backup_restore_counts_t c = { 0, 0, 0 };
+    if (out) *out = c;
     if (backup_validate_tag(tag) != 0) return -1;
     pthread_mutex_lock(&g_backup_lock);
     char snapdir[1024];
@@ -507,11 +520,40 @@ int backup_restore(const char *tag, int64_t timestamp, int *out_restored) {
         pthread_mutex_unlock(&g_backup_lock);
         return -1;
     }
-    int restored = 0;
-    int rc = restore_from_manifest(snapdir, &restored);
-    if (out_restored) *out_restored = restored;
+    int rc = restore_from_manifest(snapdir, &c);
+    if (out) *out = c;
     pthread_mutex_unlock(&g_backup_lock);
     return rc;
+}
+
+int backup_restore(const char *tag, int64_t timestamp, int *out_restored) {
+    backup_restore_counts_t c;
+    int rc = backup_restore_ex(tag, timestamp, &c);
+    if (out_restored) *out_restored = c.restored;
+    return rc;
+}
+
+int backup_restore_reply(char *out, size_t cap, const char *tag_json, int rc,
+                         const backup_restore_counts_t *c) {
+    static const backup_restore_counts_t none = { 0, 0, 0 };
+    char err[192] = "";
+    if (!c) c = &none;
+    int missed = c->skipped + c->failed;
+    int ok = rc == 0 && c->restored > 0;
+    if (rc != 0)
+        snprintf(err, sizeof err, "snapshot not found or restore failed");
+    else if (c->restored == 0 && missed == 0)
+        snprintf(err, sizeof err, "nothing was restored: the snapshot lists no files");
+    else if (c->restored == 0)
+        snprintf(err, sizeof err,
+                 "nothing was restored: %d file(s) could not be written back, %d entr%s skipped "
+                 "(outside the allowed folders or damaged)",
+                 c->failed, c->skipped, c->skipped == 1 ? "y was" : "ies were");
+    return snprintf(out, cap,
+                    "{\"ok\":%s,\"tag\":\"%s\",\"restored\":%d,\"skipped\":%d,\"failed\":%d,"
+                    "\"partial\":%s,\"err\":\"%s\"}",
+                    ok ? "true" : "false", tag_json ? tag_json : "", c->restored, c->skipped,
+                    c->failed, ok && missed > 0 ? "true" : "false", err);
 }
 
 static int rm_rf(const char *path) {

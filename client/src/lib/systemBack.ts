@@ -9,9 +9,16 @@
 
 import { useEffect, useRef } from "react";
 
-import { closeTopModal, onModalStackChange, openModalCount, registerBackDismiss } from "./focusTrap";
+import {
+  backStepCount,
+  onModalStackChange,
+  registerBackDismiss,
+  registerScreenBack,
+  takeBackStep,
+} from "./focusTrap";
 import { isMobile } from "./platform";
 import { isTauriEnv } from "./tauriEnv";
+import { isTvDevice } from "./tvNav";
 
 declare global {
   interface Window {
@@ -22,7 +29,7 @@ declare global {
 
 /** The app: the shell calls this, and moves the history itself when it answers false. */
 export function installAppBack(w: Window = window): void {
-  w.__ps5uBack = () => closeTopModal();
+  w.__ps5uBack = () => takeBackStep();
 }
 
 /** A browser: returns the undo. */
@@ -34,7 +41,7 @@ export function installBrowserBack(w: Window = window): () => void {
 
   const reconcile = () => {
     settle = null;
-    const open = openModalCount() > 0;
+    const open = backStepCount() > 0;
     if (open && !held) {
       // Same state as the page's own entry: the router sees no navigation.
       w.history.pushState(w.history.state, "");
@@ -54,8 +61,9 @@ export function installBrowserBack(w: Window = window): () => void {
   const onPop = () => {
     if (!held) return;
     held = false;
-    closeTopModal();
-    // Something still open (or one that refused Escape): Back stays with it.
+    takeBackStep();
+    // Something still open (or one that refused Escape), or the screen has another step: Back
+    // stays with it.
     schedule();
   };
   w.addEventListener("popstate", onPop);
@@ -80,12 +88,27 @@ export function useBackDismiss(open: boolean, close: () => void): void {
   }, [open]);
 }
 
+/** While `active`, system Back runs `step` on the screen itself once no surface covers it (leave
+ *  selection mode, go up a folder). A kept screen that is hidden has its effects torn down, so
+ *  only the screen on show has a step: Back never acts on one out of sight. */
+export function useScreenBack(active: boolean, step: () => void): void {
+  const latest = useRef(step);
+  useEffect(() => {
+    latest.current = step;
+  });
+  useEffect(() => {
+    if (!active) return;
+    return registerScreenBack(() => latest.current());
+  }, [active]);
+}
+
 let installed = false;
 
 /** Once, at start-up. */
 export function installSystemBack(): void {
   if (installed || typeof window === "undefined") return;
   installed = true;
-  if (isTauriEnv()) installAppBack();
+  // The TV bridge is the Android app's (MainActivity), which asks __ps5uBack too.
+  if (isTauriEnv() || isTvDevice()) installAppBack();
   else if (isMobile()) installBrowserBack();
 }

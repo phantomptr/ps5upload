@@ -13,7 +13,8 @@ use super::{Game, Location};
 pub struct ConsoleTitle {
     /// The console knows the title (it has `/user/app/<id>`).
     pub installed: bool,
-    /// Its installed version (`APP_VER`), when it could be read.
+    /// Its installed version (`CONTENT_VERSION`, else the higher of `VERSION` and `APP_VER`),
+    /// when it could be read.
     pub version: Option<String>,
     /// An update is installed (`/user/patch/<id>`).
     pub patch_installed: bool,

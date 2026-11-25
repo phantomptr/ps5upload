@@ -23,7 +23,7 @@
 //! rather than filler. The reply is encrypted the same way and carries the
 //! regist key.
 
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{Shutdown, TcpStream, ToSocketAddrs, UdpSocket};
 use std::time::Duration;
 
@@ -40,6 +40,8 @@ type Aes128CfbDec = cfb_mode::Decryptor<aes::Aes128>;
 
 /// Registration listens here — not on the discovery port.
 pub const REGIST_PORT: u16 = 9295;
+/// The most of the console's registration reply that is read: a short HTTP answer.
+const REGIST_REPLY_MAX: u64 = 1024 * 1024;
 
 /// The PS5 registration path. PS4 uses `/sie/ps4/...` or, before system
 /// software 8.0, `/sce/rp/regist`; we only ever talk to a PS5.
@@ -441,8 +443,9 @@ fn exchange(
         let _ = stream.shutdown(Shutdown::Write);
     }
     let mut raw = Vec::new();
-    if let Err(e) = stream.read_to_end(&mut raw) {
-        if raw.is_empty() {
+    // The answer is a short HTTP reply; one past the cap is refused, never taken cut short.
+    if let Err(e) = crate::net::read_to_end_capped_into(&mut stream, REGIST_REPLY_MAX, &mut raw) {
+        if raw.is_empty() || e.kind() == std::io::ErrorKind::InvalidData {
             return Err(anyhow!("reading the console's reply: {e}"));
         }
     }
@@ -1177,6 +1180,7 @@ pub fn pair_with_pin(host: &str, account_id_b64: &str, pin: &str) -> Result<Pair
 #[cfg(test)]
 mod manual_pin_tests {
     use super::*;
+    use std::io::Read;
 
     /// A console that waits for the sender to finish before it answers still gets an answer read,
     /// and a reply is read while our side stays open.

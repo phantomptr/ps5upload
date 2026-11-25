@@ -889,6 +889,10 @@ export async function browserInvoke<T>(
         full_verify: args["fullVerify"] ?? false,
         keep_both: args["keepBoth"] ?? false,
         update: args["update"],
+        unpack_packs: args["unpackPacks"] ?? false,
+        add_ampr_emu: args["addAmprEmu"] ?? true,
+        ampr_emu_build: args["amprEmuBuild"],
+        leave_out_ampr_emu: args["leaveOutAmprEmu"] ?? false,
       }, true);
     }
     case "ps5_elfldr_health": {

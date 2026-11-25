@@ -854,6 +854,98 @@ pub fn run() {
 }
 
 #[cfg(test)]
+mod asset_scope_tests {
+    use std::path::{Path, PathBuf};
+
+    /// The asset protocol's scope from tauri.conf.json, `$TEMP` resolved as Tauri resolves it
+    /// (`std::env::temp_dir`), each pattern also with its existing parent canonicalized, as
+    /// Tauri adds it.
+    fn scope() -> Vec<glob::Pattern> {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let mut out = Vec::new();
+        for p in conf["app"]["security"]["assetProtocol"]["scope"]
+            .as_array()
+            .expect("the asset protocol has a scope")
+        {
+            let p = p.as_str().unwrap();
+            let raw = match p.strip_prefix("$TEMP/") {
+                Some(rest) => std::env::temp_dir().join(rest),
+                None => PathBuf::from(p),
+            };
+            out.push(glob::Pattern::new(&raw.to_string_lossy()).unwrap());
+            let mut base = raw.clone();
+            let mut tail = Vec::new();
+            while let Some(name) = base.file_name().map(|n| n.to_os_string()) {
+                if let Ok(c) = base.canonicalize() {
+                    let full = tail.iter().rev().fold(c, |acc: PathBuf, t| acc.join(t));
+                    out.push(glob::Pattern::new(&full.to_string_lossy()).unwrap());
+                    break;
+                }
+                tail.push(name);
+                base.pop();
+            }
+        }
+        out
+    }
+
+    /// Whether the asset protocol serves `path`: Tauri matches the canonical path, and a path
+    /// that does not exist is never served.
+    fn served(scope: &[glob::Pattern], path: &Path) -> bool {
+        let Ok(path) = path.canonicalize() else {
+            return false;
+        };
+        let opts = glob::MatchOptions {
+            case_sensitive: true,
+            require_literal_separator: true,
+            require_literal_leading_dot: !cfg!(windows),
+        };
+        scope.iter().any(|p| p.matches_path_with(&path, opts))
+    }
+
+    /// The asset protocol serves what the app shows from disk, and nothing else: the previews
+    /// and thumbnails it downloads into its own scratch folders, and a game folder's cover.
+    /// With `**` the page could read any file on the computer (a key, a browser profile).
+    #[test]
+    fn the_asset_protocol_serves_only_what_the_app_shows() {
+        let scope = scope();
+        assert!(
+            !scope.iter().any(|p| p.as_str() == "**"),
+            "the scope must not be every file"
+        );
+        // Previews (Screenshots, Videos, Captures) land in a scratch dir of `make_temp_dir`.
+        let scratch = ps5upload_core::save_archive::make_temp_dir("ss-preview").unwrap();
+        let shot = scratch.join("shot.png");
+        std::fs::write(&shot, b"png").unwrap();
+        std::fs::create_dir_all(scratch.join("sub")).unwrap();
+        let clip = scratch.join("sub").join("clip.mp4");
+        std::fs::write(&clip, b"mp4").unwrap();
+        // A game folder's cover (Upload), wherever the folder is.
+        let other = std::env::temp_dir().join(format!("ps5upload-scope-{}", std::process::id()));
+        let game = other.join("My Game").join("sce_sys");
+        std::fs::create_dir_all(&game).unwrap();
+        let icon = game.join("icon0.png");
+        let param = game.join("param.json");
+        let loose = other.join("notes.txt");
+        for f in [&icon, &param, &loose] {
+            std::fs::write(f, b"x").unwrap();
+        }
+
+        assert!(served(&scope, &shot), "{}", shot.display());
+        assert!(served(&scope, &clip), "{}", clip.display());
+        assert!(served(&scope, &icon), "{}", icon.display());
+        assert!(!served(&scope, &param), "{}", param.display());
+        assert!(!served(&scope, &loose), "{}", loose.display());
+        assert!(!served(&scope, &std::env::current_exe().unwrap()));
+        #[cfg(unix)]
+        assert!(!served(&scope, Path::new("/etc/hosts")));
+
+        let _ = std::fs::remove_dir_all(&scratch);
+        let _ = std::fs::remove_dir_all(&other);
+    }
+}
+
+#[cfg(test)]
 mod profile_tests {
     /// `panic = "abort"` in this package's release profile switches off every `catch_unwind` in
     /// shipped builds, and `cargo test` ignores the setting, so no other test can notice.

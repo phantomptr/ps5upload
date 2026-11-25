@@ -64,13 +64,6 @@ pub fn device_abilist() -> String {
         .unwrap_or_default()
 }
 
-/// A SHA-256 from the manifest as 64 lowercase hex chars, or None when it is
-/// absent or malformed (a malformed one is an error for the caller, not a skip).
-fn normalize_sha256(raw: &str) -> Option<String> {
-    let s = raw.trim().to_ascii_lowercase();
-    (s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())).then_some(s)
-}
-
 /// A plain `<name>.apk` basename: no separators, no leading dot.
 fn is_apk_filename(name: &str) -> bool {
     !name.is_empty()
@@ -135,14 +128,17 @@ pub struct ApkDownload {
     /// Absolute path of the verified APK, for `PS5UploadUpdater.install`.
     pub path: String,
     pub bytes: u64,
-    /// The SHA-256 from latest.json matched (false: the release has none).
+    /// The SHA-256 from latest.json matched: always, since an APK without one is not
+    /// downloaded. Kept for the page.
     pub verified: bool,
 }
 
 /// Download the update APK into the app's cache, with progress events, and
-/// check it. `sha256` is the release's hash for this APK when latest.json has
-/// one; a mismatch deletes the file and fails. A download that was cut off
-/// carries on where it stopped (`update_fetch`, which is the desktop's path too).
+/// check it. `url` must be the APK the last check offered, and it must match the
+/// SHA-256 latest.json published for it (`updates::offered_sha256`); `sha256`, the
+/// page's copy of that hash, is not what counts. A mismatch deletes the file and
+/// fails. A download that was cut off carries on where it stopped (`update_fetch`,
+/// which is the desktop's path too).
 #[tauri::command]
 pub async fn update_download_apk(
     app: AppHandle,
@@ -156,19 +152,14 @@ pub async fn update_download_apk(
             serde_json::json!({ "url": url }),
         ));
     }
-    if !is_apk_filename(&filename) {
+    let _ = sha256;
+    let expected = super::updates::offered_sha256(&url)?;
+    if !is_apk_filename(&filename) || filename != super::updates::offered_file_name(&url) {
         return Err(coded(
             "update_bad_name",
             serde_json::json!({ "name": filename }),
         ));
     }
-    let expected = match sha256.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(raw) => Some(
-            normalize_sha256(raw)
-                .ok_or_else(|| coded("update_bad_checksum", serde_json::json!({ "value": raw })))?,
-        ),
-        None => None,
-    };
     let active = super::update_fetch::ActiveDownload::begin()?;
     let dir = updates_dir(&app)?;
     remove_others(&dir, &filename);
@@ -176,13 +167,13 @@ pub async fn update_download_apk(
 
     // Already downloaded and verified once: hand it over again (the person
     // cancelled Android's dialog and tapped again).
-    if let (Some(want), Ok(meta)) = (&expected, std::fs::metadata(&target)) {
+    if let Ok(meta) = std::fs::metadata(&target) {
         let t = target.clone();
         let actual = tokio::task::spawn_blocking(move || super::update_fetch::sha256_file(&t))
             .await
             .ok()
             .and_then(Result::ok);
-        if actual.as_ref() == Some(want) {
+        if actual.as_ref() == Some(&expected) {
             return Ok(ApkDownload {
                 path: target.to_string_lossy().into_owned(),
                 bytes: meta.len(),
@@ -202,7 +193,7 @@ pub async fn update_download_apk(
         &url,
         &part,
         APK_MAX_BYTES,
-        expected.as_deref(),
+        Some(&expected),
         active.cancel_signal(),
         &mut report,
     )
@@ -231,7 +222,7 @@ pub async fn update_download_apk(
     Ok(ApkDownload {
         path: target.to_string_lossy().into_owned(),
         bytes: done.bytes,
-        verified: expected.is_some(),
+        verified: true,
     })
 }
 
@@ -271,19 +262,6 @@ mod tests {
             asset_keys_for_abis(" x86_64 , arm64-v8a ", "android"),
             vec!["android"]
         );
-    }
-
-    #[test]
-    fn sha256_must_be_64_hex_chars() {
-        let good = "A".repeat(64);
-        assert_eq!(normalize_sha256(&good), Some("a".repeat(64)));
-        assert_eq!(
-            normalize_sha256(&format!(" {} ", "0f".repeat(32))),
-            Some("0f".repeat(32))
-        );
-        assert_eq!(normalize_sha256(&"a".repeat(63)), None);
-        assert_eq!(normalize_sha256(&"g".repeat(64)), None);
-        assert_eq!(normalize_sha256(""), None);
     }
 
     #[test]

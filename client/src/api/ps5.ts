@@ -27,6 +27,7 @@ import { isTauriEnv } from "../lib/tauriEnv";
 import { toExtractResult, type ExtractResult } from "../lib/archiveName";
 import { invoke } from "../lib/invokeLogged";
 import { randomHexId } from "../lib/randomId";
+import { APPINFO_VERSION_KEYS, installedAppVersion } from "../lib/versionNumbers";
 import { noteJobWatched } from "../lib/watchedJobIds";
 import { getCachedIcon, setCachedIcon } from "../lib/iconMemoryCache";
 import {
@@ -454,6 +455,12 @@ export interface BackupRestoreResult {
   ok: boolean;
   tag: string;
   restored: number;
+  /** Entries not used (outside the allowed folders, damaged); absent from an older engine. */
+  skipped?: number;
+  /** Files that could not be written back. */
+  failed?: number;
+  /** Some files came back and some did not. */
+  partial?: boolean;
 }
 
 /** Snapshot a file or directory tree under a backup tag. */
@@ -6414,8 +6421,9 @@ export async function cheatsEngineSet(
  *  id and install / last-opened times. Keys are appinfo.db column names;
  *  absent ones are simply missing from the result. */
 export interface AppInfoDetails {
-  /** CONTENT_VERSION (PS5, `01.000.016`) or APP_VER (PS4, `01.05`) — the
-   *  same form the cheat files name their target version in. */
+  /** CONTENT_VERSION (PS5, `01.000.016`), else the higher of VERSION and
+   *  APP_VER (PS4, `01.32`: an update raises VERSION) — the same form the
+   *  cheat files name their target version in. */
   version: string | null;
   sizeBytes: number | null;
   contentId: string | null;
@@ -6436,7 +6444,7 @@ export async function appInfoDetails(
       addr: toMgmtAddr(transferAddr),
       // Tauri maps camelCase to the command's snake_case `title_id`.
       titleId,
-      keys: "CONTENT_VERSION,APP_VER,#_size,#_install_time,#_last_access_time,CONTENT_ID",
+      keys: `${APPINFO_VERSION_KEYS},#_size,#_install_time,#_last_access_time,CONTENT_ID`,
     });
     // A refusal throws here and lands in the catch below: no details.
     const res = assertOk(resp, "Read game details");
@@ -6444,7 +6452,7 @@ export async function appInfoDetails(
     const get = (k: string) => v.get(k) || null;
     const size = Number(get("#_size"));
     return {
-      version: get("CONTENT_VERSION") ?? get("APP_VER"),
+      version: installedAppVersion(get),
       sizeBytes: Number.isFinite(size) && size > 0 ? size : null,
       contentId: get("CONTENT_ID"),
       installedAt: get("#_install_time"),

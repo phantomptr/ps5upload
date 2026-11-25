@@ -1,6 +1,38 @@
 import { describe, expect, it } from "vitest";
 
-import { endText, pathLabel, showsGuide } from "./JoinView";
+import { backStep, endText, focusWhere, pathLabel, showsGuide } from "./JoinView";
+
+describe("guest's Back and Esc, for a TV's remote (#926)", () => {
+  const base = { checking: false, guide: false, where: "game" as const, full: false };
+
+  it("closes what is open first: the controller check, then the guide", () => {
+    expect(backStep({ ...base, checking: true, guide: true, full: true })).toBe("close-check");
+    expect(backStep({ ...base, guide: true, full: true })).toBe("close-guide");
+  });
+
+  it("from the game it brings the buttons, from the buttons it leaves full screen, then lets go", () => {
+    expect(backStep({ ...base, full: true })).toBe("show-controls");
+    expect(backStep({ ...base, where: "controls", full: true })).toBe("leave-full");
+    expect(backStep({ ...base, where: "controls" })).toBeNull();
+    // On another part of the app: that screen's Back.
+    expect(backStep({ ...base, where: "page" })).toBeNull();
+    expect(backStep({ ...base, where: "page", full: true })).toBe("leave-full");
+  });
+
+  it("knows where the focus is", () => {
+    const body = { closest: () => null };
+    const gameSpot = { closest: (s: string) => (s === "[data-join-game]" ? {} : null) };
+    const button = { closest: () => null };
+    const elsewhere = { closest: () => null };
+    const view = { contains: (n: never) => n === (button as never) || n === (gameSpot as never) };
+    expect(focusWhere(null, body, view)).toBe("game");
+    expect(focusWhere(body, body, view)).toBe("game");
+    expect(focusWhere(gameSpot, body, view)).toBe("game");
+    expect(focusWhere(button, body, view)).toBe("controls");
+    expect(focusWhere(elsewhere, body, view)).toBe("page");
+    expect(focusWhere(button, body, null)).toBe("page");
+  });
+});
 
 // The fallback with the variables filled in (what an untranslated key shows).
 const tr = ((_key: string, vars?: Record<string, string | number> | string, fallback?: string) => {

@@ -9,6 +9,7 @@ import { JoinView } from "../../join/JoinView";
 import { lastName, rememberName } from "../../join/guestName";
 import { useTr } from "../../state/lang";
 import { useJoinPresence } from "../../state/joinPresence";
+import { tvNavActive } from "../../lib/tvNav";
 import { activeJoin, useJoinStore } from "../../state/joinSession";
 import { useRemotePlayStore } from "../../state/remotePlay";
 import { pushNotification } from "../../state/notifications";
@@ -186,6 +187,19 @@ export function JoinAFriend({ pending, onPendingDone }: { pending?: string | nul
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inviteShown]);
 
+  // On a TV the remote starts in the form (#926): on the link, or on the name while there is none.
+  const formShown = !invite && !session;
+  const formBox = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!formShown || !tvNavActive()) return;
+    const a = document.activeElement;
+    if (a && a !== document.body) return;
+    const id = name.trim() ? "join-link" : "join-app-name";
+    formBox.current?.querySelector<HTMLElement>(`[data-testid="${id}"]`)?.focus({ preventScroll: true });
+    // Only when the form shows, not as the name is typed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formShown]);
+
   // An invite opened while in a game shows too: Join asks to leave that game first (okToJoin).
   if (invite) {
     const who = linkHost(invite);
@@ -257,7 +271,7 @@ export function JoinAFriend({ pending, onPendingDone }: { pending?: string | nul
 
   const canScan = scanAvailable();
   return (
-    <div className="space-y-4" data-testid="join-a-friend">
+    <div className="space-y-4" data-testid="join-a-friend" ref={formBox}>
       <form
         className="space-y-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-4"
         onSubmit={(e) => {

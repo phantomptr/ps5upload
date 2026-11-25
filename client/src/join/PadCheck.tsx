@@ -132,11 +132,26 @@ export function PadCheck({ onClose }: { onClose: () => void }) {
   const [saved, setSaved] = useState(loadProfiles);
   const [notice, setNotice] = useState<string | null>(null);
   const [current, setCurrent] = useState<Gamepad | null>(null);
+  const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setPadChecking(true);
     return () => setPadChecking(false);
   }, []);
+
+  // A TV's remote (#926): the focus starts inside, on the main button (Set up), else on close; the
+  // arrows stay inside while it is open (role dialog, lib/tvNav).
+  useEffect(() => {
+    const main = box.current?.querySelector<HTMLElement>('[data-testid="join-pad-learn-start"]');
+    (main ?? box.current?.querySelector<HTMLElement>('[data-testid="join-pad-check-close"]'))?.focus({ preventScroll: true });
+  }, []);
+
+  // The button pressed went away (Set up, the last step): the focus stays inside, on the first one.
+  useEffect(() => {
+    const a = document.activeElement;
+    if (a && a !== document.body) return;
+    box.current?.querySelector<HTMLElement>("button:not([disabled])")?.focus({ preventScroll: true });
+  }, [learning, step]);
 
   // Controllers come and go (a browser shows one only after a press on it).
   useEffect(() => {
@@ -195,6 +210,10 @@ export function PadCheck({ onClose }: { onClose: () => void }) {
 
   return (
     <div
+      ref={box}
+      role="dialog"
+      aria-modal="true"
+      aria-label={tr("join_check_title", undefined, "Check your controller")}
       className="absolute inset-0 z-40 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
       data-testid="join-pad-check"
       onPointerDown={(e) => e.stopPropagation()}

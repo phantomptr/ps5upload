@@ -13,6 +13,7 @@
  * time come from appinfo.db (the same keys the PC app's game page reads).
  */
 import { compareNames } from "../../lib/collate";
+import { installedAppVersion } from "../../lib/versionNumbers";
 import { ApiError, call } from "../api";
 
 export const TILE_TITLE_ID = "PSUP00001";
@@ -163,7 +164,7 @@ export function parseInfo(raw: unknown): AppInfo {
   }
   const size = Number(v.get("#_size"));
   return {
-    version: v.get("CONTENT_VERSION") ?? v.get("APP_VER") ?? null,
+    version: installedAppVersion((k) => v.get(k)),
     sizeBytes: Number.isFinite(size) && size > 0 ? size : null,
     lastPlayed: parseInfoTime(v.get("#_last_access_time")),
   };

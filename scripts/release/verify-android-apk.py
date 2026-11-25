@@ -68,7 +68,10 @@ def problems(tree: str) -> list[str]:
     features = feature_requirements(tree)
     if "android.hardware.touchscreen" not in features:
         out.append("touchscreen not declared optional: a TV refuses the app")
-    out += [f"requires {f}: a TV without it refuses the app" for f, required in sorted(features.items()) if required]
+    # #926: declared (optional), so a store lists the app for TVs as well as phones.
+    if "android.software.leanback" not in features:
+        out.append("android.software.leanback not declared: the app would not be offered on a TV")
+    out +=[f"requires {f}: a TV without it refuses the app" for f, required in sorted(features.items()) if required]
     return out
 
 
@@ -119,6 +122,9 @@ def self_test() -> None:
         "E: uses-feature (line=3)",
         f'{a}name(0x01010003)="android.hardware.touchscreen" (Raw: "android.hardware.touchscreen")',
         f"{a}required(0x0101028e)=false",
+        "E: uses-feature (line=5)",
+        f'{a}name(0x01010003)="android.software.leanback" (Raw: "android.software.leanback")',
+        f"{a}required(0x0101028e)=false",
         "E: uses-feature (line=4)",
         f'{a}name(0x01010003)="android.hardware.camera" (Raw: "android.hardware.camera")',
         f"{a}required(0x0101028e)=false",
@@ -135,6 +141,7 @@ def self_test() -> None:
         ("LEANBACK_LAUNCHER", "no LEANBACK_LAUNCHER"),
         ("banner(", "no banner"),
         ("hardware.touchscreen", "touchscreen not declared optional"),
+        ("software.leanback", "android.software.leanback not declared"),
     ):
         tree = "\n".join(l for l in lines if needle not in l)
         assert any(p.startswith(expected) for p in problems(tree)), (needle, problems(tree))

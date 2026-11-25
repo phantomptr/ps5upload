@@ -24,6 +24,7 @@
  * part of ps5upload, GPL-3.0-or-later.
  */
 
+#include "appinfo_version.h"
 #include "cheats.h"
 #include "cheats_list.h"
 #include "cheats_json.h"
@@ -1408,16 +1409,19 @@ static int resolve_mod_locs(pid_t pid, intptr_t base, const cheat_mod_t *mod, ch
 /* ── XML game patches (#527) ─────────────────────────────────────── */
 
 /* The game's version as the console reports it: appinfo.db's CONTENT_VERSION ("01.004.000") and
- * APP_VER ("01.04"), else the installed param.json's contentVersion. */
+ * a PS4 game's version ("01.32": the higher of VERSION and APP_VER, see appinfo_version.h), else
+ * the installed param.json's contentVersion. */
 typedef struct {
     char content[32];
-    char app[32];
+    char app[32];     /* the PS4 version picked from VERSION and APP_VER */
+    char version[32]; /* VERSION as read, for that pick */
 } game_ver_t;
 
 static int game_ver_row(void *ctx, int ncol, const char *const *vals) {
     game_ver_t *v = (game_ver_t *)ctx;
     if (ncol < 2 || !vals[0] || !vals[1]) return 0;
     if (strcmp(vals[0], "CONTENT_VERSION") == 0) snprintf(v->content, sizeof v->content, "%s", vals[1]);
+    else if (strcmp(vals[0], "VERSION") == 0) snprintf(v->version, sizeof v->version, "%s", vals[1]);
     else if (strcmp(vals[0], "APP_VER") == 0) snprintf(v->app, sizeof v->app, "%s", vals[1]);
     return 0;
 }
@@ -1430,9 +1434,15 @@ static void game_versions(const char *title, game_ver_t *v) {
         if (!((title[i] >= 'A' && title[i] <= 'Z') || (title[i] >= '0' && title[i] <= '9'))) return;
     char sql[200];
     snprintf(sql, sizeof sql,
-             "SELECT key, val FROM tbl_appinfo WHERE titleId='%s' AND key IN ('CONTENT_VERSION','APP_VER')",
+             "SELECT key, val FROM tbl_appinfo WHERE titleId='%s' AND key IN (" APPINFO_VERSION_SQL_KEYS ")",
              title);
     (void)content_db_select_text(CONTENT_DB_APPINFO, sql, 8, v, game_ver_row);
+    {
+        /* A PS4 update raises VERSION and leaves APP_VER at the base game's "01.00" (#934). */
+        char app[sizeof v->app];
+        snprintf(app, sizeof app, "%s", appinfo_version_pick(NULL, v->version, v->app));
+        memcpy(v->app, app, sizeof app);
+    }
     if (v->content[0] || v->app[0]) return;
     char path[128];
     snprintf(path, sizeof path, "/system_ex/app/%s/sce_sys/param.json", title);
@@ -1858,9 +1868,17 @@ static int xml_apply_on(pid_t pid, const char *title, cheat_mod_t *mod, const xm
         }
         return -1;
     }
-    char exe[256] = "";
+    char exe[256] = "", base_path[256] = "", why[320] = "";
     uint64_t mbase = 0, msize = 0;
     (void)module_info(pid, 0, &mbase, &msize, exe, sizeof exe);
+    /* The patch's base must be one of the game's own modules, as for every other cheat write
+     * (phys_write_allowed). In a PS4 game's process handle 0 is another module (#920): a patch
+     * with no AppElf took it as the game's code and, with no original bytes to compare, wrote into
+     * it. Said before the AppElf check, whose "the game runs <that module>" would mislead. */
+    if (!gp_elf_is_module(m.app_elf) && !cheat_patch_base_ok(0, exe, why, sizeof why)) {
+        if (err) snprintf(err, err_cap, "%s", why);
+        return -1;
+    }
     if (!gp_elf_is_module(m.app_elf) && !gp_elf_ok(m.app_elf, exe)) {
         const char *b = strrchr(exe, '/');
         if (err) snprintf(err, err_cap, "this patch is for %s; the game runs %s", m.app_elf, b ? b + 1 : exe);
@@ -1872,9 +1890,14 @@ static int xml_apply_on(pid_t pid, const char *title, cheat_mod_t *mod, const xm
         hook_wait(hk);
         return -1;
     }
-    if (module_info(pid, handle, &mbase, &msize, NULL, 0) != 0 || !mbase || !msize) {
+    if (module_info(pid, handle, &mbase, &msize, base_path, sizeof base_path) != 0 || !mbase || !msize) {
         if (err) snprintf(err, err_cap, "the game's code is not loaded yet; try again");
         hook_wait(hk);
+        return -1;
+    }
+    /* Again on the module the lines are placed in (a .prx AppElf, or handle 0 read just now). */
+    if (!cheat_patch_base_ok(handle, base_path, why, sizeof why)) {
+        if (err) snprintf(err, err_cap, "%s", why);
         return -1;
     }
 

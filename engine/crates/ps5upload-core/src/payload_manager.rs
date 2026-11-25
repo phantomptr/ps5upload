@@ -27,7 +27,7 @@
 //! Plain HTTP/1.1 over a TcpStream, no client crate: this runs in the Android
 //! build too, where the engine has no HTTP client dependency.
 
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::TcpStream;
 use std::time::Duration;
 
@@ -590,6 +590,9 @@ pub fn http_request(
     exchange(addr, &head, &[], connect, io)
 }
 
+/// The most of a Payload Manager reply that is read.
+const REPLY_MAX: u64 = 8 * 1024 * 1024;
+
 fn exchange(
     addr: &str,
     head: &str,
@@ -609,9 +612,9 @@ fn exchange(
         .write_all(head.as_bytes())
         .and_then(|()| stream.write_all(body))
         .map_err(|e| format!("send to {addr}: {e}"))?;
-    let mut resp = Vec::new();
-    stream
-        .read_to_end(&mut resp)
+    // Payload Manager answers with a small JSON or a status line; one that keeps sending is
+    // refused at the cap instead of filling memory.
+    let resp = crate::net::read_to_end_capped(&mut stream, REPLY_MAX)
         .map_err(|e| format!("read from {addr}: {e}"))?;
     parse_response(&resp).ok_or_else(|| format!("{addr} sent a response that is not HTTP"))
 }
@@ -654,6 +657,34 @@ fn dechunk(mut raw: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
+
+    /// A server on the console's address that answers without end is cut off at the cap: the
+    /// reply was read whole into memory before.
+    #[test]
+    fn an_endless_reply_is_refused_at_the_cap() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut head = [0u8; 1024];
+            let _ = sock.read(&mut head);
+            let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n");
+            let chunk = vec![b'x'; 64 * 1024];
+            // Until the client hangs up.
+            while sock.write_all(&chunk).is_ok() {}
+        });
+        let e = http_request(
+            &addr,
+            "GET",
+            "/",
+            Duration::from_secs(2),
+            Duration::from_secs(5),
+        )
+        .unwrap_err();
+        assert!(e.contains("larger than"), "{e}");
+        server.join().unwrap();
+    }
 
     #[test]
     fn an_upload_replaces_a_stored_copy_only_when_there_is_one() {

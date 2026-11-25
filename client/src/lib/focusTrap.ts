@@ -132,6 +132,37 @@ export function closeTopModal(): boolean {
   return true;
 }
 
+/** What system Back does on the screen itself once nothing covers it (leave selection mode, go up
+ *  a folder), newest last. Kept apart from `backOrder`: these are steps of a screen, not surfaces
+ *  over it, so they never count as an open dialog (lib/tvNav keeps focus inside one). */
+const screenSteps: Array<() => void> = [];
+
+/** A step of the screen on show that system Back takes once no surface is open. Returns the undo. */
+export function registerScreenBack(step: () => void): () => void {
+  screenSteps.push(step);
+  stackChanged();
+  return () => {
+    const at = screenSteps.lastIndexOf(step);
+    if (at !== -1) screenSteps.splice(at, 1);
+    stackChanged();
+  };
+}
+
+/** How many presses of system Back the page would take before the history moves. Zero: none. */
+export function backStepCount(): number {
+  return backOrder.length + screenSteps.length;
+}
+
+/** One press of system Back: the top surface first, else the screen's newest step. False when
+ *  neither has anything, and the history should move. */
+export function takeBackStep(): boolean {
+  if (closeTopModal()) return true;
+  const step = screenSteps[screenSteps.length - 1];
+  if (!step) return false;
+  step();
+  return true;
+}
+
 /** A surface that is not modal (a sheet, a menu) but that system Back should close first. Returns
  *  the undo. Escape stays its own business. */
 export function registerBackDismiss(close: () => void): () => void {

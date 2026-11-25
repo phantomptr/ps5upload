@@ -13,6 +13,7 @@ pub mod ftp_fs;
 pub mod hints;
 pub mod host_key;
 mod http_digest;
+pub(crate) mod name_bytes;
 pub mod nfs_fs;
 pub mod path;
 pub mod pool;

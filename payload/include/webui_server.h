@@ -7,7 +7,8 @@
  * it without reading. A connection that has sent nothing waits on the accept
  * thread and holds no worker; a slow or hostile client that has holds one for at
  * most 5 s and can never stall the accept thread. One address gets 16 connections
- * at most. */
+ * at most. Transfers (uploads, downloads) take at most WEBUI_WORKERS - 1 workers,
+ * so the page's own requests are answered while they run. */
 #ifndef PS5UPLOAD_WEBUI_SERVER_H
 #define PS5UPLOAD_WEBUI_SERVER_H
 
@@ -37,6 +38,11 @@ typedef struct {
     /* Optional (NULL: nothing is streamed). 1 = this request (by method + path) is a streamed one. */
     int (*stream_for)(const webui_req_t *r);
     webui_stream_fn stream;
+    /* Optional (NULL: none). 1 = this request (by method + path) may hold its worker for long, as a
+     * download to a slow reader does. With the streamed requests these are the transfers: at most
+     * WEBUI_WORKERS - 1 run at once, and one more is answered 503 {"error":"busy"} (Retry-After: 2)
+     * right after the Host/Origin/token checks, so a short request always finds a worker. */
+    int (*long_for)(const webui_req_t *r);
 } webui_cfg_t;
 
 /* New token, bind, start the threads. Returns 0, or -1 when already running or

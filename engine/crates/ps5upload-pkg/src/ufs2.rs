@@ -98,6 +98,10 @@ pub enum Ufs2Error {
     InodeOutOfRange { inode: u64, max: u64 },
     #[error("directory tree exceeds max depth {max} — refusing to recurse (possible cycle or pathological nesting in the image)")]
     WalkTooDeep { max: u32 },
+    /// A directory reached a second time on one walk: an entry names the directory itself or
+    /// one that was already walked (a cycle, or one directory linked twice).
+    #[error("directory inode {inode} is linked twice — refusing to walk it again (a directory cycle in the image)")]
+    DirectoryCycle { inode: u64 },
     #[error("inode {inode} would point at block {block} which is past the image's {total_blocks} blocks")]
     BlockOutOfRange {
         inode: u64,
@@ -330,6 +334,14 @@ pub struct DirEntry {
 pub struct Ufs2Image<R: Read + Seek> {
     reader: R,
     pub superblock: Superblock,
+}
+
+#[cfg(test)]
+impl<R: Read + Seek> Ufs2Image<R> {
+    /// An image over `reader` with `superblock` as it is, for fixtures that are not whole images.
+    pub(crate) fn from_parts(reader: R, superblock: Superblock) -> Self {
+        Self { reader, superblock }
+    }
 }
 
 impl Ufs2Image<File> {

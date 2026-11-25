@@ -1723,6 +1723,28 @@ pub(crate) fn mark_restored(host: &str, save_path: &str) {
     let _ = save(DONE_FILE, &done);
 }
 
+/// A restore empties the console folder `save_path` and fills it from a backup, and unpacks the
+/// backup under `title_id` here: refused unless `title_id` is one plain name ([`plain`]) and
+/// `save_path` is a plain absolute path, with no `.`, `..` or empty part, no backslash and
+/// no control character. Otherwise a path such as `/user/home/1/savedata_prospero/../../../x/CUSA1`
+/// ends with the title ID and passed, and the folder it reaches was emptied.
+pub(crate) fn save_folder_ok(save_path: &str, title_id: &str) -> Result<(), String> {
+    if !plain(title_id) {
+        return Err(format!("{title_id:?} is not a title ID"));
+    }
+    let plain_path = save_path.starts_with('/')
+        && !save_path.contains('\\')
+        && !save_path.chars().any(char::is_control)
+        && save_path
+            .split('/')
+            .skip(1)
+            .all(|part| !part.is_empty() && part != "." && part != "..");
+    if !plain_path {
+        return Err(format!("{save_path} is not a save folder"));
+    }
+    Ok(())
+}
+
 /// The app that writes a save folder, which must be closed while it is restored.
 #[derive(Debug, PartialEq)]
 pub(crate) struct Writer<'a> {
@@ -1740,6 +1762,7 @@ pub(crate) fn save_writer<'a>(
     title_id: &'a str,
     user_id: u32,
 ) -> Result<Writer<'a>, String> {
+    save_folder_ok(save_path, title_id)?;
     let ps2 = crate::ps2_saves::place_of(save_path);
     let switch = crate::emulator_saves::place_of(save_path);
     let fits = match &ps2 {
@@ -1971,6 +1994,8 @@ pub(crate) fn put_in_place(
     tag: Option<&str>,
     keep_current: bool,
 ) -> Result<(), String> {
+    // Every name first: this empties the folder.
+    save_folder_ok(save_path, title_id)?;
     let _op = save_op(&[host]);
     // Keep what is there now, so the change can be undone: in the backup folder, or (with none
     // set) on the server the save backups go to.
@@ -3546,6 +3571,53 @@ mod tests {
         let err = only_the_saves_own(&dir, &cards).unwrap_err();
         assert!(err.contains("bios"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A restore empties the folder it is given, so a save path that climbs out with `..` (it
+    /// still ends with the title ID), or a title ID that is a path, is refused before the console
+    /// or this computer is touched. The payload's own restore refuses the same (backup.c).
+    #[test]
+    fn a_restore_never_reaches_outside_the_save_folder() {
+        for (path, title) in [
+            (
+                "/user/home/1/savedata_prospero/../../../system_data/PPSA01234",
+                "PPSA01234",
+            ),
+            ("/user/home/1/savedata_prospero/./PPSA01234", "PPSA01234"),
+            ("/user/home/1/savedata_prospero//PPSA01234", "PPSA01234"),
+            ("user/home/1/savedata_prospero/PPSA01234", "PPSA01234"),
+            (
+                "/user/home/1/savedata_prospero\\..\\x/PPSA01234",
+                "PPSA01234",
+            ),
+            ("/user/home/1/savedata_prospero/PPSA01234\n", "PPSA01234"),
+            ("/user/home/1/savedata_prospero/..", ".."),
+            ("/user/home/1/savedata_prospero/a/../b", "a/../b"),
+            ("/user/home/1/savedata_prospero/x", ""),
+        ] {
+            assert!(save_folder_ok(path, title).is_err(), "{path:?} {title:?}");
+            assert!(save_writer(path, title, 1).is_err(), "{path:?} {title:?}");
+            // Refused before anything else: no console answers at this address.
+            let e = put_in_place(
+                "127.0.0.1",
+                title,
+                Path::new("/nonexistent"),
+                path,
+                1,
+                &Settings::default(),
+                None,
+                false,
+            )
+            .unwrap_err();
+            assert!(
+                e.contains("not a save folder") || e.contains("not a title ID"),
+                "{path:?} {title:?}: refused for another reason"
+            );
+        }
+        let ok = "/user/home/1/savedata_prospero/PPSA01234";
+        assert!(save_folder_ok(ok, "PPSA01234").is_ok());
+        assert!(save_writer(ok, "PPSA01234", 1).is_ok());
+        assert!(save_folder_ok("/data/PCSX2/*.ps2", "PPSA99203").is_ok());
     }
 
     #[test]
