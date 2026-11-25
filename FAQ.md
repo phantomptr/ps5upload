@@ -701,7 +701,7 @@ EglantinePS5 (PPSA98515) is included too. Its saves stay in
 `/data/eglantineps5/user/nand/user/save/0000000000000000/<profile>/<title ID>/`,
 regardless of where its games are kept. Each profile and game's folder is backed up by the same
 local, console-drive and server passes, including after EglantinePS5 closes. Save Data lists them
-in their own “Switch games (EglantinePS5)” group. A restore waits for EglantinePS5 to close and
+in their own “Switch / Switch 2 games (EglantinePS5)” group. A restore waits for EglantinePS5 to close and
 backs up the save there first. Its backups have their own profile numbers, so
 copies of the same game and profile in ProsperoEden stay separate, including retention. The
 profile label still shows the emulator's profile, and older ProsperoEden backup names stay valid.

@@ -144,7 +144,8 @@ test("Eglantine and Eden show independent groups and backup histories", async ({
   await page.goto("/saves", { waitUntil: "domcontentloaded" });
   const eden = page.locator('[data-testid="switch-saves"][data-emulator="ProsperoEden"]');
   const eglantine = page.locator('[data-testid="switch-saves"][data-emulator="EglantinePS5"]');
-  await expect(eglantine.getByRole("heading", { name: "Switch games (EglantinePS5)" })).toBeVisible({ timeout: 30_000 });
+  await expect(eglantine.getByRole("heading", { name: "Switch / Switch 2 games (EglantinePS5)" })).toBeVisible({ timeout: 30_000 });
+  await expect(eglantine.getByText("Switch / Switch 2", { exact: true })).toBeVisible();
   await expect(eden.getByTestId("switch-saves-note")).toHaveText("ProsperoEden is running. Close it before restoring.");
   await expect(eglantine.getByTestId("switch-saves-note")).toHaveText("Close EglantinePS5 before restoring.");
   const rows = eglantine.getByTestId("switch-save");
