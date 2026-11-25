@@ -248,8 +248,12 @@ static inline int elf_find_param_sites(const unsigned char *buf, size_t len,
         uint32_t sdk_off = (p_type == PT_SCE_PROCPARAM) ? SCE_PARAM_PS5_SDK_OFFSET
                                                         : SCE_PARAM_PS4_SDK_OFFSET;
 
-        /* The segment must actually hold the struct we expect. */
-        if (p_filesz < sdk_off + 4) continue;
+        /* The segment must actually hold the struct we expect: BOTH SDK fields, whatever the type,
+         * because the patcher reads and writes the pair (PS4 at 0x10, PS5 at 0x14) in every site. A
+         * module param of 0x14..0x17 bytes at the end of the file passed `sdk_off + 4` and was then
+         * read 4 bytes past the file's mapping (a crash when the file ends on a page) and written
+         * past its end (the file grew). */
+        if (p_filesz < SCE_PARAM_PS5_SDK_OFFSET + 4) continue;
         int64_t at = elf_self_map_offset(buf, len, (uint64_t)base, elf, phoff,
                                          phentsize, phnum, i, p_offset, p_filesz);
         if (at < 0) continue;
