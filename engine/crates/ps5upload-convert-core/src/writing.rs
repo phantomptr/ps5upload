@@ -232,7 +232,15 @@ impl Writing {
     /// builds of one output would wreck each other's file. A leftover at `path` from a build
     /// that is not running any more (the app closed, the engine died) is removed, so the
     /// rebuild the queue starts is not refused as "output already exists".
+    ///
+    /// Also `None` for a finished output kept under this name because its rename failed
+    /// ([`ps5upload_fpkg::finish::is_kept`]): it is no leftover, and a retry of the same build
+    /// used to delete it here, hours of writing with it.
     pub fn claim(path: PathBuf) -> Option<Writing> {
+        // Still there, that is: once the user renamed or moved it the name is free again.
+        if ps5upload_fpkg::finish::is_kept(&path) && path.symlink_metadata().is_ok() {
+            return None;
+        }
         let mut active = active_partials().lock().unwrap_or_else(|e| e.into_inner());
         if active.contains(&path) {
             return None;
@@ -350,6 +358,30 @@ mod tests {
         drop(Writing::claim(spool.clone()).unwrap());
         assert!(!spool.exists());
         assert!(partial_in_the_way(&root.join("missing.partial")).is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A finished output kept under its `.partial` name (its rename failed) is not a leftover:
+    /// the next build of the same output is refused, and the file stays. The claim used to
+    /// delete it.
+    #[test]
+    fn a_kept_finished_output_is_not_cleared_by_the_next_claim() {
+        let root = std::env::temp_dir().join(format!("ps5upload-keptclaim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let partial = root.join("Game.pkg.partial");
+        std::fs::write(&partial, b"a finished package").unwrap();
+        ps5upload_fpkg::finish::kept_message(&partial, &root.join("Game.pkg"), &"denied");
+        assert!(Writing::claim(partial.clone()).is_none());
+        assert_eq!(std::fs::read(&partial).unwrap(), b"a finished package");
+        // Renamed by hand, as the message asks: the name can be built again.
+        std::fs::rename(&partial, root.join("Game.pkg")).unwrap();
+        drop(Writing::claim(partial.clone()).unwrap());
+        // Another output's leftover is still cleared.
+        let other = root.join("Other.pkg.partial");
+        std::fs::write(&other, b"cut short").unwrap();
+        drop(Writing::claim(other.clone()).unwrap());
+        assert!(!other.exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -4070,13 +4070,19 @@ pub(crate) async fn claim_off_thread(path: PathBuf) -> Option<Writing> {
         .flatten()
 }
 
-/// The 409 for a build whose output another running build is writing.
+/// The 409 for a build whose output another running build is writing, or whose output of an
+/// earlier build is finished and kept under that name (its rename failed).
 fn already_building(path: &Path) -> axum::response::Response {
-    json_err(
-        StatusCode::CONFLICT,
-        format!("{} is already being built", path.display()),
-    )
-    .into_response()
+    let why = if ps5upload_fpkg::finish::is_kept(path) && path.symlink_metadata().is_ok() {
+        format!(
+            "{} is a finished output that could not be given its name. Rename it by hand (drop \
+             the .partial), or move it, then build again",
+            path.display()
+        )
+    } else {
+        format!("{} is already being built", path.display())
+    };
+    json_err(StatusCode::CONFLICT, why).into_response()
 }
 
 /// Removes a file, trying again for a few seconds while something holds it: on Windows an
