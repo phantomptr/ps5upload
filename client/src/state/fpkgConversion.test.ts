@@ -1162,23 +1162,6 @@ describe("fpkg pipeline", () => {
     expect(second).not.toBe(first);
   });
 
-  it("says after unpacking when the game inside would not play as a package here", async () => {
-    const { pushNotification } = await import("./notifications");
-    vi.mocked(pushNotification).mockClear();
-    const was = (conn as { ps5Kernel?: string | null }).ps5Kernel;
-    (conn as { ps5Kernel?: string | null }).ps5Kernel = "r229358/releases/14.00";
-    inspect.mockResolvedValueOnce({ content_id: "UP9000-PPSA03671_00-X" });
-    jobStatus
-      .mockResolvedValueOnce({ status: "done", dest: "/out/.ps5upload-extract-x2/G", bytes_sent: 1 })
-      .mockResolvedValueOnce({ status: "failed", error: "stop here" });
-    await useFpkgConversion.getState().start({ source: "/dl/g.7z", outputDir: "/out" }, { install: false, host: null });
-    await tick();
-    await tick();
-    expect(inspect).toHaveBeenCalledWith("/out/.ps5upload-extract-x2/G", "/out");
-    expect(pushNotification).toHaveBeenCalledWith("warning", expect.anything(), expect.objectContaining({ link: "/workshop" }));
-    (conn as { ps5Kernel?: string | null }).ps5Kernel = was;
-  });
-
   it("unpacks a local archive, builds the game inside, then removes the unpack", async () => {
     const game = "/out/.ps5upload-extract-x1/My Game";
     jobStatus

@@ -1,7 +1,6 @@
 import { Folder, Package, HardDrive } from "lucide-react";
 
 import { Badge, Card } from "../../components";
-import { ps5FakeGameUnplayableFirmware } from "../../lib/ps5Firmware";
 import type { MakeKind } from "../../state/convertPrefs";
 import { useTr } from "../../state/lang";
 
@@ -21,17 +20,14 @@ export function NextGameNote() {
 
 /**
  * ② What to make: a package the PS5 installs, a game image ShadowMount+ mounts, or (#469) the
- * game's files back as a plain folder. They are explained side by side, and the one of the
- * first two that suits the game on the connected console is marked: a PS5 game on firmware
- * above 13.60 installs as a package but will not play, so the image is the way; otherwise the
- * package is the ordinary choice. The folder is never marked: it is a way back, not a way in.
+ * game's files back as a plain folder. They are explained side by side, and once a game is
+ * checked the package is marked as the ordinary choice (a PS5 fake package plays on every
+ * jailbroken firmware, up to 13.60). The folder is never marked: it is a way back, not a way in.
  * For a PS4 game the package is a PS4 fake package, which the engine writes from the game.
  */
 export function MakeCard({
   make,
   onMake,
-  kernel,
-  contentId,
   checked,
   archive = false,
   locked = false,
@@ -41,10 +37,6 @@ export function MakeCard({
 }: {
   make: MakeKind;
   onMake: (make: MakeKind) => void;
-  /** The connected console's kernel string, for the firmware line. */
-  kernel: string | null | undefined;
-  /** The checked game's content id (or title id); null before a game is checked. */
-  contentId: string | null | undefined;
   /** A game has been checked: the recommendation is about it. */
   checked: boolean;
   /** The source is an archive: it is looked at only once a run unpacks it. */
@@ -59,16 +51,7 @@ export function MakeCard({
   kraken?: boolean;
 }) {
   const tr = useTr();
-  const unplayableOn = checked ? ps5FakeGameUnplayableFirmware(kernel, contentId) : null;
-  // With Kraken Mount a PS5 package is mounted, not installed, so it plays where an installed one
-  // would not, and an image would not be mounted at all.
-  const recommended: "pkg" | "image" | null = !checked
-    ? null
-    : kraken && !ps4
-      ? "pkg"
-      : unplayableOn
-        ? "image"
-        : "pkg";
+  const recommended: "pkg" | null = checked ? "pkg" : null;
   const tiles: { id: MakeKind; icon: typeof Package; title: string; body: string }[] = [
     ps4
       ? {
@@ -156,9 +139,7 @@ export function MakeCard({
                   <span className="text-xs font-semibold text-[var(--color-text)] sm:text-sm">{t.title}</span>
                   {recommended === t.id && (
                     <Badge tone="accent" size="sm">
-                      {t.id === "image" && unplayableOn
-                        ? tr("fpkg.make.recommended_fw", { fw: unplayableOn }, "Recommended on FW {fw}")
-                        : tr("fpkg.make.recommended", undefined, "Recommended")}
+                      {tr("fpkg.make.recommended", undefined, "Recommended")}
                     </Badge>
                   )}
                 </div>
@@ -179,12 +160,6 @@ export function MakeCard({
                   "fpkg.make.why_kraken",
                   undefined,
                   "Kraken Mount runs on this PS5: a package made here is mounted from a drive, not installed.",
-                )
-              : unplayableOn
-              ? tr(
-                  "fpkg.make.why_image",
-                  { fw: unplayableOn },
-                  "This PS5 game would install as a package but not play on FW {fw}; as an image it does.",
                 )
               : tr("fpkg.make.why_pkg", undefined, "A package is the ordinary choice: it installs and plays like any other game.")}
         </div>}

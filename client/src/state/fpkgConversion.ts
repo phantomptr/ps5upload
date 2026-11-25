@@ -7,7 +7,6 @@ import { isTarArchiveName, stripTarSuffix } from "../lib/tarNames";
 import { create } from "zustand";
 
 import { t as translate } from "../i18n";
-import { ps5FakeGameUnplayableFirmware } from "../lib/ps5Firmware";
 import { useLangStore } from "./lang";
 import { useConvertPrefs, type AmprEmuBuild } from "./convertPrefs";
 
@@ -916,7 +915,6 @@ async function prepareThenStart(
       return;
     }
     update({ extractedSource: local, jobId: null });
-    void warnIfUnplayable(local, outputDir);
   }
   enterStage("check");
   try {
@@ -925,22 +923,6 @@ async function prepareThenStart(
     poll(job_id, install);
   } catch (error) {
     fail("check", error instanceof Error ? error.message : String(error), null);
-  }
-}
-
-/** An archive can't be looked inside before it is unpacked, so the firmware note a checked game
- *  gets under ② comes now: a PS5 game that would install as a package but not play here. */
-async function warnIfUnplayable(local: string, outputDir: string | undefined) {
-  const p = running();
-  if (!p || (p.mode !== "convert" && p.mode !== "convert-install")) return;
-  const seen = await fpkg.inspect(local, outputDir).catch(() => null);
-  const fw = seen && ps5FakeGameUnplayableFirmware(useConnectionStore.getState().ps5Kernel, seen.content_id);
-  if (fw) {
-    const lang = useLangStore.getState().lang;
-    pushNotification("warning", translate(lang, "fpkg.unpacked_unplayable_title", undefined), {
-      body: translate(lang, "fpkg.unpacked_unplayable", { fw }),
-      link: "/workshop",
-    });
   }
 }
 
