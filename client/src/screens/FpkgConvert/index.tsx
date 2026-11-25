@@ -28,6 +28,7 @@ import { useWebviewDropAll } from "../../lib/useWebviewDrop";
 import { useConnectionStore } from "../../state/connection";
 import { useConvertPrefs } from "../../state/convertPrefs";
 import {
+  archiveIsUnpacked,
   imageFormatOf,
   isArchiveSource,
   isFolderableSource,
@@ -52,7 +53,13 @@ import { MakeCard } from "./MakeCard";
 import { mergeRole, Ps4MergePicker } from "./Ps4Merge";
 import { OptionsCard } from "./OptionsCard";
 import { folderLz4Options, folderPackOptions, folderPacks, packOptions, type UnpackChoice } from "./ImageOptions";
-import { DeleteSourceOption, RemoveBackportOption, backportRefusal, deleteSourceRefusal } from "./SourceOptions";
+import {
+  DeleteSourceOption,
+  FreeArchiveOption,
+  RemoveBackportOption,
+  backportRefusal,
+  deleteSourceRefusal,
+} from "./SourceOptions";
 import { useConfirm } from "../../components/ConfirmDialog";
 import {
   OutputChoice,
@@ -73,6 +80,7 @@ import { AmprEmuTool, amprEmuOffered } from "./AmprEmuTool";
 import { ZstdRuntimeTool, zstdRuntimeOffered } from "./ZstdRuntimeTool";
 import { AmprIndexTool, amprIndexPlan } from "./AmprIndexTool";
 import {
+  archiveSurelyUnpacked,
   imageBuildWith,
   buildExtension,
   startAfterBuild,
@@ -265,7 +273,10 @@ export default function WorkshopScreen() {
     const prefs = useConvertPrefs.getState();
     const making = useFpkgConversion.getState().pipeline.phase === "running";
     const lang = making ? nextLanguage : language;
-    return useConvertQueue.getState().add({
+    // The archive's space freed as it unpacks: only for the game it was confirmed for under ③,
+    // never the others added with it, and only when this build is sure to unpack the archive.
+    const frees = freeArchiveFor?.src === src && src === source.trim() && archiveSurelyUnpacked(src, build.kind);
+    const added = useConvertQueue.getState().add({
       source: src,
       isDir: isFolder || undefined,
       // The password under ① is this game's; it stays in memory only.
@@ -303,7 +314,11 @@ export default function WorkshopScreen() {
         (build.kind === "image" || build.kind === "folder") && savesToServer(runChoice) ? serverFolder : undefined,
       // Only the game it was ticked for under ③, never the others added with it.
       removeBackport: (removesBackport && src === source.trim()) || undefined,
+      freeArchive: frees || undefined,
     });
+    // The answer went with the queued game: it is asked again for anything else.
+    if (added && frees) setFreeArchiveFor(null);
+    return added;
   };
   /** Queue what was picked or found, then say what was left out. */
   const queueAll = (sources: { path: string; isDir: boolean }[], notGames: number) => {
@@ -391,6 +406,10 @@ export default function WorkshopScreen() {
   // "Move the source to the Trash once the output is verified": the one source it was
   // confirmed for, in this window's memory only, and cleared when that conversion starts.
   const [deleteSourceFor, setDeleteSourceFor] = useState<string | null>(null);
+  // "Free the archive's space while it unpacks" (the archive is deleted on the way): the one
+  // archive it was confirmed for, with what the engine found in it. In this window's memory
+  // only, cleared when that archive's run starts or it is queued, and for any other source.
+  const [freeArchiveFor, setFreeArchiveFor] = useState<{ src: string; game: "folder" | "image" } | null>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
   const [error, setError] = useState<string | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
@@ -463,6 +482,7 @@ export default function WorkshopScreen() {
       setUnpackPacks(false);
       setPkgUnpack(true);
       setLeaveOutEmu(false);
+      setFreeArchiveFor(null);
       void check(path);
     },
     [check, reset, setSource, setPassword],
@@ -623,9 +643,11 @@ export default function WorkshopScreen() {
         ...(unpackOn ? { unpackPacks: true } : {}),
         // A .rar read in place needs its password as an image build does.
         ...(password ? { password } : {}),
+        ...(freesArchive ? { freeArchive: true } : {}),
       });
       // Asked for this one conversion: off again for whatever comes next.
       setDeleteSourceFor(null);
+      setFreeArchiveFor(null);
       return;
     }
     if (build.kind === "image") {
@@ -649,7 +671,7 @@ export default function WorkshopScreen() {
         packOptions(lz4Choice, packProfile),
         password || undefined,
         out.keepBoth,
-        direct || toServer || update || removesBackport || deletesSource || unpackOn
+        direct || toServer || update || removesBackport || deletesSource || unpackOn || freesArchive
           ? {
               ...(direct ? { toConsole: plan } : {}),
               ...(toServer ? { toServer } : {}),
@@ -657,10 +679,12 @@ export default function WorkshopScreen() {
               ...(removesBackport ? { removeBackport: true } : {}),
               ...(deletesSource ? { deleteSource: true } : {}),
               ...(unpackOn ? { unpackPacks: true } : {}),
+              ...(freesArchive ? { freeArchive: true } : {}),
             }
           : undefined,
       );
       setDeleteSourceFor(null);
+      setFreeArchiveFor(null);
       return;
     }
     const install = then !== "keep";
@@ -683,8 +707,10 @@ export default function WorkshopScreen() {
         method: then === "upload" ? "upload" : "stream",
         password: password || undefined,
         deleteAfter: install && deleteAfter,
+        ...(freesArchive ? { freeArchive: true } : {}),
       },
     );
+    setFreeArchiveFor(null);
   };
 
   const onDelete = () => {
@@ -1160,6 +1186,14 @@ export default function WorkshopScreen() {
     elsewhere: (build.kind === "image" && savesToPs5(runChoice)) || savesToServer(runChoice),
   });
   const deletesSource = deleteSourceOffered && deleteSourceFor === src && !deleteSourceBlocked;
+  // "Free the archive's space while it unpacks" is for an archive on this computer. It counts
+  // only for the archive it was confirmed for, and only while this run unpacks it to disk (a
+  // package always does; an image or folder is made straight from most archives).
+  const freeArchiveOffered = isArchiveSource(src) && !isRemotePath(src) && !src.startsWith("ps5://");
+  const freesArchive =
+    freeArchiveOffered &&
+    freeArchiveFor?.src === src &&
+    archiveIsUnpacked(src, build.kind, { merge: mergePair !== null, game: freeArchiveFor.game });
   /** Ticking it asks first, naming what would go; unticking needs no question. */
   const askDeleteSource = async (on: boolean) => {
     if (!on) {
@@ -1277,6 +1311,17 @@ export default function WorkshopScreen() {
                 refusal={deleteSourceBlocked}
                 checked={deleteSourceFor === src}
                 onChange={(on) => void askDeleteSource(on)}
+              />
+            )}
+            {!locked && freeArchiveOffered && (
+              <FreeArchiveOption
+                source={src}
+                outputDir={outFor(src).outputDir}
+                password={password || undefined}
+                kind={build.kind}
+                merge={mergePair !== null}
+                checked={freeArchiveFor?.src === src}
+                onChange={(on, found) => setFreeArchiveFor(on && found ? { src, game: found.game } : null)}
               />
             )}
           </OptionsCard>

@@ -2,8 +2,8 @@
 // running item shows its stages there), and a finished package is handed to the console queue.
 
 import { fpkg } from "../api/fpkg";
-import { pipelinePhaseChanged, setConvertRunner, type ConvertItem } from "../state/convertQueue";
-import { useFpkgConversion } from "../state/fpkgConversion";
+import { freesArchive, pipelinePhaseChanged, setConvertRunner, type ConvertItem } from "../state/convertQueue";
+import { failureText, useFpkgConversion } from "../state/fpkgConversion";
 import { pkgLibraryStore } from "../state/pkgLibrary";
 import { imageDestFor } from "./imageDest";
 
@@ -30,7 +30,8 @@ function outputOf(item: ConvertItem): string | undefined {
 function outcome(installed: boolean) {
   const p = useFpkgConversion.getState().pipeline;
   if (p.phase === "done") return { ok: true, packagePath: p.packagePath, installed };
-  if (p.phase === "failed") return { ok: false, message: p.message, cancelled: p.cancelled };
+  if (p.phase === "failed")
+    return { ok: false, message: failureText(p), cancelled: p.cancelled, ...(p.archiveGone ? { archiveGone: true } : {}) };
   return { ok: false, message: "The build did not start." };
 }
 
@@ -94,6 +95,7 @@ async function build(item: ConvertItem) {
         ...(item.toServer ? { toServer: item.toServer } : {}),
         ...(item.removeBackport ? { removeBackport: true } : {}),
         ...(item.build.unpackPacks ? { unpackPacks: true } : {}),
+        ...(freesArchive(item) ? { freeArchive: true } : {}),
       },
     );
     await whenIdle();
@@ -128,6 +130,7 @@ async function build(item: ConvertItem) {
       method: item.then === "upload" ? "upload" : "stream",
       password: item.password,
       fullVerify: item.fullVerify,
+      ...(freesArchive(item) ? { freeArchive: true } : {}),
     },
   );
   await whenIdle();

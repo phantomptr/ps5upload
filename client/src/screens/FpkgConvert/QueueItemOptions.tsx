@@ -10,6 +10,7 @@ import { PLAYGO_LANGUAGES } from "../../lib/playgoLanguages";
 import { useConvertPrefs } from "../../state/convertPrefs";
 import {
   DEFAULT_ZSTD_LEVEL,
+  archiveSurelyUnpacked,
   packsOf,
   thenFor,
   withPacks,
@@ -25,6 +26,7 @@ import { CompressionTiles } from "./CompressionTiles";
 import { imageDestFor } from "../../lib/imageDest";
 import { ImageDestination } from "./ImageDestination";
 import { FullVerifyOption, ImageChoice } from "./ImageOptions";
+import { FreeArchiveOption } from "./SourceOptions";
 
 type Kind = ConvertBuild["kind"];
 
@@ -243,6 +245,19 @@ export function QueueItemOptions({
             </select>
           </div>
         </>
+      )}
+
+      {/* An archive this build is sure to unpack: its space can be freed on the way, which
+          deletes it. Asked for and confirmed here for this one game; never saved with the queue. */}
+      {archiveSurelyUnpacked(item.source, kind) && (
+        <FreeArchiveOption
+          source={item.source}
+          outputDir={item.outputDir?.trim() || undefined}
+          password={item.password}
+          kind={kind}
+          checked={!!item.freeArchive}
+          onChange={(on) => onChange({ freeArchive: on || undefined })}
+        />
       )}
 
       <div className="flex flex-col gap-1">

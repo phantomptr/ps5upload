@@ -1021,6 +1021,27 @@ fn partial_name(path: &Path) -> PathBuf {
     to
 }
 
+/// Refuses an archive another program has open, where the system can say: Windows opens a
+/// file for nobody else only while nobody else has it. Elsewhere the lock the unpack holds on
+/// it is the check.
+fn in_use_elsewhere(archive: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(archive)
+            .map_err(|e| anyhow!("{} is in use by another program ({e})", archive.display()))?;
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = archive;
+    }
+    Ok(())
+}
+
 fn consume_zip(
     plan: &FreePlan,
     sink: &mut Sink,
@@ -1028,6 +1049,7 @@ fn consume_zip(
 ) -> std::result::Result<Outcome, ConsumeError> {
     let whole = |error: anyhow::Error| ConsumeError { error, left: None };
     let archive = &plan.parts[0];
+    in_use_elsewhere(archive).map_err(whole)?;
     let mut z = open_zip(archive).map_err(whole)?;
     let cutter = std::fs::OpenOptions::new()
         .write(true)
@@ -1035,6 +1057,9 @@ fn consume_zip(
         .with_context(|| format!("open {} to free it", archive.display()))
         .map_err(whole)?;
     // Held for the length of the unpack: another program that locks what it reads is seen.
+    // Not on Windows, where a lock taken through one handle refuses reads through any other,
+    // this unpack's own included (`in_use_elsewhere` asks there instead).
+    #[cfg(not(windows))]
     if let Err(std::fs::TryLockError::WouldBlock) = cutter.try_lock() {
         return Err(whole(anyhow!(
             "{} is in use by another program",

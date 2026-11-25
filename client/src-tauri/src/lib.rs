@@ -485,6 +485,7 @@ pub fn run() {
             commands::exfat_build,
             commands::folder_build,
             commands::fpkg_extract,
+            commands::fpkg_extract_free_check,
             commands::fpkg_extract_cleanup,
             commands::job_status,
             commands::job_cancel,

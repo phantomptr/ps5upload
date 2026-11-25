@@ -102,6 +102,10 @@ export type Pipeline =
       /** The game unpacked from an archive (inside an engine unpack folder); removed with it
        *  once the run is over. */
       extractedSource: string | null;
+      /** `extractedSource` was unpacked with its archive deleted on the way ("free the
+       *  archive's space while it unpacks"): that folder is the only copy of the game until
+       *  something is made of it, so a run that fails keeps it. */
+      freedArchive?: boolean;
       /** Found running, not started by this window (see `attachRunning`). */
       attached?: boolean;
       /** The engine job is paused (#631): it waits, and so does the queue behind it. */
@@ -154,7 +158,19 @@ export type Pipeline =
       titleId: string | null;
       /** Stopped by the user: not a fault. */
       cancelled?: boolean;
+      /** The archive this run unpacked with its space freed is gone, and nothing was made of
+       *  its game: where the unpacked files were kept. */
+      archiveGone?: ArchiveGone;
     };
+
+/** An archive deleted while it unpacked, in a run that did not finish. */
+export interface ArchiveGone {
+  /** The folder holding what was unpacked. */
+  kept: string;
+  /** The unpack itself stopped part way: the archive is cut short, and only some of the
+   *  game is in `kept`. Otherwise the whole game is there and the archive is gone. */
+  partly: boolean;
+}
 
 export interface ConversionState {
   pipeline: Pipeline;
@@ -170,6 +186,9 @@ export interface ConversionState {
       deleteAfter?: boolean;
       /** This game's own choice (a queued game keeps what it was added with); else the setting. */
       fullVerify?: boolean;
+      /** DELETES the archive `source` as it unpacks, to free its space (confirmed on the
+       *  screen for this one game; never for a copy fetched from a server). */
+      freeArchive?: boolean;
     },
   ) => Promise<void>;
   /** Write a game folder or image as one game image (`format`, .exfat by default); with
@@ -208,6 +227,9 @@ export interface ConversionState {
       deleteSource?: boolean;
       /** A game in asset packs is written as plain files again. */
       unpackPacks?: boolean;
+      /** DELETES the archive `source` as it unpacks, when this run has to unpack it (a game
+       *  image inside, an update merged in, a tar): see `start`. */
+      freeArchive?: boolean;
     },
   ) => Promise<void>;
   /** Unpack a game image or a debug-key package into a plain folder in `outputDir`; with
@@ -237,6 +259,8 @@ export interface ConversionState {
       amprEmuBuild?: AmprEmuBuild;
       /** An archive's password (RAR); never stored. */
       password?: string;
+      /** DELETES the archive `source` as it unpacks, when this run has to unpack it. */
+      freeArchive?: boolean;
     },
   ) => Promise<void>;
   /** Put the finished image in the Upload queue. */
@@ -362,16 +386,22 @@ function enterStage(stage: PipelineStage, done = 0, total = 0) {
   });
 }
 
-function fail(stage: PipelineStage, message: string, packagePath: string | null) {
+function fail(stage: PipelineStage, message: string, packagePath: string | null, gone?: ArchiveGone) {
   const p = running();
   if (!p) return;
-  dropCopy(p);
+  // A game unpacked from an archive that was deleted on the way, with nothing made of it yet:
+  // its folder is all there is of the game, so it stays and the result says where it is.
+  const archiveGone =
+    gone ??
+    (p.freedArchive && p.extractedSource && !packagePath ? { kept: p.extractedSource, partly: false } : undefined);
+  dropCopy(p, !archiveGone);
   const cancelled = isCancelMessage(message);
+  const said = archiveGone ? `${message} ${archiveGoneText(archiveGone)}` : message;
   if (p.taskId) {
     if (cancelled) useTaskStore.getState().finishTask(p.taskId, "cancelled");
     else
       useTaskStore.getState().finishTask(p.taskId, "failed", {
-        lastError: { code: "FPKG_FAILED", message, recoverable: false },
+        lastError: { code: "FPKG_FAILED", message: said, recoverable: false },
       });
   }
   const failedTitle =
@@ -394,6 +424,7 @@ function fail(stage: PipelineStage, message: string, packagePath: string | null)
       stageMs: { ...p.stageMs, [p.stage]: Date.now() - p.stageStartedMs },
       titleId: p.titleId,
       cancelled,
+      ...(archiveGone ? { archiveGone } : {}),
     },
   });
   // The user asked for this: the card says so, and it is not an error to report.
@@ -403,7 +434,7 @@ function fail(stage: PipelineStage, message: string, packagePath: string | null)
   pushNotification("error", failedTitle, {
     // The install stage's failure is an engine job's ending, which the host announces.
     jobOutcome: stage === "install",
-    body: message,
+    body: said,
     link: stage === "install" ? installErrorLink(message) : "/workshop",
   });
 }
@@ -460,7 +491,7 @@ function finish(packagePath: string, packageBytes: number, convertMs: number, so
   pendingToConsole = false;
   if (plan) queueImage(packagePath, packageBytes, plan);
   if (p.taskId) useTaskStore.getState().finishTask(p.taskId, "done");
-  dropCopy(p);
+  dropCopy(p, true);
   const now = Date.now();
   useFpkgConversion.setState({
     pipeline: {
@@ -631,7 +662,7 @@ function installDone(
   const p = running();
   if (!p) return;
   if (p.taskId) useTaskStore.getState().finishTask(p.taskId, "done");
-  dropCopy(p);
+  dropCopy(p, true);
   const now = Date.now();
   useFpkgConversion.setState({
     pipeline: {
@@ -847,15 +878,78 @@ export function archiveErrorText(message: string): string {
   return message;
 }
 
-/** Unpack an archive with the engine, following its job; the game path found inside. */
-async function extractArchive(archive: string, outputDir: string | undefined, password?: string) {
-  const { job_id } = await fpkg.extract(archive, outputDir, password);
+/** Whether a run of `source` unpacks it to disk first, so that freeing the archive on the way
+ *  gives room back: a package always does, and a tar always is; an image or a folder is made
+ *  straight from a `.zip`, `.7z` or `.rar` with nothing unpacked, unless the game inside is a
+ *  game image or an update is merged in. Never an archive on a server (what is unpacked is a
+ *  copy of it). */
+export function archiveIsUnpacked(
+  source: string,
+  kind: "pkg" | "image" | "folder",
+  o: { merge?: boolean; game?: "folder" | "image" } = {},
+): boolean {
+  const path = source.trim();
+  if (!isArchiveSource(path) || isRemotePath(path) || path.startsWith("ps5://")) return false;
+  if (kind === "pkg" || !isInPlaceArchive(path)) return true;
+  return !!o.merge || o.game === "image";
+}
+
+/** The engine's `error_reason` for an unpack that stopped with part of its archive deleted;
+ *  `error_detail` is then the folder holding what was unpacked. */
+const ARCHIVE_PARTLY_DELETED = "archive_partly_deleted";
+
+/** Such a failure's cause alone: the engine's message goes on to say what the result card
+ *  says in the user's language. */
+function causeOf(error: string | undefined): string {
+  const text = error ?? "The archive did not unpack.";
+  const at = text.indexOf(". The archive is partly deleted");
+  return at > 0 ? text.slice(0, at) : text;
+}
+
+/** An unpack that stopped with part of its archive deleted: `kept` holds what was unpacked. */
+class ArchiveGoneError extends Error {
+  constructor(
+    message: string,
+    readonly kept: string,
+  ) {
+    super(message);
+  }
+}
+
+/** A scratch unpack folder (`.ps5upload-extract-*`), which is removed after use; the folder of
+ *  an unpack that deleted its archive is not one, and stays. */
+function isScratchUnpack(path: string): boolean {
+  return /(^|[\\/])\.ps5upload-extract-[^\\/]+/.test(path);
+}
+
+/** What became of an archive deleted on the way and where its game is, in the user's language. */
+export function archiveGoneText(gone: ArchiveGone): string {
+  return translate(
+    useLangStore.getState().lang,
+    gone.partly ? "fpkg.free.gone_partly" : "fpkg.free.gone_whole",
+    { path: gone.kept },
+  );
+}
+
+/** A failed run's message as a list row says it: with where an archive's game was kept. */
+export function failureText(p: Extract<Pipeline, { phase: "failed" }>): string {
+  return p.archiveGone ? `${p.message} ${archiveGoneText(p.archiveGone)}` : p.message;
+}
+
+/** Unpack an archive with the engine, following its job; the game path found inside. With
+ *  `free`, the archive is deleted as it unpacks. */
+async function extractArchive(archive: string, outputDir: string | undefined, password?: string, free?: boolean) {
+  const { job_id } = await fpkg.extract(archive, outputDir, password, ...(free ? [true as const] : []));
   update({ jobId: job_id });
   for (;;) {
     const s = await readWithRetries(() => jobStatus(job_id));
     if (running()?.jobId === job_id) markPaused(s.status === "running" && s.paused === true);
     if (s.status === "done") return s.dest ?? "";
-    if (s.status === "failed") throw new Error(s.error ?? "The archive did not unpack.");
+    if (s.status === "failed") {
+      if (s.error_reason === ARCHIVE_PARTLY_DELETED && s.error_detail)
+        throw new ArchiveGoneError(causeOf(s.error), s.error_detail);
+      throw new Error(s.error ?? "The archive did not unpack.");
+    }
     if (running()?.jobId === job_id) enterStage("extract", s.bytes_sent ?? 0, s.total_bytes ?? 0);
     await new Promise((r) => setTimeout(r, POLL_MS));
   }
@@ -879,6 +973,8 @@ async function prepareThenStart(
   install: InstallMethod | null,
   password?: string,
   inPlace?: (local: string) => Promise<{ job_id: string }>,
+  /** Delete the archive as it unpacks (the user's own archive only, and only when unpacked). */
+  free?: boolean,
 ) {
   let local = source;
   if (isRemotePath(source)) {
@@ -904,17 +1000,21 @@ async function prepareThenStart(
   }
   if (isArchiveSource(local)) {
     enterStage("extract");
+    // Only ever the archive that was chosen, never a copy fetched from a server.
+    const freeing = !!free && local === source;
     try {
-      local = await extractArchive(local, outputDir, password);
+      local = await extractArchive(local, outputDir, password, freeing);
     } catch (error) {
-      fail("extract", archiveErrorText(error instanceof Error ? error.message : String(error)), null);
+      const gone = error instanceof ArchiveGoneError ? { kept: error.kept, partly: true } : undefined;
+      fail("extract", archiveErrorText(error instanceof Error ? error.message : String(error)), null, gone);
       return;
     }
     if (!running()) {
-      void fpkg.cleanupExtract(local).catch(() => {});
+      // Unpacked with its archive deleted, the folder is all there is of the game: it stays.
+      if (!freeing) void fpkg.cleanupExtract(local).catch(() => {});
       return;
     }
-    update({ extractedSource: local, jobId: null });
+    update({ extractedSource: local, jobId: null, ...(freeing ? { freedArchive: true } : {}) });
   }
   enterStage("check");
   try {
@@ -953,10 +1053,14 @@ function runFolder(): string {
 }
 
 /** The copy of a server source and an archive's unpack are only scaffolding: drop them once
- *  the build is over, whether it finished or not (the next run makes its own). */
-function dropCopy(p: Running) {
+ *  the build is over, whether it finished or not (the next run makes its own). The unpack of
+ *  an archive that was deleted on the way is the game's only copy until something is `made`
+ *  of it: it goes then, and stays otherwise. */
+function dropCopy(p: Running, made: boolean) {
   if (p.copiedSource) void remoteApi.cleanupFetched(p.copiedSource).catch(() => {});
-  if (p.extractedSource) void fpkg.cleanupExtract(p.extractedSource).catch(() => {});
+  if (!p.extractedSource) return;
+  if (!p.freedArchive) void fpkg.cleanupExtract(p.extractedSource).catch(() => {});
+  else if (made) void fpkg.cleanupExtract(p.extractedSource, true).catch(() => {});
 }
 
 /** "UP4433-PPSA17221_00-MINECRAFTPS50000" → "PPSA17221". */
@@ -1004,12 +1108,18 @@ async function followLostUnpack(jobId: string) {
       const s = await jobStatus(jobId);
       if (running()?.jobId !== jobId) return;
       if (s.status === "done") {
-        if (s.dest) void fpkg.cleanupExtract(s.dest).catch(() => {});
-        fail("extract", translate(useLangStore.getState().lang, "fpkg.unpack_lost", undefined), null);
+        // An unpack that deleted its archive: its folder is the game now, and stays.
+        const gone = s.dest && !isScratchUnpack(s.dest) ? { kept: s.dest, partly: false } : undefined;
+        if (s.dest && !gone) void fpkg.cleanupExtract(s.dest).catch(() => {});
+        fail("extract", translate(useLangStore.getState().lang, "fpkg.unpack_lost", undefined), null, gone);
         return;
       }
       if (s.status === "failed") {
-        fail("extract", archiveErrorText(s.error ?? "The archive did not unpack."), null);
+        const gone =
+          s.error_reason === ARCHIVE_PARTLY_DELETED && s.error_detail
+            ? { kept: s.error_detail, partly: true }
+            : undefined;
+        fail("extract", archiveErrorText(gone ? causeOf(s.error) : (s.error ?? "The archive did not unpack.")), null, gone);
         return;
       }
       markPaused(s.paused === true);
@@ -1070,7 +1180,7 @@ function folderTail(
 export const useFpkgConversion = create<ConversionState>((set, get) => ({
   pipeline: { phase: "idle" },
 
-  start: async (req, { install, host, method = "stream", password, deleteAfter, fullVerify: ownVerify }) => {
+  start: async (req, { install, host, method = "stream", password, deleteAfter, fullVerify: ownVerify, freeArchive }) => {
     const then = install ? method : null;
     if (get().pipeline.phase === "running") return;
     const fullVerify = ownVerify ?? useConvertPrefs.getState().fullVerify;
@@ -1088,6 +1198,8 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         (local) => fpkg.build({ ...req, source: local, fullVerify }),
         then,
         password,
+        undefined,
+        freeArchive,
       );
       return;
     }
@@ -1156,6 +1268,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         inPlace
           ? (local) => job(local, extrasOf(own, isRemotePath(source), undefined, password || undefined))
           : undefined,
+        own?.freeArchive,
       );
       return;
     }
@@ -1214,6 +1327,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         null,
         own?.password,
         (local) => job(local, extrasOf(own, isRemotePath(source), amprEmu, own?.password || undefined)),
+        own?.freeArchive,
       );
       return;
     }

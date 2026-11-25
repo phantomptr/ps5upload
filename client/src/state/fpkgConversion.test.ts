@@ -90,7 +90,16 @@ vi.mock("./roster", async (orig) => ({
   useRosterStore: { getState: () => roster },
 }));
 
-import { POLL_MS, archiveStem, pausedSoFar, sourceNoteOf, stagePausedSoFar, useFpkgConversion } from "./fpkgConversion";
+import {
+  POLL_MS,
+  archiveIsUnpacked,
+  archiveStem,
+  failureText,
+  pausedSoFar,
+  sourceNoteOf,
+  stagePausedSoFar,
+  useFpkgConversion,
+} from "./fpkgConversion";
 import { commandTask, taskCapabilities } from "./taskControls";
 import { useTaskStore } from "./tasks";
 
@@ -1356,5 +1365,134 @@ describe("fpkg pipeline", () => {
     expect(p).toMatchObject({ phase: "failed", stage: "park", packagePath: "/out/a.pkg" });
     expect(p.phase === "failed" && p.message).toContain("connection refused");
   });
-});
 
+  // ── "Free the archive's space while it unpacks": the archive is deleted on the way ──────
+
+  it("frees the archive only when asked, and drops the kept unpack once the package is made", async () => {
+    const game = "/out/game.unpacked/My Game";
+    jobStatus
+      .mockResolvedValueOnce({ status: "done", dest: game, bytes_sent: 10 })
+      .mockResolvedValueOnce({ status: "done", dest: "/out/a.pkg", bytes_sent: 1 });
+    await useFpkgConversion
+      .getState()
+      .start({ source: "/dl/game.zip", outputDir: "/out" }, { install: false, host: null, freeArchive: true });
+    expect(extract).toHaveBeenCalledWith("/dl/game.zip", "/out", undefined, true);
+    await tick();
+    expect(build).toHaveBeenCalledWith(expect.objectContaining({ source: game }));
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done", packagePath: "/out/a.pkg" });
+    // The folder that held the only copy of the game goes now, asked for by name.
+    expect(cleanupExtract).toHaveBeenCalledTimes(1);
+    expect(cleanupExtract).toHaveBeenCalledWith(game, true);
+  });
+
+  it("keeps the unpacked game, and says where it is, when the build fails after the archive went", async () => {
+    const game = "/out/game.unpacked/My Game";
+    jobStatus
+      .mockResolvedValueOnce({ status: "done", dest: game, bytes_sent: 10 })
+      .mockResolvedValueOnce({ status: "failed", error: "disk full" });
+    await useFpkgConversion
+      .getState()
+      .start({ source: "/dl/game.zip", outputDir: "/out" }, { install: false, host: null, freeArchive: true });
+    await tick();
+    await tick();
+    const p = useFpkgConversion.getState().pipeline;
+    expect(p).toMatchObject({
+      phase: "failed",
+      message: "disk full",
+      archiveGone: { kept: game, partly: false },
+    });
+    expect(cleanupExtract).not.toHaveBeenCalled();
+    // A list row says both: what went wrong, and where the game is.
+    const text = p.phase === "failed" ? failureText(p) : "";
+    expect(text).toContain("disk full");
+    expect(text).toContain(game);
+    expect(text).toMatch(/archive was deleted/i);
+  });
+
+  it("an unpack stopped with the archive partly deleted keeps what came out and says so, stopped or not", async () => {
+    jobStatus.mockResolvedValueOnce({
+      status: "failed",
+      error:
+        "cancelled. The archive is partly deleted and can't be used again. Everything unpacked before it stopped is kept in /out/game.unpacked. What is left of the archive: /dl/game.zip.partial-deleted.",
+      error_reason: "archive_partly_deleted",
+      error_detail: "/out/game.unpacked",
+    });
+    await useFpkgConversion
+      .getState()
+      .start({ source: "/dl/game.zip", outputDir: "/out" }, { install: false, host: null, freeArchive: true });
+    await tick();
+    const p = useFpkgConversion.getState().pipeline;
+    expect(p).toMatchObject({
+      phase: "failed",
+      stage: "extract",
+      // The cause alone: the rest is said in the user's language.
+      message: "cancelled",
+      cancelled: true,
+      archiveGone: { kept: "/out/game.unpacked", partly: true },
+    });
+    expect(cleanupExtract).not.toHaveBeenCalled();
+    expect(build).not.toHaveBeenCalled();
+    expect(p.phase === "failed" ? failureText(p) : "").toMatch(/partly deleted.*\/out\/game\.unpacked/);
+  });
+
+  it("a failed unpack that left the archive whole is an ordinary failure", async () => {
+    jobStatus.mockResolvedValueOnce({ status: "failed", error: "more than one game in the archive (a, b)" });
+    await useFpkgConversion
+      .getState()
+      .start({ source: "/dl/game.zip", outputDir: "/out" }, { install: false, host: null, freeArchive: true });
+    await tick();
+    const p = useFpkgConversion.getState().pipeline;
+    expect(p).toMatchObject({ phase: "failed", stage: "extract" });
+    expect(p.phase === "failed" && p.archiveGone).toBeUndefined();
+  });
+
+  it("never deletes a copy fetched from a server, whatever was asked", async () => {
+    const game = "/out/.ps5upload-extract-x1/G";
+    jobStatus
+      .mockResolvedValueOnce({ status: "done", dest: "/out/.ps5upload-source/r/g.zip", bytes_sent: 1 })
+      .mockResolvedValueOnce({ status: "done", dest: game, bytes_sent: 1 })
+      .mockResolvedValueOnce({ status: "done", dest: "/out/a.pkg", bytes_sent: 1 });
+    await useFpkgConversion
+      .getState()
+      .start(
+        { source: "remote://nas-1/dl/g.zip", outputDir: "/out" },
+        { install: false, host: null, freeArchive: true },
+      );
+    await tick();
+    await tick();
+    expect(extract).toHaveBeenCalledWith("/out/.ps5upload-source/r/g.zip", "/out", undefined);
+    await tick();
+    await tick();
+    expect(cleanupExtract).toHaveBeenCalledWith(game);
+  });
+
+  it("an unpack that freed its archive and lost its page keeps the folder and names it", async () => {
+    runningJobs.mockResolvedValueOnce([{ job_id: "x9", kind: "extract", source: "/g/A.zip", started_at_ms: 5 }]);
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/A.unpacked/G" });
+    await useFpkgConversion.getState().attachRunning();
+    await tick();
+    expect(cleanupExtract).not.toHaveBeenCalled();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "failed",
+      archiveGone: { kept: "/out/A.unpacked/G", partly: false },
+    });
+  });
+
+  it("knows which runs unpack an archive to disk, so freeing it gives room back", () => {
+    // A package is always made from the unpacked game; a tar is always unpacked.
+    expect(archiveIsUnpacked("/dl/G.zip", "pkg")).toBe(true);
+    expect(archiveIsUnpacked("/dl/G.part1.rar", "pkg")).toBe(true);
+    expect(archiveIsUnpacked("/dl/G.tar.zst", "image")).toBe(true);
+    // An image or folder is made straight from the archive, unless a game image is inside
+    // or an update is merged in.
+    expect(archiveIsUnpacked("/dl/G.zip", "image")).toBe(false);
+    expect(archiveIsUnpacked("/dl/G.7z", "folder", { game: "folder" })).toBe(false);
+    expect(archiveIsUnpacked("/dl/G.zip", "image", { game: "image" })).toBe(true);
+    expect(archiveIsUnpacked("/dl/G.zip", "folder", { merge: true })).toBe(true);
+    // Not an archive, or not on this computer.
+    expect(archiveIsUnpacked("/dl/G.exfat", "pkg")).toBe(false);
+    expect(archiveIsUnpacked("remote://nas-1/dl/G.zip", "pkg")).toBe(false);
+    expect(archiveIsUnpacked("ps5://10.0.0.2/data/G.zip", "pkg")).toBe(false);
+  });
+});

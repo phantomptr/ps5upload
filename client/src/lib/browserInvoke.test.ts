@@ -372,6 +372,27 @@ describe("engine-backed commands the web UI depends on (#300)", () => {
     });
   });
 
+  it("asks for an archive to be deleted as it unpacks only when that was said", async () => {
+    const calls = captureFetch({ job_id: "x1" });
+    await browserInvoke("fpkg_extract", { source: "/dl/G.zip", outputDir: "/out", password: undefined });
+    expect(JSON.parse(calls[0].init.body as string)).toEqual({ source: "/dl/G.zip", output_dir: "/out" });
+    await browserInvoke("fpkg_extract", { source: "/dl/G.zip", outputDir: "/out", freeArchive: true });
+    expect(calls[1].url).toMatch(/\/api\/fpkg\/extract$/);
+    expect(JSON.parse(calls[1].init.body as string)).toEqual({
+      source: "/dl/G.zip",
+      output_dir: "/out",
+      free_archive: true,
+    });
+    await browserInvoke("fpkg_extract_free_check", { source: "/dl/G.zip", outputDir: "/out" });
+    expect(calls[2].url).toMatch(/\/api\/fpkg\/extract\/free-check$/);
+    expect(JSON.parse(calls[2].init.body as string)).toEqual({ source: "/dl/G.zip", output_dir: "/out" });
+    // A scratch unpack folder, and the kept folder of an unpack that deleted its archive.
+    await browserInvoke("fpkg_extract_cleanup", { path: "/out/.ps5upload-extract-1/G" });
+    expect(JSON.parse(calls[3].init.body as string)).toEqual({ path: "/out/.ps5upload-extract-1/G" });
+    await browserInvoke("fpkg_extract_cleanup", { path: "/out/G.unpacked/G", kept: true });
+    expect(JSON.parse(calls[4].init.body as string)).toEqual({ path: "/out/G.unpacked/G", kept: true });
+  });
+
   it("still refuses commands that write to a host path", async () => {
     // screenshot_save writes to the desktop's own screenshot folder; mapping
     // it would silently write onto the ENGINE's filesystem instead.

@@ -13,6 +13,7 @@ vi.mock("../../state/lang", () => ({
 import type { BackportInfo } from "../../api/fpkg";
 import {
   DeleteSourceOption,
+  FreeArchiveOption,
   RemoveBackportOption,
   backportRefusal,
   deleteSourceRefusal,
@@ -119,5 +120,28 @@ describe("Move the source to the Trash once the output is verified", () => {
       expect(html).toContain('aria-checked="false"');
       expect(html).not.toContain("delete-source-path");
     }
+  });
+});
+
+describe("Free the archive's space while it unpacks", () => {
+  it("is off until it is turned on, and marked as dangerous with what is lost", () => {
+    const html = renderToStaticMarkup(
+      <FreeArchiveOption source="/dl/Game.zip" outputDir="/out" kind="pkg" checked={false} onChange={() => {}} />,
+    );
+    expect(html).toContain("Free the archive&#x27;s space while it unpacks");
+    expect(html).toContain("free-archive-danger");
+    expect(html).toContain("Dangerous");
+    expect(html).toContain("can&#x27;t be brought back");
+    expect(html).toContain("you keep only what was unpacked so far");
+    expect(html).toContain('aria-checked="false"');
+    // Nothing says it will go until it was asked for and checked.
+    expect(html).not.toContain("free-archive-path");
+  });
+
+  it("shows as on for the archive the user said yes for", () => {
+    const html = renderToStaticMarkup(
+      <FreeArchiveOption source="/dl/Game.zip" outputDir="/out" kind="pkg" checked onChange={() => {}} />,
+    );
+    expect(html).toContain('aria-checked="true"');
   });
 });

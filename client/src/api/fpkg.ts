@@ -225,6 +225,24 @@ export interface WorkshopRun {
   started_at_ms: number;
 }
 
+/** How an archive gives its own space back while it unpacks (the engine's free-check). */
+export interface ArchiveFreeCheck {
+  /** `entries`: a .zip, freed file by file. `parts`: a multi-part .rar, part by part. `end`:
+   *  anything else, where nothing is freed until the unpack is finished and checked. */
+  mode: "entries" | "parts" | "end";
+  /** The one game in it: a game folder, or a game image or package. */
+  game: "folder" | "image";
+  /** How many files the archive is (one, unless it is a multi-part set). */
+  parts: number;
+  archive_bytes: number;
+  unpacked: number;
+  /** The archive is on the output folder's drive, so its space is room for the job. */
+  same_drive: boolean;
+  /** The free room the job needs in the output folder, and what is there (when known). */
+  needed: number;
+  free: number | null;
+}
+
 export const fpkg = {
   /** With `update`, the PS4 game `source` with that update merged in, or why they don't go
    *  together. */
@@ -254,11 +272,24 @@ export const fpkg = {
         : {}),
     }),
   /** Unpack a .zip / .7z / .rar into an unpack folder in `outputDir`, as a job; the job's
-   *  `dest` is the game found inside. A RAR's password goes with it, never stored. */
-  extract: (source: string, outputDir?: string, password?: string) =>
-    invoke<{ job_id: string }>("fpkg_extract", { source, outputDir, password }),
-  /** Remove the unpack folder a game path from `extract` lies in. */
-  cleanupExtract: (path: string) => invoke<{ ok: boolean }>("fpkg_extract_cleanup", { path }),
+   *  `dest` is the game found inside. A RAR's password goes with it, never stored. With
+   *  `freeArchive` the archive is DELETED as it unpacks, and the game is unpacked into a
+   *  folder that stays (`<archive>.unpacked`): only after `freeCheck` and the user's yes. */
+  extract: (source: string, outputDir?: string, password?: string, freeArchive?: boolean) =>
+    invoke<{ job_id: string }>("fpkg_extract", {
+      source,
+      outputDir,
+      password,
+      ...(freeArchive ? { freeArchive: true } : {}),
+    }),
+  /** Whether an archive can be unpacked with its own space given back, and how. Changes
+   *  nothing; rejects with the engine's plain reason when it can't be done. */
+  freeCheck: (source: string, outputDir?: string, password?: string) =>
+    invoke<ArchiveFreeCheck>("fpkg_extract_free_check", { source, outputDir, password }),
+  /** Remove the unpack folder a game path from `extract` lies in. `kept`: the folder an
+   *  unpack with `freeArchive` made, removed only once what was made from it is finished. */
+  cleanupExtract: (path: string, kept?: boolean) =>
+    invoke<{ ok: boolean }>("fpkg_extract_cleanup", { path, ...(kept ? { kept: true } : {}) }),
   /** Size and time at each compression level for a game: a separate request from the check,
    *  since sampling a large game on a slow drive takes a while. */
   estimate: (source: string, outputDir?: string) =>

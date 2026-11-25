@@ -490,6 +490,26 @@ export function RunCard(props: RunCardProps) {
               {label(p.stage)}: {p.message}
             </div>
           )}
+          {/* The archive was deleted on the way and nothing was made: where its game is. Said
+              for a stopped run too, which has lost the archive all the same. */}
+          {p.archiveGone && (
+            <div
+              className="rounded border border-[var(--color-warn)] px-3 py-2 text-sm text-[var(--color-warn)]"
+              data-testid="run-archive-gone"
+            >
+              {p.archiveGone.partly
+                ? tr(
+                    "fpkg.free.gone_partly",
+                    { path: p.archiveGone.kept },
+                    "The archive is partly deleted and can't be used again. Everything unpacked before it stopped is kept in {path}.",
+                  )
+                : tr(
+                    "fpkg.free.gone_whole",
+                    { path: p.archiveGone.kept },
+                    "The archive was deleted when it was unpacked. The unpacked game is kept in {path}: choose that folder under ① to make it again.",
+                  )}
+            </div>
+          )}
           {p.packagePath && (
             <div className="text-sm text-[var(--color-muted)]">
               {tr("fpkg.kept", { path: p.packagePath }, "The package was built and kept: {path}")}

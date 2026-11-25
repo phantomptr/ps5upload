@@ -928,10 +928,22 @@ export async function browserInvoke<T>(
         source: args["source"],
         output_dir: args["outputDir"],
         password: args["password"],
+        // Deletes the archive as it unpacks: only ever set by a confirmed choice.
+        ...(args["freeArchive"] === true ? { free_archive: true } : {}),
+      });
+    }
+    case "fpkg_extract_free_check": {
+      return postJson<T>("/api/fpkg/extract/free-check", {
+        source: args["source"],
+        output_dir: args["outputDir"],
+        password: args["password"],
       });
     }
     case "fpkg_extract_cleanup": {
-      return postJson<T>("/api/fpkg/extract/cleanup", { path: args["path"] });
+      return postJson<T>("/api/fpkg/extract/cleanup", {
+        path: args["path"],
+        ...(args["kept"] === true ? { kept: true } : {}),
+      });
     }
     case "workshop_jobs": {
       return getJson<T>("/api/workshop/jobs");
