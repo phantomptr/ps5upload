@@ -329,6 +329,8 @@ fs_busy_copying: "Copie",
 fs_busy_renaming: "Renommage",
 fs_busy_creating_folder: "Création du dossier",
 fs_select_all: "Tout sélectionner",
+fs_select_items: "Sélectionner",
+fs_selection_actions: "Actions pour les éléments sélectionnés",
 fs_rename: "Renommer",
 
 faq: "FAQ",

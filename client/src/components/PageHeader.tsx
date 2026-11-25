@@ -30,6 +30,7 @@ export function PageHeader({
   description,
   right,
   compact = false,
+  className = "",
 }: {
   /** A small accent glyph beside the title. Optional: the big title alone
    *  says where you are. */
@@ -41,9 +42,11 @@ export function PageHeader({
   right?: React.ReactNode;
   /** Less room under the header, for a dense working screen (the Workshop). */
   compact?: boolean;
+  /** More classes on the header (Files hides it in the phone layout, which has its own). */
+  className?: string;
 }) {
   return (
-    <header className={compact ? "mb-1" : "mb-7"}>
+    <header className={`${compact ? "mb-1" : "mb-7"} ${className}`}>
       {/* From `sm` the row wraps: the title and the actions share a line when
           both fit, and otherwise the actions drop under the title. The actions
           never shrink, so without the wrap a screen with several of them (the

@@ -334,6 +334,8 @@ fs_busy_copying: "কপি হচ্ছে",
 fs_busy_renaming: "নাম পরিবর্তন করা হচ্ছে",
 fs_busy_creating_folder: "ফোল্ডার তৈরি হচ্ছে",
 fs_select_all: "সব নির্বাচন করুন",
+fs_select_items: "নির্বাচন করুন",
+fs_selection_actions: "নির্বাচিত আইটেমগুলোর কাজ",
 fs_rename: "নাম পরিবর্তন",
 
 created_by: "তৈরি করেছেন",

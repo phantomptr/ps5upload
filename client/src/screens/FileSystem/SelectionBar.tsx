@@ -15,17 +15,19 @@ export function SelectionBar({
   clearLabel,
   onClear,
   children,
+  className = "",
 }: {
   countLabel: string;
   clearLabel: string;
   onClear: () => void;
   /** The action buttons (use SELECTION_ACTION for their class). */
   children: ReactNode;
+  className?: string;
 }) {
   return (
     <div
       data-testid="fs-selection-bar"
-      className="mb-3 flex items-center gap-2 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] p-2 text-xs max-sm:gap-1.5 max-sm:p-1.5"
+      className={`${className} mb-3 flex items-center gap-2 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] p-2 text-xs max-sm:gap-1.5 max-sm:p-1.5`}
     >
       <span className="shrink-0 whitespace-nowrap font-medium">{countLabel}</span>
       <div

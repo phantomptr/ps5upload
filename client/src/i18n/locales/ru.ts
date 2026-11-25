@@ -334,6 +334,8 @@ fs_busy_copying: "Копирование",
 fs_busy_renaming: "Переименование",
 fs_busy_creating_folder: "Создание папки",
 fs_select_all: "Выбрать всё",
+fs_select_items: "Выбрать",
+fs_selection_actions: "Действия с выбранными элементами",
 fs_rename: "Переименовать",
 
 created_by: "Автор",

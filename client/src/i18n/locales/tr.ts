@@ -334,6 +334,8 @@ fs_busy_copying: "Kopyalanıyor",
 fs_busy_renaming: "Yeniden adlandırılıyor",
 fs_busy_creating_folder: "Klasör oluşturuluyor",
 fs_select_all: "Tümünü seç",
+fs_select_items: "Seç",
+fs_selection_actions: "Seçili öğeler için işlemler",
 fs_rename: "Yeniden adlandır",
 
 created_by: "Oluşturan",

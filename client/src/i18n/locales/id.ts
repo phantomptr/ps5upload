@@ -334,6 +334,8 @@ fs_busy_copying: "Menyalin",
 fs_busy_renaming: "Mengganti nama",
 fs_busy_creating_folder: "Membuat folder",
 fs_select_all: "Pilih semua",
+fs_select_items: "Pilih",
+fs_selection_actions: "Tindakan untuk item yang dipilih",
 fs_rename: "Ganti nama",
 
 created_by: "Dibuat oleh",

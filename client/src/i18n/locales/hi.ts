@@ -334,6 +334,8 @@ fs_busy_copying: "कॉपी हो रहा है",
 fs_busy_renaming: "नाम बदला जा रहा है",
 fs_busy_creating_folder: "फ़ोल्डर बनाया जा रहा है",
 fs_select_all: "सभी का चयन करें",
+fs_select_items: "चुनें",
+fs_selection_actions: "चुने गए आइटम के लिए कार्य",
 fs_rename: "नाम बदलें",
 
 created_by: "पारां",

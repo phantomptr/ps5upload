@@ -335,6 +335,8 @@ fs_busy_copying: "Wird kopiert",
 fs_busy_renaming: "Wird umbenannt",
 fs_busy_creating_folder: "Ordner wird erstellt",
 fs_select_all: "Alle auswählen",
+fs_select_items: "Auswählen",
+fs_selection_actions: "Aktionen für die ausgewählten Elemente",
 fs_rename: "Umbenennen",
 
 created_by: "Erstellt von",

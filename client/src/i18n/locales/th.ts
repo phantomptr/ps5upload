@@ -334,6 +334,8 @@ fs_busy_copying: "กำลังคัดลอก",
 fs_busy_renaming: "กำลังเปลี่ยนชื่อ",
 fs_busy_creating_folder: "กำลังสร้างโฟลเดอร์",
 fs_select_all: "เลือกทั้งหมด",
+fs_select_items: "เลือก",
+fs_selection_actions: "การทำงานกับรายการที่เลือก",
 fs_rename: "เปลี่ยนชื่อ",
 
 created_by: "สร้างโดย",

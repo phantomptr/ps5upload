@@ -335,6 +335,8 @@ fs_busy_copying: "コピー中",
 fs_busy_renaming: "リネーム中",
 fs_busy_creating_folder: "フォルダ作成中",
 fs_select_all: "すべて選択",
+fs_select_items: "選択",
+fs_selection_actions: "選択した項目の操作",
 fs_rename: "名前変更",
 
 created_by: "作成者",

@@ -10,6 +10,7 @@ import { createPortal } from "react-dom";
 import {
   Archive,
   BadgeCheck,
+  Check,
   Download,
   Eye,
   EyeOff,
@@ -29,6 +30,7 @@ import {
 
 import { Spinner } from "../../components";
 import { menuKeyAction } from "../../lib/menuKeys";
+import { useBackDismiss } from "../../lib/systemBack";
 import { isInstallPackagePath } from "../../lib/pkgDropDedupe";
 import { isExtractableArchive } from "../../lib/archiveName";
 import type { Translator } from "../../state/lang";
@@ -63,6 +65,8 @@ export interface RowMenuItem {
   run: () => void;
   disabled?: boolean;
   destructive?: boolean;
+  /** The one in use among several (the drive you are on): marked, and read out as current. */
+  current?: boolean;
 }
 
 export function rowActionMenuItems(actions: RowAction[]): RowMenuItem[] {
@@ -407,11 +411,14 @@ export function RowActionsTrigger({
   label,
   open,
   onToggle,
+  hidden = false,
 }: {
   label: string;
   open: boolean;
   /** Called with the trigger's box, for the menu to sit against. */
   onToggle: (anchor: DOMRect) => void;
+  /** Selection mode on a phone: a tap selects the row, the bar at the bottom has the actions. */
+  hidden?: boolean;
 }) {
   return (
     <button
@@ -425,7 +432,7 @@ export function RowActionsTrigger({
       // tap that should close it would close it and the click reopen it.
       onMouseDown={(ev) => ev.stopPropagation()}
       onClick={(ev) => onToggle(ev.currentTarget.getBoundingClientRect())}
-      className="-me-1 shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] roomy:hidden"
+      className={`-me-1 shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] roomy:hidden ${hidden ? "hidden" : ""}`}
     >
       <MoreVertical size={16} />
     </button>
@@ -499,6 +506,8 @@ export function RowMenu({
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // System Back closes the menu and stays in the folder (#932): before, it left the Files tab.
+  useBackDismiss(true, onClose);
   const [pos, setPos] = useState<{ left: number; top: number; maxHeight?: number }>({ left: x, top: y });
   useLayoutEffect(() => {
     const el = ref.current;
@@ -625,14 +634,17 @@ export function RowMenuList({
       role="menuitem"
       tabIndex={-1}
       disabled={it.disabled}
+      aria-current={it.current ? "true" : undefined}
       onClick={() => onPick(it)}
       className={
         "flex w-full items-center gap-2 rounded-full px-3 py-1.5 text-start hover:bg-[var(--color-surface-3)] focus:bg-[var(--color-surface-3)] disabled:opacity-40 " +
-        (it.destructive ? "text-[var(--color-bad)]" : "")
+        (it.destructive ? "text-[var(--color-bad)] " : "") +
+        (it.current ? "font-medium text-[var(--color-accent-bright)]" : "")
       }
     >
       <it.icon size={14} className="shrink-0" />
       {it.label}
+      {it.current && <Check size={14} className="ms-auto shrink-0" aria-hidden />}
     </button>
   ));
 }

@@ -335,6 +335,8 @@ fs_busy_copying: "복사 중",
 fs_busy_renaming: "이름 변경 중",
 fs_busy_creating_folder: "폴더 생성 중",
 fs_select_all: "모두 선택",
+fs_select_items: "선택",
+fs_selection_actions: "선택한 항목에 대한 작업",
 fs_rename: "이름 변경",
 
 created_by: "제작자",

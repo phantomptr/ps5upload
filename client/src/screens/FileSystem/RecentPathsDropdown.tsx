@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { ChevronRight, Star, StarOff } from "lucide-react";
 
+import { useBackDismiss } from "../../lib/systemBack";
 import { useTr } from "../../state/lang";
 import { useRecentPathsStore } from "../../state/recentPaths";
 import { useFitOnScreen } from "../../components/useFitOnScreen";
@@ -152,6 +153,8 @@ export function RecentPathsDropdown({
   const remove = useRecentPathsStore((s) => s.remove);
   const clear = useRecentPathsStore((s) => s.clear);
   const [open, setOpen] = useState(false);
+  // System Back closes the list first.
+  useBackDismiss(open, () => setOpen(false));
 
   // Filter out the current path — no value in offering "go where you
   // already are." Keeps the list focused on actual destinations.

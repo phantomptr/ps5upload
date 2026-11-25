@@ -330,6 +330,8 @@ fs_busy_copying: "正在複製",
 fs_busy_renaming: "正在重新命名",
 fs_busy_creating_folder: "正在建立資料夾",
 fs_select_all: "全選",
+fs_select_items: "選擇",
+fs_selection_actions: "所選項目的操作",
 fs_rename: "重新命名",
 
 faq: "常見問題",

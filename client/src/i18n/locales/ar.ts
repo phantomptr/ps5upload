@@ -329,6 +329,8 @@ fs_busy_copying: "جارٍ النسخ",
 fs_busy_renaming: "جارٍ إعادة التسمية",
 fs_busy_creating_folder: "جارٍ إنشاء المجلد",
 fs_select_all: "تحديد الكل",
+fs_select_items: "تحديد",
+fs_selection_actions: "إجراءات العناصر المحددة",
 fs_rename: "إعادة تسمية",
 
 faq: "الأسئلة الشائعة",

@@ -334,6 +334,8 @@ fs_busy_copying: "Copiando",
 fs_busy_renaming: "Renomeando",
 fs_busy_creating_folder: "Criando pasta",
 fs_select_all: "Selecionar tudo",
+fs_select_items: "Selecionar",
+fs_selection_actions: "Ações para os itens selecionados",
 fs_rename: "Renomear",
 
 created_by: "Criada por",

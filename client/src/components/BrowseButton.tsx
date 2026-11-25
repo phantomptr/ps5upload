@@ -8,6 +8,7 @@ import { ChevronDown, FolderOpen, HardDrive, Plus, Server } from "lucide-react";
 import type { Connection } from "../api/remote";
 import { pickPath, pickPaths, type PickPathOptions } from "../lib/pickPath";
 import { isMobile } from "../lib/platform";
+import { useBackDismiss } from "../lib/systemBack";
 import { displayPath, isRemotePath } from "../lib/remotePath";
 import { useConnectionsStore, type ConnStatus } from "../state/connections";
 import { getEngineUrl } from "../state/engine";
@@ -192,6 +193,8 @@ export function BrowseButton(props: BrowseButtonProps) {
     if (open && !loaded) void load().catch(() => {});
   }, [open, loaded, load]);
 
+  // System Back closes the list first.
+  useBackDismiss(open, () => setOpen(false));
   // Close on a click outside or Escape.
   useEffect(() => {
     if (!open) return;

@@ -335,6 +335,8 @@ fs_busy_copying: "Đang sao chép",
 fs_busy_renaming: "Đang đổi tên",
 fs_busy_creating_folder: "Đang tạo thư mục",
 fs_select_all: "Chọn tất cả",
+fs_select_items: "Chọn",
+fs_selection_actions: "Thao tác cho các mục đã chọn",
 fs_rename: "Đổi tên",
 
 created_by: "Được tạo bởi",
