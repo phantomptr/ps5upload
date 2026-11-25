@@ -377,6 +377,50 @@ pub struct AppInfoRows {
     pub error: Option<String>,
 }
 
+/// The appinfo.db keys a title's installed version is read from (see
+/// [`AppInfoRows::installed_version`]). Any helper answers them: the query takes any key list.
+pub const APPINFO_VERSION_KEYS: &str = "CONTENT_VERSION,VERSION,APP_VER";
+
+/// The keys a PS4-form (`01.32`) version is read from (see [`AppInfoRows::app_version`]).
+pub const APPINFO_APP_VERSION_KEYS: &str = "VERSION,APP_VER";
+
+impl AppInfoRows {
+    /// A key's value, trimmed; `None` when absent or blank.
+    pub fn value(&self, key: &str) -> Option<&str> {
+        self.rows
+            .iter()
+            .find(|r| r.key == key)
+            .map(|r| r.val.trim())
+            .filter(|v| !v.is_empty())
+    }
+
+    /// A PS4 title's version: the higher of `VERSION` and `APP_VER`. An installed update raises
+    /// `VERSION` (`01.32`) while `APP_VER` stays at the base game's `01.00` (#934); the higher
+    /// of the two also keeps a title whose `APP_VER` is the one that moved. `None` when neither
+    /// is there.
+    pub fn app_version(&self) -> Option<String> {
+        use crate::patch_verify::parse_app_ver;
+        match (self.value("VERSION"), self.value("APP_VER")) {
+            (Some(v), Some(a)) => match (parse_app_ver(v), parse_app_ver(a)) {
+                (Some(x), Some(y)) if y > x => Some(a),
+                (None, Some(_)) => Some(a),
+                _ => Some(v),
+            },
+            (v, a) => v.or(a),
+        }
+        .map(str::to_string)
+    }
+
+    /// A title's installed version: `CONTENT_VERSION` (a PS5 title's, `01.000.016`), else
+    /// [`Self::app_version`] (a PS4 title's, `01.32`). The helper's own readers pick the same way
+    /// (payload/include/appinfo_version.h). `None` when the rows say none.
+    pub fn installed_version(&self) -> Option<String> {
+        self.value("CONTENT_VERSION")
+            .map(str::to_string)
+            .or_else(|| self.app_version())
+    }
+}
+
 /// Read per-title metadata out of appinfo.db, the database behind
 /// Settings → Storage.
 ///
@@ -758,6 +802,74 @@ mod tests {
         assert!(rows.ok);
         assert_eq!(rows.rows[0].key, "CONTENT_VERSION");
         assert_eq!(rows.rows[0].val, "01.00");
+    }
+
+    fn rows(pairs: &[(&str, &str)]) -> AppInfoRows {
+        AppInfoRows {
+            ok: true,
+            title_id: String::new(),
+            rows: pairs
+                .iter()
+                .map(|(k, v)| AppInfoRow {
+                    key: k.to_string(),
+                    val: v.to_string(),
+                })
+                .collect(),
+            source: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn an_updated_ps4_game_reads_its_version_from_version() {
+        // #934, the reporter's replies: RDR2 and ELDEN RING keep APP_VER at the base's 01.00.
+        let rdr2: AppInfoRows = serde_json::from_str(
+            r#"{"ok":true,"title_id":"CUSA03041","rows":[{"key":"APP_VER","val":"01.00"},
+                 {"key":"VERSION","val":"01.32"}],"source":"sqlite","error":null}"#,
+        )
+        .unwrap();
+        assert_eq!(rdr2.installed_version().as_deref(), Some("01.32"));
+        assert_eq!(rdr2.app_version().as_deref(), Some("01.32"));
+        let elden = rows(&[("APP_VER", "01.00"), ("VERSION", "01.26")]);
+        assert_eq!(elden.installed_version().as_deref(), Some("01.26"));
+    }
+
+    #[test]
+    fn installed_version_prefers_content_version_then_the_higher_ps4_one() {
+        // A PS5 title.
+        let ps5 = rows(&[("CONTENT_VERSION", "01.500.000")]);
+        assert_eq!(ps5.installed_version().as_deref(), Some("01.500.000"));
+        assert_eq!(ps5.app_version(), None);
+        let both = rows(&[("APP_VER", "01.00"), ("CONTENT_VERSION", "01.000.016")]);
+        assert_eq!(both.installed_version().as_deref(), Some("01.000.016"));
+        // APP_VER the one that moved: still the higher.
+        let app_moved = rows(&[("VERSION", "01.00"), ("APP_VER", "01.09")]);
+        assert_eq!(app_moved.installed_version().as_deref(), Some("01.09"));
+        // Only one of the two, blanks and junk.
+        assert_eq!(
+            rows(&[("APP_VER", " 01.05 ")])
+                .installed_version()
+                .as_deref(),
+            Some("01.05")
+        );
+        assert_eq!(
+            rows(&[("VERSION", "01.26")]).installed_version().as_deref(),
+            Some("01.26")
+        );
+        assert_eq!(
+            rows(&[("VERSION", "  "), ("APP_VER", "01.00")])
+                .installed_version()
+                .as_deref(),
+            Some("01.00")
+        );
+        assert_eq!(
+            rows(&[("VERSION", "x"), ("APP_VER", "01.00")])
+                .app_version()
+                .as_deref(),
+            Some("01.00")
+        );
+        assert_eq!(rows(&[]).installed_version(), None);
+        assert_eq!(rows(&[("CONTENT_ID", "X")]).installed_version(), None);
     }
 }
 
