@@ -156,7 +156,24 @@ pub struct AgentMcpStatus {
 }
 
 fn expected_url() -> String {
-    format!("{}/mcp", engine::url().trim_end_matches('/'))
+    let base = engine::url();
+    mcp_url(&base).unwrap_or_else(|_| format!("{}/mcp", base.trim_end_matches('/')))
+}
+
+/// The address an agent saves: the engine's `/mcp` as a plain http(s) URL, or `bad_engine_url`.
+/// Settings → Engine URL takes any text, and the agent's CLI gets this as an argument: one that
+/// starts with `-` reads as an option, and spaces or line breaks would go into its config as
+/// more than an address. Parsed and written out again, it is one URL and nothing else.
+fn mcp_url(base: &str) -> Result<String, String> {
+    let bad = || "bad_engine_url".to_string();
+    let mut url = reqwest::Url::parse(base.trim()).map_err(|_| bad())?;
+    let host_ok = url.host_str().is_some_and(|h| !h.is_empty());
+    if !matches!(url.scheme(), "http" | "https") || !host_ok {
+        return Err(bad());
+    }
+    let path = format!("{}/mcp", url.path().trim_end_matches('/'));
+    url.set_path(&path);
+    Ok(url.to_string())
 }
 
 /// `PATH` for finding and running these CLIs: an npm-installed one starts `node` by name, so what
@@ -447,22 +464,35 @@ pub async fn agent_mcp_status() -> Result<Vec<AgentMcpStatus>, String> {
 pub async fn agent_mcp_add(agent: String) -> Result<AgentMcpStatus, String> {
     not_on_phones()?;
     let agent = agent_from(&agent)?;
+    let url = mcp_url(&engine::url())?;
     tauri::async_runtime::spawn_blocking(move || {
         let path = search_path();
-        let before = status_of(agent, &path);
-        if !before.found {
-            return Err("cli_not_found".to_string());
-        }
-        if agent.add_refuses_existing() && before.configured {
-            if let Some(args) = agent.remove_args() {
-                change(agent, &args, &path)?;
-            }
-        }
-        change(agent, &agent.add_args(&expected_url()), &path)?;
+        add_with(agent, &url, &path)?;
         Ok(status_of(agent, &path))
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Saves `url` as the agent's `ps5upload` entry. An agent that refuses a name it has (Claude
+/// Code) has its entry removed first; when the add then fails, the entry it had is put back, so
+/// a failed move never leaves the agent without one.
+fn add_with(agent: Agent, url: &str, path: &OsString) -> Result<(), String> {
+    let before = status_of(agent, path);
+    if !before.found {
+        return Err("cli_not_found".to_string());
+    }
+    let replacing = agent.add_refuses_existing() && before.configured;
+    if replacing {
+        if let Some(args) = agent.remove_args() {
+            change(agent, &args, path)?;
+        }
+    }
+    change(agent, &agent.add_args(url), path).inspect_err(|_| {
+        if let (true, Some(old)) = (replacing, before.saved_url.as_deref()) {
+            let _ = change(agent, &agent.add_args(old), path);
+        }
+    })
 }
 
 /// Takes this engine out of an agent. Answers with where it stands after.
@@ -512,6 +542,32 @@ mod tests {
         assert_eq!(Agent::from_id("claude-code"), Some(Agent::ClaudeCode));
         assert_eq!(Agent::from_id("sh"), None);
         assert_eq!(Agent::from_id(""), None);
+    }
+
+    /// The engine address goes to the agent's CLI as an argument and into its config: only a
+    /// plain http(s) URL does, written out again so nothing else rides along.
+    #[test]
+    fn only_a_web_address_is_handed_to_an_agent() {
+        assert_eq!(mcp_url("http://127.0.0.1:19113").unwrap(), URL);
+        assert_eq!(mcp_url(" http://127.0.0.1:19113/ ").unwrap(), URL);
+        assert_eq!(
+            mcp_url("https://nas.lan/ps5upload").unwrap(),
+            "https://nas.lan/ps5upload/mcp"
+        );
+        // Spaces and line breaks are encoded or dropped, never passed on as they are.
+        let odd = mcp_url("http://h/a b\n--scope project").unwrap();
+        assert!(!odd.contains([' ', '\n']), "{odd}");
+        for bad in [
+            "",
+            "-e http://h",
+            "--transport stdio",
+            "file:///etc/passwd",
+            "ftp://h/",
+            "h:19113",
+            "http://",
+        ] {
+            assert_eq!(mcp_url(bad), Err("bad_engine_url".to_string()), "{bad:?}");
+        }
     }
 
     #[test]
@@ -657,6 +713,48 @@ mod tests {
             let answer = run_written(&program, &dir, Duration::from_millis(200));
             assert_eq!(answer.unwrap_err(), "timed_out");
             assert!(started.elapsed() < Duration::from_secs(10));
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// Claude Code refuses a name it has, so its entry is removed before the new one is
+        /// added. When that add failed, the agent was left with no entry at all; the old one is
+        /// now put back.
+        #[test]
+        fn a_failed_move_puts_the_old_entry_back() {
+            let dir = scratch("move");
+            let d = dir.display();
+            // Shell builtins only: `run` gives the program this folder alone as its PATH.
+            let body = format!(
+                r#"case "$1 $2" in
+  "mcp get")
+    if [ -f "{d}/added" ]; then IFS= read -r u < "{d}/added"; echo "  URL: $u"; exit 0; fi
+    if [ -f "{d}/gone" ]; then exit 1; fi
+    echo "  URL: http://old.lan:1/mcp"; exit 0 ;;
+  "mcp remove") : > "{d}/gone"; exit 0 ;;
+  "mcp add")
+    if [ "$8" = "http://old.lan:1/mcp" ]; then echo "$8" > "{d}/added"; exit 0; fi
+    echo "cannot reach the new address" >&2; exit 1 ;;
+esac
+exit 2"#
+            );
+            script(&dir, "claude", &body);
+            let path = std::env::join_paths([&dir]).unwrap();
+            let mut tries = 0;
+            let e = loop {
+                match add_with(Agent::ClaudeCode, "http://new.lan:2/mcp", &path) {
+                    Err(e) if e.contains("Text file busy") && tries < 50 => {
+                        tries += 1;
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    other => break other.unwrap_err(),
+                }
+            };
+            assert_eq!(e, "cannot reach the new address");
+            let saved = std::fs::read_to_string(dir.join("added")).unwrap();
+            assert_eq!(saved.trim(), "http://old.lan:1/mcp");
+            let now = status_of(Agent::ClaudeCode, &path);
+            assert!(now.configured);
+            assert_eq!(now.saved_url.as_deref(), Some("http://old.lan:1/mcp"));
             let _ = std::fs::remove_dir_all(&dir);
         }
 
