@@ -18,7 +18,41 @@ use ps5upload_core::save_archive::{
     backup_finalize, cleanup_temp_dir, make_temp_dir, zip_folder_noted,
 };
 use serde::Deserialize;
-use std::path::Path;
+use std::path::{Component, Path};
+
+/// `src_dir` as a scratch dir `save_archive_make_temp` made: under the system temp root, named
+/// `ps5upload-save-…`, with no `.`/`..` in it (`Path::starts_with` compares components as
+/// written, so `<tmp>/../../home/ps5upload-save-x` would otherwise count as under the temp root).
+fn scratch_dir(src_dir: &str) -> Result<&Path, String> {
+    let p = Path::new(src_dir);
+    let tmp = std::env::temp_dir();
+    let ours = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with("ps5upload-save-"));
+    let dots = p
+        .components()
+        .any(|c| matches!(c, Component::ParentDir | Component::CurDir));
+    if !ours || dots || !p.starts_with(&tmp) || p == tmp.as_path() {
+        return Err(format!("not one of our scratch dirs: {}", p.display()));
+    }
+    Ok(p)
+}
+
+/// `name` as one folder under a scratch dir. A title ID comes from the console's saves list, so
+/// `..`, an absolute path or a name with a separator would point finalize (which deletes every
+/// subfolder but `sce_sys`) at some other folder of this computer.
+fn one_folder(name: &str) -> Result<&str, String> {
+    let mut parts = Path::new(name).components();
+    let single = matches!(
+        (parts.next(), parts.next()),
+        (Some(Component::Normal(_)), None)
+    );
+    if !single || name.contains(['/', '\\']) {
+        return Err(format!("not a save folder name: {name:?}"));
+    }
+    Ok(name)
+}
 
 #[tauri::command]
 pub async fn save_archive_make_temp(prefix: String) -> Result<String, String> {
@@ -32,6 +66,9 @@ pub async fn save_archive_make_temp(prefix: String) -> Result<String, String> {
 
 #[tauri::command]
 pub async fn save_archive_cleanup_temp(path: String) -> Result<(), String> {
+    if !path.is_empty() {
+        scratch_dir(&path)?;
+    }
     // remove_dir_all walks every entry under the scratch dir: off the UI thread.
     tokio::task::spawn_blocking(move || cleanup_temp_dir(&path))
         .await
@@ -108,12 +145,45 @@ pub struct SaveArchiveBackupFinalizeReq {
 pub async fn save_archive_backup_finalize(
     req: SaveArchiveBackupFinalizeReq,
 ) -> Result<SaveArchiveBackupFinalizeResp, String> {
-    tokio::task::spawn_blocking(move || {
-        backup_finalize(&Path::new(&req.src_dir).join(&req.title_id))
-    })
-    .await
-    .map_err(|e| format!("backup finalize task: {e}"))?
-    .map_err(|e| format!("backup finalize: {e:#}"))
+    let title_dir = scratch_dir(&req.src_dir)?.join(one_folder(&req.title_id)?);
+    tokio::task::spawn_blocking(move || backup_finalize(&title_dir))
+        .await
+        .map_err(|e| format!("backup finalize task: {e}"))?
+        .map_err(|e| format!("backup finalize: {e:#}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finalize_takes_only_one_plain_folder_name() {
+        assert_eq!(one_folder("CUSA12345"), Ok("CUSA12345"));
+        for bad in [
+            "",
+            ".",
+            "..",
+            "/Users/me",
+            "a/b",
+            "a\\b",
+            "C:\\Users\\me",
+            "../x",
+        ] {
+            assert!(one_folder(bad).is_err(), "{bad:?} passed");
+        }
+    }
+
+    #[test]
+    fn only_our_scratch_dirs_are_worked_on() {
+        let tmp = std::env::temp_dir();
+        let ours = tmp.join("ps5upload-save-CUSA12345-1-2-3");
+        assert!(scratch_dir(ours.to_str().unwrap()).is_ok());
+        let up = tmp.join("..").join("..").join("ps5upload-save-x");
+        assert!(scratch_dir(up.to_str().unwrap()).is_err());
+        assert!(scratch_dir(tmp.to_str().unwrap()).is_err());
+        assert!(scratch_dir(tmp.join("other").to_str().unwrap()).is_err());
+        assert!(scratch_dir("/ps5upload-save-x").is_err());
+    }
 }
 
 // ─── Automatic save backups ────────────────────────────────────────────────
