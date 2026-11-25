@@ -9315,6 +9315,10 @@ async fn profile_username_handler(Json(req): Json<ProfileUsernameReq>) -> impl I
     };
     let slot = req.slot;
     let name = req.name;
+    // A name the console cannot hold is the request's fault (400), not the console's (502).
+    if let Err(why) = ps5upload_core::profile::check_user_name(&name) {
+        return json_err(StatusCode::BAD_REQUEST, why).into_response();
+    }
     crate::log_info!("profile_set_username: addr={addr} slot={slot}");
     let r = tokio::task::spawn_blocking(move || {
         ps5upload_core::profile::profile_set_username(&addr, slot, &name)
@@ -9336,6 +9340,10 @@ async fn profile_local_username_handler(
     };
     let uid = req.uid;
     let name = req.name;
+    // A name the console cannot hold is the request's fault (400), not the console's (502).
+    if let Err(why) = ps5upload_core::profile::check_user_name(&name) {
+        return json_err(StatusCode::BAD_REQUEST, why).into_response();
+    }
     crate::log_info!("profile_set_local_username: addr={addr} uid={uid}");
     let r = tokio::task::spawn_blocking(move || {
         ps5upload_core::profile::profile_set_local_username(&addr, uid, &name)

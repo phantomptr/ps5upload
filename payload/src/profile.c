@@ -39,14 +39,26 @@ int profile_slot_get_name(int slot, char out[PROFILE_NAME_MAX],
 
 /* sceRegMgrSetStr is told the FIELD's size and reads that many bytes from the buffer it is given,
  * whatever the string's length. So the value goes in a zero-filled buffer of exactly that size:
- * passing the caller's string made it read 17 bytes from the 3-byte literal "np" (and 32 from any
- * shorter name) — past the end of the string, into whatever lies after it. Same size to Sony as
- * before; only what is behind the pointer changed. */
+ * passing the caller's string made it read 17 bytes from the 3-byte literal "np" — past the end of
+ * the string, into whatever lies after it.
+ *
+ * The size is the one the entity is registered with, PROFILE_NAME_FIELD (17). This passed
+ * PROFILE_NAME_MAX (32), the size of the buffer names are read into, and the console answered
+ * every rename with 0x800D0208, SCE_REGMGR_ERROR_PRM_SIZE (#940). A name that does not fit is
+ * refused, not cut: a cut could end in the middle of a UTF-8 letter. */
 int profile_slot_set_name(int slot, const char *name, uint32_t *out_err_code) {
-    char field[PROFILE_NAME_MAX] = {0};
-    if (!name) return -1;
-    snprintf(field, sizeof(field), "%s", name);
-    return sys_registry_set_str(KEY_NAME(slot), field, PROFILE_NAME_MAX,
+    char field[PROFILE_NAME_FIELD] = {0};
+    if (!name || !name[0]) {
+        if (out_err_code) *out_err_code = SYS_REGISTRY_ERR_NULL_ARG;
+        return -1;
+    }
+    size_t n = strlen(name);
+    if (n > PROFILE_NAME_BYTES_MAX) {
+        if (out_err_code) *out_err_code = SYS_REGISTRY_ERR_VALUE_TOO_LONG;
+        return -1;
+    }
+    memcpy(field, name, n);
+    return sys_registry_set_str(KEY_NAME(slot), field, PROFILE_NAME_FIELD,
                                 out_err_code);
 }
 
@@ -143,7 +155,7 @@ static void uss_resolve_impl(void) {
 }
 
 int profile_set_local_username(uint32_t uid, const char *name) {
-    if (!name) return -1;
+    if (!name || !name[0] || strlen(name) > PROFILE_NAME_BYTES_MAX) return -1;
     pthread_once(&g_uss_once, uss_resolve_impl);
     if (!g_uss_set_name) return -1;
     return g_uss_set_name((int32_t)uid, name) == 0 ? 0 : -1;
@@ -154,7 +166,7 @@ int profile_user_name(uint32_t uid, char *name_out, size_t name_out_size) {
     if (!name_out || name_out_size == 0) return -1;
     pthread_once(&g_uss_once, uss_resolve_impl);
     if (!g_uss_get_name) return -1;
-    char tmp[17] = {0};
+    char tmp[PROFILE_NAME_FIELD] = {0};
     if (g_uss_get_name((int32_t)uid, tmp, sizeof(tmp)) != 0) return -1;
     size_t n = strlen(tmp);
     if (n >= name_out_size) n = name_out_size - 1;

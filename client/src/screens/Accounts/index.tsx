@@ -51,6 +51,7 @@ import {
   type ProfileSlot,
   type SquareMode,
 } from "../../api/ps5";
+import { USER_NAME_MAX_BYTES, userNameTooLong } from "../../lib/userName";
 
 /** Display label for a console user (name, or a hex-uid placeholder). */
 function userLabel(uidHex: string, username: string): string {
@@ -612,9 +613,20 @@ function UserRow({
 
   async function save() {
     if (!dirty) return;
+    setSavedOk(false);
+    // The console keeps 16 bytes of name: said here, in the user's language, before anything is sent.
+    if (userNameTooLong(draft.trim())) {
+      setError(
+        tr(
+          "profile.username.tooLong",
+          undefined,
+          "This name is too long for the PS5. Make it shorter: letters with accents and non-Latin letters take more room.",
+        ),
+      );
+      return;
+    }
     setSaving(true);
     setError(null);
-    setSavedOk(false);
     let renamed = false;
     try {
       await profileRenameUser(uid, draft.trim(), addr);
@@ -705,7 +717,7 @@ function UserRow({
         <input
           className="min-w-0 flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-sm"
           value={draft}
-          maxLength={16}
+          maxLength={USER_NAME_MAX_BYTES}
           placeholder={tr("profile.username.placeholder", "User name")}
           onChange={(e) => {
             setDraft(e.target.value);
@@ -1050,6 +1062,17 @@ function SlotRow({
 
   async function save() {
     if (!dirty) return;
+    // The console keeps 16 bytes of name: said here, in the user's language, before anything is sent.
+    if (userNameTooLong(draft.trim())) {
+      setError(
+        tr(
+          "profile.username.tooLong",
+          undefined,
+          "This name is too long for the PS5. Make it shorter: letters with accents and non-Latin letters take more room.",
+        ),
+      );
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -1073,7 +1096,7 @@ function SlotRow({
           className="min-w-0 flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-sm"
           value={draft}
           aria-label={tr("profile.username.slot_label", { n: slot }, "User name in slot {n}")}
-          maxLength={31}
+          maxLength={USER_NAME_MAX_BYTES}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") void save();

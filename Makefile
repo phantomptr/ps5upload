@@ -1267,6 +1267,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/profile_np_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-profile-np-selftest
 	@echo "✓ a sign-in backup restores byte for byte, stays the first one, and a damaged one writes nothing wrong"
+	@echo "Running account name self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-profile-name-selftest \
+		$(PAYLOAD_DIR)/tests/profile_name_selftest.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-profile-name-selftest
+	@echo "✓ a rename passes the registry field's own size, and a name too long is refused, not cut"
 	@echo "Running notification store self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-notif-selftest \

@@ -10013,9 +10013,11 @@ static int handle_profile_info(void) {
 
 static int handle_profile_set_username(const char *body) {
     int slot = (int)extract_json_uint64_field(body, "slot");
-    char name[PROFILE_NAME_MAX] = {0};
+    /* Room for more than a name may hold, so one that is too long is seen as too long and refused
+     * (profile_slot_set_name), not cut down to the buffer and written. */
+    char name[64] = {0};
     extract_json_string_field(body, "name", name, sizeof(name));
-    uint32_t err = 0;
+    uint32_t err = SYS_REGISTRY_ERR_NULL_ARG; /* a bad slot or no name: nothing was asked of Sony */
     int rc = -1;
     if (slot >= 1 && slot <= PROFILE_SLOT_COUNT && name[0]) {
         pthread_mutex_lock(&sony_api_lock);
@@ -10023,12 +10025,14 @@ static int handle_profile_set_username(const char *body) {
         usleep(SONY_API_POST_SLEEP_US);
         pthread_mutex_unlock(&sony_api_lock);
     }
-    char nesc[PROFILE_NAME_MAX * 2 + 2];
+    /* A refused name may have been cut by the buffer in the middle of a letter: not echoed. */
+    if (strlen(name) > PROFILE_NAME_BYTES_MAX) name[0] = '\0';
+    char nesc[sizeof(name) * 2 + 2];
     json_escape_into(name, nesc, sizeof(nesc));
-    char resp[256];
+    char resp[320];
     int len = snprintf(resp, sizeof(resp),
         "{\"ok\":%s,\"slot\":%d,\"name\":\"%s\",\"err_code\":%u}",
-        rc == 0 ? "true" : "false", slot, nesc, err);
+        rc == 0 ? "true" : "false", slot, nesc, rc == 0 ? 0u : err);
     return mgmt_reply(MGMT_FRAME_PROFILE_SET_USERNAME_ACK, resp, (uint64_t)len);
 }
 
