@@ -115,7 +115,7 @@ export function MakeCard({
       <div className="flex flex-col gap-2 text-sm">
         <div className="font-medium">{tr("fpkg.card.make", undefined, "② What to make")}</div>
         {forNext && <NextGameNote />}
-        <div className="grid grid-cols-3 gap-1.5 sm:gap-2" role="radiogroup" data-testid="make-choice">
+        <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3 sm:gap-2" role="radiogroup" data-testid="make-choice">
           {tiles.map((t) => {
             const on = make === t.id;
             const Icon = t.icon;

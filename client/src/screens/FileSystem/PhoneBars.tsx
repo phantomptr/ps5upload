@@ -202,7 +202,7 @@ export function PhoneSelectionActions({
           }
         >
           <a.icon size={20} aria-hidden />
-          <span className="max-w-full truncate px-0.5">{a.label}</span>
+          <span className="line-clamp-2 max-w-full px-0.5 text-center leading-[1.1] tracking-tight break-words hyphens-auto">{a.label}</span>
         </button>
       ))}
     </div>
