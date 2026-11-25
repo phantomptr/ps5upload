@@ -1046,14 +1046,37 @@ impl Corpus {
     fn store_build(&mut self, name: &str, sha: &str, data: &[u8], set_id: &str) -> Result<()> {
         let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
         let ext = name.rsplit_once('.').map(|(_, e)| e).unwrap_or("sprx");
-        let rel = format!("builds/{stem}/{}.{ext}", &sha[..8]);
+        let builds = self
+            .manifest
+            .libraries
+            .iter()
+            .find(|e| e.name == name)
+            .map_or(&[][..], |e| e.builds.as_slice());
+        let rel = match builds.iter().find(|b| b.sha256 == sha) {
+            // A build the corpus already lists stays where it is.
+            Some(b) => b.path.clone(),
+            None => {
+                let short = format!("builds/{stem}/{}.{ext}", sha.get(..8).unwrap_or(sha));
+                // Another build of this library under the same eight characters keeps its
+                // file: this one goes under its whole digest.
+                if builds.iter().any(|b| b.path == short) {
+                    format!("builds/{stem}/{sha}.{ext}")
+                } else {
+                    short
+                }
+            }
+        };
         let abs = self.root.join(&rel);
-        if !abs.exists() {
+        // "It exists" is not "it is this build": a write that a full disk or a crash cut short
+        // left a short file under the name, and every later scan then listed the build whole
+        // (size and digest from the incoming bytes) over that short file. What is on disk is
+        // compared, and written through a temporary name when it is not the build.
+        if !std::fs::read(&abs).is_ok_and(|have| have == data) {
             if let Some(dir) = abs.parent() {
                 std::fs::create_dir_all(dir)
                     .with_context(|| format!("creating {}", dir.display()))?;
             }
-            std::fs::write(&abs, data).with_context(|| format!("writing {}", abs.display()))?;
+            write_whole(&abs, data).with_context(|| format!("writing {}", abs.display()))?;
         }
         let entry = match self.manifest.libraries.iter_mut().find(|e| e.name == name) {
             Some(e) => e,
@@ -1617,6 +1640,47 @@ mod tests {
             reopened.manifest().libraries[0].builds[0].sdk,
             Some([0x0904_0001, 0x0400_0031])
         );
+    }
+
+    /// A library file a full disk or a crash cut short stays under its name. The next scan of
+    /// the same library found a file there and wrote nothing, listing the build whole over the
+    /// short file. What is on disk is now compared, and written again when it is not the build.
+    #[test]
+    fn a_build_cut_short_on_disk_is_written_again() {
+        let dir = tempdir();
+        let whole = self_with((0x0904_0001, 0x0400_0031), 0xAA, 0x11);
+        let origin = || Origin::Import {
+            source: "pack.zip".into(),
+            at: "2026-09-09T00:00:00Z".into(),
+        };
+        // Where the build goes, learned from a corpus elsewhere.
+        let elsewhere = tempdir();
+        let mut c = Corpus::open(&elsewhere);
+        c.add_set(
+            "first",
+            origin(),
+            vec![incoming("libSceAgc.sprx", whole.clone())],
+        )
+        .unwrap();
+        let rel = c.manifest().libraries[0].builds[0].path.clone();
+        assert!(std::fs::read(elsewhere.join(&rel)).unwrap() == whole);
+        // Here the file is cut short and no manifest lists it: what a write that failed
+        // half way leaves (the manifest is only written once every library is stored).
+        let path = dir.join(&rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &whole[..whole.len() / 2]).unwrap();
+        let mut c = Corpus::open(&dir);
+        c.add_set(
+            "again",
+            origin(),
+            vec![incoming("libSceAgc.sprx", whole.clone())],
+        )
+        .unwrap();
+        assert!(
+            std::fs::read(&path).unwrap() == whole,
+            "the short file was left as the build"
+        );
+        assert_eq!(c.manifest().libraries[0].builds.len(), 1);
     }
 
     /// A directory unique to this call. An earlier version keyed on pid plus
