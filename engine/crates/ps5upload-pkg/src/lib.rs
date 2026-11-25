@@ -794,7 +794,15 @@ pub fn parse_pkg_from<R: Read + Seek>(
             meta.category =
                 kind::category_from_header(meta.content_type, content_flags).to_string();
         }
-        meta.package_type = Some(if is_patch { "PS5DP" } else { "PS5GD" }.to_string());
+        // An add-on is `PS5AC`, as the same bytes read through ranges give it
+        // (`package_type_for_category_and_platform`): `PS5GD` here made the type depend on
+        // where the package was read from.
+        let package_type = match meta.category.as_str() {
+            _ if is_patch => "PS5DP",
+            "ac" => "PS5AC",
+            _ => "PS5GD",
+        };
+        meta.package_type = Some(package_type.to_string());
     } else {
         meta.package_type = derive_package_type(&meta.category);
         meta.platform = derive_platform(magic, &meta.content_id, &meta.title_id);
@@ -1923,6 +1931,40 @@ mod tests {
         assert_eq!((m.content_type, m.content_flags), (0x21, 0x0a02_0000));
         assert_eq!(m.title_id, "PPSA01234");
         assert_eq!(fih(0x20).category, "gd");
+    }
+
+    /// The same add-on read as a file on this computer is an add-on by its package type too
+    /// (it said `PS5GD`, a game, while the ranged read above said add-on).
+    #[test]
+    fn a_local_fih_add_on_has_the_add_on_package_type() {
+        let local = |content_type: u32, flags: u32| {
+            let cnt_base = 0x10000usize;
+            let mut cnt = build_pkg_multi(
+                "UP0000-PPSA01234_00-DELUXEUPGRADE000",
+                &[("TITLE", "Deluxe Upgrade")],
+            );
+            cnt[0x74..0x78].copy_from_slice(&content_type.to_be_bytes());
+            cnt[0x78..0x7c].copy_from_slice(&flags.to_be_bytes());
+            let mut pkg = vec![0u8; cnt_base];
+            pkg[0..4].copy_from_slice(&PKG_MAGIC_FIH.to_be_bytes());
+            pkg[0x06..0x08].copy_from_slice(&3u16.to_le_bytes());
+            pkg[0x58..0x60].copy_from_slice(&(cnt_base as u64).to_le_bytes());
+            pkg.extend_from_slice(&cnt);
+            let size = pkg.len() as u64;
+            parse_pkg_from(&mut std::io::Cursor::new(pkg), size, Path::new("a.pkg"))
+                .expect("should parse embedded CNT")
+        };
+        let add_on = local(0x21, 0x0a02_0000);
+        assert_eq!(add_on.category, "ac");
+        assert_eq!(add_on.package_type.as_deref(), Some("PS5AC"));
+        assert_eq!(
+            local(0x20, 0x0a02_0000).package_type.as_deref(),
+            Some("PS5GD")
+        );
+        assert_eq!(
+            local(0x20, 0x0a12_0000).package_type.as_deref(),
+            Some("PS5DP")
+        );
     }
 
     #[test]
