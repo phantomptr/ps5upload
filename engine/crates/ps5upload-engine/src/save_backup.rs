@@ -613,6 +613,20 @@ pub(crate) fn back_up_one(
     tag: Option<&str>,
     verify: &dyn Fn() -> Result<(), String>,
 ) -> Result<PathBuf, String> {
+    back_up_one_sparing(host, entry, dir, keep, tag, verify, None)
+}
+
+/// [`back_up_one`], never pruning `spare`: the backup a restore is putting back, which is in
+/// this folder too and may be the oldest of its kind.
+fn back_up_one_sparing(
+    host: &str,
+    entry: &SaveEntry,
+    dir: &str,
+    keep: u32,
+    tag: Option<&str>,
+    verify: &dyn Fn() -> Result<(), String>,
+    spare: Option<&Path>,
+) -> Result<PathBuf, String> {
     let _op = save_op(&[host]);
     let user = entry.user_id as u32;
     let arrange = arrangement_for(dir);
@@ -650,7 +664,9 @@ pub(crate) fn back_up_one(
         }
         // Older backups go only once the new one is there, so a failed zip never costs one;
         // counted in both layouts of the folder.
-        prune_local(dir, &entry.title_id, user, backup_tag(&st), keep, &dest);
+        let mut spared = vec![dest.as_path()];
+        spared.extend(spare);
+        prune_local_sparing(dir, &entry.title_id, user, backup_tag(&st), keep, &spared);
         Ok(dest)
     })();
     let _ = cleanup_temp_dir(&tmp_s);
@@ -694,11 +710,26 @@ pub(crate) fn prune_local(
     keep: u32,
     just_made: &Path,
 ) {
+    prune_local_sparing(dir, title_id, user, tag, keep, &[just_made]);
+}
+
+/// [`prune_local`], never deleting any of `spared` (the backup just made, and the one a restore
+/// is putting back). A spared file is told by what it is on disk, however its path is spelled.
+fn prune_local_sparing(
+    dir: &str,
+    title_id: &str,
+    user: u32,
+    tag: Option<&str>,
+    keep: u32,
+    spared: &[&Path],
+) {
+    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let spared: Vec<PathBuf> = spared.iter().map(|p| real(p)).collect();
     let list = local_list(dir);
     let files = layout::backup_files(&list, title_id);
     for old in layout::to_prune(&files, title_id, user, tag, keep) {
         let p = local_path(dir, &old.rel());
-        if p != just_made {
+        if !spared.contains(&real(&p)) {
             let _ = std::fs::remove_file(p);
         }
     }
@@ -1919,6 +1950,7 @@ pub(crate) fn restore_zip_with(
             &s,
             Some(crate::save_backup_server::BEFORE_RESTORE_TAG),
             keep_current,
+            Some(zip),
         )
     })();
     let _ = cleanup_temp_dir(&tmp_s);
@@ -1982,7 +2014,9 @@ pub(crate) fn all_entries(
 /// `src`: the save there now is backed up first (tagged `tag`, so it can be put back), then the
 /// folder is emptied (kept itself: the console refuses a fresh mkdir under its save root) and
 /// `src`'s files are uploaded into it. `keep_current` false skips that backup (the caller
-/// already kept the save).
+/// already kept the save). `restoring` is the backup `src` was unpacked from, when it is one:
+/// keeping the current save never prunes it (it may be the oldest of that kind in the backup
+/// folder, and if the restore then fails it is the only copy of what it holds).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn put_in_place(
     host: &str,
@@ -1993,6 +2027,7 @@ pub(crate) fn put_in_place(
     s: &Settings,
     tag: Option<&str>,
     keep_current: bool,
+    restoring: Option<&Path>,
 ) -> Result<(), String> {
     // Every name first: this empties the folder.
     save_folder_ok(save_path, title_id)?;
@@ -2019,7 +2054,7 @@ pub(crate) fn put_in_place(
         // Already kept by the caller, or nothing to keep.
     } else if !s.dir.trim().is_empty() {
         kept = Some(
-            back_up_one(host, &current, &s.dir, s.keep, tag, &|| Ok(()))
+            back_up_one_sparing(host, &current, &s.dir, s.keep, tag, &|| Ok(()), restoring)
                 .map_err(|e| format!("could not back up the current save first: {e}"))?,
         );
     } else {
@@ -2218,6 +2253,7 @@ fn import_ps4(
         &s,
         Some(BEFORE_PS4_TAG),
         true,
+        None,
     )?;
     crate::log_info!("save backup: PS4 save of {title_id} put on {host} ({save_path})");
     Ok(())
@@ -2954,6 +2990,39 @@ mod tests {
         let _ = cleanup_temp_dir(&d);
     }
 
+    /// Undoing a restore puts back a backup of the "before restore" kind, and keeping the save
+    /// there now makes another of that kind. The one being put back is then the oldest: it was
+    /// pruned mid-restore, and a restore that failed after that left its save nowhere.
+    #[test]
+    fn a_before_restore_backup_being_restored_is_not_pruned() {
+        let dir = make_temp_dir("prunespare").unwrap();
+        let d = dir.to_string_lossy().into_owned();
+        let title = dir.join("PPSA01234");
+        std::fs::create_dir_all(&title).unwrap();
+        let tag = crate::save_backup_server::BEFORE_RESTORE_TAG;
+        let name = |st: &str| format!("PPSA01234_user00000001_{st}_{tag}.zip");
+        let restoring = title.join(name("2026-01-01_000000"));
+        let older = title.join(name("2025-12-01_000000"));
+        let made = title.join(name("2026-02-01_000000"));
+        for p in [&restoring, &older, &made] {
+            std::fs::write(p, b"z").unwrap();
+        }
+        // The restored one named another way than the folder's listing spells it.
+        let spelled = title.join(".").join(name("2026-01-01_000000"));
+        prune_local_sparing(
+            &d,
+            "PPSA01234",
+            1,
+            Some(tag),
+            1,
+            &[made.as_path(), spelled.as_path()],
+        );
+        assert!(restoring.exists(), "the backup being restored was pruned");
+        assert!(made.exists());
+        assert!(!older.exists(), "the others of its kind are still pruned");
+        let _ = cleanup_temp_dir(&d);
+    }
+
     /// #886: a backup folder holding both layouts lists, finds, dates and prunes them as one.
     #[test]
     fn a_folder_in_both_layouts_lists_restores_and_keeps_versions_as_one() {
@@ -3607,6 +3676,7 @@ mod tests {
                 &Settings::default(),
                 None,
                 false,
+                None,
             )
             .unwrap_err();
             assert!(
