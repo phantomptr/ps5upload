@@ -34,6 +34,11 @@
 #define LEGACY_BACKUP_SUFFIX ".bak"
 #define SDK_PATH_MAX 1024
 #define SDK_COPY_BUF (64u * 1024u)
+/* How deep the patch and restore walks go below the game's folder. Each level holds a few KiB of
+ * path buffers on the handler's 512 KiB stack and an open folder: a folder of 1-character names
+ * fits about 500 levels in SDK_PATH_MAX, which overflowed that stack. No game is nearly this deep;
+ * the walk counts a deeper folder as an error and goes no further. */
+#define SDK_WALK_DEPTH_MAX 32
 
 
 static void json_escape(const char *in, char *out, size_t cap) {
@@ -434,7 +439,11 @@ static int patch_libc_prx(const char *game_path) {
 
 static void walk_and_patch(const char *dir_path, uint32_t target_sdk,
                            int *patched_count, int *signed_count,
-                           int *error_count) {
+                           int *error_count, int depth) {
+    if (depth > SDK_WALK_DEPTH_MAX) {
+        if (error_count) (*error_count)++;
+        return;
+    }
     DIR *dir = opendir(dir_path);
     if (!dir) return;
     struct dirent *de;
@@ -462,7 +471,7 @@ static void walk_and_patch(const char *dir_path, uint32_t target_sdk,
              * a working one. */
             if (strcmp(de->d_name, "fakelib") == 0) continue;
             walk_and_patch(full, target_sdk, patched_count, signed_count,
-                           error_count);
+                           error_count, depth + 1);
             continue;
         }
         if (!S_ISREG(st.st_mode)) continue;
@@ -494,7 +503,8 @@ static int name_ends_with(const char *name, const char *suffix) {
  * the files beside them are still as the patch left them: a `.bak` with one of
  * our own backups next to it is not ours (make_backup() never makes both), and
  * that has to be read before the second pass renames our own backup away. */
-static void walk_and_restore(const char *dir_path, int *restored_count) {
+static void walk_and_restore(const char *dir_path, int *restored_count, int depth) {
+    if (depth > SDK_WALK_DEPTH_MAX) return; /* the patch never went there either */
     for (int pass = 0; pass < 2; pass++) {
         const int legacy = pass == 0;
         const char *suffix = legacy ? LEGACY_BACKUP_SUFFIX : BACKUP_SUFFIX;
@@ -512,7 +522,7 @@ static void walk_and_restore(const char *dir_path, int *restored_count) {
             if (lstat(full, &st) != 0) continue;
 
             if (S_ISDIR(st.st_mode)) {
-                if (!legacy) walk_and_restore(full, restored_count);
+                if (!legacy) walk_and_restore(full, restored_count, depth + 1);
                 continue;
             }
             if (!S_ISREG(st.st_mode)) continue;
@@ -797,7 +807,7 @@ int sdk_changer_patch(const char *title_id, const char *target_sdk,
     int game_json_changed = patch_game_params(game_path, target, &errors);
     int patched = 0;
     int signed_skipped = 0;
-    walk_and_patch(game_path, target, &patched, &signed_skipped, &errors);
+    walk_and_patch(game_path, target, &patched, &signed_skipped, &errors, 0);
 
     /* Opt-in only — see sdk_changer.h. */
     int libc_sites = patch_libc ? patch_libc_prx(game_path) : 0;
@@ -862,7 +872,7 @@ int sdk_changer_restore(const char *title_id, int *restored_count,
     int count = 0;
     char game_path[SDK_PATH_MAX] = "";
     if (resolve_game_path(title_id, game_path, sizeof(game_path))) {
-        walk_and_restore(game_path, &count);
+        walk_and_restore(game_path, &count, 0);
     }
     /* Also restore appmeta backups so the list reverts too. */
     char meta[SDK_PATH_MAX];
@@ -870,7 +880,7 @@ int sdk_changer_restore(const char *title_id, int *restored_count,
     struct stat st;
     if (mn >= 0 && (size_t)mn < sizeof(meta) &&
         stat(meta, &st) == 0 && S_ISDIR(st.st_mode)) {
-        walk_and_restore(meta, &count);
+        walk_and_restore(meta, &count, 0);
     }
 
     if (restored_count) *restored_count = count;

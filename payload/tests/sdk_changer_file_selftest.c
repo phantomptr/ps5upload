@@ -536,6 +536,40 @@ int main(void) {
         CHECK(read_u32_at(short_path, 0x200 + SCE_PARAM_PS4_SDK_OFFSET) == 0x09040001u);
     }
 
+    /* The walks stop SDK_WALK_DEPTH_MAX folders down (each level is a few KiB of the handler's
+     * stack): an executable below that is counted as an error and left alone, one above is
+     * patched. */
+    {
+        char deep[2048], elf_at[2048];
+        unsigned char e[0x240];
+        int depth_patched = 0, depth_signed = 0, depth_errors = 0;
+        size_t at = (size_t)snprintf(deep, sizeof(deep), "%s/deep", root);
+        CHECK(mkdir_tree(deep) == 0);
+        for (int lvl = 0; lvl < SDK_WALK_DEPTH_MAX + 8; lvl++) {
+            at += (size_t)snprintf(deep + at, sizeof(deep) - at, "/d");
+            CHECK(mkdir(deep, 0755) == 0);
+            if (lvl == 3) {
+                snprintf(elf_at, sizeof(elf_at), "%s/shallow.elf", deep);
+                make_patchable_elf(e, sizeof(e), 0x10000000u);
+                CHECK(write_bytes(elf_at, e, sizeof(e)) == 0);
+            }
+        }
+        char deep_elf[2048];
+        snprintf(deep_elf, sizeof(deep_elf), "%s/deep.elf", deep);
+        make_patchable_elf(e, sizeof(e), 0x10000000u);
+        CHECK(write_bytes(deep_elf, e, sizeof(e)) == 0);
+        snprintf(deep, sizeof(deep), "%s/deep", root);
+        walk_and_patch(deep, 0x04000031u, &depth_patched, &depth_signed, &depth_errors, 0);
+        CHECK(depth_patched >= 1);
+        CHECK(depth_errors == 1);
+        CHECK(read_u32_at(elf_at, 0x200 + SCE_PARAM_PS5_SDK_OFFSET) == 0x04000031u);
+        CHECK(read_u32_at(deep_elf, 0x200 + SCE_PARAM_PS5_SDK_OFFSET) == 0x10000000u);
+        int depth_restored = 0;
+        walk_and_restore(deep, &depth_restored, 0);
+        CHECK(depth_restored == 1);
+        CHECK(read_u32_at(elf_at, 0x200 + SCE_PARAM_PS5_SDK_OFFSET) == 0x10000000u);
+    }
+
     rm_tree(root);
     printf("sdk_changer_file_selftest: %s\n",
            failures == 0 ? "ALL PASS" : "FAILED");
