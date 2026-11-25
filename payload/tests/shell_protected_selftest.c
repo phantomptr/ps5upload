@@ -182,6 +182,66 @@ int main(void) {
         }
         free(t);
     }
+    /* chmod -R changes what is IN the tree. A link found there is not followed: its target is
+     * somewhere else (another game's files, or the trust store, which the check of the command's
+     * own words cannot see behind a link inside the tree). */
+    {
+        struct stat st;
+        char tree[600], inside[700], link_out[700], link_key[700], key[700];
+        snprintf(tree, sizeof tree, "%s/tree", g_root);
+        snprintf(inside, sizeof inside, "%s/in.txt", tree);
+        snprintf(link_out, sizeof link_out, "%s/to-notes", tree);
+        snprintf(link_key, sizeof link_key, "%s/to-key", tree);
+        snprintf(f, sizeof f, "%s/notes.txt", g_root);
+        snprintf(key, sizeof key, "%s/identity", ava);
+        if (mkdir(tree, 0755) != 0 || (fp = fopen(inside, "w")) == NULL) return 2;
+        fclose(fp);
+        if (chmod(f, 0644) != 0 || chmod(key, 0600) != 0 || chmod(inside, 0644) != 0) return 2;
+        if (symlink(f, link_out) != 0 || symlink(key, link_key) != 0) return 2;
+        snprintf(cmd, sizeof cmd, "chmod -R 700 %s", tree);
+        allowed(cmd, NULL);
+        if (stat(inside, &st) != 0 || (st.st_mode & 0777) != 0700) {
+            fprintf(stderr, "FAIL chmod -R: the file in the tree was not changed\n");
+            fails++;
+        }
+        if (stat(f, &st) != 0 || (st.st_mode & 0777) != 0644) {
+            fprintf(stderr, "FAIL chmod -R followed a link out of the tree (%o)\n", (unsigned)(st.st_mode & 0777));
+            fails++;
+        }
+        if (stat(key, &st) != 0 || (st.st_mode & 0777) != 0600) {
+            fprintf(stderr, "FAIL chmod -R followed a link into the trust store (%o)\n", (unsigned)(st.st_mode & 0777));
+            fails++;
+        }
+        /* The other tree walkers with the same links in the tree: none reads the key through its
+         * link, copies it out, or deletes what a link points at. */
+        char *t;
+        char copied[800], line[64] = "";
+        snprintf(cmd, sizeof cmd, "grep -r SECRET %s", tree);
+        (void)run(cmd, &t);
+        if (strstr(t, "SECRET")) {
+            fprintf(stderr, "FAIL grep -r read the key through a link in the tree: %s\n", t);
+            fails++;
+        }
+        free(t);
+        snprintf(cmd, sizeof cmd, "cp -r %s %s/tree-copy", tree, g_root);
+        (void)run(cmd, &t);
+        free(t);
+        snprintf(copied, sizeof copied, "%s/tree-copy/to-key", g_root);
+        if (lstat(copied, &st) == 0 && S_ISREG(st.st_mode) && (fp = fopen(copied, "r")) != NULL) {
+            if (fgets(line, sizeof line, fp) && strstr(line, "SECRET")) {
+                fprintf(stderr, "FAIL cp -r copied the key out through a link in the tree\n");
+                fails++;
+            }
+            fclose(fp);
+        }
+        snprintf(cmd, sizeof cmd, "rm -r %s", tree);
+        (void)run(cmd, &t);
+        free(t);
+        if (access(key, F_OK) != 0 || access(f, F_OK) != 0) {
+            fprintf(stderr, "FAIL rm -r deleted what a link in the tree points at\n");
+            fails++;
+        }
+    }
 
     snprintf(cmd, sizeof cmd, "rm -rf %s", g_root);
     if (system(cmd) != 0) fprintf(stderr, "warn: could not remove %s\n", g_root);

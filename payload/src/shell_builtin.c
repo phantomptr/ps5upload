@@ -1409,6 +1409,11 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
                     any_err = 1;
                     continue;
                 }
+                /* A link found in the tree is left alone: chmod() follows it, and its target is
+                 * outside the tree, a file the words of the command never named (and that
+                 * shell_protected_arg never judged: a link to the trust store's key was made
+                 * unreadable this way). fs_jobs.c's recursive chmod skips them the same way. */
+                if (ent->fts_info == FTS_SL || ent->fts_info == FTS_SLNONE) continue;
                 if (chmod(ent->fts_accpath, (mode_t)mode) != 0) {
                     len = shell_appendf(&out, &cap, len,
                                          "chmod: %s: %s\n", ent->fts_path,
