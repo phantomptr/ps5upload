@@ -1441,6 +1441,11 @@ textarea.input {
 .input::placeholder {
   color: var(--color-muted);
 }
+/* A hint longer than its field ends in "…", not mid-word ("…content ID o" on a phone). Only
+ * while the hint shows: typed text is never touched. */
+:where(input, textarea):placeholder-shown {
+  text-overflow: ellipsis;
+}
 
 /* Touch-target floor for form controls (docs/v5-mobile-design.md §4.1).
  *
