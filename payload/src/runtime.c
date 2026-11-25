@@ -3264,8 +3264,10 @@ static int fs_mount_request(runtime_state_t *state, const char *request_body,
         if (!is_path_allowed(mount_point) || path_tree_op_refused(mount_point)) {
             return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_path_not_allowed", 25);
         }
-        size_t mp_len = strlen(mount_point);
-        if (mp_len > 1 && mount_point[mp_len - 1] == '/') {
+        /* Written as the kernel will name it (one slash between components, no "."), before it
+         * is compared with the mount table, tracked or answered: image_mount.h. A trailing slash
+         * and ".." are refused there, as the trailing slash was here. */
+        if (image_mount_point_normalise(mount_point) != 0) {
             return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_bad_mount_point", 24);
         }
         if (strcmp(mount_point, FS_MOUNT_BASE) == 0) {

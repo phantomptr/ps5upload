@@ -163,6 +163,41 @@ int main(void) {
         CHECK(strcmp(key, key2) != 0 && strncmp(key, key2, IMAGE_MOUNT_KEY_HEAD - 8) == 0);
     }
 
+    /* A caller's mount point is compared with the kernel's name for it, so it is first written the
+     * same way: one slash between components, no "." component. What cannot be one is refused. */
+    {
+        static const struct {
+            const char *in, *out; /* out NULL: refused */
+        } cases[] = {
+            { "/data/games/foo", "/data/games/foo" },
+            { "/data//games/foo", "/data/games/foo" },
+            { "//data///games////foo", "/data/games/foo" },
+            { "/data/./games/./foo", "/data/games/foo" },
+            { "/./data/games/foo", "/data/games/foo" },
+            { "/data/.hidden/..foo/a.", "/data/.hidden/..foo/a." },
+            { "/mnt/usb0", "/mnt/usb0" },
+            { "/data/games/foo/", NULL },
+            { "/data/games/foo//", NULL },
+            { "/data/games/foo/.", NULL },
+            { "/data/games/../foo", NULL },
+            { "/data/games/foo/..", NULL },
+            { "/..", NULL },
+            { "/", NULL },
+            { "//", NULL },
+            { "/.", NULL },
+            { "", NULL },
+            { "data/games", NULL },
+        };
+        for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+            char buf[64];
+            snprintf(buf, sizeof buf, "%s", cases[i].in);
+            int rc = image_mount_point_normalise(buf);
+            if (cases[i].out) CHECK(rc == 0 && strcmp(buf, cases[i].out) == 0);
+            else CHECK(rc == -1);
+        }
+        CHECK(image_mount_point_normalise(NULL) == -1);
+    }
+
     CHECK(image_mount_kind("exfatfs", "/dev/lvd2") == IMAGE_MOUNT_YES);
     CHECK(image_mount_kind("ufs", "/dev/md3") == IMAGE_MOUNT_YES);
     CHECK(image_mount_kind("nullfs", "/mnt/shadowmnt/G_ca51a0d7") == IMAGE_MOUNT_YES);

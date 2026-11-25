@@ -139,6 +139,40 @@ static inline void image_mount_tracker_key(const char *mount_point, char *out, s
     snprintf(out + head, out_cap - head, "_x%016llx%016llx", h1, h2);
 }
 
+/* A caller's mount point rewritten, in place, the way the kernel's mount table names it: one slash
+ * between components and no "." component ("/data//games/./foo" becomes "/data/games/foo"). 0, or
+ * -1 for a path that cannot be a mount point: not absolute, "/" itself, one that ends in a slash,
+ * or one with a ".." component (never followed lexically: path_policy.c).
+ *
+ * fs.mount kept the string as it was sent, and everything after compared it with the kernel's
+ * name: the "something is already mounted here" check, the tracker, the Volumes list, and at
+ * unmount the search for the image unit to detach. With a doubled slash none of them matched: a
+ * second request stacked another image on the first, the mount was not listed, and unmounting it
+ * left its LVD/MD unit attached. */
+static inline int image_mount_point_normalise(char *p) {
+    size_t r = 0, w = 0;
+    if (!p || p[0] != '/') return -1;
+    while (p[r] != '\0') {
+        size_t start, len;
+        while (p[r] == '/') r++;
+        if (p[r] == '\0') return -1; /* "/", or a trailing slash */
+        start = r;
+        while (p[r] != '\0' && p[r] != '/') r++;
+        len = r - start;
+        if (len == 1 && p[start] == '.') {
+            if (p[r] == '\0') return -1; /* ends in "/." */
+            continue;
+        }
+        if (len == 2 && p[start] == '.' && p[start + 1] == '.') return -1;
+        p[w++] = '/';
+        memmove(p + w, p + start, len);
+        w += len;
+    }
+    if (w == 0) return -1;
+    p[w] = '\0';
+    return 0;
+}
+
 /* What statfs says about the mount holding `path`: its f_fstypename and f_mntfromname copied into
  * `fstype` and `from` (NUL-terminated). Non-zero when statfs failed. */
 typedef int (*image_mount_look_fn)(const char *path, char *fstype, size_t fstype_n, char *from,
