@@ -37,6 +37,10 @@ pub struct Cursor {
     pub head: Vec<u8>,
     /// Passes in a row that found the size unchanged and read nothing more.
     pub quiet: u32,
+    /// This console's log has been met. Said outright: an empty log met once (a fresh helper,
+    /// or a log just rotated with nothing in it yet) has offset 0 and no head too, and was
+    /// taken for one never met, so its first lines were skipped as "history".
+    pub met: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -58,7 +62,7 @@ pub enum Plan {
 }
 
 pub fn plan(cur: &Cursor, size_now: u64, head_now: &[u8]) -> Plan {
-    if cur.head.is_empty() && cur.offset == 0 {
+    if !cur.met {
         return Plan::StartAt { at: size_now };
     }
     let n = cur.head.len().min(head_now.len());
@@ -220,8 +224,7 @@ pub fn mirror_pass(
     let size = src.size(LOG)?;
     // Nothing written since: the size says so with one call instead of three. A log rotated to
     // exactly the same size is the one thing that hides, so the head is still looked at now and then.
-    let met = cur.offset > 0 || !cur.head.is_empty();
-    if met && size == cur.offset && cur.quiet + 1 < HEAD_CHECK_EVERY {
+    if cur.met && size == cur.offset && cur.quiet + 1 < HEAD_CHECK_EVERY {
         cur.quiet += 1;
         return Ok(());
     }
@@ -238,6 +241,7 @@ pub fn mirror_pass(
                 offset: at,
                 head: head_now,
                 quiet: 0,
+                met: true,
             };
             return Ok(());
         }
@@ -252,6 +256,7 @@ pub fn mirror_pass(
                 offset: 0,
                 head: head_now.clone(),
                 quiet: 0,
+                met: true,
             };
             0
         }
@@ -264,6 +269,7 @@ pub fn mirror_pass(
         offset: start + bytes.len() as u64,
         head: head_now,
         quiet: 0,
+        met: true,
     };
     Ok(())
 }
@@ -665,6 +671,7 @@ mod tests {
             offset: 12,
             head: b"=== A\na1\n".to_vec(),
             quiet: HEAD_CHECK_EVERY,
+            met: true,
         };
         let mut carry = Vec::new();
         let mut got = Vec::new();
@@ -687,6 +694,7 @@ mod tests {
             offset: 9,
             head: b"=== A\nx1\n".to_vec(),
             quiet: 0,
+            met: true,
         };
         let (mut carry, mut got) = (Vec::new(), Vec::new());
         for _ in 1..HEAD_CHECK_EVERY {
@@ -694,6 +702,41 @@ mod tests {
         }
         assert!(mirror_pass(&fake, "h", &mut cur, &mut carry, &mut |e| got.push(e)).is_err());
         assert!(got.is_empty());
+    }
+
+    /// A log rotated (or first met) while it is still empty is a log that has been met: what
+    /// the helper writes into it next is copied. It was taken for a console never seen, and
+    /// those lines were skipped as history.
+    #[test]
+    fn the_first_lines_of_a_log_met_empty_are_copied() {
+        let pass = |fake: &Fake, cur: &mut Cursor, carry: &mut Vec<u8>, got: &mut Vec<Event>| {
+            mirror_pass(fake, "h", cur, carry, &mut |e| got.push(e)).unwrap()
+        };
+        let mut cur = Cursor {
+            offset: 12,
+            head: b"=== A\na1\n".to_vec(),
+            quiet: 0,
+            met: true,
+        };
+        let (mut carry, mut got) = (Vec::new(), Vec::new());
+        // Rotated: the old log has one more line, the new one nothing yet.
+        let mut fake = Fake {
+            log: Vec::new(),
+            old: b"=== A\na1\na2\na3\n".to_vec(),
+            fail_log: std::cell::Cell::new(false),
+        };
+        pass(&fake, &mut cur, &mut carry, &mut got);
+        fake.log = b"=== B\nb1\n".to_vec();
+        pass(&fake, &mut cur, &mut carry, &mut got);
+        assert_eq!(texts(&got), vec!["a3", "=== B", "b1"]);
+
+        // The same for a console whose log is empty when it is first met.
+        let (mut cur, mut carry, mut got) = (Cursor::default(), Vec::new(), Vec::new());
+        fake.log = Vec::new();
+        pass(&fake, &mut cur, &mut carry, &mut got);
+        fake.log = b"=== C\nc1\n".to_vec();
+        pass(&fake, &mut cur, &mut carry, &mut got);
+        assert_eq!(texts(&got), vec!["=== C", "c1"]);
     }
 
     #[test]
@@ -739,6 +782,7 @@ mod tests {
             offset: 100,
             head: b"=== ps5upload".to_vec(),
             quiet: 0,
+            met: true,
         };
         assert!(matches!(
             plan(&c, 180, b"=== ps5upload"),
@@ -752,6 +796,7 @@ mod tests {
             offset: 5000,
             head: b"=== A".to_vec(),
             quiet: 0,
+            met: true,
         };
         assert!(matches!(
             plan(&c, 300, b"=== B"),
@@ -765,6 +810,7 @@ mod tests {
             offset: 300,
             head: b"=== A".to_vec(),
             quiet: 0,
+            met: true,
         };
         assert!(matches!(
             plan(&c, 300, b"=== B"),
