@@ -17,6 +17,7 @@ import { focusLost } from "./ui/restoreFocus";
 import { pollWhileVisible } from "./ui/visiblePoll";
 import { useHandoffPoll } from "./files/handoff";
 import { t } from "./strings";
+import { setConsoleZone } from "./time";
 
 /** The console chip refreshes this often (the temperature moves). */
 const STATUS_POLL_MS = 10_000;
@@ -107,6 +108,8 @@ export function App({ inputMap }: { inputMap: InputMap }) {
       call<ConsoleStatus>("/api/status").then(
         (s) => {
           if (!live) return;
+          // Before the render the new status causes: every time on the page reads this zone.
+          setConsoleZone(s.tz_min);
           setStatus(s);
           setOffline(false);
         },

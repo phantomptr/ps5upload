@@ -789,6 +789,15 @@ int webui_is_game_title_id(const char *tid) {
     return 0;
 }
 
+int webui_tz_minutes(int tz_ok, int tz_min, int summer_ok, int summer, long *out) {
+    long min;
+    if (!tz_ok || tz_min < -12 * 60 || tz_min > 14 * 60) return 0;
+    min = tz_min;
+    if (summer_ok && summer == 1) min += 60;
+    *out = min;
+    return 1;
+}
+
 int webui_focus_running(const char *json, size_t n, char *title_id, size_t cap, uint32_t *app_id) {
     const char *e = json + n, *p = top_value(json, n, "apps");
     long long focus = -1, big = -1;

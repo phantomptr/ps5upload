@@ -18,7 +18,8 @@ import { ApiError, call } from "../api";
 import { errorText, keepsDialogOpen, type Message } from "../home/Home";
 import { onNavAction } from "../nav";
 import type { SectionContext } from "../sections";
-import { getLanguage, t } from "../strings";
+import { t } from "../strings";
+import { formatDate } from "../time";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Modal } from "../ui/Modal";
 import { pollWhileVisible } from "../ui/visiblePoll";
@@ -94,7 +95,7 @@ export function uninstallErrorText(err: unknown): string | null {
 function lastPlayedText(ms: number | null): string {
   if (ms == null) return t("cw_games_never");
   try {
-    return new Date(ms).toLocaleDateString(getLanguage());
+    return formatDate(ms);
   } catch {
     return t("cw_games_never");
   }

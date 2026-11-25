@@ -38,6 +38,8 @@
 #include "path_policy.h"
 #include "proc_identity.h"
 #include "smbd_proto.h"
+#include "sony_api_lock.h"
+#include "sys_registry.h"
 #include "ps5_firmware.h"
 #include "storage_cleanup.h"
 #include "webui_cheats_store.h"
@@ -270,15 +272,53 @@ static void put_str(char *buf, size_t cap, size_t *at, const char *key, const ch
     put_fmt(buf, cap, at, "\"");
 }
 
-/* NODE_STATUS + HW_INFO (model) + HW_TEMPS + PROC_FOCUS. Each call is in-process and bounded by
- * its own handler; one that fails leaves its fields null instead of failing the route. */
+/* The console's time zone in minutes ahead of UTC, for /api/status (#928): the PS5's own browser
+ * reads UTC whatever zone the console is set to, so the page takes the zone from here.
+ *
+ * Two registry reads under sony_api_lock (sceRegMgr is not safe to call concurrently), kept for
+ * TZ_KEEP_S: the page asks for the status every 10 s, and the zone changes with a setting or twice
+ * a year. A read that failed is tried again after TZ_RETRY_S. The lock is only tried, never waited
+ * for: while another Sony call holds it (an install, say) the status keeps the last answer instead
+ * of standing still.
+ *
+ * 1 with *out set; 0 when the console does not say (the page then shows the browser's own time, as
+ * it always did). */
+#define TZ_KEEP_S  300
+#define TZ_RETRY_S 30
+static int console_tz_minutes(long *out) {
+    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    static time_t read_at;
+    static int have, read_once;
+    static long kept;
+    time_t now = time(NULL);
+    int ok;
+    pthread_mutex_lock(&mu);
+    if ((!read_once || now < read_at || now - read_at >= (have ? TZ_KEEP_S : TZ_RETRY_S)) &&
+        pthread_mutex_trylock(&sony_api_lock) == 0) {
+        int tz = 0, summer = 0, tz_rc, summer_rc;
+        tz_rc = sys_registry_get_int(SCE_KEY_DATE_TIMEZONE_OFFSET, &tz, NULL);
+        summer_rc = sys_registry_get_int(SCE_KEY_DATE_IS_SUMMER_TIME, &summer, NULL);
+        pthread_mutex_unlock(&sony_api_lock);
+        have = webui_tz_minutes(tz_rc == 0, tz, summer_rc == 0, summer, &kept) == 1;
+        read_at = now;
+        read_once = 1;
+    }
+    ok = have;
+    if (ok) *out = kept;
+    pthread_mutex_unlock(&mu);
+    return ok;
+}
+
+/* NODE_STATUS + HW_INFO (model) + HW_TEMPS + PROC_FOCUS, and the console's time zone. Each call is
+ * in-process and bounded by its own handler; one that fails leaves its fields null instead of
+ * failing the route. */
 static void r_status(const char *b, size_t n, uint8_t *out, int fd) {
     char version[96], firmware[64], model[128], title[16];
     const uint8_t *t;
     size_t ol, tl, at = 0;
-    long soc = 0, cpu = 0, temp = 0;
+    long soc = 0, cpu = 0, temp = 0, tz_min = 0;
     uint32_t app_id = 0;
-    int have_ver = 0, have_model = 0, have_temp = 0, running = 0;
+    int have_ver = 0, have_model = 0, have_temp = 0, running = 0, have_tz;
     (void)b;
     (void)n;
     if (call(AVA1_METHOD_NODE_STATUS, NULL, 0, out, &ol) == AVA1_STATUS_OK) {
@@ -305,6 +345,7 @@ static void r_status(const char *b, size_t n, uint8_t *out, int fd) {
     }
     if (call_text(AVA1_METHOD_PROC_FOCUS, NULL, 0, out, &ol, &t, &tl) == AVA1_STATUS_OK)
         running = webui_focus_running((const char *)t, tl, title, sizeof title, &app_id) == 1;
+    have_tz = console_tz_minutes(&tz_min);
     /* every string is copied out of `out` above: it is the JSON buffer now */
     {
         char *j = (char *)out;
@@ -325,7 +366,8 @@ static void r_status(const char *b, size_t n, uint8_t *out, int fd) {
         } else {
             put_fmt(j, cap, &at, "null");
         }
-        put_fmt(j, cap, &at, "}");
+        if (have_tz) put_fmt(j, cap, &at, ",\"tz_min\":%ld}", tz_min);
+        else put_fmt(j, cap, &at, ",\"tz_min\":null}");
         send_json(fd, 200, j, at);
     }
 }

@@ -1,6 +1,6 @@
 /**
  * Save backups on the console itself (Discord request): copy a game's save of one user, as the
- * console keeps it, to /data/ps5upload/save-backups/<user>/<title>/<YYYY-MM-DD_HH-MM-SS>/, keep as
+ * console keeps it, to /data/ps5upload/save-backups/<user>/<title>/<YYYY-MM-DD_HH-MM-SS>Z/, keep as
  * many as wanted, and put one back later (before a game's final choice, say).
  *
  * A PS5 game's save is two folders (measured on 13.60): /user/home/<user>/savedata_prospero/<title>
@@ -33,7 +33,12 @@ export type SaveKind = (typeof SAVE_KINDS)[number];
 
 const LIST_PAGE = 256;
 const HEX_USER = /^[0-9a-f]{8}$/;
-const STAMP = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})(_auto)?$/;
+/**
+ * A backup's folder name. With the "Z" the stamp is UTC: the moment it was made, the same on every
+ * device. Without it (a backup made before #928) it is the wall clock of the browser that made it,
+ * with no zone: UTC on the PS5's own browser (time.ts), local time on a phone.
+ */
+const STAMP = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})(Z)?(_auto)?$/;
 
 export interface SaveUser {
   /** The home folder's name: the user id as 8 hex digits. */
@@ -50,7 +55,7 @@ export interface SaveTitle {
 export interface Backup {
   /** The folder name (its stamp). */
   name: string;
-  /** When it was made (local time, ms), from its name. */
+  /** When it was made (ms since 1970, UTC), from its name. */
   when: number;
   /** Made by a restore, of the save it replaced. */
   auto: boolean;
@@ -141,16 +146,18 @@ export async function loadSaves(user: string, callFn: CallFn = call): Promise<Sa
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-/** A backup's folder name for `d` (local time), "_auto" for the one a restore makes. */
+/** A backup's folder name for the moment `d` (UTC, marked "Z"), "_auto" for the one a restore makes. */
 export function backupName(d: Date, auto = false): string {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}${auto ? "_auto" : ""}`;
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}_${pad(d.getUTCHours())}-${pad(d.getUTCMinutes())}-${pad(d.getUTCSeconds())}Z${auto ? "_auto" : ""}`;
 }
 
 export function parseBackupName(name: string): Backup | null {
   const m = STAMP.exec(name);
   if (!m) return null;
-  const when = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
-  return Number.isFinite(when) ? { name, when, auto: !!m[7] } : null;
+  const at = [+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]] as const;
+  // An unmarked name is read on the clock it was written on: this browser's, when it made the backup.
+  const when = m[7] ? Date.UTC(...at) : new Date(...at).getTime();
+  return Number.isFinite(when) ? { name, when, auto: !!m[8] } : null;
 }
 
 /**
