@@ -41,10 +41,19 @@ static int failures = 0;
 static uint16_t g_port;
 
 static int stub_route(const webui_req_t *r, const uint8_t *body, size_t body_len, int fd) {
-    (void)r; (void)body; (void)body_len;
+    (void)body; (void)body_len;
+    if (strcmp(r->path, "/api/slow") == 0) {
+        /* A long download to a slow reader: holds its worker until the client goes (10 s at most). */
+        char b[256];
+        struct pollfd p = { fd, POLLIN, 0 };
+        while (poll(&p, 1, 10000) > 0 && recv(fd, b, sizeof b, 0) > 0) {}
+    }
     webui_send_json(fd, 200, "{\"ok\":true}");
     return 0;
 }
+
+/* Requests that may hold a worker for long besides the streamed ones (the helper's downloads). */
+static int long_for(const webui_req_t *r) { return strcmp(r->path, "/api/slow") == 0; }
 
 /* Streamed route: reads the rest of the body itself (with its own timeout), answers {"n":<bytes>}. */
 static int stream_for(const webui_req_t *r) { return strcmp(r->path, "/api/stream") == 0; }
@@ -152,6 +161,7 @@ static int start_server(void) {
     c.route = stub_route;
     c.stream_for = stream_for;
     c.stream = stream_route;
+    c.long_for = long_for;
     return webui_start(&c);
 }
 
@@ -255,6 +265,76 @@ static void streamed_body(void) {
     if (read_all(s, resp, sizeof resp, 7000) > 0) (void)sscanf(resp, "HTTP/1.1 %d", &status);
     close(s);
     CHECK(status == 401);
+}
+
+/* Open a request that then holds its worker: a download to a reader that never reads (GET
+ * /api/slow) or an upload that never sends its body (POST /api/stream). The socket, or -1. */
+static int hold(int upload) {
+    char req[512];
+    int s = dial(), n;
+    if (s < 0) return -1;
+    if (upload)
+        n = snprintf(req, sizeof req,
+                     "POST /api/stream HTTP/1.1\r\nHost: 127.0.0.1:%u\r\nX-PS5U-Token: %s\r\n"
+                     "Content-Length: 1000000\r\n\r\n",
+                     (unsigned)g_port, webui_token());
+    else
+        n = snprintf(req, sizeof req, "GET /api/slow HTTP/1.1\r\nHost: 127.0.0.1:%u\r\nX-PS5U-Token: %s\r\n\r\n",
+                     (unsigned)g_port, webui_token());
+    if (send(s, req, (size_t)n, 0) != n) {
+        close(s);
+        return -1;
+    }
+    return s;
+}
+
+/* Transfers never take every worker: with three running (uploads and downloads alike, each holding
+ * its worker for as long as its client keeps it open), a fourth is told 503 busy at once, and the
+ * page's own requests are still answered at once. Before, four slow transfers held all four workers
+ * and every other request waited in the queue until it expired. */
+static void transfers_leave_a_worker(void) {
+    int held[3], i, s, n, status;
+    char req[512], resp[2048];
+    double t0;
+    held[0] = hold(1);
+    held[1] = hold(0);
+    held[2] = hold(0);
+    for (i = 0; i < 3; i++) CHECK(held[i] >= 0);
+    sleep_ms(500); /* the workers have them */
+
+    for (i = 0; i < 2; i++) {
+        t0 = now_s();
+        s = hold(i == 0);
+        CHECK(s >= 0);
+        if (s < 0) continue;
+        status = -1;
+        if (read_all(s, resp, sizeof resp, 3000) > 0) (void)sscanf(resp, "HTTP/1.1 %d", &status);
+        close(s);
+        CHECK(status == 503);
+        CHECK(strstr(resp, "{\"error\":\"busy\"}") != NULL);
+        CHECK(strstr(resp, "Retry-After: 2\r\n") != NULL);
+        CHECK(now_s() - t0 < 1.0);
+    }
+    t0 = now_s();
+    CHECK(request("/api/x", webui_token(), resp, sizeof resp) == 200);
+    CHECK(now_s() - t0 < 1.0);
+
+    /* Once they end, a transfer runs again. */
+    for (i = 0; i < 3; i++)
+        if (held[i] >= 0) close(held[i]);
+    sleep_ms(500);
+    s = dial();
+    CHECK(s >= 0);
+    if (s < 0) return;
+    n = snprintf(req, sizeof req,
+                 "POST /api/stream HTTP/1.1\r\nHost: 127.0.0.1:%u\r\nX-PS5U-Token: %s\r\nContent-Length: 3\r\n\r\nabc",
+                 (unsigned)g_port, webui_token());
+    CHECK(send(s, req, (size_t)n, 0) == n);
+    status = -1;
+    if (read_all(s, resp, sizeof resp, 3000) > 0) (void)sscanf(resp, "HTTP/1.1 %d", &status);
+    close(s);
+    CHECK(status == 200);
+    CHECK(strstr(resp, "{\"n\":3}") != NULL);
 }
 
 /* Idle connections hold no worker: four from anyone on the LAN (or a browser's speculative connects)
@@ -516,6 +596,7 @@ int main(void) {
     garbage_400();
     too_big_413();
     streamed_body();
+    transfers_leave_a_worker();
     idle_connections_take_no_worker();
     idle_connection_closed_at_deadline();
     silent_client_dropped_and_next_served();

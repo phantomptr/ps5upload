@@ -11,6 +11,10 @@
  *   - a full queue closes the new connection instead of waiting;
  *   - every connection has a deadline of accept time + 5 s; a worker reads in
  *     poll slices up to that deadline and drops an expired connection unread;
+ *   - a transfer (a streamed body, or a request the cfg's long_for names: the
+ *     downloads) holds its worker for as long as it moves bytes, so at most
+ *     WEBUI_LONG_MAX run at once; one more is answered 503 at once and the last
+ *     worker stays free for the page's short requests;
  *   - what was turned away is counted and logged every few seconds;
  *   - writes carry SO_SNDTIMEO and a total budget, so a client that stops
  *     reading frees the worker.
@@ -44,6 +48,9 @@
 #include "webui_auth.h"
 
 #define WEBUI_WORKERS        4
+/* Transfers (streamed bodies, the cfg's long_for requests) running at once: one worker is always
+ * left for the page's short requests. */
+#define WEBUI_LONG_MAX       (WEBUI_WORKERS - 1)
 #define WEBUI_QUEUE_DEPTH    32
 #define WEBUI_WAITING_MAX    32      /* connections waiting for their first bytes */
 #define WEBUI_PER_SOURCE_MAX 16      /* one address's connections anywhere in the server: a browser opens 6 */
@@ -93,6 +100,7 @@ typedef struct srv {
     webui_route_fn route;
     int (*stream_for)(const webui_req_t *r);
     webui_stream_fn stream;
+    int (*long_for)(const webui_req_t *r);
     int lan;
     int rebind_req;                 /* accept thread: close and rebind with ->lan */
     int bound;
@@ -109,7 +117,9 @@ typedef struct srv {
     int w_done[WEBUI_WORKERS];
     int w_fd[WEBUI_WORKERS];        /* connection being served, -1 if none */
     uint32_t w_src[WEBUI_WORKERS];  /* its address */
+    int w_long[WEBUI_WORKERS];      /* 1 while the worker is inside a transfer (WEBUI_LONG_MAX) */
     unsigned expired;               /* queued connections past their deadline before a worker got to them */
+    unsigned busy;                  /* transfers answered 503: WEBUI_LONG_MAX were running */
     worker_arg_t wargs[WEBUI_WORKERS];
     char *wbuf[WEBUI_WORKERS];
 } srv_t;
@@ -451,6 +461,22 @@ static void serve(srv_t *s, int idx, conn_t c) {
         webui_send_json(c.fd, 403, "{\"error\":\"forbidden\"}");
         return;
     }
+    if (rd == RD_STREAM || (s->long_for && s->long_for(&req))) {
+        /* A transfer holds its worker for as long as it moves bytes (minutes for a big upload or
+         * download, or a slow client's trickle). Past WEBUI_LONG_MAX of them every worker could be
+         * inside one and the page stopped answering: one more is told to come back instead. */
+        int busy = 0;
+        pthread_mutex_lock(&s->mu);
+        for (i = 0; i < WEBUI_WORKERS; i++) busy += s->w_long[i];
+        if (busy >= WEBUI_LONG_MAX) s->busy++;
+        else s->w_long[idx] = 1;
+        pthread_mutex_unlock(&s->mu);
+        if (busy >= WEBUI_LONG_MAX) {
+            static const char body[] = "{\"error\":\"busy\"}";
+            webui_send_ex(c.fd, 503, "application/json", body, sizeof body - 1, "Retry-After: 2\r\n");
+            return;
+        }
+    }
     if (rd == RD_STREAM) {
         /* The bytes past the headers that came in the same reads (never more than the body). */
         size_t pre = got > req.header_len ? got - req.header_len : 0;
@@ -498,6 +524,7 @@ static void *worker_main(void *arg) {
         }
         pthread_mutex_lock(&s->mu);
         s->w_fd[idx] = -1;
+        s->w_long[idx] = 0;
         pthread_mutex_unlock(&s->mu);
         close(c.fd);
     }
@@ -556,16 +583,19 @@ typedef struct {
 /* One line every WEBUI_WATCH_MS at most, only when something was turned away: a console page that
  * stops answering must leave a trace of why. */
 static void report_drops(srv_t *s, drops_t *d) {
-    unsigned expired;
+    unsigned expired, busy;
     pthread_mutex_lock(&s->mu);
     expired = s->expired;
     s->expired = 0;
+    busy = s->busy;
+    s->busy = 0;
     pthread_mutex_unlock(&s->mu);
-    if (d->queue_full || d->per_source || d->idle_evicted || expired)
+    if (d->queue_full || d->per_source || d->idle_evicted || expired || busy)
         fprintf(stderr,
                 "webui: connections turned away: %u queue full, %u over %d from one address, "
-                "%u idle evicted, %u expired in the queue\n",
-                d->queue_full, d->per_source, WEBUI_PER_SOURCE_MAX, d->idle_evicted, expired);
+                "%u idle evicted, %u expired in the queue, %u transfers over %d at once\n",
+                d->queue_full, d->per_source, WEBUI_PER_SOURCE_MAX, d->idle_evicted, expired, busy,
+                WEBUI_LONG_MAX);
     memset(d, 0, sizeof *d);
 }
 
@@ -848,6 +878,7 @@ int webui_start(const webui_cfg_t *cfg) {
     s->route = cfg->route;
     s->stream_for = cfg->stream_for;
     s->stream = cfg->stream;
+    s->long_for = cfg->long_for;
     s->lan = cfg->lan ? 1 : 0;
     webui_token_new(s->token);
     if (s->lan) {

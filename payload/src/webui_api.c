@@ -1930,6 +1930,12 @@ static void spawn_lan_apply(void) {
     if (rc != 0) fprintf(stderr, "webui: cannot start the rebind thread (%d); LAN applies at the next start\n", rc);
 }
 
+/* The downloads (GET /dl/<ticket>/<name>, serve_download): with the streamed uploads these are the
+ * transfers the server runs on at most all but one worker (webui_cfg_t.long_for). */
+static int api_long_for(const webui_req_t *r) {
+    return strcmp(r->method, "GET") == 0 && strncmp(r->path, "/dl/", 4) == 0;
+}
+
 /* Starts the :9180 server with the saved LAN setting (main.c at helper start, and turning Minion
  * back on). 0 when it runs (or already ran), -1 when it could not start (logged). */
 int webui_api_server_start(void) {
@@ -1945,6 +1951,7 @@ int webui_api_server_start(void) {
     wc.route = webui_api_route;
     wc.stream_for = webui_api_stream_for;
     wc.stream = webui_api_stream;
+    wc.long_for = api_long_for;
     if (webui_start(&wc) != 0) {
         if (webui_running()) return 0; /* another start won the race */
         fprintf(stderr, "webui: server did not start\n");
