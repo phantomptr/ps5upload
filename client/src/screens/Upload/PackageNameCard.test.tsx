@@ -55,7 +55,12 @@ describe("the Name on the PS5 card", () => {
 
   it("offers every language only when some have another name", () => {
     const html = render(state({ names: names({ other_names: 2 }) }));
-    expect(html).toContain("Use this name in every language (2 have another name)");
+    expect(html).toContain("Use this name in every language (other names in the package: 2)");
+  });
+
+  it("the name field takes the name's own direction (a Latin name in an Arabic app)", () => {
+    const html = render(state());
+    expect(/<input[^>]*data-testid="pkg-name-input"[^>]*>/.exec(html)?.[0]).toContain('dir="auto"');
   });
 
   it("is locked while the package is being sent", () => {

@@ -66,6 +66,8 @@ export function PackageNameView({
             <div className="min-w-0 flex-1 basis-[14rem]">
               <Input
                 aria-label={title}
+                // A game's name in its own direction: in Arabic a Latin name showed only its end.
+                dir="auto"
                 data-testid="pkg-name-input"
                 value={state.value}
                 maxLength={names.max_bytes}
@@ -93,9 +95,9 @@ export function PackageNameView({
               onChange={onAllLanguages}
               disabled={locked}
               label={tr(
-                "upload_pkg_name_all",
+                "upload_pkg_name_all_v2",
                 { count: names.other_names },
-                "Use this name in every language ({count} have another name)",
+                "Use this name in every language (other names in the package: {count})",
               )}
             />
           )}

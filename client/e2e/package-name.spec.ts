@@ -81,7 +81,7 @@ test("a picked package's name is changed before it is installed", async ({ page 
   await expect(input).toHaveValue(MARKED);
   const save = card.getByTestId("pkg-name-save");
   await expect(save).toBeDisabled();
-  await expect(card).toContainText("Use this name in every language (1 have another name)");
+  await expect(card).toContainText("Use this name in every language (other names in the package: 1)");
 
   const readsBefore = fake.headerReads;
   await input.fill("A Game");

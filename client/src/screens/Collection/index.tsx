@@ -1078,9 +1078,9 @@ export default function CollectionScreen({ embedded = false }: { embedded?: bool
             <div className="surface-panel mb-5 flex flex-wrap items-center gap-3 !rounded-[var(--radius-card)] px-5 py-3 text-sm">
               <span className="min-w-0 flex-1 basis-[12rem]">
                 {tr(
-                  "collection.uptodate_banner",
+                  "collection.uptodate_banner_v2",
                   { u: cCounts.update, d: cCounts.dlc },
-                  "This PS5 can take {u} update(s) and DLC for {d} game(s) from your collection.",
+                  "Games with an update this PS5 can take from your collection: {u}. Games with DLC to add: {d}.",
                 )}
               </span>
               <Button
@@ -1100,9 +1100,9 @@ export default function CollectionScreen({ embedded = false }: { embedded?: bool
             <div className="surface-panel mb-5 flex flex-wrap items-center gap-3 !rounded-[var(--radius-card)] px-5 py-3 text-sm">
               <span className="min-w-0 flex-1 basis-[12rem]">
                 {tr(
-                  "collection.smaller_banner",
+                  "collection.smaller_banner_v2",
                   { n: shrinkable.length },
-                  "{n} PS5 game(s) are kept as a folder or an uncompressed image. As a compressed image (.ffpfsc) they take less room here and on the PS5; how much depends on the game.",
+                  "PS5 games kept as a folder or an uncompressed image: {n}. As a compressed image (.ffpfsc) they take less room here and on the PS5; how much depends on the game.",
                 )}
               </span>
               <Button

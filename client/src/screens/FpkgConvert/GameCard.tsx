@@ -156,9 +156,9 @@ export function GameCard(props: GameCardProps) {
               id="fpkg-source"
               label={tr("fpkg.source", undefined, "Game source")}
               placeholder={tr(
-                "fpkg.sourcePlaceholder",
+                "fpkg.sourcePlaceholder_v2",
                 undefined,
-                "/games/PPSA09519.exfat, /games/my-game, /downloads/game.7z",
+                "/games/PPSA90001.exfat, /games/my-game, /games/backup.7z",
               )}
               value={props.source}
               disabled={props.locked}
@@ -271,7 +271,7 @@ export function GameCard(props: GameCardProps) {
             <div className="text-[var(--color-muted)]">
               {fw}
               {fw ? " · " : ""}
-              {tr("fpkg.checksPassed", { count: passed.length }, "{count} checks passed")}
+              {tr("fpkg.checksPassed_v2", { count: passed.length }, "Checks passed: {count}")}
             </div>
             <Ps4KindNote inspection={inspection} />
             {!!inspection.unsigned_executables && (
