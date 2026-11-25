@@ -4,6 +4,39 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+**Files on phones**
+- **Back closes what's open first (#932).** On Android, Back used to leave Files even with a menu open. Now it closes the open menu or dialog, then leaves selection, then goes up one folder, and only leaves Files at the top of a drive.
+- **More room for your files (#936).** On a phone, the top of Files is now one compact bar that stays put while you scroll: the folder name, Search, the drive switcher and ⋮ for the rest, with the path below it (beside it when the phone is sideways).
+- **Long-press to select.** Checkboxes stay hidden until you long-press a row (or pick ⋮ → Select). While selecting, the top bar shows the count and Select all, and a bar at the bottom offers Copy, Move, Rename, Delete and More. Tablets and computers look the same as before.
+
+**Play Together on a TV (#926)**
+- **The join screen works with a TV remote.** The arrows move between buttons, OK presses one, and the first useful button already has focus. Back steps out in order: it closes a dialog, then shows the buttons, then leaves full screen. During the game the remote's arrows and OK play the game.
+- **On Android TV**, the app's first screen offers a big "Join Play Together" button, the game opens in full screen, and the focus ring is easy to see from the couch.
+
+**Convert**
+- **A packed game can become a plain package (#933).** When you make a .pkg from a game whose files are in asset packs (zstd or LZ4), Convert now writes the files out plain again, on by default. A second option leaves out the AMPR emulator files. That one is off by default, because it isn't known yet whether every game runs without them.
+
+**Games**
+- **Updated PS4 games show their real version (#934).** PS4 games with an update installed showed no version and were offered the update again. The app now reads the version where PS4 games keep it, so the game page, update installs and cheat matching see 01.32 instead of 01.00.
+
+**Backups and cheats**
+- **A restore that put nothing back no longer says it worked.** If only some files came back, the Backup screen says how many couldn't be restored.
+- **XML game patches check they're writing into the game itself**, as other game patches already do.
+- **The console page stays usable during big transfers.** One worker is always kept free for the page.
+
+**Safety fixes from an audit**
+- The app only installs an update file that matches the checksum of the release it checked, and checks it again right before installing.
+- The app's pages can only read the files they show (screenshot previews and game covers), not any file on disk.
+- Sending a payload by its path only sends payload files.
+- Adding the app to an AI agent only passes a clean web address, and a failed move keeps the agent's old entry.
+- NAS and FTP file names that aren't standard text now list and copy instead of failing.
+- A save restore can never write outside the save folder it names.
+- Replies from consoles and servers have size limits, so a bad reply can't fill memory.
+- Extracting from an .ffpkg image refuses a folder that contains itself instead of running forever.
+- Release builds check the tools they download and pin their base images.
+
 ## 12.6.29
 
 **Fake packages (FPKG)**
