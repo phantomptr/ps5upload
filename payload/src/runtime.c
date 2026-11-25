@@ -621,6 +621,21 @@ static void extract_json_string_field(const char *json, const char *field,
     if (json_copy_unescaped_string(start, end, out, out_len) != 0) out[0] = '\0';
 }
 
+/* 1 when the body has `"field":"..."` with a value that is not empty. extract_json_string_field
+ * leaves "" for a value that does not fit its buffer, the same as for a field that is not there:
+ * a caller for whom "not there" means "choose for me" asks this to tell the two apart. */
+static int json_string_field_given(const char *json, const char *field) {
+    char needle[64];
+    const char *pos;
+    if (!json || !field) return 0;
+    snprintf(needle, sizeof(needle), "\"%s\":", field);
+    pos = strstr(json, needle);
+    if (!pos) return 0;
+    pos += strlen(needle);
+    while (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r') pos++;
+    return pos[0] == '"' && pos[1] != '"' && pos[1] != '\0';
+}
+
 static uint64_t extract_json_uint64_field(const char *json, const char *field) {
     char needle[64];
     const char *pos = NULL;
@@ -3157,6 +3172,16 @@ static int fs_mount_request(runtime_state_t *state, const char *request_body,
          * instead of a JSON true/false keeps extract_json_uint64_field
          * happy and avoids adding a bool parser. */
         read_only = (extract_json_uint64_field(request_body, "read_only") != 0) ? 1 : 0;
+        /* A mount point or name too long for its buffer reads as "" (extract_json_string_field),
+         * and "" means "none given": the image was then mounted at /mnt/ps5upload/<a name made
+         * from the image's> instead of where the caller asked, and answered as a success.
+         * Refused instead, before anything is attached. */
+        if (mount_point[0] == '\0' && json_string_field_given(request_body, "mount_point")) {
+            return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_bad_mount_point", 24);
+        }
+        if (mount_name[0] == '\0' && json_string_field_given(request_body, "mount_name")) {
+            return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_name_too_long", 22);
+        }
     }
     if (!is_path_allowed(image_path)) {
         return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_path_not_allowed", 25);
