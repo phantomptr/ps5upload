@@ -1514,6 +1514,18 @@ static void xml_applied_forget(pid_t pid) {
         if (g_xml_applied[i].rec && g_xml_applied[i].pid == pid) xml_applied_free(&g_xml_applied[i]);
 }
 
+/* 1 when one more entry applied to `pid` can be recorded (an earlier game session's records are
+ * let go first, as xml_applied_find does). */
+static int xml_applied_room(pid_t pid) {
+    int room = 0;
+    for (int i = 0; i < XML_APPLIED_MAX; i++) {
+        xml_applied_t *a = &g_xml_applied[i];
+        if (a->rec && a->pid != pid) xml_applied_free(a);
+        if (!a->rec) room = 1;
+    }
+    return room;
+}
+
 static int xml_applied_add(pid_t pid, const char *path, int entry, const cheat_loc_t *locs, int n,
                            uint32_t handle, uint64_t mbase, uint64_t msize) {
     xml_applied_t *a = NULL;
@@ -1985,13 +1997,27 @@ static int xml_apply_on(pid_t pid, const char *title, cheat_mod_t *mod, const xm
         if (err) snprintf(err, err_cap, "patch has no lines");
         rc = -1;
     }
+    /* Only what can be recorded is written: without its record, turning it off finds nothing to
+     * put back, says it is off and leaves the bytes in the game. */
+    if (rc == 0 && !xml_applied_room(pid)) {
+        if (err) snprintf(err, err_cap, "%d game patches are on already; turn one off first; nothing was written",
+                          XML_APPLIED_MAX);
+        rc = -1;
+    }
     if (rc == 0) {
         hook_before_write(hk);
         rc = cheat_plan_apply(locs, n, 1, NULL, 0, &ops, err, err_cap);
     }
-    if (rc == 0 && xml_applied_add(pid, mod->xml_path, mod->xml_entry, locs, n, handle, mbase, msize) != 0)
-        fprintf(stderr, "[cheats] %s #%d applied but not recorded; restart the game to remove it\n",
-                mod->xml_path, mod->xml_entry);
+    if (rc == 0 && xml_applied_add(pid, mod->xml_path, mod->xml_entry, locs, n, handle, mbase, msize) != 0) {
+        /* Out of memory for the record: take the patch out again (what is there now is its bytes). */
+        for (int i = 0; i < n; i++) memcpy(locs[i].cur, locs[i].on, (size_t)locs[i].len);
+        char undo_err[160] = "";
+        int undo = cheat_plan_apply(locs, n, 0, NULL, 0, &ops, undo_err, sizeof undo_err);
+        fprintf(stderr, "[cheats] %s #%d applied but not recorded; %s\n", mod->xml_path, mod->xml_entry,
+                undo == 0 ? "taken out again" : "restart the game to remove it");
+        if (err) snprintf(err, err_cap, "out of memory; %s", undo == 0 ? "nothing was left written" : undo_err);
+        rc = -1;
+    }
     free(locs);
     return rc;
 }
