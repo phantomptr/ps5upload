@@ -92,6 +92,9 @@ pub struct Ensure {
     pub error: Option<String>,
 }
 
+/// The most of a reply read while waiting for its line end (a real one is a few hundred bytes).
+const MAX_REPLY_BYTES: usize = 1 << 20;
+
 /// Connect to `addr`, send `request` + "\n", read one line back.
 fn talk(addr: &str, read_timeout: Duration, request: &str) -> Result<String, String> {
     let sa = addr
@@ -117,9 +120,17 @@ fn talk(addr: &str, read_timeout: Duration, request: &str) -> Result<String, Str
         match s.read(&mut tmp) {
             Ok(0) => break,
             Ok(n) => {
+                let line_ends = tmp[..n].contains(&b'\n');
                 buf.extend_from_slice(&tmp[..n]);
-                if buf.contains(&b'\n') {
+                if line_ends {
                     break;
+                }
+                // The daemon answers in one short line. Whatever sends more than this with no
+                // line end is not it, and was read for as long as it kept sending.
+                if buf.len() > MAX_REPLY_BYTES {
+                    return Err(format!(
+                        "read {addr}: no line end in {MAX_REPLY_BYTES} bytes of reply"
+                    ));
                 }
             }
             Err(e) => return Err(format!("read {addr}: {e}")),
@@ -582,6 +593,27 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread;
+
+    /// Something on the daemon's port that keeps sending with no line end is given up on after
+    /// [`MAX_REPLY_BYTES`]: it used to be read into memory for as long as it sent.
+    #[test]
+    fn a_reply_that_never_ends_its_line_is_given_up_on() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap().to_string();
+        let h = thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut sent = 0usize;
+            let chunk = [b'x'; 64 * 1024];
+            // Far more than the limit, unless the client hangs up first (it should).
+            while sent < 64 * MAX_REPLY_BYTES && s.write_all(&chunk).is_ok() {
+                sent += chunk.len();
+            }
+            sent
+        });
+        let e = talk(&addr, Duration::from_secs(10), "{}").unwrap_err();
+        assert!(e.contains("no line end"), "{e}");
+        assert!(h.join().unwrap() < 64 * MAX_REPLY_BYTES, "read to the end");
+    }
 
     /// A one-shot fake daemon: binds 127.0.0.1:0, accepts one connection,
     /// reads a line, sends `reply` + "\n". Returns (addr, join handle that
