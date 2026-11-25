@@ -152,6 +152,21 @@ static void test_order_mc4_zero_cave(void) {
     CHECK(locs[1].addr + locs[1].len <= 0x6324000);
 }
 
+static void test_module_is_game(void) {
+    CHECK(cheat_module_is_game(0, "/app0/eboot.bin"));
+    CHECK(cheat_module_is_game(0, "/system_ex/app/PPSA01234/eboot.bin"));
+    CHECK(cheat_module_is_game(0, "/mnt/sandbox/pfsmnt/CUSA00284-app0/EBOOT.BIN"));
+    CHECK(cheat_module_is_game(0, "")); /* path unreadable: as handle 0 always was */
+    CHECK(cheat_module_is_game(0, NULL));
+    CHECK(cheat_module_is_game(7, "/app0/sce_module/libgame.prx"));
+    /* #920: handle 0 of a PS4 game's process is another module; a physical write there is
+     * shared with every process mapping it. */
+    CHECK(!cheat_module_is_game(0, "/system/common/lib/libSceSomething.sprx"));
+    CHECK(!cheat_module_is_game(0, "/system_ex/common_ex/lib/libc.prx"));
+    CHECK(!cheat_module_is_game(3, "/system/common/lib/libkernel.sprx"));
+    CHECK(!cheat_module_is_game(3, ""));
+}
+
 static void test_addr_ok(void) {
     CHECK(cheat_addr_ok(0x1FAD908, 9));
     CHECK(!cheat_addr_ok(0, 4));
@@ -368,6 +383,7 @@ int main(void) {
     test_order_max_resources();
     test_order_mc4_zero_cave();
     test_addr_ok();
+    test_module_is_game();
     test_apply_mock();
     if (failures) {
         fprintf(stderr, "cheats_plan_selftest: %d failure(s)\n", failures);

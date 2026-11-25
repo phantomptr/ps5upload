@@ -456,7 +456,7 @@ static int phys_write_allowed(pid_t pid, intptr_t addr, size_t len, char *why, s
             path[0] = '\0';
             if (h.path) (void)kernel_copyout(h.path, path, sizeof(path) - 1);
             path[sizeof(path) - 1] = '\0';
-            int game_module = (h.handle == 0) || strstr(path, "/app0/") != NULL;
+            int game_module = cheat_module_is_game(h.handle, path);
             if (!game_module) {
                 if (why) snprintf(why, why_cap, "inside %s", path[0] ? path : "a system module");
                 verdict = 0;
