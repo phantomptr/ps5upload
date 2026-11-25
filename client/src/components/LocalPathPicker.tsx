@@ -167,12 +167,12 @@ export function PickerView(p: PickerViewProps) {
                 ? tr(
                     "picker_grant_hint_prompt",
                     undefined,
-                    "To upload a game folder or .zip, PS5 Upload needs permission to read your files. Tap Allow, say yes in the prompt, then tap Retry.",
+                    "To upload a game folder or .zip, PS5Upload needs permission to read your files. Tap Allow, say yes in the prompt, then tap Retry.",
                   )
                 : tr(
                     "picker_grant_hint",
                     undefined,
-                    "To upload a game folder or .zip, PS5 Upload needs permission to read your files. Tap below, enable “Allow access to manage all files”, then come back and tap Retry.",
+                    "To upload a game folder or .zip, PS5Upload needs permission to read your files. Tap below, enable “Allow access to manage all files”, then come back and tap Retry.",
                   )}
             </p>
             <div className="mt-2 flex gap-2">
