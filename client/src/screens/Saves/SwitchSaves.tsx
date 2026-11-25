@@ -62,6 +62,7 @@ function SwitchSaveGroup({ host, saves, emulator }: {
   emulator: string;
 }) {
   const tr = useTr();
+  const platform = emulator === "EglantinePS5" ? "Switch / Switch 2" : "Switch";
   const running = saves.some((s) => s.running === true);
   const games = [...new Set(saves.map((s) => s.title_id))].sort();
 
@@ -70,7 +71,7 @@ function SwitchSaveGroup({ host, saves, emulator }: {
       <header className="mb-1 flex items-center gap-2">
         <Gamepad2 size={16} aria-hidden />
         <h3 className="text-sm font-semibold">
-          {tr("saves_switch_title", { emulator }, "Switch games ({emulator})")}
+          {tr("saves_switch_title", { emulator, platform }, "{platform} games ({emulator})")}
         </h3>
       </header>
       <p
@@ -94,7 +95,7 @@ function SwitchSaveGroup({ host, saves, emulator }: {
             <div className="mb-1 flex items-center gap-2">
               <code className="text-sm font-semibold">{game}</code>
               <span className="rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-xs">
-                {tr("saves_switch_badge", undefined, "Switch")}
+                {tr("saves_switch_badge", { platform }, "{platform}")}
               </span>
             </div>
             <ul className="space-y-2">
