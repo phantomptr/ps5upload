@@ -22,6 +22,11 @@ import {
 } from "./navItems";
 import { isMacOrLinuxDesktop, isWindows } from "../lib/platform";
 
+/** End padding of a row's link while its hover buttons show (one is 28 px, 8 px from the edge). */
+const ROOM_FOR_ONE =
+  "group-hover:pe-11 group-focus-within:pe-11 [@media(hover:none)]:group-has-[[aria-current=page]]:pe-11";
+const ROOM_FOR_TWO =
+  "group-hover:pe-[4.75rem] group-focus-within:pe-[4.75rem] [@media(hover:none)]:group-has-[[aria-current=page]]:pe-[4.75rem]";
 const COLLAPSED_KEY = "ps5upload.desktop-sidebar.collapsed.v1";
 
 /**
@@ -202,7 +207,11 @@ export default function Sidebar() {
             "nav-pill relative flex min-h-9 items-center rounded-[var(--radius-field)] text-[0.875rem] transition-[background-color,color,box-shadow]",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--color-accent)]",
             collapsed ? "justify-center px-2" : "gap-3 px-4",
+            // While the row's buttons show, the name ends before them (a long one, "Hochladen &
+            // installieren", ran under them).
+            hasButtons ? (kind === "section" ? ROOM_FOR_TWO : ROOM_FOR_ONE) : "",
           ].join(" ")}
+          data-testid="sidebar-link"
         >
           <Icon size={19} strokeWidth={1.7} className="nav-pill-icon shrink-0" />
           {!collapsed && <span className="min-w-0 flex-1 truncate">{label}</span>}
