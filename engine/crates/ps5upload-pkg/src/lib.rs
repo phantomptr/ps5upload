@@ -257,10 +257,14 @@ fn extract_file<R: Read + Seek>(
     inode: &ufs2::Inode,
     path: &Path,
 ) -> Result<u64, Ufs2Error> {
+    // No file is larger than the image it is in. The image's real length, not the size its
+    // superblock claims: a few KiB of image that claimed a terabyte, holding one file of holes
+    // that size, was written out as zeros until the disk was full.
     let sb = &img.superblock;
-    let cap = sb
+    let claimed = sb
         .size_fragments
         .saturating_mul(u64::from(sb.fragment_size));
+    let cap = claimed.min(img.image_len().map_err(Ufs2Error::Io)?);
     if inode.size > cap {
         return Err(Ufs2Error::FileTooLarge {
             size: inode.size,
@@ -2361,6 +2365,38 @@ mod tests {
             volume_name: String::new(),
         };
         ufs2::Ufs2Image::from_parts(std::io::Cursor::new(image), sb)
+    }
+
+    /// A file is never larger than the image it is in, whatever the superblock says the image
+    /// is: one of holes "a terabyte long" in a 24 KiB image is refused, not written out.
+    #[test]
+    fn a_file_larger_than_the_image_is_not_extracted() {
+        let mut img = looping_root(&[]);
+        img.superblock.size_fragments = 1 << 28; // "a terabyte" of 4 KiB fragments
+        let holes = ufs2::Inode {
+            number: 9,
+            mode: 0x81a4,
+            size: 1 << 40,
+            direct: [0; 12],
+            indirect: [0; 3],
+            mtime: 0,
+        };
+        let dest = tempdir().join("larger-than-image");
+        let _ = std::fs::remove_dir_all(&dest);
+        std::fs::create_dir_all(&dest).unwrap();
+        let e = extract_file(&mut img, &holes, &dest.join("holes.bin")).unwrap_err();
+        assert!(matches!(e, Ufs2Error::FileTooLarge { .. }), "{e}");
+        assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0);
+        // One that fits is still written.
+        let small = ufs2::Inode {
+            size: 8192,
+            ..holes
+        };
+        assert_eq!(
+            extract_file(&mut img, &small, &dest.join("ok.bin")).unwrap(),
+            8192
+        );
+        let _ = std::fs::remove_dir_all(&dest);
     }
 
     /// A directory that lists itself is refused at once. Two such entries in one directory used

@@ -124,6 +124,13 @@ pub enum Ufs2Error {
         why: &'static str,
         hex: String,
     },
+    /// A file's block map does not give the bytes its size says: an indirect block linked
+    /// twice (a cycle), or a size past what the map can hold. The file is refused, never
+    /// handed back shorter than it is listed.
+    #[error(
+        "inode {inode} is {size} bytes but its block map gives only {got}: the image is damaged"
+    )]
+    ShortBlockMap { inode: u64, size: u64, got: u64 },
 }
 
 /// Subset of the superblock we actually use for reading. The full
@@ -598,7 +605,21 @@ impl<R: Read + Seek> Ufs2Image<R> {
                 &mut visited,
             )?;
         }
+        // Everything the size says, or an error: a walk that stopped early (an indirect block
+        // met twice) used to return the shorter data as the file.
+        if remaining != 0 {
+            return Err(Ufs2Error::ShortBlockMap {
+                inode: inode.number,
+                size: inode.size,
+                got: inode.size - remaining,
+            });
+        }
         Ok(out)
+    }
+
+    /// The image's real length in bytes: what its reader holds, whatever the superblock says.
+    pub fn image_len(&mut self) -> std::io::Result<u64> {
+        self.reader.seek(SeekFrom::End(0))
     }
 
     /// The `len` bytes at `offset` of a file, reading only the blocks
@@ -738,10 +759,14 @@ impl<R: Read + Seek> Ufs2Image<R> {
             });
         }
         if !visited.insert(block) {
-            // Cycle — same indirect block visited twice. Stop the
-            // walk; the file won't be fully reconstructed but the
-            // engine won't blow the stack either.
-            return Ok(());
+            // Cycle — same indirect block visited twice. The file is refused: stopping the
+            // walk here and returning `Ok` passed as a shorter file, or (with more pointers
+            // after it) as one whose later bytes had moved down.
+            return Err(Ufs2Error::ShortBlockMap {
+                inode: inode_num,
+                size: out.len() as u64 + *remaining,
+                got: out.len() as u64,
+            });
         }
         let off = self.superblock.frag_offset(block);
         self.reader.seek(SeekFrom::Start(off))?;
@@ -1090,6 +1115,35 @@ mod tests {
             img.read_range(&inode, tail, 32).unwrap(),
             &want[tail as usize..tail as usize + 32]
         );
+    }
+
+    /// A file whose map names one indirect block twice, or whose size is past what its map
+    /// holds, is refused. It used to come back `Ok`, shorter than listed (and unlike what
+    /// `read_range` gives for the same file).
+    #[test]
+    fn a_block_map_that_does_not_cover_the_file_is_an_error() {
+        const BS: u64 = 4096;
+        let (mut img, mut inode, _) = block_data();
+        // The single-indirect block again as the double-indirect one.
+        inode.indirect = [20, 20, 0];
+        inode.size = (NDADDR as u64 + BS / 8 + 4) * BS;
+        let e = img.read_file(&inode, u64::MAX).unwrap_err();
+        assert!(
+            matches!(e, Ufs2Error::ShortBlockMap { inode: 3, .. }),
+            "{e}"
+        );
+
+        // The same block twice inside a double-indirect block: the second span would have
+        // been skipped and what follows moved down.
+        let (mut img, mut inode, _) = block_data();
+        let image = img.reader.get_mut();
+        let double = 28 * BS as usize;
+        image[double..double + 8].copy_from_slice(&20u64.to_le_bytes());
+        image[double + 8..double + 16].copy_from_slice(&20u64.to_le_bytes());
+        inode.indirect = [0, 28, 0];
+        inode.size = (NDADDR as u64 + BS / 8 + 2 * (BS / 8)) * BS;
+        let e = img.read_file(&inode, u64::MAX).unwrap_err();
+        assert!(matches!(e, Ufs2Error::ShortBlockMap { .. }), "{e}");
     }
 
     /// A 4 KiB-block image holding one directory of `count` entries, each named `name_len`
