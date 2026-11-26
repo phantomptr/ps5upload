@@ -426,7 +426,8 @@ export function Convert({ ctx }: { ctx: SectionContext }) {
     if (!source || busy) return;
     let live = true;
     setInspected({ phase: "reading" });
-    void inspect(source).then((r) => {
+    // Another source, or Convert left: the check is stopped (the next one waits for it to end).
+    void inspect(source, undefined, () => !live).then((r) => {
       if (!live) return;
       setInspected(r.ok ? { phase: "done", info: r.info } : { phase: "failed", error: r.error });
     });

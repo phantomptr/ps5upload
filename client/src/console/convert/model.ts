@@ -379,15 +379,30 @@ const realDeps: JobDeps = { start: startOp, watch: watchOp };
 
 export type InspectEnd = { ok: true; info: Inspection } | { ok: false; error: string | null };
 
-/** Read what `path` is (a job: the converter is started for it). */
-export async function inspect(path: string, deps: JobDeps = realDeps): Promise<InspectEnd> {
+/** The check under way: the helper runs one converter at a time, so the next waits for it. */
+let inspecting: Promise<unknown> = Promise.resolve();
+
+/**
+ * Read what `path` is (a job: the converter is started for it). `stopped()` turning true (another
+ * source was picked) cancels it; the next check starts once it has ended, where it used to fail
+ * at once with "another conversion is running". A stopped check answers { ok: false, error: null }.
+ */
+export function inspect(path: string, deps: JobDeps = realDeps, stopped?: () => boolean): Promise<InspectEnd> {
+  const run = inspecting.then(() => inspectNow(path, deps, stopped));
+  inspecting = run.catch(() => undefined);
+  return run;
+}
+
+async function inspectNow(path: string, deps: JobDeps, stopped?: () => boolean): Promise<InspectEnd> {
+  if (stopped?.()) return { ok: false, error: null };
   let end: OpEnd;
   try {
     const job = await deps.start("/api/convert/inspect", { path });
-    end = await deps.watch(job);
+    end = await deps.watch(job, { stopped });
   } catch (e) {
     return { ok: false, error: convertErrorText(e) };
   }
+  if (end.end === "cancelled") return { ok: false, error: null };
   if (end.end === "done") {
     const info = parseInspection(opResult<unknown>(end.status));
     return info ? { ok: true, info } : { ok: false, error: convertFailureText("convert_bad_status") };
