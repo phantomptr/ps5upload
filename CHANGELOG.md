@@ -8,10 +8,25 @@ What's new in ps5upload, written for humans.
 
 **Upload & Install**
 - **Change a fake package's name before installing it (#937).** Pick one package and edit "Name on the PS5". The name is changed inside the package, in place, without rebuilding it, and checked afterwards. Packages signed by Sony, split packages and packages on a server are refused.
+- **Stream & install no longer sits at 0% in silence (#942).** Before it starts, the app checks that the PS5 can reach this computer. If it can't, or the PS5 never fetches any of the package, the install stops with the likely cause (most often this computer's firewall) and offers Retry via upload.
 
 **Convert**
 - **Free an archive's space while it unpacks (dangerous, off by default).** For a drive with no room for the archive and the unpacked game together. A .zip is freed file by file, a .7z block by block, and a multi-part .rar part by part; other archives are deleted once unpacked and checked. The archive is deleted for good: if anything fails on the way, you keep only what was unpacked so far. It asks every time, and it is for one game only.
 - **".pkg" now says what it is:** a fake package (FPKG).
+- **The PS5's own Convert page has the unpack options too.** For a .pkg of a packed game: unpack the asset packs, and leave out the AMPR emulator. Keeping the emulator is offered only where it is known to work with plain files.
+- **The unpack options are easy to find.** For a package, Options starts with "Asset packs and AMPR", which says what to do before a game is checked and when a game has no packs. The queue's per-game choices have them too.
+- **A package follows the game's own languages (#939).** When the game's own PlayGo data names its languages, the package declares those, not all 31. "Every language" and a single language can still be chosen.
+- **No more false "ampr_emu.index is stale" warning** when the output gets a fresh index anyway.
+
+**The PS5 helper**
+- **The app says when the helper on the PS5 is out of date (#941).** A notice on Home, a toast and the bell, with an Update helper button. It never sends by itself, and waits while a transfer, an install or a game start is running.
+
+**Games**
+- **A damaged package says so in plain words.** The copy check now reads, for example, "This file's data is damaged: 56,116 of 1,529,208 blocks don't match (3.7%, about 3.43 GB)", with what to do. The technical lines are under Details.
+
+**Payloads**
+- A search box appears once the saved list is long, and each section shows how many it lists.
+- **Fake PS5 games on firmware 11.61 to 13.60 need kstuff 1.15 or newer.** The notes now name the version instead of a date, and say the catalog's copy may be older.
 
 **Accounts**
 - **Renaming a user works again (#940).** The console refused every rename with error 0x800D0208, because the name was sent with the wrong size. Names are limited to 16 bytes, and a refusal now says why instead of blaming missing privileges.
