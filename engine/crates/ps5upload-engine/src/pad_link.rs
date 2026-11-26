@@ -695,7 +695,11 @@ pub async fn set_internet(headers: HeaderMap, Json(r): Json<InternetReq>) -> Res
         if l.key.is_none() {
             l.key = random_key();
         }
-        if r.new || l.net.as_ref().is_none_or(|n| n.room.url() != s.hub_url) {
+        if r.new
+            || l.net
+                .as_ref()
+                .is_none_or(|n| n.room.url() != s.hub_url || n.room.ended())
+        {
             // The old room goes first: its link stops working, and the internet phones still
             // waiting for an answer go with it (those allowed keep playing).
             l.net = None;

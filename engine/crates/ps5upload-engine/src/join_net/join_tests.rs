@@ -462,6 +462,56 @@ async fn the_engines_signalling_socket_takes_a_bounded_number_of_signals() {
     set_live(console, 0);
 }
 
+/// An invite lasts half an hour. When one lapses with no internet guest in, its room on the hub
+/// closes; the next invite gets a room again. (It kept the closed one, so every later invite was
+/// the home network's link, "offline", until Play Together was closed and opened again.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_invite_after_a_lapsed_one_gets_a_room_again() {
+    let _turn = PARTY_TESTS.lock().await;
+    let hub = FakeHub::start().await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        hub_url: hub.url.clone(),
+        stun: Vec::new(),
+        upnp: false,
+        ..Settings::default()
+    });
+    let console = "10.77.0.54";
+    set_helper(console, Arc::new(FakeHelper::default()));
+    set_live(console, 1);
+    open_party(console).await;
+    let inv = internet_invite(console).await;
+    let room = inv["internet"]["room"].as_str().unwrap().to_string();
+    until("hosted", || hub.has_host(&room)).await;
+
+    // The invite lapses (as after its half hour): nobody is in, so the room closes.
+    let key = host_key(console);
+    with_party(&key, |p| {
+        if let Some(i) = p.invite.as_mut() {
+            i.until = Instant::now();
+        }
+    });
+    until("the room closed", || !hub.has_host(&room)).await;
+    until("its task over", || {
+        with_party(&key, |p| p.internet.as_ref().is_some_and(|r| r.ended())).unwrap_or(false)
+    })
+    .await;
+
+    // The host's panel asks for the next invite: a new room, hosted.
+    let next = internet_invite(console).await;
+    let room2 = next["internet"]["room"].as_str().unwrap().to_string();
+    assert_ne!(room2, room, "{next}");
+    until("hosted again", || hub.has_host(&room2)).await;
+    let s = until_state(console, "the internet link", |s| {
+        s["invite"]["internet"]["state"] == "hosted"
+    })
+    .await;
+    assert_eq!(s["invite"]["internet"]["offline"], false, "{s}");
+
+    close_party(console).await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_live(console, 0);
+}
+
 /// A guest on the home network with the Wi-Fi's own link (no internet invite, no hub at all)
 /// joins over WebRTC signalled on the engine's socket: the link carries the engine's
 /// certificate, the answer has it, the invite key goes in the hello on the channel, the picture

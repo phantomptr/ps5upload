@@ -3792,7 +3792,15 @@ pub async fn invite(
     let key = host_key(&b.addr);
     match with_party(&key, |p| {
         let inv = p.invite(b.new, now);
-        if internet && inv.is_some() && p.internet.as_ref().is_none_or(|r| r.url() != s.hub_url) {
+        // A room that closed by itself (the invite before this one lapsed with no internet guest
+        // in) is gone for good: this invite gets a new one. Kept, it left every later invite on
+        // the home network's link until Play Together was closed and opened again.
+        if internet
+            && inv.is_some()
+            && p.internet
+                .as_ref()
+                .is_none_or(|r| r.url() != s.hub_url || r.ended())
+        {
             let k = key.clone();
             p.internet = crate::join_net::hub::Room::start(
                 crate::join_net::Kind::Join,

@@ -64,6 +64,9 @@ pub(crate) struct Shared {
     st: Mutex<St>,
     /// When the room was asked for (how long the hub has had to answer).
     started: std::time::Instant,
+    /// The room's task is over (nobody wanted it any more, or there was no network for it): this
+    /// room never hosts again, and whoever still holds it starts another when one is wanted.
+    ended: std::sync::atomic::AtomicBool,
 }
 
 /// The hub not hosting the room this long after it was asked for (or a failed connect): the
@@ -111,9 +114,14 @@ impl Room {
                 connects: 0,
             }),
             started: std::time::Instant::now(),
+            ended: std::sync::atomic::AtomicBool::new(false),
         });
         let (stop, stop_rx) = watch::channel(());
-        tokio::spawn(run(shared.clone(), wanted, stop_rx));
+        let task = shared.clone();
+        tokio::spawn(async move {
+            run(task.clone(), wanted, stop_rx).await;
+            task.ended.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
         Some(Room {
             shared,
             _stop: stop,
@@ -126,6 +134,12 @@ impl Room {
 
     pub(crate) fn url(&self) -> &str {
         &self.shared.url
+    }
+
+    /// The room closed by itself (its invite lapsed with nobody in, or it had no network): it
+    /// does not come back. An invite made after that needs a new room.
+    pub(crate) fn ended(&self) -> bool {
+        self.shared.ended.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The hub can't be reached: not hosting the room now, and a connect failed or it has had
