@@ -169,11 +169,11 @@ fn extract_engine(dir: &Path, bin_name: &str, bytes: &[u8], hex: &str) -> Result
     let (stem, ext) = bin_name.split_once('.').unwrap_or((bin_name, ""));
     let dot = if ext.is_empty() { "" } else { "." };
     let versioned = dir.join(format!("{stem}-{}{dot}{ext}", &hex[..hex.len().min(16)]));
-    eprintln!(
+    log_line(format_args!(
         "[engine] could not write {}: {err:#}; using {} instead",
         usual.display(),
         versioned.display()
-    );
+    ));
     extract_at(&versioned, bytes, hex).with_context(|| {
         format!(
             "could not write the engine to {} ({err:#}) or to {}",
@@ -219,10 +219,10 @@ fn extract_at(path: &Path, bytes: &[u8], hex: &str) -> Result<()> {
     // Stamp last so a crash mid-extract leaves a missing or outdated stamp; the next
     // launch re-extracts.
     if let Err(e) = std::fs::write(&stamp, hex) {
-        eprintln!(
+        log_line(format_args!(
             "[engine] could not write stamp {}: {e} (engine still extracted, just re-extracts next launch)",
             stamp.display()
-        );
+        ));
     }
     Ok(())
 }
@@ -633,7 +633,7 @@ const ENGINE_LOG_OLD_FILES: usize = 4;
 /// file moves to `<name>.old`, older ones along to `.old.2` and on
 /// (`ENGINE_LOG_OLD_FILES`).
 ///
-/// Logs the failure to `eprintln!` if open fails, so a developer
+/// Logs the failure to stderr (`log_line`) if open fails, so a developer
 /// running `cargo tauri dev` from a console at least sees why
 /// log capture didn't engage. Returns None on failure rather than
 /// erroring — a missing log file shouldn't block engine startup.
@@ -645,7 +645,10 @@ fn open_engine_log(path: &Path) -> Option<Arc<Mutex<EngineLog>>> {
     match EngineLog::open(path) {
         Ok(log) => Some(Arc::new(Mutex::new(log))),
         Err(e) => {
-            eprintln!("[engine-log] cannot open {}: {e}", path.display());
+            log_line(format_args!(
+                "[engine-log] cannot open {}: {e}",
+                path.display()
+            ));
             None
         }
     }
@@ -757,7 +760,9 @@ pub async fn start(app: &AppHandle) -> Result<String> {
     // Remote engine: don't spawn the bundled sidecar, just probe the
     // remote API for readiness and hand back its URL.
     if !is_loopback_url(&configured) {
-        eprintln!("[engine] remote engine configured ({configured}); skipping local sidecar");
+        log_line(format_args!(
+            "[engine] remote engine configured ({configured}); skipping local sidecar"
+        ));
         let client = engine_probe_client();
         let deadline = Instant::now() + READINESS_TIMEOUT;
         while Instant::now() < deadline {
@@ -806,15 +811,15 @@ pub async fn start(app: &AppHandle) -> Result<String> {
             // killed: the reaper below is only for an engine we cannot use.
             if engine_version_matches(&preferred_url, &client).await {
                 if guard.is_none() {
-                    eprintln!(
+                    log_line(format_args!(
                         "[engine] using the engine already answering on {preferred_url} (not started by this app)",
-                    );
+                    ));
                 }
                 return Ok(preferred_url);
             }
-            eprintln!(
+            log_line(format_args!(
                 "[engine] another version's engine answers on {preferred_url}; this app runs its own",
-            );
+            ));
         }
 
         // Kill our child handle if we have one. take() empties the
@@ -844,7 +849,9 @@ pub async fn start(app: &AppHandle) -> Result<String> {
             if probe(&preferred_url, &client).await {
                 match engine_folder(app) {
                     Ok(dir) => reap_our_orphan_on(preferred_port, &dir).await,
-                    Err(e) => eprintln!("[engine] no engine folder to compare with: {e:#}"),
+                    Err(e) => log_line(format_args!(
+                        "[engine] no engine folder to compare with: {e:#}"
+                    )),
                 }
             }
         }
@@ -860,10 +867,10 @@ pub async fn start(app: &AppHandle) -> Result<String> {
     let (engine_url, engine_port) = if loopback_port_free(preferred_port) {
         (preferred_url, preferred_port)
     } else if let Some(free) = pick_free_loopback_port() {
-        eprintln!(
+        log_line(format_args!(
             "[engine] preferred port {preferred_port} is taken; \
              using free port {free} so the app can start",
-        );
+        ));
         (format!("http://127.0.0.1:{free}"), free)
     } else {
         // Couldn't even secure a free port; try the preferred one anyway
@@ -877,7 +884,9 @@ pub async fn start(app: &AppHandle) -> Result<String> {
         .and_then(|dir| match extract_unrar_helper(dir) {
             Ok(p) => Some(p),
             Err(e) => {
-                eprintln!("[engine] could not extract the RAR helper: {e:#}");
+                log_line(format_args!(
+                    "[engine] could not extract the RAR helper: {e:#}"
+                ));
                 None
             }
         });
@@ -1275,7 +1284,9 @@ fn restart_after_crash(app: AppHandle) {
         .unwrap_or(0);
     let last = LAST_AUTO_RESTART_MS.load(Ordering::SeqCst);
     if last != 0 && now.saturating_sub(last) < AUTO_RESTART_COOLDOWN_MS {
-        eprintln!("[engine-watch] engine stopped again soon after a restart; leaving it stopped");
+        log_line(format_args!(
+            "[engine-watch] engine stopped again soon after a restart; leaving it stopped"
+        ));
         return;
     }
     LAST_AUTO_RESTART_MS.store(now, Ordering::SeqCst);
@@ -1284,7 +1295,7 @@ fn restart_after_crash(app: AppHandle) {
         if crate::exit_guard::exiting() {
             return;
         }
-        eprintln!("[engine-watch] starting the engine again");
+        log_line(format_args!("[engine-watch] starting the engine again"));
         // Boxed: start() spawned the task this runs in.
         let started: std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>> =
             Box::pin(start(&app));
@@ -1293,7 +1304,7 @@ fn restart_after_crash(app: AppHandle) {
                 let _ = app.emit("ps5upload-engine-ready", &url);
             }
             Err(e) => {
-                eprintln!("[engine-watch] restart failed: {e:#}");
+                log_line(format_args!("[engine-watch] restart failed: {e:#}"));
                 let _ = app.emit("ps5upload-engine-startup-error", format!("{e:#}"));
             }
         }
@@ -1569,6 +1580,21 @@ mod engine_log_tests {
         assert!(!path.with_extension("log.old").exists());
         assert_eq!(std::fs::metadata(&path).unwrap().len(), after_failure + 5);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod stderr_tests {
+    /// Starting, restarting and watching the engine never print with `eprintln!`: with the app's
+    /// own stderr a closed pipe it panics, and the automatic restart after a crash (which prints
+    /// before it starts the engine) never ran. `log_line` ignores the failed write.
+    #[test]
+    fn the_engine_supervisor_never_panics_on_a_closed_stderr() {
+        let banned = concat!("eprint", "ln!(");
+        for (i, line) in include_str!("engine.rs").lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("");
+            assert!(!code.contains(banned), "engine.rs:{}: {line}", i + 1);
+        }
     }
 }
 
