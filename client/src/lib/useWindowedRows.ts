@@ -68,6 +68,9 @@ function scrollerOf(el: HTMLElement): HTMLElement | null {
 export function useWindowedRows(
   count: number,
   listRef: RefObject<HTMLUListElement | null>,
+  /** Changes when the list's scroller does (Files on a phone scrolls the list itself, #936): the
+   *  scroll listener moves to the new one. */
+  scrollerKey?: unknown,
 ) {
   const [win, setWin] = useState<RowWindow>({
     start: 0,
@@ -125,7 +128,7 @@ export function useWindowedRows(
       target.removeEventListener("scroll", onScroll);
       ro?.disconnect();
     };
-  }, [windowed, measure, listRef]);
+  }, [windowed, measure, listRef, scrollerKey]);
 
   // Rows have just been rendered, the first time or after a move: their real height is known now.
   useEffect(() => {

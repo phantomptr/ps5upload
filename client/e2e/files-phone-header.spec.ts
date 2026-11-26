@@ -189,12 +189,15 @@ for (const phone of PHONES) {
       }
       await shot(page, `header-${phone.viewport.width}x${phone.viewport.height}`);
 
-      const scroller = page.locator("[data-scroll-root]");
+      // The list scrolls by itself under the header (#936): the header is outside every scroller,
+      // so the page never moves it.
+      const before = (await header.boundingBox())!;
+      const scroller = main(page).locator("[data-files-scroll]");
       await scroller.evaluate((el) => (el.scrollTop = 600));
       await expect.poll(() => scroller.evaluate((el) => el.scrollTop)).toBeGreaterThan(300);
-      const top = (await scroller.boundingBox())!.y;
+      await expect.poll(() => page.locator("[data-scroll-root]").evaluate((el) => el.scrollTop)).toBe(0);
       const box = (await header.boundingBox())!;
-      expect(Math.abs(box.y - top)).toBeLessThan(2);
+      expect(box).toEqual(before);
       await expect(header.getByRole("button", { name: "usb0" })).toBeInViewport();
       // Room for the list: two short rows; held sideways, where height is short, one (the path
       // beside the folder instead of under it).

@@ -2,10 +2,11 @@
 // selection actions that takes the bottom navigation's place while selecting. Tablets and
 // computers never show either (`roomy:hidden`); they keep the page header and the selection bar.
 
-import type { ComponentType, ReactNode } from "react";
+import { useLayoutEffect, type ComponentType, type ReactNode } from "react";
 import { CheckCheck, FolderOpen, MoreVertical, Search, X } from "lucide-react";
 
 import { Spinner } from "../../components";
+import "./filesColumn.css";
 
 type IconType = ComponentType<{ size?: number; className?: string }>;
 
@@ -167,6 +168,22 @@ export interface PhoneBarAction {
   tone?: "bad";
   /** Opens a menu: whether it is open. */
   menu?: boolean;
+}
+
+/** While `on`, Files is a column on a phone (`html[data-files-column]`, filesColumn.css): the page no
+ *  longer scrolls, the header stays where it is, and the list under it is the only scroller.
+ *  The header sat in the page's scroller as a sticky header before, and Android's overscroll
+ *  stretch moved and stretched it with the list. Rendered under the connection gate, so a gate's
+ *  message (no console, no helper) keeps the page's own scrolling. A layout effect: in place
+ *  before the windowed list looks for its scroller. */
+export function FilesColumn({ on }: { on: boolean }) {
+  useLayoutEffect(() => {
+    if (!on) return;
+    const root = document.documentElement;
+    root.setAttribute("data-files-column", "");
+    return () => root.removeAttribute("data-files-column");
+  }, [on]);
+  return null;
 }
 
 /** The actions for the selected items, where the bottom navigation is (it hides meanwhile:

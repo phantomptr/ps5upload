@@ -283,7 +283,7 @@ import { ltr } from "../../i18n";
 import NotificationInbox from "../../layout/NotificationInbox";
 import { createLongPress } from "../../lib/longPress";
 import { backUpTarget, filesBackStep, folderTitle } from "./phoneFiles";
-import { PhoneFolderRow, PhoneSelectionActions, PhoneSelectionRow } from "./PhoneBars";
+import { FilesColumn, PhoneFolderRow, PhoneSelectionActions, PhoneSelectionRow } from "./PhoneBars";
 
 function parent(p: string): string {
   if (p === "/" || p === "") return "/";
@@ -1956,9 +1956,13 @@ export default function FileSystemScreen() {
   );
   // A folder can hold 100,000 entries: only those near the screen are rendered.
   const rowsListRef = useRef<HTMLUListElement | null>(null);
+  // The phone layout (#936).
+  const phone = usePhoneLayout();
   const { start: rowsStart, end: rowsEnd, before: rowsBefore, after: rowsAfter, scrollToRow } = useWindowedRows(
     sortedEntries.length,
     rowsListRef,
+    // On a phone the list scrolls by itself under the header (FilesColumn).
+    phone && view === null,
   );
   useEffect(() => {
     scrollToEntry.current = (name) => scrollToRow(sortedEntries.findIndex((e) => e.name === name));
@@ -3136,7 +3140,7 @@ export default function FileSystemScreen() {
   }, [volumes, path]);
 
   // ── The phone layout (#936) and system Back (#932) ─────────────────────────────────────
-  const phone = usePhoneLayout();
+  // (`phone` is with the windowed list, which needs it first.)
   const selecting = selectMode || selectionActive;
   /** Selection mode as the phone shows it: checkboxes, the selection row, the bottom bar. */
   const phoneSelecting = phone && selecting && view === null;
@@ -3497,7 +3501,7 @@ export default function FileSystemScreen() {
   };
 
   return (
-    <div className="app-page" {...browserDrop}>
+    <div className="app-page" data-files-page="" {...browserDrop}>
       {properties && (
         <FileProperties
           key={`${properties.host}:${properties.path}`}
@@ -4027,7 +4031,7 @@ export default function FileSystemScreen() {
           </FilesViewFrame>
         )}
 
-        <div hidden={view !== null}>
+        <div hidden={view !== null} data-files-main="">
 
           {/* Volume picker. Renders only when we have at least one
             writable volume — otherwise it's clutter. Selecting a
@@ -4151,10 +4155,14 @@ export default function FileSystemScreen() {
               On a phone this sits in a compact header pinned over the list (#936): the open
               folder with search, the drive and ⋮ on top (or the selection, while selecting),
               the path under it (beside it on a phone held sideways, where height is short).
-              Wider windows keep the page header and the drive chips. */}
+              Wider windows keep the page header and the drive chips.
+
+              Pinned by sitting outside what scrolls: on a phone the list under it is the only
+              scroller (FilesColumn). As a sticky header inside the page's scroller it moved and
+              stretched with the list when Android's overscroll pulled the list past its ends. */}
           <div
             data-testid="fs-header"
-            className="phone:sticky phone:top-0 phone:z-30 phone:mb-2 phone:rounded-[var(--radius-card)] phone:border phone:border-[var(--glass-edge)] phone:bg-[var(--color-float)] phone:p-1 phone:shadow-[var(--edge-highlight),var(--shadow-2)] phone:backdrop-blur-xl phone:landscape:flex phone:landscape:items-center phone:landscape:gap-2"
+            className="phone:relative phone:z-30 phone:mb-2 phone:shrink-0 phone:rounded-[var(--radius-card)] phone:border phone:border-[var(--glass-edge)] phone:bg-[var(--color-float)] phone:p-1 phone:shadow-[var(--edge-highlight),var(--shadow-2)] phone:backdrop-blur-xl phone:landscape:flex phone:landscape:items-center phone:landscape:gap-2"
           >
             {phoneSelecting ? (
               <PhoneSelectionRow
@@ -4293,6 +4301,8 @@ export default function FileSystemScreen() {
             </div>
           </div>
 
+          {/* Everything under the header: on a phone, the one part that scrolls. */}
+          <div data-files-scroll="" data-scroll-inner="">
           {/* Clipboard banner: non-empty clipboard shows what's staged and
             where it came from; paste target is always the current path. */}
           {clipboardActive && (
@@ -5118,6 +5128,8 @@ export default function FileSystemScreen() {
               />
             </>
           )}
+          </div>
+          <FilesColumn on={phone && view === null} />
           {preview && (
             <Modal
               open
