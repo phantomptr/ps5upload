@@ -16,13 +16,17 @@ export interface EngineDiagnosis {
   binary_error: string | null;
   log_path: string | null;
   os: string;
+  /** Phones: why the engine inside the app is not answering, as a coded shell error
+   *  (shellError.ts words it). Absent on the desktop. */
+  startup_error?: string | null;
 }
 
 export function engineDiagnose(): Promise<EngineDiagnosis> {
   return invoke<EngineDiagnosis>("engine_diagnose");
 }
 
-/** Stops and starts the app's engine. Resolves with where it now listens. */
+/** Stops and starts the app's engine (on a phone: starts the engine inside the app again, or
+ *  makes it listen again). Resolves with where it now listens. */
 export function engineRestart(): Promise<string> {
   return invoke<string>("engine_restart");
 }

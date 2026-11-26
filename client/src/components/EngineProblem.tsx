@@ -13,6 +13,7 @@ import { isMobile } from "../lib/platform";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { useConnectionStore } from "../state/connection";
 import { setLiveEngineUrl } from "../state/engine";
+import { log } from "../state/logs";
 import { shellErrorText } from "../lib/shellError";
 import { useTr } from "../state/lang";
 import { Button } from "./Button";
@@ -109,6 +110,18 @@ function explain(
   }
 }
 
+/** The last reason the engine inside a phone app gave for not answering, logged once: the app's
+ *  log (and so the bug report) then says why, not only the socket error (#950). */
+let loggedStartupError: string | null = null;
+
+function noteDiagnosis(d: EngineDiagnosis): void {
+  const why = d.startup_error ?? null;
+  if (why && why !== loggedStartupError) {
+    loggedStartupError = why;
+    log.error("engine", `the engine inside the app is not answering: ${why}`);
+  }
+}
+
 /** Why the app cannot reach its engine, measured by the desktop shell, with the fix and a
  *  Restart button. In the web UI the engine is the server the page came from, so the panel
  *  only says the connection was lost. */
@@ -127,6 +140,7 @@ export function EngineProblem({ compact = false }: { compact?: boolean }) {
     let cancelled = false;
     void engineDiagnose()
       .then((d) => {
+        noteDiagnosis(d);
         if (!cancelled) setDiag(d);
       })
       .catch(() => {});
@@ -143,10 +157,14 @@ export function EngineProblem({ compact = false }: { compact?: boolean }) {
       setLiveEngineUrl(url);
       setStatus({ engineStatus: "up", engineError: null });
     } catch (e) {
-      setRestartError(shellErrorText(e instanceof Error ? e.message : String(e), tr));
-      void engineDiagnose()
-        .then(setDiag)
-        .catch(() => {});
+      const raw = e instanceof Error ? e.message : String(e);
+      const d = await engineDiagnose().catch(() => null);
+      if (d) {
+        noteDiagnosis(d);
+        setDiag(d);
+      }
+      // On a phone the reason is already the panel's text: not twice.
+      if (d?.startup_error !== raw) setRestartError(shellErrorText(raw, tr));
     } finally {
       setRestarting(false);
     }
@@ -167,18 +185,26 @@ export function EngineProblem({ compact = false }: { compact?: boolean }) {
           "Check that the server (Docker container) is running, then reload this page.",
         ),
       };
-  // On a phone the engine runs inside the app: Restart can only fail, and the computer advice
-  // does not apply.
+  // On a phone the engine runs inside the app: the computer advice does not apply. Try again
+  // starts it again (or makes it listen again), and the panel says why it is not answering.
   const phone = desktop && isMobile();
   const shown = phone
     ? {
-        why: tr("engine_problem.phone.why", undefined, "The engine runs inside this app, and it stopped answering."),
-        fix: tr("engine_problem.phone.fix", undefined, "Close the app fully and open it again."),
+        why: diag?.startup_error
+          ? shellErrorText(diag.startup_error, tr)
+          : tr("engine_problem.phone.why", undefined, "The engine runs inside this app, and it stopped answering."),
+        fix: tr(
+          "engine_problem.phone.fix_v2",
+          undefined,
+          "Press Try again. If it still doesn't answer, close the app fully and open it again.",
+        ),
       }
     : text;
-  const canRestart = desktop && !phone && (diag?.local ?? true);
+  const canRestart = desktop && (phone || (diag?.local ?? true));
   const stopReason =
-    engineError && engineError !== diag?.probe_error ? shellErrorText(engineError, tr) : null;
+    engineError && engineError !== diag?.probe_error && engineError !== diag?.startup_error
+      ? shellErrorText(engineError, tr)
+      : null;
 
   return (
     <div
@@ -233,7 +259,9 @@ export function EngineProblem({ compact = false }: { compact?: boolean }) {
             loading={restarting}
             onClick={() => void restart()}
           >
-            {tr("engine_problem.restart", undefined, "Restart engine")}
+            {phone
+              ? tr("engine_problem.phone.retry", undefined, "Try again")
+              : tr("engine_problem.restart", undefined, "Restart engine")}
           </Button>
         )}
         <Button size="sm" variant="secondary" onClick={() => navigate("/tasks?tab=logs")}>
