@@ -116,7 +116,9 @@ pub struct Metrics {
     pub reclaims: AtomicU64,
     pub joins: AtomicU64,
     pub signals: AtomicU64,
+    pub host_signals_dropped: AtomicU64,
     pub rooms_expired: AtomicU64,
+    pub guests_expired: AtomicU64,
     pub stun_requests: AtomicU64,
     pub stun_ignored: AtomicU64,
     pub stun_limited: AtomicU64,
@@ -144,7 +146,8 @@ impl Metrics {
         self.errors.iter().map(|e| e.load(Ordering::Relaxed)).sum()
     }
 
-    /// Requests refused by a limit (rate, size of the hub, rooms or connections per client).
+    /// Requests refused by a limit (rate, size of the hub, rooms or connections per client), and
+    /// host signals dropped by the host's.
     pub fn refused_total(&self) -> u64 {
         [
             ErrorKind::RateLimited,
@@ -156,6 +159,7 @@ impl Metrics {
         .map(|k| self.errors(*k))
         .sum::<u64>()
             + self.stun_limited.load(Ordering::Relaxed)
+            + self.host_signals_dropped.load(Ordering::Relaxed)
     }
 
     /// A number that grows whenever any counter does: the summary skips an interval in which it
@@ -166,7 +170,9 @@ impl Metrics {
             &self.reclaims,
             &self.joins,
             &self.signals,
+            &self.host_signals_dropped,
             &self.rooms_expired,
+            &self.guests_expired,
             &self.stun_requests,
             &self.stun_ignored,
             &self.stun_limited,
@@ -215,9 +221,19 @@ impl Metrics {
         counter("hub_joins_total", "Guests joined.", &self.joins);
         counter("hub_signals_total", "Signals forwarded.", &self.signals);
         counter(
+            "hub_host_signals_dropped_total",
+            "Host signals not forwarded: over the host's limit.",
+            &self.host_signals_dropped,
+        );
+        counter(
             "hub_rooms_expired_total",
             "Rooms removed after their host stayed away.",
             &self.rooms_expired,
+        );
+        counter(
+            "hub_guests_expired_total",
+            "Guests removed for staying in a room past the longest a join takes.",
+            &self.guests_expired,
         );
         counter(
             "hub_stun_requests_total",

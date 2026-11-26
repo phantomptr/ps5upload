@@ -1187,6 +1187,21 @@ body {
   --safe-right: max(env(safe-area-inset-right), var(--sys-inset-right, 0px));
 }
 .safe-bottom { padding-bottom: var(--safe-bottom); }
+/* What floats over the bottom of the page on a phone: the tab bar and, while it shows, the
+   activity pill above it (ActivityBar sets `data-activity-pill` and the pill's height). The page
+   keeps this much room under its content (the shell's scroll area) and a bar that sticks to the
+   bottom of a screen stays clear of it (Upload's actions): until 12.6.32 such a bar stuck 8px
+   from the screen's edge, behind the tab bar. 0 where nothing floats (`md` and wider). */
+:root { --float-bottom: 0px; }
+@media (max-width: 767.98px) {
+  :root { --float-bottom: calc(88px + var(--safe-bottom)); }
+  html[data-activity-pill] {
+    --float-bottom: calc(5.1rem + var(--safe-bottom) + var(--activity-pill-h, 2.75rem) + 0.375rem);
+  }
+  /* What is scrolled into view (a field that takes focus, a line that appears) stops above the
+     floating bars and one row of sticky actions, not under them. */
+  .tab-room { scroll-padding-bottom: calc(var(--float-bottom) + 4.5rem); }
+}
 /* Keyboard up in the Android app (lib/androidInsets.ts): the page has been resized to what is left
    of the screen, and these fixed bars would take up a good part of it. */
 html[data-keyboard] [data-bottom-nav],
@@ -1202,6 +1217,16 @@ html[data-keyboard] [data-testid="activity-pill"] { display: none !important; }
 /* A screen whose own header carries the bell on a phone (Files, #936) takes the top bar's place:
    only the room the system keeps at the top is left of it. Below `md`, where that bar shows
    (PHONE_TOP_BAR_QUERY in lib/phoneLayout.ts). */
+/* A phone held sideways (the sidebar's layout, about 390 px tall; PHONE_LANDSCAPE_QUERY): the
+   row over the page gives way the same way. Its search, reload and theme buttons go, the bell is
+   in the screen's header, and only the console tabs stay. With the Files header under it, two
+   rows left room for about two files. */
+@media (min-width: 768px) and (pointer: coarse) and (orientation: landscape) and (max-height: 520px) {
+  html[data-screen-bar] [data-top-row] {
+    padding-top: var(--safe-top);
+  }
+  html[data-screen-bar] [data-top-row] > :not([data-keep]) { display: none; }
+}
 @media (max-width: 767.98px) {
   html[data-screen-bar] [data-top-bar] {
     min-height: 0;
@@ -1240,8 +1265,9 @@ html[data-keyboard] [data-testid="activity-pill"] { display: none !important; }
   html[data-tab-rail] [data-testid="activity-pill"] {
     bottom: calc(var(--safe-bottom) + 0.6rem);
   }
-  html[data-tab-rail] .tab-room {
-    padding-bottom: calc(1rem + var(--safe-bottom));
+  html[data-tab-rail] { --float-bottom: calc(1rem + var(--safe-bottom)); }
+  html[data-tab-rail][data-activity-pill] {
+    --float-bottom: calc(0.6rem + var(--safe-bottom) + var(--activity-pill-h, 2.75rem) + 0.375rem);
   }
 }
 .safe-left { padding-left: var(--safe-left); }

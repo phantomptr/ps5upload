@@ -11,6 +11,7 @@ vi.mock("../api/ps5", () => ({
   updateInstall: vi.fn(),
   updateInstallOnQuit: vi.fn(async () => true),
   updateLastInstall: vi.fn(async () => null),
+  updateWaitForInstall: vi.fn(async () => "keep-running"),
   updateForgetFailure: vi.fn(async () => {}),
   updateOldDownloads: vi.fn(async () => ({ count: 0, bytes: 0 })),
   updateRemoveOldDownloads: vi.fn(async () => 0),
@@ -171,6 +172,76 @@ describe("desktop updates", () => {
     expect(api.updateInstall).toHaveBeenCalledTimes(2);
     s = useUpdateStore.getState();
     expect(s.lastInstall).toBeNull();
+  });
+
+  it("opened while the last quit's install still works: waits, says nothing, then the app restarts", async () => {
+    const api = await import("../api/ps5");
+    const notes = await import("./notifications");
+    const pending = { version: "10.2.0", installed: false, message: "", new: false, pending: true };
+    vi.mocked(api.updateLastInstall).mockResolvedValue(pending);
+    let finish: (v: "relaunch") => void = () => {};
+    vi.mocked(api.updateWaitForInstall).mockReturnValue(new Promise((r) => (finish = r)));
+    const { useUpdateStore, failedInstall } = await import("./update");
+    const loading = useUpdateStore.getState().loadInstallStatus();
+    await new Promise((r) => setTimeout(r, 0));
+    // While it waits: the card, and no failure anywhere.
+    expect(useUpdateStore.getState().finishingUpdate).toBe(true);
+    expect(useUpdateStore.getState().lastInstall).toBeNull();
+    expect(failedInstall(useUpdateStore.getState(), "10.2.0")).toBeNull();
+    finish("relaunch");
+    await loading;
+    // The app is quitting into the new version: the card stays, nothing was reported.
+    expect(useUpdateStore.getState().finishingUpdate).toBe(true);
+    expect(useUpdateStore.getState().lastInstall).toBeNull();
+    expect(notes.pushNotification).not.toHaveBeenCalled();
+    expect(api.updateLastInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("an install that ended while the app waited is judged then: a real failure is said once", async () => {
+    const api = await import("../api/ps5");
+    const notes = await import("./notifications");
+    vi.mocked(api.updateLastInstall)
+      .mockResolvedValueOnce({ version: "10.2.0", installed: false, message: "", new: false, pending: true })
+      .mockResolvedValueOnce({ version: "10.2.0", installed: false, message: "could not open the .dmg", new: true });
+    vi.mocked(api.updateWaitForInstall).mockResolvedValue("report");
+    const { useUpdateStore, failedInstall } = await import("./update");
+    await useUpdateStore.getState().loadInstallStatus();
+    const s = useUpdateStore.getState();
+    expect(s.finishingUpdate).toBe(false);
+    expect(s.lastInstall?.message).toBe("could not open the .dmg");
+    expect(failedInstall(s, "10.2.0")).not.toBeNull();
+    expect(notes.pushNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("an install still working after the wait is not called a failure", async () => {
+    const api = await import("../api/ps5");
+    const notes = await import("./notifications");
+    vi.mocked(api.updateLastInstall).mockResolvedValue({
+      version: "10.2.0",
+      installed: false,
+      message: "",
+      new: false,
+      pending: true,
+    });
+    for (const end of ["keep-running", new Error("no such command")] as const) {
+      vi.resetModules();
+      const apiNow = await import("../api/ps5");
+      vi.mocked(apiNow.updateLastInstall).mockResolvedValue({
+        version: "10.2.0",
+        installed: false,
+        message: "",
+        new: false,
+        pending: true,
+      });
+      if (typeof end === "string") vi.mocked(apiNow.updateWaitForInstall).mockResolvedValue(end);
+      else vi.mocked(apiNow.updateWaitForInstall).mockRejectedValue(end);
+      const { useUpdateStore } = await import("./update");
+      await useUpdateStore.getState().loadInstallStatus();
+      expect(useUpdateStore.getState().finishingUpdate).toBe(false);
+      expect(useUpdateStore.getState().lastInstall).toBeNull();
+    }
+    expect(notes.pushNotification).not.toHaveBeenCalled();
+    void api;
   });
 
   it("a failed install found at launch is said once and stops the automatic install", async () => {

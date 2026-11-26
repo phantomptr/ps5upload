@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use ps5upload_pkg::ufs2::{Inode, Ufs2Error, Ufs2Image, ROOT_INODE};
+use ps5upload_pkg::ufs2::{Inode, Ufs2Error, Ufs2Image, WalkBudget, ROOT_INODE};
 
 use crate::source::{dir_label, is_junk, SourceFile, SourceTree};
 use crate::{format_err, ReadSeek, Result};
@@ -55,6 +55,7 @@ impl Ufs2Source {
             dirs: std::collections::HashSet::from([ROOT_INODE]),
             path_bytes: 0,
             listed: 0,
+            budget: WalkBudget::default(),
             special: Vec::new(),
             special_count: 0,
         };
@@ -151,6 +152,8 @@ struct Walk<'a> {
     /// [`MAX_ENTRIES`]: counted as they are listed, so the entries of directories still being
     /// walked further up count too.
     listed: usize,
+    /// Directory bytes read so far, every directory's: see [`WalkBudget`].
+    budget: WalkBudget,
     /// Entries that are neither files nor directories, as `path (kind)`: the first
     /// [`MAX_SPECIAL_LISTED`], refused together once the walk is done.
     special: Vec<String>,
@@ -181,7 +184,7 @@ fn walk(
         return format_err(format!("{prefix} nests deeper than {MAX_DEPTH} levels"));
     }
     let entries: Vec<_> = image
-        .list_dir(dir)
+        .list_dir_in_walk(dir, &mut tree.budget)
         .map_err(|e| crate::Error::Format(format!("{}: {e}", dir_label(prefix))))?
         .into_iter()
         .filter(|e| !e.name.is_empty() && !is_junk(&e.name))

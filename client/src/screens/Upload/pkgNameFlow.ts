@@ -39,17 +39,36 @@ const EMPTY: NameFlowState = {
 
 const reasonOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;
+
+/** The room the package has for the name in the field, in UTF-8 bytes: how many fit (`limit`:
+ *  the package's own room for what would change, the default name alone or every language;
+ *  the engine's overall limit when it gives no room), how many the name takes, and how many
+ *  are left (negative: that many too long). null with no package read, or one that refuses. */
+export function nameRoom(s: NameFlowState): { limit: number; used: number; left: number } | null {
+  if (!s.names || s.names.refusal) return null;
+  const { room, max_bytes, other_names } = s.names;
+  const every = s.allLanguages && other_names > 0;
+  const limit = Math.min(max_bytes, room ? (every ? room.all_languages : room.default_name) : max_bytes);
+  const used = utf8Bytes(s.value.trim());
+  return { limit, used, left: limit - used };
+}
+
 /** Why Change name is not offered for what the field holds: nothing typed, nothing to change
- *  (the same name, unless every language is asked for and some differ), the package refuses a
- *  rename, or it is being read or written. null when it can be pressed. A name that is too
- *  long is the engine's to refuse: it counts bytes, and says how many fit. */
-export function saveBlocked(s: NameFlowState): "empty" | "same" | "refused" | "busy" | null {
+ *  (the same name, unless every language is asked for and some differ), a name longer than the
+ *  package has room for (counted in bytes, as the engine counts: said in the field itself,
+ *  before anything is sent), the package refuses a rename, or it is being read or written.
+ *  null when it can be pressed. */
+export function saveBlocked(
+  s: NameFlowState,
+): "empty" | "same" | "too_long" | "refused" | "busy" | null {
   if (!s.names || s.loading || s.saving) return "busy";
   if (s.names.refusal) return "refused";
   const name = s.value.trim();
   if (!name) return "empty";
   const changesOthers = s.allLanguages && s.names.other_names > 0;
   if (name === s.names.name && !changesOthers) return "same";
+  if ((nameRoom(s)?.left ?? 0) < 0) return "too_long";
   return null;
 }
 

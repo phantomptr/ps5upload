@@ -6,6 +6,58 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Storage**
+- **Files shows the right free space (#944).** Files kept its own copy of the drives, and Refresh didn't read it again, so a chip could show 98 GiB when the drive had 163 GiB. Every screen that shows drives now reads the same list: on Refresh, when a screen comes back, and when a job on that console ends.
+- **The numbers say what they are.** Free space is in GiB everywhere, only space you can copy into is counted, and the Volumes and Hardware screens say that the PS5 holds space back for itself, so its own Storage screen can show less.
+
+**Collection**
+- **A package that is cut short or still being copied is no longer treated as whole.** Organize leaves it alone and Check says it is cut short.
+- Check reads every part of a split package.
+- Organize never files anything inside a folder that is itself a game.
+- When the undo log can't be saved after a move, Organize says what moved and that Undo may be incomplete.
+
+**Save Data**
+- A save is never written while its game is running, and a console that can't say what is running is treated as busy, not idle.
+- A restore is only accepted into the PS5's own save folders and the emulator save places the app supports.
+
+**Upload & Install**
+- **A package can't be renamed while an install of it is unfinished**, however long ago the PS5 last read it. The message says how to free it.
+- "Name on the PS5" shows how many bytes are left before it sends.
+- Covers show for game folders whose `SCE_SYS` folder is in capitals.
+- A stopped job in the queue shows as stopped, not failed, and no longer holds the queue.
+
+**Updates**
+- **Opening the app while an update is installing no longer says the update failed.** It shows "Finishing the update…" and starts the new version.
+
+**Play Together and phones**
+- A link that was replaced or has lapsed no longer reaches the host's "wants to play" prompt, and an invite after a lapsed one gets its internet link again.
+- A phone allowed to watch can't come back as a controller. A kicked phone can't get back in (the link's key changes; other phones carry on).
+- A guest's PS button stays blocked through a lost connection, and a kicked guest's input can't reach the next guest.
+- One guest can no longer cut the host off the internet hub, and idle guests can't hold seats.
+- Phone input is paced so a flood can't swamp the host; normal play is untouched.
+
+**Mesh Drive**
+- With three or more consoles, links no longer undo each other's changes.
+- A folder whose first entries were hidden files could be sent to the trash with files still in it; the whole folder is now read first.
+- A newer file here is never overwritten by an older copy during failover; both are kept.
+- A folder whose console is gone can be left.
+
+**Sharing and transfers**
+- Long file lists are no longer dropped, received settings are checked, and a retail game is refused whatever it is sent as.
+- A finished folder download no longer fails on retry. "Download to a saved server" can't write outside the chosen folder.
+- Transfers between devices: a use-after-free in the PS5 helper's receiver, a job being ended by another device, an upload that couldn't resume after a disk error, and memory a peer could make grow are fixed.
+
+**Look and wording**
+- On a phone, Upload & Install's buttons are one row, sideways Files shows more rows, payload rows are compact, and the Files menu's look-alike items are renamed and grouped.
+- Arabic and Persian keep names like "ShadowMount+", paths and versions in their order.
+
+**Fixes found in audits**
+- FTP folder checks can't be fooled by servers that treat names as patterns.
+- Crafted disk images and archives are refused instead of grinding or filling memory.
+- Guest IPs and names are no longer written to the log.
+
+## 12.6.31
+
 **Upload & Install**
 - **Change a fake package's name before installing it (#937).** Pick one package and edit "Name on the PS5". The name is changed inside the package, in place, without rebuilding it, and checked afterwards. Packages signed by Sony, split packages and packages on a server are refused.
 - **Stream & install no longer sits at 0% in silence (#942).** Before it starts, the app checks that the PS5 can reach this computer. If it can't, or the PS5 never fetches any of the package, the install stops with the likely cause (most often this computer's firewall) and offers Retry via upload.

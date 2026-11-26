@@ -33,6 +33,11 @@
 //!
 //! What has no readable PARAM (an archive, an encrypted package, a broken folder) is refused:
 //! without build information it can't be shown to be homebrew.
+//!
+//! The rule holds for every item, not only the app: a package, a mount image or an app folder
+//! sent as a save, screenshots or cheats is found by its name or its first bytes ([`carried`])
+//! and judged the same way, and an archive there is refused. A save's zip is looked into instead:
+//! a package or a program in it is refused.
 
 use serde_json::Value;
 
@@ -319,10 +324,144 @@ pub(crate) fn check(b: &Build) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// A file of a share item other than the app that could carry a game: the rule judges it as it
+/// does the app (share/mod.rs), so a retail game can't go as a save, screenshots or cheats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Carried {
+    /// A package or a mount image, in the Collection's format word (`pkg`, `mount.exfat`, …).
+    Package(&'static str),
+    /// A file of an app folder (`eboot.bin`, a `sce_sys/param.*`, an executable): the folder it
+    /// is in (the one holding `sce_sys`) is the app.
+    AppFile,
+    /// An archive: what is in it can't be read, so it can't be shown to be homebrew.
+    Archive,
+}
+
+/// The bytes [`carried`] looks at, from a file's start.
+pub(crate) const HEAD: usize = 16;
+
+/// What `path` (any `/`-separated path) with these first bytes carries, judged by its name and,
+/// as a renamed file keeps its contents, by its first bytes.
+pub(crate) fn carried(path: &str, head: &[u8]) -> Option<Carried> {
+    let lower = path.to_ascii_lowercase();
+    let name = lower.rsplit('/').next().unwrap_or("");
+    for (ext, format) in [
+        (".pkg", "pkg"),
+        (".exfat", "mount.exfat"),
+        (".ffpkg", "mount.ffpkg"),
+        (".ffpfsc", "mount.ffpfsc"),
+        (".ffpfs", "mount.ffpfs"),
+    ] {
+        if name.ends_with(ext) {
+            return Some(Carried::Package(format));
+        }
+    }
+    let in_sce_sys = lower.rsplit('/').nth(1) == Some("sce_sys");
+    if name == "eboot.bin"
+        || (in_sce_sys && (name == "param.json" || name == "param.sfo"))
+        || [".self", ".sprx", ".prx", ".elf"]
+            .iter()
+            .any(|e| name.ends_with(e))
+    {
+        return Some(Carried::AppFile);
+    }
+    let at = |off: usize, magic: &[u8]| head.get(off..off + magic.len()) == Some(magic);
+    // PS4/PS5 packages (`\x7FCNT`, `\x7FFIH`), PS3's (`\x7FPKG`).
+    if at(0, b"\x7FCNT") || at(0, b"\x7FFIH") || at(0, b"\x7FPKG") {
+        return Some(Carried::Package("pkg"));
+    }
+    if at(3, b"EXFAT   ") {
+        return Some(Carried::Package("mount.exfat"));
+    }
+    // A compressed PFS image, and a PFS image (its magic 0x20130315 at 8).
+    if at(0, b"PFSC") {
+        return Some(Carried::Package("mount.ffpfsc"));
+    }
+    if at(8, &0x2013_0315u32.to_le_bytes()) {
+        return Some(Carried::Package("mount.ffpfs"));
+    }
+    // ELF, and the console's signed executables (PS4's, PS5's).
+    if at(0, b"\x7FELF") || at(0, &[0x4F, 0x15, 0x3D, 0x1D]) || at(0, &[0x54, 0x14, 0xF5, 0xEE]) {
+        return Some(Carried::AppFile);
+    }
+    let archive_name = [".zip", ".7z", ".rar", ".tar", ".gz", ".tgz", ".xz", ".zst"]
+        .iter()
+        .any(|e| name.ends_with(e));
+    if archive_name
+        || at(0, b"PK\x03\x04")
+        || at(0, b"7z\xBC\xAF\x27\x1C")
+        || at(0, b"Rar!")
+        || at(0, &[0x1F, 0x8B])
+        || at(0, &[0xFD, b'7', b'z', b'X', b'Z'])
+        || at(0, &[0x28, 0xB5, 0x2F, 0xFD])
+    {
+        return Some(Carried::Archive);
+    }
+    None
+}
+
+/// The app folder an [`Carried::AppFile`] at `path` belongs to: the folder holding `sce_sys`, or
+/// the file's own folder.
+pub(crate) fn app_folder_of(path: &str) -> &str {
+    let path = path.trim_end_matches('/');
+    let lower = path.to_ascii_lowercase();
+    if let Some(i) = lower.rfind("/sce_sys/") {
+        return &path[..i];
+    }
+    path.rsplit_once('/').map_or("", |(dir, _)| dir)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn what_could_carry_a_game_is_known_by_its_name_or_its_first_bytes() {
+        use Carried::*;
+        let none: &[u8] = &[];
+        assert_eq!(carried("a/Game.PKG", none), Some(Package("pkg")));
+        assert_eq!(
+            carried("/mnt/ext0/x.exfat", none),
+            Some(Package("mount.exfat"))
+        );
+        assert_eq!(carried("x.ffpfsc", none), Some(Package("mount.ffpfsc")));
+        assert_eq!(carried("x.ffpfs", none), Some(Package("mount.ffpfs")));
+        assert_eq!(carried("PPSA01234/eboot.bin", none), Some(AppFile));
+        assert_eq!(carried("PPSA01234/sce_sys/param.json", none), Some(AppFile));
+        assert_eq!(carried("lib/libc.prx", none), Some(AppFile));
+        assert_eq!(carried("backup.zip", none), Some(Archive));
+        // Renamed: the contents say it.
+        assert_eq!(
+            carried("shot.jpg", b"\x7FCNT\x80\x00"),
+            Some(Package("pkg"))
+        );
+        assert_eq!(carried("shot.jpg", b"\x7FFIH"), Some(Package("pkg")));
+        assert_eq!(
+            carried("clip.mp4", b"\xEB\x76\x90EXFAT   "),
+            Some(Package("mount.exfat"))
+        );
+        let mut pfs = [0u8; 16];
+        pfs[8..12].copy_from_slice(&0x2013_0315u32.to_le_bytes());
+        assert_eq!(carried("a.dat", &pfs), Some(Package("mount.ffpfs")));
+        assert_eq!(carried("a.png", b"\x7FELF\x02"), Some(AppFile));
+        assert_eq!(carried("a.png", b"PK\x03\x04"), Some(Archive));
+        // What screenshots, clips, cheats and saves are: nothing.
+        assert_eq!(carried("photo/PPSA01234/a.jxr", b"II\xBC\x01"), None);
+        assert_eq!(carried("a.png", b"\x89PNG\r\n\x1a\n"), None);
+        assert_eq!(carried("a.mp4", b"\x00\x00\x00\x18ftypmp42"), None);
+        assert_eq!(carried("PPSA01234.json", b"{\"name\""), None);
+        assert_eq!(
+            carried("save/param.json", b"{"),
+            None,
+            "a param.json not in sce_sys"
+        );
+        assert_eq!(
+            app_folder_of("/user/app/PPSA01234/sce_sys/param.json"),
+            "/user/app/PPSA01234"
+        );
+        assert_eq!(app_folder_of("/g/Game/eboot.bin"), "/g/Game");
+    }
 
     /// Homebrew Playden, as its `/user/app/FAKE77031/sce_sys/param.json` says it.
     pub(crate) fn playden() -> Value {

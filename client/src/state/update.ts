@@ -10,6 +10,7 @@ import {
   updateInstall,
   updateInstallOnQuit,
   updateLastInstall,
+  updateWaitForInstall,
   updateForgetFailure,
   updateOldDownloads,
   updateRemoveOldDownloads,
@@ -410,6 +411,10 @@ interface UpdateStore {
   /** What the last install came to (read once at launch), or after a failed install in this
    *  session. A failed version is not installed by itself again (`failedInstall`). */
   lastInstall: LastInstall | null;
+  /** An install from the last quit is still replacing the app (it was opened again too soon):
+   *  the app waits for it and then starts again as the new version. Shown as a small
+   *  "Finishing the update…" card; nothing is reported as failed meanwhile. */
+  finishingUpdate: boolean;
   /** Read the last install's outcome and the old update downloads in Downloads (once). */
   loadInstallStatus: () => Promise<void>;
   /** After a failed install: forget it, download again if needed, and install. */
@@ -624,12 +629,28 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
     installFallback: null,
     skippedVersion: loadSkipped(),
     lastInstall: null,
+    finishingUpdate: false,
     oldDownloads: 0,
 
     loadInstallStatus() {
       statusLoaded ??= (async () => {
         try {
-          const last = await updateLastInstall();
+          let last = await updateLastInstall();
+          if (last?.pending) {
+            // The installer is still at work: wait for it rather than call it a failure.
+            set({ finishingUpdate: true });
+            let next: Awaited<ReturnType<typeof updateWaitForInstall>> = "keep-running";
+            try {
+              next = await updateWaitForInstall();
+            } catch {
+              // Could not wait: carry on; the next launch judges the install.
+            }
+            // The app is quitting to start the new version: the card stays until it does.
+            if (next === "relaunch") return;
+            last = next === "report" ? await updateLastInstall() : null;
+            set({ finishingUpdate: false });
+            if (last?.pending) last = null;
+          }
           if (last) set({ lastInstall: last });
           if (last && !last.installed && last.new) {
             pushNotification(

@@ -24,7 +24,7 @@ import { useTitleInfo } from "../lib/useTitleInfo";
 import {
   firmwareCheck,
   installedFromPreflight,
-  largestFreeBytes,
+  largestRoom,
   platformFirmwareCheck,
   spaceCheck,
   type Verdict,
@@ -177,7 +177,9 @@ export function PackagePanelView({
       text:
         checks.space.verdict === "bad"
           ? tr("viewer_space_bad", { short }, `${short} short on the target drive`)
-          : tr("viewer_space_ok", undefined, "Fits on the target drive"),
+          : checks.space.verdict === "warn"
+            ? tr("fs_move_tight", undefined, "It may not fit: the PS5 holds back more space as it writes.")
+            : tr("viewer_space_ok", undefined, "Fits on the target drive"),
     });
   }
 
@@ -389,7 +391,7 @@ export function PackagePanel({
   const [backdrop, setBackdrop] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [installed, setInstalled] = useState<PanelChecks["installed"]>(null);
-  const [free, setFree] = useState<number | null>(null);
+  const [free, setFree] = useState<{ room: number; likely: number } | null>(null);
   // Bumped per load: a reply for an earlier path or console is ignored.
   const request = useRef(0);
   const kernel = useConnectionStore((s) =>
@@ -436,7 +438,7 @@ export function PackagePanel({
               .catch(() => {});
           }
           void listVolumes(transferAddr(host))
-            .then((vols) => current() && setFree(largestFreeBytes(vols)))
+            .then((vols) => current() && setFree(largestRoom(vols)))
             .catch(() => {});
         }
       })
@@ -474,7 +476,7 @@ export function PackagePanel({
         parsePS5Firmware(kernel),
       ),
       installed,
-      space: data && host ? spaceCheck(data.inspection.source.size, free) : null,
+      space: data && host ? spaceCheck(data.inspection.source.size, free?.room ?? null, free?.likely ?? null) : null,
     }),
     [data, kernel, installed, free, host],
   );

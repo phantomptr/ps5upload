@@ -179,8 +179,7 @@ async fn a_retail_app_is_refused_by_the_engine_whatever_the_page_sent() {
     assert_eq!(v["items"][0]["files"], 3);
     let _ = cancel(axum::extract::Path(v["id"].as_str().unwrap().to_string())).await;
     // A save of a retail game is allowed: player data.
-    let save = tmp("save").join("PPSA01234 save shared.zip");
-    std::fs::write(&save, b"PK zip").unwrap();
+    let save = save_zip(&[("sdimg_sce_sdmemory/save.dat", b"progress")]);
     let body: ShareCreateBody = serde_json::from_value(json!({
         "title_id": "PPSA01234",
         "items": [{"kind": "save", "path": save}],
@@ -189,6 +188,87 @@ async fn a_retail_app_is_refused_by_the_engine_whatever_the_page_sent() {
     let (s, v) = body_of(create(HeaderMap::new(), Json(body)).await).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     let _ = cancel(axum::extract::Path(v["id"].as_str().unwrap().to_string())).await;
+}
+
+/// A shared-save file of PPSA01234 holding these files (below `PPSA01234/`).
+fn save_zip(files: &[(&str, &[u8])]) -> PathBuf {
+    let dir = tmp("savezip");
+    let src = dir.join("src");
+    for (name, bytes) in files {
+        let p = src.join("PPSA01234").join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, bytes).unwrap();
+    }
+    let zip = dir.join("PPSA01234 save shared.zip");
+    ps5upload_core::save_archive::zip_folder(&src, "PPSA01234", &zip).unwrap();
+    zip
+}
+
+/// The rule is not only the app's: a retail game sent as a save, screenshots or cheats is refused
+/// the same way, as a folder, a package or an image, whatever its name. Homebrew still goes.
+#[tokio::test]
+async fn a_retail_game_is_refused_whatever_item_it_is_sent_as() {
+    use super::retail::tests as rt;
+    let _hub = test_hub("ws://127.0.0.1:9/ws", false).await;
+    let refused = |v: &Value| v["error"].as_str().unwrap_or("").to_string();
+    // A retail game's folder as screenshots.
+    let game = app_with_param(rt::astro_bot());
+    let (s, v) = make(json!([{"kind": "media", "path": game}])).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    assert_eq!(v["code"], "retail");
+    // A folder of screenshots that holds one.
+    let shots = tmp("shots");
+    std::fs::write(shots.join("a.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+    let inside = shots.join("x/Game");
+    std::fs::create_dir_all(inside.join("sce_sys")).unwrap();
+    std::fs::write(
+        inside.join("sce_sys/param.json"),
+        rt::astro_bot().to_string(),
+    )
+    .unwrap();
+    let (s, v) = make(json!([{"kind": "media", "path": shots}])).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    // A retail package, named as a package and renamed as a picture.
+    let dir = crate::inspect::test_fixtures::scratch();
+    let pkg =
+        crate::inspect::test_fixtures::write_cnt_pkg_sfo(dir.join("r.pkg"), &rt::ps4_retail());
+    let (s, v) = make(json!([{"kind": "media", "path": pkg}])).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    let renamed = dir.join("shot.jpg");
+    std::fs::copy(&pkg, &renamed).unwrap();
+    let (s, v) = make(json!([{"kind": "media", "path": renamed}])).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    assert_eq!(v["code"], "retail");
+    // As a save: the package itself, or a game inside the save's zip.
+    let (s, v) = make(json!([{"kind": "save", "path": renamed}])).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    let zipped = save_zip(&[("eboot.bin", b"\x7FELF"), ("sce_sys/param.sfo", b"x")]);
+    let (s, v) = make(json!([{"kind": "save", "path": zipped}])).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    assert!(refused(&v).contains("can't confirm"), "{v}");
+    // An archive as screenshots can't be checked.
+    let (s, v) = make(json!([{"kind": "media", "path": zipped}])).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert!(refused(&v).contains("archive"), "{v}");
+    // A save keeps its own sce_sys/param.sfo; screenshots and a homebrew package go.
+    let save = save_zip(&[
+        ("sdimg_sce_sdmemory/sce_sys/param.sfo", b"PSF"),
+        ("sdimg_sce_sdmemory/save.dat", b"progress"),
+    ]);
+    let hb =
+        crate::inspect::test_fixtures::write_cnt_pkg_sfo(dir.join("h.pkg"), &rt::ps4_homebrew());
+    let only_shots = tmp("only-shots");
+    std::fs::write(only_shots.join("a.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+    std::fs::write(only_shots.join("b.mp4"), b"\0\0\0\x18ftypmp42").unwrap();
+    for item in [
+        json!({"kind": "save", "path": save}),
+        json!({"kind": "media", "path": only_shots}),
+        json!({"kind": "media", "path": hb}),
+    ] {
+        let (s, v) = make(json!([item])).await;
+        assert_eq!(s, StatusCode::OK, "{item}: {v}");
+        let _ = cancel(axum::extract::Path(v["id"].as_str().unwrap().to_string())).await;
+    }
 }
 
 /// Packages and images in the Collection are judged by the PARAM inside them.
@@ -238,6 +318,23 @@ fn the_receiver_checks_the_offered_build() {
         .unwrap()
         .contains("can't confirm"));
     assert_eq!(items[4].refused, None);
+}
+
+/// An item of a kind this build does not know (a newer sender's, or none at all) is left out of
+/// the offer: the receiving page named it by its kind and stopped with an error.
+#[test]
+fn an_offered_item_of_an_unknown_kind_is_left_out() {
+    let items = wire::offered(&json!({"items": [
+        {"id": "i1", "kind": "trophy", "name": "A", "size": 1, "files": 1},
+        {"id": "i2", "name": "B"},
+        {"id": "i3", "kind": "App", "name": "C"},
+        {"id": "i4", "kind": "note", "name": "D"},
+    ]}));
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        (items[0].id.as_str(), items[0].kind.as_str()),
+        ("i4", "note")
+    );
 }
 
 async fn body_of(r: Response) -> (StatusCode, Value) {
@@ -644,6 +741,62 @@ async fn a_dropped_transfer_resumes_with_its_token_and_a_one_use_link_takes_no_o
     assert!(got > 0);
 }
 
+/// The friend's first link went quiet and they connected again with their token before the
+/// sender noticed: when the old link finally ends, the resumed transfer carries on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_late_end_of_the_old_link_does_not_stop_the_resumed_transfer() {
+    let app = app_folder("PSUP00006", "");
+    std::fs::write(app.join("big.bin"), vec![7u8; 400_000]).unwrap();
+    let (id, room) = share_of(json!([{"kind": "app", "path": app}]), true).await;
+    use wire::Link;
+    async fn allowed(link: &mut wire::MemLink) -> String {
+        loop {
+            match link.recv().await {
+                Some(wire::In::Text(t)) if t.contains("\"allowed\"") => {
+                    let v: Value = serde_json::from_str(&t).unwrap();
+                    return v["allowed"]["token"].as_str().unwrap().to_string();
+                }
+                Some(_) => {}
+                None => panic!("closed before the allow"),
+            }
+        }
+    }
+    let (sock, mut old) = wire::mem_pair();
+    let old_sess = tokio::spawn(wire::sender_session(sock, Arc::new(Registry), None));
+    old.raw(json!({"hello": {"v": 1, "room": room, "name": "A"}}))
+        .await;
+    old.recv().await.unwrap();
+    old.raw(json!({"accept": {"items": ["i1"]}})).await;
+    let rid = until_request(&id, "asking").await;
+    decide_on(&id, rid, true).await;
+    let token = allowed(&mut old).await;
+    // The old link stays open but says nothing; a new one carries on with the token.
+    let (sock, mut new) = wire::mem_pair();
+    tokio::spawn(wire::sender_session(sock, Arc::new(Registry), None));
+    new.raw(json!({"hello": {"v": 1, "room": room, "name": "A", "resume": token}}))
+        .await;
+    allowed(&mut new).await;
+    // Now the old link ends.
+    drop(old);
+    tokio::time::timeout(Duration::from_secs(5), old_sess)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        with_share(&id, |e| e.m.request(rid).unwrap().state).unwrap(),
+        ReqState::Sending
+    );
+    new.raw(json!({"get": {"n": 1, "item": "i1", "path": "big.bin", "offset": 0}}))
+        .await;
+    match tokio::time::timeout(Duration::from_secs(5), new.recv())
+        .await
+        .unwrap()
+    {
+        Some(wire::In::Binary(b)) => assert_eq!(wire::parse_data(&b).unwrap().0, 1),
+        other => panic!("the resumed transfer was stopped: {other:?}"),
+    }
+}
+
 /// Two engines' sides over a real WebRTC data channel (loopback, the fake hub introducing them):
 /// a homebrew folder and a save, from the link to the files on disk, with the history and the
 /// activity on both sides.
@@ -798,6 +951,168 @@ async fn two_engines_share_a_homebrew_folder_and_a_save_over_webrtc() {
     let _ = cancel(axum::extract::Path(id)).await;
 }
 
+/// A homebrew app folder of `n` small files with long names: its listing is ~350 bytes a file.
+fn many_files_app(title_id: &str, n: usize) -> PathBuf {
+    let app = app_folder(title_id, "");
+    let long = "x".repeat(150);
+    for d in 0..n.div_ceil(100) {
+        let dir = app.join(format!("{d:02}{long}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in 0..100.min(n - d * 100) {
+            std::fs::write(dir.join(format!("{f:03}{long}.dat")), [f as u8]).unwrap();
+        }
+    }
+    app
+}
+
+/// Over a real data channel, a listing longer than one data-channel message (256 KiB) arrives:
+/// in parts, put back together. It was dropped unsaid, and the friend waited for nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_listing_over_a_data_channels_limit_arrives_over_webrtc() {
+    let hub = crate::join_net::tests::FakeHub::start().await;
+    let _hub = test_hub(&hub.url, true).await;
+    let app = many_files_app("LAPY10011", 1000);
+    let (s, v) = make(json!([{"kind": "app", "path": app}])).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let id = v["id"].as_str().unwrap().to_string();
+    let mut url = String::new();
+    for _ in 0..200 {
+        let (_, v) = body(get_one(axum::extract::Path(id.clone())).await).await;
+        if v["works"] == "anywhere" && v["hub_state"] == "hosted" {
+            url = v["url"].as_str().unwrap().to_string();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(!url.is_empty());
+    let (_, r) = body(
+        receive_open(Json(ShareOpenBody {
+            link: url,
+            name: Some("Alex".into()),
+        }))
+        .await,
+    )
+    .await;
+    let rid_rx = r["id"].as_str().unwrap().to_string();
+    let rx_view = || async {
+        body(receive_get(axum::extract::Path(rid_rx.clone())).await)
+            .await
+            .1
+    };
+    let mut view = Value::Null;
+    for _ in 0..400 {
+        view = rx_view().await;
+        if view["state"] == "offered" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(view["state"], "offered", "{view}");
+    let dest = tmp("rtc-many");
+    let (s, _) = body(
+        receive_accept(
+            axum::extract::Path(rid_rx.clone()),
+            Json(ShareAcceptBody {
+                items: vec!["i1".into()],
+                dest: Some(dest.to_string_lossy().into_owned()),
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let req = until_request(&id, "asking").await;
+    assert_eq!(decide_on(&id, req, true).await, StatusCode::OK);
+    // The listing came whole: the files are being received.
+    for _ in 0..800 {
+        view = rx_view().await;
+        if matches!(
+            view["state"].as_str(),
+            Some("receiving" | "done" | "failed")
+        ) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(
+        matches!(view["state"].as_str(), Some("receiving" | "done")),
+        "{view}"
+    );
+    let _ = receive_cancel(axum::extract::Path(rid_rx)).await;
+    let _ = cancel(axum::extract::Path(id)).await;
+}
+
+/// The sender's messages to a receiver, as text, until `until` is in one.
+async fn texts_until(link: &mut wire::MemLink, until: &str) -> Vec<String> {
+    use wire::Link;
+    let mut out = Vec::new();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), link.recv())
+            .await
+            .unwrap()
+        {
+            Some(wire::In::Text(t)) => {
+                let end = t.contains(until);
+                out.push(t);
+                if end {
+                    return out;
+                }
+            }
+            Some(_) => {}
+            None => panic!("closed before {until}: {out:?}"),
+        }
+    }
+}
+
+/// A listing longer than a message goes in parts to a receiver that reads them; to an older one
+/// it goes whole on the home network, as it did.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_long_listing_goes_in_parts_to_a_receiver_that_reads_them() {
+    let app = many_files_app("PSUP00007", 400);
+    let (id, room) = share_of(json!([{"kind": "app", "path": app}]), false).await;
+    // This build's receiver: it all arrives.
+    let sh = Arc::new(Mutex::new(RxShared::default()));
+    let (sock, link) = wire::mem_pair();
+    tokio::spawn(wire::sender_session(sock, Arc::new(Registry), None));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let dest = tmp("parts");
+    let id2 = id.clone();
+    tokio::spawn(async move {
+        let rid = until_request(&id2, "asking").await;
+        decide_on(&id2, rid, true).await;
+    });
+    let rx_sh = sh.clone();
+    let recv = tokio::spawn(async move { wire::receive(link, &room, "A", rx_sh, &mut rx).await });
+    until_rx(&sh, "offered").await;
+    tx.send(RxCmd::Accept {
+        items: vec!["i1".into()],
+        dest: dest.clone(),
+    })
+    .unwrap();
+    let end = tokio::time::timeout(Duration::from_secs(60), recv)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(end, RxEnd::Done, "{:?}", sh.lock().unwrap().error);
+    let got = sh.lock().unwrap().received[0].1.clone();
+    same_tree(&app, &got);
+    // An older receiver (no `parts` in its hello) on the home network: the listing whole.
+    let room = with_share(&id, |e| e.room_id().to_string()).unwrap();
+    let (sock, mut old) = wire::mem_pair();
+    tokio::spawn(wire::sender_session(sock, Arc::new(Registry), None));
+    old.raw(json!({"hello": {"v": 1, "room": room, "name": "B"}}))
+        .await;
+    let offer = texts_until(&mut old, "\"offer\"").await;
+    assert_eq!(offer.len(), 1);
+    old.raw(json!({"accept": {"items": ["i1"]}})).await;
+    let rid = until_request(&id, "asking").await;
+    decide_on(&id, rid, true).await;
+    let msgs = texts_until(&mut old, "\"allowed\"").await;
+    assert!(msgs.iter().all(|t| !t.starts_with("{\"part\"")), "whole");
+    assert!(msgs.last().unwrap().len() > 64 * 1024);
+    let _ = cancel(axum::extract::Path(id)).await;
+}
+
 /// The app opening a link the hub can't reach falls back to the home network's socket.
 #[tokio::test]
 async fn a_link_with_only_a_home_network_hint_is_read() {
@@ -853,7 +1168,7 @@ async fn silent_sender(mut sock: wire::MemSocket, hold: tokio::sync::oneshot::Re
     }
     assert!(next(&mut sock).await.get("hello").is_some());
     let offer = json!({"offer": {"from": "S", "title": "t", "items": [
-        {"id": "i1", "kind": "file", "name": "thing", "size": 10, "files": 1}
+        {"id": "i1", "kind": "media", "name": "thing", "size": 10, "files": 1}
     ]}});
     sock.send(wire::text(offer)).await.unwrap();
     assert!(next(&mut sock).await.get("accept").is_some());
@@ -949,6 +1264,17 @@ fn a_long_name_keeps_its_extension_and_two_alike_stay_two() {
     assert_eq!(wire::safe_name("con"), "_con");
     assert_eq!(wire::safe_name("COM1.bin"), "_COM1.bin");
     assert_eq!(wire::safe_name("console.pkg"), "console.pkg");
+    // A dot in front is part of the name; a dot or space at the end is not (Windows drops it).
+    assert_eq!(wire::safe_name(".nomedia"), ".nomedia");
+    assert_eq!(wire::safe_name("._eboot.bin"), "._eboot.bin");
+    assert_eq!(wire::safe_name("x. ."), "x");
+    assert_eq!(wire::safe_name(" a "), "a");
+    assert_eq!(wire::safe_name(".."), "item");
+    let dir = std::path::Path::new("/r");
+    assert_eq!(
+        wire::target(dir, ".config/.hidden").unwrap(),
+        std::path::Path::new("/r/.config/.hidden")
+    );
 
     // Under 200 bytes nothing is cut: names that differ after their 80th character stay apart.
     let listed = |path: String| wire::Listed {

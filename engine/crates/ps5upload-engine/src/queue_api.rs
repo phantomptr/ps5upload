@@ -1255,8 +1255,11 @@ fn job_end(state: &Value) -> Option<End> {
         "done" => Some(End::with_status(Status::Done)),
         "failed" => {
             let error = field("error").unwrap_or("the job failed");
-            // A build's own word for it.
-            if error == "transfer_cancelled" || error == "cancelled" {
+            // Stopped, not failed: the job's typed reason says so, however its error is worded
+            // ("cancelled; nothing was written", "uploading x: transfer_cancelled"). Read from the
+            // error alone, those were failures: a paused item was held as failed, and a run set
+            // to stop on a failure stopped.
+            if crate::is_cancelled_end(field("error_reason"), field("error")) {
                 return Some(End {
                     code: Some("cancelled".to_string()),
                     ..End::with_status(Status::Cancelled)
@@ -1641,7 +1644,9 @@ struct RemoveBody {
 
 /// POST /api/queue/{id}/remove — drops an item that is not running. A running upload or download
 /// needs `cancel: true`: it stops and goes (202). A running install is never removed: the console
-/// goes on with it whatever the queue says.
+/// goes on with it whatever the queue says. An install from a package on this computer that has
+/// ended without its session (one the PS5 may resume) gives that session up as it goes: the
+/// package is free to rename, and the PS5, should it come back for it, is told it is over.
 async fn remove_handler(
     State(queue): State<QueueState>,
     Path(id): Path<String>,
@@ -1693,12 +1698,30 @@ async fn remove_handler(
                 .into_response();
         }
         let view = book.view(&book.items[at]);
-        book.items.remove(at);
+        let gone = book.items.remove(at);
+        drop(book);
+        // An install that ended without its session (a stall the console may resume) holds its
+        // package against a rename (`pkg_install::serving`): removing it is the way to free it.
+        if let (Some((console, path)), Some(installs)) =
+            (install_package_of(&gone), queue.0.installs.get())
+        {
+            crate::pkg_install::release_sessions_of(installs, &console, &path);
+        }
         view
     };
     bus().publish_json("queue", &json!({ "action": "removed", "item": view }));
     queue.save().await;
     Json(json!({ "removed": true, "id": id })).into_response()
+}
+
+/// The console and the package on this computer of an install item, whose install sessions go
+/// when it is removed; `None` for any other item, or an install from anywhere else.
+fn install_package_of(item: &Item) -> Option<(String, PathBuf)> {
+    if item.kind != ItemKind::Install {
+        return None;
+    }
+    let path = item.request.get("source")?.get("host_file")?.as_str()?;
+    Some((item.console.clone(), PathBuf::from(path)))
 }
 
 #[derive(Deserialize)]
@@ -1931,6 +1954,53 @@ mod tests {
         }
     }
 
+    /// Removing an install item frees its package for a rename (`pkg_install::serving`): it names
+    /// the console and the package on this computer its sessions are released by. Only those.
+    #[test]
+    fn a_removed_install_names_the_package_its_sessions_are_released_by() {
+        let install = test_item(
+            ItemKind::Install,
+            json!({ "ps5_addr": "10.0.0.2", "source": { "host_file": "/games/a.pkg" } }),
+            Secrets::default(),
+        );
+        assert_eq!(
+            install_package_of(&install),
+            Some(("10.0.0.2".to_string(), PathBuf::from("/games/a.pkg")))
+        );
+        let on_console = test_item(
+            ItemKind::Install,
+            json!({ "ps5_addr": "10.0.0.2", "source": { "console_path": "/data/a.pkg" } }),
+            Secrets::default(),
+        );
+        assert_eq!(install_package_of(&on_console), None);
+        let upload = test_item(
+            ItemKind::parse("upload_tar").unwrap(),
+            json!({ "source": { "host_file": "/games/a.pkg" } }),
+            Secrets::default(),
+        );
+        assert_eq!(install_package_of(&upload), None);
+
+        // And it is what frees the package.
+        let state = crate::pkg_install::PkgInstallState::default();
+        let dir = std::env::temp_dir().join(format!("ps5u-queue-release-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pkg = dir.join("a.pkg");
+        std::fs::write(&pkg, b"a").unwrap();
+        let mut s = crate::pkg_install::tests::dummy_session(vec![(pkg.clone(), 1)]);
+        s.ps5_mgmt_addr = "10.0.0.2:9120".into();
+        state.sessions.lock().unwrap().insert("s".into(), s);
+        assert!(crate::pkg_install::serving(&state, &pkg).is_some());
+        let mut item = install.clone();
+        item.request["source"]["host_file"] = json!(pkg.to_string_lossy());
+        let (console, path) = install_package_of(&item).unwrap();
+        assert_eq!(
+            crate::pkg_install::release_sessions_of(&state, &console, &path),
+            1
+        );
+        assert_eq!(crate::pkg_install::serving(&state, &pkg), None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn ends_read_from_a_job_and_an_install() {
         assert!(job_end(&json!({ "status": "running" })).is_none());
@@ -1954,6 +2024,19 @@ mod tests {
                 .status,
             Status::Cancelled
         );
+        // A cancel worded otherwise, typed by its reason (as the engine sets it for a job that
+        // was stopped, and for a cancel wrapped in context): cancelled, not failed.
+        for job in [
+            json!({ "status": "failed", "error": "cancelled; nothing was written",
+                    "error_reason": "cancelled" }),
+            json!({ "status": "failed", "error": "uploading x: transfer_cancelled",
+                    "error_reason": "cancelled" }),
+            json!({ "status": "failed", "error": "raw", "error_reason": "transfer_cancelled" }),
+        ] {
+            let end = job_end(&job).unwrap();
+            assert_eq!(end.status, Status::Cancelled, "{job}");
+            assert_eq!(end.code.as_deref(), Some("cancelled"));
+        }
 
         assert!(install_end(&json!({ "phase": "deliver" })).is_none());
         let done = install_end(&json!({ "phase": "done", "verdict": "may_not_launch" })).unwrap();

@@ -409,6 +409,176 @@ async fn an_app_guest_signals_the_internet_invite_to_the_engine_without_the_hub(
     set_live(console, 0);
 }
 
+/// The engine's own signalling socket takes a bounded number of signals, as the hub does: it
+/// needs no key, and each offer on it is a peer connection the driver builds. One that sends more
+/// is told so and closed, long before the socket's own time is up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_engines_signalling_socket_takes_a_bounded_number_of_signals() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as TMsg;
+    let _turn = PARTY_TESTS.lock().await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        internet_invites: false,
+        stun: Vec::new(),
+        upnp: false,
+        ..Settings::default()
+    });
+    let console = "10.77.0.52";
+    set_helper(console, Arc::new(FakeHelper::default()));
+    set_live(console, 1);
+    open_party(console).await;
+    let signal = serve().await.replace("/api/join/ws", "/api/join/signal");
+    let (mut ws, _) = tokio_tungstenite::connect_async(&signal).await.unwrap();
+    ws.send(TMsg::Text(r#"{"v":1,"t":"join","lan":true}"#.into()))
+        .await
+        .unwrap();
+    let max = crate::join_net::local_signal::SIGNALS_MAX;
+    let candidate = serde_json::json!({
+        "v": 1, "t": "signal", "to": "host",
+        "data": {"type": "candidate", "candidate": "candidate:1 1 udp 1 192.0.2.1 9 typ host"},
+    })
+    .to_string();
+    for _ in 0..max + 1 {
+        // The socket may close under the last ones.
+        if ws.send(TMsg::Text(candidate.clone().into())).await.is_err() {
+            break;
+        }
+    }
+    let mut said = false;
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(Ok(m)) = ws.next().await {
+            match m {
+                TMsg::Text(t) => said |= t.as_str() == r#"{"t":"error","why":"rate_limited"}"#,
+                TMsg::Close(_) => break,
+                _ => {}
+            }
+        }
+    })
+    .await;
+    assert!(closed.is_ok(), "the socket stayed open past its signals");
+    assert!(said, "told why");
+    close_party(console).await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_live(console, 0);
+}
+
+/// An internet invite's room takes no hello without the invite. A hello with no key and no code
+/// asks the host on the home network (a "Playing nearby" join); in a hub room it used to as well,
+/// so a link the host had replaced with New link still put its holder in front of the host,
+/// under any name.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_internet_room_takes_no_hello_without_the_current_invite() {
+    let _turn = PARTY_TESTS.lock().await;
+    let hub = FakeHub::start().await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        hub_url: hub.url.clone(),
+        stun: Vec::new(),
+        upnp: false,
+        ..Settings::default()
+    });
+    let console = "10.77.0.53";
+    set_helper(console, Arc::new(FakeHelper::default()));
+    set_live(console, 1);
+    open_party(console).await;
+    let inv = internet_invite(console).await;
+    let room = inv["internet"]["room"].as_str().unwrap().to_string();
+    let old = inv["key"].as_str().unwrap().to_string();
+    until("hosted", || hub.has_host(&room)).await;
+
+    let mut g = connect_guest(&hub.url, &room).await;
+    g.text(serde_json::json!({"hello": {"name": "Someone"}}));
+    let v = g.next_with("stage").await;
+    assert_eq!((&v["stage"], &v["why"]), (&"refused".into(), &"key".into()), "{v}");
+
+    // New link: the old link's key is no way in either (its room is still the invite's).
+    let (ci, h) = local();
+    let new = body(
+        invite(
+            ci,
+            h,
+            Json(InviteBody {
+                addr: console.into(),
+                new: true,
+                internet: true,
+                share: false,
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_ne!(new["key"], old.as_str());
+    let mut g = connect_guest(&hub.url, &room).await;
+    g.text(serde_json::json!({"hello": {"invite": old, "name": "Old link"}}));
+    let v = g.next_with("stage").await;
+    assert_eq!((&v["stage"], &v["why"]), (&"refused".into(), &"key".into()), "{v}");
+    assert_eq!(
+        host_state(console).await["pending"],
+        serde_json::json!([]),
+        "nobody was put in front of the host"
+    );
+
+    // The home network's own join still may ask with nothing: the host decides.
+    let signal = serve().await.replace("/api/join/ws", "/api/join/signal");
+    let mut near = crate::join_net::tests::connect_guest_lan(&signal, false).await;
+    near.text(serde_json::json!({"hello": {"name": "Near"}}));
+    assert_eq!(near.next_with("stage").await["stage"], "asking");
+    allow_next(console, false).await;
+
+    close_party(console).await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_live(console, 0);
+}
+
+/// An invite lasts half an hour. When one lapses with no internet guest in, its room on the hub
+/// closes; the next invite gets a room again. (It kept the closed one, so every later invite was
+/// the home network's link, "offline", until Play Together was closed and opened again.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_invite_after_a_lapsed_one_gets_a_room_again() {
+    let _turn = PARTY_TESTS.lock().await;
+    let hub = FakeHub::start().await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        hub_url: hub.url.clone(),
+        stun: Vec::new(),
+        upnp: false,
+        ..Settings::default()
+    });
+    let console = "10.77.0.54";
+    set_helper(console, Arc::new(FakeHelper::default()));
+    set_live(console, 1);
+    open_party(console).await;
+    let inv = internet_invite(console).await;
+    let room = inv["internet"]["room"].as_str().unwrap().to_string();
+    until("hosted", || hub.has_host(&room)).await;
+
+    // The invite lapses (as after its half hour): nobody is in, so the room closes.
+    let key = host_key(console);
+    with_party(&key, |p| {
+        if let Some(i) = p.invite.as_mut() {
+            i.until = Instant::now();
+        }
+    });
+    until("the room closed", || !hub.has_host(&room)).await;
+    until("its task over", || {
+        with_party(&key, |p| p.internet.as_ref().is_some_and(|r| r.ended())).unwrap_or(false)
+    })
+    .await;
+
+    // The host's panel asks for the next invite: a new room, hosted.
+    let next = internet_invite(console).await;
+    let room2 = next["internet"]["room"].as_str().unwrap().to_string();
+    assert_ne!(room2, room, "{next}");
+    until("hosted again", || hub.has_host(&room2)).await;
+    let s = until_state(console, "the internet link", |s| {
+        s["invite"]["internet"]["state"] == "hosted"
+    })
+    .await;
+    assert_eq!(s["invite"]["internet"]["offline"], false, "{s}");
+
+    close_party(console).await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_live(console, 0);
+}
+
 /// A guest on the home network with the Wi-Fi's own link (no internet invite, no hub at all)
 /// joins over WebRTC signalled on the engine's socket: the link carries the engine's
 /// certificate, the answer has it, the invite key goes in the hello on the channel, the picture

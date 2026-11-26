@@ -667,6 +667,15 @@ impl FtpFs {
         self.list_on(&mut s, dir).await
     }
 
+    /// Whether the server path `full` is a folder, asked by entering it. CWD names one exact
+    /// folder: no server reads its argument as a pattern, so a folder that is not there cannot
+    /// answer as an empty one (which LIST of its path can, on a server that globs). `None` when
+    /// the answer says neither (no answer, or one other than success and 550).
+    async fn folder_there(&self, full: &str) -> Option<bool> {
+        let mut s = self.session.lock().await;
+        cwd_says(&mut s, full).await
+    }
+
     /// A read session with no transfer open, or a new sign-in.
     async fn side_session(&self) -> Result<Session, RemoteError> {
         {
@@ -694,8 +703,19 @@ impl FtpFs {
             // folder named "[PS5] Hellblade [RUS text, …]" listed by its path matched nothing
             // and showed empty (Discord: its .ffpfsc showed over SMB, not FTP). Every
             // other command here names an absolute path, so the working folder is free to move.
-            let here = s.cwd(dir).await.is_ok();
-            let arg = if here { None } else { Some(dir) };
+            //
+            // A folder the server won't enter is listed by its path, for a server that takes
+            // CWD badly. But a server that globs answers a missing path with an empty listing
+            // and success: from that alone a folder that is not there read as there and empty
+            // (and a failed MKD as made). So once CWD has said 550, only a listing with
+            // something in it shows the folder is there, and a path that is a pattern (`*`,
+            // `?`, `[`) is not listed at all: it could match some other name.
+            let here = cwd_says(s, dir).await;
+            let not_there = || RemoteError::NotFound(format!("{dir} not found"));
+            if here == Some(false) && dir.contains(['*', '?', '[']) {
+                return Err(not_there());
+            }
+            let arg = if here == Some(true) { None } else { Some(dir) };
             let listed = if mlsd {
                 s.mlsd(arg).await
             } else {
@@ -704,6 +724,9 @@ impl FtpFs {
             match listed {
                 Ok(lines) => {
                     let mut entries = parse_listing(&lines, mlsd);
+                    if here == Some(false) && entries.is_empty() {
+                        return Err(not_there());
+                    }
                     // A link to a file is listed with the file's size, which SIZE gives (it
                     // follows the link). A link to a folder, or a server without SIZE, stays
                     // as listed.
@@ -727,6 +750,16 @@ impl FtpFs {
             }
         })
         .await
+    }
+}
+
+/// What CWD into the server path `full` says over `s`: `Some(true)` it is a folder,
+/// `Some(false)` the server answered 550 (no such folder, or not one), `None` anything else.
+async fn cwd_says(s: &mut Ftp, full: &str) -> Option<bool> {
+    match tokio::time::timeout(STEP, s.cwd(full)).await {
+        Ok(Ok(())) => Some(true),
+        Ok(Err(FtpError::UnexpectedResponse(r))) if r.status.code() == 550 => Some(false),
+        _ => None,
     }
 }
 
@@ -1033,18 +1066,39 @@ impl RemoteFs for FtpFs {
             })
             .await
         };
+        // Whether the folder is there is asked by entering it, never by listing it: a server
+        // that reads a LIST argument as a pattern lists a folder that is not there as empty,
+        // which made a failed MKD read as success.
         match made {
-            Ok(()) => Ok(()),
+            // Made, the server says: there, as far as anyone can tell, unless entering it says
+            // it is not.
+            Ok(()) => match self.folder_there(&full).await {
+                Some(false) => Err(RemoteError::Io(format!(
+                    "the server said it made the folder {path}, but it is not there"
+                ))),
+                _ => Ok(()),
+            },
             // MKD answers 550 (or 521) for a name already taken; whether that is a folder
             // (fine) or a file (not) only a look can tell.
-            Err(e @ (RemoteError::NotFound(_) | RemoteError::Io(_))) => match self.stat(path).await
-            {
-                Ok(st) if st.is_dir => Ok(()),
-                Ok(_) => Err(RemoteError::Exists(format!("{path} is a file"))),
-                // LIST hides dot-folders on many servers: one that lists is there.
-                Err(_) if self.entries(path).await.is_ok() => Ok(()),
-                Err(_) => Err(e),
-            },
+            Err(e @ (RemoteError::NotFound(_) | RemoteError::Io(_))) => {
+                match self.folder_there(&full).await {
+                    Some(true) => Ok(()),
+                    // Not a folder: a file by that name, or nothing (the MKD failed).
+                    Some(false) => match self.stat(path).await {
+                        Ok(st) if !st.is_dir => {
+                            Err(RemoteError::Exists(format!("{path} is a file")))
+                        }
+                        _ => Err(e),
+                    },
+                    // A server that answers CWD neither way: the parent's listing, which shows
+                    // a folder only when it really holds one (a missing one is not in it).
+                    None => match self.stat(path).await {
+                        Ok(st) if st.is_dir => Ok(()),
+                        Ok(_) => Err(RemoteError::Exists(format!("{path} is a file"))),
+                        Err(_) => Err(e),
+                    },
+                }
+            }
             Err(e) => Err(e),
         }
     }
@@ -1668,8 +1722,16 @@ mod tests {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         let ctl = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = ctl.local_addr().unwrap().port();
+        // The folders it holds, shared by its sessions.
+        let folders: Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
+            Arc::new(std::sync::Mutex::new(
+                ["/", GLOB_DIR, "/torrents", "/liar"]
+                    .map(str::to_string)
+                    .into(),
+            ));
         tokio::spawn(async move {
             while let Ok((sock, _)) = ctl.accept().await {
+                let folders = Arc::clone(&folders);
                 tokio::spawn(async move {
                     let (rd, mut wr) = sock.into_split();
                     let mut rd = BufReader::new(rd);
@@ -1686,11 +1748,30 @@ mod tests {
                             "PASS" => "230 OK".into(),
                             "TYPE" => "200 TYPE is now 8-bit binary".into(),
                             "PWD" => format!("257 \"{cwd}\" is your current location"),
-                            "CWD" if arg == GLOB_DIR || arg == "/" || arg == "/torrents" => {
+                            "CWD" if folders.lock().unwrap().contains(arg) => {
                                 cwd = arg.to_string();
                                 "250 OK".into()
                             }
                             "CWD" => "550 No such directory".into(),
+                            // Made only inside a folder that is there; a folder under
+                            // `/liar` is said to be made and is not, as a broken server can.
+                            "MKD" if arg.starts_with("/liar/") => format!("257 \"{arg}\" created"),
+                            "MKD" => {
+                                let parent = arg.rsplit_once('/').map_or("/", |(p, _)| {
+                                    if p.is_empty() {
+                                        "/"
+                                    } else {
+                                        p
+                                    }
+                                });
+                                let mut f = folders.lock().unwrap();
+                                if f.contains(arg) || !f.contains(parent) {
+                                    "550 Can't create the directory".into()
+                                } else {
+                                    f.insert(arg.to_string());
+                                    format!("257 \"{arg}\" created")
+                                }
+                            }
                             "PASV" => {
                                 let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                                 let p = l.local_addr().unwrap().port();
@@ -1756,8 +1837,12 @@ mod tests {
         );
         let e = fs.stat(&format!("{GLOB_DIR}/{GLOB_FILE}")).await.unwrap();
         assert_eq!((e.is_dir, e.size), (false, GLOB_SIZE));
-        // A folder the server won't enter falls back to listing by its path.
-        assert!(fs.list("/nope", None).await.unwrap().entries.is_empty());
+        // A folder the server won't enter, listed by its path: this server answers an empty
+        // listing, which is no folder. It used to list as there and empty.
+        assert!(matches!(
+            fs.list("/nope", None).await,
+            Err(RemoteError::NotFound(_))
+        ));
     }
 
     /// An upload holds the session for its whole file; browsing meanwhile is answered over
@@ -1912,5 +1997,46 @@ mod tests {
         assert_eq!(f.size(), GLOB_SIZE);
         let tail = f.read_at(GLOB_SIZE - 4096, 4096).await.unwrap();
         assert_eq!(tail.len(), 4096);
+    }
+
+    /// The audit's case: on a server that reads a LIST argument as a pattern, a folder that is
+    /// not there listed as there and empty, so a MKD the server refused was reported as made.
+    /// Whether a folder is there is now asked by entering it.
+    #[tokio::test]
+    async fn a_folder_that_is_not_there_is_never_made_or_listed_as_empty() {
+        let port = globbing_server().await;
+        let mut conn = crate::remote::store::conn("t", crate::remote::store::Protocol::Ftp);
+        conn.host = "127.0.0.1".into();
+        conn.port = port;
+        conn.user = "t".into();
+        let secret = Secret::Password {
+            password: "t".into(),
+        };
+        let fs = FtpFs::connect(&conn, &secret, false).await.unwrap();
+        // Its parent is not there: the MKD fails, and that is what is said.
+        assert!(fs.create_dir("/missing/new").await.is_err());
+        assert!(matches!(
+            fs.list("/missing", None).await,
+            Err(RemoteError::NotFound(_))
+        ));
+        assert!(fs.stat("/missing/new").await.is_err());
+        // A folder that can be made is, and lists (empty) once it is.
+        fs.create_dir("/torrents/new").await.unwrap();
+        assert!(fs
+            .list("/torrents/new", None)
+            .await
+            .unwrap()
+            .entries
+            .is_empty());
+        // Made again: already there, which is fine.
+        fs.create_dir("/torrents/new").await.unwrap();
+        // A server that says it made a folder it did not.
+        let e = fs.create_dir("/liar/new").await.unwrap_err();
+        assert!(e.to_string().contains("not there"), "{e}");
+        // A missing folder whose name is a pattern is not listed by its path at all.
+        assert!(matches!(
+            fs.list("/torrents/[PS5] gone", None).await,
+            Err(RemoteError::NotFound(_))
+        ));
     }
 }

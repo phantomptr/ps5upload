@@ -532,32 +532,74 @@ pub fn hw_power(addr: &str) -> Result<HwPower> {
     })
 }
 
-/// "Console Storage" aggregate that matches what PS5 Settings shows.
-/// Sums the three partitions Sony's UI counts (`/user effective +
-/// /system_data + /system_ex`) and accounts for the reserved-pool slice
-/// the FS keeps for root. Per-partition fields are also surfaced for
-/// the diagnostics card. Distinct from `fs_list_volumes`: that returns
-/// per-volume detail; this is the single-line summary.
+/// The console's internal storage as its filesystem counts it: `statfs` on `/user`,
+/// `/system_data` and `/system_ex`, nothing else.
+///
+/// **These are not the figures of the PS5's own Settings > Storage screen** (#944). On one
+/// 2 TB console this reported 175.5 GB in `user_free_bytes` and a 1.995 TB `/user`, while its
+/// Storage screen showed 71.35 GB free of 1.89 TB. How the console arrives at its figures is
+/// not known to this API, and nothing here models it. Read these as what the filesystem says,
+/// and expect the console's screen to show less.
+///
+/// What a copy can count on is `/api/ps5/volumes` (`allocatable_bytes`, `likely_fits_bytes`),
+/// which starts from the same `user_free_bytes`.
+///
+/// Distinct from `fs_list_volumes`: that returns per-volume detail; this is the summary of the
+/// internal drive with its partitions.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HwStorage {
+    /// Size of the three partitions together (`user` + `system_data` + `system_ex`).
     pub total_bytes: u64,
+    /// Free on the three partitions together. Includes the system partitions' own free space,
+    /// which nothing can be copied into: for room on the drive read `user_free_bytes`.
     pub free_bytes: u64,
+    /// `total_bytes - free_bytes`. Includes what the filesystem holds back (`reserved_bytes`),
+    /// not only stored data.
     pub used_bytes: u64,
+    /// The same number as `user_reserved_bytes` (the system partitions' are not counted).
     pub reserved_bytes: u64,
+    /// Size of `/user`, the partition games and files are on (`/data` is a folder of it).
     pub user_total_bytes: u64,
+    /// Free on `/user` for a writer (`f_bavail`); 0 once the drive is written into what it
+    /// holds back. `user_reserved_bytes` is already left out of it: never subtract it again.
     pub user_free_bytes: u64,
+    /// What the filesystem holds back on `/user` (`f_bfree - f_bavail`): free blocks that are
+    /// not offered to a writer. Not a fixed pool: measured on two consoles it grows by about a
+    /// fifth of what is written and comes back when data is deleted.
     pub user_reserved_bytes: u64,
+    /// Size of `/system_data`.
     pub system_data_total_bytes: u64,
+    /// Free on `/system_data` (`f_bavail`).
     pub system_data_free_bytes: u64,
+    /// Size of `/system_ex`; 0 when the firmware has no such mount.
     pub system_ex_total_bytes: u64,
+    /// Free on `/system_ex` (`f_bavail`).
     pub system_ex_free_bytes: u64,
 }
 
+impl HwStorage {
+    /// The size and free space of the partition content is stored on, for telling a person
+    /// how full the console is: `/user` alone. The three-partition totals count the system
+    /// partitions' free space as free, so a full console still showed gigabytes to spare. An
+    /// answer without the `/user` figures (none known) falls back to the totals.
+    pub fn content_space(&self) -> (u64, u64) {
+        if self.user_total_bytes > 0 {
+            (self.user_free_bytes, self.user_total_bytes)
+        } else {
+            (self.free_bytes, self.total_bytes)
+        }
+    }
+}
+
 pub fn hw_storage(addr: &str) -> Result<HwStorage> {
-    let body = round_trip(addr, m::HW_STORAGE)?;
-    let get = parse_kv(&body);
+    Ok(parse_hw_storage(&round_trip(addr, m::HW_STORAGE)?))
+}
+
+/// The helper's `key=value` answer as it stands: nothing is added to or taken from a counter.
+fn parse_hw_storage(body: &[u8]) -> HwStorage {
+    let get = parse_kv(body);
     let n = |k: &str| get(k).and_then(|v| v.parse().ok()).unwrap_or(0u64);
-    Ok(HwStorage {
+    HwStorage {
         total_bytes: n("total_bytes"),
         free_bytes: n("free_bytes"),
         used_bytes: n("used_bytes"),
@@ -569,7 +611,7 @@ pub fn hw_storage(addr: &str) -> Result<HwStorage> {
         system_data_free_bytes: n("system_data_free_bytes"),
         system_ex_total_bytes: n("system_ex_total_bytes"),
         system_ex_free_bytes: n("system_ex_free_bytes"),
-    })
+    }
 }
 
 /// Safe bounds for fan-turbo threshold. Mirrored in the payload
@@ -820,6 +862,57 @@ mod tests {
         assert_eq!(get("model"), Some("CFI-1215A"));
         assert_eq!(get("ncpu"), Some("8"));
         assert_eq!(get("physmem"), Some("13421772800"));
+    }
+
+    /// The answer of the 2 TB console in #944, as the helper sends it.
+    const STORAGE_944: &[u8] = b"total_bytes=2005599387648\nfree_bytes=182746480640\n\
+        used_bytes=1822852907008\nreserved_bytes=307929022464\n\
+        user_total_bytes=1995416338432\nuser_free_bytes=175467462656\n\
+        user_reserved_bytes=307929022464\nsystem_data_total_bytes=8572829696\n\
+        system_data_free_bytes=7136804864\nsystem_ex_total_bytes=1610219520\n\
+        system_ex_free_bytes=142213120\n";
+
+    #[test]
+    fn storage_counters_pass_through_and_add_up() {
+        let st = parse_hw_storage(STORAGE_944);
+        assert_eq!(st.user_free_bytes, 175_467_462_656);
+        assert_eq!(st.user_reserved_bytes, 307_929_022_464);
+        // Nothing is counted twice: the totals are the three partitions, and "used" is
+        // everything that is not free (what is held back included).
+        assert_eq!(
+            st.total_bytes,
+            st.user_total_bytes + st.system_data_total_bytes + st.system_ex_total_bytes
+        );
+        assert_eq!(
+            st.free_bytes,
+            st.user_free_bytes + st.system_data_free_bytes + st.system_ex_free_bytes
+        );
+        assert_eq!(st.used_bytes, st.total_bytes - st.free_bytes);
+        assert_eq!(st.reserved_bytes, st.user_reserved_bytes);
+    }
+
+    #[test]
+    fn content_space_is_the_user_partition_not_the_three_together() {
+        let st = parse_hw_storage(STORAGE_944);
+        // The totals call 7.3 GB of system partition "free": no file can go there.
+        assert_eq!(st.free_bytes - st.user_free_bytes, 7_279_017_984);
+        assert_eq!(
+            st.content_space(),
+            (st.user_free_bytes, st.user_total_bytes)
+        );
+
+        // A full drive: the system partitions' room must not read as room on the console.
+        let full = HwStorage {
+            user_free_bytes: 0,
+            free_bytes: st.free_bytes - st.user_free_bytes,
+            ..st.clone()
+        };
+        assert_eq!(full.content_space().0, 0);
+
+        // An answer with no /user figures still says something.
+        let totals_only = parse_hw_storage(b"total_bytes=1000\nfree_bytes=400\n");
+        assert_eq!(totals_only.content_space(), (400, 1000));
+        assert_eq!(parse_hw_storage(b"").content_space(), (0, 0));
     }
 
     #[test]

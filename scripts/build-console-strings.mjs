@@ -23,6 +23,7 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
+import { RTL_LOCALES, isolateLatin } from "./rtl-isolate.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const LOCALES_DIR = path.join(repoRoot, "client/src/i18n/locales");
@@ -49,11 +50,15 @@ export function extractConsoleStrings() {
   const out = {};
   for (const f of files) {
     const dict = loadLocale(path.join(LOCALES_DIR, f));
+    const code = f.replace(/\.ts$/, "");
+    // The page shows these as they are: a right-to-left locale's Latin names and paths are kept
+    // whole here, as the app's loader does for its own (client/src/i18n/isolateLatin.ts).
+    const whole = RTL_LOCALES.includes(code) ? isolateLatin : (s) => s;
     const picked = {};
     for (const key of Object.keys(dict).sort()) {
-      if (key.startsWith(PREFIX)) picked[key] = dict[key];
+      if (key.startsWith(PREFIX)) picked[key] = whole(dict[key]);
     }
-    out[f.replace(/\.ts$/, "")] = picked;
+    out[code] = picked;
   }
   if (!out.en) throw new Error(`${LOCALES_DIR} has no en.ts`);
   return out;

@@ -1150,8 +1150,20 @@ impl PkgSource {
     }
 }
 
+/// What a package whose blocks are stored shuffled is told.
+pub const SHUFFLED_MESSAGE: &str =
+    "this package stores its data in a shuffled byte order, which this reader does not read yet";
+
 /// The block layout's boundary table: each file's logical start in afid order, then the data
-/// end, the metadata base and the mount size. Laid out as [`kraken_image::describe`] reads it.
+/// end, the metadata base and the mount size. Laid out as [`kraken_image::describe`] reads it:
+/// the outer-block digests (8 B each), then the shuffle-pattern table (header bits 28..31, 8 B a
+/// pattern), then the table. Reading it from straight after the digests took a shuffle table for
+/// boundaries, and the metadata from the wrong place.
+///
+/// A table that names any pattern but the identity (all zeros) is refused: the per-block shuffle
+/// is undone by [`kraken_image::decode_described`], but no package with one has been read back
+/// here (the builder writes none, and there is no sample), so such a package is refused in words
+/// rather than read as bytes no one has checked.
 fn block_bounds(blob: &[u8]) -> Result<Vec<u64>> {
     if blob.len() < 16 {
         return Err(bad("the package's layout descriptor is too short"));
@@ -1159,7 +1171,14 @@ fn block_bounds(blob: &[u8]) -> Result<Vec<u64>> {
     let (w0, w1) = (le64(blob, 0), le64(blob, 8));
     let files = (w0 & 0xFF_FFFF) as usize + 1;
     let outer = (w1 & 0xFF_FFFF) as usize;
-    let at = 16 + outer * 8;
+    let shuffles = ((w0 >> 28) & 0xF) as usize;
+    let patterns = blob
+        .get(16 + outer * 8..16 + (outer + shuffles) * 8)
+        .ok_or_else(|| bad("the package's layout descriptor ends inside its shuffle table"))?;
+    if patterns.iter().any(|&b| b != 0) {
+        return Err(bad(SHUFFLED_MESSAGE));
+    }
+    let at = 16 + (outer + shuffles) * 8;
     let table = blob
         .get(at..at + files * 6)
         .ok_or_else(|| bad("the package's layout descriptor ends inside its file table"))?;
@@ -1470,6 +1489,50 @@ impl SourceTree for PkgSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A descriptor's head as the block layout has it: `outer` digests, `table` shuffle
+    /// patterns, then the boundary table `bounds` (6 B each).
+    fn descriptor(outer: usize, table: &[[u8; 8]], bounds: &[u64]) -> Vec<u8> {
+        let w0 = (bounds.len() as u64 - 1) | ((table.len() as u64) << 28) | (7u64 << 32);
+        let mut blob = w0.to_le_bytes().to_vec();
+        blob.extend_from_slice(&(outer as u64).to_le_bytes());
+        blob.extend(std::iter::repeat_n(0xAB, outer * 8));
+        blob.extend(table.iter().flatten());
+        for b in bounds {
+            blob.extend_from_slice(&b.to_le_bytes()[..5]);
+            blob.push(0);
+        }
+        blob
+    }
+
+    /// The audit's case: the boundary table was read from straight after the outer digests,
+    /// as if no package had a shuffle table, though the header says how many patterns sit
+    /// there first (as `kraken_image::describe` reads it). A table of identity patterns now
+    /// moves the boundaries as it should; one with a real shuffle is refused in words.
+    #[test]
+    fn the_boundary_table_is_read_after_the_shuffle_table() {
+        let bounds = [0u64, 0x4_0000, 0x9_0000, 0xA_0000, 0xB_0000];
+        let plain = descriptor(2, &[], &bounds);
+        assert_eq!(block_bounds(&plain).unwrap(), bounds);
+        for n in [1usize, 3, 15] {
+            let identity = descriptor(2, &vec![[0u8; 8]; n], &bounds);
+            assert_eq!(
+                block_bounds(&identity).unwrap(),
+                bounds,
+                "{n} identity patterns"
+            );
+        }
+        let mut table = vec![[0u8; 8]; 2];
+        table[1][..2].copy_from_slice(&[4, 4]);
+        let shuffled = descriptor(2, &table, &bounds);
+        let e = block_bounds(&shuffled).unwrap_err().to_string();
+        assert!(e.contains("shuffled byte order"), "{e}");
+        // A header naming more patterns than the blob holds.
+        let mut short = plain.clone();
+        short.truncate(16 + 2 * 8);
+        short[..8].copy_from_slice(&(4u64 | 15 << 28).to_le_bytes());
+        assert!(block_bounds(&short).is_err());
+    }
 
     fn open_bytes(bytes: Vec<u8>) -> Result<PkgSource> {
         let len = bytes.len() as u64;

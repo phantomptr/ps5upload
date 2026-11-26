@@ -402,7 +402,8 @@
    "summary": "Console boot count, uptime and load"
   },
   "GET /api/ps5/hw/storage": {
-   "summary": "The console's internal storage, as PS5 Settings counts it"
+   "summary": "The console's internal storage, as its filesystem counts it",
+   "description": "`statfs` counters for `/user`, `/system_data` and `/system_ex`. These are not the figures of the PS5's Settings > Storage screen, which can show a smaller drive and less free space. `user_free_bytes` already leaves out `user_reserved_bytes`; do not subtract it again. For how much a copy can take, read `allocatable_bytes` and `likely_fits_bytes` in `/api/ps5/volumes`."
   },
   "GET /api/ps5/hw/temps": {
    "summary": "Console temperatures and clocks"

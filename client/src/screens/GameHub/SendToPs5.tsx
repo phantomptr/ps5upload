@@ -4,13 +4,11 @@ import { Layers, Upload } from "lucide-react";
 
 import type { CollectionGame, CollectionLocation } from "../../api/collection";
 import {
-  fetchVolumes,
   volumeAllocatableBytes,
   volumeLikelyFitsBytes,
   type Volume,
 } from "../../api/ps5";
 import { Button, Checkbox, Select } from "../../components";
-import { consoleAddr } from "../../lib/addr";
 import {
   DEFAULT_SEND_SUBPATH,
   addToQueue,
@@ -35,6 +33,7 @@ import { destinationVolumeFor } from "../../state/upload";
 import { ActivityLine } from "./ActivityLine";
 import { useCopyActivity, wholeCopyActivity } from "../../state/copyActivity";
 import { useConnectionStore } from "../../state/connection";
+import { useConsoleVolumes } from "../../state/volumes";
 import { queueLinkFor } from "../../lib/gamePage";
 import { spacePlanLink } from "../../lib/spacePlan";
 
@@ -71,7 +70,13 @@ export function SendToPs5({
   // queue ("Build and send" on a .pkg).
   const asImage = canImage && how === "image";
   const radioName = useId();
-  const [volumes, setVolumes] = useState<Volume[] | null>(null);
+  // The console's drives as every screen reads them (state/volumes). null until read; none
+  // when they cannot be.
+  const drives = useConsoleVolumes(host);
+  const volumes = useMemo<Volume[] | null>(
+    () => (drives.volumes ? imageDriveChoices(drives.volumes) : drives.error ? [] : null),
+    [drives.volumes, drives.error],
+  );
   // Picked here or on the Upload screen; none: this console's drive for packages (#673).
   const [picked, setVolume] = useState<string | null>(() => destinationVolumeFor(host));
   const [subpath, setSubpath] = useState(DEFAULT_SEND_SUBPATH);
@@ -89,16 +94,6 @@ export function SendToPs5({
   // A drive or folder the user set here is never replaced by Kraken Mount's folder.
   const driveTouched = useRef(false);
   const folderTouched = useRef(false);
-
-  useEffect(() => {
-    let live = true;
-    fetchVolumes(consoleAddr(host))
-      .then((v) => live && setVolumes(imageDriveChoices(v)))
-      .catch(() => live && setVolumes([]));
-    return () => {
-      live = false;
-    };
-  }, [host]);
 
   const volume = imageDrive(host, picked, volumes).volume;
   // A package goes where Kraken Mount finds it: its folder on the chosen drive, else its first

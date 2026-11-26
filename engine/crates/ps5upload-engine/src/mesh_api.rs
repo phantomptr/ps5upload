@@ -170,7 +170,26 @@ fn default_name() -> String {
 }
 
 fn name() -> String {
-    saved_name().unwrap_or_else(default_name)
+    mesh_name(&saved_name().unwrap_or_else(default_name))
+}
+
+/// The most a console keeps of a device name, in bytes (the helper's 64-byte field, `mesh.c`).
+const NAME_BYTES: usize = 63;
+
+/// A device name as every console keeps it: a control character is a space, and it is cut to
+/// [`NAME_BYTES`] on a character boundary, as the helper cuts it (`clean_field`). A longer one
+/// used to be dropped whole by the helper, so the consoles went on showing the old name, while
+/// this engine wrote the new one into its drives.
+pub(crate) fn mesh_name(s: &str) -> String {
+    let s: String = s
+        .chars()
+        .map(|c| if c < ' ' || c == '\u{7f}' { ' ' } else { c })
+        .collect();
+    let mut end = s.len().min(NAME_BYTES);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_string()
 }
 
 /// This device's name, as the consoles list it.
@@ -274,7 +293,8 @@ pub struct MeSet {
 }
 
 pub async fn me_set(Json(req): Json<MeSet>) -> Response {
-    let n: String = req.name.trim().chars().take(60).collect();
+    // Kept as the consoles will keep it, so this device shows the name they show.
+    let n = mesh_name(req.name.trim());
     let r = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
         let path = me_path().ok_or_else(|| anyhow::anyhow!("no data directory"))?;
         if n.is_empty() {
@@ -360,6 +380,22 @@ struct NotedJob {
     host: String,
     kind: &'static str,
     title: String,
+    /// When it was noted: the job is not in the job map until its planning is done (a stat of
+    /// every file for a big list), and is not forgotten for that meanwhile.
+    at: Instant,
+}
+
+/// How long a noted transfer may take to show up in the job map before it counts as one that
+/// never started.
+const NOTED_PLANNING: Duration = Duration::from_secs(600);
+
+/// Whether a noted job stays: running, or not in the map yet and still within its planning time.
+fn noted_stays(state: Option<&crate::JobState>, noted_at: Instant, now: Instant) -> bool {
+    match state {
+        Some(crate::JobState::Running { .. }) => true,
+        Some(_) => false,
+        None => now.saturating_duration_since(noted_at) < NOTED_PLANNING,
+    }
 }
 
 fn noted_jobs() -> &'static Mutex<HashMap<uuid::Uuid, NotedJob>> {
@@ -387,6 +423,7 @@ pub(crate) fn note_job(job: uuid::Uuid, addr: &str, kind: &'static str, dest: &s
                 host: ps5upload_core::events::console_host(addr),
                 kind,
                 title,
+                at: Instant::now(),
             },
         );
 }
@@ -413,7 +450,8 @@ fn engine_job_items(addr: &str) -> Vec<Value> {
     let host = ps5upload_core::events::console_host(addr);
     let jobs = jobs.lock().unwrap_or_else(|e| e.into_inner());
     let mut noted = noted_jobs().lock().unwrap_or_else(|e| e.into_inner());
-    noted.retain(|id, _| matches!(jobs.get(id), Some(crate::JobState::Running { .. })));
+    let now = Instant::now();
+    noted.retain(|id, n| noted_stays(jobs.get(id), n.at, now));
     noted
         .iter()
         .filter(|(_, n)| n.host == host)
@@ -643,9 +681,11 @@ pub async fn device(Json(req): Json<DeviceReq>) -> Response {
     let Some(addr) = crate::required_console_addr(req.addr) else {
         return crate::missing_console_addr();
     };
+    // A new name, cut as the console keeps it.
+    let name = req.name.as_deref().map(mesh_name);
     answer(move || {
         let r = call(&addr, || {
-            mesh::device(&addr, &req.op, &req.id, req.name.as_deref())
+            mesh::device(&addr, &req.op, &req.id, name.as_deref())
         })?;
         Ok(with_supported(r))
     })
@@ -788,6 +828,26 @@ mod tests {
             .contains("\"H\""));
     }
 
+    /// A transfer is noted before its job is in the map (it plans first: a stat of every file of
+    /// a big list). A look at the presence meanwhile forgot it for good, so it was never shown.
+    #[test]
+    fn a_noted_transfer_still_planning_is_not_forgotten() {
+        let t = Instant::now();
+        assert!(noted_stays(None, t, t + Duration::from_secs(30)));
+        assert!(!noted_stays(None, t, t + NOTED_PLANNING));
+        let failed = crate::JobState::Failed {
+            started_at_ms: 0,
+            completed_at_ms: 0,
+            elapsed_ms: 0,
+            error: "x".into(),
+            error_reason: None,
+            error_detail: None,
+            error_console: None,
+            error_space: None,
+        };
+        assert!(!noted_stays(Some(&failed), t, t));
+    }
+
     #[test]
     fn a_noted_transfer_shows_when_no_window_is_left_and_only_then() {
         let addr = "192.0.2.77";
@@ -857,6 +917,21 @@ mod tests {
         let v = presence_due(addr, now).unwrap();
         assert!(serde_json::to_vec(&v).unwrap().len() <= 1400);
         assert!(!v.as_array().unwrap().is_empty());
+    }
+
+    /// Cut where the helper cuts it (payload/tests/mesh_selftest.c checks the same names there):
+    /// at most 63 bytes, never inside a character, control characters as spaces.
+    #[test]
+    fn a_device_name_is_cut_as_the_console_cuts_it() {
+        assert_eq!(mesh_name("Gaming PC"), "Gaming PC");
+        assert_eq!(mesh_name(&"x".repeat(300)), "x".repeat(63));
+        // 35 two-byte letters: 31 fit (62 bytes), the 32nd would be cut in half.
+        assert_eq!(mesh_name(&"é".repeat(35)), "é".repeat(31));
+        // A four-byte character over the edge goes whole.
+        let s = format!("{}😀", "a".repeat(61));
+        assert_eq!(mesh_name(&s), "a".repeat(61));
+        assert_eq!(mesh_name("tab\there\u{7f}"), "tab here ");
+        assert!(mesh_name(&"ü".repeat(100)).len() <= NAME_BYTES);
     }
 
     #[test]

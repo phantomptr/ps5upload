@@ -24,6 +24,8 @@
 //! * `POST /api/drive/approve` `{addr,drive,member,approve}`  (kept for 8.0.0 apps)
 //! * `POST /api/drive/leave`   `{addr,drive,member}`          (any member, e.g. a device long gone)
 //! * `POST /api/drive/delete`  `{addr,drive}`                   (the drive goes; files stay)
+//!   Both answer `later` (and a `note`) when the console did not answer: this device's own folder
+//!   stopped syncing anyway, and the console is told once it answers.
 //! * `POST /api/drive/pause`   `{addr,drive,member,paused}`
 //! * `POST /api/drive/sync`    `{addr,drive}`                   (a pass now)
 //! * `POST /api/drive/confirm` `{addr,drive,member}`            (let a held-back mass delete run)
@@ -237,11 +239,58 @@ fn new_id() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// The helper refused with `token` (`{"ok":false,"err":token}`, or the bare token).
+fn helper_refused(e: &anyhow::Error, token: &str) -> bool {
+    e.chain()
+        .filter_map(|c| c.downcast_ref::<ps5upload_core::mgmt::MgmtError>())
+        .any(|m| {
+            m.cause == token
+                || serde_json::from_str::<Value>(&m.cause)
+                    .is_ok_and(|v| v.get("err").and_then(Value::as_str) == Some(token))
+        })
+}
+
+/// The console answered, but its drive list could not be read (by the console, or by this
+/// version): not "away", and not "no drives". Nothing is written or forgotten from it.
+fn list_unreadable(e: &anyhow::Error) -> bool {
+    matches!(
+        Said::of(e).code.as_str(),
+        "list_unreadable" | "console_list_unreadable"
+    )
+}
+
 /// `{rev, doc}` from the console; None for a helper without documents.
 fn doc_read(addr: &str) -> Result<Option<(u64, DriveDoc)>> {
-    let Some(v) = crate::mesh_api::call(addr, || mesh::doc_get(addr, "drives"))? else {
-        return Ok(None);
+    drive_doc_of(crate::mesh_api::call(addr, || {
+        mesh::doc_get(addr, "drives")
+    }))
+}
+
+/// [`doc_read`] from the helper's answer.
+fn drive_doc_of(answer: Result<Option<Value>>) -> Result<Option<(u64, DriveDoc)>> {
+    let unreadable = || {
+        said_err(
+            "console_list_unreadable",
+            &[],
+            "the console could not read its drive list; nothing changes until it can",
+        )
     };
+    let v = match answer {
+        Ok(Some(v)) => v,
+        Ok(None) => return Ok(None),
+        // A helper that could not read the file says so (an older one answered `doc: null`, as
+        // for a console that never had a drive: the two cannot be told apart from here).
+        Err(e) if helper_refused(&e, "doc_unreadable") => return Err(unreadable()),
+        Err(e) => return Err(e),
+    };
+    // A refusal that reached here as an answer is never a list (it has no `doc`: none).
+    if v.get("ok").and_then(Value::as_bool) == Some(false) {
+        let err = v.get("err").and_then(Value::as_str).unwrap_or("refused");
+        if err == "doc_unreadable" {
+            return Err(unreadable());
+        }
+        bail!("the console refused to read its drive list: {err}");
+    }
     let rev = v.get("rev").and_then(Value::as_u64).unwrap_or(0);
     // A list this version cannot read is never taken as empty: writing it back would drop every
     // drive in it.
@@ -283,6 +332,41 @@ fn doc_update<T>(addr: &str, mut f: impl FnMut(&mut DriveDoc) -> Result<T>) -> R
 struct LocalConfig {
     #[serde(default)]
     members: Vec<LocalMember>,
+    /// What this device did while the console did not answer, done there once it does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pending: Vec<Pending>,
+}
+
+/// A folder of this device that left its drive (`member`), or the drive deleted (no member),
+/// while its console did not answer: this device stopped syncing it then; the console is told
+/// when it answers again.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+struct Pending {
+    console: String,
+    drive: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    member: Option<String>,
+    #[serde(default)]
+    since: u64,
+}
+
+/// At most this many are kept (the oldest go first): a console gone for good is never told.
+const PENDING_MAX: usize = 200;
+
+fn add_pending(console: &str, drive: &str, member: Option<&str>) -> Result<()> {
+    edit_config(|c| {
+        let p = Pending {
+            console: console.to_string(),
+            drive: drive.to_string(),
+            member: member.map(str::to_string),
+            since: now_ms(),
+        };
+        c.pending
+            .retain(|x| !(x.console == p.console && x.drive == p.drive && x.member == p.member));
+        c.pending.push(p);
+        let over = c.pending.len().saturating_sub(PENDING_MAX);
+        c.pending.drain(..over);
+    })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -304,7 +388,20 @@ struct LocalMember {
     paused: bool,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A test's own folder for this engine's Mesh Drive files (never the user's).
+    static TEST_STATE_DIR: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 fn state_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        if let Some(d) = TEST_STATE_DIR.with(|d| d.borrow().clone()) {
+            return Some(d);
+        }
+    }
     Some(crate::remote::store::data_dir()?.join("mesh-drive"))
 }
 
@@ -624,8 +721,8 @@ fn confirm_away(addr: &str, e: &anyhow::Error) -> Option<AwayWhy> {
         return Some(w);
     }
     match doc_read(addr) {
-        Err(e2) => Some(away_why(&e2).unwrap_or(AwayWhy::Unreachable)),
-        Ok(_) => None,
+        Err(e2) if !list_unreadable(&e2) => Some(away_why(&e2).unwrap_or(AwayWhy::Unreachable)),
+        _ => None,
     }
 }
 
@@ -1220,7 +1317,8 @@ struct Pass<'a> {
 ///
 /// A linked console holds what its partner held, so a file of the size agreed on counts as agreed
 /// on. That is a guess (the two consoles' times cannot be compared), so this first pass deletes
-/// nothing and what it replaces there goes to the trash. A file of another size changed there.
+/// nothing, what it replaces there goes to the trash, and a file of another size there (changed
+/// there, or never given the home console's last edit) is a conflict here: both are kept.
 fn seed_via_base(home: &Base, via_hub: &Listing) -> Base {
     home.iter()
         .filter_map(|(path, agreed)| {
@@ -1370,19 +1468,48 @@ fn is_os_clutter(name: &str) -> bool {
     name == ".DS_Store" || name == "Thumbs.db" || name == "desktop.ini" || name.starts_with("._")
 }
 
+/// The first name in a folder that is not clutter (so the folder stays), reading it page by page
+/// with `list(offset)` (names, whether more follow) to its end. The first page alone is not the
+/// folder: the helper lists in disk order, and eight `._` files from a Mac could come before the
+/// files of the drive, which then went to the trash with the folder.
+fn first_kept_name(
+    mut list: impl FnMut(u64) -> Result<(Vec<String>, bool)>,
+) -> Result<Option<String>> {
+    let mut offset = 0u64;
+    loop {
+        let (names, truncated) = list(offset)?;
+        let n = names.len() as u64;
+        if let Some(name) = names
+            .into_iter()
+            .find(|n| n != "." && n != ".." && !is_os_clutter(n))
+        {
+            return Ok(Some(name));
+        }
+        if n == 0 || (n < 256 && !truncated) {
+            return Ok(None);
+        }
+        offset += n;
+    }
+}
+
 /// A console folder of the drive that nothing is left in goes to the trash (moved, never
 /// deleted: anything written into it meanwhile is still there).
 fn prune_console_dir(addr: &str, root: &str, rel: &str, today: &str) -> bool {
     let dir = join_hub(root, rel);
-    let l = match fs_ops::list_dir(
-        addr,
-        &dir,
-        ListDirOptions {
-            offset: 0,
-            limit: 8,
-        },
-    ) {
-        Ok(l) => l,
+    let kept = first_kept_name(|offset| {
+        let l = fs_ops::list_dir(addr, &dir, ListDirOptions { offset, limit: 256 })?;
+        Ok((l.entries.into_iter().map(|e| e.name).collect(), l.truncated))
+    });
+    match kept {
+        Ok(None) => {}
+        Ok(Some(name)) => {
+            crate::log_at!(
+                Info,
+                "mesh",
+                "mesh drive: kept {dir}: it still holds {name}"
+            );
+            return false;
+        }
         Err(e) => {
             crate::log_at!(
                 Info,
@@ -1391,19 +1518,6 @@ fn prune_console_dir(addr: &str, root: &str, rel: &str, today: &str) -> bool {
             );
             return false;
         }
-    };
-    if let Some(e) = l
-        .entries
-        .iter()
-        .find(|e| e.name != "." && e.name != ".." && !is_os_clutter(&e.name))
-    {
-        crate::log_at!(
-            Info,
-            "mesh",
-            "mesh drive: kept {dir}: it still holds {}",
-            e.name
-        );
-        return false;
     }
     let day = join_hub(&join_hub(root, TRASH), today);
     let to = join_hub(
@@ -1481,11 +1595,17 @@ trait Side {
     /// other side leaves its files' folders behind here otherwise). False when it holds anything.
     fn prune(&self, rel: &str, today: &str) -> bool;
     fn empty_trash(&self, cutoff: &str);
-    /// What this side and the hub last agreed on. Empty only when there is none yet: a base that
-    /// cannot be read is an error (a pass against an empty one would hash everything and bring
-    /// deleted files back).
-    fn load_base(&self, drive: &str, member: &str) -> Result<Base>;
+    /// What this side and the hub last agreed on, None when there is none yet: a base that cannot
+    /// be read is an error (a pass against an empty one would hash everything and bring deleted
+    /// files back).
+    fn load_base(&self, drive: &str, member: &str) -> Result<Option<Base>>;
     fn save_base(&self, drive: &str, member: &str, base: &Base) -> Result<()>;
+    /// The record older versions kept here: one per console folder, written by every link whose
+    /// second end this console is (so with two such links, what either link agreed on). Only
+    /// read while this member has no base of its own (see [`carried_over`]).
+    fn legacy_base(&self) -> Result<Option<Base>> {
+        Ok(None)
+    }
     /// Whether a just-written file waits a pass (times come from this computer's clock).
     fn settles(&self) -> bool;
     /// A name this side cannot hold.
@@ -1674,8 +1794,8 @@ impl Side for LocalSide {
             }
         }
     }
-    fn load_base(&self, drive: &str, member: &str) -> Result<Base> {
-        Ok(load_base(drive, &self.base_key(member)))
+    fn load_base(&self, drive: &str, member: &str) -> Result<Option<Base>> {
+        Ok(Some(load_base(drive, &self.base_key(member))))
     }
     fn save_base(&self, drive: &str, member: &str, base: &Base) -> Result<()> {
         save_base(drive, &self.base_key(member), base)
@@ -1719,6 +1839,52 @@ impl ConsoleSide {
     fn path(&self, rel: &str) -> String {
         join_hub(&self.root, rel)
     }
+
+    fn parse_record(&self, bytes: &[u8]) -> Result<Base> {
+        serde_json::from_slice(bytes).map_err(|e| {
+            said_err(
+                "link_record_damaged",
+                &[("console", &self.addr)],
+                format!("the link's record on {} is damaged: {e}", self.addr),
+            )
+        })
+    }
+}
+
+/// The file (in the trash folder of the link's second console) that holds what one link agreed
+/// on, named after the link (`link_member_id`, which names both its consoles). One path component
+/// whatever the addresses hold: every byte but a letter, digit, `.` or `-` is written `_xx`, so
+/// two links never share a name; a name too long for a file system is a hash of the link.
+fn link_base_name(member: &str) -> String {
+    let mut s = String::from("link-base-");
+    for b in member.bytes() {
+        if b.is_ascii_alphanumeric() || b == b'.' || b == b'-' {
+            s.push(b as char);
+        } else {
+            s.push_str(&format!("_{b:02x}"));
+        }
+    }
+    if s.len() > 200 {
+        let h = blake3::hash(member.as_bytes()).to_hex();
+        return format!("link-base-{}.json", &h[..32]);
+    }
+    s.push_str(".json");
+    s
+}
+
+/// What a link starts from the first time it runs on this version, when the second console holds
+/// only the shared record of an older one ([`Side::legacy_base`]). That record may be another
+/// link's (it names no link), so only what it surely says of this one is kept: a file both
+/// consoles have, the link's first console (`hub`) holding it exactly as the record has it (the
+/// record's other side is the second console, the same for every link it served). All else
+/// starts as never agreed on: a file on one side only is copied to the other (a delete is never
+/// taken from it), and one on both that differs is compared (a conflict keeps both). Nothing is
+/// lost on the way.
+fn carried_over(old: &Base, side: &Listing, hub: &Listing) -> Base {
+    old.iter()
+        .filter(|(path, agreed)| side.contains_key(*path) && hub.get(*path) == Some(&agreed.h))
+        .map(|(path, agreed)| (path.clone(), *agreed))
+        .collect()
 }
 
 thread_local! {
@@ -1968,25 +2134,16 @@ impl Side for ConsoleSide {
     fn empty_trash(&self, cutoff: &str) {
         empty_console_trash(&self.addr, &self.root, cutoff);
     }
-    fn load_base(&self, _drive: &str, _member: &str) -> Result<Base> {
-        let path = join_hub(&join_hub(&self.root, TRASH), LINK_BASE);
-        let bytes = match read_console_file(&self.addr, &path)? {
-            Some(b) => b,
-            // Where 8.1.0 kept it (in the folder itself, which an 8.0 engine syncs as a file).
-            None => match read_console_file(&self.addr, &self.path(BASE_FILE))? {
-                Some(b) => b,
-                None => return Ok(Base::new()),
-            },
-        };
-        serde_json::from_slice(&bytes).map_err(|e| {
-            said_err(
-                "link_record_damaged",
-                &[("console", &self.addr)],
-                format!("the link's record on {} is damaged: {e}", self.addr),
-            )
-        })
+    /// The link's own record: one file per link (`link_base_name`), so two links that end on this
+    /// console never start from what the other agreed on.
+    fn load_base(&self, _drive: &str, member: &str) -> Result<Option<Base>> {
+        let path = join_hub(&join_hub(&self.root, TRASH), &link_base_name(member));
+        match read_console_file(&self.addr, &path)? {
+            Some(b) => self.parse_record(&b).map(Some),
+            None => Ok(None),
+        }
     }
-    fn save_base(&self, _drive: &str, _member: &str, base: &Base) -> Result<()> {
+    fn save_base(&self, _drive: &str, member: &str, base: &Base) -> Result<()> {
         let body = serde_json::to_vec(base)?;
         if body.len() > CONSOLE_BASE_MAX {
             return Err(said_err(
@@ -1997,15 +2154,27 @@ impl Side for ConsoleSide {
         }
         let dir = join_hub(&self.root, TRASH);
         fs_ops::fs_mkdir(&self.addr, &dir)?;
-        // Written whole or not at all (the write commits once).
+        // Written whole or not at all (the write commits once). The shared record of older
+        // versions stays: another link ending here may not have read it yet.
         ps5upload_core::diagnostics::fs_write_bytes_large(
             &self.addr,
-            &join_hub(&dir, LINK_BASE),
+            &join_hub(&dir, &link_base_name(member)),
             &body,
             false,
         )?;
-        let _ = fs_ops::fs_delete(&self.addr, &self.path(BASE_FILE));
         Ok(())
+    }
+    fn legacy_base(&self) -> Result<Option<Base>> {
+        let path = join_hub(&join_hub(&self.root, TRASH), LINK_BASE);
+        let bytes = match read_console_file(&self.addr, &path)? {
+            Some(b) => b,
+            // Where 8.1.0 kept it (in the folder itself, which an 8.0 engine syncs as a file).
+            None => match read_console_file(&self.addr, &self.path(BASE_FILE))? {
+                Some(b) => b,
+                None => return Ok(None),
+            },
+        };
+        self.parse_record(&bytes).map(Some)
     }
     fn settles(&self) -> bool {
         false
@@ -2207,7 +2376,14 @@ impl Pass<'_> {
         };
         let mut base = match &self.seed {
             Some(home) => seed_via_base(home, &hub),
-            None => self.side.load_base(&self.drive.id, member_id)?,
+            None => match self.side.load_base(&self.drive.id, member_id)? {
+                Some(b) => b,
+                // Read once: the pass saves a base of this member's own.
+                None => self
+                    .side
+                    .legacy_base()?
+                    .map_or_else(Base::new, |old| carried_over(&old, &member, &hub)),
+            },
         };
         let now = now_ms() as i64 / 1000;
         // Still being written: leave it for the next pass (and do not take its absence as a delete).
@@ -2250,9 +2426,20 @@ impl Pass<'_> {
         });
         skipped.extend(unread.iter().cloned());
         let mut held = 0;
-        // The first pass through a linked console deletes nothing there (its base is a guess).
+        // The first pass through a linked console deletes nothing there (its base is a guess),
+        // and never puts that console's copy over a file here: which of the two is newer is not
+        // known (the home console may have had an edit, this folder got it and the linked console
+        // did not, before it went away), so both are kept, as a conflict. (It used to come over
+        // with nothing kept, and the older copy then went on to the home console too.)
         if self.seed.is_some() {
             ops.retain(|o| !matches!(o, Op::DeleteHub(_)));
+            for o in ops.iter_mut() {
+                if let Op::Download(p) = o {
+                    if member.contains_key(p.as_str()) {
+                        *o = Op::Conflict(p.clone());
+                    }
+                }
+            }
         }
         let mut held_paths = Vec::new();
         // A confirmation covers the deletes it was given for: used up once a pass got through them.
@@ -2783,8 +2970,10 @@ fn sync_member(lm: &LocalMember, me: &str) -> Result<()> {
         // Its own console is away: a linked console holds the same drive (after a second miss
         // in a row: one dropped read is not "away").
         Err(e) => {
-            let said = Said::of(&e);
-            if away_why(&e).is_none() && said.code == "list_unreadable" {
+            // It answered, but its list could not be read: this folder stays as it is (never
+            // taken as "the drive is gone"), and says why.
+            if away_why(&e).is_none() && list_unreadable(&e) {
+                let said = Said::of(&e);
                 set_status(&lm.member, |s| {
                     s.state = "error".into();
                     s.say(said);
@@ -2897,6 +3086,8 @@ fn failover(lm: &LocalMember, running: &RunningPass) -> Result<()> {
         let doc = match doc_read(b) {
             Ok(Some((_, doc))) => doc,
             Ok(None) => continue,
+            // It answers, but its list cannot be read: not away, and not a way through either.
+            Err(e) if list_unreadable(&e) => continue,
             Err(e) => {
                 mark_away(b, away_why(&e).unwrap_or(AwayWhy::Unreachable));
                 continue;
@@ -2995,6 +3186,7 @@ fn sync_links(me: &str) {
         let doc = match doc_read(&a) {
             Ok(Some((_, doc))) => doc,
             Ok(None) => continue,
+            Err(e) if list_unreadable(&e) => continue,
             Err(e) => {
                 mark_away(&a, away_why(&e).unwrap_or(AwayWhy::Unreachable));
                 continue;
@@ -3043,13 +3235,17 @@ fn newer_password<'a>(
     }
 }
 
-fn link_member_id(drive: &str, hi: &str) -> String {
-    format!("link:{drive}:{hi}")
+/// A link's id, for its base, its status and what the engine remembers of it between passes. It
+/// names both consoles: two links ending on the same console are two members (older versions
+/// named the second console only, so a third console's link started from what the other link had
+/// agreed on and trashed what that link had just brought in, every round).
+fn link_member_id(drive: &str, lo: &str, hi: &str) -> String {
+    format!("link:{drive}:{lo}:{hi}")
 }
 
 /// One pass between the drive's home folders on `lo` and `hi`.
 fn run_link(id: &str, lo: &str, hi: &str) -> Result<()> {
-    let member_id = link_member_id(id, hi);
+    let member_id = link_member_id(id, lo, hi);
     let running = begin_pass(&member_id);
     // Either end away: the link waits (its state says so on the end that answers).
     for (end, other) in [(lo, hi), (hi, lo)] {
@@ -3061,6 +3257,11 @@ fn run_link(id: &str, lo: &str, hi: &str) -> Result<()> {
     let dlo = match doc_read(lo) {
         Ok(Some((_, d))) => d,
         Ok(None) => return Ok(()),
+        // It answers, but its list cannot be read: the link waits, and says why.
+        Err(e) if list_unreadable(&e) => {
+            set_link_state(hi, id, lo, "error", &Said::of(&e), false, None);
+            return Ok(());
+        }
         Err(e) => {
             mark_away(lo, away_why(&e).unwrap_or(AwayWhy::Unreachable));
             set_link_state(hi, id, lo, "offline", &Said::default(), false, None);
@@ -3073,6 +3274,10 @@ fn run_link(id: &str, lo: &str, hi: &str) -> Result<()> {
     let dhi = match doc_read(hi) {
         Ok(Some((_, d))) => d,
         Ok(None) => return Ok(()),
+        Err(e) if list_unreadable(&e) => {
+            set_link_state(lo, id, hi, "error", &Said::of(&e), false, None);
+            return Ok(());
+        }
         Err(e) => {
             mark_away(hi, away_why(&e).unwrap_or(AwayWhy::Unreachable));
             set_link_state(lo, id, hi, "offline", &Said::default(), false, None);
@@ -3448,8 +3653,12 @@ pub fn tick() {
     let Some(me) = crate::mesh_api::id_hex() else {
         return;
     };
+    let config = load_config();
+    if !config.pending.is_empty() {
+        start_worker("pending".into(), finish_pending);
+    }
     let mut by_console: BTreeMap<String, Vec<LocalMember>> = BTreeMap::new();
-    for lm in load_config().members {
+    for lm in config.members {
         by_console.entry(lm.console.clone()).or_default().push(lm);
     }
     if by_console.is_empty() {
@@ -4055,6 +4264,9 @@ fn add_local(addr: &str, drive: &str, member: &str, path: &str, name: &str) -> R
         }
         c.members
             .retain(|m| !(m.drive == drive && (m.member == member || m.path == path)));
+        // Joined again: a delete of the drive there that the console never heard of is off.
+        c.pending
+            .retain(|p| !(p.console == addr && p.drive == drive && p.member.is_none()));
         c.members.push(LocalMember {
             console: addr.to_string(),
             drive: drive.to_string(),
@@ -4776,15 +4988,21 @@ pub async fn unlink(Json(req): Json<UnlinkReq>) -> Response {
             kick();
             return Ok(json!({ "supported": true, "ok": true }));
         }
-        stop_pass(&link_member_id(&req.drive, link_ends(&addr, &other).1));
+        let (lo, hi) = link_ends(&addr, &other);
+        let member_id = link_member_id(&req.drive, lo, hi);
+        stop_pass(&member_id);
         drop_link(&addr, &req.drive, &other);
         drop_link(&other, &req.drive, &addr);
         // The link's base lives in the second console's folder (link_ends): it means nothing now.
-        if let Ok(Some((_, doc))) = doc_read(link_ends(&addr, &other).1) {
+        if let Ok(Some((_, doc))) = doc_read(hi) {
             if let Some(d) = doc.drives.iter().find(|d| d.id == req.drive) {
-                let hi = link_ends(&addr, &other).1;
-                let _ = fs_ops::fs_delete(hi, &join_hub(&d.hub, BASE_FILE));
-                let _ = fs_ops::fs_delete(hi, &join_hub(&join_hub(&d.hub, TRASH), LINK_BASE));
+                let trash = join_hub(&d.hub, TRASH);
+                let _ = fs_ops::fs_delete(hi, &join_hub(&trash, &link_base_name(&member_id)));
+                // The shared record of older versions, once no other link ends there.
+                if d.links.is_empty() {
+                    let _ = fs_ops::fs_delete(hi, &join_hub(&d.hub, BASE_FILE));
+                    let _ = fs_ops::fs_delete(hi, &join_hub(&trash, LINK_BASE));
+                }
             }
         }
         Ok(json!({ "supported": true, "ok": true }))
@@ -5020,61 +5238,218 @@ pub async fn approve(Json(req): Json<MemberReq>) -> Response {
     .await
 }
 
+/// Takes a folder out of the drive. When the console does not answer, this device's own folder
+/// stops syncing anyway (its files stay) and the console drops it once it answers: the answer
+/// then has `later`, and a `note` saying so.
 pub async fn leave(Json(req): Json<MemberReq>) -> Response {
     answer(move || {
-        let addr = addr_of(req.addr)?;
-        let member = req
-            .member
-            .clone()
-            .ok_or_else(|| refuse(StatusCode::BAD_REQUEST, "which member?"))?;
-        let r = doc_update(&addr, |doc| {
-            if let Some(d) = doc.drives.iter_mut().find(|d| d.id == req.drive) {
-                d.members.retain(|m| m.id != member);
+        Ok(match leave_now(&req)? {
+            Gone::Done => json!({ "supported": true, "ok": true }),
+            Gone::Unsupported => unsupported(),
+            Gone::Later(note) => {
+                json!({ "supported": true, "ok": true, "later": true, "note": note })
             }
-            Ok(())
-        })?;
-        stop_pass(&member);
-        remove_local(&req.drive, Some(&member))?;
-        if r.is_none() {
-            return Ok(unsupported());
-        }
-        Ok(json!({ "supported": true, "ok": true }))
+        })
     })
     .await
 }
 
+/// How a leave or a delete went.
+#[derive(Debug, PartialEq)]
+enum Gone {
+    Done,
+    /// The helper predates the mesh.
+    Unsupported,
+    /// The console did not answer: done on this device, and there once it answers (the note
+    /// says so).
+    Later(String),
+}
+
+fn told_later(console: &str, deleted: bool) -> Gone {
+    Gone::Later(if deleted {
+        format!(
+            "The drive is no longer kept on this device. {console} did not answer: the drive is \
+             deleted there when it is back. No files are deleted."
+        )
+    } else {
+        format!(
+            "This folder no longer syncs. {console} did not answer: the folder is removed from \
+             the drive there when it is back. Its files stay where they are."
+        )
+    })
+}
+
+fn leave_now(req: &MemberReq) -> Result<Gone> {
+    let addr = addr_of(req.addr.clone())?;
+    let member = req
+        .member
+        .clone()
+        .ok_or_else(|| refuse(StatusCode::BAD_REQUEST, "which member?"))?;
+    let r = doc_update(&addr, |doc| {
+        if let Some(d) = doc.drives.iter_mut().find(|d| d.id == req.drive) {
+            d.members.retain(|m| m.id != member);
+        }
+        Ok(())
+    });
+    stop_pass(&member);
+    let r = match r {
+        Ok(r) => r,
+        // The console did not answer (it may never again), or could not read its list: this
+        // device's own folder stops syncing anyway, its files staying where they are, and the
+        // console drops it once it answers. (This used to fail, and a folder of a console gone
+        // for good could never be removed.) Another device's folder only its console can drop.
+        Err(e) => {
+            let Some(lm) = load_config()
+                .members
+                .into_iter()
+                .find(|m| m.drive == req.drive && m.member == member && m.console == addr)
+            else {
+                return Err(e);
+            };
+            forget_local(&lm)?;
+            add_pending(&addr, &req.drive, Some(&member))?;
+            return Ok(told_later(&addr, false));
+        }
+    };
+    remove_local(&req.drive, Some(&member))?;
+    Ok(if r.is_none() {
+        Gone::Unsupported
+    } else {
+        Gone::Done
+    })
+}
+
+/// Deletes the drive (its files stay). When the console does not answer and this device keeps a
+/// folder of it, that folder stops syncing and the console deletes the drive once it answers:
+/// the answer then has `later`, and a `note` saying so.
 pub async fn delete(Json(req): Json<MemberReq>) -> Response {
     answer(move || {
-        let addr = addr_of(req.addr)?;
-        let r = doc_update(&addr, |doc| {
-            let linked: Vec<String> = doc
-                .drives
-                .iter()
-                .filter(|d| d.id == req.drive)
-                .flat_map(|d| d.links.iter().map(|l| l.console.clone()))
-                .collect();
-            doc.drives.retain(|d| d.id != req.drive);
-            Ok(linked)
-        })?;
-        // Linked consoles keep their copy as a drive of their own circle; only the link goes.
-        for c in r.clone().unwrap_or_default() {
-            stop_pass(&link_member_id(&req.drive, link_ends(&addr, &c).1));
-            drop_link(&c, &req.drive, &addr);
-        }
-        for m in load_config()
-            .members
-            .iter()
-            .filter(|m| m.drive == req.drive && m.console == addr)
-        {
-            stop_pass(&m.member);
-        }
-        remove_local_at(&req.drive, &addr)?;
-        if r.is_none() {
-            return Ok(unsupported());
-        }
-        Ok(json!({ "supported": true, "ok": true }))
+        Ok(match delete_now(&req)? {
+            Gone::Done => json!({ "supported": true, "ok": true }),
+            Gone::Unsupported => unsupported(),
+            Gone::Later(note) => {
+                json!({ "supported": true, "ok": true, "later": true, "note": note })
+            }
+        })
     })
     .await
+}
+
+fn delete_now(req: &MemberReq) -> Result<Gone> {
+    let addr = addr_of(req.addr.clone())?;
+    let r = doc_update(&addr, |doc| {
+        let linked: Vec<String> = doc
+            .drives
+            .iter()
+            .filter(|d| d.id == req.drive)
+            .flat_map(|d| d.links.iter().map(|l| l.console.clone()))
+            .collect();
+        doc.drives.retain(|d| d.id != req.drive);
+        Ok(linked)
+    });
+    let mine: Vec<LocalMember> = load_config()
+        .members
+        .into_iter()
+        .filter(|m| m.drive == req.drive && m.console == addr)
+        .collect();
+    let (r, later) = match r {
+        Ok(r) => (r, false),
+        // The console did not answer: this device stops keeping the drive (its files stay), the
+        // consoles linked to it (as last read) drop the link now, and the console deletes the
+        // drive once it answers. Without a folder of it here there is nothing to do but wait.
+        Err(e) => {
+            if mine.is_empty() {
+                return Err(e);
+            }
+            let mut linked: Vec<String> = mine.iter().flat_map(|m| m.links.clone()).collect();
+            linked.sort();
+            linked.dedup();
+            add_pending(&addr, &req.drive, None)?;
+            (Some(linked), true)
+        }
+    };
+    // Linked consoles keep their copy as a drive of their own circle; only the link goes.
+    for c in r.clone().unwrap_or_default() {
+        let (lo, hi) = link_ends(&addr, &c);
+        stop_pass(&link_member_id(&req.drive, lo, hi));
+        drop_link(&c, &req.drive, &addr);
+    }
+    for m in &mine {
+        stop_pass(&m.member);
+    }
+    remove_local_at(&req.drive, &addr)?;
+    Ok(if later {
+        told_later(&addr, true)
+    } else if r.is_none() {
+        Gone::Unsupported
+    } else {
+        Gone::Done
+    })
+}
+
+/// The console's side of `p`: the folder, or the whole drive, gone from its list. False when
+/// there is nothing left to take out.
+fn apply_pending(doc: &mut DriveDoc, p: &Pending) -> bool {
+    match &p.member {
+        Some(m) => doc
+            .drives
+            .iter_mut()
+            .find(|d| d.id == p.drive)
+            .is_some_and(|d| {
+                let before = d.members.len();
+                d.members.retain(|x| x.id != *m);
+                d.members.len() != before
+            }),
+        None => {
+            let before = doc.drives.len();
+            doc.drives.retain(|d| d.id != p.drive);
+            doc.drives.len() != before
+        }
+    }
+}
+
+/// What this device did while a console did not answer, done there once it does. Kept for the
+/// next round while the console still does not answer.
+fn finish_pending() {
+    for p in load_config().pending {
+        if !worth_trying(&p.console) {
+            continue;
+        }
+        let done = match doc_read(&p.console) {
+            // A helper without the drive list: nothing there to take out.
+            Ok(None) => true,
+            Err(_) => false,
+            Ok(Some((_, doc))) => {
+                let linked: Vec<String> = doc
+                    .drives
+                    .iter()
+                    .filter(|d| d.id == p.drive && p.member.is_none())
+                    .flat_map(|d| d.links.iter().map(|l| l.console.clone()))
+                    .collect();
+                if !apply_pending(&mut doc.clone(), &p) {
+                    true
+                } else if doc_update(&p.console, |d| Ok(apply_pending(d, &p))).is_ok() {
+                    for c in linked {
+                        let (lo, hi) = link_ends(&p.console, &c);
+                        stop_pass(&link_member_id(&p.drive, lo, hi));
+                        drop_link(&c, &p.drive, &p.console);
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+        };
+        if done {
+            crate::log_at!(
+                Info,
+                "mesh",
+                "mesh drive {}: what this device did while its console was away is done there",
+                p.drive
+            );
+            let _ = edit_config(|c| c.pending.retain(|x| *x != p));
+        }
+    }
 }
 
 pub async fn pause(Json(req): Json<MemberReq>) -> Response {
@@ -5237,6 +5612,40 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    /// A console folder is read to its end before it counts as holding nothing: clutter on the
+    /// first page and a file of the drive on a later one keeps it.
+    #[test]
+    fn a_console_folder_is_read_to_its_end_before_it_is_pruned() {
+        let clutter: Vec<String> = (0..256).map(|i| format!("._{i}")).collect();
+        let pages = |offset: u64| -> Result<(Vec<String>, bool)> {
+            Ok(match offset {
+                0 => (clutter.clone(), true),
+                256 => (vec![".DS_Store".into(), "save.dat".into()], false),
+                _ => (Vec::new(), false),
+            })
+        };
+        assert_eq!(
+            super::first_kept_name(pages).unwrap().as_deref(),
+            Some("save.dat")
+        );
+        // Clutter only (the helper says more follow, then an empty page): nothing kept.
+        let only = |offset: u64| -> Result<(Vec<String>, bool)> {
+            Ok(match offset {
+                0 => (vec![".".into(), "..".into(), "Thumbs.db".into()], true),
+                _ => (Vec::new(), false),
+            })
+        };
+        assert_eq!(super::first_kept_name(only).unwrap(), None);
+        // A page that cannot be read keeps the folder (an error, never "empty").
+        let broken = |offset: u64| -> Result<(Vec<String>, bool)> {
+            match offset {
+                0 => Ok((clutter.clone(), true)),
+                _ => Err(anyhow::anyhow!("gone")),
+            }
+        };
+        assert!(super::first_kept_name(broken).is_err());
+    }
+
     #[test]
     fn an_away_console_is_tried_less_and_less_often() {
         let secs: Vec<u64> = (1..=7).map(|n| away_backoff(n).as_secs()).collect();
@@ -5290,7 +5699,10 @@ mod tests {
     struct MemStore {
         files: Mutex<BTreeMap<String, (Meta, Vec<u8>)>>,
         trashed: Mutex<Vec<String>>,
-        base: Mutex<Option<Base>>,
+        /// Each member's base kept here (a console holds one per link that ends on it).
+        bases: Mutex<BTreeMap<String, Base>>,
+        /// The one shared record older versions kept here.
+        legacy: Mutex<Option<Base>>,
         /// File times: each write is later than the last.
         clock: std::sync::atomic::AtomicI64,
     }
@@ -5321,6 +5733,14 @@ mod tests {
         }
         fn meta(&self, rel: &str) -> Option<Meta> {
             self.files.lock().unwrap().get(rel).map(|f| f.0)
+        }
+        fn files_now(&self) -> Listing {
+            self.files
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.0))
+                .collect()
         }
     }
 
@@ -5420,12 +5840,19 @@ mod tests {
             true
         }
         fn empty_trash(&self, _cutoff: &str) {}
-        fn load_base(&self, _drive: &str, _member: &str) -> Result<Base> {
-            Ok(self.store.base.lock().unwrap().clone().unwrap_or_default())
+        fn load_base(&self, _drive: &str, member: &str) -> Result<Option<Base>> {
+            Ok(self.store.bases.lock().unwrap().get(member).cloned())
         }
-        fn save_base(&self, _drive: &str, _member: &str, base: &Base) -> Result<()> {
-            *self.store.base.lock().unwrap() = Some(base.clone());
+        fn save_base(&self, _drive: &str, member: &str, base: &Base) -> Result<()> {
+            self.store
+                .bases
+                .lock()
+                .unwrap()
+                .insert(member.to_string(), base.clone());
             Ok(())
+        }
+        fn legacy_base(&self) -> Result<Option<Base>> {
+            Ok(self.store.legacy.lock().unwrap().clone())
         }
         fn settles(&self) -> bool {
             false
@@ -5841,17 +6268,25 @@ mod tests {
         let (r, home) = rig_failed_over();
         r.pass_from(Some(home)).unwrap();
         let (side, hub) = (&r.side.store, &r.hub.store);
-        // Nothing renamed: no conflict copies from a base that was missing.
-        assert_eq!(r.status().conflicts, 0);
-        assert!(side.names().iter().all(|n| !n.contains("conflict")));
+        // No conflict copies from a base that was missing: one only, for the file of another
+        // size there (which of the two is newer is not known).
+        assert_eq!(r.status().conflicts, 1);
+        let copies: Vec<String> = side
+            .names()
+            .into_iter()
+            .filter(|n| n.contains("conflict"))
+            .collect();
+        assert_eq!(copies.len(), 1, "{copies:?}");
+        assert!(copies[0].starts_with("changed-there (conflict from "));
         // A file deleted here does not come back, and is not deleted there on a guess.
         assert!(!side.has("deleted-here.txt"));
         assert!(hub.has("deleted-here.txt"));
         // An edit here goes up, and what it replaced there is kept in the trash.
         assert_eq!(hub.get("edited-here.txt").unwrap(), b"edited, longer");
         assert_eq!(*hub.trashed.lock().unwrap(), ["edited-here.txt"]);
-        // A file of another size changed there: it comes here.
+        // A file of another size there comes here, and this folder's copy is kept beside it.
         assert_eq!(side.get("changed-there.txt").unwrap(), b"changed there");
+        assert_eq!(side.get(&copies[0]).unwrap(), b"agreed");
         // Unchanged stays; new goes up.
         assert_eq!(hub.get("new-here.txt").unwrap(), b"new");
         assert_eq!(side.get("same.txt").unwrap(), b"agreed");
@@ -5873,6 +6308,72 @@ mod tests {
         r.pass_from(Some(Base::new())).unwrap();
         assert!(r.side.store.has("deleted-here.txt"), "nothing to go by");
         assert!(r.hub.store.trashed.lock().unwrap().is_empty());
+    }
+
+    /// The home console had an edit, this folder got it, and the home console went away before
+    /// the linked console did. The first pass through the linked console keeps the newer file
+    /// here (a conflict copy) instead of putting the older one over it, and when the home console
+    /// is back the newer one reaches it too.
+    #[test]
+    fn failing_over_never_puts_an_older_copy_over_a_newer_file_here() {
+        let r = Rig::new();
+        let home_hub = Arc::new(MemStore::default());
+        home_hub.clock.store(500, Ordering::SeqCst);
+        home_hub.put("save.dat", b"newer save");
+        r.side.store.put("save.dat", b"newer save");
+        let home: Base = [(
+            "save.dat".to_string(),
+            BaseEntry {
+                m: r.side.store.meta("save.dat").unwrap(),
+                h: home_hub.meta("save.dat").unwrap(),
+            },
+        )]
+        .into();
+        r.hub.store.put("save.dat", b"old");
+        r.pass_from(Some(home.clone())).unwrap();
+        let side = &r.side.store;
+        let copies: Vec<String> = side
+            .names()
+            .into_iter()
+            .filter(|n| n.contains("conflict"))
+            .collect();
+        assert_eq!(copies.len(), 1, "{:?}", side.names());
+        assert_eq!(side.get(&copies[0]).unwrap(), b"newer save");
+        assert_eq!(side.get("save.dat").unwrap(), b"old");
+        assert!(side.trashed.lock().unwrap().is_empty());
+        // The copy reaches the linked console on the next pass.
+        r.look_again();
+        r.pass().unwrap();
+        assert_eq!(r.hub.store.get(&copies[0]).unwrap(), b"newer save");
+        // The home console is back: the older file goes there as a change made here, and the
+        // newer one with it, as the copy.
+        let home_id = format!("{}-home", r.id);
+        side.bases.lock().unwrap().insert(home_id.clone(), home);
+        let back = MemSide {
+            store: side.clone(),
+            hub: home_hub.clone(),
+            ..Default::default()
+        };
+        let home_side = MemSide {
+            store: home_hub.clone(),
+            ..Default::default()
+        };
+        Pass {
+            addr: "home",
+            drive: &r.drive,
+            member_id: home_id,
+            side: &back,
+            hub: &home_side,
+            device_name: "Here".into(),
+            side_rev: None,
+            lost: Arc::default(),
+            stop: Arc::default(),
+            wanted: None,
+            seed: None,
+        }
+        .run()
+        .unwrap();
+        assert_eq!(home_hub.get(&copies[0]).unwrap(), b"newer save");
     }
 
     #[test]
@@ -5910,6 +6411,232 @@ mod tests {
         assert_eq!(seed["both.txt"].m, m(1, 10));
         // Another size: kept as agreed, so it reads as changed there.
         assert_eq!(seed["resized.txt"].h, m(1, 20));
+    }
+
+    // ---- links: three consoles, two links ending on one ----
+
+    fn three_consoles() -> (Drive, [Arc<MemStore>; 3]) {
+        let drive = Drive {
+            id: new_id(),
+            name: "d".into(),
+            hub: "/hub".into(),
+            ..Default::default()
+        };
+        let consoles: [Arc<MemStore>; 3] = Default::default();
+        // Each console's own clock.
+        for (i, s) in consoles.iter().enumerate() {
+            s.clock.store(1000 * i as i64, Ordering::SeqCst);
+        }
+        (drive, consoles)
+    }
+
+    /// One pass of the link between the drive's home folders on `lo` and `hi`, made as
+    /// `run_link` makes it: the second console's folder is the member's side, the first's the hub.
+    /// It looks at both consoles in full (run_link learns of a change there from hub_rev).
+    fn link_pass(drive: &Drive, lo: (&str, &Arc<MemStore>), hi: (&str, &Arc<MemStore>)) {
+        let id = link_member_id(&drive.id, lo.0, hi.0);
+        with_runtime(&id, Runtime::look_again);
+        let side = MemSide {
+            store: hi.1.clone(),
+            hub: lo.1.clone(),
+            ..Default::default()
+        };
+        let hub = MemSide {
+            store: lo.1.clone(),
+            ..Default::default()
+        };
+        Pass {
+            addr: lo.0,
+            drive,
+            member_id: id.clone(),
+            side: &side,
+            hub: &hub,
+            device_name: hi.0.into(),
+            side_rev: None,
+            lost: Arc::default(),
+            stop: Arc::default(),
+            wanted: None,
+            seed: None,
+        }
+        .run()
+        .unwrap();
+        let st = statuses().lock().unwrap().get(&id).cloned().unwrap();
+        assert_eq!(st.state, "idle", "{id}: {}", st.detail);
+    }
+
+    fn trashed(s: &MemStore) -> Vec<String> {
+        s.trashed.lock().unwrap().clone()
+    }
+
+    /// A is linked with B and with C, and sorts last: it is the second end of both links. Every
+    /// file reaches every console, an edit and a delete go everywhere, and nothing else is ever
+    /// trashed. (Older versions gave both links one record on A: the link with C started from
+    /// what the link with B had agreed on, and trashed on A what B had just brought in, every
+    /// round.)
+    #[test]
+    fn two_links_ending_on_one_console_each_keep_their_own_record() {
+        let (drive, [a, b, c]) = three_consoles();
+        let (aa, ba, ca) = ("192.0.2.130", "192.0.2.110", "192.0.2.120");
+        assert_eq!(link_ends(aa, ba), (ba, aa));
+        assert_eq!(link_ends(ca, aa), (ca, aa));
+        assert_ne!(
+            link_member_id(&drive.id, ba, aa),
+            link_member_id(&drive.id, ca, aa)
+        );
+        let round = || {
+            link_pass(&drive, (ba, &b), (aa, &a));
+            link_pass(&drive, (ca, &c), (aa, &a));
+        };
+        a.put("from-a.txt", b"a");
+        b.put("from-b.txt", b"bb");
+        c.put("from-c.txt", b"ccc");
+        for _ in 0..3 {
+            round();
+        }
+        for s in [&a, &b, &c] {
+            assert_eq!(s.names(), ["from-a.txt", "from-b.txt", "from-c.txt"]);
+            assert!(trashed(s).is_empty(), "{:?}", trashed(s));
+        }
+        // An edit on C reaches B through A, with no conflict.
+        c.put("from-b.txt", b"edited on c");
+        for _ in 0..2 {
+            round();
+        }
+        for s in [&a, &b, &c] {
+            assert_eq!(s.get("from-b.txt").unwrap(), b"edited on c");
+            assert_eq!(s.names().len(), 3, "{:?}", s.names());
+        }
+        // A delete on B reaches C through A: into each console's trash, once.
+        b.remove("from-c.txt");
+        for _ in 0..3 {
+            round();
+        }
+        for s in [&a, &b, &c] {
+            assert_eq!(s.names(), ["from-a.txt", "from-b.txt"]);
+        }
+        assert_eq!(trashed(&a), ["from-c.txt"]);
+        assert_eq!(trashed(&c), ["from-c.txt"]);
+        assert!(trashed(&b).is_empty());
+    }
+
+    /// A console left by an older version holds one shared record, here the link with B's. The
+    /// first passes of both links on this version move nothing to any trash (the link with C,
+    /// whose record it is not, runs first), every file reaches every console, and each link then
+    /// keeps its own.
+    #[test]
+    fn upgrading_from_the_shared_link_record_moves_nothing_to_the_trash() {
+        let (drive, [a, b, c]) = three_consoles();
+        let (aa, ba, ca) = ("192.0.2.131", "192.0.2.111", "192.0.2.121");
+        for s in [&a, &b] {
+            s.put("shared.txt", b"same");
+            s.put("from-b.txt", b"bb");
+        }
+        c.put("shared.txt", b"same");
+        c.put("from-c.txt", b"ccc");
+        let old: Base = ["shared.txt", "from-b.txt"]
+            .into_iter()
+            .map(|n| {
+                let e = BaseEntry {
+                    m: a.meta(n).unwrap(),
+                    h: b.meta(n).unwrap(),
+                };
+                (n.to_string(), e)
+            })
+            .collect();
+        *a.legacy.lock().unwrap() = Some(old.clone());
+        // What the link with B agreed on is kept as it was: nothing of it is copied again.
+        assert_eq!(
+            carried_over(&old, &a.files_now(), &b.files_now()),
+            old,
+            "the record's own link"
+        );
+        for _ in 0..2 {
+            link_pass(&drive, (ca, &c), (aa, &a));
+            link_pass(&drive, (ba, &b), (aa, &a));
+        }
+        for s in [&a, &b, &c] {
+            assert_eq!(s.names(), ["from-b.txt", "from-c.txt", "shared.txt"]);
+            assert!(trashed(s).is_empty(), "{:?}", trashed(s));
+        }
+        let bases = a.bases.lock().unwrap();
+        for lo in [ba, ca] {
+            let own = bases.get(&link_member_id(&drive.id, lo, aa)).unwrap();
+            assert_eq!(own.len(), 3, "{lo}");
+        }
+    }
+
+    /// A file of the shared record the second console no longer has, or that the first console
+    /// holds otherwise, starts as never agreed on: copied back or compared, never deleted.
+    #[test]
+    fn a_shared_record_is_only_taken_where_it_surely_holds() {
+        let m = |size, mtime| Meta { size, mtime };
+        let e = |a, b| BaseEntry { m: a, h: b };
+        let old: Base = [
+            ("kept.txt", e(m(1, 10), m(1, 20))),
+            ("gone-there.txt", e(m(1, 10), m(1, 20))),
+            ("gone-here.txt", e(m(1, 10), m(1, 20))),
+            ("other-time.txt", e(m(1, 10), m(1, 20))),
+            ("edited-here.txt", e(m(1, 10), m(1, 20))),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let side: Listing = [
+            ("kept.txt", m(1, 10)),
+            ("gone-there.txt", m(1, 10)),
+            ("other-time.txt", m(1, 10)),
+            ("edited-here.txt", m(2, 11)),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let hub: Listing = [
+            ("kept.txt", m(1, 20)),
+            ("gone-here.txt", m(1, 20)),
+            ("other-time.txt", m(1, 21)),
+            ("edited-here.txt", m(1, 20)),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let got = carried_over(&old, &side, &hub);
+        assert_eq!(
+            got.keys().collect::<Vec<_>>(),
+            ["edited-here.txt", "kept.txt"]
+        );
+        // Kept as recorded: an edit on the second console since still goes across.
+        assert_eq!(
+            plan(&side, &hub, &got)
+                .into_iter()
+                .filter(|o| o.path() == "edited-here.txt")
+                .collect::<Vec<_>>(),
+            [Op::Upload("edited-here.txt".into())]
+        );
+        assert!(plan(&side, &hub, &got).iter().all(|o| !o.is_delete()));
+    }
+
+    #[test]
+    fn each_link_keeps_its_record_in_a_file_of_its_own() {
+        let d = "0123456789abcdef";
+        let names = [
+            link_base_name(&link_member_id(d, "192.168.1.2", "192.168.1.9")),
+            link_base_name(&link_member_id(d, "192.168.1.3", "192.168.1.9")),
+            link_base_name(&link_member_id(d, "[fe80::1]:9120", "192.168.1.9")),
+            link_base_name(&link_member_id(d, "../..", "/x\\y")),
+        ];
+        for (i, n) in names.iter().enumerate() {
+            assert!(n.starts_with("link-base-") && n.ends_with(".json"), "{n}");
+            assert!(
+                !n.contains('/') && !n.contains('\\') && !n.contains(':'),
+                "{n}"
+            );
+            assert_ne!(n, LINK_BASE);
+            assert!(names[..i].iter().all(|o| o != n), "{n}");
+        }
+        // A `_` is written out too: no two ids ever meet in one name.
+        assert_ne!(link_base_name("link:a_3ab"), link_base_name("link:a:b"));
+        let long = link_base_name(&link_member_id(d, &"x".repeat(300), "y"));
+        assert!(long.len() < 100 && long.ends_with(".json"), "{long}");
     }
 
     #[test]
@@ -6155,6 +6882,224 @@ mod tests {
         let back = serde_json::to_value(&doc).unwrap();
         assert!(back["drives"][0]["members"][0].get("error_code").is_none());
         assert!(back["drives"][0]["links"][0].get("error_args").is_none());
+    }
+
+    /// A helper that could not read its drive list says so. That is never "no drives" (every
+    /// folder kept there was forgotten, and the next write replaced the list), and not "away"
+    /// either: the folder stays and says why.
+    #[test]
+    fn a_drive_list_the_console_could_not_read_is_not_an_empty_one() {
+        let refused = |cause: &str| -> anyhow::Error {
+            ps5upload_core::mgmt::MgmtError {
+                label: "MESH_DOC_GET".into(),
+                status: 7,
+                cause: cause.into(),
+            }
+            .into()
+        };
+        let answers = [
+            Err(refused(r#"{"ok":false,"err":"doc_unreadable"}"#)),
+            Err(refused("doc_unreadable")),
+            Ok(Some(json!({"ok": false, "err": "doc_unreadable"}))),
+        ];
+        for a in answers {
+            let e = drive_doc_of(a).unwrap_err();
+            assert!(list_unreadable(&e), "{e:#}");
+            assert_eq!(Said::of(&e).code, "console_list_unreadable");
+            assert_eq!(away_why(&e), None);
+        }
+        // Another refusal stays what it was, and is no list either.
+        let e = drive_doc_of(Err(refused(r#"{"ok":false,"err":"fs_no_space"}"#))).unwrap_err();
+        assert!(!list_unreadable(&e));
+        assert!(drive_doc_of(Ok(Some(json!({"ok": false, "err": "busy"})))).is_err());
+        // One never written is none (an older helper answers the same for one it could not read).
+        let (rev, doc) = drive_doc_of(Ok(Some(json!({"ok": true, "rev": 0, "doc": null}))))
+            .unwrap()
+            .unwrap();
+        assert_eq!((rev, doc.drives.len()), (0, 0));
+        // One this version cannot read is kept apart from both.
+        let e = drive_doc_of(Ok(Some(
+            json!({"ok": true, "rev": 3, "doc": {"drives": 5}}),
+        )))
+        .unwrap_err();
+        assert!(list_unreadable(&e));
+    }
+
+    // ---- leaving or deleting while the console does not answer ----
+
+    /// A console for this thread's management calls: its drive list, and whether it answers.
+    #[derive(Default)]
+    struct FakeConsole {
+        doc: Mutex<(u64, Value)>,
+        away: AtomicBool,
+    }
+
+    impl ps5upload_core::mgmt::MgmtTransport for FakeConsole {
+        fn call(
+            &self,
+            _addr: &str,
+            method: ps5upload_core::mgmt::Method,
+            label: &str,
+            body: &[u8],
+            _timeout: Duration,
+        ) -> Result<Option<Vec<u8>>> {
+            use ps5upload_core::mgmt::m;
+            if self.away.load(Ordering::SeqCst) {
+                return Err(ps5upload_core::mgmt::console_unusable(
+                    label,
+                    ps5upload_core::mgmt::AVA1_UNREACHABLE,
+                    "nothing answered",
+                ));
+            }
+            let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let mut doc = self.doc.lock().unwrap();
+            let reply = if method.id == m::MESH_DOC_GET.id {
+                json!({"ok": true, "rev": doc.0, "doc": doc.1})
+            } else if method.id == m::MESH_DOC_PUT.id {
+                if req["base"].as_u64() == Some(doc.0) {
+                    *doc = (doc.0 + 1, req["doc"].clone());
+                    json!({"ok": true, "saved": true, "rev": doc.0})
+                } else {
+                    json!({"ok": true, "saved": false, "rev": doc.0, "doc": doc.1})
+                }
+            } else {
+                json!({"ok": true})
+            };
+            Ok(Some(serde_json::to_vec(&reply)?))
+        }
+    }
+
+    /// This thread's engine files in a folder of its own, and its calls to a fake console.
+    struct AwayRig {
+        dir: PathBuf,
+        console: Arc<FakeConsole>,
+        _calls: ps5upload_core::mgmt::ScopedTransport,
+    }
+
+    impl AwayRig {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "ps5u-mesh-{name}-{}-{}",
+                std::process::id(),
+                new_id()
+            ));
+            std::fs::create_dir_all(dir.join("folder")).unwrap();
+            std::fs::write(dir.join("folder/save.dat"), b"kept").unwrap();
+            TEST_STATE_DIR.with(|d| *d.borrow_mut() = Some(dir.join("state")));
+            let console = Arc::new(FakeConsole::default());
+            let calls = ps5upload_core::mgmt::scoped_transport(console.clone());
+            Self {
+                dir,
+                console,
+                _calls: calls,
+            }
+        }
+
+        fn folder(&self) -> String {
+            self.dir.join("folder").to_string_lossy().into_owned()
+        }
+
+        fn files_kept(&self) -> bool {
+            std::fs::read(self.dir.join("folder/save.dat")).is_ok_and(|b| b == b"kept")
+        }
+
+        fn set_doc(&self, drive: &str) {
+            *self.console.doc.lock().unwrap() = (
+                4,
+                json!({"drives": [
+                    {"id": drive, "name": "Saves", "hub": "/data/saves", "members": [
+                        {"id": "m-here", "device": "d1", "path": "/here"},
+                        {"id": "m-other", "device": "d2", "path": "/there"},
+                    ]},
+                    {"id": "kept", "name": "Other", "hub": "/data/other"},
+                ]}),
+            );
+        }
+    }
+
+    impl Drop for AwayRig {
+        fn drop(&mut self) {
+            TEST_STATE_DIR.with(|d| *d.borrow_mut() = None);
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn member_req(console: &str, drive: &str, member: Option<&str>) -> MemberReq {
+        MemberReq {
+            addr: Some(console.into()),
+            drive: drive.into(),
+            member: member.map(str::to_string),
+            approve: None,
+            paused: None,
+        }
+    }
+
+    /// A console gone for good: its folder here can still leave. It stops syncing, its files stay,
+    /// the answer says the console drops it when it is back, and once it is, it does.
+    #[test]
+    fn a_folder_leaves_while_its_console_is_away_and_is_dropped_there_once_back() {
+        let rig = AwayRig::new("leave");
+        let (console, drive) = ("192.0.2.211", new_id());
+        add_local(console, &drive, "m-here", &rig.folder(), "Saves").unwrap();
+        rig.set_doc(&drive);
+        rig.console.away.store(true, Ordering::SeqCst);
+        // Another device's folder: only its console can drop it.
+        assert!(leave_now(&member_req(console, &drive, Some("m-other"))).is_err());
+        let Gone::Later(note) = leave_now(&member_req(console, &drive, Some("m-here"))).unwrap()
+        else {
+            panic!("not later");
+        };
+        assert!(note.contains("when it is back"), "{note}");
+        let c = load_config();
+        assert!(c.members.is_empty());
+        assert_eq!(c.pending.len(), 1);
+        assert!(rig.files_kept());
+        // Still away: kept for later.
+        finish_pending();
+        assert_eq!(load_config().pending.len(), 1);
+        rig.console.away.store(false, Ordering::SeqCst);
+        finish_pending();
+        assert!(load_config().pending.is_empty());
+        let (rev, doc) = rig.console.doc.lock().unwrap().clone();
+        assert_eq!(rev, 5);
+        assert_eq!(doc["drives"][0]["members"].as_array().unwrap().len(), 1);
+        assert_eq!(doc["drives"][0]["members"][0]["id"], "m-other");
+        // Nothing left to do: nothing more is written.
+        finish_pending();
+        assert_eq!(rig.console.doc.lock().unwrap().0, 5);
+    }
+
+    #[test]
+    fn a_drive_deleted_while_its_console_is_away_is_deleted_there_once_back() {
+        let rig = AwayRig::new("delete");
+        let (console, drive) = ("192.0.2.212", new_id());
+        add_local(console, &drive, "m-here", &rig.folder(), "Saves").unwrap();
+        rig.set_doc(&drive);
+        rig.console.away.store(true, Ordering::SeqCst);
+        // A drive this device keeps no folder of waits for its console.
+        assert!(delete_now(&member_req(console, "kept", None)).is_err());
+        let Gone::Later(note) = delete_now(&member_req(console, &drive, None)).unwrap() else {
+            panic!("not later");
+        };
+        assert!(note.contains("No files are deleted"), "{note}");
+        assert!(load_config().members.is_empty());
+        assert!(rig.files_kept());
+        // Joined again before the console heard of it: the delete is off.
+        add_local(console, &drive, "m-again", &rig.folder(), "Saves").unwrap();
+        assert!(load_config().pending.is_empty());
+        let _ = remove_local(&drive, Some("m-again"));
+        add_pending(console, &drive, None).unwrap();
+        rig.console.away.store(false, Ordering::SeqCst);
+        finish_pending();
+        assert!(load_config().pending.is_empty());
+        let doc = rig.console.doc.lock().unwrap().1.clone();
+        let ids: Vec<&str> = doc["drives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|d| d["id"].as_str())
+            .collect();
+        assert_eq!(ids, ["kept"]);
     }
 
     #[test]

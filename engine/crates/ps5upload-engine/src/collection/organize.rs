@@ -16,12 +16,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
 use super::junk;
-use super::organize_fs::{path_string, OpError, PlanTree, Tree};
+use super::organize_fs::{path_string, DirEnt, Meta, OpError, PlanTree, Tree};
 use super::scan::MAX_DEPTH;
 use super::split;
 use super::PkgInfo;
@@ -32,6 +33,14 @@ pub const SKIP_INCOMPLETE: &str = "incomplete";
 pub const SKIP_UNREADABLE: &str = "unreadable";
 pub const SKIP_NO_ID: &str = "no title id";
 pub const SKIP_IN_PLACE: &str = "already correct";
+pub const SKIP_INSIDE_GAME: &str = "its folder is a game";
+
+/// How long a preview leaves between its two looks at the files it would move: one still being
+/// copied or downloaded is not the same file a moment later.
+pub const SETTLE: Duration = Duration::from_secs(1);
+/// What a file that changed between the two looks is told.
+pub const STILL_CHANGING: &str =
+    "its size or time changed while it was looked at: still being copied or downloaded";
 
 /// What one package (or split set, read from its first part) says, plus where it is.
 #[derive(Debug, Clone)]
@@ -112,9 +121,20 @@ pub struct PlanWatch {
     pub total: AtomicU64,
     pub done: AtomicU64,
     current: Mutex<String>,
+    /// The least time between a plan's start and its second look at what it would move
+    /// ([`SETTLE`] for a real preview; none in a test that is not about it).
+    pub settle: Duration,
 }
 
 impl PlanWatch {
+    /// A real preview's watch: its second look comes [`SETTLE`] after it begins.
+    pub fn for_preview() -> Self {
+        Self {
+            settle: SETTLE,
+            ..Self::default()
+        }
+    }
+
     fn stopped(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
     }
@@ -410,6 +430,39 @@ fn is_game_folder(tree: &dyn Tree, dir: &Path, entries: &[super::organize_fs::Di
             es.iter()
                 .any(|e| e.is_file && matches!(e.name.as_str(), "param.json" | "param.sfo"))
         })
+}
+
+/// Whether the folder at `dir` is an extracted game. Asked of its parent's listing first (which
+/// a plan has already), so a folder that is not there costs no listing of its own.
+fn is_game_at(tree: &dyn Tree, dir: &Path) -> bool {
+    let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
+        return false;
+    };
+    let name = key(Path::new(name));
+    let there = tree.list(parent).is_some_and(|es| {
+        es.iter()
+            .any(|e| e.is_dir && key(Path::new(&e.name)) == name)
+    });
+    there
+        && tree
+            .list(dir)
+            .is_some_and(|es| is_game_folder(tree, dir, &es))
+}
+
+/// The folder a title's items are filed in: `<container>/<platform>/<folder>`, unless that is
+/// itself an extracted game. The Collection never looks inside a game, so packages filed in one
+/// would vanish from it until the run was undone (and a game cannot be moved into itself): the
+/// title then gets `<folder> (2)`, `(3)`… beside it. `None` when the platform folder is a game,
+/// which leaves no place under it at all.
+fn title_dir(tree: &dyn Tree, container: &Path, platform: &str, folder: &str) -> Option<PathBuf> {
+    let parent = container.join(platform);
+    if is_game_at(tree, &parent) {
+        return None;
+    }
+    std::iter::once(folder.to_string())
+        .chain((2..66).map(|n| format!("{folder} ({n})")))
+        .map(|name| parent.join(name))
+        .find(|dir| !is_game_at(tree, dir))
 }
 
 /// One candidate per complete game source. Never walk inside an extracted game.
@@ -763,7 +816,18 @@ fn plan_files_watched(
             .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
             .map(|(p, _)| p.to_string())
             .unwrap_or_default();
-        let dest_dir = container.join(&platform).join(&folder);
+        let Some(dest_dir) = title_dir(tree, container, &platform, &folder) else {
+            out.skipped.extend(members.iter().map(|f| Skipped {
+                container: cname.clone(),
+                path: rel(container, &f.path),
+                reason: SKIP_INSIDE_GAME.into(),
+                detail: format!(
+                    "The {platform} folder here is an extracted game: nothing is filed inside a \
+                     game. Move or rename that game first."
+                ),
+            }));
+            continue;
+        };
 
         // The same release stored twice is filed beside its twin and marked DUPLICATE. Which
         // copy is canonical must not depend on the marker, or the two would swap forever.
@@ -909,6 +973,74 @@ fn plan_files_watched(
     out
 }
 
+/// The second look. A file still being copied or downloaded can read well and say nothing about
+/// its length (an image, a folder, a package whose header declares none): what gives it away is
+/// that it is not the same file a moment later. Every file a move would take is looked at again,
+/// no sooner than `watch.settle` after the plan `began`, through a fresh listing of its folder:
+/// the same kind of look as the first, so a server that words a size or time one way in a
+/// listing and another way for a single file cannot make a still file look changed. A file that
+/// changed, is gone, or could not be looked at again keeps its name, and a split set stays whole.
+fn leave_changing_files(
+    tree: &dyn Tree,
+    container: &Path,
+    plan: &mut Plan,
+    watch: &PlanWatch,
+    began: Instant,
+) {
+    if plan.moves.is_empty() {
+        return;
+    }
+    while let Some(left) = watch.settle.checked_sub(began.elapsed()) {
+        if watch.stopped() {
+            return;
+        }
+        std::thread::sleep(left.min(Duration::from_millis(50)));
+    }
+    let mut fresh: HashMap<PathBuf, Option<Vec<DirEnt>>> = HashMap::new();
+    // A move alone by its own name; the parts of a set by the set's.
+    let unit = |mv: &Move| {
+        if mv.set.is_empty() {
+            mv.from.clone()
+        } else {
+            mv.set.clone()
+        }
+    };
+    let mut changing: HashSet<String> = HashSet::new();
+    for mv in &plan.moves {
+        let src = container.join(&mv.from);
+        let (Some(dir), Some(name)) = (src.parent(), src.file_name()) else {
+            continue;
+        };
+        let name = name.to_string_lossy();
+        let now = fresh
+            .entry(dir.to_path_buf())
+            .or_insert_with(|| tree.list_fresh(dir))
+            .as_ref()
+            .and_then(|es| es.iter().find(|e| e.name.as_str() == name))
+            .map(|e| Meta {
+                size: e.size,
+                mtime: e.mtime,
+            });
+        if now.is_none() || now != tree.meta(&src) {
+            changing.insert(unit(mv));
+        }
+    }
+    if changing.is_empty() {
+        return;
+    }
+    let (left, moves): (Vec<Move>, Vec<Move>) = std::mem::take(&mut plan.moves)
+        .into_iter()
+        .partition(|mv| changing.contains(&unit(mv)));
+    plan.moves = moves;
+    plan.unsure.retain(|mv| !changing.contains(&unit(mv)));
+    plan.skipped.extend(left.into_iter().map(|mv| Skipped {
+        container: mv.container,
+        path: mv.from,
+        reason: SKIP_INCOMPLETE.into(),
+        detail: STILL_CHANGING.into(),
+    }));
+}
+
 /// A plan whose package facts come from the Collection's index where it is current. `roots`
 /// are (the root as a tree path, the root as the index keys it).
 #[cfg(test)]
@@ -930,6 +1062,7 @@ pub fn plan_watched(
     roots: &[(PathBuf, String)],
     watch: &PlanWatch,
 ) -> Plan {
+    let began = Instant::now();
     let tree = &PlanTree::new(tree);
     let cached = |p: &Path, size: u64, mtime: i64| -> Option<PkgInfo> {
         let lib = lib?;
@@ -968,6 +1101,7 @@ pub fn plan_watched(
         f
     };
     let mut plan = plan_files_watched(tree, container, files, &facts, watch);
+    leave_changing_files(tree, container, &mut plan, watch, began);
     plan.skipped.extend(skipped);
     if let Some(trouble) = tree.trouble() {
         // A folder the server would not list: its packages are missing from this preview.
@@ -1005,6 +1139,11 @@ pub struct UndoLog {
     /// Set once the run was undone, so it cannot be undone twice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reverted_at: Option<String>,
+    /// Why this log, as it is here, is not what is on disk: the last write of a run failed.
+    /// The moves in `completed` happened all the same; the file holds an earlier state of the
+    /// run, so Undo may not know all of them. Never stored.
+    #[serde(skip)]
+    pub unsaved: Option<String>,
 }
 
 /// A server folder's whereabouts, as the saved connection said when the run was made.
@@ -1375,7 +1514,9 @@ pub fn apply(
         removed_dirs: Vec::new(),
         kept_dirs: Vec::new(),
         reverted_at: None,
+        unsaved: None,
     };
+    // Before the first move: a run that cannot be logged does not start, and nothing moved.
     write_log(log_path, &log)?;
     let mut started_in = HashSet::new();
     let mut made = HashSet::new();
@@ -1418,8 +1559,17 @@ pub fn apply(
         log.removed_dirs = removed;
         log.kept_dirs = kept;
     }
-    write_log(log_path, &log)?;
+    // After the last move: the files are where the run put them whatever happens to this write,
+    // so a failure here is never "the run failed". It is told apart, for the caller to say what
+    // moved and that Undo may not know all of it (the file holds the last state that was
+    // written; Undo also looks for moves that happened without being recorded).
+    log.unsaved = write_log_twice(log_path, &log).err().map(|e| e.to_string());
     Ok(log)
+}
+
+/// [`write_log`], once more when it fails: a full or busy disk can take the second try.
+fn write_log_twice(path: &Path, log: &UndoLog) -> std::io::Result<()> {
+    write_log(path, log).or_else(|_| write_log(path, log))
 }
 
 /// Gives the tree a path is in.
@@ -1534,7 +1684,15 @@ pub fn revert(log_path: &Path, open: &OpenTree) -> std::io::Result<RevertResult>
     // and undo again; the moves already put back are then skipped as "moved file is gone".
     if out.problems.is_empty() {
         log.reverted_at = Some(now_iso());
-        write_log(log_path, &log)?;
+        // The files are back whatever happens to this write: failing it must not turn an undo
+        // that worked into "nothing was undone".
+        if let Err(e) = write_log_twice(log_path, &log) {
+            out.note = Some(format!(
+                "Everything was put back, but this run could not be marked as undone (its log \
+                 could not be written: {e}). It may still be listed as a run to undo; undoing \
+                 it again changes nothing."
+            ));
+        }
     }
     Ok(out)
 }
@@ -2425,6 +2583,7 @@ mod tests {
             removed_dirs: Vec::new(),
             kept_dirs: Vec::new(),
             reverted_at: None,
+            unsaved: None,
         };
         write_log(&path, &log).unwrap();
         let back: UndoLog = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -2569,5 +2728,344 @@ mod tests {
         assert_eq!(title_folder("CUSA1", ""), "CUSA1");
         assert_eq!(title_folder("CUSA1", "CUSA1"), "CUSA1");
         assert_eq!(sanitize(&"x".repeat(130)).chars().count(), 120);
+    }
+
+    /// A tree whose second look finds `grown` (a file name) bigger than the first did.
+    struct Growing(&'static str);
+    impl Tree for Growing {
+        fn list(&self, dir: &Path) -> Option<Vec<DirEnt>> {
+            LocalTree.list(dir)
+        }
+        fn list_fresh(&self, dir: &Path) -> Option<Vec<DirEnt>> {
+            let mut es = LocalTree.list(dir)?;
+            for e in es.iter_mut().filter(|e| e.name == self.0) {
+                e.size += 4096;
+            }
+            Some(es)
+        }
+        fn meta(&self, p: &Path) -> Option<Meta> {
+            LocalTree.meta(p)
+        }
+        fn exists(&self, p: &Path) -> Result<bool, OpError> {
+            LocalTree.exists(p)
+        }
+        fn create_dir(&self, p: &Path) -> Result<(), OpError> {
+            LocalTree.create_dir(p)
+        }
+        fn rename_new(&self, from: &Path, to: &Path) -> Result<(), OpError> {
+            LocalTree.rename_new(from, to)
+        }
+        fn remove_dir(&self, p: &Path) -> Result<(), OpError> {
+            LocalTree.remove_dir(p)
+        }
+        fn is_removable_junk(&self, p: &Path) -> bool {
+            LocalTree.is_removable_junk(p)
+        }
+        fn remove_junk(&self, p: &Path) {
+            LocalTree.remove_junk(p);
+        }
+        fn head(&self, p: &Path) -> Option<[u8; 4]> {
+            LocalTree.head(p)
+        }
+    }
+
+    /// A game folder (its param.json names it), as the organizer reads one.
+    fn game_dir(dir: &Path, title_id: &str) {
+        std::fs::create_dir_all(dir.join("sce_sys")).unwrap();
+        std::fs::write(
+            dir.join("sce_sys/param.json"),
+            format!(
+                r#"{{"titleId":"{title_id}","contentVersion":"01.000.000","localizedParameters":{{"defaultLanguage":"en-US","en-US":{{"titleName":"Example"}}}}}}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    /// A file that is not the same at the plan's second look is still being copied: it keeps
+    /// its name, the preview says so, and what did not change is planned as before.
+    #[test]
+    fn a_file_that_changes_between_two_looks_is_left_alone() {
+        let l = lib("changing");
+        let root = l.0.clone();
+        game_dir(&root.join("still"), "PPSA01234");
+        game_dir(&root.join("copying"), "PPSA05678");
+        let roots = [(root.clone(), "root".to_string())];
+        // Nothing changes: both are planned.
+        let plan = plan_cached(&LocalTree, &root, None, &roots);
+        assert_eq!(plan.moves.len(), 2, "{:?}", plan.skipped);
+
+        let watch = PlanWatch {
+            settle: Duration::from_millis(120),
+            ..PlanWatch::default()
+        };
+        let began = Instant::now();
+        let plan = plan_watched(&Growing("copying"), &root, None, &roots, &watch);
+        assert!(
+            began.elapsed() >= Duration::from_millis(120),
+            "the second look waits for the files to settle"
+        );
+        assert_eq!(plan.moves.len(), 1, "{:?}", plan.moves);
+        assert_eq!(plan.moves[0].from, "still");
+        let left: Vec<&Skipped> = plan
+            .skipped
+            .iter()
+            .filter(|s| s.reason == SKIP_INCOMPLETE)
+            .collect();
+        assert_eq!(left.len(), 1, "{:?}", plan.skipped);
+        assert_eq!(
+            (left[0].path.as_str(), left[0].detail.as_str()),
+            ("copying", STILL_CHANGING)
+        );
+    }
+
+    /// One part of a split set still growing leaves the whole set where it is.
+    #[test]
+    fn a_set_with_one_changing_part_stays_whole() {
+        let l = lib("changing-set");
+        let c = l.0.join("fpkg");
+        put(&c, "Game_0.pkg", 30);
+        put(&c, "Game_1.pkg", 20);
+        put(&c, "Game_2.pkg", 10);
+        std::fs::write(c.join("Game_0.pkg"), [0x7F, b'C', b'N', b'T', 0, 0]).unwrap();
+        let entries = [(
+            "Game",
+            info(
+                "Game",
+                "CUSA00001",
+                "UP0000-CUSA00001_00-GAME",
+                "base",
+                "1.00",
+            ),
+        )];
+        let facts = table(&entries);
+        let files = scan(&LocalTree, &c);
+        let mut plan = plan_files(&LocalTree, &c, files, &facts);
+        assert_eq!(plan.moves.len(), 3, "{:?}", plan.skipped);
+        leave_changing_files(
+            &Growing("Game_2.pkg"),
+            &c,
+            &mut plan,
+            &PlanWatch::default(),
+            Instant::now(),
+        );
+        assert!(plan.moves.is_empty(), "{:?}", plan.moves);
+        assert_eq!(
+            plan.skipped
+                .iter()
+                .filter(|s| s.detail == STILL_CHANGING)
+                .count(),
+            3
+        );
+    }
+
+    /// A tree that, at its first rename, puts a folder where the undo log's next write goes:
+    /// every write of the log after that fails, as on a disk that filled up during the run.
+    struct LogBreaks(PathBuf);
+    impl Tree for LogBreaks {
+        fn list(&self, dir: &Path) -> Option<Vec<DirEnt>> {
+            LocalTree.list(dir)
+        }
+        fn meta(&self, p: &Path) -> Option<Meta> {
+            LocalTree.meta(p)
+        }
+        fn exists(&self, p: &Path) -> Result<bool, OpError> {
+            LocalTree.exists(p)
+        }
+        fn create_dir(&self, p: &Path) -> Result<(), OpError> {
+            LocalTree.create_dir(p)
+        }
+        fn rename_new(&self, from: &Path, to: &Path) -> Result<(), OpError> {
+            std::fs::create_dir_all(self.0.with_extension("json.tmp")).unwrap();
+            LocalTree.rename_new(from, to)
+        }
+        fn remove_dir(&self, p: &Path) -> Result<(), OpError> {
+            LocalTree.remove_dir(p)
+        }
+        fn is_removable_junk(&self, p: &Path) -> bool {
+            LocalTree.is_removable_junk(p)
+        }
+        fn remove_junk(&self, p: &Path) {
+            LocalTree.remove_junk(p);
+        }
+    }
+
+    /// The audit's case: the moves were made and the last write of the undo log failed. That was
+    /// an error, which the caller read as "nothing moved". It is a run that moved its files, told
+    /// that its log is behind; and Undo still puts back what the log on disk only planned.
+    #[test]
+    fn a_failed_last_log_write_does_not_unsay_the_moves() {
+        let l = lib("log-last-write");
+        let c = l.0.join("fpkg");
+        put(&c, "a.pkg", 10);
+        put(&c, "b.pkg", 20);
+        let entries = [
+            (
+                "a",
+                info(
+                    "Alpha",
+                    "CUSA00001",
+                    "UP0000-CUSA00001_00-A",
+                    "base",
+                    "1.00",
+                ),
+            ),
+            (
+                "b",
+                info("Beta", "CUSA00002", "UP0000-CUSA00002_00-B", "base", "1.00"),
+            ),
+        ];
+        let p = plan_with(&LocalTree, &c, &table(&entries));
+        assert_eq!(p.moves.len(), 2);
+        let log_path = l.0.join("logs/run.json");
+        let tree = LogBreaks(log_path.clone());
+        let log = apply(&tree, &c, p.moves.clone(), &log_path, "", None).unwrap();
+        assert_eq!(log.completed.len(), 2, "the run says what it moved");
+        assert!(log.failed.is_empty());
+        assert!(log.unsaved.is_some(), "and that its log could not be saved");
+        for m in &p.moves {
+            assert!(c.join(&m.to).is_file() && !c.join(&m.from).exists());
+        }
+        // On disk: the log as it was written before the first move.
+        let on_disk: UndoLog = serde_json::from_slice(&std::fs::read(&log_path).unwrap()).unwrap();
+        assert!(on_disk.completed.is_empty());
+        assert_eq!(on_disk.moves.len(), 2);
+        assert_eq!(on_disk.unsaved, None, "never stored");
+
+        // Undo, its own last write failing too: the files go back, and that is what it says.
+        let undone = revert(&log_path, &local).unwrap();
+        assert_eq!(undone.reverted.len(), 2, "{:?}", undone.problems);
+        assert!(undone.problems.is_empty());
+        assert!(
+            undone
+                .note
+                .as_deref()
+                .is_some_and(|n| n.contains("could not be marked as undone")),
+            "{:?}",
+            undone.note
+        );
+        for m in &p.moves {
+            assert!(c.join(&m.from).is_file() && !c.join(&m.to).exists());
+        }
+        // Once the log can be written again, the same Undo marks the run and changes nothing.
+        std::fs::remove_dir_all(log_path.with_extension("json.tmp")).unwrap();
+        let again = revert(&log_path, &local).unwrap();
+        assert!(
+            again.problems.is_empty() && again.note.is_none(),
+            "{again:?}"
+        );
+        assert!(revert(&log_path, &local).is_err(), "a run is undone once");
+    }
+
+    /// The first write comes before the first move: failing it is "nothing moved", and is.
+    #[test]
+    fn a_run_that_cannot_write_its_log_first_moves_nothing() {
+        let l = lib("log-first-write");
+        let c = l.0.join("fpkg");
+        put(&c, "a.pkg", 10);
+        let entries = [(
+            "a",
+            info(
+                "Alpha",
+                "CUSA00001",
+                "UP0000-CUSA00001_00-A",
+                "base",
+                "1.00",
+            ),
+        )];
+        let p = plan_with(&LocalTree, &c, &table(&entries));
+        let log_path = l.0.join("logs/run.json");
+        std::fs::create_dir_all(log_path.with_extension("json.tmp")).unwrap();
+        assert!(apply(&LocalTree, &c, p.moves, &log_path, "", None).is_err());
+        assert!(c.join("a.pkg").is_file());
+    }
+
+    /// The audit's case: an extracted game sits exactly where its title's folder would be
+    /// (`PS5/PPSA01234 - Example`, holding `sce_sys`). Packages of that title were planned into
+    /// it, and the Collection, which never looks inside a game, lost them until the run was
+    /// undone. Nothing is filed inside a game: the title gets a folder beside it.
+    #[test]
+    fn nothing_is_planned_into_a_folder_that_is_itself_a_game() {
+        let l = lib("into-game");
+        let root = l.0.clone();
+        let game = root.join("PS5/PPSA01234 - Example");
+        game_dir(&game, "PPSA01234");
+        std::fs::write(game.join("eboot.bin"), b"e").unwrap();
+        put(&root, "update.pkg", 10);
+        put(&root, "addon.pkg", 20);
+        let ps5 = |kind: &str, cid: &str| PkgInfo {
+            platform: "PS5".into(),
+            ..info("Example", "PPSA01234", cid, kind, "1.00")
+        };
+        let entries = [
+            (
+                "update",
+                ps5("patch", "UP0000-PPSA01234_00-EXAMPLE000000000"),
+            ),
+            ("addon", ps5("dlc", "UP0000-PPSA01234_00-ADDON00000000000")),
+            (
+                "PPSA01234",
+                ps5("base", "UP0000-PPSA01234_00-EXAMPLE000000000"),
+            ),
+        ];
+        let facts = table(&entries);
+        let plan = plan_with(&LocalTree, &root, &facts);
+        let inside = "PS5/PPSA01234 - Example/";
+        let beside = "PS5/PPSA01234 - Example (2)/";
+        assert_eq!(plan.moves.len(), 3, "{:?}", plan.skipped);
+        for m in &plan.moves {
+            assert!(!m.to.starts_with(inside), "planned into the game: {m:?}");
+            assert!(m.to.starts_with(beside), "{m:?}");
+        }
+
+        // Run it: every package is still something the Collection finds.
+        let packages: Vec<Move> = plan
+            .moves
+            .iter()
+            .filter(|m| m.from.ends_with(".pkg"))
+            .cloned()
+            .collect();
+        assert_eq!(packages.len(), 2);
+        let log = apply(
+            &LocalTree,
+            &root,
+            packages,
+            &l.0.join("logs/run.json"),
+            "",
+            None,
+        )
+        .unwrap();
+        assert_eq!(log.completed.len(), 2, "{:?}", log.failed);
+        let found = scan(&LocalTree, &root);
+        assert_eq!(
+            found
+                .iter()
+                .filter(|p| p.extension().is_some_and(|e| e == "pkg"))
+                .count(),
+            2,
+            "{found:?}"
+        );
+        assert!(found.contains(&game), "the game is still one item");
+        // And they stay there: the next plan does not move them again.
+        let again = plan_with(&LocalTree, &root, &facts);
+        assert!(
+            again.moves.iter().all(|m| !m.from.ends_with(".pkg")),
+            "{:?}",
+            again.moves
+        );
+
+        // A game where the platform folder would be leaves no place under it: said, not done.
+        let l = lib("into-game-platform");
+        let root = l.0.clone();
+        game_dir(&root.join("PS5"), "PPSA09999");
+        put(&root, "update.pkg", 10);
+        let plan = plan_files(
+            &LocalTree,
+            &root,
+            vec![root.join("update.pkg")],
+            &table(&entries),
+        );
+        assert!(plan.moves.is_empty(), "{:?}", plan.moves);
+        assert_eq!(plan.skipped.len(), 1);
+        assert_eq!(plan.skipped[0].reason, SKIP_INSIDE_GAME);
     }
 }

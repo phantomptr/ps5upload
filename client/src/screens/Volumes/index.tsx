@@ -6,7 +6,6 @@ import { filesViewLink } from "../FileSystem/filesViews";
 import { useConnectionStore } from "../../state/connection";
 import {
   fetchHwStorage,
-  fetchVolumes,
   fsUnmount,
   volumeLikelyFitsBytes,
   type Volume,
@@ -30,6 +29,7 @@ import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { isInternalVolume, usePkgStorageStore } from "../../lib/pkgStorage";
 import { saveFsLastPath } from "../../lib/fsLastPath";
 import { canEjectUsb, useUsbEject } from "../../lib/useUsbEject";
+import { refreshVolumesAfterChange, useConsoleVolumes } from "../../state/volumes";
 import { KeptByApp } from "./KeptByApp";
 
 /** Path prefix for volumes our FS_MOUNT creates. Showing an Unmount
@@ -48,14 +48,22 @@ export default function VolumesScreen() {
   const guard = useStaleHostGuard();
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const navigate = useNavigate();
-  const [volumes, setVolumes] = useState<Volume[] | null>(null);
-  // Counts completed drive-list loads, so what ps5upload keeps is measured again with them.
-  const [loadedCount, setLoadedCount] = useState(0);
+  // The drives come from the slot every screen shares (state/volumes): what this screen shows
+  // as free is what Files and Upload show (#944). Read on open, on coming back into view,
+  // on Refresh, and when a job on the console ends.
+  const drives = useConsoleVolumes(host, payloadStatus === "up");
+  // A reading that could not be renewed is not shown as the drives' state: the error is.
+  const volumes = drives.error ? null : drives.volumes;
+  const loading = drives.loading;
   // What the console keeps back of its internal storage for its own use (a fact the console
   // reports; nothing is derived from it). Null = not reported.
   const [consoleKept, setConsoleKept] = useState<number | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // An unmount or an eject that failed. A failed read of the drives is the slot's own error.
+  const [actionError, setActionError] = useState<string | null>(null);
+  // Through the shared humanizer, so a transient `fs_list_volumes_getmntinfo_failed` reads
+  // as something to retry and not as a raw internal string.
+  const error = actionError ?? (drives.error ? humanizePs5Error(drives.error) : null);
+  const setError = setActionError;
   const [unmountingPath, setUnmountingPath] = useState<string | null>(null);
   // This console's default drive for install packages (null = internal).
   const packageDrive = usePkgStorageStore((s) => (host ? s.defaults[hostOf(host)] ?? null : null));
@@ -66,38 +74,28 @@ export default function VolumesScreen() {
 
   const refresh = useCallback(async () => {
     if (!host?.trim()) return;
-    // Host-stale guard (2.12.0 migrated to canonical useStaleHostGuard).
-    // fetchVolumes can take seconds on a PS5 with many mounts; an
-    // OLD list attributed to NEW host could lead to Unmount clicks
-    // targeting the wrong console.
+    setActionError(null);
+    await refreshVolumesAfterChange(host);
+  }, [host]);
+
+  // Measured with each reading of the drives, so the line under the bar is as old as the bar.
+  // Best effort: a helper without the storage summary just shows no "kept" line.
+  const drivesReadAt = drives.loadedAtMs;
+  useEffect(() => {
+    if (!host?.trim() || drivesReadAt === null || payloadStatus !== "up") return;
     const probe = guard.capture();
-    setLoading(true);
-    setError(null);
-    try {
-      const list = await fetchVolumes(transferAddr(probe.host));
-      if (probe.isStale()) return;
-      setVolumes(list);
-      setLoadedCount((n) => n + 1);
-      // Best effort: a payload without the storage summary just shows no "kept" line.
-      fetchHwStorage(transferAddr(probe.host))
-        .then((hw) => {
-          if (!probe.isStale()) setConsoleKept(hw.user_reserved_bytes > 0 ? hw.user_reserved_bytes : null);
-        })
-        .catch(() => {
-          if (!probe.isStale()) setConsoleKept(null);
-        });
-    } catch (e) {
-      if (probe.isStale()) return;
-      const raw = e instanceof Error ? e.message : String(e);
-      // Run through the shared humanizer so transient
-      // `fs_list_volumes_getmntinfo_failed` payload errors surface
-      // as a retryable hint instead of a raw internal string.
-      setError(humanizePs5Error(raw));
-      setVolumes(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [host, guard]);
+    let live = true;
+    fetchHwStorage(transferAddr(probe.host))
+      .then((hw) => {
+        if (live && !probe.isStale()) setConsoleKept(hw.user_reserved_bytes > 0 ? hw.user_reserved_bytes : null);
+      })
+      .catch(() => {
+        if (live && !probe.isStale()) setConsoleKept(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [host, drivesReadAt, guard, payloadStatus]);
 
   const { eject: handleEject, ejectingPath, dialog: ejectDialogNode } = useUsbEject({
     onEjected: () => refresh(),
@@ -144,10 +142,6 @@ export default function VolumesScreen() {
       setUnmountingPath(null);
     }
   };
-
-  useEffect(() => {
-    if (payloadStatus === "up") refresh();
-  }, [payloadStatus, refresh]);
 
   const { storageDrives, mountedImages } = useMemo(() => {
     const storage: Volume[] = [];
@@ -325,7 +319,7 @@ export default function VolumesScreen() {
           <KeptByApp
             host={host}
             drives={keptDrives}
-            refreshKey={loadedCount}
+            refreshKey={drivesReadAt ?? 0}
             confirm={confirmDialog}
             onOpenPath={(path) => {
               // `?path=`: Files reads its saved folder only when it mounts (see EditSessionBanner).
@@ -452,7 +446,8 @@ export function StorageCard({
   onFreeUp,
 }: {
   volume: Volume;
-  /** The console's own reserved pool on this drive (internal storage only), as it reports it. */
+  /** What the console holds back on this drive now (internal storage only): free blocks its
+   *  filesystem does not offer a writer. Already left out of `free_bytes`. */
   consoleKeptBytes?: number | null;
   /** This console's chosen package drive; null = internal storage. */
   packageDrive: string | null;
@@ -468,7 +463,7 @@ export function StorageCard({
     ? isInternalVolume(packageDrive)
     : packageDrive === v.path.replace(/\/+$/, "");
   // What is likely to fit: on internal storage less than free, since the PS5 holds back
-  // more as data is written. The line under the bar shows it with the difference.
+  // more as data is written. The line under the bar says it.
   const uploadSafeBytes =
     v.allocatable_bytes === undefined ? undefined : volumeLikelyFitsBytes(v);
   const pct =
@@ -516,32 +511,37 @@ export function StorageCard({
               {tr("volumes_pct_used_storage", undefined, "% used")}
             </span>
           </div>
+          {/* Three figures on internal storage, each said for what it is (#944): what the PS5
+              holds back now (already left out of "free": never taken off again), what is
+              likely to fit, and that the PS5's own screen can show less than any of them. */}
           {consoleKeptBytes !== null && consoleKeptBytes > 0 && (
-            <div className="mb-2 text-xs text-[var(--color-muted)]">
+            <div className="mb-2 text-xs text-[var(--color-muted)]" data-testid="volumes-held-back">
               {tr(
-                "volumes_kept_by_console",
+                "volumes_held_back",
                 { kept: formatBytes(consoleKeptBytes) },
-                "{kept} kept by the console for its own use",
+                "{kept} is held back by the PS5 for itself. It is not free space, and it grows as data is written.",
               )}
             </div>
           )}
           {uploadSafeBytes !== undefined &&
             uploadSafeBytes < v.free_bytes && (
-              <div className="mb-2 text-xs text-[var(--color-muted)]">
+              <div className="mb-2 text-xs text-[var(--color-muted)]" data-testid="volumes-likely-fits">
                 {tr(
-                  "volumes_upload_safe_capacity",
-                  {
-                    safe: formatBytes(uploadSafeBytes),
-                    // Everything between "free" and "likely to fit": the working margin,
-                    // and on internal storage what the PS5 holds back as it writes.
-                    reserve: formatBytes(
-                      Math.max(0, v.free_bytes - uploadSafeBytes),
-                    ),
-                  },
-                  "{safe} safe for new uploads · {reserve} kept as system/filesystem headroom",
+                  "volumes_likely_fits",
+                  { safe: formatBytes(uploadSafeBytes) },
+                  "About {safe} of new data is likely to fit here.",
                 )}
               </div>
             )}
+          {isInternalVolume(v.path) && (
+            <div className="mb-2 text-xs text-[var(--color-muted)]" data-testid="volumes-ps5-shows-less">
+              {tr(
+                "volumes_ps5_shows_less",
+                undefined,
+                "The PS5's own Storage screen can show less free space. When the two differ, go by the smaller one.",
+              )}
+            </div>
+          )}
           <ProgressBar
             size="sm"
             value={pct / 100}

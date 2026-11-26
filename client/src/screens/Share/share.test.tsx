@@ -13,10 +13,11 @@ import {
   type ReceiveView,
   type ShareView,
 } from "../../api/share";
-import { ReceiveFlow } from "./ReceivePanel";
+import { DEFAULT_KEYMAP, PadButton } from "../../lib/remotePlayStream";
+import { ReceivedFiles, ReceiveFlow } from "./ReceivePanel";
 import { historyLine } from "./ShareHistory";
 import { ShareMade, SharePick, type ShareTarget } from "./SharePanel";
-import { appSources, createBody, mediaOf, percent } from "./shareModel";
+import { appSources, createBody, mediaOf, percent, readSharedCheats, readSharedControls } from "./shareModel";
 
 const render = (el: ReactElement) => ssr(<MemoryRouter>{el}</MemoryRouter>);
 const tr = ((_k: string, vars?: Record<string, string | number> | string, fallback?: string) => {
@@ -360,5 +361,73 @@ describe("Receive", () => {
       <ReceiveFlow view={{ ...offer, state: "refused", error: "used" }} host="" onDone={() => {}} onView={() => {}} />,
     );
     expect(html).toContain("This link was already used.");
+  });
+});
+
+describe("what a friend sent is checked before it is used", () => {
+  it("takes controls in the shape the Share panel writes them", () => {
+    const c = readSharedControls({
+      title_id: "ppsa01234",
+      game: { turbo: 1, macros: [] },
+      kbm_mode: "mixed",
+      keymap: DEFAULT_KEYMAP,
+      pad_profiles: {},
+    });
+    expect(c).toEqual({ title_id: "PPSA01234", game: { turbo: 1, macros: [] }, kbm_mode: "mixed", keymap: DEFAULT_KEYMAP });
+    expect(readSharedControls({ title_id: "PPSA01234", game: null, kbm_mode: null, keymap: null })).toEqual({
+      title_id: "PPSA01234",
+      game: null,
+      kbm_mode: null,
+      keymap: null,
+    });
+    // Not a Title ID: it picks no game, the rest still counts.
+    expect(readSharedControls({ title_id: "../x", kbm_mode: "native" })).toMatchObject({ title_id: null, kbm_mode: "native" });
+  });
+
+  it("leaves out controls that are not that shape", () => {
+    for (const bad of [
+      null,
+      "text",
+      [],
+      { kbm_mode: "everything" },
+      { game: "turbo" },
+      { title_id: 5 },
+      { keymap: { KeyW: { button: "x" } } },
+      { keymap: { KeyW: { stick: "lx", dir: 2 } } },
+      { keymap: { "Key W": { button: PadButton.CROSS } } },
+      { keymap: { KeyW: { trigger: "l3" } } },
+      { keymap: { KeyW: { button: PadButton.CROSS, stick: "lx", dir: 1 } } },
+      { keymap: "WASD" },
+      { keymap: Object.fromEntries(Array.from({ length: 201 }, (_, i) => [`Key${i}`, { button: PadButton.CROSS }])) },
+    ]) {
+      expect(readSharedControls(bad), JSON.stringify(bad)).toBeNull();
+    }
+  });
+
+  it("takes the cheats that are on only as a list of names", () => {
+    expect(readSharedCheats({ title_id: "PPSA01234", on: ["Max HP"], all: ["Max HP", "Gold"] })).toEqual({ on: ["Max HP"] });
+    for (const bad of [null, { on: "Max HP" }, { on: [1] }, { on: ["a"], all: "b" }, { on: ["x".repeat(201)] }, {}]) {
+      expect(readSharedCheats(bad), JSON.stringify(bad)).toBeNull();
+    }
+  });
+
+  const rx = { id: "r1", title_id: "PPSA01234" } as ReceiveView;
+
+  it("what isn't that shape is not offered for use, and the page says so", () => {
+    // `on` a string, not a list: before, the page called join() on it and stopped.
+    const html = render(<ReceivedFiles rx={rx} files={{ "cheats-on.json": { on: "Max HP" }, "controls.json": { keymap: { KeyW: "jump" } } }} />);
+    expect(html).toContain("Some of it can&#x27;t be used");
+    expect(html).not.toContain('data-testid="receive-use-controls"');
+    expect(html).not.toContain("They play with");
+  });
+
+  it("what is that shape is offered as before", () => {
+    const html = render(
+      <ReceivedFiles rx={rx} files={{ "cheats-on.json": { on: ["Max HP"] }, "controls.json": { title_id: "PPSA01234", keymap: DEFAULT_KEYMAP } }} />,
+    );
+    expect(html).not.toContain("Some of it can&#x27;t be used");
+    expect(html).toContain('data-testid="receive-use-controls"');
+    expect(html).toContain('data-testid="receive-use-keymap"');
+    expect(html).toContain("They play with: Max HP");
   });
 });

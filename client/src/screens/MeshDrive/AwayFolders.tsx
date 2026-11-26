@@ -4,18 +4,40 @@
 // it shows while the console cannot be reached at all.
 
 import { useHelperReplaceGuard } from "../Connection/useHelperReplaceGuard";
-import { useEffect, useState } from "react";
-import { FolderSync, Power, Send } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { FolderSync, Power, Send, X } from "lucide-react";
 
 import { Badge, Button } from "../../components";
-import { fetchLocalFolders, type DriveStatus, type LocalFolder } from "../../api/meshDrive";
+import { useConfirm } from "../../components/ConfirmDialog";
+import { driveApi, fetchLocalFolders, type DriveStatus, type LocalFolder } from "../../api/meshDrive";
 import { hostOf } from "../../lib/addr";
+import { humanizeCaught } from "../../lib/humanizeError";
 import { useConsoleWake } from "../../lib/useConsoleWake";
 import { useTr, type Translator } from "../../state/lang";
 import { useRosterStore } from "../../state/roster";
 import { sendHelperTo } from "../../state/helperSendRuntime";
+import { useToastStore } from "../../state/toasts";
 import { agoText } from "../Devices";
 import { driveDetailText } from "./driveDetail";
+
+/** A leave or a delete the console did not answer: done on this device, and there once it is back. */
+export function sayDoneLater(tr: Translator, name: string, deleted: boolean): void {
+  useToastStore.getState().push({
+    tone: "info",
+    duration: 10_000,
+    message: deleted
+      ? tr(
+          "drive_deleted_later",
+          { name },
+          `The drive is no longer kept on this device. ${name} didn't answer: it's deleted there when it's back. No files are deleted.`,
+        )
+      : tr(
+          "drive_left_later",
+          { name },
+          `This folder no longer syncs. ${name} didn't answer: it's taken out of the drive there when it's back. Its files stay where they are.`,
+        ),
+  });
+}
 
 export type AwayWhy = "rest" | "unreachable" | "helper";
 
@@ -108,9 +130,38 @@ export function AwayActions({ console, why }: { console: string; why: AwayWhy })
   );
 }
 
-function FolderRow({ f, now }: { f: LocalFolder; now: number }) {
+function FolderRow({ f, now, onLeft }: { f: LocalFolder; now: number; onLeft: () => void }) {
   const tr = useTr();
   const name = useConsoleName(f.console);
+  const { confirm, dialog } = useConfirm();
+  const [leaving, setLeaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Works with the console away too (gone for good, say): the folder stops syncing here and the
+  // console is told once it answers.
+  const leave = async () => {
+    const ok = await confirm({
+      title: tr("drive_leave_title", undefined, "Stop keeping this drive on this device?"),
+      message: tr(
+        "drive_leave_body",
+        { path: f.path },
+        `The files in ${f.path} stay where they are; they just stop being kept in sync.`,
+      ),
+      confirmLabel: tr("drive_leave", undefined, "Leave"),
+      destructive: true,
+    });
+    if (!ok) return;
+    setLeaving(true);
+    setError(null);
+    try {
+      const r = await driveApi.leave(f.console, f.drive, f.member);
+      if (r.later) sayDoneLater(tr, name, false);
+      onLeft();
+    } catch (e) {
+      setError(humanizeCaught(e));
+    } finally {
+      setLeaving(false);
+    }
+  };
   const why = (f.status.away || "") as AwayWhy | "";
   const away = why ? awayText(tr, f.status, name, now) : null;
   const short =
@@ -137,9 +188,16 @@ function FolderRow({ f, now }: { f: LocalFolder; now: number }) {
             {tr("drive_folder_on", { path: f.path, name }, `${f.path} · home on ${name}`)}
           </p>
           {line && <p className="mt-1 text-xs text-[var(--color-warn)]">{line}</p>}
+          {error && <p className="mt-1 text-xs text-[var(--color-bad)]">{error}</p>}
         </div>
       </div>
-      {why && <AwayActions console={f.console} why={why} />}
+      <div className="flex shrink-0 flex-wrap items-start gap-2">
+        {why && <AwayActions console={f.console} why={why} />}
+        <Button size="sm" variant="secondary" leftIcon={<X size={14} />} loading={leaving} onClick={() => void leave()}>
+          {tr("drive_leave", undefined, "Leave")}
+        </Button>
+      </div>
+      {dialog}
     </li>
   );
 }
@@ -149,21 +207,25 @@ export function AwayFolders() {
   const tr = useTr();
   const [folders, setFolders] = useState<LocalFolder[] | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    let live = true;
-    const load = () =>
+  const live = useRef(true);
+  const load = useCallback(
+    () =>
       void fetchLocalFolders().then((f) => {
-        if (!live) return;
+        if (!live.current) return;
         setFolders(f);
         setNow(Date.now());
-      });
+      }),
+    [],
+  );
+  useEffect(() => {
+    live.current = true;
     load();
     const id = window.setInterval(load, 5_000);
     return () => {
-      live = false;
+      live.current = false;
       window.clearInterval(id);
     };
-  }, []);
+  }, [load]);
   if (!folders?.length) return null;
   return (
     <section className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
@@ -177,7 +239,7 @@ export function AwayFolders() {
       </p>
       <ul className="divide-y divide-[var(--color-border)]">
         {folders.map((f) => (
-          <FolderRow key={f.member} f={f} now={now} />
+          <FolderRow key={f.member} f={f} now={now} onLeft={load} />
         ))}
       </ul>
     </section>

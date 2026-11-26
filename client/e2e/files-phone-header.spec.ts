@@ -151,15 +151,28 @@ for (const phone of PHONES) {
       // No boxes until selecting.
       await expect(row(page, "file-01.pkg").getByRole("checkbox")).toBeHidden();
       // One bar at the top: no Back and Forward arrows (the phone's Back goes back), and one
-      // bell. Where the app's own top bar would show (below 768 px) the bell is in this header
-      // and that bar is gone; wider, it stays in the row beside the sidebar.
+      // bell, in this header. Below 768 px the app's own top bar gives way; held sideways, the
+      // row beside the sidebar does (its search, reload and theme buttons go too): with both
+      // rows there, about two files were left in view.
       await expect(page.getByRole("navigation", { name: "View history" }).locator("visible=true")).toHaveCount(0);
       const bell = page.getByRole("button", { name: "Open notifications" }).locator("visible=true");
       await expect(bell).toHaveCount(1);
-      if (phone.viewport.width < 768) {
+      {
         await expect(header.getByRole("button", { name: "Open notifications" })).toBeVisible();
         await expect(page.locator("[data-top-bar]").getByText("PS5Upload")).toBeHidden();
-        expect((await header.boundingBox())!.y).toBeLessThan(24);
+        await expect(page.getByRole("button", { name: "Reload page" }).locator("visible=true")).toHaveCount(0);
+        await expect(page.getByRole("button", { name: "Search screens and commands" }).locator("visible=true")).toHaveCount(0);
+        // At the top (held sideways, under the page's own top margin only: it was under a row
+        // of buttons, at about 88 px).
+        expect((await header.boundingBox())!.y).toBeLessThan(phone.viewport.width < 768 ? 24 : 40);
+        // Rows of files in view under the header (two, before).
+        const shown = await main(page)
+          .locator("li[data-fs-name]")
+          .evaluateAll((rows) => rows.filter((r) => {
+            const b = r.getBoundingClientRect();
+            return b.top >= 0 && b.bottom <= window.innerHeight;
+          }).length);
+        expect(shown).toBeGreaterThanOrEqual(3);
         // Its panel hangs under the header, inside the window.
         await bell.tap();
         const panel = page.getByTestId("notifications-panel").locator("visible=true");
@@ -173,8 +186,6 @@ for (const phone of PHONES) {
         await shot(page, `bell-${phone.viewport.width}x${phone.viewport.height}`);
         expect(await back(page)).toBe(true);
         await expect(panel).toHaveCount(0);
-      } else {
-        await expect(header.getByRole("button", { name: "Open notifications" })).toHaveCount(0);
       }
       await shot(page, `header-${phone.viewport.width}x${phone.viewport.height}`);
 
@@ -306,7 +317,7 @@ for (const phone of PHONES) {
       await openFiles(page);
       const header = main(page).getByTestId("fs-header");
       await header.getByRole("button", { name: "More" }).tap();
-      for (const name of ["Add files", "Add folder", "New folder", "Refresh", "Select", "Snapshots"])
+      for (const name of ["Add files", "Add folder", "New folder", "Refresh", "Select", "See snapshots"])
         await expect(menu(page).getByRole("menuitem", { name, exact: true })).toBeVisible();
       await shot(page, `more-menu-${phone.viewport.width}x${phone.viewport.height}`);
       // Select: selection mode with nothing ticked yet, for a keyboard or a D-pad.
@@ -328,6 +339,64 @@ for (const phone of PHONES) {
       await expect(menu(page).getByRole("menuitem", { name: "Eject /mnt/usb0" })).toBeVisible();
       await menu(page).getByRole("menuitem", { name: /^\/data ·/ }).click();
       await expect(title(page)).toHaveText("data");
+    });
+  });
+}
+
+// The ⋮ menu's pairs read as twins before: "What takes space here?" beside "What takes space?",
+// "Snapshot this folder" beside "Snapshots". Now each says what it is about (this folder, this
+// drive) and what it does (make a snapshot, see them), in groups with a line between them. In a
+// wide font (Linux CI's), every item is one line and the menu is whole on screen.
+for (const viewport of [
+  { width: 360, height: 800 },
+  { width: 844, height: 390 },
+]) {
+  test.describe(`the ⋮ menu's groups, ${viewport.width}x${viewport.height}`, () => {
+    test.use({ viewport, hasTouch: true, isMobile: true });
+
+    test("each folder and drive item says which it is, in groups", async ({ page }) => {
+      await openFiles(page);
+      await page.addStyleTag({ content: "*{font-family:Verdana,'DejaVu Sans',sans-serif!important}" });
+      await main(page).getByTestId("fs-header").getByRole("button", { name: "More" }).tap();
+      const items = menu(page).getByRole("menuitem");
+      const labels = (await items.allTextContents()).map((t) => t.trim());
+      expect(labels).toEqual([
+        "Add files",
+        "Add folder",
+        "New folder",
+        "Refresh",
+        "Select",
+        "What takes space in this folder?",
+        "Make a snapshot of this folder",
+        "Download from a link",
+        "What takes space on this drive?",
+        "See snapshots",
+        "Search all drives",
+        "Search this folder",
+      ]);
+      // Groups: the page's actions, this folder, a link, the drive.
+      const separators = menu(page).getByRole("separator");
+      await expect(separators).toHaveCount(3);
+      const order = await menu(page).evaluate((m) =>
+        Array.from(m.querySelectorAll('[role="menuitem"], [role="separator"]')).map((e) =>
+          e.getAttribute("role") === "separator" ? "|" : (e.textContent ?? "").trim(),
+        ),
+      );
+      expect(order.indexOf("|")).toBe(order.indexOf("What takes space in this folder?") - 1);
+      expect(order.lastIndexOf("|")).toBe(order.indexOf("What takes space on this drive?") - 1);
+      // One line each (as tall as "Refresh", which is one line), and the menu whole on screen.
+      const line = (await items.filter({ hasText: /^Refresh$/ }).boundingBox())!.height;
+      for (const item of await items.all()) {
+        const h = (await item.boundingBox())!.height;
+        expect(h, await item.textContent()).toBeLessThanOrEqual(line + 1);
+      }
+      const box = (await menu(page).boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 0.5);
+      await shot(page, `more-menu-groups-${viewport.width}x${viewport.height}`);
+      // Each opens what it says.
+      await menu(page).getByRole("menuitem", { name: "See snapshots", exact: true }).click();
+      await expect(page).toHaveURL(/view=snapshots/);
     });
   });
 }
@@ -377,6 +446,7 @@ test.describe("desktop width", () => {
     await expect(arrows.getByRole("button", { name: "Forward" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Open notifications" }).locator("visible=true")).toHaveCount(1);
     await expect(main(page).getByTestId("fs-header").getByRole("button", { name: "Open notifications" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Reload page" })).toBeVisible();
     await shot(page, "desktop-1280x800");
   });
 });

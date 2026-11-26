@@ -42,7 +42,6 @@ import {
   type SourceKind,
 } from "../../state/upload";
 import {
-  fetchVolumes,
   pathKind,
   probeDestination,
   volumeAllocatableBytes,
@@ -77,7 +76,9 @@ import {
   Select,
   Toggle,
   ProgressBar,
+  OverflowMenu,
 } from "../../components";
+import { usePhoneLayout } from "../../lib/phoneLayout";
 import { SendHelperButton } from "../../components/SendHelperButton";
 import {
   parseArchivePart,
@@ -94,6 +95,7 @@ import { convertFirstState } from "../../lib/convertFirst";
 import { isRemotePath } from "../../lib/remotePath";
 import { useUploadSettingsStore } from "../../state/uploadSettings";
 import { useUploadQueueStore } from "../../state/uploadQueue";
+import { useConsoleVolumes } from "../../state/volumes";
 import { SendAsImageCard } from "./SendAsImageCard";
 import { isImageFolder } from "./imageDirNote";
 import { pkgLibraryStore } from "../../state/pkgLibrary";
@@ -459,7 +461,17 @@ export default function UploadScreen({
   // hardcoded `/data /mnt/ext0 /mnt/usb0` list which hid every other
   // mount point (e.g. `/mnt/ext1`, `/mnt/usbN` for N>0, and any
   // ps5upload-mounted images).
-  const [availableVolumes, setAvailableVolumes] = useState<Volume[]>([]);
+  //
+  // The shared reading of the drives (state/volumes), not a copy made when the screen opened:
+  // the "usable" figure beside each drive, and the will-it-fit check on a batch, used the free
+  // space of before the last upload until the screen was left and opened again (#944).
+  const drives = useConsoleVolumes(host);
+  const availableVolumes = useMemo<Volume[]>(
+    // Only writable, real drives are upload targets. A placeholder is a mount point the
+    // helper reports even when nothing is mounted there.
+    () => (drives.volumes ?? []).filter((v) => v.writable && !v.is_placeholder),
+    [drives.volumes],
+  );
 
   /** Snapshot the current source + destination + options into a queue
    *  item. Captured at click time, so subsequent edits to the form
@@ -617,31 +629,6 @@ export default function UploadScreen({
   useEffect(() => {
     setPreflightError(null);
   }, [source?.path, source?.kind, destinationVolume, destinationSubpath]);
-  useEffect(() => {
-    if (!host?.trim()) {
-      setAvailableVolumes([]);
-      return;
-    }
-    let cancelled = false;
-    const addr = consoleAddr(host);
-    fetchVolumes(addr)
-      .then((vols) => {
-        if (cancelled) return;
-        // Only writable, non-placeholder volumes are valid upload
-        // targets. Placeholders are mount-points the payload reports
-        // even when nothing is mounted there.
-        setAvailableVolumes(
-          vols.filter((v) => v.writable && !v.is_placeholder),
-        );
-      })
-      .catch(() => {
-        if (!cancelled) setAvailableVolumes([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [host]);
-
   // The destination as the user picks it (not a prefill): a prefill never overrides it.
   const userChoseDest = useRef(false);
   const chooseDestination = (volume: string | null, subpath?: string) => {
@@ -1580,6 +1567,19 @@ function Step2Options(props: {
     preflightBusy ||
     (!!detectError && !asIs) ||
     archiveUndecided;
+  const addToQueueDisabled =
+    detecting || preflightBusy || (!!detectError && !asIs) || archiveUndecided;
+  const uploadLabel = preflightBusy
+    ? tr("upload_checking", "Checking…")
+    : inFlight
+      ? transferKind === "starting"
+        ? tr("upload_starting", "Starting…")
+        : tr("upload_uploading", "Uploading…")
+      : source.kind === "pkg"
+        ? tr("install.uploadInstall", "Upload & install")
+        : tr("upload_now", "Upload");
+  // One row of actions on a phone (below): the main one, the rest behind ⋯.
+  const phone = usePhoneLayout();
   // Why Upload / Add to queue are greyed out while an archive waits for its choice.
   const undecidedHint = tr(
     "upload_archive_choose_first",
@@ -2049,137 +2049,201 @@ function Step2Options(props: {
       <TransferStatus onRetry={onUpload} />
 
       {/* The actions stay in view at the bottom of the window however long the options above
-          are (a game folder with every fold open is taller than a laptop screen). */}
-      <div
-        className={STICKY_ACTIONS + " justify-end"}
-        data-testid="upload-actions"
-      >
-        {/* Which PS5 this upload targets — a chip instead of baking a
-            (possibly long) console name into the button label. Auto-hides for
-            single-console users. Pushed to the left; actions stay right. */}
-        {multiConsole && (
-          <span className="me-auto inline-flex items-center gap-1.5 text-xs text-[var(--color-muted)]">
-            {tr("upload_target_label", "Uploading to")}
-            <ConsoleChip addr={stepHost} />
-          </span>
-        )}
-        {/* Nothing has started yet, so this is not a Cancel: it clears the source. */}
-        <button type="button" onClick={onClear} className={ACTION_PLAIN}>
-          {tr("upload_change_source", undefined, "Change source")}
-        </button>
-        {/* A game, folder or image can be made into a package, image or folder first. */}
-        {convertState && (
+          are (a game folder with every fold open is taller than a laptop screen). On a phone
+          they are one row, above the tab bar: the main action, the rest behind ⋯ (three
+          stacked buttons covered a third of the screen, and the bar sat behind the tab bar). */}
+      {phone ? (
+        <div className={STICKY_ACTIONS + " flex-nowrap"} data-testid="upload-actions" data-compact="">
+          {multiConsole && (
+            <span className="min-w-0 shrink">
+              <ConsoleChip addr={stepHost} />
+            </span>
+          )}
+          <OverflowMenu
+            ariaLabel={tr("more_actions", undefined, "More actions")}
+            align="left"
+            triggerVariant="secondary"
+            triggerClassName="h-10 w-10 shrink-0 justify-center rounded-full px-0"
+            items={[
+              ...(streamThis
+                ? [
+                    {
+                      label: uploadLabel,
+                      onSelect: onUpload,
+                      disabled: uploadDisabled,
+                      description: tr(
+                        "upload_phone_upload_first",
+                        undefined,
+                        "Copies it to the PS5 first, then installs it.",
+                      ),
+                      testId: "upload-now-menu",
+                    },
+                  ]
+                : []),
+              {
+                label: tr("upload_add_to_queue", "Add to queue"),
+                onSelect: addToQueue,
+                disabled: addToQueueDisabled,
+                testId: "upload-add-to-queue",
+              },
+              ...(convertState
+                ? [
+                    {
+                      label: tr("upload_convert_first", undefined, "Convert first"),
+                      onSelect: () => navigate("/workshop", { state: convertState }),
+                      testId: "convert-first",
+                    },
+                  ]
+                : []),
+              {
+                label: tr("upload_change_source", undefined, "Change source"),
+                onSelect: onClear,
+                separator: true,
+                testId: "upload-change-source",
+              },
+            ]}
+          />
+          {streamThis ? (
+            <button
+              type="button"
+              onClick={streamThis}
+              disabled={inFlight}
+              className={ACTION_PRIMARY + " min-w-0 flex-1 truncate"}
+              data-testid="upload-stream-install"
+            >
+              {tr("pkglib.streamInstall", undefined, "Stream & install")}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onUpload}
+              disabled={uploadDisabled}
+              className={ACTION_PRIMARY + " min-w-0 flex-1 truncate"}
+              data-testid="upload-now"
+            >
+              {uploadLabel}
+            </button>
+          )}
+        </div>
+      ) : (
+        <div
+          className={STICKY_ACTIONS + " justify-end"}
+          data-testid="upload-actions"
+        >
+          {/* Which PS5 this upload targets — a chip instead of baking a
+              (possibly long) console name into the button label. Auto-hides for
+              single-console users. Pushed to the left; actions stay right. */}
+          {multiConsole && (
+            <span className="me-auto inline-flex items-center gap-1.5 text-xs text-[var(--color-muted)]">
+              {tr("upload_target_label", "Uploading to")}
+              <ConsoleChip addr={stepHost} />
+            </span>
+          )}
+          {/* Nothing has started yet, so this is not a Cancel: it clears the source. */}
+          <button type="button" onClick={onClear} className={ACTION_PLAIN}>
+            {tr("upload_change_source", undefined, "Change source")}
+          </button>
+          {/* A game, folder or image can be made into a package, image or folder first. */}
+          {convertState && (
+            <button
+              type="button"
+              onClick={() => navigate("/workshop", { state: convertState })}
+              className={ACTION_PLAIN}
+              data-testid="convert-first"
+            >
+              {tr("upload_convert_first", undefined, "Convert first")}
+            </button>
+          )}
+          {/* Add-to-queue: capture the current source + options into the
+              persisted upload queue without starting the transfer. The
+              Resume variant only makes sense for folders (single files
+              don't reconcile), so it's hidden for image/file sources. */}
           <button
             type="button"
-            onClick={() => navigate("/workshop", { state: convertState })}
+            onClick={addToQueue}
+            disabled={addToQueueDisabled}
             className={ACTION_PLAIN}
-            data-testid="convert-first"
-          >
-            {tr("upload_convert_first", undefined, "Convert first")}
-          </button>
-        )}
-        {/* Add-to-queue: capture the current source + options into the
-            persisted upload queue without starting the transfer. The
-            Resume variant only makes sense for folders (single files
-            don't reconcile), so it's hidden for image/file sources. */}
-        <button
-          type="button"
-          onClick={addToQueue}
-          disabled={
-            detecting ||
-            preflightBusy ||
-            (!!detectError && !asIs) ||
-            archiveUndecided
-          }
-          className={ACTION_PLAIN}
-          data-testid="upload-add-to-queue"
-          title={
-            detecting
-              ? tr(
-                  "upload_disabled_scanning",
-                  undefined,
-                  "Scanning game folder — wait for the scan to finish, then this button enables.",
-                )
-              : archiveUndecided
-                ? undecidedHint
-                : streamPkg
-                  ? tr(
-                      "upload_add_stream_to_queue_tooltip",
-                      undefined,
-                      "Add a Stream & install to the queue without starting it. Nothing is copied to the PS5 first.",
-                    )
-                  : tr(
-                      "upload_add_to_queue_tooltip",
-                      "Add this upload to the queue without starting it",
-                    )
-          }
-        >
-          {tr("upload_add_to_queue", "Add to queue")}
-        </button>
-        <button
-          type="button"
-          onClick={onUpload}
-          disabled={uploadDisabled}
-          title={
-            detecting
-              ? tr(
-                  "upload_disabled_scanning",
-                  undefined,
-                  "Scanning game folder — wait for the scan to finish, then this button enables.",
-                )
-              : archiveUndecided
-                ? undecidedHint
-                : queueRunning
-                  ? tr(
-                      "upload_after_running",
-                      undefined,
-                      "Starts after what the queue is sending now",
-                    )
-                  : queueAutoStart
+            data-testid="upload-add-to-queue"
+            title={
+              detecting
+                ? tr(
+                    "upload_disabled_scanning",
+                    undefined,
+                    "Scanning game folder — wait for the scan to finish, then this button enables.",
+                  )
+                : archiveUndecided
+                  ? undecidedHint
+                  : streamPkg
                     ? tr(
-                        "upload_starts_queue",
+                        "upload_add_stream_to_queue_tooltip",
                         undefined,
-                        "Starts the queue: anything already waiting goes first, in order",
+                        "Add a Stream & install to the queue without starting it. Nothing is copied to the PS5 first.",
                       )
                     : tr(
-                        "upload_waits_for_start",
-                        undefined,
-                        "Adds to the queue. It runs when you press Start queue (Start the queue when you add something is off)",
+                        "upload_add_to_queue_tooltip",
+                        "Add this upload to the queue without starting it",
                       )
-          }
-          className={
-            // For a package, Stream & install (next) is the main action;
-            // uploading it first is the fallback.
-            streamThis ? ACTION_PLAIN : ACTION_PRIMARY
-          }
-        >
-          {preflightBusy
-            ? tr("upload_checking", "Checking…")
-            : inFlight
-              ? transferKind === "starting"
-                ? tr("upload_starting", "Starting…")
-                : tr("upload_uploading", "Uploading…")
-              : source.kind === "pkg"
-                ? tr("install.uploadInstall", "Upload & install")
-                : tr("upload_now", "Upload")}
-        </button>
-        {streamThis && (
+            }
+          >
+            {tr("upload_add_to_queue", "Add to queue")}
+          </button>
           <button
             type="button"
-            onClick={streamThis}
-            disabled={inFlight}
-            className={ACTION_PRIMARY}
-            data-testid="upload-stream-install"
-            title={tr(
-              "upload_pkg_stream_recommended",
-              undefined,
-              "Recommended: Stream & install sends it straight from this computer — nothing is copied to the PS5 first.",
-            )}
+            onClick={onUpload}
+            disabled={uploadDisabled}
+            title={
+              detecting
+                ? tr(
+                    "upload_disabled_scanning",
+                    undefined,
+                    "Scanning game folder — wait for the scan to finish, then this button enables.",
+                  )
+                : archiveUndecided
+                  ? undecidedHint
+                  : queueRunning
+                    ? tr(
+                        "upload_after_running",
+                        undefined,
+                        "Starts after what the queue is sending now",
+                      )
+                    : queueAutoStart
+                      ? tr(
+                          "upload_starts_queue",
+                          undefined,
+                          "Starts the queue: anything already waiting goes first, in order",
+                        )
+                      : tr(
+                          "upload_waits_for_start",
+                          undefined,
+                          "Adds to the queue. It runs when you press Start queue (Start the queue when you add something is off)",
+                        )
+            }
+            className={
+              // For a package, Stream & install (next) is the main action;
+              // uploading it first is the fallback.
+              streamThis ? ACTION_PLAIN : ACTION_PRIMARY
+            }
           >
-            {tr("pkglib.streamInstall", undefined, "Stream & install")}
+            {uploadLabel}
           </button>
-        )}
-      </div>
+          {streamThis && (
+            <button
+              type="button"
+              onClick={streamThis}
+              disabled={inFlight}
+              className={ACTION_PRIMARY}
+              data-testid="upload-stream-install"
+              title={tr(
+                "upload_pkg_stream_recommended",
+                undefined,
+                "Recommended: Stream & install sends it straight from this computer — nothing is copied to the PS5 first.",
+              )}
+            >
+              {tr("pkglib.streamInstall", undefined, "Stream & install")}
+            </button>
+          )}
+        </div>
+      )}
       {preflightError && (
         <div className="mt-2">
           <ErrorCard
@@ -4141,22 +4205,22 @@ function DestinationCard({
     availableVolumes.length > 0
       ? availableVolumes.map((v) => v.path).sort()
       : [...FALLBACK_VOLUMES].sort();
-  // Build a {path → usable-bytes} map so we can show "/mnt/ext1 (450 GB
-  // usable)" inline. Only when we actually got the live list back.
+  // Build a {path → likely-to-fit bytes} map so we can show "/mnt/ext1 (room for
+  // about 450 GiB)" inline. Only when we actually got the live list back.
   //
-  // Deliberately the ALLOCATABLE figure, not raw free_bytes. On internal
-  // storage the PS5 holds back a large content-allocator reserve that
-  // statfs never reflects, so free_bytes overstates what an upload can
-  // actually use — a FW 12.00 report showed /data advertising 143 GB free
-  // while only ~63 GB was writable, and the 118 GiB upload it green-lit
-  // died at 53% after 17 minutes. Showing the number that actually governs
-  // is what lets someone pick a workable destination up front.
+  // Deliberately what is LIKELY TO FIT, not raw free_bytes. On internal storage
+  // the PS5 holds back more as data is written, so free_bytes overstates what an
+  // upload can use: a FW 12.00 report showed /data advertising 143 GB free while
+  // only ~63 GB was writable, and the 118 GiB upload it green-lit died at 53%
+  // after 17 minutes. It is an estimate ("about"): the PS5's own Storage screen
+  // can show less still (#944), and nothing here knows that figure.
   const usableBytesByPath = new Map<string, number>();
   for (const v of availableVolumes) {
     // What is likely to fit, which on internal storage is less than what is allocatable.
     usableBytesByPath.set(v.path, volumeLikelyFitsBytes(v));
   }
-  const formatUsable = (bytes: number) => `${formatBytes(bytes)} usable`;
+  const formatUsable = (bytes: number) =>
+    tr("upload_dest_room", { size: formatBytes(bytes) }, "room for about {size}");
 
   return (
     <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-3 p-4">

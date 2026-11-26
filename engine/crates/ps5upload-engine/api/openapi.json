@@ -6076,49 +6076,60 @@
         "type": "object"
       },
       "HwStorage": {
-        "description": "\"Console Storage\" aggregate that matches what PS5 Settings shows.\nSums the three partitions Sony's UI counts (`/user effective +\n/system_data + /system_ex`) and accounts for the reserved-pool slice\nthe FS keeps for root. Per-partition fields are also surfaced for\nthe diagnostics card. Distinct from `fs_list_volumes`: that returns\nper-volume detail; this is the single-line summary.",
+        "description": "The console's internal storage as its filesystem counts it: `statfs` on `/user`,\n`/system_data` and `/system_ex`, nothing else.\n\n**These are not the figures of the PS5's own Settings > Storage screen** (#944). On one\n2 TB console this reported 175.5 GB in `user_free_bytes` and a 1.995 TB `/user`, while its\nStorage screen showed 71.35 GB free of 1.89 TB. How the console arrives at its figures is\nnot known to this API, and nothing here models it. Read these as what the filesystem says,\nand expect the console's screen to show less.\n\nWhat a copy can count on is `/api/ps5/volumes` (`allocatable_bytes`, `likely_fits_bytes`),\nwhich starts from the same `user_free_bytes`.\n\nDistinct from `fs_list_volumes`: that returns per-volume detail; this is the summary of the\ninternal drive with its partitions.",
         "properties": {
           "free_bytes": {
+            "description": "Free on the three partitions together. Includes the system partitions' own free space,\nwhich nothing can be copied into: for room on the drive read `user_free_bytes`.",
             "minimum": 0,
             "type": "integer"
           },
           "reserved_bytes": {
+            "description": "The same number as `user_reserved_bytes` (the system partitions' are not counted).",
             "minimum": 0,
             "type": "integer"
           },
           "system_data_free_bytes": {
+            "description": "Free on `/system_data` (`f_bavail`).",
             "minimum": 0,
             "type": "integer"
           },
           "system_data_total_bytes": {
+            "description": "Size of `/system_data`.",
             "minimum": 0,
             "type": "integer"
           },
           "system_ex_free_bytes": {
+            "description": "Free on `/system_ex` (`f_bavail`).",
             "minimum": 0,
             "type": "integer"
           },
           "system_ex_total_bytes": {
+            "description": "Size of `/system_ex`; 0 when the firmware has no such mount.",
             "minimum": 0,
             "type": "integer"
           },
           "total_bytes": {
+            "description": "Size of the three partitions together (`user` + `system_data` + `system_ex`).",
             "minimum": 0,
             "type": "integer"
           },
           "used_bytes": {
+            "description": "`total_bytes - free_bytes`. Includes what the filesystem holds back (`reserved_bytes`),\nnot only stored data.",
             "minimum": 0,
             "type": "integer"
           },
           "user_free_bytes": {
+            "description": "Free on `/user` for a writer (`f_bavail`); 0 once the drive is written into what it\nholds back. `user_reserved_bytes` is already left out of it: never subtract it again.",
             "minimum": 0,
             "type": "integer"
           },
           "user_reserved_bytes": {
+            "description": "What the filesystem holds back on `/user` (`f_bfree - f_bavail`): free blocks that are\nnot offered to a writer. Not a fixed pool: measured on two consoles it grows by about a\nfifth of what is written and comes back when data is deleted.",
             "minimum": 0,
             "type": "integer"
           },
           "user_total_bytes": {
+            "description": "Size of `/user`, the partition games and files are on (`/data` is a folder of it).",
             "minimum": 0,
             "type": "integer"
           }
@@ -9411,6 +9422,17 @@
               }
             ],
             "description": "Why the name can't be changed; `None` when it can."
+          },
+          "room": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Room"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How long a new name may be; `None` when it can't be changed."
           }
         },
         "required": [
@@ -9419,7 +9441,8 @@
           "name",
           "entries",
           "other_names",
-          "refusal"
+          "refusal",
+          "room"
         ],
         "type": "object"
       },
@@ -10478,6 +10501,14 @@
             "description": "The container header's `content_type` (0x74): 0x1A/0x20 an application, 0x1B/0x21\nadditional content (DLC), 0x26 a PS5 system application. 0 when not read.",
             "minimum": 0,
             "type": "integer"
+          },
+          "declared_size": {
+            "description": "The least this package's file (every part of a split set together) has to be for its\nown header to be true: see [`declared_size_from`]. A file shorter than this is still\nbeing copied, or was cut short. `None` when the header declares nothing.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "fingerprint": {
             "description": "Stable, inexpensive identity for this exact package variant. This is a\nBLAKE3 digest over the file size plus bounded samples from the beginning\nand end of the pkg. It deliberately differs for two patches that share\nthe same ContentID/category/APP_VER (for example an optional fix and a\nbackport), without making the UI hash a multi-gigabyte pkg before an\nupload can start.",
@@ -12323,6 +12354,26 @@
         },
         "required": [
           "id"
+        ],
+        "type": "object"
+      },
+      "Room": {
+        "description": "How long a new name may be in this package, in UTF-8 bytes of plain text. A rename never\nmoves anything in the package, so the room is what the package itself has: the old names'\nown bytes and the whitespace its `param.json` and manifest can give up (PS5), or the fixed\nroom of its `param.sfo` strings (PS4); never more than [`MAX_NAME_BYTES`]. A character that\nhas to be written escaped (`\"` and `\\` in `param.json`; `&`, `<` and `>` in the manifest)\ntakes more than its own bytes, so such a name can still be refused a few bytes earlier.",
+        "properties": {
+          "all_languages": {
+            "description": "Giving every language the name.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "default_name": {
+            "description": "Changing only the entries that hold the current default name.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "default_name",
+          "all_languages"
         ],
         "type": "object"
       },
@@ -16277,7 +16328,7 @@
                 "type": "null"
               }
             ],
-            "description": "With `method` `package` and `state` `problems`: what the problems add up to."
+            "description": "With `state` `problems`, for a package: what the problems add up to. Always there for\n`method` `package`; for `bytes` only when the file is shorter than its header says."
           },
           "error": {
             "type": [
@@ -19454,7 +19505,7 @@
     },
     "/api/collection/organize/apply": {
       "post": {
-        "description": "POST /api/collection/organize/apply: runs the chosen moves of a preview. It does not plan\nagain: the preview already read every package, and over a network that took minutes. A move\nruns only if its file is as the preview saw it and its new name is still free.",
+        "description": "POST /api/collection/organize/apply: runs the chosen moves of a preview. It does not plan\nagain: the preview already read every package, and over a network that took minutes. A move\nruns only if its file is as the preview saw it and its new name is still free.\n\nAnswers `{moved, failed, dropped, kept_dirs, logs, undo_incomplete?}`. `moved` is what moved,\nwhatever happened afterwards: when a folder's undo log could not be saved once its moves were\nmade, the folder is listed in `undo_incomplete` (as \"folder: why\") and Undo may not put all of\nit back. `dropped` are moves that were left alone.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -19649,7 +19700,7 @@
     },
     "/api/collection/organize/revert": {
       "post": {
-        "description": "POST /api/collection/organize/revert: undoes one run from its log.",
+        "description": "POST /api/collection/organize/revert: undoes one run from its log. Answers\n`{reverted, problems, note?}`: `reverted` is what went back, also when the run could not be\nmarked as undone afterwards (`note` then says so).",
         "requestBody": {
           "content": {
             "application/json": {
@@ -21394,6 +21445,7 @@
     },
     "/api/drive/delete": {
       "post": {
+        "description": "Deletes the drive (its files stay). When the console does not answer and this device keeps a\nfolder of it, that folder stops syncing and the console deletes the drive once it answers:\nthe answer then has `later`, and a `note` saying so.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -21554,6 +21606,7 @@
     },
     "/api/drive/leave": {
       "post": {
+        "description": "Takes a folder out of the drive. When the console does not answer, this device's own folder\nstops syncing anyway (its files stay) and the console drops it once it answers: the answer\nthen has `later`, and a `note` saying so.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -29100,7 +29153,7 @@
     },
     "/api/pkg/name": {
       "get": {
-        "description": "`GET /api/pkg/name?path=`: the names a package on this computer holds (one per language)\nand whether they can be changed. `refusal` is set when they can't: `code` is `retail` for an\nofficial package, `patch` for a delta update, `no_name`, or `unsupported` with the reason.",
+        "description": "`GET /api/pkg/name?path=`: the names a package on this computer holds (one per language)\nand whether they can be changed. `room` is how long a new name may be in this package, in\nUTF-8 bytes (`default_name`: changing the default name only; `all_languages`). `refusal` is set when they can't: `code` is `retail` for an\nofficial package, `patch` for a delta update, `no_name`, or `unsupported` with the reason.",
         "parameters": [
           {
             "description": "The package, on the engine's computer.",
@@ -29154,7 +29207,7 @@
         }
       },
       "post": {
-        "description": "`POST /api/pkg/name` `{path, name, all_languages}`: gives a fake package on this computer\nanother name, in place. 409 while the package is in use (an install, an upload or a build\nreads it, or another program has it open); 400 with the reason when it can't be done (an\nofficial package, a name that does not fit). On any failure the file is as it was.",
+        "description": "`POST /api/pkg/name` `{path, name, all_languages}`: gives a fake package on this computer\nanother name, in place. 409 while the package is in use (an install of it has not finished,\nhowever long ago the PS5 last read from it; an upload or a build reads it, or another program\nhas it open), with what holds it and how to free it; 400 with the reason when it can't be done (an\nofficial package, a name that does not fit). On any failure the file is as it was.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -37606,7 +37659,7 @@
     },
     "/api/ps5/hw/storage": {
       "get": {
-        "description": "\"Console Storage\" aggregate. Same shape PS5 Settings shows: total\nacross `/user effective + /system_data + /system_ex`, free across\nthe same set, plus the per-partition breakdown for diagnostics.",
+        "description": "`statfs` counters for `/user`, `/system_data` and `/system_ex`. These are not the figures of the PS5's Settings > Storage screen, which can show a smaller drive and less free space. `user_free_bytes` already leaves out `user_reserved_bytes`; do not subtract it again. For how much a copy can take, read `allocatable_bytes` and `likely_fits_bytes` in `/api/ps5/volumes`.",
         "parameters": [
           {
             "in": "query",
@@ -37648,7 +37701,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "The console's internal storage, as PS5 Settings counts it",
+        "summary": "The console's internal storage, as its filesystem counts it",
         "tags": [
           "hardware"
         ],
@@ -41833,7 +41886,7 @@
     },
     "/api/ps5/rp/pad-link/kick": {
       "post": {
-        "description": "`POST /api/ps5/rp/pad-link/kick {id}`: let a phone go, and keep it out until the link closes\n(the link's key alone would let it back in with one tap).",
+        "description": "`POST /api/ps5/rp/pad-link/kick {id}`: let a phone go, and keep it out until the link closes\n(the link's key alone would let it back in with one tap). One on the home network: the QR code\ngets a new key, since the phone has the old one and makes up its device id itself (a new one,\nor none, was a way back in). The other phones come back by their device ([`Link::allowed`]).",
         "requestBody": {
           "content": {
             "application/json": {
@@ -45903,7 +45956,7 @@
     },
     "/api/queue/{id}/remove": {
       "post": {
-        "description": "POST /api/queue/{id}/remove — drops an item that is not running. A running upload or download\nneeds `cancel: true`: it stops and goes (202). A running install is never removed: the console\ngoes on with it whatever the queue says.",
+        "description": "POST /api/queue/{id}/remove — drops an item that is not running. A running upload or download\nneeds `cancel: true`: it stops and goes (202). A running install is never removed: the console\ngoes on with it whatever the queue says. An install from a package on this computer that has\nended without its session (one the PS5 may resume) gives that session up as it goes: the\npackage is free to rename, and the PS5, should it come back for it, is told it is over.",
         "parameters": [
           {
             "in": "path",

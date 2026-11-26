@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { PkgNames, PkgRenamed } from "../../api/pkgName";
-import { createNameFlow, saveBlocked } from "./pkgNameFlow";
+import { createNameFlow, nameRoom, saveBlocked } from "./pkgNameFlow";
 
 const names = (over: Partial<PkgNames> = {}): PkgNames => ({
   platform: "ps5",
@@ -107,6 +107,63 @@ describe("the Name on the PS5 field", () => {
     expect(saveBlocked(flow.get())).toBe("refused");
     await flow.save();
     expect(set).not.toHaveBeenCalled();
+  });
+
+  it("counts the name in bytes against the package's own room, and never sends one that is too long", async () => {
+    const set = vi.fn();
+    const read = vi.fn().mockResolvedValue(
+      names({ other_names: 2, room: { default_name: 30, all_languages: 12 } }),
+    );
+    const flow = createNameFlow({ read, set });
+    await flow.load("/games/a.pkg");
+    // The name it has: 22 bytes of the 30 that fit.
+    expect(nameRoom(flow.get())).toEqual({ limit: 30, used: 22, left: 8 });
+    // Thirty letters fit; one more does not.
+    flow.setValue("x".repeat(30));
+    expect(nameRoom(flow.get())?.left).toBe(0);
+    expect(saveBlocked(flow.get())).toBeNull();
+    flow.setValue("x".repeat(31));
+    expect(nameRoom(flow.get())?.left).toBe(-1);
+    expect(saveBlocked(flow.get())).toBe("too_long");
+    // Bytes, not letters: eleven Japanese letters are 33 bytes.
+    flow.setValue("テ".repeat(11));
+    expect(nameRoom(flow.get())).toEqual({ limit: 30, used: 33, left: -3 });
+    expect(saveBlocked(flow.get())).toBe("too_long");
+    await flow.save();
+    expect(set).not.toHaveBeenCalled();
+    // Spaces around the name are not stored, so they are not counted.
+    flow.setValue("  " + "x".repeat(30) + "  ");
+    expect(saveBlocked(flow.get())).toBeNull();
+    // Every language has less room in this package.
+    flow.setValue("A longer name");
+    expect(saveBlocked(flow.get())).toBeNull();
+    flow.setAllLanguages(true);
+    expect(nameRoom(flow.get())).toEqual({ limit: 12, used: 13, left: -1 });
+    expect(saveBlocked(flow.get())).toBe("too_long");
+  });
+
+  it("without a room from the engine, the overall limit is the room", async () => {
+    const flow = createNameFlow({ read: vi.fn().mockResolvedValue(names()), set: vi.fn() });
+    await flow.load("/games/a.pkg");
+    flow.setValue("é".repeat(63));
+    expect(nameRoom(flow.get())).toEqual({ limit: 127, used: 126, left: 1 });
+    expect(saveBlocked(flow.get())).toBeNull();
+    flow.setValue("é".repeat(64));
+    expect(saveBlocked(flow.get())).toBe("too_long");
+    // A room larger than the overall limit does not raise it.
+    const big = createNameFlow({
+      read: vi.fn().mockResolvedValue(names({ room: { default_name: 500, all_languages: 500 } })),
+      set: vi.fn(),
+    });
+    await big.load("/games/a.pkg");
+    expect(nameRoom(big.get())?.limit).toBe(127);
+    // A package that refuses has no room to show.
+    const refused = createNameFlow({
+      read: vi.fn().mockResolvedValue(names({ refusal: { code: "retail", reason: "official" } })),
+      set: vi.fn(),
+    });
+    await refused.load("/games/a.pkg");
+    expect(nameRoom(refused.get())).toBeNull();
   });
 
   it("a name that could not be read leaves no field", async () => {

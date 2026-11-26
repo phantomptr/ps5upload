@@ -3,8 +3,9 @@
 //! `/api/share/ws`. Text messages are JSON; the file data goes as binary messages.
 //!
 //! Receiver → sender:
-//! * `{"hello": {"v": 1, "room", "name", "resume"?}}` first. `resume` is the token an earlier
-//!   Allow gave: the transfer carries on without asking again.
+//! * `{"hello": {"v": 1, "room", "name", "resume"?, "parts"?}}` first. `resume` is the token an
+//!   earlier Allow gave: the transfer carries on without asking again. `parts: true`: it puts a
+//!   long message back together from its `part`s (below).
 //! * `{"accept": {"items": [id, …]}}`: what they want of the offer.
 //! * `{"get": {"n", "item", "path", "offset"}}`: one file of an accepted item, from `offset`.
 //! * `{"done": {}}` when they have everything; `{"cancel": {}}` to stop.
@@ -19,6 +20,11 @@
 //!   "size"}}`; or `{"error": {"n", "why"}}` (`not_in_manifest`, `unsafe_path`, `symlink`,
 //!   `changed`, `read`).
 //! * `{"cancelled": {}}` when the sender cancels.
+//!
+//! A long text message (an offer or a listing of many files: a data channel takes 256 KiB at
+//! most) goes, to a receiver whose hello said `parts`, as `{"part": {"i", "of", "t"}}` messages,
+//! each a piece of its text in order. To an older receiver it goes whole when the connection
+//! takes it, else `{"refused": {"why": "too_big"}}` ends the transfer plainly.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -49,9 +55,180 @@ pub(crate) const RX_IDLE_WAIT: Duration = Duration::from_secs(90);
 pub(crate) const NAME_MAX: usize = 200;
 /// The receiver's longest text message (a `get` with a long path).
 pub(crate) const TEXT_MAX: usize = 4096;
+/// A text message longer than this goes in `part`s to a receiver that reads them: every data
+/// channel takes 64 KiB.
+const TEXT_WHOLE: usize = 60 * 1024;
+/// The text in one `part`.
+const PART_TEXT: usize = 16 * 1024;
+/// The longest text an internet connection (a data channel, 256 KiB) carries whole, with room.
+const RTC_WHOLE_MAX: usize = crate::join_net::rtc::TEXT_DC_MAX - 16 * 1024;
+/// The longest text put back together from parts (a listing of very many files).
+const JOINED_MAX: usize = 64 * 1024 * 1024;
 
 pub(crate) fn text(v: Value) -> Message {
     Message::Text(v.to_string().into())
+}
+
+/// How a text message of `len` bytes goes.
+#[derive(Debug, PartialEq, Eq)]
+enum TextPlan {
+    Whole,
+    Parts,
+    /// Longer than the receiver can take: refused, plainly.
+    TooBig,
+}
+
+/// `parts`: the receiver reads parts. `rtc`: the connection is a data channel (the LAN socket
+/// takes a long message whole).
+fn plan_text(len: usize, parts: bool, rtc: bool) -> TextPlan {
+    if len <= TEXT_WHOLE {
+        TextPlan::Whole
+    } else if len > JOINED_MAX {
+        TextPlan::TooBig
+    } else if parts {
+        TextPlan::Parts
+    } else if !rtc || len <= RTC_WHOLE_MAX {
+        TextPlan::Whole
+    } else {
+        TextPlan::TooBig
+    }
+}
+
+/// `t` as `part` messages, cut between characters.
+fn split_text(t: &str) -> Vec<String> {
+    let mut pieces = Vec::new();
+    let mut at = 0;
+    while at < t.len() {
+        let mut end = (at + PART_TEXT).min(t.len());
+        while !t.is_char_boundary(end) {
+            end -= 1;
+        }
+        pieces.push(&t[at..end]);
+        at = end;
+    }
+    let of = pieces.len();
+    pieces
+        .iter()
+        .enumerate()
+        .map(|(i, p)| json!({"part": {"i": i, "of": of, "t": p}}).to_string())
+        .collect()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Sent {
+    Ok,
+    Lost,
+    TooBig,
+}
+
+/// A text message that may be long (an offer, a listing): whole, in parts, or refused when the
+/// receiver can't take it.
+async fn send_long<S: GuestSocket>(s: &mut S, t: String, parts: bool) -> Sent {
+    let sent = |r: Result<(), ()>| if r.is_ok() { Sent::Ok } else { Sent::Lost };
+    match plan_text(t.len(), parts, s.net().is_some()) {
+        TextPlan::Whole => sent(s.send(Message::Text(t.into())).await),
+        TextPlan::Parts => {
+            for p in split_text(&t) {
+                if s.send(Message::Text(p.into())).await.is_err() {
+                    return Sent::Lost;
+                }
+            }
+            Sent::Ok
+        }
+        TextPlan::TooBig => {
+            crate::log_at!(
+                Info,
+                "together",
+                "share: a message of {} bytes is too long for the friend's app over this connection",
+                t.len()
+            );
+            let _ = s.send(text(json!({"refused": {"why": "too_big"}}))).await;
+            Sent::TooBig
+        }
+    }
+}
+
+/// The receiver's link with long messages put back together from their `part`s.
+struct Joined<L> {
+    link: L,
+    buf: String,
+    next: u64,
+    of: u64,
+}
+
+impl<L> Joined<L> {
+    fn new(link: L) -> Self {
+        Joined {
+            link,
+            buf: String::new(),
+            next: 0,
+            of: 0,
+        }
+    }
+
+    /// One part: the whole text once its last part came. Err: parts out of order, or more than
+    /// [`JOINED_MAX`].
+    fn push(&mut self, t: &str) -> Result<Option<String>, ()> {
+        let v: Value = serde_json::from_str(t).map_err(|_| ())?;
+        let p = &v["part"];
+        let (i, of, piece) = (
+            p["i"].as_u64().ok_or(())?,
+            p["of"].as_u64().ok_or(())?,
+            p["t"].as_str().ok_or(())?,
+        );
+        if i != self.next || i >= of || (i > 0 && of != self.of) {
+            return Err(());
+        }
+        if self.buf.len() + piece.len() > JOINED_MAX {
+            return Err(());
+        }
+        self.of = of;
+        self.buf.push_str(piece);
+        self.next += 1;
+        if self.next < of {
+            return Ok(None);
+        }
+        self.next = 0;
+        Ok(Some(std::mem::take(&mut self.buf)))
+    }
+}
+
+impl<L: Link> Link for Joined<L> {
+    async fn send_text(&mut self, t: String) -> Result<(), ()> {
+        self.link.send_text(t).await
+    }
+    async fn recv(&mut self) -> Option<In> {
+        loop {
+            let m = self.link.recv().await?;
+            let In::Text(t) = &m else { return Some(m) };
+            if !t.starts_with("{\"part\":") {
+                return Some(m);
+            }
+            match self.push(t) {
+                Ok(Some(whole)) => return Some(In::Text(whole)),
+                Ok(None) => continue,
+                Err(()) => {
+                    self.buf = String::new();
+                    self.next = 0;
+                    return Some(In::Text(json!({"refused": {"why": "too_big"}}).to_string()));
+                }
+            }
+        }
+    }
+    fn path(&self) -> Option<&'static str> {
+        self.link.path()
+    }
+}
+
+/// What the receiver is told when the sender refused (`why`).
+fn refused_state(why: Option<&str>) -> (&'static str, Option<String>) {
+    match why {
+        Some("too_big") => (
+            "failed",
+            Some("The list of files is too long to send. Share fewer files at once.".into()),
+        ),
+        w => ("refused", w.map(str::to_string)),
+    }
 }
 
 fn data_header(n: u32, offset: u64) -> [u8; HEADER] {
@@ -95,18 +272,23 @@ pub(crate) trait Shares: Send + Sync + 'static {
     fn find(&self, room: &str) -> Option<String>;
     /// The offer a hello gets, or why not.
     fn hello(&self, id: &str) -> Result<Value, &'static str>;
-    fn ask(&self, id: &str, name: &str, wants: &[String]) -> Result<u64, &'static str>;
-    fn resume(&self, id: &str, token: &str) -> Result<u64, &'static str>;
+    /// The new request's id and its first connection's session.
+    fn ask(&self, id: &str, name: &str, wants: &[String]) -> Result<(u64, u64), &'static str>;
+    /// The request a token carries on, and this connection's session (a newer one than any
+    /// earlier connection's: what those report from now on is ignored).
+    fn resume(&self, id: &str, token: &str) -> Result<(u64, u64), &'static str>;
     /// The request's state now, and its token.
     fn state(&self, id: &str, rid: u64) -> Option<(ReqState, Option<String>)>;
+    /// Whether `session` is still the connection carrying request `rid`.
+    fn current(&self, id: &str, rid: u64, session: u64) -> bool;
     /// Waits until something about share `id` changed (or a second passed).
     fn changed(&self, id: &str) -> impl std::future::Future<Output = ()> + Send;
     /// The items and what this request accepted.
     fn items(&self, id: &str, rid: u64) -> Option<(Arc<Vec<Item>>, Vec<String>)>;
-    fn sending(&self, id: &str, rid: u64, total: u64) -> Result<(), &'static str>;
-    fn progress(&self, id: &str, rid: u64, done: u64);
-    fn done(&self, id: &str, rid: u64);
-    fn gone(&self, id: &str, rid: u64, cancelled: bool, why: &str);
+    fn sending(&self, id: &str, rid: u64, session: u64, total: u64) -> Result<(), &'static str>;
+    fn progress(&self, id: &str, rid: u64, session: u64, done: u64);
+    fn done(&self, id: &str, rid: u64, session: u64);
+    fn gone(&self, id: &str, rid: u64, session: u64, cancelled: bool, why: &str);
     /// Where the connection goes (`lan`, `tailscale`, `internet`), for the panel.
     fn path(&self, id: &str, rid: u64, path: Option<&'static str>);
 }
@@ -146,9 +328,11 @@ pub(crate) async fn sender_session<S: GuestSocket, R: Shares>(
         name
     };
     let resume = h["resume"].as_str().unwrap_or("");
-    let rid = if !resume.is_empty() {
+    // An older receiver doesn't say it: it takes each message whole.
+    let parts = h["parts"].as_bool().unwrap_or(false);
+    let (rid, sess) = if !resume.is_empty() {
         match reg.resume(&id, resume) {
-            Ok(rid) => rid,
+            Ok(x) => x,
             Err(why) => {
                 let _ = s.send(text(json!({"refused": {"why": why}}))).await;
                 return;
@@ -162,7 +346,7 @@ pub(crate) async fn sender_session<S: GuestSocket, R: Shares>(
                 return;
             }
         };
-        if s.send(text(json!({ "offer": offer }))).await.is_err() {
+        if send_long(&mut s, json!({ "offer": offer }).to_string(), parts).await != Sent::Ok {
             return;
         }
         // Their choice, or they leave.
@@ -202,15 +386,15 @@ pub(crate) async fn sender_session<S: GuestSocket, R: Shares>(
                     .unwrap_or_default();
             }
         };
-        let rid = match reg.ask(&id, &name, &wants) {
-            Ok(rid) => rid,
+        let (rid, sess) = match reg.ask(&id, &name, &wants) {
+            Ok(x) => x,
             Err(why) => {
                 let _ = s.send(text(json!({"refused": {"why": why}}))).await;
                 return;
             }
         };
         if s.send(text(json!({"asked": {}}))).await.is_err() {
-            reg.gone(&id, rid, false, "lost");
+            reg.gone(&id, rid, sess, false, "lost");
             return;
         }
         // The answer. Meanwhile the receiver may cancel or go.
@@ -237,25 +421,31 @@ pub(crate) async fn sender_session<S: GuestSocket, R: Shares>(
                 m = s.recv() => match m {
                     Some(Ok(Message::Text(t))) => {
                         if t.contains("\"cancel\"") {
-                            reg.gone(&id, rid, true, "receiver");
+                            reg.gone(&id, rid, sess, true, "receiver");
                             return;
                         }
                     }
                     Some(Ok(Message::Close(_))) | None | Some(Err(())) => {
-                        reg.gone(&id, rid, false, "left");
+                        reg.gone(&id, rid, sess, false, "left");
                         return;
                     }
                     _ => {}
                 }
             }
         }
-        rid
+        (rid, sess)
     };
-    serve(&mut s, &*reg, &id, rid).await;
+    serve(&mut s, &*reg, &id, (rid, sess), parts).await;
 }
 
 /// The allowed receiver's files.
-async fn serve<S: GuestSocket, R: Shares>(s: &mut S, reg: &R, id: &str, rid: u64) {
+async fn serve<S: GuestSocket, R: Shares>(
+    s: &mut S,
+    reg: &R,
+    id: &str,
+    (rid, sess): (u64, u64),
+    parts: bool,
+) {
     let Some((items, wants)) = reg.items(id, rid) else {
         return;
     };
@@ -277,41 +467,51 @@ async fn serve<S: GuestSocket, R: Shares>(s: &mut S, reg: &R, id: &str, rid: u64
         .filter(|i| wants.contains(&i.id))
         .map(|i| i.size())
         .sum();
-    if let Err(why) = reg.sending(id, rid, total) {
+    let allowed = json!({"allowed": {"token": token, "files": files}}).to_string();
+    // A listing this receiver can't take ends the request now, plainly, before anything starts.
+    if plan_text(allowed.len(), parts, s.net().is_some()) == TextPlan::TooBig {
+        let _ = send_long(s, allowed, parts).await;
+        reg.gone(id, rid, sess, true, "too_big");
+        return;
+    }
+    if let Err(why) = reg.sending(id, rid, sess, total) {
         let _ = s.send(text(json!({"refused": {"why": why}}))).await;
         return;
     }
-    if s.send(text(json!({"allowed": {"token": token, "files": files}})))
-        .await
-        .is_err()
-    {
-        reg.gone(id, rid, false, "lost");
+    if send_long(s, allowed, parts).await != Sent::Ok {
+        reg.gone(id, rid, sess, false, "lost");
         return;
     }
     // How far each file got, for the progress (a resumed file starts where the receiver was).
     let mut marks: HashMap<(String, String), u64> = HashMap::new();
-    let still = |reg: &R| matches!(reg.state(id, rid), Some((ReqState::Sending, _)));
+    // Still this connection's to serve: sending, and no resume has since taken the request over
+    // (an old link whose friend connected again stops quietly; the newer one carries on).
+    let still = |reg: &R| {
+        matches!(reg.state(id, rid), Some((ReqState::Sending, _))) && reg.current(id, rid, sess)
+    };
     loop {
         let v = match next_text(s, IDLE_WAIT).await {
             Ok(v) => v,
             Err(why) => {
                 if still(reg) {
-                    reg.gone(id, rid, false, why);
+                    reg.gone(id, rid, sess, false, why);
                 }
                 return;
             }
         };
         if !still(reg) {
-            let _ = s.send(text(json!({"cancelled": {}}))).await;
+            if reg.current(id, rid, sess) {
+                let _ = s.send(text(json!({"cancelled": {}}))).await;
+            }
             return;
         }
         if v.get("done").is_some() {
-            reg.done(id, rid);
+            reg.done(id, rid, sess);
             let _ = s.send(text(json!({"bye": {}}))).await;
             return;
         }
         if v.get("cancel").is_some() {
-            reg.gone(id, rid, true, "receiver");
+            reg.gone(id, rid, sess, true, "receiver");
             return;
         }
         let Some(g) = v.get("get") else { continue };
@@ -332,7 +532,7 @@ async fn serve<S: GuestSocket, R: Shares>(s: &mut S, reg: &R, id: &str, rid: u64
                     .await
                     .is_err()
                 {
-                    reg.gone(id, rid, false, "lost");
+                    reg.gone(id, rid, sess, false, "lost");
                     return;
                 }
                 continue;
@@ -365,25 +565,27 @@ async fn serve<S: GuestSocket, R: Shares>(s: &mut S, reg: &R, id: &str, rid: u64
             msg.extend_from_slice(&data_header(n, at));
             msg.extend_from_slice(&bytes);
             if s.send(Message::Binary(msg.into())).await.is_err() {
-                reg.gone(id, rid, false, "lost");
+                reg.gone(id, rid, sess, false, "lost");
                 return;
             }
             at += bytes.len() as u64;
             marks.insert(key.clone(), at);
-            reg.progress(id, rid, marks.values().sum());
+            reg.progress(id, rid, sess, marks.values().sum());
             // The receiver's cancel, or the sender's, between pieces.
             if !still(reg) {
-                let _ = s.send(text(json!({"cancelled": {}}))).await;
+                if reg.current(id, rid, sess) {
+                    let _ = s.send(text(json!({"cancelled": {}}))).await;
+                }
                 return;
             }
             if let Some(m) = s.recv().now_or_never() {
                 match m {
                     Some(Ok(Message::Text(t))) if t.contains("\"cancel\"") => {
-                        reg.gone(id, rid, true, "receiver");
+                        reg.gone(id, rid, sess, true, "receiver");
                         return;
                     }
                     Some(Ok(Message::Close(_))) | None | Some(Err(())) => {
-                        reg.gone(id, rid, false, "lost");
+                        reg.gone(id, rid, sess, false, "lost");
                         return;
                     }
                     _ => {}
@@ -392,12 +594,12 @@ async fn serve<S: GuestSocket, R: Shares>(s: &mut S, reg: &R, id: &str, rid: u64
         }
         if at >= f.size {
             marks.insert(key, f.size);
-            reg.progress(id, rid, marks.values().sum());
+            reg.progress(id, rid, sess, marks.values().sum());
             if s.send(text(json!({"eof": {"n": n, "size": f.size}})))
                 .await
                 .is_err()
             {
-                reg.gone(id, rid, false, "lost");
+                reg.gone(id, rid, sess, false, "lost");
                 return;
             }
         }
@@ -469,6 +671,9 @@ pub(crate) fn offered(v: &Value) -> Vec<Offered> {
                         refused,
                     }
                 })
+                // A kind this build has no part for (a newer sender's) is not offered: the
+                // receiving page names each item by its kind, and an unknown one stopped the app.
+                .filter(|o| super::manifest::ItemKind::from_word(&o.kind).is_some())
                 .collect()
         })
         .unwrap_or_default()
@@ -523,8 +728,9 @@ fn set(sh: &Mutex<RxShared>, f: impl FnOnce(&mut RxShared)) {
     f(&mut sh.lock().unwrap_or_else(|e| e.into_inner()));
 }
 
-/// Characters no file system takes, and control characters, as `_`; trimmed, and no longer than
-/// [`NAME_MAX`] bytes. A longer name loses the end of its stem, never its extension: `.pkg` cut
+/// Characters no file system takes, and control characters, as `_`; no space in front, no dot or
+/// space at the end (Windows drops those), and no longer than [`NAME_MAX`] bytes. A dot in front
+/// stays: `.nomedia` or `.config` is a name, and the folder received must be the one sent. A longer name loses the end of its stem, never its extension: `.pkg` cut
 /// off made the file something else, and two names alike in their first 80 characters became one.
 pub(crate) fn safe_name(s: &str) -> String {
     let t: String = s
@@ -537,7 +743,9 @@ pub(crate) fn safe_name(s: &str) -> String {
             }
         })
         .collect();
-    let t = t.trim().trim_matches('.').trim();
+    let t = t
+        .trim_start()
+        .trim_end_matches(|c: char| c == '.' || c.is_whitespace());
     let t = if t.len() > NAME_MAX {
         // The extension: after the last dot, when short enough to be one.
         let (stem, ext) = match t.rfind('.') {
@@ -636,7 +844,8 @@ pub(crate) fn item_dirs(
 ) -> Vec<(String, PathBuf)> {
     let mut out: Vec<(String, PathBuf)> = Vec::new();
     for i in items.iter().filter(|i| accepted.contains(&i.id)) {
-        let base = safe_name(&i.name);
+        // A folder of its own for the item: shown, never hidden (no dot in front).
+        let base = safe_name(i.name.trim().trim_start_matches('.'));
         let mut name = base.clone();
         let mut k = 2;
         while out
@@ -681,7 +890,7 @@ pub(crate) async fn receive<L: Link>(
 
 /// [`receive`], giving up on a sender silent for `idle`.
 pub(crate) async fn receive_with<L: Link>(
-    mut link: L,
+    link: L,
     room: &str,
     name: &str,
     sh: Arc<Mutex<RxShared>>,
@@ -689,7 +898,9 @@ pub(crate) async fn receive_with<L: Link>(
     idle: Duration,
 ) -> RxEnd {
     let token = sh.lock().unwrap_or_else(|e| e.into_inner()).token.clone();
-    let hello = json!({"hello": {"v": 1, "room": room, "name": name, "resume": token}});
+    let hello =
+        json!({"hello": {"v": 1, "room": room, "name": name, "resume": token, "parts": true}});
+    let mut link = Joined::new(link);
     if link.send_text(hello.to_string()).await.is_err() {
         return RxEnd::Lost;
     }
@@ -726,7 +937,8 @@ pub(crate) async fn receive_with<L: Link>(
             }
         };
         if let Some(r) = v.get("refused") {
-            return fail(&sh, "refused", r["why"].as_str().map(str::to_string));
+            let (state, why) = refused_state(r["why"].as_str());
+            return fail(&sh, state, why);
         }
         let Some(o) = v.get("offer") else {
             return fail(
@@ -842,7 +1054,8 @@ pub(crate) async fn receive_with<L: Link>(
             );
         }
         if let Some(r) = v.get("refused") {
-            return fail(&sh, "refused", r["why"].as_str().map(str::to_string));
+            let (state, why) = refused_state(r["why"].as_str());
+            return fail(&sh, state, why);
         }
         if let Some(a) = v.get("allowed") {
             // No more files than the accepted items can have.
@@ -1147,4 +1360,89 @@ pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)
+}
+
+#[cfg(test)]
+mod parts_tests {
+    use super::*;
+
+    #[test]
+    fn a_long_message_goes_in_parts_only_to_a_receiver_that_reads_them() {
+        use TextPlan::*;
+        let long = 300 * 1024;
+        assert_eq!(plan_text(1000, false, true), Whole);
+        assert_eq!(plan_text(long, true, true), Parts);
+        assert_eq!(plan_text(long, true, false), Parts);
+        // An older receiver: whole where the connection takes it, else refused plainly.
+        assert_eq!(plan_text(long, false, false), Whole);
+        assert_eq!(plan_text(100 * 1024, false, true), Whole);
+        assert_eq!(plan_text(long, false, true), TooBig);
+        assert_eq!(plan_text(JOINED_MAX + 1, true, true), TooBig);
+    }
+
+    #[test]
+    fn parts_come_back_as_the_message_cut_between_characters() {
+        let t: String = (0..40_000).map(|i| ['a', 'é', '漢', '🎮'][i % 4]).collect();
+        let parts = split_text(&t);
+        assert!(parts.len() > 3);
+        assert!(parts
+            .iter()
+            .all(|p| p.len() < TEXT_WHOLE && p.starts_with("{\"part\":")));
+        let mut j = Joined::new(());
+        let mut got = None;
+        for (i, p) in parts.iter().enumerate() {
+            match j.push(p).unwrap() {
+                Some(whole) => {
+                    assert_eq!(i + 1, parts.len());
+                    got = Some(whole);
+                }
+                None => assert!(i + 1 < parts.len()),
+            }
+        }
+        assert_eq!(got.unwrap(), t);
+        // Again on the same link: it started over.
+        let again = split_text("{\"x\":1}");
+        assert_eq!(j.push(&again[0]).unwrap().as_deref(), Some("{\"x\":1}"));
+    }
+
+    #[test]
+    fn parts_out_of_order_or_too_many_are_refused() {
+        let parts = split_text(&"y".repeat(3 * PART_TEXT));
+        let mut j = Joined::new(());
+        assert!(j.push(&parts[1]).is_err(), "the first part missing");
+        let mut j = Joined::new(());
+        j.push(&parts[0]).unwrap();
+        assert!(j.push(&parts[0]).is_err(), "a part twice");
+        let mut j = Joined::new(());
+        assert!(j
+            .push(&json!({"part": {"i": 0, "of": 2, "t": "a"}}).to_string())
+            .is_ok());
+        assert!(j
+            .push(&json!({"part": {"i": 1, "of": 3, "t": "b"}}).to_string())
+            .is_err());
+        assert!(Joined::new(()).push("{\"part\": 1}").is_err());
+    }
+
+    /// What a receiver gets when the parts were broken: a plain refusal it ends on.
+    #[tokio::test]
+    async fn a_broken_set_of_parts_ends_the_receive_plainly() {
+        let (mut sock, link) = mem_pair();
+        let mut j = Joined::new(link);
+        sock.send(Message::Text(
+            json!({"part": {"i": 1, "of": 2, "t": "a"}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        match j.recv().await {
+            Some(In::Text(t)) => assert!(t.contains("too_big"), "{t}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(refused_state(Some("too_big")).0, "failed");
+        assert_eq!(
+            refused_state(Some("used")),
+            ("refused", Some("used".into()))
+        );
+    }
 }

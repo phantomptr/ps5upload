@@ -178,6 +178,13 @@ impl Ps4Merged {
         }
         let game_version = sfo_text(&game_params, "APP_VER").unwrap_or_default();
         let update_version = sfo_text(&update_params, "APP_VER").unwrap_or_default();
+        // No version is not a newer version: said as what it is.
+        if update_version.trim().is_empty() {
+            return format_err(
+                "the update doesn't say its version (it has no APP_VER), so it can't be told \
+                 to be newer than the game",
+            );
+        }
         if version_cmp(&update_version, &game_version) != std::cmp::Ordering::Greater {
             return format_err(format!(
                 "the update ({update_version}) isn't newer than the game ({game_version}): \
@@ -469,6 +476,9 @@ mod tests {
         assert!(e.contains("is for CUSA11111"), "{e}");
         let e = err(game(), update("01.00", "CUSA99990"));
         assert!(e.contains("isn't newer"), "{e}");
+        // An update that names no version used to count as newer than any game.
+        let e = err(game(), update("", "CUSA99990"));
+        assert!(e.contains("doesn't say its version"), "{e}");
         let e = err(update("01.05", "CUSA99990"), update("01.06", "CUSA99990"));
         assert!(e.contains("itself an update"), "{e}");
         let e = err(game(), game());

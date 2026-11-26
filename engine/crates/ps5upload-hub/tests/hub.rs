@@ -175,7 +175,12 @@ async fn host(t: &TestHub, r: &str, s: &str) -> Ws {
 
 /// Joins; returns the guest socket and its gid (and checks the host heard about it).
 async fn join(t: &TestHub, host_ws: &mut Ws, r: &str) -> (Ws, String) {
-    let mut ws = connect(t).await;
+    join_from(t, host_ws, r, None).await
+}
+
+/// [`join`] as the client a trusted proxy names (`xff`).
+async fn join_from(t: &TestHub, host_ws: &mut Ws, r: &str, xff: Option<&str>) -> (Ws, String) {
+    let mut ws = connect_with(t, None, xff).await;
     send(&mut ws, json!({"v":1,"t":"join","room":r})).await;
     let j = recv(&mut ws).await;
     assert_eq!(j["t"], "joined", "{j}");
@@ -342,6 +347,112 @@ async fn reclaim_and_room_taken() {
     host(&t, &r, &secret(5)).await;
 }
 
+/// A room id made from its host's secret opens for that secret only: on the hub as it runs and on
+/// a hub that has just restarted with no rooms at all (before, the first `host` after a restart
+/// took any id with any secret, so a link holder could open the room as theirs).
+#[tokio::test]
+async fn a_bound_room_opens_for_its_own_secret_only_also_after_a_restart() {
+    let s = secret(40);
+    let r = ps5upload_hub::hub::room_for_secret(&s);
+    assert!(ps5upload_hub::hub::is_bound_room(&r), "{r}");
+    let t = start(cfg()).await;
+    let mut h = host(&t, &r, &s).await;
+    let (_g, _) = join(&t, &mut h, &r).await;
+    t.hub.stop(Duration::from_secs(3)).await;
+    assert_eq!(recv_close(&mut h).await, Some(1001));
+
+    // The hub is back with nothing in memory. Someone with the link comes first: refused.
+    let t = start(cfg()).await;
+    let mut x = connect(&t).await;
+    send(
+        &mut x,
+        json!({"v":1,"t":"host","room":r,"secret":secret(41)}),
+    )
+    .await;
+    expect_fatal(&mut x, "room_taken").await;
+    // The host comes back with its secret: the room is its again, and guests reach it.
+    let mut h = host(&t, &r, &s).await;
+    let (mut g, gid) = join(&t, &mut h, &r).await;
+    send(&mut g, json!({"t":"signal","to":"host","data":{"o":1}})).await;
+    assert_eq!(
+        recv(&mut h).await,
+        json!({"t":"signal","from":gid,"data":{"o":1}})
+    );
+    // Any id of the bound form needs the secret it was made from, room or no room.
+    let other = ps5upload_hub::hub::room_for_secret(&secret(42));
+    let mut y = connect(&t).await;
+    send(
+        &mut y,
+        json!({"v":1,"t":"host","room":other,"secret":secret(43)}),
+    )
+    .await;
+    expect_fatal(&mut y, "room_taken").await;
+}
+
+/// An older app's room id (16 random bytes, so it ends in A, Q, g or w) opens as before: with any
+/// secret while the id is free, for that secret only while it is open.
+#[tokio::test]
+async fn an_older_apps_room_id_still_opens() {
+    use base64::Engine as _;
+    let t = start(cfg()).await;
+    let mut open = Vec::new();
+    for (n, last) in [(0u8, 'A'), (1, 'Q'), (2, 'g'), (3, 'w')] {
+        let mut bytes = [7u8; 16];
+        // The last character is the last byte's low 2 bits, then 4 zero bits.
+        bytes[15] = 0x1c | n;
+        let r = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+        assert_eq!((r.len(), r.chars().last()), (22, Some(last)), "{r}");
+        assert!(!ps5upload_hub::hub::is_bound_room(&r));
+        let mut h = host(&t, &r, &secret(50 + u32::from(n))).await;
+        let (_g, _) = join(&t, &mut h, &r).await;
+        let mut x = connect(&t).await;
+        send(
+            &mut x,
+            json!({"v":1,"t":"host","room":r,"secret":secret(99)}),
+        )
+        .await;
+        expect_fatal(&mut x, "room_taken").await;
+        open.push(h);
+    }
+}
+
+/// A guest that joined and then sat in the room (it never left, as every client does once its
+/// connection is up) is removed after the longest a join may take, and its seat is free again.
+#[tokio::test]
+async fn an_idle_guest_is_removed_after_its_time() {
+    let t = start(Config {
+        max_guests_per_room: 2,
+        guest_max_age: Duration::from_millis(400),
+        sweep_interval: Duration::from_millis(50),
+        ..cfg()
+    })
+    .await;
+    let r = room(45);
+    let mut h = host(&t, &r, &secret(45)).await;
+    let (mut g1, gid1) = join(&t, &mut h, &r).await;
+    let (mut g2, gid2) = join(&t, &mut h, &r).await;
+    let mut full = connect(&t).await;
+    send(&mut full, json!({"v":1,"t":"join","room":r})).await;
+    expect_fatal(&mut full, "room_full").await;
+    // Both idle guests go: each is told, and so is the host.
+    for g in [&mut g1, &mut g2] {
+        expect_fatal(g, "timeout").await;
+    }
+    let mut left = [recv(&mut h).await, recv(&mut h).await];
+    left.sort_by_key(|v| v["gid"].as_str().unwrap_or("").to_string());
+    let mut want = [
+        json!({"t":"left","gid":gid1}),
+        json!({"t":"left","gid":gid2}),
+    ];
+    want.sort_by_key(|v| v["gid"].as_str().unwrap_or("").to_string());
+    assert_eq!(left, want);
+    // The seats are free, and the host is still there.
+    let (_g3, _) = join(&t, &mut h, &r).await;
+    let m = t.hub.shared.metrics_text();
+    assert_eq!(metric(&m, "hub_guests_expired_total"), 2);
+    assert_eq!(metric(&m, "hub_rooms_hosted"), 1);
+}
+
 #[tokio::test]
 async fn limit_guests_per_room() {
     let t = start(Config {
@@ -386,8 +497,68 @@ async fn limit_signals() {
         send(&mut h, json!({"t":"signal","to":gid2,"data":{"i":i}})).await;
         assert_eq!(recv(&mut g2).await["data"]["i"], i);
     }
+    // Over the host's limit: dropped, and the host stays with its guests (it was closed, and
+    // its guests with it: guests can make a host send, so that was theirs to do).
     send(&mut h, json!({"t":"signal","to":gid2,"data":{"i":4}})).await;
-    expect_fatal(&mut h, "rate_limited").await;
+    quiet(&mut g2, Duration::from_millis(200)).await;
+    send(
+        &mut g2,
+        json!({"t":"signal","to":"host","data":{"still":1}}),
+    )
+    .await;
+    assert_eq!(
+        recv(&mut h).await,
+        json!({"t":"signal","from":gid2,"data":{"still":1}})
+    );
+    let m = t.hub.shared.metrics_text();
+    assert_eq!(metric(&m, "hub_host_signals_dropped_total"), 1);
+    assert_eq!(metric(&m, "hub_rooms_hosted"), 1);
+}
+
+/// A guest's budget is its client's in the room, and leaving and joining again does not refill
+/// it (it did: each join came with 20 fresh signals, and a client may join 30 times a minute).
+/// Another client has its own.
+#[tokio::test]
+async fn a_clients_signals_in_a_room_last_across_its_joins() {
+    let t = start(Config {
+        max_signals_per_guest: 3,
+        max_signals_per_guest_client: 5,
+        trusted_proxies: vec!["127.0.0.1".parse::<Cidr>().unwrap()],
+        ..cfg()
+    })
+    .await;
+    let r = room(13);
+    let mut h = host(&t, &r, &secret(13)).await;
+    let a = Some("203.0.113.5");
+    let (mut a1, gid) = join_from(&t, &mut h, &r, a).await;
+    for i in 0..3 {
+        send(&mut a1, json!({"t":"signal","to":"host","data":{"i":i}})).await;
+        assert_eq!(recv(&mut h).await["data"]["i"], i);
+    }
+    // One guest's own limit, as before.
+    send(&mut a1, json!({"t":"signal","to":"host","data":{"i":3}})).await;
+    expect_fatal(&mut a1, "rate_limited").await;
+    assert_eq!(recv(&mut h).await, json!({"t":"left","gid":gid}));
+    // The same client again: what is left of its 5, not 3 more.
+    let (mut a2, gid) = join_from(&t, &mut h, &r, a).await;
+    for i in 0..2 {
+        send(&mut a2, json!({"t":"signal","to":"host","data":{"j":i}})).await;
+        assert_eq!(recv(&mut h).await["data"]["j"], i);
+    }
+    send(&mut a2, json!({"t":"signal","to":"host","data":{"j":2}})).await;
+    expect_fatal(&mut a2, "rate_limited").await;
+    assert_eq!(recv(&mut h).await, json!({"t":"left","gid":gid}));
+    // Used up: it may not even join until the window runs out.
+    let mut a3 = connect_with(&t, None, a).await;
+    send(&mut a3, json!({"v":1,"t":"join","room":r})).await;
+    expect_fatal(&mut a3, "rate_limited").await;
+    // Another client is not held to it.
+    let (mut b, gid) = join_from(&t, &mut h, &r, Some("198.51.100.7")).await;
+    send(&mut b, json!({"t":"signal","to":"host","data":{"b":1}})).await;
+    assert_eq!(
+        recv(&mut h).await,
+        json!({"t":"signal","from":gid,"data":{"b":1}})
+    );
 }
 
 #[tokio::test]

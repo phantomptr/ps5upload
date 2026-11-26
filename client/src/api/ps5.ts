@@ -1247,9 +1247,9 @@ export interface Volume {
   fs_type: string;
   total_bytes: number;
   free_bytes: number;
-  /** Space deliberately excluded from large-upload capacity (the internal
-   * PS5 allocator hides a fixed reserve from statfs; external filesystems keep
-   * a smaller metadata/activity margin). Present on current payloads. */
+  /** A small working margin left out of what an upload may take (room for metadata and for
+   * other activity on the drive; at most 1 GiB). It is not what the PS5 holds back on internal
+   * storage: that is already out of `free_bytes`, and its growth is in `likely_fits_bytes`. */
   safety_reserve_bytes?: number;
   /** Bytes a new upload may safely allocate after the reserve above. */
   allocatable_bytes?: number;
@@ -2203,10 +2203,14 @@ export async function fetchHwPower(transferAddr: string): Promise<HwPower> {
   return invoke<HwPower>("ps5_hw_power", { addr });
 }
 
-/** "Console Storage" aggregate matching what PS5 Settings shows
- *  (added in 2.2.26). Sums `/user effective + /system_data + /system_ex`
- *  with reserved-space accounting. Distinct from `fsListVolumes` —
- *  that returns per-volume detail; this is the single-line summary. */
+/** The internal drive as its filesystem counts it (`statfs` on `/user`, `/system_data` and
+ *  `/system_ex`; added in 2.2.26). NOT the PS5's Settings > Storage figures: that screen can
+ *  show a smaller drive and much less free space (#944: 175 GB here, 71 GB there, on one 2 TB
+ *  console), by a rule not known here. `user_free_bytes` is `/user`'s free space for a writer, with
+ *  `user_reserved_bytes` (what the filesystem holds back) already left out: never subtract it
+ *  again. `total/free/used_bytes` are the three partitions together, so `free_bytes` counts
+ *  system-partition space nothing can be copied into. Distinct from `fetchVolumes`, which
+ *  returns per-volume detail. */
 export interface HwStorage {
   total_bytes: number;
   free_bytes: number;
@@ -5763,12 +5767,23 @@ export interface LastInstall {
   message: string;
   /** Not reported before: say so once. */
   new: boolean;
+  /** The installer is still working (the app was opened again while an install from the last
+   *  quit runs): nothing is judged yet. Wait for it with `updateWaitForInstall`. */
+  pending?: boolean;
 }
 
 /** The last install's outcome (null when there was none). Also deletes what a finished
  *  install left in the app's updates folder. Once per launch. */
 export async function updateLastInstall(): Promise<LastInstall | null> {
   return invoke<LastInstall | null>("update_last_install");
+}
+
+/** An install is still working (`LastInstall.pending`): wait for it, at most a few minutes.
+ *  "relaunch": the app quits now and starts again as the new version. "report": it ended and
+ *  this copy is unchanged; `updateLastInstall` now says what happened. "keep-running": it is
+ *  still working; carry on and say nothing. */
+export async function updateWaitForInstall(): Promise<"relaunch" | "report" | "keep-running"> {
+  return invoke<"relaunch" | "report" | "keep-running">("update_wait_for_install");
 }
 
 /** Forget a failed install so that version may be installed by itself again ("Try again"). */

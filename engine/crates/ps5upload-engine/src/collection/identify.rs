@@ -18,6 +18,24 @@ pub const READ_FAILED: &str = "could not be read";
 /// What the index records for a later part of a split set: not an item, and not a package.
 pub const SPLIT_PART: &str = "part of a split package";
 
+/// Why a package whose file is shorter than its own header says is not whole.
+pub fn cut_short_reason(have: u64, need: u64) -> String {
+    format!(
+        "the file is shorter than the package says it is ({have} of at least {need} bytes): \
+         still being copied or downloaded, or cut short"
+    )
+}
+
+/// How long the package at `path` has to be by its own header, when the file (every part of a
+/// split set: `whole` bytes) is shorter than that. `None` for a whole file, and for one whose
+/// header declares nothing or can't be read.
+pub fn cut_short(path: &Path, whole: Option<u64>) -> Option<(u64, u64)> {
+    let (mut f, size) = open_any(path)?;
+    let have = whole.unwrap_or(size);
+    let need = ps5upload_pkg::declared_size_from(&mut f, size)?;
+    (have < need).then_some((have, need))
+}
+
 fn failed(why: impl Into<String>) -> PkgInfo {
     PkgInfo {
         error: Some(why.into()),
@@ -100,12 +118,30 @@ fn package(path: &Path, set_size: Option<u64>) -> PkgInfo {
             Err(e) => failed(e),
         };
     }
+    // A package shorter than its header declares is still being copied, or was cut short. Its
+    // header can read perfectly well (a PS4 package's sits at the start), so this is asked of
+    // the sizes, never of how the parse went.
+    let whole = set_size.unwrap_or(size);
+    let short = ps5upload_pkg::declared_size_from(&mut f, size)
+        .filter(|need| whole < *need)
+        .map(|need| cut_short_reason(whole, need));
     if std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(0)).is_err() {
         return failed(READ_FAILED);
     }
     let head = match ps5upload_pkg::parse_pkg_from(&mut f, size, path) {
         Ok(h) => h,
-        Err(e) => return failed(e.to_string()),
+        // A PS5 package keeps what names it at its end: cut short, it cannot be read at all.
+        // That is a file not yet whole, not one that is no package.
+        Err(e) => {
+            return match short {
+                Some(why) => PkgInfo {
+                    complete: false,
+                    kind_reason: why,
+                    ..PkgInfo::default()
+                },
+                None => failed(e.to_string()),
+            }
+        }
     };
     let mut info = match crate::inspect::inspect_local(path) {
         Ok(g) => from_inspection(&g),
@@ -152,13 +188,9 @@ fn package(path: &Path, set_size: Option<u64>) -> PkgInfo {
             head.title_id.clone()
         };
     }
-    // A package shorter than its header declares is still being copied, or was cut short.
-    if head
-        .warnings
-        .iter()
-        .any(|w| w.contains("truncat") || w.contains("shorter"))
-    {
+    if let Some(why) = short {
         info.complete = false;
+        info.kind_reason = why;
     }
     info
 }
@@ -397,5 +429,108 @@ mod tests {
         let g = &games["CUSA12345"];
         assert_eq!((g.copies, g.is_duplicate), (2, true));
         assert_eq!(summarize(&games).duplicates_count, 1);
+    }
+
+    /// A scratch folder removed when the test ends.
+    struct Gone(PathBuf);
+    impl Drop for Gone {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A PS4 game package whose header declares `total` bytes, in a file of `have`.
+    fn ps4_pkg_of(dir: &Path, name: &str, total: u64, have: u64) -> PathBuf {
+        let p = ps4_pkg(dir, name, GAME, 0x1A, 0x0A00_0000, Some("gd"));
+        let mut bytes = std::fs::read(&p).unwrap();
+        assert!(bytes.len() < 0x400 && have >= 0x1000);
+        bytes.resize(have as usize, 0);
+        bytes[0x430..0x438].copy_from_slice(&total.to_be_bytes());
+        std::fs::write(&p, bytes).unwrap();
+        p
+    }
+
+    /// The audit's case: a PS4 package still being copied. Its header sits at the start and
+    /// reads perfectly, so only the size it declares says the file is not all there.
+    #[test]
+    fn a_package_shorter_than_its_header_says_is_not_whole_and_organize_leaves_it() {
+        use crate::collection::organize::{plan_cached, SKIP_INCOMPLETE};
+        use crate::collection::organize_fs::LocalTree;
+        let d = Gone(scratch());
+        let root = d.0.join("lib");
+        std::fs::create_dir_all(&root).unwrap();
+        let p = ps4_pkg_of(&root, "copying.pkg", 0x9000, 0x1000);
+        let info = kind_of(&p);
+        assert!(!info.complete, "{info:?}");
+        assert_eq!(info.error, None);
+        assert_eq!(
+            (info.title_id.as_str(), info.kind.as_str()),
+            ("CUSA12345", "base")
+        );
+        assert!(info.kind_reason.contains("still being copied"), "{info:?}");
+        assert_eq!(cut_short(&p, None), Some((0x1000, 0x9000)));
+
+        // Organize leaves it where it is, and says why.
+        let roots = [(root.clone(), "root".to_string())];
+        let plan = plan_cached(&LocalTree, &root, None, &roots);
+        assert!(plan.moves.is_empty(), "{:?}", plan.moves);
+        let left = plan
+            .skipped
+            .iter()
+            .find(|s| s.path == "copying.pkg")
+            .expect("the package is listed as left alone");
+        assert_eq!(left.reason, SKIP_INCOMPLETE);
+        assert!(
+            left.detail.contains("4096 of at least 36864 bytes"),
+            "{left:?}"
+        );
+
+        // The copy finishes: the same file is whole, and is planned.
+        let mut bytes = std::fs::read(&p).unwrap();
+        bytes.resize(0x9000, 0);
+        std::fs::write(&p, bytes).unwrap();
+        assert!(kind_of(&p).complete);
+        assert_eq!(cut_short(&p, None), None);
+        let plan = plan_cached(&LocalTree, &root, None, &roots);
+        assert_eq!(plan.moves.len(), 1, "{:?}", plan.skipped);
+        assert_eq!(plan.moves[0].from, "copying.pkg");
+
+        // A split set is whole by all its parts together, not by its first file.
+        let lead = ps4_pkg_of(&root, "set_0.pkg", 0x9000, 0x1000);
+        assert!(identify_set(&lead, 0x9000, false).complete);
+        let short = identify_set(&lead, 0x8000, false);
+        assert!(!short.complete);
+        assert!(
+            short.kind_reason.contains("32768 of at least 36864"),
+            "{short:?}"
+        );
+    }
+
+    /// A PS5 package keeps what names it at its end, so one cut short can't be read at all:
+    /// it is still told apart from a file that is no package.
+    #[test]
+    fn a_ps5_package_cut_before_its_container_is_not_whole() {
+        use crate::collection::organize::{plan_cached, SKIP_INCOMPLETE};
+        use crate::collection::organize_fs::LocalTree;
+        let d = Gone(scratch());
+        let root = d.0.join("lib");
+        std::fs::create_dir_all(&root).unwrap();
+        let block = 0x10000usize;
+        let mut pkg = vec![0u8; 2 * block];
+        pkg[0..4].copy_from_slice(&ps5upload_pkg::PKG_MAGIC_FIH.to_be_bytes());
+        pkg[0x06..0x08].copy_from_slice(&3u16.to_le_bytes());
+        pkg[0x10..0x18].copy_from_slice(&(block as u64).to_le_bytes());
+        pkg[0x18..0x20].copy_from_slice(&(7 * block as u64).to_le_bytes());
+        pkg[0x58..0x60].copy_from_slice(&(8 * block as u64).to_le_bytes());
+        let p = root.join("PPSA01234.pkg");
+        std::fs::write(&p, &pkg).unwrap();
+        let info = kind_of(&p);
+        assert!(!info.complete, "{info:?}");
+        assert_eq!(info.error, None);
+        assert!(info.kind_reason.contains("cut short"), "{info:?}");
+        let plan = plan_cached(&LocalTree, &root, None, &[(root.clone(), "root".into())]);
+        assert!(plan.moves.is_empty());
+        assert_eq!(plan.skipped.len(), 1, "{:?}", plan.skipped);
+        assert_eq!(plan.skipped[0].reason, SKIP_INCOMPLETE);
     }
 }

@@ -25,6 +25,10 @@ export interface PkgNames {
   refusal?: PkgNameRefusal | null;
   /** The longest name accepted, in UTF-8 bytes. */
   max_bytes: number;
+  /** How long a name this package has room for, in UTF-8 bytes (a rename moves nothing in the
+   *  package, so the room is its own): for the default name alone, and for every language.
+   *  Absent when the name can't be changed, and from an engine older than 12.6.32. */
+  room?: { default_name: number; all_languages: number } | null;
 }
 
 export interface PkgRenamed {

@@ -121,7 +121,8 @@ fn whole(path: &Path) -> Result<(), String> {
 }
 
 /// `GET /api/pkg/name?path=`: the names a package on this computer holds (one per language)
-/// and whether they can be changed. `refusal` is set when they can't: `code` is `retail` for an
+/// and whether they can be changed. `room` is how long a new name may be in this package, in
+/// UTF-8 bytes (`default_name`: changing the default name only; `all_languages`). `refusal` is set when they can't: `code` is `retail` for an
 /// official package, `patch` for a delta update, `no_name`, or `unsupported` with the reason.
 pub(crate) async fn get_handler(Query(q): Query<NameQuery>) -> Response {
     let read = tokio::task::spawn_blocking(move || -> Result<NameResponse, Failure> {
@@ -149,8 +150,9 @@ pub(crate) async fn get_handler(Query(q): Query<NameQuery>) -> Response {
 }
 
 /// `POST /api/pkg/name` `{path, name, all_languages}`: gives a fake package on this computer
-/// another name, in place. 409 while the package is in use (an install, an upload or a build
-/// reads it, or another program has it open); 400 with the reason when it can't be done (an
+/// another name, in place. 409 while the package is in use (an install of it has not finished,
+/// however long ago the PS5 last read from it; an upload or a build reads it, or another program
+/// has it open), with what holds it and how to free it; 400 with the reason when it can't be done (an
 /// official package, a name that does not fit). On any failure the file is as it was.
 pub(crate) async fn set_handler(
     State(state): State<PkgInstallStateHandle>,

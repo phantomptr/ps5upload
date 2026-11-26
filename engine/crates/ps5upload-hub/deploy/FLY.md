@@ -44,7 +44,10 @@ fly status
 curl https://ps5upload-hub.fly.dev/health      # prints ok
 ```
 
-Later deploys: just `fly deploy --ha=false` from the same directory.
+Later deploys: just `fly deploy --ha=false` from the same directory. The hub and the app may be
+updated in either order: a newer hub takes older apps' rooms as before, and an older hub takes a
+newer app's. Only rooms of an updated app on an updated hub are bound to their host (nobody else
+can open them after a restart; PROTOCOL.md, Identifiers).
 
 ## 4. The hub.phantomptr.com name
 

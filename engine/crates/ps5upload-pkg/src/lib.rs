@@ -142,7 +142,15 @@ pub fn extract_from_ffpkg(
         let target = dest_dir.join(leaf_name);
         create_dir_all(&target).map_err(Ufs2Error::Io)?;
         let mut walked = std::collections::HashSet::from([inode.number]);
-        extract_dir_recursive(&mut img, &inode, &target, &mut result, 0, &mut walked)?;
+        extract_dir_recursive(
+            &mut img,
+            &inode,
+            &target,
+            &mut result,
+            0,
+            &mut walked,
+            &mut ufs2::WalkBudget::default(),
+        )?;
     } else {
         return Err(Ufs2Error::NotFound {
             component: format!("{leaf_name} (not a file or directory)"),
@@ -199,6 +207,7 @@ fn extract_dir_recursive<R: Read + Seek>(
     result: &mut FfpkgExtractResult,
     depth: u32,
     walked: &mut std::collections::HashSet<u64>,
+    budget: &mut ufs2::WalkBudget,
 ) -> Result<(), Ufs2Error> {
     // Bound recursion against pathological nesting. A directory cycle is refused on its own
     // (`walked`): an entry naming its own directory or an ancestor is not stopped by the depth
@@ -209,7 +218,7 @@ fn extract_dir_recursive<R: Read + Seek>(
             max: FFPKG_EXTRACT_MAX_DEPTH,
         });
     }
-    let entries = img.list_dir(dir)?;
+    let entries = img.list_dir_in_walk(dir, budget)?;
     for e in entries {
         if !is_safe_child_name(&e.name) {
             // Skip but don't fail the whole extract — a hostile
@@ -229,7 +238,15 @@ fn extract_dir_recursive<R: Read + Seek>(
                 });
             }
             create_dir_all(&child_path).map_err(Ufs2Error::Io)?;
-            extract_dir_recursive(img, &child_inode, &child_path, result, depth + 1, walked)?;
+            extract_dir_recursive(
+                img,
+                &child_inode,
+                &child_path,
+                result,
+                depth + 1,
+                walked,
+                budget,
+            )?;
         } else if child_inode.is_file() {
             let written = extract_file(img, &child_inode, &child_path)?;
             result.file_count += 1;
@@ -609,6 +626,11 @@ pub struct PkgMetadata {
     /// Non-fatal warnings raised during parse — surfaced in the UI as
     /// a yellow caution row. Empty for a clean stock PKG.
     pub warnings: Vec<String>,
+    /// The least this package's file (every part of a split set together) has to be for its
+    /// own header to be true: see [`declared_size_from`]. A file shorter than this is still
+    /// being copied, or was cut short. `None` when the header declares nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_size: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -634,6 +656,72 @@ pub fn parse_pkg(path: &Path) -> Result<PkgMetadata, PkgError> {
     parse_pkg_from(&mut f, size, path)
 }
 
+/// `len` bytes at `at`, when the `size`-byte file holds them all.
+fn bytes_at<R: Read + Seek>(f: &mut R, size: u64, at: u64, len: usize) -> Option<Vec<u8>> {
+    if at.checked_add(len as u64)? > size {
+        return None;
+    }
+    f.seek(SeekFrom::Start(at)).ok()?;
+    let mut buf = vec![0u8; len];
+    f.read_exact(&mut buf).ok()?;
+    Some(buf)
+}
+
+/// The least a package's file has to be for its own header to be true, read from the header
+/// alone. `None` when it is not a `\x7FCNT` / `\x7FFIH` package or its header declares nothing.
+///
+/// - PS4 (`\x7FCNT`): the end of the container's body (`0x20` + `0x28`), the end of its image
+///   (`0x410` + `0x418`) and the package size the header records (`0x430`), whichever is most.
+///   A `\x7FCNT` whose content type is a PS5 one is judged by its body alone: what its
+///   `0x400` block means outside a finalized image is not measured.
+/// - PS5 (`\x7FFIH`): the end of the embedded container (at `0x58`: its header, and its body
+///   when the header can be read), and for a debug image the end of the outer image
+///   (`0x10` + `0x18`). The install information that follows the container records no length
+///   in a header, so a file that lacks only part of that is not seen here.
+///
+/// `size` only says which header bytes can be read. The answer is for the whole package:
+/// compare it with every part of a split set together, which may be more than `size`.
+pub fn declared_size_from<R: Read + Seek>(f: &mut R, size: u64) -> Option<u64> {
+    let be64 = |b: &[u8], o: usize| u64::from_be_bytes(b[o..o + 8].try_into().unwrap());
+    let le64 = |b: &[u8], o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap());
+    let head = bytes_at(f, size, 0, 0xA0)?;
+    let magic = u32::from_be_bytes([head[0], head[1], head[2], head[3]]);
+    let mut need = 0u64;
+    // An end that overflows is a header that says nothing usable, not a longer package.
+    let mut at_least = |end: Option<u64>| need = need.max(end.unwrap_or(0));
+    if magic == PKG_MAGIC {
+        at_least(be64(&head, 0x20).checked_add(be64(&head, 0x28)));
+        let content_type = u32::from_be_bytes([head[0x74], head[0x75], head[0x76], head[0x77]]);
+        if kind::content_type_platform(content_type) != Some("PS5") {
+            if let Some(image) = bytes_at(f, size, 0x400, 0x38) {
+                if u32::from_be_bytes([image[0], image[1], image[2], image[3]]) >= 1 {
+                    at_least(be64(&image, 0x10).checked_add(be64(&image, 0x18)));
+                }
+                at_least(Some(be64(&image, 0x30)));
+            }
+        }
+    } else if magic == PKG_MAGIC_FIH {
+        let cnt_at = le64(&head, 0x58);
+        if cnt_at != 0 {
+            at_least(cnt_at.checked_add(0xA0));
+            if let Some(cnt) = bytes_at(f, size, cnt_at, 0xA0) {
+                if cnt[0..4] == PKG_MAGIC.to_be_bytes() {
+                    at_least(
+                        cnt_at
+                            .checked_add(be64(&cnt, 0x20))
+                            .and_then(|at| at.checked_add(be64(&cnt, 0x28))),
+                    );
+                }
+            }
+        }
+        // 0x00 marks a debug image, whose outer image sits where these two fields say.
+        if head[0x05] == 0 {
+            at_least(le64(&head, 0x10).checked_add(le64(&head, 0x18)));
+        }
+    }
+    (need > 0).then_some(need)
+}
+
 /// [`parse_pkg`] over any seekable bytes of `size` (a package on a server or the console);
 /// `path` is only recorded in the result.
 pub fn parse_pkg_from<R: Read + Seek>(
@@ -653,6 +741,7 @@ pub fn parse_pkg_from<R: Read + Seek>(
         Some(buf)
     })
     .unwrap_or_default();
+    let declared_size = declared_size_from(f, size);
 
     f.seek(SeekFrom::Start(0))?;
     let mut head = [0u8; 0xA0];
@@ -678,6 +767,7 @@ pub fn parse_pkg_from<R: Read + Seek>(
         content_flags: 0,
         icon_png_base64: None,
         warnings: Vec::new(),
+        declared_size,
     };
 
     let (container_base, container_head) = if magic == PKG_MAGIC_FIH {
@@ -2006,6 +2096,7 @@ mod tests {
             content_flags: 0,
             icon_png_base64: None,
             warnings: Vec::new(),
+            declared_size: None,
         };
         parse_sfo_into(&sfo, &mut meta).expect("SFO should parse");
         assert_eq!(meta.app_ver, "01.04");
@@ -2031,6 +2122,7 @@ mod tests {
             content_flags: 0,
             icon_png_base64: None,
             warnings: Vec::new(),
+            declared_size: None,
         };
         let mut json = br#"{"contentId":"UP0000-PPSA01234_00-TESTGAME00000000","titleId":"PPSA01234","contentVersion":"01.002.000","localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"Test Game"}}}"#.to_vec();
         json.extend_from_slice(&[0, 0]);
@@ -2156,6 +2248,93 @@ mod tests {
         assert_eq!(b64_encode(b"foob"), "Zm9vYg==");
         assert_eq!(b64_encode(b"fooba"), "Zm9vYmE=");
         assert_eq!(b64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    /// A PS4 package header of `total` declared bytes: a body after the header, then an image.
+    fn ps4_declaring(total: u64) -> Vec<u8> {
+        let mut pkg = build_pkg_multi(
+            "UP0000-CUSA01234_00-TESTGAME00000000",
+            &[("CATEGORY", "gd")],
+        );
+        pkg.resize(0x2000, 0);
+        pkg[0x74..0x78].copy_from_slice(&0x1Au32.to_be_bytes());
+        pkg[0x20..0x28].copy_from_slice(&0x1000u64.to_be_bytes());
+        pkg[0x28..0x30].copy_from_slice(&0x1000u64.to_be_bytes());
+        pkg[0x400..0x404].copy_from_slice(&1u32.to_be_bytes());
+        pkg[0x410..0x418].copy_from_slice(&0x2000u64.to_be_bytes());
+        pkg[0x418..0x420].copy_from_slice(&(total - 0x2000).to_be_bytes());
+        pkg[0x430..0x438].copy_from_slice(&total.to_be_bytes());
+        pkg
+    }
+
+    #[test]
+    fn a_ps4_package_says_how_long_it_has_to_be() {
+        let whole = 0x9000u64;
+        let mut pkg = ps4_declaring(whole);
+        let declared =
+            |bytes: &[u8]| declared_size_from(&mut std::io::Cursor::new(bytes), bytes.len() as u64);
+        // Still being copied: the header is there, most of the image is not.
+        assert_eq!(declared(&pkg), Some(whole));
+        let meta = parse_pkg_from(
+            &mut std::io::Cursor::new(&pkg),
+            pkg.len() as u64,
+            Path::new("a.pkg"),
+        )
+        .unwrap();
+        assert_eq!(meta.declared_size, Some(whole));
+        assert!(meta.size < whole);
+        assert_eq!(meta.content_id, "UP0000-CUSA01234_00-TESTGAME00000000");
+        // The whole file says the same, and is that long.
+        pkg.resize(whole as usize, 0);
+        assert_eq!(declared(&pkg), Some(whole));
+
+        // The package size field left empty: the image's end still says it.
+        let mut no_total = ps4_declaring(whole);
+        no_total[0x430..0x438].fill(0);
+        assert_eq!(declared(&no_total), Some(whole));
+        // No image either: the body's end.
+        no_total[0x400..0x420].fill(0);
+        assert_eq!(declared(&no_total), Some(0x2000));
+        // Cut inside the header: only the fields that are there count.
+        assert_eq!(declared(&no_total[..0x200]), Some(0x2000));
+        // Sizes that overflow say nothing, they do not make the package endless.
+        let mut wild = ps4_declaring(whole);
+        wild[0x410..0x418].copy_from_slice(&u64::MAX.to_be_bytes());
+        assert_eq!(declared(&wild), Some(whole));
+        // A header that declares nothing, and a file that is no package.
+        let plain = build_pkg_multi("UP0000-CUSA01234_00-TESTGAME00000000", &[]);
+        assert_eq!(declared(&plain), None);
+        assert_eq!(declared(&[0u8; 0x1000]), None);
+        assert_eq!(declared(&[0x7F, b'C', b'N', b'T']), None);
+    }
+
+    #[test]
+    fn a_ps5_package_says_how_long_it_has_to_be() {
+        let block = 0x10000usize;
+        let mut cnt = build_pkg_multi("UP0000-PPSA01234_00-TESTGAME00000000", &[]);
+        cnt.resize(0x3000, 0);
+        cnt[0x20..0x28].copy_from_slice(&0x2000u64.to_be_bytes());
+        cnt[0x28..0x30].copy_from_slice(&0x1000u64.to_be_bytes());
+        // Header block, three blocks of image, then the container.
+        let cnt_at = 4 * block;
+        let mut pkg = vec![0u8; cnt_at];
+        pkg[0..4].copy_from_slice(&PKG_MAGIC_FIH.to_be_bytes());
+        pkg[0x06..0x08].copy_from_slice(&3u16.to_le_bytes());
+        pkg[0x10..0x18].copy_from_slice(&(block as u64).to_le_bytes());
+        pkg[0x18..0x20].copy_from_slice(&(3 * block as u64).to_le_bytes());
+        pkg[0x58..0x60].copy_from_slice(&(cnt_at as u64).to_le_bytes());
+        pkg.extend_from_slice(&cnt);
+        let whole = (cnt_at + 0x3000) as u64;
+        let declared =
+            |bytes: &[u8]| declared_size_from(&mut std::io::Cursor::new(bytes), bytes.len() as u64);
+        assert_eq!(declared(&pkg), Some(whole));
+        // Cut inside the image: the container can't be read, but its place is known.
+        assert_eq!(declared(&pkg[..2 * block]), Some(cnt_at as u64 + 0xA0));
+        // A retail image (0x80) is judged by its container only.
+        let mut retail = pkg.clone();
+        retail[0x05] = 0x80;
+        retail[0x18..0x20].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert_eq!(declared(&retail), Some(whole));
     }
 
     #[test]
@@ -2459,8 +2638,16 @@ mod tests {
                 sample_paths: Vec::new(),
             };
             let mut walked = std::collections::HashSet::from([root.number]);
-            let e = extract_dir_recursive(&mut img, &root, &dest, &mut result, 0, &mut walked)
-                .unwrap_err();
+            let e = extract_dir_recursive(
+                &mut img,
+                &root,
+                &dest,
+                &mut result,
+                0,
+                &mut walked,
+                &mut ufs2::WalkBudget::default(),
+            )
+            .unwrap_err();
             assert!(
                 matches!(e, Ufs2Error::DirectoryCycle { inode: 2 }),
                 "{names:?}: {e}"

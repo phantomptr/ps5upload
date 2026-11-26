@@ -115,6 +115,12 @@ impl Plan {
     pub fn needs_password(&self) -> bool {
         matches!(self, Plan::LinuxPackage { .. })
     }
+
+    /// A script replaces the app after it has quit, and keeps the `installing` marker while
+    /// it does.
+    pub fn replaces_the_app_after_quit(&self) -> bool {
+        matches!(self, Plan::MacDmg { .. } | Plan::LinuxAppImage { .. })
+    }
 }
 
 /// The plan for a packaged Linux install: `kind` is the package format that owns the running
@@ -210,6 +216,21 @@ say() {{ echo "$(date +%s) $*" >> "$log" 2>/dev/null; }}"#,
     )
 }
 
+/// The lines after the prelude of a script that replaces the app: it keeps the `installing`
+/// marker (`update_files`: its PID and start time) beside the log while it works and removes
+/// it when it ends, however it ends. A launch in between waits for it instead of judging an
+/// install that is still under way (`update_wait_for_install`).
+fn sh_marker_prelude(log: &Path) -> String {
+    let dir = log.parent().unwrap_or_else(|| Path::new(""));
+    format!(
+        r#"marker={}
+echo "$$ $(date +%s)" > "$marker" 2>/dev/null
+trap 'rm -f "$marker"' EXIT
+trap 'exit 1' HUP INT TERM"#,
+        sh_quote(&super::update_files::marker_path(dir).to_string_lossy())
+    )
+}
+
 /// The script that carries `plan` out once process `pid` has quit, logging its steps to `log`.
 /// With `relaunch`, every path ends by starting the app, new or old; without it (an install on
 /// quit) nothing is started. None for the Windows plans: the setup is started directly and the
@@ -219,6 +240,7 @@ say() {{ echo "$(date +%s) $*" >> "$log" 2>/dev/null; }}"#,
 /// ran pkexec first): the script only waits for the old process and starts the new one.
 pub fn script_for(plan: &Plan, pid: u32, relaunch: bool, log: &Path) -> Option<String> {
     let prelude = sh_log_prelude(log);
+    let marking = sh_marker_prelude(log);
     Some(match plan {
         Plan::MacDmg { dmg, bundle } => {
             let dmg = sh_quote(&dmg.to_string_lossy());
@@ -228,6 +250,7 @@ pub fn script_for(plan: &Plan, pid: u32, relaunch: bool, log: &Path) -> Option<S
                 r#"#!/bin/sh
 # PS5Upload update: replace the app bundle with the one in the .dmg, then start it.
 {prelude}
+{marking}
 pid={pid}
 dmg={dmg}
 app={app}
@@ -265,6 +288,8 @@ else
 fi
 rmdir "$mnt" 2>/dev/null
 xattr -dr com.apple.quarantine "$app" 2>/dev/null
+# Done before the app starts: the new version must not find an install still marked as running.
+rm -f "$marker"
 {start}
 "#
             )
@@ -288,6 +313,7 @@ fi"#
                 r#"#!/bin/sh
 # PS5Upload update: replace the AppImage (and its launcher) with the zip's, then start it.
 {prelude}
+{marking}
 pid={pid}
 zip={zip}
 target={target}
@@ -316,6 +342,8 @@ else
   say "could not unpack the zip (no unzip or python3?)"
 fi
 rm -rf "$dir"
+# Done before the app starts: the new version must not find an install still marked as running.
+rm -f "$marker"
 {start}
 "#
             )
@@ -713,7 +741,8 @@ pub(crate) fn without_appimage_env(cmd: &mut std::process::Command, appimage: bo
 }
 
 /// Start `script` (a shell script) detached from this process, so it outlives the app.
-fn spawn_detached(script: &str) -> Result<(), String> {
+/// Returns its PID.
+fn spawn_detached(script: &str) -> Result<u32, String> {
     let path = std::env::temp_dir().join(format!("ps5upload-update-{}.sh", std::process::id()));
     std::fs::write(&path, script).map_err(|e| format!("write {}: {e}", path.display()))?;
     let mut cmd = std::process::Command::new("/bin/sh");
@@ -729,12 +758,12 @@ fn spawn_detached(script: &str) -> Result<(), String> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .map(|_| ())
+        .map(|child| child.id())
         .map_err(|e| format!("start the update: {e}"))
 }
 
-/// Start the Windows setup on its own, detached, so it outlives the app.
-fn spawn_setup(installer: &Path, relaunch: bool) -> Result<(), String> {
+/// Start the Windows setup on its own, detached, so it outlives the app. Returns its PID.
+fn spawn_setup(installer: &Path, relaunch: bool) -> Result<u32, String> {
     let mut cmd = std::process::Command::new(installer);
     cmd.args(windows_setup_args(relaunch));
     #[cfg(windows)]
@@ -748,7 +777,7 @@ fn spawn_setup(installer: &Path, relaunch: bool) -> Result<(), String> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .map(|_| ())
+        .map(|child| child.id())
         .map_err(|e| format!("start the update setup {}: {e}", installer.display()))
 }
 
@@ -826,14 +855,318 @@ fn start(plan: &Plan, relaunch: bool, dir: &Path) -> Result<(), String> {
         return Ok(());
     }
     let log = super::update_files::log_path(dir);
+    // The installer's marker, written here as well as by the script (its first lines), so no
+    // launch can fall between this app's end and the script's start. The Windows setup cannot
+    // write one: this is its only marker, and its process ending is what ends it.
+    let mark = |pid: u32| {
+        super::update_files::write_marker(
+            dir,
+            super::update_files::Marker {
+                pid,
+                started: super::update_files::now_secs(),
+            },
+        );
+    };
     match script_for(plan, std::process::id(), relaunch, &log) {
-        Some(script) => spawn_detached(&script),
+        Some(script) => {
+            let pid = spawn_detached(&script)?;
+            if plan.replaces_the_app_after_quit() {
+                mark(pid);
+            }
+            Ok(())
+        }
         None => match plan {
-            Plan::WindowsSetup { installer, .. } => spawn_setup(installer, relaunch),
+            Plan::WindowsSetup { installer, .. } => spawn_setup(installer, relaunch).map(mark),
             Plan::LinuxPackage { .. } => Ok(()),
             _ => Err("no way to install this update".into()),
         },
     }
+}
+
+/// Whether process `pid` is running now.
+#[cfg(unix)]
+pub(crate) fn pid_alive(pid: u32) -> bool {
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: signal 0 only checks that the process exists. EPERM: it does, as another user.
+    let r = unsafe { libc::kill(pid, 0) };
+    r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(windows)]
+pub(crate) fn pid_alive(pid: u32) -> bool {
+    use std::ffi::c_void;
+    #[allow(non_snake_case)]
+    extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut c_void;
+        fn WaitForSingleObject(handle: *mut c_void, ms: u32) -> u32;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+    }
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    const WAIT_TIMEOUT: u32 = 0x0000_0102;
+    // SAFETY: plain kernel32 calls on a handle this function owns and closes.
+    unsafe {
+        let h = OpenProcess(SYNCHRONIZE, 0, pid);
+        if h.is_null() {
+            return false;
+        }
+        let running = WaitForSingleObject(h, 0) == WAIT_TIMEOUT;
+        CloseHandle(h);
+        running
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn pid_alive(_pid: u32) -> bool {
+    false
+}
+
+/// How long a launch waits for a running installer before it carries on in the old version
+/// without saying anything (the next launch judges). An install is the app's own quit (30 s
+/// at most) and a copy of the app.
+const INSTALL_WAIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(150);
+
+/// How a wait for the installer ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitEnd {
+    /// It removed its marker: it is done, whatever it did.
+    Finished,
+    /// Its process is gone and the marker is still there.
+    Stale,
+    /// Still working after the limit.
+    TimedOut,
+}
+
+/// Wait for the installer the marker in `dir` names, at most `limit`, looking every `poll`.
+/// A stale marker is left for `settle_unless_installing` to clear and explain.
+pub fn wait_for_installer(
+    dir: &Path,
+    limit: std::time::Duration,
+    poll: std::time::Duration,
+    alive: &dyn Fn(u32) -> bool,
+) -> WaitEnd {
+    use super::update_files::{marker_state_in, now_secs, MarkerState};
+    let until = std::time::Instant::now() + limit;
+    loop {
+        match marker_state_in(dir, now_secs(), alive) {
+            MarkerState::None => return WaitEnd::Finished,
+            MarkerState::Stale(_) => return WaitEnd::Stale,
+            MarkerState::Live(_) => {}
+        }
+        if std::time::Instant::now() >= until {
+            return WaitEnd::TimedOut;
+        }
+        std::thread::sleep(poll);
+    }
+}
+
+/// What the app does once the wait is over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AfterInstall {
+    /// The program on disk is not the one running: start it and quit.
+    Relaunch,
+    /// The installer ended and the program is the same: judge the install now
+    /// (`update_last_install`), which says what really happened.
+    Report,
+    /// The installer is still working: carry on, say nothing.
+    KeepRunning,
+}
+
+/// The decision: start again only into a program that really changed, report only an install
+/// that ended.
+pub fn after_install(end: WaitEnd, program_changed: bool) -> AfterInstall {
+    match end {
+        WaitEnd::TimedOut => AfterInstall::KeepRunning,
+        _ if program_changed => AfterInstall::Relaunch,
+        _ => AfterInstall::Report,
+    }
+}
+
+/// What tells one copy of the program file from another at the same path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramStamp {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    /// The inode (Unix): a replaced file is a new one even with the same size and time.
+    id: u64,
+}
+
+pub fn program_stamp(path: &Path) -> Option<ProgramStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    let id = std::os::unix::fs::MetadataExt::ino(&meta);
+    #[cfg(not(unix))]
+    let id = 0;
+    Some(ProgramStamp {
+        len: meta.len(),
+        modified: meta.modified().ok(),
+        id,
+    })
+}
+
+/// Whether the program at the path this process started from was replaced since: both stamps
+/// known and different. A program that is missing now (a swap that stopped halfway) is not
+/// something to start.
+pub fn program_changed(before: Option<&ProgramStamp>, after: Option<&ProgramStamp>) -> bool {
+    matches!((before, after), (Some(b), Some(a)) if a != b)
+}
+
+/// The file an update replaces for this copy: the AppImage it runs as, else the program.
+fn program_path() -> Option<PathBuf> {
+    std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_exe().ok())
+}
+
+static STARTED_AS: std::sync::OnceLock<Option<(PathBuf, ProgramStamp)>> =
+    std::sync::OnceLock::new();
+
+/// Remember the program file this process started from. Called first thing in `run()`.
+pub fn note_program() {
+    STARTED_AS.get_or_init(|| {
+        let path = program_path()?;
+        let stamp = program_stamp(&path)?;
+        Some((path, stamp))
+    });
+}
+
+fn program_changed_since_start() -> bool {
+    match STARTED_AS.get().and_then(Option::as_ref) {
+        Some((path, before)) => program_changed(Some(before), program_stamp(path).as_ref()),
+        None => false,
+    }
+}
+
+/// What starts this copy again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Restart {
+    /// `open` the `.app` bundle.
+    MacBundle(PathBuf),
+    /// The AppImage, through the launcher beside it when it has one.
+    AppImage(PathBuf),
+    /// The program itself.
+    Exe(PathBuf),
+}
+
+/// How this copy is started again: as the install scripts start it.
+pub fn restart_for(os: &str, exe: &Path, appimage: Option<&Path>) -> Restart {
+    if os == "linux" {
+        if let Some(a) = appimage {
+            return Restart::AppImage(a.to_path_buf());
+        }
+    }
+    if os == "macos" {
+        // …/PS5Upload.app/Contents/MacOS/PS5Upload
+        let bundle = exe.parent().and_then(Path::parent).and_then(Path::parent);
+        if let Some(b) = bundle.filter(|b| b.extension().is_some_and(|e| e == "app")) {
+            return Restart::MacBundle(b.to_path_buf());
+        }
+    }
+    Restart::Exe(exe.to_path_buf())
+}
+
+/// The script that starts the app again once process `pid` (this one) has quit.
+pub fn restart_script(restart: &Restart, pid: u32, log: &Path) -> String {
+    let prelude = sh_log_prelude(log);
+    let (target, start) = match restart {
+        Restart::MacBundle(app) => (app, r#"open "$target""#),
+        Restart::AppImage(appimage) => (
+            appimage,
+            r#"launcher="$(dirname "$target")/PS5Upload.sh"
+if [ "$(basename "$target")" = PS5Upload.AppImage ] && [ -x "$launcher" ]; then
+  nohup "$launcher" >/dev/null 2>&1 &
+else
+  nohup "$target" >/dev/null 2>&1 &
+fi"#,
+        ),
+        Restart::Exe(exe) => (exe, r#"nohup "$target" >/dev/null 2>&1 &"#),
+    };
+    let target = sh_quote(&target.to_string_lossy());
+    format!(
+        r#"#!/bin/sh
+# PS5Upload update: the update finished while the app was open; start the new version once
+# this one has quit.
+{prelude}
+pid={pid}
+target={target}
+n=0
+while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 60 ]; do sleep 0.5; n=$((n+1)); done
+# Still running after 30 s: it hung on the way out.
+if kill -0 "$pid" 2>/dev/null; then say "the app did not quit in 30 s: ended it"; kill -9 "$pid"; sleep 1; fi
+{start}
+"#
+    )
+}
+
+/// Start this copy again once it has quit.
+fn relaunch(dir: &Path) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("find the app to start again: {e}"))?;
+    let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from);
+    let restart = restart_for(std::env::consts::OS, &exe, appimage.as_deref());
+    if cfg!(windows) {
+        return spawn_new_exe(&exe);
+    }
+    let log = super::update_files::log_path(dir);
+    spawn_detached(&restart_script(&restart, std::process::id(), &log)).map(|_| ())
+}
+
+/// An installer is working (`update_last_install` said `pending`): wait for it, bounded, then
+/// either start again into the program it put in place (the app quits; this never returns to
+/// a live window), or tell the renderer to ask for the outcome (`report`), or to carry on
+/// (`keep-running`: it is still working after the limit).
+#[tauri::command]
+pub async fn update_wait_for_install(app: AppHandle) -> Result<AfterInstall, String> {
+    use super::update_files as files;
+    let dir = files::updates_dir(&app)?;
+    let waited = dir.clone();
+    let end = tauri::async_runtime::spawn_blocking(move || {
+        wait_for_installer(
+            &waited,
+            INSTALL_WAIT_LIMIT,
+            std::time::Duration::from_millis(500),
+            &pid_alive,
+        )
+    })
+    .await
+    .map_err(|e| format!("update_wait_for_install: {e}"))?;
+    let next = after_install(end, program_changed_since_start());
+    if next != AfterInstall::Relaunch {
+        return Ok(next);
+    }
+    files::log(
+        &dir,
+        "the update finished while the app was open: starting the new version",
+    );
+    if let Err(e) = relaunch(&dir) {
+        files::log(&dir, &format!("could not start it: {e}"));
+        return Ok(AfterInstall::Report);
+    }
+    // Nothing armed may start a second install on the way out.
+    *on_quit_slot() = None;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    #[cfg(desktop)]
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(15));
+        crate::exit_guard::kill_all();
+        std::process::exit(0);
+    });
+    app.exit(0);
+    Ok(next)
+}
+
+/// Whether an installer is at work in `dir` right now: a second install must not start
+/// beside it.
+fn install_running(dir: &Path) -> bool {
+    use super::update_files::{marker_state_in, now_secs, MarkerState};
+    matches!(
+        marker_state_in(dir, now_secs(), &pid_alive),
+        MarkerState::Live(_)
+    )
 }
 
 /// Record the install (`update_files`), then start it. A failure to start is recorded as the
@@ -979,6 +1312,10 @@ pub fn install_armed_on_quit() {
     let Some(armed) = on_quit_slot().take() else {
         return;
     };
+    // An earlier quit's install is still working (the app was opened again meanwhile).
+    if install_running(&armed.dir) {
+        return;
+    }
     // Hashed again: the file waited on disk since it was armed.
     let result = match (
         plan(&armed.download),
@@ -1016,6 +1353,9 @@ pub async fn update_install(
     version: Option<String>,
 ) -> Result<(), String> {
     let (download, dir) = downloaded_update(&app, &path)?;
+    if install_running(&dir) {
+        return Err("an update is already being installed".into());
+    }
     let probe = download.clone();
     // Only a download that matched its release's SHA-256, hashed again now: the file sat in the
     // updates folder since, and this runs it.
@@ -1607,5 +1947,418 @@ mod tests {
         assert!(s.contains("PS5Upload.AppImage") && !s.contains("nohup"));
         assert_eq!(windows_setup_args(true), ["/P", "/R", "/UPDATE"]);
         assert_eq!(windows_setup_args(false), ["/P", "/UPDATE"]);
+    }
+
+    use super::super::update_files as files;
+
+    /// The scripts that replace the app keep the marker while they work and remove it before
+    /// they start the app; the package script (nothing left to replace) has none. Unix only:
+    /// these shell scripts only run on macOS and Linux, and Windows joins the paths with `\`.
+    #[cfg(unix)]
+    #[test]
+    fn the_scripts_that_replace_the_app_mark_the_install_as_running() {
+        let log = Path::new("/home/o'neil/.local/share/PS5Upload/updates/update.log");
+        for plan in [
+            Plan::MacDmg {
+                dmg: PathBuf::from("/tmp/PS5Upload.dmg"),
+                bundle: PathBuf::from("/Applications/PS5Upload.app"),
+            },
+            Plan::LinuxAppImage {
+                zip: PathBuf::from("/tmp/PS5Upload.zip"),
+                appimage: PathBuf::from("/home/me/PS5Upload.AppImage"),
+            },
+        ] {
+            assert!(plan.replaces_the_app_after_quit());
+            for relaunch in [true, false] {
+                let s = script_for(&plan, 42, relaunch, log).unwrap();
+                assert!(
+                    s.contains(
+                        "marker='/home/o'\\''neil/.local/share/PS5Upload/updates/installing'"
+                    ),
+                    "{s}"
+                );
+                let write = s.find(r#"echo "$$ $(date +%s)" > "$marker""#).unwrap();
+                let trap = s.find(r#"trap 'rm -f "$marker"' EXIT"#).unwrap();
+                let wait = s.find("while kill -0").unwrap();
+                let done = s.rfind(r#"rm -f "$marker""#).unwrap();
+                assert!(write < trap && trap < wait && wait < done, "{s}");
+                // A signal ends it through the same trap.
+                assert!(s.contains("trap 'exit 1' HUP INT TERM"));
+                if relaunch {
+                    let start = s
+                        .rfind("open \"$app\"")
+                        .or_else(|| s.rfind("nohup"))
+                        .unwrap();
+                    assert!(done < start, "the marker goes before the app starts: {s}");
+                }
+            }
+        }
+        let package = Plan::LinuxPackage {
+            package: PathBuf::from("/tmp/PS5Upload.deb"),
+            manager: PackageManager::Apt,
+            exe: PathBuf::from("/usr/bin/ps5upload"),
+        };
+        assert!(!package.replaces_the_app_after_quit());
+        assert!(!script_for(&package, 42, true, log)
+            .unwrap()
+            .contains("marker"));
+        for windows in [
+            Plan::WindowsSetup {
+                installer: PathBuf::from("C:\\u\\setup.exe"),
+                exe: PathBuf::from("C:\\a\\PS5Upload.exe"),
+            },
+            Plan::WindowsZip {
+                zip: PathBuf::from("C:\\u\\a.zip"),
+                exe: PathBuf::from("C:\\a\\PS5Upload.exe"),
+            },
+        ] {
+            assert!(!windows.replaces_the_app_after_quit());
+        }
+    }
+
+    #[test]
+    fn the_app_starts_again_only_into_a_program_that_changed() {
+        use AfterInstall::*;
+        // The installer finished and the program on disk is new: start it.
+        assert_eq!(after_install(WaitEnd::Finished, true), Relaunch);
+        // It finished and nothing changed: it failed, say what the log says.
+        assert_eq!(after_install(WaitEnd::Finished, false), Report);
+        // Its process is gone: the same two cases (the Windows setup always ends this way).
+        assert_eq!(after_install(WaitEnd::Stale, true), Relaunch);
+        assert_eq!(after_install(WaitEnd::Stale, false), Report);
+        // Still working after the limit: no restart under it, and no "failed".
+        assert_eq!(after_install(WaitEnd::TimedOut, true), KeepRunning);
+        assert_eq!(after_install(WaitEnd::TimedOut, false), KeepRunning);
+        assert_eq!(
+            serde_json::to_string(&KeepRunning).unwrap(),
+            "\"keep-running\""
+        );
+        assert_eq!(serde_json::to_string(&Relaunch).unwrap(), "\"relaunch\"");
+        assert_eq!(serde_json::to_string(&Report).unwrap(), "\"report\"");
+    }
+
+    #[test]
+    fn a_replaced_program_file_is_seen_and_a_missing_one_is_not_started() {
+        let dir = scratch("stamp");
+        let exe = dir.join("PS5Upload");
+        std::fs::write(&exe, b"old version").unwrap();
+        let before = program_stamp(&exe);
+        assert!(before.is_some());
+        assert!(!program_changed(
+            before.as_ref(),
+            program_stamp(&exe).as_ref()
+        ));
+        // Replaced the way every installer does it: a new file renamed into place.
+        let new = dir.join("PS5Upload.new");
+        std::fs::write(&new, b"new version!").unwrap();
+        std::fs::rename(&new, &exe).unwrap();
+        assert!(program_changed(
+            before.as_ref(),
+            program_stamp(&exe).as_ref()
+        ));
+        // Halfway through a swap there is no program: nothing to start.
+        std::fs::remove_file(&exe).unwrap();
+        assert_eq!(program_stamp(&exe), None);
+        assert!(!program_changed(before.as_ref(), None));
+        assert!(!program_changed(None, before.as_ref()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Same size, same second: on Unix the inode still tells a replaced file.
+    #[cfg(unix)]
+    #[test]
+    fn a_replacement_of_the_same_size_is_still_seen() {
+        let dir = scratch("stamp-same");
+        let exe = dir.join("PS5Upload");
+        std::fs::write(&exe, b"version A").unwrap();
+        let before = program_stamp(&exe);
+        let new = dir.join("PS5Upload.new");
+        std::fs::write(&new, b"version B").unwrap();
+        std::fs::rename(&new, &exe).unwrap();
+        assert!(program_changed(
+            before.as_ref(),
+            program_stamp(&exe).as_ref()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn each_platform_starts_the_app_again_its_own_way() {
+        let mac = Path::new("/Applications/PS5Upload.app/Contents/MacOS/PS5Upload");
+        assert_eq!(
+            restart_for("macos", mac, None),
+            Restart::MacBundle(PathBuf::from("/Applications/PS5Upload.app"))
+        );
+        // A bare binary (a dev build): itself.
+        let bare = Path::new("/Users/me/target/debug/ps5upload");
+        assert_eq!(restart_for("macos", bare, None), Restart::Exe(bare.into()));
+        let mount = Path::new("/tmp/.mount_PS5abc/usr/bin/ps5upload");
+        let appimage = Path::new("/home/me/Apps/PS5Upload.AppImage");
+        assert_eq!(
+            restart_for("linux", mount, Some(appimage)),
+            Restart::AppImage(appimage.into())
+        );
+        assert_eq!(
+            restart_for("linux", Path::new("/usr/bin/ps5upload"), None),
+            Restart::Exe(PathBuf::from("/usr/bin/ps5upload"))
+        );
+        let win = Path::new("C:\\Program Files\\PS5Upload\\PS5Upload.exe");
+        assert_eq!(restart_for("windows", win, None), Restart::Exe(win.into()));
+        // $APPIMAGE set by something else on another system changes nothing there.
+        assert_eq!(
+            restart_for("macos", mac, Some(appimage)),
+            Restart::MacBundle(PathBuf::from("/Applications/PS5Upload.app"))
+        );
+    }
+
+    #[test]
+    fn the_restart_scripts_wait_for_this_app_and_start_the_right_thing() {
+        let log = Path::new("update.log");
+        let mac = restart_script(
+            &Restart::MacBundle(PathBuf::from("/Applications/PS5 Upload.app")),
+            77,
+            log,
+        );
+        assert!(mac.contains("pid=77") && mac.contains("target='/Applications/PS5 Upload.app'"));
+        assert!(mac.find("while kill -0").unwrap() < mac.find("open \"$target\"").unwrap());
+        let appimage = restart_script(
+            &Restart::AppImage(PathBuf::from("/home/me/PS5Upload.AppImage")),
+            77,
+            log,
+        );
+        assert!(
+            appimage.contains(r#"nohup "$launcher""#) && appimage.contains(r#"nohup "$target""#)
+        );
+        let exe = restart_script(&Restart::Exe(PathBuf::from("/usr/bin/ps5upload")), 77, log);
+        assert!(exe.contains(r#"nohup "$target" >/dev/null 2>&1 &"#));
+        // None of them is an install: no marker.
+        for s in [&mac, &appimage, &exe] {
+            assert!(!s.contains("marker"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_restart_scripts_parse() {
+        for r in [
+            Restart::MacBundle(PathBuf::from("/Users/o'neil/PS5Upload.app")),
+            Restart::AppImage(PathBuf::from("/home/o'neil/PS5Upload.AppImage")),
+            Restart::Exe(PathBuf::from("/usr/bin/ps5 upload")),
+        ] {
+            let out = std::process::Command::new("/bin/sh")
+                .arg("-n")
+                .arg("-c")
+                .arg(restart_script(&r, 42, Path::new("update.log")))
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{r:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+
+    #[test]
+    fn waiting_for_the_installer_ends_when_it_does_or_at_the_limit() {
+        use std::time::Duration;
+        let dir = scratch("wait");
+        let poll = Duration::from_millis(20);
+        // No marker: nothing to wait for.
+        assert_eq!(
+            wait_for_installer(&dir, Duration::from_secs(5), poll, &|_| true),
+            WaitEnd::Finished
+        );
+        let mark = || {
+            files::write_marker(
+                &dir,
+                files::Marker {
+                    pid: 4242,
+                    started: files::now_secs(),
+                },
+            )
+        };
+        // The installer removes its marker while we wait.
+        mark();
+        let d = dir.clone();
+        let remover = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            files::remove_marker(&d);
+        });
+        let t = std::time::Instant::now();
+        assert_eq!(
+            wait_for_installer(&dir, Duration::from_secs(10), poll, &|_| true),
+            WaitEnd::Finished
+        );
+        assert!(t.elapsed() >= Duration::from_millis(100) && t.elapsed() < Duration::from_secs(5));
+        remover.join().unwrap();
+        // Its process is gone: stale at once, and the marker is left to be explained.
+        mark();
+        assert_eq!(
+            wait_for_installer(&dir, Duration::from_secs(10), poll, &|_| false),
+            WaitEnd::Stale
+        );
+        assert!(files::marker_path(&dir).is_file());
+        // Still working at the limit: bounded.
+        let t = std::time::Instant::now();
+        assert_eq!(
+            wait_for_installer(&dir, Duration::from_millis(120), poll, &|_| true),
+            WaitEnd::TimedOut
+        );
+        assert!(t.elapsed() < Duration::from_secs(3));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn this_process_is_alive_and_an_ended_one_is_not() {
+        assert!(pid_alive(std::process::id()));
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("0")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        assert!(!pid_alive(pid));
+        assert!(!pid_alive(0));
+    }
+
+    /// Runs a real install script against a download that is not one, with a stand-in for the
+    /// quitting app: while it waits for that app the marker names the script and reads as
+    /// live; when it ends the marker is gone and the log holds the reason.
+    #[cfg(unix)]
+    fn run_script_and_watch_its_marker(name: &str, plan: &Plan, reason: &str) {
+        use std::time::{Duration, Instant};
+        let dir = scratch(name);
+        let log = files::log_path(&dir);
+        let mut old_app = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let script = script_for(plan, old_app.id(), false, &log).unwrap();
+        let path = dir.join("update.sh");
+        std::fs::write(&path, script).unwrap();
+        let mut sh = std::process::Command::new("/bin/sh")
+            .arg(&path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        let marker = loop {
+            if let Some(m) = files::read_marker(&dir) {
+                break m;
+            }
+            assert!(Instant::now() < until, "the script wrote no marker");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(marker.pid, sh.id(), "the marker names the script itself");
+        assert!(marker.started.abs_diff(files::now_secs()) < 60);
+        assert_eq!(
+            files::marker_state_in(&dir, files::now_secs(), &pid_alive),
+            files::MarkerState::Live(marker)
+        );
+        // A launch now is told to wait, not that the update failed.
+        let record = files::InstallRecord {
+            from: "10.4.1".into(),
+            to: "10.5.1".into(),
+            file: dir.join("PS5Upload-10.5.1-mac-arm64.dmg"),
+            error: None,
+            reported: false,
+        };
+        files::write_record(&dir, &record).unwrap();
+        let during =
+            files::settle_unless_installing(&dir, "10.4.1", files::now_secs(), &pid_alive).unwrap();
+        assert!(during.pending && !during.new);
+        // The old app quits; the script goes on, fails on the bad download and ends.
+        old_app.kill().unwrap();
+        old_app.wait().unwrap();
+        assert_eq!(
+            wait_for_installer(
+                &dir,
+                Duration::from_secs(60),
+                Duration::from_millis(50),
+                &pid_alive
+            ),
+            WaitEnd::Finished
+        );
+        sh.wait().unwrap();
+        assert!(!files::marker_path(&dir).exists());
+        let after =
+            files::settle_unless_installing(&dir, "10.4.1", files::now_secs(), &pid_alive).unwrap();
+        assert!(!after.pending && !after.installed && after.new);
+        assert!(after.message.starts_with(reason), "{}", after.message);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_mac_script_keeps_its_marker_while_it_runs() {
+        let dir = scratch("mac-script-in");
+        let dmg = dir.join("not-a-disk-image.dmg");
+        std::fs::write(&dmg, b"not a disk image").unwrap();
+        run_script_and_watch_its_marker(
+            "mac-script",
+            &Plan::MacDmg {
+                dmg,
+                bundle: dir.join("PS5Upload.app"),
+            },
+            "could not open the .dmg",
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_appimage_script_keeps_its_marker_while_it_runs() {
+        let dir = scratch("appimage-script-in");
+        let zip = dir.join("not-a-zip.zip");
+        std::fs::write(&zip, b"not a zip").unwrap();
+        run_script_and_watch_its_marker(
+            "appimage-script",
+            &Plan::LinuxAppImage {
+                zip,
+                appimage: dir.join("PS5Upload.AppImage"),
+            },
+            "could not unpack the zip",
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A script ended by a signal still removes its marker (the EXIT trap).
+    #[cfg(unix)]
+    #[test]
+    fn a_script_that_is_ended_early_removes_its_marker() {
+        use std::time::{Duration, Instant};
+        let dir = scratch("script-term");
+        let log = files::log_path(&dir);
+        let mut old_app = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let plan = Plan::LinuxAppImage {
+            zip: dir.join("a.zip"),
+            appimage: dir.join("PS5Upload.AppImage"),
+        };
+        let path = dir.join("update.sh");
+        std::fs::write(&path, script_for(&plan, old_app.id(), false, &log).unwrap()).unwrap();
+        let mut sh = std::process::Command::new("/bin/sh")
+            .arg(&path)
+            .spawn()
+            .unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        while files::read_marker(&dir).is_none() {
+            assert!(Instant::now() < until, "the script wrote no marker");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // SAFETY: a signal to a child this test started.
+        unsafe {
+            libc::kill(sh.id() as i32, libc::SIGTERM);
+        }
+        sh.wait().unwrap();
+        assert!(!files::marker_path(&dir).exists());
+        old_app.kill().unwrap();
+        old_app.wait().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -329,6 +329,77 @@ async fn post_commit_failure_is_not_a_resend() {
     );
 }
 
+/// The typed code goes to a console that never answers it (here its owner's approval never
+/// comes; the link stays alive). The confirm runs holding the console's one-at-a-time lock, which
+/// every pairing call and new session to it waits for: it now gives up in its own time and
+/// frees the lock, instead of holding everything for that console until the answer came.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pairing_confirm_the_console_never_answers_gives_up_and_frees_the_console() {
+    let d = temp_dir("pair-silent");
+    std::fs::create_dir_all(&d).unwrap();
+    let code = Arc::new(std::sync::Mutex::new(None::<u32>));
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let held = std::sync::Mutex::new(held);
+    let seen = code.clone();
+    let ctx = ServerCtx::new(
+        Identity::generate().unwrap(),
+        "silent",
+        PeerStore::in_memory(),
+        node_info_rpc(),
+    )
+    .with_notify(Box::new(move |req| {
+        *seen.lock().unwrap() = Some(req.code);
+    }))
+    // Waits until the test lets go (or a minute): the answer to the code never comes.
+    .with_approve(Box::new(move |_| {
+        let _ = held.lock().unwrap().recv_timeout(Duration::from_secs(60));
+        false
+    }));
+    let ctx = Arc::new(ctx);
+    ctx.open_pairing(Duration::from_secs(120));
+    // The console in a runtime of its own (as a real one is another machine): its waiting hook
+    // blocks one of its threads, never this test's timers.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            tx.send(l.local_addr().unwrap().to_string()).unwrap();
+            let _ = tokio::time::timeout(Duration::from_secs(90), server::serve(l, ctx)).await;
+        });
+    });
+    let addr = rx.recv_timeout(Duration::from_secs(20)).unwrap();
+    let pool = Pool::new(d.join("ava"))
+        .with_addr(addr.clone())
+        .with_pairing_timeout(Duration::from_secs(1));
+    let status = within(20, pool.pairing_status(&addr)).await.unwrap();
+    assert!(
+        matches!(status, ps5upload_ava1::Pairing::Code { .. }),
+        "{status:?}"
+    );
+    let typed = within(20, async {
+        loop {
+            if let Some(c) = *code.lock().unwrap() {
+                return c;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    let t0 = std::time::Instant::now();
+    let r = within(15, pool.confirm_pairing(&addr, typed)).await;
+    assert!(matches!(r, Err(ava1::Ava1Error::Timeout)), "{r:?}");
+    assert!(t0.elapsed() < Duration::from_secs(15));
+    // The console's lock is free: the dialog's next call answers.
+    within(15, pool.cancel_pairing(&addr)).await;
+    drop(release);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_console_that_wants_a_user_code_is_not_paired() {
     let d = temp_dir("pair");

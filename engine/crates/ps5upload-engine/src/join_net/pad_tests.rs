@@ -361,6 +361,14 @@ async fn a_watcher_anywhere_gets_the_picture_never_the_controller_and_four_at_mo
         assert_eq!(v["stage"], "joined");
         more.push(x);
     }
+    // The host said yes to a watcher: its token is no way in as a controller (it was, with the
+    // PS button and the keyboard). Without `w` the phone asks, as one the host never met does.
+    let mut sly = connect_guest_on(&hub.url, &room, "pad").await;
+    assert_eq!(hello_rt(&mut sly, &key, false, &rt).await["stage"], "asking");
+    let asking = until_pads("the ask to play", |s| s["pending"][0]["watch"] == false).await;
+    assert_eq!(asking["pending"][0]["via"], "internet");
+    answer_next(false).await;
+    assert_eq!(refused_why(&mut sly).await, "denied");
     let mut fifth = connect_guest_on(&hub.url, &room, "pad").await;
     assert_eq!(hello_rt(&mut fifth, &key, true, &rt).await["why"], "full");
 

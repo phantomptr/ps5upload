@@ -11,6 +11,13 @@
 //! the download and the log are deleted. Still the old version means it did not: the reason
 //! (the last line of the log, or the error the app saw) is shown once, and the record stays so
 //! the automatic install and install-on-quit do not try that version again by themselves.
+//!
+//! While an install works, the `installing` file beside the record names the installer (its
+//! PID and when it started); the installer deletes it when it ends. A launch that finds it and
+//! a live installer does not judge yet (`settle_unless_installing`): it waits for the installer
+//! and starts again into the new version (`self_install::update_wait_for_install`). A marker
+//! whose installer is gone is stale: it is removed, the log says so, and the install is judged
+//! as usual. So "update failed" is said only for an install that ended without installing.
 
 use std::path::{Path, PathBuf};
 
@@ -19,6 +26,11 @@ use tauri::{AppHandle, Manager};
 
 const RECORD: &str = "install.json";
 const LOG: &str = "update.log";
+/// The file an installer keeps while it works: `<pid> <start, Unix seconds>`.
+const MARKER: &str = "installing";
+/// A marker older than this is stale whatever its PID says (a PID is used again in time): an
+/// install waits at most 30 s for the app to quit and then copies a few hundred megabytes.
+pub const MARKER_MAX_AGE_SECS: u64 = 15 * 60;
 /// `update.log` is cut back to empty past this; one install writes a few hundred bytes.
 const LOG_MAX_BYTES: u64 = 64 * 1024;
 
@@ -82,11 +94,103 @@ pub(crate) fn log(dir: &Path, line: &str) {
         .append(true)
         .open(&path)
     {
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let _ = writeln!(f, "{secs} {line}");
+        let _ = writeln!(f, "{} {line}", now_secs());
+    }
+}
+
+/// The installer at work, as its marker names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Marker {
+    pub pid: u32,
+    /// When it started, Unix seconds.
+    pub started: u64,
+}
+
+/// What a marker says at a launch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkerState {
+    /// No install is running.
+    None,
+    /// The installer is still working: wait for it, judge nothing yet.
+    Live(Marker),
+    /// The installer is gone (or the marker is too old to believe) but left its marker: it
+    /// did not finish.
+    Stale(Marker),
+}
+
+pub(crate) fn marker_path(dir: &Path) -> PathBuf {
+    dir.join(MARKER)
+}
+
+/// The marker's one line. The scripts write the same with `echo "$$ $(date +%s)"`.
+pub fn marker_line(m: Marker) -> String {
+    format!("{} {}\n", m.pid, m.started)
+}
+
+/// Read a marker's text: exactly a PID and a start time. Anything else is no marker.
+pub fn parse_marker(text: &str) -> Option<Marker> {
+    let mut parts = text.split_whitespace();
+    let pid = parts.next()?.parse::<u32>().ok().filter(|p| *p != 0)?;
+    let started = parts.next()?.parse::<u64>().ok()?;
+    parts.next().is_none().then_some(Marker { pid, started })
+}
+
+pub(crate) fn read_marker(dir: &Path) -> Option<Marker> {
+    parse_marker(&std::fs::read_to_string(marker_path(dir)).ok()?)
+}
+
+pub(crate) fn write_marker(dir: &Path, m: Marker) {
+    let _ = std::fs::write(marker_path(dir), marker_line(m));
+}
+
+pub(crate) fn remove_marker(dir: &Path) {
+    let _ = std::fs::remove_file(marker_path(dir));
+}
+
+pub(crate) fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Judge a marker: live only while its process runs (`alive`) and it is younger than
+/// `MARKER_MAX_AGE_SECS`. A start time in the future (the clock was set back) is not trusted
+/// past the same margin.
+pub fn marker_state(marker: Option<Marker>, now: u64, alive: bool) -> MarkerState {
+    let Some(m) = marker else {
+        return MarkerState::None;
+    };
+    let age_ok = now.abs_diff(m.started) <= MARKER_MAX_AGE_SECS;
+    if alive && age_ok {
+        MarkerState::Live(m)
+    } else {
+        MarkerState::Stale(m)
+    }
+}
+
+/// The marker in `dir` judged now; `alive` tells whether a PID still runs.
+pub fn marker_state_in(dir: &Path, now: u64, alive: &dyn Fn(u32) -> bool) -> MarkerState {
+    let marker = read_marker(dir);
+    marker_state(marker, now, marker.is_some_and(|m| alive(m.pid)))
+}
+
+/// A stale marker is removed. When the version it was installing is still not the one running
+/// and nothing else gave a reason, the log says what happened, so the failure reported next
+/// carries the real one. (The Windows setup never removes its marker: gone with the new version
+/// running is its normal end, and nothing is logged.)
+pub(crate) fn clear_stale_marker(dir: &Path, m: Marker, current: &str) {
+    remove_marker(dir);
+    let failed = read_record(dir)
+        .is_some_and(|r| r.error.is_none() && super::updates::is_newer(current, &r.to));
+    if failed {
+        log(
+            dir,
+            &format!(
+                "the installer (process {}) ended without finishing the update",
+                m.pid
+            ),
+        );
     }
 }
 
@@ -112,6 +216,9 @@ pub struct LastInstall {
     pub message: String,
     /// Not shown before: the renderer says so once.
     pub new: bool,
+    /// The installer is still working: nothing is judged yet, and the renderer waits for it
+    /// (`update_wait_for_install`) instead of saying anything.
+    pub pending: bool,
 }
 
 /// Judge `record` against the version running now. Ok when the install's version (or a newer
@@ -127,7 +234,41 @@ pub fn judge(record: &InstallRecord, current: &str, log_tail: Option<String>) ->
             record.error.clone().or(log_tail).unwrap_or_default()
         },
         new: !record.reported,
+        pending: false,
     }
+}
+
+/// `settle`, unless an installer is still at work (a live marker) and this is not yet the
+/// version it installs: then nothing is judged, cleaned or marked as reported, and the answer
+/// only says an install is pending. A stale marker is cleared first (`clear_stale_marker`),
+/// then the install is judged as usual. Already running the new version while the installer
+/// tidies up (or the Windows setup, which starts the app before it ends) is a success now.
+pub fn settle_unless_installing(
+    dir: &Path,
+    current: &str,
+    now: u64,
+    alive: &dyn Fn(u32) -> bool,
+) -> Option<LastInstall> {
+    match marker_state_in(dir, now, alive) {
+        MarkerState::Live(_) => {
+            let record = read_record(dir);
+            let arrived = record
+                .as_ref()
+                .is_some_and(|r| !super::updates::is_newer(current, &r.to));
+            if !arrived {
+                return Some(LastInstall {
+                    version: record.map(|r| r.to).unwrap_or_default(),
+                    installed: false,
+                    message: String::new(),
+                    new: false,
+                    pending: true,
+                });
+            }
+        }
+        MarkerState::Stale(m) => clear_stale_marker(dir, m, current),
+        MarkerState::None => {}
+    }
+    settle(dir, current)
 }
 
 /// What the last install came to, once per launch, and the clean-up that goes with it: after a
@@ -175,7 +316,7 @@ pub fn clean_dir(dir: &Path, keep: Option<&Path>, current: Option<&str>) {
     for e in entries.flatten() {
         let path = e.path();
         let name = e.file_name();
-        if name == RECORD || name == LOG || Some(path.as_path()) == keep {
+        if name == RECORD || name == LOG || name == MARKER || Some(path.as_path()) == keep {
             continue;
         }
         let pending = current.is_some_and(|cur| {
@@ -285,7 +426,12 @@ pub async fn update_last_install(app: AppHandle) -> Result<Option<LastInstall>, 
     off_main_thread(move || {
         let dir = updates_dir(&app)?;
         super::self_install::clean_leftovers();
-        Ok(settle(&dir, &current))
+        Ok(settle_unless_installing(
+            &dir,
+            &current,
+            now_secs(),
+            &super::self_install::pid_alive,
+        ))
     })
     .await
 }
@@ -531,6 +677,205 @@ mod tests {
                 "PS5Upload-10.4.1-win-x64.zip"
             ]
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_marker_is_a_pid_and_a_start_time_and_nothing_else() {
+        let m = Marker {
+            pid: 4242,
+            started: 1_800_000_000,
+        };
+        assert_eq!(parse_marker(&marker_line(m)), Some(m));
+        // What the scripts write: `echo "$$ $(date +%s)"`.
+        assert_eq!(parse_marker("4242 1800000000\n"), Some(m));
+        for bad in [
+            "",
+            "4242",
+            "0 1800000000",
+            "-1 1800000000",
+            "abc 1800000000",
+            "4242 soon",
+            "4242 1800000000 extra",
+        ] {
+            assert_eq!(parse_marker(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_marker_is_live_only_while_its_installer_runs_and_it_is_recent() {
+        let m = Marker {
+            pid: 7,
+            started: 1_000,
+        };
+        assert_eq!(marker_state(None, 1_000, true), MarkerState::None);
+        assert_eq!(marker_state(Some(m), 1_030, true), MarkerState::Live(m));
+        // The installer is gone and left its marker.
+        assert_eq!(marker_state(Some(m), 1_030, false), MarkerState::Stale(m));
+        // Too old to believe: that PID is some other program by now.
+        assert_eq!(
+            marker_state(Some(m), 1_000 + MARKER_MAX_AGE_SECS, true),
+            MarkerState::Live(m)
+        );
+        assert_eq!(
+            marker_state(Some(m), 1_001 + MARKER_MAX_AGE_SECS, true),
+            MarkerState::Stale(m)
+        );
+        // The clock was set back: a start far in the future is not trusted either.
+        assert_eq!(marker_state(Some(m), 900, true), MarkerState::Live(m));
+        let future = Marker {
+            pid: 7,
+            started: 1_000 + 2 * MARKER_MAX_AGE_SECS,
+        };
+        assert_eq!(
+            marker_state(Some(future), 1_000, true),
+            MarkerState::Stale(future)
+        );
+    }
+
+    /// The app opened again while the install from the last quit still works: nothing is
+    /// judged, reported or cleaned, however often it is asked; once the installer is done the
+    /// install is judged as usual.
+    #[test]
+    fn a_launch_during_an_install_waits_instead_of_reporting_a_failure() {
+        let dir = tmp("pending");
+        let r = record(&dir, "10.5.1");
+        std::fs::write(&r.file, b"zip").unwrap();
+        write_record(&dir, &r).unwrap();
+        log(
+            &dir,
+            "installing 10.5.1 over 10.4.1 from PS5Upload-10.5.1-win-x64.zip",
+        );
+        let now = now_secs();
+        write_marker(
+            &dir,
+            Marker {
+                pid: 4242,
+                started: now,
+            },
+        );
+        for _ in 0..2 {
+            let pending =
+                settle_unless_installing(&dir, "10.4.1", now, &|pid| pid == 4242).unwrap();
+            assert!(pending.pending && !pending.installed && !pending.new);
+            assert_eq!(pending.version, "10.5.1");
+            assert_eq!(pending.message, "");
+        }
+        assert!(!read_record(&dir).unwrap().reported, "nothing was reported");
+        assert!(r.file.is_file() && marker_path(&dir).is_file());
+        // The installer finished and removed its marker; the new version runs.
+        remove_marker(&dir);
+        let done = settle_unless_installing(&dir, "10.5.1", now, &|_| false).unwrap();
+        assert!(done.installed && !done.pending);
+        assert_eq!(read_record(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_install_that_really_failed_is_still_reported_with_its_reason() {
+        let dir = tmp("pending-failed");
+        let r = record(&dir, "10.5.1");
+        std::fs::write(&r.file, b"zip").unwrap();
+        write_record(&dir, &r).unwrap();
+        let now = now_secs();
+        write_marker(
+            &dir,
+            Marker {
+                pid: 4242,
+                started: now,
+            },
+        );
+        assert!(
+            settle_unless_installing(&dir, "10.4.1", now, &|_| true)
+                .unwrap()
+                .pending
+        );
+        // The script gave its reason and ended (marker removed).
+        log(&dir, "could not move /Applications/PS5Upload.app aside");
+        remove_marker(&dir);
+        let failed = settle_unless_installing(&dir, "10.4.1", now, &|_| false).unwrap();
+        assert!(!failed.installed && !failed.pending && failed.new);
+        assert_eq!(
+            failed.message,
+            "could not move /Applications/PS5Upload.app aside"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_stale_marker_is_cleared_and_says_what_happened() {
+        let dir = tmp("stale");
+        let r = record(&dir, "10.5.1");
+        std::fs::write(&r.file, b"zip").unwrap();
+        write_record(&dir, &r).unwrap();
+        log(&dir, "installing 10.5.1 over 10.4.1");
+        let now = now_secs();
+        write_marker(
+            &dir,
+            Marker {
+                pid: 4242,
+                started: now,
+            },
+        );
+        // The installer's process is gone (killed, or the computer restarted) mid-way.
+        let out = settle_unless_installing(&dir, "10.4.1", now, &|_| false).unwrap();
+        assert!(!out.installed && !out.pending && out.new);
+        assert_eq!(
+            out.message,
+            "the installer (process 4242) ended without finishing the update"
+        );
+        assert!(!marker_path(&dir).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Windows setup cannot remove its marker: its process ending with the new version
+    /// running is a plain success, and the log does not call it unfinished. The same while it
+    /// is still closing (it starts the app before it ends).
+    #[test]
+    fn the_new_version_running_is_a_success_whatever_the_marker_says() {
+        for alive in [false, true] {
+            let dir = tmp(if alive {
+                "arrived-live"
+            } else {
+                "arrived-stale"
+            });
+            let r = record(&dir, "10.5.1");
+            std::fs::write(&r.file, b"setup").unwrap();
+            write_record(&dir, &r).unwrap();
+            let now = now_secs();
+            write_marker(
+                &dir,
+                Marker {
+                    pid: 4242,
+                    started: now,
+                },
+            );
+            let out = settle_unless_installing(&dir, "10.5.1", now, &|_| alive).unwrap();
+            assert!(out.installed && !out.pending, "alive={alive}");
+            let text = std::fs::read_to_string(log_path(&dir)).unwrap();
+            assert!(!text.contains("without finishing"), "{text}");
+            assert!(text.contains("the install of 10.5.1 worked"), "{text}");
+            // A marker left behind (Windows) is cleared by the next launch, silently.
+            if alive {
+                assert!(marker_path(&dir).is_file());
+                assert_eq!(
+                    settle_unless_installing(&dir, "10.5.1", now, &|_| false),
+                    None
+                );
+            }
+            assert!(!marker_path(&dir).exists());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn cleaning_the_folder_keeps_a_running_installers_marker() {
+        let dir = tmp("clean-marker");
+        write_marker(&dir, Marker { pid: 1, started: 1 });
+        std::fs::write(dir.join("stray.tmp"), b"x").unwrap();
+        clean_dir(&dir, None, Some("10.4.1"));
+        assert!(marker_path(&dir).is_file());
+        assert!(!dir.join("stray.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

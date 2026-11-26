@@ -47,6 +47,21 @@ impl ItemKind {
             ItemKind::Note => "note",
         }
     }
+
+    /// The kind a word names, if it is one of this build's.
+    pub(crate) fn from_word(w: &str) -> Option<ItemKind> {
+        [
+            ItemKind::App,
+            ItemKind::Save,
+            ItemKind::Media,
+            ItemKind::Cheats,
+            ItemKind::Controls,
+            ItemKind::Stream,
+            ItemKind::Note,
+        ]
+        .into_iter()
+        .find(|k| k.word() == w)
+    }
 }
 
 /// Where one file's bytes come from.

@@ -3432,6 +3432,7 @@ fn stream_metadata(
         content_flags: 0,
         icon_png_base64: None,
         warnings: vec![],
+        declared_size: None,
     }
 }
 
@@ -4541,33 +4542,70 @@ fn gc_old_sessions(map: &mut HashMap<String, InstallSession>, now: u64, max_age:
     before - map.len()
 }
 
-/// Why the package at `path` (a file on this computer) can't be changed now: a console is
-/// installing from it, or it is shared as an install link. `None` when no session serves it.
-/// "Installing" is what [`is_rival`] means by it: a session that has not ended and that a
-/// console fetched from, or the app asked about, within the last `RIVAL_ACTIVE_WINDOW_SEC`.
+/// Why the package at `path` (a file on this computer) can't be changed now: an install of it
+/// has not finished, or it is shared as an install link. `None` when no session serves it.
+///
+/// Not finished means handed to a console and not yet ended, however long ago the console last
+/// fetched: a PS5 holds a second install until the first ends, and a download can be paused
+/// there, so a console quiet for hours can still come back for the rest. It used to be free 90
+/// seconds after the last fetch, and an install that resumed then read bytes a rename had
+/// changed. A session is over once it is released (the install was stopped or removed, or its
+/// end is known: delivered whole, refused, never fetched) or once the idle sweep has dropped it
+/// ([`gc_old_sessions`]: nothing fetched it for `PKG_SESSION_MAX_AGE_SEC`). The answer names
+/// the console and how to free the package now: stop that install, or remove it from the queue
+/// ([`release_sessions_of`]).
 pub(crate) fn serving(state: &PkgInstallState, path: &std::path::Path) -> Option<String> {
     let real = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let me = real(path);
-    let now = now_unix();
     let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
     sessions
         .values()
         .filter(|s| !s.cancelled && s.remote.is_none())
-        .filter(|s| {
-            s.shared_link
-                || (s.terminal_status.is_none()
-                    && now.saturating_sub(s.last_activity_unix.max(s.created_at_unix))
-                        < RIVAL_ACTIVE_WINDOW_SEC)
-        })
+        .filter(|s| s.shared_link || s.terminal_status.is_none())
         .find(|s| s.parts.iter().any(|p| real(p) == me))
         .map(|s| {
             if s.shared_link {
                 "this package is shared as an install link: stop sharing it first".to_string()
             } else {
-                "a PS5 is installing from this package: wait for the install to end, or stop it"
-                    .to_string()
+                let console = crate::install::console_id(&s.ps5_mgmt_addr);
+                format!(
+                    "an install of this package on the PS5 at {console} has not finished, and \
+                     the PS5 may still read from it: stop that install, or remove it from the \
+                     queue, to free the package (it is also freed by itself {} hours after the \
+                     PS5 last read from it)",
+                    pkg_session_max_age_sec().div_ceil(3600)
+                )
             }
         })
+}
+
+/// Releases every install session that serves the package at `path` (a file on this computer)
+/// to the console `console` (its [`crate::install::console_id`], any case); shared links are
+/// stopped on their own. The way out of [`serving`] for an install that ended without its
+/// session (a stall the console may resume): the user removes it from the queue, and the console,
+/// should it come back, is told the install is over. Returns how many were released.
+pub(crate) fn release_sessions_of(
+    state: &PkgInstallState,
+    console: &str,
+    path: &std::path::Path,
+) -> usize {
+    let real = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let me = real(path);
+    let mut map = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+    let ids: Vec<String> = map
+        .iter()
+        .filter(|(_, s)| !s.cancelled && !s.shared_link && s.remote.is_none())
+        .filter(|(_, s)| crate::install::console_id(&s.ps5_mgmt_addr).eq_ignore_ascii_case(console))
+        .filter(|(_, s)| s.parts.iter().any(|p| real(p) == me))
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in &ids {
+        mark_released(&mut map, id);
+    }
+    if !ids.is_empty() {
+        persist::save(&map);
+    }
+    ids.len()
 }
 
 /// Whether `other` is a live install of the same package to the same console as `new`.
@@ -5366,14 +5404,32 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         };
         assert_eq!(serving(&state, &a), None, "no session at all");
         put(&|_| {});
-        assert!(serving(&state, &a).unwrap().contains("installing from"));
+        assert!(serving(&state, &a).unwrap().contains("has not finished"));
         assert_eq!(serving(&state, &b), None, "another package");
         // The same file by another spelling of its path.
         assert!(serving(&state, &dir.join(".").join("a.pkg")).is_some());
         put(&|s| s.cancelled = true);
         assert_eq!(serving(&state, &a), None, "stopped");
-        put(&|s| s.last_activity_unix = now_unix() - RIVAL_ACTIVE_WINDOW_SEC - 1);
-        assert_eq!(serving(&state, &a), None, "nothing fetched it lately");
+        // Quiet for an hour, not ended: a paused or held download can still resume, so it holds.
+        // (It used to be free 90 seconds after the last fetch.)
+        put(&|s| {
+            s.created_at_unix = now_unix() - 3600;
+            s.last_activity_unix = now_unix() - 3600;
+        });
+        let why = serving(&state, &a).expect("an unfinished install holds the package");
+        assert!(why.contains("has not finished"), "{why}");
+        assert!(why.contains("remove it from the queue"), "{why}");
+        // The idle sweep dropping it frees it.
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            gc_old_sessions(
+                &mut sessions,
+                now_unix() + pkg_session_max_age_sec(),
+                pkg_session_max_age_sec(),
+            );
+            assert!(sessions.is_empty());
+        }
+        assert_eq!(serving(&state, &a), None, "swept");
         put(&|s| {
             s.shared_link = true;
             s.last_activity_unix = 0;
@@ -5381,6 +5437,31 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         assert!(serving(&state, &a)
             .unwrap()
             .contains("shared as an install link"));
+        // A shared link is stopped as a link, never by removing an install.
+        assert_eq!(release_sessions_of(&state, "1.2.3.4", &a), 0);
+        assert!(serving(&state, &a).is_some());
+
+        // Removing the install from the queue releases its session: free, and the console is
+        // told the install is over. Another console's install of the same package is not touched.
+        put(&|s| s.ps5_mgmt_addr = "10.0.0.7:9120".into());
+        let other = dummy_session(vec![(a.clone(), 1)]);
+        let other_console = crate::install::console_id(&other.ps5_mgmt_addr);
+        assert_ne!(other_console, "10.0.0.7");
+        state.sessions.lock().unwrap().insert("t".into(), other);
+        assert_eq!(
+            release_sessions_of(&state, "10.0.0.7", &b),
+            0,
+            "another package"
+        );
+        assert_eq!(release_sessions_of(&state, "10.0.0.7", &a), 1);
+        assert!(state.sessions.lock().unwrap()["s"].cancelled);
+        assert!(!state.sessions.lock().unwrap()["t"].cancelled);
+        assert!(
+            serving(&state, &a).is_some(),
+            "the other console's install still holds it"
+        );
+        assert_eq!(release_sessions_of(&state, &other_console, &a), 1);
+        assert_eq!(serving(&state, &a), None);
         std::fs::remove_dir_all(&dir).ok();
     }
 

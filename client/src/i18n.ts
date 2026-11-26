@@ -19,6 +19,7 @@
 
 import type { Translations } from "./i18n/types";
 import enTranslations from "./i18n/locales/en";
+import { isolateLatinAll } from "./i18n/isolateLatin";
 
 export type LanguageCode =
   | "en"
@@ -125,7 +126,9 @@ export function ensureLocale(code: LanguageCode): Promise<void> {
   const p = (async () => {
     try {
       const mod = await importLocale(code);
-      loaded[code] = mod.default;
+      // A right-to-left locale: its Latin names and paths are kept whole here, once, for every
+      // string it has or will have (i18n/isolateLatin.ts).
+      loaded[code] = RTL_CODES.has(code) ? isolateLatinAll(mod.default) : mod.default;
       for (const fn of loadListeners) fn();
     } finally {
       delete pending[code];

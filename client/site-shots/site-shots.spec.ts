@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { shotsVersion } from "./shotsVersion";
 
 // The website's screenshots (site/assets/shots), taken from the real app against a made-up
 // console: fictional games with drawn covers (make-art.py), a drawn game picture for the stream,
@@ -17,6 +18,8 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 // Every language the app has gets its own set, from the app running in that language: English
 // in out/, the others in out/<code>/. SHOT_LANGS=de,fr takes only those; SHOTS_PORT=14620 uses
 // a dev server of its own instead of one already on 1420.
+// The sidebar shows the version of the release the pictures are for: the repo's VERSION plus one
+// patch level, or SHOTS_VERSION=12.7.0 for another.
 //
 //   cd client && npx playwright test -c site-shots.config.ts && node site-shots/to-webp.mjs
 
@@ -24,8 +27,10 @@ const HOST = "192.168.1.50";
 const OUT = process.env.SHOTS_DIR ?? "site-shots/out";
 const LANGS = (process.env.SHOT_LANGS ?? "en,zh-CN,zh-TW,hi,es,ar,bn,pl,pt-BR,ru,ja,de,fr,ko,tr,vi,id,it,th,hu,fa").split(",");
 const art = (name: string) => readFileSync(new URL(`./art/${name}.png`, import.meta.url));
-/** The app's own version, so the pictures never show an old one. */
-const VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
+/** The version the pictures show (shotsVersion.ts): SHOTS_VERSION, else the repo's VERSION plus one
+ *  patch level. They are taken before the release bumps it, and showed the version before. The
+ *  sidebar reads it from the engine's /api/version, which is stubbed with it below. */
+const VERSION = shotsVersion(process.env.SHOTS_VERSION, readFileSync(new URL("../../VERSION", import.meta.url), "utf8"));
 const FIRMWARE = "10.01";
 
 const ROOT = "/Volumes/Games";

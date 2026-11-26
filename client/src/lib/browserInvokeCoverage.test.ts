@@ -105,6 +105,7 @@ const NATIVE_ONLY: Record<string, string> = {
   update_quit_for_manual_install: "native: desktop self-update",
   update_download_cancel: "native: desktop self-update",
   update_last_install: "native: desktop self-update",
+  update_wait_for_install: "native: desktop self-update",
   update_forget_failure: "native: desktop self-update",
   update_old_downloads: "native: desktop self-update",
   update_remove_old_downloads: "native: desktop self-update",

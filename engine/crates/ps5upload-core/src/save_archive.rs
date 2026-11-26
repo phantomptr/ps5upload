@@ -565,24 +565,128 @@ fn is_finder_noise(name: &str) -> bool {
     name.starts_with("__MACOSX/") || name == ".DS_Store" || name.ends_with("/.DS_Store")
 }
 
+/// How much a save's zip may unpack to. A zip says what its files hold, but a small one can say
+/// (or hold) far more than any save: unpacked without a limit it fills the disk.
+#[derive(Debug, Clone, Copy)]
+pub struct UnzipLimits {
+    /// All its files together, in bytes.
+    pub total: u64,
+    /// One file, in bytes.
+    pub entry: u64,
+    /// Entries (files, folders and Finder noise alike).
+    pub entries: usize,
+}
+
+/// The limits [`unzip_strict`] applies: far above any save a PS5 keeps (a save of several GiB
+/// fits; the engine takes a shared-save file of up to 32 GiB, save_copy.rs), so only a zip that
+/// unpacks without end is refused. A save is a handful of files; 100 000 is far past any.
+pub const UNZIP_LIMITS: UnzipLimits = UnzipLimits {
+    total: 32 * 1024 * 1024 * 1024,
+    entry: 16 * 1024 * 1024 * 1024,
+    entries: 100_000,
+};
+
+/// The most a save's zip may spend per entry in its list of files (the central directory): a
+/// 46-byte header and a name far longer than any save's. At 100 000 entries that is about 64 MiB.
+const DIR_BYTES_PER_ENTRY: u64 = 672;
+
+/// Refuses a zip whose end record says it lists more entries, or a longer list, than a save has,
+/// before the zip crate reads that whole list into memory. Every end record in the zip's tail is
+/// asked (the crate may fall back from one to another), the zip64 one too.
+fn check_zip_directory(f: &mut File, limits: UnzipLimits) -> Result<()> {
+    use std::io::{Seek, SeekFrom};
+    fn read_at(f: &mut File, at: u64, buf: &mut [u8]) -> bool {
+        f.seek(SeekFrom::Start(at)).is_ok() && f.read_exact(buf).is_ok()
+    }
+    let le16 = |b: &[u8]| u64::from(u16::from_le_bytes([b[0], b[1]]));
+    let le32 = |b: &[u8]| u64::from(u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    let le64 = |b: &[u8]| u64::from_le_bytes(b[..8].try_into().unwrap_or([0; 8]));
+
+    let len = f.metadata().context("read zip size")?.len();
+    let tail_len = len.min(22 + 65_535);
+    let tail_start = len - tail_len;
+    let mut tail = vec![0u8; tail_len as usize];
+    if !read_at(f, tail_start, &mut tail) {
+        return Err(anyhow!("read zip end"));
+    }
+    let max_dir = (limits.entries as u64).saturating_mul(DIR_BYTES_PER_ENTRY);
+    for at in (0..tail.len().saturating_sub(21)).rev() {
+        if tail[at..at + 4] != [0x50, 0x4b, 0x05, 0x06] {
+            continue;
+        }
+        let r = &tail[at..at + 22];
+        let (mut entries, mut dir) = (le16(&r[10..]), le32(&r[12..]));
+        let eocd = tail_start + at as u64;
+        if (entries == 0xFFFF || dir == 0xFFFF_FFFF) && eocd >= 20 {
+            let mut loc = [0u8; 20];
+            let mut rec = [0u8; 56];
+            if read_at(f, eocd - 20, &mut loc)
+                && loc[..4] == [0x50, 0x4b, 0x06, 0x07]
+                && read_at(f, le64(&loc[8..]), &mut rec)
+                && rec[..4] == [0x50, 0x4b, 0x06, 0x06]
+            {
+                entries = le64(&rec[32..]);
+                dir = le64(&rec[40..]);
+            }
+        }
+        if entries > limits.entries as u64 {
+            return Err(anyhow!(
+                "zip has {entries} entries, more than a save has ({} at most)",
+                limits.entries
+            ));
+        }
+        if dir > max_dir {
+            return Err(anyhow!("zip's list of files is longer than a save's"));
+        }
+    }
+    Ok(())
+}
+
 pub fn unzip_strict(
     zip_path: &Path,
     dest_dir: &Path,
     expected_inner: &str,
 ) -> Result<SaveArchiveUnzipResp> {
-    let f = File::open(zip_path).with_context(|| format!("open {}", zip_path.display()))?;
+    unzip_strict_within(zip_path, dest_dir, expected_inner, UNZIP_LIMITS)
+}
+
+/// [`unzip_strict`] with its own limits. What a zip says of its sizes is checked before anything
+/// is written, and the bytes really unpacked are counted too (a zip can say less than it holds).
+pub fn unzip_strict_within(
+    zip_path: &Path,
+    dest_dir: &Path,
+    expected_inner: &str,
+    limits: UnzipLimits,
+) -> Result<SaveArchiveUnzipResp> {
+    let mut f = File::open(zip_path).with_context(|| format!("open {}", zip_path.display()))?;
+    check_zip_directory(&mut f, limits)?;
     let mut archive = ZipArchive::new(BufReader::new(f)).context("read zip header")?;
+    if archive.len() > limits.entries {
+        return Err(anyhow!(
+            "zip has {} entries, more than a save has ({} at most)",
+            archive.len(),
+            limits.entries
+        ));
+    }
+    let too_big = || anyhow!("zip unpacks to more than a save holds");
 
     // Pass 1: validate layout before writing any bytes. Catching a bad
     // zip here means a malformed restore never half-overwrites the live
     // save (we also fsDelete first on the PS5 side, so a half-extract
     // followed by upload would be especially bad).
     let mut root_dirs: BTreeSet<String> = BTreeSet::new();
+    let mut said_total = 0u64;
     for i in 0..archive.len() {
         let entry = archive.by_index(i).context("read zip entry")?;
         let name = entry.name().context("read zip entry name")?.into_owned();
         if is_finder_noise(&name) {
             continue;
+        }
+        if !entry.is_dir() {
+            said_total = said_total.saturating_add(entry.size());
+            if entry.size() > limits.entry || said_total > limits.total {
+                return Err(too_big());
+            }
         }
         let first = name.split('/').next().unwrap_or("");
         if first.is_empty() {
@@ -615,6 +719,7 @@ pub fn unzip_strict(
 
     // Pass 2: extract. Sanitize each entry against zip-slip.
     let mut count = 0u32;
+    let mut written = 0u64;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).context("read zip entry")?;
         let name = entry.name().context("read zip entry name")?.into_owned();
@@ -646,8 +751,14 @@ pub fn unzip_strict(
         }
         let mut out =
             File::create(&out_path).with_context(|| format!("create {}", out_path.display()))?;
-        std::io::copy(&mut entry, &mut out)
+        // What it really unpacks to, whatever it said: one byte past the room left is refused.
+        let room = limits.entry.min(limits.total - written);
+        let n = std::io::copy(&mut (&mut entry).take(room.saturating_add(1)), &mut out)
             .with_context(|| format!("write {}", out_path.display()))?;
+        if n > room {
+            return Err(too_big());
+        }
+        written += n;
         count += 1;
     }
     if count == 0 {
@@ -1524,6 +1635,143 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A zip of `CUSA00001/` holding `files` (name, bytes), deflated.
+    fn deflated_zip(dir: &Path, files: &[(&str, Vec<u8>)]) -> PathBuf {
+        let z = dir.join("save.zip");
+        let mut w = ZipWriter::new(BufWriter::new(File::create(&z).unwrap()));
+        let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        w.add_directory("CUSA00001/", opts).unwrap();
+        for (name, bytes) in files {
+            w.start_file(format!("CUSA00001/{name}"), opts).unwrap();
+            w.write_all(bytes).unwrap();
+        }
+        w.finish().unwrap();
+        z
+    }
+
+    const SMALL: UnzipLimits = UnzipLimits {
+        total: 64 * 1024,
+        entry: 48 * 1024,
+        entries: 8,
+    };
+
+    /// A small zip that unpacks to far more than a save is refused before anything is written.
+    #[test]
+    fn a_zip_that_says_it_unpacks_too_big_is_refused_before_anything_is_written() {
+        let src = fresh_tmp("bomb-said");
+        let out = fresh_tmp("bomb-said-out");
+        // 1 MiB of zeros is a zip of about a kilobyte.
+        let z = deflated_zip(&src, &[("save.dat", vec![0u8; 1 << 20])]);
+        assert!(std::fs::metadata(&z).unwrap().len() < 16 * 1024);
+        let e = unzip_strict_within(&z, &out, "CUSA00001", SMALL).unwrap_err();
+        assert!(e.to_string().contains("more than a save"), "{e}");
+        assert!(!out.join("CUSA00001").exists(), "nothing written");
+        // Together too: two files each under the one-file limit, over the total.
+        let z = deflated_zip(
+            &src,
+            &[
+                ("a.dat", vec![0u8; 40 * 1024]),
+                ("b.dat", vec![0u8; 40 * 1024]),
+            ],
+        );
+        assert!(unzip_strict_within(&z, &out, "CUSA00001", SMALL).is_err());
+        assert!(!out.join("CUSA00001").exists(), "nothing written");
+        // Within the limits it unpacks.
+        let z = deflated_zip(&src, &[("a.dat", vec![7u8; 40 * 1024])]);
+        assert_eq!(
+            unzip_strict_within(&z, &out, "CUSA00001", SMALL)
+                .unwrap()
+                .file_count,
+            1
+        );
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    /// A zip that says its file is small but holds more is stopped at the limit, not unpacked to
+    /// its end.
+    #[test]
+    fn a_zip_that_holds_more_than_it_says_is_stopped_at_the_limit() {
+        let src = fresh_tmp("bomb-lie");
+        let out = fresh_tmp("bomb-lie-out");
+        let z = deflated_zip(&src, &[("save.dat", vec![0u8; 1 << 20])]);
+        // Every header's "uncompressed size" of 1 MiB now says 10 bytes.
+        let mut b = std::fs::read(&z).unwrap();
+        let mut patched = 0;
+        for (sig, at) in [
+            ([0x50, 0x4b, 0x03, 0x04], 22),
+            ([0x50, 0x4b, 0x01, 0x02], 24),
+        ] {
+            let mut i = 0;
+            while i + at + 4 <= b.len() {
+                if b[i..i + 4] == sig && b[i + at..i + at + 4] == (1u32 << 20).to_le_bytes() {
+                    b[i + at..i + at + 4].copy_from_slice(&10u32.to_le_bytes());
+                    patched += 1;
+                }
+                i += 1;
+            }
+        }
+        assert_eq!(patched, 2);
+        std::fs::write(&z, &b).unwrap();
+        assert!(unzip_strict_within(&z, &out, "CUSA00001", SMALL).is_err());
+        let got = std::fs::metadata(out.join("CUSA00001/save.dat")).map_or(0, |m| m.len());
+        assert!(got <= SMALL.entry + 1, "{got} bytes written");
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    #[test]
+    fn a_zip_of_more_entries_than_a_save_has_is_refused() {
+        let src = fresh_tmp("bomb-many");
+        let out = fresh_tmp("bomb-many-out");
+        let files: Vec<(String, Vec<u8>)> = (0..SMALL.entries)
+            .map(|i| (format!("f{i}"), vec![1u8]))
+            .collect();
+        let refs: Vec<(&str, Vec<u8>)> =
+            files.iter().map(|(n, b)| (n.as_str(), b.clone())).collect();
+        let z = deflated_zip(&src, &refs);
+        let e = unzip_strict_within(&z, &out, "CUSA00001", SMALL).unwrap_err();
+        assert!(e.to_string().contains("entries"), "{e}");
+        assert!(!out.join("CUSA00001").exists());
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    /// The list of files a zip's end record says it has is judged before the zip crate reads it:
+    /// a forged count, and a list far longer than a save's, are refused by that check.
+    #[test]
+    fn a_zip_whose_list_of_files_is_beyond_a_save_is_refused_before_it_is_read() {
+        let src = fresh_tmp("bomb-dir");
+        let out = fresh_tmp("bomb-dir-out");
+        let z = deflated_zip(&src, &[("a", vec![1u8])]);
+        let mut b = std::fs::read(&z).unwrap();
+        let at = b
+            .windows(4)
+            .rposition(|w| w == [0x50, 0x4b, 0x05, 0x06])
+            .unwrap();
+        b[at + 8..at + 12].copy_from_slice(&[0x00, 0x10, 0x00, 0x10]);
+        std::fs::write(&z, &b).unwrap();
+        let e = unzip_strict_within(&z, &out, "CUSA00001", SMALL).unwrap_err();
+        assert!(e.to_string().contains("4096 entries"), "{e}");
+
+        let long = "n".repeat(3000);
+        let z = deflated_zip(
+            &src,
+            &[
+                (&format!("{long}1"), vec![1]),
+                (&format!("{long}2"), vec![1]),
+            ],
+        );
+        let e = unzip_strict_within(&z, &out, "CUSA00001", SMALL).unwrap_err();
+        assert!(e.to_string().contains("list of files"), "{e}");
+        assert!(!out.join("CUSA00001").exists());
+
+        let z = deflated_zip(&src, &[("ok", vec![1u8])]);
+        unzip_strict_within(&z, &out, "CUSA00001", SMALL).unwrap();
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&out);
     }
 
     /// Regression: zips produced by `zip_folder` must mark directory

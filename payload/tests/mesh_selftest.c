@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "mesh.h"
@@ -260,6 +261,51 @@ static void test_hello_and_state(void) {
     CHECK(has(call(MESH_STATE, 1, "{}"), "\"nick\":\"My phone\""));
 }
 
+/* `"name":"<n times s>"` into out. */
+static void name_of(char *out, size_t cap, const char *key, const char *s, int times) {
+    size_t o = (size_t)snprintf(out, cap, "\"%s\":\"", key);
+    while (times-- > 0 && o + strlen(s) + 3 < cap) o += (size_t)snprintf(out + o, cap - o, "%s", s);
+    snprintf(out + o, cap - o, "\"");
+}
+
+/* A long name is cut to 63 bytes on a character boundary, as the engine cuts it (its test
+ * a_device_name_is_cut_as_the_console_cuts_it checks the same names): it was dropped whole, and the
+ * console went on showing the old one. */
+static void test_long_names(void) {
+    char body[1200], want[400];
+    const char *r;
+    start();
+    online(1, 0x0100a8c0u);
+    call(MESH_HELLO, 1, "{\"name\":\"Old name\"}");
+    /* 35 two-byte letters: 31 fit. */
+    name_of(want, sizeof want, "name", "\xc3\xa9", 35);
+    snprintf(body, sizeof body, "{%s}", want);
+    CHECK(has(call(MESH_HELLO, 1, body), "\"ok\":true"));
+    r = call(MESH_STATE, 1, "{}");
+    name_of(want, sizeof want, "name", "\xc3\xa9", 31);
+    CHECK(has(r, want) && !has(r, "\"name\":\"Old name\""));
+    /* Plain letters: 63 of 300. */
+    name_of(want, sizeof want, "name", "x", 300);
+    snprintf(body, sizeof body, "{%s,\"kind\":\"desktop\"}", want);
+    call(MESH_HELLO, 1, body);
+    name_of(want, sizeof want, "name", "x", 63);
+    r = call(MESH_STATE, 1, "{}");
+    CHECK(has(r, want) && has(r, "\"kind\":\"desktop\""));
+    /* A four-byte character over the edge goes whole. */
+    name_of(want, sizeof want, "name", "a", 61);
+    snprintf(body, sizeof body, "{%.*s\xf0\x9f\x98\x80\"}", (int)strlen(want) - 1, want);
+    call(MESH_HELLO, 1, body);
+    CHECK(has(call(MESH_STATE, 1, "{}"), want));
+    /* A nickname too. */
+    name_of(want, sizeof want, "name", "\xc3\xbc", 100);
+    snprintf(body, sizeof body,
+             "{\"op\":\"rename\",\"id\":\"01000000000000000000000000000000000000000000000000000000000000ab\",%s}",
+             want);
+    CHECK(has(call(MESH_DEVICE, 1, body), "\"ok\":true"));
+    name_of(want, sizeof want, "nick", "\xc3\xbc", 31);
+    CHECK(has(call(MESH_STATE, 1, "{}"), want));
+}
+
 static void test_locks(void) {
     const char *r;
     start();
@@ -319,10 +365,99 @@ static void test_docs(void) {
     CHECK(has(r, "\"saved\":false") && has(r, "\"rev\":1") && has(r, "\"a\":{\"v\":\"1\""));
     CHECK(has(call(MESH_DOC_PUT, 2, "{\"name\":\"../x\",\"base\":0,\"doc\":{}}"), "bad_request"));
     CHECK(has(call(MESH_DOC_PUT, 2, "{\"name\":\"user\",\"base\":1,\"doc\":[1]}"), "bad_request"));
-    CHECK(has(call(MESH_DOC_PUT, 2, "{\"name\":\"user\",\"base\":1,\"doc\":{\"a\":}}"), "bad_request"));
+    CHECK(has(call(MESH_DOC_PUT, 2, "{\"name\":\"user\",\"base\":1,\"doc\":{\"a\":}}"), "invalid_json"));
     /* Survives a restart. */
     reload();
     CHECK(has(call(MESH_DOC_GET, 1, "{\"name\":\"user\"}"), "\"rev\":1"));
+}
+
+/* The bytes of v1/doc-<name>, or "" (a static buffer). */
+static const char *doc_file(const char *name) {
+    static char text[4096];
+    char path[512];
+    size_t n = 0;
+    FILE *f;
+    snprintf(path, sizeof path, "%s/v1/doc-%s", g_dir, name);
+    text[0] = 0;
+    if ((f = fopen(path, "rb"))) {
+        n = fread(text, 1, sizeof text - 1, f);
+        fclose(f);
+    }
+    text[n] = 0;
+    return text;
+}
+
+/* A document that is there but cannot be read is never answered as one never written (every
+ * engine then forgot the drives on this console), and never written over. */
+static void test_doc_unreadable(void) {
+    char path[512];
+    const char *r;
+    FILE *f;
+    start();
+    CHECK(has(call(MESH_DOC_PUT, 1, "{\"name\":\"drives\",\"base\":0,\"doc\":{\"drives\":[{\"id\":\"a\"}]}}"),
+              "\"saved\":true"));
+    snprintf(path, sizeof path, "%s/v1/doc-drives", g_dir);
+    /* It cannot be opened (when run as root, anything can: then this part proves nothing). */
+    CHECK(chmod(path, 0) == 0);
+    if (access(path, R_OK) != 0) {
+        r = call(MESH_DOC_GET, 1, "{\"name\":\"drives\"}");
+        CHECK(has(r, "\"ok\":false") && has(r, "\"err\":\"doc_unreadable\"") && !has(r, "\"doc\""));
+        r = call(MESH_DOC_PUT, 1, "{\"name\":\"drives\",\"base\":0,\"doc\":{\"drives\":[]}}");
+        CHECK(has(r, "\"err\":\"doc_unreadable\"") && !has(r, "\"saved\""));
+    }
+    CHECK(chmod(path, 0600) == 0);
+    r = call(MESH_DOC_GET, 1, "{\"name\":\"drives\"}");
+    CHECK(has(r, "\"rev\":1") && has(r, "{\"drives\":[{\"id\":\"a\"}]}"));
+    /* It is not a document (cut short): the same, and it stays as it is. */
+    if ((f = fopen(path, "wb"))) {
+        fputs("4\n{\"drives\":[{\"id\":", f);
+        fclose(f);
+    }
+    CHECK(has(call(MESH_DOC_GET, 1, "{\"name\":\"drives\"}"), "\"err\":\"doc_unreadable\""));
+    CHECK(has(call(MESH_DOC_PUT, 1, "{\"name\":\"drives\",\"base\":0,\"doc\":{}}"), "\"err\":\"doc_unreadable\""));
+    CHECK(has(call(MESH_DOC_PUT, 1, "{\"name\":\"drives\",\"base\":4,\"doc\":{}}"), "\"err\":\"doc_unreadable\""));
+    CHECK(!strcmp(doc_file("drives"), "4\n{\"drives\":[{\"id\":"));
+    /* One never written is still none. */
+    r = call(MESH_DOC_GET, 1, "{\"name\":\"other\"}");
+    CHECK(has(r, "\"ok\":true") && has(r, "\"rev\":0") && has(r, "\"doc\":null"));
+}
+
+/* A document that is not JSON every reader takes is refused, and what was there stays. */
+static void test_doc_json(void) {
+    static const char *const bad[] = {
+        "{\"a\":01}",                 /* a leading zero */
+        "{\"a\":-01}",                /* the same, negative */
+        "{\"a\":1.}",                 /* no digit after the point */
+        "{\"a\":\"\\x\"}",            /* not an escape */
+        "{\"a\":\"\\u12\"}",          /* a short \u */
+        "{\"a\":\"\\ud800\"}",        /* half a pair */
+        "{\"a\":\"\\udc00\"}",        /* the other half, alone */
+        "{\"a\":\"\\ud800\\u0041\"}", /* a pair that is not one */
+        "{\"a\":\"\xc0\x80\"}",       /* an overlong UTF-8 form */
+        "{\"a\":\"\xed\xa0\x80\"}",   /* a surrogate in UTF-8 */
+        "{\"a\":\"\xf5\x80\x80\x80\"}", /* past U+10FFFF */
+        "{\"a\":\"\xe2\x82\"}",       /* cut short */
+        "{\"a\":\"\x80\"}",           /* a stray continuation byte */
+        "{\"a\":\"tab\there\"}",      /* a control byte */
+        "{\"a\":nul}",
+    };
+    char body[256];
+    const char *r;
+    size_t k;
+    start();
+    CHECK(has(call(MESH_DOC_PUT, 1, "{\"name\":\"user\",\"base\":0,\"doc\":{\"v\":1}}"), "\"saved\":true"));
+    for (k = 0; k < sizeof bad / sizeof bad[0]; k++) {
+        snprintf(body, sizeof body, "{\"name\":\"user\",\"base\":1,\"doc\":%s}", bad[k]);
+        r = call(MESH_DOC_PUT, 1, body);
+        if (!has(r, "\"err\":\"invalid_json\"")) fprintf(stderr, "accepted: %s -> %s\n", bad[k], r);
+        CHECK(has(r, "\"err\":\"invalid_json\""));
+    }
+    CHECK(!strcmp(doc_file("user"), "1\n{\"v\":1}"));
+    /* What every reader takes still goes in. */
+    r = call(MESH_DOC_PUT, 1,
+             "{\"name\":\"user\",\"base\":1,\"doc\":{\"a\":0,\"b\":-0.5e+3,\"c\":[10,true,null],"
+             "\"d\":\"\\u00e9\\ud83d\\ude00\\\"\\\\\\/\\b\\f\\n\\r\\t\",\"e\":\"\xc3\xa9\xf0\x9f\x98\x80\"}}");
+    CHECK(has(r, "\"saved\":true") && has(r, "\"rev\":2"));
 }
 
 static void test_persist_and_prune(void) {
@@ -373,8 +508,11 @@ int main(void) {
     test_ask_limits();
     test_older_app_is_listed();
     test_hello_and_state();
+    test_long_names();
     test_locks();
     test_docs();
+    test_doc_unreadable();
+    test_doc_json();
     test_persist_and_prune();
     test_events();
     {

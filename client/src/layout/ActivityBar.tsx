@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useNavigate } from "react-router";
 
 import { useActivityPanel } from "../state/activityPanel";
@@ -52,9 +52,39 @@ function MobilePill() {
   const { summary } = useActivitySummary();
   const open = useActivityPanel((s) => s.open);
   const toggle = useActivityPanel((s) => s.toggle);
-  if (open || !summaryHasNews(summary)) return null;
+  const shown = !open && summaryHasNews(summary);
+  // The page keeps room for the pill while it is there (`--float-bottom`, index.css): its
+  // content can be scrolled clear of it, and a screen's sticky actions sit above it.
+  const pill = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const el = pill.current;
+    if (!shown || !el) return;
+    const root = document.documentElement;
+    const measure = () => {
+      const h = el.getBoundingClientRect().height;
+      // Hidden (a wide window, the keyboard up): no room to keep.
+      if (h > 0) {
+        root.setAttribute("data-activity-pill", "");
+        root.style.setProperty("--activity-pill-h", `${Math.ceil(h)}px`);
+      } else {
+        root.removeAttribute("data-activity-pill");
+      }
+    };
+    measure();
+    const watch = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    watch?.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      watch?.disconnect();
+      window.removeEventListener("resize", measure);
+      root.removeAttribute("data-activity-pill");
+      root.style.removeProperty("--activity-pill-h");
+    };
+  }, [shown]);
+  if (!shown) return null;
   return (
     <div
+      ref={pill}
       data-testid="activity-pill"
       className="glass-float elev-2 fixed inset-x-3 bottom-[calc(var(--safe-bottom)_+_5.1rem)] z-30 rounded-full ps-[var(--safe-left)] pe-[var(--safe-right)] md:hidden"
     >

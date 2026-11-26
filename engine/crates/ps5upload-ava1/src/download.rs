@@ -169,33 +169,7 @@ pub(crate) fn check_shape(m: &Manifest, single: bool) -> io::Result<()> {
 fn check_shape_with(m: &Manifest, single: bool, escape_names: bool) -> io::Result<()> {
     let bad = |why: String| io::Error::new(io::ErrorKind::InvalidData, why);
     for e in &m.entries {
-        manifest::check_path(&e.path).map_err(|e| bad(e.to_string()))?;
-        if escape_names {
-            // Component by component: a '\' is part of a name here, never a separator.
-            let kept = ps5upload_core::host_names::escape_path(&e.path)
-                .map_err(|why| bad(format!("{:?}: {why}", e.path)))?;
-            if kept
-                .split('/')
-                .any(|c| c.contains('\\') || host_unsafe_component(c).is_some())
-            {
-                return Err(bad(format!("{:?} cannot be kept on this computer", e.path)));
-            }
-            continue;
-        }
-        // A backslash is a separator on Windows: `a\..\b` would climb out of the root.
-        if e.path.contains('\\') {
-            return Err(bad(format!("{:?} contains a backslash", e.path)));
-        }
-        // Peer-supplied names are written on THIS computer, whatever it is. A ':' makes
-        // `C:/x` a drive path and `C:evil` a drive-relative one on Windows (and an
-        // alternate data stream on NTFS); the reserved device names and a trailing dot
-        // or space name something other than the file asked for. Refused everywhere so
-        // the console's data lands the same way on every host.
-        for comp in e.path.split('/') {
-            if let Some(why) = host_unsafe_component(comp) {
-                return Err(bad(format!("{:?}: {why}", e.path)));
-            }
-        }
+        kept_path(&e.path, escape_names)?;
     }
     if single {
         let files = m
@@ -211,6 +185,42 @@ fn check_shape_with(m: &Manifest, single: bool, escape_names: bool) -> io::Resul
         }
     }
     Ok(())
+}
+
+/// The root-relative path a manifest `path` is written under on this computer, after the
+/// checks every peer-supplied path passes before anything is written (or removed) under it:
+/// itself, or with `escape_names` its reversible form. Err for a path that could climb out of
+/// the root or name something else on some host.
+fn kept_path(path: &str, escape_names: bool) -> io::Result<String> {
+    let bad = |why: String| io::Error::new(io::ErrorKind::InvalidData, why);
+    manifest::check_path(path).map_err(|e| bad(e.to_string()))?;
+    if escape_names {
+        // Component by component: a '\' is part of a name here, never a separator.
+        let kept = ps5upload_core::host_names::escape_path(path)
+            .map_err(|why| bad(format!("{path:?}: {why}")))?;
+        if kept
+            .split('/')
+            .any(|c| c.contains('\\') || host_unsafe_component(c).is_some())
+        {
+            return Err(bad(format!("{path:?} cannot be kept on this computer")));
+        }
+        return Ok(kept);
+    }
+    // A backslash is a separator on Windows: `a\..\b` would climb out of the root.
+    if path.contains('\\') {
+        return Err(bad(format!("{path:?} contains a backslash")));
+    }
+    // Peer-supplied names are written on THIS computer, whatever it is. A ':' makes
+    // `C:/x` a drive path and `C:evil` a drive-relative one on Windows (and an
+    // alternate data stream on NTFS); the reserved device names and a trailing dot
+    // or space name something other than the file asked for. Refused everywhere so
+    // the console's data lands the same way on every host.
+    for comp in path.split('/') {
+        if let Some(why) = host_unsafe_component(comp) {
+            return Err(bad(format!("{path:?}: {why}")));
+        }
+    }
+    Ok(path.to_owned())
 }
 
 /// `LocalSink` plus the checks above. The landing root is `dest_dir/<basename>` for both
@@ -272,34 +282,70 @@ fn case_twins(m: &Manifest) -> Option<(&str, &str)> {
     None
 }
 
-/// Whether the folder `root` is (or will be) made in ignores case in names: its nearest
-/// folder that exists, found again under its name in the other case.
+/// Whether the folder `root` is (or will be) made in ignores case in names, asked of the
+/// nearest folder that exists (`root` itself, or the one it will be made in): the disk that
+/// folder is on is the one the files land on. Never of the folder above it: at a disk's root
+/// (`/Volumes/USB`, `D:\`) that is another disk, or none, and its answer said nothing about
+/// this one.
 fn ignores_case(root: &Path) -> bool {
-    let mut at = Some(root);
-    while let Some(p) = at {
-        at = p.parent();
-        let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if !p.exists() {
-            continue;
-        }
-        let other: String = name
-            .chars()
-            .map(|c| {
-                if c.is_ascii_lowercase() {
-                    c.to_ascii_uppercase()
-                } else {
-                    c.to_ascii_lowercase()
-                }
-            })
-            .collect();
-        // A name with no letter says nothing: ask the folder above.
-        if other != name {
-            return p.with_file_name(other).exists();
-        }
+    match root.ancestors().find(|p| p.is_dir()) {
+        Some(dir) => folder_ignores_case(dir),
+        None => false,
     }
-    false
+}
+
+/// `name` with its ASCII letters in the other case.
+fn other_case(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_lowercase() {
+                c.to_ascii_uppercase()
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
+        .collect()
+}
+
+/// Whether `dir` finds its own entries under their names in the other case. A name with no
+/// letter says nothing, and a folder holding both spellings of one tells them apart; a folder
+/// with no name to ask is asked with a probe file of its own, removed at once.
+fn folder_ignores_case(dir: &Path) -> bool {
+    let Ok(it) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    let names: std::collections::HashSet<std::ffi::OsString> =
+        it.filter_map(|e| e.ok().map(|e| e.file_name())).collect();
+    for name in names.iter().filter_map(|n| n.to_str()) {
+        let other = other_case(name);
+        if other == name {
+            continue;
+        }
+        if names.contains(std::ffi::OsStr::new(&other)) {
+            return false;
+        }
+        return std::fs::symlink_metadata(dir.join(other)).is_ok();
+    }
+    static PROBES: AtomicU64 = AtomicU64::new(0);
+    let probe = dir.join(format!(
+        ".ps5upload-case-probe-{}-{}",
+        std::process::id(),
+        PROBES.fetch_add(1, Ordering::Relaxed)
+    ));
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Ok(f) => {
+            drop(f);
+            let name = probe.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let folded = std::fs::symlink_metadata(dir.join(other_case(name))).is_ok();
+            let _ = std::fs::remove_file(&probe);
+            folded
+        }
+        Err(_) => false,
+    }
 }
 
 /// Err when `m` holds two names that are one name in `root`: both were written to the one
@@ -315,6 +361,53 @@ fn refuse_case_twins(m: &Manifest, root: &Path) -> io::Result<()> {
         )),
         _ => Ok(()),
     }
+}
+
+/// The in-place part file of the file at `rel` (root-relative), as a merge writes it.
+fn part_name(rel: &str) -> String {
+    format!("{rel}.ava-part")
+}
+
+/// A file of `m` and another entry of `m` at that file's in-place part file (`X` and
+/// `X.ava-part`), compared as `fold` (lowercased) or exactly.
+fn part_name_clash(m: &Manifest, fold: bool) -> Option<(&str, &str)> {
+    let key = |p: &str| if fold { p.to_lowercase() } else { p.to_owned() };
+    let paths: std::collections::HashMap<String, &str> = m
+        .entries
+        .iter()
+        .map(|e| (key(&e.path), e.path.as_str()))
+        .collect();
+    m.entries
+        .iter()
+        .filter(|e| e.kind == gen::ENTRY_FILE)
+        .find_map(|e| {
+            paths
+                .get(&key(&part_name(&e.path)))
+                .map(|other| (e.path.as_str(), *other))
+        })
+}
+
+/// Err when `m`, downloaded into the folder `root` that already exists, holds both `X` and
+/// `X.ava-part`. Such a download writes each large file as `<name>.ava-part` beside its place
+/// and renames it at the end, so the one path was two files at once: `X` ended with the other
+/// file's bytes, or `X.ava-part` was renamed away as `X`. A folder that does not exist yet is
+/// staged whole and writes nothing under a part name, so the same tree downloads fine there.
+fn refuse_part_name_clash(m: &Manifest, root: &Path) -> io::Result<()> {
+    let Some((a, b)) = part_name_clash(m, true) else {
+        return Ok(());
+    };
+    if part_name_clash(m, false).is_none() && !ignores_case(root) {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "{b:?} is the name this app gives {a:?} while it is written into a folder that already exists; download to a folder that does not have {} yet",
+            root.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| root.display().to_string())
+        ),
+    ))
 }
 
 /// `m` with every path in the form it is kept under on this computer
@@ -340,6 +433,11 @@ impl Sink for CheckedSink {
         };
         if !self.single {
             refuse_case_twins(m, &self.root)?;
+        }
+        // Into a folder that already exists (not staged), large files go through in-place
+        // part files: the decision as the `LocalSink` holds it, a resume's included.
+        if !self.single && self.inner.resume_key().is_some_and(|(_, staged)| !staged) {
+            refuse_part_name_clash(m, &self.root)?;
         }
         *self.landed.lock().unwrap() = Some(m.clone());
         if self.single && self.root.is_dir() {
@@ -400,6 +498,16 @@ impl Sink for CheckedSink {
     }
     fn commit(&self, id: u32) -> io::Result<()> {
         self.inner.commit(id)
+    }
+    // Both to the `LocalSink` as well. Left to the trait's no-ops, a committed file's folder was
+    // not synced before the journal called it done, and a retry of a folder download that had
+    // already been renamed into place (the session lost before its JobDone) stayed "staged":
+    // its finish found the folder there and failed as "appeared during the download".
+    fn sync_committed(&self, ids: &[u32]) -> io::Result<()> {
+        self.inner.sync_committed(ids)
+    }
+    fn resume_staged(&self, journaled: bool, all_done: bool) {
+        self.inner.resume_staged(journaled, all_done)
     }
     fn finish(&self) -> io::Result<()> {
         self.inner.finish()?;
@@ -1068,19 +1176,31 @@ fn remove_part_files(job_dir: &Path, target: &Path, escape_names: bool) {
     let Ok(m) = journal::read_manifest(job_dir) else {
         return;
     };
-    let Ok(m) = (if escape_names {
-        kept_manifest(&m)
-    } else {
-        Ok(m)
-    }) else {
-        return;
-    };
-    for e in m.entries.iter().filter(|e| e.kind == gen::ENTRY_FILE) {
-        let mut p = target.join(&e.path).into_os_string();
-        p.push(".ava-part");
+    for rel in part_files(&m, escape_names) {
         // `remove_file` takes a symlink itself, never what it points at.
-        let _ = std::fs::remove_file(PathBuf::from(p));
+        let _ = std::fs::remove_file(target.join(rel));
     }
+}
+
+/// The in-place part files (root-relative, by their kept names with `escape_names`) of the
+/// files of `m`, but for a part name that is itself a path of `m` in any case: that file is
+/// the tree's own (a real `X.ava-part`, landed or about to be replaced), never `X`'s part file.
+/// Only paths that pass the writer's own checks (`kept_path`): the journal saves the manifest
+/// before `prepare` checks it, so a refused one is read back here, and on Windows `..\x`,
+/// `C:x` or `C:\x` joined onto the folder would name a file outside it.
+fn part_files(m: &Manifest, escape_names: bool) -> Vec<String> {
+    let kept: Vec<(u8, String)> = m
+        .entries
+        .iter()
+        .filter_map(|e| Some((e.kind, kept_path(&e.path, escape_names).ok()?)))
+        .collect();
+    let paths: std::collections::HashSet<String> =
+        kept.iter().map(|(_, p)| p.to_lowercase()).collect();
+    kept.iter()
+        .filter(|(kind, _)| *kind == gen::ENTRY_FILE)
+        .map(|(_, p)| part_name(p))
+        .filter(|p| !paths.contains(&p.to_lowercase()))
+        .collect()
 }
 
 fn journal_is_empty(dir: &Path) -> bool {
@@ -1464,6 +1584,38 @@ mod tests {
         };
         assert_eq!(case_twins(&dirs), None);
         assert!(refuse_case_twins(&files(&["a.bin", "b.bin"]), &root).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The case question is asked of the folder the files land in, never of the one above it:
+    /// at a disk's root (`/Volumes/USB`, `D:\`) that is another disk, which answered for this
+    /// one (a case-respecting USB disk under a case-folding `/Volumes` refused good downloads, a
+    /// folding one under a respecting root let twins overwrite each other). Without a second
+    /// disk the test makes the folder above lie the same way where it can: on a disk that tells
+    /// case apart, `vol` and `VOL` both exist above the download, and the old question found
+    /// `VOL` and said the disk folds case.
+    #[test]
+    fn the_case_question_is_asked_inside_the_destination_never_above_it() {
+        let dir = std::env::temp_dir().join(format!("ps5u-dl-case-at-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("vol")).unwrap();
+        let folds = std::fs::create_dir(dir.join("VOL")).is_err();
+        // An empty folder (asked with a probe, which is gone afterwards), and the download's
+        // own folder not made yet.
+        assert_eq!(ignores_case(&dir.join("vol").join("Game")), folds);
+        assert_eq!(std::fs::read_dir(dir.join("vol")).unwrap().count(), 0);
+        // A folder of names without letters is asked with a probe too.
+        std::fs::write(dir.join("vol").join("123"), b"x").unwrap();
+        assert_eq!(ignores_case(&dir.join("vol").join("Game")), folds);
+        // A folder with a name to ask, and the download's folder itself when it exists.
+        std::fs::create_dir(dir.join("vol").join("Game")).unwrap();
+        std::fs::write(dir.join("vol").join("Game").join("a.bin"), b"x").unwrap();
+        assert_eq!(ignores_case(&dir.join("vol").join("Game")), folds);
+        if !folds {
+            // Both spellings in the folder: it tells them apart.
+            std::fs::write(dir.join("vol").join("Game").join("A.BIN"), b"y").unwrap();
+            assert!(!ignores_case(&dir.join("vol").join("Game")));
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2244,6 +2396,182 @@ mod tests {
         std::fs::write(d.join("f.ava-part"), b"x").unwrap();
         remove_path(&d.join("f.ava-part"));
         assert!(!d.join("f.ava-part").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A folder download renamed into place whose session was lost before the console heard it
+    /// was done runs again with the same sink: the journal says every file is done, and the
+    /// finish must take the folder that is there as its own.
+    #[test]
+    fn a_retry_after_the_folder_was_renamed_into_place_finishes() {
+        let d = std::env::temp_dir().join(format!("p5a-landed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let target = d.join("Game");
+        let sink = CheckedSink {
+            inner: LocalSink::new(target.clone(), false),
+            root: target.clone(),
+            single: false,
+            escape_names: false,
+            landed: Mutex::new(None),
+        };
+        let m = Manifest {
+            entries: vec![manifest::Entry {
+                kind: gen::ENTRY_FILE,
+                mode: 0o644,
+                size: 3,
+                mtime: 0,
+                path: "a.bin".into(),
+                root: None,
+            }],
+        };
+        assert_eq!(sink.resume_key().map(|(_, staged)| staged), Some(true));
+        sink.prepare(&m).unwrap();
+        sink.write_whole(0, b"abc").unwrap();
+        sink.sync(&[0]).unwrap();
+        sink.commit(0).unwrap();
+        sink.sync_committed(&[0]).unwrap();
+        sink.finish().unwrap();
+        assert_eq!(std::fs::read(target.join("a.bin")).unwrap(), b"abc");
+        // The retry: the journal's Open said staged, and every file is done.
+        sink.resume_staged(true, true);
+        sink.prepare(&m).unwrap();
+        sink.finish().expect("the folder is this job's own");
+        assert_eq!(std::fs::read(target.join("a.bin")).unwrap(), b"abc");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A console folder holding both `X` and `X.ava-part`, downloaded into a folder that already
+    /// exists: `X` is written as `X.ava-part` until it is complete, so the two were one file and
+    /// one of them ended with the other's bytes. Refused before anything is written, and the
+    /// failure's clean-up leaves the `X.ava-part` already there alone (it is the tree's, not a
+    /// part file). Into a new folder (staged whole, no part names) the same tree is fine.
+    #[test]
+    fn a_tree_holding_x_and_x_ava_part_is_refused_into_an_existing_folder_only() {
+        let d = std::env::temp_dir().join(format!("p5a-partname-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let (job, target) = (d.join("job"), d.join("Game"));
+        std::fs::create_dir_all(&job).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        let file = |path: &str| manifest::Entry {
+            kind: gen::ENTRY_FILE,
+            mode: 0o644,
+            size: 5 << 20,
+            mtime: 0,
+            path: path.into(),
+            root: None,
+        };
+        let sink = |root: &Path| CheckedSink {
+            inner: LocalSink::new(root.to_path_buf(), false),
+            root: root.to_path_buf(),
+            single: false,
+            escape_names: false,
+            landed: Mutex::new(None),
+        };
+        for m in [
+            Manifest {
+                entries: vec![file("a/X"), file("a/X.ava-part")],
+            },
+            Manifest {
+                entries: vec![file("a/X.ava-part"), file("a/X")],
+            },
+        ] {
+            let e = sink(&target).prepare(&m).unwrap_err();
+            assert_eq!(e.kind(), io::ErrorKind::InvalidData);
+            assert!(e.to_string().contains("X.ava-part"), "{e}");
+            // A new folder is staged: nothing there is written under a part name.
+            sink(&d.join("New")).prepare(&m).unwrap();
+        }
+        // Different names are no clash.
+        let fine = Manifest {
+            entries: vec![file("a/X"), file("a/Y.ava-part"), file("X.ava-part")],
+        };
+        sink(&target).prepare(&fine).unwrap();
+
+        // The refusal is final: the clean-up runs on the saved manifest, and the tree's own
+        // `X.ava-part` (here from an earlier download) is not X's part file.
+        let m = Manifest {
+            entries: vec![file("a/X"), file("a/X.ava-part"), file("a/Y")],
+        };
+        journal::write_manifest(&job, &m).unwrap();
+        std::fs::create_dir_all(target.join("a")).unwrap();
+        std::fs::write(target.join("a/X.ava-part"), b"real").unwrap();
+        std::fs::write(target.join("a/Y.ava-part"), b"p").unwrap();
+        let part = d.join("Game.ava-part");
+        let refused = terminal(SendError::Source(invalid("clash")));
+        cleanup_after_failure(&refused, &job, &part, &target, false, false);
+        assert_eq!(std::fs::read(target.join("a/X.ava-part")).unwrap(), b"real");
+        assert!(
+            !target.join("a/Y.ava-part").exists(),
+            "Y's part file is the job's"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The clean-up after a failed download removes part files at the paths of the journal's
+    /// saved manifest, which is saved before `prepare` checks it: a refused manifest comes back
+    /// here. Its hostile paths (on Windows `..\x` climbs, `C:x` and `C:\x` name another place, a
+    /// device name is no file) are skipped by the writer's own checks on every host, so the test
+    /// means the same on this one.
+    #[test]
+    fn the_failure_clean_up_removes_nothing_at_a_path_the_writer_refuses() {
+        let file = |path: &str| manifest::Entry {
+            kind: gen::ENTRY_FILE,
+            mode: 0o644,
+            size: 5 << 20,
+            mtime: 0,
+            path: path.into(),
+            root: None,
+        };
+        let hostile = [
+            "..\\x",
+            "a\\..\\..\\x",
+            "C:x",
+            "C:\\Windows\\x",
+            "\\\\server\\share\\x",
+            "\\x",
+            "/abs/x",
+            "../x",
+            "a/../../x",
+            "CON",
+            "a/NUL.txt",
+            "x.",
+            "a/b:stream",
+        ];
+        let mut entries: Vec<_> = hostile.iter().map(|p| file(p)).collect();
+        entries.push(file("ok/y"));
+        let m = Manifest { entries };
+        assert_eq!(part_files(&m, false), vec!["ok/y.ava-part".to_string()]);
+        // Kept names: whatever the escape makes of them stays one name inside the folder.
+        for p in part_files(&m, true) {
+            assert!(
+                !p.contains('\\') && !p.contains(':') && !p.starts_with('/'),
+                "{p:?}"
+            );
+            assert!(p.split('/').all(|c| c != ".." && c != "."), "{p:?}");
+        }
+
+        // And through the real clean-up: only the safe file's part goes.
+        let d = std::env::temp_dir().join(format!("p5a-hostile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let (job, target) = (d.join("job"), d.join("in").join("Game"));
+        std::fs::create_dir_all(&job).unwrap();
+        std::fs::create_dir_all(target.join("ok")).unwrap();
+        journal::write_manifest(&job, &m).unwrap();
+        std::fs::write(target.join("ok/y.ava-part"), b"p").unwrap();
+        std::fs::write(d.join("x.ava-part"), b"not the job's").unwrap();
+        std::fs::write(d.join("in").join("x.ava-part"), b"not the job's").unwrap();
+        cleanup_after_failure(
+            &anyhow!("transfer_cancelled"),
+            &job,
+            &d.join("in").join("Game.ava-part"),
+            &target,
+            false,
+            false,
+        );
+        assert!(!target.join("ok/y.ava-part").exists());
+        assert!(d.join("x.ava-part").exists());
+        assert!(d.join("in").join("x.ava-part").exists());
         let _ = std::fs::remove_dir_all(&d);
     }
 

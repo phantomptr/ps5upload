@@ -231,18 +231,82 @@ static void skip_ws(const char *s, size_t n, size_t *i) {
     while (*i < n && (s[*i] == ' ' || s[*i] == '\t' || s[*i] == '\n' || s[*i] == '\r')) (*i)++;
 }
 
+/* Four hex digits at s[i]: their value in *v. */
+static int hex4(const char *s, size_t n, size_t i, unsigned *v) {
+    unsigned k, x = 0;
+    if (i > n || n - i < 4) return -1;
+    for (k = 0; k < 4; k++) {
+        int h = hexval((unsigned char)s[i + k]);
+        if (h < 0) return -1;
+        x = x << 4 | (unsigned)h;
+    }
+    *v = x;
+    return 0;
+}
+
+/* One UTF-8 character whose first byte (0x80 or more) is s[*i]: well formed, in its shortest form,
+ * no surrogate and at most U+10FFFF (what every JSON reader takes). */
+static int skip_utf8(const char *s, size_t n, size_t *i) {
+    unsigned c = (unsigned char)s[*i], need, cp, k;
+    if (c >= 0xC2 && c <= 0xDF) {
+        need = 1;
+        cp = c & 0x1Fu;
+    } else if (c >= 0xE0 && c <= 0xEF) {
+        need = 2;
+        cp = c & 0x0Fu;
+    } else if (c >= 0xF0 && c <= 0xF4) {
+        need = 3;
+        cp = c & 0x07u;
+    } else
+        return -1;
+    if (n - *i <= need) return -1;
+    for (k = 1; k <= need; k++) {
+        unsigned b = (unsigned char)s[*i + k];
+        if ((b & 0xC0u) != 0x80u) return -1;
+        cp = cp << 6 | (b & 0x3Fu);
+    }
+    if ((need == 2 && cp < 0x800u) || (need == 3 && (cp < 0x10000u || cp > 0x10FFFFu)) ||
+        (cp >= 0xD800u && cp <= 0xDFFFu))
+        return -1;
+    *i += need + 1;
+    return 0;
+}
+
+/* A string as JSON has it: only its escapes (a \u escape of a surrogate in a whole pair), no control
+ * byte, and valid UTF-8. Anything looser was stored, and then no engine could read the document. */
 static int skip_string(const char *s, size_t n, size_t *i) {
     if (*i >= n || s[*i] != '"') return -1;
-    for ((*i)++; *i < n; (*i)++) {
-        if (s[*i] == '\\') {
-            (*i)++;
-            continue;
-        }
-        if (s[*i] == '"') {
+    (*i)++;
+    while (*i < n) {
+        unsigned char c = (unsigned char)s[*i];
+        unsigned u, lo;
+        if (c == '"') {
             (*i)++;
             return 0;
         }
-        if ((unsigned char)s[*i] < 0x20) return -1;
+        if (c < 0x20) return -1;
+        if (c >= 0x80) {
+            if (skip_utf8(s, n, i) != 0) return -1;
+            continue;
+        }
+        if (c != '\\') {
+            (*i)++;
+            continue;
+        }
+        if (++(*i) >= n) return -1;
+        if (s[*i] && strchr("\"\\/bfnrt", s[*i])) {
+            (*i)++;
+            continue;
+        }
+        if (s[*i] != 'u' || hex4(s, n, *i + 1, &u) != 0) return -1;
+        *i += 5;
+        if (u >= 0xDC00u && u <= 0xDFFFu) return -1; /* the second half of a pair, alone */
+        if (u >= 0xD800u && u <= 0xDBFFu) {          /* the first half: the second must follow */
+            if (n - *i < 6 || s[*i] != '\\' || s[*i + 1] != 'u' || hex4(s, n, *i + 2, &lo) != 0 || lo < 0xDC00u ||
+                lo > 0xDFFFu)
+                return -1;
+            *i += 6;
+        }
     }
     return -1;
 }
@@ -302,7 +366,9 @@ static int skip_value_d(const char *s, size_t n, size_t *i, int depth) {
     }
     default:
         if (s[*i] == '-') (*i)++;
-        if (digits(s, n, i) != 0) return -1;
+        /* A leading 0 stands alone ("01" is no JSON number: every engine refused the document). */
+        if (*i < n && s[*i] == '0') (*i)++;
+        else if (digits(s, n, i) != 0) return -1;
         if (*i < n && s[*i] == '.') {
             (*i)++;
             if (digits(s, n, i) != 0) return -1;
@@ -748,17 +814,22 @@ static void put_settings(buf_t *b) {
 
 static int do_hello(const uint8_t caller[32], const char *body, size_t n, char *out, size_t cap,
                     const mesh_online_t *on, int non) {
-    char name[NAME_MAX_], kind[KIND_MAX], os[OS_MAX], app[APP_MAX], hex[65], tmp[NAME_MAX_];
+    char name[NAME_MAX_], kind[KIND_MAX], os[OS_MAX], app[APP_MAX], hex[65], *tmp;
     uint8_t ev[32];
     int evicted = 0, isnew = 0, i;
     uint32_t ip = 0;
     dev_t_ *d;
     buf_t b = { out, 0, cap, 0 };
     name[0] = kind[0] = os[0] = app[0] = 0;
-    if (webui_json_str(body, n, "name", tmp, sizeof tmp) == 1) clean_field(name, sizeof name, tmp);
-    if (webui_json_str(body, n, "kind", tmp, sizeof tmp) == 1) clean_field(kind, sizeof kind, tmp);
-    if (webui_json_str(body, n, "os", tmp, sizeof tmp) == 1) clean_field(os, sizeof os, tmp);
-    if (webui_json_str(body, n, "app", tmp, sizeof tmp) == 1) clean_field(app, sizeof app, tmp);
+    /* Each read whole (a string never decodes longer than the body that holds it), then cut to its
+     * field on a character boundary, as the engine cuts it. A name of 64 bytes or more did not fit
+     * the buffer and was dropped: the console went on showing the old one. */
+    if (!(tmp = malloc(n + 1))) return fail(out, cap, "out_of_memory");
+    if (webui_json_str(body, n, "name", tmp, n + 1) == 1) clean_field(name, sizeof name, tmp);
+    if (webui_json_str(body, n, "kind", tmp, n + 1) == 1) clean_field(kind, sizeof kind, tmp);
+    if (webui_json_str(body, n, "os", tmp, n + 1) == 1) clean_field(os, sizeof os, tmp);
+    if (webui_json_str(body, n, "app", tmp, n + 1) == 1) clean_field(app, sizeof app, tmp);
+    free(tmp);
     for (i = 0; i < non; i++)
         if (memcmp(on[i].key, caller, 32) == 0) ip = on[i].ip;
     pthread_mutex_lock(&g_mu);
@@ -1062,7 +1133,7 @@ static int do_lock(const uint8_t caller[32], const char *body, size_t n, char *o
 }
 
 static int do_device(const uint8_t caller[32], const char *body, size_t n, char *out, size_t cap) {
-    char op[16], id[80], name[NAME_MAX_ * 2];
+    char op[16], id[80];
     uint8_t key[32];
     int forget = 0, r;
     dev_t_ *d, *me;
@@ -1108,11 +1179,20 @@ static int do_device(const uint8_t caller[32], const char *body, size_t n, char 
         return fail(out, cap, "not_found");
     }
     if (!strcmp(op, "rename")) {
-        if (webui_json_str(body, n, "name", name, sizeof name) != 1) {
+        /* Read whole and cut as a hello's name is (one of 128 bytes or more was refused). */
+        char *name = malloc(n + 1);
+        int got;
+        if (!name) {
+            pthread_mutex_unlock(&g_mu);
+            return fail(out, cap, "out_of_memory");
+        }
+        got = webui_json_str(body, n, "name", name, n + 1);
+        if (got == 1) clean_field(d->nick, sizeof d->nick, name);
+        free(name);
+        if (got != 1) {
             pthread_mutex_unlock(&g_mu);
             return fail(out, cap, "bad_request");
         }
-        clean_field(d->nick, sizeof d->nick, name);
     } else if (!strcmp(op, "remove")) {
         add_event("removed", caller, "%s removed %s", me ? shown_name(me) : "A device", shown_name(d));
         d->used = 0;
@@ -1184,25 +1264,45 @@ static int doc_name_ok(const char *s) {
     return 1;
 }
 
-/* A document file: "<rev>\n<json>". Under g_mu. *rev 0 and NULL when there is none. */
-static char *doc_load(const char *name, uint64_t *rev, size_t *len) {
+/* A document file: "<rev>\n<json>". Under g_mu. 1: read (*doc, *len, *rev); 0: there is none (never
+ * written; *rev 0); -1: it is there but could not be read (an I/O error, no memory, too large, not
+ * a document). A file that could not be read is never answered as none: every engine then took the
+ * console for one without drives (forgetting every folder it keeps there), and the next write, on
+ * revision 0, replaced what was in it. */
+static int doc_load(const char *name, uint64_t *rev, char **doc, size_t *len) {
     char path[512], file[64], *p, *nl;
-    size_t n;
+    size_t n, max = MESH_DOC_MAX + 32;
+    FILE *f;
+    int bad;
     *rev = 0;
     *len = 0;
+    *doc = NULL;
     snprintf(file, sizeof file, "doc-%s", name);
     path_of(path, sizeof path, file);
-    if (!(p = read_all(path, MESH_DOC_MAX + 32, &n))) return NULL;
+    if (!(f = fopen(path, "rb"))) return errno == ENOENT ? 0 : -1;
+    if (!(p = malloc(max + 1))) {
+        fclose(f);
+        return -1;
+    }
+    n = fread(p, 1, max + 1, f);
+    bad = ferror(f) || n > max;
+    fclose(f);
+    if (bad) {
+        free(p);
+        return -1;
+    }
+    p[n] = 0;
     nl = memchr(p, '\n', n);
     if (!nl || !is_one(nl + 1, n - (size_t)(nl + 1 - p), '{')) {
         free(p);
-        return NULL;
+        return -1;
     }
     *rev = strtoull(p, NULL, 10);
     *len = n - (size_t)(nl + 1 - p);
     memmove(p, nl + 1, *len);
     p[*len] = 0;
-    return p;
+    *doc = p;
+    return 1;
 }
 
 static int doc_count(void) {
@@ -1223,11 +1323,14 @@ static int do_doc_get(const char *body, size_t n, char *out, size_t cap) {
     uint64_t rev;
     size_t len;
     char *doc;
+    int got;
     buf_t b = { out, 0, cap, 0 };
     if (webui_json_str(body, n, "name", name, sizeof name) != 1 || !doc_name_ok(name)) return fail(out, cap, "bad_request");
     pthread_mutex_lock(&g_mu);
-    doc = doc_load(name, &rev, &len);
+    got = doc_load(name, &rev, &doc, &len);
     pthread_mutex_unlock(&g_mu);
+    /* Not "none": what is in it is unknown, and a caller keeps what it has. */
+    if (got < 0) return fail(out, cap, "doc_unreadable");
     putf(&b, "{\"ok\":true,\"rev\":%llu,\"doc\":", (unsigned long long)rev);
     if (doc) put(&b, doc, len);
     else puts_(&b, "null");
@@ -1242,14 +1345,24 @@ static int do_doc_put(const char *body, size_t n, char *out, size_t cap) {
     const char *v;
     size_t vl, len;
     char *cur, *text;
-    int saved = 0;
+    int saved = 0, found;
     buf_t b = { out, 0, cap, 0 };
     if (webui_json_str(body, n, "name", name, sizeof name) != 1 || !doc_name_ok(name) ||
-        webui_json_u64(body, n, "base", &base) != 1 || top_value(body, n, "doc", &v, &vl) != 1 || !is_one(v, vl, '{'))
+        webui_json_u64(body, n, "base", &base) != 1)
         return fail(out, cap, "bad_request");
+    /* Stored only when it is JSON every reader takes: one that is not was kept, and from then on
+     * every engine failed to read the whole answer, on every read. */
+    found = top_value(body, n, "doc", &v, &vl);
+    if (found < 0) return fail(out, cap, "invalid_json");
+    if (found == 0 || *v != '{') return fail(out, cap, "bad_request"); /* a document is an object */
+    if (!is_one(v, vl, '{')) return fail(out, cap, "invalid_json");
     if (vl > MESH_DOC_MAX) return fail(out, cap, "too_large");
     pthread_mutex_lock(&g_mu);
-    cur = doc_load(name, &rev, &len);
+    /* Never written over what could not be read: it may hold every drive. */
+    if (doc_load(name, &rev, &cur, &len) < 0) {
+        pthread_mutex_unlock(&g_mu);
+        return fail(out, cap, "doc_unreadable");
+    }
     if (base == rev) {
         if (!cur && doc_count() >= MESH_DOCS_MAX) {
             pthread_mutex_unlock(&g_mu);

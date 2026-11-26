@@ -226,8 +226,17 @@ export const driveApi = {
     const b = await call("/api/drive/password")(host, { drive, password, current: current || undefined });
     return { pending: Array.isArray(b.pending) ? (b.pending as string[]) : [] };
   },
-  leave: (host: string, drive: string, member: string) => call("/api/drive/leave")(host, { drive, member }),
-  remove: (host: string, drive: string) => call("/api/drive/delete")(host, { drive }),
+  /** `later`: the console did not answer. This device's folder stopped syncing anyway; the
+   *  console is told once it answers (an older engine failed instead). */
+  leave: async (host: string, drive: string, member: string) => {
+    const b = await call("/api/drive/leave")(host, { drive, member });
+    return { later: b.later === true };
+  },
+  /** `later` as for `leave`: the console deletes the drive once it answers. */
+  remove: async (host: string, drive: string) => {
+    const b = await call("/api/drive/delete")(host, { drive });
+    return { later: b.later === true };
+  },
   pause: (host: string, drive: string, member: string, paused: boolean) =>
     call("/api/drive/pause")(host, { drive, member, paused }),
   sync: (host: string, drive: string) => call("/api/drive/sync")(host, { drive }),

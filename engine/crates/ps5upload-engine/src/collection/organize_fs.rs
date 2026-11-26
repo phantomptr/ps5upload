@@ -57,6 +57,11 @@ impl std::fmt::Display for OpError {
 pub trait Tree: Send + Sync {
     /// The entries of `dir`, or `None` when it cannot be read.
     fn list(&self, dir: &Path) -> Option<Vec<DirEnt>>;
+    /// The entries of `dir` as they are now, never from a listing kept earlier: a second look
+    /// at files a plan already saw, made the same way as the first.
+    fn list_fresh(&self, dir: &Path) -> Option<Vec<DirEnt>> {
+        self.list(dir)
+    }
     /// A file's size and time; may come from the listing of its folder.
     fn meta(&self, p: &Path) -> Option<Meta>;
     /// Whether anything is at `p` now (never from a cached listing).
@@ -117,6 +122,10 @@ impl Tree for PlanTree<'_> {
             .unwrap_or_else(|e| e.into_inner())
             .insert(dir.to_path_buf(), v.clone());
         v
+    }
+
+    fn list_fresh(&self, dir: &Path) -> Option<Vec<DirEnt>> {
+        self.inner.list_fresh(dir)
     }
 
     fn meta(&self, p: &Path) -> Option<Meta> {
@@ -344,6 +353,16 @@ impl RemoteTree {
         {
             return Ok(v.clone());
         }
+        let out = self.fetch_server(dir)?;
+        self.cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(dir.to_string(), out.clone());
+        Ok(out)
+    }
+
+    /// `dir` as the server lists it now: nothing kept, nothing remembered.
+    fn fetch_server(&self, dir: &str) -> Result<Vec<DirEnt>, RemoteError> {
         let mut out = Vec::new();
         let mut cursor = None;
         loop {
@@ -368,10 +387,6 @@ impl RemoteTree {
             // one in it could not be told from two names, so it is left out (never touched).
             out.retain(|e| !e.name.contains('\\'));
         }
-        self.cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(dir.to_string(), out.clone());
         Ok(out)
     }
 
@@ -426,6 +441,10 @@ impl Tree for RemoteTree {
                 None
             }
         }
+    }
+
+    fn list_fresh(&self, dir: &Path) -> Option<Vec<DirEnt>> {
+        self.fetch_server(&self.server(dir).ok()?).ok()
     }
 
     fn meta(&self, p: &Path) -> Option<Meta> {

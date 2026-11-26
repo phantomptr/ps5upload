@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useMemo } from "react";
 import { Link } from "react-router";
 import { Eraser } from "lucide-react";
 
-import { fetchVolumes, type Volume } from "../../api/ps5";
+import type { Volume } from "../../api/ps5";
 import { Card } from "../../components";
 import { formatBytes } from "../../lib/format";
 import { useTr } from "../../state/lang";
+import { useConsoleVolumes } from "../../state/volumes";
 
 /** Below this share of a drive free, or this much, Home suggests Clean up. */
 const LOW_SHARE = 0.1;
@@ -22,26 +23,13 @@ export function lowDrive(volumes: readonly Volume[]): Volume | null {
   return worst;
 }
 
-/** A nudge to Clean up when one of the console's drives is nearly full. Reads the drives once
- *  per console connection; draws nothing otherwise. */
+/** A nudge to Clean up when one of the console's drives is nearly full. Reads the drives the
+ *  way every screen does (state/volumes), so it goes away once room was made; draws nothing
+ *  otherwise. */
 export function LowSpaceCard({ host }: { host: string }) {
   const tr = useTr();
-  const [low, setLow] = useState<Volume | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLow(null);
-    fetchVolumes(host)
-      .then((v) => {
-        if (!cancelled) setLow(lowDrive(v));
-      })
-      .catch(() => {
-        // Nothing to say without the drive list.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [host]);
+  const drives = useConsoleVolumes(host);
+  const low = useMemo(() => (drives.volumes ? lowDrive(drives.volumes) : null), [drives.volumes]);
 
   if (!low) return null;
   return (

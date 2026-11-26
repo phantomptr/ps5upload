@@ -1285,6 +1285,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/json_escape_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-json-escape-selftest
 	@echo "✓ a quote, a backslash or a control byte in a string cannot break a reply"
+	@echo "Running UTF-8 cut self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-utf8-cut-selftest \
+		$(PAYLOAD_DIR)/tests/utf8_cut_selftest.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-utf8-cut-selftest
+	@echo "✓ a path cut short on a status line keeps whole characters"
 	@echo "Running user delete gate self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-user-guard-selftest \
