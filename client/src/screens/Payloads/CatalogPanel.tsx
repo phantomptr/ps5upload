@@ -20,7 +20,6 @@ import { withConsolePrefix } from "../../state/roster";
 import {
   payloadsCatalog,
   payloadsLocalInventory,
-  payloadsRemoveCustomRepo,
   payloadsSources,
   payloadsRemoveSource,
   sendPayloadChecked,
@@ -40,6 +39,7 @@ import { useTr } from "../../state/lang";
 import { catalogText } from "../../lib/payloadCatalogText";
 import UsbAutoloaderModal from "./UsbAutoloaderModal";
 import PayloadUpdatesPanel from "./PayloadUpdatesPanel";
+import PayloadSourcesSection from "./PayloadSources";
 import { payloadCardLink } from "./payloadTabs";
 
 /** The Send payload tab: the one place a file from this device is picked and sent. */
@@ -48,10 +48,11 @@ const SEND_TAB = "/payloads?tab=send";
 /**
  * Catalog tab of the Payloads screen: a guide to third-party PS5 payloads.
  *
- * ps5upload doesn't download payloads. Each card says what the payload does and links to its
- * project page, where the user gets the file; "Send a file…" opens the Send payload tab to
- * send it. A copy an older version of the app downloaded into its library stays usable: it can
- * still be sent or stored in Payload Manager from its card.
+ * ps5upload doesn't download the catalogue's payloads. Each card says what the payload does and
+ * links to its project page, where the user gets the file; "Send a file…" opens the Send payload
+ * tab to send it. A copy an older version of the app downloaded into its library stays usable: it
+ * can still be sent or stored in Payload Manager from its card. Projects the user adds as payload
+ * sources (PayloadSources.tsx) have their own section above, with Download and Send.
  *
  * Pre-2.12.0 this lived at /payloads as a standalone screen. The
  * Payloads shell now owns the page header + tab strip; this panel
@@ -87,8 +88,10 @@ export default function CatalogPanel() {
   }, [host]);
 
   // Client-side filter over the already-loaded catalog (name / role /
-  // description / repo). Cheap — the catalog is ~two dozen entries.
+  // description / repo). Cheap — the catalog is ~two dozen entries. The user's own sources
+  // (custom repos) are cards of the sources section instead.
   const visibleCatalog = (catalog ?? []).filter((p) => {
+    if (p.is_custom) return false;
     const q = query.trim().toLowerCase();
     if (!q) return true;
     const text = catalogText(tr, p);
@@ -100,7 +103,7 @@ export default function CatalogPanel() {
 
   useEffect(() => {
     payloadsCatalog()
-      .then(setCatalog)
+      .then((v) => setCatalog(Array.isArray(v) ? v : []))
       .catch((e) => {
         setErrors((prev) => ({ ...prev, _global: String(e) }));
       });
@@ -112,7 +115,8 @@ export default function CatalogPanel() {
   const refreshInventory = useCallback(async () => {
     try {
       const inv = await payloadsLocalInventory();
-      setInventory(inv);
+      // An engine that answers without a list (an older one, or an odd answer) is an empty one.
+      setInventory(Array.isArray(inv) ? inv : []);
     } catch (e) {
       setErrors((prev) => ({ ...prev, _inventory: String(e) }));
     }
@@ -120,7 +124,8 @@ export default function CatalogPanel() {
 
   const reloadCatalog = useCallback(async () => {
     try {
-      setCatalog(await payloadsCatalog());
+      const v = await payloadsCatalog();
+      setCatalog(Array.isArray(v) ? v : []);
     } catch (e) {
       setErrors((prev) => ({ ...prev, _global: String(e) }));
     }
@@ -136,7 +141,7 @@ export default function CatalogPanel() {
     let cancelled = false;
     payloadsSources()
       .then((list) => {
-        if (!cancelled) setSources(list);
+        if (!cancelled) setSources(Array.isArray(list) ? list : []);
       })
       .catch(() => undefined);
     return () => {
@@ -158,20 +163,6 @@ export default function CatalogPanel() {
       setSourceError(payloadErrorText(tr, e));
     } finally {
       setSourceBusy(false);
-    }
-  }
-
-  async function handleRemoveCustomRepo(id: string, name: string) {
-    try {
-      await payloadsRemoveCustomRepo(id);
-      await reloadCatalog();
-      await refreshInventory();
-      pushNotification(
-        "info",
-        tr("payloads_custom_removed", { name }, `Removed ${name}`),
-      );
-    } catch (e) {
-      setErrors((prev) => ({ ...prev, [id]: payloadErrorText(tr, e) }));
     }
   }
 
@@ -378,6 +369,7 @@ export default function CatalogPanel() {
           </Link>{" "}
           {tr("connection_elfldr_first_short", undefined, "With an autoloader or PLDMGR, put elfldr before ps5upload.elf, or the helper drops after a few seconds.")}
         </p>
+        <PayloadSourcesSection />
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
           <div className="text-xs text-[var(--color-muted)]">
             {tr(
@@ -436,7 +428,7 @@ export default function CatalogPanel() {
         {/* Updates are checked for copies saved in the app's library, which only an older
             version filled (the app no longer downloads payloads): with none, there is nothing
             to check, sync or roll back. */}
-        {inventory.length > 0 && (
+        {inventory.some((i) => !i.payload_id.startsWith("custom-")) && (
           <PayloadUpdatesPanel host={host} onChanged={() => void refreshInventory()} />
         )}
         {sourcesOpen && sources.length > 0 && (
@@ -531,11 +523,6 @@ export default function CatalogPanel() {
             onOpenHomepage={() => {
               void openExternal(p.homepage);
             }}
-            onRemove={
-              p.is_custom
-                ? () => void handleRemoveCustomRepo(p.id, p.display_name)
-                : undefined
-            }
           />
         ))}
       </div>
@@ -560,7 +547,6 @@ function PayloadCard({
   onSendFile,
   onStore,
   onOpenHomepage,
-  onRemove,
 }: {
   info: PayloadInfo;
   /** The copy saved in the app's library (downloaded by an older version), if any. */
@@ -573,9 +559,6 @@ function PayloadCard({
   /** Present when the console's Payload Manager answers: keep the saved copy there. */
   onStore?: () => void;
   onOpenHomepage: () => void;
-  /** Present only for a user-added custom repo (#93) — renders a Remove
-   *  control. Undefined for curated catalogue entries. */
-  onRemove?: () => void;
 }) {
   const tr = useTr();
   return (
@@ -586,11 +569,6 @@ function PayloadCard({
         <div className="min-w-[min(100%,16rem)] flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-semibold">{info.display_name}</h3>
-            {info.is_custom && (
-              <Badge tone="neutral" variant="outline">
-                {tr("payloads_custom_badge", undefined, "Custom")}
-              </Badge>
-            )}
             {info.source_name && (
               <Badge tone="neutral" variant="outline">
                 {tr("payloads_source_badge", { name: info.source_name }, `From ${info.source_name}`)}
@@ -601,17 +579,6 @@ function PayloadCard({
                 ? `${info.repo_owner}/${info.repo_name}`
                 : info.homepage.replace(/^https:\/\/(www\.)?/, "").replace(/\/releases\/?$/, "")}
             </span>
-            {onRemove && (
-              <button
-                type="button"
-                onClick={onRemove}
-                className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-bad)]"
-                title={tr("payloads_custom_remove", undefined, "Remove this custom repo")}
-              >
-                <Trash2 size={11} />
-                {tr("payloads_custom_remove_short", undefined, "Remove")}
-              </button>
-            )}
           </div>
           <div className="mt-0.5 text-xs text-[var(--color-muted)]">
             {catalogText(tr, info).role}
