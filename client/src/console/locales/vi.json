@@ -518,6 +518,7 @@
   "cw_files_no_folders_next": "Chọn “Tại đây” để dùng thư mục này.",
   "cw_files_none_match": "Không có mục nào khớp bộ lọc.",
   "cw_files_ok": "OK",
+  "cw_files_only_hidden": "Ở đây chỉ có tệp ẩn. Bật Tệp ẩn để xem chúng.",
   "cw_files_op_gone": "Máy không còn tác vụ này nên không biết kết quả.",
   "cw_files_open": "Mở",
   "cw_files_order": "Thứ tự: {dir}",

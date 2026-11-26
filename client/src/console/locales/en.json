@@ -518,6 +518,7 @@
   "cw_files_no_folders_next": "Choose Here to use this folder.",
   "cw_files_none_match": "Nothing matches the filter.",
   "cw_files_ok": "OK",
+  "cw_files_only_hidden": "Only hidden files are here. Turn on Hidden files to see them.",
   "cw_files_op_gone": "The console no longer has this task, so its result is not known.",
   "cw_files_open": "Open",
   "cw_files_order": "Order: {dir}",

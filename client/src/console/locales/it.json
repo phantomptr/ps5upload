@@ -518,6 +518,7 @@
   "cw_files_no_folders_next": "Scegli «Qui» per usare questa cartella.",
   "cw_files_none_match": "Nessun risultato per il filtro.",
   "cw_files_ok": "OK",
+  "cw_files_only_hidden": "Qui ci sono solo file nascosti. Attiva File nascosti per vederli.",
   "cw_files_op_gone": "La console non ha più questa attività, quindi il risultato non è noto.",
   "cw_files_open": "Apri",
   "cw_files_order": "Ordine: {dir}",

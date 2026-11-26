@@ -518,6 +518,7 @@
   "cw_files_no_folders_next": "Bu klasörü kullanmak için “Buraya” seçeneğini seçin.",
   "cw_files_none_match": "Filtreyle eşleşen yok.",
   "cw_files_ok": "Tamam",
+  "cw_files_only_hidden": "Burada yalnızca gizli dosyalar var. Görmek için Gizli dosyaları açın.",
   "cw_files_op_gone": "Konsolda bu görev artık yok, bu yüzden sonucu bilinmiyor.",
   "cw_files_open": "Aç",
   "cw_files_order": "Sıra: {dir}",

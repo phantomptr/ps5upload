@@ -518,6 +518,7 @@
   "cw_files_no_folders_next": "选择“这里”即可使用此文件夹。",
   "cw_files_none_match": "没有符合筛选的项目。",
   "cw_files_ok": "确定",
+  "cw_files_only_hidden": "这里只有隐藏文件。打开“隐藏文件”即可看到。",
   "cw_files_op_gone": "主机上已没有此任务，结果未知。",
   "cw_files_open": "打开",
   "cw_files_order": "顺序：{dir}",

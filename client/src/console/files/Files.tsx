@@ -83,7 +83,7 @@ import { ConflictDialog } from "./ConflictDialog";
 import { pasteItems, type PasteMode, type PasteResult } from "./paste";
 import { ReplaceError } from "./replace";
 import { PathBar } from "./PathBar";
-import { DEFAULT_VIEW, invertShown, loadView, MESH_MARKER, saveView, selectAllShown, statusOf, visibleEntries, LOAD_ALL_CAP, type Status, type ViewPrefs } from "./listing";
+import { DEFAULT_VIEW, emptyReason, invertShown, loadView, MESH_MARKER, saveView, selectAllShown, statusOf, visibleEntries, LOAD_ALL_CAP, type Status, type ViewPrefs } from "./listing";
 import { checkFolder, typedPath } from "./pathParts";
 import { PathPicker } from "./PathPicker";
 import { cleanPath, isPinned, usePrefs, type FilesPrefs } from "./prefs";
@@ -1253,10 +1253,12 @@ export function FilesView(p: FilesViewProps) {
             </div>
           ) : null}
           {!p.dir.loaded && !p.dir.error ? <p className="cw-dim">{t("cw_home_loading")}</p> : null}
-          {p.dir.loaded && p.dir.entries.length > 0 && !shown.length && !p.dir.more ? (
-            <p className="cw-dim">{t("cw_files_none_match")}</p>
+          {p.dir.loaded && p.dir.entries.length > 0 && !shown.length && !p.dir.more && emptyReason(p.dir.entries, p.view ?? DEFAULT_VIEW) !== "empty" ? (
+            <p className="cw-dim">
+              {t(emptyReason(p.dir.entries, p.view ?? DEFAULT_VIEW) === "filter" ? "cw_files_none_match" : "cw_files_only_hidden")}
+            </p>
           ) : null}
-          {p.dir.loaded && !p.dir.entries.length && !p.dir.more ? (
+          {p.dir.loaded && !shown.length && !p.dir.more && (!p.dir.entries.length || emptyReason(p.dir.entries, p.view ?? DEFAULT_VIEW) === "empty") ? (
             <p className="cw-dim">
               {t("cw_files_empty")} {t("cw_files_empty_next")}
             </p>

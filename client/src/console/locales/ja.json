@@ -518,6 +518,7 @@
   "cw_files_no_folders_next": "このフォルダーを使うには「ここ」を選んでください。",
   "cw_files_none_match": "絞り込みに一致するものがありません。",
   "cw_files_ok": "OK",
+  "cw_files_only_hidden": "ここには隠しファイルしかありません。「隠しファイル」をオンにすると表示されます。",
   "cw_files_op_gone": "本体にこのタスクがもうないため、結果はわかりません。",
   "cw_files_open": "開く",
   "cw_files_order": "順序: {dir}",

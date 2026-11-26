@@ -518,6 +518,7 @@
   "cw_files_no_folders_next": "Choisissez « Ici » pour utiliser ce dossier.",
   "cw_files_none_match": "Aucun résultat pour ce filtre.",
   "cw_files_ok": "OK",
+  "cw_files_only_hidden": "Il n’y a ici que des fichiers cachés. Activez Fichiers cachés pour les voir.",
   "cw_files_op_gone": "La console n’a plus cette tâche, son résultat est donc inconnu.",
   "cw_files_open": "Ouvrir",
   "cw_files_order": "Ordre : {dir}",

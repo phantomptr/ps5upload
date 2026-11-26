@@ -518,6 +518,7 @@
   "cw_files_no_folders_next": "Wybierz „Tutaj”, aby użyć tego folderu.",
   "cw_files_none_match": "Nic nie pasuje do filtra.",
   "cw_files_ok": "OK",
+  "cw_files_only_hidden": "Są tu tylko ukryte pliki. Włącz Ukryte pliki, aby je zobaczyć.",
   "cw_files_op_gone": "Konsola nie ma już tego zadania, więc jego wynik jest nieznany.",
   "cw_files_open": "Otwórz",
   "cw_files_order": "Kolejność: {dir}",

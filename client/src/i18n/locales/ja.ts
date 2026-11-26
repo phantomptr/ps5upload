@@ -5896,6 +5896,7 @@ c2c_test_deep_bad: "4 KiB のテスト送信が届きませんでした: {detail
 "cw_files_status_selected": "{n} 件選択 ({size})",
 "cw_files_status_size_dirs": "{size}、フォルダは含まず",
 "cw_files_none_match": "絞り込みに一致するものがありません。",
+"cw_files_only_hidden": "ここには隠しファイルしかありません。「隠しファイル」をオンにすると表示されます。",
 "cw_files_tools": "フォルダのツール",
 "cw_files_filter_on": "絞り込み中",
 "cw_files_items": "{n} 件",

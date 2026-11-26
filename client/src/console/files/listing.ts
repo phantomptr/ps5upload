@@ -135,6 +135,16 @@ export function visibleEntries(entries: Entry[], v: ViewPrefs): Entry[] {
   return sortEntries(list, v.sort, v.dir);
 }
 
+/**
+ * Why a folder with entries shows none: the filter, files hidden while Hidden files is off, or
+ * only the Mesh Drive's own files (never listed): then it reads as empty. It said "Nothing matches
+ * the filter." with no filter set.
+ */
+export function emptyReason(entries: Entry[], v: ViewPrefs): "filter" | "hidden" | "empty" {
+  if (v.filter.trim()) return "filter";
+  return !v.hidden && entries.some((e) => !isMeshInternal(e) && isHidden(e)) ? "hidden" : "empty";
+}
+
 /* ---- type icons ---- */
 
 export type IconKind =

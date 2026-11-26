@@ -518,6 +518,7 @@
   "cw_files_no_folders_next": "選擇「這裡」即可使用此資料夾。",
   "cw_files_none_match": "沒有符合篩選的項目。",
   "cw_files_ok": "確定",
+  "cw_files_only_hidden": "這裡只有隱藏檔案。開啟「隱藏檔案」即可看到。",
   "cw_files_op_gone": "主機上已沒有此工作，結果未知。",
   "cw_files_open": "開啟",
   "cw_files_order": "順序：{dir}",

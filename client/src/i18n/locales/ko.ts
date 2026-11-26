@@ -5894,6 +5894,7 @@ c2c_test_deep_bad: "4 KiB 테스트 전송이 도착하지 않았습니다: {det
 "cw_files_status_selected": "{n}개 선택됨 ({size})",
 "cw_files_status_size_dirs": "{size}, 폴더는 제외",
 "cw_files_none_match": "필터와 일치하는 항목이 없습니다.",
+"cw_files_only_hidden": "여기에는 숨김 파일만 있습니다. 숨김 파일을 켜면 보입니다.",
 "cw_files_tools": "폴더 도구",
 "cw_files_filter_on": "필터 켜짐",
 "cw_files_items": "{n}개 항목",

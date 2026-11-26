@@ -518,6 +518,7 @@
   "cw_files_no_folders_next": "Pilih “Di sini” untuk memakai folder ini.",
   "cw_files_none_match": "Tidak ada yang cocok dengan filter.",
   "cw_files_ok": "OK",
+  "cw_files_only_hidden": "Di sini hanya ada file tersembunyi. Nyalakan File tersembunyi untuk melihatnya.",
   "cw_files_op_gone": "Konsol tidak lagi memiliki tugas ini, jadi hasilnya tidak diketahui.",
   "cw_files_open": "Buka",
   "cw_files_order": "Urutan: {dir}",

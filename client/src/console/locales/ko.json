@@ -518,6 +518,7 @@
   "cw_files_no_folders_next": "이 폴더를 사용하려면 '여기'를 선택하세요.",
   "cw_files_none_match": "필터와 일치하는 항목이 없습니다.",
   "cw_files_ok": "확인",
+  "cw_files_only_hidden": "여기에는 숨김 파일만 있습니다. 숨김 파일을 켜면 보입니다.",
   "cw_files_op_gone": "콘솔에 이 작업이 더 이상 없어 결과를 알 수 없습니다.",
   "cw_files_open": "열기",
   "cw_files_order": "순서: {dir}",

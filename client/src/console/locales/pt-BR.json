@@ -518,6 +518,7 @@
   "cw_files_no_folders_next": "Escolha “Aqui” para usar esta pasta.",
   "cw_files_none_match": "Nada corresponde ao filtro.",
   "cw_files_ok": "OK",
+  "cw_files_only_hidden": "Aqui só há arquivos ocultos. Ative Arquivos ocultos para vê-los.",
   "cw_files_op_gone": "O console não tem mais esta tarefa, então o resultado não é conhecido.",
   "cw_files_open": "Abrir",
   "cw_files_order": "Ordem: {dir}",

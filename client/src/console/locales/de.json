@@ -518,6 +518,7 @@
   "cw_files_no_folders_next": "Wähle „Hierher“, um diesen Ordner zu verwenden.",
   "cw_files_none_match": "Nichts passt zum Filter.",
   "cw_files_ok": "OK",
+  "cw_files_only_hidden": "Hier gibt es nur versteckte Dateien. Schalte „Versteckte Dateien“ ein, um sie zu sehen.",
   "cw_files_op_gone": "Die Konsole kennt diese Aufgabe nicht mehr, ihr Ergebnis ist daher unbekannt.",
   "cw_files_open": "Öffnen",
   "cw_files_order": "Reihenfolge: {dir}",

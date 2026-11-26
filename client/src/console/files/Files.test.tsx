@@ -327,8 +327,17 @@ describe("Files listing controls", () => {
   it("offers Load all when more pages wait, and explains an empty filter", () => {
     const more = renderToStaticMarkup(<>{FilesView(props({ dir: dir([entry("a")], { more: true }), onView: vi.fn(), onLoadAll: vi.fn() }))}</>);
     expect(more).toContain('data-action="load-all"');
-    const none = renderToStaticMarkup(<>{FilesView(props({ dir: dir([entry("a")]), shown: [], onView: vi.fn() }))}</>);
+    const view = { sort: "name" as const, dir: "asc" as const, hidden: false, filter: "zz" };
+    const none = renderToStaticMarkup(<>{FilesView(props({ dir: dir([entry("a")]), shown: [], view, onView: vi.fn() }))}</>);
     expect(none).toContain(t("cw_files_none_match"));
+    // No filter: only dot-files with Hidden files off says so; only the Mesh Drive's own files is empty.
+    const quiet = { ...view, filter: "" };
+    const hidden = renderToStaticMarkup(<>{FilesView(props({ dir: dir([entry(".cfg")]), shown: [], view: quiet, onView: vi.fn() }))}</>);
+    expect(hidden).toContain(t("cw_files_only_hidden"));
+    expect(hidden).not.toContain(t("cw_files_none_match"));
+    const mesh = renderToStaticMarkup(<>{FilesView(props({ dir: dir([entry(".ps5upload-mesh")]), shown: [], view: quiet, onView: vi.fn() }))}</>);
+    expect(mesh).toContain(t("cw_files_empty"));
+    expect(mesh).not.toContain(t("cw_files_none_match"));
   });
 
   it("clipboard: Copy / Cut in the sheet, the bar in the status line, kept across folders", () => {

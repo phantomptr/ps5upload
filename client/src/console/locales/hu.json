@@ -518,6 +518,7 @@
   "cw_files_no_folders_next": "Válaszd az „Ide” lehetőséget ennek a mappának a használatához.",
   "cw_files_none_match": "Nincs a szűrőnek megfelelő elem.",
   "cw_files_ok": "OK",
+  "cw_files_only_hidden": "Itt csak rejtett fájlok vannak. Kapcsold be a Rejtett fájlokat, hogy lásd őket.",
   "cw_files_op_gone": "A konzol már nem ismeri ezt a feladatot, így az eredménye nem ismert.",
   "cw_files_open": "Megnyitás",
   "cw_files_order": "Sorrend: {dir}",
