@@ -954,6 +954,30 @@ pub(crate) mod tests {
         assert!(check(&none).unwrap_err().contains("lists no file"));
     }
 
+    /// A hash table 8-byte aligned, not 16, as another packer pads its paths: the runtime opens
+    /// it, so it is taken (PS5 Dump Forge's #64 found its reader refusing a game's own index
+    /// laid out so). At 4 bytes it is refused.
+    #[test]
+    fn a_hash_table_at_eight_bytes_is_taken_but_not_at_four() {
+        let eight = (1..40)
+            .map(|n| {
+                let p = format!("/app0/{}", "x".repeat(n));
+                raw(&[p.as_bytes()])
+            })
+            .find(|d| {
+                let at = u64_at(d, 0x20) as usize;
+                at % 16 == 8 && at - (HEADER + RECORD + u64_at(d, 0x18) as usize) >= 4
+            })
+            .unwrap();
+        assert!(check(&eight).is_ok());
+        assert!(parse(&eight).is_some());
+        let at = u64_at(&eight, 0x20) as usize;
+        let mut four = eight.clone();
+        four.drain(at - 4..at);
+        four[0x20..0x28].copy_from_slice(&((at - 4) as u64).to_le_bytes());
+        assert!(check(&four).unwrap_err().contains("8-byte aligned"));
+    }
+
     /// A header whose hash table sits at the end of the address space, or whose size wraps it:
     /// refused, never a wrapped length or an out-of-range read.
     #[test]
