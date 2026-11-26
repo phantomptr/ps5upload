@@ -99,9 +99,10 @@
   - A script or AI agent on the engine's computer can watch and play a running session
     ([AUTOMATION.md](AUTOMATION.md)), and drive everything else too ([API and AI agents](#api-and-ai-agents)).
 - **Cheats, fan curve, hardware view,** payload sender with a payload guide and playlists, and
-  backport tools. ps5upload doesn't download payloads: get each one from its project page and
-  send the file. **Payload updates** says when a newer release is out, rolls back, and keeps
-  Payload Manager's copies and boot list in step.
+  backport tools. The payload guide links to each project page; add a GitHub, Gitea or Forgejo
+  project as your own payload source and the app downloads the file you picked when you ask, shows
+  its SHA-256 and sends it. **Payload updates** says when a newer release is out, rolls back, and
+  keeps Payload Manager's copies and boot list in step.
 - **Bug reports in one place.** Bug Report (always in the sidebar) gathers the app's, the
   engine's and the PS5 helper's logs for the time you pick into one `.zip`, with addresses,
   serials and keys removed, ready to post on GitHub or Discord. **Detailed logs** (Logs tab)
