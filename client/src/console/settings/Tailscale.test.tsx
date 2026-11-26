@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import en from "../locales/en.json";
+import { t } from "../strings";
 import { blockedLines, tailnetError, tailnetLine, TailscaleSection } from "./Tailscale";
 
 describe("console page › Tailscale › turned away", () => {
@@ -68,7 +69,12 @@ describe("console page › Tailscale", () => {
         state: "backoff",
         error: "control refused registration",
       }),
-    ).toBe("Tailscale: control refused registration");
+    ).toBe(t("cw_tn_err_refused"));
+    // the app's words for the core's codes; only text none fits is passed through
+    expect(tailnetError({ enabled: true, state: "backoff", error: "timeout" })).toBe(t("cw_tn_err_unreachable"));
+    expect(tailnetError({ enabled: true, state: "backoff", error: "TLS error" })).toBe(t("cw_tn_err_unreachable"));
+    expect(tailnetError({ enabled: true, state: "signed-out", error: "signed out at control" })).toBe(t("cw_tn_err_signed_out"));
+    expect(tailnetError({ enabled: true, state: "backoff", error: "node key rejected" })).toBe("Tailscale: node key rejected");
     expect(tailnetError({ enabled: true, state: "running" })).toBeNull();
   });
 

@@ -64,6 +64,10 @@ export function tailnetError(s: ConsoleTailnet): string | null {
   const e = (s.error || "").toLowerCase();
   if (!e) return null;
   if (e.includes("dns")) return t("cw_tn_err_dns");
+  // The app's words for the rest (api/tailnet.ts tailnetProblems); the core's own text (tn_strerror) only when none fits.
+  if (/signed out at control/.test(e)) return t("cw_tn_err_signed_out");
+  if (/^(connection error|timeout|tls error|unexpected http status|protocol error)$/.test(e.trim())) return t("cw_tn_err_unreachable");
+  if (/^(control refused registration|authentication failed)$/.test(e.trim())) return t("cw_tn_err_refused");
   return t("cw_tn_err", { err: s.error || "" });
 }
 

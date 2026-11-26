@@ -35,7 +35,7 @@ export const DEVICES_POLL_MS = 4000;
 
 /** "<device> wants to use this PS5." */
 export function askLine(a: ConsoleAsk): string {
-  return t("cw_dev_ask", { device: a.name || a.ip || "A device" });
+  return t("cw_dev_ask", { device: a.name || a.ip || t("cw_dev_unnamed") });
 }
 
 /** How a device was let in, in words. */

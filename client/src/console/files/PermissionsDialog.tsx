@@ -11,6 +11,13 @@ const WHO_KEY: Record<PermWho, string> = { owner: "cw_files_perm_owner", group: 
 const BIT_KEY: Record<PermBit, string> = { read: "cw_files_perm_read", write: "cw_files_perm_write", exec: "cw_files_perm_exec" };
 
 /** Apply `mode` to `path` (and below it with `recursive`): /api/fs/chmod answers {} at once, or a job for a folder's contents. */
+/** A failed Apply in words: a job the console lost, the change refused ("fs_chmod_failed: …"), or why not. */
+export function permErrorText(e: unknown): string | null {
+  if (e === "gone") return t("cw_files_op_gone");
+  if (e instanceof ApiError && /chmod/.test(e.code)) return t("cw_files_perm_failed");
+  return filesErrorText(e);
+}
+
 export async function applyMode(path: string, mode: number, recursive: boolean): Promise<void> {
   const r = await call<{ job?: string }>("/api/fs/chmod", { path, mode: modeText(mode), recursive });
   if (r && typeof r.job === "string") {
@@ -56,7 +63,7 @@ export function PermissionsDialog({
       () => onDone(mode),
       (e: unknown) => {
         setBusy(false);
-        setError(e === "gone" ? t("cw_files_op_gone") : filesErrorText(e));
+        setError(permErrorText(e));
       },
     );
   };

@@ -42,6 +42,7 @@ export function stopErrorText(err: unknown): string | null {
   const code = (err as { code?: unknown })?.code;
   if (code === "not_running") return t("cw_procs_err_gone");
   if (code === "system" || code === "helper") return t("cw_procs_err_protected");
+  if (code === "kill_failed") return t("cw_procs_err_refused");
   return errorText(err);
 }
 
