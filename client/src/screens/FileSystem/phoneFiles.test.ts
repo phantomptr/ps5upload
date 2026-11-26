@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { backUpTarget, filesBackStep, folderTitle } from "./phoneFiles";
+import { backUpTarget, filesBackStep, folderTitle, revealAboveKeyboard } from "./phoneFiles";
 
 const at = (path: string, extra: Partial<Parameters<typeof filesBackStep>[0]> = {}) =>
   filesBackStep({ view: false, selecting: false, path, driveRoot: "/mnt/usb0", ...extra });
@@ -48,5 +48,33 @@ describe("the compact header's title (#936)", () => {
 
   it("is left to the screen's name at /", () => {
     expect(folderTitle("/")).toBeNull();
+  });
+});
+
+describe("a name field opened on a phone (#936)", () => {
+  it("is brought into view on a phone, and again when the keyboard shrinks the screen", () => {
+    const el = { scrollIntoView: vi.fn() } as unknown as HTMLElement;
+    const listeners: Array<() => void> = [];
+    vi.stubGlobal("window", {
+      visualViewport: {
+        addEventListener: (_: string, f: () => void) => listeners.push(f),
+        removeEventListener: vi.fn(),
+      },
+      setTimeout: vi.fn(),
+    });
+    try {
+      revealAboveKeyboard(el, true);
+      expect(el.scrollIntoView).toHaveBeenCalledTimes(1);
+      listeners.forEach((f) => f());
+      expect(el.scrollIntoView).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("is left alone on a computer", () => {
+    const el = { scrollIntoView: vi.fn() } as unknown as HTMLElement;
+    revealAboveKeyboard(el, false);
+    expect(el.scrollIntoView).not.toHaveBeenCalled();
   });
 });

@@ -3,8 +3,10 @@ import { Link2 } from "lucide-react";
 
 import { linkProbe, type LinkClass } from "../../api/links";
 import { Button } from "../../components";
+import { usePhoneLayout } from "../../lib/phoneLayout";
 import { useTr } from "../../state/lang";
 import { LinkDownloadCard } from "../InstallPackage/LinkDownloadCard";
+import { revealAboveKeyboard } from "./phoneFiles";
 
 /** Files › More › Download from a link (#872): paste a link and its file is saved into the
  *  folder that is open. A package is saved like any other file; nothing is installed. */
@@ -22,6 +24,7 @@ export function LinkToFolder({
   onClose: () => void;
 }) {
   const tr = useTr();
+  const phone = usePhoneLayout();
   const [url, setUrl] = useState("");
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -83,12 +86,15 @@ export function LinkToFolder({
           placeholder="https://"
           inputMode="url"
           spellCheck={false}
+          enterKeyHint="go"
           onChange={(e) => setUrl(e.target.value)}
+          onFocus={(e) => revealAboveKeyboard(e.currentTarget.parentElement, phone)}
           onKeyDown={(e) => {
             if (e.key === "Enter") void check();
             if (e.key === "Escape") onClose();
           }}
-          className="input input-sm min-w-40 flex-1 text-xs"
+          // On a phone (#936) the link has the card's width, the buttons a line under it.
+          className="input input-sm min-w-40 flex-1 text-xs phone:basis-full phone:text-base"
           aria-label={tr("fs_link_field", undefined, "Link")}
           data-testid="fs-link-url"
         />
@@ -99,12 +105,13 @@ export function LinkToFolder({
           disabled={!url.trim() || checking}
           onClick={() => void check()}
           data-testid="fs-link-check"
+          className="phone:flex-1"
         >
           {checking
             ? tr("linkdl.checking", undefined, "Checking link…")
             : tr("fs_link_check", undefined, "Check link")}
         </Button>
-        <Button size="sm" variant="ghost" onClick={onClose}>
+        <Button size="sm" variant="ghost" onClick={onClose} className="phone:flex-1">
           {tr("cancel", undefined, "Cancel")}
         </Button>
       </div>

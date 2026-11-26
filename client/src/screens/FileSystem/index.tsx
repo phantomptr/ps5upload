@@ -285,7 +285,7 @@ import { usePhoneLayout } from "../../lib/phoneLayout";
 import { ltr } from "../../i18n";
 import NotificationInbox from "../../layout/NotificationInbox";
 import { createLongPress } from "../../lib/longPress";
-import { backUpTarget, filesBackStep, folderTitle } from "./phoneFiles";
+import { backUpTarget, filesBackStep, folderTitle, revealAboveKeyboard } from "./phoneFiles";
 import { FilesColumn, PhoneFolderRow, PhoneSelectionActions, PhoneSelectionRow, PhoneStagedBar } from "./PhoneBars";
 
 function parent(p: string): string {
@@ -4267,7 +4267,11 @@ export default function FileSystemScreen() {
               stretched with the list when Android's overscroll pulled the list past its ends. */}
           <div
             data-testid="fs-header"
-            className="phone:relative phone:z-30 phone:mb-2 phone:shrink-0 phone:rounded-[var(--radius-card)] phone:border phone:border-[var(--glass-edge)] phone:bg-[var(--color-float)] phone:p-1 phone:shadow-[var(--edge-highlight),var(--shadow-2)] phone:backdrop-blur-xl phone:landscape:flex phone:landscape:items-center phone:landscape:gap-2"
+            className={
+              "phone:relative phone:z-30 phone:mb-2 phone:shrink-0 phone:rounded-[var(--radius-card)] phone:border phone:border-[var(--glass-edge)] phone:bg-[var(--color-float)] phone:p-1 phone:shadow-[var(--edge-highlight),var(--shadow-2)] phone:backdrop-blur-xl phone:landscape:flex phone:landscape:items-center phone:landscape:gap-2" +
+              // Typing a path, a phone held sideways gives the path row a line of its own (#936).
+              (pathDraft !== null ? " phone:landscape:flex-wrap" : "")
+            }
           >
             {phoneSelecting ? (
               <PhoneSelectionRow
@@ -4301,7 +4305,7 @@ export default function FileSystemScreen() {
                 disabled={!host?.trim()}
               />
             )}
-            <div className="mb-2 flex items-center gap-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-1.5 py-0.5 text-xs sm:mb-4 sm:px-2.5 sm:py-1.5 shadow-[var(--edge-highlight),var(--shadow-1)] phone:mb-0! phone:landscape:min-w-0 phone:landscape:flex-1 phone:landscape:py-0.5!">
+            <div className={"mb-2 flex items-center gap-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-1.5 py-0.5 text-xs sm:mb-4 sm:px-2.5 sm:py-1.5 shadow-[var(--edge-highlight),var(--shadow-1)] phone:mb-0! phone:landscape:min-w-0 phone:landscape:flex-1 phone:landscape:py-0.5!" + (pathDraft !== null ? " phone:landscape:basis-full" : "")}>
               <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
                 <button
                   type="button"
@@ -4330,7 +4334,10 @@ export default function FileSystemScreen() {
                     onBlur={() => setPathDraft(null)}
                     spellCheck={false}
                     aria-label={tr("fs_go_to_path", undefined, "Go to path")}
-                    className="input input-sm min-w-0 flex-1 font-mono text-xs"
+                    onFocus={(ev) => revealAboveKeyboard(ev.currentTarget, phone)}
+                    enterKeyHint="go"
+                    data-testid="fs-path-input"
+                    className="input input-sm min-w-0 flex-1 font-mono text-xs phone:text-sm"
                   />
                 ) : (
                   <>
@@ -4372,6 +4379,7 @@ export default function FileSystemScreen() {
                       type="button"
                       onClick={() => setPathDraft(path)}
                       title={tr("fs_go_to_path", undefined, "Go to path")}
+                      data-testid="fs-path-edit"
                       className="ms-1 shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
                     >
                       <Pencil size={12} />
@@ -4547,9 +4555,15 @@ export default function FileSystemScreen() {
           )}
 
           {mkdirDraft !== null && (
-            <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mb-3 flex items-center gap-2 p-2 text-sm">
-              <FolderPlus size={14} className="text-[var(--color-muted)]" />
-              <span className="text-xs text-[var(--color-muted)]">
+            // On a phone (#936) the name gets a line of its own across the card, under where it
+            // goes, and Create and Cancel a line under it: in one row the field was a few pixels
+            // wide and the buttons broke their words.
+            <div
+              data-testid="fs-mkdir"
+              className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mb-3 flex items-center gap-2 p-2 text-sm phone:flex-wrap"
+            >
+              <FolderPlus size={14} className="shrink-0 text-[var(--color-muted)]" />
+              <span className="text-xs text-[var(--color-muted)] phone:min-w-0 phone:flex-1 phone:[overflow-wrap:anywhere]">
                 {tr("fs_create_in", undefined, "Create in")}{" "}
                 <span className="font-mono">{path}</span>
               </span>
@@ -4557,24 +4571,29 @@ export default function FileSystemScreen() {
                 autoFocus
                 value={mkdirDraft}
                 placeholder={tr("fs_folder_name", undefined, "folder name")}
+                aria-label={tr("fs_folder_name", undefined, "folder name")}
+                enterKeyHint="done"
+                spellCheck={false}
                 onChange={(e) => setMkdirDraft(e.target.value)}
+                onFocus={(e) => revealAboveKeyboard(e.currentTarget.parentElement, phone)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") runMkdir();
                   if (e.key === "Escape") setMkdirDraft(null);
                 }}
-                className="input input-sm flex-1 text-xs"
+                data-testid="fs-mkdir-name"
+                className="input input-sm min-w-0 flex-1 text-xs phone:basis-full phone:text-base"
               />
               <button
                 type="button"
                 onClick={runMkdir}
-                className="rounded-full bg-[image:var(--accent-fill)] shadow-[var(--accent-glow)] px-3 py-1 text-xs font-medium text-[var(--color-accent-contrast)]"
+                className="shrink-0 whitespace-nowrap rounded-full bg-[image:var(--accent-fill)] shadow-[var(--accent-glow)] px-3 py-1 text-xs font-medium text-[var(--color-accent-contrast)] phone:flex-1 phone:text-sm"
               >
                 {tr("fs_create", undefined, "Create")}
               </button>
               <button
                 type="button"
                 onClick={() => setMkdirDraft(null)}
-                className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 py-1 text-xs"
+                className="shrink-0 whitespace-nowrap rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 py-1 text-xs phone:flex-1 phone:text-sm"
               >
                 {tr("cancel", undefined, "Cancel")}
               </button>
@@ -5071,7 +5090,11 @@ export default function FileSystemScreen() {
                           if (ev.key === "Escape") setRenaming(null);
                         }}
                         onBlur={() => setRenaming(null)}
-                        className="input input-sm flex-1"
+                        onFocus={(ev) => revealAboveKeyboard(ev.currentTarget, phone)}
+                        enterKeyHint="done"
+                        spellCheck={false}
+                        data-testid="fs-rename-input"
+                        className="input input-sm min-w-0 flex-1 phone:text-base"
                       />
                     ) : (
                       <div className="flex min-w-0 flex-1 flex-col roomy:flex-row roomy:items-center roomy:gap-3">
@@ -5127,9 +5150,15 @@ export default function FileSystemScreen() {
                     )}
                     <RowActionButtons entry={e} ctx={rowActionsCtx} />
                     {/* On a phone ⋮ and the box share one place: selecting, ⋮ keeps its room but
-                        is not shown, and the box sits over it. */}
+                        is not shown, and the box sits over it. Renaming, the name has its room (#936). */}
                     <span
-                      className={phone ? "grid shrink-0 place-items-center *:col-start-1 *:row-start-1" : "contents"}
+                      className={
+                        phone
+                          ? isRenaming
+                            ? "hidden"
+                            : "grid shrink-0 place-items-center *:col-start-1 *:row-start-1"
+                          : "contents"
+                      }
                       data-testid="fs-row-end"
                     >
                       <RowActionsTrigger
