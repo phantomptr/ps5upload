@@ -42,6 +42,7 @@ impl TitleFacts {
             patch_installed: self.patch_installed.unwrap_or(false),
             dlc_labels: self.dlc_labels.clone().unwrap_or_default(),
             registered_from: self.registered_from.clone(),
+            installed_unread: false,
             version_unread: false,
             extras_unread: false,
         }
@@ -65,7 +66,8 @@ pub fn host_key(addr: &str) -> String {
 }
 
 /// Records a full read of one title (installed, version, update, DLC). A detail the read could
-/// not get (`version_unread`, `extras_unread`) keeps what was recorded before. Returns the
+/// not get (`installed_unread`, `version_unread`, `extras_unread`) keeps what was recorded
+/// before; when `installed_unread`, the title keeps all its facts. Returns the
 /// merged facts.
 pub fn merge_detailed<'a>(
     s: &'a mut Snapshots,
@@ -82,6 +84,10 @@ pub fn merge_detailed<'a>(
         .or_default();
     if !title.is_empty() {
         facts.title = title.to_string();
+    }
+    if t.installed_unread {
+        // Whether it is installed could not be told: the last read's answer stands.
+        return facts;
     }
     facts.installed = t.installed;
     if !t.version_unread {

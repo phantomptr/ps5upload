@@ -6488,7 +6488,7 @@ fn appmeta_title_name(addr: &str, title_id: &str, appdb: &mut AppDbOnce<'_>) -> 
 /// Kept only when the app folder exists (`app_dirs`, from /user/app and the
 /// extended-storage equivalents): app.db also carries shell entries (NPXS)
 /// and preinstalled tiles whose app was never downloaded.
-fn appdb_installed_additions(
+pub(crate) fn appdb_installed_additions(
     rows: &[(String, String)],
     app_dirs: &std::collections::HashSet<String>,
     seen: &std::collections::HashSet<String>,
@@ -6522,7 +6522,7 @@ fn appdb_installed_additions(
 /// ids (NPXS) are left out, as in [`appdb_installed_additions`]. The caller still checks each
 /// candidate for evidence it is a title (a mount.lnk source or a param file). Sorted, so the
 /// list does not reshuffle between refreshes.
-fn registered_only_additions<'a>(
+pub(crate) fn registered_only_additions<'a>(
     registered: impl IntoIterator<Item = &'a str>,
     app_dirs: &std::collections::HashSet<String>,
     seen: &std::collections::HashSet<String>,
@@ -6549,7 +6549,7 @@ fn registered_only_additions<'a>(
 
 /// True when `/user/app/<id>/sce_sys` holds a param.json or param.sfo: the folder is a title,
 /// not the leftovers of a failed install.
-fn app_folder_has_param(addr: &str, title_id: &str) -> bool {
+pub(crate) fn app_folder_has_param(addr: &str, title_id: &str) -> bool {
     ["param.json", "param.sfo"]
         .iter()
         .any(|f| fs_read(addr, &format!("/user/app/{title_id}/sce_sys/{f}"), 0, 16).is_ok())
@@ -6807,7 +6807,8 @@ struct AppIconQuery {
 
 /// Where installed titles' app folders are: the internal drive, extended storage and the M.2
 /// drive (the installed list and the cover read both look in each).
-const APP_FOLDER_ROOTS: [&str; 3] = ["/user/app", "/mnt/ext0/user/app", "/mnt/ext1/user/app"];
+pub(crate) const APP_FOLDER_ROOTS: [&str; 3] =
+    ["/user/app", "/mnt/ext0/user/app", "/mnt/ext1/user/app"];
 
 /// Where a title's cover may be, in order. /user/appmeta/<id> is the usual home, but on FW 13.60
 /// titles installed by homebrew installers have none, only the app's own <root>/<id>/sce_sys
@@ -6937,7 +6938,7 @@ const LIST_DIR_MAX_PAGES: usize = 64;
 /// Every entry of a console folder, page by page, and whether the folder was read whole
 /// (`false` when it has more pages than [`LIST_DIR_MAX_PAGES`]). A listing that fails on any
 /// page is an error: a busy console must not read as a shorter folder.
-fn list_dir_whole(
+pub(crate) fn list_dir_whole(
     addr: &str,
     path: &str,
 ) -> anyhow::Result<(Vec<ps5upload_core::fs_ops::DirEntry>, bool)> {
