@@ -337,29 +337,29 @@ fn a_package_of_a_game_with_several_languages_declares_those() {
 }
 
 /// A game that declares no PlayGo languages (the usual dump: neither PlayGo file) is packaged
-/// declaring its default language alone, whatever languages `param.json` names the title in.
+/// declaring all 31, starting in its own default: one language is never guessed for it.
 /// The language option changes only what it says: one language, or all 31.
 #[test]
-fn a_package_of_a_game_that_declares_no_languages_gets_its_default_alone() {
-    // No language named anywhere: en-US.
+fn a_package_of_a_game_that_declares_no_languages_keeps_them_all() {
+    // No language named anywhere: all, starting in en-US.
     let bare = TempDir::new("lang-none-source");
     write_tree(bare.path());
     let v = packaged_scenario(bare.path(), "lang-none-out", None);
-    assert_eq!(v["chunkSupportedLanguages"], serde_json::json!(["en-US"]));
+    assert_eq!(v["chunkSupportedLanguages"].as_array().unwrap().len(), 31);
     assert_eq!(v["chunkDefaultLanguage"], "en-US");
 
-    // A default and three title names: the default alone.
+    // A default and three title names: all, starting in the default.
     let named = TempDir::new("lang-named-source");
     write_tree(named.path());
     write_param(named.path(), "de-DE", &["de-DE", "en-US", "ja-JP"]);
     let v = packaged_scenario(named.path(), "lang-named-out", None);
-    assert_eq!(v["chunkSupportedLanguages"], serde_json::json!(["de-DE"]));
+    assert_eq!(v["chunkSupportedLanguages"].as_array().unwrap().len(), 31);
     assert_eq!(v["chunkDefaultLanguage"], "de-DE");
     assert_eq!(v["scenarioDefaultLanguage"], "de-DE");
     // A chunk table that names no language in particular (every bit set) changes nothing.
     write_chunk_table(named.path(), u64::MAX);
     let v = packaged_scenario(named.path(), "lang-unset-out", None);
-    assert_eq!(v["chunkSupportedLanguages"], serde_json::json!(["de-DE"]));
+    assert_eq!(v["chunkSupportedLanguages"].as_array().unwrap().len(), 31);
 
     // One language chosen: that one, as the default too.
     let v = packaged_scenario(named.path(), "lang-chosen-out", Some("ja-JP"));

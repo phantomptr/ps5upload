@@ -1292,10 +1292,9 @@ fn languages_line(language: Option<&str>, game: &cnt_write::GameLanguages) -> St
         match game.declared_by {
             DeclaredBy::Scenario => "as the game's own playgo-scenario.json declares them",
             DeclaredBy::ChunkTable => "as the game's own playgo-chunk.dat declares them",
-            DeclaredBy::ParamDefault => {
-                "the game declares no PlayGo languages, so only its default language"
+            DeclaredBy::ParamDefault | DeclaredBy::Nothing => {
+                "the game declares no PlayGo languages, so all of them; choose one under Game language to declare only that one"
             }
-            DeclaredBy::Nothing => "the game names no language at all",
         }
     };
     format!("languages: {listed} ({default} by default; {why})")
