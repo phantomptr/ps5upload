@@ -4631,22 +4631,61 @@ async fn ps5_save_open(Json(req): Json<SaveOpenReq>) -> impl IntoResponse {
     crate::log_info!("save_open: addr={addr} image={image}");
     let r = tokio::task::spawn_blocking(move || {
         let _busy = busy;
-        // The open copy is written back over the real image on close, so a game writing the save
-        // meanwhile would lose what it wrote. An empty image only reports what is open.
-        if let Some(title) = save_backup::title_of_save_image(&image) {
-            if save_backup::title_running(&addr, title).map_err(anyhow::Error::msg)? {
-                anyhow::bail!("{title} is running on the PS5. Close the game, then open its save.");
-            }
-        }
-        ps5upload_core::saves::save_open(&addr, &image)
+        // Opening one save closes the one open, so never while a copy, sync or backup has this
+        // console's save: that closed its save half filled, and its next files went into the
+        // save opened here. Held until the helper answered, so one starting meanwhile waits and
+        // then finds this save open. An empty image only reports what is open.
+        let _op = if image.is_empty() {
+            None
+        } else {
+            Some(save_backup::try_save_op(&addr).ok_or(SaveJobRunning)?)
+        };
+        save_open_now(&addr, &image)
     })
     .await
     .map_err(anyhow::Error::from)
     .and_then(|r| r);
+    save_route_reply(r)
+}
+
+/// A copy, sync or backup holds the console's save (`save_backup::try_save_op`).
+#[derive(Debug)]
+struct SaveJobRunning;
+
+impl std::fmt::Display for SaveJobRunning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(save_backup::SAVE_JOB_RUNNING)
+    }
+}
+
+impl std::error::Error for SaveJobRunning {}
+
+fn save_route_reply(
+    r: anyhow::Result<ps5upload_core::saves::OpenSave>,
+) -> axum::response::Response {
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) if e.is::<SaveJobRunning>() => {
+            json_err(StatusCode::CONFLICT, save_backup::SAVE_JOB_RUNNING).into_response()
+        }
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
+}
+
+/// Opens the save image `image` on the helper (an empty one only reports what is open), refused
+/// while its game runs: the open copy is written back over the real image on close, so a game
+/// writing the save meanwhile would lose what it wrote. For the route above and for the engine's
+/// own save operations, which hold the console's save themselves.
+pub(crate) fn save_open_now(
+    addr: &str,
+    image: &str,
+) -> anyhow::Result<ps5upload_core::saves::OpenSave> {
+    if let Some(title) = save_backup::title_of_save_image(image) {
+        if save_backup::title_running(addr, title).map_err(anyhow::Error::msg)? {
+            anyhow::bail!("{title} is running on the PS5. Close the game, then open its save.");
+        }
+    }
+    ps5upload_core::saves::save_open(addr, image)
 }
 
 #[derive(serde::Deserialize)]
@@ -4718,15 +4757,14 @@ async fn ps5_save_close(Json(req): Json<SaveOpenReq>) -> impl IntoResponse {
     crate::log_info!("save_close: addr={addr}");
     let r = tokio::task::spawn_blocking(move || {
         let _busy = busy;
+        // The save open may be a copy's, sync's or backup's, part way through: not closed here.
+        let _op = save_backup::try_save_op(&addr).ok_or(SaveJobRunning)?;
         ps5upload_core::saves::save_close(&addr)
     })
     .await
     .map_err(anyhow::Error::from)
     .and_then(|r| r);
-    match r {
-        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
-    }
+    save_route_reply(r)
 }
 
 #[derive(Deserialize)]
