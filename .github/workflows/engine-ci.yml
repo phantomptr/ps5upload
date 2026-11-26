@@ -328,16 +328,28 @@ jobs:
         working-directory: engine
         run: cargo build -p ps5upload-unrar
 
+      # The tests run with the temp folder pointed at an empty folder of this job's own, and a
+      # step after them fails if they left anything there: tests that never removed their scratch
+      # folders once filled a developer's temp folder with 38 GB (scripts/check-test-tmp-leaks.sh).
+      - name: Empty temp folder for the tests
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/test-tmp"
+          echo "TEST_TMP=$RUNNER_TEMP/test-tmp" >> "$GITHUB_ENV"
+
       # nextest runs the test binaries side by side (cargo test runs them one at a time, and most
       # of these sit in network sleeps); doctests, which nextest does not run, follow separately.
       # Timing-sensitive binaries are serialized by engine/.config/nextest.toml.
       # Bounded per step: a hung test fails here in minutes instead of holding the job.
+      # Built first with the usual temp folder: only what the tests leave is checked.
       - name: cargo nextest
         working-directory: engine
         timeout-minutes: 25
         env:
           RUST_BACKTRACE: 1
-        run: cargo nextest run --profile ci ${{ matrix.select }}
+        run: |
+          cargo nextest run --profile ci --no-run ${{ matrix.select }}
+          TMPDIR="$TEST_TMP" cargo nextest run --profile ci ${{ matrix.select }}
 
       # After the main run and with its exact package set (matrix.select), so nothing recompiles:
       # a `cargo test -p ps5upload-engine` here first built the engine a second time. --no-capture
@@ -401,7 +413,11 @@ jobs:
       - name: cargo test --doc
         working-directory: engine
         timeout-minutes: 10
-        run: cargo test --doc ${{ matrix.select }}
+        run: TMPDIR="$TEST_TMP" cargo test --doc ${{ matrix.select }}
+
+      - name: Tests left nothing in the temp folder
+        shell: bash
+        run: scripts/check-test-tmp-leaks.sh --check "$TEST_TMP"
 
       # target/tmp is CARGO_TARGET_TMPDIR, test scratch space, not build output. The UFS2 writer
       # tests leave sparse images there, one of them 68 GB apparent (lastcg.ffpkg): tar stored it
