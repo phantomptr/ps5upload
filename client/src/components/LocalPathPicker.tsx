@@ -16,11 +16,11 @@ import {
 
 import { Button } from ".";
 import { localFs, storageAccessUsesPrompt } from "../api/localFs";
-import { remoteApi, RemoteApiError } from "../api/remote";
+import { RemoteApiError } from "../api/remote";
 import { parentOf, fmtSize } from "../lib/pathBrowser";
 import { displayPath, remotePath } from "../lib/remotePath";
-import { hostOf, transferAddr } from "../lib/addr";
-import { fsListDir } from "../api/ps5";
+import { hostOf } from "../lib/addr";
+import { CONSOLE_ROOTS, listPlace, serverParent, type Place } from "../lib/placeList";
 import { useConnectionsStore } from "../state/connections";
 import { useLocalPickerStore } from "../state/localPicker";
 import { usePackageViewer } from "../state/packageViewer";
@@ -389,24 +389,10 @@ function writeLastDir(id: string, dir: string) {
   }
 }
 
-/** "/games/ps5" → "/games"; "/" has no parent. */
-function serverParent(path: string): string | null {
-  const t = path.replace(/\/+$/, "");
-  if (!t) return null;
-  const i = t.lastIndexOf("/");
-  return i <= 0 ? "/" : t.slice(0, i);
-}
-
-/** Where a game can live on the console: internal storage and the external drives. */
-const CONSOLE_ROOTS = ["/data", "/mnt/ext0", "/mnt/ext1", "/mnt/usb0", "/mnt/usb1"];
 
 /** A pick on the console, as the converter reads it: `ps5://<host><path>`. */
 export function consolePickResult(host: string, path: string): string {
   return `ps5://${hostOf(host)}${path.startsWith("/") ? path : `/${path}`}`;
-}
-
-function joinServer(dir: string, name: string): string {
-  return `${dir.replace(/\/+$/, "")}/${name}`;
 }
 
 /** Whether the picker steps aside for the package viewer. It does only for a View pressed in
@@ -457,33 +443,15 @@ export function LocalPathPicker() {
       setError(null);
       setHint(null);
       try {
-        if (consoleHost) {
-          const list = await fsListDir(transferAddr(consoleHost), path);
-          setEntries(
-            list.map((e) => ({
-              name: e.name,
-              path: joinServer(path, e.name),
-              is_dir: e.kind === "dir",
-              size: e.size ?? 0,
-            })),
-          );
-          setCursor(null);
-        } else if (connectionId) {
-          const page = await remoteApi.listDir(remotePath(connectionId, path), more);
-          const list = page.entries.map((e) => ({
-            name: e.name,
-            path: joinServer(path, e.name),
-            is_dir: e.is_dir,
-            size: e.size,
-          }));
-          setEntries((prev) => (more ? [...prev, ...list] : list));
-          setCursor(page.next_cursor);
-          writeLastDir(connectionId, path);
-        } else {
-          const page = await localFs.listDirPage(path, more ? Number(more) : 0);
-          setEntries((prev) => (more ? [...prev, ...page.entries] : page.entries));
-          setCursor(page.next === null ? null : String(page.next));
-        }
+        const place: Place = consoleHost
+          ? { kind: "console", host: consoleHost }
+          : connectionId
+            ? { kind: "server", id: connectionId }
+            : { kind: "computer" };
+        const page = await listPlace(place, path, more);
+        setEntries((prev) => (more ? [...prev, ...page.entries] : page.entries));
+        setCursor(page.more);
+        if (connectionId) writeLastDir(connectionId, path);
         setCwd(path);
         if (!more) setRevealed(childToReveal(from, path));
         cwdRef.current = path;
