@@ -175,9 +175,11 @@ struct NetLink {
     room: crate::join_net::hub::Room,
     key: String,
     /// Reconnect tokens this engine gave the internet phones it allowed (random, made here: never
-    /// what a phone says about itself). Only one of these lets a phone back in without asking
-    /// again; they go with the room, so a New link (or closing the link) voids them all.
-    tokens: std::collections::HashSet<String>,
+    /// what a phone says about itself), each with what it was allowed to do (true: to watch).
+    /// Only one of these lets a phone back in without asking again, and only to do that: the
+    /// computer said yes to a watcher, not to a controller. They go with the room, so a New link
+    /// (or closing the link) voids them all.
+    tokens: std::collections::HashMap<String, bool>,
 }
 
 struct Pending {
@@ -206,8 +208,9 @@ struct Link {
     key: Option<String>,
     pads: Vec<Pad>,
     pending: Vec<Pending>,
-    /// Devices the computer allowed: back in without asking on a new socket.
-    allowed: std::collections::HashSet<String>,
+    /// Devices the computer allowed, each with what for (true: to watch): back in without asking
+    /// on a new socket that asks for the same. One allowed to watch asks again to play.
+    allowed: std::collections::HashSet<(String, bool)>,
     /// Devices the computer disconnected: out until the link closes.
     denied: std::collections::HashSet<String>,
     /// The internet link, once asked for (until the link closes or a New link replaces it).
@@ -779,7 +782,7 @@ pub async fn kick(Json(r): Json<KickReq>) -> Json<serde_json::Value> {
         let p = l.pads.remove(i);
         let_go(&p, "kicked");
         if let Some(d) = &p.device {
-            l.allowed.remove(d);
+            l.allowed.retain(|(x, _)| x != d);
             l.denied.insert(d.clone());
         }
         // Its way back in over the internet goes too.
@@ -881,14 +884,16 @@ fn clean_device(d: Option<&str>) -> Option<String> {
 
 static CONNECTS: crate::join::ConnectLimit = crate::join::ConnectLimit::new();
 
-/// A socket that has the computer's word already: the link's key, or a device it allowed. Those
-/// come back as often as a flaky Wi-Fi drops them; the limit is for everyone else.
+/// A socket that has the computer's word already: the link's key, or a device it allowed to do
+/// what this socket asks (watch, or play). Those come back as often as a flaky Wi-Fi drops them;
+/// the limit is for everyone else.
 fn is_expected(q: &PadQuery) -> bool {
     let device = clean_device(q.d.as_deref());
+    let watch = q.w == Some(1);
     with_link(|l| {
         q.t.as_deref()
             .is_some_and(|t| l.key.as_deref().is_some_and(|k| same_key(k, t)))
-            || device.is_some_and(|d| l.allowed.contains(&d))
+            || device.is_some_and(|d| l.allowed.contains(&(d, watch)))
     })
 }
 
@@ -973,22 +978,28 @@ pub(crate) async fn rtc_session(
     pad_session(socket, q, ip).await
 }
 
-/// `t` when it is a reconnect token the current internet link gave (compared whole).
-fn net_token_known(t: &str) -> Option<String> {
+/// `t` when it is a reconnect token the current internet link gave (compared whole) to a phone
+/// it allowed to do what this one asks (`watch`, or play). A watcher's token is no way in as a
+/// controller: the computer never said yes to that.
+fn net_token_known(t: &str, watch: bool) -> Option<String> {
     with_link(|l| {
-        l.net
-            .as_ref()
-            .and_then(|n| n.tokens.iter().find(|k| same_key(k, t)).cloned())
+        l.net.as_ref().and_then(|n| {
+            n.tokens
+                .iter()
+                .find(|(k, w)| same_key(k, t) && **w == watch)
+                .map(|(k, _)| k.clone())
+        })
     })
 }
 
-/// A new reconnect token for an internet phone just allowed, kept with the current internet link.
-/// None when the link went meanwhile (the phone then has to ask again after a drop).
-fn new_net_token() -> Option<String> {
+/// A new reconnect token for an internet phone just allowed (to watch, or to play), kept with the
+/// current internet link. None when the link went meanwhile (the phone then has to ask again
+/// after a drop).
+fn new_net_token(watch: bool) -> Option<String> {
     let t = random_key()?;
     with_link(|l| {
         let n = l.net.as_mut()?;
-        n.tokens.insert(t.clone());
+        n.tokens.insert(t.clone(), watch);
         Some(t)
     })
 }
@@ -1096,8 +1107,9 @@ async fn pad_session<S: crate::join::GuestSocket>(
     // lets a phone ask (`rtc_session` checked it): the computer allows it, as it allows an
     // internet Play Together guest, and one it allowed comes back after a drop with the reconnect
     // token this engine gave it then. Never by its device id: the phone makes that up itself.
+    let watch = q.w == Some(1);
     let mut rt = match &net {
-        Some(_) => q.rt.as_deref().and_then(net_token_known),
+        Some(_) => q.rt.as_deref().and_then(|t| net_token_known(t, watch)),
         None => None,
     };
     let keyed = match &net {
@@ -1123,7 +1135,7 @@ async fn pad_session<S: crate::join::GuestSocket>(
                 name: name.clone(),
                 ip,
                 net: net.is_some(),
-                watch: q.w == Some(1),
+                watch,
                 answer: tx,
             });
             true
@@ -1136,7 +1148,7 @@ async fn pad_session<S: crate::join::GuestSocket>(
             Info,
             "together",
             "pad_link: phone {id} asks to {} ({})",
-            if q.w == Some(1) { "watch" } else { "play" },
+            if watch { "watch" } else { "play" },
             if net.is_some() { "internet" } else { "LAN" }
         );
         send_limited(&mut socket, say(serde_json::json!({"stage": "asking"}))).await;
@@ -1163,17 +1175,16 @@ async fn pad_session<S: crate::join::GuestSocket>(
             Some(Answer::Allow) => {
                 if net.is_some() {
                     // Its way back after a drop: a token of ours, kept by the phone for this link.
-                    rt = new_net_token();
+                    rt = new_net_token(watch);
                     if let Some(t) = &rt {
                         send_limited(&mut socket, say(serde_json::json!({ "rt": t }))).await;
                     }
                 } else if let Some(d) = &device {
-                    with_link(|l| l.allowed.insert(d.clone()));
+                    with_link(|l| l.allowed.insert((d.clone(), watch)));
                 }
             }
         }
     }
-    let watch = q.w == Some(1);
     // A watcher gets the stream itself (rp_stream_api's copy for it); none without a session. Over
     // the internet as a Play Together guest gets it: pictures through a short queue of their own
     // (`video`) that skips to the next keyframe when the connection can't keep up.
@@ -2446,6 +2457,46 @@ mod tests {
             // Someone else, no id: still asks.
             let mut other = phone(&format!("{base}?name=Other")).await;
             hear(&mut other, |v| v["stage"] == "asking").await;
+        }
+
+        /// The computer's yes was to a watcher: the device comes back to watch without asking,
+        /// and asks again to play (it played at once before, PS button and keyboard included).
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_phone_allowed_to_watch_asks_again_to_play() {
+            let _turn = LIVE_TEST_LOCK.lock().await;
+            let live = test_live::Session::start("10.0.77.3");
+            fresh_link();
+            let base = serve().await;
+            let play = format!("{base}?name=Pixel&d=00112233445566778899aabbccddeeff");
+            let watch = format!("{play}&w=1");
+            let mut ws = phone(&watch).await;
+            hear(&mut ws, |v| v["stage"] == "asking").await;
+            let (ask, asks_to_watch) = with_link(|l| (l.pending[0].id, l.pending[0].watch));
+            assert!(asks_to_watch);
+            assert_eq!(
+                decide(Json(DecideReq {
+                    id: ask,
+                    allow: true
+                }))
+                .await
+                .0["ok"],
+                true
+            );
+            hear(&mut ws, joined).await;
+            drop(ws);
+            until("gone", || pads() == 0).await;
+            let mut back = phone(&watch).await;
+            hear(&mut back, joined).await;
+            assert!(with_link(|l| l.pads.iter().all(|p| p.watch)));
+            // The same device, the link without `w`: not in, and nothing it sends is played.
+            let mut sly = phone(&play).await;
+            let v = hear(&mut sly, |v| v.get("stage").is_some()).await;
+            assert_eq!(v["stage"], "asking", "{v}");
+            assert!(with_link(|l| !l.pending[0].watch), "asks to play");
+            sly.send(TMsg::Text(PRESS.into())).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            assert_eq!(live.merged().buttons, 0);
+            assert!(!phones_playing());
         }
 
         /// Any device on the LAN reaches this socket: asks and sizes have a limit.
