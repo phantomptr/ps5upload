@@ -2954,6 +2954,49 @@
         ],
         "type": "object"
       },
+      "Damage": {
+        "description": "What a package's problems add up to, for a screen to say in plain words. Counts that don't\nbelong to the `kind` are 0.",
+        "properties": {
+          "block_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "blocks_bad": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "blocks_total": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bytes_have": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bytes_need": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "checks_failed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "- `data`: `blocks_bad` of the `blocks_total` data blocks (`block_bytes` each) are not\n  the bytes the package's own digests say they are. The usual result of a copy or\n  download that was interrupted or went wrong.\n- `truncated`: the file ends early. It is `bytes_have` long and the package needs at\n  least `bytes_need`; both are 0 when only the very end of the file is missing.\n- `structure`: `checks_failed` checks of the image's own tables fail though no data\n  block was found bad.\n- `metadata`: only `checks_failed` checks of what the package says about itself fail;\n  every block of the game's data is right. Seen on packages edited after they were made.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "blocks_bad",
+          "blocks_total",
+          "block_bytes",
+          "bytes_have",
+          "bytes_need",
+          "checks_failed"
+        ],
+        "type": "object"
+      },
       "DdpStatus": {
         "description": "What a console said about itself.",
         "properties": {
@@ -10882,6 +10925,10 @@
           "file": {
             "description": "The file inside the copy, or empty for the copy as a whole.",
             "type": "string"
+          },
+          "kind": {
+            "description": "For a failed check of a package, what the check looks at: `data` (the game's data\nblocks), `structure` (the image's own tables), `metadata` (what the package says about\nitself: header, digests, install manifest) or `truncated` (the file ends early).\nAbsent for any other problem.",
+            "type": "string"
           }
         },
         "required": [
@@ -16220,6 +16267,17 @@
           "bytes_total": {
             "minimum": 0,
             "type": "integer"
+          },
+          "damage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Damage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "With `method` `package` and `state` `problems`: what the problems add up to."
           },
           "error": {
             "type": [

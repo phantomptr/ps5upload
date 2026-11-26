@@ -11,11 +11,42 @@ use crate::xts::{Xts, SIGNED_SECTOR_FLAG};
 use crate::{fih, flt, le32, si, PkgFile, Result};
 use crate::{format_err, BLOCK};
 
+/// What a check looks at, so a caller can say in plain words what a failure of it means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// What the package says about itself: the header, and the container's digests, descriptors
+    /// and install manifest. Small; a tool that edits a package without redoing them fails these
+    /// while every byte of the game is right.
+    Metadata,
+    /// The image's own tables: its superblock, inodes, folders and the layout descriptor.
+    Structure,
+    /// The game's data blocks against the digest the package carries for each.
+    Data,
+    /// The file ends before the package does.
+    Truncated,
+}
+
+impl Kind {
+    /// The word an API gives for it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Metadata => "metadata",
+            Kind::Structure => "structure",
+            Kind::Data => "data",
+            Kind::Truncated => "truncated",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Check {
     pub name: String,
     pub ok: bool,
     pub detail: String,
+    pub kind: Kind,
+    /// For a check that counts: how many of `total` failed (the data sweep's blocks), or how
+    /// many bytes of `total` the file has ([`Kind::Truncated`]).
+    pub count: Option<(u64, u64)>,
 }
 
 #[derive(Debug)]
@@ -24,18 +55,104 @@ pub struct Report {
     pub checks: Vec<Check>,
 }
 
+/// What a report's failed checks add up to: the one thing to tell someone who asks what is
+/// wrong with their package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Damage {
+    /// The file is `have` bytes and the package needs at least `need` (both 0 when only the
+    /// end of the file, the install manifest, is missing).
+    Truncated { have: u64, need: u64 },
+    /// `bad` of `total` data blocks (of [`BLOCK`] bytes each) are not the bytes the package's
+    /// digests say they are. With a sampled sweep, `total` is the number looked at.
+    Data { bad: u64, total: u64 },
+    /// The image's own tables fail and no data block was found bad: the game can't be read
+    /// out of it.
+    Structure { failed: u64 },
+    /// Only what the package says about itself fails: every data block and table checked is
+    /// right.
+    Metadata { failed: u64 },
+}
+
+/// The check that the header marks a debug image.
+const DEBUG_IMAGE: &str = "fih debug image";
+
 impl Report {
     pub fn ok(&self) -> bool {
         self.checks.iter().all(|c| c.ok)
     }
 
-    fn push(&mut self, name: impl Into<String>, ok: bool, detail: impl Into<String>) {
+    /// Whether the package is a debug image, the only kind these checks can read: a retail
+    /// one is encrypted with keys this does not have, so what it reports about one (every
+    /// block "failing") says nothing about the file.
+    pub fn is_debug(&self) -> bool {
+        !self.checks.iter().any(|c| c.name == DEBUG_IMAGE && !c.ok)
+    }
+
+    /// The worst thing the failed checks say, `None` when every check holds: a file cut short
+    /// before damaged data (the rest of it was never read), damaged data before broken tables,
+    /// and metadata alone last.
+    pub fn damage(&self) -> Option<Damage> {
+        let failed = |kind: Kind| self.checks.iter().filter(move |c| !c.ok && c.kind == kind);
+        if let Some(c) = failed(Kind::Truncated).next() {
+            let (have, need) = c.count.unwrap_or((0, 0));
+            return Some(Damage::Truncated { have, need });
+        }
+        if failed(Kind::Data).next().is_some() {
+            // The streaming sweep is one counted check; the in-memory verifier has one per block.
+            let (mut bad, mut total) = (0u64, 0u64);
+            for c in self.checks.iter().filter(|c| c.kind == Kind::Data) {
+                let (b, t) = c.count.unwrap_or((u64::from(!c.ok), 1));
+                bad += b;
+                total += t;
+            }
+            return Some(Damage::Data { bad, total });
+        }
+        let structure = failed(Kind::Structure).count() as u64;
+        if structure > 0 {
+            return Some(Damage::Structure { failed: structure });
+        }
+        let metadata = failed(Kind::Metadata).count() as u64;
+        (metadata > 0).then_some(Damage::Metadata { failed: metadata })
+    }
+
+    fn push(&mut self, kind: Kind, name: impl Into<String>, ok: bool, detail: impl Into<String>) {
         self.checks.push(Check {
             name: name.into(),
             ok,
             detail: detail.into(),
+            kind,
+            count: None,
         });
     }
+
+    /// [`Self::push`] for a check that counts ([`Check::count`]).
+    fn push_counted(
+        &mut self,
+        kind: Kind,
+        name: impl Into<String>,
+        (failed, total): (u64, u64),
+        ok: bool,
+        detail: impl Into<String>,
+    ) {
+        self.push(kind, name, ok, detail);
+        if let Some(c) = self.checks.last_mut() {
+            c.count = Some((failed, total));
+        }
+    }
+}
+
+/// The least a debug package's file has to hold for its header to be true: the outer image and
+/// the start of the container behind it. `None` when the file is long enough (or the header is
+/// a retail one, whose layout this does not judge).
+fn cut_short(fih: &fih::Fih, len: u64) -> Option<(u64, u64)> {
+    if !fih.is_debug() {
+        return None;
+    }
+    let need = fih
+        .pfs_offset
+        .saturating_add(fih.pfs_size)
+        .max(fih.cnt_offset.saturating_add(1));
+    (len < need).then_some((len, need))
 }
 
 impl fmt::Display for Report {
@@ -148,38 +265,69 @@ pub(crate) fn container_report(fih_block: &[u8], fih: &fih::Fih, cnt: &cnt::Cnt)
         checks: Vec::new(),
     };
     r.push(
-        "fih debug image",
+        Kind::Metadata,
+        DEBUG_IMAGE,
         fih.is_debug(),
         format!("signed byte {:#04x}", fih.signed_byte),
     );
     r.push(
+        Kind::Metadata,
         "fih format version 3",
         fih.format_version == 3,
         fih.format_version.to_string(),
     );
-    r.push("cnt package digest", cnt.package_digest_ok(), "");
-    r.push("cnt digest-table digest", cnt.digest_table_digest_ok(), "");
-    r.push("cnt header rollup digest", cnt.header_rollup_ok(), "");
-    r.push("cnt second rollup digest", cnt.sc_entries2_ok(), "");
-    r.push("cnt body digest", cnt.body_digest_ok(), "");
     r.push(
+        Kind::Metadata,
+        "cnt package digest",
+        cnt.package_digest_ok(),
+        "",
+    );
+    r.push(
+        Kind::Metadata,
+        "cnt digest-table digest",
+        cnt.digest_table_digest_ok(),
+        "",
+    );
+    r.push(
+        Kind::Metadata,
+        "cnt header rollup digest",
+        cnt.header_rollup_ok(),
+        "",
+    );
+    r.push(
+        Kind::Metadata,
+        "cnt second rollup digest",
+        cnt.sc_entries2_ok(),
+        "",
+    );
+    r.push(Kind::Metadata, "cnt body digest", cnt.body_digest_ok(), "");
+    r.push(
+        Kind::Metadata,
         "cnt finalized-image digest",
         cnt.fih_digest_ok(fih_block),
         "",
     );
-    r.push("cnt descriptor pairs", cnt.descriptor_ok(), "");
     r.push(
+        Kind::Metadata,
+        "cnt descriptor pairs",
+        cnt.descriptor_ok(),
+        "",
+    );
+    r.push(
+        Kind::Metadata,
         "cnt image-key digest",
         cnt.entry_digest_at(cnt::ids::IMAGE_KEY, 0x520),
         "",
     );
     r.push(
+        Kind::Metadata,
         "cnt imagedigs digest",
         cnt.entry_digest_at(cnt::ids::IMAGE_DIGESTS, 0x540),
         "",
     );
     for (id, verdict) in cnt.entry_digests() {
         r.push(
+            Kind::Metadata,
             format!("cnt entry {id:#06x} digest"),
             verdict != EntryDigest::Mismatch,
             format!("{verdict:?}"),
@@ -192,13 +340,14 @@ pub(crate) fn container_report(fih_block: &[u8], fih: &fih::Fih, cnt: &cnt::Cnt)
             .map(|g| cnt.payload(g))
             .unwrap_or(&[]);
         r.push(
+            Kind::Metadata,
             "param.json digest in GeneralDigests",
             general.windows(32).any(|w| w == param),
             "",
         );
     }
     for (name, ok) in cnt.general_digests(&fih.game_digest) {
-        r.push(name, ok, "");
+        r.push(Kind::Metadata, name, ok, "");
     }
 
     r
@@ -224,6 +373,7 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
 
     let img = outer::open(&mut file, &fih, &cnt, passcode)?;
     r.push(
+        Kind::Structure,
         "outer superblock ICV",
         img.superblock.icv_ok,
         format!("block {}", img.superblock.index),
@@ -233,6 +383,7 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
     let plaintext = img.superblock.mode == crate::ImageMode::PlaintextNoAuth;
     for v in &img.verdicts {
         r.push(
+            Kind::Data,
             format!(
                 "outer block {} {} its imagedigs entry",
                 v.index,
@@ -253,7 +404,7 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
         .plaintext
         .get(img.superblock.inode_table_block as usize)
         .is_some_and(|b| sha3(b) == img.superblock.inode_table_digest);
-    r.push("outer inode table digest", table_ok, "");
+    r.push(Kind::Structure, "outer inode table digest", table_ok, "");
     let nodes = img.dinodes();
     for (ino, n) in nodes.iter().enumerate() {
         let direct_ok = n
@@ -269,6 +420,7 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
         // so every level is checked against the one above it.
         let used = n.indirect.iter().take_while(|t| t.block != 0).count();
         r.push(
+            Kind::Structure,
             format!("outer inode {ino} block signatures"),
             direct_ok && img.indirect_ok(n),
             format!("{} block(s), {used} indirect level(s)", n.blocks),
@@ -279,6 +431,7 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
         .map(|n| img.dirents(n).into_iter().map(|d| d.name).collect())
         .unwrap_or_default();
     r.push(
+        Kind::Structure,
         "outer uroot holds pfs_image.dat and naps_pkg_layout.dat",
         uroot.iter().any(|n| n == "pfs_image.dat")
             && uroot.iter().any(|n| n == "naps_pkg_layout.dat"),
@@ -307,6 +460,7 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
             // package's — `naps::parse` reads the smallest sample exactly and the large ones not
             // at all — so it is reported without failing the package.
             Err(e) => r.push(
+                Kind::Structure,
                 "the inner image expands to the mount its descriptor fixes",
                 true,
                 format!("the descriptor is not parsed here: {e}"),
@@ -314,6 +468,7 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
             Ok(layout) => {
                 let (ok, detail) = inner_mount_ok(image.len() as u64, &image, &layout);
                 r.push(
+                    Kind::Structure,
                     "the inner image expands to the mount its descriptor fixes",
                     ok,
                     detail,
@@ -336,6 +491,7 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
             ok &= flt_holds(&flt, count, flt::hash_path(&d.name), d.ino as u64);
         }
         r.push(
+            Kind::Structure,
             "outer flat-path table hashes the uroot names",
             ok && checked > 0,
             format!("{checked} name(s), {count} table entries"),
@@ -350,15 +506,26 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
                     let stored = file.read_at(m.offset, m.size as usize)?;
                     let expected = si::chunk_crc_table(&mut file, s.zip_start)?;
                     r.push(
+                        Kind::Metadata,
                         "si playgo-chunk.crc",
                         stored == expected,
                         format!("{} bytes", m.size),
                     );
                 }
-                None => r.push("si playgo-chunk.crc", false, format!("{crc_name} missing")),
+                None => r.push(
+                    Kind::Metadata,
+                    "si playgo-chunk.crc",
+                    false,
+                    format!("{crc_name} missing"),
+                ),
             }
         }
-        None => r.push("si zip present", false, "no trailing STORED ZIP"),
+        None => r.push(
+            Kind::Truncated,
+            "si zip present",
+            false,
+            "no trailing STORED ZIP",
+        ),
     }
     Ok(r)
 }
@@ -438,6 +605,23 @@ fn verify_streaming_inner(
     let mut file = PkgFile::open(path)?;
     let fih_block = file.read_at(0, BLOCK as usize)?;
     let fih = fih::parse(&fih_block)?;
+    // A file that stops before its image or container does: said as that, where reading on
+    // would only fail with a read past the end (and a copy check would then read the file as
+    // some other kind of package and find nothing wrong).
+    if let Some((have, need)) = cut_short(&fih, file.len()) {
+        let mut r = Report {
+            content_id: String::new(),
+            checks: Vec::new(),
+        };
+        r.push_counted(
+            Kind::Truncated,
+            "the file is as long as its header says",
+            (have, need),
+            false,
+            format!("{have} bytes, at least {need} needed"),
+        );
+        return Ok(r);
+    }
     let cnt = cnt::read(&mut file, fih.cnt_offset)?;
     let mut r = container_report(&fih_block, &fih, &cnt);
 
@@ -449,6 +633,7 @@ fn verify_streaming_inner(
         Some(d) if d.len() as u64 == count => d,
         _ => {
             r.push(
+                Kind::Structure,
                 "outer imagedigs table",
                 false,
                 "missing or the wrong length",
@@ -466,12 +651,18 @@ fn verify_streaming_inner(
         return format_err("the header's superblock offset is outside the image");
     };
     r.push(
+        Kind::Structure,
         "outer superblock is where the header says",
         sha3(&sb_block) == fih.game_digest,
         format!("block {sb_index}"),
     );
     let superblock = outer::parse_superblock(sb_index, &sb_block)?;
-    r.push("outer superblock ICV", superblock.icv_ok, "");
+    r.push(
+        Kind::Structure,
+        "outer superblock ICV",
+        superblock.icv_ok,
+        "",
+    );
 
     // A native image derives its keys here; a plaintext one stores its blocks as they are, so
     // there is nothing to derive and nothing to undo.
@@ -504,6 +695,7 @@ fn verify_streaming_inner(
 
     let table = read_block(&mut file, superblock.inode_table_block as u64)?;
     r.push(
+        Kind::Structure,
         "outer inode table digest",
         sha3(&table) == superblock.inode_table_digest,
         "",
@@ -517,6 +709,7 @@ fn verify_streaming_inner(
             outer::verify_dinode(node, false, &mut read)?
         };
         r.push(
+            Kind::Structure,
             format!("outer inode {ino} block signatures"),
             ok,
             format!("{} block(s)", node.blocks),
@@ -534,6 +727,7 @@ fn verify_streaming_inner(
     // counts fewer inodes than that is damaged: reported, not indexed past its end.
     let (Some(flt_node), Some(uroot_node)) = (nodes.get(1), nodes.get(2)) else {
         r.push(
+            Kind::Structure,
             "outer image holds its flat-path table and root folder",
             false,
             format!("{} inode(s)", nodes.len()),
@@ -592,12 +786,15 @@ fn verify_streaming_inner(
         return format_err("cancelled");
     }
     progress(done * BLOCK, sweep * BLOCK);
-    r.push(
+    r.push_counted(
+        Kind::Data,
         if plaintext_mode {
             "outer blocks match their imagedigs entry"
         } else {
             "outer blocks decrypt to their imagedigs entry"
         },
+        // Of the blocks looked at: every one, or the sample's.
+        (bad, sweep),
         bad == 0,
         match seed {
             None => format!("{} of {count} failed", bad),
@@ -611,6 +808,7 @@ fn verify_streaming_inner(
     // The uroot dirents (read above) and the flat-path table.
     let names: Vec<String> = uroot.iter().map(|d| d.name.clone()).collect();
     r.push(
+        Kind::Structure,
         "outer uroot holds pfs_image.dat and naps_pkg_layout.dat",
         names.iter().any(|n| n == "pfs_image.dat")
             && names.iter().any(|n| n == "naps_pkg_layout.dat"),
@@ -632,6 +830,7 @@ fn verify_streaming_inner(
             );
         }
         r.push(
+            Kind::Structure,
             "outer flat-path table hashes the uroot names",
             ok && checked > 0,
             format!("{checked} name(s), {count} table entries"),
@@ -649,12 +848,27 @@ fn verify_streaming_inner(
                         None => stored == si::chunk_crc_table(&mut file, s.zip_start)?,
                         Some(seed) => si::chunk_crc_sampled(&mut file, s.zip_start, &stored, seed)?,
                     };
-                    r.push("si playgo-chunk.crc", ok, format!("{} bytes", m.size));
+                    r.push(
+                        Kind::Metadata,
+                        "si playgo-chunk.crc",
+                        ok,
+                        format!("{} bytes", m.size),
+                    );
                 }
-                None => r.push("si playgo-chunk.crc", false, format!("{crc_name} missing")),
+                None => r.push(
+                    Kind::Metadata,
+                    "si playgo-chunk.crc",
+                    false,
+                    format!("{crc_name} missing"),
+                ),
             }
         }
-        None => r.push("si zip present", false, "no trailing STORED ZIP"),
+        None => r.push(
+            Kind::Truncated,
+            "si zip present",
+            false,
+            "no trailing STORED ZIP",
+        ),
     }
     Ok(r)
 }
