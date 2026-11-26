@@ -657,7 +657,7 @@
   "cw_files_sort_size": "আকার অনুযায়ী সাজান",
   "cw_files_sort_view": "সাজানো ও দেখা",
   "cw_files_status_filtered": "{total}টির মধ্যে {n}টি আইটেম",
-  "cw_files_status_items": "{n}টি আইটেম",
+  "cw_files_status_items_v2": "আইটেম: {n}",
   "cw_files_status_selected": "{n}টি বাছাই করা ({size})",
   "cw_files_status_size_dirs": "{size}, ফোল্ডার গণনা হয়নি",
   "cw_files_tasks": "চলমান কাজ: {n}",

@@ -657,7 +657,7 @@
   "cw_files_sort_size": "आकार के अनुसार क्रम",
   "cw_files_sort_view": "क्रम और दृश्य",
   "cw_files_status_filtered": "{total} में से {n} आइटम",
-  "cw_files_status_items": "{n} आइटम",
+  "cw_files_status_items_v2": "आइटम: {n}",
   "cw_files_status_selected": "{n} चुने गए ({size})",
   "cw_files_status_size_dirs": "{size}, फ़ोल्डर गिने नहीं गए",
   "cw_files_tasks": "चल रहे कार्य: {n}",

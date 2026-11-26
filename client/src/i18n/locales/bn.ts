@@ -5871,7 +5871,7 @@ c2c_test_deep_bad: "4 KiB-এর পরীক্ষামূলক পাঠা�
 "cw_files_select_all": "সব বাছুন",
 "cw_files_select_none": "বাছাই সরান",
 "cw_files_select_invert": "উল্টে দিন",
-"cw_files_status_items": "{n}টি আইটেম",
+"cw_files_status_items_v2": "আইটেম: {n}",
 "cw_files_status_filtered": "{total}টির মধ্যে {n}টি আইটেম",
 "cw_files_status_selected": "{n}টি বাছাই করা ({size})",
 "cw_files_status_size_dirs": "{size}, ফোল্ডার গণনা হয়নি",

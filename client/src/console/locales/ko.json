@@ -657,7 +657,7 @@
   "cw_files_sort_size": "크기순",
   "cw_files_sort_view": "정렬 및 보기",
   "cw_files_status_filtered": "{total}개 중 {n}개 항목",
-  "cw_files_status_items": "{n}개 항목",
+  "cw_files_status_items_v2": "항목: {n}",
   "cw_files_status_selected": "{n}개 선택됨 ({size})",
   "cw_files_status_size_dirs": "{size}, 폴더는 제외",
   "cw_files_tasks": "실행 중인 작업: {n}",

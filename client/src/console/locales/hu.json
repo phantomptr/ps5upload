@@ -657,7 +657,7 @@
   "cw_files_sort_size": "Rendezés méret szerint",
   "cw_files_sort_view": "Rendezés és nézet",
   "cw_files_status_filtered": "{n} / {total} elem",
-  "cw_files_status_items": "{n} elem",
+  "cw_files_status_items_v2": "Elemek: {n}",
   "cw_files_status_selected": "{n} kijelölve ({size})",
   "cw_files_status_size_dirs": "{size}, a mappák nincsenek beleszámítva",
   "cw_files_tasks": "Futó feladatok: {n}",

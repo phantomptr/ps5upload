@@ -5824,7 +5824,7 @@ c2c_test_deep_bad: "Тестовая отправка 4 КиБ не дошла: 
 "cw_files_select_all": "Выбрать все",
 "cw_files_select_none": "Снять выбор",
 "cw_files_select_invert": "Инвертировать",
-"cw_files_status_items": "Элементов: {n}",
+"cw_files_status_items_v2": "Элементов: {n}",
 "cw_files_status_filtered": "{n} из {total} элементов",
 "cw_files_status_selected": "Выбрано: {n} ({size})",
 "cw_files_status_size_dirs": "{size}, папки не учтены",

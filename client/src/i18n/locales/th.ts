@@ -5878,7 +5878,7 @@ c2c_test_deep_bad: "การส่งทดสอบ 4 KiB ไปไม่ถ�
 "cw_files_select_all": "เลือกทั้งหมด",
 "cw_files_select_none": "ไม่เลือกเลย",
 "cw_files_select_invert": "กลับการเลือก",
-"cw_files_status_items": "{n} รายการ",
+"cw_files_status_items_v2": "รายการ: {n}",
 "cw_files_status_filtered": "{n} จาก {total} รายการ",
 "cw_files_status_selected": "เลือกแล้ว {n} ({size})",
 "cw_files_status_size_dirs": "{size} ไม่นับโฟลเดอร์",

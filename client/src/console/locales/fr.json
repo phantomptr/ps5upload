@@ -657,7 +657,7 @@
   "cw_files_sort_size": "Trier par taille",
   "cw_files_sort_view": "Tri et affichage",
   "cw_files_status_filtered": "{n} sur {total} éléments",
-  "cw_files_status_items": "{n} éléments",
+  "cw_files_status_items_v2": "Éléments : {n}",
   "cw_files_status_selected": "{n} sélectionnés ({size})",
   "cw_files_status_size_dirs": "{size}, dossiers non comptés",
   "cw_files_tasks": "Tâches en cours : {n}",

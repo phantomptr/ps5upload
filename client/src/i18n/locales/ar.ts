@@ -5871,7 +5871,7 @@ c2c_test_deep_bad: "لم يصل الإرسال التجريبي بحجم 4 KiB: 
 "cw_files_select_all": "تحديد الكل",
 "cw_files_select_none": "إلغاء التحديد",
 "cw_files_select_invert": "عكس التحديد",
-"cw_files_status_items": "{n} عنصر",
+"cw_files_status_items_v2": "العناصر: {n}",
 "cw_files_status_filtered": "{n} من {total} عنصر",
 "cw_files_status_selected": "تم تحديد {n} ({size})",
 "cw_files_status_size_dirs": "{size}، بدون احتساب المجلدات",

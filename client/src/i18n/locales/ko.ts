@@ -5888,7 +5888,7 @@ c2c_test_deep_bad: "4 KiB 테스트 전송이 도착하지 않았습니다: {det
 "cw_files_select_all": "모두 선택",
 "cw_files_select_none": "선택 해제",
 "cw_files_select_invert": "선택 반전",
-"cw_files_status_items": "{n}개 항목",
+"cw_files_status_items_v2": "항목: {n}",
 "cw_files_status_filtered": "{total}개 중 {n}개 항목",
 "cw_files_status_selected": "{n}개 선택됨 ({size})",
 "cw_files_status_size_dirs": "{size}, 폴더는 제외",

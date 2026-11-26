@@ -657,7 +657,7 @@
   "cw_files_sort_size": "Sắp xếp theo dung lượng",
   "cw_files_sort_view": "Sắp xếp và hiển thị",
   "cw_files_status_filtered": "{n} trong {total} mục",
-  "cw_files_status_items": "{n} mục",
+  "cw_files_status_items_v2": "Số mục: {n}",
   "cw_files_status_selected": "Đã chọn {n} ({size})",
   "cw_files_status_size_dirs": "{size}, chưa tính thư mục",
   "cw_files_tasks": "Tác vụ đang chạy: {n}",

@@ -657,7 +657,7 @@
   "cw_files_sort_size": "依大小排序",
   "cw_files_sort_view": "排序與檢視",
   "cw_files_status_filtered": "{total} 項中的 {n} 項",
-  "cw_files_status_items": "{n} 項",
+  "cw_files_status_items_v2": "項目數：{n}",
   "cw_files_status_selected": "已選 {n} 項（{size}）",
   "cw_files_status_size_dirs": "{size}，不含資料夾",
   "cw_files_tasks": "執行中的工作：{n}",

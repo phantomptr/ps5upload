@@ -657,7 +657,7 @@
   "cw_files_sort_size": "По размеру",
   "cw_files_sort_view": "Сортировка и вид",
   "cw_files_status_filtered": "{n} из {total} элементов",
-  "cw_files_status_items": "Элементов: {n}",
+  "cw_files_status_items_v2": "Элементов: {n}",
   "cw_files_status_selected": "Выбрано: {n} ({size})",
   "cw_files_status_size_dirs": "{size}, папки не учтены",
   "cw_files_tasks": "Выполняется задач: {n}",

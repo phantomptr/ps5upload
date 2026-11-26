@@ -657,7 +657,7 @@
   "cw_files_sort_size": "Ordenar por tamanho",
   "cw_files_sort_view": "Ordenar e exibir",
   "cw_files_status_filtered": "{n} de {total} itens",
-  "cw_files_status_items": "{n} itens",
+  "cw_files_status_items_v2": "Itens: {n}",
   "cw_files_status_selected": "{n} selecionados ({size})",
   "cw_files_status_size_dirs": "{size}, pastas não contadas",
   "cw_files_tasks": "Tarefas em andamento: {n}",

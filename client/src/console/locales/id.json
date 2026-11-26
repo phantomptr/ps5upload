@@ -657,7 +657,7 @@
   "cw_files_sort_size": "Urutkan menurut ukuran",
   "cw_files_sort_view": "Urutkan dan tampilan",
   "cw_files_status_filtered": "{n} dari {total} item",
-  "cw_files_status_items": "{n} item",
+  "cw_files_status_items_v2": "Item: {n}",
   "cw_files_status_selected": "{n} dipilih ({size})",
   "cw_files_status_size_dirs": "{size}, folder tidak dihitung",
   "cw_files_tasks": "Tugas berjalan: {n}",

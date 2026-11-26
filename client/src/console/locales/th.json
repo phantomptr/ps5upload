@@ -657,7 +657,7 @@
   "cw_files_sort_size": "เรียงตามขนาด",
   "cw_files_sort_view": "เรียงลำดับและมุมมอง",
   "cw_files_status_filtered": "{n} จาก {total} รายการ",
-  "cw_files_status_items": "{n} รายการ",
+  "cw_files_status_items_v2": "รายการ: {n}",
   "cw_files_status_selected": "เลือกแล้ว {n} ({size})",
   "cw_files_status_size_dirs": "{size} ไม่นับโฟลเดอร์",
   "cw_files_tasks": "งานที่กำลังทำ: {n}",

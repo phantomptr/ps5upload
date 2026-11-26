@@ -657,7 +657,7 @@
   "cw_files_sort_size": "مرتب‌سازی بر اساس اندازه",
   "cw_files_sort_view": "مرتب‌سازی و نمایش",
   "cw_files_status_filtered": "{n} از {total} مورد",
-  "cw_files_status_items": "{n} مورد",
+  "cw_files_status_items_v2": "موردها: {n}",
   "cw_files_status_selected": "{n} انتخاب شده ({size})",
   "cw_files_status_size_dirs": "{size}، پوشه‌ها محاسبه نشده‌اند",
   "cw_files_tasks": "کارهای در حال اجرا: {n}",

@@ -5890,7 +5890,7 @@ c2c_test_deep_bad: "4 KiB のテスト送信が届きませんでした: {detail
 "cw_files_select_all": "すべて選択",
 "cw_files_select_none": "選択を解除",
 "cw_files_select_invert": "選択を反転",
-"cw_files_status_items": "{n} 件",
+"cw_files_status_items_v2": "項目数: {n}",
 "cw_files_status_filtered": "{total} 件中 {n} 件",
 "cw_files_status_selected": "{n} 件選択 ({size})",
 "cw_files_status_size_dirs": "{size}、フォルダは含まず",

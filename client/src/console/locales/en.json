@@ -657,7 +657,7 @@
   "cw_files_sort_size": "Sort by size",
   "cw_files_sort_view": "Sort and view",
   "cw_files_status_filtered": "{n} of {total} items",
-  "cw_files_status_items": "{n} items",
+  "cw_files_status_items_v2": "Items: {n}",
   "cw_files_status_selected": "{n} selected ({size})",
   "cw_files_status_size_dirs": "{size}, folders not counted",
   "cw_files_tasks": "Tasks running: {n}",

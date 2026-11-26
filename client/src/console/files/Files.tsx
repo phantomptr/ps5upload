@@ -1014,7 +1014,7 @@ function ToolButton({
 /** "N items · M selected (size)"; folders count as selected but add no size. */
 export function statusText(st: Status): string {
   const items =
-    st.items === st.total ? t("cw_files_status_items", { n: st.items }) : t("cw_files_status_filtered", { n: st.items, total: st.total });
+    st.items === st.total ? t("cw_files_status_items_v2", { n: st.items }) : t("cw_files_status_filtered", { n: st.items, total: st.total });
   if (!st.selected) return items;
   const size = st.folders ? t("cw_files_status_size_dirs", { size: formatBytes(st.bytes) }) : formatBytes(st.bytes);
   return `${items} · ${t("cw_files_status_selected", { n: st.selected, size })}`;

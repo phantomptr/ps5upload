@@ -5885,7 +5885,7 @@ c2c_test_deep_bad: "4 KiB का परीक्षण नहीं पहुँ
 "cw_files_select_all": "सब चुनें",
 "cw_files_select_none": "चयन हटाएँ",
 "cw_files_select_invert": "चयन उलटें",
-"cw_files_status_items": "{n} आइटम",
+"cw_files_status_items_v2": "आइटम: {n}",
 "cw_files_status_filtered": "{total} में से {n} आइटम",
 "cw_files_status_selected": "{n} चुने गए ({size})",
 "cw_files_status_size_dirs": "{size}, फ़ोल्डर गिने नहीं गए",

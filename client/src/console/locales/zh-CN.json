@@ -657,7 +657,7 @@
   "cw_files_sort_size": "按大小排序",
   "cw_files_sort_view": "排序和视图",
   "cw_files_status_filtered": "{total} 项中的 {n} 项",
-  "cw_files_status_items": "{n} 项",
+  "cw_files_status_items_v2": "项目数：{n}",
   "cw_files_status_selected": "已选 {n} 项（{size}）",
   "cw_files_status_size_dirs": "{size}，不含文件夹",
   "cw_files_tasks": "运行中的任务：{n}",

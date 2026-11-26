@@ -657,7 +657,7 @@
   "cw_files_sort_size": "サイズ順",
   "cw_files_sort_view": "並べ替えと表示",
   "cw_files_status_filtered": "{total} 件中 {n} 件",
-  "cw_files_status_items": "{n} 件",
+  "cw_files_status_items_v2": "項目数: {n}",
   "cw_files_status_selected": "{n} 件選択 ({size})",
   "cw_files_status_size_dirs": "{size}、フォルダは含まず",
   "cw_files_tasks": "実行中のタスク: {n}",

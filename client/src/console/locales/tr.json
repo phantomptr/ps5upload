@@ -657,7 +657,7 @@
   "cw_files_sort_size": "Boyuta göre sırala",
   "cw_files_sort_view": "Sırala ve görünüm",
   "cw_files_status_filtered": "{total} öğeden {n} tanesi",
-  "cw_files_status_items": "{n} öğe",
+  "cw_files_status_items_v2": "Öğe: {n}",
   "cw_files_status_selected": "{n} seçili ({size})",
   "cw_files_status_size_dirs": "{size}, klasörler sayılmadı",
   "cw_files_tasks": "Çalışan görevler: {n}",
