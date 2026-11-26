@@ -94,6 +94,8 @@ pub struct Pool {
     power_probe: PowerProbe,
     /// How long a failure DDP explained (rest mode, or nothing answering) is repeated.
     probed_ttl: Duration,
+    /// How long `confirm_pairing` waits for the console to answer the typed code.
+    pairing_timeout: Duration,
 }
 
 /// The DDP probe a pool uses: host (no port) to the reply's code (`200` awake, `620` rest
@@ -147,6 +149,12 @@ pub const PROBED_REFUSAL_TTL: Duration = Duration::from_secs(12);
 /// How long a `ava1_not_paired` refusal is repeated: it outlasts the client's 10 s status poll.
 /// A pairing attempt (the dialog opening, a confirm, a dismissal) resets it.
 pub const NOT_PAIRED_TTL: Duration = Duration::from_secs(30);
+/// How long the console has to answer a typed pairing code (two round trips) before the
+/// confirm gives up. It runs holding the console's one-at-a-time lock, which every pairing
+/// call and every new session to that console waits for: a console that kept the connection
+/// alive but never answered held them all for as long as it did. The console itself gives a
+/// pending code 60 s.
+pub const PAIRING_CONFIRM_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Whether the console answering at a new address is the one paired at an old one
 /// (`Pool::same_console`).
@@ -405,6 +413,7 @@ impl Pool {
             room_probe: None,
             power_probe: ddp_power_probe(),
             probed_ttl: PROBED_REFUSAL_TTL,
+            pairing_timeout: PAIRING_CONFIRM_TIMEOUT,
         }
     }
 
@@ -473,6 +482,7 @@ impl Pool {
             room_probe: None,
             power_probe: ddp_power_probe(),
             probed_ttl: PROBED_REFUSAL_TTL,
+            pairing_timeout: PAIRING_CONFIRM_TIMEOUT,
         }
     }
 
@@ -480,6 +490,12 @@ impl Pool {
     /// engine (A1).
     pub fn with_addr(mut self, addr: impl Into<String>) -> Pool {
         self.addr = Some(addr.into());
+        self
+    }
+
+    /// Test seam: how long `confirm_pairing` waits for the console's answer.
+    pub fn with_pairing_timeout(mut self, t: Duration) -> Pool {
+        self.pairing_timeout = t;
         self
     }
 
@@ -931,9 +947,12 @@ impl Pool {
             let Some(mut s) = taken.filter(|s| !s.is_closed()) else {
                 return Err(Ava1Error::NotPaired);
             };
-            if let Err(e) = s.confirm_pairing(typed).await {
-                // The console refused the code (or could not prove its own): the session is
-                // used up. A retry is a new handshake with a new code on the console.
+            let confirmed = tokio::time::timeout(self.pairing_timeout, s.confirm_pairing(typed))
+                .await
+                .unwrap_or(Err(Ava1Error::Timeout));
+            if let Err(e) = confirmed {
+                // The console refused the code, could not prove its own, or never answered: the
+                // session is used up. A retry is a new handshake with a new code on the console.
                 s.close().await;
                 return Err(e);
             }
