@@ -142,7 +142,15 @@ pub fn extract_from_ffpkg(
         let target = dest_dir.join(leaf_name);
         create_dir_all(&target).map_err(Ufs2Error::Io)?;
         let mut walked = std::collections::HashSet::from([inode.number]);
-        extract_dir_recursive(&mut img, &inode, &target, &mut result, 0, &mut walked)?;
+        extract_dir_recursive(
+            &mut img,
+            &inode,
+            &target,
+            &mut result,
+            0,
+            &mut walked,
+            &mut ufs2::WalkBudget::default(),
+        )?;
     } else {
         return Err(Ufs2Error::NotFound {
             component: format!("{leaf_name} (not a file or directory)"),
@@ -199,6 +207,7 @@ fn extract_dir_recursive<R: Read + Seek>(
     result: &mut FfpkgExtractResult,
     depth: u32,
     walked: &mut std::collections::HashSet<u64>,
+    budget: &mut ufs2::WalkBudget,
 ) -> Result<(), Ufs2Error> {
     // Bound recursion against pathological nesting. A directory cycle is refused on its own
     // (`walked`): an entry naming its own directory or an ancestor is not stopped by the depth
@@ -209,7 +218,7 @@ fn extract_dir_recursive<R: Read + Seek>(
             max: FFPKG_EXTRACT_MAX_DEPTH,
         });
     }
-    let entries = img.list_dir(dir)?;
+    let entries = img.list_dir_in_walk(dir, budget)?;
     for e in entries {
         if !is_safe_child_name(&e.name) {
             // Skip but don't fail the whole extract — a hostile
@@ -229,7 +238,15 @@ fn extract_dir_recursive<R: Read + Seek>(
                 });
             }
             create_dir_all(&child_path).map_err(Ufs2Error::Io)?;
-            extract_dir_recursive(img, &child_inode, &child_path, result, depth + 1, walked)?;
+            extract_dir_recursive(
+                img,
+                &child_inode,
+                &child_path,
+                result,
+                depth + 1,
+                walked,
+                budget,
+            )?;
         } else if child_inode.is_file() {
             let written = extract_file(img, &child_inode, &child_path)?;
             result.file_count += 1;
@@ -2621,8 +2638,16 @@ mod tests {
                 sample_paths: Vec::new(),
             };
             let mut walked = std::collections::HashSet::from([root.number]);
-            let e = extract_dir_recursive(&mut img, &root, &dest, &mut result, 0, &mut walked)
-                .unwrap_err();
+            let e = extract_dir_recursive(
+                &mut img,
+                &root,
+                &dest,
+                &mut result,
+                0,
+                &mut walked,
+                &mut ufs2::WalkBudget::default(),
+            )
+            .unwrap_err();
             assert!(
                 matches!(e, Ufs2Error::DirectoryCycle { inode: 2 }),
                 "{names:?}: {e}"

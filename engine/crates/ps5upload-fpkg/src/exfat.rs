@@ -147,6 +147,16 @@ impl ExFat {
     /// [`ExFat::walk`], plus the directories left with nothing in them once junk is skipped
     /// (sorted), as [`crate::source::scan_tree`] reports them for a folder.
     pub fn walk_tree(&mut self) -> Result<(Vec<ExFatFile>, Vec<String>)> {
+        // Every directory of a sound volume is clusters of its own, so all of them together
+        // never hold more than the heap: a walk that has read more is reading the same
+        // clusters again through directories that overlap, which a crafted image can make
+        // go on for terabytes (a million directories of up to 64 MiB each).
+        let heap = u64::from(self.geom.cluster_count) * self.geom.cluster_size;
+        self.walk_within(heap)
+    }
+
+    /// [`ExFat::walk_tree`], reading at most `dir_budget` directory bytes in all.
+    fn walk_within(&mut self, dir_budget: u64) -> Result<(Vec<ExFatFile>, Vec<String>)> {
         let root = self.root_cluster;
         let bytes = self.chain_stream(root)?;
         let mut w = Walked {
@@ -155,7 +165,10 @@ impl ExFat {
             dirs: std::collections::HashSet::from([root]),
             path_bytes: 0,
             listed: 0,
+            dir_bytes: 0,
+            dir_budget,
         };
+        w.read_dir(bytes.len() as u64)?;
         self.walk_dir(&bytes, "", 0, &mut w)?;
         let (mut files, mut empty) = (w.files, w.empty);
         files.sort_by(|a, b| a.path.cmp(&b.path));
@@ -205,6 +218,8 @@ impl ExFat {
                         e.first_cluster
                     ));
                 }
+                // Charged before it is read: the budget is what stops the reading.
+                w.read_dir(e.size.max(self.geom.cluster_size))?;
                 let bytes = self.read_dir_stream(&e, &path)?;
                 if !self.walk_dir(&bytes, &format!("{path}/"), depth + 1, w)? {
                     w.keep(&path)?;
@@ -460,9 +475,26 @@ struct Walked {
     /// [`MAX_ENTRIES`]: counted as they are parsed, so the entries of directories still being
     /// walked further up count too.
     listed: usize,
+    /// Directory bytes read so far, every directory's, against `dir_budget`.
+    dir_bytes: u64,
+    /// The most directory bytes the walk may read: the heap's size (see [`ExFat::walk_tree`]).
+    dir_budget: u64,
 }
 
 impl Walked {
+    /// Count one more directory's bytes against the walk's budget.
+    fn read_dir(&mut self, bytes: u64) -> Result<()> {
+        self.dir_bytes = self.dir_bytes.saturating_add(bytes);
+        if self.dir_bytes > self.dir_budget {
+            return format_err(format!(
+                "the volume's directories add up to more than its {} bytes: they overlap, \
+                 so the image is damaged",
+                self.dir_budget
+            ));
+        }
+        Ok(())
+    }
+
     /// Count one more kept path against the walk's budgets.
     fn keep(&mut self, path: &str) -> Result<()> {
         self.path_bytes += path.len();
@@ -1272,5 +1304,45 @@ mod tests {
         let err = err.to_string();
         assert!(err.contains("past the image"), "{err}");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A crafted volume's directories can overlap, and a walk that reads the same clusters again
+    /// through each would grind on for as long as they let it. A walk reads no more directory
+    /// bytes than the volume holds: a sound one never needs more, as its directories are
+    /// clusters of their own.
+    #[test]
+    fn the_walk_reads_no_more_directory_bytes_than_the_volume_holds() {
+        let path =
+            std::env::temp_dir().join(format!("fpkg-exfat-{}-dir-budget", std::process::id()));
+        std::fs::write(&path, image_with_dirs()).unwrap();
+        let mut volume = ExFat::open(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        // The sound image: its root and four directories, one cluster each, in nine clusters.
+        let (files, _) = volume.walk_tree().unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(volume.walk_within(5 * 4096).is_ok());
+        // One cluster less than those five, and the walk stops instead of reading on.
+        let err = volume.walk_within(4 * 4096).unwrap_err().to_string();
+        assert!(err.contains("add up to more than"), "{err}");
+    }
+
+    /// Overlapping directories, as a crafted image has them: `empty` now claims the rest of the
+    /// volume, over the clusters `junk`, `nest` and `deeper` have. Nothing in it parses as more than it
+    /// did, yet the walk reads more than the volume holds and is refused.
+    #[test]
+    fn overlapping_directories_are_refused() {
+        let mut img = image_with_dirs();
+        // `empty`'s stream record is the root's eighth record (cluster 4): its data length.
+        let at = 2 * 512 + (4 - 2) * 4096 + 7 * 32 + 24;
+        img[at..at + 8].copy_from_slice(&(5 * 4096u64).to_le_bytes());
+        // And `junk` (the root's eleventh record) runs on over `nest` and `deeper`.
+        let at = at + 3 * 32;
+        img[at..at + 8].copy_from_slice(&(3 * 4096u64).to_le_bytes());
+        let path = std::env::temp_dir().join(format!("fpkg-exfat-{}-overlap", std::process::id()));
+        std::fs::write(&path, img).unwrap();
+        let err = ExFatSource::open(&path).err().map(|e| e.to_string());
+        std::fs::remove_file(&path).ok();
+        let err = err.expect("refused");
+        assert!(err.contains("add up to more than"), "{err}");
     }
 }

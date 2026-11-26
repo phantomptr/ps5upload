@@ -58,6 +58,37 @@ pub const ROOT_INODE: u64 = 2;
 // ponytail: 64 MiB per directory read whole (~250,000 maximal names), stream the entries block by block if a real image ever needs more
 pub const MAX_DIR_BYTES: u64 = 64 * 1024 * 1024;
 
+/// The most directory bytes one walk of an image reads in all, as the PFS reader bounds its
+/// walk. Each directory may hold [`MAX_DIR_BYTES`] and a walk may list a million entries, so a
+/// crafted image of directories that claim the most and share their blocks would otherwise have
+/// a walk read terabytes. A real game's directories are a few MiB together.
+pub const MAX_WALK_DIR_BYTES: u64 = 2 << 30;
+
+/// What one walk of an image has read of its directories, against [`MAX_WALK_DIR_BYTES`]: give
+/// each walk its own and list through [`Ufs2Image::list_dir_in_walk`].
+#[derive(Debug)]
+pub struct WalkBudget {
+    dir_bytes: u64,
+    max: u64,
+}
+
+impl Default for WalkBudget {
+    fn default() -> Self {
+        Self {
+            dir_bytes: 0,
+            max: MAX_WALK_DIR_BYTES,
+        }
+    }
+}
+
+impl WalkBudget {
+    /// A budget of `max` bytes, for a test that cannot make gigabytes of directories.
+    #[doc(hidden)]
+    pub fn with_max(max: u64) -> Self {
+        Self { dir_bytes: 0, max }
+    }
+}
+
 /// The most entries [`Ufs2Image::list_dir`] returns for one directory. The byte budget alone
 /// would allow five million twelve-byte records, each a [`DirEntry`] on the heap.
 pub const MAX_DIR_ENTRIES: usize = 1_000_000;
@@ -118,6 +149,8 @@ pub enum Ufs2Error {
     InodeRunTooLong { count: u64, max: u64 },
     #[error("directory inode {inode} has more than {max} entries")]
     TooManyEntries { inode: u64, max: usize },
+    #[error("the image's directories add up to more than {max} bytes: the image is damaged")]
+    WalkTooLarge { max: u64 },
     #[error("directory inode {inode} holds a name that {why} (bytes {hex})")]
     BadName {
         inode: u64,
@@ -474,6 +507,22 @@ fn parse_inode(n: u64, buf: &[u8]) -> Inode {
 }
 
 impl<R: Read + Seek> Ufs2Image<R> {
+    /// [`Ufs2Image::list_dir`] as one step of a walk: the directory's bytes are charged to
+    /// `budget` before they are read, and a walk past it is refused.
+    pub fn list_dir_in_walk(
+        &mut self,
+        dir: &Inode,
+        budget: &mut WalkBudget,
+    ) -> Result<Vec<DirEntry>, Ufs2Error> {
+        if dir.is_dir() {
+            budget.dir_bytes = budget.dir_bytes.saturating_add(dir.size);
+            if budget.dir_bytes > budget.max {
+                return Err(Ufs2Error::WalkTooLarge { max: budget.max });
+            }
+        }
+        self.list_dir(dir)
+    }
+
     /// List entries in a directory inode.
     pub fn list_dir(&mut self, dir: &Inode) -> Result<Vec<DirEntry>, Ufs2Error> {
         if !dir.is_dir() {
@@ -1274,6 +1323,27 @@ mod tests {
             img.list_dir(&dir),
             Err(Ufs2Error::TooManyEntries { .. })
         ));
+    }
+
+    /// A walk charges every directory it lists: once their bytes add up to more than its budget
+    /// the next listing is refused, before that directory is read.
+    #[test]
+    fn a_walk_past_its_directory_budget_is_refused() {
+        let (mut img, dir) = big_dir(40, 8);
+        let mut walk = WalkBudget::with_max(3 * dir.size);
+        for _ in 0..3 {
+            assert_eq!(img.list_dir_in_walk(&dir, &mut walk).unwrap().len(), 40);
+        }
+        assert!(matches!(
+            img.list_dir_in_walk(&dir, &mut walk),
+            Err(Ufs2Error::WalkTooLarge { .. })
+        ));
+        // A real walk's budget is far above any real image's directories.
+        assert!(WalkBudget::default().max >= 1 << 30);
+        // A file is no directory, and costs nothing.
+        let mut file = dir.clone();
+        file.mode = 0o100644;
+        assert!(img.list_dir_in_walk(&file, &mut walk).unwrap().is_empty());
     }
 
     /// A directory inode claiming more than the budget is refused before anything is read.
