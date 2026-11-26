@@ -92,6 +92,8 @@ pub const CTRL_NO_SESSION_ID: &str = "the console never sent a session id over c
 /// The same, the console closing ctrl instead.
 pub const CTRL_CLOSED_BEFORE_SESSION_ID: &str =
     "the console closed ctrl before sending a session id";
+/// The page stopped while the session id was awaited: the stream ends as a stop.
+const CTRL_STOPPED: &str = "stopped while the console's session id was awaited";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Codec {
@@ -507,6 +509,10 @@ fn await_session_id(
         } else if Instant::now() > deadline {
             // What it did send, for the log: what it was busy with (#720).
             bail!("{CTRL_NO_SESSION_ID} (heard: {heard})");
+        } else if page.stopped() {
+            // A Stop while a slow console (#720) takes its time: not held for the whole wait,
+            // which kept the session "still finishing" and refused a new Start meanwhile.
+            bail!(CTRL_STOPPED);
         }
         match s.read(&mut buf) {
             Ok(0) if flow.involved() => bail!(PASSCODE_CONSOLE_GAVE_UP),
@@ -978,6 +984,10 @@ pub fn run_stream(
     };
     let (mut ctrl, session_id, brt, amb) = match opened {
         Ok(c) => c,
+        // Stopped while the console took its time: a stop, as above.
+        Err(e) if format!("{e:#}").contains(CTRL_STOPPED) => {
+            return Ok(StreamReport::default());
+        }
         // The console gave a nonce, then refused or reset ctrl: it is booting
         // (rule 2 in guard.rs) or still letting go of a session. Seen on the
         // Pro awake (DDP 200) 2.5 min after a clean stop; fine again ~5 min
@@ -1674,6 +1684,48 @@ mod tests {
         let mut p = vec![SESSION.len() as u8];
         p.extend_from_slice(SESSION);
         p
+    }
+
+    /// A Stop while a silent console takes its time over the session id ends the wait within a
+    /// read, not after CTRL_SESSION_WAIT.
+    #[test]
+    fn a_stop_ends_the_wait_for_the_session_id() {
+        struct StopSoon(u32);
+        impl StreamSink for StopSoon {
+            fn video(&mut self, _: &[u8], _: bool) -> bool {
+                true
+            }
+            fn stopped(&mut self) -> bool {
+                self.0 += 1;
+                self.0 > 2
+            }
+        }
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        let t = std::thread::spawn(move || {
+            let (mut c, _) = l.accept().unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            // Says nothing until we hang up.
+            let mut b = [0u8; 64];
+            while matches!(c.read(&mut b), Ok(n) if n > 0) {}
+        });
+        let mut s = TcpStream::connect(addr).unwrap();
+        let (mut ours, mut theirs) = (5u64, 1u64);
+        let t0 = Instant::now();
+        let r = await_session_id(
+            &mut s,
+            &mut Vec::new(),
+            &BRT,
+            &AMB,
+            &mut ours,
+            &mut theirs,
+            &mut StopSoon(0),
+        );
+        drop(s);
+        t.join().unwrap();
+        let e = format!("{:#}", r.unwrap_err());
+        assert!(e.contains(CTRL_STOPPED), "{e}");
+        assert!(t0.elapsed() < Duration::from_secs(5));
     }
 
     /// Run `await_session_id` against a fake console thread; returns the result, what the page
