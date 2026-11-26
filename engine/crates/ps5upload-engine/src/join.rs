@@ -2536,6 +2536,10 @@ enum Admit {
     New(String, u64),
 }
 
+/// Guest sockets so far: how the log tells one from another before it is a guest (never by its
+/// address or the name it gave: a bug report is posted in public).
+static GUEST_SOCKETS: AtomicU64 = AtomicU64::new(1);
+
 pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
     let Some(hello) = read_hello(&mut socket).await else {
         let _ = socket.send(refused("hello")).await;
@@ -2543,11 +2547,17 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
     };
     let name = clean_name(hello.name.as_deref());
     let t0 = Instant::now();
+    let sock = GUEST_SOCKETS.fetch_add(1, Ordering::Relaxed);
     // What the guest came with, never the credential itself.
     crate::log_at!(
         Debug,
         "together",
-        "join: guest {ip} ({name}) says hello: resume={} invite={} code={}",
+        "join: guest socket {sock} ({}) says hello: resume={} invite={} code={}",
+        if socket.net().is_some() {
+            "internet"
+        } else {
+            "LAN"
+        },
         hello.resume.as_deref().is_some_and(|t| !t.is_empty()),
         hello.invite.as_deref().is_some_and(|k| !k.is_empty()),
         hello.code.as_deref().is_some_and(|c| !c.trim().is_empty()),
@@ -2594,7 +2604,7 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
             crate::log_at!(
                 Debug,
                 "together",
-                "join: guest {ip} ({name}) refused: {why} after {ms} ms"
+                "join: guest socket {sock} refused: {why} after {ms} ms"
             );
             let _ = socket.send(refused(why)).await;
             return;
@@ -2603,7 +2613,7 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
             crate::log_at!(
                 Debug,
                 "together",
-                "join: guest {ip} ({name}) resumed on {c} after {ms} ms"
+                "join: guest socket {sock} resumed as guest {id} on {c} after {ms} ms"
             );
             (c, id)
         }
@@ -2611,7 +2621,7 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
             crate::log_at!(
                 Debug,
                 "together",
-                "join: guest {ip} ({name}) let in on {c} after {ms} ms"
+                "join: guest socket {sock} let in as guest {id} on {c} after {ms} ms"
             );
             (c, id)
         }
@@ -2929,8 +2939,11 @@ async fn ask<S: GuestSocket>(
         return Some(Admit::Refused(why));
     }
     // By number in the log: a bug report is posted in public, and names are the host's friends.
-    crate::log_at!(Info, "together", "join: a guest asks to play on {console}");
-    crate::log_at!(Debug, "together", "join: {name} asks to play on {console}");
+    crate::log_at!(
+        Info,
+        "together",
+        "join: ask {id}: a guest asks to play on {console}"
+    );
     if socket
         .send(say(serde_json::json!({"stage": "asking"})))
         .await
@@ -2950,7 +2963,7 @@ async fn ask<S: GuestSocket>(
     crate::log_at!(
         Debug,
         "together",
-        "join: {name}'s ask on {console}: {} after {} ms",
+        "join: ask {id} on {console}: {} after {} ms",
         if gave_up {
             "the guest gave up".to_string()
         } else {
@@ -3000,12 +3013,7 @@ async fn ask<S: GuestSocket>(
             crate::log_at!(
                 Info,
                 "together",
-                "join: a guest has the stream's controller on {console}"
-            );
-            crate::log_at!(
-                Debug,
-                "together",
-                "join: {name} has the stream's controller on {console}"
+                "join: guest {gid} has the stream's controller on {console}"
             );
             return Some(Admit::New(console, gid));
         }
@@ -3037,12 +3045,7 @@ async fn ask<S: GuestSocket>(
             crate::log_at!(
                 Info,
                 "together",
-                "join: a guest is Player {player} on {console}"
-            );
-            crate::log_at!(
-                Debug,
-                "together",
-                "join: {name} is Player {player} on {console}"
+                "join: guest {gid} is Player {player} on {console}"
             );
             return Some(Admit::New(console, gid));
         }

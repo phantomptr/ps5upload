@@ -1283,7 +1283,7 @@ async fn pad_session<S: crate::join::GuestSocket>(
         send_limited(&mut socket, refuse("full")).await;
         return;
     }
-    // By number at this level: a bug report is posted in public (names under Detailed logs).
+    // By number: a bug report is posted in public (never a phone's name or address).
     crate::log_at!(
         Info,
         "together",
@@ -1291,7 +1291,6 @@ async fn pad_session<S: crate::join::GuestSocket>(
         if watch { "watcher" } else { "controller" },
         if net.is_some() { "internet" } else { "LAN" }
     );
-    crate::log_at!(Debug, "together", "pad_link: phone {id} is {name}");
     let mut tick = tokio::time::interval(STATE_EVERY);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // Rounds since anything came from the phone (counted, not timed: see rp_stream_api's page).
