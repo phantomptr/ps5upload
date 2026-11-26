@@ -768,6 +768,18 @@ impl Ctx<'_, '_> {
             },
             None => None,
         };
+        // Its game asked about again right before the read: the run was planned (that game not
+        // running) up to minutes ago, and a game started since may be writing the save. Copied
+        // then, a torn save was kept as verified, and keep-N could prune a good older one for it.
+        // A console that can't say now goes on to the read, which waits for a PS5 that is gone.
+        if folder.is_none() {
+            if let Ok(titles) = self.console.running(host) {
+                if let Some(app) = writer_running(entry, &titles) {
+                    run.failed(i, &running_now(app));
+                    return End::Done;
+                }
+            }
+        }
         // Off the console and zipped, waiting for a PS5 that stops answering a few times.
         let mut tries = 0usize;
         loop {
@@ -1592,6 +1604,8 @@ mod tests {
         pub folder_err: RefCell<Option<String>>,
         /// The titles running (upper-case), or why that can't be asked.
         pub running: RefCell<Result<BTreeSet<String>, String>>,
+        /// A game the player starts while the first save is read (it then runs).
+        pub starts_on_read: RefCell<Option<String>>,
     }
 
     const GONE: &str =
@@ -1651,6 +1665,11 @@ mod tests {
                 return Err(GONE.into());
             }
             self.reads.set(self.reads.get() + 1);
+            if let Some(game) = self.starts_on_read.borrow_mut().take() {
+                if let Ok(running) = self.running.borrow_mut().as_mut() {
+                    running.insert(game);
+                }
+            }
             let dir = tmp.join(&e.title_id);
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             std::fs::write(dir.join("sdimg_SAVEDATA00"), &self.bytes[&e.path])
@@ -1759,6 +1778,7 @@ mod tests {
             id: RefCell::new(Some(PS5_ID.into())),
             folder_err: RefCell::default(),
             running: RefCell::new(Ok(BTreeSet::new())),
+            starts_on_read: RefCell::default(),
         }
     }
 
@@ -2460,6 +2480,51 @@ mod tests {
             Some("the folder is no longer on the PS5")
         );
         again.finish(None);
+    }
+
+    /// A game started while a run is under way (it was planned with that game closed): its saves
+    /// are not read while it runs, and wait for the next pass; the other games' saves all go.
+    #[test]
+    fn a_game_started_during_a_run_has_its_saves_left_alone() {
+        let c = console(0, 0);
+        let late = "PPSA01003".to_string();
+        *c.starts_on_read.borrow_mut() = Some(late.clone());
+        let fs = MemFs::new(&[]);
+        let records = MemRecords::default();
+        let journal = Journal::open(None);
+        let hosts = all_hosts();
+        pass_over(
+            &c,
+            &fs,
+            &records,
+            &Retry::instant(),
+            &journal,
+            "manual",
+            Work::Hosts(&hosts, false),
+        );
+        let run = journal.last(Which::Share).unwrap();
+        let (late_items, others): (Vec<&Item>, Vec<&Item>) =
+            run.items.iter().partition(|it| it.title_id == late);
+        assert_eq!(late_items.len(), 11);
+        // The save being read as the game started may have gone already; none after it did.
+        let copied_late = late_items
+            .iter()
+            .filter(|it| it.dests[&Place::Share].step == Step::Verified)
+            .count();
+        assert!(
+            copied_late <= 1,
+            "{copied_late} saves of a running game copied"
+        );
+        for it in late_items
+            .iter()
+            .filter(|it| it.dests[&Place::Share].step != Step::Verified)
+        {
+            assert_eq!(it.error, Some(running_now(&late)));
+        }
+        assert!(others
+            .iter()
+            .all(|it| it.dests[&Place::Share].step == Step::Verified));
+        assert_eq!(c.reads.get(), 55 + copied_late);
     }
 
     /// The audit's cases. A share pass took a console that could not say what runs on it as
