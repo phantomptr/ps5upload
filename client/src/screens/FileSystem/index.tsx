@@ -278,7 +278,7 @@ import { formatNumber, formatDuration } from "../../lib/formatDate";
 import { Modal } from "../../components/Modal";
 import { childToReveal, REVEAL_MS } from "../../lib/revealChild";
 import { useBackDismiss, useScreenBack } from "../../lib/systemBack";
-import { usePhoneLayout, usePhoneTopBar } from "../../lib/phoneLayout";
+import { usePhoneLayout } from "../../lib/phoneLayout";
 import { ltr } from "../../i18n";
 import NotificationInbox from "../../layout/NotificationInbox";
 import { createLongPress } from "../../lib/longPress";
@@ -3154,12 +3154,11 @@ export default function FileSystemScreen() {
     return () => root.removeAttribute("data-selection-bar");
   }, [phoneSelecting]);
   // One bar at the top, not two (#936): on a phone the compact header carries the bell, and the
-  // app's top bar gives it its place (`html[data-screen-bar]`, index.css). Only where that bar
-  // shows (below `md`: a phone held sideways that wide has the bell in the row beside the
-  // sidebar), and not over a view, which has no such header. An iPhone keeps the app's bar: its
-  // arrows are the only way back there.
-  const phoneTopBar = usePhoneTopBar();
-  const ownTopBar = phone && phoneTopBar && view === null && !isIOS();
+  // app's top bar gives it its place (`html[data-screen-bar]`, index.css). Held sideways too,
+  // where the row beside the sidebar gives way and only its console tabs stay: two rows left
+  // room for about two files. Not over a view, which has no such header. An iPhone keeps the
+  // app's bar: its arrows are the only way back there.
+  const ownTopBar = phone && view === null && !isIOS();
   useEffect(() => {
     if (!ownTopBar) return;
     const root = document.documentElement;

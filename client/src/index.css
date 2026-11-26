@@ -1217,6 +1217,16 @@ html[data-keyboard] [data-testid="activity-pill"] { display: none !important; }
 /* A screen whose own header carries the bell on a phone (Files, #936) takes the top bar's place:
    only the room the system keeps at the top is left of it. Below `md`, where that bar shows
    (PHONE_TOP_BAR_QUERY in lib/phoneLayout.ts). */
+/* A phone held sideways (the sidebar's layout, about 390 px tall; PHONE_LANDSCAPE_QUERY): the
+   row over the page gives way the same way. Its search, reload and theme buttons go, the bell is
+   in the screen's header, and only the console tabs stay. With the Files header under it, two
+   rows left room for about two files. */
+@media (min-width: 768px) and (pointer: coarse) and (orientation: landscape) and (max-height: 520px) {
+  html[data-screen-bar] [data-top-row] {
+    padding-top: var(--safe-top);
+  }
+  html[data-screen-bar] [data-top-row] > :not([data-keep]) { display: none; }
+}
 @media (max-width: 767.98px) {
   html[data-screen-bar] [data-top-bar] {
     min-height: 0;

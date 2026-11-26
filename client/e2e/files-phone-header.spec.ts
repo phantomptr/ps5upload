@@ -151,15 +151,28 @@ for (const phone of PHONES) {
       // No boxes until selecting.
       await expect(row(page, "file-01.pkg").getByRole("checkbox")).toBeHidden();
       // One bar at the top: no Back and Forward arrows (the phone's Back goes back), and one
-      // bell. Where the app's own top bar would show (below 768 px) the bell is in this header
-      // and that bar is gone; wider, it stays in the row beside the sidebar.
+      // bell, in this header. Below 768 px the app's own top bar gives way; held sideways, the
+      // row beside the sidebar does (its search, reload and theme buttons go too): with both
+      // rows there, about two files were left in view.
       await expect(page.getByRole("navigation", { name: "View history" }).locator("visible=true")).toHaveCount(0);
       const bell = page.getByRole("button", { name: "Open notifications" }).locator("visible=true");
       await expect(bell).toHaveCount(1);
-      if (phone.viewport.width < 768) {
+      {
         await expect(header.getByRole("button", { name: "Open notifications" })).toBeVisible();
         await expect(page.locator("[data-top-bar]").getByText("PS5Upload")).toBeHidden();
-        expect((await header.boundingBox())!.y).toBeLessThan(24);
+        await expect(page.getByRole("button", { name: "Reload page" }).locator("visible=true")).toHaveCount(0);
+        await expect(page.getByRole("button", { name: "Search screens and commands" }).locator("visible=true")).toHaveCount(0);
+        // At the top (held sideways, under the page's own top margin only: it was under a row
+        // of buttons, at about 88 px).
+        expect((await header.boundingBox())!.y).toBeLessThan(phone.viewport.width < 768 ? 24 : 40);
+        // Rows of files in view under the header (two, before).
+        const shown = await main(page)
+          .locator("li[data-fs-name]")
+          .evaluateAll((rows) => rows.filter((r) => {
+            const b = r.getBoundingClientRect();
+            return b.top >= 0 && b.bottom <= window.innerHeight;
+          }).length);
+        expect(shown).toBeGreaterThanOrEqual(3);
         // Its panel hangs under the header, inside the window.
         await bell.tap();
         const panel = page.getByTestId("notifications-panel").locator("visible=true");
@@ -173,8 +186,6 @@ for (const phone of PHONES) {
         await shot(page, `bell-${phone.viewport.width}x${phone.viewport.height}`);
         expect(await back(page)).toBe(true);
         await expect(panel).toHaveCount(0);
-      } else {
-        await expect(header.getByRole("button", { name: "Open notifications" })).toHaveCount(0);
       }
       await shot(page, `header-${phone.viewport.width}x${phone.viewport.height}`);
 
@@ -377,6 +388,7 @@ test.describe("desktop width", () => {
     await expect(arrows.getByRole("button", { name: "Forward" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Open notifications" }).locator("visible=true")).toHaveCount(1);
     await expect(main(page).getByTestId("fs-header").getByRole("button", { name: "Open notifications" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Reload page" })).toBeVisible();
     await shot(page, "desktop-1280x800");
   });
 });

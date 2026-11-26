@@ -1884,7 +1884,12 @@ export default function AppShell() {
             className="flex min-w-0 flex-1 flex-col overflow-hidden outline-none"
           >
             {/* A phone held sideways is short: less room over this row there. */}
-            <div className="flex min-w-0 items-center gap-3 px-3 md:px-6 md:pt-[calc(var(--safe-top)_+_1rem)] phone:md:pt-[calc(var(--safe-top)_+_0.375rem)]">
+            {/* On a phone held sideways, a screen with its own header (Files) takes this row's
+                place: only the console tabs stay (`html[data-screen-bar]`, index.css). */}
+            <div
+              data-top-row=""
+              className="flex min-w-0 items-center gap-3 px-3 md:px-6 md:pt-[calc(var(--safe-top)_+_1rem)] phone:md:pt-[calc(var(--safe-top)_+_0.375rem)]"
+            >
               {/* Browser-style history for a desktop app: route and workspace-tab
                   changes are first-class views, so users can retrace a workflow
                   without reopening More or rebuilding a search. */}
@@ -1894,7 +1899,7 @@ export default function AppShell() {
               {/* Console tab strip — one tab per PS5; switches the viewed console
                   while every console's uploads/installs keep running in their own
                   background loops. Hidden for single-console users. */}
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 flex-1" data-keep="">
                 <ConsoleTabs />
               </div>
               <TopBarActions />
