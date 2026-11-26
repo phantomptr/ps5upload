@@ -320,7 +320,7 @@ static void test_docs(void) {
     CHECK(has(r, "\"saved\":false") && has(r, "\"rev\":1") && has(r, "\"a\":{\"v\":\"1\""));
     CHECK(has(call(MESH_DOC_PUT, 2, "{\"name\":\"../x\",\"base\":0,\"doc\":{}}"), "bad_request"));
     CHECK(has(call(MESH_DOC_PUT, 2, "{\"name\":\"user\",\"base\":1,\"doc\":[1]}"), "bad_request"));
-    CHECK(has(call(MESH_DOC_PUT, 2, "{\"name\":\"user\",\"base\":1,\"doc\":{\"a\":}}"), "bad_request"));
+    CHECK(has(call(MESH_DOC_PUT, 2, "{\"name\":\"user\",\"base\":1,\"doc\":{\"a\":}}"), "invalid_json"));
     /* Survives a restart. */
     reload();
     CHECK(has(call(MESH_DOC_GET, 1, "{\"name\":\"user\"}"), "\"rev\":1"));
@@ -377,6 +377,44 @@ static void test_doc_unreadable(void) {
     CHECK(has(r, "\"ok\":true") && has(r, "\"rev\":0") && has(r, "\"doc\":null"));
 }
 
+/* A document that is not JSON every reader takes is refused, and what was there stays. */
+static void test_doc_json(void) {
+    static const char *const bad[] = {
+        "{\"a\":01}",                 /* a leading zero */
+        "{\"a\":-01}",                /* the same, negative */
+        "{\"a\":1.}",                 /* no digit after the point */
+        "{\"a\":\"\\x\"}",            /* not an escape */
+        "{\"a\":\"\\u12\"}",          /* a short \u */
+        "{\"a\":\"\\ud800\"}",        /* half a pair */
+        "{\"a\":\"\\udc00\"}",        /* the other half, alone */
+        "{\"a\":\"\\ud800\\u0041\"}", /* a pair that is not one */
+        "{\"a\":\"\xc0\x80\"}",       /* an overlong UTF-8 form */
+        "{\"a\":\"\xed\xa0\x80\"}",   /* a surrogate in UTF-8 */
+        "{\"a\":\"\xf5\x80\x80\x80\"}", /* past U+10FFFF */
+        "{\"a\":\"\xe2\x82\"}",       /* cut short */
+        "{\"a\":\"\x80\"}",           /* a stray continuation byte */
+        "{\"a\":\"tab\there\"}",      /* a control byte */
+        "{\"a\":nul}",
+    };
+    char body[256];
+    const char *r;
+    size_t k;
+    start();
+    CHECK(has(call(MESH_DOC_PUT, 1, "{\"name\":\"user\",\"base\":0,\"doc\":{\"v\":1}}"), "\"saved\":true"));
+    for (k = 0; k < sizeof bad / sizeof bad[0]; k++) {
+        snprintf(body, sizeof body, "{\"name\":\"user\",\"base\":1,\"doc\":%s}", bad[k]);
+        r = call(MESH_DOC_PUT, 1, body);
+        if (!has(r, "\"err\":\"invalid_json\"")) fprintf(stderr, "accepted: %s -> %s\n", bad[k], r);
+        CHECK(has(r, "\"err\":\"invalid_json\""));
+    }
+    CHECK(!strcmp(doc_file("user"), "1\n{\"v\":1}"));
+    /* What every reader takes still goes in. */
+    r = call(MESH_DOC_PUT, 1,
+             "{\"name\":\"user\",\"base\":1,\"doc\":{\"a\":0,\"b\":-0.5e+3,\"c\":[10,true,null],"
+             "\"d\":\"\\u00e9\\ud83d\\ude00\\\"\\\\\\/\\b\\f\\n\\r\\t\",\"e\":\"\xc3\xa9\xf0\x9f\x98\x80\"}}");
+    CHECK(has(r, "\"saved\":true") && has(r, "\"rev\":2"));
+}
+
 static void test_persist_and_prune(void) {
     const char *r;
     start();
@@ -428,6 +466,7 @@ int main(void) {
     test_locks();
     test_docs();
     test_doc_unreadable();
+    test_doc_json();
     test_persist_and_prune();
     test_events();
     {
