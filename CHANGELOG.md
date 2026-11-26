@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.32
 
 **Storage**
 - **Files shows the right free space (#944).** Files kept its own copy of the drives, and Refresh didn't read it again, so a chip could show 98 GiB when the drive had 163 GiB. Every screen that shows drives now reads the same list: on Refresh, when a screen comes back, and when a job on that console ends.
