@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.31
 
 **Upload & Install**
 - **Change a fake package's name before installing it (#937).** Pick one package and edit "Name on the PS5". The name is changed inside the package, in place, without rebuilding it, and checked afterwards. Packages signed by Sony, split packages and packages on a server are refused.
