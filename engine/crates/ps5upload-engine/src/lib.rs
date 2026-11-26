@@ -6805,12 +6805,6 @@ struct AppIconQuery {
     size: Option<u32>,
 }
 
-/// GET /api/ps5/app-icon?addr=IP:MGMT_PORT&title_id=PPSA01234
-///
-/// Streams /user/appmeta/<title_id>/icon0.png as image/png — the cover
-/// art for an installed title. Mirrors /api/ps5/game-icon but keyed by
-/// title_id instead of folder path. 404 on any miss so `<img onerror>`
-/// can fall back to a placeholder.
 /// Where installed titles' app folders are: the internal drive, extended storage and the M.2
 /// drive (the installed list and the cover read both look in each).
 const APP_FOLDER_ROOTS: [&str; 3] = ["/user/app", "/mnt/ext0/user/app", "/mnt/ext1/user/app"];
@@ -6829,6 +6823,12 @@ fn app_icon_paths(title_id: &str) -> Vec<String> {
         .collect()
 }
 
+/// GET /api/ps5/app-icon?addr=IP:MGMT_PORT&title_id=PPSA01234
+///
+/// Streams /user/appmeta/<title_id>/icon0.png as image/png — the cover
+/// art for an installed title. Mirrors /api/ps5/game-icon but keyed by
+/// title_id instead of folder path. 404 on any miss so `<img onerror>`
+/// can fall back to a placeholder.
 async fn ps5_app_icon(
     State(state): State<AppState>,
     headers: HeaderMap,
