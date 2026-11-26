@@ -1,12 +1,25 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { buildsDone, listFiles, newArtifacts } from "./scan-artifacts.mjs";
+
+// Temp folders are removed when the file's tests end, pass or fail (PS5UPLOAD_KEEP_TEST_TMP=1
+// keeps them to look at).
+const tempDirs = [];
+const tempDir = (prefix) => {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+};
+after(() => {
+  if (process.env.PS5UPLOAD_KEEP_TEST_TMP) return;
+  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+});
 
 const script = new URL("./scan-artifacts.mjs", import.meta.url).pathname;
 // The end-to-end tests build artifact zips with the `zip` command; Windows runners have none (the
@@ -49,7 +62,7 @@ test("buildsDone: every build-* job finished, and there is one", () => {
 });
 
 test("listFiles: recursive and sorted", () => {
-  const dir = mkdtempSync(join(tmpdir(), "scan-list-"));
+  const dir = tempDir("scan-list-");
   mkdirSync(join(dir, "b"));
   writeFileSync(join(dir, "b", "x"), "x");
   writeFileSync(join(dir, "a"), "a");
@@ -60,7 +73,7 @@ test("listFiles: recursive and sorted", () => {
 // still going; on the next poll it has finished and uploaded. A fake clamscan flags a file
 // named EICAR.
 function fakeRun(t, { infected = false } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "scan-run-"));
+  const root = tempDir("scan-run-");
   const mkzip = (name, files) => {
     const src = join(root, `src-${name}`);
     mkdirSync(src, { recursive: true });

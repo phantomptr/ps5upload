@@ -1106,7 +1106,7 @@ mod tests {
     #[test]
     fn inspect_tells_ps4_kinds_apart() {
         use crate::ps4_pkg::Ps4Kind;
-        let dir = std::env::temp_dir().join(format!("fpkg-ps4-kinds-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-ps4-kinds-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let put = |name: &str| {
             let path = dir.join(format!("{name}.pkg"));
@@ -1157,7 +1157,7 @@ mod tests {
     /// A build's `.partial` goes on every way out but success, a panic included; kept, it stays.
     #[test]
     fn a_leftover_is_removed_unless_kept() {
-        let dir = std::env::temp_dir().join(format!("fpkg-leftover-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-leftover-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (a, b, c) = (
             dir.join("a.partial"),

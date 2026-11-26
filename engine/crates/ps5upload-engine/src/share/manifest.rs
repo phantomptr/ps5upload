@@ -465,7 +465,7 @@ pub(crate) mod tests {
     use super::*;
 
     pub(crate) fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
+        let d = crate::test_tmp::temp_path(format!(
             "ps5u-share-{name}-{}-{}",
             std::process::id(),
             crate::join_net::random_b64(6).unwrap()

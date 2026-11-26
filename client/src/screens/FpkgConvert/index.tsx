@@ -192,6 +192,7 @@ export default function WorkshopScreen() {
   const finishReplace = useFpkgConversion((s) => s.finishReplace);
   const queueItems = useConvertQueue((s) => s.items);
   const queueRunning = useConvertQueue((s) => s.running);
+  const queueStoppedByClose = useConvertQueue((s) => s.stoppedByClose);
   const queueAutoStart = useUploadSettingsStore((s) => s.queueAutoStart);
   // ③'s one choice of what happens after converting, for Convert and the queue alike.
   const [thenChoice, setThen] = useState<ConvertThen>("keep");
@@ -1532,6 +1533,7 @@ export default function WorkshopScreen() {
       <QueueCard
         items={queueItems}
         running={queueRunning}
+        stoppedByClose={queueStoppedByClose}
         paused={pipeline.phase === "running" && !!pipeline.paused}
         onOpenUpload={() => navigate("/send")}
         onStart={() => void useConvertQueue.getState().start()}

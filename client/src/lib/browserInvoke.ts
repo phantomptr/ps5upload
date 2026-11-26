@@ -1856,6 +1856,7 @@ export async function browserInvoke<T>(
         addr: args["req"]?.addr,
         kind: args["req"]?.kind,
         unsafe_read: args["req"]?.unsafe_read,
+        remove_source: args["req"]?.remove_source,
       });
 
     case "transfer_download_zip":

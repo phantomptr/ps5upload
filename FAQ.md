@@ -83,8 +83,8 @@ more depth further down.
 Send **elfldr** first (if your setup uses it), then **kstuff**, then
 **ShadowMount+**, then **ps5upload**. The **Set up your PS5** wizard does the
 last three in this order for you, with the delays the Payloads catalogue
-recommends. ps5upload doesn't download payloads: get kstuff and ShadowMount+ from their project
-pages (Payloads › Catalog links to them) and choose the files in the wizard. Send them one at a time; the loader takes one file per
+recommends. The built-in catalogue only links to payloads: get kstuff and ShadowMount+ from their
+project pages (Payloads › Catalog links to them) and choose the files in the wizard. Send them one at a time; the loader takes one file per
 connection. After a reboot the payloads are gone, so load them again. Rest mode
 can stop them too; the PS5Upload helper usually keeps running through it.
 
@@ -559,8 +559,10 @@ something else, and records the send in a history panel so you
 can replay it without re-picking the file.
 
 **Q: How do I keep my payloads up to date?**
-ps5upload doesn't download payloads. Get a newer release from the payload's project page and send
-the file from **Payloads → Send payload**. **Payloads › Catalog › Payload updates** still tells you
+For a payload from a project you added as your own payload source, its card says **New version
+available** and **Update** downloads it (see *How do I add my own payload source?*). The built-in
+catalogue's payloads aren't downloaded by the app: get a newer release from the payload's project
+page and send the file from **Payloads → Send payload**. **Payloads › Catalog › Payload updates** still tells you
 when one is out: **Check for payload updates** compares each payload saved in the app (copies
 earlier versions of the app downloaded) with its latest release, and links to the release page.
 A copy an earlier update replaced is kept: **Roll back** puts it back.
@@ -569,6 +571,32 @@ If you use itsPLK's Payload Manager on the PS5, tick **Keep in Payload Manager**
 Manager loads it at boot** if you want it at boot) on a payload, and **Sync with Payload Manager**
 copies the ones you keep into it when they change and adds the marked ones to its boot list.
 Nothing else in its list is changed. Payload Manager has to be running on the PS5 for this.
+
+**Q: How do I add my own payload source (a custom GitHub or Gitea repo)?**
+In **Payloads › Catalog**, under **Your payload sources**, press **Add a payload source** and paste
+the project's address: `https://github.com/owner/project`, or a Gitea or Forgejo project
+(`https://your-server/owner/project`; a server on your home network and its own port is fine).
+Only https addresses work, without a user name or password in them. **Show its files** lists the
+`.elf` and `.bin` files of the project's newest release: pick the payload once and press **Add
+source**. PS5Upload will download and send whatever that project publishes under that name, so
+only add projects you trust.
+
+Newer releases are matched by name: the same name apart from its version numbers. If you picked
+`kstuff-v1.6.0.elf`, a later `kstuff-v1.7.elf` is the update; a name like `ftpsrv-ps5.elf` (no
+version in it) has to stay exactly the same. The card shows the rule it uses. If the project
+renames the file, use **Change file**.
+
+Each source gets a card. Nothing happens on its own: the app looks for new releases when you open
+Payloads or press **Check** (at most every ten minutes otherwise; GitHub allows 60 checks an hour,
+and when it says to wait, the card says until when). **Download** (or **Update**, when the card
+says *New version available*) saves the file in the app's payload folder, checked against the
+size the release gives and against its checksum file when it has one. The card then shows the
+file's name, release, size and SHA-256, and **Send to PS5** asks once more, naming them, before
+it sends. **Remove source** deletes the source and its downloaded file. The built-in catalogue
+stays a list of project pages: PS5Upload never downloads those for you, so for them download the
+file yourself and send it from **Payloads → Send payload**.
+
+Repos you added before 12.6.0 come back as sources: press **Pick the file** on their card once.
 
 **Q: The Send button says "Waiting for the helper to start…" for a long time.**
 That is the normal probe window, up to 20 seconds. If it times out, the helper likely crashed on

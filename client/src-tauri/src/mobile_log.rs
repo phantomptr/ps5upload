@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn rotates_past_the_cap_and_keeps_writing() {
-        let dir = std::env::temp_dir().join(format!("ps5u_mobile_log_{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u_mobile_log_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("engine.log");
@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn appends_to_what_an_earlier_run_left() {
-        let dir = std::env::temp_dir().join(format!("ps5u_mobile_log2_{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u_mobile_log2_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("engine.log");

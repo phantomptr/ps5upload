@@ -314,7 +314,7 @@ mod tests {
     }
 
     fn cache(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::test_tmp::temp_path(format!(
             "ps5upload-zstd-runtime-{name}-{}",
             std::process::id()
         ));

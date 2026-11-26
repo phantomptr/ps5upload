@@ -24,7 +24,7 @@ fn a_flat_path_table_is_read_no_further_than_it_goes() {
 /// as failing its checks. It used to index past the list and take the job down.
 #[test]
 fn an_image_without_its_first_inodes_is_reported_not_indexed() {
-    let dir = std::env::temp_dir().join(format!("fpkg-verify-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("fpkg-verify-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let source = dir.join("game");
     let put = |path: &str, data: &[u8]| {
@@ -171,7 +171,7 @@ fn damage_names_the_worst_thing_the_checks_found() {
 /// cut short, and with only its trailing install manifest gone.
 #[test]
 fn a_damaged_package_says_how_it_is_damaged() {
-    let dir = std::env::temp_dir().join(format!("fpkg-verify-damage-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("fpkg-verify-damage-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let source = dir.join("game");
     let put = |path: &str, data: &[u8]| {
@@ -249,4 +249,134 @@ fn a_damaged_package_says_how_it_is_damaged() {
     let r = verify(&tailless);
     assert_eq!(r.damage(), Some(Damage::Truncated { have: 0, need: 0 }));
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A scratch folder that goes when the test ends, passed or not.
+struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    fn new(tag: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("fpkg-verify-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Scratch(dir)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A small debug package as Convert builds one: an SI ZIP with its playgo-chunk.crc.
+fn built_package(dir: &Path) -> std::path::PathBuf {
+    let source = dir.join("game");
+    std::fs::create_dir_all(source.join("sce_sys")).unwrap();
+    std::fs::write(source.join("eboot.bin"), [7u8; 4096]).unwrap();
+    std::fs::write(source.join("big.bin"), vec![0x5Au8; 3 << 20]).unwrap();
+    std::fs::write(
+        source.join("sce_sys/param.json"),
+        br#"{"contentId":"UP0000-PPSA01234_00-TESTGAME00000000","contentVersion":"01.000.000","titleId":"PPSA01234"}"#,
+    )
+    .unwrap();
+    let out = dir.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let request = BuildRequest {
+        time: Some((1_700_000_000, 0)),
+        ..BuildRequest::new(&source, &out)
+    };
+    build::build(&request, &mut |_| {}).unwrap().path
+}
+
+/// #951: a full check reads the package twice, its blocks and then the PlayGo chunk CRCs. Both
+/// passes count in one total, so the progress reaches its total only when both are done, and
+/// the second pass reports as it goes and says it is the second.
+#[test]
+fn progress_counts_the_playgo_crc_pass_and_reaches_its_total_only_at_the_end() {
+    let t = Scratch::new("phases");
+    let path = built_package(&t.0);
+    let mut file = PkgFile::open(&path).unwrap();
+    let zip_start = si::read(&mut file).unwrap().expect("an SI ZIP").zip_start;
+    drop(file);
+
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    // Every report, with the pass it came in.
+    let events = std::cell::RefCell::new(Vec::<(Option<Phase>, u64, u64)>::new());
+    let current = std::cell::Cell::new(None::<Phase>);
+    let report = verify_streaming_phased(
+        &path,
+        crate::crypto::DEFAULT_PASSCODE,
+        &cancel,
+        &mut |done, total| events.borrow_mut().push((current.get(), done, total)),
+        &mut |p| current.set(Some(p)),
+    )
+    .unwrap();
+    assert!(report.ok(), "{report}");
+    let events = events.into_inner();
+    let (_, _, total) = *events.last().unwrap();
+    assert!(events.iter().all(|e| e.2 == total), "one total throughout");
+    assert!(
+        events.windows(2).all(|w| w[0].1 <= w[1].1),
+        "never goes back"
+    );
+    assert_eq!(events.last().unwrap().1, total, "done at the end");
+    let blocks: Vec<_> = events
+        .iter()
+        .filter(|e| e.0 == Some(Phase::Blocks))
+        .collect();
+    let crc: Vec<_> = events
+        .iter()
+        .filter(|e| e.0 == Some(Phase::PlaygoCrc))
+        .collect();
+    assert!(!blocks.is_empty() && !crc.is_empty());
+    // The block pass ends a whole CRC pass short of the total.
+    assert_eq!(total - blocks.last().unwrap().1, zip_start);
+    assert!(
+        blocks.iter().all(|e| e.1 < total),
+        "never 100% before the CRC pass"
+    );
+    // The CRC pass reports from where the blocks left off, more than once (every 256 blocks
+    // and at its end), and reaches the total only with its last report.
+    assert!(crc.len() >= 2, "{crc:?}");
+    assert!(crc[..crc.len() - 1].iter().all(|e| e.1 < total));
+}
+
+/// #951: Cancel is heard during the PlayGo CRC pass, not only during the block sweep.
+#[test]
+fn cancel_stops_the_playgo_crc_pass() {
+    let t = Scratch::new("crc-cancel");
+    let path = built_package(&t.0);
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let reached = std::cell::Cell::new(false);
+    let err = verify_streaming_phased(
+        &path,
+        crate::crypto::DEFAULT_PASSCODE,
+        &cancel,
+        &mut |_, _| {},
+        &mut |p| {
+            if p == Phase::PlaygoCrc {
+                reached.set(true);
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        },
+    )
+    .unwrap_err();
+    assert!(reached.get());
+    assert!(err.to_string().contains("cancelled"), "{err}");
+}
+
+/// The table read with progress is the plain table, and says how far it got.
+#[test]
+fn the_crc_table_with_progress_matches_the_plain_one() {
+    let t = Scratch::new("crc-table");
+    let path = t.0.join("blob");
+    let bytes: Vec<u8> = (0..BLOCK * 600 + 5).map(|i| (i * 13 % 251) as u8).collect();
+    std::fs::write(&path, &bytes).unwrap();
+    let mut f = PkgFile::open(&path).unwrap();
+    let zip_start = BLOCK * 600;
+    let mut seen = Vec::new();
+    let with = si::chunk_crc_table_with(&mut f, zip_start, None, &mut |n| seen.push(n)).unwrap();
+    assert_eq!(with, si::chunk_crc_table(&mut f, zip_start).unwrap());
+    assert_eq!(seen, [0, 256 * BLOCK, 512 * BLOCK, zip_start]);
 }

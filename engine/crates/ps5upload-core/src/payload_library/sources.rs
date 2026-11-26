@@ -301,6 +301,7 @@ impl ListPayload {
             asset_name_hint: self.file_hint(),
             is_custom: false,
             list_payload: Some(Box::new(self.clone())),
+            repo_port: None,
         }
     }
 }

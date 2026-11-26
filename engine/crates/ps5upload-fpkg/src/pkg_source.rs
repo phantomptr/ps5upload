@@ -1879,7 +1879,7 @@ mod tests {
     #[test]
     fn protected_container_entries_read_back_decrypted() {
         use crate::crypto::DEFAULT_PASSCODE;
-        let dir = std::env::temp_dir().join(format!("fpkg-protected-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-protected-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (src, out) = (dir.join("src"), dir.join("out"));
         let put = |path: &str, data: &[u8]| {
@@ -1964,7 +1964,7 @@ mod tests {
     #[test]
     fn game_files_kept_only_in_the_container_are_restored() {
         use crate::crypto::DEFAULT_PASSCODE;
-        let dir = std::env::temp_dir().join(format!("fpkg-restore-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-restore-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (src, out) = (dir.join("src"), dir.join("out"));
         let put = |path: &str, data: &[u8]| {

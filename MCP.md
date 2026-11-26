@@ -27,7 +27,7 @@ More than 120 tools, all of them thin layers over [the engine's API](API.md):
 | Convert | `convert_*` | Whether an archive can give its space back while it unpacks; put the AMPR emulator on a console for Convert on the PS5 (a conversion itself goes through `api_request`) |
 | Games | `games_*`, `processes_*`, `saves_*`, `cheats_*` | Installed titles, launch and stop, back up saves, cheats |
 | Hardware | `hw_*`, `power_*`, `notifications_*`, `health_*`, `disk_usage_*`, `cleanup_*`, `shell_run` | Temperatures, rest and wake, health checks and repairs, what fills the drive |
-| Payloads | `payloads_*` | Catalogue, new-version checks and rollback, send (a file, or a copy already on the computer: ps5upload never downloads payloads), store, autoload, Payload Manager sync |
+| Payloads | `payloads_*` | Catalogue, the payload sources you added (list, check for a new release, download its file), new-version checks and rollback, send (a file, or a copy already on the computer), store, autoload, Payload Manager sync. Built-in catalogue payloads are never downloaded, and only you can add a source, in the app |
 | Remote Play | `rp_*` | Start and stop a session, see the picture, press buttons, type, answer a passcode; see what the controller sends and how pairing went |
 | Friends and viewers | `together_*`, `golive_*`, `share_*` | Open Play Together and invite; go live; share an app's things with a friend |
 | Everything else | `settings_*`, `devices_list`, `drive_*`, `api_catalog`, `api_describe`, `api_request` | Settings, Mesh Drive, and any route of the API |
@@ -282,6 +282,7 @@ clients let you allow tools one by one, so keep these on "ask".
 | `power_control` | Rest, reboot or shut down |
 | `shell_run` | Run any command on the console, and read any file there, sign-in keys included |
 | `payloads_send` | Run a program on the console, with the same reach as a shell |
+| `payloads_source_download` | Replace the copy of a payload source's file on this computer with its newest release |
 | `payloads_store`, `payloads_delete`, `payloads_autoload`, `payloads_pm_sync` | Change what the console keeps and runs at boot |
 | `cleanup_apply`, `health_fix` | Delete what a scan found, and apply repairs |
 | `rp_stop` | End the Remote Play session someone may be playing |

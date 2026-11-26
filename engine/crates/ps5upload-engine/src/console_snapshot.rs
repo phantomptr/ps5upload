@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn round_trip_and_corrupt_file() {
-        let dir = std::env::temp_dir().join(format!("ps5u-snap-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-snap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("console-snapshots.json");
         let mut s = Snapshots::new();

@@ -1561,7 +1561,7 @@ mod engine_log_tests {
 
     #[test]
     fn a_long_session_rotates_the_log_at_the_cap() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-englog-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5upload-englog-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("engine.log");
@@ -1591,7 +1591,7 @@ mod engine_log_tests {
     #[test]
     fn a_failed_rotation_is_not_tried_on_every_line() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("ps5upload-englog-ro-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5upload-englog-ro-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("engine.log");
@@ -1653,7 +1653,8 @@ mod engine_log_generation_tests {
 
     #[test]
     fn rotation_keeps_the_older_files_and_drops_only_the_oldest() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-englog-gen-{}", std::process::id()));
+        let dir =
+            crate::test_tmp::temp_path(format!("ps5upload-englog-gen-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("engine.log");
@@ -1807,7 +1808,7 @@ mod reaper_tests {
         // This test process listens on the port: wrongly killing what holds it would end the run.
         let held = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = held.local_addr().unwrap().port();
-        let dir = std::env::temp_dir().join("ps5upload-no-such-engine-folder");
+        let dir = crate::test_tmp::temp_path("ps5upload-no-such-engine-folder");
         reap_our_orphan_on(port, &dir).await;
         // Still bound, and the port still counts as taken: `start` moves to a free one.
         assert!(!loopback_port_free(port));
@@ -1912,7 +1913,7 @@ mod extract_tests {
 
     fn scratch(name: &str) -> PathBuf {
         let d =
-            std::env::temp_dir().join(format!("ps5upload-extract-{name}-{}", std::process::id()));
+            crate::test_tmp::temp_path(format!("ps5upload-extract-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

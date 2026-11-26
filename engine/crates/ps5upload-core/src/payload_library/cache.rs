@@ -162,6 +162,13 @@ impl Library {
             (Some(t), _) => format!("{name} {t} isn't on this computer"),
             (None, _) => format!("{name} isn't on this computer"),
         };
+        if super::repos::is_valid_custom_id(id) {
+            // A source the user added: the app downloads it when asked.
+            return Err(LibraryError::new(
+                NOT_ON_THIS_COMPUTER,
+                format!("{what}. Download it on its card in Payloads first."),
+            ));
+        }
         Err(LibraryError::new(
             NOT_ON_THIS_COMPUTER,
             format!(

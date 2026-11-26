@@ -23,6 +23,8 @@ import { QueueItemOptions } from "./QueueItemOptions";
 export interface QueueCardProps {
   items: ConvertItem[];
   running: boolean;
+  /** The queue was making a game when its page was closed or reloaded: it waits for Start. */
+  stoppedByClose?: boolean;
   /** The game being made is paused (#631): the rest wait for it. */
   paused?: boolean;
   /** Open Upload & Install, where a made game installs or uploads. */
@@ -163,6 +165,24 @@ export function QueueCard(p: QueueCardProps) {
             "A game set to install or upload goes on to {send}'s queue once it is made.",
           )}
         </div>
+
+        {p.running ? (
+          <div className="text-xs text-[var(--color-muted)]" data-testid="cq-page-note">
+            {tr(
+              "cq_page_close_note",
+              undefined,
+              "Closing this page does not stop the game being made. The next game starts only while this page is open.",
+            )}
+          </div>
+        ) : p.stoppedByClose && pending > 0 ? (
+          <div className="text-xs text-[var(--color-warn)]" role="status" data-testid="cq-stopped-by-close">
+            {tr(
+              "cq_stopped_by_close",
+              undefined,
+              "The queue stopped when this page was closed. The game it was making went on. Start the queue again to continue.",
+            )}
+          </div>
+        ) : null}
 
         {sent && (
           <div>

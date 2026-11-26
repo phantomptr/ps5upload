@@ -95,7 +95,7 @@ mod tests {
 
     /// A paired loopback AVA1 console running `handler`, and the transport over its pool.
     async fn console(tag: &str, handler: RpcHandler) -> Arc<Spy> {
-        let base = std::env::temp_dir().join(format!("p5-route-{tag}-{}", std::process::id()));
+        let base = crate::test_tmp::temp_path(format!("p5-route-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let ava = base.join("ava");
         std::fs::create_dir_all(&ava).unwrap();
@@ -161,7 +161,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_console_without_ava1_is_helper_not_ava1() {
         // Nothing listens on this address: the transport has no session to open.
-        let base = std::env::temp_dir().join(format!("p5-route-none-{}", std::process::id()));
+        let base = crate::test_tmp::temp_path(format!("p5-route-none-{}", std::process::id()));
         std::fs::create_dir_all(&base).unwrap();
         let pool: &'static Pool = Box::leak(Box::new(Pool::new(base).with_addr("127.0.0.1:1")));
         let t: Arc<dyn MgmtTransport> = Arc::new(AvaTransport::with_pool(pool));

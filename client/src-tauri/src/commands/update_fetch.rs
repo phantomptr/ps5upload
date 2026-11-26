@@ -411,7 +411,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn scratch(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
+        let d = crate::test_tmp::temp_path(format!(
             "ps5upload-update-fetch-{name}-{}",
             std::process::id()
         ));

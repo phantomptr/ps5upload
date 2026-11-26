@@ -1,6 +1,22 @@
 import { describe, expect, it } from "vitest";
 
-import { fsKeyAction, nextSort, normalizeTypedPath, sortEntries } from "./fsBrowse";
+import { fsKeyAction, keysBelongElsewhere, nextSort, normalizeTypedPath, sortEntries } from "./fsBrowse";
+
+describe("keysBelongElsewhere", () => {
+  // Just enough of an element: its tag and which of the selectors it sits inside.
+  const el = (tagName: string, inside: string[] = []) => ({
+    tagName,
+    isContentEditable: false,
+    closest: (sel: string) => (sel.split(",").some((s) => inside.includes(s)) ? {} : null),
+  });
+
+  it("the list keeps a row's keys; a field, a dialog and the two panes' other side keep their own", () => {
+    expect(keysBelongElsewhere(el("LI") as unknown as EventTarget)).toBe(false);
+    expect(keysBelongElsewhere(el("INPUT") as unknown as EventTarget)).toBe(true);
+    expect(keysBelongElsewhere(el("BUTTON", ['[role="dialog"]']) as unknown as EventTarget)).toBe(true);
+    expect(keysBelongElsewhere(el("LI", ["[data-keys-own]"]) as unknown as EventTarget)).toBe(true);
+  });
+});
 
 const key = (k: string, mods: Partial<{ ctrl: boolean; meta: boolean; alt: boolean }> = {}) => ({
   key: k,

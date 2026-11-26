@@ -565,7 +565,7 @@ pub fn verify_streaming_sampled(
     seed: Option<u64>,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<Report> {
-    verify_streaming_inner(path, passcode, seed, None, progress)
+    verify_streaming_inner(path, passcode, seed, None, progress, &mut |_| {})
 }
 
 /// [`verify_streaming`] that stops with a "cancelled" error once `cancel` is set (checked
@@ -576,7 +576,40 @@ pub fn verify_streaming_cancellable(
     cancel: &std::sync::atomic::AtomicBool,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<Report> {
-    verify_streaming_inner(path, passcode, None, Some(cancel), progress)
+    verify_streaming_inner(path, passcode, None, Some(cancel), progress, &mut |_| {})
+}
+
+/// The passes a full read of a package makes, in order: what a caller can show beside the
+/// progress, which counts both in one total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    /// Every block of the image against its digest.
+    Blocks,
+    /// The PlayGo chunk CRCs (`playgo-chunk.crc`): a second read of everything before the SI ZIP,
+    /// in a full check of a debug package that carries one.
+    PlaygoCrc,
+}
+
+impl Phase {
+    /// The word an API gives for it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Phase::Blocks => "blocks",
+            Phase::PlaygoCrc => "playgo",
+        }
+    }
+}
+
+/// [`verify_streaming_cancellable`] that also says which pass it is on (`phase`, each time it
+/// starts one).
+pub fn verify_streaming_phased(
+    path: &Path,
+    passcode: &str,
+    cancel: &std::sync::atomic::AtomicBool,
+    progress: &mut dyn FnMut(u64, u64),
+    phase: &mut dyn FnMut(Phase),
+) -> Result<Report> {
+    verify_streaming_inner(path, passcode, None, Some(cancel), progress, phase)
 }
 
 /// [`verify_streaming_sampled`] that also stops with a "cancelled" error once `cancel` is set
@@ -588,7 +621,7 @@ pub fn verify_streaming_controlled(
     cancel: Option<&std::sync::atomic::AtomicBool>,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<Report> {
-    verify_streaming_inner(path, passcode, seed, cancel, progress)
+    verify_streaming_inner(path, passcode, seed, cancel, progress, &mut |_| {})
 }
 
 fn verify_streaming_inner(
@@ -597,6 +630,7 @@ fn verify_streaming_inner(
     seed: Option<u64>,
     cancel: Option<&std::sync::atomic::AtomicBool>,
     progress: &mut dyn FnMut(u64, u64),
+    phase: &mut dyn FnMut(Phase),
 ) -> Result<Report> {
     let cancelled = || cancel.is_some_and(crate::workshop::checkpoint);
     if cancelled() {
@@ -747,6 +781,23 @@ fn verify_streaming_inner(
     let sweep = batches.as_ref().map_or(count, |v| {
         v.iter().map(|b| span(*b).end - span(*b).start).sum::<u64>() + (count - data)
     });
+    // A full check also reads everything before the SI ZIP a second time for the PlayGo chunk
+    // CRCs (#951): counted in the same total, so the progress never says 100% while that pass
+    // still has a whole package to read. Asked of the SI here only for its size; the check
+    // itself reads it again below and says what is wrong with it.
+    let crc_bytes = match seed {
+        Some(_) => 0,
+        None => si::read(&mut file).ok().flatten().map_or(0, |s| {
+            let crc_name = format!("config/{}/playgo-chunk.crc", cnt.content_id);
+            if s.members.iter().any(|m| m.name == crc_name) {
+                s.zip_start
+            } else {
+                0
+            }
+        }),
+    };
+    let total = sweep * BLOCK + crc_bytes;
+    phase(Phase::Blocks);
     let indices: Box<dyn Iterator<Item = u64>> = match batches {
         None => Box::new(0..count),
         Some(v) => Box::new(v.into_iter().flat_map(span).chain(data..count)),
@@ -778,14 +829,14 @@ fn verify_streaming_inner(
             if crate::workshop::checkpoint_opt(cancel) {
                 return format_err("cancelled");
             }
-            progress(done * BLOCK, sweep * BLOCK);
+            progress(done * BLOCK, total);
         }
     }
     // Every 256 blocks above; a smaller package (or the last few blocks) is checked here.
     if cancelled() {
         return format_err("cancelled");
     }
-    progress(done * BLOCK, sweep * BLOCK);
+    progress(done * BLOCK, total);
     r.push_counted(
         Kind::Data,
         if plaintext_mode {
@@ -845,7 +896,17 @@ fn verify_streaming_inner(
                     let stored = file.read_at(m.offset, m.size as usize)?;
                     // Sampled with the sweep: the whole table would read the package again.
                     let ok = match seed {
-                        None => stored == si::chunk_crc_table(&mut file, s.zip_start)?,
+                        None => {
+                            phase(Phase::PlaygoCrc);
+                            let before = sweep * BLOCK;
+                            let table = si::chunk_crc_table_with(
+                                &mut file,
+                                s.zip_start,
+                                cancel,
+                                &mut |read| progress(before + read, total.max(before + read)),
+                            )?;
+                            stored == table
+                        }
                         Some(seed) => si::chunk_crc_sampled(&mut file, s.zip_start, &stored, seed)?,
                     };
                     r.push(

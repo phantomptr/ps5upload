@@ -1234,7 +1234,7 @@ mod served_tests {
         assert_eq!(info.image, Some(ImageKind::Exfat));
         assert_eq!(info.unpacked_name, "tool.elf.exfat");
 
-        let dir = std::env::temp_dir().join(format!("link-lz4-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("link-lz4-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let ava = dir.join("engine");
         let key = Identity::load_or_create(&ava.join("identity"))
@@ -1294,7 +1294,7 @@ mod served_tests {
         use ava1::server::{self, ServerCtx};
         use ps5upload_ava1::Pool;
 
-        let dir = std::env::temp_dir().join(format!("link-whole-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("link-whole-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let ava = dir.join("engine");
         let key = Identity::load_or_create(&ava.join("identity"))
@@ -1363,7 +1363,7 @@ mod served_tests {
 
         let b = base();
         let total = 5 * 1024 * 1024 + 123;
-        let dir = std::env::temp_dir().join(format!("link-dl-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("link-dl-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let ava = dir.join("engine");
         let key = Identity::load_or_create(&ava.join("identity"))

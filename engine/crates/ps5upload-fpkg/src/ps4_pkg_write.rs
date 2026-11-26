@@ -2786,7 +2786,7 @@ mod tests {
     }
 
     fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::test_tmp::temp_path(format!(
             "ps4w-{}-{}-{name}",
             std::process::id(),
             std::time::SystemTime::now()

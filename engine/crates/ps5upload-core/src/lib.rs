@@ -76,3 +76,8 @@ pub mod vinput;
 pub mod volumes;
 pub mod vpad;
 pub mod zip_cd;
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[cfg(test)]
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

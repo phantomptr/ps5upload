@@ -28,7 +28,7 @@ fn build_zip(entries: &[(&str, &[u8])], deflate: bool) -> TmpZip {
     use zip::CompressionMethod;
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
-    let path = std::env::temp_dir().join(format!(
+    let path = crate::test_tmp::temp_path(format!(
         "ps5u_ava1_ziptest_{}_{}.zip",
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
@@ -313,7 +313,7 @@ fn zip_plan_preview_sorted_total_and_excludes() {
 fn inspect_zip_on_garbage_errors() {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
-    let p = std::env::temp_dir().join(format!(
+    let p = crate::test_tmp::temp_path(format!(
         "ps5u_ava1_notazip_{}_{}.zip",
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
@@ -323,3 +323,6 @@ fn inspect_zip_on_garbage_errors() {
     let _ = std::fs::remove_file(&p);
     assert!(r.is_err(), "garbage input must fail to inspect");
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+use ava1_common::test_tmp;

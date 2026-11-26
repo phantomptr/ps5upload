@@ -1215,7 +1215,7 @@ async fn invites_work_only_on_the_wifi_keeps_to_the_home_networks_link() {
 /// (`internet_invites` false) reads as Only on my Wi-Fi, a missing or broken one as nothing saved.
 #[test]
 fn invites_work_is_saved_and_an_old_off_reads_as_wifi() {
-    let dir = std::env::temp_dir().join(format!("ps5u-invites-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("ps5u-invites-{}", std::process::id()));
     let p = dir.join(INVITES_FILE);
     let d = crate::self_host::defaults();
     let with = |anywhere: bool, port: u16| Settings {
@@ -1251,7 +1251,7 @@ fn invites_work_is_saved_and_an_old_off_reads_as_wifi() {
 /// saved value that wins over a default from the environment.
 #[test]
 fn hub_page_base_and_stun_are_kept_until_reset() {
-    let dir = std::env::temp_dir().join(format!("ps5u-hub-kept-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("ps5u-hub-kept-{}", std::process::id()));
     let p = dir.join(INVITES_FILE);
     let d = crate::self_host::defaults();
     let custom = Settings {

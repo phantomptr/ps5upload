@@ -380,7 +380,7 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&p);
         fs::create_dir_all(&p).unwrap();
-        p
+        crate::test_tmp::remove_at_exit(p)
     }
 
     #[test]

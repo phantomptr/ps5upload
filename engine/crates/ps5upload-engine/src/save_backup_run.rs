@@ -824,7 +824,7 @@ mod tests {
     use super::*;
 
     fn temp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ps5u-runs-{}-{name}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("ps5u-runs-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d.join(FILE)

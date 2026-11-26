@@ -1646,7 +1646,7 @@ mod tests {
 
         fs.create_dir("/t").await.unwrap();
         fs.create_dir("/t").await.unwrap();
-        let src = std::env::temp_dir().join(format!("nfs-put-{}", std::process::id()));
+        let src = crate::test_tmp::temp_path(format!("nfs-put-{}", std::process::id()));
         std::fs::write(&src, &all[..3_000_000]).unwrap();
         let sent = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let add = Arc::clone(&sent);

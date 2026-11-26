@@ -161,7 +161,7 @@ mod tests {
             .id;
         register();
         let url = format!("remote://{id}/fpkg-remote/mini.exfat");
-        let out = std::env::temp_dir().join(format!("fpkg-remote-build-{}", std::process::id()));
+        let out = crate::test_tmp::temp_path(format!("fpkg-remote-build-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&out);
         let (u, o) = (url.clone(), out.clone());
         let report = tokio::task::spawn_blocking(move || {
@@ -325,7 +325,7 @@ mod tests {
         ]);
         register();
         let url = "ps5://192.0.2.99/data/games/mini.exfat".to_string();
-        let out = std::env::temp_dir().join(format!("fpkg-console-build-{}", std::process::id()));
+        let out = crate::test_tmp::temp_path(format!("fpkg-console-build-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&out);
         let (c, o) = (console.clone(), out.clone());
         let report = tokio::task::spawn_blocking(move || {
@@ -470,7 +470,7 @@ mod tests {
         ps5upload_ava1::mgmt::install();
         register();
         let url = format!("ps5://{host}{path}");
-        let out = std::env::temp_dir().join(format!("fpkg-live-{}", std::process::id()));
+        let out = crate::test_tmp::temp_path(format!("fpkg-live-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&out);
         let o = out.clone();
         let started = std::time::Instant::now();

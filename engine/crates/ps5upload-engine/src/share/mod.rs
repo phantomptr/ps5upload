@@ -349,7 +349,9 @@ pub fn sweep_left_shares() {
 
 fn shares_dir() -> Option<PathBuf> {
     if cfg!(test) {
-        return Some(std::env::temp_dir().join(format!("ps5u-shares-{}", std::process::id())));
+        return Some(crate::test_scratch(
+            std::env::temp_dir().join(format!("ps5u-shares-{}", std::process::id())),
+        ));
     }
     crate::remote::store::data_dir().map(|d| d.join("shares"))
 }

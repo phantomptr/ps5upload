@@ -825,7 +825,7 @@ mod tests {
     fn out_path(name: &str) -> Out {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::test_tmp::temp_path(format!(
             "ps5upload-exfatw-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)

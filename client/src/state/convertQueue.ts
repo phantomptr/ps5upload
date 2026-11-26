@@ -279,13 +279,19 @@ export function savedItems(items: ConvertItem[]): Omit<ConvertItem, "password" |
   return items.map(({ password, freeArchive, ...kept }) => kept);
 }
 
-function load(): ConvertItem[] {
+/** The saved queue, and whether it was making a game when its page went (#954). */
+function load(): { items: ConvertItem[]; stoppedByClose: boolean } {
   try {
     const raw = safeGetItem(KEY);
+    if (!raw) return { items: [], stoppedByClose: false };
+    const saved = JSON.parse(raw) as ConvertItem[];
     // Whatever a saved queue says, no game comes back set to delete its archive.
-    return raw ? hydrateConvertQueue(savedItems(JSON.parse(raw) as ConvertItem[])) : [];
+    return {
+      items: hydrateConvertQueue(savedItems(saved)),
+      stoppedByClose: saved.some((i) => i.status === "running"),
+    };
   } catch {
-    return [];
+    return { items: [], stoppedByClose: false };
   }
 }
 
@@ -297,6 +303,10 @@ interface ConvertQueueState {
    *  source), so the result's buttons stay until then; never after a build that failed. Start
    *  starts it at once. */
   armed: boolean;
+  /** The queue was making a game when its page was closed or reloaded (#954). The queue is run
+   *  by the page: the build itself goes on in the engine (and is picked up again when the page
+   *  opens), but the next game starts only once Start is pressed again. Cleared by Start. */
+  stoppedByClose: boolean;
   /** False (and nothing added) when this source is already waiting or building. */
   add: (item: NewConvertItem) => boolean;
   remove: (id: string) => void;
@@ -347,10 +357,12 @@ export const useConvertQueue = create<ConvertQueueState>((set, get) => {
     save();
   };
 
+  const loaded = typeof window === "undefined" ? { items: [], stoppedByClose: false } : load();
   return {
-    items: typeof window === "undefined" ? [] : load(),
+    items: loaded.items,
     running: false,
     armed: false,
+    stoppedByClose: loaded.stoppedByClose,
     add: (item) => {
       // The same game for the same console once; another console may have it too.
       const busy = get().items.some(
@@ -389,7 +401,7 @@ export const useConvertQueue = create<ConvertQueueState>((set, get) => {
       save();
     },
     start: async () => {
-      set({ armed: false });
+      set({ armed: false, stoppedByClose: false });
       if (get().running || !runner) return;
       const r0 = runner;
       stopRequested = false;

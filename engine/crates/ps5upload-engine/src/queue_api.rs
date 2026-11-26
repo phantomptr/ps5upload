@@ -1991,7 +1991,7 @@ mod tests {
 
         // And it is what frees the package.
         let state = crate::pkg_install::PkgInstallState::default();
-        let dir = std::env::temp_dir().join(format!("ps5u-queue-release-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-queue-release-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let pkg = dir.join("a.pkg");
         std::fs::write(&pkg, b"a").unwrap();

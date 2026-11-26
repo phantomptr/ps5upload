@@ -95,7 +95,7 @@ mod tests {
 
     #[test]
     fn only_a_real_folder_opens() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-reveal-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5upload-reveal-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("Game.app")).unwrap();
         std::fs::write(dir.join("program.exe"), b"x").unwrap();

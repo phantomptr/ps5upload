@@ -197,24 +197,114 @@ pub(crate) const ORIGIN_CHANGED: &str =
     "the file at this link changed while it was being read, so what was \
      read so far can't be finished with it; start again";
 
-/// Whether a 200 to `If-Range` means another file. The body is the origin's whole current file, so
-/// its length and date say more than the validator: a mirror that spells its ETag differently (or
-/// a new one per response) serves the same bytes. Without a date to compare, a validator that had
-/// been honoured and no longer is means the file changed; one never honoured says nothing.
-fn origin_changed_on_200(
+/// How many of the file's first bytes are kept from its first read, to tell the same file from
+/// another one when an origin stops matching its own validator (see [`judge_whole_answer`]). A
+/// package's header is in there, and it carries digests of the whole package.
+const HEAD_SAMPLE: u64 = 64 * 1024;
+
+/// What a 200 to `If-Range` (the whole current file instead of the range) says about the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WholeAnswer {
+    /// Another file: `.0` names the evidence (for the log).
+    Changed(&'static str),
+    /// The same file (its first bytes match): this node just does not match the validator.
+    Same,
+    /// Nothing that tells it apart from a node with validators of its own: not a change.
+    Unknown,
+}
+
+/// The headers of a 200 to `If-Range` that [`judge_whole_answer`] looks at.
+#[derive(Debug, Default, Clone, Copy)]
+struct WholeHeaders<'a> {
+    content_length: Option<u64>,
+    content_encoding: Option<&'a str>,
+    last_modified: Option<&'a str>,
+}
+
+/// A body sent with an encoding (gzip, br) has a Content-Length and bytes that are not the file's.
+fn encoded(content_encoding: Option<&str>) -> bool {
+    content_encoding.is_some_and(|e| {
+        let e = e.trim();
+        !e.is_empty() && !e.eq_ignore_ascii_case("identity")
+    })
+}
+
+/// Two HTTP dates as one origin's nodes may spell them: spacing and letter case aside.
+fn same_date(a: &str, b: &str) -> bool {
+    let norm = |s: &str| {
+        s.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase()
+    };
+    norm(a) == norm(b)
+}
+
+/// A strong ETag as given; `None` for a weak (`W/"…"`) or empty one.
+fn strong_etag(v: Option<&str>) -> Option<&str> {
+    v.map(str::trim)
+        .filter(|e| !e.is_empty() && !e.starts_with("W/"))
+}
+
+/// Whether the file behind a link changed, from a 200 to `If-Range`. Big files are served by many
+/// nodes (CDN edges, mirrors behind one name), and each may have its own ETag and Last-Modified for
+/// the very same bytes, so a validator that stops matching proves nothing by itself. The file
+/// counts as changed only on evidence that holds whichever node answered:
+///
+/// 1. Its size: the 200's Content-Length differs from the size the install started with (only for
+///    a body sent as it is, with no Content-Encoding). A 206 whose Content-Range total differs is
+///    the same evidence (see `read_into`).
+/// 2. Same size, and the file's first bytes are known (kept from its first read): the 200's first
+///    bytes against them. Different is a change; the same is the same file, whatever its
+///    validators say.
+/// 3. Same size, first bytes not known (a resumed download that never read the start): a
+///    Last-Modified that differs from the one the install started with, and only from an origin
+///    that has been consistent (`consistent`): it honoured `If-Range` before, and none of its
+///    answers so far carried another date or another strong ETag.
+///
+/// Weak ETags, missing validators, validators only some answers carry and ETags that differ
+/// between answers are unknown, never a change: an ETag alone never decides. A change found here
+/// is still asked once more, on another connection, before the read is failed (`fetch_piece`).
+fn judge_whole_answer(
     known: &OriginValidators,
     total_size: u64,
-    content_length: Option<u64>,
+    whole: WholeHeaders<'_>,
+    head: Option<(&[u8], &[u8])>,
+    consistent: bool,
+) -> WholeAnswer {
+    let plain = !encoded(whole.content_encoding);
+    if plain && whole.content_length.is_some_and(|l| l != total_size) {
+        return WholeAnswer::Changed("its size");
+    }
+    if let (true, Some((known_head, got))) = (plain, head) {
+        return if known_head == got {
+            WholeAnswer::Same
+        } else {
+            WholeAnswer::Changed("its first bytes")
+        };
+    }
+    match (known.last_modified.as_deref(), whole.last_modified) {
+        (Some(a), Some(b)) if consistent && !same_date(a, b) => WholeAnswer::Changed("its date"),
+        _ => WholeAnswer::Unknown,
+    }
+}
+
+/// Whether a 206's validators say the origin's nodes disagree with the ones the install started
+/// with (another date, or another strong ETag): a date that differs later then says nothing.
+fn validators_disagree(
+    known: &OriginValidators,
+    etag: Option<&str>,
     last_modified: Option<&str>,
-    validator_honoured: bool,
 ) -> bool {
-    if content_length.is_some_and(|l| l != total_size) {
-        return true;
-    }
-    match (known.last_modified.as_deref(), last_modified) {
-        (Some(a), Some(b)) => a.trim() != b.trim(),
-        _ => validator_honoured,
-    }
+    let other_date = matches!(
+        (known.last_modified.as_deref(), last_modified),
+        (Some(a), Some(b)) if !same_date(a, b)
+    );
+    let other_etag = matches!(
+        (strong_etag(known.etag.as_deref()), strong_etag(etag)),
+        (Some(a), Some(b)) if a != b
+    );
+    other_date || other_etag
 }
 
 /// `bytes 5-9/100` as (5, Some(100)); a `*` total is `None`.
@@ -237,6 +327,11 @@ pub struct RemoteSource {
     validators: OriginValidators,
     /// The origin honoured `If-Range` at least once.
     validator_honoured: std::sync::atomic::AtomicBool,
+    /// Every 206 so far carried the probe's date and strong ETag, or none: its nodes agree, so a
+    /// date that differs later can mean a change (rule 3 of [`judge_whole_answer`]).
+    validators_consistent: std::sync::atomic::AtomicBool,
+    /// The file's first bytes (up to [`HEAD_SAMPLE`]) as first read, to compare a 200 with.
+    head_sample: std::sync::OnceLock<Vec<u8>>,
     /// Its `If-Range` turned out to be unusable (an ETag per response, say): not sent any more.
     validator_off: std::sync::atomic::AtomicBool,
     /// The file changed: every later read fails at once, with the reason.
@@ -851,6 +946,8 @@ impl RemoteSource {
             total_size,
             validators: OriginValidators::default(),
             validator_honoured: std::sync::atomic::AtomicBool::new(false),
+            validators_consistent: std::sync::atomic::AtomicBool::new(true),
+            head_sample: std::sync::OnceLock::new(),
             validator_off: std::sync::atomic::AtomicBool::new(false),
             origin_changed: std::sync::atomic::AtomicBool::new(false),
             window_bytes,
@@ -1407,6 +1504,8 @@ impl RemoteSource {
         let mut stalls = 0u32;
         let mut attempts = 0u32;
         let mut last_err = String::from("no attempt was made");
+        // The answer just before this one also said the file changed.
+        let mut change_seen = false;
         while filled < len {
             if self.stopped() {
                 return Err(FETCH_STOPPED.to_string());
@@ -1433,7 +1532,12 @@ impl RemoteSource {
             attempts += 1;
             let from = start + filled;
             let to = start + len - 1;
-            match self.read_into(agent, from, to, &mut dst[filled as usize..]) {
+            let answer = self.read_into(agent, from, to, &mut dst[filled as usize..]);
+            let was_change_seen = std::mem::replace(
+                &mut change_seen,
+                matches!(answer, Err(FetchErr::OriginChanged)),
+            );
+            match answer {
                 Ok((0, ttfb)) => {
                     stat.record_ttfb(ttfb);
                     stalls += 1;
@@ -1474,9 +1578,10 @@ impl RemoteSource {
                         return Err(FETCH_STOPPED.to_string());
                     }
                 }
-                // Said once more on another connection in case a mirror answered: the second answer
-                // settles it, and asking any longer would only read a package that cannot be used.
-                Err(FetchErr::OriginChanged) if stalls > 0 => {
+                // Said once more on another connection in case a mirror answered: two such answers
+                // in a row settle it (an earlier timeout or short read does not count as one), and
+                // asking any longer would only read a package that cannot be used.
+                Err(FetchErr::OriginChanged) if was_change_seen => {
                     self.origin_changed.store(true, Ordering::Relaxed);
                     return Err(ORIGIN_CHANGED.to_string());
                 }
@@ -1512,7 +1617,10 @@ impl RemoteSource {
         let mut request = agent
             .get(&self.url)
             .header("User-Agent", "ps5upload")
-            .header("Range", &format!("bytes={start}-{end}"));
+            .header("Range", &format!("bytes={start}-{end}"))
+            // The file's own bytes: a compressed answer's length and bytes are not the file's,
+            // and would read as another file (see `judge_whole_answer`).
+            .header("Accept-Encoding", "identity");
         if let Some(v) = if_range {
             request = request.header("If-Range", v);
         }
@@ -1536,19 +1644,50 @@ impl RemoteSource {
         // `If-Range` did not match: the whole current file is on its way instead of the range.
         if status == 200 && if_range.is_some() {
             let content_length = header("content-length").and_then(|v| v.trim().parse().ok());
-            if origin_changed_on_200(
+            let content_encoding = header("content-encoding");
+            let last_modified = header("last-modified");
+            // The whole file starts at its first byte: read as many as were kept from the start.
+            let known_head = self.head_sample.get();
+            let got_head = known_head
+                .filter(|_| !encoded(content_encoding.as_deref()))
+                .and_then(|known| {
+                    let mut got = Vec::with_capacity(known.len());
+                    let mut body = resp.into_body().into_reader().take(known.len() as u64);
+                    body.read_to_end(&mut got).ok()?;
+                    // A body cut short tells nothing about the bytes it did not send.
+                    (got.len() == known.len()).then_some(got)
+                });
+            let verdict = judge_whole_answer(
                 &self.validators,
                 self.total_size,
-                content_length,
-                header("last-modified").as_deref(),
-                self.validator_honoured.load(Ordering::Relaxed),
-            ) {
+                WholeHeaders {
+                    content_length,
+                    content_encoding: content_encoding.as_deref(),
+                    last_modified: last_modified.as_deref(),
+                },
+                known_head
+                    .zip(got_head.as_deref())
+                    .map(|(k, g)| (k.as_slice(), g)),
+                self.validator_honoured.load(Ordering::Relaxed)
+                    && self.validators_consistent.load(Ordering::Relaxed),
+            );
+            if let WholeAnswer::Changed(evidence) = verdict {
+                // What decided it, for a bug report; never the link's path or query.
+                crate::log_info!(
+                    "url-install origin {}: the file looks changed ({evidence}) at offset {start}",
+                    log_host(&self.url)
+                );
                 return Err(FetchErr::OriginChanged);
             }
-            // The same file: this origin's validator just cannot be used.
+            // The same file, or nothing says otherwise: this node's validator just cannot be used.
             if !self.validator_off.swap(true, Ordering::Relaxed) {
                 crate::log_info!(
-                    "url-install origin: it does not honour its own validator; going on without one"
+                    "url-install origin: it does not honour its own validator ({}); going on without one",
+                    if verdict == WholeAnswer::Same {
+                        "same first bytes"
+                    } else {
+                        "no evidence of a change"
+                    }
                 );
             }
             return Err(FetchErr::Other(
@@ -1569,7 +1708,12 @@ impl RemoteSource {
             .as_deref()
             .and_then(parse_content_range)
         {
-            if got_total.is_some_and(|t| t != self.total_size) {
+            if let Some(t) = got_total.filter(|t| *t != self.total_size) {
+                crate::log_info!(
+                    "url-install origin {}: the file looks changed (its size: {t}, not {}) at offset {start}",
+                    log_host(&self.url),
+                    self.total_size
+                );
                 return Err(FetchErr::OriginChanged);
             }
             if got_start != start {
@@ -1580,6 +1724,18 @@ impl RemoteSource {
         }
         if if_range.is_some() {
             self.validator_honoured.store(true, Ordering::Relaxed);
+        }
+        if validators_disagree(
+            &self.validators,
+            header("etag").as_deref(),
+            header("last-modified").as_deref(),
+        ) && self.validators_consistent.swap(false, Ordering::Relaxed)
+        {
+            crate::log_info!(
+                "url-install origin {}: its answers carry other validators than the first; \
+                 only its size and first bytes can tell a change now",
+                log_host(&self.url)
+            );
         }
         let mut reader = resp.into_body().into_reader();
         let mut filled = 0usize;
@@ -1606,6 +1762,12 @@ impl RemoteSource {
         if filled == dst.len() {
             let mut scratch = [0u8; 1];
             let _ = reader.read(&mut scratch);
+        }
+        // The file's first bytes, kept from the first read of them: what a 200 to `If-Range` is
+        // compared with (`judge_whole_answer`).
+        let sample = HEAD_SAMPLE.min(self.total_size) as usize;
+        if start == 0 && filled >= sample && self.head_sample.get().is_none() {
+            let _ = self.head_sample.set(dst[..sample].to_vec());
         }
         Ok((filled as u64, ttfb))
     }
@@ -1917,10 +2079,15 @@ pub(crate) mod origin_tests {
         out
     }
 
-    /// What `If-Range` not matching sends: the head of the whole file. The body is never read.
-    fn whole(len: usize, headers: &str) -> Vec<u8> {
-        format!("HTTP/1.1 200 OK\r\nContent-Length: {len}\r\n{headers}Connection: close\r\n\r\n")
-            .into_bytes()
+    /// What `If-Range` not matching sends: the whole current file. Only its start is ever read.
+    fn whole(data: &[u8], headers: &str) -> Vec<u8> {
+        let mut out = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n{headers}Connection: close\r\n\r\n",
+            data.len()
+        )
+        .into_bytes();
+        out.extend_from_slice(data);
+        out
     }
 
     const TEST_WINDOW: u64 = 64 * 1024;
@@ -1979,7 +2146,7 @@ pub(crate) mod origin_tests {
         let addr = spawn_scripted_origin(move |asked| {
             let (data, tag) = &*served.lock().unwrap();
             if asked.if_range.as_deref().is_some_and(|v| v != tag) {
-                return whole(data.len(), "");
+                return whole(data, "");
             }
             partial(data, asked, &format!("ETag: {tag}\r\n"))
         });
@@ -2009,7 +2176,7 @@ pub(crate) mod origin_tests {
         let served = data.clone();
         let addr = spawn_scripted_origin(move |asked| {
             if asked.if_range.is_some() {
-                return whole(served.len(), "ETag: \"fresh\"\r\n");
+                return whole(&served, "ETag: \"fresh\"\r\n");
             }
             partial(&served, asked, "ETag: \"fresh\"\r\n")
         });
@@ -2030,7 +2197,7 @@ pub(crate) mod origin_tests {
         let addr = spawn_scripted_origin(move |asked| {
             // The first answer is the mirror the probe saw, the second another one.
             if asked.if_range.is_some() && counter.fetch_add(1, Ordering::SeqCst) == 1 {
-                return whole(served.len(), &format!("Last-Modified: {DATE}\r\n"));
+                return whole(&served, &format!("Last-Modified: {DATE}\r\n"));
             }
             partial(&served, asked, &format!("Last-Modified: {DATE}\r\n"))
         });
@@ -2049,51 +2216,216 @@ pub(crate) mod origin_tests {
         assert!(!src.origin_changed.load(Ordering::Relaxed));
     }
 
+    /// The rule `judge_whole_answer` documents, case by case.
     #[test]
-    fn a_new_length_or_date_on_a_200_is_a_change() {
+    fn only_strong_evidence_makes_a_200_a_change() {
         let known = OriginValidators {
             etag: Some("\"a\"".into()),
-            last_modified: Some("old".into()),
+            last_modified: Some("Tue, 03 Nov 2026 10:00:00 GMT".into()),
         };
         let total = 100;
-        assert!(origin_changed_on_200(
+        let h = |len: Option<u64>, enc: Option<&'static str>, date: Option<&'static str>| {
+            WholeHeaders {
+                content_length: len,
+                content_encoding: enc,
+                last_modified: date,
+            }
+        };
+        let judge = |w, head, consistent| judge_whole_answer(&known, total, w, head, consistent);
+        let new_date = Some("Wed, 04 Nov 2026 10:00:00 GMT");
+
+        // 1. Another size is another file, whatever else is said.
+        assert_eq!(
+            judge(h(Some(99), None, None), None, false),
+            WholeAnswer::Changed("its size")
+        );
+        // ...but not the length of a compressed body.
+        assert_eq!(
+            judge(h(Some(40), Some("gzip"), None), None, false),
+            WholeAnswer::Unknown
+        );
+        assert_eq!(
+            judge(h(Some(99), Some("identity"), None), None, false),
+            WholeAnswer::Changed("its size")
+        );
+
+        // 2. Same size: the first bytes decide, over any date.
+        let a: &[u8] = b"head";
+        assert_eq!(
+            judge(h(Some(100), None, new_date), Some((a, b"head")), true),
+            WholeAnswer::Same
+        );
+        assert_eq!(
+            judge(h(Some(100), None, None), Some((a, b"HEAD")), false),
+            WholeAnswer::Changed("its first bytes")
+        );
+
+        // 3. No first bytes: a new date, only from an origin that has been consistent.
+        assert_eq!(
+            judge(h(Some(100), None, new_date), None, true),
+            WholeAnswer::Changed("its date")
+        );
+        assert_eq!(
+            judge(h(Some(100), None, new_date), None, false),
+            WholeAnswer::Unknown
+        );
+        // The same date spelled with other spacing or case is the same date.
+        assert_eq!(
+            judge(
+                h(Some(100), None, Some("tue, 03 Nov 2026  10:00:00 gmt")),
+                None,
+                true
+            ),
+            WholeAnswer::Unknown
+        );
+        // No date: nothing to go by, however the ETag went (it never decides on its own).
+        assert_eq!(
+            judge(h(Some(100), None, None), None, true),
+            WholeAnswer::Unknown
+        );
+        assert_eq!(judge(h(None, None, None), None, true), WholeAnswer::Unknown);
+    }
+
+    #[test]
+    fn nodes_with_other_validators_are_told_apart() {
+        let known = OriginValidators {
+            etag: Some("\"a\"".into()),
+            last_modified: Some("Tue, 03 Nov 2026 10:00:00 GMT".into()),
+        };
+        assert!(!validators_disagree(&known, Some("\"a\""), None));
+        assert!(!validators_disagree(&known, None, None));
+        // A weak ETag says nothing about the bytes.
+        assert!(!validators_disagree(&known, Some("W/\"b\""), None));
+        assert!(validators_disagree(&known, Some("\"b\""), None));
+        assert!(validators_disagree(
             &known,
-            total,
-            Some(99),
-            Some("old"),
-            false
-        ));
-        assert!(origin_changed_on_200(
-            &known,
-            total,
-            Some(100),
-            Some("new"),
-            false
-        ));
-        assert!(!origin_changed_on_200(
-            &known,
-            total,
-            Some(100),
-            Some("old"),
-            true
-        ));
-        // No date to go by: honoured before and not now says it changed; never honoured says
-        // nothing about the file.
-        let no_date = etag("\"a\"");
-        assert!(origin_changed_on_200(
-            &no_date,
-            total,
-            Some(100),
             None,
-            true
+            Some("Wed, 04 Nov 2026 10:00:00 GMT")
         ));
-        assert!(!origin_changed_on_200(
-            &no_date,
-            total,
-            Some(100),
-            None,
-            false
-        ));
+    }
+
+    /// Weak ETags (here a new one on every answer) are never sent as `If-Range` and never read as
+    /// a change.
+    #[test]
+    fn a_weak_etag_is_not_a_change() {
+        let data = test_bytes(7);
+        let served = data.clone();
+        let n = Arc::new(AtomicUsize::new(0));
+        let (count, if_ranges) = (n.clone(), Arc::new(AtomicUsize::new(0)));
+        let seen = if_ranges.clone();
+        let addr = spawn_scripted_origin(move |asked| {
+            if asked.if_range.is_some() {
+                seen.fetch_add(1, Ordering::SeqCst);
+            }
+            let i = count.fetch_add(1, Ordering::SeqCst);
+            partial(&served, asked, &format!("ETag: W/\"n{i}\"\r\n"))
+        });
+        let src = source_of(addr, etag("W/\"n0\""));
+        let got = src.read_range(0, TEST_TOTAL as u64 - 1).expect("read");
+        assert_eq!(got, data);
+        assert!(!src.origin_changed());
+        assert_eq!(if_ranges.load(Ordering::SeqCst), 0);
+    }
+
+    /// Two nodes behind one name: one sends the ETag the probe saw and honours it, the other drops
+    /// the ETag (and so answers `If-Range` with the whole file). Same bytes: not a change, whether
+    /// or not the file's start was read first.
+    #[test]
+    fn an_etag_only_some_answers_carry_is_not_a_change() {
+        for from_start in [true, false] {
+            let data = test_bytes(8);
+            let served = data.clone();
+            let n = Arc::new(AtomicUsize::new(0));
+            let count = n.clone();
+            let addr = spawn_scripted_origin(move |asked| {
+                if count.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) {
+                    return partial(&served, asked, "ETag: \"a\"\r\n");
+                }
+                if asked.if_range.is_some() {
+                    return whole(&served, "");
+                }
+                partial(&served, asked, "")
+            });
+            let src = source_of(addr, etag("\"a\""));
+            if !from_start {
+                let far = src
+                    .read_range(2 * TEST_WINDOW, 3 * TEST_WINDOW - 1)
+                    .expect("the same file");
+                assert_eq!(
+                    far,
+                    data[2 * TEST_WINDOW as usize..3 * TEST_WINDOW as usize]
+                );
+            }
+            let got = src.read_range(0, TEST_TOTAL as u64 - 1).expect("read");
+            assert_eq!(got, data, "from_start={from_start}");
+            assert!(!src.origin_changed(), "from_start={from_start}");
+        }
+    }
+
+    /// Mirrors that keep their own ETag and date for the very same bytes (nginx derives its ETag
+    /// from the file's time, which differs between copies): the size is the same, and the first
+    /// bytes, read at the start, show it is the same file.
+    #[test]
+    fn two_nodes_with_their_own_strong_etags_for_the_same_bytes_are_not_a_change() {
+        let data = test_bytes(9);
+        let served = data.clone();
+        let n = Arc::new(AtomicUsize::new(0));
+        let count = n.clone();
+        let node = |tag: &str, date: &str| format!("ETag: \"{tag}\"\r\nLast-Modified: {date}\r\n");
+        let (a, b) = (
+            node("a", "Tue, 03 Nov 2026 10:00:00 GMT"),
+            node("b", "Wed, 04 Nov 2026 11:00:00 GMT"),
+        );
+        let addr = spawn_scripted_origin(move |asked| {
+            let on_a = count.fetch_add(1, Ordering::SeqCst).is_multiple_of(2);
+            let headers = if on_a { &a } else { &b };
+            if !on_a && asked.if_range.is_some() {
+                return whole(&served, headers);
+            }
+            partial(&served, asked, headers)
+        });
+        let src = source_of(
+            addr,
+            OriginValidators {
+                etag: Some("\"a\"".into()),
+                last_modified: Some("Tue, 03 Nov 2026 10:00:00 GMT".into()),
+            },
+        );
+        // The start first, as a link install does (it reads the package's header).
+        assert_eq!(src.read_range(0, 1023).unwrap(), data[..1024].to_vec());
+        let got = src.read_range(0, TEST_TOTAL as u64 - 1).expect("read");
+        assert_eq!(got, data);
+        assert!(!src.origin_changed());
+    }
+
+    /// A real change: the file at the link is replaced with a longer one half-way. Its size says
+    /// so on every node, as a 206's total and as a 200's length.
+    #[test]
+    fn a_file_whose_size_changes_is_a_change() {
+        for answer_whole in [false, true] {
+            let state = Arc::new(Mutex::new(test_bytes(10)));
+            let served = state.clone();
+            let addr = spawn_scripted_origin(move |asked| {
+                let data = served.lock().unwrap().clone();
+                if answer_whole && data.len() != TEST_TOTAL && asked.if_range.is_some() {
+                    return whole(&data, "ETag: \"two\"\r\n");
+                }
+                partial(&data, asked, "")
+            });
+            let src = source_of(addr, etag("\"one\""));
+            assert_eq!(
+                src.read_range(0, 15).unwrap(),
+                test_bytes(10)[..16].to_vec()
+            );
+            let mut longer = test_bytes(11);
+            longer.extend_from_slice(&[0; 7]);
+            *state.lock().unwrap() = longer;
+            let err = src
+                .read_range(2 * TEST_WINDOW, 2 * TEST_WINDOW + 1023)
+                .expect_err("another file");
+            assert!(err.to_string().contains("changed"), "{err}");
+            assert!(src.origin_changed(), "answer_whole={answer_whole}");
+        }
     }
 
     /// A 206 is only the bytes asked for if it says so.

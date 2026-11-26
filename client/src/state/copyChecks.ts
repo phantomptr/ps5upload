@@ -83,10 +83,12 @@ export function useCopyCheck(path: string): CopyCheck | undefined {
   return useCopyChecks((s) => s.byPath[path]);
 }
 
-/** Percent through a running check, or null when its size is not known yet. */
+/** Percent through a running check, or null when its size is not known yet. Never 100: a
+ *  check that is still running has something left to do (#951: an older engine's package check
+ *  reached its byte total and then read the whole package again). */
 export function checkPercent(
   c: Pick<CopyCheck, "bytes_done" | "bytes_total">,
 ): number | null {
   if (!c.bytes_total) return null;
-  return Math.min(100, Math.floor((c.bytes_done / c.bytes_total) * 100));
+  return Math.min(99, Math.floor((c.bytes_done / c.bytes_total) * 100));
 }

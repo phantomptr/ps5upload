@@ -16,10 +16,10 @@ use super::{atomic_write, Library, LibraryError, ResolvedEntry};
 const RELEASE_CACHE_TTL: Duration = Duration::from_secs(3600);
 
 /// The most release JSON accepted: 30 releases with long notes fit well under this.
-const RELEASE_JSON_MAX_BYTES: u64 = 16 * 1024 * 1024;
+pub(super) const RELEASE_JSON_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
 /// GitHub and Gitea both accept this; only GitHub looks at it.
-const JSON_ACCEPT: &str = "application/vnd.github+json";
+pub(super) const JSON_ACCEPT: &str = "application/vnd.github+json";
 
 /// A text field GitHub sometimes sends as `null` instead of leaving it out (a release with no
 /// notes has `"body": null`). `#[serde(default)]` alone only covers a missing field, so a null
@@ -51,6 +51,9 @@ pub(super) struct GithubRelease {
     /// So the UI can warn that a version may be unstable (payload development moves fast).
     #[serde(default)]
     pub(super) prerelease: bool,
+    /// A draft is not published yet (only its owner sees one); a source skips it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) draft: bool,
 }
 
 /// What a client consumes: flat, with the asset already picked.
@@ -207,6 +210,7 @@ fn list_release(entry: &ResolvedEntry, refresh_error: Option<String>) -> Release
         }],
         html_url: p.homepage.clone(),
         prerelease: false,
+        draft: false,
     };
     release_to_info(entry, &release, 0, refresh_error)
 }
@@ -494,6 +498,7 @@ mod tests {
             html_url: "".into(),
             prerelease: false,
             assets,
+            draft: false,
         }
     }
 

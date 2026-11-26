@@ -182,6 +182,7 @@ git push -q -u origin "$BRANCH"
 PR="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')"
 if [ -z "$PR" ]; then
   BODY="$(mktemp -t fast-release-body.XXXXXX)"
+  trap 'rm -f "$BODY"' EXIT
   {
     if [ "$GATE" = 1 ]; then
       echo "Fast release v$V (scripts/release/fast-release.sh --gate): bare checks, merged once the PR gate passed."

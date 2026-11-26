@@ -29,7 +29,7 @@ mod tests {
 
     fn scratch(tag: &str) -> std::path::PathBuf {
         let root =
-            std::env::temp_dir().join(format!("ps5upload-fold-{tag}-{}", std::process::id()));
+            crate::test_tmp::temp_path(format!("ps5upload-fold-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root

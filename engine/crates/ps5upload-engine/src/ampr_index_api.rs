@@ -408,7 +408,7 @@ mod tests {
     use ps5upload_fpkg::source::FolderSource;
 
     fn scratch(tag: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
+        let root = crate::test_tmp::temp_path(format!(
             "ps5upload-ampridx-{tag}-{}-{}",
             std::process::id(),
             Uuid::new_v4()

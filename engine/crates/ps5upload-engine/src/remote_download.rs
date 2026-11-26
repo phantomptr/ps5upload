@@ -857,7 +857,7 @@ mod tests {
 
     #[test]
     fn an_existing_file_is_refused_unless_the_user_chose_resume_or_replace() {
-        let dir = std::env::temp_dir().join(format!("ps5u-dl-takeover-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-dl-takeover-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("game.pkg");
         let partial = partial_path(&path);
@@ -886,7 +886,7 @@ mod tests {
     /// start; only a complete one gets the real name.
     #[test]
     fn a_whole_download_replaces_the_partial_and_is_named_only_when_complete() {
-        let dir = std::env::temp_dir().join(format!("ps5u-dl-whole-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-dl-whole-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("game.pkg");
         let partial = partial_path(&path);
@@ -997,7 +997,7 @@ mod tests {
     }
 
     fn scratch(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ps5u-dl-{tag}-{}", uuid::Uuid::new_v4()));
+        let d = crate::test_tmp::temp_path(format!("ps5u-dl-{tag}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         d
     }

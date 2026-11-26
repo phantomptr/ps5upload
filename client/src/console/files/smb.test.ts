@@ -381,6 +381,61 @@ describe("transferItems", () => {
     expect(w.sent).toHaveLength(1);
   });
 
+  it("a move to a share deletes each original only after its copy finished whole (#953)", async () => {
+    const w = world({ "/data/a.txt": "file", "/data/g": "dir" }, {});
+    w.ends.c1 = job({ job: "c1", state: "done", bytes_done: 100, files_done: 1, skipped: 0 });
+    w.ends.c3 = job({ job: "c3", state: "done", bytes_done: 100, files_done: 1, files_total: 1, skipped: 0 });
+    const waited: string[] = [];
+    const r = await transferItems(
+      [
+        { path: "/data/a.txt", dir: false },
+        { path: "/data/g", dir: true },
+      ],
+      `smb://${ID}/backup`,
+      { ...w.deps(never), move: true },
+      { waitJob: async (id) => (waited.push(id), "done") },
+    );
+    expect(r.done).toEqual(["/data/a.txt", "/data/g"]);
+    expect(r.notes).toEqual([]);
+    expect(w.sent).toEqual([
+      `/api/smb/copy ${JSON.stringify({ src: "/data/a.txt", dest: `smb://${ID}/backup/a.txt` })}`,
+      `/api/fs/delete ${JSON.stringify({ path: "/data/a.txt" })}`,
+      `/api/smb/copy ${JSON.stringify({ src: "/data/g", dest: `smb://${ID}/backup/g` })}`,
+      `/api/fs/delete ${JSON.stringify({ path: "/data/g" })}`,
+    ]);
+    expect(waited).toEqual(["l2", "l4"]);
+  });
+
+  it("a move keeps the original when the copy fails, is stopped or comes up short", async () => {
+    for (const end of [
+      job({ job: "c1", state: "failed", error: "smb_disconnected" }),
+      job({ job: "c1", state: "cancelled", error: "cancelled" }),
+      job({ job: "c1", state: "done", bytes_done: 60, files_done: 1, skipped: 0 }),
+      job({ job: "c1", state: "done", bytes_done: 100, files_done: 2, files_total: 3, skipped: 0 }),
+      // the copy left out links (the daemon counts them), or a daemon too old to say
+      job({ job: "c1", state: "done", bytes_done: 100, files_done: 1, skipped: 2 }),
+      job({ job: "c1", state: "done", bytes_done: 100, files_done: 1 }),
+    ]) {
+      const w = world({ "/data/g": "dir" }, {});
+      w.ends.c1 = end;
+      const r = await transferItems([{ path: "/data/g", dir: true }], `smb://${ID}`, { ...w.deps(never), move: true }, { waitJob: async () => "done" });
+      expect(w.sent.filter((s) => s.startsWith("/api/fs/delete")), end.state).toEqual([]);
+      if (end.state === "done") expect(r.notes).toMatchObject([{ what: "moved_left", item: "g", why: end.skipped ? "links" : null }]);
+    }
+  });
+
+  it("a move whose original won't go says so, and a copy never deletes", async () => {
+    const w = world({ "/data/a.txt": "file" }, {});
+    w.ends.c1 = job({ job: "c1", state: "done", bytes_done: 100, files_done: 1, skipped: 0 });
+    const stuck = { ...w.deps(never), move: true, localStat: async () => ({ kind: "file" }) };
+    const r = await transferItems([{ path: "/data/a.txt", dir: false }], `smb://${ID}`, stuck, { waitJob: async () => "failed" });
+    expect(r.notes).toMatchObject([{ what: "moved_left", item: "a.txt" }]);
+    const c = world({ "/data/a.txt": "file" }, {});
+    c.ends.c1 = job({ job: "c1", state: "done", bytes_done: 100, files_done: 1, skipped: 0 });
+    await transferItems([{ path: "/data/a.txt", dir: false }], `smb://${ID}`, c.deps(never), { waitJob: async () => "done" });
+    expect(c.sent.filter((s) => s.startsWith("/api/fs/delete"))).toEqual([]);
+  });
+
   it("a job that fails reports the daemon's reason", async () => {
     const w = world({}, {});
     w.ends.c1 = job({ job: "c1", state: "failed", error: "smb_disconnected", failed: "big.bin" });

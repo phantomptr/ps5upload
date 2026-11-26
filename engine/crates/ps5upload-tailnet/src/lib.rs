@@ -539,7 +539,7 @@ mod tests {
 
     #[test]
     fn starts_retries_and_maps_without_a_control_server() {
-        let dir = std::env::temp_dir().join(format!("tailnet-rs-test-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("tailnet-rs-test-{}", std::process::id()));
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let node = Node::start(
@@ -584,3 +584,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[cfg(test)]
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

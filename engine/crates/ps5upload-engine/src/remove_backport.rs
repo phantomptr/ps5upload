@@ -606,7 +606,7 @@ mod tests {
         use ps5upload_fpkg::sample::VerifyMode;
         use std::sync::atomic::AtomicBool;
 
-        let root = std::env::temp_dir().join(format!("ps5upload-rmbp-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-rmbp-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let game_dir = root.join("PPSA01234");
         let mut on_disk = game(0x1200_0038);

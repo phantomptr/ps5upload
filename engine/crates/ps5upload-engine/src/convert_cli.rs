@@ -830,7 +830,7 @@ mod tests {
     /// image route's own handler and job, and the image holds the folder's files.
     #[tokio::test]
     async fn a_game_folder_converts_to_a_verified_image() {
-        let root = std::env::temp_dir().join(format!("convert-cli-{}", Uuid::new_v4()));
+        let root = crate::test_tmp::temp_path(format!("convert-cli-{}", Uuid::new_v4()));
         let (game, out) = (root.join("PPSA01234"), root.join("out"));
         tiny_game(&game);
 

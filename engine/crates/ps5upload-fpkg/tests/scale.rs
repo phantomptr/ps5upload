@@ -13,7 +13,7 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("fpkg-scale-{}-{name}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-scale-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
@@ -129,13 +129,26 @@ fn the_streaming_writer_reports_progress() {
     .unwrap();
     assert!(report.verify.ok());
     assert!(!samples.is_empty());
-    // One total throughout (the outer image), never exceeded, and the run ends complete.
-    // Each phase sweeps it — writing, then verifying — so the sequence steps back
-    // between phases, which is what the engine's per-phase progress expects.
+    // One total per phase, never exceeded, and the run ends complete. Writing sweeps the outer
+    // image; the read-back sweeps it again and, checking in full, reads everything before the
+    // SI ZIP once more for the PlayGo chunk CRCs (#951), which its total counts too. The
+    // sequence steps back between phases, which is what the engine's per-phase progress
+    // expects.
     let total = samples[0].1;
-    assert!(samples.iter().all(|(_, t)| *t == total), "{samples:?}");
+    let check_total = samples.last().unwrap().1;
+    assert!(check_total > total, "{total} {check_total}");
+    assert!(
+        samples
+            .iter()
+            .all(|(_, t)| *t == total || *t == check_total),
+        "{samples:?}"
+    );
     assert!(samples.iter().all(|(done, t)| done <= t), "{samples:?}");
-    assert_eq!(*samples.last().unwrap(), (total, total), "{samples:?}");
+    assert_eq!(
+        *samples.last().unwrap(),
+        (check_total, check_total),
+        "{samples:?}"
+    );
 }
 
 /// An image past the first indirect slot's 1820 blocks (12 + 1820 blocks = 114 MiB) makes
@@ -731,3 +744,7 @@ fn a_sampled_sweep_reads_back_a_sample_and_a_full_sweep_all_of_it() {
     }
     assert!(sweep(&report.path, Some(seed)) && sweep(&report.path, None));
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

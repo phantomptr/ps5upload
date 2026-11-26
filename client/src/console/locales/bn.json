@@ -510,6 +510,8 @@
   "cw_files_load_all": "সব লোড করুন",
   "cw_files_mesh_home": "এই ফোল্ডারটি একটি Mesh Drive। এর সিঙ্ক ফাইল লুকানো: ফোল্ডারটি সরাবেন না বা নাম বদলাবেন না।",
   "cw_files_more": "আরও দেখান",
+  "cw_files_move_has_links": "এতে এমন লিঙ্ক আছে যা নেটওয়ার্ক শেয়ারে রাখা যায় না।",
+  "cw_files_move_source_left": "“{name}” কপি হয়েছে, কিন্তু মূলটি এখনও PS5-এ আছে।",
   "cw_files_move_to": "এখানে সরান…",
   "cw_files_name": "নাম",
   "cw_files_new_file": "নতুন ফাইল",

@@ -18,7 +18,7 @@ struct Roots {
 
 impl Roots {
     fn new(tag: &str) -> Roots {
-        let base = std::env::temp_dir().join(format!(
+        let base = crate::test_tmp::temp_path(format!(
             "ps5u-smp-meta-{tag}-{}-{:?}",
             std::process::id(),
             std::time::SystemTime::now()
@@ -261,3 +261,7 @@ fn poll_interval_is_clamped_and_run_now_returns_at_once() {
     assert_eq!(smp_meta::set_poll_seconds(30), 30);
     assert_eq!(smp_meta::stats().running, 0, "not started by the hooks");
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

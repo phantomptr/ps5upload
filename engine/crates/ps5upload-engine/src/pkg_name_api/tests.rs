@@ -24,7 +24,7 @@ struct TempDir(PathBuf);
 impl TempDir {
     fn new(name: &str) -> Self {
         static N: AtomicU32 = AtomicU32::new(0);
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::test_tmp::temp_path(format!(
             "ps5upload-pkg-name-{}-{}-{name}",
             std::process::id(),
             N.fetch_add(1, Ordering::Relaxed)

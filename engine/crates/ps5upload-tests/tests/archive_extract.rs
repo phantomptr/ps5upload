@@ -10,7 +10,7 @@ use ps5upload_core::archive_extract::{
 
 fn scratch(name: &str) -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
-    let d = std::env::temp_dir().join(format!(
+    let d = crate::test_tmp::temp_path(format!(
         "ps5upload-extract-{}-{}-{name}",
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
@@ -171,3 +171,7 @@ fn a_password_rar_needs_its_password() {
         b"target\nCargo.lock\n"
     );
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

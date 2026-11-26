@@ -9,7 +9,7 @@ import {
   checkPercent,
   useCopyCheck,
 } from "../../state/copyChecks";
-import { useTr } from "../../state/lang";
+import { useTr, type Translator } from "../../state/lang";
 
 /** A copy's check, under its row: progress while it runs, then what was found. */
 export function CopyCheckLine({ path }: { path: string }) {
@@ -37,7 +37,7 @@ export function CopyCheckLine({ path }: { path: string }) {
               "read start to end (finds a copy cut short or unreadable, not one with wrong bytes)",
             );
   if (c.state === "queued" || c.state === "running") {
-    const pct = checkPercent(c);
+    const pct = c.state === "running" ? checkPercent(c) : null;
     return (
       <div
         className="mt-1 flex items-center gap-2 text-[0.6875rem] text-[var(--color-muted)]"
@@ -48,15 +48,7 @@ export function CopyCheckLine({ path }: { path: string }) {
             ? tr("copycheck.queued", undefined, "Waiting to be checked")
             : pct === null
               ? tr("copycheck.running", undefined, "Checking…")
-              : tr(
-                  "copycheck.running_pct",
-                  {
-                    pct,
-                    done: formatCollectionBytes(c.bytes_done),
-                    total: formatCollectionBytes(c.bytes_total),
-                  },
-                  "Checking {pct}% ({done} of {total})",
-                )}
+              : runningText(tr, c, pct)}
         </span>
         <button
           type="button"
@@ -104,6 +96,21 @@ export function CopyCheckLine({ path }: { path: string }) {
     );
   }
   return <CopyProblems check={c} how={how} />;
+}
+
+/** A running check's line: how far through the whole check it is and, for a package, which of
+ *  its two reads it is on (#951: its blocks, then the PlayGo chunk CRCs, a second full read). */
+export function runningText(
+  tr: Translator,
+  c: Pick<CopyCheck, "bytes_done" | "bytes_total" | "phase">,
+  pct: number,
+): string {
+  const vars = { pct, done: formatCollectionBytes(c.bytes_done), total: formatCollectionBytes(c.bytes_total) };
+  if (c.phase === "blocks")
+    return tr("copycheck.running_blocks_pct", vars, "Checking the data blocks: {pct}% ({done} of {total})");
+  if (c.phase === "playgo")
+    return tr("copycheck.running_playgo_pct", vars, "Checking the PlayGo chunks: {pct}% ({done} of {total})");
+  return tr("copycheck.running_pct", vars, "Checking {pct}% ({done} of {total})");
 }
 
 /** A check that found problems: what is wrong in plain words, what to do about it, and the

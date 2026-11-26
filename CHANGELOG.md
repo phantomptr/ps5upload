@@ -6,6 +6,27 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Payloads**
+- **Your own payload sources are back.** In Payloads, add a GitHub, Gitea or Forgejo project that publishes payload files, and pick the file once (for example `kstuff.elf`). Its card shows the release you have, says when a newer one is out, and has Download, Update and Send to PS5. Nothing happens on its own: it checks only when you open Payloads or press Check, downloads only when you press Download, and before sending shows the file, its release, size and checksum. Only add projects you trust. The built-in list stays a guide with links.
+
+**Files**
+- **Two panes on a wide screen (#952).** Turn on Two panes to keep the PS5 on one side and this computer, a saved server or another console on the other, and copy or move between them. Phones and tablets stay as they were.
+- **Copy or move from the PS5 to a saved server (#953),** in Move to… and on the console's own page. A move deletes the original only after the copy is checked, and keeps a folder that holds links, which a share can't hold.
+
+**Convert**
+- **Closing the page no longer marks a running build "Interrupted" (#954).** The build keeps going; the reopened page picks it up or shows it finished. The queue's next game, and the install after Convert & install, wait until the page is open again, and the page says so.
+
+**Games**
+- **Check the copy no longer shows 100% while it still reads the package (#951).** It counts both reads and says which part it is on, and Cancel works in both.
+
+**Upload & Install**
+- **"The file at this link changed" only when it really did.** Servers whose copies disagree on dates or tags no longer trip it; a different size or different first bytes still do.
+
+**Under the hood**
+- The tests no longer leave folders behind in the system's temp folder (a full run used to leave about 2 GB), and CI checks it. A signing script no longer leaves its key file behind.
+
+## 12.6.33
+
 **Fake PS5 packages**
 - **Two ways to play them, explained side by side.** Install the package (on firmware 11.61 to 13.60 with the latest kstuff, which supports fake packages up to 13.60), or mount it with Kraken Mount. Upload & Install, Convert, the hint after a game doesn't start, the Payloads catalog, the FAQ and the website now all say this the same way, and the note is information rather than a warning.
 

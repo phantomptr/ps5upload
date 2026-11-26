@@ -692,7 +692,7 @@ mod tests {
     /// are kept as they were.
     #[test]
     fn the_overlay_swaps_packed_files_for_the_pack_set() {
-        let root = std::env::temp_dir().join(format!(
+        let root = crate::test_tmp::temp_path(format!(
             "ampr-overlay-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
@@ -770,7 +770,7 @@ mod tests {
     /// a packed file edited after the measure fails the read instead of giving other bytes.
     #[test]
     fn a_streamed_packed_game_is_the_spooled_one() {
-        let root = std::env::temp_dir().join(format!(
+        let root = crate::test_tmp::temp_path(format!(
             "ampr-streamed-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
@@ -865,7 +865,7 @@ mod tests {
     /// the runtime's version and whether it serves packs.
     #[test]
     fn readiness_reads_the_games_ampr_emu() {
-        let root = std::env::temp_dir().join(format!(
+        let root = crate::test_tmp::temp_path(format!(
             "ampr-ready-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
@@ -948,7 +948,7 @@ mod tests {
     #[test]
     fn installing_the_runtime_replaces_and_keeps_the_original() {
         use crate::source::SourceTree;
-        let root = std::env::temp_dir().join(format!("ps5upload-rt-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-rt-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("fakelib")).unwrap();
         std::fs::write(root.join("eboot.bin"), b"libSceAmpr.prx").unwrap();

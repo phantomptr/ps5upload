@@ -202,6 +202,7 @@ mod tests {
                 status: 404,
                 location: None,
                 content_length: Some(0),
+                retry_at: None,
                 body: Box::new(std::io::Cursor::new(Vec::new())),
             })
         }
@@ -247,7 +248,7 @@ mod tests {
     }
 
     async fn serve(tag: &str) -> Harness {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::test_tmp::temp_path(format!(
             "ps5upload-payload-updates-{tag}-{}",
             std::process::id()
         ));

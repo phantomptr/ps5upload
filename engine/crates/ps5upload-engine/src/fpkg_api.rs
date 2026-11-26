@@ -4630,7 +4630,7 @@ mod extract_tests {
     /// folder of that name, or nothing there, counts for none.
     #[test]
     fn a_stopped_builds_partial_counts_as_room() {
-        let base = std::env::temp_dir().join(format!("fpkg-leftover-{}", Uuid::new_v4()));
+        let base = crate::test_tmp::temp_path(format!("fpkg-leftover-{}", Uuid::new_v4()));
         std::fs::create_dir_all(base.join("dir.exfat.partial")).unwrap();
         std::fs::write(base.join("game.exfat.partial"), vec![0u8; 4096]).unwrap();
         assert_eq!(leftover_bytes(&base.join("game.exfat.partial")), 4096);
@@ -4644,7 +4644,7 @@ mod extract_tests {
     #[test]
     fn a_failed_unpack_leaves_no_files_behind() {
         use std::io::Write;
-        let base = std::env::temp_dir().join(format!("fpkg-failed-unpack-{}", Uuid::new_v4()));
+        let base = crate::test_tmp::temp_path(format!("fpkg-failed-unpack-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&base).unwrap();
         let zip_path = base.join("game.zip");
         {
@@ -4691,7 +4691,7 @@ mod extract_tests {
     /// anywhere else is never touched.
     #[test]
     fn a_build_removes_the_unpack_folder_it_read_from() {
-        let base = std::env::temp_dir().join(format!("ps5upload-scaffold-{}", std::process::id()));
+        let base = crate::test_tmp::temp_path(format!("ps5upload-scaffold-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join(format!("{EXTRACT_PREFIX}run"));
         let game = root.join("Game");
@@ -4709,7 +4709,7 @@ mod extract_tests {
 
     #[test]
     fn a_leftover_partial_goes_but_a_second_build_of_the_same_output_is_refused() {
-        let out = std::env::temp_dir().join(format!("ps5upload-partial-{}", std::process::id()));
+        let out = crate::test_tmp::temp_path(format!("ps5upload-partial-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&out);
         std::fs::create_dir_all(&out).unwrap();
         std::fs::write(out.join("A.pkg.partial"), b"x").unwrap();
@@ -4760,7 +4760,7 @@ mod extract_tests {
     fn a_failed_or_interrupted_conversion_leaves_nothing_behind() {
         // #432: a failed image build kept its `.partial` (as large as the image) in the output
         // folder, and an interrupted one was never cleared.
-        let out = std::env::temp_dir().join(format!("ps5upload-leftovers-{}", std::process::id()));
+        let out = crate::test_tmp::temp_path(format!("ps5upload-leftovers-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&out);
         std::fs::create_dir_all(out.join(format!("{EXTRACT_PREFIX}old"))).unwrap();
         for n in [
@@ -4819,7 +4819,7 @@ mod extract_tests {
     fn another_process_s_unfinished_output_is_never_swept() {
         use ps5upload_convert_core::writing::ClaimLock;
         let out =
-            std::env::temp_dir().join(format!("ps5upload-other-claim-{}", std::process::id()));
+            crate::test_tmp::temp_path(format!("ps5upload-other-claim-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&out);
         std::fs::create_dir_all(&out).unwrap();
         let theirs = out.join("A.exfat.partial");
@@ -4960,7 +4960,7 @@ mod extract_tests {
 
     #[test]
     fn stale_unpacks_go_but_active_ones_stay() {
-        let out = std::env::temp_dir().join(format!("ps5upload-stale-{}", std::process::id()));
+        let out = crate::test_tmp::temp_path(format!("ps5upload-stale-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&out);
         let (old, live, keep) = (
             out.join(".ps5upload-extract-old"),
@@ -4985,7 +4985,7 @@ mod delete_tests {
     /// Delete package removes only what this engine built, once.
     #[test]
     fn only_a_package_this_engine_built_can_be_deleted() {
-        let dir = std::env::temp_dir().join(format!("fpkg-del-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-del-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let ours = dir.join("ours.pkg");
         let theirs = dir.join("theirs.pkg");
@@ -5036,7 +5036,7 @@ mod panic_tests {
                 bytes_finalized: 0,
             },
         );
-        let dest = std::env::temp_dir().join(format!("fpkg-panic-{job_id}"));
+        let dest = crate::test_tmp::temp_path(format!("fpkg-panic-{job_id}"));
         std::fs::create_dir_all(&dest).unwrap();
         active_extracts().lock().unwrap().insert(dest.clone());
         let spinning = tokio::spawn(async {
@@ -5073,7 +5073,7 @@ mod panic_tests {
     /// A finished unpack keeps its folder.
     #[test]
     fn a_found_game_keeps_its_folder() {
-        let dest = std::env::temp_dir().join(format!("fpkg-keep-{}", Uuid::new_v4()));
+        let dest = crate::test_tmp::temp_path(format!("fpkg-keep-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dest).unwrap();
         let mut unpacking = Unpacking(Some(dest.clone()));
         unpacking.0 = None;
@@ -5091,7 +5091,7 @@ mod title_param_tests {
     /// param.sfo in sce_sys.
     #[tokio::test]
     async fn a_folder_needs_param_json_or_param_sfo() {
-        let dir = std::env::temp_dir().join(format!("fpkg-param-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-param-{}", std::process::id()));
         let sys = dir.join("sce_sys");
         std::fs::create_dir_all(&sys).unwrap();
         std::fs::write(dir.join("eboot.bin"), b"x").unwrap();
@@ -5247,7 +5247,7 @@ mod source_option_tests {
 
     /// A game folder `<root>/PPSA01234` and a small exFAT image of it beside it.
     fn game(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
-        let root = std::env::temp_dir().join(format!("fpkg-srcopt-{tag}-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("fpkg-srcopt-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let dir = root.join("PPSA01234");
         std::fs::create_dir_all(dir.join("sce_sys")).unwrap();
@@ -5530,7 +5530,7 @@ mod source_option_tests {
     /// same archive with the game alone does go.
     #[tokio::test(flavor = "multi_thread")]
     async fn delete_source_keeps_a_source_the_conversion_left_something_of() {
-        let root = std::env::temp_dir().join(format!("fpkg-leftout-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("fpkg-leftout-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let root = std::fs::canonicalize(&root).unwrap();

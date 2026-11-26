@@ -650,6 +650,32 @@ describe("QueueCard adding", () => {
     expect(card([waiting("handed")])).toContain("Open Upload &amp; Install");
   });
 
+  it("says what closing the page does while the queue runs, and that it waits after one (#954)", () => {
+    const props = {
+      items: [waiting()],
+      onOpenUpload: noop,
+      onStart: noop,
+      onStop: noop,
+      onRemove: noop,
+      onUpdate: noop,
+      canInstall: true,
+      host: "192.168.1.20",
+      onMove: noop,
+      onClearFinished: noop,
+    };
+    const runningHtml = renderToStaticMarkup(<QueueCard {...props} running />);
+    expect(runningHtml).toContain("Closing this page does not stop the game being made");
+    expect(runningHtml).not.toContain("cq-stopped-by-close");
+    const stopped = renderToStaticMarkup(<QueueCard {...props} running={false} stoppedByClose />);
+    expect(stopped).toContain("The queue stopped when this page was closed");
+    expect(stopped).not.toContain("Closing this page does not stop");
+    // Nothing left to start: nothing to say.
+    expect(renderToStaticMarkup(<QueueCard {...props} items={[waiting("done")]} running={false} stoppedByClose />)).not.toContain(
+      "cq-stopped-by-close",
+    );
+    expect(card([waiting()])).not.toContain("cq-stopped-by-close");
+  });
+
   it("a game with a plain % in its name does not break the card", async () => {
     const { nameOf } = await import("./QueueCard");
     expect(nameOf("/games/100% Orange Juice")).toBe("100% Orange Juice");

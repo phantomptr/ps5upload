@@ -192,6 +192,8 @@ export interface SmbJob {
   error: string | null;
   failed: string;
   reconnects: number;
+  /** Entries the copy left out (links…); absent from a daemon before #953, which no move trusts. */
+  skipped?: number;
 }
 
 export interface SmbJobDeps {
@@ -290,6 +292,8 @@ export interface TransferDeps {
   watch?: typeof watchSmbJob;
   localStat?: (path: string) => Promise<{ kind: string } | null>;
   remoteStat?: (path: string) => Promise<{ kind: string } | null>;
+  /** Console -> share: delete each source once its copy job ended done with every file and byte. */
+  move?: boolean;
 }
 
 /** A job that ended failed, as the error the batch reports ("smb_disconnected" …). */
@@ -342,13 +346,29 @@ export async function transferItems(
     },
   };
 
+  let copied: SmbJob | null = null;
   const copyJob = async (item: string, dest: string, res: BatchResult, overwrite: boolean) => {
     const { job } = await send<{ job: string }>("/api/smb/copy", overwrite ? { src: item, dest, overwrite } : { src: item, dest });
     res.started.push(job);
-    return watch(job, {
+    const end = await watch(job, {
       stopped: opts?.stopped,
       onStatus: (s) => deps.onBytes?.(s.bytes_done, s.bytes_total),
     });
+    copied = end.end === "done" ? end.status : null;
+    return end;
+  };
+
+  /** A move's source goes only after a complete copy, and is kept (with a note) on any doubt. */
+  const drop = async (item: string) => {
+    if (!deps.move) return;
+    const s: SmbJob | null = copied;
+    let gone = false;
+    if (s && s.skipped === 0 && s.files_done === s.files_total && s.bytes_done === s.bytes_total) {
+      const { job } = await send<{ job: string }>("/api/fs/delete", { path: item });
+      if (opts?.waitJob) await opts.waitJob(job, true);
+      gone = (await (deps.localStat ?? statOrNull)(item).catch(() => true)) == null;
+    }
+    if (!gone) notes.push(new ReplaceError("moved_left", baseName(item), { why: s?.skipped ? "links" : null }));
   };
 
   /** Replace `dest` with `item`, through a temporary name (replace.ts). */
@@ -365,8 +385,9 @@ export async function transferItems(
     if (r.end === "stopped") {
       halted.push(item);
       if (r.temp) notes.push(new ReplaceError("temp_left", name, { temp: r.temp }));
-    } else if (r.old) {
-      notes.push(new ReplaceError("old_left", name, { old: r.old }));
+    } else {
+      if (r.old) notes.push(new ReplaceError("old_left", name, { old: r.old }));
+      await drop(item);
     }
   };
 
@@ -401,7 +422,7 @@ export async function transferItems(
       }
     }
     const end = await copyJob(item, dest, res, overwrite);
-    if (end.end === "done") return;
+    if (end.end === "done") return drop(item);
     if (end.end === "cancelled") {
       cancelled.push(item);
       return;

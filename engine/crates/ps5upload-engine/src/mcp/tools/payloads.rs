@@ -1,10 +1,13 @@
-//! Payloads: the engine's library (`payloads_catalog`), new versions (`payloads_updates`,
+//! Payloads: the engine's library (`payloads_catalog`), the payload sources the user added
+//! (`payloads_sources`, `payloads_source_download`), new versions (`payloads_updates`,
 //! `payloads_updates_check`, `payloads_rollback`), keeping a console's Payload Manager in step
 //! (`payloads_pm_choice`, `payloads_pm_sync`), sending one to a
 //! console (`payloads_send`), and the console's Payload Manager (`payloads_list`,
 //! `payloads_launch`, `payloads_store`, `payloads_delete`, `payloads_autoload`).
 //!
-//! ps5upload never downloads a payload: the user gets the file from the project page.
+//! The built-in catalogue is never downloaded: the user gets those files from the project page.
+//! Only a source the user added themselves is downloaded, and adding one is the user's own step
+//! in the app (it asks them to trust the project), so no tool adds or removes one.
 
 use serde_json::json;
 
@@ -23,6 +26,46 @@ pub(super) fn tools() -> Vec<ToolDef> {
             kind: Kind::Read,
             schema: object(json!({}), &[]),
             run: route!(path: "/api/payloads", done: "The payload library."),
+        },
+        ToolDef {
+            name: "payloads_sources",
+            title: "Payload sources the user added",
+            description: "The payload sources the user added in Payloads: a GitHub, Gitea or \
+                          Forgejo project and the file picked from its releases. For each: the \
+                          copy on the engine's computer (release, size, SHA-256, `path`) and, \
+                          after a check, the newest release's file and `update_available`. \
+                          Without `check` nothing asks the network. A project's releases are \
+                          read at most every ten minutes unless `force`; GitHub allows 60 reads \
+                          an hour, and a limited host answers `rate_limited` with `retry_at`.",
+            kind: Kind::Read,
+            schema: object(
+                json!({
+                    "check": flag("Read each source's newest releases."),
+                    "force": flag("With `check`: read them even when read in the last ten minutes."),
+                }),
+                &[],
+            ),
+            run: route!(path: "/api/payloads/repos", done: "The payload sources."),
+        },
+        ToolDef {
+            name: "payloads_source_download",
+            title: "Download a payload source's file",
+            description: "Downloads the newest release's file of a payload source the user \
+                          added (an id from payloads_sources) into the engine's payload folder, \
+                          replacing the copy there once the new one is checked (its size, and \
+                          the release's checksum file when it has one). Sends nothing: \
+                          payloads_send with the same id as `payload_id` does, and only when the \
+                          user asked for it.",
+            kind: Kind::Destructive { idempotent: true },
+            schema: object(
+                json!({ "id": text("The source's id, from payloads_sources.") }),
+                &["id"],
+            ),
+            run: route!(
+                method: "POST",
+                path: "/api/payloads/repos/{id}/download",
+                done: "Downloaded the source's file.",
+            ),
         },
         ToolDef {
             name: "payloads_updates",
@@ -127,10 +170,10 @@ pub(super) fn tools() -> Vec<ToolDef> {
             title: "Send a payload to a console",
             description: "Sends a payload to a console's loader, which runs it: a file on the \
                           engine's computer (`path`) or the local copy of a library payload \
-                          (`payload_id`). Nothing is downloaded: without a local copy it fails \
-                          with `not_on_this_computer`, and the user gets the file from the \
-                          project page. A payload is a program with full access to the console: \
-                          only one the user asked for.",
+                          (`payload_id`: a catalogue id, or a payload source's id from \
+                          payloads_sources). Nothing is downloaded: without a local copy it fails \
+                          with `not_on_this_computer`. A payload is a program with full access to \
+                          the console: only one the user asked for.",
             kind: Kind::Destructive { idempotent: false },
             schema: object(
                 json!({

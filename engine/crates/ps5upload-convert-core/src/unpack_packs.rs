@@ -419,11 +419,13 @@ fn unpack(
             (Some(path), Some(c)) => format!("it has {} at {path}", named(c)),
             _ => "it has none".to_string(),
         };
+        // The facts last: a long detail is shortened in the middle, and these are what a
+        // report needs.
         return Err(format!(
-            "{NEEDS_OTHER_EMULATOR}: the game reads its files through AMPR and {has}, where \
-             ampr_emu {RUNTIME_VERSION} or newer is needed, and none is on this PS5. Put the AMPR \
-             emulator on this PS5 from the app, leave it out, or make the package with PS5Upload \
-             on a computer"
+            "{NEEDS_OTHER_EMULATOR}. Put the AMPR emulator on this PS5 from the app, leave it \
+             out, or make the package with PS5Upload on a computer. The game reads its files \
+             through AMPR and {has}; ampr_emu {RUNTIME_VERSION} or newer is needed, and none is \
+             on this PS5"
         ));
     }
     let mut generated: HashMap<String, Vec<u8>> = HashMap::new();
@@ -566,7 +568,7 @@ mod tests {
 
     impl Scratch {
         fn new(name: &str) -> Self {
-            let root = std::env::temp_dir().join(format!(
+            let root = crate::test_tmp::temp_path(format!(
                 "ps5upload-core-unpack-{name}-{}",
                 std::process::id()
             ));

@@ -4260,6 +4260,17 @@
         ],
         "type": "object"
       },
+      "FileBody": {
+        "properties": {
+          "file_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "file_name"
+        ],
+        "type": "object"
+      },
       "FileListEntryReq": {
         "properties": {
           "dest": {
@@ -11209,6 +11220,17 @@
         ],
         "type": "object"
       },
+      "PreviewBody": {
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
       "Problem": {
         "properties": {
           "error": {
@@ -15712,6 +15734,10 @@
             "description": "\"file\" or \"folder\". The caller already knows from context\n(Library/FileSystem row) so we trust the hint and skip a\nstat round-trip just to classify.",
             "type": "string"
           },
+          "remove_source": {
+            "description": "A move to a saved server (`dest_dir` is `remote://…`): once the copy is complete and\nchecked on the server, the source is deleted on the console. A failed or cancelled copy\nleaves it (download_relay::finish_move). Refused with any other destination.",
+            "type": "boolean"
+          },
           "src_path": {
             "description": "Path on the PS5 to download. For `kind: \"folder\"` this is the\nroot of the tree; for `kind: \"file\"` it's the file itself.",
             "type": "string"
@@ -16639,6 +16665,7 @@
       "engine.collection_check_api.CheckStatus": {
         "properties": {
           "bytes_done": {
+            "description": "Of every pass together: a package's full check reads it twice (its blocks, then the\nPlayGo chunk CRCs), and both count here, so `bytes_done` reaches `bytes_total` only at\nthe end (#951).",
             "minimum": 0,
             "type": "integer"
           },
@@ -16680,6 +16707,10 @@
             "type": "string"
           },
           "path": {
+            "type": "string"
+          },
+          "phase": {
+            "description": "For `method` `package` while it runs: `blocks` (every block against its digest) or\n`playgo` (the PlayGo chunk CRCs, a second read of the package). Absent otherwise.",
             "type": "string"
           },
           "problems": {
@@ -17234,6 +17265,21 @@
           "unknown"
         ],
         "type": "string"
+      },
+      "engine.payloads_api.AddBody": {
+        "properties": {
+          "file_name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "file_name"
+        ],
+        "type": "object"
       },
       "engine.pldmgr_api.DeleteReq": {
         "properties": {
@@ -28134,8 +28180,32 @@
       }
     },
     "/api/payloads/repos": {
-      "post": {
-        "description": "POST /api/payloads/repos: refused (410 `payload_downloads_removed`). Repos added earlier stay\nlisted and can be removed.",
+      "get": {
+        "description": "GET /api/payloads/repos?check=1&force=1 → {sources}: the payload sources the user added.\nWithout `check`, nothing asks the network (a release list read in the last ten minutes is\nshown). With it, each source's releases are read (a list from the last ten minutes is used\nunless `force`).",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "check",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Success. The handler builds this answer in a way the generator cannot read."
@@ -28144,35 +28214,82 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
-          "410": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/Error"
-                    },
-                    {
-                      "properties": {
-                        "code": {},
-                        "error": {
-                          "type": "string"
-                        }
-                      },
-                      "type": "object"
-                    }
-                  ]
-                }
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "{sources}: the payload sources the user added",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      },
+      "post": {
+        "description": "POST /api/payloads/repos {url, file_name} → the source: adds a project as a payload source\nwith the file picked from its releases (adding one again changes its file). Asks no network.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/engine.payloads_api.AddBody"
               }
-            },
-            "description": "Gone"
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
           },
           "default": {
             "$ref": "#/components/responses/Error",
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "Refused (410 `payload_downloads_removed`)",
+        "summary": "The source: adds a project as a payload source with the file picked from its releases (adding one again changes its file)",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/repos/preview": {
+      "post": {
+        "description": "POST /api/payloads/repos/preview {url} → the project's newest releases with `.elf` and `.bin`\nfiles, for picking the file. Saves nothing.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The project's newest releases with `.elf` and `.bin` files, for picking the file",
         "tags": [
           "payloads"
         ],
@@ -28184,7 +28301,7 @@
     },
     "/api/payloads/repos/{id}": {
       "delete": {
-        "description": "DELETE /api/payloads/repos/{id} → {removed}",
+        "description": "DELETE /api/payloads/repos/{id} → {removed}: the source and its downloaded file.",
         "parameters": [
           {
             "in": "path",
@@ -28208,7 +28325,88 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "{removed}",
+        "summary": "{removed}: the source and its downloaded file",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/repos/{id}/download": {
+      "post": {
+        "description": "POST /api/payloads/repos/{id}/download → the source: downloads the newest release's file into\nthe payload folder (through a temporary file, checked against its size and the release's\nchecksum file when there is one). The copy it replaces stays if anything fails.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/repos/{id}/file": {
+      "put": {
+        "description": "PUT /api/payloads/repos/{id}/file {file_name} → the source: change the file it downloads, or\npick it for a source added before 12.6.0.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The source: change the file it downloads, or pick it for a source added before 12.6.0",
         "tags": [
           "payloads"
         ],

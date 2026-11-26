@@ -527,7 +527,7 @@ mod tests {
 
     #[test]
     fn a_report_is_a_txt_the_report_list_finds() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-hook-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5upload-hook-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = write_report_in(&dir, "hello").unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "hello");

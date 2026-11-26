@@ -573,7 +573,7 @@ mod tests {
     #[test]
     fn a_paused_conversion_makes_no_progress_and_finishes_after_resume() {
         use crate::ffpfsc;
-        let dir = std::env::temp_dir().join(format!("workshop-pause-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("workshop-pause-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let source = dir.join("GAME00001.exfat");
         let output = dir.join("GAME00001.ffpfsc");

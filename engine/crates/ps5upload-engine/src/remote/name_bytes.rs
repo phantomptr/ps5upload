@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(encode(&decode(raw)), raw);
         // The file system here takes such a name.
         let name = decode(b"\xFF\xFE.bin");
-        let path = std::env::temp_dir().join(format!("ps5u-name-{}-{name}", std::process::id()));
+        let path = crate::test_tmp::temp_path(format!("ps5u-name-{}-{name}", std::process::id()));
         std::fs::write(&path, b"x").expect("a name with the stand-ins can be made here");
         std::fs::remove_file(&path).unwrap();
     }

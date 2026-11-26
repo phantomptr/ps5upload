@@ -23,7 +23,7 @@ impl Drop for Tmp7z {
 fn tmp_path(tag: &str) -> PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
-    std::env::temp_dir().join(format!(
+    crate::test_tmp::temp_path(format!(
         "ps5u_ava1_7z_{tag}_{}_{}.7z",
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
@@ -319,3 +319,6 @@ async fn upload_7z_refuses_a_block_with_directories_between_its_files() {
     }
     let _ = std::fs::remove_file(&p);
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+use ava1_common::test_tmp;

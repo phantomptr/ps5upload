@@ -1127,7 +1127,7 @@ mod cover_tests {
     #[test]
     fn a_thumbnail_is_made_once_and_again_when_the_cover_changes() {
         let dir =
-            std::env::temp_dir().join(format!("ps5upload-cover-thumb-{}", std::process::id()));
+            crate::test_tmp::temp_path(format!("ps5upload-cover-thumb-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let cover = dir.join("PPSA01234.png");
         std::fs::write(&cover, png(512, 10)).unwrap();
@@ -1154,7 +1154,7 @@ mod cover_tests {
     #[test]
     fn a_small_cover_has_no_thumbnail() {
         let dir =
-            std::env::temp_dir().join(format!("ps5upload-cover-small-{}", std::process::id()));
+            crate::test_tmp::temp_path(format!("ps5upload-cover-small-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let cover = dir.join("PPSA00001.png");
         std::fs::write(&cover, png(64, 1)).unwrap();

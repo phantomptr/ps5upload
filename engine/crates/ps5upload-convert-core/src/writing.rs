@@ -331,7 +331,7 @@ mod tests {
     /// else's is kept and named as in the way. A pack spool is ours either way.
     #[test]
     fn a_partial_folder_without_our_marker_is_never_cleared() {
-        let root = std::env::temp_dir().join(format!("ps5upload-claim-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-claim-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let theirs = root.join("Game.partial");
         std::fs::create_dir_all(&theirs).unwrap();
@@ -366,7 +366,8 @@ mod tests {
     /// delete it.
     #[test]
     fn a_kept_finished_output_is_not_cleared_by_the_next_claim() {
-        let root = std::env::temp_dir().join(format!("ps5upload-keptclaim-{}", std::process::id()));
+        let root =
+            crate::test_tmp::temp_path(format!("ps5upload-keptclaim-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let partial = root.join("Game.pkg.partial");
@@ -389,7 +390,8 @@ mod tests {
     /// treats the same), refuses a second claim, and leaves nothing behind once dropped.
     #[test]
     fn a_claim_is_seen_by_other_processes_and_cleared_when_dropped() {
-        let root = std::env::temp_dir().join(format!("ps5upload-claimlock-{}", std::process::id()));
+        let root =
+            crate::test_tmp::temp_path(format!("ps5upload-claimlock-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let partial = root.join("Game.exfat.partial");
         let file = claim_file_of(&partial).unwrap();
@@ -427,7 +429,7 @@ mod tests {
         assert!(!retry_open(ErrorKind::PermissionDenied, false));
         assert!(!retry_open(ErrorKind::NotFound, true));
         // A parent that is a file: no claim file can exist there on any OS.
-        let root = std::env::temp_dir().join(format!("ps5upload-noclaim-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-noclaim-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let blocker = root.join("not-a-folder");

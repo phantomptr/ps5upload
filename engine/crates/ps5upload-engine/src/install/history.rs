@@ -154,7 +154,7 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let p = std::env::temp_dir().join(format!(
+            let p = crate::test_tmp::temp_path(format!(
                 "ps5u-hist-{}-{}-{}",
                 std::process::id(),
                 n,

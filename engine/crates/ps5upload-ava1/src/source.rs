@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn a_renamed_module_is_listed_under_its_new_name_and_read_from_the_old_file() {
-        let d = std::env::temp_dir().join(format!("p5a-renamed-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-renamed-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("Media/Modules")).unwrap();
         std::fs::write(d.join("eboot.bin"), b"eboot").unwrap();

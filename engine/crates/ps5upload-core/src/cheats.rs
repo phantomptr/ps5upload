@@ -1155,7 +1155,7 @@ mod tests {
             }
         }
         let dir =
-            std::env::temp_dir().join(format!("ps5upload-local-cheat-{}", std::process::id()));
+            crate::test_tmp::temp_path(format!("ps5upload-local-cheat-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let source = dir.join("PPSA13197.json");
         std::fs::write(

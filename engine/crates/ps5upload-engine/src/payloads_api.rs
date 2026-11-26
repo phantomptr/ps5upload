@@ -4,18 +4,19 @@
 //! The library's folder is `PS5UPLOAD_PAYLOADS_DIR` (the desktop app points its sidecar at its
 //! own cache), else `payloads` under the engine's data folder.
 //!
-//! ps5upload no longer downloads payloads: users get a payload from its project page and send
-//! the file. The routes that used to download (or add a repo or a payload list to download from)
-//! answer 410 `payload_downloads_removed` with where to get the file.
+//! The built-in catalogue is a list of links: its payloads are never downloaded (their old download
+//! routes answer 410 `payload_downloads_removed` with where to get the file). The payload sources a
+//! user adds (`/api/payloads/repos`) are: their releases are read when asked, and their file is
+//! downloaded when asked, never in the background.
 
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
-use ps5upload_core::payload_library::{Library, LibraryError, PayloadInfo};
+use ps5upload_core::payload_library::{Library, LibraryError, PayloadInfo, SourceError};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -51,6 +52,27 @@ fn status_of(code: &str) -> StatusCode {
         "io_failed" => StatusCode::INTERNAL_SERVER_ERROR,
         _ => StatusCode::BAD_GATEWAY,
     }
+}
+
+/// The status for a payload source's error code.
+fn source_status(code: &str) -> StatusCode {
+    match code {
+        c if c.starts_with("url_") => StatusCode::BAD_REQUEST,
+        "invalid_file_name" | "needs_file" => StatusCode::BAD_REQUEST,
+        "unknown_source" | "project_not_found" | "no_matching_file" => StatusCode::NOT_FOUND,
+        "rate_limited" => StatusCode::TOO_MANY_REQUESTS,
+        other => status_of(other),
+    }
+}
+
+/// A payload source's error: `{error, code, retry_at?}` (`retry_at`: when the host said to ask
+/// again, seconds since the Unix epoch).
+fn source_error(e: &SourceError) -> Response {
+    let mut body = json!({ "error": e.message, "code": e.code });
+    if let Some(at) = e.retry_at {
+        body["retry_at"] = json!(at);
+    }
+    (source_status(&e.code), Json(body)).into_response()
 }
 
 pub(crate) fn library_error(e: &LibraryError) -> Response {
@@ -116,6 +138,27 @@ impl Api {
     }
 }
 
+impl Api {
+    /// As [`Api::run`], for the payload sources' calls and their errors.
+    async fn run_source<T: serde::Serialize + Send + 'static>(
+        &self,
+        f: impl FnOnce(Library) -> Result<T, SourceError> + Send + 'static,
+    ) -> Response {
+        let Some(lib) = self.0.clone() else {
+            return no_library();
+        };
+        match tokio::task::spawn_blocking(move || f(lib)).await {
+            Ok(Ok(v)) => (StatusCode::OK, Json(v)).into_response(),
+            Ok(Err(e)) => source_error(&e),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        }
+    }
+}
+
 pub fn router<S: Clone + Send + Sync + 'static>() -> Router<S> {
     // A merge, so the API description's generator follows it to the routes.
     Router::new().merge(router_with(library()))
@@ -124,8 +167,11 @@ pub fn router<S: Clone + Send + Sync + 'static>() -> Router<S> {
 fn router_with<S: Clone + Send + Sync + 'static>(library: Option<Library>) -> Router<S> {
     Router::new()
         .route("/api/payloads", get(list))
-        .route("/api/payloads/repos", post(add_repo))
+        .route("/api/payloads/repos", get(list_repos).post(add_repo))
+        .route("/api/payloads/repos/preview", post(preview_repo))
         .route("/api/payloads/repos/{id}", delete(remove_repo))
+        .route("/api/payloads/repos/{id}/file", put(set_repo_file))
+        .route("/api/payloads/repos/{id}/download", post(download_repo))
         .route("/api/payloads/sources", get(list_sources).post(add_source))
         .route("/api/payloads/sources/refresh", post(refresh_sources))
         .route("/api/payloads/sources/{id}", delete(remove_source))
@@ -200,17 +246,78 @@ async fn download(State(api): State<Api>, Path(id): Path<String>) -> Response {
     downloads_removed(downloads_removed_text(info.as_ref()))
 }
 
-/// POST /api/payloads/repos: refused (410 `payload_downloads_removed`). Repos added earlier stay
-/// listed and can be removed.
-async fn add_repo() -> Response {
-    downloads_removed(
-        "ps5upload no longer downloads payloads, so repos can't be added: get the payload from \
-         its project page and send the file."
-            .to_string(),
-    )
+#[derive(Deserialize, Default)]
+struct SourcesQuery {
+    #[serde(default)]
+    check: Option<String>,
+    #[serde(default)]
+    force: Option<String>,
 }
 
-/// DELETE /api/payloads/repos/{id} → {removed}
+fn is_yes(v: &Option<String>) -> bool {
+    matches!(v.as_deref(), Some("1") | Some("true"))
+}
+
+/// GET /api/payloads/repos?check=1&force=1 → {sources}: the payload sources the user added.
+/// Without `check`, nothing asks the network (a release list read in the last ten minutes is
+/// shown). With it, each source's releases are read (a list from the last ten minutes is used
+/// unless `force`).
+async fn list_repos(State(api): State<Api>, Query(q): Query<SourcesQuery>) -> Response {
+    let (check, force) = (is_yes(&q.check), is_yes(&q.force));
+    api.run_source(move |lib| Ok(json!({ "sources": lib.user_sources(check, force)? })))
+        .await
+}
+
+#[derive(Deserialize)]
+struct PreviewBody {
+    url: String,
+}
+
+/// POST /api/payloads/repos/preview {url} → the project's newest releases with `.elf` and `.bin`
+/// files, for picking the file. Saves nothing.
+async fn preview_repo(State(api): State<Api>, Json(b): Json<PreviewBody>) -> Response {
+    api.run_source(move |lib| lib.preview_user_source(&b.url))
+        .await
+}
+
+#[derive(Deserialize)]
+struct AddBody {
+    url: String,
+    file_name: String,
+}
+
+/// POST /api/payloads/repos {url, file_name} → the source: adds a project as a payload source
+/// with the file picked from its releases (adding one again changes its file). Asks no network.
+async fn add_repo(State(api): State<Api>, Json(b): Json<AddBody>) -> Response {
+    api.run_source(move |lib| lib.add_user_source(&b.url, &b.file_name))
+        .await
+}
+
+#[derive(Deserialize)]
+struct FileBody {
+    file_name: String,
+}
+
+/// PUT /api/payloads/repos/{id}/file {file_name} → the source: change the file it downloads, or
+/// pick it for a source added before 12.6.0.
+async fn set_repo_file(
+    State(api): State<Api>,
+    Path(id): Path<String>,
+    Json(b): Json<FileBody>,
+) -> Response {
+    api.run_source(move |lib| lib.set_user_source_file(&id, &b.file_name))
+        .await
+}
+
+/// POST /api/payloads/repos/{id}/download → the source: downloads the newest release's file into
+/// the payload folder (through a temporary file, checked against its size and the release's
+/// checksum file when there is one). The copy it replaces stays if anything fails.
+async fn download_repo(State(api): State<Api>, Path(id): Path<String>) -> Response {
+    api.run_source(move |lib| lib.download_user_source(&id))
+        .await
+}
+
+/// DELETE /api/payloads/repos/{id} → {removed}: the source and its downloaded file.
 async fn remove_repo(State(api): State<Api>, Path(id): Path<String>) -> Response {
     api.run(move |lib| Ok(json!({ "removed": lib.remove_custom_repo(&id)? })))
         .await
@@ -279,12 +386,16 @@ mod tests {
     }
 
     async fn serve(tag: &str) -> Harness {
-        let dir = std::env::temp_dir().join(format!(
+        serve_lib(tag, Library::new).await
+    }
+
+    async fn serve_lib(tag: &str, make: impl FnOnce(std::path::PathBuf) -> Library) -> Harness {
+        let dir = crate::test_tmp::temp_path(format!(
             "ps5upload-payloads-api-{tag}-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        let app: Router = router_with(Some(Library::new(dir.join("payloads"))));
+        let app: Router = router_with(Some(make(dir.join("payloads"))));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move {
@@ -316,6 +427,19 @@ mod tests {
             tokio::task::spawn_blocking(move || {
                 let mut r = agent
                     .post(&url)
+                    .header("content-type", "application/json")
+                    .send(body.to_string())
+                    .unwrap();
+                (r.status().as_u16(), read_body(&mut r))
+            })
+            .await
+            .unwrap()
+        }
+        async fn put(&self, path: &str, body: Value) -> (u16, Value) {
+            let (agent, url) = (self.agent.clone(), format!("{}{path}", self.base));
+            tokio::task::spawn_blocking(move || {
+                let mut r = agent
+                    .put(&url)
                     .header("content-type", "application/json")
                     .send(body.to_string())
                     .unwrap();
@@ -387,11 +511,7 @@ mod tests {
         );
         let (status, v) = h.post("/api/payloads/nope/download", json!({})).await;
         assert_eq!((status, v["code"].as_str()), (410, Some(DOWNLOADS_REMOVED)));
-        for path in [
-            "/api/payloads/repos",
-            "/api/payloads/sources",
-            "/api/payloads/sources/refresh",
-        ] {
+        for path in ["/api/payloads/sources", "/api/payloads/sources/refresh"] {
             let (status, v) = h
                 .post(path, json!({"host": "github.com", "owner": "a", "name": "b", "url": "https://x.org/p.json"}))
                 .await;
@@ -406,6 +526,161 @@ mod tests {
         assert_eq!((status, v["sources"].clone()), (200, json!([])));
         let (status, v) = h.delete("/api/payloads/sources/src-000000000000").await;
         assert_eq!((status, v["removed"].clone()), (200, json!(false)));
+    }
+
+    /// One scripted answer: status, body, and when to ask again.
+    type Answer = (u16, Vec<u8>, Option<u64>);
+
+    /// A made-up GitHub: url → answer. Unknown urls answer 404.
+    #[derive(Default)]
+    struct FakeHost(std::sync::Mutex<std::collections::HashMap<String, Answer>>);
+
+    impl FakeHost {
+        fn answer(&self, url: &str, status: u16, body: &[u8], retry_at: Option<u64>) {
+            self.0
+                .lock()
+                .unwrap()
+                .insert(url.to_string(), (status, body.to_vec(), retry_at));
+        }
+    }
+
+    impl ps5upload_core::payload_library::HttpClient for FakeHost {
+        fn get(
+            &self,
+            url: &str,
+            _: Option<&str>,
+            _: ps5upload_core::payload_library::FetchKind,
+        ) -> Result<ps5upload_core::payload_library::HttpResponse, String> {
+            let (status, body, retry_at) =
+                self.0
+                    .lock()
+                    .unwrap()
+                    .get(url)
+                    .cloned()
+                    .unwrap_or((404, Vec::new(), None));
+            Ok(ps5upload_core::payload_library::HttpResponse {
+                status,
+                location: None,
+                content_length: Some(body.len() as u64),
+                retry_at,
+                body: Box::new(std::io::Cursor::new(body)),
+            })
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_source_is_added_checked_downloaded_and_removed() {
+        let host = std::sync::Arc::new(FakeHost::default());
+        let api_url = "https://api.github.com/repos/me/kstuff/releases?per_page=10";
+        let file_url = "https://github.com/me/kstuff/releases/download/v1.6.0/kstuff-v1.6.0.elf";
+        let mut elf = b"\x7FELF".to_vec();
+        elf.resize(64, 7);
+        let list = json!([{
+            "tag_name": "v1.6.0", "name": "kstuff 1.6.0", "published_at": "2026-11-01T00:00:00Z",
+            "html_url": "https://github.com/me/kstuff/releases/tag/v1.6.0",
+            "assets": [{ "name": "kstuff-v1.6.0.elf", "browser_download_url": file_url, "size": 64 }],
+        }]);
+        host.answer(api_url, 200, list.to_string().as_bytes(), None);
+        host.answer(file_url, 200, &elf, None);
+        let fake = host.clone();
+        let h = serve_lib("sources", move |dir| Library::with_http(dir, fake)).await;
+
+        let (status, v) = h.get("/api/payloads/repos").await;
+        assert_eq!((status, v["sources"].clone()), (200, json!([])));
+
+        let url = "https://github.com/me/kstuff";
+        let (status, v) = h
+            .post("/api/payloads/repos/preview", json!({ "url": url }))
+            .await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(v["releases"][0]["files"][0]["pattern"], "kstuff-v*.elf");
+
+        let (status, v) = h
+            .post(
+                "/api/payloads/repos",
+                json!({ "url": url, "file_name": "kstuff-v1.6.0.elf" }),
+            )
+            .await;
+        assert_eq!(status, 200, "{v}");
+        let id = v["id"].as_str().unwrap().to_string();
+        assert!(v.get("have").is_none());
+
+        let (_, v) = h.get("/api/payloads/repos?check=1").await;
+        assert_eq!(v["sources"][0]["latest"]["tag"], "v1.6.0");
+
+        let (status, v) = h
+            .post(&format!("/api/payloads/repos/{id}/download"), json!({}))
+            .await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(v["have"]["size"], 64);
+        assert_eq!(v["have"]["sha256"].as_str().unwrap().len(), 64);
+        let path = v["have"]["path"].as_str().unwrap().to_string();
+        assert_eq!(std::fs::read(&path).unwrap(), elf);
+        // The library lists it as a local copy too, so a send by id finds it.
+        let (_, v) = h.get("/api/payloads").await;
+        assert!(v["local"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l["payload_id"] == id));
+
+        let (status, v) = h
+            .put(
+                &format!("/api/payloads/repos/{id}/file"),
+                json!({ "file_name": "x.zip" }),
+            )
+            .await;
+        assert_eq!(
+            (status, v["code"].as_str()),
+            (400, Some("invalid_file_name"))
+        );
+
+        let (status, v) = h.delete(&format!("/api/payloads/repos/{id}")).await;
+        assert_eq!((status, v["removed"].clone()), (200, json!(true)));
+        assert!(!std::path::Path::new(&path).exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn source_errors_say_why_with_a_fitting_status() {
+        let host = std::sync::Arc::new(FakeHost::default());
+        host.answer(
+            "https://api.github.com/repos/me/kstuff/releases?per_page=10",
+            403,
+            b"{}",
+            Some(1_900_000_000),
+        );
+        let fake = host.clone();
+        let h = serve_lib("source-errors", move |dir| Library::with_http(dir, fake)).await;
+        let (status, v) = h
+            .post(
+                "/api/payloads/repos/preview",
+                json!({ "url": "https://github.com/me/kstuff" }),
+            )
+            .await;
+        assert_eq!((status, v["code"].as_str()), (429, Some("rate_limited")));
+        assert_eq!(v["retry_at"], 1_900_000_000);
+        let (status, v) = h
+            .post(
+                "/api/payloads/repos/preview",
+                json!({ "url": "http://github.com/me/kstuff" }),
+            )
+            .await;
+        assert_eq!((status, v["code"].as_str()), (400, Some("url_not_https")));
+        let (status, v) = h
+            .post(
+                "/api/payloads/repos/preview",
+                json!({ "url": "https://127.0.0.1:19113/a/b" }),
+            )
+            .await;
+        assert_eq!(
+            (status, v["code"].as_str()),
+            (400, Some("url_host_not_allowed"))
+        );
+        let (status, v) = h
+            .post("/api/payloads/repos/custom-0a/download", json!({}))
+            .await;
+        assert_eq!((status, v["code"].as_str()), (404, Some("unknown_source")));
+        assert!(!h.dir.join("payloads").exists(), "nothing written");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

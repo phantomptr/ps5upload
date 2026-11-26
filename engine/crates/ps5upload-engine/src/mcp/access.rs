@@ -318,7 +318,7 @@ mod tests {
 
     #[test]
     fn the_switch_is_kept_in_its_file() {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::test_tmp::temp_path(format!(
             "ps5upload-agent-access-{}-{}",
             std::process::id(),
             SEQ_TEST.fetch_add(1, Ordering::Relaxed)

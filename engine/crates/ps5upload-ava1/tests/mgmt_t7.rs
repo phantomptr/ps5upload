@@ -26,7 +26,7 @@ use ps5upload_core::{
 };
 
 fn temp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("p5a-t7-{tag}-{}", std::process::id()));
+    let d = crate::test_tmp::temp_path(format!("p5a-t7-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -653,3 +653,7 @@ fn no_core_module_of_this_group_dials_a_console_directly() {
         assert!(!d[i..i + end].contains("TcpStream::connect"), "{f}");
     }
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

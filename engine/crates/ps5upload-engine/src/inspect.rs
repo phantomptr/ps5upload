@@ -854,7 +854,7 @@ pub(crate) mod test_fixtures {
 
     /// A fresh scratch directory per call.
     pub fn scratch() -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
+        let d = crate::test_tmp::temp_path(format!(
             "ps5upload-inspect-{}-{}",
             std::process::id(),
             N.fetch_add(1, Ordering::SeqCst)

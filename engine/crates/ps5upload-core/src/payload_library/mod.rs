@@ -1,7 +1,7 @@
-//! Payload Library: the curated catalogue of third-party PS5 payloads, user-added repos,
-//! release information (GitHub, Gitea, Forgejo: read-only, for "a new version is out"), and the
-//! local copies of payloads users got earlier. The app never downloads a payload: users get the
-//! file from the project themselves and send it.
+//! Payload Library: the curated catalogue of third-party PS5 payloads, the payload sources users
+//! add, release information (GitHub, Gitea, Forgejo), and the local copies of payloads. The
+//! catalogue is a list of links: the app never downloads a payload from it. Only a source the user
+//! added is downloaded, and only when the user asks (`user_sources.rs`).
 //!
 //! One implementation for every front end: the desktop app's commands and the engine's
 //! `/api/payloads` routes both call [`Library`], over the same folder when the engine is the
@@ -27,6 +27,7 @@ mod releases;
 mod repos;
 mod sources;
 mod updates;
+mod user_sources;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -44,6 +45,10 @@ use repos::CustomRepo;
 use sources::ListPayload;
 pub use sources::SourceInfo;
 pub use updates::{is_newer, AppliedUpdate, UpdateOutcome, UpdateRow, UpdateState, PREVIOUS_DIR};
+pub use user_sources::{
+    is_payload_file_name, name_pattern, names_match, parse_project_url, HaveCopy, LatestFile,
+    PreviewFile, PreviewRelease, ProjectRef, SourceError, SourcePreview, UserSource,
+};
 
 /// Overrides where the library lives. The desktop app sets it for its sidecar, so the engine's
 /// routes and the app's screens share one cache.
@@ -172,6 +177,8 @@ pub(crate) struct ResolvedEntry {
     pub(crate) is_custom: bool,
     /// A payload from a source list (#829): its one listed file and SHA-256.
     pub(crate) list_payload: Option<Box<ListPayload>>,
+    /// The port of a user's own Gitea or Forgejo server, when it is not 443.
+    pub(crate) repo_port: Option<u16>,
 }
 
 impl From<&CatalogueEntry> for ResolvedEntry {
@@ -184,6 +191,7 @@ impl From<&CatalogueEntry> for ResolvedEntry {
             asset_name_hint: e.asset_name_hint.to_string(),
             is_custom: false,
             list_payload: None,
+            repo_port: None,
         }
     }
 }
@@ -198,6 +206,7 @@ impl From<&CustomRepo> for ResolvedEntry {
             asset_name_hint: r.asset_name_hint.clone(),
             is_custom: true,
             list_payload: None,
+            repo_port: r.repo_port,
         }
     }
 }
@@ -350,12 +359,26 @@ fn is_safe_payload_id(id: &str) -> bool {
         || sources::is_valid_list_payload_id(id)
 }
 
-/// The `.elf` in a payload's cache folder (there is one per payload; see `remove_other_elfs`).
+/// The payload in a payload's cache folder (there is one per payload; see `remove_other_elfs`):
+/// its `.elf`, else a `.bin` (a source the user added may publish one).
 fn elf_in_dir(dir: &Path) -> Option<PathBuf> {
-    std::fs::read_dir(dir).ok()?.flatten().find_map(|f| {
-        let p = f.path();
-        (p.extension().and_then(|e| e.to_str()) == Some("elf")).then_some(p)
-    })
+    let files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|f| f.path())
+        .filter(|p| p.is_file())
+        .collect();
+    let with_ext = |ext: &str| {
+        files
+            .iter()
+            .find(|p| {
+                p.extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case(ext))
+            })
+            .cloned()
+    };
+    with_ext("elf").or_else(|| with_ext("bin"))
 }
 
 fn mtime_secs(meta: &std::fs::Metadata) -> i64 {
@@ -443,6 +466,10 @@ pub(crate) mod test_support {
     pub struct Scripted {
         pub routes: Mutex<HashMap<String, Route>>,
         pub asked: Mutex<Vec<String>>,
+        /// url → when the host says to ask again (a rate-limit answer).
+        pub retry_at: Mutex<HashMap<String, u64>>,
+        /// url → the length the answer claims, when it differs from the body (cut short).
+        pub claimed_len: Mutex<HashMap<String, u64>>,
     }
 
     impl Scripted {
@@ -464,6 +491,22 @@ pub(crate) mod test_support {
                 .lock()
                 .unwrap()
                 .insert(url.to_string(), (0, None, Vec::new()));
+        }
+        /// The host's rate limit: `status` (403 or 429), ask again at `retry_at`.
+        pub fn limited(&self, url: &str, status: u16, retry_at: u64) {
+            self.status(url, status);
+            self.retry_at
+                .lock()
+                .unwrap()
+                .insert(url.to_string(), retry_at);
+        }
+        /// An answer that claims `claimed` bytes and ends after `body`.
+        pub fn cut_short(&self, url: &str, body: &[u8], claimed: u64) {
+            self.ok(url, body);
+            self.claimed_len
+                .lock()
+                .unwrap()
+                .insert(url.to_string(), claimed);
         }
         pub fn redirect(&self, url: &str, to: &str) {
             self.routes
@@ -491,10 +534,18 @@ pub(crate) mod test_support {
             if status == 0 {
                 return Err("io: Connection refused".into());
             }
+            let content_length = self
+                .claimed_len
+                .lock()
+                .unwrap()
+                .get(url)
+                .copied()
+                .unwrap_or(body.len() as u64);
             Ok(HttpResponse {
                 status,
                 location,
-                content_length: Some(body.len() as u64),
+                content_length: Some(content_length),
+                retry_at: self.retry_at.lock().unwrap().get(url).copied(),
                 body: Box::new(Cursor::new(body)),
             })
         }
@@ -505,7 +556,7 @@ pub(crate) mod test_support {
     impl TempDir {
         pub fn new(tag: &str) -> Self {
             let dir =
-                std::env::temp_dir().join(format!("ps5upload-library-{tag}-{}", unique_suffix()));
+                crate::test_tmp::temp_path(format!("ps5upload-library-{tag}-{}", unique_suffix()));
             std::fs::create_dir_all(&dir).unwrap();
             Self(dir)
         }

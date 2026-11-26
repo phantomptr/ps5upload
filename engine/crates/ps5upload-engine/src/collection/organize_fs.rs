@@ -681,7 +681,7 @@ mod tests {
             .unwrap()
             .conn
             .id;
-        let logs = std::env::temp_dir().join(format!("ps5u-rorg-{name}-{}", std::process::id()));
+        let logs = crate::test_tmp::temp_path(format!("ps5u-rorg-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&logs);
         Server {
             mem,

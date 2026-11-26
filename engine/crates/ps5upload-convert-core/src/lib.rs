@@ -31,3 +31,8 @@ pub mod safe_write;
 pub mod unpack_packs;
 pub mod writing;
 pub mod zstd_packs;
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[cfg(test)]
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

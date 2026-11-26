@@ -388,7 +388,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        std::env::temp_dir().join(format!(
+        crate::test_tmp::temp_path(format!(
             "ps5upload-zipcd-test-{}-{}-{}.zip",
             std::process::id(),
             n,

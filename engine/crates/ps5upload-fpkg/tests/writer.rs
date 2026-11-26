@@ -14,7 +14,7 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("fpkg-writer-{}-{name}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-writer-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
@@ -967,3 +967,7 @@ fn estimates_rank_the_levels_and_cover_the_game() {
     assert!(e.balanced.bytes < 600 * 1024);
     assert!(e.fast.seconds <= e.smallest.seconds);
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

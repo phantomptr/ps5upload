@@ -510,6 +510,8 @@
   "cw_files_load_all": "Carica tutto",
   "cw_files_mesh_home": "Questa cartella è un Mesh Drive. Il suo file di sincronizzazione è nascosto: non spostare né rinominare la cartella.",
   "cw_files_more": "Mostra altro",
+  "cw_files_move_has_links": "Contiene link che una condivisione di rete non può contenere.",
+  "cw_files_move_source_left": "“{name}” è stato copiato, ma l’originale è ancora sulla PS5.",
   "cw_files_move_to": "Sposta in…",
   "cw_files_name": "Nome",
   "cw_files_new_file": "Nuovo file",

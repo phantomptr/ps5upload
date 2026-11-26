@@ -793,7 +793,7 @@ mod tests {
     }
 
     fn dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("p5a-zs-{tag}-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-zs-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

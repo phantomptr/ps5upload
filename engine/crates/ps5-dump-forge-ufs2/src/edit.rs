@@ -2772,7 +2772,7 @@ mod tests {
     /// The cylinder groups count against the budget: past it, the open is a finding.
     #[test]
     fn past_the_budget_is_refused() {
-        let dir = std::env::temp_dir().join(format!("forge-ufs2-budget-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("forge-ufs2-budget-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src/sce_sys")).unwrap();
         std::fs::write(dir.join("src/eboot.bin"), b"x").unwrap();

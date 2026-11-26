@@ -5,6 +5,7 @@ set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 TS=${TAILSCALE_SRC:-$HOME/workspace/github.com/tailscale/tailscale}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/tnvectors.XXXXXX")
+trap 'rm -rf "$WORK"' EXIT
 cp "$HERE/main.go" "$WORK/"
 cd "$WORK"
 cat >go.mod <<MOD
@@ -19,4 +20,4 @@ MOD
 cp "$TS/go.sum" go.sum
 go mod tidy >/dev/null 2>&1 || go mod tidy
 go run . >"$HERE/../../tests/vectors_go.h"
-echo "wrote tailnet/tests/vectors_go.h ($(wc -l <"$HERE/../../tests/vectors_go.h") lines); scratch dir $WORK"
+echo "wrote tailnet/tests/vectors_go.h ($(wc -l <"$HERE/../../tests/vectors_go.h") lines)"

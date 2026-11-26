@@ -715,7 +715,7 @@ mod tests {
 
     #[test]
     fn remove_path_retrying_removes_trees_files_and_absent_paths() {
-        let base = std::env::temp_dir().join(format!("ps5u-rmretry-{}", std::process::id()));
+        let base = crate::test_tmp::temp_path(format!("ps5u-rmretry-{}", std::process::id()));
         let tree = base.join("tree");
         std::fs::create_dir_all(tree.join("a/b")).unwrap();
         std::fs::write(tree.join("a/b/f.bin"), b"x").unwrap();

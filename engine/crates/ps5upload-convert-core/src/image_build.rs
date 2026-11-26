@@ -1796,7 +1796,7 @@ mod tests {
     /// Every format, plain and compressed, writes a folder that reads back hash for hash.
     #[test]
     fn every_format_round_trips_plain_and_compressed() {
-        let root = std::env::temp_dir().join(format!("ps5upload-imgb-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imgb-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = game(&root);
         for format in [ImageFormat::Exfat, ImageFormat::Ffpkg, ImageFormat::Ffpfs] {
@@ -1839,7 +1839,8 @@ mod tests {
     /// the build fails and leaves it, and its own partial file, alone and gone.
     #[test]
     fn an_output_that_appears_while_written_is_not_replaced() {
-        let root = std::env::temp_dir().join(format!("ps5upload-imgb-race-{}", std::process::id()));
+        let root =
+            crate::test_tmp::temp_path(format!("ps5upload-imgb-race-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = game(&root);
         let out = root.join("g.exfat");
@@ -1872,7 +1873,7 @@ mod tests {
     #[test]
     fn an_lz4_packed_image_reads_as_the_game_it_was() {
         use ps5upload_fpkg::ampr_pack::image::{Lz4Unpacked, Unpacking};
-        let root = std::env::temp_dir().join(format!("ps5upload-imglz4-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imglz4-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = ampr_game(&root);
         let out = root.join("PPSA99999-app.exfat");
@@ -1939,7 +1940,7 @@ mod tests {
     /// already on disk, and the image comes out the same bytes. Any other game starts over.
     #[test]
     fn a_plain_exfat_goes_on_from_a_checkpoint() {
-        let root = std::env::temp_dir().join(format!("ps5upload-imgres-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imgres-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = root.join("game");
         std::fs::create_dir_all(src.join("sce_sys")).unwrap();
@@ -2115,7 +2116,7 @@ mod tests {
     /// is byte for byte the one an uninterrupted build makes.
     #[test]
     fn every_format_goes_on_from_a_crash_byte_for_byte() {
-        let root = std::env::temp_dir().join(format!("ps5upload-imgcrash-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imgcrash-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = noisy_game(&root);
         for (format, compress) in EVERY_KIND {
@@ -2168,7 +2169,7 @@ mod tests {
     /// the new source's, byte for byte.
     #[test]
     fn a_changed_source_refuses_the_resume_and_rebuilds() {
-        let root = std::env::temp_dir().join(format!("ps5upload-imgchg-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imgchg-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         for (format, compress) in EVERY_KIND {
             let what = format!("{format:?} compress={compress}");
@@ -2215,7 +2216,7 @@ mod tests {
     /// nothing, one past it leaves a hole, and going back is refused.
     #[test]
     fn the_checkpoint_writer_seeks_forward_over_what_is_on_disk() {
-        let root = std::env::temp_dir().join(format!("ps5upload-imgcks-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imgcks-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("x.partial");
@@ -2250,7 +2251,7 @@ mod tests {
     /// no checkpoint behind it gets a new one.
     #[test]
     fn an_index_stamp_lasts_only_as_long_as_its_checkpoint() {
-        let root = std::env::temp_dir().join(format!("ps5upload-imgstamp-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imgstamp-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let partial = root.join("x.exfat.partial");
@@ -2267,7 +2268,7 @@ mod tests {
     /// The writer drops what is on disk already, whichever way the writes are cut.
     #[test]
     fn the_checkpoint_writer_skips_then_writes_and_records() {
-        let root = std::env::temp_dir().join(format!("ps5upload-imgckw-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imgckw-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("x.partial");
@@ -2306,7 +2307,7 @@ mod tests {
     /// (Alembic's console test: without it the game mounts and then won't start).
     #[test]
     fn a_ps4_game_gets_its_param_json_in_every_format() {
-        let root = std::env::temp_dir().join(format!("ps5upload-imgb-ps4-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imgb-ps4-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = root.join("CUSA00000-app");
         std::fs::create_dir_all(src.join("sce_sys")).unwrap();
@@ -2359,7 +2360,7 @@ mod tests {
     /// and a cancel that lands after the image was finished does not turn it into a failure.
     #[test]
     fn another_builds_partial_is_left_alone_and_a_late_cancel_changes_nothing() {
-        let root = std::env::temp_dir().join(format!("ps5upload-imgp-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imgp-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = game(&root);
         let out = root.join("x.exfat");
@@ -2401,7 +2402,7 @@ mod tests {
     /// A file that is not read front to back while the image is written is still checked.
     #[test]
     fn a_file_read_out_of_order_is_hashed_afterwards() {
-        let root = std::env::temp_dir().join(format!("ps5upload-imgh-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imgh-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = game(&root);
         let mut tree = FolderSource::open(&src).unwrap();
@@ -2437,7 +2438,7 @@ mod tests {
     #[test]
     fn a_fast_verify_catches_what_it_samples_and_a_full_one_everything() {
         const MIB: usize = 1 << 20;
-        let root = std::env::temp_dir().join(format!("ps5upload-imgf-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imgf-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = game(&root);
         // 48 MiB in six slices, each stamped with a marker the image can be searched for.
@@ -2588,7 +2589,7 @@ mod tests {
     /// A PFS image holds ASCII names only; the build refuses before writing anything.
     #[test]
     fn a_name_pfs_cannot_hold_is_refused_before_writing() {
-        let root = std::env::temp_dir().join(format!("ps5upload-imgn-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imgn-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = game(&root);
         std::fs::write(src.join("données.bin"), b"x").unwrap();
@@ -2640,7 +2641,7 @@ mod tests {
     /// descriptor file ../../../griffin/griffin.uproject").
     #[test]
     fn an_unreal_title_packs_only_its_iostore_containers() {
-        let root = std::env::temp_dir().join(format!("ps5upload-imgu-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imgu-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = ampr_game(&root);
         let paks = src.join("griffin/Content/Paks");
@@ -2717,7 +2718,7 @@ mod tests {
     #[test]
     fn an_lz4_packed_exfat_reads_back_to_the_source() {
         use ps5upload_fpkg::ampr_pack::Reader;
-        let root = std::env::temp_dir().join(format!("ps5upload-imgl-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imgl-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = ampr_game(&root);
         let out = root.join("PPSA99999-app.exfat");
@@ -2811,7 +2812,7 @@ mod tests {
     /// (#449), never the dump's stale one.
     #[test]
     fn a_plain_image_regenerates_a_stale_ampr_index() {
-        let root = std::env::temp_dir().join(format!("ps5upload-imgi-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imgi-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = ampr_game(&root);
         std::fs::write(src.join("ampr_emu.index"), b"AMPRIDX3 stale").unwrap();
@@ -2852,7 +2853,7 @@ mod tests {
     /// Packing is refused for a game whose ampr_emu can't serve packs, and leaves nothing behind.
     #[test]
     fn lz4_packs_are_refused_for_a_game_that_cannot_read_them() {
-        let root = std::env::temp_dir().join(format!("ps5upload-imgr-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imgr-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = ampr_game(&root);
         let exfat = root.join("x.exfat");

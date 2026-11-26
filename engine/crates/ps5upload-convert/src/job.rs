@@ -59,7 +59,7 @@ const STATUS_EVERY: Duration = Duration::from_millis(250);
 const CANCEL_EVERY: Duration = Duration::from_millis(150);
 /// The most of a failure's words kept in the status: the helper reads `detail` into 400 bytes
 /// and drops a longer one.
-const MAX_DETAIL_BYTES: usize = 300;
+const MAX_DETAIL_BYTES: usize = 512;
 /// The largest emulator file read for zstd packs (ampr-emu-ng is well under 1 MiB).
 const MAX_RUNTIME_BYTES: u64 = 16 << 20;
 /// zstd's level when the request names none: the engine's default.
@@ -204,13 +204,24 @@ fn read_request(dir: &Path) -> Result<Request, String> {
     Ok(request)
 }
 
-/// `detail` cut to [`MAX_DETAIL_BYTES`] at a character boundary.
-fn short(detail: &str) -> &str {
-    let mut end = detail.len().min(MAX_DETAIL_BYTES);
-    while !detail.is_char_boundary(end) {
-        end -= 1;
+/// `detail` kept within [`MAX_DETAIL_BYTES`], cut at character boundaries. A long one loses its
+/// middle, not its end: details start with a path and end with the reason, and a deep folder's
+/// path must not push the reason (a version, a file name) off the end.
+fn short(detail: &str) -> std::borrow::Cow<'_, str> {
+    if detail.len() <= MAX_DETAIL_BYTES {
+        return std::borrow::Cow::Borrowed(detail);
     }
-    &detail[..end]
+    const GAP: &str = "…";
+    let head_max = MAX_DETAIL_BYTES / 3;
+    let mut head = head_max;
+    while !detail.is_char_boundary(head) {
+        head -= 1;
+    }
+    let mut tail = detail.len() - (MAX_DETAIL_BYTES - head - GAP.len());
+    while !detail.is_char_boundary(tail) {
+        tail += 1;
+    }
+    std::borrow::Cow::Owned(format!("{}{GAP}{}", &detail[..head], &detail[tail..]))
 }
 
 /// A running job's reports: rewrites the status at most every [`STATUS_EVERY`], and at once
@@ -1669,7 +1680,7 @@ mod tests {
     fn a_file_too_big_for_the_drive_has_its_cause() {
         let plan = Plan {
             source: std::env::temp_dir(),
-            dest: std::env::temp_dir().join("g.exfat"),
+            dest: crate::test_tmp::temp_path("g.exfat"),
             image: Some(ImageFormat::Exfat),
             ffpfsc: None,
             mode: VerifyMode::Full,
@@ -1700,8 +1711,25 @@ mod tests {
     fn a_long_detail_is_cut_at_a_character() {
         let long = "é".repeat(400);
         let cut = short(&long);
-        assert!(cut.len() <= MAX_DETAIL_BYTES && cut.len() >= MAX_DETAIL_BYTES - 1);
+        assert!(cut.len() <= MAX_DETAIL_BYTES && cut.len() >= MAX_DETAIL_BYTES - 4);
+        assert!(cut.contains('…'));
         assert_eq!(short("short"), "short");
+    }
+
+    /// A deep folder's path loses its middle, so the reason at the end survives whole.
+    #[test]
+    fn a_long_path_never_cuts_the_reason_off() {
+        let detail = format!(
+            "/{}/packed: it has ampr_emu 0.3.9, which reads LZ4 packs only",
+            "a-very-deep-folder".repeat(30)
+        );
+        let cut = short(&detail);
+        assert!(cut.len() <= MAX_DETAIL_BYTES, "{}", cut.len());
+        assert!(
+            cut.ends_with("it has ampr_emu 0.3.9, which reads LZ4 packs only"),
+            "{cut}"
+        );
+        assert!(cut.starts_with("/a-very-deep-folder"));
     }
 
     // ---- a .pkg of a game in asset packs, as plain files ("Unpack the asset packs") ----

@@ -958,7 +958,7 @@ mod tests {
 
     #[test]
     fn logs_and_temporary_files_are_left_out_and_the_rest_kept() {
-        let dir = std::env::temp_dir().join(format!("cb-prune-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("cb-prune-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         for f in ["config.ini", "debug.log", "sub/x.tmp", "sub/keep.bin"] {
             std::fs::write(dir.join(f), b"x").unwrap();
@@ -1014,7 +1014,7 @@ mod tests {
 
     #[test]
     fn a_manifest_comes_back_as_written_and_a_newer_one_is_refused() {
-        let dir = std::env::temp_dir().join(format!("cb-manifest-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("cb-manifest-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let m = Manifest {
             format: FORMAT,

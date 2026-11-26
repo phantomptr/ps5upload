@@ -22,7 +22,7 @@ use ps5upload_core::download::DownloadKind;
 use ps5upload_core::transfer::{host_unsafe_component, TransferConfig};
 
 fn temp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("p5a-kept-{tag}-{}", std::process::id()));
+    let d = crate::test_tmp::temp_path(format!("p5a-kept-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -280,3 +280,7 @@ async fn a_kept_name_the_app_did_not_make_is_refused() {
         assert!(names_of(&d.join("share")).is_empty(), "{bad:?}");
     }
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

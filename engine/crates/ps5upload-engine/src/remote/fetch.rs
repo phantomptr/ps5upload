@@ -918,6 +918,12 @@ pub fn sweep_stale_copies() {
 /// Where a server folder's metadata files are mirrored for a look at it. The answer points at the
 /// mirror's icon, so a mirror outlives the request; it goes once it is an hour old.
 fn inspect_root() -> PathBuf {
+    if cfg!(test) {
+        // A folder of the test process's own, removed when it exits.
+        return crate::test_scratch(
+            std::env::temp_dir().join(format!("ps5upload-inspect-root-{}", std::process::id())),
+        );
+    }
     std::env::temp_dir().join("ps5upload-inspect")
 }
 
@@ -1033,7 +1039,7 @@ mod tests {
     /// not put over the first (on a drive that folds case, `README.TXT` after `Readme.txt`).
     #[test]
     fn a_second_file_under_one_name_does_not_replace_the_first() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-twins-{}", Uuid::new_v4()));
+        let dir = crate::test_tmp::temp_path(format!("ps5upload-twins-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let local = dir.join("Readme.txt");
         let partial = dir.join("Readme.txt.partial");
@@ -1054,7 +1060,7 @@ mod tests {
     /// goes once nothing is left in it.
     #[test]
     fn the_output_sweep_takes_only_what_no_build_is_using() {
-        let out = std::env::temp_dir().join(format!("ps5upload-source-{}", Uuid::new_v4()));
+        let out = crate::test_tmp::temp_path(format!("ps5upload-source-{}", Uuid::new_v4()));
         let root = out.join(OUTPUT_COPY_DIR);
         let (left, writing, held) = (root.join("left"), root.join("writing"), root.join("held"));
         for d in [&left, &writing, &held] {

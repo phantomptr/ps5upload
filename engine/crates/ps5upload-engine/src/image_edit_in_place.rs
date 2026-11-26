@@ -1624,7 +1624,7 @@ mod tests {
         fn new(tag: &str) -> Self {
             static N: AtomicUsize = AtomicUsize::new(0);
             let n = N.fetch_add(1, Ordering::Relaxed);
-            let dir = std::env::temp_dir().join(format!(
+            let dir = crate::test_tmp::temp_path(format!(
                 "ps5upload-inplace-{tag}-{}-{n}",
                 std::process::id()
             ));

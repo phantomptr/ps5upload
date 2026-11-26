@@ -215,7 +215,7 @@ mod tests {
         if process_ids().map(|(u, _)| u) == Some(0) {
             return;
         }
-        let dir = std::env::temp_dir().join(format!("ps5u-probe-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-probe-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert!(probe_write(&dir).is_ok());
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
@@ -249,7 +249,7 @@ mod tests {
         if process_ids().map(|(u, _)| u) == Some(0) {
             return;
         }
-        let dir = std::env::temp_dir().join(format!("ps5u-ro-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-ro-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
         let err = crate::remote::store::Store::open(&dir.join("state")).err();
@@ -265,7 +265,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_writable_dir_opens() {
-        let dir = std::env::temp_dir().join(format!("ps5u-rw-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-rw-{}", std::process::id()));
         let r = crate::remote::store::Store::open(&dir);
         let _ = std::fs::remove_dir_all(&dir);
         assert!(r.is_ok());

@@ -1,10 +1,9 @@
-//! User-added payload repos (#93).
+//! User-added payload repos (#93): the payload sources a user adds (see `user_sources.rs`).
 //!
-//! The curated catalogue is a `const`. Users also track their own repos (a fork, a niche payload),
-//! which live in `custom-repos.json` and flow through the same release-information path, so
-//! every fetch guard applies to them. New repos can no longer be added from the app (it never
-//! downloads a payload); repos added earlier stay listed and can be removed. Custom ids are always
-//! `custom-<hex>`, so they can never collide with a catalogue id nor leave the library's folder.
+//! The curated catalogue is a `const`. Users also add their own projects (a fork, a niche
+//! payload), which live in `custom-repos.json` and flow through the same release-information
+//! path, so every fetch guard applies to them. Custom ids are always `custom-<hex>`, so they can
+//! never collide with a catalogue id nor leave the library's folder.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -15,8 +14,8 @@ use super::{atomic_write, Library, LibraryError, PayloadInfo};
 pub(super) const CUSTOM_AUTOLOAD_PRIORITY: u8 = u8::MAX;
 pub(super) const CUSTOM_AUTOLOAD_DELAY_MS: u32 = 200;
 
-/// A user-added repo, as stored by an earlier version. `id` was minted when it was added; the rest
-/// is what the user supplied. Fields this build no longer reads (`checksum_file`) are ignored.
+/// A user-added repo. `id` was minted when it was added; the rest is what the user supplied.
+/// Fields this build no longer reads (`checksum_file`) are ignored.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct CustomRepo {
     pub(crate) id: String,
@@ -26,24 +25,49 @@ pub(crate) struct CustomRepo {
     pub(crate) repo_name: String,
     #[serde(default)]
     pub(crate) asset_name_hint: String,
+    /// A Gitea or Forgejo server's port, when it is not 443.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) repo_port: Option<u16>,
+    /// The payload file the user picked (12.6.34). Empty for a repo added before 12.6.0, which
+    /// asks for the file to be picked.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) file_name: String,
+}
+
+impl CustomRepo {
+    /// The host as a URL names it: `host` or `host:port`.
+    pub(crate) fn host_and_port(&self) -> String {
+        match self.repo_port {
+            Some(p) => format!("{}:{p}", self.repo_host),
+            None => self.repo_host.clone(),
+        }
+    }
+
+    /// The project's page.
+    pub(crate) fn project_url(&self) -> String {
+        format!(
+            "https://{}/{}/{}",
+            self.host_and_port(),
+            self.repo_owner,
+            self.repo_name
+        )
+    }
 }
 
 impl From<&CustomRepo> for PayloadInfo {
     fn from(r: &CustomRepo) -> Self {
-        let homepage = if r.repo_host == "github.com" {
-            format!("https://github.com/{}/{}", r.repo_owner, r.repo_name)
-        } else {
-            format!("https://{}/{}/{}", r.repo_host, r.repo_owner, r.repo_name)
-        };
+        let homepage = r.project_url();
         Self {
             id: r.id.clone(),
             display_name: r.display_name.clone(),
             role: "Custom repo".to_string(),
             description: format!(
-                "User-added repo. Releases are fetched from {}/{}/{} and sent like any \
-                 other payload — the same ELF/zip checks apply. ps5upload doesn't vet \
-                 what this repo ships; only add repos you trust.",
-                r.repo_host, r.repo_owner, r.repo_name
+                "A payload source you added. Its releases are read from {}/{}/{}, and the file \
+                 you picked is downloaded and sent when you ask. ps5upload doesn't check what \
+                 this project publishes; only add projects you trust.",
+                r.host_and_port(),
+                r.repo_owner,
+                r.repo_name
             ),
             repo_owner: r.repo_owner.clone(),
             repo_name: r.repo_name.clone(),
@@ -167,7 +191,7 @@ impl Library {
         }
     }
 
-    fn save_repo_file(&self, file: &RepoFile) -> Result<(), LibraryError> {
+    pub(super) fn save_repo_file(&self, file: &RepoFile) -> Result<(), LibraryError> {
         let mut out: Vec<Value> = Vec::with_capacity(file.repos.len() + file.kept.len());
         for r in &file.repos {
             out.push(
@@ -228,6 +252,8 @@ pub(crate) mod test_repos {
             repo_owner: owner.into(),
             repo_name: name.into(),
             asset_name_hint: String::new(),
+            repo_port: None,
+            file_name: String::new(),
         };
         assert!(is_valid_custom_id(&repo.id));
         let mut file = lib.read_repo_file().unwrap();

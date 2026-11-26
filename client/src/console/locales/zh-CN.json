@@ -510,6 +510,8 @@
   "cw_files_load_all": "全部加载",
   "cw_files_mesh_home": "此文件夹是 Mesh Drive。它的同步文件已隐藏：请勿移动或重命名此文件夹。",
   "cw_files_more": "显示更多",
+  "cw_files_move_has_links": "其中包含网络共享无法保存的链接。",
+  "cw_files_move_source_left": "“{name}”已复制，但原文件仍在 PS5 上。",
   "cw_files_move_to": "移动到…",
   "cw_files_name": "名称",
   "cw_files_new_file": "新建文件",

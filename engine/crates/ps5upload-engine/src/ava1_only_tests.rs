@@ -40,7 +40,7 @@ fn state_for(jobs: &Arc<Mutex<HashMap<Uuid, JobState>>>) -> AppState {
 /// retries and not by trying another protocol.
 #[tokio::test(flavor = "multi_thread")]
 async fn no_ava1_listener_surfaces_helper_not_running() {
-    let dir = std::env::temp_dir().join(format!("p5-ava1only-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("p5-ava1only-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = dir.join("one.bin");
     std::fs::write(&src, b"hello").unwrap();
@@ -89,7 +89,7 @@ async fn assert_helper_not_ava1(jobs: &Arc<Mutex<HashMap<Uuid, JobState>>>) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_dir_with_no_ava1_listener_is_helper_not_ava1() {
-    let dir = std::env::temp_dir().join(format!("p5-ava1only-dir-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("p5-ava1only-dir-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("a.bin"), b"hello").unwrap();
     let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -122,7 +122,7 @@ fn tiny_zip(path: &std::path::Path) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_zip_with_no_ava1_listener_is_helper_not_ava1() {
-    let dir = std::env::temp_dir().join(format!("p5-ava1only-zip-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("p5-ava1only-zip-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let zp = dir.join("g.zip");
     tiny_zip(&zp);
@@ -145,7 +145,7 @@ async fn transfer_zip_with_no_ava1_listener_is_helper_not_ava1() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_7z_with_no_ava1_listener_is_helper_not_ava1() {
-    let dir = std::env::temp_dir().join(format!("p5-ava1only-7z-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("p5-ava1only-7z-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let ap = dir.join("g.7z");
     {
@@ -177,7 +177,7 @@ async fn transfer_7z_with_no_ava1_listener_is_helper_not_ava1() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_tar_with_no_ava1_listener_is_helper_not_ava1() {
-    let dir = std::env::temp_dir().join(format!("p5-ava1only-tar-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("p5-ava1only-tar-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     // A lone .zst by hand: one single-segment frame, content size 5, one raw block "hello".
     let ap = dir.join("a.txt.zst");
@@ -235,7 +235,7 @@ async fn transfer_rar_with_no_ava1_listener_is_helper_not_ava1() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_file_list_with_no_ava1_listener_is_helper_not_ava1() {
-    let dir = std::env::temp_dir().join(format!("p5-ava1only-fl-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("p5-ava1only-fl-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("a.bin"), b"hello").unwrap();
     let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -261,7 +261,7 @@ async fn transfer_file_list_with_no_ava1_listener_is_helper_not_ava1() {
 /// success with the file simply absent (R2-1 F25).
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_file_list_names_the_files_it_could_not_read() {
-    let dir = std::env::temp_dir().join(format!("p5-ava1only-fl-skip-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("p5-ava1only-fl-skip-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("a.bin"), b"hello").unwrap();
     let missing = dir.join("gone.bin").to_string_lossy().into_owned();
@@ -300,7 +300,7 @@ async fn transfer_file_list_names_the_files_it_could_not_read() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_dir_reconcile_with_no_ava1_listener_is_helper_not_ava1() {
-    let dir = std::env::temp_dir().join(format!("p5-ava1only-rc-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("p5-ava1only-rc-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("a.bin"), b"hello").unwrap();
     let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -323,7 +323,7 @@ async fn transfer_dir_reconcile_with_no_ava1_listener_is_helper_not_ava1() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_download_with_no_ava1_listener_is_helper_not_ava1() {
-    let dir = std::env::temp_dir().join(format!("p5-ava1only-dl-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("p5-ava1only-dl-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::new(Mutex::new(HashMap::new()));
     let req = TransferDownloadReq {
@@ -333,6 +333,7 @@ async fn transfer_download_with_no_ava1_listener_is_helper_not_ava1() {
         kind: "file".to_string(),
         unsafe_read: false,
         escape_names: false,
+        remove_source: false,
     };
     let resp = transfer_download_handler(State(state_for(&jobs)), Json(req))
         .await
@@ -346,7 +347,7 @@ async fn transfer_download_with_no_ava1_listener_is_helper_not_ava1() {
 /// download keeps names (`escape_names`, the saves code): then it starts.
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_download_takes_a_name_windows_refuses_only_when_keeping_names() {
-    let dir = std::env::temp_dir().join(format!("p5-ava1only-kept-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("p5-ava1only-kept-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     for src in ["/data/x/options\\gabindings.xml", "/data/x/CON"] {
         for escape_names in [false, true] {
@@ -358,6 +359,7 @@ async fn transfer_download_takes_a_name_windows_refuses_only_when_keeping_names(
                 kind: "file".to_string(),
                 unsafe_read: false,
                 escape_names,
+                remove_source: false,
             };
             let resp = transfer_download_handler(State(state_for(&jobs)), Json(req))
                 .await
@@ -373,9 +375,39 @@ async fn transfer_download_takes_a_name_windows_refuses_only_when_keeping_names(
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #953: a move off the console (`remove_source`) goes only to a saved server, never takes a
+/// drive or a top folder as a whole, and never rides on `unsafe_read`; each is refused up front.
+#[tokio::test(flavor = "multi_thread")]
+async fn transfer_download_refuses_a_move_it_should_not_make() {
+    let cases = [
+        ("/data/x", "/tmp/somewhere", false),
+        ("/data", "remote://abc/games", false),
+        ("/mnt/usb0", "remote://abc/games", false),
+        ("/mnt/usb0/", "remote://abc/games", false),
+        ("/data/x", "remote://abc/games", true),
+    ];
+    for (src, dest, unsafe_read) in cases {
+        let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::new(Mutex::new(HashMap::new()));
+        let req = TransferDownloadReq {
+            addr: Some("127.0.0.1:9113".to_string()),
+            src_path: src.to_string(),
+            dest_dir: dest.to_string(),
+            kind: "folder".to_string(),
+            unsafe_read,
+            escape_names: false,
+            remove_source: true,
+        };
+        let resp = transfer_download_handler(State(state_for(&jobs)), Json(req))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{src} -> {dest}");
+        assert!(jobs.lock().unwrap().is_empty(), "{src}: no job starts");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_download_zip_with_no_ava1_listener_is_helper_not_ava1() {
-    let dir = std::env::temp_dir().join(format!("p5-ava1only-dz-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("p5-ava1only-dz-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::new(Mutex::new(HashMap::new()));
     let req = TransferDownloadZipReq {
@@ -399,7 +431,7 @@ async fn transfer_download_zip_with_no_ava1_listener_is_helper_not_ava1() {
 /// gone without a word. The person has to have chosen that (the save dialog asks; a script says so).
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_download_zip_refuses_an_existing_archive_unless_told_to_replace_it() {
-    let dir = std::env::temp_dir().join(format!("p5-dz-existing-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("p5-dz-existing-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let zip = dir.join("x.zip");
     std::fs::write(&zip, b"an earlier backup").unwrap();
@@ -771,7 +803,7 @@ fn engine_does_not_read_console_files_through_ftpsrv() {
 /// and the record holds neither the source path nor the console's address.
 #[test]
 fn a_failed_transfer_leaves_a_record_with_no_local_path_and_no_address() {
-    let dir = std::env::temp_dir().join(format!("p5-ava1only-telem-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("p5-ava1only-telem-{}", std::process::id()));
     let src_dir = dir.join("Secret Games Folder");
     std::fs::create_dir_all(&src_dir).unwrap();
     let src = src_dir.join("one.bin");

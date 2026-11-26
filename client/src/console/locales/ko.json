@@ -510,6 +510,8 @@
   "cw_files_load_all": "모두 불러오기",
   "cw_files_mesh_home": "이 폴더는 Mesh Drive입니다. 동기화 파일은 숨겨져 있습니다. 폴더를 옮기거나 이름을 바꾸지 마세요.",
   "cw_files_more": "더 보기",
+  "cw_files_move_has_links": "네트워크 공유에 저장할 수 없는 링크가 들어 있습니다.",
+  "cw_files_move_source_left": "“{name}”을(를) 복사했지만 원본은 아직 PS5에 있습니다.",
   "cw_files_move_to": "이동할 위치…",
   "cw_files_name": "이름",
   "cw_files_new_file": "새 파일",

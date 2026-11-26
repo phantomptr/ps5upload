@@ -28,18 +28,22 @@ pub fn is_server_dest(dest: &str) -> bool {
 /// A file on the console: its path, its path relative to the root's parent, its size.
 type ConsoleFile = (String, String, u64);
 
+/// A source as the console lists it: its files, its folders, and what a relay leaves out
+/// (links and other special entries, relative like the rest): a move keeps a source with any.
+type Listing = (Vec<ConsoleFile>, Vec<String>, Vec<String>);
+
 /// Every file under `root` on the console, and every folder (relative to `root`'s parent, the
 /// root itself first among them): a folder with no file in it is made on the server too.
-fn console_files(
-    addr: &str,
-    root: &str,
-    kind: DownloadKind,
-) -> Result<(Vec<ConsoleFile>, Vec<String>)> {
+fn console_files(addr: &str, root: &str, kind: DownloadKind) -> Result<Listing> {
     let root = root.trim_end_matches('/');
     if matches!(kind, DownloadKind::File) {
         let base = root.rsplit('/').next().unwrap_or(root).to_string();
         let st = fs_ops::fs_stat(addr, root)?;
-        return Ok((vec![(root.to_string(), base, st.size)], Vec::new()));
+        return Ok((
+            vec![(root.to_string(), base, st.size)],
+            Vec::new(),
+            Vec::new(),
+        ));
     }
     walk_console(root, |dir, offset| {
         let l = fs_ops::list_dir(addr, dir, ListDirOptions { offset, limit: 256 })?;
@@ -57,10 +61,11 @@ fn console_files(
 fn walk_console(
     root: &str,
     mut list: impl FnMut(&str, u64) -> Result<(Vec<(String, String, u64)>, bool)>,
-) -> Result<(Vec<ConsoleFile>, Vec<String>)> {
+) -> Result<Listing> {
     let base = root.rsplit('/').next().unwrap_or(root).to_string();
     let mut out = Vec::new();
     let mut dirs = Vec::new();
+    let mut skipped = Vec::new();
     let mut stack = vec![(root.to_string(), base)];
     while let Some((dir, rel)) = stack.pop() {
         dirs.push(rel.clone());
@@ -80,7 +85,8 @@ fn walk_console(
                 match kind.as_str() {
                     "dir" => stack.push((path, r)),
                     "file" => out.push((path, r, size)),
-                    _ => {}
+                    // A link, a device…: never copied, so a move must not delete it.
+                    _ => skipped.push(r),
                 }
             }
             if n == 0 || (n < 256 && !truncated) {
@@ -91,7 +97,8 @@ fn walk_console(
     }
     out.sort_by(|a, b| a.1.cmp(&b.1));
     dirs.sort();
-    Ok((out, dirs))
+    skipped.sort();
+    Ok((out, dirs, skipped))
 }
 
 fn remote_err(e: RemoteError) -> anyhow::Error {
@@ -160,7 +167,103 @@ fn staged_name(console_path: &str) -> Result<String> {
     ps5upload_core::host_names::escape_name(name).map_err(|why| anyhow!(why))
 }
 
+/// The console end of a relay: what is copied, how one file comes off it, and (for a move) how
+/// the source goes. A trait so the tests can stand a folder on this computer in for the console.
+pub(crate) trait ConsoleSide {
+    /// Every file and folder under the source, as [`console_files`] lists them.
+    fn files(&self) -> Result<Listing>;
+    /// Pulls the console file `path` into `staging`, under [`staged_name`], counting into `dl`.
+    fn pull(
+        &self,
+        path: &str,
+        staging: &Path,
+        dl: &ps5upload_ava1::download::Counters,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<()>;
+    /// Deletes the source (the file, or the whole folder tree) on the console.
+    fn delete(&self) -> Result<()>;
+}
+
+/// The console itself, over AVA1.
+struct Ava1Console<'a> {
+    addr: &'a str,
+    src: &'a str,
+    kind: DownloadKind,
+    unsafe_read: bool,
+}
+
+impl ConsoleSide for Ava1Console<'_> {
+    fn files(&self) -> Result<Listing> {
+        console_files(self.addr, self.src, self.kind)
+    }
+
+    fn pull(
+        &self,
+        path: &str,
+        staging: &Path,
+        dl: &ps5upload_ava1::download::Counters,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<()> {
+        let id: [u8; 16] = ava1::keys::random_bytes()?;
+        // Staged under a name this computer can hold whatever the console's is (`a:b`, `CON`,
+        // `x.` on Windows): the server gets the console's own name, and it is the server, not
+        // this computer's staging folder, that says whether it can hold it.
+        ps5upload_ava1::download::to_local_escaped(
+            self.addr,
+            path,
+            DownloadKind::File,
+            staging,
+            self.unsafe_read,
+            id,
+            dl,
+            Some(Arc::clone(cancel)),
+        )
+        .map(|_| ())
+    }
+
+    fn delete(&self) -> Result<()> {
+        // As the Files delete does: never from under a game that is running from it.
+        if let Some(title) = crate::running_title_from(self.addr, self.src) {
+            bail!(
+                "{title} is running from {}. Close it first: {KEPT}.",
+                self.src
+            );
+        }
+        // A whole game folder takes minutes to delete (see the fs_delete route's deadline).
+        fs_ops::fs_delete_with_op_id(self.addr, self.src, 0, Some(Duration::from_secs(60 * 60)))
+    }
+}
+
+/// How a move that stopped short ends its message.
+const KEPT: &str = "the original was kept on the PS5";
+
+/// Whether `src` may be moved off the console: never a drive or a top folder (`/data`,
+/// `/mnt/usb0`) as a whole, whose delete would take every other file on it along.
+pub fn movable_source(src: &str) -> bool {
+    let parts: Vec<&str> = src.split('/').filter(|p| !p.is_empty()).collect();
+    if !src.starts_with('/') || parts.iter().any(|p| *p == "." || *p == "..") {
+        return false;
+    }
+    match parts.first() {
+        Some(&"mnt") => parts.len() > 2,
+        Some(_) => parts.len() > 1,
+        None => false,
+    }
+}
+
+/// What a relay put on the server: every file (console path, path under `dest_dir`, size) and
+/// every folder, as the console listed them.
+pub(crate) struct Relayed {
+    bytes: u64,
+    dest_dir: String,
+    files: Vec<ConsoleFile>,
+    dirs: Vec<String>,
+    skipped: Vec<String>,
+}
+
 /// Pulls `src` (a file or a folder) from the console at `addr` into `dest` (`remote://id/dir`).
+/// With `remove_source` it is a move: the copy is checked on the server and the source deleted
+/// only then ([`finish_move`]); a failed or cancelled copy leaves the source as it was.
 /// Returns the bytes delivered.
 #[allow(clippy::too_many_arguments)]
 pub fn to_server(
@@ -169,6 +272,7 @@ pub fn to_server(
     kind: DownloadKind,
     dest: &str,
     unsafe_read: bool,
+    remove_source: bool,
     counters: &ps5upload_ava1::download::Counters,
     cancel: Arc<AtomicBool>,
     staging_root: &Path,
@@ -179,7 +283,54 @@ pub fn to_server(
     let fs = rt
         .block_on(r.pool.fs(&r.store, &rp.connection_id))
         .map_err(remote_err)?;
-    let (files, dirs) = console_files(addr, src, kind)?;
+    let console = Ava1Console {
+        addr,
+        src,
+        kind,
+        unsafe_read,
+    };
+    copy_or_move(
+        &rt,
+        fs.as_ref(),
+        &console,
+        &rp.path,
+        remove_source,
+        counters,
+        &cancel,
+        staging_root,
+    )
+}
+
+/// [`to_server`] past its setup: the relay, then for a move [`finish_move`]. The bytes delivered.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn copy_or_move(
+    rt: &tokio::runtime::Handle,
+    fs: &dyn RemoteFs,
+    console: &dyn ConsoleSide,
+    dest_dir: &str,
+    remove_source: bool,
+    counters: &ps5upload_ava1::download::Counters,
+    cancel: &Arc<AtomicBool>,
+    staging_root: &Path,
+) -> Result<u64> {
+    let done = relay(rt, fs, console, dest_dir, counters, cancel, staging_root)?;
+    if remove_source {
+        finish_move(rt, fs, console, &done, cancel)?;
+    }
+    Ok(done.bytes)
+}
+
+/// The copy of [`to_server`]: every folder made, every file staged here and placed on the server.
+pub(crate) fn relay(
+    rt: &tokio::runtime::Handle,
+    fs: &dyn RemoteFs,
+    console: &dyn ConsoleSide,
+    dest_dir: &str,
+    counters: &ps5upload_ava1::download::Counters,
+    cancel: &Arc<AtomicBool>,
+    staging_root: &Path,
+) -> Result<Relayed> {
+    let (files, dirs, skipped) = console.files()?;
     let total: u64 = files.iter().map(|f| f.2).sum();
     if let Some(t) = &counters.total {
         t.store(total.max(1), Ordering::Relaxed);
@@ -188,8 +339,8 @@ pub fn to_server(
     let staging: PathBuf =
         staging_root.join(job.iter().map(|b| format!("{b:02x}")).collect::<String>());
     std::fs::create_dir_all(&staging).with_context(|| format!("make {}", staging.display()))?;
+    let dest_dir = dest_dir.trim_end_matches('/').to_string();
     let result = (|| -> Result<u64> {
-        let dest_dir = rp.path.trim_end_matches('/').to_string();
         let mut made = std::collections::HashSet::new();
         let mut done = 0u64;
         // Every folder, so one with nothing in it is on the server as it is on the console.
@@ -198,7 +349,7 @@ pub fn to_server(
                 bail!("transfer_cancelled");
             }
             let dir = format!("{dest_dir}/{rel}");
-            rt.block_on(make_dirs(fs.as_ref(), &dir))?;
+            rt.block_on(make_dirs(fs, &dir))?;
             made.insert(dir);
         }
         for (path, rel, size) in &files {
@@ -208,7 +359,7 @@ pub fn to_server(
             let target = format!("{dest_dir}/{rel}");
             if let Some((parent, _)) = target.rsplit_once('/') {
                 if !parent.is_empty() && made.insert(parent.to_string()) {
-                    rt.block_on(make_dirs(fs.as_ref(), parent))?;
+                    rt.block_on(make_dirs(fs, parent))?;
                 }
             }
             // 1. Off the console, into staging (half of this file's share of the bar).
@@ -216,8 +367,6 @@ pub fn to_server(
             let dl_bytes = Arc::clone(&dl.bytes);
             let shown = Arc::clone(&counters.bytes);
             let base = done;
-            // Before the progress thread starts: an early return must not leave it running.
-            let id: [u8; 16] = ava1::keys::random_bytes()?;
             let stop = Arc::new(AtomicBool::new(false));
             let mirror = {
                 let stop = Arc::clone(&stop);
@@ -231,19 +380,7 @@ pub fn to_server(
                     }
                 })
             };
-            // Staged under a name this computer can hold whatever the console's is (`a:b`,
-            // `CON`, `x.` on Windows): the server gets the console's own name, and it is the
-            // server, not this computer's staging folder, that says whether it can hold it.
-            let got = ps5upload_ava1::download::to_local_escaped(
-                addr,
-                path,
-                DownloadKind::File,
-                &staging,
-                unsafe_read,
-                id,
-                &dl,
-                Some(Arc::clone(&cancel)),
-            );
+            let got = console.pull(path, &staging, &dl, cancel);
             stop.store(true, Ordering::Relaxed);
             let _ = mirror.join();
             got?;
@@ -268,9 +405,9 @@ pub fn to_server(
                         shown.store(base + half + part, Ordering::Relaxed);
                     })
                 },
-                cancel: Arc::clone(&cancel),
+                cancel: Arc::clone(cancel),
             };
-            let placed = rt.block_on(place(fs.as_ref(), &staged, &target, &progress));
+            let placed = rt.block_on(place(fs, &staged, &target, &progress));
             let _ = std::fs::remove_file(&staged);
             placed?;
             done += size;
@@ -282,7 +419,59 @@ pub fn to_server(
         Ok(done)
     })();
     let _ = std::fs::remove_dir_all(&staging);
-    result
+    Ok(Relayed {
+        bytes: result?,
+        dest_dir,
+        files,
+        dirs,
+        skipped,
+    })
+}
+
+/// A move's second half, once the copy finished: every file is on the server at its size and
+/// every folder is there, the source on the console is still what was copied (nothing added,
+/// grown or gone meanwhile), and only then is the source deleted. Any doubt keeps the source.
+pub(crate) fn finish_move(
+    rt: &tokio::runtime::Handle,
+    fs: &dyn RemoteFs,
+    console: &dyn ConsoleSide,
+    r: &Relayed,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    if cancel.load(Ordering::Relaxed) {
+        bail!("transfer_cancelled");
+    }
+    if let Some(first) = r.skipped.first() {
+        bail!("{first} is a link, which can't be copied to the server: {KEPT}.");
+    }
+    for (_, rel, size) in &r.files {
+        let target = format!("{}/{rel}", r.dest_dir);
+        match rt.block_on(fs.stat(&target)) {
+            Ok(e) if !e.is_dir && e.size == *size => {}
+            Ok(e) => bail!(
+                "The copy of {rel} on the server is {} bytes, not {size}: {KEPT}.",
+                e.size
+            ),
+            Err(e) => bail!(
+                "The copy of {rel} could not be checked on the server ({}): {KEPT}.",
+                remote::api::error_with_hint(&e)
+            ),
+        }
+    }
+    for rel in &r.dirs {
+        let dir = format!("{}/{rel}", r.dest_dir);
+        if !rt.block_on(fs.stat(&dir)).is_ok_and(|e| e.is_dir) {
+            bail!("The folder {rel} is not on the server: {KEPT}.");
+        }
+    }
+    let (files, dirs, skipped) = console.files()?;
+    if files != r.files || dirs != r.dirs || skipped != r.skipped {
+        bail!("Files on the PS5 changed during the copy: {KEPT}.");
+    }
+    if cancel.load(Ordering::Relaxed) {
+        bail!("transfer_cancelled");
+    }
+    console.delete()
 }
 
 #[cfg(test)]
@@ -300,7 +489,7 @@ mod tests {
     #[tokio::test]
     async fn a_file_lands_under_its_name_through_a_temporary_one() {
         let fs = MemFs::new(&[("/games/old.bin", b"stale")]);
-        let dir = std::env::temp_dir().join(format!("relay-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("relay-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let staged = dir.join("old.bin");
         std::fs::write(&staged, b"fresh bytes").unwrap();
@@ -325,7 +514,7 @@ mod tests {
     /// A folder with nothing in it is listed, so it is made on the server (it was dropped).
     #[test]
     fn a_folder_with_no_file_in_it_is_still_listed() {
-        let (files, dirs) = walk_console("/data/game", |dir, offset| {
+        let (files, dirs, _) = walk_console("/data/game", |dir, offset| {
             let page: Vec<(String, String, u64)> = match (dir, offset) {
                 ("/data/game", 0) => vec![
                     (".".into(), "dir".into(), 0),
@@ -371,7 +560,7 @@ mod tests {
             });
             assert!(r.is_err(), "{bad:?}: {r:?}");
         }
-        let (files, _) = walk_console("/data/game", |dir, _| {
+        let (files, _, _) = walk_console("/data/game", |dir, _| {
             let page = match dir {
                 "/data/game" => {
                     vec![("options\\gabindings.xml".to_string(), "file".to_string(), 1)]
@@ -396,10 +585,416 @@ mod tests {
         );
     }
 
+    /// A folder on this computer standing in for the console: a pull copies a file into staging
+    /// (failing, cancelling or coming up short on cue), and a delete removes the source.
+    struct DirConsole {
+        root: PathBuf,
+        /// The pull with this number (1-based) fails as a dropped console.
+        fail_at: Option<usize>,
+        /// The pull with this number is cancelled, as Stop does mid-file.
+        cancel_at: Option<usize>,
+        /// Every pull stages one byte less than the file holds.
+        short: bool,
+        /// After the first pull, a file is added to the source (a game writing into it).
+        grow: bool,
+        pulls: std::sync::atomic::AtomicUsize,
+        deletes: std::sync::atomic::AtomicUsize,
+    }
+
+    impl DirConsole {
+        fn new(root: &Path) -> Self {
+            Self {
+                root: root.to_path_buf(),
+                fail_at: None,
+                cancel_at: None,
+                short: false,
+                grow: false,
+                pulls: Default::default(),
+                deletes: Default::default(),
+            }
+        }
+    }
+
+    impl ConsoleSide for DirConsole {
+        fn files(&self) -> Result<Listing> {
+            walk_console(self.root.to_str().unwrap(), |dir, offset| {
+                if offset > 0 {
+                    return Ok((Vec::new(), false));
+                }
+                let mut page = Vec::new();
+                for e in std::fs::read_dir(dir)? {
+                    let e = e?;
+                    let md = std::fs::symlink_metadata(e.path())?;
+                    let kind = if md.is_symlink() {
+                        "link"
+                    } else if md.is_dir() {
+                        "dir"
+                    } else {
+                        "file"
+                    };
+                    page.push((
+                        e.file_name().to_string_lossy().into_owned(),
+                        kind.to_string(),
+                        md.len(),
+                    ));
+                }
+                Ok((page, false))
+            })
+        }
+
+        fn pull(
+            &self,
+            path: &str,
+            staging: &Path,
+            dl: &ps5upload_ava1::download::Counters,
+            cancel: &Arc<AtomicBool>,
+        ) -> Result<()> {
+            let n = self.pulls.fetch_add(1, Ordering::SeqCst) + 1;
+            if self.fail_at == Some(n) {
+                bail!("the console dropped the connection");
+            }
+            if self.cancel_at == Some(n) {
+                cancel.store(true, Ordering::SeqCst);
+                bail!("transfer_cancelled");
+            }
+            let mut bytes = std::fs::read(path)?;
+            if self.short {
+                bytes.pop();
+            }
+            dl.bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+            std::fs::write(staging.join(staged_name(path)?), bytes)?;
+            if self.grow && n == 1 {
+                std::fs::write(self.root.join("new.sav"), b"written meanwhile")?;
+            }
+            Ok(())
+        }
+
+        fn delete(&self) -> Result<()> {
+            self.deletes.fetch_add(1, Ordering::SeqCst);
+            std::fs::remove_dir_all(&self.root)?;
+            Ok(())
+        }
+    }
+
+    /// A temporary folder that goes when the test ends, passed or failed.
+    struct Scratch(PathBuf);
+    impl Scratch {
+        fn new(tag: &str) -> Self {
+            let n: [u8; 8] = ava1::keys::random_bytes().unwrap();
+            let hex: String = n.iter().map(|b| format!("{b:02x}")).collect();
+            let p = std::env::temp_dir().join(format!("relay-{tag}-{hex}"));
+            std::fs::create_dir_all(&p).unwrap();
+            Self(p)
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A game folder `game` with a file, a subfolder with a file, and an empty subfolder.
+    fn game(at: &Path) -> PathBuf {
+        let root = at.join("game");
+        std::fs::create_dir_all(root.join("sce_sys")).unwrap();
+        std::fs::create_dir_all(root.join("empty")).unwrap();
+        std::fs::write(root.join("eboot.bin"), b"eboot bytes").unwrap();
+        std::fs::write(root.join("sce_sys/param.json"), b"{\"a\":1}").unwrap();
+        root
+    }
+
+    /// Runs a copy or move of `console` into `/shared/PS5` on `fs`, from a thread outside the
+    /// runtime as the job's blocking thread is.
+    fn run(fs: &dyn RemoteFs, console: &DirConsole, remove: bool, staging: &Path) -> Result<u64> {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let counters = ps5upload_ava1::download::Counters::default();
+        let cancel = Arc::new(AtomicBool::new(false));
+        copy_or_move(
+            rt.handle(),
+            fs,
+            console,
+            "/shared/PS5",
+            remove,
+            &counters,
+            &cancel,
+            staging,
+        )
+    }
+
+    #[test]
+    fn a_move_deletes_the_source_only_once_the_copy_is_on_the_server() {
+        let tmp = Scratch::new("move");
+        let console = DirConsole::new(&game(&tmp.0));
+        let fs = MemFs::new(&[]);
+        let staging = tmp.0.join("staging");
+        assert_eq!(run(&fs, &console, true, &staging).unwrap(), 18);
+        assert_eq!(
+            fs.bytes("/shared/PS5/game/eboot.bin").unwrap(),
+            b"eboot bytes"
+        );
+        assert_eq!(
+            fs.bytes("/shared/PS5/game/sce_sys/param.json").unwrap(),
+            b"{\"a\":1}"
+        );
+        assert!(futures_block(fs.stat("/shared/PS5/game/empty")).is_dir);
+        assert_eq!(console.deletes.load(Ordering::SeqCst), 1);
+        assert!(
+            !console.root.exists(),
+            "the source goes after a checked copy"
+        );
+        // Nothing left in staging on this computer.
+        assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_copy_keeps_the_source() {
+        let tmp = Scratch::new("copy");
+        let console = DirConsole::new(&game(&tmp.0));
+        let fs = MemFs::new(&[]);
+        run(&fs, &console, false, &tmp.0.join("staging")).unwrap();
+        assert_eq!(
+            fs.bytes("/shared/PS5/game/eboot.bin").unwrap(),
+            b"eboot bytes"
+        );
+        assert_eq!(console.deletes.load(Ordering::SeqCst), 0);
+        assert!(console.root.join("eboot.bin").exists());
+    }
+
+    #[test]
+    fn a_move_that_fails_part_way_keeps_the_source() {
+        let tmp = Scratch::new("fail");
+        let mut console = DirConsole::new(&game(&tmp.0));
+        console.fail_at = Some(2);
+        let fs = MemFs::new(&[]);
+        let e = run(&fs, &console, true, &tmp.0.join("staging")).unwrap_err();
+        assert!(e.to_string().contains("dropped"), "{e}");
+        assert_eq!(console.deletes.load(Ordering::SeqCst), 0);
+        assert!(console.root.join("eboot.bin").exists());
+        assert!(console.root.join("sce_sys/param.json").exists());
+    }
+
+    #[test]
+    fn a_cancelled_move_keeps_the_source() {
+        let tmp = Scratch::new("cancel");
+        let mut console = DirConsole::new(&game(&tmp.0));
+        console.cancel_at = Some(2);
+        let fs = MemFs::new(&[]);
+        let e = run(&fs, &console, true, &tmp.0.join("staging")).unwrap_err();
+        assert_eq!(e.to_string(), "transfer_cancelled");
+        assert_eq!(console.deletes.load(Ordering::SeqCst), 0);
+        assert!(console.root.join("eboot.bin").exists());
+        assert!(fs.paths().iter().all(|p| !p.ends_with(".ps5upload-tmp")));
+    }
+
+    #[test]
+    fn a_move_whose_copy_does_not_match_keeps_the_source() {
+        let tmp = Scratch::new("short");
+        let mut console = DirConsole::new(&game(&tmp.0));
+        console.short = true;
+        let fs = MemFs::new(&[]);
+        let e = run(&fs, &console, true, &tmp.0.join("staging")).unwrap_err();
+        assert!(e.to_string().contains("kept"), "{e}");
+        assert_eq!(console.deletes.load(Ordering::SeqCst), 0);
+        assert!(console.root.join("eboot.bin").exists());
+    }
+
+    #[test]
+    fn a_move_whose_source_changed_meanwhile_keeps_it() {
+        let tmp = Scratch::new("grow");
+        let mut console = DirConsole::new(&game(&tmp.0));
+        console.grow = true;
+        let fs = MemFs::new(&[]);
+        let e = run(&fs, &console, true, &tmp.0.join("staging")).unwrap_err();
+        assert!(e.to_string().contains("changed"), "{e}");
+        assert_eq!(console.deletes.load(Ordering::SeqCst), 0);
+        assert!(console.root.join("new.sav").exists());
+    }
+
+    /// A link is never copied (the console lists it as a link, not a file), so a move with one
+    /// in the tree keeps the whole source: deleting it would lose the link (#953).
+    #[cfg(unix)]
+    #[test]
+    fn a_move_whose_tree_holds_a_link_keeps_the_source() {
+        let tmp = Scratch::new("link");
+        let root = game(&tmp.0);
+        std::os::unix::fs::symlink("eboot.bin", root.join("sce_sys/alias")).unwrap();
+        let console = DirConsole::new(&root);
+        let (_, _, skipped) = console.files().unwrap();
+        assert_eq!(skipped, ["game/sce_sys/alias"]);
+        let fs = MemFs::new(&[]);
+        let e = run(&fs, &console, true, &tmp.0.join("staging")).unwrap_err();
+        assert!(
+            e.to_string().contains("game/sce_sys/alias is a link"),
+            "{e}"
+        );
+        assert!(e.to_string().contains("kept"), "{e}");
+        assert_eq!(console.deletes.load(Ordering::SeqCst), 0);
+        assert!(root.join("sce_sys/alias").symlink_metadata().is_ok());
+        // The files themselves were copied; a copy (not a move) of the same tree succeeds.
+        assert_eq!(
+            fs.bytes("/shared/PS5/game/eboot.bin").unwrap(),
+            b"eboot bytes"
+        );
+        run(&fs, &console, false, &tmp.0.join("staging")).unwrap();
+    }
+
+    #[test]
+    fn a_single_file_moves_too() {
+        let tmp = Scratch::new("file");
+        let root = game(&tmp.0);
+        struct OneFile(DirConsole, PathBuf);
+        impl ConsoleSide for OneFile {
+            fn files(&self) -> Result<Listing> {
+                let len = std::fs::metadata(&self.1)?.len();
+                Ok((
+                    vec![(self.1.to_string_lossy().into(), "eboot.bin".into(), len)],
+                    Vec::new(),
+                    Vec::new(),
+                ))
+            }
+            fn pull(
+                &self,
+                path: &str,
+                staging: &Path,
+                dl: &ps5upload_ava1::download::Counters,
+                cancel: &Arc<AtomicBool>,
+            ) -> Result<()> {
+                self.0.pull(path, staging, dl, cancel)
+            }
+            fn delete(&self) -> Result<()> {
+                Ok(std::fs::remove_file(&self.1)?)
+            }
+        }
+        let one = OneFile(DirConsole::new(&root), root.join("eboot.bin"));
+        let fs = MemFs::new(&[]);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        copy_or_move(
+            rt.handle(),
+            &fs,
+            &one,
+            "/shared",
+            true,
+            &Default::default(),
+            &cancel,
+            &tmp.0.join("staging"),
+        )
+        .unwrap();
+        assert_eq!(fs.bytes("/shared/eboot.bin").unwrap(), b"eboot bytes");
+        assert!(!root.join("eboot.bin").exists());
+        assert!(
+            root.join("sce_sys/param.json").exists(),
+            "only the file goes"
+        );
+    }
+
+    #[test]
+    fn only_items_inside_a_drive_can_be_moved() {
+        for ok in [
+            "/data/game",
+            "/data/a/b",
+            "/mnt/usb0/PS5",
+            "/mnt/ext1/x/y",
+            "/user/x",
+        ] {
+            assert!(movable_source(ok), "{ok}");
+        }
+        for bad in [
+            "/",
+            "",
+            "/data",
+            "/data/",
+            "/mnt",
+            "/mnt/usb0",
+            "/mnt/usb0/",
+            "data/x",
+        ] {
+            assert!(!movable_source(bad), "{bad}");
+        }
+        assert!(!movable_source("/data/../mnt/usb0"));
+    }
+
+    fn futures_block<T>(f: impl std::future::Future<Output = Result<T, RemoteError>>) -> T {
+        tokio::runtime::Runtime::new().unwrap().block_on(f).unwrap()
+    }
+
+    /// The same move against real Samba (memory: smb-test-server recipe), with a writable share:
+    /// `PS5UPLOAD_SAMBA_TEST=127.0.0.1:445 PS5UPLOAD_SAMBA_SHARE=games PS5UPLOAD_SAMBA_USER=tester
+    /// PS5UPLOAD_SAMBA_PASS=pw123 cargo test -p ps5upload-engine -- --ignored moves_onto_samba`.
+    #[test]
+    #[ignore = "needs a Samba server; see the doc comment"]
+    fn moves_onto_samba() {
+        let Ok(addr) = std::env::var("PS5UPLOAD_SAMBA_TEST") else {
+            return;
+        };
+        use crate::remote::store::Secret;
+        let (host, port) = addr.split_once(':').unwrap();
+        let mut conn = crate::remote::store::conn("t", crate::remote::store::Protocol::Smb);
+        conn.host = host.into();
+        conn.port = port.parse().unwrap();
+        conn.share = std::env::var("PS5UPLOAD_SAMBA_SHARE").unwrap_or_default();
+        conn.user = std::env::var("PS5UPLOAD_SAMBA_USER").unwrap_or_default();
+        let secret = match std::env::var("PS5UPLOAD_SAMBA_PASS") {
+            Ok(password) => Secret::Password { password },
+            Err(_) => Secret::None,
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let fs = rt
+            .block_on(crate::remote::smb_fs::SmbFs::connect(&conn, &secret))
+            .unwrap();
+        let tmp = Scratch::new("samba");
+        let dest = format!("/relay-test-{}", std::process::id());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let go = |console: &DirConsole| {
+            copy_or_move(
+                rt.handle(),
+                &fs,
+                console,
+                &dest,
+                true,
+                &Default::default(),
+                &cancel,
+                &tmp.0.join("staging"),
+            )
+        };
+        // A failed move first: nothing deleted.
+        let mut failing = DirConsole::new(&game(&tmp.0));
+        failing.fail_at = Some(2);
+        assert!(go(&failing).is_err());
+        assert!(failing.root.join("eboot.bin").exists());
+        // Then the real one.
+        let console = DirConsole::new(&failing.root);
+        go(&console).unwrap();
+        assert!(!console.root.exists());
+        let st = rt
+            .block_on(fs.stat(&format!("{dest}/game/sce_sys/param.json")))
+            .unwrap();
+        assert_eq!(st.size, 7);
+        assert!(
+            rt.block_on(fs.stat(&format!("{dest}/game/empty")))
+                .unwrap()
+                .is_dir
+        );
+        // Leave the share as it was.
+        for p in [
+            "game/eboot.bin",
+            "game/sce_sys/param.json",
+            "game/sce_sys",
+            "game/empty",
+            "game",
+            "",
+        ] {
+            let path = format!("{dest}/{p}");
+            let path = path.trim_end_matches('/');
+            let _ = rt.block_on(fs.remove_file(path));
+            let _ = rt.block_on(fs.remove_dir(path));
+        }
+    }
+
     #[tokio::test]
     async fn a_cancelled_write_leaves_nothing_behind() {
         let fs = MemFs::new(&[]);
-        let dir = std::env::temp_dir().join(format!("relay-c-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("relay-c-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let staged = dir.join("x.bin");
         std::fs::write(&staged, vec![7u8; 3 << 20]).unwrap();

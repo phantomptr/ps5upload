@@ -1605,6 +1605,9 @@ pub struct TransferDownloadReq {
     /// ops never honor this flag. Default false.
     #[serde(default)]
     pub unsafe_read: bool,
+    /// A move to a saved server: the engine deletes the source once the copy is checked there.
+    #[serde(default)]
+    pub remove_source: bool,
 }
 
 /// PS5 → host download streamed straight into a `.zip` (one pass, no scratch
@@ -1651,6 +1654,7 @@ pub async fn transfer_download(req: TransferDownloadReq) -> Result<JsonValue, St
         "addr": req.addr,
         "kind": req.kind,
         "unsafe_read": req.unsafe_read,
+        "remove_source": req.remove_source,
     });
     post_json(&url, &body).await
 }

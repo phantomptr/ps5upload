@@ -1253,7 +1253,9 @@ pub struct InstallRequest {
 fn history_dir() -> std::path::PathBuf {
     // A test that ends a job must not write to the user's own history.
     if cfg!(test) {
-        return std::env::temp_dir().join(format!("ps5u-install-history-{}", std::process::id()));
+        return crate::test_scratch(
+            std::env::temp_dir().join(format!("ps5u-install-history-{}", std::process::id())),
+        );
     }
     crate::remote::store::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from(".ps5upload"))
@@ -3097,7 +3099,7 @@ mod certainly_a_game_tests {
     /// The stream route reads the header from the file on this computer.
     #[tokio::test]
     async fn the_stream_route_reads_the_add_on_header_from_the_file_here() {
-        let dir = std::env::temp_dir().join(format!("ps5u-724-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-724-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut verdicts = Vec::new();
         for (name, (t, f)) in [("addon.pkg", ADD_ON), ("game.pkg", GAME)] {

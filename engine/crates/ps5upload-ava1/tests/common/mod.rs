@@ -11,7 +11,7 @@ use ava1::wire::Message;
 use ps5upload_ava1::gen;
 
 pub fn temp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ava1-relay-{tag}-{}", std::process::id()));
+    let d = test_tmp::temp_path(format!("ava1-relay-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -150,3 +150,7 @@ pub fn assert_pattern(path: &Path, seed: u8, size: u64) {
     }
     assert_eq!(got.finalize(), want.finalize(), "{path:?} content differs");
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[path = "../../../../test-support/test_tmp.rs"]
+mod test_tmp;

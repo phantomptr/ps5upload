@@ -32,7 +32,7 @@ fn state() -> (AppState, Jobs) {
 }
 
 fn root(tag: &str) -> PathBuf {
-    let r = std::env::temp_dir().join(format!("ps5u-archive-build-{tag}-{}", std::process::id()));
+    let r = crate::test_tmp::temp_path(format!("ps5u-archive-build-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&r);
     std::fs::create_dir_all(&r).unwrap();
     r

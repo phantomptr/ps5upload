@@ -627,7 +627,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_json_form_sends_a_file_from_a_path() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-send-api-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5upload-send-api-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("thing.elf");
         std::fs::write(&file, b"\x7fELFfrom a path").unwrap();
@@ -648,7 +648,7 @@ mod tests {
     #[tokio::test]
     async fn the_json_form_accepts_the_other_names_for_the_console() {
         let (port, received) = listen_once();
-        let dir = std::env::temp_dir().join(format!("ps5upload-send-api2-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5upload-send-api2-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("a.bin");
         std::fs::write(&file, b"x").unwrap();
@@ -818,7 +818,7 @@ mod tests {
     /// own one in place of a damaged copy, and never a file that is not named .elf.
     #[test]
     fn the_bundled_form_takes_a_good_copy_and_replaces_a_damaged_one() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-bundled-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5upload-bundled-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let good = dir.join("ps5upload.elf");
         std::fs::write(&good, b"\x7fELF the app's helper").unwrap();

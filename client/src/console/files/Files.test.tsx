@@ -19,6 +19,7 @@ import { ConflictDialog } from "./ConflictDialog";
 import { IntoItselfError, renameEntry } from "./move";
 import { TextPrompt } from "./TextPrompt";
 import { PickerWait } from "./PathPicker";
+import { ReplaceError } from "./replace";
 import { UploadDialog } from "./UploadDialog";
 import type { DirState, Entry } from "./useDir";
 
@@ -434,6 +435,12 @@ describe("Files listing controls", () => {
     expect(pasteMessage({ ...base, halted: ["/data/a/G"], skipped: ["/data/a/G", "/data/a/H"] })?.text).toBe(
       `${t("cw_files_paste_halted", { name: "G" })} ${t("cw_files_batch_stopped", { n: 1 })}`,
     );
+    // A move to a share that kept the original says so, and why when the tree held links (#953).
+    const kept = (why: string | null) =>
+      pasteMessage({ ...base, done: ["/data/g"], notes: [new ReplaceError("moved_left", "g", { why })] })?.text;
+    expect(kept(null)).toContain(t("cw_files_move_source_left", { name: "g" }));
+    expect(kept(null)).not.toContain(t("cw_files_move_has_links"));
+    expect(kept("links")).toContain(`${t("cw_files_move_source_left", { name: "g" })} ${t("cw_files_move_has_links")}`);
   });
 });
 

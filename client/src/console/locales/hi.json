@@ -510,6 +510,8 @@
   "cw_files_load_all": "सब लोड करें",
   "cw_files_mesh_home": "यह फ़ोल्डर एक Mesh Drive है। इसकी सिंक फ़ाइल छिपी है: फ़ोल्डर को न हटाएँ और न उसका नाम बदलें।",
   "cw_files_more": "और दिखाएँ",
+  "cw_files_move_has_links": "इसमें ऐसे लिंक हैं जिन्हें नेटवर्क शेयर नहीं रख सकता।",
+  "cw_files_move_source_left": "“{name}” कॉपी हो गया, लेकिन मूल अभी भी PS5 पर है।",
   "cw_files_move_to": "यहाँ ले जाएँ…",
   "cw_files_name": "नाम",
   "cw_files_new_file": "नई फ़ाइल",

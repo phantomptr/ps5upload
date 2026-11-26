@@ -29,8 +29,7 @@ import { fileSystemTargetFor } from "../Search/searchLink";
 import { isMeshInternal, MESH_MARKER } from "../../lib/meshFiles";
 import { DiskUsagePanel } from "../DiskUsage";
 import { SnapshotsPanel, type SnapshotPrefill } from "../Backup";
-import { useC2cRoutes } from "../../state/c2cRoutes";
-import { useUploadQueueStore } from "../../state/uploadQueue";
+import { queueConsoleSend } from "../../state/consoleSendQueue";
 import type { SendItem } from "../../lib/consoleSend";
 import { queueLinkFor } from "../../lib/gamePage";
 import {
@@ -80,7 +79,11 @@ import {
   Network,
   ListChecks,
   Server,
+  Columns2,
 } from "lucide-react";
+import { TwoPanesFrame, type PsSide } from "./TwoPanes";
+import { readTwoPanes, TWO_PANES_QUERY, writeTwoPanes, type CopyOutcome } from "./panePlan";
+import { useMediaQuery } from "../../lib/phoneLayout";
 import type { Connection } from "../../api/remote";
 import { useConnectionsStore } from "../../state/connections";
 import { pickLocalPath } from "../../state/localPicker";
@@ -143,7 +146,7 @@ import {
   type SearchHit,
   type Volume,
 } from "../../api/ps5";
-import { baseNameOf, kindsOf, namesPreview, planFsUpload } from "../../state/fsUploadPlan";
+import { baseNameOf, kindsOf, namesPreview, planFsUpload, type FsPickedItem } from "../../state/fsUploadPlan";
 import { useConflictAsk } from "./ConflictAsk";
 import {
   loadFsLastPath,
@@ -1710,7 +1713,12 @@ export default function FileSystemScreen() {
    *  Two or more local files then go up as ONE job, a folder as its own job, all of it one
    *  run (one task, one progress bar, one Cancel). `kind`: what the picker returned, when it
    *  only returns one kind (a drop is asked about). */
-  const addPicked = async (picked: string[], kind?: "file" | "folder") => {
+  const addPicked = async (
+    picked: string[],
+    kind?: "file" | "folder",
+    // What each pick is, when the caller has listed it already (the two panes, #952).
+    known?: FsPickedItem[],
+  ) => {
     if (picked.length === 0) return;
     setError(null);
     // The console can change while this waits on the listing or on the user: the plan is
@@ -1718,7 +1726,7 @@ export default function FileSystemScreen() {
     const probe = guard.capture();
     const addr = consoleAddr(host);
     const destDir = path;
-    const items = await kindsOf(picked, pathKind, kind);
+    const items = known ?? (await kindsOf(picked, pathKind, kind));
     let existing: Awaited<ReturnType<typeof fsListDir>>;
     try {
       existing = await fsListDir(addr, destDir);
@@ -1958,6 +1966,10 @@ export default function FileSystemScreen() {
   const rowsListRef = useRef<HTMLUListElement | null>(null);
   // The phone layout (#936).
   const phone = usePhoneLayout();
+  // Two panes (#952): a wide window with a mouse only; a phone or a tablet keeps the one list.
+  const wideEnough = useMediaQuery(TWO_PANES_QUERY);
+  const [twoPanesWanted, setTwoPanesWanted] = useState(readTwoPanes);
+  const twoPanes = wideEnough && twoPanesWanted && !phone;
   const { start: rowsStart, end: rowsEnd, before: rowsBefore, after: rowsAfter, scrollToRow } = useWindowedRows(
     sortedEntries.length,
     rowsListRef,
@@ -1988,31 +2000,10 @@ export default function FileSystemScreen() {
   };
   const confirmSend = (target: string, _destDir: string, dests: string[]) => {
     const items = sendItems ?? [];
-    const route = useC2cRoutes.getState().routeFor(hostOf(host), target);
     setSendItems(null);
     if (items.length === 0) return;
     setSelected(new Set());
-    const q = useUploadQueueStore.getState();
-    const ids = items.map((it, i) =>
-      q.add({
-        sourceKind: "ps5",
-        fromConsole: hostOf(host),
-        route: route.mode,
-        directAddr: route.directAddr || null,
-        sourcePath: it.path,
-        displayName: it.name,
-        resolvedDest: dests[i],
-        addr: target,
-        strategy: "overwrite",
-        reconcileMode: "fast",
-        excludes: [],
-        mountAfterUpload: false,
-        mountReadOnly: true,
-        registerAfterUpload: false,
-        estimatedBytes: it.size,
-      }),
-    );
-    q.startAdded(target, ids);
+    queueConsoleSend(host, target, items, dests);
     const name = profileNameForAddr(target, useRosterStore.getState().profiles) || target;
     pushNotification(
       "info",
@@ -2912,13 +2903,22 @@ export default function FileSystemScreen() {
   /** Save a file or folder under the current dir to the host. Same
    *  flow as Library's per-row Download — pick a host folder, kick
    *  off `transfer_download`, poll jobStatus to terminal. Single-
-   *  flight at the screen level: only one download at a time. */
-  const runDownload = async (entry: DirEntry, asZip = false, server?: Connection) => {
+   *  flight at the screen level: only one download at a time.
+   *  `to`: a folder already picked (on `server`, or on this computer for the two panes), and
+   *  `move` to delete the source once the engine checked the copy on the server (#953); `from`
+   *  is the PS5 folder the entry is in when it is not the one shown (the two panes, #952).
+   *  How it ended: done, failed, or stopped (also a cancelled picker). */
+  const runDownload = async (
+    entry: DirEntry,
+    asZip = false,
+    server?: Connection,
+    to?: { dir: string; move?: boolean; from?: string },
+  ): Promise<CopyOutcome> => {
     // Single-flight per console: only one download at a time on THIS
     // console (others download concurrently into their own slots).
-    if (fsDownload.active) return;
+    if (fsDownload.active) return "failed";
     const addr = consoleAddr(host);
-    const remote = joinPath(path, entry.name);
+    const remote = joinPath(to?.from ?? path, entry.name);
     const kind: "file" | "folder" = entry.kind === "dir" ? "folder" : "file";
 
     // asZip: pick a .zip save path and stream-zip into it (no scratch dir).
@@ -2936,14 +2936,16 @@ export default function FileSystemScreen() {
           'Save "{name}" as a .zip',
         ),
       });
-      if (!destZip || typeof destZip !== "string") return;
+      if (!destZip || typeof destZip !== "string") return "stopped";
       dest = destZip;
       rootName = destZip.split(/[\\/]/).pop() || `${entry.name}.zip`;
       start = () =>
         startTransferDownloadZip(remote, destZip, addr, kind, systemFileRead);
     } else {
       // A saved server (8.0.0): the engine pulls it off the console and writes it there.
-      const picked = server
+      const picked = to
+        ? to.dir
+        : server
         ? await pickLocalPath({
             mode: "folder",
             source: { connectionId: server.id },
@@ -2967,11 +2969,11 @@ export default function FileSystemScreen() {
               'Pick a destination folder for "{name}"',
             ),
           });
-      if (typeof picked !== "string") return;
+      if (typeof picked !== "string") return "stopped";
       dest = picked;
       rootName = entry.name;
       start = () =>
-        startTransferDownload(remote, picked, addr, kind, systemFileRead);
+        startTransferDownload(remote, picked, addr, kind, systemFileRead, !!to?.move);
     }
     setError(null);
     let jobId: string;
@@ -2994,7 +2996,7 @@ export default function FileSystemScreen() {
         { body: friendly },
       );
       fsDownload.end(friendly);
-      return;
+      return "failed";
     }
     labelEngineJob(jobId, "download", rootName);
     const myRunId = fsDownload.begin({
@@ -3027,20 +3029,53 @@ export default function FileSystemScreen() {
     };
     // A failed status read keeps polling (the engine is still downloading);
     // the banner says contact is lost and its Cancel still stops the job.
+    let outcome: CopyOutcome = "stopped";
     await pollFsDownload(
       jobId,
       {
         isLive,
         onProgress: (p) => fsDownload.setProgress(p),
         onLostContact: (e) => fsDownload.setLostContact(e),
-        onDone: () => fsDownload.end(null),
-        onFailed: (error) =>
+        onDone: () => {
+          outcome = "done";
+          fsDownload.end(null);
+        },
+        onFailed: (error) => {
+          outcome = "failed";
           fail(
             tr("fs_download_failed", { error }, "Download failed: {error}"),
-          ),
+          );
+        },
       },
       { jobStatus: (id) => jobStatus(id) },
     );
+    return outcome;
+  };
+
+  /** Copy or move `list` into one folder picked on `server` (#953), one item after another: a
+   *  failed, cancelled or refused item stops the rest. A move deletes each source on the PS5
+   *  only after the engine checked its copy on the server. */
+  const runServerTransfer = async (list: DirEntry[], server: Connection, move: boolean) => {
+    if (list.length === 0 || fsDownload.active) return;
+    const what =
+      list.length === 1
+        ? list[0].name
+        : tr("fs_move_n_items", { count: list.length }, `${list.length} items`);
+    const dir = await pickLocalPath({
+      mode: "folder",
+      source: { connectionId: server.id },
+      title: tr(
+        "fs_download_server_title",
+        { name: what, server: server.name },
+        'Pick a folder on {server} for "{name}"',
+      ),
+    });
+    if (typeof dir !== "string") return;
+    setSelected(new Set());
+    for (const entry of list) {
+      if ((await runDownload(entry, false, server, { dir, move })) !== "done") break;
+    }
+    if (move) void refresh();
   };
 
   const selectionActive = selected.size > 0;
@@ -3515,6 +3550,27 @@ export default function FileSystemScreen() {
     ],
   };
 
+  // What the two panes (#952) use of this screen: its ticks, and its own Download and Add files.
+  const psSide: PsSide = {
+    host,
+    path,
+    selected: selectedEntries
+      .filter((e) => e.kind === "file" || e.kind === "dir")
+      .map((e) => ({
+        name: e.name,
+        path: joinPath(path, e.name),
+        isDir: e.kind === "dir",
+        size: e.kind === "dir" ? 0 : e.size,
+      })),
+    names: (entries ?? []).map((e) => e.name),
+    downloadBusy: downloadOp.active,
+    download: (item, into, server) =>
+      runDownload({ name: item.name, kind: item.isDir ? "dir" : "file", size: item.size }, false, server, into),
+    upload: (paths, known) => addPicked(paths, undefined, known),
+    clearSelection: () => setSelected(new Set()),
+    refresh: () => void refresh(),
+  };
+
   return (
     <div className="app-page" data-files-page="" {...browserDrop}>
       {properties && (
@@ -3554,6 +3610,19 @@ export default function FileSystemScreen() {
           startPath={parent(moveItems[0]?.path ?? path)}
           onCancel={() => setMoveItems(null)}
           onConfirm={confirmMove}
+          servers={savedServers}
+          onServer={(id, move) => {
+            const server = savedServers.find((c) => c.id === id);
+            const names = new Set(moveItems.map((i) => i.name));
+            setMoveItems(null);
+            if (server) {
+              void runServerTransfer(
+                (entries ?? []).filter((e) => names.has(e.name)),
+                server,
+                move,
+              );
+            }
+          }}
         />
       )}
       {rowMenu && menuEntry && (
@@ -3947,6 +4016,26 @@ export default function FileSystemScreen() {
             >
               {tr("fs_refresh", "Refresh")}
             </Button>
+            {wideEnough && (
+              <Button
+                variant={twoPanes ? "primary" : "secondary"}
+                size="sm"
+                leftIcon={<Columns2 size={12} />}
+                aria-pressed={twoPanes}
+                onClick={() => {
+                  writeTwoPanes(!twoPanesWanted);
+                  setTwoPanesWanted(!twoPanesWanted);
+                }}
+                title={tr(
+                  "two_panes_toggle_title",
+                  undefined,
+                  "Show another place beside the PS5, to copy or move between them",
+                )}
+                data-testid="fs-two-panes-toggle"
+              >
+                {tr("two_panes_toggle", undefined, "Two panes")}
+              </Button>
+            )}
             <Button
               variant="secondary"
               size="sm"
@@ -4046,6 +4135,7 @@ export default function FileSystemScreen() {
           </FilesViewFrame>
         )}
 
+        <TwoPanesFrame on={twoPanes} ps={psSide} servers={savedServers} hidden={view !== null}>
         <div hidden={view !== null} data-files-main="">
 
           {/* Volume picker. Renders only when we have at least one
@@ -5194,6 +5284,7 @@ export default function FileSystemScreen() {
             </Modal>
           )}
         </div>
+        </TwoPanesFrame>
       </ConnectionGate>
     </div>
   );

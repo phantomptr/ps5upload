@@ -248,7 +248,7 @@ mod tests {
 
     #[test]
     fn the_setting_round_trips_and_a_missing_file_is_off() {
-        let dir = std::env::temp_dir().join(format!("ps5u-workshop-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-workshop-{}", std::process::id()));
         let path = dir.join(FILE);
         let _ = std::fs::remove_file(&path);
         assert_eq!(read_from(&path), Stored { gentle: false });

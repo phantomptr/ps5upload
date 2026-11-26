@@ -341,7 +341,7 @@ mod tests {
     fn listing_of(paths: &[&str]) -> Listing {
         // A stored zip of empty-ish files, listed the real way.
         use std::io::Write;
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::test_tmp::temp_path(format!(
             "ps5u-archive-tree-{}-{}",
             std::process::id(),
             paths.len()
