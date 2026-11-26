@@ -1163,7 +1163,7 @@ mod tests {
         let ra = room_for_secret(&a);
         assert_eq!(ra, room_for_secret(&a));
         assert_ne!(ra, room_for_secret(&b));
-        assert!(is_b64url(&ra, ROOM_LEN) && is_bound_room(&ra), "{ra}");
+        assert!(is_b64url(&ra, ROOM_LEN) && is_bound_room(&ra));
         // Not a piece of the hash kept for reclaims.
         let kept = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash_secret(&a));
         assert!(!kept.starts_with(&ra[..ROOM_LEN - 1]));
