@@ -65,8 +65,17 @@ const realJob = { id: 3, name: "security scan", conclusion: "failure", runner_na
 const browserJob = { id: 4, name: "client browser tests (3/3)", conclusion: "failure", runner_name: "r", steps: [{ name: "Browser workflow smoke test", conclusion: "failure" }] };
 const ANNOTATIONS = { 2: [{ message: "apt could not download after 3 attempts: clang" }], 3: [{ message: "Process completed with exit code 1." }] };
 
+// Each run's folder is removed when the file's tests end, pass or fail (PS5UPLOAD_KEEP_TEST_TMP=1
+// keeps them to look at).
+const runDirs = [];
+nodeTest.after(() => {
+  if (process.env.PS5UPLOAD_KEEP_TEST_TMP) return;
+  for (const dir of runDirs) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 function run({ gate, jobs = [], jobsAfter, pr = { state: "OPEN", isDraft: false, headRefOid: SHA }, rerunMode, mergeRc, log, args = [], shell }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "merge-when-green-"));
+  runDirs.push(dir);
   const bin = path.join(dir, "bin");
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, "gh"), FAKE_GH, { mode: 0o755 });

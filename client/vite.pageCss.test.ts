@@ -1,13 +1,22 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 import { pageFiles, scopedCss } from "./vite.pageCss";
+
+// Temp folders are removed when the file's tests end, pass or fail (PS5UPLOAD_KEEP_TEST_TMP=1 keeps
+// them to look at).
+const tempDirs: string[] = [];
+afterAll(() => {
+  if (process.env.PS5UPLOAD_KEEP_TEST_TMP) return;
+  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+});
 
 describe("pageFiles", () => {
   it("walks relative imports, follows a swap, and leaves packages and styles out", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "page-css-"));
+    tempDirs.push(dir);
     mkdirSync(path.join(dir, "join"));
     mkdirSync(path.join(dir, "components"));
     const put = (name: string, text: string) =>

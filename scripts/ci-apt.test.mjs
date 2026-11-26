@@ -5,15 +5,24 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 
 const here = import.meta.dirname;
 const ciApt = path.join(here, "ci-apt.sh");
 const latest = path.join(here, "ci-apt-latest.sh");
 
+// Every sandbox is removed when the file's tests end, pass or fail (PS5UPLOAD_KEEP_TEST_TMP=1 keeps
+// them to look at).
+const sandboxes = [];
 function sandbox() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "ci-apt-test-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-apt-test-"));
+  sandboxes.push(dir);
+  return dir;
 }
+after(() => {
+  if (process.env.PS5UPLOAD_KEEP_TEST_TMP) return;
+  for (const dir of sandboxes) fs.rmSync(dir, { recursive: true, force: true });
+});
 
 /** Runs `ci-apt.sh --rotate <tryNo>` over files in a temp dir; returns {stderr, read(name)}. */
 function rotate(tryNo, { arch, mirrors, sources = {}, keep = [] }, dir = sandbox()) {
