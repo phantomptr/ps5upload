@@ -33,6 +33,7 @@ pub const SKIP_INCOMPLETE: &str = "incomplete";
 pub const SKIP_UNREADABLE: &str = "unreadable";
 pub const SKIP_NO_ID: &str = "no title id";
 pub const SKIP_IN_PLACE: &str = "already correct";
+pub const SKIP_INSIDE_GAME: &str = "its folder is a game";
 
 /// How long a preview leaves between its two looks at the files it would move: one still being
 /// copied or downloaded is not the same file a moment later.
@@ -431,6 +432,39 @@ fn is_game_folder(tree: &dyn Tree, dir: &Path, entries: &[super::organize_fs::Di
         })
 }
 
+/// Whether the folder at `dir` is an extracted game. Asked of its parent's listing first (which
+/// a plan has already), so a folder that is not there costs no listing of its own.
+fn is_game_at(tree: &dyn Tree, dir: &Path) -> bool {
+    let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
+        return false;
+    };
+    let name = key(Path::new(name));
+    let there = tree.list(parent).is_some_and(|es| {
+        es.iter()
+            .any(|e| e.is_dir && key(Path::new(&e.name)) == name)
+    });
+    there
+        && tree
+            .list(dir)
+            .is_some_and(|es| is_game_folder(tree, dir, &es))
+}
+
+/// The folder a title's items are filed in: `<container>/<platform>/<folder>`, unless that is
+/// itself an extracted game. The Collection never looks inside a game, so packages filed in one
+/// would vanish from it until the run was undone (and a game cannot be moved into itself): the
+/// title then gets `<folder> (2)`, `(3)`… beside it. `None` when the platform folder is a game,
+/// which leaves no place under it at all.
+fn title_dir(tree: &dyn Tree, container: &Path, platform: &str, folder: &str) -> Option<PathBuf> {
+    let parent = container.join(platform);
+    if is_game_at(tree, &parent) {
+        return None;
+    }
+    std::iter::once(folder.to_string())
+        .chain((2..66).map(|n| format!("{folder} ({n})")))
+        .map(|name| parent.join(name))
+        .find(|dir| !is_game_at(tree, dir))
+}
+
 /// One candidate per complete game source. Never walk inside an extracted game.
 #[cfg(test)]
 fn discover(
@@ -782,7 +816,18 @@ fn plan_files_watched(
             .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
             .map(|(p, _)| p.to_string())
             .unwrap_or_default();
-        let dest_dir = container.join(&platform).join(&folder);
+        let Some(dest_dir) = title_dir(tree, container, &platform, &folder) else {
+            out.skipped.extend(members.iter().map(|f| Skipped {
+                container: cname.clone(),
+                path: rel(container, &f.path),
+                reason: SKIP_INSIDE_GAME.into(),
+                detail: format!(
+                    "The {platform} folder here is an extracted game: nothing is filed inside a \
+                     game. Move or rename that game first."
+                ),
+            }));
+            continue;
+        };
 
         // The same release stored twice is filed beside its twin and marked DUPLICATE. Which
         // copy is canonical must not depend on the marker, or the two would swap forever.
@@ -2932,5 +2977,95 @@ mod tests {
         std::fs::create_dir_all(log_path.with_extension("json.tmp")).unwrap();
         assert!(apply(&LocalTree, &c, p.moves, &log_path, "", None).is_err());
         assert!(c.join("a.pkg").is_file());
+    }
+
+    /// The audit's case: an extracted game sits exactly where its title's folder would be
+    /// (`PS5/PPSA01234 - Example`, holding `sce_sys`). Packages of that title were planned into
+    /// it, and the Collection, which never looks inside a game, lost them until the run was
+    /// undone. Nothing is filed inside a game: the title gets a folder beside it.
+    #[test]
+    fn nothing_is_planned_into_a_folder_that_is_itself_a_game() {
+        let l = lib("into-game");
+        let root = l.0.clone();
+        let game = root.join("PS5/PPSA01234 - Example");
+        game_dir(&game, "PPSA01234");
+        std::fs::write(game.join("eboot.bin"), b"e").unwrap();
+        put(&root, "update.pkg", 10);
+        put(&root, "addon.pkg", 20);
+        let ps5 = |kind: &str, cid: &str| PkgInfo {
+            platform: "PS5".into(),
+            ..info("Example", "PPSA01234", cid, kind, "1.00")
+        };
+        let entries = [
+            (
+                "update",
+                ps5("patch", "UP0000-PPSA01234_00-EXAMPLE000000000"),
+            ),
+            ("addon", ps5("dlc", "UP0000-PPSA01234_00-ADDON00000000000")),
+            (
+                "PPSA01234",
+                ps5("base", "UP0000-PPSA01234_00-EXAMPLE000000000"),
+            ),
+        ];
+        let facts = table(&entries);
+        let plan = plan_with(&LocalTree, &root, &facts);
+        let inside = "PS5/PPSA01234 - Example/";
+        let beside = "PS5/PPSA01234 - Example (2)/";
+        assert_eq!(plan.moves.len(), 3, "{:?}", plan.skipped);
+        for m in &plan.moves {
+            assert!(!m.to.starts_with(inside), "planned into the game: {m:?}");
+            assert!(m.to.starts_with(beside), "{m:?}");
+        }
+
+        // Run it: every package is still something the Collection finds.
+        let packages: Vec<Move> = plan
+            .moves
+            .iter()
+            .filter(|m| m.from.ends_with(".pkg"))
+            .cloned()
+            .collect();
+        assert_eq!(packages.len(), 2);
+        let log = apply(
+            &LocalTree,
+            &root,
+            packages,
+            &l.0.join("logs/run.json"),
+            "",
+            None,
+        )
+        .unwrap();
+        assert_eq!(log.completed.len(), 2, "{:?}", log.failed);
+        let found = scan(&LocalTree, &root);
+        assert_eq!(
+            found
+                .iter()
+                .filter(|p| p.extension().is_some_and(|e| e == "pkg"))
+                .count(),
+            2,
+            "{found:?}"
+        );
+        assert!(found.contains(&game), "the game is still one item");
+        // And they stay there: the next plan does not move them again.
+        let again = plan_with(&LocalTree, &root, &facts);
+        assert!(
+            again.moves.iter().all(|m| !m.from.ends_with(".pkg")),
+            "{:?}",
+            again.moves
+        );
+
+        // A game where the platform folder would be leaves no place under it: said, not done.
+        let l = lib("into-game-platform");
+        let root = l.0.clone();
+        game_dir(&root.join("PS5"), "PPSA09999");
+        put(&root, "update.pkg", 10);
+        let plan = plan_files(
+            &LocalTree,
+            &root,
+            vec![root.join("update.pkg")],
+            &table(&entries),
+        );
+        assert!(plan.moves.is_empty(), "{:?}", plan.moves);
+        assert_eq!(plan.skipped.len(), 1);
+        assert_eq!(plan.skipped[0].reason, SKIP_INSIDE_GAME);
     }
 }
