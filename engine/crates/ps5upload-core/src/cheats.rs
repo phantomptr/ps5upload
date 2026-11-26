@@ -844,6 +844,33 @@ pub fn cheats_repo_download(
     write_cheat_file(addr, &path, dir, &bytes)
 }
 
+/// Clears the saved switches of the game the cheat file at `path` is for, before that file is
+/// added or replaced. The helper saves them by position across every cheat file of the game (all
+/// JSON files, then SHN, MC4 and XML), so a new or changed file moves the positions: the switches
+/// saved for one cheat turned another on at the next launch, and the one chosen stayed off. A
+/// name without a title id has no saved switches of its own.
+fn forget_saved_switches(addr: &str, path: &str) -> Result<()> {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let (title, _) = parse_cheat_filename(name);
+    if title.is_empty() {
+        return Ok(());
+    }
+    let state = format!(
+        "/data/ps5upload/cheats/state/{}.json",
+        title.to_ascii_uppercase()
+    );
+    match crate::fs_ops::fs_stat(addr, &state) {
+        Err(e) if crate::fs_ops::is_not_found(&format!("{e:#}")) => Ok(()),
+        Err(e) => Err(e),
+        Ok(_) => {
+            crate::core_log!(
+                "[cheats] {title}: cheat files change; its saved switches are cleared"
+            );
+            crate::fs_ops::fs_delete(addr, &state)
+        }
+    }
+}
+
 /// Write a downloaded cheat or patch file into its folder on the PS5 (≤ 256 KiB).
 fn write_cheat_file(
     addr: &str,
@@ -861,6 +888,16 @@ fn write_cheat_file(
             error: Some(format!(
                 "file too large for fast write ({} bytes > 256 KiB); use the transfer pipeline",
                 bytes.len()
+            )),
+            ..Default::default()
+        });
+    }
+
+    if let Err(e) = forget_saved_switches(addr, path) {
+        return Ok(CheatDownloadResponse {
+            ok: false,
+            error: Some(format!(
+                "this game's saved cheat switches could not be cleared, so the file was not added: {e:#}"
             )),
             ..Default::default()
         });
@@ -1140,6 +1177,101 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A downloaded file that adds to or replaces a game's cheat files clears that game's saved
+    /// switches first (they are saved by position, which the new file moves); a game with none
+    /// saved is written as before, and a clear that fails writes nothing.
+    #[test]
+    fn a_new_cheat_file_clears_the_games_saved_switches_first() {
+        use crate::mgmt::{JobCall, JobOp, MgmtError, MgmtTransport};
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+        struct Fake {
+            state: bool,
+            delete_fails: bool,
+            log: Mutex<Vec<String>>,
+        }
+        impl MgmtTransport for Fake {
+            fn call(
+                &self,
+                _: &str,
+                method: Method,
+                _: &str,
+                body: &[u8],
+                _: Duration,
+            ) -> Result<Option<Vec<u8>>> {
+                let b: serde_json::Value = serde_json::from_slice(body)?;
+                let path = b["path"].as_str().unwrap_or("").to_string();
+                let v = if method == m::FS_MKDIR {
+                    serde_json::json!({"ok":true})
+                } else if method == m::FS_STAT {
+                    if !self.state {
+                        return Err(MgmtError {
+                            label: "FS_STAT".into(),
+                            status: 1,
+                            cause: "fs_stat_failed_errno_2".into(),
+                        }
+                        .into());
+                    }
+                    serde_json::json!({"kind":"file","size":12,"mtime":0,"mode":420})
+                } else if method == m::FS_WRITE {
+                    self.log.lock().unwrap().push(format!("write {path}"));
+                    serde_json::json!({"ok":true,"size":10})
+                } else {
+                    panic!("unexpected RPC: {}", method.label);
+                };
+                Ok(Some(serde_json::to_vec(&v)?))
+            }
+            fn run_job(
+                &self,
+                _: &str,
+                _: JobOp,
+                label: &str,
+                body: &[u8],
+                _: &JobCall<'_>,
+            ) -> Result<Option<Vec<u8>>> {
+                assert_eq!(label, "FS_DELETE");
+                if self.delete_fails {
+                    anyhow::bail!("fs_delete_failed_errno_13");
+                }
+                let b: serde_json::Value = serde_json::from_slice(body)?;
+                self.log
+                    .lock()
+                    .unwrap()
+                    .push(format!("delete {}", b["path"].as_str().unwrap()));
+                Ok(Some(b"{\"ok\":true}".to_vec()))
+            }
+        }
+        let file = "/data/ps5upload/cheats/json/PPSA01339_01.000.json";
+        for (state, delete_fails, ok, want) in [
+            (
+                true,
+                false,
+                true,
+                vec![
+                    "delete /data/ps5upload/cheats/state/PPSA01339.json",
+                    "write /data/ps5upload/cheats/json/PPSA01339_01.000.json",
+                ],
+            ),
+            (
+                false,
+                false,
+                true,
+                vec!["write /data/ps5upload/cheats/json/PPSA01339_01.000.json"],
+            ),
+            (true, true, false, vec![]),
+        ] {
+            let f = Arc::new(Fake {
+                state,
+                delete_fails,
+                log: Mutex::new(vec![]),
+            });
+            let _g = mgmt::scoped_transport(f.clone());
+            let r = write_cheat_file("h", file, "/data/ps5upload/cheats/json", b"{}").unwrap();
+            assert_eq!(r.ok, ok, "{r:?}");
+            assert_eq!(*f.log.lock().unwrap(), want);
+        }
     }
 
     #[test]
