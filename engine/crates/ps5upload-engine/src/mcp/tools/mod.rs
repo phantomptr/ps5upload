@@ -9,6 +9,7 @@
 mod api;
 mod cheats;
 pub(crate) mod consoles;
+mod convert;
 mod disk;
 mod engine;
 pub(crate) mod files;
@@ -97,6 +98,7 @@ fn all() -> &'static [ToolDef] {
             more_files::tools(),
             transfer::tools(),
             install::tools(),
+            convert::tools(),
             queue::tools(),
             power::tools(),
             hw::tools(),

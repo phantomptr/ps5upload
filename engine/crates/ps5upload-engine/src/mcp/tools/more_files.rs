@@ -20,7 +20,10 @@ pub(super) fn tools() -> Vec<ToolDef> {
             name: "files_volumes",
             title: "Console drives",
             description: "A console's drives and mounts: each `path`, `fs_type`, `free_bytes`, \
-                          `total_bytes` and whether it is `writable`.",
+                          `total_bytes` and whether it is `writable`. Sizes are the filesystem's \
+                          own counters; the PS5's Storage screen can show less free space. For \
+                          how much a copy can take, read `allocatable_bytes` and \
+                          `likely_fits_bytes`.",
             kind: Kind::Read,
             schema: object(json!({ "console": console_optional() }), &[]),
             run: route!(path: "/api/ps5/volumes", done: "The console's drives."),

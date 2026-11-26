@@ -23,7 +23,8 @@ More than 120 tools, all of them thin layers over [the engine's API](API.md):
 | Consoles | `consoles_*`, `tailnet_consoles` | The known ones, find them on the network or on Tailscale, how one stands and how its last status checks went, make sure the helper runs |
 | Files | `files_*` | List, read, write, copy, move, delete, hash, extract, mount, eject |
 | Moving things | `upload_*`, `queue_*`, `files_download`, `sources_*`, `jobs_*` | Send a file or folder or archive, line work up per console, follow it, pause or stop it, fetch from a NAS |
-| Installs | `install_*` | Install a package by the best route, check first, wait for it |
+| Installs | `install_*` | Install a package by the best route, check first, wait for it; read or change a fake package's name before it goes |
+| Convert | `convert_*` | Whether an archive can give its space back while it unpacks; put the AMPR emulator on a console for Convert on the PS5 (a conversion itself goes through `api_request`) |
 | Games | `games_*`, `processes_*`, `saves_*`, `cheats_*` | Installed titles, launch and stop, back up saves, cheats |
 | Hardware | `hw_*`, `power_*`, `notifications_*`, `health_*`, `disk_usage_*`, `cleanup_*`, `shell_run` | Temperatures, rest and wake, health checks and repairs, what fills the drive |
 | Payloads | `payloads_*` | Catalogue, new-version checks and rollback, send (a file, or a copy already on the computer: ps5upload never downloads payloads), store, autoload, Payload Manager sync |
@@ -273,6 +274,8 @@ clients let you allow tools one by one, so keep these on "ask".
 | `files_extract` | Unpack over what's already there |
 | `files_unmount`, `files_eject` | Pull a drive out from under a running game |
 | `upload_file`, `upload_dir`, `upload_archive`, `queue_add` | Overwrite what's at the destination |
+| `install_pkg_rename` | Change the name inside a package file on this computer |
+| `convert_ampr_emu_to_console` | Write the AMPR emulator onto the console |
 | `saves_restore` | Replace save data with a backup |
 | `games_unregister` | Remove a title from the console |
 | `games_stop`, `processes_kill` | End a game, losing what isn't saved |

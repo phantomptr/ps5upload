@@ -26,9 +26,11 @@ pub(super) fn tools() -> Vec<ToolDef> {
             name: "queue_list",
             title: "See the queue",
             description: "The engine's queue: `items` in order with each one's status (queued, \
-                          running, paused, done, failed, cancelled, interrupted), and for each \
-                          console whether it runs or what it waits for (`waiting_for`: hold, \
-                          other_work, console, settle). Leave `console` out for all of them.",
+                          running, paused, done, failed, cancelled, interrupted; cancelled is \
+                          stopped, not failed, and holds nothing after it), with `code` saying \
+                          why it ended, and for each console whether it runs or what it waits for \
+                          (`waiting_for`: hold, other_work, console, settle). Leave `console` out \
+                          for all of them.",
             kind: Kind::Read,
             schema: object(
                 json!({ "console": text("Only this console's queue.") }),
