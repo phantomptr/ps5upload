@@ -9,6 +9,9 @@ What's new in ps5upload, written for humans.
 **Files on a phone**
 - **Name and path fields get the full width (#936).** New folder, New file, Rename, Download from a link and Go to path no longer squeeze the text box: on a phone the field takes the width of the card and its buttons sit on their own line, so you can see what you type and the buttons never break mid-word. Tablets and computers look as before.
 
+**Convert**
+- **A running build is found again even if the page closed within seconds of starting it (#954).** The link to the build is saved at once instead of with the next progress update.
+
 ## 12.6.34
 
 **Payloads**
