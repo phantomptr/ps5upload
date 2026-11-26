@@ -218,7 +218,7 @@ export function DriveList({
                     {volumeLabel(v)}
                     {!v.writable ? <span className="cw-tag">{t("cw_home_vol_readonly")}</span> : null}
                   </span>
-                  <span className="cw-dim cw-mono">{v.path}</span>
+                  <span className="cw-dim cw-mono cw-file-sub">{v.path}</span>
                 </span>
                 <span className="cw-file-meta">
                   <span className="cw-bar" aria-hidden>

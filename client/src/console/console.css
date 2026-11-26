@@ -306,6 +306,8 @@ button {
 .cw-mono {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 0.8rem;
+  /* A path keeps its order in Arabic and Persian ("/data", not "data/"). */
+  unicode-bidi: plaintext;
 }
 .cw-tag {
   display: inline-block;
@@ -2215,6 +2217,11 @@ button {
     margin-inline-start: 0.5rem;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  /* Cut at their end in Arabic and Persian too ("PS5Upload Mi…", not "…Upload Minion"). */
+  .cw-brand,
+  .cw-chip {
+    unicode-bidi: plaintext;
   }
   /* The sections in a bar at the bottom, as the app has them on a phone, and no controller hints:
    * the rail took a fifth of the width. */

@@ -30,11 +30,26 @@ function interpolate(raw: string, vars?: Vars): string {
   );
 }
 
+/**
+ * In Arabic or Persian a value written left to right (a path, a size with its unit, a file name)
+ * is kept whole and in its own order: "/data" read "data/" and "163 GiB" "GiB 163". It goes between
+ * LEFT-TO-RIGHT ISOLATE and POP DIRECTIONAL ISOLATE (drawn as nothing), as the app's tr() does.
+ */
+function isolated(vars: Vars): Vars {
+  const out: Vars = {};
+  for (const k of Object.keys(vars)) {
+    const s = String(vars[k]);
+    out[k] = /[A-Za-z/\\]/.test(s) && !/[֐-ࣿיִ-ﻼ]/.test(s) ? `⁦${s}⁩` : vars[k];
+  }
+  return out;
+}
+
 /** A translator over `maps` for `lang`, falling back to English, then to the key. */
 export function makeT(maps: StringMaps, lang: string): (key: string, vars?: Vars) => string {
   const own = maps[lang] ?? {};
   const fallback = maps.en ?? {};
-  return (key, vars) => interpolate(own[key] ?? fallback[key] ?? key, vars);
+  const rtl = lang === "ar" || lang === "fa";
+  return (key, vars) => interpolate(own[key] ?? fallback[key] ?? key, vars && rtl ? isolated(vars) : vars);
 }
 
 /**
