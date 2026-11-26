@@ -166,6 +166,20 @@ describe("network shares in Files", () => {
     expect(pick.props.start).toBeNull();
   });
 
+  it("Copy to… and Move to… from a console folder offer the saved shares after the drives (#953)", () => {
+    for (const op of ["copy", "move"] as const) {
+      const pick = elements(FilesView(props({ path: "/data", ask: { kind: "pick", op, names: ["a.txt"] } }))).find((e) => e.type === PathPicker)!;
+      expect(pick.props.shares).toEqual([share()]);
+      const html = renderToStaticMarkup(<PathPicker {...(pick.props as Parameters<typeof PathPicker>[0])} start={null} />);
+      expect(html).toContain(`data-pick="/data"`);
+      expect(html).toContain(`data-pick="${ID}"`);
+      expect(html.indexOf(`data-pick="/data"`)).toBeLessThan(html.indexOf(`data-pick="${ID}"`));
+    }
+    // From a share, Copy to… stays on the console (share to share is not offered).
+    const fromShare = elements(FilesView(props({ ask: { kind: "pick", op: "copy", names: ["big.bin"] } }))).find((e) => e.type === PathPicker)!;
+    expect(fromShare.props.shares).toBeUndefined();
+  });
+
   it("a copy's line shows its bytes, and Stop shows for one item when it cancels", () => {
     const busy = { op: "copy" as const, at: 1, total: 1, stopping: false, cancels: true, bytesDone: 512 << 20, bytesTotal: 1 << 30 };
     expect(busyText(busy)).toContain(t("cw_home_percent", { n: 50 }));

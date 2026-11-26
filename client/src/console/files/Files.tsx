@@ -240,6 +240,8 @@ function replaceErrorText(e: ReplaceError): string {
       return t("cw_files_replace_old_left", { name: e.item, old: baseName(e.old ?? "") });
     case "source_left":
       return t("cw_files_replace_source_left", { name: e.item });
+    case "moved_left":
+      return t("cw_files_move_source_left", { name: e.item });
     case "temp_left":
       return t("cw_files_replace_temp_left", { temp: baseName(e.temp ?? "") });
   }
@@ -923,6 +925,7 @@ function askView(p: FilesViewProps) {
           title={t(a.op === "copy" ? "cw_files_copy_to" : "cw_files_move_to")}
           subtitle={namesTitle(a.names)}
           volumes={p.volumes ?? []}
+          shares={isSmbPath(path) ? undefined : (p.shares ?? undefined)}
           start={isSmbPath(path) ? null : path}
           onPick={(d) => p.onPicked(a.op, a.names, d)}
           onCancel={p.onDismiss}
@@ -1672,16 +1675,16 @@ export function Files({ ctx }: { ctx: SectionContext }) {
    * in the status line, Stop cancels the item running. Conflicts are asked like a paste's.
    */
   const runTransfer = useCallback(
-    (items: { path: string; dir: boolean }[], dest: string) => {
+    (items: { path: string; dir: boolean }[], dest: string, move = false) => {
       if (currentBatch() || !items.length) return;
       setMessage(null);
       setSelecting(false);
       setSelected([]);
       const run = startBatch(
-        "copy",
+        move ? "move" : "copy",
         items.length,
         (ctl) =>
-          transferItems(items, dest, { decide: askConflict, onBytes: ctl.onBytes }, batchOptions(ctl)),
+          transferItems(items, dest, { decide: askConflict, onBytes: ctl.onBytes, move }, batchOptions(ctl)),
         items.map((i) => i.path).concat(dest),
         true,
       );
@@ -1700,16 +1703,16 @@ export function Files({ ctx }: { ctx: SectionContext }) {
   const onPicked = useCallback(
     (op: "copy" | "move", names: string[], destDir: string) => {
       setAsk(null);
+      if (path == null) return;
+      const kinds = new Map(dir.entries.map((e) => [e.name, e.kind]));
+      const items = () => names.map((n) => ({ path: joinPath(path, n), dir: kinds.get(n) === "dir" }));
       if (isSmbPath(path)) {
         // Copy to… from a share: a console folder (the picker shows only the console's drives).
-        if (op !== "copy" || isSmbPath(destDir)) return;
-        const kinds = new Map(dir.entries.map((e) => [e.name, e.kind]));
-        runTransfer(
-          names.map((n) => ({ path: joinPath(path, n), dir: kinds.get(n) === "dir" })),
-          destDir,
-        );
+        if (op === "copy" && !isSmbPath(destDir)) runTransfer(items(), destDir);
         return;
       }
+      // To a share (#953): a move deletes each original once its copy is complete.
+      if (isSmbPath(destDir)) return runTransfer(items(), destDir, op === "move");
       runBatch(op, names, (items, opts) => (op === "copy" ? copyItems : moveItems)(items, destDir, opts), destDir);
     },
     [runBatch, runTransfer, path, dir.entries],

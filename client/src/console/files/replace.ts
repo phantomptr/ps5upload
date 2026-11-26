@@ -84,6 +84,8 @@ export type ReplaceFailure =
   | "old_left"
   /** Replaced, but the moved item's original could not be deleted. */
   | "source_left"
+  /** A move to a share copied, but the original could not be deleted (or the copy fell short). */
+  | "moved_left"
   /** Not replaced, and `temp` is still there: the old item is as it was. */
   | "temp_left";
 
