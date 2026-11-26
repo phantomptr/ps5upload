@@ -48,6 +48,19 @@ export function folderTitle(path: string): string | null {
   return here.slice(here.lastIndexOf("/") + 1);
 }
 
+/** A name or path field just opened on a phone (#936): bring it into view once the on-screen
+ *  keyboard is up, so the keyboard does not cover what is typed. The keyboard shrinks the visual
+ *  viewport a moment after the focus, so it is shown again when that happens. */
+export function revealAboveKeyboard(el: HTMLElement | null, phone: boolean): void {
+  if (!el || !phone || typeof window === "undefined") return;
+  const show = () => el.scrollIntoView?.({ block: "nearest" });
+  show();
+  const vv = window.visualViewport;
+  if (!vv) return;
+  vv.addEventListener("resize", show);
+  window.setTimeout(() => vv.removeEventListener("resize", show), 1000);
+}
+
 function trimSlash(p: string): string {
   return p.length > 1 && p.endsWith("/") ? p.replace(/\/+$/, "") || "/" : p;
 }
