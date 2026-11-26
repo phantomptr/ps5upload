@@ -159,8 +159,8 @@ Anything touching real transfer behaviour still needs hardware — see
   connect to that address (`install/reach.rs`): if it cannot, this computer's
   other addresses on the console's network are tried, and if none answers the
   install fails at once instead of waiting on Sony. A console that is handed
-  the link and makes no request in 60 s fails the same way. Every
-  stream-unreachable failure — the reach check, the 60 s watchdog, a Sony
+  the link and makes no request in 120 s fails the same way. Every
+  stream-unreachable failure — the reach check, the 120 s watchdog, a Sony
   refusal before any byte was fetched, and an accepted install the console
   never fetched from — names this variable in its hint, and the first two
   also carry the facts in the status's `reach` field.

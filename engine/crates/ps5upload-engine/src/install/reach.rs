@@ -41,8 +41,10 @@ pub const MAX_ALTERNATIVES: usize = 2;
 
 /// No request from the console this long after it was handed the link: it is not going to fetch.
 /// Past Sony's own connect timeout (30 s where it has been measured), so a firmware that does
-/// answer by itself is heard first.
-pub const NO_FETCH_GIVE_UP: Duration = Duration::from_secs(60);
+/// answer by itself is heard first. Two minutes, not one: a healthy install on a busy console
+/// must never be stopped by this (a pre-check that gave up early was removed in 6.2.0 for that),
+/// and how soon every firmware makes its first request has not been measured.
+pub const NO_FETCH_GIVE_UP: Duration = Duration::from_secs(120);
 
 /// What a job is waiting for before the console has moved a byte, for the app to say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
