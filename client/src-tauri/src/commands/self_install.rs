@@ -1952,7 +1952,9 @@ mod tests {
     use super::super::update_files as files;
 
     /// The scripts that replace the app keep the marker while they work and remove it before
-    /// they start the app; the package script (nothing left to replace) has none.
+    /// they start the app; the package script (nothing left to replace) has none. Unix only:
+    /// these shell scripts only run on macOS and Linux, and Windows joins the paths with `\`.
+    #[cfg(unix)]
     #[test]
     fn the_scripts_that_replace_the_app_mark_the_install_as_running() {
         let log = Path::new("/home/o'neil/.local/share/PS5Upload/updates/update.log");
