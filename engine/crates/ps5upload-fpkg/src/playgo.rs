@@ -121,6 +121,25 @@ pub fn build(
     })
 }
 
+/// The languages a `playgo-chunk.dat` says its game supports: the `u64` at `0x38`, one bit per
+/// language from the top bit down in the order of `cnt_write::SCENARIO_LANGUAGES` (bit 63 is
+/// `ja-JP`, bit 62 `en-US`, …). `None` when the bytes are not a PS5 chunk table.
+///
+/// Measured on tables read out of games and packages: one that supports only `en-US` carries
+/// `0x4000_0000_0000_0000` (and a scenario listing `en-US` alone), one that supports all 31
+/// carries `0xFFFF_FFFE_0000_0000` (and a scenario listing the 31, with a chunk per language at
+/// `0x8000…`, `0x4000…`, `0x2000…`), and one that names no languages carries every bit, the 33
+/// that stand for no language included. Each chunk's own mask is the `u64` at `+0x10` of its
+/// record, in the same bits.
+pub fn language_mask(chunk_dat: &[u8]) -> Option<u64> {
+    if chunk_dat.get(..4)? != b"plgx" {
+        return None;
+    }
+    Some(u64::from_le_bytes(
+        chunk_dat.get(0x38..0x40)?.try_into().ok()?,
+    ))
+}
+
 fn put16(d: &mut [u8], at: usize, v: u16) {
     d[at..at + 2].copy_from_slice(&v.to_le_bytes());
 }
@@ -273,6 +292,22 @@ mod tests {
             ("data/b.bin".into(), 40 * BLOCK, 60 * BLOCK),
             ("sce_sys/keystone".into(), 101 * BLOCK, 96),
         ]
+    }
+
+    /// The language mask is read from a chunk table and from nothing else. A table written
+    /// here still carries every bit, as the packages that install do.
+    #[test]
+    fn the_language_mask_is_read_from_a_chunk_table() {
+        let mut d = build(ID, &files(), 0x20_0000, 1).unwrap().chunk_dat;
+        assert_eq!(language_mask(&d), Some(u64::MAX));
+        d[0x38..0x40].copy_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0x40]);
+        assert_eq!(language_mask(&d), Some(0x4000_0000_0000_0000));
+        d[0x38..0x40].copy_from_slice(&[0, 0, 0, 0, 0xFE, 0xFF, 0xFF, 0xFF]);
+        assert_eq!(language_mask(&d), Some(0xFFFF_FFFE_0000_0000));
+        assert_eq!(language_mask(&d[..0x3C]), None);
+        assert_eq!(language_mask(b""), None);
+        d[0] = b'x';
+        assert_eq!(language_mask(&d), None);
     }
 
     /// One chunk is byte for byte the shape the installing packages carry: 400 bytes, one

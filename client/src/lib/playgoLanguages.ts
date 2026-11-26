@@ -1,6 +1,10 @@
 // The languages a package's PlayGo scenario can declare (the engine's SCENARIO_LANGUAGES, in
 // Sony's system-language order), each named in itself so no translation is needed.
 
+/** The language option's value for a package that declares every language (the engine's
+ *  ALL_LANGUAGES); no value keeps the game's own. */
+export const ALL_PLAYGO_LANGUAGES = "all";
+
 export const PLAYGO_LANGUAGES: ReadonlyArray<readonly [code: string, name: string]> = [
   ["ja-JP", "日本語"],
   ["en-US", "English (US)"],

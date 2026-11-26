@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 
 import type { FpkgCompression, FpkgEstimate, ImageFormat } from "../../api/fpkg";
 import { Button, Card } from "../../components";
-import { PLAYGO_LANGUAGES } from "../../lib/playgoLanguages";
+import { ALL_PLAYGO_LANGUAGES, PLAYGO_LANGUAGES } from "../../lib/playgoLanguages";
 import type { MakeKind } from "../../state/convertPrefs";
 import type { OutputPlace } from "../../lib/outputPlace";
 import { useTr } from "../../state/lang";
@@ -45,7 +45,8 @@ export interface OptionsCardProps {
   compressedFrom?: number;
   /** Room on the output drive; absent where the platform does not say. */
   outputFree?: number | null;
-  /** The one language the package declares to PlayGo; "" keeps every language. */
+  /** The language the package declares to PlayGo: "" keeps the game's own, "all" declares
+   *  every one. */
   language?: string;
   /** What Convert makes. Compression and language are a package's: an image carries the
    *  folder's files as they are, and its own compression is chosen beside its format. */
@@ -226,7 +227,8 @@ export function OptionsCard(props: OptionsCardProps) {
               disabled={props.locked}
               onChange={(e) => props.onLanguage?.(e.target.value)}
             >
-              <option value="">{tr("fpkg.languageAll", undefined, "As the game ships (all languages)")}</option>
+              <option value="">{tr("fpkg.languageOwn", undefined, "The game's own languages")}</option>
+              <option value={ALL_PLAYGO_LANGUAGES}>{tr("fpkg.languageEvery", undefined, "Every language")}</option>
               {PLAYGO_LANGUAGES.map(([code, name]) => (
                 <option key={code} value={code}>
                   {name}
@@ -234,6 +236,15 @@ export function OptionsCard(props: OptionsCardProps) {
               ))}
             </select>
             </div>
+            {props.language === ALL_PLAYGO_LANGUAGES && (
+              <div className="text-xs text-[var(--color-warn)]" data-testid="language-every-hint">
+                {tr(
+                  "fpkg.languageEveryHint",
+                  undefined,
+                  "The package then declares all 31 languages, and the PS5 may list a language pack for each one when you manage the game's content.",
+                )}
+              </div>
+            )}
             <div className="text-xs text-[var(--color-muted)]">
               {tr(
                 "fpkg.languageHint",

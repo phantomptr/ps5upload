@@ -1380,7 +1380,7 @@
             "type": "boolean"
           },
           "language": {
-            "description": "A PlayGo language code (`fr-FR`, …) the package declares as its only one.",
+            "description": "The languages the package declares to PlayGo. Absent or empty: the game's own, read from\nits `sce_sys/playgo-scenario.json` or `playgo-chunk.dat`, and only its default language\n(`param.json`'s `localizedParameters.defaultLanguage`) when it has neither. A language\ncode (`fr-FR`, …): that one alone, as the default too. `all`: every language, starting\nin the game's default (what packages declared before they kept to the game's own).",
             "type": [
               "string",
               "null"

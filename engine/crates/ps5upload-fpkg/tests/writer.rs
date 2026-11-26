@@ -240,23 +240,14 @@ fn gate_g2_a_built_package_verifies_and_round_trips() {
     );
 }
 
-/// A dump's own PlayGo scenario is left out as a stale copy, but the package keeps the game's
-/// languages and default from it (an EU game came up in Japanese when the package declared all
-/// 31 languages, Japanese first, with en-US as the default).
-#[test]
-fn a_package_keeps_the_games_own_languages() {
-    let source_dir = TempDir::new("lang-source");
-    let output_dir = TempDir::new("lang-out");
-    write_tree(source_dir.path());
-    std::fs::write(
-        source_dir.path().join("sce_sys/playgo-scenario.json"),
-        br#"{"scenarioDefaultLanguage":"en-GB","chunkDefaultLanguage":"en-GB","chunkSupportedLanguages":["en-GB","fr-FR","de-DE"]}"#,
-    )
-    .unwrap();
+/// The PlayGo scenario a package of `source` carries, built with `language` chosen.
+fn packaged_scenario(source: &Path, name: &str, language: Option<&str>) -> serde_json::Value {
+    let output_dir = TempDir::new(name);
     let request = BuildRequest {
         time: Some((1_700_000_000, 0)),
         seed: Some([7; 16]),
-        ..BuildRequest::new(source_dir.path(), output_dir.path())
+        language: language.map(str::to_string),
+        ..BuildRequest::new(source, output_dir.path())
     };
     let report = build::build(&request, &mut |_| {}).unwrap();
     assert!(report.verify.ok());
@@ -265,13 +256,119 @@ fn a_package_keeps_the_games_own_languages() {
     let parsed = fih::parse(&head).unwrap();
     let container = cnt::read(&mut pkg, parsed.cnt_offset).unwrap();
     let entry = container.entry(cnt::ids::PLAYGO_SCENARIO_JSON).unwrap();
-    let v: serde_json::Value = serde_json::from_slice(container.payload(entry)).unwrap();
+    serde_json::from_slice(container.payload(entry)).unwrap()
+}
+
+/// The fixture game's `param.json`, naming the title in `named` and starting in `default`.
+fn write_param(root: &Path, default: &str, named: &[&str]) {
+    let names: String = named
+        .iter()
+        .map(|l| format!(",\"{l}\":{{\"titleName\":\"Test Game\"}}"))
+        .collect();
+    std::fs::write(
+        root.join("sce_sys/param.json"),
+        format!(
+            "{{\"contentId\":\"{CONTENT_ID}\",\"contentVersion\":\"01.001.000\",\"titleId\":\"PPSA01234\",\"applicationCategoryType\":0,\"attributePub\":0,\"localizedParameters\":{{\"defaultLanguage\":\"{default}\"{names}}}}}"
+        ),
+    )
+    .unwrap();
+}
+
+/// The chunk table a dump carries, supporting the languages in `mask` (one bit per language
+/// from the top bit down: `ja-JP`, `en-US`, `fr-FR`, …).
+fn write_chunk_table(root: &Path, mask: u64) {
+    let mut table =
+        ps5upload_fpkg::playgo::chunk_dat(CONTENT_ID, &[vec![0]], &[(0, 0x10000)], false);
+    table[0x38..0x40].copy_from_slice(&mask.to_le_bytes());
+    std::fs::write(root.join("sce_sys/playgo-chunk.dat"), table).unwrap();
+}
+
+/// A dump's own PlayGo scenario is left out as a stale copy, but the package keeps the game's
+/// languages and default from it (an EU game came up in Japanese when the package declared all
+/// 31 languages, Japanese first, with en-US as the default).
+#[test]
+fn a_package_keeps_the_games_own_languages() {
+    let source_dir = TempDir::new("lang-source");
+    write_tree(source_dir.path());
+    std::fs::write(
+        source_dir.path().join("sce_sys/playgo-scenario.json"),
+        br#"{"scenarioDefaultLanguage":"en-GB","chunkDefaultLanguage":"en-GB","chunkSupportedLanguages":["en-GB","fr-FR","de-DE"]}"#,
+    )
+    .unwrap();
+    let v = packaged_scenario(source_dir.path(), "lang-out", None);
     assert_eq!(v["chunkDefaultLanguage"], "en-GB");
     assert_eq!(v["scenarioDefaultLanguage"], "en-GB");
     assert_eq!(
         v["chunkSupportedLanguages"],
         serde_json::json!(["en-GB", "fr-FR", "de-DE"])
     );
+}
+
+/// A game that declares one language in its own chunk table (`0x4000…` is `en-US`, as read
+/// out of a real dump) is packaged declaring that one: the console's "Manage Game Content"
+/// listed a language pack for each of the 31 a package used to declare (#939).
+#[test]
+fn a_package_of_a_one_language_game_declares_that_language() {
+    let source_dir = TempDir::new("lang-one-source");
+    write_tree(source_dir.path());
+    write_param(source_dir.path(), "en-US", &["en-US"]);
+    write_chunk_table(source_dir.path(), 0x4000_0000_0000_0000);
+    let v = packaged_scenario(source_dir.path(), "lang-one-out", None);
+    assert_eq!(v["chunkSupportedLanguages"], serde_json::json!(["en-US"]));
+    assert_eq!(v["chunkDefaultLanguage"], "en-US");
+    assert_eq!(v["scenarioDefaultLanguage"], "en-US");
+}
+
+/// A game that declares several is packaged declaring exactly those, starting in its default.
+#[test]
+fn a_package_of_a_game_with_several_languages_declares_those() {
+    let source_dir = TempDir::new("lang-several-source");
+    write_tree(source_dir.path());
+    write_param(source_dir.path(), "fr-FR", &["fr-FR", "en-US"]);
+    // ja-JP, en-US, fr-FR and de-DE.
+    write_chunk_table(source_dir.path(), 0xE800_0000_0000_0000);
+    let v = packaged_scenario(source_dir.path(), "lang-several-out", None);
+    assert_eq!(
+        v["chunkSupportedLanguages"],
+        serde_json::json!(["ja-JP", "en-US", "fr-FR", "de-DE"])
+    );
+    assert_eq!(v["chunkDefaultLanguage"], "fr-FR");
+    assert_eq!(v["scenarioDefaultLanguage"], "fr-FR");
+}
+
+/// A game that declares no PlayGo languages (the usual dump: neither PlayGo file) is packaged
+/// declaring its default language alone, whatever languages `param.json` names the title in.
+/// The language option changes only what it says: one language, or all 31.
+#[test]
+fn a_package_of_a_game_that_declares_no_languages_gets_its_default_alone() {
+    // No language named anywhere: en-US.
+    let bare = TempDir::new("lang-none-source");
+    write_tree(bare.path());
+    let v = packaged_scenario(bare.path(), "lang-none-out", None);
+    assert_eq!(v["chunkSupportedLanguages"], serde_json::json!(["en-US"]));
+    assert_eq!(v["chunkDefaultLanguage"], "en-US");
+
+    // A default and three title names: the default alone.
+    let named = TempDir::new("lang-named-source");
+    write_tree(named.path());
+    write_param(named.path(), "de-DE", &["de-DE", "en-US", "ja-JP"]);
+    let v = packaged_scenario(named.path(), "lang-named-out", None);
+    assert_eq!(v["chunkSupportedLanguages"], serde_json::json!(["de-DE"]));
+    assert_eq!(v["chunkDefaultLanguage"], "de-DE");
+    assert_eq!(v["scenarioDefaultLanguage"], "de-DE");
+    // A chunk table that names no language in particular (every bit set) changes nothing.
+    write_chunk_table(named.path(), u64::MAX);
+    let v = packaged_scenario(named.path(), "lang-unset-out", None);
+    assert_eq!(v["chunkSupportedLanguages"], serde_json::json!(["de-DE"]));
+
+    // One language chosen: that one, as the default too.
+    let v = packaged_scenario(named.path(), "lang-chosen-out", Some("ja-JP"));
+    assert_eq!(v["chunkSupportedLanguages"], serde_json::json!(["ja-JP"]));
+    assert_eq!(v["chunkDefaultLanguage"], "ja-JP");
+    // Every language chosen: the 31, starting in the game's own default.
+    let v = packaged_scenario(named.path(), "lang-all-out", Some("all"));
+    assert_eq!(v["chunkSupportedLanguages"].as_array().unwrap().len(), 31);
+    assert_eq!(v["chunkDefaultLanguage"], "de-DE");
 }
 
 /// A game whose param.json names a content id with a path in it (36 characters, like a real

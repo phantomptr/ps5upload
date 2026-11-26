@@ -192,7 +192,11 @@ pub(crate) struct BuildReq {
     /// `fast`, `balanced` (the default) or `smallest`: how hard the Kraken encoder works.
     #[serde(default)]
     compression: Option<String>,
-    /// A PlayGo language code (`fr-FR`, …) the package declares as its only one.
+    /// The languages the package declares to PlayGo. Absent or empty: the game's own, read from
+    /// its `sce_sys/playgo-scenario.json` or `playgo-chunk.dat`, and only its default language
+    /// (`param.json`'s `localizedParameters.defaultLanguage`) when it has neither. A language
+    /// code (`fr-FR`, …): that one alone, as the default too. `all`: every language, starting
+    /// in the game's default (what packages declared before they kept to the game's own).
     #[serde(default)]
     language: Option<String>,
     /// Read the whole package back to verify it. Off (the default): the structure is checked
@@ -1179,6 +1183,12 @@ mod path_tests {
         assert_eq!(language_of(req.language), None);
         let req: BuildReq = serde_json::from_str(r#"{"source":"/g"}"#).unwrap();
         assert_eq!(language_of(req.language), None);
+        // Every language is asked for by name; the package builder knows the word.
+        let req: BuildReq = serde_json::from_str(r#"{"source":"/g","language":"all"}"#).unwrap();
+        assert_eq!(
+            language_of(req.language).as_deref(),
+            Some(ps5upload_fpkg::cnt_write::ALL_LANGUAGES)
+        );
     }
 
     #[test]

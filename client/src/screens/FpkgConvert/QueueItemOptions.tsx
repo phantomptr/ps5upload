@@ -6,7 +6,7 @@ import { Button } from "../../components";
 import { SegmentedControl } from "../../components/SegmentedControl";
 import { Toggle } from "../../components/Toggle";
 import { parentDir } from "../../lib/outputPlace";
-import { PLAYGO_LANGUAGES } from "../../lib/playgoLanguages";
+import { ALL_PLAYGO_LANGUAGES, PLAYGO_LANGUAGES } from "../../lib/playgoLanguages";
 import { useConvertPrefs } from "../../state/convertPrefs";
 import {
   DEFAULT_ZSTD_LEVEL,
@@ -236,7 +236,8 @@ export function QueueItemOptions({
               value={item.language ?? ""}
               onChange={(e) => onChange({ language: e.target.value || undefined })}
             >
-              <option value="">{tr("fpkg.languageAll", undefined, "As the game ships (all languages)")}</option>
+              <option value="">{tr("fpkg.languageOwn", undefined, "The game's own languages")}</option>
+              <option value={ALL_PLAYGO_LANGUAGES}>{tr("fpkg.languageEvery", undefined, "Every language")}</option>
               {PLAYGO_LANGUAGES.map(([code, name]) => (
                 <option key={code} value={code}>
                   {name}

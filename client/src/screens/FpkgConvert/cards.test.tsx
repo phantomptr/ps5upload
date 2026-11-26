@@ -240,6 +240,22 @@ describe("OptionsCard for an image", () => {
     expect(pkg).toContain("fpkg-language");
   });
 
+  it("offers the game's own languages first, then every language, then each one (#939)", () => {
+    const render = (language: string) =>
+      renderToStaticMarkup(<OptionsCard {...props} make="pkg" language={language} onLanguage={() => {}} />);
+    const own = render("");
+    expect(own).toMatch(/<option value="" selected="">The game&#x27;s own languages<\/option>/);
+    expect(own).toContain('<option value="all">Every language</option>');
+    // 31 languages after the two.
+    expect((own.match(/<option /g) ?? []).length).toBe(33);
+    // Every language is the one choice that can fill the console's list: it says so.
+    expect(own).not.toContain("language-every-hint");
+    expect(render("fr-FR")).not.toContain("language-every-hint");
+    const every = render("all");
+    expect(every).toContain("language-every-hint");
+    expect(every).toContain("all 31 languages");
+  });
+
   it("offers the .ffpfsc levels only when compressing", () => {
     const render = (compress: boolean) =>
       renderToStaticMarkup(
@@ -345,7 +361,7 @@ describe("OptionsCard free space", () => {
   it("offers every PlayGo language, by its own name", () => {
     const out = renderToStaticMarkup(<OptionsCard {...props} language="de-DE" onLanguage={() => {}} />);
     expect(out).toContain("Game language");
-    expect(out).toMatch(/<option value="">[^<]*As the game ships/);
+    expect(out).toMatch(/<option value="">[^<]*The game&#x27;s own languages/);
     expect(out).toMatch(/<option value="de-DE" selected="">Deutsch/);
     expect((out.match(/<option value="[a-z]{2}-/g) ?? []).length).toBe(31);
   });

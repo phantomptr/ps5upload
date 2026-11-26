@@ -194,7 +194,8 @@ export interface FpkgBuildRequest {
   /** The package's minimum firmware, like "5.10"; the game's own when absent. A console older
    *  than the package's minimum refuses to install it. */
   firmware?: string;
-  /** The one PlayGo language the package declares (`de-DE`, …); every language when absent. */
+  /** The PlayGo language the package declares: one code (`de-DE`, …) for that one alone, `all`
+   *  for every language; absent, the game's own (only its default when it names none). */
   language?: string;
   /** Re-read every byte to check the package; the engine's fast check when false or absent. */
   fullVerify?: boolean;
