@@ -716,7 +716,7 @@ fn start_plan() -> bool {
     let Some(turn) = OrganizerTurn::take() else {
         return false;
     };
-    let watch = Arc::new(organize::PlanWatch::default());
+    let watch = Arc::new(organize::PlanWatch::for_preview());
     *job.watch.lock().unwrap_or_else(|e| e.into_inner()) = Arc::clone(&watch);
     *job.status.lock().unwrap_or_else(|e| e.into_inner()) = PlanStatus {
         running: true,

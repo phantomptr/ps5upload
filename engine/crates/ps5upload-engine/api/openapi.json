@@ -10490,6 +10490,14 @@
             "minimum": 0,
             "type": "integer"
           },
+          "declared_size": {
+            "description": "The least this package's file (every part of a split set together) has to be for its\nown header to be true: see [`declared_size_from`]. A file shorter than this is still\nbeing copied, or was cut short. `None` when the header declares nothing.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "fingerprint": {
             "description": "Stable, inexpensive identity for this exact package variant. This is a\nBLAKE3 digest over the file size plus bounded samples from the beginning\nand end of the pkg. It deliberately differs for two patches that share\nthe same ContentID/category/APP_VER (for example an optional fix and a\nbackport), without making the UI hash a multi-gigabyte pkg before an\nupload can start.",
             "type": "string"
@@ -16288,7 +16296,7 @@
                 "type": "null"
               }
             ],
-            "description": "With `method` `package` and `state` `problems`: what the problems add up to."
+            "description": "With `state` `problems`, for a package: what the problems add up to. Always there for\n`method` `package`; for `bytes` only when the file is shorter than its header says."
           },
           "error": {
             "type": [

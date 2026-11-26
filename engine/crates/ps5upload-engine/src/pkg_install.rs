@@ -3432,6 +3432,7 @@ fn stream_metadata(
         content_flags: 0,
         icon_png_base64: None,
         warnings: vec![],
+        declared_size: None,
     }
 }
 

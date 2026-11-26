@@ -16,12 +16,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
 use super::junk;
-use super::organize_fs::{path_string, OpError, PlanTree, Tree};
+use super::organize_fs::{path_string, DirEnt, Meta, OpError, PlanTree, Tree};
 use super::scan::MAX_DEPTH;
 use super::split;
 use super::PkgInfo;
@@ -32,6 +33,13 @@ pub const SKIP_INCOMPLETE: &str = "incomplete";
 pub const SKIP_UNREADABLE: &str = "unreadable";
 pub const SKIP_NO_ID: &str = "no title id";
 pub const SKIP_IN_PLACE: &str = "already correct";
+
+/// How long a preview leaves between its two looks at the files it would move: one still being
+/// copied or downloaded is not the same file a moment later.
+pub const SETTLE: Duration = Duration::from_secs(1);
+/// What a file that changed between the two looks is told.
+pub const STILL_CHANGING: &str =
+    "its size or time changed while it was looked at: still being copied or downloaded";
 
 /// What one package (or split set, read from its first part) says, plus where it is.
 #[derive(Debug, Clone)]
@@ -112,9 +120,20 @@ pub struct PlanWatch {
     pub total: AtomicU64,
     pub done: AtomicU64,
     current: Mutex<String>,
+    /// The least time between a plan's start and its second look at what it would move
+    /// ([`SETTLE`] for a real preview; none in a test that is not about it).
+    pub settle: Duration,
 }
 
 impl PlanWatch {
+    /// A real preview's watch: its second look comes [`SETTLE`] after it begins.
+    pub fn for_preview() -> Self {
+        Self {
+            settle: SETTLE,
+            ..Self::default()
+        }
+    }
+
     fn stopped(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
     }
@@ -909,6 +928,74 @@ fn plan_files_watched(
     out
 }
 
+/// The second look. A file still being copied or downloaded can read well and say nothing about
+/// its length (an image, a folder, a package whose header declares none): what gives it away is
+/// that it is not the same file a moment later. Every file a move would take is looked at again,
+/// no sooner than `watch.settle` after the plan `began`, through a fresh listing of its folder:
+/// the same kind of look as the first, so a server that words a size or time one way in a
+/// listing and another way for a single file cannot make a still file look changed. A file that
+/// changed, is gone, or could not be looked at again keeps its name, and a split set stays whole.
+fn leave_changing_files(
+    tree: &dyn Tree,
+    container: &Path,
+    plan: &mut Plan,
+    watch: &PlanWatch,
+    began: Instant,
+) {
+    if plan.moves.is_empty() {
+        return;
+    }
+    while let Some(left) = watch.settle.checked_sub(began.elapsed()) {
+        if watch.stopped() {
+            return;
+        }
+        std::thread::sleep(left.min(Duration::from_millis(50)));
+    }
+    let mut fresh: HashMap<PathBuf, Option<Vec<DirEnt>>> = HashMap::new();
+    // A move alone by its own name; the parts of a set by the set's.
+    let unit = |mv: &Move| {
+        if mv.set.is_empty() {
+            mv.from.clone()
+        } else {
+            mv.set.clone()
+        }
+    };
+    let mut changing: HashSet<String> = HashSet::new();
+    for mv in &plan.moves {
+        let src = container.join(&mv.from);
+        let (Some(dir), Some(name)) = (src.parent(), src.file_name()) else {
+            continue;
+        };
+        let name = name.to_string_lossy();
+        let now = fresh
+            .entry(dir.to_path_buf())
+            .or_insert_with(|| tree.list_fresh(dir))
+            .as_ref()
+            .and_then(|es| es.iter().find(|e| e.name.as_str() == name))
+            .map(|e| Meta {
+                size: e.size,
+                mtime: e.mtime,
+            });
+        if now.is_none() || now != tree.meta(&src) {
+            changing.insert(unit(mv));
+        }
+    }
+    if changing.is_empty() {
+        return;
+    }
+    let (left, moves): (Vec<Move>, Vec<Move>) = std::mem::take(&mut plan.moves)
+        .into_iter()
+        .partition(|mv| changing.contains(&unit(mv)));
+    plan.moves = moves;
+    plan.unsure.retain(|mv| !changing.contains(&unit(mv)));
+    plan.skipped.extend(left.into_iter().map(|mv| Skipped {
+        container: mv.container,
+        path: mv.from,
+        reason: SKIP_INCOMPLETE.into(),
+        detail: STILL_CHANGING.into(),
+    }));
+}
+
 /// A plan whose package facts come from the Collection's index where it is current. `roots`
 /// are (the root as a tree path, the root as the index keys it).
 #[cfg(test)]
@@ -930,6 +1017,7 @@ pub fn plan_watched(
     roots: &[(PathBuf, String)],
     watch: &PlanWatch,
 ) -> Plan {
+    let began = Instant::now();
     let tree = &PlanTree::new(tree);
     let cached = |p: &Path, size: u64, mtime: i64| -> Option<PkgInfo> {
         let lib = lib?;
@@ -968,6 +1056,7 @@ pub fn plan_watched(
         f
     };
     let mut plan = plan_files_watched(tree, container, files, &facts, watch);
+    leave_changing_files(tree, container, &mut plan, watch, began);
     plan.skipped.extend(skipped);
     if let Some(trouble) = tree.trouble() {
         // A folder the server would not list: its packages are missing from this preview.
@@ -2569,5 +2658,133 @@ mod tests {
         assert_eq!(title_folder("CUSA1", ""), "CUSA1");
         assert_eq!(title_folder("CUSA1", "CUSA1"), "CUSA1");
         assert_eq!(sanitize(&"x".repeat(130)).chars().count(), 120);
+    }
+
+    /// A tree whose second look finds `grown` (a file name) bigger than the first did.
+    struct Growing(&'static str);
+    impl Tree for Growing {
+        fn list(&self, dir: &Path) -> Option<Vec<DirEnt>> {
+            LocalTree.list(dir)
+        }
+        fn list_fresh(&self, dir: &Path) -> Option<Vec<DirEnt>> {
+            let mut es = LocalTree.list(dir)?;
+            for e in es.iter_mut().filter(|e| e.name == self.0) {
+                e.size += 4096;
+            }
+            Some(es)
+        }
+        fn meta(&self, p: &Path) -> Option<Meta> {
+            LocalTree.meta(p)
+        }
+        fn exists(&self, p: &Path) -> Result<bool, OpError> {
+            LocalTree.exists(p)
+        }
+        fn create_dir(&self, p: &Path) -> Result<(), OpError> {
+            LocalTree.create_dir(p)
+        }
+        fn rename_new(&self, from: &Path, to: &Path) -> Result<(), OpError> {
+            LocalTree.rename_new(from, to)
+        }
+        fn remove_dir(&self, p: &Path) -> Result<(), OpError> {
+            LocalTree.remove_dir(p)
+        }
+        fn is_removable_junk(&self, p: &Path) -> bool {
+            LocalTree.is_removable_junk(p)
+        }
+        fn remove_junk(&self, p: &Path) {
+            LocalTree.remove_junk(p);
+        }
+        fn head(&self, p: &Path) -> Option<[u8; 4]> {
+            LocalTree.head(p)
+        }
+    }
+
+    /// A game folder (its param.json names it), as the organizer reads one.
+    fn game_dir(dir: &Path, title_id: &str) {
+        std::fs::create_dir_all(dir.join("sce_sys")).unwrap();
+        std::fs::write(
+            dir.join("sce_sys/param.json"),
+            format!(
+                r#"{{"titleId":"{title_id}","contentVersion":"01.000.000","localizedParameters":{{"defaultLanguage":"en-US","en-US":{{"titleName":"Example"}}}}}}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    /// A file that is not the same at the plan's second look is still being copied: it keeps
+    /// its name, the preview says so, and what did not change is planned as before.
+    #[test]
+    fn a_file_that_changes_between_two_looks_is_left_alone() {
+        let l = lib("changing");
+        let root = l.0.clone();
+        game_dir(&root.join("still"), "PPSA01234");
+        game_dir(&root.join("copying"), "PPSA05678");
+        let roots = [(root.clone(), "root".to_string())];
+        // Nothing changes: both are planned.
+        let plan = plan_cached(&LocalTree, &root, None, &roots);
+        assert_eq!(plan.moves.len(), 2, "{:?}", plan.skipped);
+
+        let watch = PlanWatch {
+            settle: Duration::from_millis(120),
+            ..PlanWatch::default()
+        };
+        let began = Instant::now();
+        let plan = plan_watched(&Growing("copying"), &root, None, &roots, &watch);
+        assert!(
+            began.elapsed() >= Duration::from_millis(120),
+            "the second look waits for the files to settle"
+        );
+        assert_eq!(plan.moves.len(), 1, "{:?}", plan.moves);
+        assert_eq!(plan.moves[0].from, "still");
+        let left: Vec<&Skipped> = plan
+            .skipped
+            .iter()
+            .filter(|s| s.reason == SKIP_INCOMPLETE)
+            .collect();
+        assert_eq!(left.len(), 1, "{:?}", plan.skipped);
+        assert_eq!(
+            (left[0].path.as_str(), left[0].detail.as_str()),
+            ("copying", STILL_CHANGING)
+        );
+    }
+
+    /// One part of a split set still growing leaves the whole set where it is.
+    #[test]
+    fn a_set_with_one_changing_part_stays_whole() {
+        let l = lib("changing-set");
+        let c = l.0.join("fpkg");
+        put(&c, "Game_0.pkg", 30);
+        put(&c, "Game_1.pkg", 20);
+        put(&c, "Game_2.pkg", 10);
+        std::fs::write(c.join("Game_0.pkg"), [0x7F, b'C', b'N', b'T', 0, 0]).unwrap();
+        let entries = [(
+            "Game",
+            info(
+                "Game",
+                "CUSA00001",
+                "UP0000-CUSA00001_00-GAME",
+                "base",
+                "1.00",
+            ),
+        )];
+        let facts = table(&entries);
+        let files = scan(&LocalTree, &c);
+        let mut plan = plan_files(&LocalTree, &c, files, &facts);
+        assert_eq!(plan.moves.len(), 3, "{:?}", plan.skipped);
+        leave_changing_files(
+            &Growing("Game_2.pkg"),
+            &c,
+            &mut plan,
+            &PlanWatch::default(),
+            Instant::now(),
+        );
+        assert!(plan.moves.is_empty(), "{:?}", plan.moves);
+        assert_eq!(
+            plan.skipped
+                .iter()
+                .filter(|s| s.detail == STILL_CHANGING)
+                .count(),
+            3
+        );
     }
 }

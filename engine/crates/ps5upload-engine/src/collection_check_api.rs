@@ -8,8 +8,9 @@
 //! - `archive`: every entry of a `.zip` / `.7z` / `.rar` is decoded and its checksum checked.
 //! - `files`: a game folder or image has every file read back through its filesystem.
 //! - `bytes`: anything else (a retail or PS4 package, a copy on a server) is read from the first
-//!   byte to the last, which finds a copy that is cut short or sits on failing storage, but not
-//!   one whose bytes are wrong yet readable.
+//!   byte to the last, which finds a copy that sits on failing storage, but not one whose bytes
+//!   are wrong yet readable. A package is also held against its own header: one shorter than
+//!   the header says is cut short, and `damage` says so (`truncated`).
 //!
 //! One check reads at a time: two at once on the same drive would only slow both. Only paths
 //! that are copies in the Collection can be checked.
@@ -111,7 +112,8 @@ pub struct CheckStatus {
     pub files_total: u64,
     pub problems: Vec<Problem>,
     pub problems_total: u64,
-    /// With `method` `package` and `state` `problems`: what the problems add up to.
+    /// With `state` `problems`, for a package: what the problems add up to. Always there for
+    /// `method` `package`; for `bytes` only when the file is shorter than its header says.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub damage: Option<Damage>,
     pub error: Option<String>,
@@ -386,8 +388,26 @@ fn package(job: &Job, path: &Path) -> Result<bool, String> {
 }
 
 /// The package header, for a package read byte by byte: one that says it is longer than the
-/// file is cut short.
+/// file is cut short. That is asked of the sizes the header declares, not of whether the header
+/// reads: a PS4 package's header sits at the start and reads perfectly well from a file that
+/// stops half way.
 fn package_header(job: &Job, path: &Path) {
+    if let Some((have, need)) = crate::collection::identify::cut_short(path, None) {
+        job.problem_of(
+            "truncated",
+            "",
+            format!("the file ends early: {have} bytes, at least {need} needed"),
+        );
+        job.update(|s| {
+            s.damage = Some(Damage {
+                kind: "truncated".into(),
+                bytes_have: have,
+                bytes_need: need,
+                ..Damage::default()
+            })
+        });
+        return;
+    }
     let opened = if ps5upload_fpkg::remote_source::is_remote(path) {
         ps5upload_fpkg::remote_source::open_file(path).ok()
     } else {
@@ -399,17 +419,8 @@ fn package_header(job: &Job, path: &Path) {
     let Some((mut f, size)) = opened else {
         return;
     };
-    match ps5upload_pkg::parse_pkg_from(&mut f, size, path) {
-        Ok(h) => {
-            for w in h
-                .warnings
-                .iter()
-                .filter(|w| w.contains("truncat") || w.contains("shorter"))
-            {
-                job.problem("", w.clone());
-            }
-        }
-        Err(e) => job.problem("", format!("the package header can't be read: {e}")),
+    if let Err(e) = ps5upload_pkg::parse_pkg_from(&mut f, size, path) {
+        job.problem("", format!("the package header can't be read: {e}"));
     }
 }
 
@@ -781,5 +792,44 @@ mod tests {
         let s = j.status.lock().unwrap();
         assert_eq!(s.method, "bytes");
         assert_eq!(s.bytes_done, 70_000);
+    }
+
+    /// A PS4 package (`\\x7FCNT`) whose header declares `total` bytes, in a file of `have`.
+    fn ps4_package(path: &Path, total: u64, have: usize) {
+        let mut pkg = vec![0u8; have];
+        pkg[0..4].copy_from_slice(&ps5upload_pkg::PKG_MAGIC.to_be_bytes());
+        pkg[0x74..0x78].copy_from_slice(&0x1Au32.to_be_bytes());
+        pkg[0x430..0x438].copy_from_slice(&total.to_be_bytes());
+        std::fs::write(path, pkg).unwrap();
+    }
+
+    /// The audit's case: a PS4 package cut short reads without an error from its first byte to
+    /// its last, so only its own header says it is not all there. The check says it is cut
+    /// short, in the words the screen has for that, and a whole one is fine.
+    #[test]
+    fn a_package_shorter_than_its_header_says_is_reported_cut_short() {
+        let t = Scratch::new("ps4-short");
+        let short = t.path().join("short.pkg");
+        ps4_package(&short, 0x9000, 0x3000);
+        let s = checked(&short);
+        assert_eq!(s.method, "bytes");
+        assert_eq!(s.bytes_done, 0x3000, "it is still read to its end");
+        assert_eq!(s.problems_total, 1, "{:?}", s.problems);
+        assert_eq!(s.problems[0].kind, "truncated");
+        assert_eq!(
+            s.damage,
+            Some(Damage {
+                kind: "truncated".into(),
+                bytes_have: 0x3000,
+                bytes_need: 0x9000,
+                ..Damage::default()
+            })
+        );
+
+        let whole = t.path().join("whole.pkg");
+        ps4_package(&whole, 0x9000, 0x9000);
+        let s = checked(&whole);
+        assert_eq!(s.problems_total, 0, "{:?}", s.problems);
+        assert_eq!(s.damage, None);
     }
 }
