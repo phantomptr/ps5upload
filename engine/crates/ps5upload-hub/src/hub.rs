@@ -10,11 +10,12 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State as AxState};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{any, get};
 use axum::Router;
 use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
@@ -27,7 +28,7 @@ use tokio::sync::{mpsc, Notify};
 
 use crate::config::Config;
 use crate::limits::{canonical_ip, v6_site, IpKey, RateTable, Window};
-use crate::metrics::{ErrorKind, Gauges, Metrics};
+use crate::metrics::{ErrorKind, Gauges, Limit, Metrics, Stray};
 use crate::{Field, Shared};
 
 pub const PROTOCOL_VERSION: u64 = 1;
@@ -183,16 +184,44 @@ pub(crate) fn gauges(shared: &Shared) -> Gauges {
     }
 }
 
+/// What `/robots.txt` says: nothing here is for crawlers.
+pub const ROBOTS_TXT: &str = "User-agent: *\nDisallow: /\n";
+
+/// The public routes. `/ws/` is `/ws` (a hub address typed with a slash at the end). Everything
+/// else answers 404 and is counted by the class of its path ([`Stray`]), never logged: the hub's
+/// name is public (certificate logs list it), so scanners and crawlers ask for `/`, `/.env` and
+/// the like all day. `/robots.txt` tells well-behaved crawlers to stay away.
 pub(crate) fn router(shared: Arc<Shared>, with_metrics: bool) -> Router {
     let r = Router::new()
-        .route("/ws", get(ws_handler))
-        .route("/health", get(|| async { "ok\n" }));
+        // Every method reaches the handler, so a request that is not a WebSocket upgrade is
+        // counted; it gets the same answer as before (405, 400 or 426).
+        .route("/ws", any(ws_handler))
+        .route("/ws/", any(ws_handler))
+        .route("/health", get(|| async { "ok\n" }))
+        .route("/robots.txt", get(robots_handler));
     let r = if with_metrics {
         r.route("/metrics", get(metrics_handler))
     } else {
         r
     };
-    r.with_state(shared)
+    r.fallback(not_found).with_state(shared)
+}
+
+async fn robots_handler(AxState(shared): AxState<Arc<Shared>>) -> Response {
+    shared.metrics.stray(Stray::Robots);
+    (
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        ROBOTS_TXT,
+    )
+        .into_response()
+}
+
+async fn not_found(AxState(shared): AxState<Arc<Shared>>, uri: Uri) -> Response {
+    shared.metrics.stray(Stray::of_path(uri.path()));
+    (StatusCode::NOT_FOUND, "not found\n").into_response()
 }
 
 /// The private metrics listener's routes.
@@ -231,8 +260,15 @@ async fn ws_handler(
     AxState(shared): AxState<Arc<Shared>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    ws: WebSocketUpgrade,
+    ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
 ) -> Response {
+    let ws = match ws {
+        Ok(ws) => ws,
+        Err(rejection) => {
+            shared.metrics.stray(Stray::WsNotWebSocket);
+            return rejection.into_response();
+        }
+    };
     if let Some(origin) = headers.get(header::ORIGIN) {
         let ok = origin
             .to_str()
@@ -276,16 +312,20 @@ impl ConnSlot {
     fn take(shared: &Arc<Shared>, ip: IpKey, site: Option<u64>) -> Result<ConnSlot, ErrorKind> {
         let cfg = &shared.config;
         let mut st = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        let m = &shared.metrics;
         if shared.connections.load(Ordering::Relaxed) >= cfg.max_connections {
+            m.limited(Limit::Connections);
             return Err(ErrorKind::ServerFull);
         }
         // Both limits are checked before either count moves, so a refusal leaves no entry.
         if st.conns_per_ip.get(&ip).copied().unwrap_or(0) >= cfg.max_connections_per_ip {
+            m.limited(Limit::ConnectionsPerClient);
             return Err(ErrorKind::TooManyConnections);
         }
         if let Some(site) = site {
             let open = st.conns_per_v6_site.get(&site).copied().unwrap_or(0);
             if open >= cfg.max_connections_per_v6_site {
+                m.limited(Limit::ConnectionsPerV6Site);
                 return Err(ErrorKind::TooManyConnections);
             }
             *st.conns_per_v6_site.entry(site).or_insert(0) += 1;
@@ -631,10 +671,12 @@ fn on_host(
         Metrics::inc(&shared.metrics.reclaims);
     } else {
         if st.rooms.len() >= cfg.max_rooms {
+            shared.metrics.limited(Limit::Rooms);
             return Err(ErrorKind::ServerFull);
         }
         let owned = st.rooms_per_ip.get(&ip).copied().unwrap_or(0);
         if owned >= cfg.max_rooms_per_ip {
+            shared.metrics.limited(Limit::RoomsPerClient);
             return Err(ErrorKind::TooManyRooms);
         }
         *st.rooms_per_ip.entry(ip).or_insert(0) += 1;
@@ -673,6 +715,7 @@ fn on_join(
     let mut st = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     // Every attempt counts, found or not: this is what makes guessing room ids pointless.
     if !st.joins.hit(ip, now, cfg.rate_window, cfg.max_joins_per_ip) {
+        shared.metrics.limited(Limit::JoinRate);
         return Err(ErrorKind::RateLimited);
     }
     let room_id = str_field(msg, "room")?.unwrap_or_default();
@@ -701,6 +744,7 @@ fn on_join(
         room.guest_clients
             .retain(|_, w| !w.expired(now, cfg.rate_window));
         if room.guest_clients.len() >= cap {
+            shared.metrics.limited(Limit::RoomClients);
             return Err(ErrorKind::RateLimited);
         }
     }
@@ -709,6 +753,7 @@ fn on_join(
         .entry(ip)
         .or_insert_with(|| Window::new(now));
     if budget.used_up(now, cfg.rate_window, cfg.max_signals_per_guest_client) {
+        shared.metrics.limited(Limit::ClientBudget);
         return Err(ErrorKind::RateLimited);
     }
     let gid = loop {
@@ -767,6 +812,7 @@ fn on_signal(shared: &Shared, role: &mut Role, msg: &Msg) -> Result<Action, Erro
                 .signals
                 .hit(now, cfg.rate_window, cfg.max_signals_per_guest)
             {
+                shared.metrics.limited(Limit::GuestSignals);
                 return Err(ErrorKind::RateLimited);
             }
             // (An entry the sweeper dropped as run out starts again: a guest in the room has a
@@ -776,6 +822,7 @@ fn on_signal(shared: &Shared, role: &mut Role, msg: &Msg) -> Result<Action, Erro
                 .entry(g.client)
                 .or_insert_with(|| Window::new(now));
             if !client.hit(now, cfg.rate_window, cfg.max_signals_per_guest_client) {
+                shared.metrics.limited(Limit::ClientSignals);
                 return Err(ErrorKind::RateLimited);
             }
             let Some(h) = &r.host else {
@@ -801,6 +848,7 @@ fn on_signal(shared: &Shared, role: &mut Role, msg: &Msg) -> Result<Action, Erro
                 .hit(now, cfg.rate_window, cfg.max_signals_per_host)
             {
                 Metrics::inc(&shared.metrics.host_signals_dropped);
+                shared.metrics.limited(Limit::HostSignals);
                 return Ok(Action::Reply(Vec::new()));
             }
             let Some(g) = r.guests.get(to) else {
@@ -874,6 +922,7 @@ fn on_leave(shared: &Shared, role: &mut Role, me: &Peer, msg: &Msg) -> Result<Ac
                 // Close the room for good.
                 None => {
                     if let Some(r) = st.remove_room(&room) {
+                        Metrics::inc(&shared.metrics.rooms_closed);
                         for g in r.guests.values() {
                             close_guest(&g.peer, &shared.metrics);
                         }
@@ -945,6 +994,7 @@ pub(crate) async fn sweeper(shared: Arc<Shared>, stun_table: Arc<Mutex<RateTable
                         ("stun", Field::N(m.stun_requests.load(Ordering::Relaxed))),
                         ("errors", Field::N(m.errors_total())),
                         ("refused", Field::N(m.refused_total())),
+                        ("strays", Field::N(m.strays_total())),
                     ],
                 );
             }

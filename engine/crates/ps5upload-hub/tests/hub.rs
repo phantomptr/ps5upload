@@ -1107,3 +1107,151 @@ async fn an_idle_hub_logs_no_summary() {
     // One for the room that opened; none for the idle time before or after it.
     assert_eq!(summaries, 1, "{logs:?}");
 }
+
+/// One plain HTTP request; the whole answer (status line, headers, body).
+async fn http_req(addr: SocketAddr, method: &str, path: &str) -> String {
+    let mut s = TcpStream::connect(addr).await.unwrap();
+    s.write_all(
+        format!("{method} {path} HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n").as_bytes(),
+    )
+    .await
+    .unwrap();
+    let mut out = String::new();
+    tokio::time::timeout(WAIT, s.read_to_string(&mut out))
+        .await
+        .unwrap()
+        .unwrap();
+    out
+}
+
+fn labelled(text: &str, name: &str, label: &str, value: &str) -> u64 {
+    metric(text, &format!("{name}{{{label}=\"{value}\"}}"))
+}
+
+/// What is not a WebSocket to `/ws` (scanners, crawlers) answers 404 as before, is counted by the
+/// class of its path and is never logged; `/robots.txt` keeps crawlers away; `/ws/` is `/ws`.
+#[tokio::test]
+async fn strays_are_counted_by_class_and_never_logged() {
+    let t = start(Config {
+        summary_interval: Duration::from_millis(1),
+        sweep_interval: Duration::from_millis(10),
+        ..cfg()
+    })
+    .await;
+    let a = t.hub.http_addr;
+    for (path, class) in [
+        ("/", "root"),
+        ("/favicon.ico", "favicon"),
+        ("/.well-known/security.txt", "well_known"),
+        ("/phpinfo?looks-like-a-query=1", "other"),
+        ("/wp-login.php", "other"),
+        ("/ws/extra", "other"),
+    ] {
+        let r = http_req(a, "GET", path).await;
+        assert!(r.starts_with("HTTP/1.1 404"), "{path}: {r}");
+        let m = t.hub.shared.metrics_text();
+        assert!(
+            labelled(&m, "hub_http_strays_total", "class", class) > 0,
+            "{path}"
+        );
+    }
+    let robots = http_req(a, "GET", "/robots.txt").await;
+    assert!(robots.starts_with("HTTP/1.1 200"), "{robots}");
+    assert!(robots.ends_with("User-agent: *\nDisallow: /\n"), "{robots}");
+    // `/ws` without the upgrade, or with another method: the answers it always had.
+    for (method, path, status) in [
+        ("GET", "/ws", "400"),
+        ("GET", "/ws/", "400"),
+        ("HEAD", "/ws", "405"),
+        ("POST", "/ws", "405"),
+    ] {
+        let r = http_req(a, method, path).await;
+        assert!(
+            r.starts_with(&format!("HTTP/1.1 {status}")),
+            "{method} {path}: {r}"
+        );
+    }
+    // The health check is not a stray.
+    assert!(http_req(a, "GET", "/health").await.ends_with("ok\n"));
+    let m = t.hub.shared.metrics_text();
+    assert_eq!(labelled(&m, "hub_http_strays_total", "class", "root"), 1);
+    assert_eq!(labelled(&m, "hub_http_strays_total", "class", "other"), 3);
+    assert_eq!(labelled(&m, "hub_http_strays_total", "class", "robots"), 1);
+    assert_eq!(
+        labelled(&m, "hub_http_strays_total", "class", "ws_not_websocket"),
+        4
+    );
+    assert_eq!(t.hub.shared.metrics.strays_total(), 11, "{m}");
+    // `/ws/` (a hub address typed with a slash at the end) is the hub.
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{a}/ws/"))
+        .await
+        .expect("/ws/ upgrades");
+    let r = room(90);
+    send(
+        &mut ws,
+        json!({"v":1,"t":"host","room":r,"secret":secret(90)}),
+    )
+    .await;
+    assert_eq!(recv(&mut ws).await, json!({"t":"hosted","room":r}));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let logs = t.logs.lock().unwrap().join("\n");
+    for bad in [
+        "phpinfo",
+        "looks-like",
+        "wp-login",
+        "favicon",
+        "well-known",
+        "robots",
+        "/",
+    ] {
+        assert!(!logs.contains(bad), "{bad} in {logs}");
+    }
+    assert!(logs.contains(" strays=11"), "{logs}");
+}
+
+/// Each limit that fires is counted by name, beside the error the client gets.
+#[tokio::test]
+async fn the_limit_that_fired_is_counted() {
+    let t = start(Config {
+        max_signals_per_guest: 2,
+        max_joins_per_ip: 2,
+        ..cfg()
+    })
+    .await;
+    let r = room(91);
+    let mut h = host(&t, &r, &secret(91)).await;
+    let (mut g, _) = join(&t, &mut h, &r).await;
+    for i in 0..2 {
+        send(&mut g, json!({"t":"signal","to":"host","data":{"i":i}})).await;
+        recv(&mut h).await;
+    }
+    send(&mut g, json!({"t":"signal","to":"host","data":{"i":2}})).await;
+    expect_fatal(&mut g, "rate_limited").await;
+    recv(&mut h).await; // left
+    let (_g2, _) = join(&t, &mut h, &r).await;
+    let mut third = connect(&t).await;
+    send(&mut third, json!({"v":1,"t":"join","room":r})).await;
+    expect_fatal(&mut third, "rate_limited").await;
+    let m = t.hub.shared.metrics_text();
+    assert_eq!(
+        labelled(&m, "hub_limited_total", "limit", "guest_signals"),
+        1
+    );
+    assert_eq!(labelled(&m, "hub_limited_total", "limit", "join_rate"), 1);
+    assert_eq!(
+        labelled(&m, "hub_limited_total", "limit", "client_signals"),
+        0
+    );
+    assert_eq!(
+        labelled(&m, "hub_errors_total", "kind", "rate_limited"),
+        2,
+        "{m}"
+    );
+    // A room its host closes counts as closed, not expired.
+    send(&mut h, json!({"t":"leave"})).await;
+    assert_eq!(recv_close(&mut h).await, Some(1000));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let m = t.hub.shared.metrics_text();
+    assert_eq!(metric(&m, "hub_rooms_closed_total"), 1);
+    assert_eq!(metric(&m, "hub_rooms_expired_total"), 0);
+}

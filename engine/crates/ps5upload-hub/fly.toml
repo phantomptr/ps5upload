@@ -17,7 +17,8 @@ kill_timeout = "10s"
 [env]
   HUB_HTTP_LISTEN = "0.0.0.0:8080"
   # /metrics on its own port, reachable only over Fly's private network (Fly scrapes it; the
-  # owner reads it with `fly proxy 9091`). The public port serves /ws and /health only.
+  # owner reads it with `fly proxy 9091`). The public port serves /ws, /health and
+  # /robots.txt; everything else is a 404 counted in hub_http_strays_total (FLY.md, Metrics).
   HUB_METRICS_LISTEN = "[::]:9091"
   # Fly's proxy is the only way in from the internet and it puts the client's address in
   # Fly-Client-IP. The proxy's own addresses are not fixed, so every peer is trusted for that

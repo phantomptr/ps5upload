@@ -202,10 +202,16 @@ IPv6. It ignores every other message and does no TURN.
 ## Other endpoints
 
 - `GET /health`: `ok`.
-- `GET /metrics`: Prometheus text, counts only (rooms, guests, connections, hosts, reclaims,
-  joins, signals, dropped host signals, expired rooms and guests, STUN requests, errors by
-  kind). Kept private: localhost only behind Caddy, or a separate private port
-  (`HUB_METRICS_LISTEN`) on Fly.
+- `/ws/` is `/ws`. A request to `/ws` that is not a WebSocket upgrade gets 400, 405 or 426.
+- `GET /robots.txt`: `User-agent: *` / `Disallow: /`.
+- Anything else: 404. The hub's name is public, so scanners and crawlers ask for `/`, `/.env`
+  and the like all day; these are counted by a fixed class of the path (`root`, `favicon`,
+  `robots`, `well_known`, `ws_not_websocket`, `other`) and never logged.
+- `GET /metrics`: Prometheus text, counts only (rooms, guests, connections, rooms opened,
+  reclaimed, closed and expired, joins, signals, dropped host signals, expired guests, STUN
+  requests, errors by kind, refusals by the limit that fired, stray HTTP requests by class).
+  Kept private: localhost only behind Caddy, or a separate private port (`HUB_METRICS_LISTEN`)
+  on Fly.
 
 ## Privacy
 

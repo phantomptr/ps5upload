@@ -79,7 +79,7 @@ fly logs --no-tail       # recent
 ```
 
 The hub logs only counts and error kinds, never addresses, room ids or payloads, and only a few
-lines: `started`, `stopped`, and an hourly `hub: summary rooms=... errors=... refused=...` when
+lines: `started`, `stopped`, and an hourly `hub: summary rooms=... errors=... refused=... strays=...` when
 something happened in that hour (an idle hub logs nothing). Bad frames and refusals are counted
 in `/metrics`, not logged one by one.
 
@@ -105,6 +105,23 @@ section of `fly.toml`; it shows in the Fly dashboard's Metrics / Grafana). To re
 fly proxy 9091           # leave running, then in another terminal:
 curl -s http://127.0.0.1:9091/metrics
 ```
+
+Reading it:
+
+- `hub_hosts_total` counts rooms opened, not connections: every Play Together internet invite,
+  phone link and Share opens one. A host that reconnects within 2 minutes takes its room back
+  (`hub_reclaims_total`); rooms go when their host closes them (`hub_rooms_closed_total`) or
+  stays away 2 minutes (`hub_rooms_expired_total`: a computer asleep, an app quit).
+- `hub_limited_total{limit=...}` says which limit refused something, beside the
+  `hub_errors_total{kind="rate_limited"}` a client got.
+- `hub_errors_total{kind="no_room"}` is a guest opening a link whose room is gone (an old
+  invite, a host that closed Play Together or is asleep). The page tells them to ask for a new link.
+- `hub_http_strays_total{class=...}`: plain HTTP requests that were not a WebSocket to `/ws`,
+  by class of path only. These are the 404s in Fly's HTTP status chart: the hub's name is in
+  public certificate logs, so scanners and crawlers ask for `/`, `/.env`, `/phpinfo` and so on
+  all day (Fly's proxy logs show some as `client problem: invalid authority`, which it answers
+  itself). The apps and the pages only ever open `/ws`. `/robots.txt` tells crawlers to stay
+  away; nothing else is worth doing about them.
 
 ## Settings
 
