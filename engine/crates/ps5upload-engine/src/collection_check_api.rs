@@ -10,7 +10,9 @@
 //! - `bytes`: anything else (a retail or PS4 package, a copy on a server) is read from the first
 //!   byte to the last, which finds a copy that sits on failing storage, but not one whose bytes
 //!   are wrong yet readable. A package is also held against its own header: one shorter than
-//!   the header says is cut short, and `damage` says so (`truncated`).
+//!   the header says is cut short, and `damage` says so (`truncated`). A split package is one
+//!   package: every part is read, in order, and a part that is missing is a problem named by
+//!   that part.
 //!
 //! One check reads at a time: two at once on the same drive would only slow both. Only paths
 //! that are copies in the Collection can be checked.
@@ -208,14 +210,19 @@ pub async fn post_check(Json(req): Json<CheckReq>) -> Response {
     };
     let mut wanted = Vec::new();
     for p in &req.paths {
-        let kind = lib
+        // A split package's later parts come from the index with it, never from the request.
+        let copy = lib
             .games
             .values()
             .flat_map(|g| g.locations.iter())
             .find(|l| &l.absolute_path == p)
-            .map(|l| l.kind.clone());
-        match kind {
-            Some(k) => wanted.push((p.clone(), k)),
+            .map(|l| (l.kind.clone(), l.parts.clone()));
+        match copy {
+            Some((kind, parts)) => wanted.push(Wanted {
+                path: p.clone(),
+                kind,
+                parts,
+            }),
             None => {
                 return err(
                     StatusCode::NOT_FOUND,
@@ -228,10 +235,18 @@ pub async fn post_check(Json(req): Json<CheckReq>) -> Response {
     get_checks().await
 }
 
-/// Queues a check of each `(path, kind)` not already being checked.
-fn start(wanted: Vec<(String, String)>, handle: tokio::runtime::Handle) {
+/// A copy to check: where it is, its Collection type, and its later files when it is a split
+/// package.
+struct Wanted {
+    path: String,
+    kind: String,
+    parts: Vec<String>,
+}
+
+/// Queues a check of each copy not already being checked.
+fn start(wanted: Vec<Wanted>, handle: tokio::runtime::Handle) {
     let mut map = jobs().lock().unwrap_or_else(|e| e.into_inner());
-    for (path, kind) in wanted {
+    for Wanted { path, kind, parts } in wanted {
         if map
             .get(&path)
             .is_some_and(|j| j.status.lock().unwrap_or_else(|e| e.into_inner()).active())
@@ -261,7 +276,7 @@ fn start(wanted: Vec<(String, String)>, handle: tokio::runtime::Handle) {
                 return;
             }
             job.update(|s| s.state = "running".into());
-            let outcome = run(&job, Path::new(&path), &kind);
+            let outcome = run(&job, Path::new(&path), &kind, &parts);
             job.update(|s| {
                 s.finished_ms = now_ms();
                 s.state = match outcome {
@@ -318,16 +333,18 @@ pub async fn post_check_cancel(Json(req): Json<CancelReq>) -> Response {
     get_checks().await
 }
 
-/// Checks the copy at `path` (of Collection type `kind`). Problems found are recorded on the
-/// job; `Err` is a copy that could not be checked at all.
-fn run(job: &Job, path: &Path, kind: &str) -> Result<(), String> {
+/// Checks the copy at `path` (of Collection type `kind`; `parts` are a split package's later
+/// files, in order). Problems found are recorded on the job; `Err` is a copy that could not be
+/// checked at all.
+fn run(job: &Job, path: &Path, kind: &str, parts: &[String]) -> Result<(), String> {
     let remote = ps5upload_fpkg::remote_source::is_remote(path);
     match kind {
+        "pkg" if !parts.is_empty() => split_package(job, path, parts),
         "pkg" => {
             if !remote && package(job, path)? {
                 return Ok(());
             }
-            package_header(job, path);
+            package_header(job, path, None);
             bytes(job, path)
         }
         "zip" | "7z" | "rar" if !remote => archive(job, path),
@@ -390,9 +407,9 @@ fn package(job: &Job, path: &Path) -> Result<bool, String> {
 /// The package header, for a package read byte by byte: one that says it is longer than the
 /// file is cut short. That is asked of the sizes the header declares, not of whether the header
 /// reads: a PS4 package's header sits at the start and reads perfectly well from a file that
-/// stops half way.
-fn package_header(job: &Job, path: &Path) {
-    if let Some((have, need)) = crate::collection::identify::cut_short(path, None) {
+/// stops half way. `whole` is the length of a split package, all its parts together.
+fn package_header(job: &Job, path: &Path, whole: Option<u64>) {
+    if let Some((have, need)) = crate::collection::identify::cut_short(path, whole) {
         job.problem_of(
             "truncated",
             "",
@@ -408,15 +425,7 @@ fn package_header(job: &Job, path: &Path) {
         });
         return;
     }
-    let opened = if ps5upload_fpkg::remote_source::is_remote(path) {
-        ps5upload_fpkg::remote_source::open_file(path).ok()
-    } else {
-        std::fs::File::open(path).ok().and_then(|f| {
-            let n = f.metadata().ok()?.len();
-            Some((Box::new(f) as Box<dyn ps5upload_fpkg::ReadSeek>, n))
-        })
-    };
-    let Some((mut f, size)) = opened else {
+    let Ok((mut f, size)) = open(path) else {
         return;
     };
     if let Err(e) = ps5upload_pkg::parse_pkg_from(&mut f, size, path) {
@@ -516,18 +525,26 @@ fn files(job: &Job, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Every byte of a single file, start to end.
-fn bytes(job: &Job, path: &Path) -> Result<(), String> {
-    job.update(|s| s.method = "bytes".into());
-    let (mut f, size): (Box<dyn ps5upload_fpkg::ReadSeek>, u64) =
-        if ps5upload_fpkg::remote_source::is_remote(path) {
-            ps5upload_fpkg::remote_source::open_file(path).map_err(|e| format!("{e}"))?
-        } else {
-            let f = std::fs::File::open(path).map_err(|e| format!("{e}"))?;
-            let n = f.metadata().map_err(|e| format!("{e}"))?.len();
-            (Box::new(f), n)
-        };
-    job.update(|s| s.bytes_total = size);
+/// A file's bytes and its length: on this computer, or on a saved server.
+fn open(path: &Path) -> Result<(Box<dyn ps5upload_fpkg::ReadSeek>, u64), String> {
+    if ps5upload_fpkg::remote_source::is_remote(path) {
+        return ps5upload_fpkg::remote_source::open_file(path).map_err(|e| format!("{e}"));
+    }
+    let f = std::fs::File::open(path).map_err(|e| format!("{e}"))?;
+    let n = f.metadata().map_err(|e| format!("{e}"))?.len();
+    Ok((Box::new(f), n))
+}
+
+/// Reads `f` (`size` bytes, named `file` in a problem) from its first byte to its last, adding
+/// to the job's bytes done after the `before` bytes read ahead of it. `Ok(false)`: it could not
+/// be read to its end, and the problem says where.
+fn read_through(
+    job: &Job,
+    f: &mut dyn Read,
+    size: u64,
+    file: &str,
+    before: u64,
+) -> Result<bool, String> {
     let mut buf = vec![0u8; CHUNK];
     let mut done = 0u64;
     loop {
@@ -539,15 +556,133 @@ fn bytes(job: &Job, path: &Path) -> Result<(), String> {
             Ok(n) => n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => {
-                job.problem("", format!("can't be read at byte {done}: {e}"));
-                return Ok(());
+                job.problem(file, format!("can't be read at byte {done}: {e}"));
+                return Ok(false);
             }
         };
         done += n as u64;
-        job.update(|s| s.bytes_done = done);
+        job.update(|s| s.bytes_done = before + done);
     }
     if done < size {
-        job.problem("", format!("ends early: {done} of {size} bytes"));
+        job.problem(file, format!("ends early: {done} of {size} bytes"));
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Every byte of a single file, start to end.
+fn bytes(job: &Job, path: &Path) -> Result<(), String> {
+    job.update(|s| s.method = "bytes".into());
+    let (mut f, size) = open(path)?;
+    job.update(|s| s.bytes_total = size);
+    read_through(job, &mut f, size, "", 0).map(|_| ())
+}
+
+/// A path's last name, as a problem shows it.
+fn name_of(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// The parts a split set's own numbering says should be there and are not: `Game_0.pkg` and
+/// `Game_2.pkg` miss `Game_1.pkg`; `Game.pkg` and `Game.pkg.1` miss `Game.pkg.0`. Parts missing
+/// after the last one there leave no gap in the names: the package's declared length finds those.
+fn missing_from_run(lead: &Path, parts: &[String]) -> Vec<String> {
+    use crate::collection::split::{named_part, suffix_part};
+    let lead = name_of(lead);
+    let names: Vec<String> = parts.iter().map(|p| name_of(Path::new(p))).collect();
+    // (the first number a later part has, each part's number, the name a number makes)
+    let suffixed: Option<Vec<u32>> = names
+        .iter()
+        .map(|n| suffix_part(n).map(|(_, k)| k))
+        .collect();
+    let (first, have, name): (u32, Vec<u32>, Box<dyn Fn(u32) -> String>) = match suffixed {
+        Some(have) => (0, have, Box::new(move |k| format!("{lead}.{k}"))),
+        None => {
+            let Some((stem, _)) = named_part(&lead) else {
+                return Vec::new();
+            };
+            let stem = stem.to_string();
+            let Some(have) = names
+                .iter()
+                .map(|n| named_part(n).map(|(_, k)| k))
+                .collect::<Option<Vec<u32>>>()
+            else {
+                return Vec::new();
+            };
+            (1, have, Box::new(move |k| format!("{stem}_{k}.pkg")))
+        }
+    };
+    let last = have.iter().copied().max().unwrap_or(0);
+    // A set has dozens of parts at the very most: a name with a wild number is not walked to.
+    if last.saturating_sub(first) > 4096 {
+        return Vec::new();
+    }
+    (first..last)
+        .filter(|k| !have.contains(k))
+        .map(|k| name(k))
+        .collect()
+}
+
+/// A split package: its parts are one package, so every one is read, in order, and the package's
+/// own header is held against all of them together. A part that is not there is a problem named
+/// by that part; so is one that cannot be opened or read to its end.
+fn split_package(job: &Job, lead: &Path, parts: &[String]) -> Result<(), String> {
+    job.update(|s| s.method = "bytes".into());
+    let all: Vec<&Path> = std::iter::once(lead)
+        .chain(parts.iter().map(Path::new))
+        .collect();
+    // Each part's length first: the total is what the header is held against and what the
+    // progress counts to. The first part is the package: without it nothing can be checked.
+    let mut sizes: Vec<Option<u64>> = Vec::with_capacity(all.len());
+    for (i, part) in all.iter().enumerate() {
+        match open(part) {
+            Ok((_, n)) => sizes.push(Some(n)),
+            Err(e) if i == 0 => return Err(e),
+            Err(e) => {
+                let gone = !ps5upload_fpkg::remote_source::is_remote(part) && !part.exists();
+                job.problem(
+                    &name_of(part),
+                    if gone {
+                        "this part of the split package is missing".to_string()
+                    } else {
+                        format!("this part of the split package can't be opened: {e}")
+                    },
+                );
+                sizes.push(None);
+            }
+        }
+        if job.cancelled() {
+            return Err("cancelled".into());
+        }
+    }
+    for name in missing_from_run(lead, parts) {
+        job.problem(&name, "this part of the split package is missing");
+    }
+    let total: u64 = sizes.iter().flatten().sum();
+    job.update(|s| {
+        s.files_total = all.len() as u64;
+        s.bytes_total = total;
+    });
+    package_header(job, lead, Some(total));
+    let mut before = 0u64;
+    for (part, size) in all.iter().zip(&sizes) {
+        let Some(size) = *size else {
+            continue;
+        };
+        match open(part) {
+            Ok((mut f, _)) => {
+                read_through(job, &mut f, size, &name_of(part), before)?;
+            }
+            Err(e) => job.problem(&name_of(part), format!("can't be opened: {e}")),
+        }
+        // A part given up on still counts as gone through.
+        before += size;
+        job.update(|s| {
+            s.files_done += 1;
+            s.bytes_done = before;
+        });
     }
     Ok(())
 }
@@ -593,7 +728,7 @@ mod tests {
         let t = Scratch::new("clean");
         game_folder(t.path());
         let j = job();
-        run(&j, t.path(), "folder").unwrap();
+        run(&j, t.path(), "folder", &[]).unwrap();
         let s = j.status.lock().unwrap();
         assert_eq!(s.method, "files");
         assert_eq!(s.problems_total, 0, "{:?}", s.problems);
@@ -606,7 +741,7 @@ mod tests {
         let t = Scratch::new("missing");
         std::fs::write(t.path().join("data.bin"), b"x").unwrap();
         let j = job();
-        run(&j, t.path(), "folder").unwrap();
+        run(&j, t.path(), "folder", &[]).unwrap();
         let s = j.status.lock().unwrap();
         assert_eq!(s.problems_total, 2, "{:?}", s.problems);
     }
@@ -628,7 +763,7 @@ mod tests {
             z.finish().unwrap();
         }
         let j = job();
-        run(&j, &good, "zip").unwrap();
+        run(&j, &good, "zip", &[]).unwrap();
         assert_eq!(j.status.lock().unwrap().problems_total, 0);
 
         // Flip a byte of the stored data: the CRC no longer matches.
@@ -638,7 +773,7 @@ mod tests {
         let bad = t.path().join("bad.zip");
         std::fs::write(&bad, bytes).unwrap();
         let j = job();
-        run(&j, &bad, "zip").unwrap();
+        run(&j, &bad, "zip", &[]).unwrap();
         let s = j.status.lock().unwrap();
         assert_eq!(s.method, "archive");
         assert_eq!(s.problems_total, 1, "{:?}", s.problems);
@@ -684,7 +819,7 @@ mod tests {
     /// The check of the package at `path`, finished.
     fn checked(path: &Path) -> CheckStatus {
         let j = job();
-        run(&j, path, "pkg").unwrap();
+        run(&j, path, "pkg", &[]).unwrap();
         let s = j.status.lock().unwrap().clone();
         s
     }
@@ -788,7 +923,7 @@ mod tests {
         let f = t.path().join("retail.pkg");
         std::fs::write(&f, vec![0u8; 70_000]).unwrap();
         let j = job();
-        run(&j, &f, "pkg").unwrap();
+        run(&j, &f, "pkg", &[]).unwrap();
         let s = j.status.lock().unwrap();
         assert_eq!(s.method, "bytes");
         assert_eq!(s.bytes_done, 70_000);
@@ -831,5 +966,93 @@ mod tests {
         let s = checked(&whole);
         assert_eq!(s.problems_total, 0, "{:?}", s.problems);
         assert_eq!(s.damage, None);
+    }
+
+    /// The check of a split package: its first file and its later parts.
+    fn checked_set(lead: &Path, parts: &[&Path]) -> CheckStatus {
+        let parts: Vec<String> = parts.iter().map(|p| p.display().to_string()).collect();
+        let j = job();
+        run(&j, lead, "pkg", &parts).unwrap();
+        let s = j.status.lock().unwrap().clone();
+        s
+    }
+
+    /// The audit's case: only the first file of a split package was read. Every part is read,
+    /// in order, as the one package they make; a part that is gone is named.
+    #[test]
+    fn every_part_of_a_split_package_is_checked_as_one_package() {
+        let t = Scratch::new("split");
+        let (p0, p1, p2) = (
+            t.path().join("Game_0.pkg"),
+            t.path().join("Game_1.pkg"),
+            t.path().join("Game_2.pkg"),
+        );
+        // 0x9000 bytes declared, kept as three files of 0x3000.
+        ps4_package(&p0, 0x9000, 0x3000);
+        std::fs::write(&p1, vec![1u8; 0x3000]).unwrap();
+        std::fs::write(&p2, vec![2u8; 0x3000]).unwrap();
+        let s = checked_set(&p0, &[&p1, &p2]);
+        assert_eq!(s.method, "bytes");
+        assert_eq!(s.problems_total, 0, "{:?}", s.problems);
+        assert_eq!((s.bytes_done, s.bytes_total), (0x9000, 0x9000));
+        assert_eq!((s.files_done, s.files_total), (3, 3));
+        assert_eq!(s.damage, None);
+
+        // The last part cut short: the first file alone would have read as fine.
+        std::fs::write(&p2, vec![2u8; 0x1000]).unwrap();
+        let s = checked_set(&p0, &[&p1, &p2]);
+        assert_eq!(s.bytes_done, 0x7000);
+        let damage = s.damage.expect("the set is shorter than the package says");
+        assert_eq!(
+            (damage.kind.as_str(), damage.bytes_have, damage.bytes_need),
+            ("truncated", 0x7000, 0x9000)
+        );
+
+        // A part the index knows that is not there any more.
+        std::fs::remove_file(&p1).unwrap();
+        let s = checked_set(&p0, &[&p1, &p2]);
+        let gone: Vec<&Problem> = s
+            .problems
+            .iter()
+            .filter(|p| p.file == "Game_1.pkg")
+            .collect();
+        assert_eq!(gone.len(), 1, "{:?}", s.problems);
+        assert_eq!(gone[0].error, "this part of the split package is missing");
+        assert_eq!((s.files_done, s.files_total), (2, 3));
+        assert_eq!(
+            s.bytes_done, 0x4000,
+            "the parts that are there are still read"
+        );
+
+        // A part missing from the run of names (the index holds parts 0 and 2 only).
+        let s = checked_set(&p0, &[&p2]);
+        assert!(
+            s.problems
+                .iter()
+                .any(|p| p.file == "Game_1.pkg" && p.error.contains("is missing")),
+            "{:?}",
+            s.problems
+        );
+    }
+
+    #[test]
+    fn the_numbering_of_a_set_says_which_parts_are_missing() {
+        let named = |parts: &[&str]| {
+            let parts: Vec<String> = parts.iter().map(|p| format!("/lib/{p}")).collect();
+            missing_from_run(Path::new("/lib/Game_0.pkg"), &parts)
+        };
+        assert!(named(&["Game_1.pkg", "Game_2.pkg"]).is_empty());
+        assert_eq!(
+            named(&["Game_2.pkg", "Game_4.pkg"]),
+            ["Game_1.pkg", "Game_3.pkg"]
+        );
+        let suffixed = |parts: &[&str]| {
+            let parts: Vec<String> = parts.iter().map(|p| format!("/lib/{p}")).collect();
+            missing_from_run(Path::new("/lib/Game.pkg"), &parts)
+        };
+        assert!(suffixed(&["Game.pkg.0", "Game.pkg.1"]).is_empty());
+        assert_eq!(suffixed(&["Game.pkg.1", "Game.pkg.2"]), ["Game.pkg.0"]);
+        // A name with a wild number is not walked to.
+        assert!(named(&["Game_4000000000.pkg"]).is_empty());
     }
 }
