@@ -743,10 +743,26 @@ impl EngineLog {
     }
 }
 
+/// One start, stop or restart of the engine at a time. The child slot's own lock is held only
+/// around the slot: a Restart pressed while the first start still waited for the engine (up to
+/// READINESS_TIMEOUT, e.g. an antivirus scanning it) stopped that start's engine, so the first start
+/// reported the engine gone, or its timeout then killed the restart's engine and left none; an
+/// automatic restart overlapping a manual one could start two.
+fn lifecycle() -> &'static tokio::sync::Mutex<()> {
+    static LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    &LIFECYCLE
+}
+
 /// Start the engine child process and wait for HTTP readiness.
 ///
-/// Idempotent: a second call is a no-op if the engine is already up.
+/// Idempotent: a second call is a no-op if the engine is already up. One at a time with
+/// [`stop`] and [`restart`]: a call made meanwhile waits for the one running.
 pub async fn start(app: &AppHandle) -> Result<String> {
+    let _one = lifecycle().lock().await;
+    start_unlocked(app).await
+}
+
+async fn start_unlocked(app: &AppHandle) -> Result<String> {
     // Seed the configured URL from settings.json before the spawn
     // decision — renderer hydration runs too late to gate it here. Only
     // when the renderer has not said yet: what it pushed may be newer than the
@@ -1171,7 +1187,20 @@ fn chrono_like_now() -> String {
 /// it down in an orderly way, then kill it if it is still there after
 /// `SHUTDOWN_EOF_GRACE`. Idempotent — safe to call twice, safe to call
 /// when nothing is running.
+///
+/// Waits for a start in progress ([`lifecycle`]), except while the app exits: quitting is not
+/// held up by a slow start, whose engine ends with the app anyway (its parent watch, and the exit
+/// guard's kill).
 pub async fn stop() {
+    let _one = if crate::exit_guard::exiting() {
+        None
+    } else {
+        Some(lifecycle().lock().await)
+    };
+    stop_unlocked().await
+}
+
+async fn stop_unlocked() {
     let lock = child_lock().await;
     let mut guard = lock.lock().await;
     let Some(mut child) = guard.take() else {
@@ -1313,10 +1342,12 @@ fn restart_after_crash(app: AppHandle) {
 
 /// Stop the sidecar (if any) and start it again. For a remote engine this only re-probes it.
 pub async fn restart(app: &AppHandle) -> Result<String> {
+    // Both halves under one hold: no other start comes between the stop and the start.
+    let _one = lifecycle().lock().await;
     if is_loopback_url(&url()) {
-        stop().await;
+        stop_unlocked().await;
     }
-    start(app).await
+    start_unlocked(app).await
 }
 
 /// Read lines from a child's stdio, forward to our stderr with a tag,
@@ -1580,6 +1611,24 @@ mod engine_log_tests {
         assert!(!path.with_extension("log.old").exists());
         assert_eq!(std::fs::metadata(&path).unwrap().len(), after_failure + 5);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    /// A stop (a Restart's first half) waits for a start still waiting on the engine, rather
+    /// than taking that start's engine away under it.
+    #[tokio::test]
+    async fn a_stop_waits_for_a_start_in_progress() {
+        let start_in_progress = super::lifecycle().lock().await;
+        let stop = tokio::spawn(super::stop());
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(!stop.is_finished(), "the stop went ahead of the start");
+        drop(start_in_progress);
+        tokio::time::timeout(std::time::Duration::from_secs(10), stop)
+            .await
+            .expect("the stop ran once the start ended")
+            .unwrap();
     }
 }
 
