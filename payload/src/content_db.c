@@ -11,6 +11,7 @@
 #include "appdb_scan.h"
 #include "proc_list.h"
 #include "sqlite3.h"
+#include "utf8_cut.h"
 
 /* ── small helpers ───────────────────────────────────────────────────── */
 
@@ -279,6 +280,10 @@ static void cdb_fill_row(content_db_app_t *r, const char *tid,
     memset(r, 0, sizeof(*r));
     snprintf(r->title_id, sizeof(r->title_id), "%s", tid);
     snprintf(r->name, sizeof(r->name), "%s", name ? name : "");
+    /* A name longer than the row holds (about 86 CJK characters) is cut on a character, never
+     * in one: half a character is invalid UTF-8, and the engine then refused the whole page of
+     * the list, so every title only app.db knew of went missing from the installed list. */
+    r->name[utf8_whole_prefix(r->name, strlen(r->name))] = '\0';
     r->app_id = app_id;
 }
 

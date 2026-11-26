@@ -34,6 +34,7 @@
 #include "unregister_outcome.h"
 #include "install_guard.h"
 #include "json_key.h"
+#include "utf8_cut.h"
 #include "start_trace.h"
 #include "shell_builtin.h" /* mntinfo_snapshot */
 #include "content_db.h"
@@ -544,6 +545,9 @@ static int json_extract_string(const char *json, const char *key,
          * titles don't contain backslashes in any observed dataset. */
         out[i++] = *p++;
     }
+    /* A value cut at out_cap is cut on a character (utf8_cut.h): half of one is invalid UTF-8,
+     * and the registered list carrying it no longer parsed in the engine. */
+    i = utf8_whole_prefix(out, i);
     out[i] = '\0';
     return (i > 0) ? 0 : -1;
 }
