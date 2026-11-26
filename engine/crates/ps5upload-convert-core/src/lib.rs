@@ -28,5 +28,6 @@ pub mod image_build;
 pub mod lz4_packs;
 pub mod refusal;
 pub mod safe_write;
+pub mod unpack_packs;
 pub mod writing;
 pub mod zstd_packs;
