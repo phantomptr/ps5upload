@@ -11,6 +11,13 @@ describe("system Back on the Files listing (#932)", () => {
     expect(at("/mnt/usb0", { selecting: true })).toBe("end-selection");
   });
 
+  it("then lets go of what is staged to copy or move, at a drive's root too (#936)", () => {
+    expect(at("/mnt/usb0/homebrew", { selecting: true, staged: true })).toBe("end-selection");
+    expect(at("/mnt/usb0/homebrew", { staged: true })).toBe("cancel-staged");
+    expect(at("/mnt/usb0", { staged: true })).toBe("cancel-staged");
+    expect(at("/mnt/usb0/homebrew", { staged: true, view: true })).toBeNull();
+  });
+
   it("then goes up one folder", () => {
     expect(at("/mnt/usb0/homebrew/games")).toBe("up");
     expect(backUpTarget("/mnt/usb0/homebrew/games", "/mnt/usb0")).toBe("/mnt/usb0/homebrew");

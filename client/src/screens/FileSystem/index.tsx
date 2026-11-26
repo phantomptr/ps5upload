@@ -283,7 +283,7 @@ import { ltr } from "../../i18n";
 import NotificationInbox from "../../layout/NotificationInbox";
 import { createLongPress } from "../../lib/longPress";
 import { backUpTarget, filesBackStep, folderTitle } from "./phoneFiles";
-import { FilesColumn, PhoneFolderRow, PhoneSelectionActions, PhoneSelectionRow } from "./PhoneBars";
+import { FilesColumn, PhoneFolderRow, PhoneSelectionActions, PhoneSelectionRow, PhoneStagedBar } from "./PhoneBars";
 
 function parent(p: string): string {
   if (p === "/" || p === "") return "/";
@@ -2443,7 +2443,9 @@ export default function FileSystemScreen() {
     }));
     if (items.length === 0) return;
     clipboard.set(op, items, path);
+    // Selecting is done: on a phone the staged items' bar takes the selection's place.
     setSelected(new Set());
+    setSelectMode(false);
   };
 
   // Paste: apply clipboard.op to every item, pasting into `path`.
@@ -3144,6 +3146,9 @@ export default function FileSystemScreen() {
   const selecting = selectMode || selectionActive;
   /** Selection mode as the phone shows it: checkboxes, the selection row, the bottom bar. */
   const phoneSelecting = phone && selecting && view === null;
+  /** Something staged to copy or move, shown in a bar where the bottom navigation is (#936):
+   *  not while selecting, whose actions have that place. */
+  const phoneStaged = phone && clipboardActive && !selecting && view === null;
   const endSelection = () => {
     setSelected(new Set());
     setSelectMode(false);
@@ -3156,12 +3161,20 @@ export default function FileSystemScreen() {
   } | null>(null);
   const togglePhoneMenu = (kind: NonNullable<typeof phoneMenu>["kind"], anchor: DOMRect) =>
     setPhoneMenu((cur) => (cur?.kind === kind ? null : { kind, anchor }));
-  // Back on the listing once nothing covers it: selection mode first, then up one folder; from
-  // the drive's root it leaves Files. Menus, dialogs and the inline editors close before that.
-  const backState = { view: view !== null, selecting, path, driveRoot: currentVolumePath };
+  // Back on the listing once nothing covers it: selection mode first, then the staged items'
+  // bar, then up one folder; from the drive's root it leaves Files. Menus, dialogs and the inline
+  // editors close before that.
+  const backState = {
+    view: view !== null,
+    selecting,
+    staged: phoneStaged,
+    path,
+    driveRoot: currentVolumePath,
+  };
   useScreenBack(filesBackStep(backState) !== null, () => {
     const step = filesBackStep(backState);
     if (step === "end-selection") endSelection();
+    else if (step === "cancel-staged") clipboard.clear();
     else if (step === "up") {
       const to = backUpTarget(path, currentVolumePath);
       if (to !== null) setPath(to);
@@ -3173,12 +3186,14 @@ export default function FileSystemScreen() {
   useBackDismiss(linkInto !== null, () => setLinkInto(null));
   // The selection's actions take the bottom navigation's place (index.css hides it). Only while
   // Files is on show: a kept, hidden screen has its effects torn down.
+  // The staged items' bar the same way.
+  const phoneBottomBar = phoneSelecting || phoneStaged;
   useEffect(() => {
-    if (!phoneSelecting) return;
+    if (!phoneBottomBar) return;
     const root = document.documentElement;
     root.setAttribute("data-selection-bar", "");
     return () => root.removeAttribute("data-selection-bar");
-  }, [phoneSelecting]);
+  }, [phoneBottomBar]);
   // One bar at the top, not two (#936): on a phone the compact header carries the bell, and the
   // app's top bar gives it its place (`html[data-screen-bar]`, index.css). Held sideways too,
   // where the row beside the sidebar gives way and only its console tabs stay: two rows left
@@ -4304,9 +4319,10 @@ export default function FileSystemScreen() {
           {/* Everything under the header: on a phone, the one part that scrolls. */}
           <div data-files-scroll="" data-scroll-inner="">
           {/* Clipboard banner: non-empty clipboard shows what's staged and
-            where it came from; paste target is always the current path. */}
+            where it came from; paste target is always the current path. A phone has a bar
+            at the bottom instead (PhoneStagedBar). */}
           {clipboardActive && (
-            <div className="mb-3 flex items-center gap-2 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] p-2 text-xs">
+            <div data-testid="fs-staged-banner" className="mb-3 phone:hidden flex items-center gap-2 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] p-2 text-xs">
               <ClipboardPaste size={14} className="text-[var(--color-accent)]" />
               <span>
                 <span className="font-medium">
@@ -5125,6 +5141,29 @@ export default function FileSystemScreen() {
                     menu: phoneMenu?.kind === "selection",
                   },
                 ]}
+              />
+            </>
+          )}
+          {phoneStaged && (
+            <>
+              <div aria-hidden className="h-20 roomy:hidden" />
+              <PhoneStagedBar
+                label={tr("fs_staged_bar", undefined, "Items to paste")}
+                countLabel={
+                  clipboard.op === "cut"
+                    ? tr("fs_staged_move", { count: clipboard.items.length }, `Items to move: ${clipboard.items.length}`)
+                    : tr("fs_staged_copy", { count: clipboard.items.length }, `Items to copy: ${clipboard.items.length}`)
+                }
+                fromLabel={
+                  clipboard.sourceLabel
+                    ? tr("fs_staged_from", { path: clipboard.sourceLabel }, `From ${clipboard.sourceLabel}`)
+                    : null
+                }
+                pasteLabel={tr("fs_paste_here", undefined, "Paste here")}
+                onPaste={() => void runPaste()}
+                pasteDisabled={bulkOp.op !== null || !host?.trim()}
+                cancelLabel={tr("cancel", undefined, "Cancel")}
+                onCancel={() => clipboard.clear()}
               />
             </>
           )}
