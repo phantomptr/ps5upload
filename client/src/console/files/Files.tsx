@@ -1416,7 +1416,13 @@ export function Files({ ctx }: { ctx: SectionContext }) {
   }, [revealed]);
   /** "Show more" had focus when it read the next page: the row count before it. */
   const afterMore = useRef<number | null>(null);
-  const { refresh } = dir;
+  // The folder again, and the drives with it: what was just deleted or copied changed the
+  // free space under the list, which was read when Files opened (#944).
+  const listAgain = dir.refresh;
+  const refresh = useCallback(() => {
+    listAgain();
+    setVolumesTick((n) => n + 1);
+  }, [listAgain]);
   // Inside a folder, the browser's Back (○) goes up one level.
   useBackLevel(path != null);
 

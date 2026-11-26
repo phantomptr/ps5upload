@@ -6,7 +6,6 @@ import { filesViewLink } from "../FileSystem/filesViews";
 import { useConnectionStore } from "../../state/connection";
 import {
   fetchHwStorage,
-  fetchVolumes,
   fsUnmount,
   volumeLikelyFitsBytes,
   type Volume,
@@ -30,6 +29,7 @@ import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { isInternalVolume, usePkgStorageStore } from "../../lib/pkgStorage";
 import { saveFsLastPath } from "../../lib/fsLastPath";
 import { canEjectUsb, useUsbEject } from "../../lib/useUsbEject";
+import { refreshVolumesAfterChange, useConsoleVolumes } from "../../state/volumes";
 import { KeptByApp } from "./KeptByApp";
 
 /** Path prefix for volumes our FS_MOUNT creates. Showing an Unmount
@@ -48,14 +48,22 @@ export default function VolumesScreen() {
   const guard = useStaleHostGuard();
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const navigate = useNavigate();
-  const [volumes, setVolumes] = useState<Volume[] | null>(null);
-  // Counts completed drive-list loads, so what ps5upload keeps is measured again with them.
-  const [loadedCount, setLoadedCount] = useState(0);
+  // The drives come from the slot every screen shares (state/volumes): what this screen shows
+  // as free is what Files and Upload show (#944). Read on open, on coming back into view,
+  // on Refresh, and when a job on the console ends.
+  const drives = useConsoleVolumes(host, payloadStatus === "up");
+  // A reading that could not be renewed is not shown as the drives' state: the error is.
+  const volumes = drives.error ? null : drives.volumes;
+  const loading = drives.loading;
   // What the console keeps back of its internal storage for its own use (a fact the console
   // reports; nothing is derived from it). Null = not reported.
   const [consoleKept, setConsoleKept] = useState<number | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // An unmount or an eject that failed. A failed read of the drives is the slot's own error.
+  const [actionError, setActionError] = useState<string | null>(null);
+  // Through the shared humanizer, so a transient `fs_list_volumes_getmntinfo_failed` reads
+  // as something to retry and not as a raw internal string.
+  const error = actionError ?? (drives.error ? humanizePs5Error(drives.error) : null);
+  const setError = setActionError;
   const [unmountingPath, setUnmountingPath] = useState<string | null>(null);
   // This console's default drive for install packages (null = internal).
   const packageDrive = usePkgStorageStore((s) => (host ? s.defaults[hostOf(host)] ?? null : null));
@@ -66,38 +74,28 @@ export default function VolumesScreen() {
 
   const refresh = useCallback(async () => {
     if (!host?.trim()) return;
-    // Host-stale guard (2.12.0 migrated to canonical useStaleHostGuard).
-    // fetchVolumes can take seconds on a PS5 with many mounts; an
-    // OLD list attributed to NEW host could lead to Unmount clicks
-    // targeting the wrong console.
+    setActionError(null);
+    await refreshVolumesAfterChange(host);
+  }, [host]);
+
+  // Measured with each reading of the drives, so the line under the bar is as old as the bar.
+  // Best effort: a helper without the storage summary just shows no "kept" line.
+  const drivesReadAt = drives.loadedAtMs;
+  useEffect(() => {
+    if (!host?.trim() || drivesReadAt === null || payloadStatus !== "up") return;
     const probe = guard.capture();
-    setLoading(true);
-    setError(null);
-    try {
-      const list = await fetchVolumes(transferAddr(probe.host));
-      if (probe.isStale()) return;
-      setVolumes(list);
-      setLoadedCount((n) => n + 1);
-      // Best effort: a payload without the storage summary just shows no "kept" line.
-      fetchHwStorage(transferAddr(probe.host))
-        .then((hw) => {
-          if (!probe.isStale()) setConsoleKept(hw.user_reserved_bytes > 0 ? hw.user_reserved_bytes : null);
-        })
-        .catch(() => {
-          if (!probe.isStale()) setConsoleKept(null);
-        });
-    } catch (e) {
-      if (probe.isStale()) return;
-      const raw = e instanceof Error ? e.message : String(e);
-      // Run through the shared humanizer so transient
-      // `fs_list_volumes_getmntinfo_failed` payload errors surface
-      // as a retryable hint instead of a raw internal string.
-      setError(humanizePs5Error(raw));
-      setVolumes(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [host, guard]);
+    let live = true;
+    fetchHwStorage(transferAddr(probe.host))
+      .then((hw) => {
+        if (live && !probe.isStale()) setConsoleKept(hw.user_reserved_bytes > 0 ? hw.user_reserved_bytes : null);
+      })
+      .catch(() => {
+        if (live && !probe.isStale()) setConsoleKept(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [host, drivesReadAt, guard, payloadStatus]);
 
   const { eject: handleEject, ejectingPath, dialog: ejectDialogNode } = useUsbEject({
     onEjected: () => refresh(),
@@ -144,10 +142,6 @@ export default function VolumesScreen() {
       setUnmountingPath(null);
     }
   };
-
-  useEffect(() => {
-    if (payloadStatus === "up") refresh();
-  }, [payloadStatus, refresh]);
 
   const { storageDrives, mountedImages } = useMemo(() => {
     const storage: Volume[] = [];
@@ -325,7 +319,7 @@ export default function VolumesScreen() {
           <KeptByApp
             host={host}
             drives={keptDrives}
-            refreshKey={loadedCount}
+            refreshKey={drivesReadAt ?? 0}
             confirm={confirmDialog}
             onOpenPath={(path) => {
               // `?path=`: Files reads its saved folder only when it mounts (see EditSessionBanner).

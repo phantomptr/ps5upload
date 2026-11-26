@@ -2,14 +2,12 @@
 // upload one, and the real path before anything runs. With no drive picked it is the drive set
 // under Volumes › Use for packages for that console.
 
-import { useEffect, useId, useState } from "react";
+import { useId } from "react";
 
 import {
-  fetchVolumes,
   volumeAllocatableBytes,
   type Volume,
 } from "../../api/ps5";
-import { consoleAddr, hostOf } from "../../lib/addr";
 import { formatBytes } from "../../lib/format";
 import {
   DEFAULT_IMAGE_SUBPATH,
@@ -18,26 +16,12 @@ import {
 } from "../../lib/imageUpload";
 import { usePkgStorageStore } from "../../lib/pkgStorage";
 import { resolveUploadDest } from "../../lib/uploadDest";
+import { useConsoleVolumes as useSharedVolumes } from "../../state/volumes";
 import { useTr } from "../../state/lang";
 
-/** The console's drives; null until known or when they cannot be read. */
+/** The console's drives; null until known. The reading every screen shares (state/volumes). */
 export function useConsoleVolumes(host: string | null): Volume[] | null {
-  const [volumes, setVolumes] = useState<Volume[] | null>(null);
-  const key = host ? hostOf(host) : "";
-  useEffect(() => {
-    setVolumes(null);
-    if (!key) return;
-    let live = true;
-    fetchVolumes(consoleAddr(key))
-      .then((v) => {
-        if (live) setVolumes(v);
-      })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [key]);
-  return volumes;
+  return useSharedVolumes(host).volumes;
 }
 
 /** The folder an image lands in: `<drive>/<folder>`. */

@@ -42,7 +42,6 @@ import {
   type SourceKind,
 } from "../../state/upload";
 import {
-  fetchVolumes,
   pathKind,
   probeDestination,
   volumeAllocatableBytes,
@@ -94,6 +93,7 @@ import { convertFirstState } from "../../lib/convertFirst";
 import { isRemotePath } from "../../lib/remotePath";
 import { useUploadSettingsStore } from "../../state/uploadSettings";
 import { useUploadQueueStore } from "../../state/uploadQueue";
+import { useConsoleVolumes } from "../../state/volumes";
 import { SendAsImageCard } from "./SendAsImageCard";
 import { isImageFolder } from "./imageDirNote";
 import { pkgLibraryStore } from "../../state/pkgLibrary";
@@ -459,7 +459,17 @@ export default function UploadScreen({
   // hardcoded `/data /mnt/ext0 /mnt/usb0` list which hid every other
   // mount point (e.g. `/mnt/ext1`, `/mnt/usbN` for N>0, and any
   // ps5upload-mounted images).
-  const [availableVolumes, setAvailableVolumes] = useState<Volume[]>([]);
+  //
+  // The shared reading of the drives (state/volumes), not a copy made when the screen opened:
+  // the "usable" figure beside each drive, and the will-it-fit check on a batch, used the free
+  // space of before the last upload until the screen was left and opened again (#944).
+  const drives = useConsoleVolumes(host);
+  const availableVolumes = useMemo<Volume[]>(
+    // Only writable, real drives are upload targets. A placeholder is a mount point the
+    // helper reports even when nothing is mounted there.
+    () => (drives.volumes ?? []).filter((v) => v.writable && !v.is_placeholder),
+    [drives.volumes],
+  );
 
   /** Snapshot the current source + destination + options into a queue
    *  item. Captured at click time, so subsequent edits to the form
@@ -617,31 +627,6 @@ export default function UploadScreen({
   useEffect(() => {
     setPreflightError(null);
   }, [source?.path, source?.kind, destinationVolume, destinationSubpath]);
-  useEffect(() => {
-    if (!host?.trim()) {
-      setAvailableVolumes([]);
-      return;
-    }
-    let cancelled = false;
-    const addr = consoleAddr(host);
-    fetchVolumes(addr)
-      .then((vols) => {
-        if (cancelled) return;
-        // Only writable, non-placeholder volumes are valid upload
-        // targets. Placeholders are mount-points the payload reports
-        // even when nothing is mounted there.
-        setAvailableVolumes(
-          vols.filter((v) => v.writable && !v.is_placeholder),
-        );
-      })
-      .catch(() => {
-        if (!cancelled) setAvailableVolumes([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [host]);
-
   // The destination as the user picks it (not a prefill): a prefill never overrides it.
   const userChoseDest = useRef(false);
   const chooseDestination = (volume: string | null, subpath?: string) => {

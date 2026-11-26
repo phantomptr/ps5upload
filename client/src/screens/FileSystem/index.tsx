@@ -137,7 +137,6 @@ import {
   jobStatus,
   startTransferDownload,
   startTransferDownloadZip,
-  fetchVolumes,
   generateTxIdHex,
   pathKind,
   loadConsolePayload,
@@ -201,6 +200,7 @@ import {
 import { enqueueFsUpload, fsUploadReservations, pauseFsUpload, pauseFsUploadQueue, resumeFsUploadItem, resumeFsUploadQueue, removeFsUploadQueued, sendFsUploadNow, useFsUploadQueue } from "../../state/fsUploadQueue";
 import { nameKey, type FsExistingEntry } from "../../state/fsUploadPlan";
 import { fsUploadDeps } from "../../state/fsUploadRuntime";
+import { refreshVolumes, refreshVolumesAfterChange, useConsoleVolumes } from "../../state/volumes";
 import { useScrollLock } from "../../lib/useScrollLock";
 import { runBulkDelete as runBulkDeleteLoop } from "../../lib/bulkDelete";
 import { krakenKeptPaths } from "../../lib/krakenGuard";
@@ -423,6 +423,12 @@ export function isSinglePathName(name: string): boolean {
   );
 }
 
+/** How long a reading of the drives counts as recent while folders are browsed. Refresh, and
+ *  anything done here that changes free space, reads them again whatever their age. */
+const DRIVES_FRESH_MS = 30_000;
+/** The same for a dialog that says whether something fits on a drive. */
+const DIALOG_FRESH_MS = 5_000;
+
 /** The in-app drag of rows to move them (the row names, as JSON). */
 const FS_DRAG_MIME = "application/x-ps5upload-fs-move";
 
@@ -465,17 +471,21 @@ export default function FileSystemScreen() {
   // are handled by the effect below.
   const [searchParams, setSearchParams] = useSearchParams();
   const [path, setPath] = useState<string>(() => loadFsLastPath(host));
-  // Refetched whenever host or payloadStatus changes. Drives the
-  // volume picker dropdown — same shape Library's Move modal uses.
-  // null while loading or before the first probe completes; an empty
-  // array means the probe ran but the PS5 has no writable volumes
-  // (rare on stock PS5, but possible after a user mounts and then
-  // unmounts everything). Errors are swallowed silently — the picker
-  // just hides itself, which is less noisy than yet another red
-  // banner for what's a degraded-but-functional state.
-  const [volumes, setVolumes] = useState<Volume[] | null>(null);
-  // Bumped after a USB eject so the drive bar lists the drives again.
-  const [volumesEpoch, setVolumesEpoch] = useState(0);
+  // The console's drives, for the drive chips, the phone's drive menu and the Move/Extract
+  // dialogs: the slot every screen shares (state/volumes), so the free space here is the
+  // free space Volumes shows. null while not read (or with the helper not answering); an
+  // empty array means the console reports no writable drive. A read that fails says nothing
+  // here (the last list stays): another red banner would be noise for a state that works.
+  const drives = useConsoleVolumes(host, payloadStatus === "up");
+  const volumes = useMemo<Volume[] | null>(
+    () =>
+      payloadStatus === "up" && drives.volumes
+        ? // Writable, real drives only: the chips are for going there, and a placeholder
+          // ("nothing mounted here yet") would jump to a path that does not exist.
+          drives.volumes.filter((v) => v.writable && !v.is_placeholder)
+        : null,
+    [drives.volumes, payloadStatus],
+  );
   const [entries, setEntries] = useState<DirEntry[] | null>(null);
   // The folder on screen is a Mesh Drive's (its marker file is in it, hidden from the list).
   const [meshHome, setMeshHome] = useState(false);
@@ -609,8 +619,8 @@ export default function FileSystemScreen() {
   // Eject next to each USB drive, as the console's own Files page has (#496). Browsing inside
   // the drive that went away returns to /data.
   const { eject: ejectUsb, ejectingPath, dialog: ejectDialogNode } = useUsbEject({
-    onEjected: (_host, mountPoint) => {
-      setVolumesEpoch((n) => n + 1);
+    onEjected: (ejectedOn, mountPoint) => {
+      void refreshVolumesAfterChange(ejectedOn);
       setPath((p) => (p === mountPoint || p.startsWith(`${mountPoint}/`) ? "/data" : p));
     },
     onError: setError,
@@ -626,7 +636,7 @@ export default function FileSystemScreen() {
   // mid-run is harmless. The runner loops keep going (writing to
   // the store), the screen re-mount sees the in-flight progress.
 
-  const refresh = useCallback(async () => {
+  const listFolder = useCallback(async () => {
     if (!host?.trim()) return;
     // Stale-result guard (2.9.0). The user can navigate (changes
     // `path`) or switch PS5 (changes `host`) faster than ps5_list_dir
@@ -750,46 +760,28 @@ export default function FileSystemScreen() {
       setLoading(false);
     }
   }, [host, path, tr]);
+  // Refresh, and the listing after anything done here (a delete, a paste, an extract, an
+  // upload that ended): the folder AND the drives. The drive chips used to keep the free
+  // space read when the screen opened, whatever was deleted or copied since (#944).
+  const refresh = useCallback(async () => {
+    void refreshVolumesAfterChange(host);
+    await listFolder();
+  }, [host, listFolder]);
   // Layout effects run before the passive ones below, so the listing effect of the same
   // commit already sees the new place.
   useLayoutEffect(() => {
     placeRef.current = { host, path };
-    refreshRef.current = refresh;
-  }, [host, path, refresh]);
+    refreshRef.current = listFolder;
+  }, [host, path, listFolder]);
 
+  // Opening a folder lists it. The drives are read again only if their reading is not
+  // recent: a job running from another screen moves free space while folders are browsed,
+  // but one more console call per folder opened would be waste.
   useEffect(() => {
-    if (payloadStatus === "up") refresh();
-  }, [payloadStatus, refresh]);
-
-  // Fetch writable volumes whenever the connection becomes healthy or
-  // the host changes. Same data the Library Move modal uses — listing
-  // volumes on the FileSystem screen lets users jump between mounts
-  // (/data → /mnt/ext1 → /mnt/usb0) with one click instead of
-  // navigating up to / and clicking down. Errors swallow silently;
-  // the picker just won't render.
-  useEffect(() => {
-    if (payloadStatus !== "up" || !host?.trim()) {
-      setVolumes(null);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const vols = await fetchVolumes(consoleAddr(host));
-        if (!cancelled) {
-          // Only show writable, non-placeholder volumes — the picker
-          // is for navigation, and a placeholder ("disk not yet
-          // mounted") would jump to a nonexistent path.
-          setVolumes(vols.filter((v) => v.writable && !v.is_placeholder));
-        }
-      } catch {
-        if (!cancelled) setVolumes([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [host, payloadStatus, volumesEpoch]);
+    if (payloadStatus !== "up") return;
+    void refreshVolumes(host, { maxAgeMs: DRIVES_FRESH_MS });
+    void listFolder();
+  }, [payloadStatus, listFolder, host]);
 
   // An "Add files" run ended (here, or while another screen was open): list the folder
   // again so what landed shows. The count is per console, so a console switch is not a run.
@@ -2226,6 +2218,12 @@ export default function FileSystemScreen() {
     choice: ExtractChoice | null;
     after?: ExtractAfter;
   } | null>(null);
+  // Move to and Extract show each drive's free space and say whether the items fit: they open
+  // on a reading of now, not one from before a job running elsewhere filled the drive.
+  const spaceDialogOpen = moveItems !== null || extractAsk !== null;
+  useEffect(() => {
+    if (spaceDialogOpen) void refreshVolumes(host, { maxAgeMs: DIALOG_FRESH_MS });
+  }, [spaceDialogOpen, host]);
   const extractNameTaken = (n: string) => !!entries?.some((e) => e.name === n);
   const runExtract = async (
     entry: DirEntry,
