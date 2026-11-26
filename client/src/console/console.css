@@ -84,6 +84,9 @@ button {
 
 .cw-app {
   display: grid;
+  /* minmax(0, …): the column never grows to a wide row's width (a running task's long name on a
+   * phone pushed every section past the screen's edge, cut off since body does not scroll). */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto 1fr auto;
   height: 100vh;
 }
