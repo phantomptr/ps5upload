@@ -7,6 +7,7 @@
  * buffer is on the heap. */
 #include "webui_api.h"
 
+#include <errno.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -2916,6 +2917,20 @@ static void s_cheats_store(const webui_req_t *r, const uint8_t *pre, size_t pre_
         drain_then(fd, left);
         send_error(fd, 500, why, strlen(why));
         return;
+    }
+    /* The game's saved switches count positions across all of its cheat files, so a new or changed
+     * file moves them and the watcher would switch on cheats nobody chose: they are cleared first,
+     * as the app does, and nothing is written when they cannot be. */
+    {
+        char title[10], state[API_PATH];
+        if (webui_cheat_file_title(name, title) && webui_cheat_state_path(WEBUI_CHEATS_ROOT, title, state, sizeof state) == 0 &&
+            unlink(state) != 0 && errno != ENOENT) {
+            pthread_mutex_unlock(&g_cheat_mu);
+            free(buf);
+            drain_then(fd, left);
+            send_error(fd, 500, "state_not_cleared", 17);
+            return;
+        }
     }
     if (folder_of(target, dir, sizeof dir) == 0) (void)wf_sweep_stale(dir, time(NULL), WF_STALE_PART_S);
     replaced = lstat(target, &old) == 0 && S_ISREG(old.st_mode); /* stores are serialized (g_cheat_mu) */

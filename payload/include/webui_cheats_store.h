@@ -31,6 +31,14 @@ const char *webui_cheat_store_query(const char *query, char fmt[WEBUI_CHEAT_FMT_
  * when it does not fit or the folder cannot be made (or is not a real folder: a link is refused). */
 int webui_cheat_target(const char *root, const char *fmt, const char *name, char *out, size_t cap);
 
+/* The game a cheat file is for, from its name as cheats.c matches it (filename_matches_title): a title
+ * id (four letters, five digits, any case) then '.' or '_'. Into `out` in upper case: 1, else 0 and "". */
+int webui_cheat_file_title(const char *name, char out[10]);
+
+/* "<root>/state/<TITLE>.json", the game's saved switches (cheats.c state_path: always upper case),
+ * into `out`. 0, or -1 when `title` is not one or it does not fit. */
+int webui_cheat_state_path(const char *root, const char *title, char *out, size_t cap);
+
 /* The game's version from an APP_INFO_QUERY reply ({"ok":true,"rows":[{"key":..,"val":..}..]}):
  * CONTENT_VERSION (PS5, "01.000.016") first, else the higher of VERSION and APP_VER (PS4, "01.32":
  * an update raises VERSION, appinfo_version.h), the same forms the cheat files name their target

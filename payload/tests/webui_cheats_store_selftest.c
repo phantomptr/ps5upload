@@ -237,9 +237,29 @@ static void version_pick(void) {
     CHECK(appinfo_version_cmp("99999999999999999999", "1") > 0); /* no overflow */
 }
 
+/* A downloaded file's game, and where its saved switches are: always the upper-case title id. */
+static void titles(void) {
+    char t[10], p[256];
+    CHECK(webui_cheat_file_title("CUSA15438_01.00.json", t) && strcmp(t, "CUSA15438") == 0);
+    CHECK(webui_cheat_file_title("ppsa01650.shn", t) && strcmp(t, "PPSA01650") == 0);
+    CHECK(webui_cheat_file_title("Ppsa01650_2.mc4", t) && strcmp(t, "PPSA01650") == 0);
+    CHECK(!webui_cheat_file_title("PPSA0165.json", t) && t[0] == '\0');
+    CHECK(!webui_cheat_file_title("PPSA016501.json", t));
+    CHECK(!webui_cheat_file_title("1PSA01650.json", t));
+    CHECK(!webui_cheat_file_title("PPSA01650-x.json", t));
+    CHECK(!webui_cheat_file_title("mygame.json", t));
+    CHECK(!webui_cheat_file_title("", t));
+    CHECK(webui_cheat_state_path("/data/ps5upload/cheats", "PPSA01650", p, sizeof p) == 0);
+    CHECK(strcmp(p, "/data/ps5upload/cheats/state/PPSA01650.json") == 0);
+    CHECK(webui_cheat_state_path("/r", "ppsa01650", p, sizeof p) == -1); /* only the upper-case name */
+    CHECK(webui_cheat_state_path("/r", "../x/../y", p, sizeof p) == -1);
+    CHECK(webui_cheat_state_path("/r", "PPSA01650", p, 10) == -1);
+}
+
 int main(void) {
     formats();
     names();
+    titles();
     queries();
     store();
     versions();
