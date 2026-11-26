@@ -14,6 +14,7 @@ import {
   AmprSection,
   FullVerifyOption,
   ImageChoice,
+  PackagePacks,
   UnpackOption,
   type Lz4Choice,
   type UnpackChoice,
@@ -61,6 +62,10 @@ export interface OptionsCardProps {
   /** The game is in asset packs and no pack option is on: offer to write plain files again
    *  (an image, a folder, or a package, which also offers to leave the AMPR emulator out). */
   unpack?: UnpackChoice;
+  /** The game under ① has been checked (and is one whose files could be looked at: not an
+   *  archive). A package then says whether the game is in asset packs; until then, that
+   *  checking it shows the options for one that is. */
+  gameChecked?: boolean;
   onLanguage?: (code: string) => void;
   /** A game is being made: this card sets what the next game added uses (#669). */
   forNext?: boolean;
@@ -76,11 +81,17 @@ export function OptionsCard(props: OptionsCardProps) {
   // A PS4 package has neither the PS5 package's compression nor its language; it is always
   // read back whole.
   const ps4Package = props.ps4 === true && props.make !== "image" && props.make !== "folder";
+  // A PS5 package is what is being made.
+  const pkg = props.make !== "image" && props.make !== "folder" && !ps4Package;
   return (
     <Card padded={false} className="p-3.5 sm:p-4">
       <div className="flex flex-col gap-2.5 text-sm">
         <div className="font-medium">{tr("fpkg.card.options_v2", undefined, "③ Options")}</div>
         {props.forNext && <NextGameNote />}
+        {/* A package's asset-pack choices first: what they decide (how large the package is, and
+            whether it needs the AMPR emulator) matters more than anything below, and under the
+            output folder and four compression tiles they were a long way down on a phone. */}
+        {pkg && <PackagePacks unpack={props.unpack} state={props.gameChecked ? "none" : "pending"} />}
         <div className="flex flex-col gap-1">
           <label htmlFor="fpkg-output" className="text-[var(--color-muted)]">
             {tr("fpkg.output", undefined, "Output folder")}
@@ -211,10 +222,7 @@ export function OptionsCard(props: OptionsCardProps) {
             />
           </div>
         )}
-        {props.unpack && props.make !== "image" && props.make !== "folder" && !ps4Package && (
-          <UnpackOption unpack={props.unpack} />
-        )}
-        {props.onLanguage && props.make !== "image" && props.make !== "folder" && !ps4Package && (
+        {props.onLanguage && pkg && (
           <div className="flex flex-col gap-1">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <label htmlFor="fpkg-language" className="text-[var(--color-muted)]">

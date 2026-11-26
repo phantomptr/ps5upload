@@ -87,6 +87,7 @@ import {
   thenFor,
   useConvertQueue,
   type ConvertBuild,
+  type ConvertItem,
   type ConvertThen,
 } from "../../state/convertQueue";
 import { gameFoldersAmong, gamesInFolder } from "../../lib/folderScan";
@@ -256,6 +257,8 @@ export default function WorkshopScreen() {
     unpack?: boolean,
     /** With `unpack`, a package's: leave its AMPR emulator out. */
     leaveOutAmprEmu?: boolean,
+    /** The packs the game is in ("none": in none), when it is the game checked under ①. */
+    packs?: ConvertItem["packs"],
   ): boolean | QueueSkip => {
     // A later part of a multi-part archive is read through its first part.
     if (isRarLaterVolume(src)) return "later-part";
@@ -301,6 +304,7 @@ export default function WorkshopScreen() {
           ? { volume: u.destinationVolume, subpath: u.destinationSubpath || DEFAULT_IMAGE_SUBPATH }
           : undefined,
       language: lang || undefined,
+      packs,
       then,
       host: then !== "keep" ? host : null,
       deleteAfterInstall: then !== "keep" && deleteAfter,
@@ -1286,6 +1290,8 @@ export default function WorkshopScreen() {
               lz4: locked ? undefined : lz4Choice,
             }}
             unpack={locked ? undefined : (unpackChoice ?? pkgUnpackChoice)}
+            // An archive is not looked inside until the run unpacks it: its packs aren't known.
+            gameChecked={!locked && inspection !== null && !noFiles && !isArchiveSource(src)}
             language={locked ? nextLanguage : language}
             onLanguage={locked ? setNextLanguage : setLanguage}
             onCompression={setCompression}
@@ -1399,6 +1405,10 @@ export default function WorkshopScreen() {
                 build.kind === "folder" ? folderPackOptions(lz4Choice, packProfile) : undefined,
                 build.kind === "pkg" ? pkgUnpackOn : unpackOn,
                 build.kind === "pkg" && pkgLeavesOutEmu,
+                // Checked here: the queue shows this game's own pack choices while it waits.
+                inspection && !noFiles && !isArchiveSource(source.trim()) && !inspection.ps4_game
+                  ? (inspection.packs ?? "none")
+                  : undefined,
               );
               if (r === "not-image" || r === "not-folder" || r === "later-part") setError(skippedText(r, 1));
               else if (!r) setError(tr("cq_already", undefined, "This game is already in the queue."));

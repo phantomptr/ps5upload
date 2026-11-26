@@ -324,6 +324,48 @@ describe("OptionsCard for a package of a game in asset packs (#933)", () => {
     const ps4 = renderToStaticMarkup(<OptionsCard {...props} make="pkg" ps4 unpack={pkgUnpack(true)} />);
     expect(ps4).not.toContain("unpack-option");
   });
+
+  // Someone looked for "create fpkg without ampr" and found nothing: the two options only
+  // showed for a checked game in packs, under the output folder and the compression tiles.
+  it("puts them first under ③, in a group named for asset packs and AMPR", () => {
+    const html = renderToStaticMarkup(<OptionsCard {...props} make="pkg" gameChecked unpack={pkgUnpack(true)} />);
+    expect(html).toMatch(/role="group" aria-label="Asset packs and AMPR"[^>]*data-testid="pkg-packs"/);
+    const at = (needle: string) => html.indexOf(needle);
+    expect(at("pkg-packs")).toBeGreaterThan(0);
+    expect(at("pkg-packs")).toBeLessThan(at("Output folder"));
+    expect(at("unpack-option")).toBeLessThan(at('role="radiogroup"'));
+    expect(at("leave-out-ampr-emu")).toBeLessThan(at("Output folder"));
+    // The note is for a game with nothing to choose.
+    expect(html).not.toContain("pkg-packs-note");
+  });
+
+  it("says where the options are before a game is checked, and why there are none for a plain game", () => {
+    const pending = renderToStaticMarkup(<OptionsCard {...props} make="pkg" />);
+    expect(pending).toMatch(/data-testid="pkg-packs-note" data-state="pending"/);
+    expect(pending).toContain("Asset packs and AMPR");
+    expect(pending).toContain(
+      "Check a game under ① first. If it is in asset packs, the options to unpack them and to leave out the AMPR emulator appear here.",
+    );
+    expect(pending).not.toContain("unpack-option");
+    const plain = renderToStaticMarkup(<OptionsCard {...props} make="pkg" gameChecked />);
+    expect(plain).toMatch(/data-testid="pkg-packs-note" data-state="none"/);
+    expect(plain).toContain("This game has no asset packs, so there is nothing to unpack.");
+    expect(plain).not.toContain("Check a game under ① first");
+    // One line each, in the same place the options take.
+    for (const html of [pending, plain]) expect(html.indexOf("pkg-packs-note")).toBeLessThan(html.indexOf("Output folder"));
+  });
+
+  it("says nothing of a package's packs for an image, a folder or a PS4 package", () => {
+    const image = renderToStaticMarkup(
+      <OptionsCard {...props} make="image" image={{ format: "ffpkg", compress: false, onChoice: () => {} }} />,
+    );
+    const folder = renderToStaticMarkup(<OptionsCard {...props} make="folder" />);
+    const ps4 = renderToStaticMarkup(<OptionsCard {...props} make="pkg" ps4 gameChecked />);
+    for (const html of [image, folder, ps4]) {
+      expect(html).not.toContain("pkg-packs");
+      expect(html).not.toContain("Asset packs and AMPR");
+    }
+  });
 });
 
 describe("OptionsCard verification", () => {
@@ -754,6 +796,67 @@ describe("a waiting game's own options (#669)", () => {
     const folder = await options(waitingItem({ source: "/dl/game.exfat", build: { kind: "folder", zstd: { level: 1 } } }));
     expect(folder).toContain("cq-zstd-level");
     expect(await options(waitingItem({ build: { kind: "pkg" } }))).not.toContain("cq-packs");
+  });
+
+  // The same two choices while a package waits in the queue: shown for a game known to be in
+  // packs, with one line otherwise.
+  it("shows a waiting package's asset-pack choices, or says why it has none", async () => {
+    const packed = await options(waitingItem({ build: { kind: "pkg", unpackPacks: true }, packs: "zstd" }));
+    expect(packed).toMatch(/aria-label="Asset packs and AMPR"[^>]*data-testid="pkg-packs"/);
+    expect(packed).toMatch(/data-testid="unpack-option"[^>]*>\s*<input[^>]*checked/);
+    expect(packed).toContain("Unpack the asset packs");
+    expect(packed).toContain("Leave out the AMPR emulator");
+    expect(packed).not.toMatch(/data-testid="leave-out-ampr-emu"[^>]*>\s*<input[^>]*checked/);
+    expect(packed.indexOf("pkg-packs")).toBeLessThan(packed.indexOf("Compression"));
+    const left = await options(
+      waitingItem({ build: { kind: "pkg", unpackPacks: true, leaveOutAmprEmu: true }, packs: "lz4" }),
+    );
+    expect(left).toMatch(/data-testid="leave-out-ampr-emu"[^>]*>\s*<input[^>]*checked/);
+    // Checked under ① and unticked there: still its choice to make.
+    const kept = await options(waitingItem({ build: { kind: "pkg" }, packs: "zstd" }));
+    expect(kept).toContain('data-testid="unpack-option"');
+    expect(kept).not.toMatch(/data-testid="unpack-option"[^>]*>\s*<input[^>]*checked/);
+    expect(kept).not.toContain("leave-out-ampr-emu");
+    // Queued with its packs unpacked before the queue remembered what the game is in.
+    expect(await options(waitingItem({ build: { kind: "pkg", unpackPacks: true } }))).toContain(
+      'data-testid="unpack-option"',
+    );
+
+    const plain = await options(waitingItem({ build: { kind: "pkg" }, packs: "none" }));
+    expect(plain).toMatch(/data-testid="pkg-packs-note" data-state="none"/);
+    expect(plain).toContain("This game has no asset packs, so there is nothing to unpack.");
+    const unchecked = await options(waitingItem({ build: { kind: "pkg" } }));
+    expect(unchecked).toMatch(/data-testid="pkg-packs-note" data-state="unchecked"/);
+    expect(unchecked).toContain("If it is in asset packs, the package gets them unpacked.");
+    expect(unchecked).toContain("check the game under ① and add it from there");
+    // An image or a folder has its own packs row, not the package's.
+    expect(await options(waitingItem({ build: { kind: "image", format: "exfat", compress: false } }))).not.toContain(
+      "pkg-packs",
+    );
+  });
+
+  it("changes a waiting package's asset-pack choices, and keeps what was unticked by hand", async () => {
+    const { pkgUnpackChoice } = await import("./QueueItemOptions");
+    const changes: unknown[] = [];
+    const choice = (item: ConvertItem) => pkgUnpackChoice(item, (c) => changes.push(c))!;
+    const packed = waitingItem({ build: { kind: "pkg", unpackPacks: true }, packs: "zstd" });
+    choice(packed).leaveOutEmulator!.onToggle(true);
+    choice(packed).onToggle(false);
+    choice(waitingItem({ build: { kind: "pkg", unpackPacks: true, leaveOutAmprEmu: true }, packs: "zstd" })).onToggle(
+      false,
+    );
+    choice(waitingItem({ build: { kind: "pkg" }, packs: "lz4" })).onToggle(true);
+    expect(changes).toEqual([
+      { build: { kind: "pkg", unpackPacks: true, leaveOutAmprEmu: true } },
+      // Unticked: said outright, so the queue doesn't look again and unpack it after all.
+      { build: { kind: "pkg", unpackPacks: false } },
+      // Leaving the emulator out goes with unpacking.
+      { build: { kind: "pkg", unpackPacks: false } },
+      { build: { kind: "pkg", unpackPacks: true } },
+    ]);
+    // A game nobody checked, or one in no packs, has nothing to choose.
+    expect(pkgUnpackChoice(waitingItem({ build: { kind: "pkg" } }), () => {})).toBeUndefined();
+    expect(pkgUnpackChoice(waitingItem({ build: { kind: "pkg" }, packs: "none" }), () => {})).toBeUndefined();
   });
 
   it("changing packs, format or kind keeps the rest of the game's build (#905)", async () => {

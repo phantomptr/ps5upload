@@ -407,7 +407,9 @@ export interface UnpackChoice {
   leaveOutEmulator?: { on: boolean; onToggle: (on: boolean) => void };
 }
 
-export function UnpackOption({ unpack }: { unpack: UnpackChoice }) {
+/** `compact`: the two choices by name only, for a place that has no room for what each does
+ *  (a waiting game's options in the queue; ③ explains them). */
+export function UnpackOption({ unpack, compact }: { unpack: UnpackChoice; compact?: boolean }) {
   const tr = useTr();
   const kind = unpack.kind === "zstd" ? "zstd" : "LZ4";
   const leaveOut = unpack.leaveOutEmulator;
@@ -424,7 +426,7 @@ export function UnpackOption({ unpack }: { unpack: UnpackChoice }) {
           <span className="block font-medium text-[var(--color-text)]">
             {tr("fpkg.unpack_packs", undefined, "Unpack the asset packs (plain files again)")}
           </span>
-          <span className="mt-0.5 block leading-relaxed text-[var(--color-muted)]">
+          <span className={compact ? "hidden" : "mt-0.5 block leading-relaxed text-[var(--color-muted)]"}>
             {leaveOut
               ? tr(
                   "fpkg.unpack_packs_pkg_body",
@@ -451,7 +453,7 @@ export function UnpackOption({ unpack }: { unpack: UnpackChoice }) {
             <span className="block font-medium text-[var(--color-text)]">
               {tr("fpkg.leave_out_ampr_emu", undefined, "Leave out the AMPR emulator")}
             </span>
-            <span className="mt-0.5 block leading-relaxed text-[var(--color-muted)]">
+            <span className={compact ? "hidden" : "mt-0.5 block leading-relaxed text-[var(--color-muted)]"}>
               {tr(
                 "fpkg.leave_out_ampr_emu_body",
                 undefined,
@@ -461,6 +463,59 @@ export function UnpackOption({ unpack }: { unpack: UnpackChoice }) {
           </span>
         </label>
       )}
+    </div>
+  );
+}
+
+/** A package's asset-pack choices (#933), in one named place at the top of the options, so
+ *  someone looking for "AMPR" or "asset packs" finds them or finds why they aren't there:
+ *  - a game in packs (`unpack`): "Unpack the asset packs", and under it "Leave out the AMPR
+ *    emulator";
+ *  - a game that was checked and is in no packs (`state` "none"): one line saying so;
+ *  - a game not checked yet ("pending"): one line saying that checking it shows them;
+ *  - a waiting game that was never checked ("unchecked", the queue): what happens to it. */
+export function PackagePacks({
+  unpack,
+  state,
+  compact,
+}: {
+  unpack?: UnpackChoice;
+  state: "pending" | "none" | "unchecked";
+  compact?: boolean;
+}) {
+  const tr = useTr();
+  const title = tr("fpkg.pkg_packs.title", undefined, "Asset packs and AMPR");
+  if (unpack) {
+    return (
+      <div
+        role="group"
+        aria-label={title}
+        className="space-y-2 rounded-[var(--radius-card)] border border-[var(--color-border)] px-3 py-2.5"
+        data-testid="pkg-packs"
+      >
+        <div className="text-xs font-medium text-[var(--color-muted)]">{title}</div>
+        <UnpackOption unpack={unpack} compact={compact} />
+      </div>
+    );
+  }
+  const text =
+    state === "none"
+      ? tr("fpkg.pkg_packs.none", undefined, "This game has no asset packs, so there is nothing to unpack.")
+      : state === "unchecked"
+        ? tr(
+            "fpkg.pkg_packs.unchecked",
+            undefined,
+            "This game wasn't checked under ①. If it is in asset packs, the package gets them unpacked. To keep the packs or leave out the AMPR emulator, check the game under ① and add it from there.",
+          )
+        : tr(
+            "fpkg.pkg_packs.pending",
+            undefined,
+            "Check a game under ① first. If it is in asset packs, the options to unpack them and to leave out the AMPR emulator appear here.",
+          );
+  return (
+    <div className="text-xs text-[var(--color-muted)]" data-testid="pkg-packs-note" data-state={state}>
+      <span className="font-medium">{title}</span>
+      <p className="leading-relaxed">{text}</p>
     </div>
   );
 }

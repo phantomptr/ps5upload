@@ -174,8 +174,14 @@ export interface ConvertItem {
   /** An image sent to the PS5 once built (then = "upload"): where it goes. */
   imageDest?: { volume: string | null; subpath: string };
   firmware?: string;
-  /** The one PlayGo language the package declares; every language when absent. */
+  /** The PlayGo language the package declares: one code for that one alone, `all` for every
+   *  language; the game's own when absent. */
   language?: string;
+  /** The asset packs the game is in, when it was the game checked under ① as it was added
+   *  ("none": checked, and in none). Absent for a game added without being checked: a package
+   *  of it is looked at when its turn comes and, like one made from ①, gets its packs
+   *  unpacked. */
+  packs?: "lz4" | "zstd" | "none";
   /** What to do with the package: keep it, or install it (streamed / uploaded first). An image
    *  is kept, or ("upload") put in the Upload queue for the PS5. */
   then: ConvertThen;

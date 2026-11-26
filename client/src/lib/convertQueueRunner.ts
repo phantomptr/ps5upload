@@ -3,7 +3,7 @@
 
 import { fpkg } from "../api/fpkg";
 import { freesArchive, pipelinePhaseChanged, setConvertRunner, type ConvertItem } from "../state/convertQueue";
-import { failureText, useFpkgConversion } from "../state/fpkgConversion";
+import { failureText, isArchiveSource, useFpkgConversion } from "../state/fpkgConversion";
 import { pkgLibraryStore } from "../state/pkgLibrary";
 import { imageDestFor } from "./imageDest";
 
@@ -33,6 +33,26 @@ function outcome(installed: boolean) {
   if (p.phase === "failed")
     return { ok: false, message: failureText(p), cancelled: p.cancelled, ...(p.archiveGone ? { archiveGone: true } : {}) };
   return { ok: false, message: "The build did not start." };
+}
+
+/** Whether a queued package gets its game's asset packs unpacked. A game checked under ①
+ *  when it was added carries the choice made there (ticked by default). One added without
+ *  being checked (several games picked at once, a folder of games) has had no choice made:
+ *  it is looked at now, and a game in asset packs is unpacked, as ① would have it. An archive
+ *  can't be looked inside until its build unpacks it, and goes in as it is. */
+export async function unpacksPackage(item: ConvertItem): Promise<boolean> {
+  const pkg = item.build?.kind === "pkg" ? item.build : undefined;
+  if (item.build && !pkg) return false;
+  if (pkg?.unpackPacks !== undefined) return pkg.unpackPacks;
+  if (item.packs !== undefined) return false;
+  if (isArchiveSource(item.source)) return false;
+  try {
+    const found = await fpkg.inspect(item.source, outputOf(item));
+    return !!found?.packs && !found.ps4_game;
+  } catch {
+    // The build says why the game can't be read.
+    return false;
+  }
 }
 
 async function build(item: ConvertItem) {
@@ -105,6 +125,7 @@ async function build(item: ConvertItem) {
   // A console dump is swapped for its package inside the build (never installed beside it).
   const swap = item.source.startsWith("ps5://") && item.then !== "keep" && !!item.host;
   const pkg = item.build?.kind === "pkg" ? item.build : undefined;
+  const unpack = await unpacksPackage(item);
   await conv.start(
     {
       source: item.source,
@@ -114,13 +135,13 @@ async function build(item: ConvertItem) {
       language: item.language,
       keepBoth: item.keepBoth,
       // A game in asset packs packaged as plain files, with the emulator choice it was added with.
-      ...(pkg?.unpackPacks
+      ...(unpack
         ? {
             unpackPacks: true,
             ...(item.addAmprEmu !== undefined && item.amprEmuBuild
               ? { amprEmu: { add: item.addAmprEmu, build: item.amprEmuBuild } }
               : {}),
-            ...(pkg.leaveOutAmprEmu ? { leaveOutAmprEmu: true } : {}),
+            ...(pkg?.leaveOutAmprEmu ? { leaveOutAmprEmu: true } : {}),
           }
         : {}),
     },

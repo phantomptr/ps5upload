@@ -25,7 +25,7 @@ import { useTr } from "../../state/lang";
 import { CompressionTiles } from "./CompressionTiles";
 import { imageDestFor } from "../../lib/imageDest";
 import { ImageDestination } from "./ImageDestination";
-import { FullVerifyOption, ImageChoice } from "./ImageOptions";
+import { FullVerifyOption, ImageChoice, PackagePacks, type UnpackChoice } from "./ImageOptions";
 import { FreeArchiveOption } from "./SourceOptions";
 
 type Kind = ConvertBuild["kind"];
@@ -128,6 +128,35 @@ function PacksChoice({ build, onChange }: { build: ConvertBuild; onChange: (chan
   );
 }
 
+/** A waiting package's asset-pack choices, as ③ has them: for a game known to be in packs
+ *  (checked under ① when it was added, or queued with its packs unpacked before the queue
+ *  remembered that). None for any other game. */
+export function pkgUnpackChoice(
+  item: ConvertItem,
+  onChange: (change: ConvertItemChange) => void,
+): UnpackChoice | undefined {
+  const build = item.build?.kind === "pkg" ? item.build : undefined;
+  const packed = item.packs === "lz4" || item.packs === "zstd";
+  if (!packed && !build?.unpackPacks) return undefined;
+  const set = (unpackPacks: boolean, leaveOutAmprEmu: boolean) =>
+    onChange({
+      build: {
+        kind: "pkg",
+        // Said either way: unticked by hand, the packs stay (the runner only looks at a game
+        // nobody has decided for).
+        unpackPacks,
+        // Leaving the emulator out goes with unpacking.
+        ...(unpackPacks && leaveOutAmprEmu ? { leaveOutAmprEmu: true } : {}),
+      },
+    });
+  return {
+    kind: item.packs === "lz4" ? "lz4" : "zstd",
+    on: !!build?.unpackPacks,
+    onToggle: (on) => set(on, !!build?.leaveOutAmprEmu),
+    leaveOutEmulator: { on: !!build?.leaveOutAmprEmu, onToggle: (on) => set(true, on) },
+  };
+}
+
 /** The change for "Save next to its source" on one game: back to the Output folder when off. A
  *  game with no folder here to go next to (on a server or the PS5) stays where it goes. */
 export function changeForBeside(source: string, on: boolean, outputFolder: string): ConvertItemChange {
@@ -222,6 +251,11 @@ export function QueueItemOptions({
 
       {kind === "pkg" && (
         <>
+          <PackagePacks
+            compact
+            unpack={pkgUnpackChoice(item, onChange)}
+            state={item.packs === "none" ? "none" : "unchecked"}
+          />
           <div className="flex flex-col gap-1">
             <span className="text-xs text-[var(--color-muted)]">{tr("fpkg.compression", undefined, "Compression")}</span>
             <CompressionTiles value={item.compression} onChange={(compression) => onChange({ compression })} estimates={null} />

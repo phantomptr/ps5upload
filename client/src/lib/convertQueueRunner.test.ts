@@ -6,6 +6,8 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 const calls: { kind: "pkg" | "image"; args: unknown[] }[] = [];
 let pipeline: { phase: string; packagePath?: string; message?: string } = { phase: "idle" };
 vi.mock("../state/fpkgConversion", () => ({
+  isArchiveSource: (path: string) => /\.(zip|7z|rar|tar|zst)$/i.test(path.trim()),
+  failureText: (p: { message?: string }) => p.message ?? "",
   useFpkgConversion: {
     getState: () => ({
       pipeline,
@@ -161,6 +163,68 @@ describe("the Convert queue's runner (bug: a queued image came out as a .pkg)", 
     const plain = calls[1].args[0] as Record<string, unknown>;
     expect(plain).not.toHaveProperty("unpackPacks");
     expect(plain).not.toHaveProperty("leaveOutAmprEmu");
+  });
+
+  // A game added without being checked under ① (several picked at once, a folder of games)
+  // has had no choice made for its asset packs. ① unpacks them unless unticked, so the queue
+  // looks at the game when its turn comes and does the same.
+  it("unpacks the asset packs of a queued package nobody decided for, as ① would", async () => {
+    const inspect = vi.spyOn(fpkg, "inspect").mockImplementation(
+      async (source: string) =>
+        ({ packs: source.includes("Packed") ? "zstd" : undefined, ps4_game: source.includes("PS4") }) as never,
+    );
+    const add = (source: string, over: Partial<ConvertItem> = {}) =>
+      useConvertQueue.getState().add({ source, compression: "balanced", then: "keep", host: null, ...over });
+    add("/games/Packed-unchecked", { build: { kind: "pkg" } });
+    add("/games/Plain-unchecked", { build: { kind: "pkg" } });
+    // No build at all: an item queued before images could be.
+    add("/games/Packed-older");
+    // A PS4 game in a folder that happens to hold packs is not a PS5 package's business.
+    add("/games/Packed-PS4", { build: { kind: "pkg" } });
+    // Checked under ① and unticked there: the packs stay, and nothing is looked at again.
+    add("/games/Packed-kept", { build: { kind: "pkg" }, packs: "zstd" });
+    // Unticked in the queue's own options.
+    add("/games/Packed-unticked", { build: { kind: "pkg", unpackPacks: false } });
+    // Checked and in no packs.
+    add("/games/Packed-in-name-only", { build: { kind: "pkg" }, packs: "none" });
+    // An archive is not looked inside until its build unpacks it.
+    add("/dl/Packed.zip", { build: { kind: "pkg" } });
+    await useConvertQueue.getState().start();
+    await flush();
+    await flush();
+    const built = Object.fromEntries(
+      calls.map((c) => {
+        const req = c.args[0] as { source: string; unpackPacks?: boolean };
+        return [req.source, !!req.unpackPacks];
+      }),
+    );
+    expect(built).toEqual({
+      "/games/Packed-unchecked": true,
+      "/games/Plain-unchecked": false,
+      "/games/Packed-older": true,
+      "/games/Packed-PS4": false,
+      "/games/Packed-kept": false,
+      "/games/Packed-unticked": false,
+      "/games/Packed-in-name-only": false,
+      "/dl/Packed.zip": false,
+    });
+    expect(inspect.mock.calls.map((c) => c[0])).toEqual([
+      "/games/Packed-unchecked",
+      "/games/Plain-unchecked",
+      "/games/Packed-older",
+      "/games/Packed-PS4",
+    ]);
+    inspect.mockRestore();
+  });
+
+  it("builds a queued package as it is when the game can't be looked at first", async () => {
+    const inspect = vi.spyOn(fpkg, "inspect").mockRejectedValue(new Error("engine down"));
+    useConvertQueue.getState().add({ source: "/games/Packed-app", compression: "balanced", build: { kind: "pkg" }, then: "keep", host: null });
+    await useConvertQueue.getState().start();
+    await flush();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args[0]).not.toHaveProperty("unpackPacks");
+    inspect.mockRestore();
   });
 
   it("still builds a package for an item queued as one (and for older items with no choice)", async () => {
