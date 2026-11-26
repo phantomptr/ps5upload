@@ -6646,7 +6646,7 @@ async fn ps5_apps_installed(
             // Whether the internal drive's listing was read whole: None when it could not be
             // read at all.
             let mut internal_whole: Option<bool> = None;
-            for root in ["/user/app", "/mnt/ext0/user/app", "/mnt/ext1/user/app"] {
+            for root in APP_FOLDER_ROOTS {
                 if let Ok((entries, whole)) = list_dir_whole(&addr, root) {
                     if root == "/user/app" {
                         internal_whole = Some(whole);
@@ -6811,6 +6811,24 @@ struct AppIconQuery {
 /// art for an installed title. Mirrors /api/ps5/game-icon but keyed by
 /// title_id instead of folder path. 404 on any miss so `<img onerror>`
 /// can fall back to a placeholder.
+/// Where installed titles' app folders are: the internal drive, extended storage and the M.2
+/// drive (the installed list and the cover read both look in each).
+const APP_FOLDER_ROOTS: [&str; 3] = ["/user/app", "/mnt/ext0/user/app", "/mnt/ext1/user/app"];
+
+/// Where a title's cover may be, in order. /user/appmeta/<id> is the usual home, but on FW 13.60
+/// titles installed by homebrew installers have none, only the app's own <root>/<id>/sce_sys
+/// (measured on both consoles, 2026-09-29), on whichever drive it went to. The M.2 drive's was
+/// missing: such a title had no cover, and the miss was remembered.
+fn app_icon_paths(title_id: &str) -> Vec<String> {
+    std::iter::once(format!("/user/appmeta/{title_id}/icon0.png"))
+        .chain(
+            APP_FOLDER_ROOTS
+                .iter()
+                .map(|root| format!("{root}/{title_id}/sce_sys/icon0.png")),
+        )
+        .collect()
+}
+
 async fn ps5_app_icon(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -6829,14 +6847,7 @@ async fn ps5_app_icon(
         return (StatusCode::BAD_REQUEST, "invalid title_id").into_response();
     }
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
-    // /user/appmeta/<id> is the usual home, but on FW 13.60 titles
-    // installed by homebrew installers have none — only the app's own
-    // /user/app/<id>/sce_sys (measured on both consoles, 2026-09-29).
-    let icon_paths = vec![
-        format!("/user/appmeta/{}/icon0.png", q.title_id),
-        format!("/user/app/{}/sce_sys/icon0.png", q.title_id),
-        format!("/mnt/ext0/user/app/{}/sce_sys/icon0.png", q.title_id),
-    ];
+    let icon_paths = app_icon_paths(&q.title_id);
     let inm = headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
@@ -8630,6 +8641,19 @@ fn is_game_icon_path(p: &std::path::Path) -> bool {
 
 #[cfg(test)]
 mod game_icon_path_tests {
+    /// A title's cover is looked for on every drive the installed list finds titles on, the M.2
+    /// drive included, after appmeta.
+    #[test]
+    fn a_cover_is_looked_for_on_every_drive_with_app_folders() {
+        let paths = super::app_icon_paths("PPSA01234");
+        assert_eq!(paths[0], "/user/appmeta/PPSA01234/icon0.png");
+        for root in super::APP_FOLDER_ROOTS {
+            let want = format!("{root}/PPSA01234/sce_sys/icon0.png");
+            assert!(paths.contains(&want), "{want} is not looked at");
+        }
+        assert!(paths.contains(&"/mnt/ext1/user/app/PPSA01234/sce_sys/icon0.png".to_string()));
+    }
+
     #[test]
     fn a_grid_cover_is_a_small_jpeg_and_transparency_stays_png() {
         let png = |img: image::DynamicImage| {
