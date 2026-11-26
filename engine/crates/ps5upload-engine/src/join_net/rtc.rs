@@ -1682,6 +1682,11 @@ fn fail(p: &mut Peer, why: &'static str, detail: &str) {
     p.rtc.disconnect();
 }
 
+/// The longest text a data channel takes in one message (str0m's and the browsers' 256 KiB).
+/// Text is not split (chunk.rs), so a session keeps its texts under this (Share splits its long
+/// ones: share/wire.rs).
+pub(crate) const TEXT_DC_MAX: usize = 256 * 1024;
+
 /// A session's message onto the peer's outgoing queue, as data-channel messages.
 fn queue(p: &mut Peer, m: Message) {
     let push = |p: &mut Peer, binary: bool, b: Vec<u8>| {
@@ -1689,6 +1694,21 @@ fn queue(p: &mut Peer, m: Message) {
         p.out.push_back((binary, b));
     };
     match m {
+        // The channel refuses it, and its write error emptied the whole queue unsaid: the guest
+        // waited for what never came. The connection ends instead, saying why.
+        Message::Text(t) if t.len() > TEXT_DC_MAX => {
+            crate::log_at!(
+                Info,
+                "together",
+                "join: a text message of {} bytes is over the data channel's limit; the connection ends",
+                t.len()
+            );
+            fail(
+                p,
+                "protocol",
+                "a text message over the data channel's limit",
+            );
+        }
         Message::Text(t) => push(p, false, t.as_bytes().to_vec()),
         Message::Binary(b) => {
             for piece in chunk::split(&b) {

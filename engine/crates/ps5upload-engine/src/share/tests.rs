@@ -951,6 +951,168 @@ async fn two_engines_share_a_homebrew_folder_and_a_save_over_webrtc() {
     let _ = cancel(axum::extract::Path(id)).await;
 }
 
+/// A homebrew app folder of `n` small files with long names: its listing is ~350 bytes a file.
+fn many_files_app(title_id: &str, n: usize) -> PathBuf {
+    let app = app_folder(title_id, "");
+    let long = "x".repeat(150);
+    for d in 0..n.div_ceil(100) {
+        let dir = app.join(format!("{d:02}{long}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in 0..100.min(n - d * 100) {
+            std::fs::write(dir.join(format!("{f:03}{long}.dat")), [f as u8]).unwrap();
+        }
+    }
+    app
+}
+
+/// Over a real data channel, a listing longer than one data-channel message (256 KiB) arrives:
+/// in parts, put back together. It was dropped unsaid, and the friend waited for nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_listing_over_a_data_channels_limit_arrives_over_webrtc() {
+    let hub = crate::join_net::tests::FakeHub::start().await;
+    let _hub = test_hub(&hub.url, true).await;
+    let app = many_files_app("LAPY10011", 1000);
+    let (s, v) = make(json!([{"kind": "app", "path": app}])).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let id = v["id"].as_str().unwrap().to_string();
+    let mut url = String::new();
+    for _ in 0..200 {
+        let (_, v) = body(get_one(axum::extract::Path(id.clone())).await).await;
+        if v["works"] == "anywhere" && v["hub_state"] == "hosted" {
+            url = v["url"].as_str().unwrap().to_string();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(!url.is_empty());
+    let (_, r) = body(
+        receive_open(Json(ShareOpenBody {
+            link: url,
+            name: Some("Alex".into()),
+        }))
+        .await,
+    )
+    .await;
+    let rid_rx = r["id"].as_str().unwrap().to_string();
+    let rx_view = || async {
+        body(receive_get(axum::extract::Path(rid_rx.clone())).await)
+            .await
+            .1
+    };
+    let mut view = Value::Null;
+    for _ in 0..400 {
+        view = rx_view().await;
+        if view["state"] == "offered" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(view["state"], "offered", "{view}");
+    let dest = tmp("rtc-many");
+    let (s, _) = body(
+        receive_accept(
+            axum::extract::Path(rid_rx.clone()),
+            Json(ShareAcceptBody {
+                items: vec!["i1".into()],
+                dest: Some(dest.to_string_lossy().into_owned()),
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let req = until_request(&id, "asking").await;
+    assert_eq!(decide_on(&id, req, true).await, StatusCode::OK);
+    // The listing came whole: the files are being received.
+    for _ in 0..800 {
+        view = rx_view().await;
+        if matches!(
+            view["state"].as_str(),
+            Some("receiving" | "done" | "failed")
+        ) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(
+        matches!(view["state"].as_str(), Some("receiving" | "done")),
+        "{view}"
+    );
+    let _ = receive_cancel(axum::extract::Path(rid_rx)).await;
+    let _ = cancel(axum::extract::Path(id)).await;
+}
+
+/// The sender's messages to a receiver, as text, until `until` is in one.
+async fn texts_until(link: &mut wire::MemLink, until: &str) -> Vec<String> {
+    use wire::Link;
+    let mut out = Vec::new();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), link.recv())
+            .await
+            .unwrap()
+        {
+            Some(wire::In::Text(t)) => {
+                let end = t.contains(until);
+                out.push(t);
+                if end {
+                    return out;
+                }
+            }
+            Some(_) => {}
+            None => panic!("closed before {until}: {out:?}"),
+        }
+    }
+}
+
+/// A listing longer than a message goes in parts to a receiver that reads them; to an older one
+/// it goes whole on the home network, as it did.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_long_listing_goes_in_parts_to_a_receiver_that_reads_them() {
+    let app = many_files_app("PSUP00007", 400);
+    let (id, room) = share_of(json!([{"kind": "app", "path": app}]), false).await;
+    // This build's receiver: it all arrives.
+    let sh = Arc::new(Mutex::new(RxShared::default()));
+    let (sock, link) = wire::mem_pair();
+    tokio::spawn(wire::sender_session(sock, Arc::new(Registry), None));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let dest = tmp("parts");
+    let id2 = id.clone();
+    tokio::spawn(async move {
+        let rid = until_request(&id2, "asking").await;
+        decide_on(&id2, rid, true).await;
+    });
+    let rx_sh = sh.clone();
+    let recv = tokio::spawn(async move { wire::receive(link, &room, "A", rx_sh, &mut rx).await });
+    until_rx(&sh, "offered").await;
+    tx.send(RxCmd::Accept {
+        items: vec!["i1".into()],
+        dest: dest.clone(),
+    })
+    .unwrap();
+    let end = tokio::time::timeout(Duration::from_secs(60), recv)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(end, RxEnd::Done, "{:?}", sh.lock().unwrap().error);
+    let got = sh.lock().unwrap().received[0].1.clone();
+    same_tree(&app, &got);
+    // An older receiver (no `parts` in its hello) on the home network: the listing whole.
+    let room = with_share(&id, |e| e.room_id().to_string()).unwrap();
+    let (sock, mut old) = wire::mem_pair();
+    tokio::spawn(wire::sender_session(sock, Arc::new(Registry), None));
+    old.raw(json!({"hello": {"v": 1, "room": room, "name": "B"}}))
+        .await;
+    let offer = texts_until(&mut old, "\"offer\"").await;
+    assert_eq!(offer.len(), 1);
+    old.raw(json!({"accept": {"items": ["i1"]}})).await;
+    let rid = until_request(&id, "asking").await;
+    decide_on(&id, rid, true).await;
+    let msgs = texts_until(&mut old, "\"allowed\"").await;
+    assert!(msgs.iter().all(|t| !t.starts_with("{\"part\"")), "whole");
+    assert!(msgs.last().unwrap().len() > 64 * 1024);
+    let _ = cancel(axum::extract::Path(id)).await;
+}
+
 /// The app opening a link the hub can't reach falls back to the home network's socket.
 #[tokio::test]
 async fn a_link_with_only_a_home_network_hint_is_read() {
