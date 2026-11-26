@@ -661,6 +661,62 @@ async fn a_dropped_transfer_resumes_with_its_token_and_a_one_use_link_takes_no_o
     assert!(got > 0);
 }
 
+/// The friend's first link went quiet and they connected again with their token before the
+/// sender noticed: when the old link finally ends, the resumed transfer carries on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_late_end_of_the_old_link_does_not_stop_the_resumed_transfer() {
+    let app = app_folder("PSUP00006", "");
+    std::fs::write(app.join("big.bin"), vec![7u8; 400_000]).unwrap();
+    let (id, room) = share_of(json!([{"kind": "app", "path": app}]), true).await;
+    use wire::Link;
+    async fn allowed(link: &mut wire::MemLink) -> String {
+        loop {
+            match link.recv().await {
+                Some(wire::In::Text(t)) if t.contains("\"allowed\"") => {
+                    let v: Value = serde_json::from_str(&t).unwrap();
+                    return v["allowed"]["token"].as_str().unwrap().to_string();
+                }
+                Some(_) => {}
+                None => panic!("closed before the allow"),
+            }
+        }
+    }
+    let (sock, mut old) = wire::mem_pair();
+    let old_sess = tokio::spawn(wire::sender_session(sock, Arc::new(Registry), None));
+    old.raw(json!({"hello": {"v": 1, "room": room, "name": "A"}}))
+        .await;
+    old.recv().await.unwrap();
+    old.raw(json!({"accept": {"items": ["i1"]}})).await;
+    let rid = until_request(&id, "asking").await;
+    decide_on(&id, rid, true).await;
+    let token = allowed(&mut old).await;
+    // The old link stays open but says nothing; a new one carries on with the token.
+    let (sock, mut new) = wire::mem_pair();
+    tokio::spawn(wire::sender_session(sock, Arc::new(Registry), None));
+    new.raw(json!({"hello": {"v": 1, "room": room, "name": "A", "resume": token}}))
+        .await;
+    allowed(&mut new).await;
+    // Now the old link ends.
+    drop(old);
+    tokio::time::timeout(Duration::from_secs(5), old_sess)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        with_share(&id, |e| e.m.request(rid).unwrap().state).unwrap(),
+        ReqState::Sending
+    );
+    new.raw(json!({"get": {"n": 1, "item": "i1", "path": "big.bin", "offset": 0}}))
+        .await;
+    match tokio::time::timeout(Duration::from_secs(5), new.recv())
+        .await
+        .unwrap()
+    {
+        Some(wire::In::Binary(b)) => assert_eq!(wire::parse_data(&b).unwrap().0, 1),
+        other => panic!("the resumed transfer was stopped: {other:?}"),
+    }
+}
+
 /// Two engines' sides over a real WebRTC data channel (loopback, the fake hub introducing them):
 /// a homebrew folder and a save, from the link to the files on disk, with the history and the
 /// activity on both sides.

@@ -95,18 +95,23 @@ pub(crate) trait Shares: Send + Sync + 'static {
     fn find(&self, room: &str) -> Option<String>;
     /// The offer a hello gets, or why not.
     fn hello(&self, id: &str) -> Result<Value, &'static str>;
-    fn ask(&self, id: &str, name: &str, wants: &[String]) -> Result<u64, &'static str>;
-    fn resume(&self, id: &str, token: &str) -> Result<u64, &'static str>;
+    /// The new request's id and its first connection's session.
+    fn ask(&self, id: &str, name: &str, wants: &[String]) -> Result<(u64, u64), &'static str>;
+    /// The request a token carries on, and this connection's session (a newer one than any
+    /// earlier connection's: what those report from now on is ignored).
+    fn resume(&self, id: &str, token: &str) -> Result<(u64, u64), &'static str>;
     /// The request's state now, and its token.
     fn state(&self, id: &str, rid: u64) -> Option<(ReqState, Option<String>)>;
+    /// Whether `session` is still the connection carrying request `rid`.
+    fn current(&self, id: &str, rid: u64, session: u64) -> bool;
     /// Waits until something about share `id` changed (or a second passed).
     fn changed(&self, id: &str) -> impl std::future::Future<Output = ()> + Send;
     /// The items and what this request accepted.
     fn items(&self, id: &str, rid: u64) -> Option<(Arc<Vec<Item>>, Vec<String>)>;
-    fn sending(&self, id: &str, rid: u64, total: u64) -> Result<(), &'static str>;
-    fn progress(&self, id: &str, rid: u64, done: u64);
-    fn done(&self, id: &str, rid: u64);
-    fn gone(&self, id: &str, rid: u64, cancelled: bool, why: &str);
+    fn sending(&self, id: &str, rid: u64, session: u64, total: u64) -> Result<(), &'static str>;
+    fn progress(&self, id: &str, rid: u64, session: u64, done: u64);
+    fn done(&self, id: &str, rid: u64, session: u64);
+    fn gone(&self, id: &str, rid: u64, session: u64, cancelled: bool, why: &str);
     /// Where the connection goes (`lan`, `tailscale`, `internet`), for the panel.
     fn path(&self, id: &str, rid: u64, path: Option<&'static str>);
 }
@@ -146,9 +151,9 @@ pub(crate) async fn sender_session<S: GuestSocket, R: Shares>(
         name
     };
     let resume = h["resume"].as_str().unwrap_or("");
-    let rid = if !resume.is_empty() {
+    let (rid, sess) = if !resume.is_empty() {
         match reg.resume(&id, resume) {
-            Ok(rid) => rid,
+            Ok(x) => x,
             Err(why) => {
                 let _ = s.send(text(json!({"refused": {"why": why}}))).await;
                 return;
@@ -202,15 +207,15 @@ pub(crate) async fn sender_session<S: GuestSocket, R: Shares>(
                     .unwrap_or_default();
             }
         };
-        let rid = match reg.ask(&id, &name, &wants) {
-            Ok(rid) => rid,
+        let (rid, sess) = match reg.ask(&id, &name, &wants) {
+            Ok(x) => x,
             Err(why) => {
                 let _ = s.send(text(json!({"refused": {"why": why}}))).await;
                 return;
             }
         };
         if s.send(text(json!({"asked": {}}))).await.is_err() {
-            reg.gone(&id, rid, false, "lost");
+            reg.gone(&id, rid, sess, false, "lost");
             return;
         }
         // The answer. Meanwhile the receiver may cancel or go.
@@ -237,25 +242,25 @@ pub(crate) async fn sender_session<S: GuestSocket, R: Shares>(
                 m = s.recv() => match m {
                     Some(Ok(Message::Text(t))) => {
                         if t.contains("\"cancel\"") {
-                            reg.gone(&id, rid, true, "receiver");
+                            reg.gone(&id, rid, sess, true, "receiver");
                             return;
                         }
                     }
                     Some(Ok(Message::Close(_))) | None | Some(Err(())) => {
-                        reg.gone(&id, rid, false, "left");
+                        reg.gone(&id, rid, sess, false, "left");
                         return;
                     }
                     _ => {}
                 }
             }
         }
-        rid
+        (rid, sess)
     };
-    serve(&mut s, &*reg, &id, rid).await;
+    serve(&mut s, &*reg, &id, rid, sess).await;
 }
 
 /// The allowed receiver's files.
-async fn serve<S: GuestSocket, R: Shares>(s: &mut S, reg: &R, id: &str, rid: u64) {
+async fn serve<S: GuestSocket, R: Shares>(s: &mut S, reg: &R, id: &str, rid: u64, sess: u64) {
     let Some((items, wants)) = reg.items(id, rid) else {
         return;
     };
@@ -277,7 +282,7 @@ async fn serve<S: GuestSocket, R: Shares>(s: &mut S, reg: &R, id: &str, rid: u64
         .filter(|i| wants.contains(&i.id))
         .map(|i| i.size())
         .sum();
-    if let Err(why) = reg.sending(id, rid, total) {
+    if let Err(why) = reg.sending(id, rid, sess, total) {
         let _ = s.send(text(json!({"refused": {"why": why}}))).await;
         return;
     }
@@ -285,33 +290,39 @@ async fn serve<S: GuestSocket, R: Shares>(s: &mut S, reg: &R, id: &str, rid: u64
         .await
         .is_err()
     {
-        reg.gone(id, rid, false, "lost");
+        reg.gone(id, rid, sess, false, "lost");
         return;
     }
     // How far each file got, for the progress (a resumed file starts where the receiver was).
     let mut marks: HashMap<(String, String), u64> = HashMap::new();
-    let still = |reg: &R| matches!(reg.state(id, rid), Some((ReqState::Sending, _)));
+    // Still this connection's to serve: sending, and no resume has since taken the request over
+    // (an old link whose friend connected again stops quietly; the newer one carries on).
+    let still = |reg: &R| {
+        matches!(reg.state(id, rid), Some((ReqState::Sending, _))) && reg.current(id, rid, sess)
+    };
     loop {
         let v = match next_text(s, IDLE_WAIT).await {
             Ok(v) => v,
             Err(why) => {
                 if still(reg) {
-                    reg.gone(id, rid, false, why);
+                    reg.gone(id, rid, sess, false, why);
                 }
                 return;
             }
         };
         if !still(reg) {
-            let _ = s.send(text(json!({"cancelled": {}}))).await;
+            if reg.current(id, rid, sess) {
+                let _ = s.send(text(json!({"cancelled": {}}))).await;
+            }
             return;
         }
         if v.get("done").is_some() {
-            reg.done(id, rid);
+            reg.done(id, rid, sess);
             let _ = s.send(text(json!({"bye": {}}))).await;
             return;
         }
         if v.get("cancel").is_some() {
-            reg.gone(id, rid, true, "receiver");
+            reg.gone(id, rid, sess, true, "receiver");
             return;
         }
         let Some(g) = v.get("get") else { continue };
@@ -332,7 +343,7 @@ async fn serve<S: GuestSocket, R: Shares>(s: &mut S, reg: &R, id: &str, rid: u64
                     .await
                     .is_err()
                 {
-                    reg.gone(id, rid, false, "lost");
+                    reg.gone(id, rid, sess, false, "lost");
                     return;
                 }
                 continue;
@@ -365,25 +376,27 @@ async fn serve<S: GuestSocket, R: Shares>(s: &mut S, reg: &R, id: &str, rid: u64
             msg.extend_from_slice(&data_header(n, at));
             msg.extend_from_slice(&bytes);
             if s.send(Message::Binary(msg.into())).await.is_err() {
-                reg.gone(id, rid, false, "lost");
+                reg.gone(id, rid, sess, false, "lost");
                 return;
             }
             at += bytes.len() as u64;
             marks.insert(key.clone(), at);
-            reg.progress(id, rid, marks.values().sum());
+            reg.progress(id, rid, sess, marks.values().sum());
             // The receiver's cancel, or the sender's, between pieces.
             if !still(reg) {
-                let _ = s.send(text(json!({"cancelled": {}}))).await;
+                if reg.current(id, rid, sess) {
+                    let _ = s.send(text(json!({"cancelled": {}}))).await;
+                }
                 return;
             }
             if let Some(m) = s.recv().now_or_never() {
                 match m {
                     Some(Ok(Message::Text(t))) if t.contains("\"cancel\"") => {
-                        reg.gone(id, rid, true, "receiver");
+                        reg.gone(id, rid, sess, true, "receiver");
                         return;
                     }
                     Some(Ok(Message::Close(_))) | None | Some(Err(())) => {
-                        reg.gone(id, rid, false, "lost");
+                        reg.gone(id, rid, sess, false, "lost");
                         return;
                     }
                     _ => {}
@@ -392,12 +405,12 @@ async fn serve<S: GuestSocket, R: Shares>(s: &mut S, reg: &R, id: &str, rid: u64
         }
         if at >= f.size {
             marks.insert(key, f.size);
-            reg.progress(id, rid, marks.values().sum());
+            reg.progress(id, rid, sess, marks.values().sum());
             if s.send(text(json!({"eof": {"n": n, "size": f.size}})))
                 .await
                 .is_err()
             {
-                reg.gone(id, rid, false, "lost");
+                reg.gone(id, rid, sess, false, "lost");
                 return;
             }
         }

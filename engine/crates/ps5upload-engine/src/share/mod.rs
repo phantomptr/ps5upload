@@ -369,18 +369,19 @@ impl wire::Shares for Registry {
         })
         .unwrap_or(Err("no_share"))
     }
-    fn ask(&self, id: &str, name: &str, wants: &[String]) -> Result<u64, &'static str> {
+    fn ask(&self, id: &str, name: &str, wants: &[String]) -> Result<(u64, u64), &'static str> {
         let r = with_share(id, |e| {
             let rid = e.m.ask(Instant::now(), name, wants)?;
+            let session = e.m.request(rid).map_or(0, |r| r.session);
             e.bump();
             let names: Vec<String> = wants
                 .iter()
                 .filter_map(|w| e.items.iter().find(|i| &i.id == w).map(|i| i.name.clone()))
                 .collect();
-            Ok((rid, names))
+            Ok((rid, session, names))
         })
         .unwrap_or(Err("no_share"));
-        if let Ok((rid, names)) = &r {
+        if let Ok((rid, _, names)) = &r {
             crate::log_at!(
                 Info,
                 "together",
@@ -391,9 +392,9 @@ impl wire::Shares for Registry {
                 json!({"share": id, "event": "asked", "request": rid, "name": name, "wants": names}),
             );
         }
-        r.map(|x| x.0)
+        r.map(|x| (x.0, x.1))
     }
-    fn resume(&self, id: &str, token: &str) -> Result<u64, &'static str> {
+    fn resume(&self, id: &str, token: &str) -> Result<(u64, u64), &'static str> {
         let r = with_share(id, |e| e.m.resume(Instant::now(), token)).unwrap_or(Err("no_share"));
         if r.is_ok() {
             crate::log_at!(Info, "together", "share {id}: a friend carries on");
@@ -406,6 +407,9 @@ impl wire::Shares for Registry {
             e.m.request(rid).map(|r| (r.state, r.token.clone()))
         })
         .flatten()
+    }
+    fn current(&self, id: &str, rid: u64, session: u64) -> bool {
+        with_share(id, |e| e.m.current(rid, session)).unwrap_or(false)
     }
     async fn changed(&self, id: &str) {
         let rx = with_share(id, |e| e.changed.subscribe());
@@ -422,9 +426,9 @@ impl wire::Shares for Registry {
         })
         .flatten()
     }
-    fn sending(&self, id: &str, rid: u64, total: u64) -> Result<(), &'static str> {
+    fn sending(&self, id: &str, rid: u64, session: u64, total: u64) -> Result<(), &'static str> {
         let r = with_share(id, |e| {
-            e.m.sending(rid, total)?;
+            e.m.sending(rid, session, total)?;
             if !e.started.iter().any(|(r, _)| *r == rid) {
                 e.started.push((rid, now_ms()));
             }
@@ -438,12 +442,12 @@ impl wire::Shares for Registry {
         }
         r
     }
-    fn progress(&self, id: &str, rid: u64, done: u64) {
-        with_share(id, |e| e.m.progress(rid, done));
+    fn progress(&self, id: &str, rid: u64, session: u64, done: u64) {
+        with_share(id, |e| e.m.progress(rid, session, done));
     }
-    fn done(&self, id: &str, rid: u64) {
+    fn done(&self, id: &str, rid: u64, session: u64) {
         let ok = with_share(id, |e| {
-            let r = e.m.done(rid);
+            let r = e.m.done(rid, session);
             e.bump();
             r.is_ok()
         });
@@ -453,11 +457,19 @@ impl wire::Shares for Registry {
         }
         settle(id);
     }
-    fn gone(&self, id: &str, rid: u64, cancelled: bool, why: &str) {
-        with_share(id, |e| {
-            e.m.gone(rid, cancelled, Some(why));
-            e.bump();
+    fn gone(&self, id: &str, rid: u64, session: u64, cancelled: bool, why: &str) {
+        // A connection a resume replaced: the newer one carries the request, so this says nothing.
+        let current = with_share(id, |e| {
+            let current = e.m.current(rid, session);
+            if current {
+                e.m.gone(rid, session, cancelled, Some(why));
+                e.bump();
+            }
+            current
         });
+        if current == Some(false) {
+            return;
+        }
         crate::log_at!(
             Info,
             "together",

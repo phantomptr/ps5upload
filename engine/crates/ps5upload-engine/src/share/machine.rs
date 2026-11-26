@@ -80,6 +80,10 @@ pub(crate) struct Request {
     pub token: Option<String>,
     pub bytes_done: u64,
     pub bytes_total: u64,
+    /// Which connection carries the request now: 1 for the one that asked, one more for each
+    /// resume. What an earlier connection reports after a newer one took over is ignored, so a
+    /// late "gone" from a dead link cannot stop the transfer the friend resumed.
+    pub session: u64,
     pub asked_at: Instant,
     pub why: Option<String>,
 }
@@ -179,6 +183,7 @@ impl Machine {
             token: None,
             bytes_done: 0,
             bytes_total: 0,
+            session: 1,
             asked_at: now,
             why: None,
         });
@@ -229,9 +234,10 @@ impl Machine {
         Ok(ReqState::Allowed)
     }
 
-    /// An allowed friend connects again with their token: their request, to carry on. Refused
-    /// once the share was cancelled or expired, or the request ended.
-    pub(crate) fn resume(&mut self, now: Instant, token: &str) -> Result<u64, Refused> {
+    /// An allowed friend connects again with their token: their request, to carry on, and the
+    /// new connection's session (the earlier connection's are stale from now on). Refused once
+    /// the share was cancelled or expired, or the request ended.
+    pub(crate) fn resume(&mut self, now: Instant, token: &str) -> Result<(u64, u64), Refused> {
         let state = self.tick(now);
         if matches!(state, ShareState::Cancelled | ShareState::Expired) {
             return Err(state.word());
@@ -245,15 +251,24 @@ impl Machine {
             return Err(r.state.word());
         }
         r.state = ReqState::Allowed;
-        Ok(r.rid)
+        r.session += 1;
+        Ok((r.rid, r.session))
+    }
+
+    /// Whether `session` is the connection carrying request `rid` now.
+    pub(crate) fn current(&self, rid: u64, session: u64) -> bool {
+        self.request(rid).is_some_and(|r| r.session == session)
     }
 
     /// Files start going to an allowed friend (`total`: the bytes of what they accepted).
-    pub(crate) fn sending(&mut self, rid: u64, total: u64) -> Result<(), Refused> {
+    pub(crate) fn sending(&mut self, rid: u64, session: u64, total: u64) -> Result<(), Refused> {
         if self.state == ShareState::Cancelled {
             return Err("cancelled");
         }
         let r = self.request_mut(rid).ok_or("no_request")?;
+        if r.session != session {
+            return Err("replaced");
+        }
         if !matches!(r.state, ReqState::Allowed | ReqState::Sending) {
             return Err(r.state.word());
         }
@@ -262,15 +277,18 @@ impl Machine {
         Ok(())
     }
 
-    pub(crate) fn progress(&mut self, rid: u64, done: u64) {
-        if let Some(r) = self.request_mut(rid) {
+    pub(crate) fn progress(&mut self, rid: u64, session: u64, done: u64) {
+        if let Some(r) = self.request_mut(rid).filter(|r| r.session == session) {
             r.bytes_done = done.min(r.bytes_total.max(done));
         }
     }
 
     /// The friend has everything.
-    pub(crate) fn done(&mut self, rid: u64) -> Result<(), Refused> {
+    pub(crate) fn done(&mut self, rid: u64, session: u64) -> Result<(), Refused> {
         let r = self.request_mut(rid).ok_or("no_request")?;
+        if r.session != session {
+            return Err("replaced");
+        }
         if r.state != ReqState::Sending {
             return Err(r.state.word());
         }
@@ -280,11 +298,15 @@ impl Machine {
     }
 
     /// The friend's connection ended. Asking: they left. Sending or allowed: kept, so they can
-    /// resume with their token, unless `cancelled` (they said so).
-    pub(crate) fn gone(&mut self, rid: u64, cancelled: bool, why: Option<&str>) {
+    /// resume with their token, unless `cancelled` (they said so). From a connection a resume
+    /// has since replaced (`session` not the current one): nothing, the newer one carries on.
+    pub(crate) fn gone(&mut self, rid: u64, session: u64, cancelled: bool, why: Option<&str>) {
         let Some(r) = self.request_mut(rid) else {
             return;
         };
+        if r.session != session {
+            return;
+        }
         match r.state {
             ReqState::Asking => {
                 r.state = if cancelled {
@@ -357,16 +379,16 @@ mod tests {
         let rid = s.ask(now, "Alex", &ids(&["a"])).unwrap();
         assert_eq!(s.request(rid).unwrap().state, ReqState::Asking);
         // Nothing goes before the Allow.
-        assert_eq!(s.sending(rid, 10), Err("asking"));
+        assert_eq!(s.sending(rid, 1, 10), Err("asking"));
         assert_eq!(
             s.decide(now, rid, true, "tok".into()),
             Ok(ReqState::Allowed)
         );
         assert_eq!(s.state, ShareState::Used);
-        s.sending(rid, 10).unwrap();
-        s.progress(rid, 4);
+        s.sending(rid, 1, 10).unwrap();
+        s.progress(rid, 1, 4);
         assert_eq!(s.request(rid).unwrap().bytes_done, 4);
-        s.done(rid).unwrap();
+        s.done(rid, 1).unwrap();
         assert_eq!(s.request(rid).unwrap().state, ReqState::Done);
         assert!(s.finished(now));
     }
@@ -390,7 +412,7 @@ mod tests {
         );
         assert_eq!(s.state, ShareState::Open);
         assert_eq!(s.decide(now, rid, true, "t".into()), Err("answered"));
-        assert_eq!(s.sending(rid, 1), Err("declined"));
+        assert_eq!(s.sending(rid, 1, 1), Err("declined"));
         assert_eq!(s.hello(now), Ok(()), "someone else may still ask");
     }
 
@@ -404,7 +426,7 @@ mod tests {
         assert_eq!(s.hello(now), Err("used"));
         assert_eq!(s.ask(now, "C", &ids(&["a"])), Err("used"));
         // The allowed friend can still carry on.
-        assert_eq!(s.resume(now, "t1"), Ok(r1));
+        assert_eq!(s.resume(now, "t1"), Ok((r1, 2)));
         assert_eq!(s.resume(now, "nope"), Err("no_request"));
         assert_eq!(s.resume(now, ""), Err("no_request"));
     }
@@ -446,10 +468,10 @@ mod tests {
         let (mut s, now) = m(true);
         let rid = s.ask(now, "A", &ids(&["a"])).unwrap();
         s.decide(now, rid, true, "t".into()).unwrap();
-        s.sending(rid, 5).unwrap();
+        s.sending(rid, 1, 5).unwrap();
         let later = now + DAY * 2;
         assert!(!s.finished(later), "still sending");
-        s.done(rid).unwrap();
+        s.done(rid, 1).unwrap();
         assert!(s.finished(later));
         assert_eq!(s.resume(later, "t"), Err("expired"));
     }
@@ -460,13 +482,13 @@ mod tests {
         let r1 = s.ask(now, "A", &ids(&["a"])).unwrap();
         let r2 = s.ask(now, "B", &ids(&["a"])).unwrap();
         s.decide(now, r2, true, "t".into()).unwrap();
-        s.sending(r2, 9).unwrap();
+        s.sending(r2, 1, 9).unwrap();
         s.cancel();
         assert_eq!(s.state, ShareState::Cancelled);
         assert_eq!(s.request(r1).unwrap().state, ReqState::Cancelled);
         assert_eq!(s.request(r2).unwrap().state, ReqState::Cancelled);
         assert_eq!(s.hello(now), Err("cancelled"));
-        assert_eq!(s.sending(r2, 9), Err("cancelled"));
+        assert_eq!(s.sending(r2, 1, 9), Err("cancelled"));
         assert_eq!(s.resume(now, "t"), Err("cancelled"));
         assert!(s.finished(now));
     }
@@ -475,18 +497,18 @@ mod tests {
     fn the_friend_leaving_or_cancelling() {
         let (mut s, now) = m(false);
         let r1 = s.ask(now, "A", &ids(&["a"])).unwrap();
-        s.gone(r1, false, None);
+        s.gone(r1, 1, false, None);
         assert_eq!(s.request(r1).unwrap().state, ReqState::Left);
         // An allowed friend whose connection dropped mid-way can resume…
         let r2 = s.ask(now, "B", &ids(&["a"])).unwrap();
         s.decide(now, r2, true, "t2".into()).unwrap();
-        s.sending(r2, 9).unwrap();
-        s.gone(r2, false, Some("lost"));
+        s.sending(r2, 1, 9).unwrap();
+        s.gone(r2, 1, false, Some("lost"));
         assert_eq!(s.request(r2).unwrap().state, ReqState::Allowed);
-        assert_eq!(s.resume(now, "t2"), Ok(r2));
+        assert_eq!(s.resume(now, "t2"), Ok((r2, 2)));
         // …one who cancelled can't.
-        s.sending(r2, 9).unwrap();
-        s.gone(r2, true, None);
+        s.sending(r2, 2, 9).unwrap();
+        s.gone(r2, 2, true, None);
         assert_eq!(s.request(r2).unwrap().state, ReqState::Cancelled);
         assert_eq!(s.resume(now, "t2"), Err("cancelled"));
     }
@@ -498,5 +520,35 @@ mod tests {
             s.ask(now, &format!("F{i}"), &ids(&["a"])).unwrap();
         }
         assert_eq!(s.ask(now, "late", &ids(&["a"])), Err("busy"));
+    }
+
+    #[test]
+    fn a_late_gone_from_the_old_connection_leaves_the_resumed_transfer_alone() {
+        let (mut s, now) = m(true);
+        let rid = s.ask(now, "A", &ids(&["a"])).unwrap();
+        s.decide(now, rid, true, "t".into()).unwrap();
+        s.sending(rid, 1, 10).unwrap();
+        s.progress(rid, 1, 3);
+        // The friend's first link went quiet; they connect again before the sender noticed.
+        let (r, sess) = s.resume(now, "t").unwrap();
+        assert_eq!((r, sess), (rid, 2));
+        assert!(!s.current(rid, 1));
+        assert!(s.current(rid, 2));
+        s.sending(rid, 2, 10).unwrap();
+        // The old connection's timeout lands now: it changes nothing.
+        s.gone(rid, 1, false, Some("timeout"));
+        assert_eq!(s.request(rid).unwrap().state, ReqState::Sending);
+        assert_eq!(s.request(rid).unwrap().why, None);
+        s.gone(rid, 1, true, Some("receiver"));
+        assert_eq!(s.request(rid).unwrap().state, ReqState::Sending);
+        // Nor do its progress, its start or its done.
+        s.progress(rid, 2, 7);
+        s.progress(rid, 1, 1);
+        assert_eq!(s.request(rid).unwrap().bytes_done, 7);
+        assert_eq!(s.sending(rid, 1, 10), Err("replaced"));
+        assert_eq!(s.done(rid, 1), Err("replaced"));
+        // The new one finishes.
+        s.done(rid, 2).unwrap();
+        assert_eq!(s.request(rid).unwrap().state, ReqState::Done);
     }
 }
