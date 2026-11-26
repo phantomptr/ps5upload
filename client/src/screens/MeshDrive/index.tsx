@@ -49,7 +49,7 @@ import { agoText, KIND_ICONS } from "../Devices";
 import { CreateDriveDialog, JoinDriveDialog, PasswordDialog } from "./DriveDialogs";
 import { ConflictsDialog, LinkDialog, LinkedConsoles, linkName } from "./LinksAndConflicts";
 import { useRosterStore } from "../../state/roster";
-import { AwayActions, AwayFolders, awayText, useConsoleName } from "./AwayFolders";
+import { AwayActions, AwayFolders, awayText, sayDoneLater, useConsoleName } from "./AwayFolders";
 import { driveDetailText } from "./driveDetail";
 import { humanizeCaught } from "../../lib/humanizeError";
 
@@ -343,7 +343,10 @@ function DriveCard({
       confirmLabel: tr("drive_member_remove", undefined, "Remove"),
       destructive: true,
     });
-    if (ok) await run(() => driveApi.leave(host, d.id, m.id));
+    if (ok)
+      await run(async () => {
+        if ((await driveApi.leave(host, d.id, m.id)).later) sayDoneLater(tr, consoleName, false);
+      });
   };
 
   const openHere = async () => {
@@ -363,7 +366,11 @@ function DriveCard({
       confirmLabel: tr("drive_leave", undefined, "Leave"),
       destructive: true,
     });
-    if (ok) await run(() => driveApi.leave(host, d.id, mine.member));
+    if (ok)
+      await run(async () => {
+        // The console stopped answering since the list was read: done here, and there once back.
+        if ((await driveApi.leave(host, d.id, mine.member)).later) sayDoneLater(tr, consoleName, false);
+      });
   };
 
   const remove = async () => {
@@ -377,7 +384,10 @@ function DriveCard({
       confirmLabel: tr("drive_delete", undefined, "Delete drive"),
       destructive: true,
     });
-    if (ok) await run(() => driveApi.remove(host, d.id));
+    if (ok)
+      await run(async () => {
+        if ((await driveApi.remove(host, d.id)).later) sayDoneLater(tr, consoleName, true);
+      });
   };
 
   const reviewDeletes = async () => {

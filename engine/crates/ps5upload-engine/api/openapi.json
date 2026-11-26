@@ -21445,6 +21445,7 @@
     },
     "/api/drive/delete": {
       "post": {
+        "description": "Deletes the drive (its files stay). When the console does not answer and this device keeps a\nfolder of it, that folder stops syncing and the console deletes the drive once it answers:\nthe answer then has `later`, and a `note` saying so.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -21605,6 +21606,7 @@
     },
     "/api/drive/leave": {
       "post": {
+        "description": "Takes a folder out of the drive. When the console does not answer, this device's own folder\nstops syncing anyway (its files stay) and the console drops it once it answers: the answer\nthen has `later`, and a `note` saying so.",
         "requestBody": {
           "content": {
             "application/json": {

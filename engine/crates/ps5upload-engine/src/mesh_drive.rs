@@ -24,6 +24,8 @@
 //! * `POST /api/drive/approve` `{addr,drive,member,approve}`  (kept for 8.0.0 apps)
 //! * `POST /api/drive/leave`   `{addr,drive,member}`          (any member, e.g. a device long gone)
 //! * `POST /api/drive/delete`  `{addr,drive}`                   (the drive goes; files stay)
+//!   Both answer `later` (and a `note`) when the console did not answer: this device's own folder
+//!   stopped syncing anyway, and the console is told once it answers.
 //! * `POST /api/drive/pause`   `{addr,drive,member,paused}`
 //! * `POST /api/drive/sync`    `{addr,drive}`                   (a pass now)
 //! * `POST /api/drive/confirm` `{addr,drive,member}`            (let a held-back mass delete run)
@@ -330,6 +332,41 @@ fn doc_update<T>(addr: &str, mut f: impl FnMut(&mut DriveDoc) -> Result<T>) -> R
 struct LocalConfig {
     #[serde(default)]
     members: Vec<LocalMember>,
+    /// What this device did while the console did not answer, done there once it does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pending: Vec<Pending>,
+}
+
+/// A folder of this device that left its drive (`member`), or the drive deleted (no member),
+/// while its console did not answer: this device stopped syncing it then; the console is told
+/// when it answers again.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+struct Pending {
+    console: String,
+    drive: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    member: Option<String>,
+    #[serde(default)]
+    since: u64,
+}
+
+/// At most this many are kept (the oldest go first): a console gone for good is never told.
+const PENDING_MAX: usize = 200;
+
+fn add_pending(console: &str, drive: &str, member: Option<&str>) -> Result<()> {
+    edit_config(|c| {
+        let p = Pending {
+            console: console.to_string(),
+            drive: drive.to_string(),
+            member: member.map(str::to_string),
+            since: now_ms(),
+        };
+        c.pending
+            .retain(|x| !(x.console == p.console && x.drive == p.drive && x.member == p.member));
+        c.pending.push(p);
+        let over = c.pending.len().saturating_sub(PENDING_MAX);
+        c.pending.drain(..over);
+    })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -351,7 +388,20 @@ struct LocalMember {
     paused: bool,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A test's own folder for this engine's Mesh Drive files (never the user's).
+    static TEST_STATE_DIR: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 fn state_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        if let Some(d) = TEST_STATE_DIR.with(|d| d.borrow().clone()) {
+            return Some(d);
+        }
+    }
     Some(crate::remote::store::data_dir()?.join("mesh-drive"))
 }
 
@@ -3603,8 +3653,12 @@ pub fn tick() {
     let Some(me) = crate::mesh_api::id_hex() else {
         return;
     };
+    let config = load_config();
+    if !config.pending.is_empty() {
+        start_worker("pending".into(), finish_pending);
+    }
     let mut by_console: BTreeMap<String, Vec<LocalMember>> = BTreeMap::new();
-    for lm in load_config().members {
+    for lm in config.members {
         by_console.entry(lm.console.clone()).or_default().push(lm);
     }
     if by_console.is_empty() {
@@ -4210,6 +4264,9 @@ fn add_local(addr: &str, drive: &str, member: &str, path: &str, name: &str) -> R
         }
         c.members
             .retain(|m| !(m.drive == drive && (m.member == member || m.path == path)));
+        // Joined again: a delete of the drive there that the console never heard of is off.
+        c.pending
+            .retain(|p| !(p.console == addr && p.drive == drive && p.member.is_none()));
         c.members.push(LocalMember {
             console: addr.to_string(),
             drive: drive.to_string(),
@@ -5181,62 +5238,218 @@ pub async fn approve(Json(req): Json<MemberReq>) -> Response {
     .await
 }
 
+/// Takes a folder out of the drive. When the console does not answer, this device's own folder
+/// stops syncing anyway (its files stay) and the console drops it once it answers: the answer
+/// then has `later`, and a `note` saying so.
 pub async fn leave(Json(req): Json<MemberReq>) -> Response {
     answer(move || {
-        let addr = addr_of(req.addr)?;
-        let member = req
-            .member
-            .clone()
-            .ok_or_else(|| refuse(StatusCode::BAD_REQUEST, "which member?"))?;
-        let r = doc_update(&addr, |doc| {
-            if let Some(d) = doc.drives.iter_mut().find(|d| d.id == req.drive) {
-                d.members.retain(|m| m.id != member);
+        Ok(match leave_now(&req)? {
+            Gone::Done => json!({ "supported": true, "ok": true }),
+            Gone::Unsupported => unsupported(),
+            Gone::Later(note) => {
+                json!({ "supported": true, "ok": true, "later": true, "note": note })
             }
-            Ok(())
-        })?;
-        stop_pass(&member);
-        remove_local(&req.drive, Some(&member))?;
-        if r.is_none() {
-            return Ok(unsupported());
-        }
-        Ok(json!({ "supported": true, "ok": true }))
+        })
     })
     .await
 }
 
+/// How a leave or a delete went.
+#[derive(Debug, PartialEq)]
+enum Gone {
+    Done,
+    /// The helper predates the mesh.
+    Unsupported,
+    /// The console did not answer: done on this device, and there once it answers (the note
+    /// says so).
+    Later(String),
+}
+
+fn told_later(console: &str, deleted: bool) -> Gone {
+    Gone::Later(if deleted {
+        format!(
+            "The drive is no longer kept on this device. {console} did not answer: the drive is \
+             deleted there when it is back. No files are deleted."
+        )
+    } else {
+        format!(
+            "This folder no longer syncs. {console} did not answer: the folder is removed from \
+             the drive there when it is back. Its files stay where they are."
+        )
+    })
+}
+
+fn leave_now(req: &MemberReq) -> Result<Gone> {
+    let addr = addr_of(req.addr.clone())?;
+    let member = req
+        .member
+        .clone()
+        .ok_or_else(|| refuse(StatusCode::BAD_REQUEST, "which member?"))?;
+    let r = doc_update(&addr, |doc| {
+        if let Some(d) = doc.drives.iter_mut().find(|d| d.id == req.drive) {
+            d.members.retain(|m| m.id != member);
+        }
+        Ok(())
+    });
+    stop_pass(&member);
+    let r = match r {
+        Ok(r) => r,
+        // The console did not answer (it may never again), or could not read its list: this
+        // device's own folder stops syncing anyway, its files staying where they are, and the
+        // console drops it once it answers. (This used to fail, and a folder of a console gone
+        // for good could never be removed.) Another device's folder only its console can drop.
+        Err(e) => {
+            let Some(lm) = load_config()
+                .members
+                .into_iter()
+                .find(|m| m.drive == req.drive && m.member == member && m.console == addr)
+            else {
+                return Err(e);
+            };
+            forget_local(&lm)?;
+            add_pending(&addr, &req.drive, Some(&member))?;
+            return Ok(told_later(&addr, false));
+        }
+    };
+    remove_local(&req.drive, Some(&member))?;
+    Ok(if r.is_none() {
+        Gone::Unsupported
+    } else {
+        Gone::Done
+    })
+}
+
+/// Deletes the drive (its files stay). When the console does not answer and this device keeps a
+/// folder of it, that folder stops syncing and the console deletes the drive once it answers:
+/// the answer then has `later`, and a `note` saying so.
 pub async fn delete(Json(req): Json<MemberReq>) -> Response {
     answer(move || {
-        let addr = addr_of(req.addr)?;
-        let r = doc_update(&addr, |doc| {
-            let linked: Vec<String> = doc
-                .drives
-                .iter()
-                .filter(|d| d.id == req.drive)
-                .flat_map(|d| d.links.iter().map(|l| l.console.clone()))
-                .collect();
-            doc.drives.retain(|d| d.id != req.drive);
-            Ok(linked)
-        })?;
-        // Linked consoles keep their copy as a drive of their own circle; only the link goes.
-        for c in r.clone().unwrap_or_default() {
-            let (lo, hi) = link_ends(&addr, &c);
-            stop_pass(&link_member_id(&req.drive, lo, hi));
-            drop_link(&c, &req.drive, &addr);
-        }
-        for m in load_config()
-            .members
-            .iter()
-            .filter(|m| m.drive == req.drive && m.console == addr)
-        {
-            stop_pass(&m.member);
-        }
-        remove_local_at(&req.drive, &addr)?;
-        if r.is_none() {
-            return Ok(unsupported());
-        }
-        Ok(json!({ "supported": true, "ok": true }))
+        Ok(match delete_now(&req)? {
+            Gone::Done => json!({ "supported": true, "ok": true }),
+            Gone::Unsupported => unsupported(),
+            Gone::Later(note) => {
+                json!({ "supported": true, "ok": true, "later": true, "note": note })
+            }
+        })
     })
     .await
+}
+
+fn delete_now(req: &MemberReq) -> Result<Gone> {
+    let addr = addr_of(req.addr.clone())?;
+    let r = doc_update(&addr, |doc| {
+        let linked: Vec<String> = doc
+            .drives
+            .iter()
+            .filter(|d| d.id == req.drive)
+            .flat_map(|d| d.links.iter().map(|l| l.console.clone()))
+            .collect();
+        doc.drives.retain(|d| d.id != req.drive);
+        Ok(linked)
+    });
+    let mine: Vec<LocalMember> = load_config()
+        .members
+        .into_iter()
+        .filter(|m| m.drive == req.drive && m.console == addr)
+        .collect();
+    let (r, later) = match r {
+        Ok(r) => (r, false),
+        // The console did not answer: this device stops keeping the drive (its files stay), the
+        // consoles linked to it (as last read) drop the link now, and the console deletes the
+        // drive once it answers. Without a folder of it here there is nothing to do but wait.
+        Err(e) => {
+            if mine.is_empty() {
+                return Err(e);
+            }
+            let mut linked: Vec<String> = mine.iter().flat_map(|m| m.links.clone()).collect();
+            linked.sort();
+            linked.dedup();
+            add_pending(&addr, &req.drive, None)?;
+            (Some(linked), true)
+        }
+    };
+    // Linked consoles keep their copy as a drive of their own circle; only the link goes.
+    for c in r.clone().unwrap_or_default() {
+        let (lo, hi) = link_ends(&addr, &c);
+        stop_pass(&link_member_id(&req.drive, lo, hi));
+        drop_link(&c, &req.drive, &addr);
+    }
+    for m in &mine {
+        stop_pass(&m.member);
+    }
+    remove_local_at(&req.drive, &addr)?;
+    Ok(if later {
+        told_later(&addr, true)
+    } else if r.is_none() {
+        Gone::Unsupported
+    } else {
+        Gone::Done
+    })
+}
+
+/// The console's side of `p`: the folder, or the whole drive, gone from its list. False when
+/// there is nothing left to take out.
+fn apply_pending(doc: &mut DriveDoc, p: &Pending) -> bool {
+    match &p.member {
+        Some(m) => doc
+            .drives
+            .iter_mut()
+            .find(|d| d.id == p.drive)
+            .is_some_and(|d| {
+                let before = d.members.len();
+                d.members.retain(|x| x.id != *m);
+                d.members.len() != before
+            }),
+        None => {
+            let before = doc.drives.len();
+            doc.drives.retain(|d| d.id != p.drive);
+            doc.drives.len() != before
+        }
+    }
+}
+
+/// What this device did while a console did not answer, done there once it does. Kept for the
+/// next round while the console still does not answer.
+fn finish_pending() {
+    for p in load_config().pending {
+        if !worth_trying(&p.console) {
+            continue;
+        }
+        let done = match doc_read(&p.console) {
+            // A helper without the drive list: nothing there to take out.
+            Ok(None) => true,
+            Err(_) => false,
+            Ok(Some((_, doc))) => {
+                let linked: Vec<String> = doc
+                    .drives
+                    .iter()
+                    .filter(|d| d.id == p.drive && p.member.is_none())
+                    .flat_map(|d| d.links.iter().map(|l| l.console.clone()))
+                    .collect();
+                if !apply_pending(&mut doc.clone(), &p) {
+                    true
+                } else if doc_update(&p.console, |d| Ok(apply_pending(d, &p))).is_ok() {
+                    for c in linked {
+                        let (lo, hi) = link_ends(&p.console, &c);
+                        stop_pass(&link_member_id(&p.drive, lo, hi));
+                        drop_link(&c, &p.drive, &p.console);
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+        };
+        if done {
+            crate::log_at!(
+                Info,
+                "mesh",
+                "mesh drive {}: what this device did while its console was away is done there",
+                p.drive
+            );
+            let _ = edit_config(|c| c.pending.retain(|x| *x != p));
+        }
+    }
 }
 
 pub async fn pause(Json(req): Json<MemberReq>) -> Response {
@@ -6710,6 +6923,183 @@ mod tests {
         )))
         .unwrap_err();
         assert!(list_unreadable(&e));
+    }
+
+    // ---- leaving or deleting while the console does not answer ----
+
+    /// A console for this thread's management calls: its drive list, and whether it answers.
+    #[derive(Default)]
+    struct FakeConsole {
+        doc: Mutex<(u64, Value)>,
+        away: AtomicBool,
+    }
+
+    impl ps5upload_core::mgmt::MgmtTransport for FakeConsole {
+        fn call(
+            &self,
+            _addr: &str,
+            method: ps5upload_core::mgmt::Method,
+            label: &str,
+            body: &[u8],
+            _timeout: Duration,
+        ) -> Result<Option<Vec<u8>>> {
+            use ps5upload_core::mgmt::m;
+            if self.away.load(Ordering::SeqCst) {
+                return Err(ps5upload_core::mgmt::console_unusable(
+                    label,
+                    ps5upload_core::mgmt::AVA1_UNREACHABLE,
+                    "nothing answered",
+                ));
+            }
+            let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let mut doc = self.doc.lock().unwrap();
+            let reply = if method.id == m::MESH_DOC_GET.id {
+                json!({"ok": true, "rev": doc.0, "doc": doc.1})
+            } else if method.id == m::MESH_DOC_PUT.id {
+                if req["base"].as_u64() == Some(doc.0) {
+                    *doc = (doc.0 + 1, req["doc"].clone());
+                    json!({"ok": true, "saved": true, "rev": doc.0})
+                } else {
+                    json!({"ok": true, "saved": false, "rev": doc.0, "doc": doc.1})
+                }
+            } else {
+                json!({"ok": true})
+            };
+            Ok(Some(serde_json::to_vec(&reply)?))
+        }
+    }
+
+    /// This thread's engine files in a folder of its own, and its calls to a fake console.
+    struct AwayRig {
+        dir: PathBuf,
+        console: Arc<FakeConsole>,
+        _calls: ps5upload_core::mgmt::ScopedTransport,
+    }
+
+    impl AwayRig {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "ps5u-mesh-{name}-{}-{}",
+                std::process::id(),
+                new_id()
+            ));
+            std::fs::create_dir_all(dir.join("folder")).unwrap();
+            std::fs::write(dir.join("folder/save.dat"), b"kept").unwrap();
+            TEST_STATE_DIR.with(|d| *d.borrow_mut() = Some(dir.join("state")));
+            let console = Arc::new(FakeConsole::default());
+            let calls = ps5upload_core::mgmt::scoped_transport(console.clone());
+            Self {
+                dir,
+                console,
+                _calls: calls,
+            }
+        }
+
+        fn folder(&self) -> String {
+            self.dir.join("folder").to_string_lossy().into_owned()
+        }
+
+        fn files_kept(&self) -> bool {
+            std::fs::read(self.dir.join("folder/save.dat")).is_ok_and(|b| b == b"kept")
+        }
+
+        fn set_doc(&self, drive: &str) {
+            *self.console.doc.lock().unwrap() = (
+                4,
+                json!({"drives": [
+                    {"id": drive, "name": "Saves", "hub": "/data/saves", "members": [
+                        {"id": "m-here", "device": "d1", "path": "/here"},
+                        {"id": "m-other", "device": "d2", "path": "/there"},
+                    ]},
+                    {"id": "kept", "name": "Other", "hub": "/data/other"},
+                ]}),
+            );
+        }
+    }
+
+    impl Drop for AwayRig {
+        fn drop(&mut self) {
+            TEST_STATE_DIR.with(|d| *d.borrow_mut() = None);
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn member_req(console: &str, drive: &str, member: Option<&str>) -> MemberReq {
+        MemberReq {
+            addr: Some(console.into()),
+            drive: drive.into(),
+            member: member.map(str::to_string),
+            approve: None,
+            paused: None,
+        }
+    }
+
+    /// A console gone for good: its folder here can still leave. It stops syncing, its files stay,
+    /// the answer says the console drops it when it is back, and once it is, it does.
+    #[test]
+    fn a_folder_leaves_while_its_console_is_away_and_is_dropped_there_once_back() {
+        let rig = AwayRig::new("leave");
+        let (console, drive) = ("192.0.2.211", new_id());
+        add_local(console, &drive, "m-here", &rig.folder(), "Saves").unwrap();
+        rig.set_doc(&drive);
+        rig.console.away.store(true, Ordering::SeqCst);
+        // Another device's folder: only its console can drop it.
+        assert!(leave_now(&member_req(console, &drive, Some("m-other"))).is_err());
+        let Gone::Later(note) = leave_now(&member_req(console, &drive, Some("m-here"))).unwrap()
+        else {
+            panic!("not later");
+        };
+        assert!(note.contains("when it is back"), "{note}");
+        let c = load_config();
+        assert!(c.members.is_empty());
+        assert_eq!(c.pending.len(), 1);
+        assert!(rig.files_kept());
+        // Still away: kept for later.
+        finish_pending();
+        assert_eq!(load_config().pending.len(), 1);
+        rig.console.away.store(false, Ordering::SeqCst);
+        finish_pending();
+        assert!(load_config().pending.is_empty());
+        let (rev, doc) = rig.console.doc.lock().unwrap().clone();
+        assert_eq!(rev, 5);
+        assert_eq!(doc["drives"][0]["members"].as_array().unwrap().len(), 1);
+        assert_eq!(doc["drives"][0]["members"][0]["id"], "m-other");
+        // Nothing left to do: nothing more is written.
+        finish_pending();
+        assert_eq!(rig.console.doc.lock().unwrap().0, 5);
+    }
+
+    #[test]
+    fn a_drive_deleted_while_its_console_is_away_is_deleted_there_once_back() {
+        let rig = AwayRig::new("delete");
+        let (console, drive) = ("192.0.2.212", new_id());
+        add_local(console, &drive, "m-here", &rig.folder(), "Saves").unwrap();
+        rig.set_doc(&drive);
+        rig.console.away.store(true, Ordering::SeqCst);
+        // A drive this device keeps no folder of waits for its console.
+        assert!(delete_now(&member_req(console, "kept", None)).is_err());
+        let Gone::Later(note) = delete_now(&member_req(console, &drive, None)).unwrap() else {
+            panic!("not later");
+        };
+        assert!(note.contains("No files are deleted"), "{note}");
+        assert!(load_config().members.is_empty());
+        assert!(rig.files_kept());
+        // Joined again before the console heard of it: the delete is off.
+        add_local(console, &drive, "m-again", &rig.folder(), "Saves").unwrap();
+        assert!(load_config().pending.is_empty());
+        let _ = remove_local(&drive, Some("m-again"));
+        add_pending(console, &drive, None).unwrap();
+        rig.console.away.store(false, Ordering::SeqCst);
+        finish_pending();
+        assert!(load_config().pending.is_empty());
+        let doc = rig.console.doc.lock().unwrap().1.clone();
+        let ids: Vec<&str> = doc["drives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|d| d["id"].as_str())
+            .collect();
+        assert_eq!(ids, ["kept"]);
     }
 
     #[test]
