@@ -988,6 +988,8 @@ impl Guest {
                 self.seat_note = None;
                 self.playing = true;
             }
+            // The pad they had: signed in (or not yet) as it was.
+            link::OpenResult::Kept => {}
             other => {
                 self.plays_as = None;
                 self.seat_note = match other {
@@ -4339,6 +4341,11 @@ pub(crate) mod link {
         /// The pad is there, but the profile the host chose could not be given to it: the console
         /// asks who it is, as without a choice. Why: [`Unseated`] notes.
         Unseated(&'static str),
+        /// The pad is there, and was already: the helper still had it for this token (a close
+        /// that never reached it, the helper unreachable then). It is the same pad, with whoever
+        /// the console signed in on it: the guest's picking stands as it was (a pad treated as new
+        /// gave a guest signed in on it their PS button back).
+        Kept,
         /// Another owner holds the slot.
         Busy,
         /// The helper has no Play Together.
@@ -4351,14 +4358,17 @@ pub(crate) mod link {
         pub(crate) fn is_ok(&self) -> bool {
             matches!(
                 self,
-                OpenResult::Ok | OpenResult::Seated(_) | OpenResult::Unseated(_)
+                OpenResult::Ok | OpenResult::Seated(_) | OpenResult::Unseated(_) | OpenResult::Kept
             )
         }
 
         /// The guest's refusal for it.
         pub(crate) fn why(&self) -> &'static str {
             match self {
-                OpenResult::Ok | OpenResult::Seated(_) | OpenResult::Unseated(_) => "ok",
+                OpenResult::Ok
+                | OpenResult::Seated(_)
+                | OpenResult::Unseated(_)
+                | OpenResult::Kept => "ok",
                 OpenResult::Busy => "full",
                 OpenResult::OldHelper => "old_helper",
                 OpenResult::Failed(_) => "unreachable",
@@ -4535,6 +4545,9 @@ pub(crate) mod link {
         note: Option<&'static str>,
         /// The pad is seated in `want`'s user.
         seated: bool,
+        /// Its last open found the pad still there for this token (`resumed`): see
+        /// [`OpenResult::Kept`].
+        kept: bool,
         /// A seat the helper said is starting is asked again until this.
         bind_until: Option<Instant>,
         /// The next open no sooner than this.
@@ -4564,6 +4577,7 @@ pub(crate) mod link {
                 try_bind: want.is_some(),
                 note: None,
                 seated: false,
+                kept: false,
                 bind_until: None,
                 open_at: now,
                 waiters: Vec::new(),
@@ -4583,6 +4597,7 @@ pub(crate) mod link {
         fn result(&self) -> OpenResult {
             match (self.want, self.seated, self.note) {
                 (Some(b), true, _) => OpenResult::Seated(b.user),
+                _ if self.kept => OpenResult::Kept,
                 (Some(_), false, note) => OpenResult::Unseated(note.unwrap_or(unseated::FAILED)),
                 (None, ..) => OpenResult::Ok,
             }
@@ -4764,6 +4779,7 @@ pub(crate) mod link {
                             && (o.resumed == Some(false)
                                 || (o.resumed.is_none() && s.handle != Some(o.handle)));
                         s.opened = true;
+                        s.kept = o.resumed == Some(true);
                         s.refused_since = None;
                         s.handle = Some(o.handle);
                         s.last_call = now;
@@ -5811,6 +5827,30 @@ mod tests {
         assert_eq!(p.strip_mask(id), None);
     }
 
+    /// Their pad found as it was (a close the helper never got): the same pad, still signed in. PS
+    /// stays off for a guest who picked (a pad taken for a new one gave it back), and one still
+    /// picking goes on picking.
+    #[test]
+    fn a_kept_pad_keeps_the_guests_ps_as_it_was() {
+        let mut p = party();
+        let t = Instant::now();
+        let id = admit(&mut p, "A", t);
+        let (tx, _rx) = conn();
+        p.attach(id, 1, tx);
+        p.guest_mut(id)
+            .unwrap()
+            .pad_made(&OpenResult::Kept, Some(None));
+        assert_eq!(p.strip_mask(id), Some((2, vpad::button::CREATE)));
+        assert_eq!(p.saw_input(id, vpad::button::PS), None);
+        assert!(p.saw_input(id, vpad::button::CROSS).is_some());
+        assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
+        p.guest_mut(id)
+            .unwrap()
+            .pad_made(&OpenResult::Kept, Some(None));
+        assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
+        assert_eq!(p.saw_input(id, vpad::button::PS), None, "nothing to pick");
+    }
+
     /// A guest who keeps PS down while pressing ✕ on "Who's using this controller?" has picked a
     /// user like any other: PS is off for them after it. (It counted as no pick, so they were
     /// signed in with a PS button that still worked.)
@@ -6200,6 +6240,8 @@ mod tests {
         log: Mutex<Vec<String>>,
         states: Mutex<Vec<StateItem>>,
         handle: AtomicI64,
+        /// The slots it has a pad for (a close that reached it removes one).
+        pads: Mutex<std::collections::HashSet<u8>>,
         /// The next open is a new pad (a restarted helper).
         restarted: AtomicBool,
         down: AtomicBool,
@@ -6292,9 +6334,9 @@ mod tests {
                 }));
             }
             *self.not_open.lock().unwrap() = None;
-            // the first open, or one after a restart, makes a new pad
+            // the slot's first open, one after its close, or one after a restart makes a new pad
             let fresh = self.restarted.swap(false, Ordering::Relaxed)
-                || self.handle.load(Ordering::Relaxed) == 0;
+                | self.pads.lock().unwrap().insert(slot);
             if fresh {
                 self.handle.fetch_add(1, Ordering::Relaxed);
             }
@@ -6383,6 +6425,7 @@ mod tests {
         fn close(&self, _h: &str, slot: u8, _t: &str) -> anyhow::Result<Option<Ack>> {
             self.up()?;
             self.log.lock().unwrap().push(format!("close{slot}"));
+            self.pads.lock().unwrap().remove(&slot);
             Ok(Some(Ack {
                 ok: true,
                 ..Default::default()
@@ -6451,6 +6494,36 @@ mod tests {
         );
         st.tick(t);
         rx
+    }
+
+    /// The helper unreachable when a pad's close was sent: the close is lost, and the next open
+    /// with the same token finds the pad still there. Kept (the console has it signed in as it
+    /// was), not a new pad; after a close that reached it, a new one.
+    #[test]
+    fn a_pad_whose_close_was_lost_opens_as_kept_not_new() {
+        let f = Arc::new(FakeHelper::default());
+        let (mut st, ev) = link_with(&f);
+        let t = Instant::now();
+        assert_eq!(
+            open_slot_t(&mut st, 2, "a", t).try_recv().unwrap(),
+            OpenResult::Ok
+        );
+        f.down.store(true, Ordering::Relaxed);
+        st.on_cmd(Cmd::Close { slot: 2 }, t);
+        st.tick(t);
+        f.down.store(false, Ordering::Relaxed);
+        let t = t + Duration::from_secs(1);
+        assert_eq!(
+            open_slot_t(&mut st, 2, "a", t).try_recv().unwrap(),
+            OpenResult::Kept
+        );
+        assert_eq!(reopens(&ev), 0);
+        st.on_cmd(Cmd::Close { slot: 2 }, t);
+        st.tick(t);
+        assert_eq!(
+            open_slot_t(&mut st, 2, "a", t).try_recv().unwrap(),
+            OpenResult::Ok
+        );
     }
 
     #[test]
