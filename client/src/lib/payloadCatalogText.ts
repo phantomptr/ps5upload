@@ -8,7 +8,7 @@ type Tr = (key: string, vars: Record<string, string | number> | undefined, fallb
 /** By catalogue id. Written out, so the checks for unused and missing keys can read them. */
 export const CATALOG_KEYS: Record<string, [role: string, description: string]> = {
   "elfldr": ["payload_role_elfldr", "payload_desc_elfldr"],
-  "kstuff-echostretch": ["payload_role_kstuff_echostretch", "payload_desc_kstuff_echostretch_v3"],
+  "kstuff-echostretch": ["payload_role_kstuff_echostretch", "payload_desc_kstuff_echostretch_v4"],
   "kstuff-lite-drakmor": ["payload_role_kstuff_lite_drakmor", "payload_desc_kstuff_lite_drakmor"],
   "shadowmountplus": ["payload_role_shadowmountplus", "payload_desc_shadowmountplus"],
   "etahen": ["payload_role_etahen", "payload_desc_etahen"],

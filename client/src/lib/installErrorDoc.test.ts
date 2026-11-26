@@ -60,7 +60,8 @@ describe("installErrorDoc", () => {
   it("FAQ.md documents the PS5 fake-game limit and the matrix", () => {
     expect(faq).toContain("## install routes: what works for what (support matrix)");
     expect(faq).toContain("## my uploaded game won't launch");
-    expect(faq).toContain("above 11.60");
+    expect(faq).toContain("11.61 to 13.60");
+    expect(faq).toContain("what are the two ways to play a fake ps5 package?");
     expect(faq).toContain("ps4 fake packages");
   });
 });

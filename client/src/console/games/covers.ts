@@ -6,7 +6,7 @@
  */
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { ApiError, callBlob } from "../api";
-import { TITLE_ID_RE } from "./model";
+import { APP_ROOTS, TITLE_ID_RE } from "./model";
 
 export const COVER_PX = 192;
 const CONCURRENT = 2;
@@ -82,8 +82,16 @@ function forget(key: string): void {
 /** The cover of `titleId` (cached), or null when it has none. */
 export function loadCover(titleId: string): Promise<string | null> {
   if (!TITLE_ID_RE.test(titleId)) return Promise.resolve(null);
-  // appmeta first; a title a homebrew installer put on FW 13.60 has only its app folder (the engine's order).
-  return loadImage(titleId, [`/user/appmeta/${titleId}/icon0.png`, `/user/app/${titleId}/sce_sys/icon0.png`]);
+  return loadImage(titleId, coverPaths(titleId));
+}
+
+/**
+ * Where a title's cover may be, in order (the engine's app_icon_paths): appmeta first; a title a
+ * homebrew installer put on FW 13.60 has only its app folder, on whichever drive it went to, so
+ * every app root the installed list reads (the M.2 drive's too: such a title had no cover).
+ */
+export function coverPaths(titleId: string): string[] {
+  return [`/user/appmeta/${titleId}/icon0.png`, ...APP_ROOTS.map((root) => `${root}/${titleId}/sce_sys/icon0.png`)];
 }
 
 /** The first of `paths` that reads as a PNG/JPEG, drawn down to `px` and cached under `key`; null when none does. */

@@ -3,6 +3,7 @@ import { ArchiveRestore, Eraser, Gamepad2, HardDrive, Sparkles, Usb, X } from "l
 import { formatBytes } from "../../lib/format";
 import { ApiError, call, callBlob, isOffline } from "../api";
 import { cleanupLastFound, onCleanupFound } from "../cleanup/Cleanup";
+import { appName } from "../games/model";
 import { onNavAction } from "../nav";
 import type { SectionContext } from "../sections";
 import type { ConsoleStatus } from "../shell/TopBar";
@@ -27,6 +28,8 @@ export interface Volume {
   fs_type: string;
   total_bytes: number;
   free_bytes: number;
+  /** What a new copy may take: free less the helper's safety reserve. */
+  allocatable_bytes?: number;
   writable: boolean;
   source_image?: string;
 }
@@ -447,6 +450,22 @@ function useVolumes(tick: number): { volumes: Volume[] | null; error: boolean } 
 /** A title id the helper can look up (also keeps the path below free of anything else). */
 const TITLE_ID = /^[A-Z]{4}\d{5}$/;
 
+/** The running game's name: `known` when the helper sent one, else app.db's (games/model appName). */
+export function useAppName(titleId: string | null, known?: string | null): string | null {
+  const [got, setGot] = useState<[string, string] | null>(null);
+  useEffect(() => {
+    if (!titleId || known) return;
+    let live = true;
+    void appName(titleId).then((n) => {
+      if (live && n) setGot([titleId, n]);
+    });
+    return () => {
+      live = false;
+    };
+  }, [titleId, known]);
+  return known || (got && got[0] === titleId ? got[1] : null);
+}
+
 /** The running game's cover: its icon0.png read through the helper, as an object URL; null when unreadable. */
 export function useAppCover(titleId: string | null): string | null {
   const [url, setUrl] = useState<string | null>(null);
@@ -538,6 +557,9 @@ export function Home({ ctx }: { ctx: SectionContext }) {
   const titleId = ctx.status?.running?.title_id ?? null;
   const loadedCover = useAppCover(titleId);
   const cover = loadedCover && coverFailed !== loadedCover ? loadedCover : null;
+  const running = ctx.status?.running ?? null;
+  const runName = useAppName(titleId, running?.name);
+  const status = running && runName && !running.name ? { ...ctx.status!, running: { ...running, name: runName } } : ctx.status;
   const onOpenCheats = hasSection("cheats") ? () => openSection("cheats") : null;
   const onOpenSaves = canOpen("saves") ? (title: string) => openSection("saves", { title }) : null;
   const onOpenDrive = canOpen("files") ? (path: string) => openSection("files", { path }) : null;
@@ -559,7 +581,7 @@ export function Home({ ctx }: { ctx: SectionContext }) {
 
   return (
     <HomeView
-      status={ctx.status}
+      status={status}
       volumes={volumes}
       volumesError={volumesError}
       jobs={jobs}

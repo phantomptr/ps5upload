@@ -815,6 +815,81 @@ fn convert_unpacks_tars_and_zstd_zips_and_the_zip_preview_reads_a_zstd_param_jso
     .is_err());
 }
 
+/// A tar of `files` empty files under `folders` folders, compressed with `codec`.
+fn many_entries(path: &Path, folders: usize, files: usize, codec: Codec) {
+    let mut b = tar::Builder::new(Vec::new());
+    for i in 0..folders {
+        let mut h = header(tar::EntryType::Directory, 0);
+        b.append_data(&mut h, format!("game/d{i}/"), io::empty())
+            .unwrap();
+    }
+    for i in 0..files {
+        let mut h = header(tar::EntryType::Regular, 0);
+        b.append_data(&mut h, format!("game/f{i}.bin"), io::empty())
+            .unwrap();
+    }
+    let tar = b.into_inner().unwrap();
+    let bytes = match codec {
+        Codec::None => tar,
+        c => compress(c, &tar),
+    };
+    std::fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn a_listing_past_the_entry_or_name_cap_is_refused_in_plain_words() {
+    const {
+        assert!(
+            MAX_TAR_ENTRIES >= 2_000_000,
+            "far above a real game's 223 000 files"
+        )
+    };
+    let d = temp_dir("entry-cap");
+    let set = |c: Option<(usize, u64)>| TEST_CAPS.with(|t| t.set(c));
+    for codec in [Codec::None, Codec::Zstd] {
+        let tag = codec.name();
+        // Files and folders count together: 20 + 30 is at the cap, one more is past it.
+        set(Some((50, u64::MAX)));
+        let at = d.join(format!("at-{tag}.tar"));
+        many_entries(&at, 20, 30, codec);
+        let l = tar_layout(&at).unwrap();
+        assert_eq!((l.files.len(), l.dirs.len()), (30, 21), "{tag}");
+        let past = d.join(format!("past-{tag}.tar"));
+        many_entries(&past, 20, 31, codec);
+        let e = tar_layout(&past).unwrap_err();
+        assert!(
+            matches!(tar_fault_of(&e), Some(TarFault::Unsupported(m))
+                if m.contains("more than 50 files and folders")),
+            "{tag}: {e}"
+        );
+        // A folder past the cap is refused too.
+        let past = d.join(format!("past-dirs-{tag}.tar"));
+        many_entries(&past, 60, 0, codec);
+        assert!(tar_layout(&past).is_err(), "{tag}");
+        // The names' bytes have their own cap.
+        set(Some((usize::MAX, 1 << 20)));
+        let long = d.join(format!("long-{tag}.tar"));
+        let mut b = tar::Builder::new(Vec::new());
+        for i in 0..300 {
+            let mut h = header(tar::EntryType::Regular, 0);
+            let name = format!("game/{}/{i}.bin", "n".repeat(4000));
+            b.append_data(&mut h, name, io::empty()).unwrap();
+        }
+        let tar = b.into_inner().unwrap();
+        let bytes = match codec {
+            Codec::None => tar,
+            c => compress(c, &tar),
+        };
+        std::fs::write(&long, bytes).unwrap();
+        let e = tar_layout(&long).unwrap_err();
+        assert!(
+            matches!(tar_fault_of(&e), Some(TarFault::Unsupported(m)) if m.contains("1 MiB")),
+            "{tag}: {e}"
+        );
+    }
+    set(None);
+}
+
 /// Decode speed of real archives: the listing, then a full walk.
 /// `PS5UPLOAD_TAR_BENCH=a.tar.zst:b.tgz cargo test --release -p ps5upload-core --lib tar_bench -- --ignored --nocapture`
 #[test]

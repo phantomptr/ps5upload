@@ -14,6 +14,7 @@ const mem = new globalThis.Map<string, string>();
 };
 
 const { useTaskStore } = await import("./tasks");
+const { MAX_POLL_FAILURES } = await import("../lib/pollRead");
 const {
   useFsUploadStore,
   fsUploadForHost,
@@ -499,6 +500,40 @@ describe("runFsUpload", () => {
     expect(e.started.map((x) => x.src)).toEqual(["/pc/c.bin"]);
   });
 
+  it("a failed read of the interrupted run's job is asked again, not answered with a second job (#945)", async () => {
+    const e = fakeEngine({
+      "job-7": [{ status: "running", bytes_sent: 5, total_bytes: 9 } as Snap],
+    });
+    const status = e.deps.jobStatus;
+    let failed = false;
+    e.deps.jobStatus = async (id) => {
+      if (id === "job-7" && !failed) {
+        failed = true;
+        throw new Error("Service unavailable");
+      }
+      return status(id);
+    };
+    useFsUploadStore.getState().patch(HOST, {
+      stopped: {
+        why: "interrupted",
+        error: "",
+        reason: null,
+        addr: HOST,
+        destDir: "/data/x",
+        srcPaths: ["/pc/b.bin", "/pc/c.bin"],
+        doneCount: 1,
+        count: 3,
+        name: "b.bin",
+        jobId: "job-7",
+      },
+    });
+    const r = await resumeFsUpload(HOST, e.deps);
+    expect(r.ok).toBe(true);
+    expect(failed).toBe(true);
+    // b.bin stayed on its old job: no second job wrote the same file.
+    expect(e.started.map((x) => x.src)).toEqual(["/pc/c.bin"]);
+  });
+
   it("dismissing or finishing leaves nothing saved", async () => {
     const e = fakeEngine({
       "job-1": [{ status: "failed", error: "disk full" } as Snap],
@@ -893,6 +928,31 @@ describe("giving a stopped run up (R2-1 F10)", () => {
   it("deletes a folder step's staging tree and its empty place-holder", async () => {
     const c = console_({ [part]: ["eboot.bin"], "/data/x/G": [] });
     await discardFsUploadPartial({ ...base, steps: [{ kind: "one", src: "/pc/G", name: "G" }] }, deps(c));
+    expect(c.removed).toEqual([part, "/data/x/G"]);
+  });
+
+  it("keeps the partial while the old job cannot be asked about (#945)", async () => {
+    const c = console_({ [part]: ["eboot.bin"], "/data/x/G": [] });
+    const jobStatus = vi.fn(async () => {
+      throw new Error("Service unavailable");
+    });
+    await discardFsUploadPartial(
+      { ...base, jobId: "job-9", steps: [{ kind: "one", src: "/pc/G", name: "G" }] },
+      deps(c, { jobStatus }),
+    );
+    expect(jobStatus).toHaveBeenCalledTimes(MAX_POLL_FAILURES);
+    expect(c.removed).toEqual([]);
+  });
+
+  it("deletes the partial of a job the engine no longer knows", async () => {
+    const c = console_({ [part]: ["eboot.bin"], "/data/x/G": [] });
+    const jobStatus = vi.fn(async () => {
+      throw new Error("job not found");
+    });
+    await discardFsUploadPartial(
+      { ...base, jobId: "job-9", steps: [{ kind: "one", src: "/pc/G", name: "G" }] },
+      deps(c, { jobStatus }),
+    );
     expect(c.removed).toEqual([part, "/data/x/G"]);
   });
 

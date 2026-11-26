@@ -1,0 +1,50 @@
+/* Files on a phone (#936, FilesColumn in screens/FileSystem/PhoneBars.tsx): the page is a column
+   that does not scroll, the header stays put, and the list under it is the only scroller. Android
+   stretches the scroller a drag pulls past its ends; with the header inside it (sticky), the
+   header moved and stretched with the list. The list keeps the page's side padding as its own,
+   so rows' edges and shadows are not cut off at its sides.
+   Here, not in index.css: that one is in the /join and /pad pages too, which have a size budget,
+   and this comes with the Files screen's own chunk.
+   !important: postcss.config.mjs flattens Tailwind's layers into specificity (the reset is four
+   ids strong, utilities eight), which a plain selector in a file of its own cannot outrank. Not
+   the list's overflow-y, which a dialog's scroll lock overrides inline (lib/useScrollLock). */
+html[data-files-column] [data-scroll-root] {
+  display: flex !important;
+  flex-direction: column !important;
+  overflow-y: hidden !important;
+  padding-bottom: 0 !important;
+}
+html[data-files-column] [data-files-page] {
+  --files-pad-x: clamp(2rem, 2.5vw, 3rem);
+  display: flex !important;
+  flex: 1 1 auto !important;
+  flex-direction: column !important;
+  min-height: 0 !important;
+  padding-bottom: 0 !important;
+}
+@media (max-width: 767px) {
+  html[data-files-column] [data-files-page] { --files-pad-x: 1rem; }
+}
+html[data-files-column] [data-files-main] {
+  display: flex !important;
+  flex: 1 1 auto !important;
+  flex-direction: column !important;
+  min-height: 0 !important;
+}
+html[data-files-column] [data-files-page] > :not([data-files-main]),
+html[data-files-column] [data-files-main] > :not([data-files-scroll]) { flex-shrink: 0 !important; }
+html[data-files-column] [data-files-scroll] {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  margin-inline: calc(-1 * var(--files-pad-x)) !important;
+  padding-inline: var(--files-pad-x) !important;
+  padding-bottom: var(--float-bottom) !important;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain !important;
+}
+/* As the page's own scroller (`.tab-room`, index.css): what is scrolled into view stops above the
+   floating bars, where they float. */
+@media (max-width: 767.98px) {
+  html[data-files-column] [data-files-scroll] { scroll-padding-bottom: calc(var(--float-bottom) + 4.5rem) !important; }
+}

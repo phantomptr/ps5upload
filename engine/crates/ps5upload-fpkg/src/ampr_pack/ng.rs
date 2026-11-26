@@ -15,7 +15,15 @@ use crate::source::SourceTree;
 pub const ZSTD_INDEX: &str = "ampr_zstd.index";
 
 /// ampr-emu-ng releases: version and the SHA-256 GitHub publishes for its `libSceAmpr.sprx`.
-pub const NG_RELEASES: [(&str, &str); 8] = [
+pub const NG_RELEASES: [(&str, &str); 10] = [
+    (
+        "0.5.1",
+        "7ca61afc444f0b44d2f005506dde16cb43e74dae4b1e045323b291b8db1c3d5d",
+    ),
+    (
+        "0.5.0",
+        "7379e49953d8f14f26b45ff06a863ecea56aa90a60ba3d5a375f61c52618a174",
+    ),
     (
         "0.4.1",
         "9c7c41b3216bc4f877d67e3c2e5c9c8f9ffabdd5065f4f3fe0dd98fa7228386f",
@@ -177,6 +185,30 @@ mod tests {
         assert!(!older("0.3.4", "0.3.4"));
         assert!(!older("0.4.0", "0.3.4"));
         assert!(older("0.3", "0.3.4"));
+    }
+
+    /// Newest first, each digest a SHA-256 in lower-case hex, no release or digest twice.
+    #[test]
+    fn the_release_table_is_newest_first_and_unique() {
+        for pair in NG_RELEASES.windows(2) {
+            assert!(
+                older(pair[1].0, pair[0].0),
+                "{} before {}",
+                pair[0].0,
+                pair[1].0
+            );
+        }
+        for (v, sha) in NG_RELEASES {
+            assert_eq!(sha.len(), 64, "{v}");
+            assert!(sha
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+            assert_eq!(
+                NG_RELEASES.iter().filter(|(_, s)| *s == sha).count(),
+                1,
+                "{v}"
+            );
+        }
     }
 
     #[test]

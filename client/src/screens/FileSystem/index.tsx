@@ -283,7 +283,7 @@ import { ltr } from "../../i18n";
 import NotificationInbox from "../../layout/NotificationInbox";
 import { createLongPress } from "../../lib/longPress";
 import { backUpTarget, filesBackStep, folderTitle } from "./phoneFiles";
-import { PhoneFolderRow, PhoneSelectionActions, PhoneSelectionRow } from "./PhoneBars";
+import { FilesColumn, PhoneFolderRow, PhoneSelectionActions, PhoneSelectionRow, PhoneStagedBar } from "./PhoneBars";
 
 function parent(p: string): string {
   if (p === "/" || p === "") return "/";
@@ -1956,9 +1956,13 @@ export default function FileSystemScreen() {
   );
   // A folder can hold 100,000 entries: only those near the screen are rendered.
   const rowsListRef = useRef<HTMLUListElement | null>(null);
+  // The phone layout (#936).
+  const phone = usePhoneLayout();
   const { start: rowsStart, end: rowsEnd, before: rowsBefore, after: rowsAfter, scrollToRow } = useWindowedRows(
     sortedEntries.length,
     rowsListRef,
+    // On a phone the list scrolls by itself under the header (FilesColumn).
+    phone && view === null,
   );
   useEffect(() => {
     scrollToEntry.current = (name) => scrollToRow(sortedEntries.findIndex((e) => e.name === name));
@@ -2439,7 +2443,9 @@ export default function FileSystemScreen() {
     }));
     if (items.length === 0) return;
     clipboard.set(op, items, path);
+    // Selecting is done: on a phone the staged items' bar takes the selection's place.
     setSelected(new Set());
+    setSelectMode(false);
   };
 
   // Paste: apply clipboard.op to every item, pasting into `path`.
@@ -2543,6 +2549,8 @@ export default function FileSystemScreen() {
     const addr = consoleAddr(host);
     const errors: string[] = [...refused];
     const duplicated: string[] = [];
+    // The items that went through cleanly: they leave the clipboard afterwards.
+    const done: ClipboardItem[] = [];
     try {
       for (let i = 0; i < items.length; i++) {
         // Between-items cancel check. We *also* drive in-flight
@@ -2662,6 +2670,8 @@ export default function FileSystemScreen() {
                       delErr instanceof Error ? delErr.message : String(delErr)
                     })`,
                   );
+                  // Still where it was, so still staged.
+                  continue;
                 }
               } else {
                 throw e;
@@ -2670,6 +2680,7 @@ export default function FileSystemScreen() {
           } else {
             await fsCopy(addr, item.path, target, opId, overwrite);
           }
+          done.push(item);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           // The engine maps the payload's "fs_copy_cancelled" error
@@ -2715,14 +2726,31 @@ export default function FileSystemScreen() {
     if (problemMsgs.length > 0) {
       setError(problemMsgs.join(" · "));
     }
-    // Only clear the clipboard when every cut succeeded cleanly — a
-    // partial failure means the user might want to retry the leftover
-    // items. Copies always keep the clipboard (same-items-many-places
-    // is the usual copy workflow).
-    // This console's clipboard, and only if it still holds what was pasted. The store's
-    // live half belongs to the SELECTED console, which this one may no longer be.
-    if (!staged && op === "cut" && problemMsgs.length === 0)
-      useFsClipboardStore.getState().clearFor(host, pasted);
+    // What went through leaves the clipboard, a copy as well as a cut (#936): the bar used to
+    // stay after a copy had finished, as if there were still something to do. What failed, was
+    // refused or was not reached before Stop stays staged, to try again. This console's
+    // clipboard: the store's live half belongs to the SELECTED console, which this one may no
+    // longer be. (A moved source has left it already: lib/fsPathsGone.)
+    if (!staged)
+      useFsClipboardStore.getState().drop(
+        host,
+        done.map((i) => i.path),
+      );
+    // A word that it is done, which goes by itself (#936).
+    const notPasted = pasted.length - done.length;
+    if (problemMsgs.length > 0)
+      toast({
+        tone: "warn",
+        message: tr("fs_paste_failed", { count: notPasted }, `Items not pasted: ${notPasted}`),
+      });
+    else if (done.length > 0)
+      toast({
+        tone: "success",
+        message:
+          op === "cut"
+            ? tr("fs_paste_done_move", { count: done.length }, `Items moved: ${done.length}`)
+            : tr("fs_paste_done_copy", { count: done.length }, `Items copied: ${done.length}`),
+      });
     await refresh();
   };
 
@@ -3114,10 +3142,13 @@ export default function FileSystemScreen() {
   }, [volumes, path]);
 
   // ── The phone layout (#936) and system Back (#932) ─────────────────────────────────────
-  const phone = usePhoneLayout();
+  // (`phone` is with the windowed list, which needs it first.)
   const selecting = selectMode || selectionActive;
   /** Selection mode as the phone shows it: checkboxes, the selection row, the bottom bar. */
   const phoneSelecting = phone && selecting && view === null;
+  /** Something staged to copy or move, shown in a bar where the bottom navigation is (#936):
+   *  not while selecting, whose actions have that place. */
+  const phoneStaged = phone && clipboardActive && !selecting && view === null;
   const endSelection = () => {
     setSelected(new Set());
     setSelectMode(false);
@@ -3130,12 +3161,20 @@ export default function FileSystemScreen() {
   } | null>(null);
   const togglePhoneMenu = (kind: NonNullable<typeof phoneMenu>["kind"], anchor: DOMRect) =>
     setPhoneMenu((cur) => (cur?.kind === kind ? null : { kind, anchor }));
-  // Back on the listing once nothing covers it: selection mode first, then up one folder; from
-  // the drive's root it leaves Files. Menus, dialogs and the inline editors close before that.
-  const backState = { view: view !== null, selecting, path, driveRoot: currentVolumePath };
+  // Back on the listing once nothing covers it: selection mode first, then the staged items'
+  // bar, then up one folder; from the drive's root it leaves Files. Menus, dialogs and the inline
+  // editors close before that.
+  const backState = {
+    view: view !== null,
+    selecting,
+    staged: phoneStaged,
+    path,
+    driveRoot: currentVolumePath,
+  };
   useScreenBack(filesBackStep(backState) !== null, () => {
     const step = filesBackStep(backState);
     if (step === "end-selection") endSelection();
+    else if (step === "cancel-staged") clipboard.clear();
     else if (step === "up") {
       const to = backUpTarget(path, currentVolumePath);
       if (to !== null) setPath(to);
@@ -3147,12 +3186,14 @@ export default function FileSystemScreen() {
   useBackDismiss(linkInto !== null, () => setLinkInto(null));
   // The selection's actions take the bottom navigation's place (index.css hides it). Only while
   // Files is on show: a kept, hidden screen has its effects torn down.
+  // The staged items' bar the same way.
+  const phoneBottomBar = phoneSelecting || phoneStaged;
   useEffect(() => {
-    if (!phoneSelecting) return;
+    if (!phoneBottomBar) return;
     const root = document.documentElement;
     root.setAttribute("data-selection-bar", "");
     return () => root.removeAttribute("data-selection-bar");
-  }, [phoneSelecting]);
+  }, [phoneBottomBar]);
   // One bar at the top, not two (#936): on a phone the compact header carries the bell, and the
   // app's top bar gives it its place (`html[data-screen-bar]`, index.css). Held sideways too,
   // where the row beside the sidebar gives way and only its console tabs stay: two rows left
@@ -3475,7 +3516,7 @@ export default function FileSystemScreen() {
   };
 
   return (
-    <div className="app-page" {...browserDrop}>
+    <div className="app-page" data-files-page="" {...browserDrop}>
       {properties && (
         <FileProperties
           key={`${properties.host}:${properties.path}`}
@@ -4005,7 +4046,7 @@ export default function FileSystemScreen() {
           </FilesViewFrame>
         )}
 
-        <div hidden={view !== null}>
+        <div hidden={view !== null} data-files-main="">
 
           {/* Volume picker. Renders only when we have at least one
             writable volume — otherwise it's clutter. Selecting a
@@ -4129,10 +4170,14 @@ export default function FileSystemScreen() {
               On a phone this sits in a compact header pinned over the list (#936): the open
               folder with search, the drive and ⋮ on top (or the selection, while selecting),
               the path under it (beside it on a phone held sideways, where height is short).
-              Wider windows keep the page header and the drive chips. */}
+              Wider windows keep the page header and the drive chips.
+
+              Pinned by sitting outside what scrolls: on a phone the list under it is the only
+              scroller (FilesColumn). As a sticky header inside the page's scroller it moved and
+              stretched with the list when Android's overscroll pulled the list past its ends. */}
           <div
             data-testid="fs-header"
-            className="phone:sticky phone:top-0 phone:z-30 phone:mb-2 phone:rounded-[var(--radius-card)] phone:border phone:border-[var(--glass-edge)] phone:bg-[var(--color-float)] phone:p-1 phone:shadow-[var(--edge-highlight),var(--shadow-2)] phone:backdrop-blur-xl phone:landscape:flex phone:landscape:items-center phone:landscape:gap-2"
+            className="phone:relative phone:z-30 phone:mb-2 phone:shrink-0 phone:rounded-[var(--radius-card)] phone:border phone:border-[var(--glass-edge)] phone:bg-[var(--color-float)] phone:p-1 phone:shadow-[var(--edge-highlight),var(--shadow-2)] phone:backdrop-blur-xl phone:landscape:flex phone:landscape:items-center phone:landscape:gap-2"
           >
             {phoneSelecting ? (
               <PhoneSelectionRow
@@ -4271,10 +4316,13 @@ export default function FileSystemScreen() {
             </div>
           </div>
 
+          {/* Everything under the header: on a phone, the one part that scrolls. */}
+          <div data-files-scroll="" data-scroll-inner="">
           {/* Clipboard banner: non-empty clipboard shows what's staged and
-            where it came from; paste target is always the current path. */}
+            where it came from; paste target is always the current path. A phone has a bar
+            at the bottom instead (PhoneStagedBar). */}
           {clipboardActive && (
-            <div className="mb-3 flex items-center gap-2 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] p-2 text-xs">
+            <div data-testid="fs-staged-banner" className="mb-3 phone:hidden flex items-center gap-2 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] p-2 text-xs">
               <ClipboardPaste size={14} className="text-[var(--color-accent)]" />
               <span>
                 <span className="font-medium">
@@ -5096,6 +5144,31 @@ export default function FileSystemScreen() {
               />
             </>
           )}
+          {phoneStaged && (
+            <>
+              <div aria-hidden className="h-20 roomy:hidden" />
+              <PhoneStagedBar
+                label={tr("fs_staged_bar", undefined, "Items to paste")}
+                countLabel={
+                  clipboard.op === "cut"
+                    ? tr("fs_staged_move", { count: clipboard.items.length }, `Items to move: ${clipboard.items.length}`)
+                    : tr("fs_staged_copy", { count: clipboard.items.length }, `Items to copy: ${clipboard.items.length}`)
+                }
+                fromLabel={
+                  clipboard.sourceLabel
+                    ? tr("fs_staged_from", { path: clipboard.sourceLabel }, `From ${clipboard.sourceLabel}`)
+                    : null
+                }
+                pasteLabel={tr("fs_paste_here", undefined, "Paste here")}
+                onPaste={() => void runPaste()}
+                pasteDisabled={bulkOp.op !== null || !host?.trim()}
+                cancelLabel={tr("cancel", undefined, "Cancel")}
+                onCancel={() => clipboard.clear()}
+              />
+            </>
+          )}
+          </div>
+          <FilesColumn on={phone && view === null} />
           {preview && (
             <Modal
               open

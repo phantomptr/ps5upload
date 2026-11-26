@@ -1,12 +1,15 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import en from "../locales/en.json";
+import { t } from "../strings";
 import { askLine, DeviceAsks, trustedDevices, viaLine } from "./Devices";
 
 describe("console page › Devices", () => {
   it("names the device asking, and offers Allow and Decline", () => {
     expect(askLine({ id: "a", name: "Pixel 9", ip: "192.168.1.30" })).toBe("Pixel 9 wants to use this PS5.");
     expect(askLine({ id: "a", name: "", ip: "192.168.1.30" })).toBe("192.168.1.30 wants to use this PS5.");
+    // no name and no address: a translated word, not the English "A device"
+    expect(askLine({ id: "a", name: "" })).toBe(t("cw_dev_ask", { device: t("cw_dev_unnamed") }));
     const html = renderToStaticMarkup(
       <DeviceAsks asks={[{ id: "ab", name: "Pixel 9" }]} busy={false} onAnswer={() => {}} />,
     );

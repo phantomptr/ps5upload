@@ -18,6 +18,16 @@
 //! a status call (once per console per engine run; a failure is tried again after
 //! [`RETRY_AFTER`]), in the background, never in the way of the status answer or of a helper
 //! send, and also on request: `POST /api/ps5/convert-runtime {host}`.
+//!
+//! ampr_emu, which an unpacked `.pkg` gets where the game's own emulator has to go, is put there
+//! the same way, but only when the user asks for it (`POST /api/ps5/convert-ampr-emu {host}`,
+//! never on its own): the release the desktop app installs ([`crate::ampr_trace::release_runtime`],
+//! the same download, digest and cache), checked to be ampr_emu of that version, written to
+//!
+//! `/data/ps5upload/convert/runtime/ampr_emu-<version>/libSceAmpr.sprx`
+//!
+//! where the converter looks for it (`unpack_packs::console_ampr_emu`); the folder's name is the
+//! version the converter checks the file against.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -170,12 +180,14 @@ fn sweep_stale_parts(fs: &dyn ConsoleFiles, dir: &str) -> Vec<String> {
     let probe_name = part_name();
     let probe = format!("{dir}/{probe_name}");
     if let Err(why) = fs.write(&probe, b"0") {
-        crate::log_warn!("zstd runtime: could not write {probe} to read the console's time: {why}");
+        crate::log_warn!(
+            "convert runtime: could not write {probe} to read the console's time: {why}"
+        );
         return Vec::new();
     }
     let listed = fs.list(dir);
     if let Err(why) = fs.remove(&probe) {
-        crate::log_warn!("zstd runtime: {probe} was left on the console: {why}");
+        crate::log_warn!("convert runtime: {probe} was left on the console: {why}");
     }
     let entries = match listed {
         Ok(e) => e,
@@ -201,12 +213,12 @@ fn sweep_stale_parts(fs: &dyn ConsoleFiles, dir: &str) -> Vec<String> {
         let path = format!("{dir}/{name}");
         match fs.remove(&path) {
             Ok(()) => removed.push(path),
-            Err(why) => crate::log_warn!("zstd runtime: could not remove {path}: {why}"),
+            Err(why) => crate::log_warn!("convert runtime: could not remove {path}: {why}"),
         }
     }
     if !removed.is_empty() {
         crate::log_info!(
-            "zstd runtime: removed {} temporary file(s) an earlier put left in {dir}",
+            "convert runtime: removed {} temporary file(s) an earlier put left in {dir}",
             removed.len()
         );
     }
@@ -234,8 +246,15 @@ fn holds(fs: &dyn ConsoleFiles, path: &str, len: u64, sha: &str) -> Result<bool,
     }
 }
 
-/// Puts `bytes` (ampr-emu-ng `version`, already checked against its digest) on the console.
-pub(crate) fn put(fs: &dyn ConsoleFiles, version: &str, bytes: &[u8]) -> Result<Outcome, String> {
+/// The folder ampr_emu `version` goes in: the converter looks for it there.
+pub(crate) fn ampr_emu_dir(version: &str) -> String {
+    format!(
+        "{CONSOLE_DIR}/{}",
+        ps5upload_convert_core::unpack_packs::console_ampr_emu_folder(version)
+    )
+}
+
+fn check_version(version: &str) -> Result<(), String> {
     if version.is_empty()
         || !version
             .bytes()
@@ -243,7 +262,41 @@ pub(crate) fn put(fs: &dyn ConsoleFiles, version: &str, bytes: &[u8]) -> Result<
     {
         return Err(format!("{version:?} is not a version"));
     }
-    let dir = version_dir(version);
+    Ok(())
+}
+
+/// Puts `bytes` (ampr-emu-ng `version`, already checked against its digest) on the console.
+pub(crate) fn put(fs: &dyn ConsoleFiles, version: &str, bytes: &[u8]) -> Result<Outcome, String> {
+    check_version(version)?;
+    put_in(fs, &version_dir(version), version, bytes)
+}
+
+/// Puts `bytes`, the ampr_emu release this app installs (already checked against its digest),
+/// on the console where the converter looks for it. Refused, with nothing written, unless the
+/// module says it is ampr_emu of that release: the folder's name is the version the converter
+/// checks it against.
+pub(crate) fn put_ampr_emu(fs: &dyn ConsoleFiles, bytes: &[u8]) -> Result<Outcome, String> {
+    use ps5upload_fpkg::ampr_pack::image::RUNTIME_VERSION;
+    match ps5upload_fpkg::ampr_pack::ng::classify(bytes) {
+        ("ampr_emu", Some(v), _) if v == RUNTIME_VERSION => {}
+        (kind, v, _) => {
+            return Err(format!(
+                "the file is {kind} {}, not ampr_emu {RUNTIME_VERSION}: not put on the console",
+                v.unwrap_or_default()
+            ))
+        }
+    }
+    put_in(fs, &ampr_emu_dir(RUNTIME_VERSION), RUNTIME_VERSION, bytes)
+}
+
+/// Puts `bytes` on the console as `<dir>/libSceAmpr.sprx`.
+fn put_in(
+    fs: &dyn ConsoleFiles,
+    dir: &str,
+    version: &str,
+    bytes: &[u8],
+) -> Result<Outcome, String> {
+    let dir = dir.to_string();
     let path = format!("{dir}/{FILE}");
     let part = format!("{dir}/{}", part_name());
     let sha = sha256_hex(bytes);
@@ -271,7 +324,7 @@ pub(crate) fn put(fs: &dyn ConsoleFiles, version: &str, bytes: &[u8]) -> Result<
     })();
     if let Err(e) = written {
         if let Err(why) = fs.remove(&part) {
-            crate::log_warn!("zstd runtime: {part} was left on the console: {why}");
+            crate::log_warn!("convert runtime: {part} was left on the console: {why}");
         }
         return Err(e);
     }
@@ -280,7 +333,9 @@ pub(crate) fn put(fs: &dyn ConsoleFiles, version: &str, bytes: &[u8]) -> Result<
     // helper to hand to a converter.
     if !holds(fs, &path, len, &sha)? {
         if let Err(why) = fs.remove(&path) {
-            crate::log_warn!("zstd runtime: {path} does not match and could not be removed: {why}");
+            crate::log_warn!(
+                "convert runtime: {path} does not match and could not be removed: {why}"
+            );
         }
         return Err(format!(
             "{path} on the console does not match what was put there"
@@ -332,6 +387,35 @@ fn ensure_unlocked(host: &str) -> Result<Outcome, String> {
         );
     }
     Ok(out)
+}
+
+/// Puts the ampr_emu release this app installs on the console at `host`, on request only
+/// (blocking; one put per console at a time, the zstd runtime's included).
+pub(crate) fn ensure_ampr_emu(host: &str) -> Result<Outcome, String> {
+    with_host_lock(host, || {
+        let out = put_ampr_emu_fetched(&Helper(host), &crate::ampr_trace::release_runtime)?;
+        if out.written {
+            crate::log_info!(
+                "convert runtime: put ampr_emu {} on the console ({})",
+                out.version,
+                out.path
+            );
+        }
+        Ok(out)
+    })
+}
+
+/// [`put_ampr_emu`] with the bytes `fetch` gives (this machine's cache or the download, digest
+/// checked): nothing is written when they can't be had.
+fn put_ampr_emu_fetched(
+    fs: &dyn ConsoleFiles,
+    fetch: &dyn Fn() -> Result<Vec<u8>, String>,
+) -> Result<Outcome, String> {
+    use ps5upload_fpkg::ampr_pack::image::RUNTIME_VERSION;
+    let bytes = fetch().map_err(|e| {
+        format!("ampr_emu {RUNTIME_VERSION} could not be had on this computer: {e}")
+    })?;
+    put_ampr_emu(fs, &bytes)
 }
 
 /// Whether a helper of `version` carries the converter. A helper of this engine's own version
@@ -459,6 +543,39 @@ pub(crate) async fn put_handler(Json(req): Json<ConvertRuntimeRequest>) -> impl 
             }
             (StatusCode::OK, Json(out)).into_response()
         }
+        Ok(Err(e)) => crate::json_err(StatusCode::BAD_GATEWAY, e).into_response(),
+        Err(e) => {
+            crate::json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response()
+        }
+    }
+}
+
+/// POST /api/ps5/convert-ampr-emu {host} — put the AMPR emulator on the console for Convert on
+/// the PS5. That is ampr_emu, the release the desktop app installs into games (digest checked,
+/// from this computer's cache or downloaded), written under
+/// /data/ps5upload/convert/runtime/ampr_emu-<version>/, so Convert on the PS5 can keep an
+/// emulator when it unpacks asset packs. Only on request, never on its own. Answers {version,
+/// path, written}; written is false when that version was already there. 502 when it could not
+/// be downloaded or written; needs the helper up.
+pub(crate) async fn put_ampr_emu_handler(
+    Json(req): Json<ConvertRuntimeRequest>,
+) -> impl IntoResponse {
+    let host = crate::console_addr(&crate::consoles_api::resolve(req.host.trim()));
+    if host.is_empty() {
+        return crate::json_err(StatusCode::BAD_REQUEST, "host is required").into_response();
+    }
+    // Counted busy while it writes: a Stop or a "Remove PS5Upload" waits for it.
+    let Some(busy) = crate::helper_stop::try_enter(&host) else {
+        return crate::json_err(StatusCode::CONFLICT, crate::helper_stop::STOPPING_MESSAGE)
+            .into_response();
+    };
+    let r = tokio::task::spawn_blocking(move || {
+        let _busy = busy;
+        ensure_ampr_emu(&host)
+    })
+    .await;
+    match r {
+        Ok(Ok(out)) => (StatusCode::OK, Json(out)).into_response(),
         Ok(Err(e)) => crate::json_err(StatusCode::BAD_GATEWAY, e).into_response(),
         Err(e) => {
             crate::json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response()
@@ -843,6 +960,80 @@ mod tests {
             seen().lock().unwrap().get(host).is_none(),
             "put again after a removal"
         );
+    }
+
+    /// drakmor's ampr_emu at `version`, as `ng::classify` names it.
+    fn ampr_emu(version: &str) -> Vec<u8> {
+        let mut m = format!("\0\0ampr_emu {version} (c) Drakmor\0").into_bytes();
+        m.extend_from_slice(&[0u8; 32]);
+        m
+    }
+
+    const AMPR_EMU_FINAL: &str = "/data/ps5upload/convert/runtime/ampr_emu-0.4.2.1/libSceAmpr.sprx";
+
+    #[test]
+    fn ampr_emu_goes_in_a_folder_named_after_its_version_where_the_converter_looks() {
+        use ps5upload_fpkg::ampr_pack::image::RUNTIME_VERSION;
+        assert_eq!(RUNTIME_VERSION, "0.4.2.1", "the path below names it");
+        let fs = Fake::default();
+        let emu = ampr_emu(RUNTIME_VERSION);
+        let out = put_ampr_emu_fetched(&fs, &|| Ok(emu.clone())).unwrap();
+        assert_eq!(
+            out,
+            Outcome {
+                version: RUNTIME_VERSION.into(),
+                path: AMPR_EMU_FINAL.into(),
+                written: true
+            }
+        );
+        assert_eq!(fs.files.borrow()[AMPR_EMU_FINAL], emu);
+        // The folder under the converter's job folder that it reads (`runtime/`).
+        assert_eq!(
+            CONSOLE_DIR,
+            format!(
+                "/data/ps5upload/convert/{}",
+                ps5upload_convert_core::unpack_packs::CONSOLE_RUNTIME_FOLDER
+            )
+        );
+        // Already there: nothing is written again.
+        let writes = *fs.writes.borrow();
+        assert!(!put_ampr_emu(&fs, &emu).unwrap().written);
+        assert_eq!(*fs.writes.borrow(), writes);
+        // The zstd runtime's folder is another one.
+        put(&fs, "0.4.1", b"EMULATOR").unwrap();
+        assert_eq!(fs.files.borrow()[AMPR_EMU_FINAL], emu);
+        assert_eq!(fs.files.borrow()[FINAL], b"EMULATOR");
+    }
+
+    #[test]
+    fn only_ampr_emu_of_the_release_this_app_installs_is_put_there() {
+        let fs = Fake::default();
+        for (bytes, says) in [
+            (ampr_emu("0.3.9"), "ampr_emu 0.3.9"),
+            (ampr_emu("0.4.3"), "ampr_emu 0.4.3"),
+            (b"NG EMULATOR".to_vec(), "unknown"),
+        ] {
+            let e = put_ampr_emu(&fs, &bytes).unwrap_err();
+            assert!(
+                e.contains(says) && e.contains("not ampr_emu 0.4.2.1"),
+                "{e}"
+            );
+        }
+        assert_eq!(*fs.writes.borrow(), 0);
+        assert!(fs.files.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_failed_download_writes_nothing_and_says_why() {
+        let fs = Fake::default();
+        let e = put_ampr_emu_fetched(&fs, &|| Err("fetching ampr_emu 0.4.2.1: offline".into()))
+            .unwrap_err();
+        assert!(
+            e.contains("could not be had") && e.contains("offline"),
+            "{e}"
+        );
+        assert_eq!(*fs.writes.borrow(), 0);
+        assert!(fs.dirs.borrow().is_empty());
     }
 
     #[test]

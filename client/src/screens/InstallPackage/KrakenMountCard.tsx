@@ -99,9 +99,9 @@ export function KrakenMountCard({ host }: { host: string }) {
       <p className="mb-3 text-xs text-[var(--color-muted)]">
         {alone
           ? tr(
-              "install.kraken.body",
+              "install.kraken.body_v2",
               undefined,
-              "A PS5 package made with the debug key (every package Convert makes is one) can be mounted instead of installed: PS5Upload copies it into the homebrew folder of the package drive, and Kraken Mount puts it on the home screen. Nothing is installed, and removing it later deletes just that file. PS4 packages, retail packages, updates and add-ons still install.",
+              "A PS5 package made with the debug key (every package Convert makes is one) can be mounted or installed. To mount it, PS5Upload copies it into the homebrew folder of the package drive and Kraken Mount puts it on the home screen; nothing is installed, and removing it later deletes just that file. PS4 packages, retail packages, updates and add-ons are installed.",
             )
           : tr(
               "install.kraken.both",

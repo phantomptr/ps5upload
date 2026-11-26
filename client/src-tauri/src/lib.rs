@@ -39,6 +39,9 @@ mod engine;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 #[path = "engine_mobile.rs"]
 mod engine;
+// Why the engine inside a phone app is not answering, as the renderer words it (#950).
+#[cfg(any(mobile, test))]
+mod engine_in_app;
 // HTTP client for talking to either engine. `pub` only so
 // tests/engine_http_proxy.rs can drive it with proxy variables set.
 pub mod engine_http;
@@ -822,7 +825,7 @@ pub fn run() {
         // Back from the background: iOS may have reclaimed the engine's listening socket.
         #[cfg(mobile)]
         if let tauri::RunEvent::Resumed = &event {
-            tauri::async_runtime::spawn(engine::check_listener());
+            tauri::async_runtime::spawn(engine::check_listener(_handle.clone()));
         }
         if let tauri::RunEvent::Exit = event {
             // The window's last size and place, if the delayed save has not written it yet.

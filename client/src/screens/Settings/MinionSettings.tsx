@@ -4,6 +4,7 @@ import { Button, Toggle } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import {
   minionSet,
+  putAmprEmu,
   putZstdRuntime,
   type MinionChange,
   type MinionTileState,
@@ -400,6 +401,7 @@ function MinionTileControl({ host, up }: { host: string; up: boolean }) {
       />
       {dialog}
       {up && state?.supported && <ZstdRuntimePut host={host} />}
+      {up && state?.supported && <AmprEmuPut host={host} />}
       {error && (
         <div>
           <p role="alert" className="text-[var(--color-bad)]">
@@ -421,20 +423,58 @@ function MinionTileControl({ host, up }: { host: string; up: boolean }) {
   );
 }
 
-/** Convert on the PS5 needs the zstd runtime on the console for zstd packs, and the console
- *  downloads nothing: the app puts it there on its own when the console connects; this button
- *  does it now. */
-function ZstdRuntimePut({ host }: { host: string }) {
-  const tr = useTr();
+/** What a "Put … on this PS5" button shows: what it is for, the button, and how it went. */
+export function RuntimePutView(p: {
+  note: string;
+  label: string;
+  action: string;
+  busy: boolean;
+  /** What is on the console now, in words; null before a put. */
+  done: string | null;
+  error: string | null;
+  onPut: () => void;
+}) {
+  return (
+    <div className="space-y-2 border-t border-[var(--glass-edge)] pt-3" data-runtime-put={p.action}>
+      <p className="text-[var(--color-muted)]">{p.note}</p>
+      <Button size="sm" variant="secondary" disabled={p.busy} onClick={p.onPut}>
+        {p.label}
+      </Button>
+      {p.done && (
+        <p role="status" className="text-[var(--color-good)]">
+          {p.done}
+        </p>
+      )}
+      {p.error && (
+        <p role="alert" className="text-[var(--color-bad)]">
+          {p.error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** One "Put … on this PS5" button: `put` copies it there and answers the version now there. */
+function RuntimePut({
+  put,
+  doneText,
+  ...view
+}: {
+  note: string;
+  label: string;
+  action: string;
+  doneText: (version: string) => string;
+  put: () => Promise<{ version: string }>;
+}) {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const put = async () => {
+  const run = async () => {
     setBusy(true);
     setError(null);
     setDone(null);
     try {
-      setDone((await putZstdRuntime(host)).version);
+      setDone((await put()).version);
     } catch (e) {
       setError(humanizeCaught(e));
     } finally {
@@ -442,31 +482,57 @@ function ZstdRuntimePut({ host }: { host: string }) {
     }
   };
   return (
-    <div className="space-y-2 border-t border-[var(--glass-edge)] pt-3">
-      <p className="text-[var(--color-muted)]">
-        {tr(
-          "minion_zstd_runtime_note",
-          undefined,
-          "Convert on the PS5 needs the zstd runtime (ampr-emu-ng) on the console to write zstd packs. The app puts it there on its own when this PS5 connects.",
-        )}
-      </p>
-      <Button size="sm" variant="secondary" disabled={busy} onClick={() => void put()}>
-        {tr("minion_zstd_runtime_put", undefined, "Put the zstd runtime on this PS5")}
-      </Button>
-      {done && (
-        <p role="status" className="text-[var(--color-good)]">
-          {tr(
-            "minion_zstd_runtime_done",
-            { version: done },
-            "ampr-emu-ng {version} is on this PS5.",
-          )}
-        </p>
-      )}
-      {error && (
-        <p role="alert" className="text-[var(--color-bad)]">
-          {error}
-        </p>
-      )}
-    </div>
+    <RuntimePutView
+      {...view}
+      busy={busy}
+      done={done != null ? doneText(done) : null}
+      error={error}
+      onPut={() => void run()}
+    />
   );
+}
+
+/** Convert on the PS5 needs the zstd runtime on the console for zstd packs, and the console
+ *  downloads nothing: the app puts it there on its own when the console connects; this button
+ *  does it now. */
+function ZstdRuntimePut({ host }: { host: string }) {
+  const tr = useTr();
+  return (
+    <RuntimePut
+      note={tr(
+        "minion_zstd_runtime_note",
+        undefined,
+        "Convert on the PS5 needs the zstd runtime (ampr-emu-ng) on the console to write zstd packs. The app puts it there on its own when this PS5 connects.",
+      )}
+      label={tr("minion_zstd_runtime_put", undefined, "Put the zstd runtime on this PS5")}
+      action="zstd-runtime"
+      doneText={(version) =>
+        tr("minion_zstd_runtime_done", { version }, "ampr-emu-ng {version} is on this PS5.")
+      }
+      put={() => putZstdRuntime(host)}
+    />
+  );
+}
+
+/** The words of the AMPR emulator's button (Convert on the PS5 keeps an AMPR emulator in a
+ *  package of unpacked asset packs only with ampr_emu on the console). */
+export function amprEmuPutText(tr: Tr) {
+  return {
+    note: tr(
+      "minion_ampr_emu_note",
+      undefined,
+      "To keep an AMPR emulator when Convert on the PS5 unpacks asset packs, the console needs ampr_emu. The app puts it there only when you ask.",
+    ),
+    label: tr("minion_ampr_emu_put", undefined, "Put the AMPR emulator on this PS5"),
+    action: "ampr-emu",
+    doneText: (version: string) =>
+      tr("minion_ampr_emu_done", { version }, "ampr_emu {version} is on this PS5."),
+  };
+}
+
+/** ampr_emu for Convert on the PS5. Never put there on its own (the owner's choice): only this
+ *  button does it, with the same release the app puts into games. */
+function AmprEmuPut({ host }: { host: string }) {
+  const tr = useTr();
+  return <RuntimePut {...amprEmuPutText(tr)} put={() => putAmprEmu(host)} />;
 }

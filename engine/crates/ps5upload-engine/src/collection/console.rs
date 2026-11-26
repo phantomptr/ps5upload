@@ -11,8 +11,12 @@ use super::{Game, Location};
 /// What the console has for one Game ID.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ConsoleTitle {
-    /// The console knows the title (it has `/user/app/<id>`).
+    /// The console has the title installed: app.db or `/user/appmeta` records it. An app folder
+    /// alone (left behind by an uninstall) does not count.
     pub installed: bool,
+    /// Whether it is installed could not be told (the console's record was not read in full):
+    /// nothing here means anything, and the last answer stands.
+    pub installed_unread: bool,
     /// Its installed version (`CONTENT_VERSION`, else the higher of `VERSION` and `APP_VER`),
     /// when it could be read.
     pub version: Option<String>,

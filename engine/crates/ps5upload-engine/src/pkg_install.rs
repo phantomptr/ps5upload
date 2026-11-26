@@ -888,9 +888,14 @@ fn mark_released(map: &mut HashMap<String, InstallSession>, sid: &str) -> bool {
             s.cancelled = true;
             // A released session answers every fetch with 410, so nothing reads the origin
             // again: drop it now, or its window cache, SMB handle and FTP sessions would
-            // stay open until the 2 h idle prune. A body still streaming holds its own
-            // clone of the session and finishes on that.
-            s.remote = None;
+            // stay open until the 2 h idle prune. And stop a link's fetching: the windows read
+            // ahead and a body still streaming hold their own clones of the source, and went
+            // on downloading (retrying a 429/503 host for hours) after a Stop during the
+            // handover or a refusal. Every release is an end: a refusal, a Stop, or 60 s with
+            // nothing asked.
+            if let Some(remote) = s.remote.take() {
+                remote.stop();
+            }
             true
         }
         None => false,
@@ -4747,6 +4752,20 @@ mod persist_tests {
         assert!(links["a-link"].cancelled && links["a-link"].remote.is_none());
         assert!(!super::stop_link(&mut links, "an-install"));
         assert!(!links["an-install"].cancelled);
+
+        // A link's session released (a Stop during the handover, a refusal): what still holds
+        // its source (the windows read ahead, a body streaming) stops fetching too.
+        let source = Arc::new(crate::remote_pkg::RemoteSource::new(
+            "http://127.0.0.1:9/game.pkg".into(),
+            4096,
+        ));
+        let mut from_link = session("from-link", dir.join("game.pkg"), 4096);
+        from_link.remote = Some(Arc::new(RemotePkg::Http(source.clone())));
+        let mut fetching = HashMap::from([(from_link.id.clone(), from_link)]);
+        assert!(!source.stopped());
+        assert!(super::mark_released(&mut fetching, "from-link"));
+        assert!(fetching["from-link"].remote.is_none());
+        assert!(source.stopped(), "a released link kept fetching");
 
         let file = dir.join("sessions.json");
         persist::save_to(&file, &map);

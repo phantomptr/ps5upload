@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { gamesViewOf } from "../games/GamesSection";
 import { SECTIONS } from "../sections";
 import { t } from "../strings";
-import { LibraryView, groupSize, type LibraryViewProps } from "./Library";
+import { DrivePicker, LibraryView, groupSize, type LibraryViewProps } from "./Library";
 import { baseTitleId, compareVersions, filterGroups, formatOf, groupEntries, nameKey, roleOf, titleFromFileName } from "./group";
 import { copyDest, displayName, entriesOf, parseScan, stagePath, STAGE_DIR, type Entry, type LibItem, type LibScan } from "./model";
 
@@ -258,5 +258,13 @@ describe("Library section", () => {
     expect(h).not.toContain(t("cw_lib_register"));
     expect(html({ open: "ps4:CUSA07842", copied: { key: folder.key, path: "/mnt/usb0/homebrew/CUSA07842" } })).toContain(t("cw_lib_register"));
     expect(html({ open: "ps4:CUSA07842", onShowInFiles: vi.fn() })).toContain(t("cw_cleanup_show_in_files"));
+  });
+
+  it("says when the drives for a copy could not be read, instead of reading them forever", () => {
+    const e = entriesOf(base().sources, new Map([["3fa2c1d0", parseScan(SCAN_JSON)]])).find((x) => x.kind === "folder")!;
+    const picker = (drives: LibraryViewProps["drives"]) => renderToStaticMarkup(<DrivePicker e={e} p={base({ drives })} onClose={vi.fn()} />);
+    expect(picker(null)).toContain(t("cw_games_loading"));
+    expect(picker([])).toContain(t("cw_home_err_load_storage"));
+    expect(picker([])).not.toContain(t("cw_games_loading"));
   });
 });

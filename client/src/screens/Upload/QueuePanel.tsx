@@ -1584,6 +1584,16 @@ export function QueueRow({
         </div>
       )}
 
+      {isPending && item.checkingJob && (
+        <div className="mt-2 text-xs text-[var(--color-muted)]" data-testid="queue-checking-job">
+          {tr(
+            "queue_checking_job",
+            undefined,
+            "Checking whether this upload is still running…",
+          )}
+        </div>
+      )}
+
       <StageRail stages={queueStages(item)} installPct={item.installPct} />
       {showInstallProgress && <InstallProgressBlock item={item} />}
 

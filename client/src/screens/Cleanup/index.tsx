@@ -227,7 +227,7 @@ function ConfirmRemove({
     <Modal
       open
       onClose={onCancel}
-      title={tr("cw_cleanup_confirm_title", { count: totals.count }, `Remove ${totals.count} items from the PS5?`)}
+      title={tr("cw_cleanup_confirm_title_v2", { count: totals.count }, `Remove from the PS5? Items: ${totals.count}`)}
       size="lg"
       footer={
         <div className="flex justify-end gap-2">
@@ -279,9 +279,9 @@ function ResultCard({ summary, before, after }: { summary: ApplySummary; before:
     <section className="space-y-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] p-3 text-sm" data-testid="cleanup-result">
       <div className="font-semibold">
         {tr(
-          "cw_cleanup_result_removed",
+          "cw_cleanup_result_removed_v2",
           { count: summary.removed.length, size: formatBytes(summary.freed) },
-          `Removed ${summary.removed.length} items (${formatBytes(summary.freed)})`,
+          `Items removed: ${summary.removed.length} (${formatBytes(summary.freed)})`,
         )}
       </div>
       {before !== null && after !== null ? (

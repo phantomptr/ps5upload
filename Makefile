@@ -1025,6 +1025,12 @@ test-payload: payload
 	@cc -O2 -Wall -Wextra -Werror -o $(SELFTEST_DIR)/ps5upload-app-info-selftest \
 		$(PAYLOAD_DIR)/tests/app_info_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-app-info-selftest
+	@echo "Running param.json key self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-json-key-selftest \
+		$(PAYLOAD_DIR)/tests/json_key_selftest.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-json-key-selftest
+	@echo "✓ a registered game's title is its en-US block's, not the one after defaultLanguage"
 	@echo "Running file compare self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-file-compare-selftest \

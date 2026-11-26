@@ -169,11 +169,11 @@ fn extract_engine(dir: &Path, bin_name: &str, bytes: &[u8], hex: &str) -> Result
     let (stem, ext) = bin_name.split_once('.').unwrap_or((bin_name, ""));
     let dot = if ext.is_empty() { "" } else { "." };
     let versioned = dir.join(format!("{stem}-{}{dot}{ext}", &hex[..hex.len().min(16)]));
-    eprintln!(
+    log_line(format_args!(
         "[engine] could not write {}: {err:#}; using {} instead",
         usual.display(),
         versioned.display()
-    );
+    ));
     extract_at(&versioned, bytes, hex).with_context(|| {
         format!(
             "could not write the engine to {} ({err:#}) or to {}",
@@ -219,10 +219,10 @@ fn extract_at(path: &Path, bytes: &[u8], hex: &str) -> Result<()> {
     // Stamp last so a crash mid-extract leaves a missing or outdated stamp; the next
     // launch re-extracts.
     if let Err(e) = std::fs::write(&stamp, hex) {
-        eprintln!(
+        log_line(format_args!(
             "[engine] could not write stamp {}: {e} (engine still extracted, just re-extracts next launch)",
             stamp.display()
-        );
+        ));
     }
     Ok(())
 }
@@ -633,7 +633,7 @@ const ENGINE_LOG_OLD_FILES: usize = 4;
 /// file moves to `<name>.old`, older ones along to `.old.2` and on
 /// (`ENGINE_LOG_OLD_FILES`).
 ///
-/// Logs the failure to `eprintln!` if open fails, so a developer
+/// Logs the failure to stderr (`log_line`) if open fails, so a developer
 /// running `cargo tauri dev` from a console at least sees why
 /// log capture didn't engage. Returns None on failure rather than
 /// erroring — a missing log file shouldn't block engine startup.
@@ -645,7 +645,10 @@ fn open_engine_log(path: &Path) -> Option<Arc<Mutex<EngineLog>>> {
     match EngineLog::open(path) {
         Ok(log) => Some(Arc::new(Mutex::new(log))),
         Err(e) => {
-            eprintln!("[engine-log] cannot open {}: {e}", path.display());
+            log_line(format_args!(
+                "[engine-log] cannot open {}: {e}",
+                path.display()
+            ));
             None
         }
     }
@@ -655,8 +658,12 @@ fn open_engine_log(path: &Path) -> Option<Arc<Mutex<EngineLog>>> {
 /// file from a previous instance, etc.), the caller goes on appending
 /// to the existing log and lets it grow past the cap. Worst case is a
 /// larger log file, which is recoverable; the alternative of failing
-/// to open at all loses diagnostics entirely.
-fn rotate_engine_log(path: &Path) {
+/// to open at all loses diagnostics entirely. Whether it rotated.
+///
+/// Reports through `log_line`, never `eprintln!`: this runs on the engine's stderr drain, and with
+/// the app's own stderr gone a panic there stopped the drain (the engine then blocked on a full
+/// pipe, and its exit was never seen).
+fn rotate_engine_log(path: &Path) -> bool {
     let old_file = |n: usize| {
         if n == 1 {
             path.with_extension("log.old")
@@ -669,12 +676,16 @@ fn rotate_engine_log(path: &Path) {
         let _ = std::fs::rename(old_file(n), old_file(n + 1));
     }
     let old = old_file(1);
-    if let Err(e) = std::fs::rename(path, &old) {
-        eprintln!(
-            "[engine-log] rotate {} -> {} failed: {e} (continuing)",
-            path.display(),
-            old.display()
-        );
+    match std::fs::rename(path, &old) {
+        Ok(()) => true,
+        Err(e) => {
+            log_line(format_args!(
+                "[engine-log] rotate {} -> {} failed: {e} (continuing)",
+                path.display(),
+                old.display()
+            ));
+            false
+        }
     }
 }
 
@@ -684,6 +695,10 @@ struct EngineLog {
     path: PathBuf,
     file: std::fs::File,
     len: u64,
+    /// The size at which the next rotation is tried: the cap, or after a failed one another cap
+    /// further on. Tried again on every line, a failed rotation shifted the older files along each
+    /// time (deleting the oldest) and cost a reopen per line.
+    rotate_at: u64,
 }
 
 impl EngineLog {
@@ -697,6 +712,7 @@ impl EngineLog {
             path: path.to_path_buf(),
             file,
             len,
+            rotate_at: ENGINE_LOG_MAX_BYTES,
         })
     }
 
@@ -706,27 +722,47 @@ impl EngineLog {
         let _ = writeln!(self.file, "{line}");
         let _ = self.file.flush();
         self.len = self.len.saturating_add(line.len() as u64 + 1);
-        if self.len > ENGINE_LOG_MAX_BYTES {
-            // Reopen first so a failed rotation keeps appending to the same file.
-            rotate_engine_log(&self.path);
+        if self.len > self.rotate_at {
+            if !rotate_engine_log(&self.path) {
+                // Keeps appending to this file; tried again a cap further on.
+                self.rotate_at = self.len.saturating_add(ENGINE_LOG_MAX_BYTES);
+                return;
+            }
             match Self::open(&self.path) {
                 Ok(next) => *self = next,
                 Err(e) => {
-                    eprintln!(
+                    log_line(format_args!(
                         "[engine-log] reopen {} after rotation failed: {e}",
                         self.path.display()
-                    );
+                    ));
                     self.len = 0;
+                    self.rotate_at = ENGINE_LOG_MAX_BYTES;
                 }
             }
         }
     }
 }
 
+/// One start, stop or restart of the engine at a time. The child slot's own lock is held only
+/// around the slot: a Restart pressed while the first start still waited for the engine (up to
+/// READINESS_TIMEOUT, e.g. an antivirus scanning it) stopped that start's engine, so the first start
+/// reported the engine gone, or its timeout then killed the restart's engine and left none; an
+/// automatic restart overlapping a manual one could start two.
+fn lifecycle() -> &'static tokio::sync::Mutex<()> {
+    static LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    &LIFECYCLE
+}
+
 /// Start the engine child process and wait for HTTP readiness.
 ///
-/// Idempotent: a second call is a no-op if the engine is already up.
+/// Idempotent: a second call is a no-op if the engine is already up. One at a time with
+/// [`stop`] and [`restart`]: a call made meanwhile waits for the one running.
 pub async fn start(app: &AppHandle) -> Result<String> {
+    let _one = lifecycle().lock().await;
+    start_unlocked(app).await
+}
+
+async fn start_unlocked(app: &AppHandle) -> Result<String> {
     // Seed the configured URL from settings.json before the spawn
     // decision — renderer hydration runs too late to gate it here. Only
     // when the renderer has not said yet: what it pushed may be newer than the
@@ -740,7 +776,9 @@ pub async fn start(app: &AppHandle) -> Result<String> {
     // Remote engine: don't spawn the bundled sidecar, just probe the
     // remote API for readiness and hand back its URL.
     if !is_loopback_url(&configured) {
-        eprintln!("[engine] remote engine configured ({configured}); skipping local sidecar");
+        log_line(format_args!(
+            "[engine] remote engine configured ({configured}); skipping local sidecar"
+        ));
         let client = engine_probe_client();
         let deadline = Instant::now() + READINESS_TIMEOUT;
         while Instant::now() < deadline {
@@ -789,15 +827,15 @@ pub async fn start(app: &AppHandle) -> Result<String> {
             // killed: the reaper below is only for an engine we cannot use.
             if engine_version_matches(&preferred_url, &client).await {
                 if guard.is_none() {
-                    eprintln!(
+                    log_line(format_args!(
                         "[engine] using the engine already answering on {preferred_url} (not started by this app)",
-                    );
+                    ));
                 }
                 return Ok(preferred_url);
             }
-            eprintln!(
+            log_line(format_args!(
                 "[engine] another version's engine answers on {preferred_url}; this app runs its own",
-            );
+            ));
         }
 
         // Kill our child handle if we have one. take() empties the
@@ -827,7 +865,9 @@ pub async fn start(app: &AppHandle) -> Result<String> {
             if probe(&preferred_url, &client).await {
                 match engine_folder(app) {
                     Ok(dir) => reap_our_orphan_on(preferred_port, &dir).await,
-                    Err(e) => eprintln!("[engine] no engine folder to compare with: {e:#}"),
+                    Err(e) => log_line(format_args!(
+                        "[engine] no engine folder to compare with: {e:#}"
+                    )),
                 }
             }
         }
@@ -843,10 +883,10 @@ pub async fn start(app: &AppHandle) -> Result<String> {
     let (engine_url, engine_port) = if loopback_port_free(preferred_port) {
         (preferred_url, preferred_port)
     } else if let Some(free) = pick_free_loopback_port() {
-        eprintln!(
+        log_line(format_args!(
             "[engine] preferred port {preferred_port} is taken; \
              using free port {free} so the app can start",
-        );
+        ));
         (format!("http://127.0.0.1:{free}"), free)
     } else {
         // Couldn't even secure a free port; try the preferred one anyway
@@ -860,7 +900,9 @@ pub async fn start(app: &AppHandle) -> Result<String> {
         .and_then(|dir| match extract_unrar_helper(dir) {
             Ok(p) => Some(p),
             Err(e) => {
-                eprintln!("[engine] could not extract the RAR helper: {e:#}");
+                log_line(format_args!(
+                    "[engine] could not extract the RAR helper: {e:#}"
+                ));
                 None
             }
         });
@@ -1145,7 +1187,20 @@ fn chrono_like_now() -> String {
 /// it down in an orderly way, then kill it if it is still there after
 /// `SHUTDOWN_EOF_GRACE`. Idempotent — safe to call twice, safe to call
 /// when nothing is running.
+///
+/// Waits for a start in progress ([`lifecycle`]), except while the app exits: quitting is not
+/// held up by a slow start, whose engine ends with the app anyway (its parent watch, and the exit
+/// guard's kill).
 pub async fn stop() {
+    let _one = if crate::exit_guard::exiting() {
+        None
+    } else {
+        Some(lifecycle().lock().await)
+    };
+    stop_unlocked().await
+}
+
+async fn stop_unlocked() {
     let lock = child_lock().await;
     let mut guard = lock.lock().await;
     let Some(mut child) = guard.take() else {
@@ -1258,7 +1313,9 @@ fn restart_after_crash(app: AppHandle) {
         .unwrap_or(0);
     let last = LAST_AUTO_RESTART_MS.load(Ordering::SeqCst);
     if last != 0 && now.saturating_sub(last) < AUTO_RESTART_COOLDOWN_MS {
-        eprintln!("[engine-watch] engine stopped again soon after a restart; leaving it stopped");
+        log_line(format_args!(
+            "[engine-watch] engine stopped again soon after a restart; leaving it stopped"
+        ));
         return;
     }
     LAST_AUTO_RESTART_MS.store(now, Ordering::SeqCst);
@@ -1267,7 +1324,7 @@ fn restart_after_crash(app: AppHandle) {
         if crate::exit_guard::exiting() {
             return;
         }
-        eprintln!("[engine-watch] starting the engine again");
+        log_line(format_args!("[engine-watch] starting the engine again"));
         // Boxed: start() spawned the task this runs in.
         let started: std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>> =
             Box::pin(start(&app));
@@ -1276,7 +1333,7 @@ fn restart_after_crash(app: AppHandle) {
                 let _ = app.emit("ps5upload-engine-ready", &url);
             }
             Err(e) => {
-                eprintln!("[engine-watch] restart failed: {e:#}");
+                log_line(format_args!("[engine-watch] restart failed: {e:#}"));
                 let _ = app.emit("ps5upload-engine-startup-error", format!("{e:#}"));
             }
         }
@@ -1285,10 +1342,12 @@ fn restart_after_crash(app: AppHandle) {
 
 /// Stop the sidecar (if any) and start it again. For a remote engine this only re-probes it.
 pub async fn restart(app: &AppHandle) -> Result<String> {
+    // Both halves under one hold: no other start comes between the stop and the start.
+    let _one = lifecycle().lock().await;
     if is_loopback_url(&url()) {
-        stop().await;
+        stop_unlocked().await;
     }
-    start(app).await
+    start_unlocked(app).await
 }
 
 /// Read lines from a child's stdio, forward to our stderr with a tag,
@@ -1524,6 +1583,67 @@ mod engine_log_tests {
         log.write_line("after");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "after\n");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A rotation that fails keeps the log appending, and is not tried again on the next line
+    /// (each try shifted the older files along): only a cap further on.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_rotation_is_not_tried_on_every_line() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ps5upload-englog-ro-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("engine.log");
+        let mut log = EngineLog::open(&path).unwrap();
+        let line = "x".repeat(1023);
+        for _ in 0..ENGINE_LOG_MAX_BYTES / 1024 {
+            log.write_line(&line);
+        }
+        // No rename can happen in the folder now.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        log.write_line("past the cap");
+        let after_failure = std::fs::metadata(&path).unwrap().len();
+        assert_eq!(after_failure, ENGINE_LOG_MAX_BYTES + 13);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // The folder would take a rotation again, but the next line does not try.
+        log.write_line("next");
+        assert!(!path.with_extension("log.old").exists());
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), after_failure + 5);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    /// A stop (a Restart's first half) waits for a start still waiting on the engine, rather
+    /// than taking that start's engine away under it.
+    #[tokio::test]
+    async fn a_stop_waits_for_a_start_in_progress() {
+        let start_in_progress = super::lifecycle().lock().await;
+        let stop = tokio::spawn(super::stop());
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(!stop.is_finished(), "the stop went ahead of the start");
+        drop(start_in_progress);
+        tokio::time::timeout(std::time::Duration::from_secs(10), stop)
+            .await
+            .expect("the stop ran once the start ended")
+            .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod stderr_tests {
+    /// Starting, restarting and watching the engine never print with `eprintln!`: with the app's
+    /// own stderr a closed pipe it panics, and the automatic restart after a crash (which prints
+    /// before it starts the engine) never ran. `log_line` ignores the failed write.
+    #[test]
+    fn the_engine_supervisor_never_panics_on_a_closed_stderr() {
+        let banned = concat!("eprint", "ln!(");
+        for (i, line) in include_str!("engine.rs").lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("");
+            assert!(!code.contains(banned), "engine.rs:{}: {line}", i + 1);
+        }
     }
 }
 

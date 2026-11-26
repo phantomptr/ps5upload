@@ -12,6 +12,15 @@
 
 use std::path::Path;
 
+/// Waits for the opener in the background, so it never blocks the caller: dropped without a
+/// wait, each one stayed a zombie process on macOS and Linux until the app quit, one per click.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn reap(mut child: std::process::Child) {
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+}
+
 /// Open `path` (a directory) in the platform file manager. Best-effort:
 /// returns an error string the caller can show, but never blocks.
 #[cfg(target_os = "macos")]
@@ -19,7 +28,7 @@ pub fn reveal(path: &Path) -> Result<(), String> {
     std::process::Command::new("open")
         .arg(path)
         .spawn()
-        .map(|_| ())
+        .map(reap)
         .map_err(|e| format!("open failed: {e}"))
 }
 
@@ -30,7 +39,7 @@ pub fn reveal(path: &Path) -> Result<(), String> {
     std::process::Command::new("explorer")
         .arg(path)
         .spawn()
-        .map(|_| ())
+        .map(reap)
         .map_err(|e| format!("explorer failed: {e}"))
 }
 
@@ -47,7 +56,7 @@ pub fn reveal(path: &Path) -> Result<(), String> {
     // AppImage's libraries (the shell died at once with them, #603, and nothing opened).
     super::self_install::without_appimage_env(&mut cmd, std::env::var_os("APPIMAGE").is_some());
     cmd.spawn()
-        .map(|_| ())
+        .map(reap)
         .map_err(|e| format!("xdg-open failed: {e}"))
 }
 
@@ -95,5 +104,23 @@ mod tests {
         assert!(!is_plain_folder(&dir.join("program.exe")));
         assert!(!is_plain_folder(&dir.join("missing")));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The opener is waited for once it ends: no zombie is left behind per click. (A zombie
+    /// still answers `kill(pid, 0)`; a reaped process does not.)
+    #[cfg(unix)]
+    #[test]
+    fn an_opener_that_ended_is_reaped() {
+        let child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id() as libc::pid_t;
+        super::reap(child);
+        let started = std::time::Instant::now();
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(10),
+                "the opener was left a zombie"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 }

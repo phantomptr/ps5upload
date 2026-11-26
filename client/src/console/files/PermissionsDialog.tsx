@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { Check, Square, SquareCheck } from "lucide-react";
-import { call } from "../api";
-import { errorText } from "../home/Home";
+import { ApiError, call } from "../api";
 import { t } from "../strings";
 import { Modal } from "../ui/Modal";
+import { filesErrorText } from "./Files";
 import { watchOp } from "./opJob";
 import { hasPerm, keepsPermissions, modeLetters, modeText, PERM_BITS, PERM_WHO, togglePerm, type PermBit, type PermWho } from "./permissions";
 
@@ -11,11 +11,19 @@ const WHO_KEY: Record<PermWho, string> = { owner: "cw_files_perm_owner", group: 
 const BIT_KEY: Record<PermBit, string> = { read: "cw_files_perm_read", write: "cw_files_perm_write", exec: "cw_files_perm_exec" };
 
 /** Apply `mode` to `path` (and below it with `recursive`): /api/fs/chmod answers {} at once, or a job for a folder's contents. */
+/** A failed Apply in words: a job the console lost, the change refused ("fs_chmod_failed: …"), or why not. */
+export function permErrorText(e: unknown): string | null {
+  if (e === "gone") return t("cw_files_op_gone");
+  if (e instanceof ApiError && /chmod/.test(e.code)) return t("cw_files_perm_failed");
+  return filesErrorText(e);
+}
+
 export async function applyMode(path: string, mode: number, recursive: boolean): Promise<void> {
   const r = await call<{ job?: string }>("/api/fs/chmod", { path, mode: modeText(mode), recursive });
   if (r && typeof r.job === "string") {
     const end = await watchOp(r.job);
-    if (end.end !== "done") throw new Error(end.end === "failed" ? (end.status.message ?? "failed") : end.end);
+    // gone: the console no longer has the job (said as such); failed: its first word (no paths)
+    if (end.end !== "done") throw end.end === "failed" ? new ApiError(500, (end.status.message ?? "failed").split(":")[0]) : end.end;
   }
 }
 
@@ -55,7 +63,7 @@ export function PermissionsDialog({
       () => onDone(mode),
       (e: unknown) => {
         setBusy(false);
-        setError(errorText(e));
+        setError(permErrorText(e));
       },
     );
   };

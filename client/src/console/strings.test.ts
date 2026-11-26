@@ -74,6 +74,17 @@ describe("console strings", () => {
     expect(say("cw_missing_everywhere")).toBe("cw_missing_everywhere");
   });
 
+  it("keeps a path or a size whole in Arabic and Persian, as the app does", () => {
+    const maps = { en: { cw_x: "{free} free of {total} in {path} ({n})" }, ar: { cw_x: "{free} متاحة من {total} في {path} ({n})" } };
+    const ar = makeT(maps, "ar");
+    expect(ar("cw_x", { free: "163 GiB", total: "800 GiB", path: "/data", n: 3 })).toBe(
+      "⁦163 GiB⁩ متاحة من ⁦800 GiB⁩ في ⁦/data⁩ (3)",
+    );
+    // Arabic text and plain numbers are left as they are; a left-to-right language is untouched.
+    expect(ar("cw_x", { free: "1", total: "2", path: "مجلد", n: 3 })).toBe("1 متاحة من 2 في مجلد (3)");
+    expect(makeT(maps, "en")("cw_x", { free: "1 GiB", total: "2 GiB", path: "/data", n: 3 })).toBe("1 GiB free of 2 GiB in /data (3)");
+  });
+
   it("picks the closest shipped language for the browser's", () => {
     const have = ["en", "zh-CN", "zh-TW", "pt-BR", "de"];
     expect(pickLanguage("de-DE", have)).toBe("de");

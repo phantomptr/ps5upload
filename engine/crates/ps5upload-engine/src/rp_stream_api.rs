@@ -293,8 +293,9 @@ struct Live {
     pad: Mutex<std::collections::VecDeque<ControllerState>>,
     /// Every controller's latest state: the page (source 0) and phones (pad_link.rs).
     sources: crate::pad_link::PadSources,
-    /// A Play Together guest has the stream's controller: see [`guest_seat`].
-    guest_seat: AtomicBool,
+    /// The Play Together guest (their id, 0: none) who has the stream's controller: see
+    /// [`guest_seat`]. Only their input lands on it, so a kicked guest's late input is dropped.
+    guest_seat: AtomicU64,
     stop: AtomicBool,
     viewer: Mutex<Option<Viewer>>,
     /// Since when no page has been attached.
@@ -635,16 +636,17 @@ pub(crate) fn stream_seat_kept(host: &str) -> bool {
 /// A guest has the stream's controller, or no longer. The page stays off it meanwhile; the
 /// picture back on takes it back from the guest ([`Live::set_picture`]), so two people never share
 /// one player.
-pub(crate) fn guest_seat(host: &str, on: bool) {
+pub(crate) fn guest_seat(host: &str, guest: Option<u64>) {
     if let Some(l) = live_on(host) {
-        l.set_guest_seat(on);
+        l.set_guest_seat(guest);
     }
 }
 
-/// The guest's state on the stream's controller (None: let go).
-pub(crate) fn push_guest_pad(host: &str, state: Option<ControllerState>) {
+/// Guest `guest`'s state on the stream's controller (None: let go). Dropped unless they are the
+/// one who has it: a kicked guest's input still on its way never lands.
+pub(crate) fn push_guest_pad(host: &str, guest: u64, state: Option<ControllerState>) {
     if let Some(l) = live_on(host) {
-        l.push_pad(GUEST_SEAT_SOURCE, state);
+        l.push_guest_pad(guest, state);
     }
 }
 
@@ -773,6 +775,17 @@ pub(crate) fn live_state() -> serde_json::Value {
 
 fn text(v: serde_json::Value) -> Message {
     Message::Text(v.to_string().into())
+}
+
+/// Whether a status message tells the page another page took the stream (`{"stage":"moved"}`).
+/// Read as JSON, not by its text: the console's on-screen keyboard text goes out on the same queue
+/// (`{"keyboard":{"text":..}}`), and a field reading `moved` used to end the page each time.
+fn is_moved(m: &Message) -> bool {
+    let Message::Text(t) = m else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(t.as_str())
+        .is_ok_and(|v| v.get("stage").and_then(|s| s.as_str()) == Some("moved"))
 }
 
 /// `[kind][payload]`, the form every socket takes. One copy per frame: each sink clones the handle,
@@ -990,7 +1003,7 @@ impl Live {
             keep_alive,
             pad: Default::default(),
             sources: Default::default(),
-            guest_seat: AtomicBool::new(false),
+            guest_seat: AtomicU64::new(0),
             stop: AtomicBool::new(false),
             viewer: Mutex::new(None),
             alone_since: Mutex::new(None),
@@ -1167,8 +1180,8 @@ impl Live {
             }
             // The host's controller plays again at once: a friend on it moves to a pad of
             // their own (join.rs), never sharing Player 1 with the host (#720).
-            if self.guest_seat.load(Ordering::Relaxed) {
-                self.set_guest_seat(false);
+            if self.seat_held() {
+                self.set_guest_seat(None);
                 crate::join::seat_needed(&self.host, "the picture is back on");
             }
             if let Some(h) = self.video_header.lock().ok().and_then(|g| g.clone()) {
@@ -1203,9 +1216,7 @@ impl Live {
     /// Free for a guest: the picture off here, no guest on it, nothing held on it, and no
     /// linked phone playing (`phones_playing`: one quiet a moment still merges into it, #720).
     fn seat_free_given(&self, phones_playing: bool) -> bool {
-        self.seat_kept_given(phones_playing)
-            && !self.guest_seat.load(Ordering::Relaxed)
-            && self.sources.is_empty()
+        self.seat_kept_given(phones_playing) && !self.seat_held() && self.sources.is_empty()
     }
 
     /// The guest on the stream's controller may keep it: the picture is still off here and no
@@ -1214,8 +1225,29 @@ impl Live {
         self.picture_off() && !phones_playing
     }
 
-    fn set_guest_seat(&self, on: bool) {
-        if self.guest_seat.swap(on, Ordering::Relaxed) == on {
+    /// A guest has the stream's controller.
+    fn seat_held(&self) -> bool {
+        self.guest_seat.load(Ordering::Relaxed) != 0
+    }
+
+    /// Guest `guest`'s state on the stream's controller, when they are the one who has it.
+    fn push_guest_pad(&self, guest: u64, state: Option<ControllerState>) {
+        if guest == 0 || self.guest_seat.load(Ordering::Relaxed) != guest {
+            return;
+        }
+        self.push_pad(GUEST_SEAT_SOURCE, state);
+    }
+
+    /// Guest `guest` has the stream's controller (None: no guest has it).
+    fn set_guest_seat(&self, guest: Option<u64>) {
+        let id = guest.unwrap_or(0);
+        let had = self.guest_seat.swap(id, Ordering::Relaxed);
+        let on = id != 0;
+        if had != 0 && had != id && on {
+            // Straight from one guest to another: what the one before held is let go.
+            self.push_pad(GUEST_SEAT_SOURCE, None);
+        }
+        if (had != 0) == on {
             // Off and already off: a guest's last state pushed just after the give-back (its
             // frame raced the seat being taken back) would otherwise stay held on the host's
             // controller for good. The tick says off every 250 ms, so this clears it.
@@ -1236,7 +1268,7 @@ impl Live {
 
     /// The page's controller counts: its picture is on and no guest has the stream's controller.
     fn page_pad_open(&self) -> bool {
-        !self.picture_off() && !self.guest_seat.load(Ordering::Relaxed)
+        !self.picture_off() && !self.seat_held()
     }
 
     /// With no page attached, the session still has a reason to run: the picture is off here on
@@ -1373,9 +1405,9 @@ impl Live {
         if state.is_some()
             && source != PAGE_SOURCE
             && source != GUEST_SEAT_SOURCE
-            && self.guest_seat.load(Ordering::Relaxed)
+            && self.seat_held()
         {
-            self.set_guest_seat(false);
+            self.set_guest_seat(None);
             let host = self.host.clone();
             if let Ok(rt) = tokio::runtime::Handle::try_current() {
                 rt.spawn(async move { crate::join::seat_needed(&host, "a phone plays") });
@@ -1679,6 +1711,13 @@ fn read_slot_file(p: &std::path::Path) -> std::collections::HashMap<String, u64>
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default()
+}
+
+/// Whether a session that ended with `end` (its last word) had the console's slot, which the
+/// console keeps a while after: one that ended, given the slot (`slot_taken`, not one stopped
+/// during the wake), or one lost mid-stream.
+fn ended_holding_the_slot(end: &serde_json::Value, slot_taken: bool) -> bool {
+    (end["stage"] == "ended" && slot_taken) || end["code"] == "lost"
 }
 
 /// Our session with `host` ended now: remembered here and on disk.
@@ -2010,6 +2049,7 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
                 panic_text(&p)
             ))
         });
+        let slot_taken = matches!(&r, Ok(rep) if rep.slot_taken);
         let end = match r {
             Ok(rep) => serde_json::json!({
                 "stage": "ended",
@@ -2038,8 +2078,8 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         // A session that reached the console holds its slot for a while after: remembered, so a
         // start refused meanwhile is told apart from another device's session. Only a session
         // that got as far as the console's slot: an end, or one lost mid-stream (an unreachable
-        // or refused start never held it).
-        if end["stage"] == "ended" || end["code"] == "lost" {
+        // or refused start never held it, nor did one stopped during the wake).
+        if ended_holding_the_slot(&end, slot_taken) {
             note_session_ended(&l.host);
         }
         // The end and why, with the console's words for a refusal (80108b26 and the like).
@@ -2248,7 +2288,7 @@ async fn session(mut socket: WebSocket) {
             biased;
             out = ctl_rx.recv() => match out {
                 Some(m) => {
-                    let moved = matches!(&m, Message::Text(t) if t.as_str().contains("\"moved\""));
+                    let moved = is_moved(&m);
                     if !send_limited(&mut socket, m).await {
                         reason = "gone";
                         break;
@@ -2449,6 +2489,23 @@ mod slot_held_tests {
         assert!(slot_held_status("10.9.9.9", &anyhow::anyhow!("other")).is_none());
     }
 
+    /// A Start stopped while the PS5 was still waking never had its slot: another device's
+    /// session found afterwards is "in use", not ours being let go.
+    #[test]
+    fn a_stop_during_the_wake_is_not_remembered_as_our_session() {
+        let ended = serde_json::json!({"stage": "ended", "frames": 0});
+        assert!(!ended_holding_the_slot(&ended, false));
+        assert!(ended_holding_the_slot(&ended, true));
+        assert!(ended_holding_the_slot(
+            &serde_json::json!({"stage": "error", "code": "lost"}),
+            false
+        ));
+        assert!(!ended_holding_the_slot(
+            &serde_json::json!({"stage": "error", "code": "unreachable"}),
+            false
+        ));
+    }
+
     /// #720 end to end on the engine's side: a session ends (our stop), the app restarts, Start
     /// is closed by the PS5 again and again. Each answer is "busy" with a growing wait (the
     /// player counts down and tries again by itself), never "another device", until five of
@@ -2520,6 +2577,20 @@ mod slot_held_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only the "another page took the stream" message ends a page: keyboard text or a reason
+    /// that reads `moved` does not.
+    #[test]
+    fn only_the_moved_stage_ends_a_page() {
+        assert!(is_moved(&text(serde_json::json!({"stage": "moved"}))));
+        assert!(!is_moved(&text(
+            serde_json::json!({"keyboard": {"text": "moved"}})
+        )));
+        assert!(!is_moved(&text(
+            serde_json::json!({"stage": "ended", "reason": "moved"})
+        )));
+        assert!(!is_moved(&Message::Binary(b"\"moved\"".to_vec().into())));
+    }
 
     #[test]
     fn a_session_keeps_and_logs_only_its_first_decoder_events() {
@@ -2663,13 +2734,13 @@ mod tests {
         l.set_picture(false);
         assert!(l.seat_free_given(false), "the picture is off: it sits idle");
 
-        l.set_guest_seat(true);
+        l.set_guest_seat(Some(7));
         assert!(!l.seat_free(), "one guest has it");
         let cross = ControllerState {
             buttons: 1,
             ..Default::default()
         };
-        l.push_pad(GUEST_SEAT_SOURCE, Some(cross));
+        l.push_guest_pad(7, Some(cross));
         assert_eq!(l.pad.lock().unwrap().back().map(|p| p.buttons), Some(1));
 
         assert!(!l.page_pad_open());
@@ -2681,12 +2752,51 @@ mod tests {
             l.page_pad_open(),
             "picture back: the stream's controller is the host's"
         );
-        assert!(!l.guest_seat.load(Ordering::Relaxed));
+        assert!(!l.seat_held());
         assert_eq!(
             l.pad.lock().unwrap().back().map(|p| p.buttons),
             Some(0),
             "what they held is let go"
         );
+    }
+
+    #[test]
+    fn a_kicked_guests_late_input_never_lands_on_the_stream_controller() {
+        let l = Live::new("ps5-test".into(), false, Duration::from_secs(60));
+        l.playing.store(true, Ordering::Relaxed);
+        l.set_picture(false);
+        let pressed = |b: u32| ControllerState {
+            buttons: b,
+            ..Default::default()
+        };
+        let last = |l: &Live| l.pad.lock().unwrap().back().map(|p| p.buttons);
+        l.set_guest_seat(Some(7));
+        l.push_guest_pad(7, Some(pressed(1)));
+        assert_eq!(last(&l), Some(1), "the guest who has it plays");
+
+        // Kicked: their seat is let go, then input already on its way arrives.
+        l.set_guest_seat(None);
+        assert_eq!(last(&l), Some(0));
+        l.push_guest_pad(7, Some(pressed(2)));
+        assert_eq!(last(&l), Some(0), "a kicked guest's late input is dropped");
+        assert!(!l.sources.contains(GUEST_SEAT_SOURCE));
+        assert!(
+            l.seat_free_given(false),
+            "nothing is held: the seat is free again"
+        );
+
+        // The next guest has it: the one before still cannot reach it.
+        l.set_guest_seat(Some(8));
+        l.push_guest_pad(7, Some(pressed(4)));
+        assert_eq!(last(&l), Some(0), "not the one before's");
+        l.push_guest_pad(8, Some(pressed(8)));
+        assert_eq!(last(&l), Some(8));
+        // Handed straight to another guest: what the one before held is let go.
+        l.set_guest_seat(Some(9));
+        assert_eq!(last(&l), Some(0));
+        l.push_guest_pad(8, None);
+        l.push_guest_pad(0, Some(pressed(16)));
+        assert_eq!(last(&l), Some(0), "nobody has id 0");
     }
 
     #[test]

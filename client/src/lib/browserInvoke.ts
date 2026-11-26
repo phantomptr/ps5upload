@@ -179,6 +179,44 @@ async function extractEngineError(r: Response): Promise<string> {
   return text.trim() || `engine HTTP ${r.status}`;
 }
 
+/**
+ * The engine's payload send reply as the desktop `payload_send` command answers it
+ * (`engine_send_reply` in src-tauri `commands/probes.rs`): a refusal (409) is
+ * `{ok:false, refused, forceable, retry_after_ms}`, which `payloadSend` turns into the
+ * worded refusal and its "Send anyway", not a thrown bare code.
+ */
+export function payloadSendReply(code: number, body: string): Record<string, unknown> {
+  let v: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (parsed && typeof parsed === "object") v = parsed as Record<string, unknown>;
+  } catch {
+    /* not JSON: a proxy's page, worded below */
+  }
+  const text = (k: string) => (typeof v[k] === "string" ? (v[k] as string) : undefined);
+  if (code >= 200 && code < 300) {
+    return {
+      ok: true,
+      status: text("status") ?? "",
+      bytes: v["bytes"] ?? null,
+      via_payload_manager: v["via_payload_manager"] === true,
+    };
+  }
+  if (code === 409) {
+    const refused = text("refused") ?? text("error") ?? "loader_busy";
+    return {
+      ok: false,
+      status: text("message") ?? refused,
+      refused,
+      forceable: v["forceable"] === true,
+      retry_after_ms: v["retry_after_ms"] ?? null,
+    };
+  }
+  const status =
+    text("error") ?? text("status") ?? (body.trim() ? body.trim() : `engine returned HTTP ${code}`);
+  return { ok: false, status };
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const url = `${getEngineUrl()}${path}`;
   const r = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_STANDARD) });
@@ -513,11 +551,18 @@ export async function browserInvoke<T>(
     }
 
     case "ps5_app_unregister": {
-      const { addr, title_id } = args["req"] as {
+      // registration_only as the desktop command forwards it: without it the engine runs a
+      // full uninstall, and a console-installed game sharing the title id is not protected.
+      const { addr, title_id, registration_only } = args["req"] as {
         addr?: string | null;
         title_id: string;
+        registration_only?: boolean;
       };
-      return postJson<T>("/api/ps5/app/unregister", { addr, title_id }, /*long=*/ true);
+      return postJson<T>(
+        "/api/ps5/app/unregister",
+        { addr, title_id, registration_only: registration_only === true },
+        /*long=*/ true,
+      );
     }
 
     // ── Hardware monitoring ─────────────────────────────────────────────────
@@ -1896,12 +1941,25 @@ export async function browserInvoke<T>(
       return ((await r.json()) as { removed: T }).removed;
     }
 
-    case "payload_send":
-      return postJson<T>(
-        "/api/payload/send",
-        { host: args["ip"], path: args["path"], port: args["port"] ?? undefined },
-        /*long=*/ true,
-      );
+    case "payload_send": {
+      // The gate's options as the desktop command sends them, and its reply shape: without them
+      // a refusal reached the person as a bare code and "Send anyway" (force) did nothing.
+      const r = await fetch(`${getEngineUrl()}/api/payload/send`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          host: args["ip"],
+          path: args["path"],
+          port: args["port"] ?? undefined,
+          mode: args["mode"] ?? undefined,
+          force: args["force"] === true,
+          replace: args["replace"] === true,
+          app_version: args["appVersion"] ?? undefined,
+        }),
+        signal: AbortSignal.timeout(TIMEOUT_LONG),
+      });
+      return payloadSendReply(r.status, await r.text().catch(() => "")) as T;
+    }
 
     case "companion_probe":
       return getJson<T>(qs("/api/ps5/companions", { addr: args["host"] as string }));

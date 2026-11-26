@@ -86,6 +86,36 @@ int webui_cheat_target(const char *root, const char *fmt, const char *name, char
     return 0;
 }
 
+int webui_cheat_file_title(const char *name, char out[10]) {
+    int i;
+    out[0] = '\0';
+    if (!name) return 0;
+    for (i = 0; i < 9; i++) {
+        char c = name[i];
+        int ok = i < 4 ? ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) : (c >= '0' && c <= '9');
+        if (!ok) return 0;
+    }
+    if (name[9] != '.' && name[9] != '_') return 0;
+    for (i = 0; i < 9; i++) out[i] = (char)(name[i] >= 'a' && name[i] <= 'z' ? name[i] - 'a' + 'A' : name[i]);
+    out[9] = '\0';
+    return 1;
+}
+
+int webui_cheat_state_path(const char *root, const char *title, char *out, size_t cap) {
+    char check[16];
+    int k;
+    if (!root || !title || strlen(title) != 9) return -1;
+    memcpy(check, title, 9);
+    check[9] = '.';
+    check[10] = '\0';
+    {
+        char upper[10];
+        if (!webui_cheat_file_title(check, upper) || strcmp(upper, title) != 0) return -1;
+    }
+    k = snprintf(out, cap, "%s/state/%s.json", root, title);
+    return k > 0 && (size_t)k < cap ? 0 : -1;
+}
+
 /* The end of the JSON value at s[0] (an object): the index past its '}', strings skipped; 0 if cut. */
 static size_t object_end(const char *s, size_t n) {
     size_t i;

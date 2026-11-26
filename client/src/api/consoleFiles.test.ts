@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchConsoleStat, importLocalCheat, minionSet } from "./consoleFiles";
+import { fetchConsoleStat, importLocalCheat, minionSet, putAmprEmu } from "./consoleFiles";
 vi.mock("../state/engine", () => ({ getEngineUrl: () => "http://engine" }));
 afterEach(() => vi.unstubAllGlobals());
 function reply(body: object, status = 200) {
@@ -112,5 +112,20 @@ describe("paired console controls", () => {
     await expect(importLocalCheat("h", "/tmp/PPSA00001.json")).rejects.toThrow(
       "already exists",
     );
+  });
+  it("puts the AMPR emulator on the console only when asked, and says why it could not", async () => {
+    const fetcher = reply({ version: "0.4.2.1", path: "/data/ps5upload/convert/runtime/ampr_emu-0.4.2.1/libSceAmpr.sprx", written: true });
+    expect(await putAmprEmu("ps5-test")).toEqual({
+      version: "0.4.2.1",
+      path: "/data/ps5upload/convert/runtime/ampr_emu-0.4.2.1/libSceAmpr.sprx",
+      written: true,
+    });
+    expect(fetcher.mock.calls[0][0]).toBe("http://engine/api/ps5/convert-ampr-emu");
+    expect(fetcher.mock.calls[0][1].method).toBe("POST");
+    expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({ host: "ps5-test" });
+    reply({ error: "ampr_emu 0.4.2.1 could not be had on this computer: offline" }, 502);
+    await expect(putAmprEmu("ps5-test")).rejects.toThrow("could not be had");
+    reply({ version: 1 });
+    await expect(putAmprEmu("ps5-test")).rejects.toThrow("Invalid AMPR emulator reply");
   });
 });

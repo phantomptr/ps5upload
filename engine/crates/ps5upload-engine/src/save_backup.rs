@@ -588,6 +588,31 @@ pub(crate) fn save_op(hosts: &[&str]) -> SaveOp {
     SaveOp(keys)
 }
 
+/// [`save_op`] without waiting: None while another save operation runs on `host`. For a save
+/// opened or closed from Save Data, which must neither close a copy's or backup's save part way
+/// through nor wait minutes for one to finish.
+pub(crate) fn try_save_op(host: &str) -> Option<SaveOp> {
+    let me = std::thread::current().id();
+    let (held, _) = save_ops();
+    let mut held = held.lock().unwrap_or_else(|e| e.into_inner());
+    let k = crate::helper_stop::console_key(host);
+    if k.is_empty() {
+        return Some(SaveOp(Vec::new()));
+    }
+    match held.get(&k) {
+        Some(t) if *t == me => Some(SaveOp(Vec::new())),
+        Some(_) => None,
+        None => {
+            held.insert(k.clone(), me);
+            Some(SaveOp(vec![k]))
+        }
+    }
+}
+
+/// What Save Data's Open and Close answer while a copy, sync or backup has the console's save.
+pub(crate) const SAVE_JOB_RUNNING: &str =
+    "A save copy, sync or backup is using this PS5's saves now. Try again when it finishes.";
+
 impl Drop for SaveOp {
     fn drop(&mut self) {
         if self.0.is_empty() {
@@ -2389,33 +2414,38 @@ pub(crate) fn folder_of(image: &str) -> &str {
 }
 
 /// Opens `image` decrypted on the console; its mount point.
+///
+/// Called straight, not through the engine's own `/api/ps5/saves/open`: that route refuses while
+/// a save operation holds the console (Save Data's Open must not close a copy's save part way
+/// through), and the operation calling this is the one holding it.
 pub(crate) fn open_save(host: &str, image: &str) -> Result<String, String> {
-    let v = post(
-        "/api/ps5/saves/open",
-        json!({ "addr": host, "image": image }),
-    )?;
-    match (
-        v.get("mounted").and_then(Value::as_bool),
-        v.get("mount_point").and_then(Value::as_str),
-    ) {
-        (Some(true), Some(mp)) if !mp.is_empty() => Ok(mp.to_string()),
-        _ => Err("the save did not open".into()),
+    let _busy = crate::helper_stop::try_enter(host)
+        .ok_or_else(|| crate::helper_stop::STOPPING_MESSAGE.to_string())?;
+    let v = crate::save_open_now(host, image).map_err(|e| format!("{e:#}"))?;
+    if v.mounted && !v.mount_point.is_empty() {
+        Ok(v.mount_point)
+    } else {
+        Err("the save did not open".into())
     }
 }
 
-/// Closes the open save (written back when it changed); whether one was open.
+/// Closes the open save (written back when it changed); whether one was open. Straight to the
+/// helper, as [`open_save`].
 pub(crate) fn close_save(host: &str) -> Result<bool, String> {
-    let v = post("/api/ps5/saves/close", json!({ "addr": host }))?;
+    let _busy = crate::helper_stop::try_enter(host)
+        .ok_or_else(|| crate::helper_stop::STOPPING_MESSAGE.to_string())?;
+    let v = ps5upload_core::saves::save_close(host).map_err(|e| format!("{e:#}"))?;
     // An older helper does not say: assume it was.
-    Ok(v.get("was_open").and_then(Value::as_bool).unwrap_or(true))
+    Ok(v.was_open.unwrap_or(true))
 }
 
 /// Whether a save is open on the console (one at a time); Err when it could not be asked.
 pub(crate) fn save_open_state(host: &str) -> Result<bool, String> {
-    let v = post("/api/ps5/saves/open", json!({ "addr": host, "image": "" }))?;
-    v.get("mounted")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| "the PS5 did not say whether a save is open".to_string())
+    let _busy = crate::helper_stop::try_enter(host)
+        .ok_or_else(|| crate::helper_stop::STOPPING_MESSAGE.to_string())?;
+    ps5upload_core::saves::save_open(host, "")
+        .map(|v| v.mounted)
+        .map_err(|e| format!("{e:#}"))
 }
 
 /// The title a save image belongs to (`/user/home/<uid>/savedata[_prospero]/<title>/<image>`).
@@ -2942,6 +2972,37 @@ mod tests {
         for t in threads {
             t.join().unwrap();
         }
+    }
+
+    /// Save Data's Open and Close never take the save of a copy or backup running on that console
+    /// (they are refused, without waiting), and a copy starting meanwhile waits for them.
+    #[test]
+    fn save_data_open_is_refused_while_a_save_operation_runs() {
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        let job = std::thread::spawn(move || {
+            let _op = save_op(&["192.0.2.61"]);
+            held_tx.send(()).unwrap();
+            go_rx.recv().unwrap();
+        });
+        held_rx.recv().unwrap();
+        assert!(try_save_op("192.0.2.61:9020").is_none());
+        // Another console's saves are free.
+        assert!(try_save_op("192.0.2.62").is_some());
+        go_tx.send(()).unwrap();
+        job.join().unwrap();
+
+        let open = try_save_op("192.0.2.61").expect("free once the copy ended");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let copy = std::thread::spawn(move || {
+            let _op = save_op(&["192.0.2.61"]);
+            tx.send(()).unwrap();
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        drop(open);
+        rx.recv_timeout(Duration::from_secs(20))
+            .expect("the copy waited past the open");
+        copy.join().unwrap();
     }
 
     #[tokio::test]

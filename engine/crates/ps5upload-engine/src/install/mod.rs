@@ -1386,11 +1386,22 @@ pub async fn install_stop_handler(
     }
 }
 
+/// `GET /api/pkg/install/status?job=`: how an install job stands. While it runs, `phase` says
+/// where it is, and `waiting` what it waits for before the console has moved a byte:
+/// `previous_install` (an earlier install's call has to end first), `reach_check` (asking the
+/// helper whether the console reaches this computer) or `console_fetch` (the console has the
+/// link and has not asked for the package yet). A failed job has `reason`: `stream_unreachable`
+/// when the console could not fetch from this computer, with `reach` saying where it was sent
+/// (`origin`), at which `stage` it was found (`check` before the link was handed over, or
+/// `no_fetch` after the console never asked for it), how its connect ended (`cause`) and how
+/// long it was waited for (`waited_s`), and `hint` the message; `cancelled` when it was
+/// stopped. 404 for a job this engine does not know (finished ones are kept for a while).
 pub async fn install_status_handler(
     State(state): State<PkgInstallStateHandle>,
     Query(q): Query<JobQuery>,
 ) -> Response {
-    match state.jobs.get(&q.job) {
+    let found: Option<InstallStatus> = state.jobs.get(&q.job);
+    match found {
         Some(st) => Json(st).into_response(),
         None => (
             StatusCode::NOT_FOUND,

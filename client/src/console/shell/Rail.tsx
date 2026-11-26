@@ -28,6 +28,7 @@ export function Rail({
             type="button"
             className="cw-focusable cw-rail-item"
             data-rail-id={s.id}
+            data-tip={t(s.labelKey)}
             aria-current={s.id === active ? "page" : undefined}
             data-nav-entry={s.id === active ? "" : undefined}
             onClick={() => onSelect(s.id)}
@@ -38,7 +39,7 @@ export function Rail({
         );
       })}
       {onHelp ? (
-        <button type="button" className="cw-focusable cw-rail-item cw-rail-help" data-action="help" onClick={onHelp}>
+        <button type="button" className="cw-focusable cw-rail-item cw-rail-help" data-action="help" data-tip={t("cw_hint_help")} onClick={onHelp}>
           <CircleHelp aria-hidden />
           <span>{t("cw_hint_help")}</span>
         </button>

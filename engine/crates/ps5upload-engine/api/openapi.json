@@ -4087,6 +4087,28 @@
         ],
         "type": "object"
       },
+      "FailReason": {
+        "enum": [
+          "loader_unreachable",
+          "no_bringup",
+          "no_image",
+          "source_gone",
+          "origin_changed",
+          "sony_refused",
+          "destructive_guard",
+          "bad_request",
+          "stalled",
+          "stream_unreachable",
+          "stream_proxy",
+          "staged_refused",
+          "cancelled",
+          "base_missing",
+          "busy",
+          "image_mounted",
+          "reply_lost"
+        ],
+        "type": "string"
+      },
       "FanThresholdReq": {
         "properties": {
           "addr": {
@@ -7185,6 +7207,177 @@
         ],
         "type": "object"
       },
+      "InstallStatus": {
+        "properties": {
+          "app_ver_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "app_ver_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "code": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "content_id": {
+            "type": "string"
+          },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "job": {
+            "type": "string"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/Metrics"
+          },
+          "net_diag": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NetDiag"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Windows only: which local adapter faces the console, what network category Windows gave it\nand whether the firewall lets this engine in on it. Set when the console could not reach\nthis computer; the UI offers the fixes it implies. Never set off Windows."
+          },
+          "package_type": {
+            "description": "The package's type as the engine came to know it (`PS4DP`, `PS5GD`…), for a check the\nclient goes on making after the job has ended.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "patch_verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PatchVerdict"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "phase": {
+            "$ref": "#/components/schemas/Phase"
+          },
+          "ps5_addr": {
+            "type": "string"
+          },
+          "reach": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReachFail"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "With `FailReason::StreamUnreachable` from the reach check or the no-request watchdog\n(#942): where the console was sent and how its connect ended, for the client to word."
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FailReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "replaces": {
+            "description": "With `FailReason::DestructiveGuard`: what the install would replace, so the client can ask\nin the right words: \"game\" (Sony removes it first) or \"update\" (one already applied, which\nre-applying can undo).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retry_with_stream": {
+            "description": "The failure is the console refusing a package from its own storage and the same\npackage can safely be sent through Stream: the client may offer \"Retry with Stream\".",
+            "type": "boolean"
+          },
+          "route": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Route"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "shortened": {
+            "type": "boolean"
+          },
+          "started_at": {
+            "description": "Epoch seconds (the engine has no date crate and stamps time this way\neverywhere, e.g. session `created_at_unix`); the client formats it.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Verdict"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "waiting": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Waiting"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "On a running job: what it is waiting for before the console has moved a byte (an earlier\ninstall's call, the reach check, the console's first request). Absent otherwise."
+          }
+        },
+        "required": [
+          "job",
+          "ps5_addr",
+          "content_id",
+          "title_id",
+          "phase",
+          "route",
+          "verdict",
+          "code",
+          "hint",
+          "reason",
+          "metrics",
+          "app_ver_before",
+          "app_ver_after",
+          "patch_verdict",
+          "shortened",
+          "retry_with_stream",
+          "started_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "InstalledApp": {
         "properties": {
           "image_backed": {
@@ -9446,6 +9639,54 @@
         ],
         "type": "object"
       },
+      "NetCategory": {
+        "description": "A Windows network category.",
+        "enum": [
+          "public",
+          "private",
+          "domain",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "NetDiag": {
+        "description": "What was found about the link to the console.",
+        "properties": {
+          "adapter": {
+            "description": "The local adapter on the console's subnet (\"Ethernet 3\").",
+            "type": "string"
+          },
+          "allowed_by_rule": {
+            "description": "Whether an enabled inbound Allow rule for this engine (by program, or by its port) covers\nthat category's profile (`None` = not read).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "category": {
+            "$ref": "#/components/schemas/NetCategory"
+          },
+          "firewall_enabled": {
+            "description": "Whether Windows Firewall is on for that category's profile (`None` = not read).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "local_ip": {
+            "description": "This computer's address on that adapter.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "adapter",
+          "local_ip",
+          "category",
+          "firewall_enabled",
+          "allowed_by_rule"
+        ],
+        "type": "object"
+      },
       "NetInterface": {
         "properties": {
           "flags": {
@@ -10193,6 +10434,15 @@
         ],
         "type": "object"
       },
+      "PatchVerdict": {
+        "enum": [
+          "applied",
+          "did_not_apply",
+          "regressed",
+          "inconclusive"
+        ],
+        "type": "string"
+      },
       "PathStat": {
         "description": "What `fs.stat` says about a path (a symbolic link is followed; a dangling one is `link`).",
         "properties": {
@@ -10315,6 +10565,17 @@
           "action"
         ],
         "type": "object"
+      },
+      "Phase": {
+        "enum": [
+          "resolve",
+          "deliver",
+          "install",
+          "verify",
+          "done",
+          "failed"
+        ],
+        "type": "string"
       },
       "PictureReq": {
         "properties": {
@@ -11681,6 +11942,63 @@
           "smallest"
         ],
         "type": "object"
+      },
+      "ReachCause": {
+        "description": "How the console's connect ended.",
+        "enum": [
+          "timed_out",
+          "refused",
+          "other",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "ReachFail": {
+        "description": "A stream the console could not start, in facts: the app words it in the user's language.",
+        "properties": {
+          "cause": {
+            "$ref": "#/components/schemas/ReachCause"
+          },
+          "detail": {
+            "description": "What is known beyond the usual cause: Windows' own account of the network, or that the\nengine runs in a container. English.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "description": "`http://host:port` the console was (or would have been) sent to.",
+            "type": "string"
+          },
+          "source": {
+            "description": "The install's source kind (`host_file`, `remote`, …): only a file on this computer can\nbe uploaded instead.",
+            "type": "string"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/ReachStage"
+          },
+          "waited_s": {
+            "description": "Seconds waited for a request (`NoFetch`), else 0.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stage",
+          "origin",
+          "cause",
+          "waited_s",
+          "source"
+        ],
+        "type": "object"
+      },
+      "ReachStage": {
+        "description": "Where a stream that never started was found out.",
+        "enum": [
+          "check",
+          "no_fetch"
+        ],
+        "type": "string"
       },
       "ReaderMetadata": {
         "description": "The subset of [`PkgMetadata`] recoverable from ranged reads — enough to\nenrich a listing row without parsing the whole file.",
@@ -16009,6 +16327,15 @@
         ],
         "type": "object"
       },
+      "Waiting": {
+        "description": "What a job is waiting for before the console has moved a byte, for the app to say.",
+        "enum": [
+          "previous_install",
+          "reach_check",
+          "console_fetch"
+        ],
+        "type": "string"
+      },
       "WrappedGameHint": {
         "description": "A game found one level down inside an otherwise-empty wrapper folder.",
         "properties": {
@@ -20140,6 +20467,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "Back up the chosen parts of a console (saves, captures, payload settings, homebrew) into a folder on this computer",
         "tags": [
           "console-backup"
         ],
@@ -20317,6 +20645,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "Put a console backup from this computer back onto a console",
         "tags": [
           "console-backup"
         ],
@@ -20433,6 +20762,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "How the running console backup or restore stands",
         "tags": [
           "console-backup"
         ],
@@ -23480,7 +23810,7 @@
     },
     "/api/fpkg/extract/free-check": {
       "post": {
-        "description": "POST /api/fpkg/extract/free-check — whether an archive can be unpacked with its own space\ngiven back (`free_archive` on `/api/fpkg/extract`), and how: `mode` is `entries` (a `.zip`:\nfreed file by file), `blocks` (a `.7z` of more than one block: block by block), `parts` (a\nmulti-part `.rar`: part by part) or `end` (anything else: deleted once the unpack is\nfinished and checked). `parts` counts the blocks or parts (1 otherwise); `game` is `folder`\nor `image`. Changes nothing. 400 with the plain reason when it can't be done.",
+        "description": "POST /api/fpkg/extract/free-check — whether an archive can be unpacked with its space given\nback. Asks before `free_archive` on `/api/fpkg/extract`, and says how it would go: `mode` is\n`entries` (a `.zip`: freed file by file), `blocks` (a `.7z` of more than one block: block by\nblock), `parts` (a multi-part `.rar`: part by part) or `end` (anything else: deleted once the\nunpack is finished and checked). `parts` counts the blocks or parts (1 otherwise); `game` is\n`folder` or `image`. `archive_bytes` is the archive's size (every part), `unpacked` what it\nunpacks to, `same_drive` whether it sits on the output folder's drive (only then does its\nfreed space count), `needed` the free bytes the unpack and the build after it need, and\n`free` the output folder's free bytes (null when they could not be read). Changes nothing.\n400 with the plain reason when it can't be done, including too little room.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -23529,6 +23859,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "Whether an archive can be unpacked with its space given back",
         "tags": [
           "workshop"
         ],
@@ -25080,6 +25411,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "The profiles signed in on a console and which one each guest plays as",
         "tags": [
           "play-together"
         ],
@@ -28327,6 +28659,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "A payload's newest release",
         "tags": [
           "payloads"
         ],
@@ -28744,6 +29077,7 @@
     },
     "/api/pkg/install/status": {
       "get": {
+        "description": "`GET /api/pkg/install/status?job=`: how an install job stands. While it runs, `phase` says\nwhere it is, and `waiting` what it waits for before the console has moved a byte:\n`previous_install` (an earlier install's call has to end first), `reach_check` (asking the\nhelper whether the console reaches this computer) or `console_fetch` (the console has the\nlink and has not asked for the package yet). A failed job has `reason`: `stream_unreachable`\nwhen the console could not fetch from this computer, with `reach` saying where it was sent\n(`origin`), at which `stage` it was found (`check` before the link was handed over, or\n`no_fetch` after the console never asked for it), how its connect ended (`cause`) and how\nlong it was waited for (`waited_s`), and `hint` the message; `cancelled` when it was\nstopped. 404 for a job this engine does not know (finished ones are kept for a while).",
         "parameters": [
           {
             "in": "query",
@@ -28758,10 +29092,12 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/InstallStatus"
+                }
               }
             },
-            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+            "description": "Success."
           },
           "403": {
             "$ref": "#/components/responses/Error",
@@ -28803,7 +29139,7 @@
         ],
         "x-ps5upload": {
           "access": "loopback",
-          "response_schema": "json-unknown"
+          "response_schema": "struct"
         }
       }
     },
@@ -33801,6 +34137,74 @@
         }
       }
     },
+    "/api/ps5/convert-ampr-emu": {
+      "post": {
+        "description": "POST /api/ps5/convert-ampr-emu {host} — put the AMPR emulator on the console for Convert on\nthe PS5. That is ampr_emu, the release the desktop app installs into games (digest checked,\nfrom this computer's cache or downloaded), written under\n/data/ps5upload/convert/runtime/ampr_emu-<version>/, so Convert on the PS5 can keep an\nemulator when it unpacks asset packs. Only on request, never on its own. Answers {version,\npath, written}; written is false when that version was already there. 502 when it could not\nbe downloaded or written; needs the helper up.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConvertRuntimeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/engine.convert_runtime.Outcome"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Put the AMPR emulator on the console for Convert on the PS5",
+        "tags": [
+          "console-tools"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "addr"
+            ],
+            "in": "body",
+            "name": "host",
+            "required": true
+          },
+          "response_schema": "struct"
+        }
+      }
+    },
     "/api/ps5/convert-runtime": {
       "post": {
         "description": "POST /api/ps5/convert-runtime {host} — put the zstd runtime Convert on the PS5 needs (the\nampr-emu-ng release this app pins, digest checked) on the console, under\n/data/ps5upload/convert/runtime/. Answers {version, path, written}; written is false when the\nsame version was already there. Needs the helper up.",
@@ -38048,6 +38452,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "Remove a game Kraken Mount mounts, deleting its source",
         "tags": [
           "console-tools"
         ],
@@ -39052,6 +39457,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "Set Payload Manager's boot autoload switch and list, and read it back",
         "tags": [
           "payloads"
         ],
@@ -40771,6 +41177,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "What Remote Play sends the console's controller, per controller",
         "tags": [
           "remote-play"
         ],
@@ -42046,6 +42453,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "The last Remote Play pairing tries and how each ended",
         "tags": [
           "remote-play"
         ],
@@ -44069,6 +44477,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "Ask the console's mounter to scan for games again now",
         "tags": [
           "shadowmount"
         ],
@@ -44346,6 +44755,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "The console's Tailscale node: state, address, peers and who may reach it",
         "tags": [
           "console-tools"
         ],
@@ -44446,6 +44856,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "Put the console on Tailscale, pause, sign out, rename it or change who may reach it",
         "tags": [
           "console-tools"
         ],
@@ -45452,7 +45863,7 @@
     },
     "/api/ps5/volumes": {
       "get": {
-        "description": "GET /api/ps5/volumes?addr=IP:PORT — enumerate mounted PS5 storage volumes.",
+        "description": "GET /api/ps5/volumes?addr=IP:PORT — enumerate mounted PS5 storage volumes.\n\n`total_bytes` and `free_bytes` are the filesystem's own counters (`statfs`), not the figures\nof the PS5's Settings > Storage screen, which can show less free space. On internal storage\n`free_bytes` already leaves out what the filesystem holds back (`user_reserved_bytes` in\n`/api/ps5/hw/storage`). For how much a copy can take, read `allocatable_bytes` and\n`likely_fits_bytes`.",
         "parameters": [
           {
             "in": "query",
@@ -45515,7 +45926,7 @@
     },
     "/api/queue": {
       "get": {
-        "description": "GET /api/queue?console= — one console's line, or every console's.",
+        "description": "GET /api/queue?console= — one console's line, or every console's. Answers `{items, consoles}`:\neach item is `{id, console, kind, label, status, request, stop_on_failure, added_at_ms,\nstarted_at_ms?, finished_at_ms?, job_id?, runs, error?, code?, verdict?, hint?, progress?,\nposition?}`, `status` one of `queued`, `running`, `paused`, `done`, `failed`, `cancelled`\n(stopped, not failed: `code` `cancelled`) or `interrupted`; `position` is a waiting item's\nplace in its console's line.",
         "parameters": [
           {
             "in": "query",
@@ -47192,6 +47603,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "One game's save backups on the console's chosen drives",
         "tags": [
           "saves"
         ],
@@ -47539,6 +47951,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "Save a save backup as a file for a friend or another PS5",
         "tags": [
           "saves"
         ],
@@ -47612,6 +48025,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "The folder backups a console may be given back, per folder, newest first",
         "tags": [
           "saves"
         ],
@@ -47724,6 +48138,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "Put a folder backup back where it came from",
         "tags": [
           "saves"
         ],
@@ -48492,6 +48907,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "Continue the last save backup run, or retry some of its saves",
         "tags": [
           "saves"
         ],
@@ -49959,6 +50375,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "One incoming share and how it stands",
         "tags": [
           "share"
         ],
@@ -50302,6 +50719,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "One outgoing share and how it stands",
         "tags": [
           "share"
         ],
@@ -51162,6 +51580,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "This engine's own Tailscale node and the consoles it reaches through it",
         "tags": [
           "tailnet"
         ],
@@ -51246,6 +51665,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "Turn this engine's own Tailscale node on or off, or change it",
         "tags": [
           "tailnet"
         ],
@@ -51642,6 +52062,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "Why the engine reaches a console the way it does now",
         "tags": [
           "tailnet"
         ],
@@ -51703,6 +52124,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "How the engine reaches one console now: on the home network, or through Tailscale direct or relayed",
         "tags": [
           "tailnet"
         ],

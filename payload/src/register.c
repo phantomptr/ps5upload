@@ -33,6 +33,8 @@
 #include "plog.h"
 #include "unregister_outcome.h"
 #include "install_guard.h"
+#include "json_key.h"
+#include "utf8_cut.h"
 #include "start_trace.h"
 #include "shell_builtin.h" /* mntinfo_snapshot */
 #include "content_db.h"
@@ -543,6 +545,9 @@ static int json_extract_string(const char *json, const char *key,
          * titles don't contain backslashes in any observed dataset. */
         out[i++] = *p++;
     }
+    /* A value cut at out_cap is cut on a character (utf8_cut.h): half of one is invalid UTF-8,
+     * and the registered list carrying it no longer parsed in the engine. */
+    i = utf8_whole_prefix(out, i);
     out[i] = '\0';
     return (i > 0) ? 0 : -1;
 }
@@ -787,9 +792,10 @@ static int parse_title_from_param_json(const char *path,
         return -1;
     }
 
-    /* Title -- prefer the en-US block if present, else top-level. */
+    /* Title -- prefer the en-US block if present, else top-level. The block's key, not
+     * "defaultLanguage": "en-US" (json_key.h). */
     out_name[0] = '\0';
-    const char *en = strstr(buf, "\"en-US\"");
+    const char *en = json_find_key(buf, "\"en-US\"");
     if (en) {
         (void)json_extract_string(en, "titleName", out_name, name_cap);
     }

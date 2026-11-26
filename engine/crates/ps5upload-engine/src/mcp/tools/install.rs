@@ -1,5 +1,6 @@
 //! Installing packages: `install_pkg`, `install_status`, `install_wait`, `install_stop`,
-//! `install_preflight`, `install_sessions`, `install_history`.
+//! `install_preflight`, `install_sessions`, `install_history`, and a fake package's name before
+//! it is installed: `install_pkg_name`, `install_pkg_rename`.
 //!
 //! An install is not a job of `/api/jobs`: it has its own status route and states, and the engine
 //! allows one per console at a time.
@@ -90,7 +91,12 @@ pub(super) fn tools() -> Vec<ToolDef> {
             name: "install_status",
             title: "Follow an install",
             description: "How an install stands: its `phase` (resolve, deliver, install, verify, \
-                          done, failed), `verdict`, and `hint` when it failed.",
+                          done, failed), `verdict`, and `hint` when it failed. Before the console \
+                          has moved a byte, `waiting` says what it waits for (previous_install, \
+                          reach_check, console_fetch). `reason` says why it failed: \
+                          stream_unreachable means the console could not fetch the package from \
+                          this computer (most often its firewall), with `reach` saying where it \
+                          was sent and how the connect ended; cancelled means it was stopped.",
             kind: Kind::Read,
             schema: object(json!({ "job": job_argument() }), &["job"]),
             run: |ctx, args| Box::pin(status(ctx, args)),
@@ -167,6 +173,45 @@ pub(super) fn tools() -> Vec<ToolDef> {
                 console: "ps5_addr",
                 done: "The install history.",
             ),
+        },
+        ToolDef {
+            name: "install_pkg_name",
+            title: "A package's name",
+            description: "The names a .pkg on the engine's computer holds (one per language), \
+                          and whether it can be renamed: `room` is how long a new name may be, in \
+                          UTF-8 bytes (`default_name` for the default name only, `all_languages` \
+                          for every language); `refusal` says why not (retail: signed by its \
+                          publisher, patch, no_name, unsupported). Reads only.",
+            kind: Kind::Read,
+            schema: object(
+                json!({ "path": text("The package, on the computer the engine runs on.") }),
+                &["path"],
+            ),
+            run: route!(path: "/api/pkg/name", done: "The package's names."),
+        },
+        ToolDef {
+            name: "install_pkg_rename",
+            title: "Rename a package",
+            description: "Changes the name a fake package (FPKG) on the engine's computer shows on \
+                          the PS5, in the package file itself, before it is installed. A game \
+                          already installed keeps its name. Check install_pkg_name first: an \
+                          official package, a delta patch, a split package or a name longer than \
+                          `room` is refused (400), and a package an install, upload or build still uses \
+                          is refused (409) with what holds it. On any failure the file is as it \
+                          was.",
+            kind: Kind::Destructive { idempotent: true },
+            schema: object(
+                json!({
+                    "path": text("The package, on the computer the engine runs on."),
+                    "name": text("The new name: no line breaks, at most `room` bytes of UTF-8."),
+                    "all_languages": flag(
+                        "Give every language this name. Otherwise only the entries that hold \
+                         the current default name change.",
+                    ),
+                }),
+                &["path", "name"],
+            ),
+            run: route!(method: "POST", path: "/api/pkg/name", done: "Renamed the package."),
         },
     ]
 }

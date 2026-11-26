@@ -22,6 +22,8 @@ export function gamesViewOf(params: Record<string, string> | null): GamesView {
  */
 export function GamesSection({ ctx }: { ctx: SectionContext }) {
   const [view, setView] = useState<GamesView>(() => gamesViewOf(ctx.params));
+  // Home's "USB drive connected" asks for one scan: switching to Installed and back does not scan again.
+  const [scan, setScan] = useState(ctx.params?.scan === "1");
   const switcher = (
     <div className="cw-toolbar" role="group" aria-label={t("cw_games_title")}>
       <button
@@ -29,7 +31,10 @@ export function GamesSection({ ctx }: { ctx: SectionContext }) {
         className="cw-focusable cw-button"
         aria-pressed={view === "installed"}
         data-action="games-view-installed"
-        onClick={() => setView("installed")}
+        onClick={() => {
+          setScan(false);
+          setView("installed");
+        }}
       >
         <Gamepad2 aria-hidden />
         <span>{t("cw_games_view_installed")}</span>
@@ -47,7 +52,7 @@ export function GamesSection({ ctx }: { ctx: SectionContext }) {
     </div>
   );
   return view === "library" ? (
-    <Library scan={ctx.params?.scan === "1"} ctx={ctx} switcher={switcher} />
+    <Library scan={scan} ctx={ctx} switcher={switcher} />
   ) : (
     <Games ctx={ctx} switcher={switcher} />
   );

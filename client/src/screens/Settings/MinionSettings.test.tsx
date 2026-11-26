@@ -7,7 +7,7 @@ vi.mock("../../state/lang", async (orig) => ({
   useTr: () => (key: string, _vars?: unknown, fallback?: string) => fallback ?? key,
 }));
 
-const { MinionView, minionStatus, minionUrl } = await import("./MinionSettings");
+const { MinionView, RuntimePutView, amprEmuPutText, minionStatus, minionUrl } = await import("./MinionSettings");
 const { Toggle } = await import("../../components");
 
 const tr = (key: string, _vars?: unknown, fallback?: string) => fallback ?? key;
@@ -141,6 +141,32 @@ describe("Settings → Minion", () => {
     );
     (remove?.props.onClick as () => void)();
     expect(onRemove).toHaveBeenCalled();
+  });
+
+  it("offers the AMPR emulator for Convert on the PS5 as a button of its own, and says how it went", () => {
+    const text = amprEmuPutText(tr);
+    expect(text.label).toBe("Put the AMPR emulator on this PS5");
+    expect(text.note).toContain("only when you ask");
+    expect(text.doneText("0.4.2.1")).toBe("ampr_emu {version} is on this PS5.");
+    const onPut = vi.fn();
+    const view = RuntimePutView({ ...text, busy: false, done: null, error: null, onPut });
+    const html = renderToStaticMarkup(view);
+    expect(html).toContain("Put the AMPR emulator on this PS5");
+    expect(html).toContain('data-runtime-put="ampr-emu"');
+    expect(html).not.toContain('role="status"');
+    expect(html).not.toContain('role="alert"');
+    const button = elements(view).find((e) => typeof e.props.onClick === "function");
+    (button?.props.onClick as () => void)();
+    expect(onPut).toHaveBeenCalledTimes(1);
+
+    const done = renderToStaticMarkup(
+      RuntimePutView({ ...text, busy: false, done: "ampr_emu 0.4.2.1 is on this PS5.", error: null, onPut }),
+    );
+    expect(done).toContain('role="status"');
+    expect(done).toContain("ampr_emu 0.4.2.1 is on this PS5.");
+    const failed = RuntimePutView({ ...text, busy: true, done: null, error: "offline", onPut });
+    expect(renderToStaticMarkup(failed)).toContain('role="alert"');
+    expect(elements(failed).find((e) => typeof e.props.onClick === "function")?.props.disabled).toBe(true);
   });
 
   it("builds the network address, IPv6 in brackets", () => {

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { useConnectionStore } from "./connection";
 import { hostOf } from "../lib/addr";
+import { isAtOrUnder, onPathsGone } from "../lib/fsPathsGone";
 
 /**
  * Shared cut/copy clipboard for PS5 filesystem operations.
@@ -11,6 +12,10 @@ import { hostOf } from "../lib/addr";
  * (not component state) is what lets the user click "Cut" in Library,
  * tab over to File System, navigate, and click "Paste" — the staged
  * items survive the navigation.
+ *
+ * Staged items leave the clipboard once they have been pasted (a copy as well as a cut: one
+ * paste, as phone file managers do), and when their source is deleted or moved away by
+ * anything (lib/fsPathsGone). What failed to paste stays staged, to try again (#936).
  *
  * We don't persist this to disk: the clipboard is a session-level
  * intent, not a setting. If the app restarts mid-paste, it's safer to
@@ -47,6 +52,9 @@ interface FsClipboardState {
    *  may be hidden by now (its clipboard is the stashed one), and its clipboard may hold
    *  something newer: with `items`, it is cleared only while it still holds exactly those. */
   clearFor: (host: string | null | undefined, items?: ClipboardItem[]) => void;
+  /** Items at or under `paths` on console `host` are gone (deleted, moved away) or have been
+   *  pasted: they leave that console's clipboard, which empties when none is left. */
+  drop: (host: string | null | undefined, paths: readonly string[]) => void;
   /** Console switch: stash THIS console's clipboard and restore the target
    *  console's, so a cut/copy survives a round-trip switch (each PS5 keeps its
    *  own clipboard). The clipboard holds PS5-side source paths, so it's only
@@ -93,6 +101,26 @@ export const useFsClipboardStore = create<FsClipboardState>((set, get) => ({
     const stashed = clipboardStash.get(key);
     if (stashed && (!items || stashed.items === items)) clipboardStash.delete(key);
   },
+  drop: (host, paths) => {
+    if (paths.length === 0) return;
+    const keep = (items: ClipboardItem[]) =>
+      items.filter((i) => !paths.some((p) => isAtOrUnder(i.path, p)));
+    const key = clipKey(host);
+    if (key === clipKey(useConnectionStore.getState().host)) {
+      const s = get();
+      const left = keep(s.items);
+      if (left.length === s.items.length) return;
+      if (left.length === 0) get().clear();
+      else set({ items: left });
+      return;
+    }
+    const kept = clipboardStash.get(key);
+    if (!kept) return;
+    const left = keep(kept.items);
+    if (left.length === kept.items.length) return;
+    if (left.length === 0) clipboardStash.delete(key);
+    else clipboardStash.set(key, { ...kept, items: left });
+  },
   switchToHost: (newHost) => {
     const oldKey = clipKey(useConnectionStore.getState().host);
     const newKey = clipKey(newHost);
@@ -106,3 +134,6 @@ export const useFsClipboardStore = create<FsClipboardState>((set, get) => ({
     set(clipboardStash.get(newKey) ?? EMPTY_CLIPBOARD);
   },
 }));
+
+// A staged source deleted or moved away, from any screen: it can no longer be pasted.
+onPathsGone((addr, paths) => useFsClipboardStore.getState().drop(addr, paths));

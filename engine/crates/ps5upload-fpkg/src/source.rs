@@ -1064,16 +1064,17 @@ fn ampr_index_verdict(tree: &mut dyn SourceTree, packs: Option<&'static str>) ->
             format!("the folder's {name} could not be read: {regenerated}"),
         );
     };
+    // The runtime's own checks first: one bad record and it refuses the whole file, and the
+    // finding says which (adapted from PS5 Dump Forge, its #62: a damaged index names why).
+    if let Err(why) = crate::ampr_index::check(&bytes) {
+        return (false, format!("{why}; {regenerated}"));
+    }
     let Some(listed) = crate::ampr_index::parse(&bytes) else {
         return (
             false,
             format!("the folder's {name} is not a readable AMPRIDX3 index: {regenerated}"),
         );
     };
-    // The runtime's own checks: one bad record and it refuses the whole file.
-    if let Err(why) = crate::ampr_index::check(&bytes) {
-        return (false, format!("{why}; {regenerated}"));
-    }
     let joined = match packs {
         Some("zstd") => crate::ampr_index::zstd_packed(tree).and_then(|packed| {
             crate::ampr_index::check_zstd(&bytes, packed.iter().map(|(p, s)| (p.as_str(), *s)))?;
@@ -1290,6 +1291,32 @@ mod tests {
         assert_eq!(kind("short", &[("ampr_assets.index", b"AMPR")]), None);
         assert_eq!(kind("other", &[("ampr_zstd.index", b"notapack!")]), None);
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// A folder's `ampr_emu.index` that doesn't read: the finding says why, not only that.
+    #[test]
+    fn a_damaged_index_finding_names_the_reason() {
+        let dir = std::env::temp_dir().join(format!("fpkg-index-why-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("eboot.bin"), b"x").unwrap();
+        let good = crate::ampr_index::build(&[("eboot.bin".to_string(), 1)], 0).expect("an index");
+        let verdict = |index: &[u8]| {
+            std::fs::write(dir.join(crate::ampr_index::NAME), index).unwrap();
+            let mut tree = super::FolderSource::open(&dir).unwrap();
+            super::ampr_index_verdict(&mut tree, None)
+        };
+        // Another header: named as such.
+        let mut magic = good.clone();
+        magic[0] = b'X';
+        let (ok, detail) = verdict(&magic);
+        assert!(!ok && detail.contains("no AMPRIDX3 header"), "{detail}");
+        // A record whose path runs past the path blob: named as such.
+        let mut path = good.clone();
+        path[0x30 + 4..0x30 + 8].copy_from_slice(&0xFFFFu32.to_le_bytes());
+        let (ok, detail) = verdict(&path);
+        assert!(!ok && detail.contains("out of bounds"), "{detail}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A folder's headers come back in the order asked, the same as one file at a time, and

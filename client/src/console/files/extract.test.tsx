@@ -175,7 +175,7 @@ describe("extract dialog", () => {
     expect((el.props.check as (v: string) => string | null)("")).toBe(t("cw_files_extract_pw_empty"));
     (el.props.onSubmit as (v: string) => void)("hunter2");
     // With the folder the extract began in: the folder shown may be another by now.
-    expect(onExtract).toHaveBeenCalledWith("g.zip", start, "hunter2", "/data/began");
+    expect(onExtract).toHaveBeenCalledWith("g.zip", start, "hunter2", "/data/began", false);
   });
 });
 
@@ -209,10 +209,16 @@ describe("extract lines", () => {
       false,
     );
     expect(done?.tone).toBe("info");
-    expect(done?.text).toContain(t("cw_files_extract_done", { n: 12, name: "g" }));
-    expect(done?.text).toContain(t("cw_files_extract_done_skipped", { n: 3 }));
-    expect(done?.text).toContain(t("cw_files_extract_done_unsafe", { n: 1 }));
-    expect(done?.text).not.toContain(t("cw_files_extract_done_links", { n: 0 }));
+    expect(done?.text).toContain(t("cw_files_extract_done_v2", { n: 12, name: "g" }));
+    expect(done?.text).toContain(t("cw_files_extract_done_skipped_v2", { n: 3 }));
+    expect(done?.text).toContain(t("cw_files_extract_done_unsafe_v2", { n: 1 }));
+    expect(done?.text).not.toContain(t("cw_files_extract_done_links_v2", { n: 0 }));
+    // one reads right: "Files: 1", "unsafe paths: 1" (it said "1 files", "1 with unsafe paths were")
+    const one = extractMessage(
+      { end: "done", status: { ...status, result: '{"path":"/data/x/g","files":1,"dirs":0,"bytes":9,"skipped":0,"unsafe":1,"links":1}' } },
+      false,
+    );
+    expect(one?.text).toBe("Extracted into “g”. Files: 1. Not extracted, unsafe paths: 1. Links or special files not extracted: 1.");
   });
 
   it("stopped says what stays; failures say why", () => {

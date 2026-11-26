@@ -83,7 +83,7 @@ import { ConflictDialog } from "./ConflictDialog";
 import { pasteItems, type PasteMode, type PasteResult } from "./paste";
 import { ReplaceError } from "./replace";
 import { PathBar } from "./PathBar";
-import { DEFAULT_VIEW, invertShown, loadView, MESH_MARKER, saveView, selectAllShown, statusOf, visibleEntries, LOAD_ALL_CAP, type Status, type ViewPrefs } from "./listing";
+import { DEFAULT_VIEW, emptyReason, invertShown, loadView, MESH_MARKER, saveView, selectAllShown, statusOf, visibleEntries, LOAD_ALL_CAP, type Status, type ViewPrefs } from "./listing";
 import { checkFolder, typedPath } from "./pathParts";
 import { PathPicker } from "./PathPicker";
 import { cleanPath, isPinned, usePrefs, type FilesPrefs } from "./prefs";
@@ -369,7 +369,10 @@ export interface FilesViewProps {
   onLoadPayload?: (name: string) => void;
   /** Extract `name` (an archive in the folder shown) as `start` says; `password` once one was asked for. */
   /** `dir`: the archive's folder, when it is not (or may no longer be) the one shown. */
-  onExtract?: (name: string, start: ExtractStart, password?: string, dir?: string) => void;
+  onExtract?: (name: string, start: ExtractStart, password?: string, dir?: string, over?: boolean) => void;
+  /** An extract's password question over the open dialog, and its Cancel. */
+  pwOver?: PwAsk | null;
+  onPwOverCancel?: () => void;
   onMkdir: (name: string) => void;
   onPicked: (op: "copy" | "move", names: string[], destDir: string) => void;
   /** Open `dir` in Files with `name` focused (a search result); null name: the folder itself. */
@@ -521,10 +524,10 @@ export function unpackMessage(end: OpEnd | { end: "error"; error: unknown }, sou
 export function extractMessage(end: OpEnd | { end: "error"; error: unknown }, merged: boolean): Message | null {
   if (end.end === "done") {
     const r = toExtractResult(opResult<unknown>(end.status));
-    const parts = [t("cw_files_extract_done", { n: r.files, name: r.path ? baseName(r.path) : "" })];
-    if (r.skipped > 0) parts.push(t("cw_files_extract_done_skipped", { n: r.skipped }));
-    if (r.unsafe > 0) parts.push(t("cw_files_extract_done_unsafe", { n: r.unsafe }));
-    if (r.links > 0) parts.push(t("cw_files_extract_done_links", { n: r.links }));
+    const parts = [t("cw_files_extract_done_v2", { n: r.files, name: r.path ? baseName(r.path) : "" })];
+    if (r.skipped > 0) parts.push(t("cw_files_extract_done_skipped_v2", { n: r.skipped }));
+    if (r.unsafe > 0) parts.push(t("cw_files_extract_done_unsafe_v2", { n: r.unsafe }));
+    if (r.links > 0) parts.push(t("cw_files_extract_done_links_v2", { n: r.links }));
     return { tone: "info", text: parts.join(" ") };
   }
   if (end.end === "cancelled") return { tone: "info", text: t(merged ? "cw_files_extract_stopped_merge" : "cw_files_extract_stopped") };
@@ -686,6 +689,28 @@ function namesTitle(names: string[]): string {
 }
 
 /** The modal for `p.ask` (a plain call, not a component: tests read its props). */
+type PwAsk = Extract<FilesAsk, { kind: "extractpw" }>;
+
+/** An extract's password question: as the dialog, or `over` the one open (which stays). */
+function pwPrompt(p: FilesViewProps, a: PwAsk, over: boolean) {
+  return (
+    <TextPrompt
+      title={t("cw_files_extract_pw_title", { name: a.name })}
+      fieldLabel={t("cw_files_extract_pw_label")}
+      note={
+        <p className={a.wrong ? "cw-field-error" : "cw-dim"} role={a.wrong ? "alert" : undefined}>
+          {t(a.wrong ? "cw_files_extract_pw_wrong" : "cw_files_extract_pw_body")}
+        </p>
+      }
+      initial=""
+      secret
+      check={(v) => (v ? null : t("cw_files_extract_pw_empty"))}
+      onSubmit={(v) => p.onExtract?.(a.name, a.start, v, a.dir, over)}
+      onCancel={(over ? p.onPwOverCancel : null) ?? p.onDismiss}
+    />
+  );
+}
+
 function askView(p: FilesViewProps) {
   const a = p.ask;
   if (!a) return null;
@@ -891,22 +916,7 @@ function askView(p: FilesViewProps) {
         />
       );
     case "extractpw":
-      return (
-        <TextPrompt
-          title={t("cw_files_extract_pw_title", { name: a.name })}
-          fieldLabel={t("cw_files_extract_pw_label")}
-          note={
-            <p className={a.wrong ? "cw-field-error" : "cw-dim"} role={a.wrong ? "alert" : undefined}>
-              {t(a.wrong ? "cw_files_extract_pw_wrong" : "cw_files_extract_pw_body")}
-            </p>
-          }
-          initial=""
-          secret
-          check={(v) => (v ? null : t("cw_files_extract_pw_empty"))}
-          onSubmit={(v) => p.onExtract?.(a.name, a.start, v, a.dir)}
-          onCancel={p.onDismiss}
-        />
-      );
+      return pwPrompt(p, a, false);
     case "pick":
       return (
         <PathPicker
@@ -1014,7 +1024,7 @@ function ToolButton({
 /** "N items · M selected (size)"; folders count as selected but add no size. */
 export function statusText(st: Status): string {
   const items =
-    st.items === st.total ? t("cw_files_status_items", { n: st.items }) : t("cw_files_status_filtered", { n: st.items, total: st.total });
+    st.items === st.total ? t("cw_files_status_items_v2", { n: st.items }) : t("cw_files_status_filtered", { n: st.items, total: st.total });
   if (!st.selected) return items;
   const size = st.folders ? t("cw_files_status_size_dirs", { size: formatBytes(st.bytes) }) : formatBytes(st.bytes);
   return `${items} · ${t("cw_files_status_selected", { n: st.selected, size })}`;
@@ -1243,10 +1253,12 @@ export function FilesView(p: FilesViewProps) {
             </div>
           ) : null}
           {!p.dir.loaded && !p.dir.error ? <p className="cw-dim">{t("cw_home_loading")}</p> : null}
-          {p.dir.loaded && p.dir.entries.length > 0 && !shown.length && !p.dir.more ? (
-            <p className="cw-dim">{t("cw_files_none_match")}</p>
+          {p.dir.loaded && p.dir.entries.length > 0 && !shown.length && !p.dir.more && emptyReason(p.dir.entries, p.view ?? DEFAULT_VIEW) !== "empty" ? (
+            <p className="cw-dim">
+              {t(emptyReason(p.dir.entries, p.view ?? DEFAULT_VIEW) === "filter" ? "cw_files_none_match" : "cw_files_only_hidden")}
+            </p>
           ) : null}
-          {p.dir.loaded && !p.dir.entries.length && !p.dir.more ? (
+          {p.dir.loaded && !shown.length && !p.dir.more && (!p.dir.entries.length || emptyReason(p.dir.entries, p.view ?? DEFAULT_VIEW) === "empty") ? (
             <p className="cw-dim">
               {t("cw_files_empty")} {t("cw_files_empty_next")}
             </p>
@@ -1284,11 +1296,11 @@ export function FilesView(p: FilesViewProps) {
           ) : null}
         </>
       )}
-      {p.conflict ? (
-        <ConflictDialog key={p.conflict.conflict.item} conflict={p.conflict.conflict} onAnswer={p.conflict.answer} />
-      ) : (
-        askView(p)
-      )}
+      {askView(p)}
+      {p.pwOver ? pwPrompt(p, p.pwOver, true) : null}
+      {/* Over the open dialog, which stays: closing it would stop an upload or drop an editor's
+          unsaved text. Last in the page, so it is the topmost modal. */}
+      {p.conflict ? <ConflictDialog key={p.conflict.conflict.item} conflict={p.conflict.conflict} onAnswer={p.conflict.answer} /> : null}
     </div>
   );
 }
@@ -1399,6 +1411,9 @@ export function Files({ ctx }: { ctx: SectionContext }) {
   /** The dialog open now: a late answer checks it is still the one that asked, and a
    *  finished extract leaves the folder alone while one is open. */
   const askRef = useRef(ask);
+  /** An extract's password question that came while another dialog was open: shown over it (it
+   *  used to replace it, an editor's unsaved text with it), which stays. */
+  const [pwOver, setPwOver] = useState<PwAsk | null>(null);
   useEffect(() => {
     askRef.current = ask;
   }, [ask]);
@@ -1904,12 +1919,14 @@ export function Files({ ctx }: { ctx: SectionContext }) {
   );
 
   const onExtract = useCallback(
-    (name: string, start: ExtractStart, password?: string, askedIn?: string) => {
+    (name: string, start: ExtractStart, password?: string, askedIn?: string, over?: boolean) => {
       // The password prompt of an extract that began in another folder names that folder.
       const began = askedIn ?? path;
       if (began == null || currentBatch()) return;
       const src = joinPath(began, name);
-      setAsk(null);
+      // Asked over another dialog: that one stays.
+      if (over) setPwOver(null);
+      else setAsk(null);
       setMessage(null);
       let end: OpEnd | { end: "error"; error: unknown } = { end: "gone" };
       const body = {
@@ -1943,7 +1960,9 @@ export function Files({ ctx }: { ctx: SectionContext }) {
           const cause = done.end === "failed" ? opCause(done.status) : done.end === "error" && done.error instanceof ApiError ? done.error.code : "";
           if (cause === "fs_extract_password_required" || cause === "fs_extract_wrong_password") {
             // Not a failure yet: ask for the password and run the same extract again.
-            setAsk({ kind: "extractpw", name, start, wrong: cause === "fs_extract_wrong_password", dir: began });
+            const pw: PwAsk = { kind: "extractpw", name, start, wrong: cause === "fs_extract_wrong_password", dir: began };
+            if (askRef.current) setPwOver(pw);
+            else setAsk(pw);
             refresh();
             return;
           }
@@ -2013,6 +2032,8 @@ export function Files({ ctx }: { ctx: SectionContext }) {
       if (path == null) return;
       createFile(joinPath(path, name)).then(
         () => {
+          // Another folder opened meanwhile: the editor would open that folder's file of this name.
+          if (pathRef.current !== path) return;
           focusName.current = name;
           refresh();
           setAsk({ kind: "view", name, type: "text", edit: true });
@@ -2382,6 +2403,8 @@ export function Files({ ctx }: { ctx: SectionContext }) {
         onInstallPkg={onInstallPkg}
         onLoadPayload={onLoadPayload}
         onExtract={onExtract}
+        pwOver={pwOver}
+        onPwOverCancel={() => setPwOver(null)}
         onMkdir={onMkdir}
         onNewFile={onNewFile}
         onDownload={remote ? onDownload : undefined}

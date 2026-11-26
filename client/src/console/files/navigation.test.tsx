@@ -12,7 +12,7 @@ import type { Volume } from "../home/Home";
 import { t } from "../strings";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { ActionsSheet } from "./ActionsSheet";
-import { canEject, DriveList, isImage, isSystemVolume, placeLabel } from "./DriveList";
+import { canEject, DriveList, isImage, isSystemVolume, likelyFitsBytes, placeLabel } from "./DriveList";
 import { ejectBlocker, FilesView, PinnedChoices, volumeErrorText, type FilesViewProps } from "./Files";
 import { createPrefsApplier } from "./prefs";
 import type { Job } from "../home/useJobs";
@@ -171,7 +171,9 @@ describe("path bar", () => {
     mockCall.mockRejectedValueOnce(new ApiError(403, "path_not_allowed"));
     expect(await checkFolder("/data/ps5upload/ava")).toBe(t("cw_files_err_denied"));
     expect(await checkFolder("relative")).toBe(t("cw_files_goto_bad"));
-    expect(mockCall).toHaveBeenCalledTimes(4);
+    mockCall.mockRejectedValueOnce(new ApiError(0, "offline"));
+    expect(await checkFolder("/data")).toBe(t("cw_home_err_offline"));
+    expect(mockCall).toHaveBeenCalledTimes(5);
   });
 
   it("go to path is a text prompt with that check; OK navigates", () => {
@@ -281,6 +283,19 @@ describe("pinned and recent", () => {
     expect(isPinned(null, "/data")).toBe(false);
     expect(placeLabel("/data", VOLS)).toBe(t("cw_home_vol_internal"));
     expect(placeLabel("/data/homebrew", VOLS)).toBe("homebrew");
+  });
+});
+
+describe("how much is likely to fit", () => {
+  const G = 1024 ** 3;
+  it("says it for internal storage only, as the app's Volumes does (the PS5 holds back more as data is written)", () => {
+    // engine volumes.rs likely_fits_bytes: (allocatable - 1 GiB) / 6 * 5
+    expect(likelyFitsBytes(vol("/data", "/dev/ssd0.user", { free_bytes: 163 * G, allocatable_bytes: 161 * G }))).toBe(Math.floor((160 * G) / 6) * 5);
+    expect(likelyFitsBytes(vol("/data", "/dev/ssd0.user", { free_bytes: 7 * G }))).toBe(5 * G);
+    expect(likelyFitsBytes(vol("/data", "/dev/ssd0.user", { free_bytes: 0 }))).toBeNull();
+    expect(likelyFitsBytes(vol("/mnt/usb0", "/dev/da0s1", { free_bytes: 7 * G }))).toBeNull();
+    const html = renderToStaticMarkup(<FilesView {...props({ volumes: [vol("/data", "/dev/ssd0.user", { free_bytes: 7 * G })] })} />);
+    expect(html).toContain(t("cw_files_likely_fits", { safe: "5.00 GiB" }));
   });
 });
 

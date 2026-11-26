@@ -15,7 +15,7 @@ import {
   type FsExistingEntry,
   type FsUploadStep,
 } from "./fsUploadPlan";
-import { isJobUnknownError } from "../lib/pollRead";
+import { isJobUnknownError, readWithRetries } from "../lib/pollRead";
 
 /**
  * An "Add files" / drag-in upload on the Files screen, kept outside the screen.
@@ -440,16 +440,14 @@ export async function runFsUpload(
           // An interrupted run's job may have carried on without the app: watch it rather
           // than start a second one onto the same files.
           let jobId = "";
-          if (at === 0 && attempt === 0 && req.attachJobId) {
-            const old = await deps.jobStatus(req.attachJobId).catch(() => null);
-            if (old?.status === "done") break;
-            if (old?.status === "running") jobId = req.attachJobId;
-          }
+          // A read that failed is no answer (#945): it used to start a second job beside the
+          // live one. It is asked like an unsettled job instead, below.
+          if (at === 0 && attempt === 0 && req.attachJobId) unsettledJob = req.attachJobId;
           if (!jobId && unsettledJob) {
             const prev = unsettledJob;
             let old: JobSnapshot | null = null;
             try {
-              old = await deps.jobStatus(prev);
+              old = await readWithRetries(() => deps.jobStatus(prev), deps.sleep);
             } catch (e) {
               // Still no answer: starting now could run beside it. This try fails instead.
               if (!jobNotFound(e)) throw e;
@@ -663,15 +661,27 @@ export async function discardFsUploadPartial(
   if (!step || !deleteRemote || !listDir) return;
   try {
     // What the app closed on may still be running: a part deleted under a live job comes back.
+    // A read that fails after its retries throws (to the catch below: the part stays), since
+    // "not running" on a 503 would delete it under a job that is still writing it (#945).
     if (run.jobId) {
-      const state = await deps.jobStatus(run.jobId).catch(() => null);
+      const jobId = run.jobId;
+      const state = await readWithRetries(() => deps.jobStatus(jobId), deps.sleep).catch((e) => {
+        if (jobNotFound(e)) return null;
+        throw e;
+      });
       if (state?.status === "running") {
         await deps.jobCancel(run.jobId).catch(() => {});
-        for (let i = 0; i < 60; i++) {
-          const now = await deps.jobStatus(run.jobId).catch(() => null);
-          if (now?.status !== "running") break;
-          await deps.sleep(500);
+        let ended = false;
+        for (let i = 0; i < 60 && !ended; i++) {
+          // A failed read is no answer: wait on, as for a job still running.
+          const now = await deps.jobStatus(jobId).catch((e: unknown) =>
+            jobNotFound(e) ? null : ("unanswered" as const),
+          );
+          ended = now === null || (now !== "unanswered" && now.status !== "running");
+          if (!ended) await deps.sleep(500);
         }
+        // Still going (or not answering): deleting now would only be undone.
+        if (!ended) return;
       }
     }
     if (step.kind === "one") {

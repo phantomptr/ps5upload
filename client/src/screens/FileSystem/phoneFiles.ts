@@ -3,10 +3,12 @@
 
 /** What one press of system Back does on the Files listing once no menu, sheet or dialog is open
  *  (those close first, lib/systemBack). Null: nothing here, the press leaves Files. */
-export type FilesBackStep = "end-selection" | "up" | null;
+export type FilesBackStep = "end-selection" | "cancel-staged" | "up" | null;
 
 /**
- * Leave selection mode first, then go up one folder, and leave Files from the top.
+ * Leave selection mode first, then go up one folder, and leave Files from the top. What is staged to
+ * copy or move stays while Back goes up (that is how one gets to the folder to paste into); at the
+ * top, Back lets go of it first (its bar is where the bottom navigation was), then leaves Files.
  *
  * The top is the drive's root (/data, /mnt/usb0): a phone's file manager stops at its storage, and
  * the folders above a drive (/mnt) are not where anyone was. Outside every known drive it is "/".
@@ -18,13 +20,16 @@ export function filesBackStep(s: {
   view: boolean;
   /** Selection mode: something is selected, or "Select" was picked. */
   selecting: boolean;
+  /** Something is staged to copy or move, and its bar shows (#936). */
+  staged?: boolean;
   path: string;
   /** The drive the path is on, or null outside every known drive. */
   driveRoot: string | null;
 }): FilesBackStep {
   if (s.view) return null;
   if (s.selecting) return "end-selection";
-  return backUpTarget(s.path, s.driveRoot) === null ? null : "up";
+  if (backUpTarget(s.path, s.driveRoot) !== null) return "up";
+  return s.staged ? "cancel-staged" : null;
 }
 
 /** Where Back goes up to from `path`, or null at the top (see filesBackStep). */

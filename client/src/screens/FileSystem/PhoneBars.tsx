@@ -1,11 +1,13 @@
-// The Files bars of the phone layout (#936): the top row of the pinned header, and the bar of
-// selection actions that takes the bottom navigation's place while selecting. Tablets and
-// computers never show either (`roomy:hidden`); they keep the page header and the selection bar.
+// The Files bars of the phone layout (#936): the top row of the pinned header, and the bars that
+// take the bottom navigation's place: the selection's actions while selecting, and Paste here
+// while something is staged to copy or move. Tablets and computers never show them
+// (`roomy:hidden`); they keep the page header, the selection bar and the banner over the list.
 
-import type { ComponentType, ReactNode } from "react";
-import { CheckCheck, FolderOpen, MoreVertical, Search, X } from "lucide-react";
+import { useLayoutEffect, type ComponentType, type ReactNode } from "react";
+import { CheckCheck, ClipboardPaste, FolderOpen, MoreVertical, Search, X } from "lucide-react";
 
 import { Spinner } from "../../components";
+import "./filesColumn.css";
 
 type IconType = ComponentType<{ size?: number; className?: string }>;
 
@@ -167,6 +169,84 @@ export interface PhoneBarAction {
   tone?: "bad";
   /** Opens a menu: whether it is open. */
   menu?: boolean;
+}
+
+/** While `on`, Files is a column on a phone (`html[data-files-column]`, filesColumn.css): the page no
+ *  longer scrolls, the header stays where it is, and the list under it is the only scroller.
+ *  The header sat in the page's scroller as a sticky header before, and Android's overscroll
+ *  stretch moved and stretched it with the list. Rendered under the connection gate, so a gate's
+ *  message (no console, no helper) keeps the page's own scrolling. A layout effect: in place
+ *  before the windowed list looks for its scroller. */
+export function FilesColumn({ on }: { on: boolean }) {
+  useLayoutEffect(() => {
+    if (!on) return;
+    const root = document.documentElement;
+    root.setAttribute("data-files-column", "");
+    return () => root.removeAttribute("data-files-column");
+  }, [on]);
+  return null;
+}
+
+/** What is staged to copy or move, with Paste here and Cancel, where the bottom navigation is
+ *  (it hides meanwhile, as for the selection's actions). Replaces the banner over the list that
+ *  the wider layouts keep (#936). */
+export function PhoneStagedBar({
+  label,
+  countLabel,
+  fromLabel,
+  pasteLabel,
+  onPaste,
+  pasteDisabled,
+  cancelLabel,
+  onCancel,
+}: {
+  /** The toolbar's name, read out. */
+  label: string;
+  /** "Items to move: 3". */
+  countLabel: string;
+  /** Where they come from, or null. */
+  fromLabel: string | null;
+  pasteLabel: string;
+  onPaste: () => void;
+  pasteDisabled: boolean;
+  cancelLabel: string;
+  onCancel: () => void;
+}) {
+  const button =
+    "flex w-[4.75rem] shrink-0 flex-col items-center justify-center gap-0.5 rounded-full text-[0.625rem] font-medium leading-[1.15] hover:bg-[var(--color-surface-3)] disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]";
+  return (
+    <div
+      role="toolbar"
+      aria-label={label}
+      data-testid="fs-staged-bar"
+      className="glass-float elev-2 fixed inset-x-3 bottom-[calc(var(--safe-bottom)_+_0.6rem)] z-40 flex min-h-16 items-stretch gap-1 rounded-[2rem] p-1.5 roomy:hidden"
+    >
+      <button type="button" onClick={onCancel} className={button}>
+        <X size={20} aria-hidden />
+        <span className="line-clamp-2 max-w-full px-0.5 text-center break-words hyphens-auto">{cancelLabel}</span>
+      </button>
+      <div className="flex min-w-0 flex-1 flex-col justify-center px-1" role="status" data-testid="fs-staged-count">
+        {/* Whole, on two lines if it must (a wide font, a long language): the count is the point. */}
+        <span className="line-clamp-2 text-sm leading-tight font-semibold tabular-nums break-words" data-testid="fs-staged-what">
+          {countLabel}
+        </span>
+        {fromLabel && (
+          <span className="truncate text-[0.6875rem] text-[var(--color-muted)]" dir="auto">
+            {fromLabel}
+          </span>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onPaste}
+        disabled={pasteDisabled}
+        className={`${button} text-[var(--color-accent-bright)]`}
+      >
+        <ClipboardPaste size={20} aria-hidden />
+        <span className="line-clamp-2 max-w-full px-0.5 text-center break-words hyphens-auto">{pasteLabel}</span>
+      </button>
+    </div>
+  );
 }
 
 /** The actions for the selected items, where the bottom navigation is (it hides meanwhile:

@@ -1,4 +1,5 @@
-import logo from "../../../public/logo-square.png?inline";
+// public/logo-square.png at 96 px, 64 colours (1.2 KB, not 6.7 KB): drawn at 1.8rem, at most ~90 px.
+import logo from "./logo.png?inline";
 
 /** What /api/status answers (payload/src/webui_api.c r_status). */
 export interface ConsoleStatus {

@@ -37,9 +37,10 @@
   a NAS/SMB share, a USB drive or a link. If the PS5 refuses one route, the app offers another.
   A picked fake package shows **Name on the PS5**: change it there and the game installs under
   that name.
-  An installed PS5 fake package plays on firmware up to 13.60; above 11.60 it needs a kstuff build
-  with fake-package support for that firmware: kstuff 1.15 or newer. **Kraken Mount** can mount
-  the package instead (Upload & Install offers it when Kraken Mount runs). PS4 fake packages are fine.
+  A fake PS5 package plays in one of two ways: **install** it (on firmware 11.61 to 13.60 with
+  the latest kstuff, which has fake-package support up to 13.60), or **mount** it with **Kraken
+  Mount** (copied as a plain file to a folder Kraken Mount scans; nothing is installed). PS4 fake
+  packages are installed, on any firmware.
 - **Games.** One grid with every game once: your copies in your folders (including folders on
   a NAS, scanned in place) grouped with their updates and DLC, what each PS5 has installed (at
   its real version, a PS4 game's update included), and the games on its drives. Play (or close) an installed game right from its card. Each game's
@@ -569,7 +570,7 @@ adapted file by file), **library** (a dependency the build pulls in), **fetched 
 * [Noto Sans](https://fonts.google.com/noto) (Google, Adobe) — font subsets in `client/src/assets/fonts`
 
 **Ported:**
-* [PS5 Dump Forge](https://github.com/quer3q/ps5-dump-forge) (quer3q) — more of its code, adapted into this repo's crates and files: the PS5 Rust toolchain that builds the on-console converter (`payload/convert/`: target file, std patch, linker wrapper, CPU-count fix, pool allocator), patch-package (`\x7FLIH`) reading (`engine/crates/ps5upload-fpkg/src/lih.rs`), protected container entries (`protected.rs`, including strongt1me's work), the undo journal and in-place image editors, removing backport libraries, zstd packs for games that don't use AMPR, pack rules for zstd, unpacking packs, and keeping `.ini` files out of the packs
+* [PS5 Dump Forge](https://github.com/quer3q/ps5-dump-forge) (quer3q) — more of its code, adapted into this repo's crates and files: the PS5 Rust toolchain that builds the on-console converter (`payload/convert/`: target file, std patch, linker wrapper, CPU-count fix, pool allocator), patch-package (`\x7FLIH`) reading (`engine/crates/ps5upload-fpkg/src/lih.rs`), protected container entries (`protected.rs`, including strongt1me's work), the undo journal and in-place image editors, removing backport libraries, zstd packs for games that don't use AMPR, pack rules for zstd, unpacking packs, and keeping `.ini` files out of the packs; from its v0.5.7 and v0.6.0 (including strongt1me's fixes): reading a PFS image whose last block is short (`engine/crates/ps5-dump-forge-pfs/src/read.rs`), saying why an `ampr_emu.index` doesn't read, and leaving a dumper's and a GP5 generator's leftovers out of packages (`sdk_rules.rs`)
 * [ps5-ai-cli](https://github.com/saawant12/ps5-ai-cli) (saawant12) — the syscall shims the on-console converter's toolchain uses, by way of PS5 Dump Forge, in `payload/convert/shim/`
 * [ps5-app-dumper](https://github.com/EchoStretch/ps5-app-dumper) (EchoStretch, slopmaster33) — the on-console game dump: its dumper, package, PFS, decrypt and elf2fself code, adapted into `payload/src/app_dump_*.c`
 * [ps5-self-pager](https://github.com/idlesauce/ps5-self-pager) (idlesauce) — the self-pager SELF decryption and its firmware table, in `payload/src/app_dump_self.c`

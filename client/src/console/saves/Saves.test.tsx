@@ -308,6 +308,11 @@ describe("Saves section", () => {
     expect(h).toContain(new Date(backups[0].when).toLocaleString());
   });
 
+  it("keeps the user while a backup, restore or delete runs (its result belongs to that user)", () => {
+    expect(html({ task: { text: "…" } }).match(/data-user="[^"]+" disabled=""/g)?.length).toBe(2);
+    expect(html()).not.toMatch(/data-user="[^"]+" disabled/);
+  });
+
   it("says when a user has no saves", () => {
     expect(html({ saves: [] })).toContain(t("cw_saves_none", { name: "Alex" }));
   });

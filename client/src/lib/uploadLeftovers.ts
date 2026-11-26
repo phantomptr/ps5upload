@@ -12,6 +12,7 @@
 import { fsDelete, fsListDir, jobCancel, jobStatus, resumeTxidForget } from "../api/ps5";
 import type { QueueItem } from "../state/uploadQueue";
 import { hostOf } from "./addr";
+import { isJobUnknownError, readWithRetries } from "./pollRead";
 import { removeUploadPart, type UploadPartDeps } from "./uploadPart";
 
 /** How long a stopped job gets to end (a cancel lands at the next shard boundary). */
@@ -32,11 +33,14 @@ export interface LeftoverDeps extends UploadPartDeps {
 const realDeps: LeftoverDeps = {
   listDir: (addr, path) => fsListDir(addr, path),
   remove: (addr, path) => fsDelete(addr, path),
+  // A failed read is asked again, and one that never answers throws: "not running" on a 503
+  // would delete the part under a job that is still writing it (#945). The caller then keeps it.
   jobRunning: async (jobId) => {
     try {
-      return (await jobStatus(jobId)).status === "running";
-    } catch {
-      return false; // the engine no longer knows it
+      return (await readWithRetries(() => jobStatus(jobId))).status === "running";
+    } catch (e) {
+      if (isJobUnknownError(e)) return false; // the engine no longer knows it
+      throw e;
     }
   },
   cancelJob: (jobId) => jobCancel(jobId),
@@ -54,6 +58,7 @@ type LeftoverItem = Pick<
   | "resolvedDest"
   | "startedAt"
   | "interrupted"
+  | "checkingJob"
   | "uploadDone"
   | "jobId"
 >;
@@ -106,8 +111,12 @@ export async function discardUploadLeftovers(
     }
     // A row left over from before a window reload can have a job still sending: removing the row
     // is the person's way of stopping it, and nothing else would.
+    // So can one whose job a reopened page is still asking about (checkingJob).
     const orphanJob =
-      it.status !== "running" && it.interrupted && it.jobId && (await deps.jobRunning(it.jobId));
+      it.status !== "running" &&
+      (it.interrupted || it.checkingJob) &&
+      it.jobId &&
+      (await deps.jobRunning(it.jobId));
     if (it.status !== "running" && !orphanJob) {
       await sweep();
       return;

@@ -90,6 +90,12 @@ export function useScrollLock(
     if (el && el.getClientRects().length === 0) return;
     const root = el?.closest<HTMLElement>("[data-scroll-root]") || scrollRoot();
     if (!root) return;
-    return lockScrollRoot(root);
+    // A screen whose list is the scroller under a fixed header (Files on a phone, #936) marks it
+    // `data-scroll-inner`: held still too, while it is one (it is not in the wider layouts).
+    const inner = Array.from(root.querySelectorAll<HTMLElement>("[data-scroll-inner]")).filter((e) =>
+      /auto|scroll/.test(getComputedStyle(e).overflowY),
+    );
+    const releases = [root, ...inner].map(lockScrollRoot);
+    return () => releases.forEach((release) => release());
   }, [active, owner]);
 }

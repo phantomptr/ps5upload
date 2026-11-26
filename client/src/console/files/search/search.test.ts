@@ -115,6 +115,27 @@ function flowOver(api: SearchApi) {
 }
 
 describe("search flow", () => {
+  it("a search sent before the first status read answered waits for the build it started", async () => {
+    const h = fakeHelper();
+    // the dialog's first read is slow: it answers "idle" only after the build has started
+    let answerFirst: (s: IndexStatus) => void = () => undefined;
+    h.api.status.mockImplementationOnce(() => new Promise<IndexStatus>((res) => (answerFirst = res)));
+    const { flow, tick } = flowOver(h.api);
+    const opened = flow.open();
+    await flow.submit("eboot", "all", ["/data"], null);
+    expect(h.api.start).toHaveBeenCalledWith(["/data"]);
+    answerFirst({ phase: "idle", files: 0, truncated: false, cancelled: false, roots: null });
+    await opened;
+    // the old answer is dropped: no search on the index not built yet, and it is still pending
+    expect(h.api.search).not.toHaveBeenCalled();
+    expect(flow.state().index?.phase).toBe("building");
+    expect(flow.state().pending).toBe("*eboot*");
+    h.set({ phase: "ready", files: 9000 });
+    await tick();
+    expect(h.api.search).toHaveBeenCalledWith("*eboot*", null);
+    expect(flow.state().done?.results.hits).toHaveLength(1);
+  });
+
   it("first use builds the index for the scope (progress), then searches", async () => {
     const h = fakeHelper();
     const { flow, timers, tick } = flowOver(h.api);

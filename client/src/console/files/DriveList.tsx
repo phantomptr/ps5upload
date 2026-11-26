@@ -23,6 +23,18 @@ export function isSystemVolume(path: string): boolean {
 }
 
 /** A disk image PS5Upload mounted (the helper names its source, or it sits under /mnt/ps5upload). */
+/**
+ * How much new data is likely to fit on internal storage, where the PS5 holds back about a fifth
+ * more as data is written (engine volumes.rs likely_fits_bytes, said the same in the app's Volumes);
+ * null elsewhere, or when it is all of the free space. For telling, never for refusing.
+ */
+export function likelyFitsBytes(v: Volume): number | null {
+  if (v.path !== "/data") return null;
+  const room = Math.max(0, Math.min(v.free_bytes, v.allocatable_bytes ?? v.free_bytes));
+  const fits = Math.floor(Math.max(0, room - 1073741824) / 6) * 5;
+  return fits < v.free_bytes ? fits : null;
+}
+
 export function isImage(v: Volume): boolean {
   return !isDrive(v) && (!!v.source_image || v.path.startsWith("/mnt/ps5upload/")) && !isSystemVolume(v.path);
 }
@@ -204,6 +216,7 @@ export function DriveList({
           const Icon = isUsb(v) ? Usb : HardDrive;
           const used = v.total_bytes > 0 ? Math.max(0, Math.min(100, 100 - (v.free_bytes / v.total_bytes) * 100)) : 0;
           const eject = onEject && canEject(v);
+          const fits = likelyFitsBytes(v);
           return (
             <li key={v.path} className={`cw-file${eject ? "" : " is-plain"}`} data-nav-item data-volume={v.path}>
               <button
@@ -218,7 +231,8 @@ export function DriveList({
                     {volumeLabel(v)}
                     {!v.writable ? <span className="cw-tag">{t("cw_home_vol_readonly")}</span> : null}
                   </span>
-                  <span className="cw-dim cw-mono">{v.path}</span>
+                  <span className="cw-dim cw-mono cw-file-sub">{v.path}</span>
+                  {fits != null ? <span className="cw-dim">{t("cw_files_likely_fits", { safe: formatBytes(fits) })}</span> : null}
                 </span>
                 <span className="cw-file-meta">
                   <span className="cw-bar" aria-hidden>

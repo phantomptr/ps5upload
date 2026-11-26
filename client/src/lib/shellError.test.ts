@@ -41,6 +41,23 @@ describe("shellErrorText", () => {
     expect(text("other")).toContain("/x/engine.log");
   });
 
+  it("says why the engine inside a phone app is not answering (#950)", () => {
+    const failed = JSON.stringify({
+      code: "engine_in_app_failed",
+      detail: "in-process engine failed to bind 0.0.0.0:19113: Address already in use",
+    });
+    expect(shellErrorText(failed, tr)).toBe(
+      "The engine inside the app didn't start: in-process engine failed to bind 0.0.0.0:19113: Address already in use",
+    );
+    const blocked = shellErrorText(
+      JSON.stringify({ code: "engine_in_app_blocked", detail: "No route to host (os error 65)" }),
+      tr,
+    );
+    expect(blocked).toContain("this device blocked the app's connection to it (No route to host (os error 65))");
+    expect(blocked).toContain("Try again");
+    expect(shellErrorCode(failed)).toBe("engine_in_app_failed");
+  });
+
   it("says when a rate limit lifts, or that it does not know", () => {
     const at = 1_800_000_000;
     expect(shellErrorText(JSON.stringify({ code: "update_rate_limited", reset_at: at }), tr)).toContain(

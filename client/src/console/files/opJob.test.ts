@@ -6,7 +6,7 @@ vi.mock("../api", async (importOriginal) => {
 });
 
 import { ApiError, call } from "../api";
-import { crcHex, isFfpfsc, opCause, opResult, startOp, unpackBlocker, watchOp, type OpDeps, type OpStatus } from "./opJob";
+import { checkUnavailable, crcHex, isFfpfsc, opCause, opResult, startOp, unpackBlocker, watchOp, type OpDeps, type OpStatus } from "./opJob";
 import { runVerify, type VerifyState } from "./VerifyDialog";
 
 const mockCall = vi.mocked(call);
@@ -145,5 +145,16 @@ describe("runVerify", () => {
     expect(r.step).toBe("failed");
     const stopped = await runVerify("/d", () => undefined, () => true, { start: (async () => "h") as never });
     expect(stopped).toEqual({ step: "cancelled" });
+  });
+});
+
+describe("the check before Decompress and Extract", () => {
+  it("lets the helper decide when this helper has no check (404 not_found), not when the file is gone", () => {
+    expect(checkUnavailable(new ApiError(404, "not_found"))).toBe(true);
+    expect(checkUnavailable(new ApiError(404, "http_404"))).toBe(true);
+    expect(checkUnavailable(new ApiError(0, "offline"))).toBe(true);
+    expect(checkUnavailable(new ApiError(503, "busy"))).toBe(true);
+    expect(checkUnavailable(new ApiError(404, "fs_unpack_open_failed"))).toBe(false);
+    expect(checkUnavailable(new ApiError(403, "path_not_allowed"))).toBe(false);
   });
 });

@@ -113,8 +113,10 @@ describe("selection and status", () => {
     const shown = visibleEntries(all, view());
     const st = statusOf(shown, all.length, ["a", "c", "gone"], all);
     expect(st).toEqual({ items: 4, total: 4, selected: 2, bytes: 100, folders: 1 });
-    expect(statusText(st)).toBe("4 items · 2 selected (100 B, folders not counted)");
-    expect(statusText(statusOf(shown, 4, ["a", "b"], all))).toBe("4 items · 2 selected (300 B)");
+    expect(statusText(st)).toBe("Items: 4 · 2 selected (100 B, folders not counted)");
+    expect(statusText(statusOf(shown, 4, ["a", "b"], all))).toBe("Items: 4 · 2 selected (300 B)");
+    // one item reads right ("Items: 1", not "1 items")
+    expect(statusText(statusOf(shown.slice(0, 1), 1, [], all))).toBe("Items: 1");
     expect(statusText(statusOf(shown.slice(0, 2), 4, [], all))).toBe("2 of 4 items");
   });
 });

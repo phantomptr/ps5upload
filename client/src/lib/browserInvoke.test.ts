@@ -4,6 +4,7 @@ import {
   browserInvoke,
   BrowserUnsupportedError,
   parseSseBlock,
+  payloadSendReply,
   statusFailureFields,
   statusFailureText,
   timeSyncBody,
@@ -152,6 +153,83 @@ describe("loader-port commands the DPI fallback depends on", () => {
     expect(calls[0].url).toBe("http://engine.test:19113/api/pkg/install");
     expect(JSON.parse(calls[0].init.body as string)).toEqual(req);
     expect(res).toEqual({ ok: true, job: "17-1" });
+  });
+
+  it("passes registration_only on to the engine's unregister, as the desktop app does", async () => {
+    const calls = captureFetch({ ok: true });
+    await browserInvoke("ps5_app_unregister", {
+      req: { addr: "192.168.1.50", title_id: "PPSA01234", registration_only: true },
+    });
+    expect(calls[0].url).toBe("http://engine.test:19113/api/ps5/app/unregister");
+    expect(JSON.parse(calls[0].init.body as string)).toEqual({
+      addr: "192.168.1.50",
+      title_id: "PPSA01234",
+      registration_only: true,
+    });
+    await browserInvoke("ps5_app_unregister", {
+      req: { addr: "192.168.1.50", title_id: "PPSA01234" },
+    });
+    expect(JSON.parse(calls[1].init.body as string)).toMatchObject({ registration_only: false });
+  });
+
+  it("sends a payload with the gate's options and answers a refusal as the desktop app does", async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push({ url, init });
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: "pkg_install_busy",
+            refused: "pkg_install_busy",
+            message: "An install is running on this PS5.",
+            forceable: true,
+            retry_after_ms: 5000,
+          }),
+          { status: 409 },
+        );
+      }),
+    );
+    const res = await browserInvoke("payload_send", {
+      ip: "192.168.1.50",
+      path: "/srv/x.elf",
+      port: null,
+      mode: "explicit",
+      force: true,
+      replace: null,
+      appVersion: "12.6.33",
+    });
+    expect(calls[0].url).toBe("http://engine.test:19113/api/payload/send");
+    expect(JSON.parse(calls[0].init.body as string)).toEqual({
+      host: "192.168.1.50",
+      path: "/srv/x.elf",
+      mode: "explicit",
+      force: true,
+      replace: false,
+      app_version: "12.6.33",
+    });
+    expect(res).toEqual({
+      ok: false,
+      status: "An install is running on this PS5.",
+      refused: "pkg_install_busy",
+      forceable: true,
+      retry_after_ms: 5000,
+    });
+  });
+
+  it("answers a sent payload and a failed one in the desktop command's shape", () => {
+    expect(payloadSendReply(200, JSON.stringify({ status: "sent", bytes: 12 }))).toEqual({
+      ok: true,
+      status: "sent",
+      bytes: 12,
+      via_payload_manager: false,
+    });
+    expect(payloadSendReply(502, JSON.stringify({ error: "connect refused" }))).toEqual({
+      ok: false,
+      status: "connect refused",
+    });
+    expect(payloadSendReply(503, "")).toEqual({ ok: false, status: "engine returned HTTP 503" });
   });
 
   it("routes pkg_install_status_v2 to the job-based status", async () => {
@@ -476,7 +554,12 @@ describe("Payload Library and console tools in the web UI", () => {
   it("sends a file by path, with the port only when one is given", async () => {
     answer({ ok: true, status: "sent 5 bytes", bytes: 5 });
     await browserInvoke("payload_send", { ip: "10.0.0.2", path: "/d/k.elf", port: null });
-    expect(asked().body).toEqual({ host: "10.0.0.2", path: "/d/k.elf" });
+    expect(asked().body).toEqual({
+      host: "10.0.0.2",
+      path: "/d/k.elf",
+      force: false,
+      replace: false,
+    });
   });
 
   it("turns the desktop's arguments into the console routes", async () => {

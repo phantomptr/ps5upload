@@ -281,6 +281,37 @@ int main(void) {
     assert(content_db_has_title("bad'id") == -1);
     printf("✓ a title is found by a WHERE lookup, and a missing one is 0\n");
 
+    /* ── a name longer than a row holds is cut on a character ────────── */
+    {
+        char longname[512];
+        size_t at = 0;
+        longname[at++] = 'A';
+        for (int i = 0; i < 100; i++) { /* U+65E5, 3 bytes each: 301 bytes in all */
+            longname[at++] = (char)0xE6;
+            longname[at++] = (char)0x97;
+            longname[at++] = (char)0xA5;
+        }
+        longname[at] = '\0';
+        unlink(CONTENT_DB_APP);
+        sqlite3 *db = NULL;
+        assert(sqlite3_open(CONTENT_DB_APP, &db) == SQLITE_OK);
+        exec_or_die(db, "CREATE TABLE tbl_info_1000000 (titleId TEXT, appId INTEGER, titleName TEXT);");
+        sqlite3_stmt *st = NULL;
+        assert(sqlite3_prepare_v2(db, "INSERT INTO tbl_info_1000000 VALUES ('PPSA04321', 7, ?)", -1,
+                                  &st, NULL) == SQLITE_OK);
+        sqlite3_bind_text(st, 1, longname, -1, SQLITE_STATIC);
+        assert(sqlite3_step(st) == SQLITE_DONE);
+        sqlite3_finalize(st);
+        sqlite3_close(db);
+        content_db_app_t one[2];
+        assert(content_db_apps(one, 2, NULL) == 1);
+        /* 255 bytes would end in two bytes of a character: the whole ones are kept. */
+        assert(strlen(one[0].name) == 1 + 84 * 3);
+        assert(memcmp(one[0].name, longname, strlen(one[0].name)) == 0);
+        printf("✓ a long title name is cut between characters, never in one\n");
+        make_app_db(CONTENT_DB_APP);
+    }
+
     /* ── a database that is not a database falls back to the scanner ─── */
     {
         FILE *f = fopen(CONTENT_DB_APP, "wb");

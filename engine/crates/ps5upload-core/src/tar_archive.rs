@@ -740,6 +740,49 @@ fn unread_after(kind: &Kind, size: u64) -> u64 {
     }
 }
 
+/// The most entries (files and folders) one listing keeps. The listing holds a record per
+/// entry (about 100 bytes plus its name), so an archive of millions of empty members would
+/// otherwise grow it without end. The largest known game has about 223 000 files and 19 000
+/// folders; this is eight times that, and a listing this long holds about 400 MiB.
+pub const MAX_TAR_ENTRIES: usize = 2_000_000;
+
+/// The most name bytes (every kept path added up) one listing holds: a real game's names come
+/// to some tens of MiB, long names on millions of entries to far more.
+pub const MAX_TAR_NAME_BYTES: u64 = 512 << 20;
+
+#[cfg(test)]
+thread_local! {
+    /// Lower caps for one test thread, so a test archive needs not two million members.
+    static TEST_CAPS: std::cell::Cell<Option<(usize, u64)>> = const { std::cell::Cell::new(None) };
+}
+
+fn listing_caps() -> (usize, u64) {
+    #[cfg(test)]
+    if let Some(c) = TEST_CAPS.with(|c| c.get()) {
+        return c;
+    }
+    (MAX_TAR_ENTRIES, MAX_TAR_NAME_BYTES)
+}
+
+/// Refuses a listing that has grown past [`MAX_TAR_ENTRIES`] or [`MAX_TAR_NAME_BYTES`].
+fn check_listing_size(entries: usize, name_bytes: u64) -> io::Result<()> {
+    let (max_entries, max_bytes) = listing_caps();
+    if entries > max_entries {
+        return Err(fault(TarFault::Unsupported(format!(
+            "the archive has more than {max_entries} files and folders, more than any game: \
+             it is not opened"
+        ))));
+    }
+    if name_bytes > max_bytes {
+        return Err(fault(TarFault::Unsupported(format!(
+            "the archive's file names add up to more than {} MiB, more than any game: it is \
+             not opened",
+            max_bytes >> 20
+        ))));
+    }
+    Ok(())
+}
+
 fn headers_too_big() -> io::Error {
     corrupt(format!(
         "one entry's headers (its long name or PAX header) are over {} MiB, which no real \
@@ -1088,6 +1131,7 @@ fn list(path: &Path, watch: TarWatch<'_>) -> io::Result<TarLayout> {
     let mut dirs: BTreeSet<String> = BTreeSet::new();
     let (mut links, mut special) = (0u64, 0u64);
     let mut param: Option<(usize, String, Vec<u8>)> = None;
+    let mut name_bytes = 0u64;
     let result = (|| -> io::Result<()> {
         let mut ar = tar::Archive::new(&mut opened);
         let mut entries = entries(&mut ar, codec == Codec::None).map_err(classify)?;
@@ -1119,13 +1163,19 @@ fn list(path: &Path, watch: TarWatch<'_>) -> io::Result<TarLayout> {
                     // `./` (the archive's own root) carries nothing; an unsafe folder name is
                     // ignored, its files are refused by name.
                     if let Some(rel) = sanitize_zip_entry(&name) {
-                        dirs.insert(rel);
+                        let len = rel.len() as u64;
+                        if dirs.insert(rel) {
+                            name_bytes = name_bytes.saturating_add(len);
+                            check_listing_size(files.len() + dirs.len(), name_bytes)?;
+                        }
                     }
                 }
                 Kind::File => {
                     let Some(rel) = sanitize_zip_entry(&name) else {
                         return Err(fault(TarFault::UnsafePath(format!("{name:?}"))));
                     };
+                    name_bytes = name_bytes.saturating_add(rel.len() as u64);
+                    check_listing_size(files.len() + dirs.len() + 1, name_bytes)?;
                     let size = entry.size();
                     let mtime = entry.header().mtime().unwrap_or(0);
                     let mode = match entry.header().mode().unwrap_or(0) & 0o777 {

@@ -25,9 +25,11 @@ afterEach(() => {
 });
 
 describe("the engine problem card", () => {
-  it("on a phone says to reopen the app, with no computer advice and no Restart", () => {
+  it("on a phone offers Try again, then reopening the app, with no computer advice (#950)", () => {
     const html = render();
-    expect(html).toContain("Close the app fully and open it again.");
+    expect(html).toContain("Press Try again.");
+    expect(html).toContain("close the app fully and open it again.");
+    expect(html).toContain(">Try again</span></button>");
     expect(html).not.toContain("on this computer");
     expect(html).not.toContain("Restart engine");
   });

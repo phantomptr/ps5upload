@@ -105,7 +105,8 @@ describe("Home", () => {
 
   it("names what a network-share copy copies", () => {
     const row = renderToStaticMarkup(<TaskRow job={job({ job: "smb:3", name: "PPSA01234" })} onCancel={() => {}} />);
-    expect(row).toContain(" · PPSA01234");
+    // In its own direction: a path keeps its order in Arabic and Persian ("/data/x", not "data/x/").
+    expect(row).toContain(' · <span dir="auto">PPSA01234</span>');
     expect(renderToStaticMarkup(<TaskRow job={job({})} onCancel={() => {}} />)).not.toContain("PPSA01234");
   });
 

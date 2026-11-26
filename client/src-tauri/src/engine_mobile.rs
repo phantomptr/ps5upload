@@ -42,8 +42,24 @@ const FALLBACK_PORTS: std::ops::RangeInclusive<u16> = 19123..=19132;
 /// `engine_url_get`).
 static URL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+/// The port `start` chose; a retry binds the same one, so the URL the renderer holds stays right.
+static PORT_CHOSEN: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+
 /// `start` has run in this process.
 static STARTED_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The engine's server task is running. Its first step is binding the port, and it ends at once
+/// when it cannot.
+static SERVING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Why the engine is not answering, as a coded error (`engine_in_app.rs`), until it answers.
+/// The renderer reads it through `engine_diagnose`: the startup event alone can fire before the
+/// page listens, and it was the only place the reason went (#950).
+static FAILURE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// How long the engine gets to answer after a start, a retry or a return to the app. Its first
+/// start sets up its data folder and journal before it serves (about 1.5 s in the simulator).
+const ANSWER_WITHIN: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// The first port that can be bound now, 19113 first. A probe bind released at once: the
 /// engine binds it a moment later on its own task.
@@ -54,10 +70,127 @@ fn pick_port() -> u16 {
         .unwrap_or(PORT)
 }
 
-/// Start the engine on a background task. Returns immediately with the
-/// loopback URL; the server finishes binding within a few milliseconds.
-/// The renderer's engine-status tick tolerates the brief startup race
-/// (it retries), matching how the desktop readiness probe is advisory.
+fn chosen_port() -> u16 {
+    PORT_CHOSEN.get().copied().unwrap_or(PORT)
+}
+
+/// One line to the app's engine.log (`mobile_log.rs`), which the bug report carries.
+fn log_line(text: &str) {
+    let _ = crate::crash_hook::stderr_line(&format!("[engine] {text}"));
+}
+
+fn set_failure(app: &AppHandle, coded: String) {
+    log_line(&format!("in-app engine not answering: {coded}"));
+    if let Ok(mut f) = FAILURE.lock() {
+        *f = Some(coded.clone());
+    }
+    let _ = app.emit("ps5upload-engine-startup-error", &coded);
+}
+
+fn clear_failure() {
+    if let Ok(mut f) = FAILURE.lock() {
+        *f = None;
+    }
+}
+
+fn failure() -> Option<String> {
+    FAILURE.lock().ok().and_then(|f| f.clone())
+}
+
+/// Something holds the engine's port: binding it fails with "in use". That is the engine's own
+/// listener, as the port was free when `start` chose it.
+fn port_held() -> bool {
+    matches!(
+        std::net::TcpListener::bind((BIND_HOST, chosen_port())),
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse
+    )
+}
+
+/// Run the engine's server on a task of its own and record how it ends: its error or its panic.
+/// A panic used to end the task with no word anywhere but stderr.
+fn spawn_serve(app: &AppHandle) {
+    use crate::engine_in_app::Ended;
+    let bind = format!("{BIND_HOST}:{}", chosen_port());
+    SERVING.store(true, std::sync::atomic::Ordering::Relaxed);
+    let task_app = app.clone();
+    tokio::spawn(async move {
+        let serve_bind = bind.clone();
+        let served = tokio::spawn(async move {
+            ps5upload_engine::serve_in_process(&serve_bind, DEFAULT_PS5_ADDR.to_string()).await
+        })
+        .await;
+        let ended = match served {
+            Ok(Ok(())) => Ended::Stopped,
+            Ok(Err(e)) => Ended::Error(format!("{e:#}")),
+            Err(e) if e.is_panic() => {
+                let p = e.into_panic();
+                Ended::Panic(
+                    p.downcast_ref::<&str>()
+                        .map(|s| s.to_string())
+                        .or_else(|| p.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "no message".to_string()),
+                )
+            }
+            Err(e) => Ended::Error(e.to_string()),
+        };
+        // The reason first: a waiter that sees the task gone finds it.
+        set_failure(&task_app, crate::engine_in_app::ended(&ended, &bind));
+        SERVING.store(false, std::sync::atomic::Ordering::Relaxed);
+    });
+}
+
+fn serving() -> bool {
+    SERVING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Wait until the engine answers, up to `within`. The last connection error when it does not.
+/// An answer counts only while the server task runs: in the iPhone Simulator a desktop engine on
+/// the same port answers for an in-app engine that failed to bind.
+async fn wait_answering(within: std::time::Duration) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + within;
+    loop {
+        // The server task ended: waiting longer cannot help, and it recorded why.
+        if !serving() {
+            return Err("it is not running".to_string());
+        }
+        let last = match probe().await {
+            Ok(()) if serving() => return Ok(()),
+            Ok(()) => continue,
+            Err(e) => e,
+        };
+        if std::time::Instant::now() >= deadline {
+            return Err(last);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
+/// Wait for the engine to answer and record the outcome: a line in engine.log either way and,
+/// when it does not answer, the reason for the renderer (the coded error).
+async fn confirm_answering(app: &AppHandle, what: &str) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    match wait_answering(ANSWER_WITHIN).await {
+        Ok(()) => {
+            clear_failure();
+            log_line(&format!(
+                "{what}: answering at {} after {} ms",
+                url(),
+                started.elapsed().as_millis()
+            ));
+            Ok(())
+        }
+        Err(last) => {
+            // A server task that ended has said why; otherwise say what was measured.
+            if serving() || failure().is_none() {
+                set_failure(app, crate::engine_in_app::not_answering(&last, port_held()));
+            }
+            Err(failure().unwrap_or(last))
+        }
+    }
+}
+
+/// Start the engine on a background task. Returns immediately with the loopback URL; a watcher
+/// then waits for the engine to answer and records why when it does not.
 pub async fn start(app: &AppHandle) -> Result<&'static str> {
     // Android can run setup again when its Activity is recreated while the process lives on;
     // the engine from the first run still holds the port, and a second bind would only fail
@@ -66,30 +199,23 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
         return Ok(url());
     }
     let port = pick_port();
+    let _ = PORT_CHOSEN.set(port);
     // The stream-install URL the console fetches names this port, not the default.
     // Before the engine task starts, as for `PS5UPLOAD_DATA_DIR` below.
     std::env::set_var("PS5UPLOAD_ENGINE_PORT", port.to_string());
     let _ = URL.set(format!("http://127.0.0.1:{port}"));
-    let bind = format!("{BIND_HOST}:{port}");
     point_engine_at_app_data(app);
-    let task_app = app.clone();
-    tokio::spawn(async move {
-        if let Err(e) =
-            ps5upload_engine::serve_in_process(&bind, DEFAULT_PS5_ADDR.to_string()).await
-        {
-            let message = format!("in-app engine failed to start on {bind}: {e}");
-            let _ = task_app.emit("ps5upload-engine-startup-error", &message);
-            // Log and let the renderer surface "engine unreachable" via
-            // its normal probe — don't panic the app over it.
-            eprintln!("[engine] in-process serve failed: {message}");
-        }
-    });
+    spawn_serve(app);
     let url = url();
     if port != PORT {
-        eprintln!(
-            "[engine] 19113 is taken (a desktop PS5Upload on this Mac?); in-app engine on {url}"
-        );
+        log_line(&format!(
+            "19113 is taken (a desktop PS5Upload on this Mac?); in-app engine on {url}"
+        ));
     }
+    let watch_app = app.clone();
+    tokio::spawn(async move {
+        let _ = confirm_answering(&watch_app, "started").await;
+    });
     let _ = app.emit("ps5upload-engine-ready", url);
     Ok(url)
 }
@@ -151,6 +277,9 @@ pub struct Diagnosis {
     pub binary_error: Option<String>,
     pub log_path: Option<String>,
     pub os: &'static str,
+    /// Why the engine is not answering, as a coded error (`engine_in_app.rs`). None while it
+    /// answers, and before it has had its time to start.
+    pub startup_error: Option<String>,
 }
 
 async fn probe() -> Result<(), String> {
@@ -171,25 +300,41 @@ async fn probe() -> Result<(), String> {
 
 pub async fn diagnose(_app: &AppHandle) -> Diagnosis {
     let probe = probe().await;
+    // Only this engine's answer counts (see `wait_answering`).
+    let answering = probe.is_ok() && serving();
     Diagnosis {
         url: url().to_string(),
         local: true,
-        answering: probe.is_ok(),
+        answering,
         probe_error: probe.err(),
-        child_running: None,
-        port_taken: None,
+        child_running: Some(serving()),
+        port_taken: Some(port_held()),
         binary_found: None,
         binary_error: None,
         log_path: crate::mobile_log::log_path().map(|p| p.display().to_string()),
         os: std::env::consts::OS,
+        startup_error: if answering { None } else { failure() },
     }
 }
 
-/// The in-process engine cannot be restarted without restarting the app.
-pub async fn restart(_app: &AppHandle) -> Result<String> {
-    Err(anyhow::anyhow!(crate::commands::shell_error::code_only(
-        "engine_restart_in_app"
-    )))
+/// "Try again" for the engine inside the app: a server that ended is started again on the same
+/// port, and one still running gets a new listener (as after a return to the app). Then it gets
+/// its time to answer. The error is the coded reason when it still does not.
+pub async fn restart(app: &AppHandle) -> Result<String> {
+    if !STARTED_ONCE.load(std::sync::atomic::Ordering::Relaxed) {
+        start(app).await?;
+    } else if serving() {
+        log_line("try again: listening again");
+        ps5upload_engine::rebind_in_process();
+    } else {
+        log_line("try again: starting the engine again");
+        clear_failure();
+        spawn_serve(app);
+    }
+    confirm_answering(app, "try again")
+        .await
+        .map(|()| url().to_string())
+        .map_err(|e| anyhow::anyhow!(e))
 }
 
 /// No-op on mobile, returning where the proxies stay. The desktop build made the engine URL
@@ -205,14 +350,23 @@ pub fn set_url(_url: String) -> String {
 /// The app is back in front: if the engine has stopped answering, listen again.
 ///
 /// iOS can reclaim a suspended app's listening sockets (seen by others; not yet measured on an
-/// iPhone here), and every renderer call goes through this one. The engine itself is fine, so
-/// only the listener is re-created.
-pub async fn check_listener() {
+/// iPhone here), and every renderer call goes through this one. A running engine only gets a new
+/// listener; one whose server ended is started again.
+pub async fn check_listener(app: AppHandle) {
     if !STARTED_ONCE.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
-    if let Err(e) = probe().await {
-        eprintln!("[engine] not answering after resume ({e}); listening again");
-        ps5upload_engine::rebind_in_process();
+    if serving() {
+        if let Err(e) = probe().await {
+            log_line(&format!(
+                "not answering after resume ({e}); listening again"
+            ));
+            ps5upload_engine::rebind_in_process();
+            let _ = confirm_answering(&app, "after resume").await;
+        }
+    } else {
+        log_line("not running after resume; starting it again");
+        spawn_serve(&app);
+        let _ = confirm_answering(&app, "after resume").await;
     }
 }

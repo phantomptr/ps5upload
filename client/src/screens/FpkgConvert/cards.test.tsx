@@ -79,11 +79,12 @@ describe("MakeCard", () => {
   it("explains both, and marks the package once a game is checked", () => {
     const fw = renderToStaticMarkup(<MakeCard make="pkg" onMake={() => {}} checked />);
     expect(fw).toContain("A fake package (FPKG, .pkg)");
-    // It says in words what a .pkg is: a fake package (FPKG) that installs on the PS5.
-    expect(fw).toContain("A fake package (FPKG). It installs on the PS5");
+    // It says in words what a .pkg is, and the two ways to play it: install, or Kraken Mount.
+    expect(fw).toContain("A fake package (FPKG). There are two ways to play a PS5 one: install it");
+    expect(fw).toContain("or mount it with Kraken Mount");
     expect(fw).toContain("A game image");
     expect(fw.match(/Recommended/g)).toHaveLength(1);
-    expect(fw).toContain("plays on firmware up to 13.60");
+    expect(fw).toContain("needs the latest kstuff (with fake-package support up to 13.60)");
     const ps4 = renderToStaticMarkup(
       <MakeCard make="pkg" onMake={() => {}} checked />,
     );

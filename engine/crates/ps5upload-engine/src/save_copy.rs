@@ -194,7 +194,9 @@ const CLOSE_TRIES: usize = 5;
 /// connection can drop in the middle. Left open, the next open or close of any save would write
 /// that copy over whatever is put in the folder meanwhile. `changed`: files were put in the save.
 /// A close that worked only on a later try, finding nothing open, can't say the files were
-/// written (the helper gives up on a second failed write-back and closes): an Err then.
+/// written (the helper gives up on a second failed write-back and closes): an Err then. Nor can
+/// a first close finding nothing open: something else closed the save while the files went in
+/// (a helper restarted), so they went into an empty folder, or only some were written back.
 fn close_save(c: &dyn Console, changed: bool) -> Result<(), String> {
     let mut first: Option<String> = None;
     let mut last = String::new();
@@ -208,6 +210,10 @@ fn close_save(c: &dyn Console, changed: bool) -> Result<(), String> {
                     Some(e) if changed && !closed.was_open => Err(format!(
                         "closing the save failed ({e}), so its new files may not have been kept"
                     )),
+                    None if changed && !closed.was_open => Err(
+                        "the save was closed by something else while its files were put in, so they may not have been kept"
+                            .into(),
+                    ),
                     _ => Ok(()),
                 };
             }
@@ -2376,6 +2382,11 @@ mod tests {
                     *self.mounted.borrow_mut() = None;
                     Err("connection reset by peer".into())
                 }
+                // Something else closed it first (a helper restarted): nothing open now.
+                Some("closed") => {
+                    *self.mounted.borrow_mut() = None;
+                    Ok(Closed { was_open: false })
+                }
                 Some(e) => Err(e.into()),
                 None => Ok(Closed {
                     was_open: self.mounted.borrow_mut().take().is_some(),
@@ -2800,6 +2811,28 @@ mod tests {
             "{e}"
         );
         assert!(c.calls().last().unwrap().starts_with("put_back"));
+    }
+
+    /// The save closed by something else while its files went in (a helper restarted): the
+    /// first close finds nothing open, so the copy is not reported done and the folder is put
+    /// back. A read-only open closed that way is fine.
+    #[test]
+    fn a_save_closed_under_a_copy_is_not_reported_kept() {
+        let c = Fake::both(&[MAIN]);
+        c.close_errors.borrow_mut().push("closed");
+        let e = import(&c, &folder(B), B, &shared_zip(&[MAIN]), None, None)
+            .unwrap_err()
+            .msg;
+        assert!(
+            e.contains("may not have been kept") && e.contains("put back"),
+            "{e}"
+        );
+        assert_eq!(c.closes.get(), 1);
+        assert!(c.calls().last().unwrap().starts_with("put_back"));
+
+        let c = Fake::both(&[MAIN]);
+        c.close_errors.borrow_mut().push("closed");
+        assert!(close_save(&c, false).is_ok());
     }
 
     /// A save still open after every try: the folder is not put back (the helper would write its

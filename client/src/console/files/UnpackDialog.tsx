@@ -7,7 +7,7 @@ import { Modal } from "../ui/Modal";
 import { refocusIfLost } from "../ui/restoreFocus";
 import { filesErrorText } from "./Files";
 import { freeName, statOrNull } from "./paste";
-import { unpackBlocker, unpackInfo, type UnpackInfo } from "./opJob";
+import { checkUnavailable, unpackBlocker, unpackInfo, type UnpackInfo } from "./opJob";
 
 type Load = { info: UnpackInfo } | { error: string | null; generic: boolean } | null;
 
@@ -80,7 +80,7 @@ export function UnpackDialog({
       (e: unknown) => {
         if (!live) return;
         // A helper without the check (or a check that could not run): warn and let the helper decide.
-        const generic = e instanceof ApiError && (e.status === 0 || e.status >= 500 || e.code === "http_404");
+        const generic = checkUnavailable(e);
         setState({ error: generic ? null : unpackErrorText(e), generic });
       },
     );

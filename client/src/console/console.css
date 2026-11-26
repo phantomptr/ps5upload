@@ -84,6 +84,9 @@ button {
 
 .cw-app {
   display: grid;
+  /* minmax(0, …): the column never grows to a wide row's width (a running task's long name on a
+   * phone pushed every section past the screen's edge, cut off since body does not scroll). */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto 1fr auto;
   height: 100vh;
 }
@@ -303,6 +306,8 @@ button {
 .cw-mono {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 0.8rem;
+  /* A path keeps its order in Arabic and Persian ("/data", not "data/"). */
+  unicode-bidi: plaintext;
 }
 .cw-tag {
   display: inline-block;
@@ -551,25 +556,10 @@ button {
   margin: 0 0 0.4rem;
   margin-inline-end: 0.6rem;
 }
-.cw-toolbar-path {
-  flex: 1;
-  min-width: 10rem;
-  margin: 0 0 0.4rem;
-  margin-inline-end: 0.8rem;
-}
 .cw-path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.cw-toolbar-free {
-  margin: 0 0 0.4rem;
-  margin-inline-start: auto;
-  font-size: 0.85rem;
-}
-.cw-pin.is-pinned svg {
-  color: var(--color-accent);
-  fill: currentColor;
 }
 /* Path bar: Up, then the folder as buttons (✕ jumps there). */
 .cw-pathbar {
@@ -913,15 +903,6 @@ button {
   max-width: 100%;
   max-height: 100%;
   margin: 0 auto;
-}
-.cw-viewer-text {
-  margin: 0;
-  padding: 0.1rem 0.4rem;
-  font-family: var(--font-mono, monospace);
-  font-size: 0.85rem;
-  white-space: pre-wrap;
-  word-break: break-all;
-  cursor: default;
 }
 
 /* ---- Fan ---- */
@@ -1647,6 +1628,46 @@ button {
   margin-top: auto;
   margin-bottom: 0;
 }
+/* The type follows the width up to an aspect of 15:7, so a wide screen is short in rem: 32 rem at
+ * 16:9, 27 rem in the PS5 browser (1540x700). The rail tightens there so Settings and Help are on
+ * screen without scrolling; from 17:9 it shows icons only and the focused one's name is in the
+ * hint bar (data-tip). */
+@media (min-aspect-ratio: 4/3) {
+  .cw-rail {
+    padding: 0.3rem 0.5rem;
+  }
+  .cw-rail-item {
+    padding: 0.25rem 0.2rem;
+    margin-bottom: 0.1rem;
+    font-size: 0.65rem;
+  }
+  .cw-rail-item svg {
+    width: 1.2rem;
+    height: 1.2rem;
+    margin-bottom: 0.1rem;
+  }
+}
+@media (min-aspect-ratio: 17/9) {
+  .cw-rail {
+    width: 4rem;
+  }
+  .cw-rail-item {
+    position: relative;
+    padding: 0.4rem 0;
+  }
+  .cw-rail-item svg {
+    width: 1.3rem;
+    height: 1.3rem;
+    margin: 0;
+  }
+  .cw-rail-item span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+}
 
 /* ---- guides: help overlay, tour, Controls ---- */
 .cw-help h2,
@@ -1872,9 +1893,6 @@ button {
 }
 
 /* ---- Files: sort, filter, status ---- */
-.cw-listbar {
-  margin-bottom: 0.3rem;
-}
 .cw-status {
   margin: 0 0 0.6rem;
   font-size: 0.85rem;
@@ -2240,12 +2258,50 @@ button {
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* Cut at their end in Arabic and Persian too ("PS5Upload Mi…", not "…Upload Minion"). */
+  .cw-brand,
+  .cw-chip {
+    unicode-bidi: plaintext;
+  }
+  /* The sections in a bar at the bottom, as the app has them on a phone, and no controller hints:
+   * the rail took a fifth of the width. */
+  .cw-hints {
+    display: none;
+  }
+  .cw-body {
+    flex-direction: column-reverse;
+  }
+  .cw-content {
+    min-height: 0;
+  }
   .cw-rail {
-    width: 4.6rem;
-    padding: 0.5rem 0.25rem;
+    width: auto;
+    flex-direction: row;
+    padding: 0.15rem 0.2rem;
+    border-inline-end: 0;
+    border-top: 1px solid var(--color-border);
+    overflow: hidden;
   }
   .cw-rail-item {
-    font-size: 0.72rem;
+    flex: 1 1 0;
+    min-width: 0;
+    margin: 0;
+    padding: 0.3rem 0;
+    font-size: 0.62rem;
+    white-space: nowrap;
+  }
+  .cw-rail-item span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .cw-rail-item svg {
+    width: 1.3rem;
+    height: 1.3rem;
+    margin-bottom: 0.15rem;
+  }
+  .cw-rail-help {
+    margin-top: 0;
   }
   .cw-content {
     padding: 0.6rem 0.6rem 1rem;
@@ -2274,6 +2330,18 @@ button {
   .cw-file-meta {
     min-width: 0;
     margin-inline-start: 0.5rem;
+  }
+  /* A drive's free space under its name: beside it, with Eject, the name had no room left. */
+  .cw-file-main[data-drive] {
+    flex-wrap: wrap;
+  }
+  .cw-file-main[data-drive] .cw-file-meta {
+    flex: 1 1 100%;
+    margin: 0.3rem 0 0;
+    text-align: start;
+  }
+  .cw-file-main[data-drive] .cw-bar {
+    width: 100%;
   }
   .cw-dialog {
     max-width: calc(100vw - 1rem);

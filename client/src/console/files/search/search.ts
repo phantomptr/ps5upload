@@ -223,19 +223,26 @@ export function createSearchFlow(deps: FlowDeps, onChange: (s: SearchState) => v
     }
   };
 
+  /** Status reads started: only the latest one's answer counts. A search sent while the first read
+   *  was out started a build; that first, older "not built" answer then ran the search on an index
+   *  not built yet ("nothing found"), and the search was gone when the build ended. */
+  let reads = 0;
   const poll = async (): Promise<void> => {
     timer = null;
     if (closed) return;
+    const read = ++reads;
     let st: IndexStatus;
     try {
       st = await deps.api.status();
     } catch (e) {
+      if (read !== reads) return;
       if (isMissingRoute(e)) return set({ unsupported: true });
       set({ error: e });
       // A read that failed (the helper busy, a blip) is tried again while the build may still run.
       if (!closed) timer = deps.setTimer(() => void poll(), POLL_MS);
       return;
     }
+    if (read !== reads) return;
     set({ index: st, error: null, ...(st.phase !== "building" ? { stopping: false } : {}) });
     if (st.phase === "building") {
       if (!closed) timer = deps.setTimer(() => void poll(), POLL_MS);

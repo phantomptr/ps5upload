@@ -437,7 +437,11 @@ fn collect_from_console(
     let jb = read_whole(addr, &journal, js.size)?;
     let ib = read_whole(addr, &index, is.size)?;
     if ps5upload_fpkg::ampr_index::parse(&ib).is_none() {
-        return Err("the game's ampr_emu.index is not a readable AMPRIDX3 index".into());
+        // Why it doesn't read, when the runtime's own checks say.
+        return Err(match ps5upload_fpkg::ampr_index::check(&ib) {
+            Err(why) => format!("the game's {why}"),
+            Ok(_) => "the game's ampr_emu.index is not a readable AMPRIDX3 index".into(),
+        });
     }
     let ts = now();
     let dir = traces_dir(title_id)?.join(ts.to_string());

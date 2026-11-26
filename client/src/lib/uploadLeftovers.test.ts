@@ -100,6 +100,26 @@ describe("discardUploadLeftovers", () => {
     await discardUploadLeftovers(row({ status: "running", jobId: "j" }), () => [], deps);
     expect(order).toEqual(["running", "ended", "remove", "remove"]);
   });
+  it("stops a job a reopened page was still asking about before deleting its part (#945)", async () => {
+    const { deps, removed } = consoleWith({}, ["/data/pkg/g.pkg.ava-part"]);
+    const cancelJob = vi.fn(async () => {});
+    vi.mocked(deps.jobRunning).mockResolvedValueOnce(true).mockResolvedValueOnce(true);
+    await discardUploadLeftovers(
+      row({ status: "pending", checkingJob: true, interrupted: false, jobId: "j" }),
+      () => [],
+      { ...deps, cancelJob },
+    );
+    expect(cancelJob).toHaveBeenCalledWith("j");
+    // Asked first (still running), cancelled, waited out (running, then ended), then deleted.
+    expect(deps.jobRunning).toHaveBeenCalledTimes(3);
+    expect(removed).toContain("/data/pkg/g.pkg.ava-part");
+  });
+  it("keeps the part when the job cannot be asked about", async () => {
+    const { deps, removed } = consoleWith({}, ["/data/pkg/g.pkg.ava-part"]);
+    vi.mocked(deps.jobRunning).mockRejectedValue(new Error("Service unavailable"));
+    await discardUploadLeftovers(row({ status: "pending", interrupted: true, jobId: "j" }), () => [], deps);
+    expect(removed).toEqual([]);
+  });
   it("deletes nothing while the stopped job will not end", async () => {
     const { deps, removed } = consoleWith({}, ["/data/pkg/g.pkg.ava-part"]);
     vi.mocked(deps.jobRunning).mockResolvedValue(true);

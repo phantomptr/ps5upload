@@ -1,5 +1,6 @@
 /** The path bar's pieces and the "Go to path" check (pure, apart from checkFolder's one call). */
-import { ApiError, call } from "../api";
+import { ApiError, call, isOffline } from "../api";
+import { errorText } from "../home/Home";
 import { isDrive, volumeLabel, type Volume } from "../home/Home";
 import { t } from "../strings";
 import { cleanPath } from "./prefs";
@@ -72,6 +73,8 @@ export async function checkFolder(raw: string): Promise<string | null> {
     if (e instanceof ApiError) {
       if (e.status === 404 || /not_found|no_such|enoent|stat_failed/i.test(e.code)) return t("cw_files_goto_missing");
       if (e.status === 403) return t("cw_files_err_denied");
+      // the console out of reach or restarting: said as such, not as a code
+      if (isOffline(e)) return errorText(e);
       return t("cw_files_goto_failed", { code: e.code });
     }
     return t("cw_files_goto_failed", { code: String(e) });

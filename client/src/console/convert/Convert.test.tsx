@@ -140,7 +140,7 @@ describe("Convert", () => {
     const stuck = info({ unpackKeepsEmulator: false });
     const h = html(pkg({ inspected: stuck }));
     expect(h).toContain('data-convert-blocked="emulator"');
-    expect(h).toContain(esc(t("cw_convert_unpack_needs_emulator")));
+    expect(h).toContain(esc(t("cw_convert_unpack_needs_emulator_v2")));
     expect(h).toMatch(/data-action="convert-go"[^>]*disabled/);
     // Either way out builds: the emulator left out, or the packs kept as they are.
     for (const way of [{ leaveOutEmulator: true }, { unpack: false }]) {

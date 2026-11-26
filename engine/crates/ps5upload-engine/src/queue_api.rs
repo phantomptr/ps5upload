@@ -180,7 +180,8 @@ pub(crate) enum Status {
     Paused,
     Done,
     Failed,
-    /// Someone stopped its job or install directly.
+    /// Someone stopped its job or install directly, whatever words its error used: `code` is
+    /// then `cancelled`. Not a failure: it never holds the items after a `stop_on_failure` item.
     Cancelled,
     /// Was running when the engine stopped, or its job can no longer be found.
     Interrupted,
@@ -229,6 +230,9 @@ pub(crate) struct Item {
     runs: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    /// Why it ended as it did, for a client to word: the job's or install's own reason (such as
+    /// `stream_unreachable`), `cancelled`, `job_lost`, or `held_after_failure` on an item paused
+    /// because an earlier `stop_on_failure` item failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     code: Option<String>,
     /// How an install ended: installed, may_not_launch, unverified.
@@ -1349,7 +1353,12 @@ struct ListQuery {
     console: Option<String>,
 }
 
-/// GET /api/queue?console= — one console's line, or every console's.
+/// GET /api/queue?console= — one console's line, or every console's. Answers `{items, consoles}`:
+/// each item is `{id, console, kind, label, status, request, stop_on_failure, added_at_ms,
+/// started_at_ms?, finished_at_ms?, job_id?, runs, error?, code?, verdict?, hint?, progress?,
+/// position?}`, `status` one of `queued`, `running`, `paused`, `done`, `failed`, `cancelled`
+/// (stopped, not failed: `code` `cancelled`) or `interrupted`; `position` is a waiting item's
+/// place in its console's line.
 async fn list_handler(State(queue): State<QueueState>, Query(q): Query<ListQuery>) -> Response {
     let wanted = q
         .console

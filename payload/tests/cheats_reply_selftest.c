@@ -228,7 +228,49 @@ static void xml_text_measures_without_whitespace(void) {
     free(xml);
 }
 
+/* Each <Cheatline> / <Cheat> ends where it does, self-closing or paired, in whatever mix: walked
+ * the way parse_shn_file walks a file. */
+static void shn_elements_end_at_their_own_tags(void) {
+    const char *cheat =
+        "<Cheatline Offset=\"10\" ValueOn=\"01\" ValueOff=\"00\"/>"
+        "<Cheatline><Offset>20</Offset><ValueOn>02</ValueOn><ValueOff>00</ValueOff></Cheatline>"
+        "<Cheatline Offset=\"30\" ValueOn=\"03\" ValueOff=\"00\"/>";
+    const char *want[] = {"10", "20", "30"};
+    const char *cur = cheat;
+    int n = 0;
+    for (;;) {
+        const char *s = strstr(cur, "<Cheatline");
+        if (!s) break;
+        const char *e = strchr(s, '>') + 1, *body;
+        const char *after = cheats_xml_element_end(s, e, "</Cheatline>", &body);
+        CHECK(after != NULL);
+        if (!after || n >= 3) break;
+        char line[256], off[16] = "";
+        size_t len = (size_t)(after - s);
+        memcpy(line, s, len);
+        line[len] = '\0';
+        if (cheats_xml_attr(line, "Offset", off, sizeof off) != 0)
+            CHECK(cheats_xml_text(line, "Offset", off, sizeof off) == 0);
+        CHECK(strcmp(off, want[n]) == 0);
+        n++;
+        cur = after;
+    }
+    CHECK(n == 3); /* the paired line after a self-closing one is not skipped */
+
+    /* <Cheat .../> has no lines: the next cheat's lines and close stay the next cheat's. */
+    const char *file = "<Cheat Text=\"A\"/><Cheat Text=\"B\"><Cheatline Offset=\"40\"/></Cheat>";
+    const char *s = strstr(file, "<Cheat");
+    const char *e = strchr(s, '>') + 1, *body;
+    const char *after = cheats_xml_element_end(s, e, "</Cheat>", &body);
+    CHECK(after == e && body == e);
+    CHECK(after && strncmp(after, "<Cheat Text=\"B\">", 16) == 0);
+    /* A paired element with no close at all. */
+    const char *open = "<Cheat Text=\"C\"><Cheatline Offset=\"1\"/>";
+    CHECK(cheats_xml_element_end(open, strchr(open, '>') + 1, "</Cheat>", &body) == NULL);
+}
+
 int main(void) {
+    shn_elements_end_at_their_own_tags();
     xml_attr_finds_whole_names();
     xml_attr_stops_at_the_end();
     xml_text_measures_without_whitespace();

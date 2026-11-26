@@ -875,6 +875,8 @@ mod tests {
     /// the way it always did.
     #[test]
     fn only_a_session_started_here_is_kept_alive_by_calls() {
+        // API_SESSION is global: the test below sets it too, and asserts on it.
+        let _g = super::super::LIVE_TEST_LOCK.blocking_lock();
         let mine = session();
         let page = session();
         let old = Instant::now() - Duration::from_secs(30);

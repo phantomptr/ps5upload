@@ -12,7 +12,7 @@ import type { Volume } from "../home/Home";
 import { t } from "../strings";
 import { TextPrompt } from "./TextPrompt";
 import { FilesView, sheetActions, type FilesViewProps } from "./Files";
-import { PermissionsDialog } from "./PermissionsDialog";
+import { PermissionsDialog, permErrorText } from "./PermissionsDialog";
 import { UploadDialog, uploadSummaryText } from "./UploadDialog";
 import type { DirState, Entry } from "./useDir";
 import { editableOf, Viewer } from "./Viewer";
@@ -118,10 +118,18 @@ describe("text editing", () => {
     expect(saveErrorText(new ApiError(413, "too_large"))).toBe(t("cw_files_edit_too_large"));
     expect(saveErrorText(new ApiError(404, "gone"))).toBe(t("cw_files_edit_gone"));
     expect(saveErrorText(new ApiError(507, "no_space"))).toBe(t("cw_files_edit_no_space"));
+    // a protected folder in plain words, not "That did not work (path_not_allowed)"
+    expect(saveErrorText(new ApiError(403, "path_not_allowed"))).toBe(t("cw_files_err_denied"));
   });
 });
 
 describe("permissions editor", () => {
+  it("says a refused change, a lost job and a protected folder in words", () => {
+    expect(permErrorText(new ApiError(500, "fs_chmod_failed"))).toBe(t("cw_files_perm_failed"));
+    expect(permErrorText("gone")).toBe(t("cw_files_op_gone"));
+    expect(permErrorText(new ApiError(403, "path_not_allowed"))).toBe(t("cw_files_err_denied"));
+  });
+
   it("shows the toggles and octal value; a folder can apply to its contents", () => {
     const html = renderToStaticMarkup(<PermissionsDialog name="cfg" path="/data/cfg" mode={0o40755} dir onDone={vi.fn()} onCancel={vi.fn()} />);
     expect(html).toContain('data-perm-value="">0755<');
@@ -164,5 +172,8 @@ describe("upload and download (another device only)", () => {
     expect(s).toBe(
       [t("cw_files_up_done", { n: 2 }), t("cw_files_up_skipped", { n: 1 }), t("cw_files_up_failed", { n: 1, reason: t("cw_files_up_no_space") })].join(" · "),
     );
+    const denied = uploadSummaryText({ uploaded: [], skipped: [], failed: [{ name: "d", error: new ApiError(403, "path_not_allowed") }], stopped: [] });
+    expect(denied).toContain(t("cw_files_err_denied"));
+    expect(denied).not.toContain("path_not_allowed");
   });
 });

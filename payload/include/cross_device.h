@@ -40,9 +40,10 @@
  *   src/sdk_changer.c     3  dir    backup copy, patched file, restore (suffix stripped from the same name)
  *   src/vinput_relay.c    1  dir    the companion's token: <path>.tmp -> <path>
  *   src/takeover_flag.c   1  dir    takeover flag: tmp -> final
- *   src/runtime.c         6  dir    mount tracker, ownership record, online.json, save write-back (all tmp -> final),
- *                                 an unsaved save copy kept as <copy>.unsaved (same folder), and the same
- *                                 for the copies of a save an earlier helper left open
+ *   src/runtime.c         3  dir    mount tracker, ownership record, save write-back (all tmp -> final)
+ *   src/file_compare.c    1  dir    keep_aside: an unsaved save copy kept as <copy>.unsaved or <copy>.N.unsaved
+ *                                 (same folder), for runtime.c's save close and the copies of a save an
+ *                                 earlier helper left open
  *   src/fs_jobs.c         1  dir    chmod/copy tmp inside the destination folder
  *   src/icon_keeper.c     1  dir    hidden_icons.txt: tmp -> final
  *   src/smp_meta.c        1  dir    restored tile art / param.json: <file>.tmp-<pid> -> file, same appmeta folder

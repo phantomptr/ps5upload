@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { FilePlus, FolderUp, Settings, Square, SquareCheck, X } from "lucide-react";
 import { formatBytes } from "../../lib/format";
 import { ApiError } from "../api";
-import { errorText } from "../home/Home";
 import { t } from "../strings";
 import { Modal } from "../ui/Modal";
 import { PhoneHandoff } from "../ui/PhoneHandoff";
 import { statOrNull, type ConflictChoice } from "./paste";
 import { makeFolders, uploadFile, uploadItems, type UploadItem } from "./transfer";
+import { filesErrorText } from "./Files";
 import { runUploads, type UploadProgress, type UploadSummary } from "./uploadRun";
 
 /** Can this browser pick a whole folder (webkitdirectory)? */
@@ -23,7 +23,7 @@ export function uploadSummaryText(s: UploadSummary): string {
   if (s.stopped.length) parts.push(t("cw_files_up_stopped", { n: s.stopped.length }));
   if (s.failed.length) {
     const e = s.failed[0].error;
-    const why = e instanceof ApiError && e.code === "no_space" ? t("cw_files_up_no_space") : (errorText(e) ?? "");
+    const why = e instanceof ApiError && e.code === "no_space" ? t("cw_files_up_no_space") : (filesErrorText(e) ?? "");
     parts.push(t("cw_files_up_failed", { n: s.failed.length, reason: why }));
   }
   return parts.join(" · ");

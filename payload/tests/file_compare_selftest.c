@@ -42,6 +42,37 @@ int main(void) {
     CHECK(file_contents_differ(a, b) == 0);
     unlink(a);
     unlink(b);
+
+    /* keep_aside: two saves' edits kept under the same image name both stay. */
+    char copy[256], kept[300], first[300];
+    snprintf(copy, sizeof copy, "%s/sdimg_sce_sdmemory", dir);
+    put(copy, (const unsigned char *)"first", 5);
+    CHECK(keep_aside(copy, kept, sizeof kept) == 0);
+    snprintf(first, sizeof first, "%s.unsaved", copy);
+    CHECK(strcmp(kept, first) == 0);
+    put(copy, (const unsigned char *)"second", 6);
+    CHECK(keep_aside(copy, kept, sizeof kept) == 0);
+    char second[300];
+    snprintf(second, sizeof second, "%s.2.unsaved", copy);
+    CHECK(strcmp(kept, second) == 0);
+    CHECK(access(copy, F_OK) != 0);
+    {
+        char got[16] = {0};
+        FILE *f = fopen(first, "rb");
+        CHECK(f && fread(got, 1, sizeof got - 1, f) == 5 && strcmp(got, "first") == 0);
+        if (f) fclose(f);
+    }
+    /* Nothing to keep: it says so and names the path. */
+    CHECK(keep_aside(copy, kept, sizeof kept) == -1);
+    CHECK(strcmp(kept, copy) == 0);
+    /* A name that does not fit is never cut to some other file's name. */
+    put(copy, (const unsigned char *)"x", 1);
+    char tiny[8];
+    CHECK(keep_aside(copy, tiny, sizeof tiny) == -1);
+    CHECK(access(copy, F_OK) == 0);
+    unlink(copy);
+    unlink(first);
+    unlink(second);
     rmdir(dir);
     free(d);
     printf("file_compare_selftest: %s\n", fails ? "FAILED" : "all passed");

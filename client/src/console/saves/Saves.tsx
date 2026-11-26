@@ -267,7 +267,7 @@ export function SavesView(p: SavesViewProps) {
       <div className="cw-toolbar">
         <span className="cw-saves-users">
           {(p.users ?? []).map((u) => (
-            <button key={u.id} type="button" className="cw-focusable cw-button" aria-pressed={u.id === p.user} data-user={u.id} onClick={() => p.onUser(u.id)}>
+            <button key={u.id} type="button" className="cw-focusable cw-button" aria-pressed={u.id === p.user} data-user={u.id} disabled={!!p.task} onClick={() => p.onUser(u.id)}>
               <span>{u.name}</span>
             </button>
           ))}
@@ -633,6 +633,8 @@ export function Saves({ ctx }: { ctx: SectionContext }) {
           setPlace(r);
         }}
         onUser={(id) => {
+          // Not while a backup, restore or delete runs: its list reload would land on the next user.
+          if (st.task) return;
           setOpen(null);
           setUser(id);
         }}

@@ -7916,9 +7916,7 @@ static int save_do_unmount(int *written_back, char *kept, size_t kept_sz) {
         } else if (image_moved) {
             fprintf(stderr, "[payload2] save: %s changed since it was opened; edits not written back\n",
                     g_save_image);
-            if (kept_sz && snprintf(kept, kept_sz, "%s.unsaved", g_save_copy) < (int)kept_sz &&
-                rename(g_save_copy, kept) != 0)
-                snprintf(kept, kept_sz, "%s", g_save_copy);
+            (void)keep_aside(g_save_copy, kept, kept_sz);
             if (g_save_copy_key[0]) unlink(g_save_copy_key);
             sync();
             save_clear_state();
@@ -7931,10 +7929,9 @@ static int save_do_unmount(int *written_back, char *kept, size_t kept_sz) {
                     g_save_copy, g_save_image, strerror(errno));
             if (++g_save_wb_failures < 2) return -2;
             /* Twice: give up on writing back, keep the edits under a name the next open never
-             * reuses (same folder, so the rename stays on one device), and close the save. */
-            if (kept_sz && snprintf(kept, kept_sz, "%s.unsaved", g_save_copy) < (int)kept_sz &&
-                rename(g_save_copy, kept) != 0)
-                snprintf(kept, kept_sz, "%s", g_save_copy);
+             * reuses and no earlier kept copy has (same folder, so the rename stays on one
+             * device), and close the save. */
+            (void)keep_aside(g_save_copy, kept, kept_sz);
             if (g_save_copy_key[0]) unlink(g_save_copy_key);
             sync();
             save_clear_state();
@@ -7997,8 +7994,7 @@ static int save_release_orphan(void) {
                 unlink(path); /* the sealed key of the save that was open */
                 continue;
             }
-            snprintf(to, sizeof to, "%s.unsaved", path);
-            if (rename(path, to) == 0) kept++; /* same folder: one device */
+            if (keep_aside(path, to, sizeof to) == 0) kept++; /* same folder: one device */
         }
         closedir(d);
     }

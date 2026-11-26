@@ -529,52 +529,124 @@ pub struct ConsoleQuery {
     addr: String,
 }
 
-/// The console's titles: upper-case title ID → the path it was registered from, if any. A title
-/// whose app folder is on the internal or an extended drive counts too: the installed-apps list
-/// counts those, and two reads that disagreed made a game on the M.2 drive flip between
-/// installed and not.
-pub(crate) fn installed_titles(
-    addr: &str,
-) -> Result<std::collections::HashMap<String, Option<String>>, String> {
-    let registered = ps5upload_core::fs_ops::app_list_registered(addr)
-        .map_err(|e| format!("the console's titles could not be read: {e:#}"))?;
-    let mut folders = Vec::new();
-    // Every page, and a folder that could not be read is an error: one read as empty (a busy
-    // console, a page cut at 256) made every installed game read as not installed, and the
-    // snapshots kept that.
-    for root in ["/user/app", "/mnt/ext0/user/app", "/mnt/ext1/user/app"] {
-        folders.extend(
-            console_names_all(addr, root)
-                .map_err(|e| format!("the console's app folders could not be read: {e}"))?,
-        );
-    }
-    Ok(with_app_folders(
-        registered
-            .apps
-            .into_iter()
-            .map(|a| (a.title_id, (!a.src.is_empty()).then_some(a.src))),
-        folders,
-    ))
+/// What a console has installed, by the rule the installed list (`/api/ps5/apps/installed`) also
+/// uses: upper-case title ID → the path it was registered from, if any.
+pub(crate) struct ConsoleInstalled {
+    pub(crate) titles: std::collections::HashMap<String, Option<String>>,
+    /// The read was whole: a title not in `titles` is known not to be installed. When false
+    /// (app.db or an app folder could not be read in full), a title missing from `titles` is
+    /// unknown, not "not installed".
+    pub(crate) complete: bool,
 }
 
-/// Registered titles plus the title-ID-shaped app folders, keys upper case.
-fn with_app_folders(
-    registered: impl IntoIterator<Item = (String, Option<String>)>,
-    folders: impl IntoIterator<Item = String>,
-) -> std::collections::HashMap<String, Option<String>> {
-    let mut out: std::collections::HashMap<String, Option<String>> = registered
-        .into_iter()
-        .filter(|(id, _)| !crate::is_console_webui_tile(id))
-        .map(|(id, from)| (id.to_ascii_uppercase(), from))
-        .collect();
-    for f in folders {
-        let id = f.to_ascii_uppercase();
-        // By bytes: a folder name with a multi-byte character must not be sliced mid-char.
-        if crate::collection::is_game_id(&id) && !crate::is_console_webui_tile(&id) {
-            out.entry(id).or_insert(None);
+/// The console's installed titles. A title counts when the console records it: a
+/// `/user/appmeta/<id>` folder, or an app.db row whose app folder exists on the internal or an
+/// extended drive (an M.2 title has its folder there). An app folder alone is not an installed
+/// game: an uninstall can leave `/user/app/<id>` behind, and the helper's registered list holds
+/// every folder there. Games registered from a folder or an image are in app.db and appmeta.
+pub(crate) fn installed_titles(addr: &str) -> Result<ConsoleInstalled, String> {
+    let registered = ps5upload_core::fs_ops::app_list_registered(addr)
+        .map_err(|e| format!("the console's titles could not be read: {e:#}"))?;
+    let (appmeta, appmeta_whole) = crate::list_dir_whole(addr, "/user/appmeta")
+        .map_err(|e| format!("the console's titles could not be read: {e:#}"))?;
+    let mut app_dirs = std::collections::HashSet::new();
+    let mut folders_whole = true;
+    for root in crate::APP_FOLDER_ROOTS {
+        // An absent drive is no folders; one that could not be read leaves the answer open.
+        match console_names_all(addr, root) {
+            Ok(names) => app_dirs.extend(names),
+            Err(_) => folders_whole = false,
         }
     }
-    out
+    // app.db is asked only when there are app folders to confirm its rows against.
+    let appdb =
+        (!app_dirs.is_empty()).then(|| match ps5upload_core::diagnostics::appdb_query(addr) {
+            Ok(list) => {
+                let whole = !list.truncated && list.err.is_none();
+                let rows = list.apps.into_iter().map(|a| (a.title_id, a.name));
+                Ok((rows.collect(), whole))
+            }
+            Err(e) => {
+                crate::log_warn!("collection: app.db query failed: {e:#}");
+                Err(())
+            }
+        });
+    let read = InstalledRead {
+        appmeta: appmeta.into_iter().map(|e| e.name).collect(),
+        appmeta_whole,
+        app_dirs,
+        folders_whole,
+        appdb,
+        registered: (registered.apps.into_iter())
+            .map(|a| (a.title_id, a.src))
+            .collect(),
+    };
+    Ok(installed_from(read, |id| {
+        crate::app_folder_has_param(addr, id)
+    }))
+}
+
+/// app.db's (title ID, name) rows, and whether they are all of them.
+type AppDbRows = (Vec<(String, String)>, bool);
+
+/// What one installed-titles read found on the console.
+struct InstalledRead {
+    /// `/user/appmeta` entry names, and whether every page was read.
+    appmeta: Vec<String>,
+    appmeta_whole: bool,
+    /// App folder names on every drive, and whether every drive's listing was read.
+    app_dirs: std::collections::HashSet<String>,
+    folders_whole: bool,
+    /// app.db's (title ID, name) rows and whether they are all of them; `Err` when it could not
+    /// be read; None when it was not asked (no app folders).
+    appdb: Option<Result<AppDbRows, ()>>,
+    /// The helper's list: every app folder, with the source our mount.lnk names (empty if none).
+    registered: Vec<(String, String)>,
+}
+
+/// The installed rule, without the console (see [`installed_titles`]). `has_param` tells
+/// whether an app folder holds a title, for a folder app.db could not be read for.
+fn installed_from(read: InstalledRead, has_param: impl Fn(&str) -> bool) -> ConsoleInstalled {
+    let mut ids: Vec<String> = (read.appmeta.into_iter())
+        .filter(|id| crate::looks_like_title_id(id) && !crate::is_console_webui_tile(id))
+        .collect();
+    let mut complete = read.appmeta_whole && read.folders_whole && !read.app_dirs.is_empty();
+    if let Some(appdb) = read.appdb {
+        let appdb_whole = matches!(appdb, Ok((_, true)));
+        complete &= appdb_whole;
+        if let Ok((rows, _)) = appdb {
+            let seen: std::collections::HashSet<String> = ids.iter().cloned().collect();
+            let added = crate::appdb_installed_additions(&rows, &read.app_dirs, &seen);
+            ids.extend(added.into_iter().map(|(id, _)| id));
+        }
+        // app.db not read in full: a registered title it did not get to still counts when its
+        // folder holds a title (our mount.lnk source, or a param file), never a bare folder.
+        let seen: std::collections::HashSet<String> = ids.iter().cloned().collect();
+        for id in crate::registered_only_additions(
+            read.registered.iter().map(|(id, _)| id.as_str()),
+            &read.app_dirs,
+            &seen,
+            appdb_whole,
+        ) {
+            let has_src =
+                (read.registered.iter()).any(|(r, src)| r.trim() == id && !src.trim().is_empty());
+            if has_src || has_param(&id) {
+                ids.push(id);
+            }
+        }
+    }
+    let sources: std::collections::HashMap<String, String> = (read.registered.into_iter())
+        .filter(|(_, src)| !src.is_empty())
+        .map(|(id, src)| (id.trim().to_ascii_uppercase(), src))
+        .collect();
+    let titles = (ids.into_iter())
+        .map(|id| id.to_ascii_uppercase())
+        .map(|id| {
+            let from = sources.get(&id).cloned();
+            (id, from)
+        })
+        .collect();
+    ConsoleInstalled { titles, complete }
 }
 
 /// The console's update and DLC folders, listed once per drive and shared by every title of a
@@ -639,10 +711,14 @@ pub(crate) fn read_title(
     addr: &str,
     id: &str,
     extras: &ConsoleExtras,
-    installed: &std::collections::HashMap<String, Option<String>>,
+    installed: &ConsoleInstalled,
 ) -> crate::collection::console::ConsoleTitle {
-    let mut t = crate::collection::console::ConsoleTitle::default();
-    if let Some(from) = installed.get(id) {
+    let mut t = crate::collection::console::ConsoleTitle {
+        // Not listed by a read that was not whole: unknown, so the last answer stands.
+        installed_unread: !installed.complete && !installed.titles.contains_key(id),
+        ..Default::default()
+    };
+    if let Some(from) = installed.titles.get(id) {
         t.installed = true;
         t.registered_from = from.clone();
         match installed_version(addr, id) {
@@ -765,23 +841,136 @@ pub async fn get_console(Query(q): Query<ConsoleQuery>) -> Response {
 
 #[cfg(test)]
 mod installed_titles_tests {
-    use super::with_app_folders;
+    use super::{installed_from, read_title, ConsoleExtras, ConsoleInstalled, InstalledRead};
+    use crate::collection::console::ConsoleTitle;
+    use crate::console_snapshot::{merge_detailed, Snapshots};
+
+    fn strings(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A console with these appmeta folders, app folders (every one in the helper's list, as it
+    /// lists every app folder) and app.db rows; `sources` are our mount.lnk sources.
+    fn read(
+        appmeta: &[&str],
+        folders: &[&str],
+        appdb: Option<Result<(&[&str], bool), ()>>,
+        sources: &[(&str, &str)],
+    ) -> InstalledRead {
+        InstalledRead {
+            appmeta: strings(appmeta),
+            appmeta_whole: true,
+            app_dirs: strings(folders).into_iter().collect(),
+            folders_whole: true,
+            appdb: appdb.map(|r| {
+                r.map(|(rows, whole)| {
+                    let rows = rows.iter().map(|id| (id.to_string(), String::new()));
+                    (rows.collect(), whole)
+                })
+            }),
+            registered: folders
+                .iter()
+                .map(|id| {
+                    let src = sources.iter().find(|(s, _)| s == id).map(|(_, p)| *p);
+                    (id.to_string(), src.unwrap_or_default().to_string())
+                })
+                .collect(),
+        }
+    }
+
+    fn no_param(_: &str) -> bool {
+        false
+    }
+
+    /// The game page's answer for a title the read does not list (no console call is made).
+    fn page_answer(installed: &ConsoleInstalled, id: &str) -> ConsoleTitle {
+        let extras = ConsoleExtras::from_lister(&[], |_| Ok(Vec::new()));
+        read_title("", id, &extras, installed)
+    }
 
     #[test]
-    fn an_app_folder_counts_as_installed_and_keeps_the_registered_source() {
-        let m = with_app_folders(
-            [("ppsa00001".to_string(), Some("/data/a".to_string()))],
-            [
-                "PPSA00001".to_string(),
-                "PPSA00002".to_string(),
-                "not-a-title".to_string(),
-                // Nine bytes, a multi-byte character inside: skipped, never sliced mid-char.
-                "PPP\u{e9}0001".to_string(),
-            ],
+    fn a_title_app_db_lists_is_installed_ps5_or_ps4() {
+        let r = read(
+            &[],
+            &["PPSA00001", "CUSA00002", "PPSA00009"],
+            Some(Ok((&["PPSA00001", "CUSA00002", "PPSA00003"], true))),
+            &[],
         );
-        assert_eq!(m.len(), 2);
-        assert_eq!(m["PPSA00001"].as_deref(), Some("/data/a"));
-        assert_eq!(m["PPSA00002"], None);
+        let m = installed_from(r, no_param);
+        assert!(m.complete);
+        assert!(m.titles.contains_key("PPSA00001"));
+        assert!(m.titles.contains_key("CUSA00002"));
+        // A row with no app folder (a preinstalled tile never downloaded) is not installed.
+        assert!(!m.titles.contains_key("PPSA00003"));
+    }
+
+    #[test]
+    fn an_app_folder_alone_is_not_an_installed_game() {
+        // An uninstall left PPSA00009's folder behind; app.db, read whole, does not list it.
+        let r = read(
+            &["PPSA00001", "not-a-title"],
+            // Nine bytes, a multi-byte character inside: skipped, never sliced mid-char.
+            &["PPSA00001", "PPSA00009", "PPP\u{e9}0001"],
+            Some(Ok((&["PPSA00001"], true))),
+            &[],
+        );
+        let m = installed_from(r, |_| true);
+        assert!(m.complete);
+        assert_eq!(m.titles.len(), 1);
+        assert!(!m.titles.contains_key("PPSA00009"));
+        let t = page_answer(&m, "PPSA00009");
+        assert!(!t.installed && !t.installed_unread);
+    }
+
+    #[test]
+    fn an_unreadable_app_db_leaves_unlisted_titles_unknown_not_uninstalled() {
+        for appdb in [Err(()), Ok((&["PPSA00001"][..], false))] {
+            let r = read(
+                &[],
+                &["PPSA00001", "PPSA00002", "PPSA00005"],
+                Some(appdb),
+                &[("PPSA00002", "/data/games/b")],
+            );
+            let m = installed_from(r, no_param);
+            assert!(!m.complete);
+            // Our registered folder game still counts; a bare folder does not.
+            assert_eq!(m.titles["PPSA00002"].as_deref(), Some("/data/games/b"));
+            assert!(!m.titles.contains_key("PPSA00005"));
+            let t = page_answer(&m, "PPSA00005");
+            assert!(t.installed_unread);
+            // The last read said installed: that stands.
+            let mut snaps = Snapshots::new();
+            let was = ConsoleTitle {
+                installed: true,
+                version: Some("01.000.000".into()),
+                ..ConsoleTitle::default()
+            };
+            merge_detailed(&mut snaps, "10.0.0.2", "PPSA00005", &was, "", 1);
+            let facts = merge_detailed(&mut snaps, "10.0.0.2", "PPSA00005", &t, "", 2);
+            assert!(facts.installed);
+            assert_eq!(facts.version.as_deref(), Some("01.000.000"));
+        }
+    }
+
+    #[test]
+    fn a_failed_folder_listing_makes_the_read_not_whole() {
+        let mut r = read(&["PPSA00001"], &["PPSA00001"], None, &[]);
+        r.folders_whole = false;
+        assert!(!installed_from(r, no_param).complete);
+    }
+
+    #[test]
+    fn a_game_registered_from_a_folder_or_image_reads_as_present() {
+        let r = read(
+            &["PPSA00002"],
+            &["PPSA00002", "CUSA00004"],
+            Some(Ok((&["PPSA00002", "CUSA00004"], true))),
+            &[("PPSA00002", "/data/games/b"), ("CUSA00004", "/mnt/img/c")],
+        );
+        let m = installed_from(r, no_param);
+        assert!(m.complete);
+        assert_eq!(m.titles["PPSA00002"].as_deref(), Some("/data/games/b"));
+        assert_eq!(m.titles["CUSA00004"].as_deref(), Some("/mnt/img/c"));
     }
 }
 

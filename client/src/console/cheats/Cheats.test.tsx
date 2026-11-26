@@ -140,6 +140,11 @@ describe("cheats section", () => {
     expect(html).toContain(t("cw_cheats_engine_off_state"));
     expect(html).toContain(`>${t("cw_cheats_saved")}<`);
     expect(html).not.toContain(`>${t("cw_cheats_on")}<`);
+    // The game's name once app.db gave it, its title id under it.
+    expect(html).toContain(`<div class="cw-game-title">${GAME}</div>`);
+    const named = view(c.get(), { name: "Astro Bot" });
+    expect(named).toContain('<div class="cw-game-title">Astro Bot</div>');
+    expect(named).toContain(`<div class="cw-dim cw-mono">${GAME}</div>`);
   });
 
   it("switched_on_cheats_read_on_only_while_they_are_applied", async () => {

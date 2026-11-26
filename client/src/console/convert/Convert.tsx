@@ -240,7 +240,7 @@ export function ConvertView(p: ConvertViewProps) {
               </div>
               <div>
                 <dt className="cw-dim">{t("cw_convert_info_size")}</dt>
-                <dd>{t("cw_convert_info_size_files", { size: formatBytes(info.size), n: info.files })}</dd>
+                <dd>{t("cw_convert_info_size_files_v2", { size: formatBytes(info.size), n: info.files })}</dd>
               </div>
               <div>
                 <dt className="cw-dim">{t("cw_convert_info_ampr")}</dt>
@@ -294,7 +294,7 @@ export function ConvertView(p: ConvertViewProps) {
                   ) : null}
                   {needsEmulator ? (
                     <p className="cw-field-error" role="alert" data-convert-blocked="emulator">
-                      {t("cw_convert_unpack_needs_emulator")}
+                      {t("cw_convert_unpack_needs_emulator_v2")}
                     </p>
                   ) : null}
                 </div>
@@ -426,7 +426,8 @@ export function Convert({ ctx }: { ctx: SectionContext }) {
     if (!source || busy) return;
     let live = true;
     setInspected({ phase: "reading" });
-    void inspect(source).then((r) => {
+    // Another source, or Convert left: the check is stopped (the next one waits for it to end).
+    void inspect(source, undefined, () => !live).then((r) => {
       if (!live) return;
       setInspected(r.ok ? { phase: "done", info: r.info } : { phase: "failed", error: r.error });
     });

@@ -4631,22 +4631,61 @@ async fn ps5_save_open(Json(req): Json<SaveOpenReq>) -> impl IntoResponse {
     crate::log_info!("save_open: addr={addr} image={image}");
     let r = tokio::task::spawn_blocking(move || {
         let _busy = busy;
-        // The open copy is written back over the real image on close, so a game writing the save
-        // meanwhile would lose what it wrote. An empty image only reports what is open.
-        if let Some(title) = save_backup::title_of_save_image(&image) {
-            if save_backup::title_running(&addr, title).map_err(anyhow::Error::msg)? {
-                anyhow::bail!("{title} is running on the PS5. Close the game, then open its save.");
-            }
-        }
-        ps5upload_core::saves::save_open(&addr, &image)
+        // Opening one save closes the one open, so never while a copy, sync or backup has this
+        // console's save: that closed its save half filled, and its next files went into the
+        // save opened here. Held until the helper answered, so one starting meanwhile waits and
+        // then finds this save open. An empty image only reports what is open.
+        let _op = if image.is_empty() {
+            None
+        } else {
+            Some(save_backup::try_save_op(&addr).ok_or(SaveJobRunning)?)
+        };
+        save_open_now(&addr, &image)
     })
     .await
     .map_err(anyhow::Error::from)
     .and_then(|r| r);
+    save_route_reply(r)
+}
+
+/// A copy, sync or backup holds the console's save (`save_backup::try_save_op`).
+#[derive(Debug)]
+struct SaveJobRunning;
+
+impl std::fmt::Display for SaveJobRunning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(save_backup::SAVE_JOB_RUNNING)
+    }
+}
+
+impl std::error::Error for SaveJobRunning {}
+
+fn save_route_reply(
+    r: anyhow::Result<ps5upload_core::saves::OpenSave>,
+) -> axum::response::Response {
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) if e.is::<SaveJobRunning>() => {
+            json_err(StatusCode::CONFLICT, save_backup::SAVE_JOB_RUNNING).into_response()
+        }
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
+}
+
+/// Opens the save image `image` on the helper (an empty one only reports what is open), refused
+/// while its game runs: the open copy is written back over the real image on close, so a game
+/// writing the save meanwhile would lose what it wrote. For the route above and for the engine's
+/// own save operations, which hold the console's save themselves.
+pub(crate) fn save_open_now(
+    addr: &str,
+    image: &str,
+) -> anyhow::Result<ps5upload_core::saves::OpenSave> {
+    if let Some(title) = save_backup::title_of_save_image(image) {
+        if save_backup::title_running(addr, title).map_err(anyhow::Error::msg)? {
+            anyhow::bail!("{title} is running on the PS5. Close the game, then open its save.");
+        }
+    }
+    ps5upload_core::saves::save_open(addr, image)
 }
 
 #[derive(serde::Deserialize)]
@@ -4718,15 +4757,14 @@ async fn ps5_save_close(Json(req): Json<SaveOpenReq>) -> impl IntoResponse {
     crate::log_info!("save_close: addr={addr}");
     let r = tokio::task::spawn_blocking(move || {
         let _busy = busy;
+        // The save open may be a copy's, sync's or backup's, part way through: not closed here.
+        let _op = save_backup::try_save_op(&addr).ok_or(SaveJobRunning)?;
         ps5upload_core::saves::save_close(&addr)
     })
     .await
     .map_err(anyhow::Error::from)
     .and_then(|r| r);
-    match r {
-        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
-    }
+    save_route_reply(r)
 }
 
 #[derive(Deserialize)]
@@ -6450,7 +6488,7 @@ fn appmeta_title_name(addr: &str, title_id: &str, appdb: &mut AppDbOnce<'_>) -> 
 /// Kept only when the app folder exists (`app_dirs`, from /user/app and the
 /// extended-storage equivalents): app.db also carries shell entries (NPXS)
 /// and preinstalled tiles whose app was never downloaded.
-fn appdb_installed_additions(
+pub(crate) fn appdb_installed_additions(
     rows: &[(String, String)],
     app_dirs: &std::collections::HashSet<String>,
     seen: &std::collections::HashSet<String>,
@@ -6484,7 +6522,7 @@ fn appdb_installed_additions(
 /// ids (NPXS) are left out, as in [`appdb_installed_additions`]. The caller still checks each
 /// candidate for evidence it is a title (a mount.lnk source or a param file). Sorted, so the
 /// list does not reshuffle between refreshes.
-fn registered_only_additions<'a>(
+pub(crate) fn registered_only_additions<'a>(
     registered: impl IntoIterator<Item = &'a str>,
     app_dirs: &std::collections::HashSet<String>,
     seen: &std::collections::HashSet<String>,
@@ -6511,7 +6549,7 @@ fn registered_only_additions<'a>(
 
 /// True when `/user/app/<id>/sce_sys` holds a param.json or param.sfo: the folder is a title,
 /// not the leftovers of a failed install.
-fn app_folder_has_param(addr: &str, title_id: &str) -> bool {
+pub(crate) fn app_folder_has_param(addr: &str, title_id: &str) -> bool {
     ["param.json", "param.sfo"]
         .iter()
         .any(|f| fs_read(addr, &format!("/user/app/{title_id}/sce_sys/{f}"), 0, 16).is_ok())
@@ -6608,7 +6646,7 @@ async fn ps5_apps_installed(
             // Whether the internal drive's listing was read whole: None when it could not be
             // read at all.
             let mut internal_whole: Option<bool> = None;
-            for root in ["/user/app", "/mnt/ext0/user/app", "/mnt/ext1/user/app"] {
+            for root in APP_FOLDER_ROOTS {
                 if let Ok((entries, whole)) = list_dir_whole(&addr, root) {
                     if root == "/user/app" {
                         internal_whole = Some(whole);
@@ -6767,6 +6805,25 @@ struct AppIconQuery {
     size: Option<u32>,
 }
 
+/// Where installed titles' app folders are: the internal drive, extended storage and the M.2
+/// drive (the installed list and the cover read both look in each).
+pub(crate) const APP_FOLDER_ROOTS: [&str; 3] =
+    ["/user/app", "/mnt/ext0/user/app", "/mnt/ext1/user/app"];
+
+/// Where a title's cover may be, in order. /user/appmeta/<id> is the usual home, but on FW 13.60
+/// titles installed by homebrew installers have none, only the app's own <root>/<id>/sce_sys
+/// (measured on both consoles, 2026-09-29), on whichever drive it went to. The M.2 drive's was
+/// missing: such a title had no cover, and the miss was remembered.
+fn app_icon_paths(title_id: &str) -> Vec<String> {
+    std::iter::once(format!("/user/appmeta/{title_id}/icon0.png"))
+        .chain(
+            APP_FOLDER_ROOTS
+                .iter()
+                .map(|root| format!("{root}/{title_id}/sce_sys/icon0.png")),
+        )
+        .collect()
+}
+
 /// GET /api/ps5/app-icon?addr=IP:MGMT_PORT&title_id=PPSA01234
 ///
 /// Streams /user/appmeta/<title_id>/icon0.png as image/png — the cover
@@ -6791,14 +6848,7 @@ async fn ps5_app_icon(
         return (StatusCode::BAD_REQUEST, "invalid title_id").into_response();
     }
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
-    // /user/appmeta/<id> is the usual home, but on FW 13.60 titles
-    // installed by homebrew installers have none — only the app's own
-    // /user/app/<id>/sce_sys (measured on both consoles, 2026-09-29).
-    let icon_paths = vec![
-        format!("/user/appmeta/{}/icon0.png", q.title_id),
-        format!("/user/app/{}/sce_sys/icon0.png", q.title_id),
-        format!("/mnt/ext0/user/app/{}/sce_sys/icon0.png", q.title_id),
-    ];
+    let icon_paths = app_icon_paths(&q.title_id);
     let inm = headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
@@ -6888,7 +6938,7 @@ const LIST_DIR_MAX_PAGES: usize = 64;
 /// Every entry of a console folder, page by page, and whether the folder was read whole
 /// (`false` when it has more pages than [`LIST_DIR_MAX_PAGES`]). A listing that fails on any
 /// page is an error: a busy console must not read as a shorter folder.
-fn list_dir_whole(
+pub(crate) fn list_dir_whole(
     addr: &str,
     path: &str,
 ) -> anyhow::Result<(Vec<ps5upload_core::fs_ops::DirEntry>, bool)> {
@@ -7066,6 +7116,12 @@ async fn ps5_pkg_metadata(
 }
 
 /// GET /api/ps5/volumes?addr=IP:PORT — enumerate mounted PS5 storage volumes.
+///
+/// `total_bytes` and `free_bytes` are the filesystem's own counters (`statfs`), not the figures
+/// of the PS5's Settings > Storage screen, which can show less free space. On internal storage
+/// `free_bytes` already leaves out what the filesystem holds back (`user_reserved_bytes` in
+/// `/api/ps5/hw/storage`). For how much a copy can take, read `allocatable_bytes` and
+/// `likely_fits_bytes`.
 async fn ps5_volumes(
     State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
@@ -8586,6 +8642,19 @@ fn is_game_icon_path(p: &std::path::Path) -> bool {
 
 #[cfg(test)]
 mod game_icon_path_tests {
+    /// A title's cover is looked for on every drive the installed list finds titles on, the M.2
+    /// drive included, after appmeta.
+    #[test]
+    fn a_cover_is_looked_for_on_every_drive_with_app_folders() {
+        let paths = super::app_icon_paths("PPSA01234");
+        assert_eq!(paths[0], "/user/appmeta/PPSA01234/icon0.png");
+        for root in super::APP_FOLDER_ROOTS {
+            let want = format!("{root}/PPSA01234/sce_sys/icon0.png");
+            assert!(paths.contains(&want), "{want} is not looked at");
+        }
+        assert!(paths.contains(&"/mnt/ext1/user/app/PPSA01234/sce_sys/icon0.png".to_string()));
+    }
+
     #[test]
     fn a_grid_cover_is_a_small_jpeg_and_transparency_stays_png() {
         let png = |img: image::DynamicImage| {
@@ -13978,6 +14047,10 @@ fn build_app_and_mcp(
         .route(
             "/api/ps5/convert-runtime",
             post(convert_runtime::put_handler),
+        )
+        .route(
+            "/api/ps5/convert-ampr-emu",
+            post(convert_runtime::put_ampr_emu_handler),
         )
         .route("/api/ps5/process/kill", post(ps5_process_kill))
         .route("/api/ps5/power/control", post(ps5_power_control))

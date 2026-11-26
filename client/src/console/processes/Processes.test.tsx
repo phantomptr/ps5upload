@@ -86,5 +86,7 @@ describe("Processes section", () => {
     expect(stopErrorText(new ApiError(404, "not_running"))).toBe(t("cw_procs_err_gone"));
     expect(stopErrorText(new ApiError(403, "system"))).toBe(t("cw_procs_err_protected"));
     expect(stopErrorText(new ApiError(403, "helper"))).toBe(t("cw_procs_err_protected"));
+    // the kernel said no: in words, not "That did not work (kill_failed)"
+    expect(stopErrorText(new ApiError(409, "kill_failed"))).toBe(t("cw_procs_err_refused"));
   });
 });
