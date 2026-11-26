@@ -503,7 +503,14 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       const tasks = [...s.tasks];
       tasks[idx] = updated;
       const trimmed = trimTaskHistory(tasks);
-      persistProgress(trimmed);
+      // What a reopened page needs to find the job again (its engine job, what it is, its
+      // state) is written now; only progress waits for the next batched write (#954).
+      const mustKeep =
+        (patch.engineJobId !== undefined && patch.engineJobId !== existing.engineJobId) ||
+        (patch.status !== undefined && patch.status !== existing.status) ||
+        patch.payload !== undefined;
+      if (mustKeep) persist(trimmed);
+      else persistProgress(trimmed);
       return { tasks: trimmed };
     });
   },

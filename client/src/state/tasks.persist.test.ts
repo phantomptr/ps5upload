@@ -48,3 +48,15 @@ it("writes a task's end at once, with no stale progress write after it", () => {
   vi.advanceTimersByTime(2000);
   expect(writes).toHaveLength(1);
 });
+
+it("writes a task's engine job at once, so a page closed right after can find it again (#954)", () => {
+  const id = newTask();
+  writes.length = 0;
+  useTaskStore.getState().updateTask(id, { engineJobId: "job-1", payload: { jobKind: "build" } });
+  expect(writes).toHaveLength(1);
+  const saved = JSON.parse(writes[0]) as { tasks: Array<{ id: string; engineJobId?: string }> };
+  expect(saved.tasks.find((t) => t.id === id)?.engineJobId).toBe("job-1");
+  // Progress after it still waits for the batched write.
+  useTaskStore.getState().updateTask(id, { stage: "next" });
+  expect(writes).toHaveLength(1);
+});
