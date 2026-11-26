@@ -70,14 +70,14 @@ export function MakeCard({
           title: tr("fpkg.make.pkg_title_v2", undefined, "A fake package (FPKG, .pkg)"),
           body: kraken
             ? tr(
-                "fpkg.make.pkg_body_kraken_v3",
+                "fpkg.make.pkg_body_kraken_v4",
                 undefined,
-                "A fake package (FPKG). Kraken Mount, running on this PS5, mounts it from a drive's homebrew folder and shows it on the home screen, with nothing installed. It can still be installed instead.",
+                "A fake package (FPKG). Kraken Mount, running on this PS5, mounts it from a drive's homebrew folder and shows it on the home screen, with nothing installed. It can also be installed like a game from the store.",
               )
             : tr(
-                "fpkg.make.pkg_body_v5",
+                "fpkg.make.pkg_body_v6",
                 undefined,
-                "A fake package (FPKG). It installs on the PS5 like a game from the store, streamed from here or uploaded first. PS4 games play on any firmware. An installed PS5 game plays on firmware up to 13.60; above 11.60 it needs kstuff 1.15 or newer.",
+                "A fake package (FPKG). There are two ways to play a PS5 one: install it like a game from the store (streamed from here or uploaded first), or mount it with Kraken Mount from a folder it scans. Installing on firmware 11.61 to 13.60 needs the latest kstuff (with fake-package support up to 13.60). PS4 packages are installed, and play on any firmware.",
               ),
         },
     {
