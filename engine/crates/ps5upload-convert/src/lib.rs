@@ -58,6 +58,16 @@ pub struct Inspection {
     pub master_version: Option<String>,
     /// `lz4` or `zstd` when the game's files are inside asset packs already.
     pub packed: Option<String>,
+    /// For a packed game (not one inside an archive): about what it holds as plain files, the
+    /// size a `.pkg` with `unpack_packs` has to fit. `None` when it is not packed or its packs
+    /// could not be read (a warning says why).
+    #[serde(default)]
+    pub unpacked_bytes: Option<u64>,
+    /// With `unpacked_bytes`: whether the game's own AMPR emulator can stay beside the plain
+    /// files (`ps5upload_convert_core::unpack_packs::assess`). False: an unpacked `.pkg` has to
+    /// leave the emulator out here, or be made on a computer.
+    #[serde(default)]
+    pub unpack_keeps_emulator: Option<bool>,
     pub has_eboot: bool,
     pub warnings: Vec<String>,
 }
@@ -237,6 +247,8 @@ pub fn inspect_keeping(
         content_version: None,
         master_version: None,
         packed: None,
+        unpacked_bytes: None,
+        unpack_keeps_emulator: None,
         has_eboot: has(tree.as_ref(), "eboot.bin"),
         // What the conversion leaves out of an archive (files beside its game folder).
         warnings: tree.notes(),
@@ -276,7 +288,21 @@ pub fn inspect_keeping(
         Ok(kind) => out.packed = kind.map(str::to_string),
         Err(e) => out.warnings.push(format!("asset pack index: {e}")),
     }
-    Ok((out, is_archive(format).then_some(tree)))
+    if is_archive(format) {
+        return Ok((out, Some(tree)));
+    }
+    if out.packed.is_some() {
+        // What "Unpack the asset packs" would make of it: from the pack indexes, the eboot's
+        // imports and the emulator's file, never the packed data.
+        match ps5upload_convert_core::unpack_packs::assess(tree) {
+            Ok(a) => {
+                out.unpacked_bytes = Some(a.plain_bytes);
+                out.unpack_keeps_emulator = Some(a.own_emulator_suits);
+            }
+            Err(e) => out.warnings.push(format!("asset packs: {e}")),
+        }
+    }
+    Ok((out, None))
 }
 
 #[cfg(test)]
