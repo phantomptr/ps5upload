@@ -9085,7 +9085,7 @@ rp_users_add_hint: "若也想以其他用户游玩，请在 PS5 上登录该用�
 "pkg_mount_not_queued": "这台主机的队列在另一个窗口中运行：请在那里添加。",
 "pkg_mount_done": "已放入 {root}。Kraken Mount 下次扫描时会将其添加到主屏幕；没有安装任何内容。",
 "install.kraken.title": "这台 PS5 上正在运行 Kraken Mount",
-"install.kraken.body": "用调试密钥制作的 PS5 安装包（“转换”制作的安装包都是）可以挂载而不必安装：PS5Upload 会把它复制到安装包磁盘的 homebrew 文件夹，再由 Kraken Mount 放到主屏幕上。不会安装任何内容，以后移除时也只删除那个文件。PS4 安装包、零售安装包、更新和追加内容仍会照常安装。",
+"install.kraken.body_v2": "用调试密钥制作的 PS5 安装包（“转换”制作的安装包都是）可以挂载，也可以安装。挂载时，PS5Upload 会把它复制到安装包磁盘的 homebrew 文件夹，再由 Kraken Mount 放到主屏幕上；不会安装任何内容，以后移除时也只删除那个文件。PS4 安装包、零售安装包、更新和追加内容会被安装。",
 "install.kraken.both": "ShadowMount+ 也在运行。两者不能同时运行：挂载安装包前，请重启 PS5，只运行其中一个。",
 "kraken_update_note": "Kraken Mount {version} 可能会漏掉已挂载包的存档和奖杯。请从项目页面更新到 {min} 或更高版本。",
 "kraken_update_open": "项目页面",

@@ -9135,7 +9135,7 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "pkg_mount_not_queued": "Antrean konsol ini dijalankan oleh jendela lain: tambahkan di sana.",
 "pkg_mount_done": "Ditaruh di {root}. Kraken Mount akan menambahkannya ke layar utama pada pemindaian berikutnya; tidak ada yang diinstal.",
 "install.kraken.title": "Kraken Mount berjalan di PS5 ini",
-"install.kraken.body": "Paket PS5 yang dibuat dengan kunci debug (setiap paket buatan Konversi termasuk) bisa di-mount alih-alih diinstal: PS5Upload menyalinnya ke folder homebrew di drive paket, dan Kraken Mount menaruhnya di layar utama. Tidak ada yang diinstal, dan menghapusnya nanti hanya menghapus file itu. Paket PS4, paket retail, pembaruan, dan add-on tetap diinstal.",
+"install.kraken.body_v2": "Paket PS5 yang dibuat dengan kunci debug (setiap paket buatan Konversi termasuk) bisa di-mount atau diinstal. Untuk me-mount-nya, PS5Upload menyalinnya ke folder homebrew di drive paket dan Kraken Mount menaruhnya di layar utama; tidak ada yang diinstal, dan menghapusnya nanti hanya menghapus file itu. Paket PS4, paket retail, pembaruan, dan add-on diinstal.",
 "install.kraken.both": "ShadowMount+ juga berjalan. Keduanya tidak boleh berjalan bersamaan: mulai ulang PS5 dengan hanya salah satunya sebelum me-mount paket.",
 "kraken_update_note": "Kraken Mount {version} bisa melewatkan data simpanan dan trofi paket yang dipasang. Perbarui ke {min} atau lebih baru dari halaman proyeknya.",
 "kraken_update_open": "Halaman proyek",

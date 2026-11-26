@@ -9440,7 +9440,7 @@ game_fps_tv_note: "Shown here, not on the TV: drawing over a game means changing
 "pkg_mount_not_queued": "Another window runs this console's queue: add it there.",
 "pkg_mount_done": "Put in {root}. Kraken Mount adds it to the home screen on its next scan; nothing was installed.",
 "install.kraken.title": "Kraken Mount is running on this PS5",
-"install.kraken.body": "A PS5 package made with the debug key (every package Convert makes is one) can be mounted instead of installed: PS5Upload copies it into the homebrew folder of the package drive, and Kraken Mount puts it on the home screen. Nothing is installed, and removing it later deletes just that file. PS4 packages, retail packages, updates and add-ons still install.",
+"install.kraken.body_v2": "A PS5 package made with the debug key (every package Convert makes is one) can be mounted or installed. To mount it, PS5Upload copies it into the homebrew folder of the package drive and Kraken Mount puts it on the home screen; nothing is installed, and removing it later deletes just that file. PS4 packages, retail packages, updates and add-ons are installed.",
 "install.kraken.both": "ShadowMount+ is running too. The two must not run together: restart the PS5 with only one of them before mounting a package.",
 "kraken_update_note": "Kraken Mount {version} can leave a mounted package's save data and trophies out. Update it to {min} or later from its project page.",
 "kraken_update_open": "Project page",

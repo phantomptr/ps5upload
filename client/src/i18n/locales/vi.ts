@@ -9128,7 +9128,7 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "pkg_mount_not_queued": "Hàng đợi của máy này đang chạy ở cửa sổ khác: hãy thêm ở đó.",
 "pkg_mount_done": "Đã đặt vào {root}. Kraken Mount sẽ thêm nó vào màn hình chính ở lần quét tiếp theo; không có gì được cài.",
 "install.kraken.title": "Kraken Mount đang chạy trên PS5 này",
-"install.kraken.body": "Gói PS5 được tạo bằng khóa debug (mọi gói do Chuyển đổi tạo ra đều thuộc loại này) có thể được gắn thay vì cài: PS5Upload sao chép nó vào thư mục homebrew của ổ lưu gói, và Kraken Mount đưa nó lên màn hình chính. Không có gì được cài, và khi gỡ sau này chỉ xóa đúng tệp đó. Gói PS4, gói bán lẻ, bản cập nhật và nội dung bổ sung vẫn được cài như thường.",
+"install.kraken.body_v2": "Gói PS5 được tạo bằng khóa debug (mọi gói do Chuyển đổi tạo ra đều thuộc loại này) có thể được gắn hoặc cài. Để gắn, PS5Upload sao chép nó vào thư mục homebrew của ổ lưu gói và Kraken Mount đưa nó lên màn hình chính; không có gì được cài, và khi gỡ sau này chỉ xóa đúng tệp đó. Gói PS4, gói bán lẻ, bản cập nhật và nội dung bổ sung được cài.",
 "install.kraken.both": "ShadowMount+ cũng đang chạy. Hai thứ này không được chạy cùng lúc: hãy khởi động lại PS5 chỉ với một trong hai trước khi gắn gói.",
 "kraken_update_note": "Kraken Mount {version} có thể bỏ sót dữ liệu lưu và cúp của gói đã gắn. Hãy cập nhật lên {min} trở lên từ trang dự án.",
 "kraken_update_open": "Trang dự án",

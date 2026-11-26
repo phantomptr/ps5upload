@@ -9133,7 +9133,7 @@ rp_users_add_hint: "Başka bir kullanıcıyla da oynamak için PS5'te o kullanı
 "pkg_mount_not_queued": "Bu konsolun kuyruğunu başka bir pencere yürütüyor: oraya ekleyin.",
 "pkg_mount_done": "{root} içine kondu. Kraken Mount bir sonraki taramasında onu ana ekrana ekler; hiçbir şey kurulmadı.",
 "install.kraken.title": "Bu PS5'te Kraken Mount çalışıyor",
-"install.kraken.body": "Hata ayıklama anahtarıyla yapılmış bir PS5 paketi (Dönüştür'ün yaptığı her paket böyledir) kurulmak yerine bağlanabilir: PS5Upload onu paket sürücüsünün homebrew klasörüne kopyalar ve Kraken Mount onu ana ekrana koyar. Hiçbir şey kurulmaz ve daha sonra kaldırmak yalnızca o dosyayı siler. PS4 paketleri, perakende paketler, güncellemeler ve eklentiler yine kurulur.",
+"install.kraken.body_v2": "Hata ayıklama anahtarıyla yapılmış bir PS5 paketi (Dönüştür'ün yaptığı her paket böyledir) bağlanabilir veya kurulabilir. Bağlamak için PS5Upload onu paket sürücüsünün homebrew klasörüne kopyalar ve Kraken Mount onu ana ekrana koyar; hiçbir şey kurulmaz ve daha sonra kaldırmak yalnızca o dosyayı siler. PS4 paketleri, perakende paketler, güncellemeler ve eklentiler kurulur.",
 "install.kraken.both": "ShadowMount+ da çalışıyor. İkisi birlikte çalışmamalıdır: bir paketi bağlamadan önce PS5'i yalnızca biriyle yeniden başlatın.",
 "kraken_update_note": "Kraken Mount {version}, bağlanan bir paketin kayıt verilerini ve kupalarını dışarıda bırakabilir. Proje sayfasından {min} veya daha yeni bir sürüme güncelleyin.",
 "kraken_update_open": "Proje sayfası",

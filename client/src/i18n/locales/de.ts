@@ -9134,7 +9134,7 @@ rp_users_add_hint: "Um auch als anderer Benutzer zu spielen, melde dich auf der 
 "pkg_mount_not_queued": "Ein anderes Fenster führt die Warteschlange dieser Konsole: Füge es dort hinzu.",
 "pkg_mount_done": "In {root} abgelegt. Kraken Mount fügt es bei seinem nächsten Scan dem Startbildschirm hinzu; es wurde nichts installiert.",
 "install.kraken.title": "Auf dieser PS5 läuft Kraken Mount",
-"install.kraken.body": "Ein mit dem Debug-Schlüssel erstelltes PS5-Paket (jedes Paket, das Konvertieren erstellt, ist eines) kann eingehängt statt installiert werden: PS5Upload kopiert es in den homebrew-Ordner des Paketlaufwerks, und Kraken Mount bringt es auf den Startbildschirm. Nichts wird installiert, und späteres Entfernen löscht nur diese Datei. PS4-Pakete, Retail-Pakete, Updates und Add-ons werden weiterhin installiert.",
+"install.kraken.body_v2": "Ein mit dem Debug-Schlüssel erstelltes PS5-Paket (jedes Paket, das Konvertieren erstellt, ist eines) kann eingehängt oder installiert werden. Zum Einhängen kopiert PS5Upload es in den homebrew-Ordner des Paketlaufwerks, und Kraken Mount bringt es auf den Startbildschirm; nichts wird installiert, und späteres Entfernen löscht nur diese Datei. PS4-Pakete, Retail-Pakete, Updates und Add-ons werden installiert.",
 "install.kraken.both": "ShadowMount+ läuft ebenfalls. Die beiden dürfen nicht zusammen laufen: Starte die PS5 mit nur einem von beiden neu, bevor du ein Paket einhängst.",
 "kraken_update_note": "Kraken Mount {version} kann die Spielstände und Trophäen eines eingehängten Pakets auslassen. Aktualisiere es auf {min} oder neuer über seine Projektseite.",
 "kraken_update_open": "Projektseite",

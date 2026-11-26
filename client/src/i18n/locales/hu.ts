@@ -9418,7 +9418,7 @@ rp_users_add_hint: "Ha másik felhasználóként is játszanál, jelentkezz be a
 "pkg_mount_not_queued": "A konzol sorát egy másik ablak kezeli: ott add hozzá.",
 "pkg_mount_done": "Elhelyezve ide: {root}. A Kraken Mount a következő átvizsgáláskor felteszi a kezdőképernyőre; semmi nem lett telepítve.",
 "install.kraken.title": "Ezen a PS5-ön fut a Kraken Mount",
-"install.kraken.body": "A debug kulccsal készült PS5-csomag (az Átalakítás minden csomagja ilyen) telepítés helyett csatolható is: a PS5Upload a csomagmeghajtó homebrew mappájába másolja, a Kraken Mount pedig a kezdőképernyőre teszi. Semmi nem települ, és a későbbi eltávolítás csak azt az egy fájlt törli. A PS4-csomagok, retail csomagok, frissítések és kiegészítők továbbra is települnek.",
+"install.kraken.body_v2": "A debug kulccsal készült PS5-csomag (az Átalakítás minden csomagja ilyen) csatolható vagy telepíthető. Csatoláshoz a PS5Upload a csomagmeghajtó homebrew mappájába másolja, a Kraken Mount pedig a kezdőképernyőre teszi; semmi nem települ, és a későbbi eltávolítás csak azt az egy fájlt törli. A PS4-csomagok, retail csomagok, frissítések és kiegészítők települnek.",
 "install.kraken.both": "A ShadowMount+ is fut. A kettő nem futhat együtt: csomag csatolása előtt indítsd újra a PS5-öt csak az egyikkel.",
 "kraken_update_note": "A Kraken Mount {version} kihagyhatja egy csatolt csomag mentéseit és trófeáit. Frissítsd {min} vagy újabb verzióra a projekt oldaláról.",
 "kraken_update_open": "Projektoldal",

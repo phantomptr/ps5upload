@@ -9079,7 +9079,7 @@ rp_users_add_hint: "Para jugar también como otro usuario, inicia sesión con es
 "pkg_mount_not_queued": "Otra ventana gestiona la cola de esta consola: añádelo allí.",
 "pkg_mount_done": "Colocado en {root}. Kraken Mount lo añade a la pantalla de inicio en su próximo escaneo; no se instaló nada.",
 "install.kraken.title": "Kraken Mount está en ejecución en esta PS5",
-"install.kraken.body": "Un paquete de PS5 creado con la clave de depuración (todos los paquetes que crea Convertir lo son) se puede montar en lugar de instalar: PS5Upload lo copia en la carpeta homebrew de la unidad de paquetes y Kraken Mount lo pone en la pantalla de inicio. No se instala nada, y quitarlo después borra solo ese archivo. Los paquetes de PS4, los paquetes retail, las actualizaciones y los complementos se siguen instalando.",
+"install.kraken.body_v2": "Un paquete de PS5 creado con la clave de depuración (todos los paquetes que crea Convertir lo son) se puede montar o instalar. Para montarlo, PS5Upload lo copia en la carpeta homebrew de la unidad de paquetes y Kraken Mount lo pone en la pantalla de inicio; no se instala nada, y quitarlo después borra solo ese archivo. Los paquetes de PS4, los paquetes retail, las actualizaciones y los complementos se instalan.",
 "install.kraken.both": "ShadowMount+ también está en ejecución. Los dos no deben ejecutarse juntos: reinicia la PS5 con solo uno de ellos antes de montar un paquete.",
 "kraken_update_note": "Kraken Mount {version} puede dejar fuera los datos guardados y los trofeos de un paquete montado. Actualízalo a {min} o posterior desde la página del proyecto.",
 "kraken_update_open": "Página del proyecto",

@@ -9079,7 +9079,7 @@ rp_users_add_hint: "若也想以其他使用者遊玩，請在 PS5 上登入該�
 "pkg_mount_not_queued": "這台主機的佇列在另一個視窗中執行：請在那裡新增。",
 "pkg_mount_done": "已放入 {root}。Kraken Mount 下次掃描時會將其加入主畫面；沒有安裝任何內容。",
 "install.kraken.title": "這台 PS5 上正在執行 Kraken Mount",
-"install.kraken.body": "以除錯金鑰製作的 PS5 套件（「轉換」製作的套件都是）可以掛載而不必安裝：PS5Upload 會把它複製到安裝檔磁碟的 homebrew 資料夾，再由 Kraken Mount 放到主畫面上。不會安裝任何內容，日後移除時也只刪除那個檔案。PS4 套件、零售套件、更新和追加內容仍會照常安裝。",
+"install.kraken.body_v2": "以除錯金鑰製作的 PS5 套件（「轉換」製作的套件都是）可以掛載，也可以安裝。掛載時，PS5Upload 會把它複製到安裝檔磁碟的 homebrew 資料夾，再由 Kraken Mount 放到主畫面上；不會安裝任何內容，日後移除時也只刪除那個檔案。PS4 套件、零售套件、更新和追加內容會被安裝。",
 "install.kraken.both": "ShadowMount+ 也在執行。兩者不能同時執行：掛載套件前，請重新啟動 PS5，只執行其中一個。",
 "kraken_update_note": "Kraken Mount {version} 可能會漏掉已掛載套件的存檔和獎盃。請從專案頁面更新到 {min} 或更新版本。",
 "kraken_update_open": "專案頁面",
