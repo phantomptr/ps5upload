@@ -777,6 +777,17 @@ fn text(v: serde_json::Value) -> Message {
     Message::Text(v.to_string().into())
 }
 
+/// Whether a status message tells the page another page took the stream (`{"stage":"moved"}`).
+/// Read as JSON, not by its text: the console's on-screen keyboard text goes out on the same queue
+/// (`{"keyboard":{"text":..}}`), and a field reading `moved` used to end the page each time.
+fn is_moved(m: &Message) -> bool {
+    let Message::Text(t) = m else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(t.as_str())
+        .is_ok_and(|v| v.get("stage").and_then(|s| s.as_str()) == Some("moved"))
+}
+
 /// `[kind][payload]`, the form every socket takes. One copy per frame: each sink clones the handle,
 /// and the replay keeps `slice(1..)`.
 fn tagged(kind: u8, payload: &[u8]) -> Bytes {
@@ -2269,7 +2280,7 @@ async fn session(mut socket: WebSocket) {
             biased;
             out = ctl_rx.recv() => match out {
                 Some(m) => {
-                    let moved = matches!(&m, Message::Text(t) if t.as_str().contains("\"moved\""));
+                    let moved = is_moved(&m);
                     if !send_limited(&mut socket, m).await {
                         reason = "gone";
                         break;
@@ -2541,6 +2552,20 @@ mod slot_held_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only the "another page took the stream" message ends a page: keyboard text or a reason
+    /// that reads `moved` does not.
+    #[test]
+    fn only_the_moved_stage_ends_a_page() {
+        assert!(is_moved(&text(serde_json::json!({"stage": "moved"}))));
+        assert!(!is_moved(&text(
+            serde_json::json!({"keyboard": {"text": "moved"}})
+        )));
+        assert!(!is_moved(&text(
+            serde_json::json!({"stage": "ended", "reason": "moved"})
+        )));
+        assert!(!is_moved(&Message::Binary(b"\"moved\"".to_vec().into())));
+    }
 
     #[test]
     fn a_session_keeps_and_logs_only_its_first_decoder_events() {
