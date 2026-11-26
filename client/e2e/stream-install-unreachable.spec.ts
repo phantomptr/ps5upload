@@ -16,7 +16,7 @@ interface Fake {
 
 const base = {
   job: "j1",
-  ps5_addr: "192.168.1.100:9114",
+  ps5_addr: "192.168.1.100",
   content_id: "UP0000-CUSA00001_00-0000000000000000",
   title_id: "CUSA00001",
   route: "stream",
