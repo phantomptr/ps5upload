@@ -8977,6 +8977,8 @@ rp_users_add_hint: "若也想以其他使用者遊玩，請在 PS5 上登入該�
 "receive_cheats_none": "對方沒有開啟任何項目。",
 "receive_stream": "串流設定",
 "receive_stream_body": "與你收到的其他內容一起保存。",
+"receive_data_unreadable": "部分內容無法使用",
+"receive_data_unreadable_body": "好友傳送的部分內容不是本應用程式能讀取的格式，因此已略過。",
 "receive_intro_v2": "貼上對方的連結。在任何內容傳過來之前，你都能先看到對方提供了什麼。",
 "receive_pick": "要接收的內容",
 "receive_total": "共 {size}",

@@ -9026,6 +9026,8 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "receive_cheats_none": "Họ không bật mã nào.",
 "receive_stream": "Cài đặt luồng",
 "receive_stream_body": "Được giữ cùng những thứ khác bạn đã nhận.",
+"receive_data_unreadable": "Một phần không dùng được",
+"receive_data_unreadable_body": "Một phần bạn của bạn gửi không ở dạng ứng dụng này đọc được nên đã bị bỏ qua.",
 "receive_intro_v2": "Dán liên kết của họ. Bạn sẽ thấy họ gửi gì trước khi có gì được chuyển tới.",
 "receive_pick": "Nhận những gì",
 "receive_total": "Tổng {size}",

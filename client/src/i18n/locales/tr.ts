@@ -9031,6 +9031,8 @@ rp_users_add_hint: "Başka bir kullanıcıyla da oynamak için PS5'te o kullanı
 "receive_cheats_none": "Hiç hile açmadan oynuyor.",
 "receive_stream": "Yayın ayarları",
 "receive_stream_body": "Aldığın diğer şeylerle birlikte saklanır.",
+"receive_data_unreadable": "Bir kısmı kullanılamıyor",
+"receive_data_unreadable_body": "Arkadaşının gönderdiklerinin bir kısmı bu uygulamanın okuyabildiği biçimde değil, bu yüzden dışarıda bırakıldı.",
 "receive_intro_v2": "Bağlantısını yapıştır. Bir şey gelmeden önce ne sunduğunu görürsün.",
 "receive_pick": "Ne alınacak",
 "receive_total": "Toplam {size}",

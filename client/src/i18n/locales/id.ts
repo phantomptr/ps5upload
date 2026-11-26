@@ -9033,6 +9033,8 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "receive_cheats_none": "Dia bermain tanpa cheat aktif.",
 "receive_stream": "Pengaturan stream",
 "receive_stream_body": "Disimpan bersama hal lain yang kamu terima.",
+"receive_data_unreadable": "Sebagian tidak bisa dipakai",
+"receive_data_unreadable_body": "Sebagian yang dikirim temanmu tidak dalam bentuk yang bisa dibaca aplikasi ini, jadi dilewati.",
 "receive_intro_v2": "Tempel tautan darinya. Kamu melihat yang ditawarkan sebelum apa pun tiba.",
 "receive_pick": "Yang diambil",
 "receive_total": "Total {size}",

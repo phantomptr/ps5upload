@@ -9032,6 +9032,8 @@ rp_users_add_hint: "Um auch als anderer Benutzer zu spielen, melde dich auf der 
 "receive_cheats_none": "Er spielt ohne aktive Cheats.",
 "receive_stream": "Stream-Einstellungen",
 "receive_stream_body": "Bei den anderen empfangenen Dingen gespeichert.",
+"receive_data_unreadable": "Einiges davon ist nicht nutzbar",
+"receive_data_unreadable_body": "Ein Teil dessen, was dein Freund geschickt hat, liegt in keiner Form vor, die diese App liest, und wurde weggelassen.",
 "receive_intro_v2": "Füge den Link ein. Du siehst, was angeboten wird, bevor etwas ankommt.",
 "receive_pick": "Was übernehmen",
 "receive_total": "{size} insgesamt",

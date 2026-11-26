@@ -9024,6 +9024,8 @@ rp_users_add_hint: "للعب باسم مستخدم آخر أيضًا، سجّل 
 "receive_cheats_none": "يلعب دون تفعيل أي منها.",
 "receive_stream": "إعدادات البث",
 "receive_stream_body": "محفوظة مع الأشياء الأخرى التي استلمتها.",
+"receive_data_unreadable": "لا يمكن استخدام بعضه",
+"receive_data_unreadable_body": "جزء مما أرسله صديقك ليس بصيغة يقرؤها هذا التطبيق، لذلك تم تركه.",
 "receive_intro_v2": "الصق رابطهم. سترى ما يقدّمونه قبل أن يصل أي شيء.",
 "receive_pick": "ما الذي تأخذه",
 "receive_total": "{size} إجمالًا",

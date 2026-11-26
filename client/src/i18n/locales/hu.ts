@@ -9316,6 +9316,8 @@ rp_users_add_hint: "Ha másik felhasználóként is játszanál, jelentkezz be a
 "receive_cheats_none": "Csalások nélkül játszik.",
 "receive_stream": "Stream-beállítások",
 "receive_stream_body": "A többi kapott dologgal együtt tárolva.",
+"receive_data_unreadable": "Egy része nem használható",
+"receive_data_unreadable_body": "A barátod által küldöttek egy része nem olyan formában van, amit ez az app olvas, ezért kimaradt.",
 "receive_intro_v2": "Illeszd be a linkjét. Látod, mit kínál, mielőtt bármi megérkezik.",
 "receive_pick": "Mit veszel át",
 "receive_total": "Összesen {size}",

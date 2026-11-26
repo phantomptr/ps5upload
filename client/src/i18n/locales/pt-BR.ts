@@ -9039,6 +9039,8 @@ rp_users_add_hint: "Para jogar também como outro usuário, entre com esse usuá
 "receive_cheats_none": "Joga sem nenhum ativado.",
 "receive_stream": "Configurações de transmissão",
 "receive_stream_body": "Guardadas junto com as outras coisas que você recebeu.",
+"receive_data_unreadable": "Parte não pode ser usada",
+"receive_data_unreadable_body": "Parte do que seu amigo enviou não está em um formato que este app lê, então ficou de fora.",
 "receive_intro_v2": "Cole o link. Você vê o que é oferecido antes de qualquer coisa chegar.",
 "receive_pick": "O que receber",
 "receive_total": "{size} no total",

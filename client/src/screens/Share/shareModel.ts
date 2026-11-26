@@ -3,6 +3,8 @@
 
 import type { CollectionLocation } from "../../api/collection";
 import type { ShareCreate, ShareItemSpec } from "../../api/share";
+import { KBM_MODES, type KbmMode } from "../../lib/kbmInput";
+import { PAD_ACTIONS, type KeyAction } from "../../lib/remotePlayStream";
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 
 /** How long a link works: 1 hour, 24 hours (the default), 7 days. */
@@ -132,4 +134,84 @@ export function timeLeft(seconds: number): { h: number; m: number } {
 export function percent(done: number, total: number): number {
   if (!total || total <= 0) return 0;
   return Math.max(0, Math.min(100, Math.floor((done / total) * 100)));
+}
+
+// ── What a friend sent, checked before it is used ─────────────────────────────────────────────
+// controls.json and cheats-on.json come from someone else's app: each is used only when it has
+// the shape this app writes (SharePanel's controls, createBody's cheats), never as it came.
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** Keys in a keyboard map, and names in a cheat list, at most. */
+const KEYMAP_MAX = 200;
+const CHEATS_MAX = 2000;
+const CHEAT_NAME_MAX = 200;
+
+/** Received controls (controls.json): what the receiver can use of them. */
+export type SharedControls = {
+  title_id: string | null;
+  /** The game's controls as sent; lib/gameControls' readControls makes them safe to keep. */
+  game: Record<string, unknown> | null;
+  kbm_mode: KbmMode | null;
+  keymap: Record<string, KeyAction> | null;
+};
+
+/** One key's action, when it is one a keyboard map can hold (PAD_ACTIONS). */
+function readKeyAction(v: unknown): KeyAction | null {
+  if (!isRecord(v)) return null;
+  const hit = PAD_ACTIONS.find(({ action: a }) => {
+    if ("button" in a) return v.button === a.button && v.stick === undefined && v.trigger === undefined;
+    if ("stick" in a) return v.stick === a.stick && v.dir === a.dir && v.button === undefined && v.trigger === undefined;
+    return v.trigger === a.trigger && v.button === undefined && v.stick === undefined;
+  });
+  return hit ? hit.action : null;
+}
+
+/** A keyboard map (KeyboardEvent.code → action), or null when any of it is not one. */
+function readKeymap(v: unknown): Record<string, KeyAction> | null {
+  if (!isRecord(v)) return null;
+  const entries = Object.entries(v);
+  if (entries.length === 0 || entries.length > KEYMAP_MAX) return null;
+  const out: Record<string, KeyAction> = {};
+  for (const [code, a] of entries) {
+    const action = readKeyAction(a);
+    if (!/^[A-Za-z0-9]{1,32}$/.test(code) || !action) return null;
+    out[code] = action;
+  }
+  return out;
+}
+
+/** controls.json as SharePanel writes it ({title_id, game, kbm_mode, keymap, pad_profiles}), or
+ *  null when it is not that shape (then none of it is used). */
+export function readSharedControls(v: unknown): SharedControls | null {
+  if (!isRecord(v)) return null;
+  const tid = v.title_id;
+  if (tid != null && typeof tid !== "string") return null;
+  if (v.game != null && !isRecord(v.game)) return null;
+  const mode = v.kbm_mode;
+  if (mode != null && !KBM_MODES.includes(mode as KbmMode)) return null;
+  let keymap: Record<string, KeyAction> | null = null;
+  if (v.keymap != null) {
+    keymap = readKeymap(v.keymap);
+    if (!keymap) return null;
+  }
+  return {
+    // Only a real Title ID picks the game the controls go to.
+    title_id: typeof tid === "string" && /^[A-Za-z]{4}\d{5}$/.test(tid) ? tid.toUpperCase() : null,
+    game: isRecord(v.game) ? v.game : null,
+    kbm_mode: mode == null ? null : (mode as KbmMode),
+    keymap,
+  };
+}
+
+/** cheats-on.json as createBody writes it ({title_id, on, all}): the names that are on, or null
+ *  when it is not that shape. */
+export function readSharedCheats(v: unknown): { on: string[] } | null {
+  if (!isRecord(v)) return null;
+  const names = (x: unknown): x is string[] =>
+    Array.isArray(x) && x.length <= CHEATS_MAX && x.every((n) => typeof n === "string" && n.length <= CHEAT_NAME_MAX);
+  if (!names(v.on)) return null;
+  if (v.all !== undefined && !names(v.all)) return null;
+  if (v.title_id != null && typeof v.title_id !== "string") return null;
+  return { on: v.on };
 }

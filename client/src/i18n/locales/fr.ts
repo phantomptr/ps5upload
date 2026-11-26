@@ -9040,6 +9040,8 @@ rp_users_add_hint: "Pour jouer aussi avec un autre utilisateur, connectez-vous �
 "receive_cheats_none": "Il joue sans aucun code activé.",
 "receive_stream": "Réglages du flux",
 "receive_stream_body": "Gardés avec les autres éléments reçus.",
+"receive_data_unreadable": "Une partie est inutilisable",
+"receive_data_unreadable_body": "Une partie de ce que ton ami a envoyé n'est pas dans un format que cette app lit, elle a donc été laissée de côté.",
 "receive_intro_v2": "Collez son lien. Vous voyez ce qui est proposé avant que rien n'arrive.",
 "receive_pick": "Quoi prendre",
 "receive_total": "{size} au total",

@@ -32,7 +32,7 @@ import { pushNotification } from "../../state/notifications";
 import { useRemotePlayStore } from "../../state/remotePlay";
 import { SendToPs5 } from "../GameHub/SendToPs5";
 import { ItemRow, KIND_ICON, NameField } from "./ShareParts";
-import { percent, saveShareName, savedShareName } from "./shareModel";
+import { percent, readSharedCheats, readSharedControls, saveShareName, savedShareName } from "./shareModel";
 
 const POLL_MS = 1000;
 const ENDED = ["done", "declined", "cancelled", "failed", "refused"];
@@ -635,9 +635,7 @@ function ReceivedSave({ rx, item, host }: { rx: ReceiveView; item: OfferedItem; 
 }
 
 function ReceivedData({ rx, item }: { rx: ReceiveView; item: OfferedItem }) {
-  const tr = useTr();
   const [files, setFiles] = useState<Record<string, unknown> | null>(null);
-  const [applied, setApplied] = useState(false);
   useEffect(() => {
     let live = true;
     receiveData(rx.id, item.id)
@@ -648,22 +646,35 @@ function ReceivedData({ rx, item }: { rx: ReceiveView; item: OfferedItem }) {
     };
   }, [rx.id, item.id]);
   if (!files) return null;
+  return <ReceivedFiles rx={rx} files={files} />;
+}
+
+/** A received data item's files (note, controls, cheats, stream settings) and what can be done
+ *  with them. */
+export function ReceivedFiles({ rx, files }: { rx: ReceiveView; files: Record<string, unknown> }) {
+  const tr = useTr();
+  const [applied, setApplied] = useState(false);
   const note = typeof files["note.txt"] === "string" ? (files["note.txt"] as string) : null;
-  const controls = files["controls.json"] as
-    | { title_id?: string; game?: unknown; kbm_mode?: string | null; keymap?: Record<string, unknown> }
-    | undefined;
-  const cheats = files["cheats-on.json"] as { on?: string[] } | undefined;
+  // Checked against the shapes this app writes: what isn't one is left out, and said so.
+  const controls = files["controls.json"] === undefined ? undefined : readSharedControls(files["controls.json"]);
+  const cheats = files["cheats-on.json"] === undefined ? undefined : readSharedCheats(files["cheats-on.json"]);
+  const unreadable = controls === null || cheats === null;
   const applyControls = () => {
     if (!controls) return;
     const tid = (controls.title_id ?? rx.title_id ?? "").toUpperCase();
     if (/^[A-Z]{4}\d{5}$/.test(tid)) {
       if (controls.game) useGameControlsStore.getState().update(tid, readControls(controls.game));
-      if (controls.kbm_mode) useKbmStore.getState().setMode(tid, controls.kbm_mode as never);
+      if (controls.kbm_mode) useKbmStore.getState().setMode(tid, controls.kbm_mode);
     }
     setApplied(true);
   };
   return (
     <div className="space-y-2">
+      {unreadable && (
+        <Callout tone="warn" title={tr("receive_data_unreadable", undefined, "Some of it can't be used")}>
+          {tr("receive_data_unreadable_body", undefined, "Part of what your friend sent isn't in a form this app reads, so it was left out.")}
+        </Callout>
+      )}
       {note && (
         <p className="whitespace-pre-wrap text-sm [overflow-wrap:anywhere]" data-testid="receive-note">
           {note}
@@ -678,7 +689,7 @@ function ReceivedData({ rx, item }: { rx: ReceiveView; item: OfferedItem }) {
             <Button
               size="sm"
               variant="secondary"
-              onClick={() => useRemotePlayStore.getState().setKeymap(controls.keymap as never)}
+              onClick={() => useRemotePlayStore.getState().setKeymap(controls.keymap)}
               data-testid="receive-use-keymap"
             >
               {tr("receive_use_keymap", undefined, "Also use their keyboard keys")}

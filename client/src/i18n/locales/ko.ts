@@ -9041,6 +9041,8 @@ rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사�
 "receive_cheats_none": "친구는 아무것도 켜지 않고 플레이합니다.",
 "receive_stream": "스트림 설정",
 "receive_stream_body": "받은 다른 항목과 함께 보관됩니다.",
+"receive_data_unreadable": "일부는 사용할 수 없습니다",
+"receive_data_unreadable_body": "친구가 보낸 것 중 일부는 이 앱이 읽을 수 있는 형식이 아니어서 제외했습니다.",
 "receive_intro_v2": "상대의 링크를 붙여 넣으세요. 무엇이든 받기 전에 상대가 보내려는 것을 확인할 수 있습니다.",
 "receive_pick": "받을 항목",
 "receive_total": "총 {size}",

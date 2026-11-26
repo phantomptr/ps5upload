@@ -9261,6 +9261,8 @@ rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim 
 "receive_cheats_none": "Znajomy gra bez włączonych kodów.",
 "receive_stream": "Ustawienia strumienia",
 "receive_stream_body": "Zapisane razem z innymi odebranymi rzeczami.",
+"receive_data_unreadable": "Części nie da się użyć",
+"receive_data_unreadable_body": "Część tego, co wysłał znajomy, nie jest w formie, którą ta aplikacja odczytuje, więc została pominięta.",
 "receive_intro_v2": "Wklej link od znajomego. Zobaczysz, co oferuje, zanim cokolwiek dotrze.",
 "receive_pick": "Co wziąć",
 "receive_total": "Razem {size}",
