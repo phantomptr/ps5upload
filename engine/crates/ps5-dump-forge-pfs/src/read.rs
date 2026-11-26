@@ -300,11 +300,14 @@ fn extent(h: &PfsHeader, inodes: &[Inode], n: u32, what: &str) -> Result<Extent>
         return Err(bad("size out of range"));
     }
     let bs = u64::from(h.block_size);
-    let limit = h.ndblock.min(h.image_len / bs);
+    // The run lies inside the header's blocks, and its stored bytes inside the file. The last
+    // block may be short: some writers end the file at its last data byte, and only `stored`
+    // bytes are ever read (adapted from PS5 Dump Forge, its issue #65).
     let in_image = ino.db0 > 0
         && (ino.db0 as u64)
             .checked_add(ino.blocks)
-            .is_some_and(|e| e <= limit);
+            .is_some_and(|e| e <= h.ndblock)
+        && (ino.db0 as u64 * bs).saturating_add(stored) <= h.image_len;
     let fill_ok = ino.fill == Some(-1) || (n == 0 && ino.fill == Some(0));
     if !fill_ok || ino.blocks != stored.div_ceil(bs).max(1) || !in_image {
         return Err(bad("unsupported PFS pointer layout"));
