@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.33
 
 **Fake PS5 packages**
 - **Two ways to play them, explained side by side.** Install the package (on firmware 11.61 to 13.60 with the latest kstuff, which supports fake packages up to 13.60), or mount it with Kraken Mount. Upload & Install, Convert, the hint after a game doesn't start, the Payloads catalog, the FAQ and the website now all say this the same way, and the note is information rather than a warning.
