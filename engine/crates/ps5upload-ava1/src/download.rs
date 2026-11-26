@@ -401,6 +401,16 @@ impl Sink for CheckedSink {
     fn commit(&self, id: u32) -> io::Result<()> {
         self.inner.commit(id)
     }
+    // Both to the `LocalSink` as well. Left to the trait's no-ops, a committed file's folder was
+    // not synced before the journal called it done, and a retry of a folder download that had
+    // already been renamed into place (the session lost before its JobDone) stayed "staged":
+    // its finish found the folder there and failed as "appeared during the download".
+    fn sync_committed(&self, ids: &[u32]) -> io::Result<()> {
+        self.inner.sync_committed(ids)
+    }
+    fn resume_staged(&self, journaled: bool, all_done: bool) {
+        self.inner.resume_staged(journaled, all_done)
+    }
     fn finish(&self) -> io::Result<()> {
         self.inner.finish()?;
         if let Some(m) = self.landed.lock().unwrap().as_ref() {
@@ -2244,6 +2254,48 @@ mod tests {
         std::fs::write(d.join("f.ava-part"), b"x").unwrap();
         remove_path(&d.join("f.ava-part"));
         assert!(!d.join("f.ava-part").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A folder download renamed into place whose session was lost before the console heard it
+    /// was done runs again with the same sink: the journal says every file is done, and the
+    /// finish must take the folder that is there as its own.
+    #[test]
+    fn a_retry_after_the_folder_was_renamed_into_place_finishes() {
+        let d = std::env::temp_dir().join(format!("p5a-landed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let target = d.join("Game");
+        let sink = CheckedSink {
+            inner: LocalSink::new(target.clone(), false),
+            root: target.clone(),
+            single: false,
+            escape_names: false,
+            landed: Mutex::new(None),
+        };
+        let m = Manifest {
+            entries: vec![manifest::Entry {
+                kind: gen::ENTRY_FILE,
+                mode: 0o644,
+                size: 3,
+                mtime: 0,
+                path: "a.bin".into(),
+                root: None,
+            }],
+        };
+        assert_eq!(sink.resume_key().map(|(_, staged)| staged), Some(true));
+        sink.prepare(&m).unwrap();
+        sink.write_whole(0, b"abc").unwrap();
+        sink.sync(&[0]).unwrap();
+        sink.commit(0).unwrap();
+        sink.sync_committed(&[0]).unwrap();
+        sink.finish().unwrap();
+        assert_eq!(std::fs::read(target.join("a.bin")).unwrap(), b"abc");
+        // The retry: the journal's Open said staged, and every file is done.
+        sink.resume_staged(true, true);
+        sink.prepare(&m).unwrap();
+        sink.finish().expect("the folder is this job's own");
+        assert_eq!(std::fs::read(target.join("a.bin")).unwrap(), b"abc");
         let _ = std::fs::remove_dir_all(&d);
     }
 
