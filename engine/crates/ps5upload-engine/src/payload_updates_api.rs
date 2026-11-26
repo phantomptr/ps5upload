@@ -202,6 +202,7 @@ mod tests {
                 status: 404,
                 location: None,
                 content_length: Some(0),
+                retry_at: None,
                 body: Box::new(std::io::Cursor::new(Vec::new())),
             })
         }

@@ -351,10 +351,13 @@ impl Library {
         extra_ids: &[String],
     ) -> Result<UpdateState, LibraryError> {
         let catalog = self.catalog();
+        // A payload source the user added has its own card, which checks only when asked: it is
+        // left out here, so it is neither checked twice nor shown twice.
         let mut ids: Vec<String> = self
             .local_inventory()
             .into_iter()
             .map(|e| e.payload_id)
+            .filter(|id| !super::repos::is_valid_custom_id(id))
             .collect();
         for id in extra_ids {
             if !ids.contains(id) && catalog.iter().any(|p| &p.id == id) {

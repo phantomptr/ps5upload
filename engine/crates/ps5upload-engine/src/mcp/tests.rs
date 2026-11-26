@@ -2746,6 +2746,24 @@ async fn the_routes_that_say_host_get_the_console_as_host() {
 }
 
 #[tokio::test]
+async fn the_payload_source_tools_reach_their_routes() {
+    let server = echo_server();
+    let asked = route_of(&server, "payloads_sources", json!({"check": true})).await;
+    assert_eq!(asked["path"], "/api/payloads/repos");
+    assert_eq!(asked["query"]["check"], "true");
+    let asked = route_of(
+        &server,
+        "payloads_source_download",
+        json!({"id": "custom-0a1b2c3d4e5f"}),
+    )
+    .await;
+    assert_eq!(
+        asked["path"],
+        "/api/payloads/repos/custom-0a1b2c3d4e5f/download"
+    );
+}
+
+#[tokio::test]
 async fn the_payload_update_tools_reach_their_routes() {
     let server = echo_server();
     let asked = route_of(&server, "payloads_updates", json!({})).await;
