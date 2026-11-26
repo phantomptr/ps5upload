@@ -1708,6 +1708,24 @@ fn queue(p: &mut Peer, m: Message) {
     }
 }
 
+/// The answer to a guest's ping onto the outgoing queue. One waits there at most: a newer ping's
+/// takes its place (that round trip is the one that counts). A pong went past the queue's limit,
+/// so a guest that pinged without reading what it is sent grew the queue for as long as it liked.
+fn queue_pong(out: &mut VecDeque<(bool, Vec<u8>)>, out_bytes: &mut usize, ping: [u8; 8]) {
+    let mut v = vec![chunk::PONG];
+    v.extend_from_slice(&ping);
+    // A binary piece starts with its header byte: only a pong's is PONG.
+    if let Some(waiting) = out
+        .iter_mut()
+        .find(|(binary, d)| *binary && d.first() == Some(&chunk::PONG))
+    {
+        waiting.1 = v;
+        return;
+    }
+    *out_bytes += v.len();
+    out.push_back((true, v));
+}
+
 /// Moves what the channel takes from the queue into it, and tells the session how full it is.
 fn flush(p: &mut Peer) {
     let Some(cid) = p.cid else {
@@ -1916,10 +1934,7 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
                     Ok(Piece::Message(b)) => Message::Binary(b.into()),
                     Ok(Piece::Pong(b)) => Message::Pong(b.to_vec().into()),
                     Ok(Piece::Ping(b)) => {
-                        let mut v = vec![chunk::PONG];
-                        v.extend_from_slice(&b);
-                        p.out_bytes += v.len();
-                        p.out.push_back((true, v));
+                        queue_pong(&mut p.out, &mut p.out_bytes, b);
                         flush(p);
                         return;
                     }
@@ -2527,6 +2542,29 @@ mod track_bench;
 #[cfg(test)]
 mod track_tests {
     use super::*;
+
+    /// A guest that pings and never reads: one pong waits, the latest ping's, behind what was
+    /// there already.
+    #[test]
+    fn pings_from_a_guest_that_does_not_read_queue_one_pong() {
+        let mut out = VecDeque::new();
+        let mut bytes = 0;
+        out.push_back((true, vec![chunk::LAST, 1, 2]));
+        bytes += 3;
+        for i in 0..10_000u64 {
+            queue_pong(&mut out, &mut bytes, i.to_le_bytes());
+        }
+        assert_eq!(out.len(), 2);
+        assert_eq!(bytes, 3 + 9);
+        let mut last = vec![chunk::PONG];
+        last.extend_from_slice(&9_999u64.to_le_bytes());
+        assert_eq!(out[1], (true, last));
+        // Once it went, the next ping gets a pong of its own.
+        out.pop_back();
+        bytes -= 9;
+        queue_pong(&mut out, &mut bytes, [7; 8]);
+        assert_eq!((out.len(), bytes), (2, 12));
+    }
 
     const HEADER: &[u8] = &[0, 0, 0, 1, 0x67, 0x64, 0, 0x2a, 0xac, 0, 0, 1, 0x68, 0xee];
 
