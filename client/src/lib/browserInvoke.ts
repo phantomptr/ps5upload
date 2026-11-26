@@ -513,11 +513,18 @@ export async function browserInvoke<T>(
     }
 
     case "ps5_app_unregister": {
-      const { addr, title_id } = args["req"] as {
+      // registration_only as the desktop command forwards it: without it the engine runs a
+      // full uninstall, and a console-installed game sharing the title id is not protected.
+      const { addr, title_id, registration_only } = args["req"] as {
         addr?: string | null;
         title_id: string;
+        registration_only?: boolean;
       };
-      return postJson<T>("/api/ps5/app/unregister", { addr, title_id }, /*long=*/ true);
+      return postJson<T>(
+        "/api/ps5/app/unregister",
+        { addr, title_id, registration_only: registration_only === true },
+        /*long=*/ true,
+      );
     }
 
     // ── Hardware monitoring ─────────────────────────────────────────────────
