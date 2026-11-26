@@ -7,7 +7,11 @@
 //! * **QR code**: the computer's page opens the link (`POST /api/ps5/rp/pad-link {open:true}`)
 //!   and shows `http://<this computer>:<port>/pad#t=<key>` as a QR code. Any phone camera opens
 //!   the controller page (`GET /pad`), which connects to `GET /api/pad/ws?t=<key>&name=..`.
-//!   The key is 128 random bits, valid until the link is closed or the engine restarts.
+//!   The key is 128 random bits, valid until the link is closed, the engine restarts, or the
+//!   computer disconnects a phone on the home network: a new key then (the QR code shows it), so
+//!   the old one is no way back in under a new device id or none. The phones still in come back
+//!   on the old key's address all the same: a device that came in with the key is allowed, as one
+//!   the computer said yes to.
 //! * **Ask**: the ps5upload app on a phone sees "<computer> is using Remote Play" (mesh presence,
 //!   with this engine's pad address) and connects without a key; the socket waits until the
 //!   computer's page allows it (`POST /api/ps5/rp/pad-link/decide`). The phone app connects
@@ -208,8 +212,9 @@ struct Link {
     key: Option<String>,
     pads: Vec<Pad>,
     pending: Vec<Pending>,
-    /// Devices the computer allowed, each with what for (true: to watch): back in without asking
-    /// on a new socket that asks for the same. One allowed to watch asks again to play.
+    /// Devices the computer allowed, or that came in on the LAN with the key, each with what for
+    /// (true: to watch): back in without asking on a new socket that asks for the same. One
+    /// allowed to watch asks again to play.
     allowed: std::collections::HashSet<(String, bool)>,
     /// Devices the computer disconnected: out until the link closes.
     denied: std::collections::HashSet<String>,
@@ -779,7 +784,9 @@ pub struct KickReq {
 }
 
 /// `POST /api/ps5/rp/pad-link/kick {id}`: let a phone go, and keep it out until the link closes
-/// (the link's key alone would let it back in with one tap).
+/// (the link's key alone would let it back in with one tap). One on the home network: the QR code
+/// gets a new key, since the phone has the old one and makes up its device id itself (a new one,
+/// or none, was a way back in). The other phones come back by their device ([`Link::allowed`]).
 pub async fn kick(Json(r): Json<KickReq>) -> Json<serde_json::Value> {
     let gone = with_link(|l| {
         let i = l.pads.iter().position(|p| p.id == r.id)?;
@@ -788,6 +795,9 @@ pub async fn kick(Json(r): Json<KickReq>) -> Json<serde_json::Value> {
         if let Some(d) = &p.device {
             l.allowed.retain(|(x, _)| x != d);
             l.denied.insert(d.clone());
+        }
+        if p.net.is_none() && l.key.is_some() {
+            l.key = random_key();
         }
         // Its way back in over the internet goes too.
         if let (Some(rt), Some(n)) = (&p.rt, l.net.as_mut()) {
@@ -1236,6 +1246,11 @@ async fn pad_session<S: crate::join::GuestSocket>(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
+        // A device in on the LAN, with the key or the computer's yes, comes back by its id: the
+        // key may be replaced meanwhile (a phone disconnected), and this one was not.
+        if let (None, Some(d)) = (&net, &device) {
+            l.allowed.insert((d.clone(), watch));
+        }
         l.pads.push(Pad {
             id,
             name: name.clone(),
@@ -2310,6 +2325,10 @@ mod tests {
             let base = serve().await;
             let url = format!("{base}?t={key}&name=iphone&d=00112233445566778899aabbccddeeff");
             let (mut ws, id) = holding(&url, &live).await;
+            // Another phone on the same QR code, which stays.
+            let other = format!("{base}?t={key}&name=android&d=ffeeddccbbaa99887766554433221100");
+            let mut ws2 = phone(&other).await;
+            hear(&mut ws2, joined).await;
             let r = kick(Json(KickReq { id })).await;
             assert_eq!(r.0["ok"], true);
             // The engine itself, not the socket's loop.
@@ -2327,13 +2346,31 @@ mod tests {
                 .0["ok"],
                 false
             );
-            // One tap on Try again: out, while the link's key still works for others.
+            // One tap on Try again: out.
             let mut again = phone(&url).await;
             assert_eq!(
                 hear(&mut again, |v| v["stage"] == "refused").await["why"],
                 "kicked"
             );
-            let other = format!("{base}?t={key}&name=android&d=ffeeddccbbaa99887766554433221100");
+            // Nor with the old key under a new device id, or none (the page makes it up: cleared
+            // site data was a way back in). The QR code has a new key now.
+            for d in ["&d=0123456789abcdef0123456789abcdef", ""] {
+                let mut sly = phone(&format!("{base}?t={key}&name=iphone{d}")).await;
+                assert_eq!(
+                    hear(&mut sly, |v| v["stage"] == "refused").await["why"],
+                    "key",
+                    "{d}"
+                );
+            }
+            let new_key = with_link(|l| l.key.clone()).unwrap();
+            assert!(!same_key(&new_key, &key));
+            let mut fresh = phone(&format!("{base}?t={new_key}&name=pixel")).await;
+            hear(&mut fresh, joined).await;
+            drop(fresh);
+            // The phone that was not disconnected loses its socket and comes back on the address
+            // it has, the old key's, without asking.
+            drop(ws2);
+            until("gone", || pads() == 0).await;
             let mut ws2 = phone(&other).await;
             hear(&mut ws2, joined).await;
             // The link closed: everyone told why, and the key void; a new link starts afresh.
