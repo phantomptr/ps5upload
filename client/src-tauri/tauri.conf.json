@@ -35,7 +35,7 @@
         "enable": true,
         "scope": [
           "$TEMP/ps5upload-save-*/**",
-          "**/sce_sys/icon0.png"
+          "**/[sS][cC][eE]_[sS][yY][sS]/[iI][cC][oO][nN]0.[pP][nN][gG]"
         ]
       }
     }

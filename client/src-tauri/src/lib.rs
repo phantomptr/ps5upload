@@ -944,6 +944,57 @@ mod asset_scope_tests {
         let _ = std::fs::remove_dir_all(&scratch);
         let _ = std::fs::remove_dir_all(&other);
     }
+
+    /// A game folder's cover in any letter case. Windows and macOS file systems ignore case,
+    /// so the app finds `sce_sys/icon0.png` in a dump that names it `SCE_SYS/ICON0.PNG`, and
+    /// Tauri checks the scope against the name as it is on disk. Still only that one file.
+    #[test]
+    fn a_cover_is_served_in_any_letter_case_and_nothing_else_is() {
+        let scope = scope();
+        let root =
+            std::env::temp_dir().join(format!("ps5upload-scope-case-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (game, dir, icon) in [
+            ("Upper", "SCE_SYS", "ICON0.PNG"),
+            ("Mixed", "Sce_Sys", "Icon0.png"),
+            ("LowerDir", "sce_sys", "ICON0.PNG"),
+            ("UpperDir", "SCE_SYS", "icon0.png"),
+        ] {
+            let sys = root.join(game).join(dir);
+            std::fs::create_dir_all(&sys).unwrap();
+            let cover = sys.join(icon);
+            std::fs::write(&cover, b"png").unwrap();
+            assert!(served(&scope, &cover), "{}", cover.display());
+            // The path the app asks for is always lower case (`game_meta::inspect_folder`);
+            // it exists only where the file system ignores case, and there it is served too.
+            let asked = root.join(game).join("sce_sys").join("icon0.png");
+            if asked.is_file() {
+                assert!(served(&scope, &asked), "{}", asked.display());
+            }
+            // Its neighbours, in any case, are not.
+            for other in [
+                "PARAM.SFO",
+                "param.json",
+                "ICON1.PNG",
+                "ICON0.PNG.BAK",
+                "PIC0.PNG",
+            ] {
+                let f = sys.join(other);
+                std::fs::write(&f, b"x").unwrap();
+                assert!(!served(&scope, &f), "{}", f.display());
+            }
+        }
+        // The same file name outside an sce_sys folder is not a cover.
+        let loose = root.join("Upper").join("ICON0.PNG");
+        std::fs::write(&loose, b"x").unwrap();
+        assert!(!served(&scope, &loose), "{}", loose.display());
+        let near = root.join("Upper").join("XSCE_SYS");
+        std::fs::create_dir_all(&near).unwrap();
+        let near_icon = near.join("ICON0.PNG");
+        std::fs::write(&near_icon, b"x").unwrap();
+        assert!(!served(&scope, &near_icon), "{}", near_icon.display());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 #[cfg(test)]
