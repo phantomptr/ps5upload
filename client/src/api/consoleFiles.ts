@@ -198,6 +198,25 @@ export async function putZstdRuntime(host: string): Promise<ZstdRuntimeOnConsole
   return { version: b.version, path: b.path, written: b.written };
 }
 
+/** Puts ampr_emu on the console, on request only, so Convert on the PS5 can keep an AMPR emulator
+ *  when it unpacks asset packs (the engine fetches the release the app installs into games, from
+ *  its cache or the internet, checks its digest and writes it there). Answers like
+ *  putZstdRuntime. */
+export async function putAmprEmu(host: string): Promise<ZstdRuntimeOnConsole> {
+  const res = await fetch(`${getEngineUrl()}/api/ps5/convert-ampr-emu`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ host: consoleAddr(host) }),
+    signal: AbortSignal.timeout(180_000),
+  });
+  const b = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok)
+    throw new Error(typeof b.error === "string" && b.error ? b.error : `request failed (${res.status})`);
+  if (typeof b.version !== "string" || typeof b.path !== "string" || typeof b.written !== "boolean")
+    throw new Error("Invalid AMPR emulator reply");
+  return { version: b.version, path: b.path, written: b.written };
+}
+
 export async function importLocalCheat(
   host: string,
   path: string,

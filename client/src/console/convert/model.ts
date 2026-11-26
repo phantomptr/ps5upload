@@ -235,7 +235,7 @@ export const CONVERT_CAUSES: Record<string, string> = {
   convert_partial_in_the_way: "cw_convert_err_partial_in_the_way",
   convert_no_zstd_runtime: "cw_convert_zstd_no_runtime",
   convert_not_packable: "cw_convert_err_not_packable",
-  convert_unpack_needs_emulator: "cw_convert_unpack_needs_emulator",
+  convert_unpack_needs_emulator: "cw_convert_unpack_needs_emulator_v2",
   convert_not_packed: "cw_convert_err_not_packed",
   convert_dest_read_only: "cw_convert_err_dest_read_only",
   convert_too_big_for_drive: "cw_convert_err_too_big_for_drive",

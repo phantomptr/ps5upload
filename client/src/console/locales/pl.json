@@ -245,7 +245,7 @@
   "cw_convert_stopped": "Zatrzymano. Nic z tego, co zapisano, nie zostało zachowane.",
   "cw_convert_title": "Konwersja",
   "cw_convert_unpack": "Rozpakuj paczki zasobów (znów zwykłe pliki)",
-  "cw_convert_unpack_needs_emulator": "Ta gra czyta swoje pliki przez AMPR i nie ma emulatora, który działa ze zwykłymi plikami. PS5 nie może go pobrać. Włącz „Pomiń emulator AMPR” albo utwórz ten pakiet w PS5Upload na komputerze.",
+  "cw_convert_unpack_needs_emulator_v2": "Ta gra czyta swoje pliki przez AMPR i nie ma emulatora, który działa ze zwykłymi plikami. Umieść emulator AMPR na tej PS5 z aplikacji (Ustawienia › Ta PS5) albo włącz Pomiń emulator AMPR.",
   "cw_convert_unpack_note": "Ta gra jest w paczkach zasobów {kind}. Gdy włączone, pakiet zawiera każdy plik jako zwykły plik i pomija paczki, więc jest mniej więcej tak duży jak gra przed spakowaniem ({size}). Gdy wyłączone, paczki trafiają do pakietu bez zmian i tylko emulator może je czytać.",
   "cw_convert_verify": "Sprawdź po zapisie",
   "cw_convert_verify_fast": "Szybkie sprawdzenie",

@@ -21,8 +21,10 @@
 //! default.
 //!
 //! The engine fetches the emulator that takes the place of one that has to go. The converter on
-//! the PS5 fetches nothing, so it has a third way ([`open_with_own_emulator`]): the game's own
-//! emulator stays when the rule above keeps it, and the unpack is refused
+//! the PS5 fetches nothing: when the user had the app put ampr_emu on the console
+//! ([`console_ampr_emu`]) it unpacks exactly as the engine does with that file
+//! ([`open_with_console_emulator`]); otherwise it has a third way ([`open_with_own_emulator`]):
+//! the game's own emulator stays when the rule above keeps it, and the unpack is refused
 //! ([`NEEDS_OTHER_EMULATOR`]) when the rule would have put another in, so plain files never end
 //! up beside an emulator the rule does not keep there. [`assess`] says which it will be before
 //! anything is built.
@@ -200,6 +202,101 @@ pub fn open_with_own_emulator(
     unpack(tree, EmulatorChoice::Own, mtime)
 }
 
+/// The folder, in the converter's job folder (`/data/ps5upload/convert` on the PS5), that holds
+/// the emulators the desktop app puts on the console: ampr-emu-ng for zstd packs, and, when the
+/// user asks for it, ampr_emu for unpacked asset packs ([`console_ampr_emu_folder`]).
+pub const CONSOLE_RUNTIME_FOLDER: &str = "runtime";
+/// The emulator's file in its folder there.
+pub const CONSOLE_EMULATOR_FILE: &str = "libSceAmpr.sprx";
+/// The largest file there read as an emulator (ampr_emu is about 1 MiB).
+const CONSOLE_EMULATOR_MAX: u64 = 16 << 20;
+
+/// ampr_emu `version`'s folder in [`CONSOLE_RUNTIME_FOLDER`]: its name is the version marker the
+/// converter checks the file's own version against.
+pub fn console_ampr_emu_folder(version: &str) -> String {
+    format!("ampr_emu-{version}")
+}
+
+/// The ampr_emu the app put on the console, as the converter there finds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsoleEmulator {
+    pub version: String,
+    pub bytes: Vec<u8>,
+}
+
+/// The newest usable ampr_emu in `runtime_dir` ([`CONSOLE_RUNTIME_FOLDER`]): a
+/// `ampr_emu-<version>/libSceAmpr.sprx` whose module says it is ampr_emu of that same version,
+/// as new as [`RUNTIME_VERSION`] or newer. None when there is none (nothing was put there, or
+/// what is there is damaged or another build).
+pub fn console_ampr_emu(runtime_dir: &std::path::Path) -> Option<ConsoleEmulator> {
+    let mut best: Option<ConsoleEmulator> = None;
+    for entry in std::fs::read_dir(runtime_dir).ok()?.flatten() {
+        let name = entry.file_name();
+        let Some(version) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix("ampr_emu-"))
+            .filter(|v| {
+                !v.is_empty()
+                    && v.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+            })
+        else {
+            continue;
+        };
+        if ng::older(version, RUNTIME_VERSION)
+            || best
+                .as_ref()
+                .is_some_and(|b| !ng::older(&b.version, version))
+        {
+            continue;
+        }
+        let file = entry.path().join(CONSOLE_EMULATOR_FILE);
+        let size = std::fs::metadata(&file).map_or(0, |m| m.len());
+        if size == 0 || size > CONSOLE_EMULATOR_MAX {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&file) else {
+            continue;
+        };
+        match ng::classify(&bytes) {
+            ("ampr_emu", Some(v), _) if v == version => {
+                best = Some(ConsoleEmulator {
+                    version: version.to_string(),
+                    bytes,
+                });
+            }
+            (kind, v, _) => crate::log_at!(
+                Warn,
+                "convert",
+                "{} is {kind} {}, not ampr_emu {version}: not used",
+                file.display(),
+                v.unwrap_or_default()
+            ),
+        }
+    }
+    best
+}
+
+/// `tree` with its asset packs decoded as the desktop app decodes them with "Add the AMPR
+/// emulator" on and ampr_emu chosen: [`open`] with `emulator` (ampr_emu from the console's own
+/// disk, [`console_ampr_emu`]) as the one that goes in where the game's own has to go. For the
+/// converter on the PS5; the package it writes holds the same files as the desktop app's.
+pub fn open_with_console_emulator(
+    tree: Box<dyn SourceTree>,
+    emulator: &[u8],
+    mtime: i64,
+) -> Result<Box<dyn SourceTree>, String> {
+    let fetch = || Ok(emulator.to_vec());
+    open(
+        tree,
+        Some(&Emulator {
+            ng: false,
+            fetch: &fetch,
+        }),
+        mtime,
+    )
+}
+
 /// What an unpack of a game would be, read from its pack indexes, its eboot's imports and its
 /// emulator: never the packed data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -324,8 +421,9 @@ fn unpack(
         };
         return Err(format!(
             "{NEEDS_OTHER_EMULATOR}: the game reads its files through AMPR and {has}, where \
-             ampr_emu {RUNTIME_VERSION} or newer is needed, and none can be fetched here. Leave \
-             the AMPR emulator out, or make the package with PS5Upload on a computer"
+             ampr_emu {RUNTIME_VERSION} or newer is needed, and none is on this PS5. Put the AMPR \
+             emulator on this PS5 from the app, leave it out, or make the package with PS5Upload \
+             on a computer"
         ));
     }
     let mut generated: HashMap<String, Vec<u8>> = HashMap::new();
@@ -650,6 +748,88 @@ mod tests {
             // Left out, any of them unpacks.
             let bare = open_without_emulator(folder(&packed), 7).unwrap();
             assert!(!bare.files().iter().any(|f| is_emulator_file(&f.path)));
+        }
+    }
+
+    /// What the app put on the console: only an ampr_emu whose module says the version its
+    /// folder is named after, new enough for plain files, is used; the newest of them.
+    #[test]
+    fn the_console_emulator_is_the_newest_usable_ampr_emu_in_the_runtime_folder() {
+        let scratch = Scratch::new("console-emu");
+        let dir = scratch.0.join(CONSOLE_RUNTIME_FOLDER);
+        assert_eq!(console_ampr_emu(&dir), None, "no folder");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(console_ampr_emu(&dir), None, "an empty folder");
+        let put = |folder: &str, bytes: &[u8]| {
+            std::fs::create_dir_all(dir.join(folder)).unwrap();
+            std::fs::write(dir.join(folder).join(CONSOLE_EMULATOR_FILE), bytes).unwrap();
+        };
+        // The zstd runtime beside it, an old ampr_emu, one whose module names another
+        // version, another build under ampr_emu's name, an empty file: none of them.
+        put("ampr-emu-ng-0.4.1", b"NG EMULATOR");
+        put(&console_ampr_emu_folder("0.3.9"), &ampr_emu("0.3.9"));
+        put(&console_ampr_emu_folder("0.5"), &ampr_emu("0.4.9"));
+        put(&console_ampr_emu_folder("0.6"), b"NG EMULATOR");
+        put(&console_ampr_emu_folder("0.7"), b"");
+        std::fs::create_dir_all(dir.join(console_ampr_emu_folder("0.8"))).unwrap();
+        assert_eq!(console_ampr_emu(&dir), None);
+
+        let current = ampr_emu(RUNTIME_VERSION);
+        put(&console_ampr_emu_folder(RUNTIME_VERSION), &current);
+        assert_eq!(
+            console_ampr_emu(&dir),
+            Some(ConsoleEmulator {
+                version: RUNTIME_VERSION.into(),
+                bytes: current.clone()
+            })
+        );
+        let newer = ampr_emu("0.4.3");
+        put(&console_ampr_emu_folder("0.4.3"), &newer);
+        assert_eq!(console_ampr_emu(&dir).unwrap().bytes, newer);
+        assert_eq!(console_ampr_emu_folder("0.4.3"), "ampr_emu-0.4.3");
+    }
+
+    /// With ampr_emu on the console, every packed game unpacks exactly as the engine unpacks it
+    /// with the same ampr_emu fetched: the same files, the same bytes, the same index.
+    #[test]
+    fn the_console_emulator_unpacks_as_the_engine_does() {
+        let new = ampr_emu(RUNTIME_VERSION);
+        let old = ampr_emu("0.3.9");
+        let ng: &[u8] = b"NG EMULATOR";
+        for (name, ampr, emulator) in [
+            ("c-ampr-ng", true, Some(ng)),
+            ("c-ampr-old", true, Some(&old[..])),
+            ("c-ampr-none", true, None),
+            ("c-ampr-new", true, Some(&new[..])),
+            ("c-plain-ng", false, Some(ng)),
+        ] {
+            let scratch = Scratch::new(name);
+            let src = game(&scratch.0, ampr);
+            let packed = scratch.0.join("packed");
+            zstd_packed(&src, &packed, emulator);
+            let mut console = open_with_console_emulator(folder(&packed), &new, 7).unwrap();
+            let fetch = || Ok(new.clone());
+            let engine = Emulator {
+                ng: false,
+                fetch: &fetch,
+            };
+            let mut desktop = open(folder(&packed), Some(&engine), 7).unwrap();
+            assert_eq!(console.files(), desktop.files(), "{name}");
+            for f in desktop.files().to_vec() {
+                assert_eq!(
+                    console.read(&f.path).unwrap(),
+                    desktop.read(&f.path).unwrap(),
+                    "{name}: {}",
+                    f.path
+                );
+            }
+            if ampr {
+                assert_eq!(
+                    console.read("fakelib/libSceAmpr.sprx").unwrap(),
+                    new,
+                    "{name}: ampr_emu goes in"
+                );
+            }
         }
     }
 

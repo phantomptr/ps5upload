@@ -245,7 +245,7 @@
   "cw_convert_stopped": "已停止。已写入的内容均未保留。",
   "cw_convert_title": "转换",
   "cw_convert_unpack": "解开资源包（恢复为普通文件）",
-  "cw_convert_unpack_needs_emulator": "此游戏通过 AMPR 读取文件，但其中没有能配合普通文件使用的模拟器。PS5 无法下载。请开启“不包含 AMPR 模拟器”，或在电脑上用 PS5Upload 制作此封包。",
+  "cw_convert_unpack_needs_emulator_v2": "这个游戏通过 AMPR 读取文件，但没有能用于普通文件的模拟器。请在应用里把 AMPR 模拟器放到这台 PS5 上（设置 › 这台 PS5），或打开“不包含 AMPR 模拟器”。",
   "cw_convert_unpack_note": "此游戏使用 {kind} 资源包。开启后，封包中的每个文件都是普通文件，不包含资源包，因此大小与打包前的游戏差不多（{size}）。关闭时，资源包按原样放入，只有模拟器能读取它们。",
   "cw_convert_verify": "写入后校验",
   "cw_convert_verify_fast": "快速校验",

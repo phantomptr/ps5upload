@@ -156,7 +156,7 @@ test("a game whose emulator can't stay with plain files holds Convert until it i
 
   const blocked = page.locator('[data-convert-blocked="emulator"]');
   await expect(blocked).toContainText("has no emulator that works with plain files");
-  await expect(blocked).toContainText("PS5Upload on your computer");
+  await expect(blocked).toContainText("Put the AMPR emulator on this PS5 from the app");
   await expect(go(page)).toBeDisabled();
 
   await leaveOut(page).click();
@@ -165,6 +165,21 @@ test("a game whose emulator can't stay with plain files holds Convert until it i
   await go(page).click();
   await expect.poll(() => started.length).toBe(1);
   expect(started[0]).toMatchObject({ format: "pkg", unpack_packs: true, leave_out_ampr_emu: true });
+  expect(errors).toEqual([]);
+});
+
+test("with the AMPR emulator put on this PS5 from the app, the same game keeps an emulator", async ({ page }) => {
+  const errors: string[] = [];
+  const started: unknown[] = [];
+  // The helper's answer when ampr_emu is on the console: the emulator can stay, and which.
+  await openOnGame(page, errors, inspection({ unpack_keeps_emulator: true, ampr_emu: "0.4.2.1" }), started);
+  await page.locator('[data-action="convert-format-pkg"]').click();
+  await expect(leaveOut(page)).toHaveAttribute("aria-checked", "false");
+  await expect(page.locator("[data-convert-blocked]")).toHaveCount(0);
+  await go(page).click();
+  await expect.poll(() => started.length).toBe(1);
+  expect(started[0]).toMatchObject({ format: "pkg", unpack_packs: true });
+  expect(started[0]).not.toHaveProperty("leave_out_ampr_emu");
   expect(errors).toEqual([]);
 });
 

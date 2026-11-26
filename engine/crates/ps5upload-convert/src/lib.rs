@@ -63,11 +63,17 @@ pub struct Inspection {
     /// could not be read (a warning says why).
     #[serde(default)]
     pub unpacked_bytes: Option<u64>,
-    /// With `unpacked_bytes`: whether the game's own AMPR emulator can stay beside the plain
-    /// files (`ps5upload_convert_core::unpack_packs::assess`). False: an unpacked `.pkg` has to
-    /// leave the emulator out here, or be made on a computer.
+    /// With `unpacked_bytes`: whether an unpacked `.pkg` can keep an AMPR emulator: the game's
+    /// own can stay beside the plain files (`ps5upload_convert_core::unpack_packs::assess`), or
+    /// (a job's inspection) the app put ampr_emu on the console (`ampr_emu`). False: an unpacked
+    /// `.pkg` has to leave the emulator out here, or be made on a computer.
     #[serde(default)]
     pub unpack_keeps_emulator: Option<bool>,
+    /// With `unpacked_bytes`, from a job's inspection: the version of the ampr_emu the app put on
+    /// the console (`unpack_packs::console_ampr_emu`), which an unpacked `.pkg` gets where the
+    /// game's own emulator has to go. Absent when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ampr_emu: Option<String>,
     pub has_eboot: bool,
     pub warnings: Vec<String>,
 }
@@ -249,6 +255,7 @@ pub fn inspect_keeping(
         packed: None,
         unpacked_bytes: None,
         unpack_keeps_emulator: None,
+        ampr_emu: None,
         has_eboot: has(tree.as_ref(), "eboot.bin"),
         // What the conversion leaves out of an archive (files beside its game folder).
         warnings: tree.notes(),

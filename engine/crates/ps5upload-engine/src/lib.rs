@@ -13979,6 +13979,10 @@ fn build_app_and_mcp(
             "/api/ps5/convert-runtime",
             post(convert_runtime::put_handler),
         )
+        .route(
+            "/api/ps5/convert-ampr-emu",
+            post(convert_runtime::put_ampr_emu_handler),
+        )
         .route("/api/ps5/process/kill", post(ps5_process_kill))
         .route("/api/ps5/power/control", post(ps5_power_control))
         .route(

@@ -245,7 +245,7 @@
   "cw_convert_stopped": "Leállítva. Semmi sem maradt meg abból, amit kiírt.",
   "cw_convert_title": "Átalakítás",
   "cw_convert_unpack": "Elemcsomagok kibontása (újra sima fájlok)",
-  "cw_convert_unpack_needs_emulator": "Ez a játék AMPR-en keresztül olvassa a fájljait, és nincs benne olyan emulátor, amely sima fájlokkal működik. A PS5 nem tud ilyet letölteni. Kapcsold be az „AMPR-emulátor kihagyása” lehetőséget, vagy készítsd el ezt a csomagot a PS5Uploaddal a számítógépeden.",
+  "cw_convert_unpack_needs_emulator_v2": "Ez a játék AMPR-en keresztül olvassa a fájljait, és nincs olyan emulátora, amely sima fájlokkal működik. Töltsd fel az AMPR-emulátort erre a PS5-re az appból (Beállítások › Ez a PS5), vagy kapcsold be az AMPR-emulátor kihagyása lehetőséget.",
   "cw_convert_unpack_note": "Ez a játék {kind} elemcsomagokban van. Bekapcsolva a csomag minden fájlt sima fájlként tartalmaz, az elemcsomagok kimaradnak, így nagyjából akkora, mint a játék csomagolás előtt ({size}). Kikapcsolva az elemcsomagok változatlanul kerülnek bele, és csak az emulátor tudja olvasni őket.",
   "cw_convert_verify": "Ellenőrzés írás után",
   "cw_convert_verify_fast": "Gyors ellenőrzés",

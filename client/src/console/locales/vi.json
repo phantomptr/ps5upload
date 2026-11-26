@@ -245,7 +245,7 @@
   "cw_convert_stopped": "Đã dừng. Không giữ lại gì đã ghi.",
   "cw_convert_title": "Chuyển đổi",
   "cw_convert_unpack": "Giải nén gói tài nguyên (trở lại tệp thường)",
-  "cw_convert_unpack_needs_emulator": "Game này đọc tệp qua AMPR và không có trình giả lập nào chạy được với tệp thường. PS5 không tải về được. Hãy bật “Bỏ trình giả lập AMPR”, hoặc tạo gói này bằng PS5Upload trên máy tính.",
+  "cw_convert_unpack_needs_emulator_v2": "Trò chơi này đọc tệp qua AMPR và không có trình giả lập nào chạy được với tệp thường. Hãy đặt trình giả lập AMPR vào PS5 này từ ứng dụng (Cài đặt › PS5 này), hoặc bật Bỏ trình giả lập AMPR.",
   "cw_convert_unpack_note": "Game này ở dạng gói tài nguyên {kind}. Khi bật, gói .pkg chứa mọi tệp dưới dạng tệp thường và bỏ các gói tài nguyên đi, nên nó lớn xấp xỉ game trước khi đóng gói ({size}). Khi tắt, các gói tài nguyên được đưa vào nguyên trạng và chỉ trình giả lập đọc được chúng.",
   "cw_convert_verify": "Kiểm tra sau khi ghi",
   "cw_convert_verify_fast": "Kiểm tra nhanh",

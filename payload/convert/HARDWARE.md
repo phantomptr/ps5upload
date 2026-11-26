@@ -185,6 +185,23 @@ without a download. Not run on a console yet.
    difference.
 6. "Unpack the asset packs" off: the package holds the packs as before (run 3d's result).
 
+## Run 3f: the AMPR emulator put on the console from the app
+
+New: the converter reads `/data/ps5upload/convert/runtime/ampr_emu-<version>/libSceAmpr.sprx`
+(written by the app's Settings › This PS5 › "Put the AMPR emulator on this PS5", never on its
+own). No new import. Not run on a console yet.
+
+1. Press the button: it says `ampr_emu 0.4.2.1 is on this PS5.`; Files shows that file, about
+   1 MiB. Pressed again: the same, nothing written (the engine log has no new "put ampr_emu").
+2. Run 3e's game (ampr-emu-ng in `fakelib`) in Minion, Convert, `.pkg`: no sentence holds Convert
+   now, "Leave out the AMPR emulator" is off. Convert. Proven when: it ends `ok`; `convert.log` has
+   `ampr_emu 0.4.2.1 on the console goes in where the game's own emulator has to go` and
+   `ampr-emu-ng ... at fakelib/libSceAmpr.sprx is replaced by ampr_emu`; the package's
+   `fakelib/libSceAmpr.sprx` is byte for byte the file on the console; it installs and the game
+   starts. The same game made into a `.pkg` by the desktop app holds the same files.
+3. Delete the `ampr_emu-0.4.2.1` folder in Files: the page holds Convert again with the sentence
+   that names the app's button (run 3e step 1).
+
 ## Run 4: Stop, and a full drive
 
 Start run 3 on a large game and press Stop at about 10 %, then at about 50 %, then during

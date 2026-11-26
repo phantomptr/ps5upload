@@ -245,7 +245,7 @@
   "cw_convert_stopped": "已停止。已寫入的內容均未保留。",
   "cw_convert_title": "轉換",
   "cw_convert_unpack": "解開資源包（還原為一般檔案）",
-  "cw_convert_unpack_needs_emulator": "此遊戲透過 AMPR 讀取檔案，但其中沒有能搭配一般檔案使用的模擬器。PS5 無法下載。請開啟「不包含 AMPR 模擬器」，或在電腦上用 PS5Upload 製作此封包。",
+  "cw_convert_unpack_needs_emulator_v2": "這個遊戲透過 AMPR 讀取檔案，但沒有能用於一般檔案的模擬器。請在應用程式裡把 AMPR 模擬器放到這台 PS5 上（設定 › 這台 PS5），或開啟「不包含 AMPR 模擬器」。",
   "cw_convert_unpack_note": "此遊戲使用 {kind} 資源包。開啟後，封包中的每個檔案都是一般檔案，不包含資源包，因此大小與打包前的遊戲差不多（{size}）。關閉時，資源包按原樣放入，只有模擬器能讀取它們。",
   "cw_convert_verify": "寫入後驗證",
   "cw_convert_verify_fast": "快速驗證",

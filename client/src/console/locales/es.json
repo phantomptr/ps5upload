@@ -245,7 +245,7 @@
   "cw_convert_stopped": "Detenido. No se conservó nada de lo escrito.",
   "cw_convert_title": "Convertir",
   "cw_convert_unpack": "Desempaquetar los paquetes de recursos (archivos normales de nuevo)",
-  "cw_convert_unpack_needs_emulator": "Este juego lee sus archivos mediante AMPR y no tiene un emulador que funcione con archivos normales. La PS5 no puede descargar uno. Activa «Omitir el emulador AMPR» o crea este paquete con PS5Upload en tu ordenador.",
+  "cw_convert_unpack_needs_emulator_v2": "Este juego lee sus archivos a través de AMPR y no tiene un emulador que funcione con archivos normales. Pon el emulador AMPR en esta PS5 desde la app (Configuración › Esta PS5) o activa Omitir el emulador AMPR.",
   "cw_convert_unpack_note": "Este juego está en paquetes de recursos {kind}. Si está activado, el paquete guarda cada archivo como archivo normal y omite los paquetes de recursos, así que ocupa más o menos lo que el juego antes de empaquetarlo ({size}). Si está desactivado, los paquetes de recursos entran tal cual y solo el emulador puede leerlos.",
   "cw_convert_verify": "Comprobar después de escribir",
   "cw_convert_verify_fast": "Comprobación rápida",

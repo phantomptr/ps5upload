@@ -294,7 +294,7 @@ export function ConvertView(p: ConvertViewProps) {
                   ) : null}
                   {needsEmulator ? (
                     <p className="cw-field-error" role="alert" data-convert-blocked="emulator">
-                      {t("cw_convert_unpack_needs_emulator")}
+                      {t("cw_convert_unpack_needs_emulator_v2")}
                     </p>
                   ) : null}
                 </div>

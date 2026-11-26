@@ -25,7 +25,8 @@
  *   [,"zstd":true[,"zstd_level":1..22]][,"verify":"fast"|"full"]}
  * "inspect" (the default) reads what the source is; the job's result is the converter's answer
  * ({"path","format","size","files","title_id","title",...; for a game in asset packs also
- * "unpacked_bytes" and "unpack_keeps_emulator"}) and "zstd_runtime": the version of the
+ * "unpacked_bytes" and "unpack_keeps_emulator", and "ampr_emu": the version of the ampr_emu the
+ * app put on the console when it is there}) and "zstd_runtime": the version of the
  * newest zstd runtime on the console (CONVERT_RUNTIME_DIR), or null when there is none, so the page
  * can say a zstd build needs it. "build" writes `dest` in `format`
  * (through `<dest>.partial` beside it, renamed in place at the end). A `dest` that exists is
@@ -36,10 +37,13 @@
  * "unpack_packs" (a .pkg only; absent: the game is packaged as it is, packs and all) packages a
  * packed game as its plain files, decoded as the package is written. The game's own AMPR emulator
  * stays only when it is one that suits plain files (the converter's rule, the desktop app's: see
- * engine/crates/ps5upload-convert-core/src/unpack_packs.rs); otherwise the converter refuses with
- * convert_unpack_needs_emulator, since the console fetches no other emulator, and
- * "leave_out_ampr_emu" (with "unpack_packs" only) leaves every libSceAmpr.sprx out instead. A game
- * that is not in packs is refused with convert_not_packed.
+ * engine/crates/ps5upload-convert-core/src/unpack_packs.rs). Where it has to go, the converter puts
+ * in the ampr_emu the desktop app put on the console when the user asked it to
+ * (CONVERT_RUNTIME_DIR/ampr_emu-<version>/libSceAmpr.sprx, which the converter finds and checks
+ * itself), as the desktop app does; with none there it refuses with
+ * convert_unpack_needs_emulator, since the console fetches nothing. "leave_out_ampr_emu" (with
+ * "unpack_packs" only) leaves every libSceAmpr.sprx out instead. A game that is not in packs is
+ * refused with convert_not_packed.
  * One job at a time (convert_busy); a build is also refused while a package install or an
  * archive extraction runs (the three would share the drive and the console's memory). */
 #ifndef PS5UPLOAD_CONSOLE_CONVERT_H
@@ -57,7 +61,8 @@
 #endif
 /* The zstd runtime (ampr-emu-ng's libSceAmpr.sprx) the desktop app puts on the console, one
  * folder per release: <this>/ampr-emu-ng-<version>/libSceAmpr.sprx (the engine's
- * convert_runtime.rs writes it; nothing is downloaded on the console). */
+ * convert_runtime.rs writes it; nothing is downloaded on the console). On request it also puts
+ * ampr_emu there, <this>/ampr_emu-<version>/libSceAmpr.sprx, which the converter reads itself. */
 #define CONVERT_RUNTIME_DIR "/data/ps5upload/convert/runtime"
 
 /* The most of status.json the helper reads. The converter keeps its status far below this (an

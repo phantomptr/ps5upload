@@ -33801,6 +33801,73 @@
         }
       }
     },
+    "/api/ps5/convert-ampr-emu": {
+      "post": {
+        "description": "POST /api/ps5/convert-ampr-emu {host} — put ampr_emu (the release the desktop app installs\ninto games, digest checked, from this computer's cache or downloaded) on the console under\n/data/ps5upload/convert/runtime/ampr_emu-<version>/, so Convert on the PS5 can keep an\nemulator when it unpacks asset packs. Only on request, never on its own. Answers {version,\npath, written}; written is false when that version was already there. 502 when it could not\nbe downloaded or written; needs the helper up.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConvertRuntimeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/engine.convert_runtime.Outcome"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "console-tools"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "addr"
+            ],
+            "in": "body",
+            "name": "host",
+            "required": true
+          },
+          "response_schema": "struct"
+        }
+      }
+    },
     "/api/ps5/convert-runtime": {
       "post": {
         "description": "POST /api/ps5/convert-runtime {host} — put the zstd runtime Convert on the PS5 needs (the\nampr-emu-ng release this app pins, digest checked) on the console, under\n/data/ps5upload/convert/runtime/. Answers {version, path, written}; written is false when the\nsame version was already there. Needs the helper up.",

@@ -245,7 +245,7 @@
   "cw_convert_stopped": "Dihentikan. Tidak ada yang ditulisnya yang disimpan.",
   "cw_convert_title": "Konversi",
   "cw_convert_unpack": "Bongkar paket aset (kembali jadi file biasa)",
-  "cw_convert_unpack_needs_emulator": "Game ini membaca filenya lewat AMPR dan tidak punya emulator yang bekerja dengan file biasa. PS5 tidak bisa mengunduhnya. Nyalakan “Jangan sertakan emulator AMPR”, atau buat paket ini dengan PS5Upload di komputer.",
+  "cw_convert_unpack_needs_emulator_v2": "Game ini membaca filenya lewat AMPR dan tidak punya emulator yang bekerja dengan file biasa. Taruh emulator AMPR di PS5 ini dari aplikasi (Pengaturan › PS5 ini), atau aktifkan Jangan sertakan emulator AMPR.",
   "cw_convert_unpack_note": "Game ini dalam paket aset {kind}. Jika nyala, paket .pkg berisi setiap file sebagai file biasa dan paket aset tidak disertakan, jadi ukurannya kira-kira sama dengan game sebelum dikemas ({size}). Jika mati, paket aset dimasukkan apa adanya, dan hanya emulator yang bisa membacanya.",
   "cw_convert_verify": "Periksa setelah ditulis",
   "cw_convert_verify_fast": "Pemeriksaan cepat",

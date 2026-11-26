@@ -245,7 +245,7 @@
   "cw_convert_stopped": "Gestoppt. Nichts, was geschrieben wurde, wurde behalten.",
   "cw_convert_title": "Konvertieren",
   "cw_convert_unpack": "Asset-Packs entpacken (wieder normale Dateien)",
-  "cw_convert_unpack_needs_emulator": "Dieses Spiel liest seine Dateien über AMPR und hat keinen Emulator, der mit normalen Dateien funktioniert. Die PS5 kann keinen herunterladen. Schalte „AMPR-Emulator weglassen“ ein oder erstelle dieses Paket mit PS5Upload auf deinem Computer.",
+  "cw_convert_unpack_needs_emulator_v2": "Dieses Spiel liest seine Dateien über AMPR und hat keinen Emulator, der mit normalen Dateien funktioniert. Bring den AMPR-Emulator aus der App auf diese PS5 (Einstellungen › Diese PS5) oder schalte „AMPR-Emulator weglassen“ ein.",
   "cw_convert_unpack_note": "Dieses Spiel liegt in {kind}-Asset-Packs. An: Das Paket enthält jede Datei als normale Datei und lässt die Packs weg, sodass es etwa so groß ist wie das Spiel vor dem Packen ({size}). Aus: Die Packs kommen unverändert hinein, und nur der Emulator kann sie lesen.",
   "cw_convert_verify": "Nach dem Schreiben prüfen",
   "cw_convert_verify_fast": "Schnelle Prüfung",

@@ -15,6 +15,11 @@
 //!   [`PKG_LEVELS`], `fast` when absent), and for a game in LZ4 or zstd asset packs
 //!   `"unpack_packs"` (bool: the package holds the plain files again) with
 //!   `"leave_out_ampr_emu"` (bool: no `libSceAmpr.sprx` in it); see [`Unpack`].
+//! - `runtime/`: the emulators the desktop app put on the console, never written here:
+//!   `ampr-emu-ng-<version>/libSceAmpr.sprx` (the helper names it in `"zstd_runtime"`) and, when
+//!   the user asked the app for it, `ampr_emu-<version>/libSceAmpr.sprx`, which an unpacked
+//!   `.pkg` gets where the game's own emulator has to go (`unpack_packs::console_ampr_emu`). An
+//!   inspection of a packed game then says its version in `"ampr_emu"`.
 //! - `status.json`: rewritten here through a temporary file and a rename in the same folder, so
 //!   the helper never reads half of one; at most every [`STATUS_EVERY`] while a job runs.
 //!   `{"id", "pid", "op", "state": "running"|"done"|"failed", "stage"?, "bytes_done"?,
@@ -100,31 +105,43 @@ struct Request {
     /// refused (`convert_unpack_needs_emulator`) when it is not one that suits plain files.
     #[serde(default)]
     leave_out_ampr_emu: bool,
+    /// The job folder's `runtime/` ([`unpack_packs::CONSOLE_RUNTIME_FOLDER`]), where the app puts
+    /// ampr_emu: set from the folder the request is read in, never from the request.
+    #[serde(skip)]
+    runtime: PathBuf,
 }
 
 /// How a `.pkg` unpacks a game's asset packs (`ps5upload_convert_core::unpack_packs`, the code
 /// the engine's "Unpack the asset packs" runs). On a computer an emulator that only suits packs
-/// is replaced by one the engine fetches; nothing is fetched here, so the two ways are the ones
-/// that need no other emulator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// is replaced by one the engine fetches; nothing is fetched here: the replacement is the
+/// ampr_emu the app put on the console, when the user had it put there, else the game's own
+/// emulator has to suit plain files.
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Unpack {
+    /// As the engine unpacks with "Add the AMPR emulator" on: this ampr_emu (from the console's
+    /// `runtime/`) goes in where the game's own has to go.
+    FromConsole(Arc<Vec<u8>>),
     /// The game's own emulator stays where the unpack rule keeps it (an ampr_emu as new as the
     /// one the app installs; anything in a game that does not read through libSceAmpr). A
     /// libSceAmpr game with ampr-emu-ng, an older ampr_emu, an unknown build or none is
     /// refused: `convert_unpack_needs_emulator`.
-    OwnEmulator,
+    KeepOwn,
     /// Every `libSceAmpr.sprx` in `fakelib` and `fakelib2` is left out.
-    NoEmulator,
+    LeaveOut,
 }
 
 impl Unpack {
     /// The source read as this unpack gives it, for the package builder and for the check
     /// before it. `mtime` goes on every record of the new `ampr_emu.index`, so the read-back
     /// that opens the source again gets the same bytes.
-    fn reader(self, mtime: i64) -> ps5upload_fpkg::build::SourceReader {
-        ps5upload_fpkg::build::SourceReader(Arc::new(move |tree| match self {
-            Unpack::OwnEmulator => unpack_packs::open_with_own_emulator(tree, mtime),
-            Unpack::NoEmulator => unpack_packs::open_without_emulator(tree, mtime),
+    fn reader(&self, mtime: i64) -> ps5upload_fpkg::build::SourceReader {
+        let how = self.clone();
+        ps5upload_fpkg::build::SourceReader(Arc::new(move |tree| match &how {
+            Unpack::FromConsole(emulator) => {
+                unpack_packs::open_with_console_emulator(tree, emulator, mtime)
+            }
+            Unpack::KeepOwn => unpack_packs::open_with_own_emulator(tree, mtime),
+            Unpack::LeaveOut => unpack_packs::open_without_emulator(tree, mtime),
         }))
     }
 }
@@ -181,7 +198,10 @@ fn read_request(dir: &Path) -> Result<Request, String> {
         return Err(format!("request.json is {size} bytes"));
     }
     let bytes = std::fs::read(&path).map_err(|e| format!("request.json: {e}"))?;
-    serde_json::from_slice(&bytes).map_err(|e| format!("request.json: {e}"))
+    let mut request: Request =
+        serde_json::from_slice(&bytes).map_err(|e| format!("request.json: {e}"))?;
+    request.runtime = dir.join(unpack_packs::CONSOLE_RUNTIME_FOLDER);
+    Ok(request)
 }
 
 /// `detail` cut to [`MAX_DETAIL_BYTES`] at a character boundary.
@@ -417,9 +437,15 @@ fn plan(request: &Request, cancel: &Arc<AtomicBool>) -> Result<Plan, Refusal> {
             });
         }
         let how = if request.leave_out_ampr_emu {
-            Unpack::NoEmulator
+            Unpack::LeaveOut
+        } else if let Some(e) = unpack_packs::console_ampr_emu(&request.runtime) {
+            crate::log(format_args!(
+                "ampr_emu {} on the console goes in where the game's own emulator has to go",
+                e.version
+            ));
+            Unpack::FromConsole(Arc::new(e.bytes))
         } else {
-            Unpack::OwnEmulator
+            Unpack::KeepOwn
         };
         Some((how, zstd_packs::now_secs()))
     } else {
@@ -633,11 +659,11 @@ fn build(
             detail,
         })?;
     }
-    if let Some((how, mtime)) = plan.unpack {
+    if let Some((how, mtime)) = &plan.unpack {
         // The game as the package will hold it: refused here, before anything is written, when
         // its emulator can't stay or its packs don't decode; and its plain size is what the
         // drive has to hold, not the packs'.
-        tree = (how.reader(mtime).0)(tree).map_err(|e| unpack_refusal(&plan.source, e))?;
+        tree = (how.reader(*mtime).0)(tree).map_err(|e| unpack_refusal(&plan.source, e))?;
     }
     if tree.files().is_empty() {
         return Err(unreadable("no files in it".into()));
@@ -873,13 +899,15 @@ fn build_pkg(
     request.kraken = true;
     request.level = level;
     // A packed game as plain files: decoded as the package is written, nothing spooled.
-    request.reader = plan.unpack.map(|(how, mtime)| how.reader(mtime));
+    request.reader = plan.unpack.as_ref().map(|(how, mtime)| how.reader(*mtime));
     crate::log(format_args!(
         ".pkg at Kraken level {level:?} on {} threads ({files} files{})",
         ps5upload_fpkg::workshop::workshop_threads(),
         match plan.unpack {
-            Some((Unpack::OwnEmulator, _)) => ", asset packs unpacked, the game's emulator kept",
-            Some((Unpack::NoEmulator, _)) => ", asset packs unpacked, the AMPR emulator left out",
+            Some((Unpack::FromConsole(_), _)) =>
+                ", asset packs unpacked, the console's ampr_emu where the game's emulator has to go",
+            Some((Unpack::KeepOwn, _)) => ", asset packs unpacked, the game's emulator kept",
+            Some((Unpack::LeaveOut, _)) => ", asset packs unpacked, the AMPR emulator left out",
             None => "",
         }
     ));
@@ -1023,7 +1051,17 @@ fn run_with(dir: &Path, hook: &mut dyn FnMut(&str)) -> std::io::Result<i32> {
             finished.store(true, Ordering::Relaxed);
             let _ = watcher.join();
             match inspected.map(|(inspection, _)| inspection) {
-                Ok(inspection) => done(json!(inspection)),
+                Ok(mut inspection) => {
+                    if inspection.unpacked_bytes.is_some() {
+                        if let Some(e) = unpack_packs::console_ampr_emu(&request.runtime) {
+                            // An unpacked .pkg keeps an emulator: this one goes in where the
+                            // game's own has to go.
+                            inspection.ampr_emu = Some(e.version);
+                            inspection.unpack_keeps_emulator = Some(true);
+                        }
+                    }
+                    done(json!(inspection))
+                }
                 Err(refusal) => fail(refusal),
             }
         }
@@ -1907,6 +1945,104 @@ mod tests {
         let names = names_of(&*pkg);
         assert!(!has_emulator(&names), "{names:?}");
         assert_index_lists_the_package(&mut *pkg);
+    }
+
+    /// The app put ampr_emu on the console (`runtime/ampr_emu-<version>/libSceAmpr.sprx` in the
+    /// job folder): the inspection says so and that the emulator can stay, and a zstd-packed game
+    /// whose ampr-emu-ng only suits packs unpacks into a `.pkg` holding exactly what the desktop
+    /// app's package holds (its unpack with that ampr_emu fetched): every file byte for byte,
+    /// ampr_emu where the game's own was, and the same fresh `ampr_emu.index`.
+    #[test]
+    fn a_pkg_unpack_puts_in_the_ampr_emu_on_the_console_as_the_desktop_app_does() {
+        use ps5upload_fpkg::ampr_index;
+        let tmp = TempDir::new("jobunpackconsoleemu");
+        let dir = tmp.0.join("convert");
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = packable_game(&tmp.0, true);
+        let packed = tmp.0.join("packed");
+        zstd_packed(&dir, &src, &packed, b"NG EMULATOR");
+        let version = ps5upload_fpkg::ampr_pack::image::RUNTIME_VERSION;
+        let emu = ampr_emu(version);
+        let home = dir
+            .join(unpack_packs::CONSOLE_RUNTIME_FOLDER)
+            .join(unpack_packs::console_ampr_emu_folder(version));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(unpack_packs::CONSOLE_EMULATOR_FILE), &emu).unwrap();
+
+        // The page's inspection: the emulator can stay, and which one goes in.
+        ask(&dir, json!({"id": "i", "op": "inspect", "path": packed}));
+        assert_eq!(run_with(&dir, &mut |_| {}).unwrap(), 0);
+        let s = status(&dir);
+        assert_eq!(s["result"]["unpack_keeps_emulator"], true, "{s}");
+        assert_eq!(s["result"]["ampr_emu"], version, "{s}");
+        // A game that is not packed is not told about it.
+        ask(&dir, json!({"id": "i", "op": "inspect", "path": src}));
+        assert_eq!(run_with(&dir, &mut |_| {}).unwrap(), 0);
+        assert!(status(&dir)["result"].get("ampr_emu").is_none());
+
+        let console = tmp.0.join("console.pkg");
+        let (code, s) = pkg_job(&dir, &packed, &console, json!({"unpack_packs": true}));
+        assert_eq!(code, 0, "{s}");
+        let mut pkg = packaged(&console);
+        assert_packaged_plain(&mut *pkg, &src);
+        assert_eq!(pkg.read("fakelib/libSceAmpr.sprx").unwrap(), emu);
+        assert_index_lists_the_package(&mut *pkg);
+
+        // The desktop app's package of the same game: the engine's reader (`fpkg_api`'s
+        // `open_unpacked` with "Add the AMPR emulator" on and ampr_emu chosen), made at the time
+        // the console's index records carry.
+        let index = pkg.read(ampr_index::NAME).unwrap();
+        let mtime = ampr_index::parse(&index).unwrap()[0].mtime;
+        let fetched = emu.clone();
+        let out = tmp.0.join("desktop");
+        std::fs::create_dir_all(&out).unwrap();
+        let mut request = ps5upload_fpkg::build::BuildRequest::new(&packed, &out);
+        request.file_name = Some("desktop".into());
+        request.content_id = crate::inspect(&packed).unwrap().content_id;
+        request.kraken = true;
+        // The package builder writes the index again with the package's own time.
+        request.time = Some((mtime, 0));
+        request.reader = Some(ps5upload_fpkg::build::SourceReader(Arc::new(move |tree| {
+            let fetch = || Ok(fetched.clone());
+            let emulator = unpack_packs::Emulator {
+                ng: false,
+                fetch: &fetch,
+            };
+            unpack_packs::open(tree, Some(&emulator), mtime)
+        })));
+        let report = ps5upload_fpkg::build::build(&request, &mut |_| {}).unwrap();
+        let mut desktop = packaged(&report.path);
+        assert_eq!(names_of(&*pkg), names_of(&*desktop));
+        for name in names_of(&*desktop) {
+            assert_eq!(
+                pkg.read(&name).unwrap(),
+                desktop.read(&name).unwrap(),
+                "{name}"
+            );
+        }
+
+        // Left out when asked, whatever is on the console.
+        let bare = tmp.0.join("bare.pkg");
+        let (code, s) = pkg_job(
+            &dir,
+            &packed,
+            &bare,
+            json!({"unpack_packs": true, "leave_out_ampr_emu": true}),
+        );
+        assert_eq!(code, 0, "{s}");
+        assert!(!has_emulator(&names_of(&*packaged(&bare))));
+
+        // Another build under ampr_emu's name is not used: the refusal stays, and says how out.
+        std::fs::write(
+            home.join(unpack_packs::CONSOLE_EMULATOR_FILE),
+            b"NG EMULATOR",
+        )
+        .unwrap();
+        let refused = tmp.0.join("refused.pkg");
+        let (code, s) = pkg_job(&dir, &packed, &refused, json!({"unpack_packs": true}));
+        assert_eq!(code, 1, "{s}");
+        assert_eq!(s["cause"], "convert_unpack_needs_emulator", "{s}");
+        assert!(!refused.exists());
     }
 
     /// An older ampr_emu is one the rule replaces, as ampr-emu-ng is: refused, not kept.

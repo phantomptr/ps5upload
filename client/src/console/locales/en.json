@@ -245,7 +245,7 @@
   "cw_convert_stopped": "Stopped. Nothing it wrote was kept.",
   "cw_convert_title": "Convert",
   "cw_convert_unpack": "Unpack the asset packs (plain files again)",
-  "cw_convert_unpack_needs_emulator": "This game reads its files through AMPR and has no emulator that works with plain files. The PS5 can't download one. Turn on Leave out the AMPR emulator, or make this package with PS5Upload on your computer.",
+  "cw_convert_unpack_needs_emulator_v2": "This game reads its files through AMPR and has no emulator that works with plain files. Put the AMPR emulator on this PS5 from the app (Settings › This PS5), or turn on Leave out the AMPR emulator.",
   "cw_convert_unpack_note": "This game is in {kind} asset packs. On, the package holds every file as a plain file and leaves the packs out, so it is about as large as the game was before packing ({size}). Off, the packs go in as they are, and only the emulator can read them.",
   "cw_convert_verify": "Check after writing",
   "cw_convert_verify_fast": "Quick check",

@@ -210,8 +210,14 @@ describe("names and requests", () => {
     expect(unpackNeedsEmulator(packed, { unpack: false, leaveOutEmulator: false })).toBe(false);
     const fine = parseInspection({ path: "/g", format: "folder", packed: "lz4", unpacked_bytes: 50, unpack_keeps_emulator: true });
     expect(unpackNeedsEmulator(fine, keep)).toBe(false);
+    // ampr_emu that the app put on this PS5: the helper says the emulator can stay, and the
+    // keep choice builds (its version is extra; an older page reads only the yes/no).
+    const onConsole = parseInspection({ path: "/g", format: "folder", packed: "zstd", unpacked_bytes: 50, unpack_keeps_emulator: true, ampr_emu: "0.4.2.1" });
+    expect(unpackNeedsEmulator(onConsole, keep)).toBe(false);
+    // The refusal names the way out: the app's button.
+    expect(t("cw_convert_unpack_needs_emulator_v2")).toContain("Put the AMPR emulator on this PS5");
     // The converter's own refusal of it reads as the same sentence the page shows beforehand.
-    expect(convertFailureText("convert_unpack_needs_emulator")).toBe(t("cw_convert_unpack_needs_emulator"));
+    expect(convertFailureText("convert_unpack_needs_emulator")).toBe(t("cw_convert_unpack_needs_emulator_v2"));
     expect(convertFailureText("convert_not_packed")).toBe(t("cw_convert_err_not_packed"));
 
     expect(packed && bytesToWrite(packed, keep)).toBe(50);
