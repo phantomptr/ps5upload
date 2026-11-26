@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Gamepad2, Power, RefreshCw, Search } from "lucide-react";
 import { buttonWorks } from "../help/hints";
-import { useAppCover } from "../home/Home";
+import { useAppCover, useAppName } from "../home/Home";
 import { DEFAULT_INPUT_MAP, onNavAction } from "../nav";
 import { t } from "../strings";
 import { pollWhileVisible } from "../ui/visiblePoll";
@@ -35,6 +35,8 @@ export interface CheatsViewProps {
   notice?: string | null;
   /** □ was measured on a console: the card may offer it next to ✕. */
   squareWorks?: boolean;
+  /** The running game's name from app.db, shown over its title id when known. */
+  name?: string | null;
 }
 
 /**
@@ -240,7 +242,8 @@ export function CheatsView(p: CheatsViewProps) {
           )}
           <div className="cw-game-text">
             <div className="cw-dim">{t("cw_home_now_running")}</div>
-            <div className="cw-game-title">{title}</div>
+            <div className="cw-game-title">{p.name ?? title}</div>
+            {p.name ? <div className="cw-dim cw-mono">{title}</div> : null}
             <div className="cw-dim cw-cheats-how">
               {held
                 ? t("cw_cheats_held")
@@ -371,6 +374,7 @@ export function Cheats() {
     if (finderClosesFor(finderState.title, now, noGameReads.current)) finder.current?.close();
   }, [status, finderState]);
   const loadedCover = useAppCover(titleId);
+  const name = useAppName(titleId);
   const [coverFailed, setCoverFailed] = useState<string | null>(null);
   const cover = loadedCover && coverFailed !== loadedCover ? loadedCover : null;
 
@@ -378,6 +382,7 @@ export function Cheats() {
     <div ref={root}>
       <CheatsView
         state={state}
+        name={name}
         cover={cover}
         onCoverError={() => setCoverFailed(loadedCover)}
         onToggle={(m) => void ctl.current?.toggle(m)}
