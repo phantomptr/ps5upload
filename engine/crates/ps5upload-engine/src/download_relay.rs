@@ -28,18 +28,22 @@ pub fn is_server_dest(dest: &str) -> bool {
 /// A file on the console: its path, its path relative to the root's parent, its size.
 type ConsoleFile = (String, String, u64);
 
+/// A source as the console lists it: its files, its folders, and what a relay leaves out
+/// (links and other special entries, relative like the rest): a move keeps a source with any.
+type Listing = (Vec<ConsoleFile>, Vec<String>, Vec<String>);
+
 /// Every file under `root` on the console, and every folder (relative to `root`'s parent, the
 /// root itself first among them): a folder with no file in it is made on the server too.
-fn console_files(
-    addr: &str,
-    root: &str,
-    kind: DownloadKind,
-) -> Result<(Vec<ConsoleFile>, Vec<String>)> {
+fn console_files(addr: &str, root: &str, kind: DownloadKind) -> Result<Listing> {
     let root = root.trim_end_matches('/');
     if matches!(kind, DownloadKind::File) {
         let base = root.rsplit('/').next().unwrap_or(root).to_string();
         let st = fs_ops::fs_stat(addr, root)?;
-        return Ok((vec![(root.to_string(), base, st.size)], Vec::new()));
+        return Ok((
+            vec![(root.to_string(), base, st.size)],
+            Vec::new(),
+            Vec::new(),
+        ));
     }
     walk_console(root, |dir, offset| {
         let l = fs_ops::list_dir(addr, dir, ListDirOptions { offset, limit: 256 })?;
@@ -57,10 +61,11 @@ fn console_files(
 fn walk_console(
     root: &str,
     mut list: impl FnMut(&str, u64) -> Result<(Vec<(String, String, u64)>, bool)>,
-) -> Result<(Vec<ConsoleFile>, Vec<String>)> {
+) -> Result<Listing> {
     let base = root.rsplit('/').next().unwrap_or(root).to_string();
     let mut out = Vec::new();
     let mut dirs = Vec::new();
+    let mut skipped = Vec::new();
     let mut stack = vec![(root.to_string(), base)];
     while let Some((dir, rel)) = stack.pop() {
         dirs.push(rel.clone());
@@ -80,7 +85,8 @@ fn walk_console(
                 match kind.as_str() {
                     "dir" => stack.push((path, r)),
                     "file" => out.push((path, r, size)),
-                    _ => {}
+                    // A link, a device…: never copied, so a move must not delete it.
+                    _ => skipped.push(r),
                 }
             }
             if n == 0 || (n < 256 && !truncated) {
@@ -91,7 +97,8 @@ fn walk_console(
     }
     out.sort_by(|a, b| a.1.cmp(&b.1));
     dirs.sort();
-    Ok((out, dirs))
+    skipped.sort();
+    Ok((out, dirs, skipped))
 }
 
 fn remote_err(e: RemoteError) -> anyhow::Error {
@@ -164,7 +171,7 @@ fn staged_name(console_path: &str) -> Result<String> {
 /// the source goes. A trait so the tests can stand a folder on this computer in for the console.
 pub(crate) trait ConsoleSide {
     /// Every file and folder under the source, as [`console_files`] lists them.
-    fn files(&self) -> Result<(Vec<ConsoleFile>, Vec<String>)>;
+    fn files(&self) -> Result<Listing>;
     /// Pulls the console file `path` into `staging`, under [`staged_name`], counting into `dl`.
     fn pull(
         &self,
@@ -186,7 +193,7 @@ struct Ava1Console<'a> {
 }
 
 impl ConsoleSide for Ava1Console<'_> {
-    fn files(&self) -> Result<(Vec<ConsoleFile>, Vec<String>)> {
+    fn files(&self) -> Result<Listing> {
         console_files(self.addr, self.src, self.kind)
     }
 
@@ -251,6 +258,7 @@ pub(crate) struct Relayed {
     dest_dir: String,
     files: Vec<ConsoleFile>,
     dirs: Vec<String>,
+    skipped: Vec<String>,
 }
 
 /// Pulls `src` (a file or a folder) from the console at `addr` into `dest` (`remote://id/dir`).
@@ -322,7 +330,7 @@ pub(crate) fn relay(
     cancel: &Arc<AtomicBool>,
     staging_root: &Path,
 ) -> Result<Relayed> {
-    let (files, dirs) = console.files()?;
+    let (files, dirs, skipped) = console.files()?;
     let total: u64 = files.iter().map(|f| f.2).sum();
     if let Some(t) = &counters.total {
         t.store(total.max(1), Ordering::Relaxed);
@@ -416,6 +424,7 @@ pub(crate) fn relay(
         dest_dir,
         files,
         dirs,
+        skipped,
     })
 }
 
@@ -431,6 +440,9 @@ pub(crate) fn finish_move(
 ) -> Result<()> {
     if cancel.load(Ordering::Relaxed) {
         bail!("transfer_cancelled");
+    }
+    if let Some(first) = r.skipped.first() {
+        bail!("{first} is a link, which can't be copied to the server: {KEPT}.");
     }
     for (_, rel, size) in &r.files {
         let target = format!("{}/{rel}", r.dest_dir);
@@ -452,8 +464,8 @@ pub(crate) fn finish_move(
             bail!("The folder {rel} is not on the server: {KEPT}.");
         }
     }
-    let (files, dirs) = console.files()?;
-    if files != r.files || dirs != r.dirs {
+    let (files, dirs, skipped) = console.files()?;
+    if files != r.files || dirs != r.dirs || skipped != r.skipped {
         bail!("Files on the PS5 changed during the copy: {KEPT}.");
     }
     if cancel.load(Ordering::Relaxed) {
@@ -502,7 +514,7 @@ mod tests {
     /// A folder with nothing in it is listed, so it is made on the server (it was dropped).
     #[test]
     fn a_folder_with_no_file_in_it_is_still_listed() {
-        let (files, dirs) = walk_console("/data/game", |dir, offset| {
+        let (files, dirs, _) = walk_console("/data/game", |dir, offset| {
             let page: Vec<(String, String, u64)> = match (dir, offset) {
                 ("/data/game", 0) => vec![
                     (".".into(), "dir".into(), 0),
@@ -548,7 +560,7 @@ mod tests {
             });
             assert!(r.is_err(), "{bad:?}: {r:?}");
         }
-        let (files, _) = walk_console("/data/game", |dir, _| {
+        let (files, _, _) = walk_console("/data/game", |dir, _| {
             let page = match dir {
                 "/data/game" => {
                     vec![("options\\gabindings.xml".to_string(), "file".to_string(), 1)]
@@ -604,7 +616,7 @@ mod tests {
     }
 
     impl ConsoleSide for DirConsole {
-        fn files(&self) -> Result<(Vec<ConsoleFile>, Vec<String>)> {
+        fn files(&self) -> Result<Listing> {
             walk_console(self.root.to_str().unwrap(), |dir, offset| {
                 if offset > 0 {
                     return Ok((Vec::new(), false));
@@ -612,8 +624,14 @@ mod tests {
                 let mut page = Vec::new();
                 for e in std::fs::read_dir(dir)? {
                     let e = e?;
-                    let md = e.metadata()?;
-                    let kind = if md.is_dir() { "dir" } else { "file" };
+                    let md = std::fs::symlink_metadata(e.path())?;
+                    let kind = if md.is_symlink() {
+                        "link"
+                    } else if md.is_dir() {
+                        "dir"
+                    } else {
+                        "file"
+                    };
                     page.push((
                         e.file_name().to_string_lossy().into_owned(),
                         kind.to_string(),
@@ -792,16 +810,45 @@ mod tests {
         assert!(console.root.join("new.sav").exists());
     }
 
+    /// A link is never copied (the console lists it as a link, not a file), so a move with one
+    /// in the tree keeps the whole source: deleting it would lose the link (#953).
+    #[cfg(unix)]
+    #[test]
+    fn a_move_whose_tree_holds_a_link_keeps_the_source() {
+        let tmp = Scratch::new("link");
+        let root = game(&tmp.0);
+        std::os::unix::fs::symlink("eboot.bin", root.join("sce_sys/alias")).unwrap();
+        let console = DirConsole::new(&root);
+        let (_, _, skipped) = console.files().unwrap();
+        assert_eq!(skipped, ["game/sce_sys/alias"]);
+        let fs = MemFs::new(&[]);
+        let e = run(&fs, &console, true, &tmp.0.join("staging")).unwrap_err();
+        assert!(
+            e.to_string().contains("game/sce_sys/alias is a link"),
+            "{e}"
+        );
+        assert!(e.to_string().contains("kept"), "{e}");
+        assert_eq!(console.deletes.load(Ordering::SeqCst), 0);
+        assert!(root.join("sce_sys/alias").symlink_metadata().is_ok());
+        // The files themselves were copied; a copy (not a move) of the same tree succeeds.
+        assert_eq!(
+            fs.bytes("/shared/PS5/game/eboot.bin").unwrap(),
+            b"eboot bytes"
+        );
+        run(&fs, &console, false, &tmp.0.join("staging")).unwrap();
+    }
+
     #[test]
     fn a_single_file_moves_too() {
         let tmp = Scratch::new("file");
         let root = game(&tmp.0);
         struct OneFile(DirConsole, PathBuf);
         impl ConsoleSide for OneFile {
-            fn files(&self) -> Result<(Vec<ConsoleFile>, Vec<String>)> {
+            fn files(&self) -> Result<Listing> {
                 let len = std::fs::metadata(&self.1)?.len();
                 Ok((
                     vec![(self.1.to_string_lossy().into(), "eboot.bin".into(), len)],
+                    Vec::new(),
                     Vec::new(),
                 ))
             }
