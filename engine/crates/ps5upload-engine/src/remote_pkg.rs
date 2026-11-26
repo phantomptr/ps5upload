@@ -893,7 +893,7 @@ impl RemoteSource {
         self
     }
 
-    fn stopped(&self) -> bool {
+    pub(crate) fn stopped(&self) -> bool {
         self.stop_now.load(Ordering::Relaxed) || self.stop.as_ref().is_some_and(|stop| stop())
     }
 
