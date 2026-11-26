@@ -551,25 +551,10 @@ button {
   margin: 0 0 0.4rem;
   margin-inline-end: 0.6rem;
 }
-.cw-toolbar-path {
-  flex: 1;
-  min-width: 10rem;
-  margin: 0 0 0.4rem;
-  margin-inline-end: 0.8rem;
-}
 .cw-path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.cw-toolbar-free {
-  margin: 0 0 0.4rem;
-  margin-inline-start: auto;
-  font-size: 0.85rem;
-}
-.cw-pin.is-pinned svg {
-  color: var(--color-accent);
-  fill: currentColor;
 }
 /* Path bar: Up, then the folder as buttons (✕ jumps there). */
 .cw-pathbar {
@@ -913,15 +898,6 @@ button {
   max-width: 100%;
   max-height: 100%;
   margin: 0 auto;
-}
-.cw-viewer-text {
-  margin: 0;
-  padding: 0.1rem 0.4rem;
-  font-family: var(--font-mono, monospace);
-  font-size: 0.85rem;
-  white-space: pre-wrap;
-  word-break: break-all;
-  cursor: default;
 }
 
 /* ---- Fan ---- */
@@ -1872,9 +1848,6 @@ button {
 }
 
 /* ---- Files: sort, filter, status ---- */
-.cw-listbar {
-  margin-bottom: 0.3rem;
-}
 .cw-status {
   margin: 0 0 0.6rem;
   font-size: 0.85rem;
