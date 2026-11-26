@@ -6,8 +6,9 @@
 export type FilesBackStep = "end-selection" | "cancel-staged" | "up" | null;
 
 /**
- * Leave selection mode first, then let go of what is staged to copy or move (its bar is where the
- * bottom navigation was), then go up one folder, and leave Files from the top.
+ * Leave selection mode first, then go up one folder, and leave Files from the top. What is staged to
+ * copy or move stays while Back goes up (that is how one gets to the folder to paste into); at the
+ * top, Back lets go of it first (its bar is where the bottom navigation was), then leaves Files.
  *
  * The top is the drive's root (/data, /mnt/usb0): a phone's file manager stops at its storage, and
  * the folders above a drive (/mnt) are not where anyone was. Outside every known drive it is "/".
@@ -27,8 +28,8 @@ export function filesBackStep(s: {
 }): FilesBackStep {
   if (s.view) return null;
   if (s.selecting) return "end-selection";
-  if (s.staged) return "cancel-staged";
-  return backUpTarget(s.path, s.driveRoot) === null ? null : "up";
+  if (backUpTarget(s.path, s.driveRoot) !== null) return "up";
+  return s.staged ? "cancel-staged" : null;
 }
 
 /** Where Back goes up to from `path`, or null at the top (see filesBackStep). */

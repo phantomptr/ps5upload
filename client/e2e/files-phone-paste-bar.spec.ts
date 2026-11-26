@@ -7,7 +7,8 @@ import { expect, test, type Locator, type Page, type Route } from "@playwright/t
 //   that its box does not change when the list is scrolled to its end and further.
 // - What is staged to copy or move shows in a bar at the bottom (Paste here, Cancel) instead of a
 //   banner over the list; it goes once the paste is done (a copy as well as a cut, and when the
-//   source is deleted), a toast says so and goes by itself, and Back lets go of it.
+//   source is deleted), a toast says so and goes by itself, and Back keeps it while going up folders
+//   and lets go of it at the drive's root.
 // Tablets and computers keep the banner, which now goes after a paste as well.
 
 const HOST = "192.168.0.5";
@@ -319,7 +320,7 @@ for (const viewport of PHONES) {
         await expect(toast).toHaveCount(0, { timeout: 8_000 });
       });
 
-      test("cut: pasted items leave the clipboard; Back lets go of what is staged", async ({ page }) => {
+      test("cut: pasted items leave the clipboard; Back keeps what is staged up to the drive's root", async ({ page }) => {
         const ops = await openFiles(page, { wideFont });
         await stage(page, "cut", ["file-02.pkg", "file-03.pkg"]);
         const bar = stagedBar(page);
@@ -338,13 +339,16 @@ for (const viewport of PHONES) {
         await expect(title(page)).toHaveText("homebrew");
         await stage(page, "copy", ["file-04.pkg"]);
         await expect(bar).toBeVisible();
-        expect(await back(page)).toBe(true);
-        await expect(bar).toHaveCount(0);
-        await expect(title(page)).toHaveText("homebrew");
-        if (viewport.width < 768) await expect(page.locator("[data-bottom-nav]")).toBeVisible();
-        // Then up a folder, as before.
+        // Back goes up a folder and keeps what is staged: that is how one gets to the folder to
+        // paste into.
         expect(await back(page)).toBe(true);
         await expect(title(page)).toHaveText("usb0");
+        await expect(bar).toBeVisible();
+        // At the drive's root, Back lets go of it, and the folder stays.
+        expect(await back(page)).toBe(true);
+        await expect(bar).toHaveCount(0);
+        await expect(title(page)).toHaveText("usb0");
+        if (viewport.width < 768) await expect(page.locator("[data-bottom-nav]")).toBeVisible();
 
         // Cancel on the bar lets go too.
         await row(page, "homebrew").getByRole("button", { name: "homebrew", exact: true }).tap();
