@@ -1370,19 +1370,48 @@ fn is_os_clutter(name: &str) -> bool {
     name == ".DS_Store" || name == "Thumbs.db" || name == "desktop.ini" || name.starts_with("._")
 }
 
+/// The first name in a folder that is not clutter (so the folder stays), reading it page by page
+/// with `list(offset)` (names, whether more follow) to its end. The first page alone is not the
+/// folder: the helper lists in disk order, and eight `._` files from a Mac could come before the
+/// files of the drive, which then went to the trash with the folder.
+fn first_kept_name(
+    mut list: impl FnMut(u64) -> Result<(Vec<String>, bool)>,
+) -> Result<Option<String>> {
+    let mut offset = 0u64;
+    loop {
+        let (names, truncated) = list(offset)?;
+        let n = names.len() as u64;
+        if let Some(name) = names
+            .into_iter()
+            .find(|n| n != "." && n != ".." && !is_os_clutter(n))
+        {
+            return Ok(Some(name));
+        }
+        if n == 0 || (n < 256 && !truncated) {
+            return Ok(None);
+        }
+        offset += n;
+    }
+}
+
 /// A console folder of the drive that nothing is left in goes to the trash (moved, never
 /// deleted: anything written into it meanwhile is still there).
 fn prune_console_dir(addr: &str, root: &str, rel: &str, today: &str) -> bool {
     let dir = join_hub(root, rel);
-    let l = match fs_ops::list_dir(
-        addr,
-        &dir,
-        ListDirOptions {
-            offset: 0,
-            limit: 8,
-        },
-    ) {
-        Ok(l) => l,
+    let kept = first_kept_name(|offset| {
+        let l = fs_ops::list_dir(addr, &dir, ListDirOptions { offset, limit: 256 })?;
+        Ok((l.entries.into_iter().map(|e| e.name).collect(), l.truncated))
+    });
+    match kept {
+        Ok(None) => {}
+        Ok(Some(name)) => {
+            crate::log_at!(
+                Info,
+                "mesh",
+                "mesh drive: kept {dir}: it still holds {name}"
+            );
+            return false;
+        }
         Err(e) => {
             crate::log_at!(
                 Info,
@@ -1391,19 +1420,6 @@ fn prune_console_dir(addr: &str, root: &str, rel: &str, today: &str) -> bool {
             );
             return false;
         }
-    };
-    if let Some(e) = l
-        .entries
-        .iter()
-        .find(|e| e.name != "." && e.name != ".." && !is_os_clutter(&e.name))
-    {
-        crate::log_at!(
-            Info,
-            "mesh",
-            "mesh drive: kept {dir}: it still holds {}",
-            e.name
-        );
-        return false;
     }
     let day = join_hub(&join_hub(root, TRASH), today);
     let to = join_hub(
@@ -5235,6 +5251,40 @@ mod tests {
         assert!(!side.prune("kept", "2026-10-28"));
         assert!(root.join("kept/save.dat").exists());
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A console folder is read to its end before it counts as holding nothing: clutter on the
+    /// first page and a file of the drive on a later one keeps it.
+    #[test]
+    fn a_console_folder_is_read_to_its_end_before_it_is_pruned() {
+        let clutter: Vec<String> = (0..256).map(|i| format!("._{i}")).collect();
+        let pages = |offset: u64| -> Result<(Vec<String>, bool)> {
+            Ok(match offset {
+                0 => (clutter.clone(), true),
+                256 => (vec![".DS_Store".into(), "save.dat".into()], false),
+                _ => (Vec::new(), false),
+            })
+        };
+        assert_eq!(
+            super::first_kept_name(pages).unwrap().as_deref(),
+            Some("save.dat")
+        );
+        // Clutter only (the helper says more follow, then an empty page): nothing kept.
+        let only = |offset: u64| -> Result<(Vec<String>, bool)> {
+            Ok(match offset {
+                0 => (vec![".".into(), "..".into(), "Thumbs.db".into()], true),
+                _ => (Vec::new(), false),
+            })
+        };
+        assert_eq!(super::first_kept_name(only).unwrap(), None);
+        // A page that cannot be read keeps the folder (an error, never "empty").
+        let broken = |offset: u64| -> Result<(Vec<String>, bool)> {
+            match offset {
+                0 => Ok((clutter.clone(), true)),
+                _ => Err(anyhow::anyhow!("gone")),
+            }
+        };
+        assert!(super::first_kept_name(broken).is_err());
     }
 
     #[test]
