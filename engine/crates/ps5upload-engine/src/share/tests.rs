@@ -966,6 +966,17 @@ fn a_long_name_keeps_its_extension_and_two_alike_stay_two() {
     assert_eq!(wire::safe_name("con"), "_con");
     assert_eq!(wire::safe_name("COM1.bin"), "_COM1.bin");
     assert_eq!(wire::safe_name("console.pkg"), "console.pkg");
+    // A dot in front is part of the name; a dot or space at the end is not (Windows drops it).
+    assert_eq!(wire::safe_name(".nomedia"), ".nomedia");
+    assert_eq!(wire::safe_name("._eboot.bin"), "._eboot.bin");
+    assert_eq!(wire::safe_name("x. ."), "x");
+    assert_eq!(wire::safe_name(" a "), "a");
+    assert_eq!(wire::safe_name(".."), "item");
+    let dir = std::path::Path::new("/r");
+    assert_eq!(
+        wire::target(dir, ".config/.hidden").unwrap(),
+        std::path::Path::new("/r/.config/.hidden")
+    );
 
     // Under 200 bytes nothing is cut: names that differ after their 80th character stay apart.
     let listed = |path: String| wire::Listed {

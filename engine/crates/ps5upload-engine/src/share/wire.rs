@@ -526,8 +526,9 @@ fn set(sh: &Mutex<RxShared>, f: impl FnOnce(&mut RxShared)) {
     f(&mut sh.lock().unwrap_or_else(|e| e.into_inner()));
 }
 
-/// Characters no file system takes, and control characters, as `_`; trimmed, and no longer than
-/// [`NAME_MAX`] bytes. A longer name loses the end of its stem, never its extension: `.pkg` cut
+/// Characters no file system takes, and control characters, as `_`; no space in front, no dot or
+/// space at the end (Windows drops those), and no longer than [`NAME_MAX`] bytes. A dot in front
+/// stays: `.nomedia` or `.config` is a name, and the folder received must be the one sent. A longer name loses the end of its stem, never its extension: `.pkg` cut
 /// off made the file something else, and two names alike in their first 80 characters became one.
 pub(crate) fn safe_name(s: &str) -> String {
     let t: String = s
@@ -540,7 +541,9 @@ pub(crate) fn safe_name(s: &str) -> String {
             }
         })
         .collect();
-    let t = t.trim().trim_matches('.').trim();
+    let t = t
+        .trim_start()
+        .trim_end_matches(|c: char| c == '.' || c.is_whitespace());
     let t = if t.len() > NAME_MAX {
         // The extension: after the last dot, when short enough to be one.
         let (stem, ext) = match t.rfind('.') {
@@ -639,7 +642,8 @@ pub(crate) fn item_dirs(
 ) -> Vec<(String, PathBuf)> {
     let mut out: Vec<(String, PathBuf)> = Vec::new();
     for i in items.iter().filter(|i| accepted.contains(&i.id)) {
-        let base = safe_name(&i.name);
+        // A folder of its own for the item: shown, never hidden (no dot in front).
+        let base = safe_name(i.name.trim().trim_start_matches('.'));
         let mut name = base.clone();
         let mut k = 2;
         while out
