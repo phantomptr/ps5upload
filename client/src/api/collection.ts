@@ -296,6 +296,9 @@ export interface OrganizeResult {
   dropped: string[];
   kept_dirs: string[];
   logs: string[];
+  /** Folders whose items moved but whose undo log could not be saved afterwards ("folder: why"):
+   *  Undo may not put everything back. Absent when every log was saved. */
+  undo_incomplete?: string[];
 }
 
 export interface OrganizeRun {

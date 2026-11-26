@@ -4321,6 +4321,7 @@ trace_profile_name: "{n} खेल सत्रों से मापा गय
 "collection.org_summary": "{n} बदलाव · {size}",
 "collection.org_title": "संग्रह व्यवस्थित करें",
 "collection.org_undo": "वापस लें",
+"collection.org_undo_incomplete": "आइटम ले जाए गए, लेकिन पूर्ववत लॉग सहेजा नहीं जा सका। पूर्ववत करने पर शायद सब कुछ वापस न आए।",
 "collection.org_undo_body": "स्थानांतरित {n} आइटम उनके मूल नाम और फ़ोल्डर में लौटते हैं। बाद में स्थानांतरित या नाम बदले गए आइटम वहीं रहते हैं।",
 "collection.org_undo_title": "यह रन वापस लें?",
 "collection.org_undone": "वापस लिया गया: {n} बहाल, {problems} वहीं रहे",

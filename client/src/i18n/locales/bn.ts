@@ -4307,6 +4307,7 @@ trace_profile_name: "{n}টি খেলার সেশন থেকে মা�
 "collection.org_summary": "{n}টি সরানো · {size}",
 "collection.org_title": "সংগ্রহ সাজান",
 "collection.org_undo": "ফেরান",
+"collection.org_undo_incomplete": "আইটেমগুলো সরানো হয়েছে, কিন্তু আনডু লগ সংরক্ষণ করা যায়নি। আনডু সবকিছু আগের জায়গায় নাও ফেরাতে পারে।",
 "collection.org_undo_body": "সরানো {n}টি আইটেম তাদের আগের নাম ও ফোল্ডারে ফেরে। পরে সরানো বা নাম বদলানো আইটেম যেখানে আছে সেখানেই থাকে।",
 "collection.org_undo_title": "এই রানটি ফেরাবেন?",
 "collection.org_undone": "ফেরানো হয়েছে: {n}টি পুনরুদ্ধার, {problems}টি যেখানে ছিল সেখানে",

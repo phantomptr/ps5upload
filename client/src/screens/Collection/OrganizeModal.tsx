@@ -262,6 +262,20 @@ export function OrganizeModal({
               )}
             </div>
           )}
+          {(result.undo_incomplete?.length ?? 0) > 0 && (
+            <div className="mt-1 text-[var(--color-warn)]">
+              {tr(
+                "collection.org_undo_incomplete",
+                undefined,
+                "The items were moved, but the undo log could not be saved. Undo may not put everything back.",
+              )}
+              {result.undo_incomplete?.map((line) => (
+                <div key={line} className="break-all font-mono text-[0.6875rem]">
+                  {line}
+                </div>
+              ))}
+            </div>
+          )}
           {result.failed.map((f) => (
             <div
               key={`${f.container}|${f.from}`}

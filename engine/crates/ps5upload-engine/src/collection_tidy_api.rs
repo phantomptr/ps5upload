@@ -837,6 +837,28 @@ pub struct OrganizeApplyResult {
     pub dropped: Vec<String>,
     pub kept_dirs: Vec<String>,
     pub logs: Vec<String>,
+    /// Folders whose moves were made but whose undo log could not be written whole afterwards
+    /// (each as "folder: why"). What `moved` lists did move; Undo may not put all of it back.
+    /// Empty when every log was saved.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub undo_incomplete: Vec<String>,
+}
+
+impl OrganizeApplyResult {
+    /// Adds what one folder's run did (`at` is the folder as shown, `log_name` its undo log).
+    /// A run whose log could not be saved afterwards still moved what it moved: that is
+    /// reported as moved, with the folder listed in `undo_incomplete`.
+    fn record(&mut self, log: organize::UndoLog, at: &str, log_name: String) {
+        if let Some(why) = &log.unsaved {
+            self.undo_incomplete.push(format!("{at}: {why}"));
+        }
+        self.moved.extend(log.completed);
+        self.failed.extend(log.failed);
+        // Where each is: one name ("old") could be in several containers.
+        self.kept_dirs
+            .extend(log.kept_dirs.iter().map(|d| format!("{at}/{d}")));
+        self.logs.push(log_name);
+    }
 }
 
 /// `dir/stem`, or `dir/stem_2`, `_3`, ... when a log by that name exists: two folders with
@@ -959,6 +981,11 @@ fn pick_moves(
 /// POST /api/collection/organize/apply: runs the chosen moves of a preview. It does not plan
 /// again: the preview already read every package, and over a network that took minutes. A move
 /// runs only if its file is as the preview saw it and its new name is still free.
+///
+/// Answers `{moved, failed, dropped, kept_dirs, logs, undo_incomplete?}`. `moved` is what moved,
+/// whatever happened afterwards: when a folder's undo log could not be saved once its moves were
+/// made, the folder is listed in `undo_incomplete` (as "folder: why") and Undo may not put all of
+/// it back. `dropped` are moves that were left alone.
 pub async fn post_organize_apply(Json(req): Json<OrganizeApplyReq>) -> Response {
     let Some(turn) = OrganizerTurn::take() else {
         return organizer_busy();
@@ -1040,20 +1067,23 @@ pub async fn post_organize_apply(Json(req): Json<OrganizeApplyReq>) -> Response 
                             log_path.display()
                         ),
                     );
-                    out.moved.extend(log.completed);
-                    out.failed.extend(log.failed);
-                    // Where each is: one name ("old") could be in several containers.
-                    let at = label(&c);
-                    out.kept_dirs
-                        .extend(log.kept_dirs.iter().map(|d| format!("{at}/{d}")));
-                    out.logs.push(
-                        log_path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned(),
-                    );
+                    if let Some(why) = &log.unsaved {
+                        crate::engine_log::record(
+                            "warn",
+                            format!(
+                                "collection: the undo log of that run could not be saved \
+                                 afterwards ({why}): Undo may not put everything back"
+                            ),
+                        );
+                    }
+                    let name = log_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned();
+                    out.record(log, &label(&c), name);
                 }
+                // The log is written before the first move: nothing in this folder moved.
                 Err(e) => out.dropped.push(format!(
                     "{container}: the undo log could not be written ({e})"
                 )),
@@ -1061,8 +1091,22 @@ pub async fn post_organize_apply(Json(req): Json<OrganizeApplyReq>) -> Response 
         }
         out
     })
-    .await
-    .unwrap_or_default();
+    .await;
+    let result = match result {
+        Ok(result) => result,
+        // The run stopped part way without saying what it did: files may have moved, so the
+        // Collection is read again and the answer is not "nothing happened".
+        Err(e) => {
+            rescan();
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "the organizer stopped unexpectedly ({e}); some items may have moved. \
+                     Check Earlier runs for an Undo"
+                ),
+            );
+        }
+    };
     if !result.moved.is_empty() {
         rescan();
     }
@@ -1206,7 +1250,9 @@ pub struct RevertReq {
     pub id: String,
 }
 
-/// POST /api/collection/organize/revert: undoes one run from its log.
+/// POST /api/collection/organize/revert: undoes one run from its log. Answers
+/// `{reverted, problems, note?}`: `reverted` is what went back, also when the run could not be
+/// marked as undone afterwards (`note` then says so).
 pub async fn post_organize_revert(Json(req): Json<RevertReq>) -> Response {
     // A log name only: never a path.
     if req.id.contains(['/', '\\'])
@@ -1225,7 +1271,11 @@ pub async fn post_organize_revert(Json(req): Json<RevertReq>) -> Response {
         let _turn = turn;
         let note = same_place(&path).map_err(std::io::Error::other)?;
         organize::revert(&path, &tree_for).map(|mut r| {
-            r.note = note;
+            // Both can be true: where it was undone, and that the log could not be marked.
+            r.note = match (note, r.note.take()) {
+                (Some(a), Some(b)) => Some(format!("{a} {b}")),
+                (a, b) => a.or(b),
+            };
             r
         })
     })
@@ -1975,5 +2025,44 @@ mod tests {
     fn log_slugs_are_plain() {
         assert_eq!(slug(FsPath::new("/x/game fpkgs (old)")), "game-fpkgs--old");
         assert_eq!(slug(FsPath::new("/x/★")), "packages");
+    }
+
+    /// The audit's case: the run moved files and then could not save its undo log. The answer
+    /// lists what moved (which is what makes the Collection scan again) and says Undo may be
+    /// incomplete; a run whose log was saved says nothing of the kind.
+    #[test]
+    fn a_run_whose_log_could_not_be_saved_still_reports_what_moved() {
+        let run = |unsaved: Option<&str>| -> organize::UndoLog {
+            let mut log: organize::UndoLog = serde_json::from_value(serde_json::json!({
+                "version": 1, "container_root": "/c", "created_at": "2026-01-01T00:00:00Z",
+                "moves": [], "kept_dirs": ["old"],
+            }))
+            .unwrap();
+            log.completed = vec![planned("a.pkg", "x/a.pkg", "")];
+            log.unsaved = unsaved.map(str::to_string);
+            log
+        };
+        let mut out = OrganizeApplyResult::default();
+        out.record(
+            run(Some("No space left on device")),
+            "/c",
+            "organize_1_c.json".into(),
+        );
+        assert_eq!(out.moved.len(), 1, "what moved is reported as moved");
+        assert!(out.dropped.is_empty(), "not as a move that was left alone");
+        assert_eq!(out.undo_incomplete, vec!["/c: No space left on device"]);
+        assert_eq!(out.kept_dirs, vec!["/c/old"]);
+        let v = serde_json::to_value(&out).unwrap();
+        assert_eq!(v["undo_incomplete"][0], "/c: No space left on device");
+        assert_eq!(v["moved"][0]["from"], "a.pkg");
+
+        let mut saved = OrganizeApplyResult::default();
+        saved.record(run(None), "/c", "organize_2_c.json".into());
+        assert_eq!(saved.moved.len(), 1);
+        let v = serde_json::to_value(&saved).unwrap();
+        assert!(
+            v.get("undo_incomplete").is_none(),
+            "absent when every log was saved"
+        );
     }
 }

@@ -4314,6 +4314,7 @@ trace_profile_name: "วัดจาก {n} เซสชันการเล่
 "collection.org_summary": "ย้าย {n} รายการ · {size}",
 "collection.org_title": "จัดระเบียบคอลเลกชัน",
 "collection.org_undo": "ย้อนกลับ",
+"collection.org_undo_incomplete": "ย้ายรายการแล้ว แต่บันทึกสำหรับเลิกทำบันทึกไม่ได้ การเลิกทำอาจนำกลับมาได้ไม่ครบ",
 "collection.org_undo_body": "ย้าย {n} รายการกลับไปยังชื่อและโฟลเดอร์เดิม รายการที่ถูกย้ายหรือเปลี่ยนชื่อภายหลังจะอยู่ที่เดิม",
 "collection.org_undo_title": "ย้อนกลับการทำงานนี้หรือไม่",
 "collection.org_undone": "ย้อนกลับแล้ว: คืนค่า {n} รายการ {problems} รายการอยู่ที่เดิม",

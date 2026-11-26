@@ -19473,7 +19473,7 @@
     },
     "/api/collection/organize/apply": {
       "post": {
-        "description": "POST /api/collection/organize/apply: runs the chosen moves of a preview. It does not plan\nagain: the preview already read every package, and over a network that took minutes. A move\nruns only if its file is as the preview saw it and its new name is still free.",
+        "description": "POST /api/collection/organize/apply: runs the chosen moves of a preview. It does not plan\nagain: the preview already read every package, and over a network that took minutes. A move\nruns only if its file is as the preview saw it and its new name is still free.\n\nAnswers `{moved, failed, dropped, kept_dirs, logs, undo_incomplete?}`. `moved` is what moved,\nwhatever happened afterwards: when a folder's undo log could not be saved once its moves were\nmade, the folder is listed in `undo_incomplete` (as \"folder: why\") and Undo may not put all of\nit back. `dropped` are moves that were left alone.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -19668,7 +19668,7 @@
     },
     "/api/collection/organize/revert": {
       "post": {
-        "description": "POST /api/collection/organize/revert: undoes one run from its log.",
+        "description": "POST /api/collection/organize/revert: undoes one run from its log. Answers\n`{reverted, problems, note?}`: `reverted` is what went back, also when the run could not be\nmarked as undone afterwards (`note` then says so).",
         "requestBody": {
           "content": {
             "application/json": {

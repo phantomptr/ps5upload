@@ -1094,6 +1094,11 @@ pub struct UndoLog {
     /// Set once the run was undone, so it cannot be undone twice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reverted_at: Option<String>,
+    /// Why this log, as it is here, is not what is on disk: the last write of a run failed.
+    /// The moves in `completed` happened all the same; the file holds an earlier state of the
+    /// run, so Undo may not know all of them. Never stored.
+    #[serde(skip)]
+    pub unsaved: Option<String>,
 }
 
 /// A server folder's whereabouts, as the saved connection said when the run was made.
@@ -1464,7 +1469,9 @@ pub fn apply(
         removed_dirs: Vec::new(),
         kept_dirs: Vec::new(),
         reverted_at: None,
+        unsaved: None,
     };
+    // Before the first move: a run that cannot be logged does not start, and nothing moved.
     write_log(log_path, &log)?;
     let mut started_in = HashSet::new();
     let mut made = HashSet::new();
@@ -1507,8 +1514,17 @@ pub fn apply(
         log.removed_dirs = removed;
         log.kept_dirs = kept;
     }
-    write_log(log_path, &log)?;
+    // After the last move: the files are where the run put them whatever happens to this write,
+    // so a failure here is never "the run failed". It is told apart, for the caller to say what
+    // moved and that Undo may not know all of it (the file holds the last state that was
+    // written; Undo also looks for moves that happened without being recorded).
+    log.unsaved = write_log_twice(log_path, &log).err().map(|e| e.to_string());
     Ok(log)
+}
+
+/// [`write_log`], once more when it fails: a full or busy disk can take the second try.
+fn write_log_twice(path: &Path, log: &UndoLog) -> std::io::Result<()> {
+    write_log(path, log).or_else(|_| write_log(path, log))
 }
 
 /// Gives the tree a path is in.
@@ -1623,7 +1639,15 @@ pub fn revert(log_path: &Path, open: &OpenTree) -> std::io::Result<RevertResult>
     // and undo again; the moves already put back are then skipped as "moved file is gone".
     if out.problems.is_empty() {
         log.reverted_at = Some(now_iso());
-        write_log(log_path, &log)?;
+        // The files are back whatever happens to this write: failing it must not turn an undo
+        // that worked into "nothing was undone".
+        if let Err(e) = write_log_twice(log_path, &log) {
+            out.note = Some(format!(
+                "Everything was put back, but this run could not be marked as undone (its log \
+                 could not be written: {e}). It may still be listed as a run to undo; undoing \
+                 it again changes nothing."
+            ));
+        }
     }
     Ok(out)
 }
@@ -2514,6 +2538,7 @@ mod tests {
             removed_dirs: Vec::new(),
             kept_dirs: Vec::new(),
             reverted_at: None,
+            unsaved: None,
         };
         write_log(&path, &log).unwrap();
         let back: UndoLog = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -2786,5 +2811,126 @@ mod tests {
                 .count(),
             3
         );
+    }
+
+    /// A tree that, at its first rename, puts a folder where the undo log's next write goes:
+    /// every write of the log after that fails, as on a disk that filled up during the run.
+    struct LogBreaks(PathBuf);
+    impl Tree for LogBreaks {
+        fn list(&self, dir: &Path) -> Option<Vec<DirEnt>> {
+            LocalTree.list(dir)
+        }
+        fn meta(&self, p: &Path) -> Option<Meta> {
+            LocalTree.meta(p)
+        }
+        fn exists(&self, p: &Path) -> Result<bool, OpError> {
+            LocalTree.exists(p)
+        }
+        fn create_dir(&self, p: &Path) -> Result<(), OpError> {
+            LocalTree.create_dir(p)
+        }
+        fn rename_new(&self, from: &Path, to: &Path) -> Result<(), OpError> {
+            std::fs::create_dir_all(self.0.with_extension("json.tmp")).unwrap();
+            LocalTree.rename_new(from, to)
+        }
+        fn remove_dir(&self, p: &Path) -> Result<(), OpError> {
+            LocalTree.remove_dir(p)
+        }
+        fn is_removable_junk(&self, p: &Path) -> bool {
+            LocalTree.is_removable_junk(p)
+        }
+        fn remove_junk(&self, p: &Path) {
+            LocalTree.remove_junk(p);
+        }
+    }
+
+    /// The audit's case: the moves were made and the last write of the undo log failed. That was
+    /// an error, which the caller read as "nothing moved". It is a run that moved its files, told
+    /// that its log is behind; and Undo still puts back what the log on disk only planned.
+    #[test]
+    fn a_failed_last_log_write_does_not_unsay_the_moves() {
+        let l = lib("log-last-write");
+        let c = l.0.join("fpkg");
+        put(&c, "a.pkg", 10);
+        put(&c, "b.pkg", 20);
+        let entries = [
+            (
+                "a",
+                info(
+                    "Alpha",
+                    "CUSA00001",
+                    "UP0000-CUSA00001_00-A",
+                    "base",
+                    "1.00",
+                ),
+            ),
+            (
+                "b",
+                info("Beta", "CUSA00002", "UP0000-CUSA00002_00-B", "base", "1.00"),
+            ),
+        ];
+        let p = plan_with(&LocalTree, &c, &table(&entries));
+        assert_eq!(p.moves.len(), 2);
+        let log_path = l.0.join("logs/run.json");
+        let tree = LogBreaks(log_path.clone());
+        let log = apply(&tree, &c, p.moves.clone(), &log_path, "", None).unwrap();
+        assert_eq!(log.completed.len(), 2, "the run says what it moved");
+        assert!(log.failed.is_empty());
+        assert!(log.unsaved.is_some(), "and that its log could not be saved");
+        for m in &p.moves {
+            assert!(c.join(&m.to).is_file() && !c.join(&m.from).exists());
+        }
+        // On disk: the log as it was written before the first move.
+        let on_disk: UndoLog = serde_json::from_slice(&std::fs::read(&log_path).unwrap()).unwrap();
+        assert!(on_disk.completed.is_empty());
+        assert_eq!(on_disk.moves.len(), 2);
+        assert_eq!(on_disk.unsaved, None, "never stored");
+
+        // Undo, its own last write failing too: the files go back, and that is what it says.
+        let undone = revert(&log_path, &local).unwrap();
+        assert_eq!(undone.reverted.len(), 2, "{:?}", undone.problems);
+        assert!(undone.problems.is_empty());
+        assert!(
+            undone
+                .note
+                .as_deref()
+                .is_some_and(|n| n.contains("could not be marked as undone")),
+            "{:?}",
+            undone.note
+        );
+        for m in &p.moves {
+            assert!(c.join(&m.from).is_file() && !c.join(&m.to).exists());
+        }
+        // Once the log can be written again, the same Undo marks the run and changes nothing.
+        std::fs::remove_dir_all(log_path.with_extension("json.tmp")).unwrap();
+        let again = revert(&log_path, &local).unwrap();
+        assert!(
+            again.problems.is_empty() && again.note.is_none(),
+            "{again:?}"
+        );
+        assert!(revert(&log_path, &local).is_err(), "a run is undone once");
+    }
+
+    /// The first write comes before the first move: failing it is "nothing moved", and is.
+    #[test]
+    fn a_run_that_cannot_write_its_log_first_moves_nothing() {
+        let l = lib("log-first-write");
+        let c = l.0.join("fpkg");
+        put(&c, "a.pkg", 10);
+        let entries = [(
+            "a",
+            info(
+                "Alpha",
+                "CUSA00001",
+                "UP0000-CUSA00001_00-A",
+                "base",
+                "1.00",
+            ),
+        )];
+        let p = plan_with(&LocalTree, &c, &table(&entries));
+        let log_path = l.0.join("logs/run.json");
+        std::fs::create_dir_all(log_path.with_extension("json.tmp")).unwrap();
+        assert!(apply(&LocalTree, &c, p.moves, &log_path, "", None).is_err());
+        assert!(c.join("a.pkg").is_file());
     }
 }
