@@ -1,4 +1,5 @@
 import {
+  Fragment,
   type ComponentType,
   type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
@@ -67,6 +68,8 @@ export interface RowMenuItem {
   destructive?: boolean;
   /** The one in use among several (the drive you are on): marked, and read out as current. */
   current?: boolean;
+  /** Starts a group: a line before it (never before the first item). */
+  separator?: boolean;
 }
 
 export function rowActionMenuItems(actions: RowAction[]): RowMenuItem[] {
@@ -673,10 +676,12 @@ export function RowMenu({
       data-testid="fs-row-menu"
       onKeyDown={onMenuKeyDown}
       style={{ left: pos.left, top: pos.top, maxHeight: pos.maxHeight }}
+      // As wide as its longest item (up to the screen's width), then placed: sized by where
+      // it was put first, a ⋮ menu near the right edge wrapped its items to two lines.
       // The same floating glass as the app's other menus (components/Menu).
       // `--color-surface` is the translucent page tint: with it the rows under
       // the menu read straight through the items.
-      className="glass-float elev-2 fixed z-50 max-h-[calc(100dvh-0.5rem-var(--safe-top)-var(--safe-bottom,0px))] min-w-[12rem] max-w-[calc(100vw-0.5rem)] overflow-y-auto rounded-[var(--radius-card)] p-1.5 text-sm"
+      className="glass-float elev-2 fixed z-50 max-h-[calc(100dvh-0.5rem-var(--safe-top)-var(--safe-bottom,0px))] w-max min-w-[12rem] max-w-[calc(100vw-0.5rem)] overflow-y-auto rounded-[var(--radius-card)] p-1.5 text-sm"
     >
       <RowMenuList
         items={items}
@@ -701,24 +706,28 @@ export function RowMenuList({
   items: RowMenuItem[];
   onPick: (item: RowMenuItem) => void;
 }) {
-  return items.map((it) => (
-    <button
-      key={it.label}
-      type="button"
-      role="menuitem"
-      tabIndex={-1}
-      disabled={it.disabled}
-      aria-current={it.current ? "true" : undefined}
-      onClick={() => onPick(it)}
-      className={
-        "flex w-full items-center gap-2 rounded-full px-3 py-1.5 text-start hover:bg-[var(--color-surface-3)] focus:bg-[var(--color-surface-3)] disabled:opacity-40 " +
-        (it.destructive ? "text-[var(--color-bad)] " : "") +
-        (it.current ? "font-medium text-[var(--color-accent-bright)]" : "")
-      }
-    >
-      <it.icon size={14} className="shrink-0" />
-      {it.label}
-      {it.current && <Check size={14} className="ms-auto shrink-0" aria-hidden />}
-    </button>
+  return items.map((it, i) => (
+    <Fragment key={it.label}>
+      {it.separator && i > 0 && (
+        <div role="separator" className="mx-2 my-1 h-px bg-[var(--color-border)]" data-testid="fs-menu-separator" />
+      )}
+      <button
+        type="button"
+        role="menuitem"
+        tabIndex={-1}
+        disabled={it.disabled}
+        aria-current={it.current ? "true" : undefined}
+        onClick={() => onPick(it)}
+        className={
+          "flex w-full items-center gap-2 rounded-full px-3 py-1.5 text-start hover:bg-[var(--color-surface-3)] focus:bg-[var(--color-surface-3)] disabled:opacity-40 " +
+          (it.destructive ? "text-[var(--color-bad)] " : "") +
+          (it.current ? "font-medium text-[var(--color-accent-bright)]" : "")
+        }
+      >
+        <it.icon size={14} className="shrink-0" />
+        {it.label}
+        {it.current && <Check size={14} className="ms-auto shrink-0" aria-hidden />}
+      </button>
+    </Fragment>
   ));
 }

@@ -3254,17 +3254,22 @@ export default function FileSystemScreen() {
   // A const, so the menu items' closures keep the non-null narrowing.
   const menuEntry = rowMenu?.entry ?? null;
 
-  /** The open folder's own view items, in its right-click menu and the page's ⋯ menu. */
-  const folderViewItems = () => [
+  /** The open folder's own view items, in its right-click menu and the page's ⋯ menu. A group
+   *  of their own, named for this folder; the drive's items further down say "drive", and the
+   *  snapshot pair says which one makes a snapshot and which one shows them (they read as twins:
+   *  "What takes space here?" beside "What takes space?", "Snapshot this folder" beside
+   *  "Snapshots"). */
+  const folderViewItems = (): RowMenuItem[] => [
     {
       icon: PieChart,
-      label: tr("fs_space_here", undefined, "What takes space here?"),
+      label: tr("fs_space_here_v2", undefined, "What takes space in this folder?"),
       run: () => openSpace(path),
       disabled: !host?.trim(),
+      separator: true,
     },
     {
       icon: Archive,
-      label: tr("fs_snapshot_folder", undefined, "Snapshot this folder"),
+      label: tr("fs_snapshot_folder_v2", undefined, "Make a snapshot of this folder"),
       run: () => snapshotPaths([path]),
       disabled: !host?.trim() || path === "/",
     },
@@ -3277,17 +3282,19 @@ export default function FileSystemScreen() {
       icon: Link2,
       label: tr("fs_link_download", undefined, "Download from a link"),
       run: () => setLinkInto(path),
+      separator: true,
     },
     // The size map of the drive you are on (Disk usage, a Files view). With the other
     // whole-drive tools here, not among the drive chips, which only pick a drive.
     {
       icon: PieChart,
-      label: tr("fs_space_title", undefined, "What takes space?"),
+      label: tr("fs_space_drive", undefined, "What takes space on this drive?"),
       run: () => openSpace(currentVolumePath ?? path),
+      separator: true,
     },
     {
       icon: Archive,
-      label: tr("fs_snapshots_open", undefined, "Snapshots"),
+      label: tr("fs_snapshots_see", undefined, "See snapshots"),
       run: () => openView("snapshots"),
     },
     {
