@@ -2012,6 +2012,8 @@ export function Files({ ctx }: { ctx: SectionContext }) {
       if (path == null) return;
       createFile(joinPath(path, name)).then(
         () => {
+          // Another folder opened meanwhile: the editor would open that folder's file of this name.
+          if (pathRef.current !== path) return;
           focusName.current = name;
           refresh();
           setAsk({ kind: "view", name, type: "text", edit: true });
