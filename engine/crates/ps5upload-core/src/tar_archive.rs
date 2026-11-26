@@ -1036,7 +1036,7 @@ fn list(path: &Path, watch: TarWatch<'_>) -> io::Result<TarLayout> {
             // An entry's headers start where the one before it ends: its data, padded to 512.
             let header_offset = next_header;
             next_header = align512(entry.raw_file_position().saturating_add(entry.size()));
-            let what = Kind::of(&entry)?;
+            let what = Kind::of(&mut entry)?;
             let raw = entry.path_bytes().into_owned();
             let name = String::from_utf8(raw)
                 .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
@@ -1323,11 +1323,29 @@ enum Kind {
     Skip,
 }
 
+/// The entry's PAX keys say it is a sparse file (`GNU.sparse.*`, every version of the format).
+fn pax_sparse<R: Read>(e: &mut tar::Entry<'_, R>) -> io::Result<bool> {
+    Ok(e.pax_extensions()?.is_some_and(|mut keys| {
+        keys.any(|k| k.is_ok_and(|k| k.key_bytes().starts_with(b"GNU.sparse.")))
+    }))
+}
+
 impl Kind {
-    fn of<R: Read>(e: &tar::Entry<'_, R>) -> io::Result<Kind> {
+    fn of<R: Read>(e: &mut tar::Entry<'_, R>) -> io::Result<Kind> {
         use tar::EntryType as T;
         let t = e.header().entry_type();
         Ok(match t {
+            // A sparse file in the PAX form (bsdtar, which macOS's tar is, and `tar -S
+            // --format=posix`) is an ordinary file entry whose data starts with the map of its
+            // holes, named `GNUSparseFile.<n>/<name>`: only its PAX keys say so. Taken as it was,
+            // it went to the console as the map and the parts, under that name.
+            T::Regular | T::Continuous if pax_sparse(e)? => {
+                return Err(fault(TarFault::Unsupported(format!(
+                    "{} is a sparse file, which this app does not unpack; create the archive \
+                     again without --sparse (-S)",
+                    String::from_utf8_lossy(&e.path_bytes())
+                ))))
+            }
             T::Regular | T::Continuous => Kind::File,
             T::Directory => Kind::Dir,
             T::Symlink | T::Link => Kind::Link,
@@ -1447,7 +1465,7 @@ pub fn tar_walk(
             }
             let Some(entry) = entries.next() else { break };
             let mut entry = entry.map_err(Tagged::decode)?;
-            if !matches!(Kind::of(&entry)?, Kind::File) {
+            if !matches!(Kind::of(&mut entry)?, Kind::File) {
                 continue;
             }
             let Some(f) = layout.files.get(i) else {

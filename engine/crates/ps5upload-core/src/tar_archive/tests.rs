@@ -338,6 +338,36 @@ fn a_sparse_file_and_case_clashes_are_refused_with_what_to_do() {
         "{e}"
     );
 
+    // The PAX form (bsdtar, `tar -S --format=posix`): a PAX header, then a plain file entry.
+    let mut b = tar::Builder::new(Vec::new());
+    let mut pax = Vec::new();
+    for (k, v) in [
+        ("GNU.sparse.major", "1"),
+        ("GNU.sparse.minor", "0"),
+        ("GNU.sparse.name", "hole.bin"),
+        ("GNU.sparse.realsize", "67112960"),
+    ] {
+        let rest = format!(" {k}={v}\n");
+        let mut n = rest.len() + 1;
+        while format!("{n}{rest}").len() != n {
+            n += 1;
+        }
+        pax.extend_from_slice(format!("{n}{rest}").as_bytes());
+    }
+    let mut h = header(tar::EntryType::XHeader, pax.len() as u64);
+    b.append_data(&mut h, "./PaxHeaders/hole.bin", &pax[..])
+        .unwrap();
+    let mut h = header(tar::EntryType::Regular, 3);
+    b.append_data(&mut h, "GNUSparseFile.0/hole.bin", &b"map"[..])
+        .unwrap();
+    let p = d.join("pax-sparse.tar");
+    std::fs::write(&p, b.into_inner().unwrap()).unwrap();
+    let e = tar_layout(&p).unwrap_err();
+    assert!(
+        matches!(tar_fault_of(&e), Some(TarFault::Unsupported(m)) if m.contains("--sparse")),
+        "{e}"
+    );
+
     let mut b = tar::Builder::new(Vec::new());
     for n in ["G/a.bin", "g/A.bin"] {
         let mut h = header(tar::EntryType::Regular, 1);
