@@ -218,9 +218,14 @@ pub fn normalize_version(ver: &str) -> String {
         .join(".")
 }
 
-/// Orders versions numerically segment by segment; non-numeric segments sort last.
+/// Orders versions numerically segment by segment; non-numeric segments sort last. A blank
+/// version is no version: it sorts below every real one (it used to sort above them all, so a
+/// package that named no version won every "which is newest").
 pub fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     let key = |v: &str| -> Vec<(u8, u64)> {
+        if v.trim().is_empty() {
+            return Vec::new();
+        }
         v.split('.')
             .map(|s| match s.trim().parse::<u64>() {
                 Ok(n) => (0, n),
@@ -332,6 +337,23 @@ mod tests {
         assert_eq!(newer_version("", "1.2"), "1.2");
         assert_eq!(version_cmp("1.10", "1.9"), std::cmp::Ordering::Greater);
         assert_eq!(version_cmp("1.32", "1.32"), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
+    fn a_blank_version_sorts_below_every_real_one() {
+        use std::cmp::Ordering::{Equal, Greater, Less};
+        for real in ["0", "0.0", "1.00", "01.05", "9.99.999", "1.0a"] {
+            assert_eq!(version_cmp("", real), Less, "blank against {real}");
+            assert_eq!(version_cmp(real, "  "), Greater, "{real} against blank");
+        }
+        assert_eq!(version_cmp("", " "), Equal);
+        // The newest of a list is never the one that names no version.
+        let newest = ["1.02", "", "1.10", " "]
+            .into_iter()
+            .max_by(|a, b| version_cmp(a, b));
+        assert_eq!(newest, Some("1.10"));
+        // A segment that is no number still sorts last among real versions.
+        assert_eq!(version_cmp("1.x", "1.9"), Greater);
     }
 
     #[test]
