@@ -119,6 +119,13 @@ export interface Inspection {
   masterVersion: string | null;
   /** "lz4" or "zstd": the game reads its files through AMPR from asset packs. */
   packed: string | null;
+  /** For a packed game: about its size as plain files (what a .pkg that unpacks it holds). Null
+   *  when it is not packed, its packs could not be read, or the helper is from before 12.6.31. */
+  unpackedBytes: number | null;
+  /** With unpackedBytes: whether the game's own AMPR emulator can stay beside plain files. False:
+   *  an unpacked .pkg has to leave the emulator out here, or be made on a computer (the console
+   *  downloads no other emulator). */
+  unpackKeepsEmulator: boolean | null;
   hasEboot: boolean;
   warnings: string[];
   /** The zstd runtime on the console (the helper adds it), or null: a zstd build needs one, and
@@ -146,10 +153,46 @@ export function parseInspection(raw: unknown): Inspection | null {
     contentVersion: str(r.content_version),
     masterVersion: str(r.master_version),
     packed: str(r.packed),
+    unpackedBytes: typeof r.unpacked_bytes === "number" && Number.isFinite(r.unpacked_bytes) && r.unpacked_bytes >= 0 ? r.unpacked_bytes : null,
+    unpackKeepsEmulator: typeof r.unpack_keeps_emulator === "boolean" ? r.unpack_keeps_emulator : null,
     hasEboot: r.has_eboot === true,
     warnings: Array.isArray(r.warnings) ? r.warnings.filter((w): w is string => typeof w === "string") : [],
     zstdRuntime: str(r.zstd_runtime),
   };
+}
+
+/** Whether a .pkg of this game can be asked to unpack its asset packs: it is in packs, and the
+ *  converter read them (an older helper's answer has no size, and its converter no such option). */
+export function canUnpack(info: Inspection | null): boolean {
+  return info != null && info.packed != null && info.unpackedBytes != null;
+}
+
+/** What a .pkg does with a packed game's asset packs and its AMPR emulator. */
+export interface UnpackChoice {
+  /** The package holds the plain files again (the page's default, as the desktop app's). */
+  unpack: boolean;
+  /** With unpack: no libSceAmpr.sprx in the package. */
+  leaveOutEmulator: boolean;
+}
+
+/** `choice` as it applies to `format` and this game: both off for anything but a .pkg of a packed
+ *  game, and the emulator is left out only with the unpack. */
+export function unpackFor(format: OutFormat, info: Inspection | null, choice: UnpackChoice): UnpackChoice {
+  const unpack = format === "pkg" && canUnpack(info) && choice.unpack;
+  return { unpack, leaveOutEmulator: unpack && choice.leaveOutEmulator };
+}
+
+/** Whether the choice can't be built on the console: the plain files would need another emulator
+ *  than the game's own, and the console downloads none (the converter refuses it with
+ *  convert_unpack_needs_emulator). Leaving the emulator out, or not unpacking, builds. */
+export function unpackNeedsEmulator(info: Inspection | null, applied: UnpackChoice): boolean {
+  return applied.unpack && !applied.leaveOutEmulator && info?.unpackKeepsEmulator === false;
+}
+
+/** The bytes the output has to hold before any compression: the plain files' when a .pkg unpacks
+ *  the game's packs, else what the source's files add up to. */
+export function bytesToWrite(info: Inspection, applied: UnpackChoice): number {
+  return applied.unpack && info.unpackedBytes != null ? info.unpackedBytes : info.dataBytes;
 }
 
 /** A format's name as the page shows it. */
@@ -192,6 +235,8 @@ export const CONVERT_CAUSES: Record<string, string> = {
   convert_partial_in_the_way: "cw_convert_err_partial_in_the_way",
   convert_no_zstd_runtime: "cw_convert_zstd_no_runtime",
   convert_not_packable: "cw_convert_err_not_packable",
+  convert_unpack_needs_emulator: "cw_convert_unpack_needs_emulator",
+  convert_not_packed: "cw_convert_err_not_packed",
   convert_dest_read_only: "cw_convert_err_dest_read_only",
   convert_too_big_for_drive: "cw_convert_err_too_big_for_drive",
   convert_drive_gone: "cw_convert_err_drive_gone",
@@ -221,6 +266,7 @@ export const CONVERT_CAUSES: Record<string, string> = {
   convert_bad_inner: "cw_convert_err_bad_request",
   convert_bad_ffpfsc_level: "cw_convert_err_bad_request",
   convert_bad_pkg_level: "cw_convert_err_bad_request",
+  convert_bad_unpack: "cw_convert_err_bad_request",
   convert_bad_request: "cw_convert_err_bad_request",
   bad_format: "cw_convert_err_bad_request",
   bad_verify: "cw_convert_err_bad_request",
@@ -275,7 +321,9 @@ export function stageText(message: string | null | undefined): string | null {
 }
 
 /** What /api/convert/start is sent. The zstd level goes only with zstd, the image inside and its
- *  compression only with a .ffpfsc, the package's level only with a .pkg (never with zstd). */
+ *  compression only with a .ffpfsc, the package's level only with a .pkg (never with zstd), and
+ *  with a .pkg of a packed game `unpack_packs` (and with it `leave_out_ampr_emu`), each only when
+ *  on: absent, the helper builds what it always did (cc_start_tail). */
 export interface StartBody {
   path: string;
   dest: string;
@@ -285,6 +333,8 @@ export interface StartBody {
   inner?: InnerFormat;
   ffpfsc_level?: FfpfscLevel;
   pkg_level?: PkgLevel;
+  unpack_packs?: true;
+  leave_out_ampr_emu?: true;
   verify: Verify;
 }
 
@@ -298,11 +348,20 @@ export function startBody(o: {
   inner?: InnerFormat;
   ffpfscLevel?: FfpfscLevel;
   pkgLevel?: PkgLevel;
+  /** With a .pkg of a packed game (unpackFor): the plain files, and without the emulator. */
+  unpack?: boolean;
+  leaveOutEmulator?: boolean;
 }): StartBody {
   const zstd = o.zstd && o.format !== "pkg";
   const body: StartBody = { path: o.source, dest: o.dest, format: o.format, zstd, verify: o.verify };
   if (zstd) body.zstd_level = o.level;
-  if (o.format === "pkg") body.pkg_level = o.pkgLevel ?? DEFAULT_PKG_LEVEL;
+  if (o.format === "pkg") {
+    body.pkg_level = o.pkgLevel ?? DEFAULT_PKG_LEVEL;
+    if (o.unpack) {
+      body.unpack_packs = true;
+      if (o.leaveOutEmulator) body.leave_out_ampr_emu = true;
+    }
+  }
   if (o.format === "ffpfsc") {
     body.inner = o.inner ?? "exfat";
     body.ffpfsc_level = o.ffpfscLevel ?? "balanced";

@@ -9,6 +9,8 @@ import { PathPicker } from "../files/PathPicker";
 import type { SectionContext } from "../sections";
 import { t } from "../strings";
 import {
+  bytesToWrite,
+  canUnpack,
   converting,
   DEFAULT_PKG_LEVEL,
   DEFAULT_ZSTD_LEVEL,
@@ -29,6 +31,8 @@ import {
   startBody,
   startConvert,
   stopConvert,
+  unpackFor,
+  unpackNeedsEmulator,
   useConvertRun,
   ZSTD_LEVELS,
   type ConvertRun,
@@ -62,6 +66,10 @@ export interface ConvertViewProps {
   ffpfscLevel: FfpfscLevel;
   /** With a .pkg: its Kraken level. */
   pkgLevel: PkgLevel;
+  /** With a .pkg of a game in asset packs: the package holds the plain files again, and has no
+   *  AMPR emulator (the second only with the first). */
+  unpack: boolean;
+  leaveOutEmulator: boolean;
   verify: Verify;
   run: ConvertRun | null;
   onPickSource: () => void;
@@ -73,6 +81,8 @@ export interface ConvertViewProps {
   onInner: (f: InnerFormat) => void;
   onFfpfscLevel: (l: FfpfscLevel) => void;
   onPkgLevel: (l: PkgLevel) => void;
+  onUnpack: () => void;
+  onLeaveOutEmulator: () => void;
   onVerify: (v: Verify) => void;
   onStart: () => void;
   onStop: () => void;
@@ -110,7 +120,10 @@ export function progressLine(run: ConvertRun): string {
 export function ConvertView(p: ConvertViewProps) {
   const running = converting(p.run);
   const info = p.inspected?.phase === "done" ? p.inspected.info : null;
-  const canStart = !running && info != null && p.dest != null && p.exists === false && !p.naming;
+  // A .pkg of a packed game: what becomes of its packs and its emulator.
+  const applied = unpackFor(p.format, info, { unpack: p.unpack, leaveOutEmulator: p.leaveOutEmulator });
+  const needsEmulator = unpackNeedsEmulator(info, applied);
+  const canStart = !running && info != null && p.dest != null && p.exists === false && !p.naming && !needsEmulator;
   // zstd needs the runtime on the console (only the desktop app puts it there).
   const zstdOn = p.zstd && info?.zstdRuntime != null;
   const choice = (on: boolean, label: string, action: string, onClick: () => void) => (
@@ -124,6 +137,21 @@ export function ConvertView(p: ConvertViewProps) {
       onClick={onClick}
     >
       <span>{label}</span>
+    </button>
+  );
+  // An on/off switch with its state beside the label; `held` keeps it from being changed.
+  const toggle = (on: boolean, label: string, action: string, onClick: () => void, held = false) => (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      className="cw-focusable cw-button"
+      data-action={action}
+      disabled={running || held}
+      onClick={onClick}
+    >
+      <span>{label}</span>
+      <span className={`cw-tag${on ? " is-on" : ""}`}>{t(on ? "cw_settings_on" : "cw_settings_off")}</span>
     </button>
   );
   const run = p.run;
@@ -252,6 +280,25 @@ export function ConvertView(p: ConvertViewProps) {
                 {PKG_LEVELS.map((l) => choice(p.pkgLevel === l, t(PKG_LEVEL_KEYS[l]), `convert-pkg-level-${l}`, () => p.onPkgLevel(l)))}
               </div>
               <p className="cw-dim">{t("cw_convert_pkg_note")}</p>
+              {canUnpack(info) ? (
+                <div data-convert-unpack="">
+                  {toggle(applied.unpack, t("cw_convert_unpack"), "convert-unpack", p.onUnpack)}
+                  <p className="cw-dim">
+                    {t("cw_convert_unpack_note", { kind: info.packed ?? "", size: formatBytes(info.unpackedBytes ?? 0) })}
+                  </p>
+                  {applied.unpack ? (
+                    <>
+                      {toggle(applied.leaveOutEmulator, t("cw_convert_leave_out_emu"), "convert-leave-out-emulator", p.onLeaveOutEmulator)}
+                      <p className="cw-dim">{t("cw_convert_leave_out_emu_note")}</p>
+                    </>
+                  ) : null}
+                  {needsEmulator ? (
+                    <p className="cw-field-error" role="alert" data-convert-blocked="emulator">
+                      {t("cw_convert_unpack_needs_emulator")}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : null}
           <dl className="cw-info">
@@ -289,22 +336,15 @@ export function ConvertView(p: ConvertViewProps) {
               {t("cw_convert_exists", { name: p.dest ? lastPart(p.dest) : "" })}
             </p>
           ) : null}
-          {p.free != null && info.dataBytes > p.free ? <p className="cw-dim">{t("cw_convert_space_note")}</p> : null}
+          {p.free != null && bytesToWrite(info, applied) > p.free ? (
+            <p className="cw-dim" data-convert-space="">
+              {t("cw_convert_space_note")}
+            </p>
+          ) : null}
 
           {p.format !== "pkg" ? (
             <>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={zstdOn}
-                className="cw-focusable cw-button"
-                data-action="convert-zstd"
-                disabled={running || !info.zstdRuntime}
-                onClick={p.onZstd}
-              >
-                <span>{t("cw_convert_zstd")}</span>
-                <span className={`cw-tag${zstdOn ? " is-on" : ""}`}>{t(zstdOn ? "cw_settings_on" : "cw_settings_off")}</span>
-              </button>
+              {toggle(zstdOn, t("cw_convert_zstd"), "convert-zstd", p.onZstd, !info.zstdRuntime)}
               <p className="cw-dim">{t("cw_convert_zstd_note")}</p>
               {!info.zstdRuntime ? (
                 <p className="cw-dim" data-convert-zstd-runtime="missing">
@@ -360,6 +400,9 @@ export function Convert({ ctx }: { ctx: SectionContext }) {
   const [inner, setInner] = useState<InnerFormat>("exfat");
   const [ffpfscLevel, setFfpfscLevel] = useState<FfpfscLevel>("balanced");
   const [pkgLevel, setPkgLevel] = useState<PkgLevel>(DEFAULT_PKG_LEVEL);
+  // A .pkg of a packed game holds its plain files unless turned off, as in the desktop app.
+  const [unpack, setUnpack] = useState(true);
+  const [leaveOutEmulator, setLeaveOutEmulator] = useState(false);
   const [verify, setVerify] = useState<Verify>("fast");
   const [picking, setPicking] = useState<"source" | "dest" | null>(null);
   const [volumes, setVolumes] = useState<Volume[]>([]);
@@ -440,7 +483,11 @@ export function Convert({ ctx }: { ctx: SectionContext }) {
   const zstdOk = inspected?.phase === "done" && inspected.info.zstdRuntime != null;
   const start = () => {
     if (!source || !dest) return;
-    void startConvert(startBody({ source, dest, format, zstd: zstd && zstdOk, level, verify, inner, ffpfscLevel, pkgLevel }));
+    // The unpack only for a .pkg of a game the converter read as packed.
+    const applied = unpackFor(format, inspected?.phase === "done" ? inspected.info : null, { unpack, leaveOutEmulator });
+    void startConvert(
+      startBody({ source, dest, format, zstd: zstd && zstdOk, level, verify, inner, ffpfscLevel, pkgLevel, ...applied }),
+    );
   };
 
   const vol = outParent ? volumeOf(outParent, volumes) : null;
@@ -459,6 +506,8 @@ export function Convert({ ctx }: { ctx: SectionContext }) {
         inner={inner}
         ffpfscLevel={ffpfscLevel}
         pkgLevel={pkgLevel}
+        unpack={unpack}
+        leaveOutEmulator={leaveOutEmulator}
         verify={verify}
         run={run}
         onPickSource={() => setPicking("source")}
@@ -473,6 +522,8 @@ export function Convert({ ctx }: { ctx: SectionContext }) {
         onInner={setInner}
         onFfpfscLevel={setFfpfscLevel}
         onPkgLevel={setPkgLevel}
+        onUnpack={() => setUnpack((u) => !u)}
+        onLeaveOutEmulator={() => setLeaveOutEmulator((l) => !l)}
         onVerify={setVerify}
         onStart={start}
         onStop={stopConvert}

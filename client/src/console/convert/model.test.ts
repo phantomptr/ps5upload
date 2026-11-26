@@ -5,6 +5,8 @@ import en from "../locales/en.json";
 import { t } from "../strings";
 import { freeName } from "../files/paste";
 import {
+  bytesToWrite,
+  canUnpack,
   CONVERT_CAUSES,
   convertCauseText,
   convertErrorText,
@@ -24,6 +26,8 @@ import {
   startBody,
   startConvert,
   stopConvert,
+  unpackFor,
+  unpackNeedsEmulator,
   type JobDeps,
 } from "./model";
 
@@ -157,6 +161,61 @@ describe("names and requests", () => {
     expect(startBody({ ...base, zstd: false })).toMatchObject({ pkg_level: "fast" });
     expect(startBody({ ...base, format: "exfat", zstd: false, pkgLevel: "stored" })).not.toHaveProperty("pkg_level");
     expect(outputName("/data/Astro", "pkg")).toBe("Astro.pkg");
+  });
+
+  it("sends the unpack only with a .pkg, and the emulator left out only with the unpack", () => {
+    const base = { source: "/data/g", dest: "/data/g.pkg", format: "pkg" as const, zstd: false, level: 5 as const, verify: "fast" as const };
+    // Not asked: neither word goes (an older helper, and this one, then package the game as it is).
+    const asis = startBody(base);
+    expect(asis).not.toHaveProperty("unpack_packs");
+    expect(asis).not.toHaveProperty("leave_out_ampr_emu");
+    expect(startBody({ ...base, unpack: true })).toEqual({
+      path: "/data/g",
+      dest: "/data/g.pkg",
+      format: "pkg",
+      zstd: false,
+      pkg_level: "fast",
+      unpack_packs: true,
+      verify: "fast",
+    });
+    expect(startBody({ ...base, unpack: true, leaveOutEmulator: true })).toMatchObject({ unpack_packs: true, leave_out_ampr_emu: true });
+    const packs = startBody({ ...base, unpack: false, leaveOutEmulator: true });
+    expect(packs).not.toHaveProperty("unpack_packs");
+    expect(packs).not.toHaveProperty("leave_out_ampr_emu");
+    const image = startBody({ ...base, format: "exfat", dest: "/data/g.exfat", unpack: true, leaveOutEmulator: true });
+    expect(image).not.toHaveProperty("unpack_packs");
+    expect(image).not.toHaveProperty("leave_out_ampr_emu");
+  });
+
+  it("the unpack applies to a .pkg of a packed game, and says when the emulator can't stay", () => {
+    const packed = parseInspection({ path: "/g", format: "folder", data_bytes: 20, packed: "zstd", unpacked_bytes: 50, unpack_keeps_emulator: false });
+    expect(packed).toMatchObject({ unpackedBytes: 50, unpackKeepsEmulator: false });
+    const plain = parseInspection({ path: "/g", format: "folder", data_bytes: 20 });
+    expect(plain).toMatchObject({ unpackedBytes: null, unpackKeepsEmulator: null });
+    // What is not a size or a yes/no reads as absent, never as 0 or false.
+    const odd = parseInspection({ path: "/g", format: "folder", packed: "lz4", unpacked_bytes: "50", unpack_keeps_emulator: 0 });
+    expect(odd).toMatchObject({ unpackedBytes: null, unpackKeepsEmulator: null });
+    expect([canUnpack(packed), canUnpack(plain), canUnpack(odd), canUnpack(null)]).toEqual([true, false, false, false]);
+
+    const both = { unpack: true, leaveOutEmulator: true };
+    expect(unpackFor("pkg", packed, both)).toEqual(both);
+    expect(unpackFor("pkg", packed, { unpack: false, leaveOutEmulator: true })).toEqual({ unpack: false, leaveOutEmulator: false });
+    for (const none of [unpackFor("exfat", packed, both), unpackFor("pkg", plain, both), unpackFor("pkg", odd, both)]) {
+      expect(none).toEqual({ unpack: false, leaveOutEmulator: false });
+    }
+
+    const keep = { unpack: true, leaveOutEmulator: false };
+    expect(unpackNeedsEmulator(packed, keep)).toBe(true);
+    expect(unpackNeedsEmulator(packed, both)).toBe(false);
+    expect(unpackNeedsEmulator(packed, { unpack: false, leaveOutEmulator: false })).toBe(false);
+    const fine = parseInspection({ path: "/g", format: "folder", packed: "lz4", unpacked_bytes: 50, unpack_keeps_emulator: true });
+    expect(unpackNeedsEmulator(fine, keep)).toBe(false);
+    // The converter's own refusal of it reads as the same sentence the page shows beforehand.
+    expect(convertFailureText("convert_unpack_needs_emulator")).toBe(t("cw_convert_unpack_needs_emulator"));
+    expect(convertFailureText("convert_not_packed")).toBe(t("cw_convert_err_not_packed"));
+
+    expect(packed && bytesToWrite(packed, keep)).toBe(50);
+    expect(packed && bytesToWrite(packed, { unpack: false, leaveOutEmulator: false })).toBe(20);
   });
 
   it("sends the image inside and its compression only with a .ffpfsc", () => {
