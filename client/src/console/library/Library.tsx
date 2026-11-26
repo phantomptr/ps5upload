@@ -131,7 +131,8 @@ export interface LibraryViewProps {
   message: Message | null;
   /** The game whose detail is open (by group key), or null. */
   open: string | null;
-  drives: Volume[];
+  /** Null while they are read; empty when they could not be (or none is writable). */
+  drives: Volume[] | null;
   /** The folder a copy just put on the console, for Register. */
   copied: { key: string; path: string } | null;
   /** This console's titles; null until read (or when they could not be). */
@@ -213,13 +214,13 @@ function PartRow({ g, part, first, p, onCopyPick }: { g: GameGroup; part: Part; 
 }
 
 /** Which drive a copy goes to. */
-function DrivePicker({ e, p, onClose }: { e: Entry; p: LibraryViewProps; onClose: () => void }) {
+export function DrivePicker({ e, p, onClose }: { e: Entry; p: LibraryViewProps; onClose: () => void }) {
   return (
     <Modal label={t("cw_lib_copy_where")} className="cw-sheet" onBack={onClose}>
       <h2 className="cw-sheet-title">{t("cw_lib_copy_where")}</h2>
       <p className="cw-dim">{displayName(e)}</p>
       <div className="cw-sheet-items">
-        {p.drives.length ? (
+        {p.drives?.length ? (
           p.drives.map((d, i) => (
             <button
               key={d.path}
@@ -236,7 +237,7 @@ function DrivePicker({ e, p, onClose }: { e: Entry; p: LibraryViewProps; onClose
             </button>
           ))
         ) : (
-          <p className="cw-dim">{t("cw_games_loading")}</p>
+          <p className={p.drives ? "cw-field-error" : "cw-dim"}>{t(p.drives ? "cw_home_err_load_storage" : "cw_games_loading")}</p>
         )}
       </div>
       <div className="cw-dialog-buttons">
@@ -529,13 +530,14 @@ async function scanAll(): Promise<void> {
       if (end.end === "failed") failed.push(`${s.name}: ${failText(new ApiError(502, end.status.error ?? "io_error"))}`);
       else if (end.end === "gone") failed.push(`${s.name}: ${failText(new ApiError(502, "smb_job_lost"))}`);
       const scan = await readScan(s.id);
-      patch({ scans: new Map(lib.scans).set(s.id, scan) });
+      // loaded: a scan started before the section's first load (Home's USB card) is that load
+      patch({ scans: new Map(lib.scans).set(s.id, scan), loaded: true });
     } catch (e) {
       failed.push(`${s.name}: ${failText(e)}`);
     }
   }
   // a new scan: folder sizes are counted again when asked
-  patch({ task: null, sizes: new Map(), ...(failed.length ? { message: { tone: "error", text: t("cw_lib_scan_failed", { list: failed.join(" · ") }) } } : {}) });
+  patch({ task: null, loaded: true, sizes: new Map(), ...(failed.length ? { message: { tone: "error", text: t("cw_lib_scan_failed", { list: failed.join(" · ") }) } } : {}) });
   void loadInstalledIds();
 }
 
@@ -693,7 +695,7 @@ export function Library({
   const [, bump] = useReducer((n: number) => n + 1, 0);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<string | null>(null);
-  const [drives, setDrives] = useState<Volume[]>([]);
+  const [drives, setDrives] = useState<Volume[] | null>(null);
   const live = useRef(true);
   const root = useRef<HTMLDivElement>(null);
   const stopCount = useRef<(() => void) | null>(null);
@@ -734,11 +736,13 @@ export function Library({
     if (!g) return;
     stopCount.current = countFolders(g);
     if (g.titleId) void loadInstalledVersion(g.titleId);
-    if (g.parts.some((p) => p.entry.source !== CONSOLE_SOURCE && p.entry.kind !== "pkg"))
+    if (g.parts.some((p) => p.entry.source !== CONSOLE_SOURCE && p.entry.kind !== "pkg")) {
+      setDrives(null);
       void call<{ volumes?: unknown }>("/api/volumes").then(
-        (r) => live.current && setDrives((Array.isArray(r.volumes) ? (r.volumes as Volume[]) : []).filter((v) => isDrive(v) && v.writable)),
-        () => setDrives([]),
+        (r) => live.current && setDrives((Array.isArray(r?.volumes) ? (r.volumes as Volume[]) : []).filter((v) => isDrive(v) && v.writable)),
+        () => live.current && setDrives([]),
       );
+    }
   }, []);
 
   const showInFiles = ctx?.canOpen("files") ? (path: string) => ctx.openSection("files", { path }) : null;
