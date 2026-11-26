@@ -240,7 +240,7 @@ export function ConvertView(p: ConvertViewProps) {
               </div>
               <div>
                 <dt className="cw-dim">{t("cw_convert_info_size")}</dt>
-                <dd>{t("cw_convert_info_size_files", { size: formatBytes(info.size), n: info.files })}</dd>
+                <dd>{t("cw_convert_info_size_files_v2", { size: formatBytes(info.size), n: info.files })}</dd>
               </div>
               <div>
                 <dt className="cw-dim">{t("cw_convert_info_ampr")}</dt>

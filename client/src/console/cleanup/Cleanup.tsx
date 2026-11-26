@@ -207,7 +207,7 @@ export function CleanupView(p: CleanupViewProps) {
       {p.summary ? (
         <div className="cw-card cw-cleanup-result" role="status">
           <div className="cw-cleanup-name">
-            {t("cw_cleanup_result_removed", { count: p.summary.removed.length, size: formatBytes(p.summary.freed) })}
+            {t("cw_cleanup_result_removed_v2", { count: p.summary.removed.length, size: formatBytes(p.summary.freed) })}
           </div>
           {p.summary.skipped.map((s) => (
             <div key={`s${s.item.id}`} className="cw-dim">
@@ -473,7 +473,7 @@ export function Cleanup({ ctx, switcher }: { ctx: SectionContext; switcher?: Rea
       />
       {asking ? (
         <ConfirmDialog
-          title={t("cw_cleanup_confirm_title", { count: totals.count })}
+          title={t("cw_cleanup_confirm_title_v2", { count: totals.count })}
           body={confirmBody(items, selected)}
           confirmLabel={t("cw_cleanup_remove_size", { size: formatBytes(totals.bytes) })}
           danger

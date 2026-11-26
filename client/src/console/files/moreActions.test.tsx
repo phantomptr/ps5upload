@@ -204,7 +204,7 @@ describe("folder size", () => {
     expect(walkNote({ ...c, end: "capped" })).toContain("200,000");
     expect(walkNote({ ...c, end: "timeout" })).toContain("60");
     expect(walkNote({ ...c, end: "cancelled" })).toBe(t("cw_files_size_cancelled"));
-    expect(walkNote({ ...c, end: "done", unreadable: 2 })).toBe(t("cw_files_size_unreadable", { n: "2" }));
+    expect(walkNote({ ...c, end: "done", unreadable: 2 })).toBe(t("cw_files_size_unreadable_v2", { n: "2" }));
   });
 });
 

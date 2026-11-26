@@ -19,7 +19,7 @@ export function usageLine(s: UsageSnapshot | null, refused: boolean): { text: st
     case null:
       return { text: t("cw_files_usage_running", { at: s.measured, n: s.folders, items }), tone: "plain" };
     case "done":
-      return { text: t("cw_files_usage_done", { size: formatBytes(total), items }), tone: "plain" };
+      return { text: t("cw_files_usage_done_v2", { size: formatBytes(total), items }), tone: "plain" };
     case "capped":
       return { text: t("cw_files_usage_capped", { size: formatBytes(total), items }), tone: "info" };
     case "timeout":

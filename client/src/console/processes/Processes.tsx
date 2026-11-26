@@ -77,7 +77,7 @@ function ProcRow({ p, fg, onAsk }: { p: Proc; fg: boolean; onAsk: (p: Proc) => v
   const facts = [
     t("cw_procs_pid", { pid: p.pid }),
     p.memoryMib != null ? t("cw_procs_mb", { mb: p.memoryMib.toFixed(1) }) : null,
-    p.threads != null ? t("cw_procs_threads", { n: p.threads }) : null,
+    p.threads != null ? t("cw_procs_threads_v2", { n: p.threads }) : null,
     p.titleId || null,
   ].filter((x): x is string => !!x);
   return (

@@ -44,7 +44,7 @@ export function walkNote(r: SizeResult): string | null {
   else if (r.end === "cancelled") note = t("cw_files_size_cancelled");
   else if (r.end === "error") note = t("cw_files_err_read");
   if (r.unreadable > 0) {
-    const u = t("cw_files_size_unreadable", { n: num(r.unreadable) });
+    const u = t("cw_files_size_unreadable_v2", { n: num(r.unreadable) });
     note = note ? `${note} ${u}` : u;
   }
   return note;

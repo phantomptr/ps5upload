@@ -218,7 +218,7 @@ describe("disk usage page", () => {
   });
 
   it("how it ended", () => {
-    expect(usageLine({ ...snap, end: "done" }, false)?.text).toBe(t("cw_files_usage_done", { size: formatBytes(8850), items: "6" }));
+    expect(usageLine({ ...snap, end: "done" }, false)?.text).toBe(t("cw_files_usage_done_v2", { size: formatBytes(8850), items: "6" }));
     expect(usageLine({ ...snap, end: "cancelled" }, false)?.tone).toBe("info");
     expect(usageLine(null, true)?.text).toBe(t("cw_files_usage_busy"));
     expect(usageLine({ ...snap, end: "error", error: new ApiError(401, "token") }, false)).toBeNull();

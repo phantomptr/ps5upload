@@ -524,10 +524,10 @@ export function unpackMessage(end: OpEnd | { end: "error"; error: unknown }, sou
 export function extractMessage(end: OpEnd | { end: "error"; error: unknown }, merged: boolean): Message | null {
   if (end.end === "done") {
     const r = toExtractResult(opResult<unknown>(end.status));
-    const parts = [t("cw_files_extract_done", { n: r.files, name: r.path ? baseName(r.path) : "" })];
-    if (r.skipped > 0) parts.push(t("cw_files_extract_done_skipped", { n: r.skipped }));
-    if (r.unsafe > 0) parts.push(t("cw_files_extract_done_unsafe", { n: r.unsafe }));
-    if (r.links > 0) parts.push(t("cw_files_extract_done_links", { n: r.links }));
+    const parts = [t("cw_files_extract_done_v2", { n: r.files, name: r.path ? baseName(r.path) : "" })];
+    if (r.skipped > 0) parts.push(t("cw_files_extract_done_skipped_v2", { n: r.skipped }));
+    if (r.unsafe > 0) parts.push(t("cw_files_extract_done_unsafe_v2", { n: r.unsafe }));
+    if (r.links > 0) parts.push(t("cw_files_extract_done_links_v2", { n: r.links }));
     return { tone: "info", text: parts.join(" ") };
   }
   if (end.end === "cancelled") return { tone: "info", text: t(merged ? "cw_files_extract_stopped_merge" : "cw_files_extract_stopped") };
