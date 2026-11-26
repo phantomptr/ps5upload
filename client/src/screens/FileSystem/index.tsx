@@ -4031,6 +4031,8 @@ export default function FileSystemScreen() {
                     key={v.path}
                     type="button"
                     onClick={() => setPath(v.path)}
+                    // A path and a size: left to right in every language ("250 GiB", not "GiB 250").
+                    dir="ltr"
                     title={`${v.path} · ${formatBytes(v.free_bytes)} ${tr("fs_free", "free")}`}
                     aria-current={active ? "true" : undefined}
                     // Exactly ONE thing is highlighted: the drive you are
