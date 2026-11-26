@@ -327,6 +327,46 @@ test.describe("phone", () => {
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/many-390-filter.png` });
   });
 
+  // A compact row: the name and its state on one line, the main action as one button, the rest
+  // behind ⋯. Before, each row's buttons took two or three lines.
+  test("a saved payload is one compact row: name, state, one button, ⋯", async ({ page }) => {
+    const root = await open(page);
+    await page.addStyleTag({ content: WIDE_FONT });
+    const saved = root.getByTestId("pm-saved-list");
+    const rows = saved.locator("li");
+    await expect(rows.first()).toHaveAttribute("data-compact", "");
+    // The running one, first at boot: its state, Stop, and ⋯ with the rest.
+    const first = rows.first();
+    await expect(first).toContainText("kstuff-1.13-fpkg.elf");
+    await expect(first).toContainText("Running");
+    await expect(first).toContainText("boot #1");
+    await expect(first.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+    await expect(first.getByRole("button", { name: "Launch", exact: true })).toHaveCount(0);
+    await expect(first.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
+    // A plain one: Launch.
+    await expect(rows.nth(1).getByRole("button", { name: "Launch", exact: true })).toBeVisible();
+    // As tall as the 44 px button and the row's padding: a name that wraps to two lines fits
+    // beside it (before, a row was about 170 px).
+    const heights = await rows.evaluateAll((els) =>
+      els.slice(0, 19).map((e) => Math.round(e.getBoundingClientRect().height)),
+    );
+    expect(Math.max(...heights)).toBeLessThanOrEqual(64);
+    // ⋯ holds the rest.
+    await first.getByRole("button", { name: "More for kstuff-1.13-fpkg.elf" }).click();
+    const menu = page.getByRole("menu");
+    for (const name of ["Don't load at boot", "Load earlier", "Load later", "Launch", "Delete"]) {
+      await expect(menu.getByRole("menuitem", { name, exact: true })).toBeVisible();
+    }
+    await expect(menu.getByRole("menuitem", { name: "Load earlier", exact: true })).toBeDisabled();
+    const m = (await menu.boundingBox())!;
+    expect(m.x).toBeGreaterThanOrEqual(0);
+    expect(m.x + m.width).toBeLessThanOrEqual(390.5);
+    if (SHOTS) await page.screenshot({ path: `${SHOTS}/many-390-compact-menu.png` });
+    await page.keyboard.press("Escape");
+    await expectNoOverflow(page, root, "phone wide font");
+    if (SHOTS) await page.screenshot({ path: `${SHOTS}/many-390-compact.png` });
+  });
+
   test("German, Russian and Arabic fit on a phone", async ({ page }) => {
     for (const lang of ["de", "ru", "ar"]) {
       const root = await open(page, { lang });

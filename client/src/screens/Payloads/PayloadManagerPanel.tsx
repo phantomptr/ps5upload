@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, ExternalLink, Play, Plus, RefreshCw, Search, Skull, Trash2, Upload } from "lucide-react";
 
-import { Badge, Button, Callout, ErrorCard, Input, Select, Spinner, Toggle } from "../../components";
+import { Badge, Button, Callout, ErrorCard, Input, OverflowMenu, Select, Spinner, Toggle } from "../../components";
+import type { OverflowMenuItem } from "../../components";
+import { usePhoneLayout } from "../../lib/phoneLayout";
 import { useConfirm } from "../../components/ConfirmDialog";
 import {
   autoloadKey,
@@ -130,8 +132,6 @@ export function runningOrigin(tr: Translator, ours: boolean, bootN: number | nul
  *  path) marks the ones running now, with their pid and Stop. `onChanged` runs after a
  *  change here (launch, delete, store, boot list), so what runs is read again. `part` picks the
  *  saved list or the settings (boot list, helper at boot, adding a payload). */
-export default function PayloadManagerPanel({
-  running,
 /** The saved list on a computer or tablet: the rows share one column for their actions (as wide
  *  as the widest row's, up to a limit, its buttons wrapping inside it), so every row's name and
  *  path get the same width. Before, a row with more buttons (running, and in the boot list) had
@@ -144,12 +144,16 @@ const SAVED_ROW =
   "supports-[grid-template-columns:subgrid]:roomy:col-span-2 supports-[grid-template-columns:subgrid]:roomy:grid supports-[grid-template-columns:subgrid]:roomy:grid-cols-subgrid";
 const SAVED_ACTIONS = "supports-[grid-template-columns:subgrid]:roomy:justify-end";
 
+export default function PayloadManagerPanel({
+  running,
   onChanged,
   part,
 }: { running?: Readonly<Record<string, PmRunning>>; onChanged?: () => void; part: PmPanelPart }) {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const { confirm, dialog } = useConfirm();
+  // A phone gets a compact row per saved payload (`row` below).
+  const phone = usePhoneLayout();
   const [view, setView] = useState<PmOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -488,6 +492,138 @@ const SAVED_ACTIONS = "supports-[grid-template-columns:subgrid]:roomy:justify-en
     // out here is the switch turned off, not something the next connection undoes.
     const isHelper = !!helperCopy && p.path === helperCopy.path;
     const live = running?.[p.path];
+    const toggleBoot = () => {
+      if (!autoload) return;
+      void (isHelper
+        ? setHelperAtBoot(!listed)
+        : setAutoload(
+            autoload.enabled,
+            listed ? autoload.list.filter((e) => !keys.includes(e)) : [...autoload.list, key],
+          ));
+    };
+    if (phone) {
+      // A phone: the name and its state on one line, the main action as one button (Stop for
+      // one that runs, else Launch), the rest behind ⋯. With every button on show, a row took
+      // two or three lines of buttons, and 20 payloads were a long scroll.
+      const stop = live?.canStop ? live : null;
+      const more: OverflowMenuItem[] = [
+        ...(live?.webUrl
+          ? [{ label: tr("hub_open_page", undefined, "Open web page"), onSelect: () => void openExternalUrl(live.webUrl!) }]
+          : []),
+        ...(autoload
+          ? [
+              {
+                label: listed
+                  ? tr("pm_autoload_remove", undefined, "Don't load at boot")
+                  : tr("pm_autoload_add", undefined, "Load at boot"),
+                onSelect: toggleBoot,
+                disabled: busy !== null,
+              },
+            ]
+          : []),
+        ...(autoload && listed
+          ? [
+              {
+                label: tr("pm_autoload_earlier", undefined, "Load earlier"),
+                onSelect: () => void setAutoload(autoload.enabled, moveEntry(autoload.list, key, -1)),
+                disabled: busy !== null || pos <= 0,
+              },
+              {
+                label: tr("pm_autoload_later", undefined, "Load later"),
+                onSelect: () => void setAutoload(autoload.enabled, moveEntry(autoload.list, key, 1)),
+                disabled: busy !== null || pos >= order.length - 1,
+              },
+            ]
+          : []),
+        ...(to && recorded && to.html_url
+          ? [
+              {
+                label: tr("pu_out_open_page", { version: to.tag }, `${to.tag} is out — open project page`),
+                onSelect: () => void openExternalUrl(to.html_url),
+              },
+            ]
+          : []),
+        ...(stop
+          ? [
+              {
+                label: tr("pm_launch", undefined, "Launch"),
+                onSelect: () => void launch(p),
+                disabled: busy !== null || !!live?.busy,
+              },
+            ]
+          : []),
+        ...(p.path.startsWith("/data/pldmgr/")
+          ? [
+              {
+                label: tr("delete", undefined, "Delete"),
+                onSelect: () => void remove(p),
+                disabled: busy !== null || !!live?.busy,
+                destructive: true,
+                separator: true,
+              },
+            ]
+          : []),
+      ];
+      return (
+        <li
+          key={p.path}
+          data-pm-card={live?.cardId}
+          data-compact=""
+          className="flex items-center gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] py-1.5 ps-3 pe-1.5 text-sm"
+        >
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
+            {/* A long file name takes the lines it needs, and keeps its own order in a
+                right-to-left language. */}
+            <span className="min-w-0 font-medium [overflow-wrap:anywhere]" data-testid="pm-row-name" title={p.path}>
+              <bdi>{p.name || p.filename}</bdi>
+            </span>
+            {live && (
+              <Badge tone="good" dot>
+                {tr("hub_state_running", undefined, "Running")}
+              </Badge>
+            )}
+            {listed && autoload && (
+              <Badge tone="good" variant="outline">
+                {tr("pm_autoload_badge", { n: pos + 1 }, `boot #${pos + 1}`)}
+              </Badge>
+            )}
+            {to && recorded && (
+              <Badge tone="warn" variant="outline">
+                {tr("pm_update_available", { tag: to.tag }, `${to.tag} available`)}
+              </Badge>
+            )}
+          </div>
+          {stop ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="shrink-0"
+              leftIcon={<Skull size={12} />}
+              disabled={stop.busy}
+              onClick={stop.onStop}
+            >
+              {tr("hub_stop", undefined, "Stop")}
+            </Button>
+          ) : (
+            <Button
+              variant={live ? "secondary" : "primary"}
+              size="sm"
+              className="shrink-0"
+              leftIcon={busy === `launch:${p.path}` ? <Spinner size={12} tone="inherit" /> : <Play size={12} />}
+              disabled={busy !== null || !!live?.busy}
+              onClick={() => void launch(p)}
+            >
+              {tr("pm_launch", undefined, "Launch")}
+            </Button>
+          )}
+          <OverflowMenu
+            items={more}
+            ariaLabel={tr("pm_row_more", { name: p.filename }, `More for ${p.filename}`)}
+            triggerClassName="h-10 w-10 shrink-0 justify-center px-0"
+          />
+        </li>
+      );
+    }
     return (
       <li
         key={p.path}
@@ -570,14 +706,7 @@ const SAVED_ACTIONS = "supports-[grid-template-columns:subgrid]:roomy:justify-en
                 variant={listed ? "secondary" : "ghost"}
                 size="sm"
                 disabled={busy !== null}
-                onClick={() =>
-                  void (isHelper
-                    ? setHelperAtBoot(!listed)
-                    : setAutoload(
-                        autoload.enabled,
-                        listed ? autoload.list.filter((e) => !keys.includes(e)) : [...autoload.list, key],
-                      ))
-                }
+                onClick={toggleBoot}
                 title={tr(
                   "pm_autoload_toggle_tooltip",
                   undefined,
