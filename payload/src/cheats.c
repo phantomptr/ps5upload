@@ -212,37 +212,57 @@ static int module_info(pid_t pid, uint32_t handle, uint64_t *base, uint64_t *siz
                        size_t path_cap);
 static int game_mem_read(pid_t pid, intptr_t addr, uint8_t *out, size_t len);
 
-/* Where a PS4 executable is loaded in a PS4 game's process on the PS5. */
-#define PS4_EBOOT_BASE ((intptr_t)0x400000)
+/* dynlib handle 0 of the game's process, as its module list has it. */
+static void exe_seen(pid_t pid, cheat_exe_seen_t *h0) {
+    memset(h0, 0, sizeof *h0);
+    h0->found = module_info(pid, 0, &h0->base, &h0->size, h0->path, sizeof h0->path) == 0;
+}
 
-/* The load address cheat offsets are relative to: the game's executable.
+static int title_is_ps4(const char *title) { return title && strncmp(title, "CUSA", 4) == 0; }
+
+static void log_game_modules(pid_t pid, const char *title, const cheat_exe_seen_t *h0,
+                             intptr_t base, int how);
+
+/* The load address cheat offsets are relative to: the game's executable (cheat_exe_base_pick).
  *
- * For a PS5 game that is dynlib handle 0. In a PS4 game's process (#920, Rayman Legends
- * CUSA00284 on FW 11.60) handle 0 is not the game's eboot.bin: it reported a 336 KiB module
- * at 0x6988c000 while the game's code was at 0x400000, so every offset past that module's end
- * read zeros and the toggle said "the game's code is not loaded yet". So for a PS4 title whose
- * handle 0 is not an eboot.bin, the executable at 0x400000 is used when it can be read. A wrong
- * guess writes nothing: every location's bytes must equal the cheat's original bytes first. */
+ * For a PS5 game that is dynlib handle 0. For a PS4 game it is handle 0 when that is its
+ * eboot.bin at a usable address, else 0x400000 (#920, #946). `how` (may be NULL) says which. */
+static intptr_t game_exe_base_how(pid_t pid, const char *title, int *how) {
+    cheat_exe_seen_t h0, eboot;
+    exe_seen(pid, &h0);
+    int ps4 = title_is_ps4(title);
+    memset(&eboot, 0, sizeof eboot);
+    if (ps4 && !(h0.found && cheat_module_is_game(0, h0.path))) {
+        /* Handle 0 is not the PS4 game's eboot.bin: the module of that name, if the list has it
+         * under another handle. */
+        uint32_t eh = 0;
+        if (locked_dynlib_handle(pid, "eboot.bin", &eh) == 0 && eh != 0)
+            eboot.found = module_info(pid, eh, &eboot.base, &eboot.size, eboot.path,
+                                      sizeof eboot.path) == 0;
+    }
+    int picked = CHEAT_EXE_NONE;
+    intptr_t b = (intptr_t)cheat_exe_base_pick(ps4, &h0, &eboot, &picked);
+    if (how) *how = picked;
+    /* A PS4 game whose base is not its handle 0: say what the list held. A PS5 game with no base
+     * yet is the start-up window (the watcher asks every few ms), not worth a log. */
+    if (picked == CHEAT_EXE_PS4_DEFAULT || picked == CHEAT_EXE_NAMED)
+        log_game_modules(pid, title, &h0, b, picked);
+    return b;
+}
+
 static intptr_t game_exe_base(pid_t pid, const char *title) {
-    intptr_t b = locked_mapbase(pid, 0);
-    if (!title || strncmp(title, "CUSA", 4) != 0 || b == PS4_EBOOT_BASE) return b;
-    uint64_t mb = 0, ms = 0;
-    char path[256] = "";
-    if (module_info(pid, 0, &mb, &ms, path, sizeof path) == 0) {
-        const char *leaf = strrchr(path, '/');
-        leaf = leaf ? leaf + 1 : path;
-        if (strcasecmp(leaf, "eboot.bin") == 0) return b;
-    }
-    uint8_t probe[16];
-    if (game_mem_read(pid, PS4_EBOOT_BASE, probe, sizeof probe) != 0) return b;
-    static pid_t told;
-    if (told != pid) {
-        told = pid;
-        fprintf(stderr, "[cheats] %s: PS4 game, handle 0 is %s at 0x%llx; using 0x%lx\n", title,
-                path[0] ? path : "(no path)", (unsigned long long)mb,
-                (unsigned long)PS4_EBOOT_BASE);
-    }
-    return PS4_EBOOT_BASE;
+    return game_exe_base_how(pid, title, NULL);
+}
+
+/* "the game's code is not loaded yet; try again", with what handle 0 is (#946). */
+static void exe_not_loaded(pid_t pid, char *err, size_t err_cap) {
+    if (!err || !err_cap) return;
+    cheat_exe_seen_t h0;
+    char h0_text[160];
+    exe_seen(pid, &h0);
+    cheat_exe_describe(&h0, h0_text, sizeof h0_text);
+    snprintf(err, err_cap, "the game's code is not loaded yet; try again (its executable, module "
+                           "handle 0, is %s)", h0_text);
 }
 
 /* Find the pid + base address of the running big app (game).
@@ -505,6 +525,76 @@ static int module_info(pid_t pid, uint32_t handle, uint64_t *base, uint64_t *siz
     }
     pthread_mutex_unlock(&kernel_rw_lock);
     return found;
+}
+
+/* The game process's module list, once per process, into the helper's log (stderr.log, which
+ * the app's bug report collects): what the base was taken from when it was not handle 0, so a
+ * report shows what the console had (#946). Handles, file names (never whole paths), load
+ * addresses and sizes: nothing of the user's. */
+#define EXE_LOG_MODULES_MAX 64
+static void log_game_modules(pid_t pid, const char *title, const cheat_exe_seen_t *h0,
+                             intptr_t base, int how) {
+    static pid_t told;
+    if (told == pid) return;
+    told = pid;
+    char h0_text[160];
+    cheat_exe_describe(h0, h0_text, sizeof h0_text);
+    fprintf(stderr, "[cheats] %s pid %d: cheat offsets from 0x%lx (%s); handle 0 is %s\n",
+            title ? title : "?", (int)pid, (unsigned long)base,
+            how == CHEAT_EXE_PS4_DEFAULT ? "the PS4 executable address"
+            : how == CHEAT_EXE_NAMED     ? "the module named eboot.bin"
+            : how == CHEAT_EXE_HANDLE0   ? "handle 0"
+                                         : "none yet",
+            h0_text);
+    typedef struct {
+        uint64_t handle, base, size;
+        int app0;
+        char leaf[64];
+    } mod_row_t;
+    /* On the heap: the watcher's thread stack is not the place for 6 KiB. */
+    mod_row_t *m = (mod_row_t *)calloc(EXE_LOG_MODULES_MAX, sizeof *m);
+    if (!m) return;
+    int n = 0, more = 0, walked = 0;
+    char path[256];
+    pthread_mutex_lock(&kernel_rw_lock);
+    unsigned long kproc = (unsigned long)kernel_get_proc(pid);
+    unsigned long obj = 0;
+    if (kproc && kernel_copyout(kproc + 0x3e8, &obj, sizeof(obj)) == 0) {
+        walked = 1;
+        for (int guard = 0; guard < 1024; guard++) {
+            if (kernel_copyout(obj, &obj, sizeof(obj)) != 0 || !obj) break;
+            dynlib_head_t h;
+            if (kernel_copyout(obj, &h, sizeof(h)) != 0) break;
+            if (n >= EXE_LOG_MODULES_MAX) {
+                more++;
+                continue;
+            }
+            path[0] = '\0';
+            if (h.path && kernel_copyout(h.path, path, sizeof(path) - 1) != 0) path[0] = '\0';
+            path[sizeof(path) - 1] = '\0';
+            const char *leaf = strrchr(path, '/');
+            leaf = leaf ? leaf + 1 : path;
+            m[n].handle = h.handle;
+            m[n].base = h.mapbase;
+            m[n].size = h.mapsize;
+            m[n].app0 = strstr(path, "/app0/") != NULL;
+            snprintf(m[n].leaf, sizeof m[n].leaf, "%s", leaf[0] ? leaf : "(no path)");
+            n++;
+        }
+    }
+    pthread_mutex_unlock(&kernel_rw_lock);
+    if (!walked) {
+        fprintf(stderr, "[cheats] %s pid %d: its module list could not be read\n",
+                title ? title : "?", (int)pid);
+        free(m);
+        return;
+    }
+    for (int i = 0; i < n; i++)
+        fprintf(stderr, "[cheats]   handle %llu %s%s at 0x%llx, 0x%llx bytes\n",
+                (unsigned long long)m[i].handle, m[i].leaf, m[i].app0 ? " (app0)" : "",
+                (unsigned long long)m[i].base, (unsigned long long)m[i].size);
+    if (more) fprintf(stderr, "[cheats]   and %d more\n", more);
+    free(m);
 }
 
 typedef struct {
@@ -1353,7 +1443,7 @@ static int resolve_mod_locs(pid_t pid, intptr_t base, const cheat_mod_t *mod, ch
     /* No base yet means the module is not mapped: a relative offset would be used as an
      * absolute address. */
     if (base <= 0) {
-        if (err) snprintf(err, err_cap, "the game's code is not loaded yet; try again");
+        exe_not_loaded(pid, err, err_cap);
         return -2;
     }
     int n = mod->mem_count;
@@ -1891,7 +1981,15 @@ static int xml_apply_on(pid_t pid, const char *title, cheat_mod_t *mod, const xm
         return -1;
     }
     if (module_info(pid, handle, &mbase, &msize, base_path, sizeof base_path) != 0 || !mbase || !msize) {
-        if (err) snprintf(err, err_cap, "the game's code is not loaded yet; try again");
+        if (handle == 0) {
+            exe_not_loaded(pid, err, err_cap);
+        } else if (err) {
+            cheat_exe_seen_t mod_seen = { .found = 1, .base = mbase, .size = msize };
+            char mod_text[160];
+            snprintf(mod_seen.path, sizeof mod_seen.path, "%s", m.app_elf);
+            cheat_exe_describe(&mod_seen, mod_text, sizeof mod_text);
+            snprintf(err, err_cap, "the game's code is not loaded yet; try again (%s)", mod_text);
+        }
         hook_wait(hk);
         return -1;
     }
@@ -2450,8 +2548,10 @@ static int sess_apply(void *vctx, cheats_session_t *s, const cheats_item_t *it, 
         intptr_t mb = c->base;
         if (mod->module_name[0]) mb = resolve_module_base(c->pid, mod->module_name);
         if (mb <= 0) {
-            snprintf(why, why_cap, "module %s is not loaded yet",
-                     mod->module_name[0] ? mod->module_name : "of the game");
+            if (mod->module_name[0])
+                snprintf(why, why_cap, "module %s is not loaded yet", mod->module_name);
+            else
+                exe_not_loaded(c->pid, why, why_cap);
             hk.wait = 1;
             rc = -1;
         } else {
@@ -2804,6 +2904,8 @@ static pid_t g_gate_pid;     /* its executable is loaded (or the wait for it is 
 static int g_gate_told;      /* "waiting for eboot.bin" was logged */
 static pid_t g_base_pid;
 static intptr_t g_base;      /* its eboot's load address (0: not yet) */
+static int g_base_how;       /* CHEAT_EXE_*: where g_base came from */
+static uint64_t g_base_at;   /* when g_base was looked up (mono_ms) */
 
 /* Applies to a launch wait for the game's own executable: a game execs more than once per launch
  * (fakelib_overlay.c), and code read before its eboot.bin is there is someone else's. */
@@ -2840,11 +2942,15 @@ static int exe_gate_locked(uint64_t now) {
 }
 
 static intptr_t pass_base(pid_t pid) {
-    /* A PS4 game's address is looked for again until its code is there (game_exe_base). */
-    int ps4_pending = strncmp(g_sess.title, "CUSA", 4) == 0 && g_base != PS4_EBOOT_BASE;
-    if (g_base_pid != pid || g_base <= 0 || ps4_pending) {
-        g_base = game_exe_base(pid, g_sess.title);
+    /* A PS4 game on the 0x400000 default is looked at again (at most once a second) until its
+     * handle 0 gives the address (game_exe_base_how). */
+    uint64_t now = mono_ms();
+    int ps4_default = (g_base_how == CHEAT_EXE_PS4_DEFAULT || g_base_how == CHEAT_EXE_NAMED) &&
+                      now - g_base_at >= 1000;
+    if (g_base_pid != pid || g_base <= 0 || ps4_default) {
+        g_base = game_exe_base_how(pid, g_sess.title, &g_base_how);
         g_base_pid = pid;
+        g_base_at = now;
     }
     return g_base > 0 ? g_base : 0;
 }

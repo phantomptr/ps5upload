@@ -165,6 +165,94 @@ static void test_module_is_game(void) {
     CHECK(!cheat_module_is_game(0, "/system_ex/common_ex/lib/libc.prx"));
     CHECK(!cheat_module_is_game(3, "/system/common/lib/libkernel.sprx"));
     CHECK(!cheat_module_is_game(3, ""));
+    /* #946: a PS4 game's eboot.bin under another handle, from its sandbox path. */
+    CHECK(cheat_module_is_game(5, "/mnt/sandbox/pfsmnt/CUSA00284-app0/eboot.bin"));
+    CHECK(cheat_module_is_game(5, "/mnt/sandbox/CUSA00284_000/app0/eboot.bin"));
+    /* A system app's eboot.bin is not the game's. */
+    CHECK(!cheat_module_is_game(5, "/system/vsh/app/NPXS20001/eboot.bin"));
+    CHECK(!cheat_module_is_game(5, "/system_ex/app/NPXS40087/eboot.bin"));
+    CHECK(!cheat_module_is_game(5, "/preinst/app/eboot.bin"));
+    CHECK(!cheat_module_is_game(5, "/mnt/sandbox/pfsmnt/CUSA00284-app0/libfoo.prx"));
+}
+
+static cheat_exe_seen_t seen(int found, uint64_t base, uint64_t size, const char *path) {
+    cheat_exe_seen_t s;
+    memset(&s, 0, sizeof s);
+    s.found = found;
+    s.base = base;
+    s.size = size;
+    snprintf(s.path, sizeof s.path, "%s", path);
+    return s;
+}
+
+/* #946: where cheat offsets are relative to. The toggle said "the game's code is not loaded yet"
+ * (base 0) for Rayman Legends (CUSA00284, PS4) on a PS5 while a debugger saw its code at
+ * 0x400000. Every case a PS4 game can be in gives a base; a PS5 game gives one only from its
+ * handle 0. */
+static void test_exe_base_pick(void) {
+    int how = -1;
+    /* PS5: handle 0, whatever it is (the write check judges the module). */
+    cheat_exe_seen_t ps5 = seen(1, 0x7ff00000000ULL, 0x6000000, "/app0/eboot.bin");
+    CHECK(cheat_exe_base_pick(0, &ps5, NULL, &how) == 0x7ff00000000ULL && how == CHEAT_EXE_HANDLE0);
+    cheat_exe_seen_t none = seen(0, 0, 0, "");
+    CHECK(cheat_exe_base_pick(0, &none, NULL, &how) == 0 && how == CHEAT_EXE_NONE);
+    cheat_exe_seen_t zero = seen(1, 0, 0x6000000, "/app0/eboot.bin");
+    CHECK(cheat_exe_base_pick(0, &zero, NULL, &how) == 0 && how == CHEAT_EXE_NONE);
+    CHECK(cheat_exe_base_pick(0, NULL, NULL, NULL) == 0);
+
+    /* PS4, handle 0 is its eboot.bin at a usable address: that address. */
+    cheat_exe_seen_t ps4 = seen(1, 0x400000, 0x1600000, "/mnt/sandbox/pfsmnt/CUSA00284-app0/eboot.bin");
+    CHECK(cheat_exe_base_pick(1, &ps4, NULL, &how) == 0x400000 && how == CHEAT_EXE_HANDLE0);
+    /* PS4, handle 0 named eboot.bin but listed at 0 (12.6.26 returned 0 here: "not loaded"). */
+    cheat_exe_seen_t ps4_zero = seen(1, 0, 0x1600000, "/mnt/sandbox/pfsmnt/CUSA00284-app0/eboot.bin");
+    CHECK(cheat_exe_base_pick(1, &ps4_zero, NULL, &how) == CHEAT_PS4_EXE_BASE &&
+          how == CHEAT_EXE_PS4_DEFAULT);
+    /* PS4, handle 0 not in the list at all (12.6.26: 0 unless one read at 0x400000 worked). */
+    CHECK(cheat_exe_base_pick(1, &none, NULL, &how) == CHEAT_PS4_EXE_BASE &&
+          how == CHEAT_EXE_PS4_DEFAULT);
+    CHECK(cheat_exe_base_pick(1, NULL, NULL, &how) == CHEAT_PS4_EXE_BASE);
+    /* PS4, handle 0 is another module. */
+    cheat_exe_seen_t other = seen(1, 0x6988c000ULL, 0x54000, "/system/common/lib/libSceSomething.sprx");
+    CHECK(cheat_exe_base_pick(1, &other, NULL, &how) == CHEAT_PS4_EXE_BASE &&
+          how == CHEAT_EXE_PS4_DEFAULT);
+    /* ... with the game's eboot.bin under another handle: that one. */
+    cheat_exe_seen_t named = seen(1, 0x800000, 0x1600000, "/mnt/sandbox/pfsmnt/CUSA00284-app0/eboot.bin");
+    CHECK(cheat_exe_base_pick(1, &other, &named, &how) == 0x800000 && how == CHEAT_EXE_NAMED);
+    /* ... but not a named one at 0, or a system app's. */
+    cheat_exe_seen_t named_zero = seen(1, 0, 0x1600000, "/mnt/sandbox/pfsmnt/CUSA00284-app0/eboot.bin");
+    CHECK(cheat_exe_base_pick(1, &other, &named_zero, &how) == CHEAT_PS4_EXE_BASE);
+    cheat_exe_seen_t named_sys = seen(1, 0x900000, 0x1000, "/system/vsh/app/NPXS20001/eboot.bin");
+    CHECK(cheat_exe_base_pick(1, &other, &named_sys, &how) == CHEAT_PS4_EXE_BASE);
+    /* A handle 0 at a kernel address is no base either. */
+    cheat_exe_seen_t kern = seen(1, 0xFFFFF04080F57368ULL, 0x1000, "/app0/eboot.bin");
+    CHECK(cheat_exe_base_pick(0, &kern, NULL, &how) == 0 && how == CHEAT_EXE_NONE);
+    CHECK(cheat_exe_base_pick(1, &kern, NULL, &how) == CHEAT_PS4_EXE_BASE);
+
+    /* The Rayman Legends "Infinite Live" location (CUSA00031/CUSA00284 01.00, offset F3A54)
+     * lands where the debugger read its original bytes 29 F0. */
+    uint64_t off = 0;
+    CHECK(cheat_parse_offset("F3A54", &off) == 0);
+    CHECK(cheat_exe_base_pick(1, &ps4_zero, NULL, NULL) + off == 0x4F3A54);
+}
+
+static void test_exe_describe(void) {
+    char out[160];
+    cheat_exe_seen_t none = seen(0, 0, 0, "");
+    cheat_exe_describe(&none, out, sizeof out);
+    CHECK(strcmp(out, "not in the module list") == 0);
+    cheat_exe_describe(NULL, out, sizeof out);
+    CHECK(strcmp(out, "not in the module list") == 0);
+    cheat_exe_seen_t e = seen(1, 0, 0x1600000, "/mnt/sandbox/pfsmnt/CUSA00284-app0/eboot.bin");
+    cheat_exe_describe(&e, out, sizeof out);
+    /* The file name only, never the whole path. */
+    CHECK(strcmp(out, "eboot.bin at 0x0, 0x1600000 bytes") == 0);
+    cheat_exe_seen_t np = seen(1, 0x400000, 0x10, "");
+    cheat_exe_describe(&np, out, sizeof out);
+    CHECK(strcmp(out, "(no path) at 0x400000, 0x10 bytes") == 0);
+    char tiny[6];
+    memset(tiny, 'x', sizeof tiny);
+    cheat_exe_describe(&e, tiny, sizeof tiny);
+    CHECK(tiny[sizeof tiny - 1] == '\0');
 }
 
 /* An XML game patch's base module goes by the same rule (it used to take handle 0 by number). */
@@ -408,6 +496,8 @@ int main(void) {
     test_addr_ok();
     test_module_is_game();
     test_patch_base_ok();
+    test_exe_base_pick();
+    test_exe_describe();
     test_apply_mock();
     if (failures) {
         fprintf(stderr, "cheats_plan_selftest: %d failure(s)\n", failures);

@@ -91,7 +91,8 @@ int cheat_addr_ok(intptr_t addr, int len);
 
 /* Whether a loaded module of the game's process may take a physical write: one of the game's
  * own. A module loaded from its /app0, or dynlib handle 0 when that is its executable (a path
- * ending in eboot.bin, or a path that could not be read, as handle 0 always was). Handle 0 by
+ * ending in eboot.bin, or a path that could not be read, as handle 0 always was), or a module
+ * under another handle whose path ends in eboot.bin outside /system* and /preinst (#946). Handle 0 by
  * number alone is not enough: in a PS4 game's process (#920) it is another module, and a
  * physical write there lands in every process that maps the page. */
 int cheat_module_is_game(uint64_t handle, const char *path);
@@ -101,5 +102,52 @@ int cheat_module_is_game(uint64_t handle, const char *path);
  * 0 that is not its eboot.bin is refused whatever way the write would go (physical or debugger).
  * 1, or 0 with `why` (may be NULL) saying so. */
 int cheat_patch_base_ok(uint64_t handle, const char *path, char *why, size_t why_cap);
+
+/* Where a PS4 executable is loaded: the address GoldHEN-style PS4 cheat offsets are relative to,
+ * and where a debugger saw Rayman Legends' (CUSA00284) code on a PS5 (#920). */
+#define CHEAT_PS4_EXE_BASE 0x400000ULL
+
+/* What the game process's module list says about dynlib handle 0 (cheats.c module_info). */
+typedef struct {
+    int      found; /* handle 0 is in the list */
+    uint64_t base;  /* its mapbase */
+    uint64_t size;  /* its mapsize */
+    char     path[256];
+} cheat_exe_seen_t;
+
+enum {
+    CHEAT_EXE_NONE        = 0, /* no base: the game's code is not there (yet) */
+    CHEAT_EXE_HANDLE0     = 1, /* handle 0's load address */
+    CHEAT_EXE_PS4_DEFAULT = 2, /* a PS4 game whose module list gives no usable base: 0x400000 */
+    CHEAT_EXE_NAMED       = 3, /* a PS4 game: the module named eboot.bin, under another handle */
+};
+
+/* The address a game's cheat offsets are relative to: its executable's load address.
+ *
+ * A PS5 game: handle 0's load address, or none (0) while it has none.
+ * A PS4 game (`ps4`): handle 0's load address when handle 0 is the game's executable at a usable
+ * address; else the load address of the module named eboot.bin (`eboot`, may be NULL: the list
+ * has none, or it is handle 0) when usable; otherwise CHEAT_PS4_EXE_BASE, never 0 (#946). 12.6.26 (#920) fell back to 0x400000
+ * only when handle 0 was some other module, and only when one 16-byte read at 0x400000 worked,
+ * so a handle 0 named eboot.bin whose list entry gives a load address of 0, or that one read
+ * failing, still left 0 and every toggle said "the game's code is not loaded yet" without
+ * reading a single cheat location. Taking 0x400000 writes nothing by itself: every location is
+ * read first and must hold the cheat's original bytes, and a physical write must still pass the
+ * module check (cheat_module_is_game).
+ *
+ * What handle 0 of a PS4 game's process really is has not been seen: the "336 KiB module at
+ * 0x6988c000" #920 went by (and the "eboot.bin at 0x400000, 344064 bytes" of #946) came from
+ * PROC_MODULES, which lists the helper's own process (runtime.c handle_proc_modules), not the
+ * game's. cheats.c log_game_modules writes the game's list to the helper's log when this falls
+ * back, so a bug report shows it.
+ *
+ * `how` (may be NULL) gets a CHEAT_EXE_* value. */
+uint64_t cheat_exe_base_pick(int ps4, const cheat_exe_seen_t *h0, const cheat_exe_seen_t *eboot,
+                             int *how);
+
+/* What handle 0 is, for an error or the log: "eboot.bin at 0x0, 0x1a4000 bytes", "not in the
+ * module list". Only the file name of its path (a sandbox path names the title and nothing
+ * else, but the name is all that is needed). */
+void cheat_exe_describe(const cheat_exe_seen_t *h0, char *out, size_t cap);
 
 #endif /* PS5UPLOAD_CHEATS_PLAN_H */
