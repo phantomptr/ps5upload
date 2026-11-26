@@ -2216,12 +2216,45 @@ button {
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* The sections in a bar at the bottom, as the app has them on a phone, and no controller hints:
+   * the rail took a fifth of the width. */
+  .cw-hints {
+    display: none;
+  }
+  .cw-body {
+    flex-direction: column-reverse;
+  }
+  .cw-content {
+    min-height: 0;
+  }
   .cw-rail {
-    width: 4.6rem;
-    padding: 0.5rem 0.25rem;
+    width: auto;
+    flex-direction: row;
+    padding: 0.15rem 0.2rem;
+    border-inline-end: 0;
+    border-top: 1px solid var(--color-border);
+    overflow: hidden;
   }
   .cw-rail-item {
-    font-size: 0.72rem;
+    flex: 1 1 0;
+    min-width: 0;
+    margin: 0;
+    padding: 0.3rem 0;
+    font-size: 0.62rem;
+    white-space: nowrap;
+  }
+  .cw-rail-item span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .cw-rail-item svg {
+    width: 1.3rem;
+    height: 1.3rem;
+    margin-bottom: 0.15rem;
+  }
+  .cw-rail-help {
+    margin-top: 0;
   }
   .cw-content {
     padding: 0.6rem 0.6rem 1rem;

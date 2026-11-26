@@ -39,7 +39,7 @@ const BODIES: Record<string, unknown> = {
   "/api/fs/list": { entries: [], path: "/data", truncated: false },
 };
 
-test("a running task's long name does not push the page past a phone's edge", async ({ page }) => {
+test("a running task's long name does not push the page past a phone's edge; the sections are along the bottom", async ({ page }) => {
   const errors: string[] = [];
   await page.addInitScript(() => localStorage.setItem("ps5upload.console.tourSeen", "1"));
   page.on("pageerror", (e) => errors.push(e.message));
@@ -63,5 +63,10 @@ test("a running task's long name does not push the page past a phone's edge", as
     });
     expect(widths, section).toEqual({ page: 360, content: 360 });
   }
+  // The sections in a bar along the bottom (the rail took a fifth of the width), no controller hints.
+  const rail = (await page.locator(".cw-rail").boundingBox())!;
+  expect(rail.width).toBe(360);
+  expect(rail.y + rail.height).toBeGreaterThan(790);
+  await expect(page.locator(".cw-hints")).toBeHidden();
   expect(errors).toEqual([]);
 });
