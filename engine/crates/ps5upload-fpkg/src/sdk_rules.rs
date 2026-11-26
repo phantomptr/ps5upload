@@ -47,8 +47,20 @@ const GENERATED_SCE_SYS_FILES: &[&str] = &[
     "origin-relocinfo.dat",
     "target-relocinfo.dat",
 ];
-/// Top-level trees the publishing tools reserve.
-const GENERATED_ROOT_DIRECTORIES: &[&str] = &["sce_suppl", "sce_sc"];
+/// Top-level trees the publishing tools reserve, and other tools' leftovers: host-side
+/// decryption copies (`decrypted/`), a GP5 generator's generated inputs (`.gp5-assets/`) and the
+/// placeholder per-language payloads it packages (`playgo-languages/`, 1 MiB of zeros each).
+/// The leftovers' list is adapted from PS5 Dump Forge.
+const GENERATED_ROOT_DIRECTORIES: &[&str] = &[
+    "sce_suppl",
+    "sce_sc",
+    "decrypted",
+    ".gp5-assets",
+    "playgo-languages",
+];
+/// Root files a dumper writes beside the game: its entitlement records, the dumping user's own
+/// and no part of the game.
+const DUMPER_ROOT_FILES: &[&str] = &["entitlements.txt", "entitlement_key.dat"];
 /// Build-project files that sometimes sit in a game folder.
 const PROJECT_SUFFIXES: &[&str] = &[".gp4", ".gp5", ".esbak"];
 
@@ -62,6 +74,9 @@ pub fn excluded(path: &str) -> Option<&'static str> {
     }
     if PROJECT_SUFFIXES.iter().any(|s| lower.ends_with(s)) {
         return Some("build-project file");
+    }
+    if parts.len() == 1 && DUMPER_ROOT_FILES.contains(&parts[0]) {
+        return Some("a dumper's entitlement record");
     }
     if lower.ends_with(".playgo-scenario.json") {
         return Some("build-project scenario sidecar");
@@ -220,6 +235,11 @@ mod tests {
             "sce_suppl/x.bin",
             "sce_sc/keys/a",
             "game.gp5",
+            "entitlements.txt",
+            "Entitlement_Key.dat",
+            "decrypted/eboot.bin",
+            "playgo-languages/01-en-US.bin",
+            ".gp5-assets/x/sce_sys/param.json",
         ] {
             assert!(excluded(p).is_some(), "{p}");
         }
@@ -239,6 +259,10 @@ mod tests {
             "ampr_emu.index",
             "data/sce_sys/param.sfo",
             "data/ampr_emu.index",
+            // Only at the root: a game's own files of these names stay.
+            "data/entitlements.txt",
+            "data/decrypted/a.bin",
+            "decrypted",
         ] {
             assert!(excluded(p).is_none(), "{p}");
         }
