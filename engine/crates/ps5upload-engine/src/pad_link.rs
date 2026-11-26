@@ -90,6 +90,13 @@ const MAX_PENDING_PER_IP: usize = 2;
 const NET_WATCH_QUEUE: usize = 6;
 /// An internet phone must say hello this soon after its channel opens.
 const NET_HELLO_WAIT: Duration = Duration::from_secs(10);
+/// A phone's input reaches the console and the computer's page at most this many a second on
+/// average, for each kind (pad states, touchpad & keyboard reports, keyboard & mouse switches),
+/// with bursts of [`INPUT_BURST`] (bunched up by the network). A pad sends 250 a second at most and
+/// a touchpad no more: they pass untouched. More is folded into the latest, which goes once there
+/// is room, so a release is never lost and the phone is never cut off for it.
+const INPUT_RATE: f64 = 500.0;
+const INPUT_BURST: f64 = 64.0;
 
 /// Merge controller states into the one pad the console gets: buttons from all, the deeper
 /// trigger, and for each stick axis the one pushed furthest (a resting controller never cancels
@@ -1097,6 +1104,11 @@ fn any_playing(pads: &[Pad]) -> bool {
     pads.iter().any(Pad::plays)
 }
 
+/// One kind of a phone's input, held to [`INPUT_RATE`].
+fn input_pacer<T>() -> crate::join::PadPacer<T> {
+    crate::join::PadPacer::with_rate(INPUT_RATE, INPUT_BURST, std::time::Instant::now())
+}
+
 /// A phone's session, on the LAN socket or an internet phone's data channel (whose key
 /// `rtc_session` checked already).
 async fn pad_session<S: crate::join::GuestSocket>(
@@ -1287,6 +1299,22 @@ async fn pad_session<S: crate::join::GuestSocket>(
     // When a page that keeps sending is let go of if it hasn't.
     let mut pad_due: Option<tokio::time::Instant> = None;
     let mut key_asked: Option<std::time::Instant> = None;
+    let mut pads = input_pacer();
+    let mut kbms = input_pacer();
+    let mut reports = input_pacer();
+    // A pad state goes: played (a watcher only while it holds the controller), and a page that
+    // keeps sending is let go of if it stops.
+    let pad_in = |(p, ka): (ControllerState, bool), pad_due: &mut Option<tokio::time::Instant>| {
+        if plays(id) {
+            crate::rp_stream_api::push_pad(id, Some(p));
+            *pad_due = ka.then(|| tokio::time::Instant::now() + PAD_SILENT_AFTER);
+        }
+    };
+    let kbm_in = |v: serde_json::Value| {
+        if plays(id) {
+            crate::rp_stream_api::push_pad_kbm(v);
+        }
+    };
     loop {
         tokio::select! {
             out = rx.recv() => match out {
@@ -1341,6 +1369,24 @@ async fn pad_session<S: crate::join::GuestSocket>(
                 pad_due = None;
                 crate::rp_stream_api::push_pad(id, None);
             },
+            // Input held back by the rate (the latest of each kind), once it may go.
+            _ = async {
+                match [pads.due(), kbms.due(), reports.due()].into_iter().flatten().min() {
+                    Some(t) => tokio::time::sleep_until(t.into()).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                let now = std::time::Instant::now();
+                if let Some(p) = pads.take(now) {
+                    pad_in(p, &mut pad_due);
+                }
+                if let Some(v) = kbms.take(now) {
+                    kbm_in(v);
+                }
+                if let Some(v) = reports.take(now) {
+                    kbm_in(v);
+                }
+            },
             inc = socket.recv() => { quiet = 0; match inc {
                 Some(Ok(Message::Text(t))) => {
                     #[derive(serde::Deserialize)]
@@ -1357,24 +1403,19 @@ async fn pad_session<S: crate::join::GuestSocket>(
                             key_asked = Some(std::time::Instant::now());
                             crate::rp_stream_api::request_spectator_keyframe(id);
                         }
-                        if let Some(p) = m.pad {
-                            if plays(id) {
-                                crate::rp_stream_api::push_pad(id, Some(p));
-                                pad_due = m.ka.is_some().then(|| tokio::time::Instant::now() + PAD_SILENT_AFTER);
-                            }
+                        let now = std::time::Instant::now();
+                        if let Some(p) = m.pad.and_then(|p| pads.offer(now, (p, m.ka.is_some()))) {
+                            pad_in(p, &mut pad_due);
                         }
-                        if let Some(k) = m.kbm {
-                            if plays(id) {
-                                crate::rp_stream_api::push_pad_kbm(kbm_control(id, &k));
-                            }
+                        if let Some(v) = m.kbm.and_then(|k| kbms.offer(now, kbm_control(id, &k))) {
+                            kbm_in(v);
                         }
                     }
                 }
                 Some(Ok(Message::Binary(b))) => {
-                    if let Some(v) = kbm_report(id, &b) {
-                        if plays(id) {
-                            crate::rp_stream_api::push_pad_kbm(v);
-                        }
+                    let now = std::time::Instant::now();
+                    if let Some(v) = kbm_report(id, &b).and_then(|v| reports.offer(now, v)) {
+                        kbm_in(v);
                     }
                 }
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
@@ -1728,6 +1769,20 @@ pub(crate) fn router<S: Clone + Send + Sync + 'static>() -> axum::Router<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A pad at 250 a second and its touchpad as fast, bunched up by the network (eight at once
+    /// every 32 ms): every one goes at once.
+    #[test]
+    fn a_pad_at_250_hz_and_its_touchpad_pass_untouched() {
+        let mut pads = input_pacer();
+        let mut touch = input_pacer();
+        let t = std::time::Instant::now();
+        for i in 0..2500u32 {
+            let now = t + Duration::from_millis(32 * u64::from(i / 8));
+            assert_eq!(pads.offer(now, i), Some(i));
+            assert_eq!(touch.offer(now, i), Some(i));
+        }
+    }
 
     #[test]
     fn a_ping_carries_eight_bytes() {
@@ -2538,6 +2593,43 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             assert_eq!(live.merged().buttons, 0);
             assert!(!phones_playing());
+        }
+
+        /// A phone flooding its pad states: they reach the console at the rate, the latest always
+        /// (the release after the presses), and the phone stays in.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_flooding_phone_is_held_to_the_rate_and_stays_in() {
+            let _turn = LIVE_TEST_LOCK.lock().await;
+            let live = test_live::Session::start("10.0.77.3");
+            let key = fresh_link();
+            let base = serve().await;
+            let (mut ws, id) = holding(&format!("{base}?t={key}"), &live).await;
+            let t0 = std::time::Instant::now();
+            const N: u32 = 3000;
+            for i in 0..N {
+                // ✕, then ✕ and ○, and so on; the last lets go of everything.
+                let b = if i + 1 == N { 0 } else { 1 + (i % 2) * 2 };
+                let m = format!(
+                    r#"{{"pad":{{"buttons":{b},"l2":0,"r2":0,"lx":0,"ly":0,"rx":0,"ry":0}}}}"#
+                );
+                ws.send(TMsg::Text(m.into())).await.unwrap();
+            }
+            until("let go", || live.merged().buttons == 0).await;
+            let secs = t0.elapsed().as_secs_f64();
+            let v = crate::rp_diag::controller_json(None, |n| n.to_string());
+            let updates = v["sources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s["source"].as_str() == Some(id.to_string().as_str()))
+                .and_then(|s| s["updates"].as_u64())
+                .unwrap();
+            assert!(
+                (updates as f64) <= INPUT_RATE * (secs + 0.1) + INPUT_BURST + 1.0,
+                "{updates} in {secs:.2} s"
+            );
+            hear(&mut ws, joined).await;
+            assert_eq!(pads(), 1);
         }
 
         /// Any device on the LAN reaches this socket: asks and sizes have a limit.

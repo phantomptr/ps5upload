@@ -41,6 +41,10 @@ struct Seen {
 }
 
 const LEVELS_KEPT: usize = 8;
+/// Controllers kept per session. Each phone connection is a source of its own (a new id on every
+/// reconnect), so a long session, or a phone that keeps connecting, would add one each time: past
+/// this many, the one gone the longest (else the one quiet the longest) makes room.
+const SOURCES_KEPT: usize = 16;
 
 impl Seen {
     fn new(state: ControllerState) -> Self {
@@ -197,6 +201,16 @@ fn pad_seen_in(
         Some(s) => match g.sources.get_mut(&source) {
             Some(seen) => seen.take(*s),
             None => {
+                if g.sources.len() >= SOURCES_KEPT {
+                    let oldest = g
+                        .sources
+                        .iter()
+                        .min_by_key(|(_, x)| (!x.gone, x.at))
+                        .map(|(k, _)| *k);
+                    if let Some(k) = oldest {
+                        g.sources.remove(&k);
+                    }
+                }
                 g.sources.insert(source, Seen::new(*s));
             }
         },
@@ -549,6 +563,28 @@ mod tests {
         assert_eq!(phone["gone"], true);
         assert_eq!(phone["peak_r2"], 40);
         assert_eq!(phone["state"]["r2"], 0);
+    }
+
+    /// A phone that keeps connecting is a new source each time: the list stays short, the
+    /// controllers still there stay in it, and the newest is always in.
+    #[test]
+    fn a_phone_that_keeps_connecting_does_not_grow_the_list() {
+        let mut g = PadDiag::default();
+        pad_seen_in(&mut g, 3, "ps5", 0, Some(&st(0, 0)), &st(0, 0));
+        for n in 1..=1000u64 {
+            pad_seen_in(&mut g, 3, "ps5", n, Some(&st(0, 9)), &st(0, 9));
+            pad_seen_in(&mut g, 3, "ps5", n, None, &st(0, 0));
+        }
+        assert_eq!(g.sources.len(), SOURCES_KEPT);
+        assert!(g.sources.contains_key(&0), "the page, still there, stays");
+        assert!(g.sources.contains_key(&1000));
+        // With none gone, the quietest makes room.
+        let mut g = PadDiag::default();
+        for n in 0..=SOURCES_KEPT as u64 {
+            pad_seen_in(&mut g, 3, "ps5", n, Some(&st(0, 0)), &st(0, 0));
+        }
+        assert_eq!(g.sources.len(), SOURCES_KEPT);
+        assert!(!g.sources.contains_key(&0));
     }
 
     #[test]

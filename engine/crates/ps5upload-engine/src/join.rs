@@ -3064,29 +3064,39 @@ async fn ask<S: GuestSocket>(
 
 /// Holds a guest's pad frames to [`PAD_RATE`] (bursts of [`PAD_BURST`]): one over it waits as the
 /// latest (a newer one replaces it), so a flooding guest costs the link what a normal one does.
-struct PadPacer<T> {
+/// A linked phone's input has its own (pad_link.rs).
+pub(crate) struct PadPacer<T> {
     tokens: f64,
     at: Instant,
     held: Option<T>,
+    rate: f64,
+    burst: f64,
 }
 
 impl<T> PadPacer<T> {
     fn new(now: Instant) -> Self {
+        Self::with_rate(PAD_RATE, PAD_BURST, now)
+    }
+
+    /// `rate` a second on average, bursts of `burst`.
+    pub(crate) fn with_rate(rate: f64, burst: f64, now: Instant) -> Self {
         PadPacer {
-            tokens: PAD_BURST,
+            tokens: burst,
             at: now,
             held: None,
+            rate,
+            burst,
         }
     }
 
     fn refill(&mut self, now: Instant) {
         let dt = now.saturating_duration_since(self.at).as_secs_f64();
-        self.tokens = (self.tokens + dt * PAD_RATE).min(PAD_BURST);
+        self.tokens = (self.tokens + dt * self.rate).min(self.burst);
         self.at = now;
     }
 
     /// A frame: back to send now, or None (it is held as the latest).
-    fn offer(&mut self, now: Instant, v: T) -> Option<T> {
+    pub(crate) fn offer(&mut self, now: Instant, v: T) -> Option<T> {
         self.refill(now);
         if self.held.is_none() && self.tokens >= 1.0 {
             self.tokens -= 1.0;
@@ -3097,14 +3107,14 @@ impl<T> PadPacer<T> {
     }
 
     /// When the held frame may go.
-    fn due(&self) -> Option<Instant> {
+    pub(crate) fn due(&self) -> Option<Instant> {
         self.held.as_ref()?;
-        let wait = ((1.0 - self.tokens).max(0.0) / PAD_RATE).min(1.0);
+        let wait = ((1.0 - self.tokens).max(0.0) / self.rate).min(1.0);
         Some(self.at + Duration::from_secs_f64(wait))
     }
 
     /// The held frame, once it may go.
-    fn take(&mut self, now: Instant) -> Option<T> {
+    pub(crate) fn take(&mut self, now: Instant) -> Option<T> {
         self.refill(now);
         if self.held.is_some() && self.tokens >= 1.0 {
             self.tokens -= 1.0;
