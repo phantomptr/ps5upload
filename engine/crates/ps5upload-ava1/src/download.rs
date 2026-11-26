@@ -282,34 +282,70 @@ fn case_twins(m: &Manifest) -> Option<(&str, &str)> {
     None
 }
 
-/// Whether the folder `root` is (or will be) made in ignores case in names: its nearest
-/// folder that exists, found again under its name in the other case.
+/// Whether the folder `root` is (or will be) made in ignores case in names, asked of the
+/// nearest folder that exists (`root` itself, or the one it will be made in): the disk that
+/// folder is on is the one the files land on. Never of the folder above it: at a disk's root
+/// (`/Volumes/USB`, `D:\`) that is another disk, or none, and its answer said nothing about
+/// this one.
 fn ignores_case(root: &Path) -> bool {
-    let mut at = Some(root);
-    while let Some(p) = at {
-        at = p.parent();
-        let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if !p.exists() {
-            continue;
-        }
-        let other: String = name
-            .chars()
-            .map(|c| {
-                if c.is_ascii_lowercase() {
-                    c.to_ascii_uppercase()
-                } else {
-                    c.to_ascii_lowercase()
-                }
-            })
-            .collect();
-        // A name with no letter says nothing: ask the folder above.
-        if other != name {
-            return p.with_file_name(other).exists();
-        }
+    match root.ancestors().find(|p| p.is_dir()) {
+        Some(dir) => folder_ignores_case(dir),
+        None => false,
     }
-    false
+}
+
+/// `name` with its ASCII letters in the other case.
+fn other_case(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_lowercase() {
+                c.to_ascii_uppercase()
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
+        .collect()
+}
+
+/// Whether `dir` finds its own entries under their names in the other case. A name with no
+/// letter says nothing, and a folder holding both spellings of one tells them apart; a folder
+/// with no name to ask is asked with a probe file of its own, removed at once.
+fn folder_ignores_case(dir: &Path) -> bool {
+    let Ok(it) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    let names: std::collections::HashSet<std::ffi::OsString> =
+        it.filter_map(|e| e.ok().map(|e| e.file_name())).collect();
+    for name in names.iter().filter_map(|n| n.to_str()) {
+        let other = other_case(name);
+        if other == name {
+            continue;
+        }
+        if names.contains(std::ffi::OsStr::new(&other)) {
+            return false;
+        }
+        return std::fs::symlink_metadata(dir.join(other)).is_ok();
+    }
+    static PROBES: AtomicU64 = AtomicU64::new(0);
+    let probe = dir.join(format!(
+        ".ps5upload-case-probe-{}-{}",
+        std::process::id(),
+        PROBES.fetch_add(1, Ordering::Relaxed)
+    ));
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Ok(f) => {
+            drop(f);
+            let name = probe.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let folded = std::fs::symlink_metadata(dir.join(other_case(name))).is_ok();
+            let _ = std::fs::remove_file(&probe);
+            folded
+        }
+        Err(_) => false,
+    }
 }
 
 /// Err when `m` holds two names that are one name in `root`: both were written to the one
@@ -1548,6 +1584,38 @@ mod tests {
         };
         assert_eq!(case_twins(&dirs), None);
         assert!(refuse_case_twins(&files(&["a.bin", "b.bin"]), &root).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The case question is asked of the folder the files land in, never of the one above it:
+    /// at a disk's root (`/Volumes/USB`, `D:\`) that is another disk, which answered for this
+    /// one (a case-respecting USB disk under a case-folding `/Volumes` refused good downloads, a
+    /// folding one under a respecting root let twins overwrite each other). Without a second
+    /// disk the test makes the folder above lie the same way where it can: on a disk that tells
+    /// case apart, `vol` and `VOL` both exist above the download, and the old question found
+    /// `VOL` and said the disk folds case.
+    #[test]
+    fn the_case_question_is_asked_inside_the_destination_never_above_it() {
+        let dir = std::env::temp_dir().join(format!("ps5u-dl-case-at-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("vol")).unwrap();
+        let folds = std::fs::create_dir(dir.join("VOL")).is_err();
+        // An empty folder (asked with a probe, which is gone afterwards), and the download's
+        // own folder not made yet.
+        assert_eq!(ignores_case(&dir.join("vol").join("Game")), folds);
+        assert_eq!(std::fs::read_dir(dir.join("vol")).unwrap().count(), 0);
+        // A folder of names without letters is asked with a probe too.
+        std::fs::write(dir.join("vol").join("123"), b"x").unwrap();
+        assert_eq!(ignores_case(&dir.join("vol").join("Game")), folds);
+        // A folder with a name to ask, and the download's folder itself when it exists.
+        std::fs::create_dir(dir.join("vol").join("Game")).unwrap();
+        std::fs::write(dir.join("vol").join("Game").join("a.bin"), b"x").unwrap();
+        assert_eq!(ignores_case(&dir.join("vol").join("Game")), folds);
+        if !folds {
+            // Both spellings in the folder: it tells them apart.
+            std::fs::write(dir.join("vol").join("Game").join("A.BIN"), b"y").unwrap();
+            assert!(!ignores_case(&dir.join("vol").join("Game")));
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
