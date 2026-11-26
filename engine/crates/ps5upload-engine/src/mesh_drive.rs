@@ -1497,11 +1497,17 @@ trait Side {
     /// other side leaves its files' folders behind here otherwise). False when it holds anything.
     fn prune(&self, rel: &str, today: &str) -> bool;
     fn empty_trash(&self, cutoff: &str);
-    /// What this side and the hub last agreed on. Empty only when there is none yet: a base that
-    /// cannot be read is an error (a pass against an empty one would hash everything and bring
-    /// deleted files back).
-    fn load_base(&self, drive: &str, member: &str) -> Result<Base>;
+    /// What this side and the hub last agreed on, None when there is none yet: a base that cannot
+    /// be read is an error (a pass against an empty one would hash everything and bring deleted
+    /// files back).
+    fn load_base(&self, drive: &str, member: &str) -> Result<Option<Base>>;
     fn save_base(&self, drive: &str, member: &str, base: &Base) -> Result<()>;
+    /// The record older versions kept here: one per console folder, written by every link whose
+    /// second end this console is (so with two such links, what either link agreed on). Only
+    /// read while this member has no base of its own (see [`carried_over`]).
+    fn legacy_base(&self) -> Result<Option<Base>> {
+        Ok(None)
+    }
     /// Whether a just-written file waits a pass (times come from this computer's clock).
     fn settles(&self) -> bool;
     /// A name this side cannot hold.
@@ -1690,8 +1696,8 @@ impl Side for LocalSide {
             }
         }
     }
-    fn load_base(&self, drive: &str, member: &str) -> Result<Base> {
-        Ok(load_base(drive, &self.base_key(member)))
+    fn load_base(&self, drive: &str, member: &str) -> Result<Option<Base>> {
+        Ok(Some(load_base(drive, &self.base_key(member))))
     }
     fn save_base(&self, drive: &str, member: &str, base: &Base) -> Result<()> {
         save_base(drive, &self.base_key(member), base)
@@ -1735,6 +1741,52 @@ impl ConsoleSide {
     fn path(&self, rel: &str) -> String {
         join_hub(&self.root, rel)
     }
+
+    fn parse_record(&self, bytes: &[u8]) -> Result<Base> {
+        serde_json::from_slice(bytes).map_err(|e| {
+            said_err(
+                "link_record_damaged",
+                &[("console", &self.addr)],
+                format!("the link's record on {} is damaged: {e}", self.addr),
+            )
+        })
+    }
+}
+
+/// The file (in the trash folder of the link's second console) that holds what one link agreed
+/// on, named after the link (`link_member_id`, which names both its consoles). One path component
+/// whatever the addresses hold: every byte but a letter, digit, `.` or `-` is written `_xx`, so
+/// two links never share a name; a name too long for a file system is a hash of the link.
+fn link_base_name(member: &str) -> String {
+    let mut s = String::from("link-base-");
+    for b in member.bytes() {
+        if b.is_ascii_alphanumeric() || b == b'.' || b == b'-' {
+            s.push(b as char);
+        } else {
+            s.push_str(&format!("_{b:02x}"));
+        }
+    }
+    if s.len() > 200 {
+        let h = blake3::hash(member.as_bytes()).to_hex();
+        return format!("link-base-{}.json", &h[..32]);
+    }
+    s.push_str(".json");
+    s
+}
+
+/// What a link starts from the first time it runs on this version, when the second console holds
+/// only the shared record of an older one ([`Side::legacy_base`]). That record may be another
+/// link's (it names no link), so only what it surely says of this one is kept: a file both
+/// consoles have, the link's first console (`hub`) holding it exactly as the record has it (the
+/// record's other side is the second console, the same for every link it served). All else
+/// starts as never agreed on: a file on one side only is copied to the other (a delete is never
+/// taken from it), and one on both that differs is compared (a conflict keeps both). Nothing is
+/// lost on the way.
+fn carried_over(old: &Base, side: &Listing, hub: &Listing) -> Base {
+    old.iter()
+        .filter(|(path, agreed)| side.contains_key(*path) && hub.get(*path) == Some(&agreed.h))
+        .map(|(path, agreed)| (path.clone(), *agreed))
+        .collect()
 }
 
 thread_local! {
@@ -1984,25 +2036,16 @@ impl Side for ConsoleSide {
     fn empty_trash(&self, cutoff: &str) {
         empty_console_trash(&self.addr, &self.root, cutoff);
     }
-    fn load_base(&self, _drive: &str, _member: &str) -> Result<Base> {
-        let path = join_hub(&join_hub(&self.root, TRASH), LINK_BASE);
-        let bytes = match read_console_file(&self.addr, &path)? {
-            Some(b) => b,
-            // Where 8.1.0 kept it (in the folder itself, which an 8.0 engine syncs as a file).
-            None => match read_console_file(&self.addr, &self.path(BASE_FILE))? {
-                Some(b) => b,
-                None => return Ok(Base::new()),
-            },
-        };
-        serde_json::from_slice(&bytes).map_err(|e| {
-            said_err(
-                "link_record_damaged",
-                &[("console", &self.addr)],
-                format!("the link's record on {} is damaged: {e}", self.addr),
-            )
-        })
+    /// The link's own record: one file per link (`link_base_name`), so two links that end on this
+    /// console never start from what the other agreed on.
+    fn load_base(&self, _drive: &str, member: &str) -> Result<Option<Base>> {
+        let path = join_hub(&join_hub(&self.root, TRASH), &link_base_name(member));
+        match read_console_file(&self.addr, &path)? {
+            Some(b) => self.parse_record(&b).map(Some),
+            None => Ok(None),
+        }
     }
-    fn save_base(&self, _drive: &str, _member: &str, base: &Base) -> Result<()> {
+    fn save_base(&self, _drive: &str, member: &str, base: &Base) -> Result<()> {
         let body = serde_json::to_vec(base)?;
         if body.len() > CONSOLE_BASE_MAX {
             return Err(said_err(
@@ -2013,15 +2056,27 @@ impl Side for ConsoleSide {
         }
         let dir = join_hub(&self.root, TRASH);
         fs_ops::fs_mkdir(&self.addr, &dir)?;
-        // Written whole or not at all (the write commits once).
+        // Written whole or not at all (the write commits once). The shared record of older
+        // versions stays: another link ending here may not have read it yet.
         ps5upload_core::diagnostics::fs_write_bytes_large(
             &self.addr,
-            &join_hub(&dir, LINK_BASE),
+            &join_hub(&dir, &link_base_name(member)),
             &body,
             false,
         )?;
-        let _ = fs_ops::fs_delete(&self.addr, &self.path(BASE_FILE));
         Ok(())
+    }
+    fn legacy_base(&self) -> Result<Option<Base>> {
+        let path = join_hub(&join_hub(&self.root, TRASH), LINK_BASE);
+        let bytes = match read_console_file(&self.addr, &path)? {
+            Some(b) => b,
+            // Where 8.1.0 kept it (in the folder itself, which an 8.0 engine syncs as a file).
+            None => match read_console_file(&self.addr, &self.path(BASE_FILE))? {
+                Some(b) => b,
+                None => return Ok(None),
+            },
+        };
+        self.parse_record(&bytes).map(Some)
     }
     fn settles(&self) -> bool {
         false
@@ -2223,7 +2278,14 @@ impl Pass<'_> {
         };
         let mut base = match &self.seed {
             Some(home) => seed_via_base(home, &hub),
-            None => self.side.load_base(&self.drive.id, member_id)?,
+            None => match self.side.load_base(&self.drive.id, member_id)? {
+                Some(b) => b,
+                // Read once: the pass saves a base of this member's own.
+                None => self
+                    .side
+                    .legacy_base()?
+                    .map_or_else(Base::new, |old| carried_over(&old, &member, &hub)),
+            },
         };
         let now = now_ms() as i64 / 1000;
         // Still being written: leave it for the next pass (and do not take its absence as a delete).
@@ -3059,13 +3121,17 @@ fn newer_password<'a>(
     }
 }
 
-fn link_member_id(drive: &str, hi: &str) -> String {
-    format!("link:{drive}:{hi}")
+/// A link's id, for its base, its status and what the engine remembers of it between passes. It
+/// names both consoles: two links ending on the same console are two members (older versions
+/// named the second console only, so a third console's link started from what the other link had
+/// agreed on and trashed what that link had just brought in, every round).
+fn link_member_id(drive: &str, lo: &str, hi: &str) -> String {
+    format!("link:{drive}:{lo}:{hi}")
 }
 
 /// One pass between the drive's home folders on `lo` and `hi`.
 fn run_link(id: &str, lo: &str, hi: &str) -> Result<()> {
-    let member_id = link_member_id(id, hi);
+    let member_id = link_member_id(id, lo, hi);
     let running = begin_pass(&member_id);
     // Either end away: the link waits (its state says so on the end that answers).
     for (end, other) in [(lo, hi), (hi, lo)] {
@@ -4792,15 +4858,21 @@ pub async fn unlink(Json(req): Json<UnlinkReq>) -> Response {
             kick();
             return Ok(json!({ "supported": true, "ok": true }));
         }
-        stop_pass(&link_member_id(&req.drive, link_ends(&addr, &other).1));
+        let (lo, hi) = link_ends(&addr, &other);
+        let member_id = link_member_id(&req.drive, lo, hi);
+        stop_pass(&member_id);
         drop_link(&addr, &req.drive, &other);
         drop_link(&other, &req.drive, &addr);
         // The link's base lives in the second console's folder (link_ends): it means nothing now.
-        if let Ok(Some((_, doc))) = doc_read(link_ends(&addr, &other).1) {
+        if let Ok(Some((_, doc))) = doc_read(hi) {
             if let Some(d) = doc.drives.iter().find(|d| d.id == req.drive) {
-                let hi = link_ends(&addr, &other).1;
-                let _ = fs_ops::fs_delete(hi, &join_hub(&d.hub, BASE_FILE));
-                let _ = fs_ops::fs_delete(hi, &join_hub(&join_hub(&d.hub, TRASH), LINK_BASE));
+                let trash = join_hub(&d.hub, TRASH);
+                let _ = fs_ops::fs_delete(hi, &join_hub(&trash, &link_base_name(&member_id)));
+                // The shared record of older versions, once no other link ends there.
+                if d.links.is_empty() {
+                    let _ = fs_ops::fs_delete(hi, &join_hub(&d.hub, BASE_FILE));
+                    let _ = fs_ops::fs_delete(hi, &join_hub(&trash, LINK_BASE));
+                }
             }
         }
         Ok(json!({ "supported": true, "ok": true }))
@@ -5074,7 +5146,8 @@ pub async fn delete(Json(req): Json<MemberReq>) -> Response {
         })?;
         // Linked consoles keep their copy as a drive of their own circle; only the link goes.
         for c in r.clone().unwrap_or_default() {
-            stop_pass(&link_member_id(&req.drive, link_ends(&addr, &c).1));
+            let (lo, hi) = link_ends(&addr, &c);
+            stop_pass(&link_member_id(&req.drive, lo, hi));
             drop_link(&c, &req.drive, &addr);
         }
         for m in load_config()
@@ -5340,7 +5413,10 @@ mod tests {
     struct MemStore {
         files: Mutex<BTreeMap<String, (Meta, Vec<u8>)>>,
         trashed: Mutex<Vec<String>>,
-        base: Mutex<Option<Base>>,
+        /// Each member's base kept here (a console holds one per link that ends on it).
+        bases: Mutex<BTreeMap<String, Base>>,
+        /// The one shared record older versions kept here.
+        legacy: Mutex<Option<Base>>,
         /// File times: each write is later than the last.
         clock: std::sync::atomic::AtomicI64,
     }
@@ -5371,6 +5447,14 @@ mod tests {
         }
         fn meta(&self, rel: &str) -> Option<Meta> {
             self.files.lock().unwrap().get(rel).map(|f| f.0)
+        }
+        fn files_now(&self) -> Listing {
+            self.files
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.0))
+                .collect()
         }
     }
 
@@ -5470,12 +5554,19 @@ mod tests {
             true
         }
         fn empty_trash(&self, _cutoff: &str) {}
-        fn load_base(&self, _drive: &str, _member: &str) -> Result<Base> {
-            Ok(self.store.base.lock().unwrap().clone().unwrap_or_default())
+        fn load_base(&self, _drive: &str, member: &str) -> Result<Option<Base>> {
+            Ok(self.store.bases.lock().unwrap().get(member).cloned())
         }
-        fn save_base(&self, _drive: &str, _member: &str, base: &Base) -> Result<()> {
-            *self.store.base.lock().unwrap() = Some(base.clone());
+        fn save_base(&self, _drive: &str, member: &str, base: &Base) -> Result<()> {
+            self.store
+                .bases
+                .lock()
+                .unwrap()
+                .insert(member.to_string(), base.clone());
             Ok(())
+        }
+        fn legacy_base(&self) -> Result<Option<Base>> {
+            Ok(self.store.legacy.lock().unwrap().clone())
         }
         fn settles(&self) -> bool {
             false
@@ -5960,6 +6051,232 @@ mod tests {
         assert_eq!(seed["both.txt"].m, m(1, 10));
         // Another size: kept as agreed, so it reads as changed there.
         assert_eq!(seed["resized.txt"].h, m(1, 20));
+    }
+
+    // ---- links: three consoles, two links ending on one ----
+
+    fn three_consoles() -> (Drive, [Arc<MemStore>; 3]) {
+        let drive = Drive {
+            id: new_id(),
+            name: "d".into(),
+            hub: "/hub".into(),
+            ..Default::default()
+        };
+        let consoles: [Arc<MemStore>; 3] = Default::default();
+        // Each console's own clock.
+        for (i, s) in consoles.iter().enumerate() {
+            s.clock.store(1000 * i as i64, Ordering::SeqCst);
+        }
+        (drive, consoles)
+    }
+
+    /// One pass of the link between the drive's home folders on `lo` and `hi`, made as
+    /// `run_link` makes it: the second console's folder is the member's side, the first's the hub.
+    /// It looks at both consoles in full (run_link learns of a change there from hub_rev).
+    fn link_pass(drive: &Drive, lo: (&str, &Arc<MemStore>), hi: (&str, &Arc<MemStore>)) {
+        let id = link_member_id(&drive.id, lo.0, hi.0);
+        with_runtime(&id, Runtime::look_again);
+        let side = MemSide {
+            store: hi.1.clone(),
+            hub: lo.1.clone(),
+            ..Default::default()
+        };
+        let hub = MemSide {
+            store: lo.1.clone(),
+            ..Default::default()
+        };
+        Pass {
+            addr: lo.0,
+            drive,
+            member_id: id.clone(),
+            side: &side,
+            hub: &hub,
+            device_name: hi.0.into(),
+            side_rev: None,
+            lost: Arc::default(),
+            stop: Arc::default(),
+            wanted: None,
+            seed: None,
+        }
+        .run()
+        .unwrap();
+        let st = statuses().lock().unwrap().get(&id).cloned().unwrap();
+        assert_eq!(st.state, "idle", "{id}: {}", st.detail);
+    }
+
+    fn trashed(s: &MemStore) -> Vec<String> {
+        s.trashed.lock().unwrap().clone()
+    }
+
+    /// A is linked with B and with C, and sorts last: it is the second end of both links. Every
+    /// file reaches every console, an edit and a delete go everywhere, and nothing else is ever
+    /// trashed. (Older versions gave both links one record on A: the link with C started from
+    /// what the link with B had agreed on, and trashed on A what B had just brought in, every
+    /// round.)
+    #[test]
+    fn two_links_ending_on_one_console_each_keep_their_own_record() {
+        let (drive, [a, b, c]) = three_consoles();
+        let (aa, ba, ca) = ("192.0.2.130", "192.0.2.110", "192.0.2.120");
+        assert_eq!(link_ends(aa, ba), (ba, aa));
+        assert_eq!(link_ends(ca, aa), (ca, aa));
+        assert_ne!(
+            link_member_id(&drive.id, ba, aa),
+            link_member_id(&drive.id, ca, aa)
+        );
+        let round = || {
+            link_pass(&drive, (ba, &b), (aa, &a));
+            link_pass(&drive, (ca, &c), (aa, &a));
+        };
+        a.put("from-a.txt", b"a");
+        b.put("from-b.txt", b"bb");
+        c.put("from-c.txt", b"ccc");
+        for _ in 0..3 {
+            round();
+        }
+        for s in [&a, &b, &c] {
+            assert_eq!(s.names(), ["from-a.txt", "from-b.txt", "from-c.txt"]);
+            assert!(trashed(s).is_empty(), "{:?}", trashed(s));
+        }
+        // An edit on C reaches B through A, with no conflict.
+        c.put("from-b.txt", b"edited on c");
+        for _ in 0..2 {
+            round();
+        }
+        for s in [&a, &b, &c] {
+            assert_eq!(s.get("from-b.txt").unwrap(), b"edited on c");
+            assert_eq!(s.names().len(), 3, "{:?}", s.names());
+        }
+        // A delete on B reaches C through A: into each console's trash, once.
+        b.remove("from-c.txt");
+        for _ in 0..3 {
+            round();
+        }
+        for s in [&a, &b, &c] {
+            assert_eq!(s.names(), ["from-a.txt", "from-b.txt"]);
+        }
+        assert_eq!(trashed(&a), ["from-c.txt"]);
+        assert_eq!(trashed(&c), ["from-c.txt"]);
+        assert!(trashed(&b).is_empty());
+    }
+
+    /// A console left by an older version holds one shared record, here the link with B's. The
+    /// first passes of both links on this version move nothing to any trash (the link with C,
+    /// whose record it is not, runs first), every file reaches every console, and each link then
+    /// keeps its own.
+    #[test]
+    fn upgrading_from_the_shared_link_record_moves_nothing_to_the_trash() {
+        let (drive, [a, b, c]) = three_consoles();
+        let (aa, ba, ca) = ("192.0.2.131", "192.0.2.111", "192.0.2.121");
+        for s in [&a, &b] {
+            s.put("shared.txt", b"same");
+            s.put("from-b.txt", b"bb");
+        }
+        c.put("shared.txt", b"same");
+        c.put("from-c.txt", b"ccc");
+        let old: Base = ["shared.txt", "from-b.txt"]
+            .into_iter()
+            .map(|n| {
+                let e = BaseEntry {
+                    m: a.meta(n).unwrap(),
+                    h: b.meta(n).unwrap(),
+                };
+                (n.to_string(), e)
+            })
+            .collect();
+        *a.legacy.lock().unwrap() = Some(old.clone());
+        // What the link with B agreed on is kept as it was: nothing of it is copied again.
+        assert_eq!(
+            carried_over(&old, &a.files_now(), &b.files_now()),
+            old,
+            "the record's own link"
+        );
+        for _ in 0..2 {
+            link_pass(&drive, (ca, &c), (aa, &a));
+            link_pass(&drive, (ba, &b), (aa, &a));
+        }
+        for s in [&a, &b, &c] {
+            assert_eq!(s.names(), ["from-b.txt", "from-c.txt", "shared.txt"]);
+            assert!(trashed(s).is_empty(), "{:?}", trashed(s));
+        }
+        let bases = a.bases.lock().unwrap();
+        for lo in [ba, ca] {
+            let own = bases.get(&link_member_id(&drive.id, lo, aa)).unwrap();
+            assert_eq!(own.len(), 3, "{lo}");
+        }
+    }
+
+    /// A file of the shared record the second console no longer has, or that the first console
+    /// holds otherwise, starts as never agreed on: copied back or compared, never deleted.
+    #[test]
+    fn a_shared_record_is_only_taken_where_it_surely_holds() {
+        let m = |size, mtime| Meta { size, mtime };
+        let e = |a, b| BaseEntry { m: a, h: b };
+        let old: Base = [
+            ("kept.txt", e(m(1, 10), m(1, 20))),
+            ("gone-there.txt", e(m(1, 10), m(1, 20))),
+            ("gone-here.txt", e(m(1, 10), m(1, 20))),
+            ("other-time.txt", e(m(1, 10), m(1, 20))),
+            ("edited-here.txt", e(m(1, 10), m(1, 20))),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let side: Listing = [
+            ("kept.txt", m(1, 10)),
+            ("gone-there.txt", m(1, 10)),
+            ("other-time.txt", m(1, 10)),
+            ("edited-here.txt", m(2, 11)),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let hub: Listing = [
+            ("kept.txt", m(1, 20)),
+            ("gone-here.txt", m(1, 20)),
+            ("other-time.txt", m(1, 21)),
+            ("edited-here.txt", m(1, 20)),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let got = carried_over(&old, &side, &hub);
+        assert_eq!(
+            got.keys().collect::<Vec<_>>(),
+            ["edited-here.txt", "kept.txt"]
+        );
+        // Kept as recorded: an edit on the second console since still goes across.
+        assert_eq!(
+            plan(&side, &hub, &got)
+                .into_iter()
+                .filter(|o| o.path() == "edited-here.txt")
+                .collect::<Vec<_>>(),
+            [Op::Upload("edited-here.txt".into())]
+        );
+        assert!(plan(&side, &hub, &got).iter().all(|o| !o.is_delete()));
+    }
+
+    #[test]
+    fn each_link_keeps_its_record_in_a_file_of_its_own() {
+        let d = "0123456789abcdef";
+        let names = [
+            link_base_name(&link_member_id(d, "192.168.1.2", "192.168.1.9")),
+            link_base_name(&link_member_id(d, "192.168.1.3", "192.168.1.9")),
+            link_base_name(&link_member_id(d, "[fe80::1]:9120", "192.168.1.9")),
+            link_base_name(&link_member_id(d, "../..", "/x\\y")),
+        ];
+        for (i, n) in names.iter().enumerate() {
+            assert!(n.starts_with("link-base-") && n.ends_with(".json"), "{n}");
+            assert!(
+                !n.contains('/') && !n.contains('\\') && !n.contains(':'),
+                "{n}"
+            );
+            assert_ne!(n, LINK_BASE);
+            assert!(names[..i].iter().all(|o| o != n), "{n}");
+        }
+        // A `_` is written out too: no two ids ever meet in one name.
+        assert_ne!(link_base_name("link:a_3ab"), link_base_name("link:a:b"));
+        let long = link_base_name(&link_member_id(d, &"x".repeat(300), "y"));
+        assert!(long.len() < 100 && long.ends_with(".json"), "{long}");
     }
 
     #[test]
