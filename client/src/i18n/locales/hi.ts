@@ -5894,6 +5894,7 @@ c2c_test_deep_bad: "4 KiB का परीक्षण नहीं पहुँ
 "cw_files_filter_on": "फ़िल्टर चालू है",
 "cw_files_items": "{n} आइटम",
 "cw_files_free": "{free} खाली",
+"cw_files_likely_fits": "यहाँ लगभग {safe} नया डेटा आने की संभावना है।",
 "cw_files_del_one": "“{name}” हटाएँ?",
 "cw_files_del_many": "{n} आइटम हटाएँ?",
 "cw_files_del_list_many": "“{name}” और {more} अन्य।",

@@ -504,6 +504,7 @@
   "cw_files_kind_file": "檔案",
   "cw_files_kind_link": "連結",
   "cw_files_last_gone": "上次開啟的資料夾（{path}）已不存在。",
+  "cw_files_likely_fits": "這裡大約還能放下 {safe} 的新資料。",
   "cw_files_list_truncated": "此共用資料夾太大，無法完整列出：僅顯示前 100,000 項。",
   "cw_files_load_all": "全部載入",
   "cw_files_mesh_home": "此資料夾是 Mesh Drive。它的同步檔案已隱藏：請勿移動或重新命名此資料夾。",

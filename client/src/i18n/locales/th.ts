@@ -5887,6 +5887,7 @@ c2c_test_deep_bad: "การส่งทดสอบ 4 KiB ไปไม่ถ�
 "cw_files_filter_on": "ตัวกรองเปิดอยู่",
 "cw_files_items": "{n} รายการ",
 "cw_files_free": "ว่าง {free}",
+"cw_files_likely_fits": "น่าจะใส่ข้อมูลใหม่ได้ประมาณ {safe} ที่นี่",
 "cw_files_del_one": "ลบ “{name}” ไหม",
 "cw_files_del_many": "ลบ {n} รายการไหม",
 "cw_files_del_list_many": "“{name}” และอีก {more} รายการ",

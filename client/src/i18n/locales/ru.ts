@@ -5833,6 +5833,7 @@ c2c_test_deep_bad: "Тестовая отправка 4 КиБ не дошла: 
 "cw_files_filter_on": "Фильтр включён",
 "cw_files_items": "Элементов: {n}",
 "cw_files_free": "Свободно: {free}",
+"cw_files_likely_fits": "Сюда, скорее всего, поместится около {safe} новых данных.",
 "cw_files_del_one": "Удалить «{name}»?",
 "cw_files_del_many": "Удалить элементы ({n})?",
 "cw_files_del_list_many": "«{name}» и ещё {more}.",

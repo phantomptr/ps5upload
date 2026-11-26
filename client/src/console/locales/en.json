@@ -504,6 +504,7 @@
   "cw_files_kind_file": "File",
   "cw_files_kind_link": "Link",
   "cw_files_last_gone": "The folder you had open last ({path}) is gone.",
+  "cw_files_likely_fits": "About {safe} of new data is likely to fit here.",
   "cw_files_list_truncated": "This share folder is too big to list in full: only its first 100,000 items are shown.",
   "cw_files_load_all": "Load all",
   "cw_files_mesh_home": "This folder is a Mesh Drive. Its sync file is hidden: don't move or rename the folder.",

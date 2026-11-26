@@ -5880,6 +5880,7 @@ c2c_test_deep_bad: "4 KiB-এর পরীক্ষামূলক পাঠা�
 "cw_files_filter_on": "ফিল্টার চালু",
 "cw_files_items": "{n}টি আইটেম",
 "cw_files_free": "{free} খালি",
+"cw_files_likely_fits": "এখানে প্রায় {safe} নতুন ডেটা আঁটবে বলে মনে হয়।",
 "cw_files_del_one": "“{name}” মুছবেন?",
 "cw_files_del_many": "{n}টি আইটেম মুছবেন?",
 "cw_files_del_list_many": "“{name}” এবং আরও {more}টি।",

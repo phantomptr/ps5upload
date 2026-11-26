@@ -504,6 +504,7 @@
   "cw_files_kind_file": "Plik",
   "cw_files_kind_link": "Dowiązanie",
   "cw_files_last_gone": "Ostatnio otwarty folder ({path}) już nie istnieje.",
+  "cw_files_likely_fits": "Zmieści się tu prawdopodobnie około {safe} nowych danych.",
   "cw_files_list_truncated": "Ten folder udziału jest za duży, by wyświetlić go w całości: pokazano tylko pierwsze 100 000 elementów.",
   "cw_files_load_all": "Wczytaj wszystko",
   "cw_files_mesh_home": "Ten folder to Mesh Drive. Jego plik synchronizacji jest ukryty: nie przenoś folderu ani nie zmieniaj jego nazwy.",

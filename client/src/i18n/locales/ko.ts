@@ -5897,6 +5897,7 @@ c2c_test_deep_bad: "4 KiB 테스트 전송이 도착하지 않았습니다: {det
 "cw_files_filter_on": "필터 켜짐",
 "cw_files_items": "{n}개 항목",
 "cw_files_free": "{free} 남음",
+"cw_files_likely_fits": "여기에 새 데이터 약 {safe}가 들어갈 것으로 보입니다.",
 "cw_files_del_one": "“{name}”을(를) 삭제할까요?",
 "cw_files_del_many": "{n}개 항목을 삭제할까요?",
 "cw_files_del_list_many": "“{name}” 외 {more}개.",

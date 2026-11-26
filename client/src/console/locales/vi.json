@@ -504,6 +504,7 @@
   "cw_files_kind_file": "Tệp",
   "cw_files_kind_link": "Liên kết",
   "cw_files_last_gone": "Thư mục bạn mở lần trước ({path}) không còn nữa.",
+  "cw_files_likely_fits": "Có lẽ chứa được khoảng {safe} dữ liệu mới ở đây.",
   "cw_files_list_truncated": "Thư mục chia sẻ này quá lớn để liệt kê hết: chỉ hiện 100.000 mục đầu tiên.",
   "cw_files_load_all": "Tải tất cả",
   "cw_files_mesh_home": "Thư mục này là một Mesh Drive. Tệp đồng bộ của nó bị ẩn: đừng di chuyển hoặc đổi tên thư mục.",

@@ -5880,6 +5880,7 @@ c2c_test_deep_bad: "لم يصل الإرسال التجريبي بحجم 4 KiB: 
 "cw_files_filter_on": "التصفية مفعّلة",
 "cw_files_items": "{n} عناصر",
 "cw_files_free": "{free} متاحة",
+"cw_files_likely_fits": "يُرجّح أن يتسع هنا نحو {safe} من البيانات الجديدة.",
 "cw_files_del_one": "حذف «{name}»؟",
 "cw_files_del_many": "حذف {n} عناصر؟",
 "cw_files_del_list_many": "«{name}» و{more} غيره.",

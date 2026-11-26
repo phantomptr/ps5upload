@@ -504,6 +504,7 @@
   "cw_files_kind_file": "Fájl",
   "cw_files_kind_link": "Hivatkozás",
   "cw_files_last_gone": "A legutóbb megnyitott mappa ({path}) már nem létezik.",
+  "cw_files_likely_fits": "Nagyjából {safe} új adat fér el itt valószínűleg.",
   "cw_files_list_truncated": "Ez a megosztott mappa túl nagy ahhoz, hogy teljesen listázzuk: csak az első 100 000 eleme látszik.",
   "cw_files_load_all": "Összes betöltése",
   "cw_files_mesh_home": "Ez a mappa egy Mesh Drive. A szinkronfájlja rejtett: ne helyezd át és ne nevezd át a mappát.",

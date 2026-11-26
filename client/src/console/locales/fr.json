@@ -504,6 +504,7 @@
   "cw_files_kind_file": "Fichier",
   "cw_files_kind_link": "Lien",
   "cw_files_last_gone": "Le dernier dossier ouvert ({path}) n'existe plus.",
+  "cw_files_likely_fits": "Environ {safe} de nouvelles données devraient tenir ici.",
   "cw_files_list_truncated": "Ce dossier partagé est trop volumineux pour être listé en entier : seuls ses 100 000 premiers éléments sont affichés.",
   "cw_files_load_all": "Tout charger",
   "cw_files_mesh_home": "Ce dossier est un Mesh Drive. Son fichier de synchronisation est masqué : ne déplacez pas et ne renommez pas le dossier.",

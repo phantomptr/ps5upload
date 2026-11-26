@@ -504,6 +504,7 @@
   "cw_files_kind_file": "ファイル",
   "cw_files_kind_link": "リンク",
   "cw_files_last_gone": "前回開いていたフォルダー（{path}）はもうありません。",
+  "cw_files_likely_fits": "ここには新しいデータが約 {safe} 入る見込みです。",
   "cw_files_list_truncated": "この共有フォルダは大きすぎて全部を一覧できません。先頭の 100,000 件だけを表示しています。",
   "cw_files_load_all": "すべて読み込む",
   "cw_files_mesh_home": "このフォルダーは Mesh Drive です。同期ファイルは非表示です。フォルダーを移動したり名前を変えたりしないでください。",

@@ -504,6 +504,7 @@
   "cw_files_kind_file": "Datei",
   "cw_files_kind_link": "Verknüpfung",
   "cw_files_last_gone": "Der zuletzt geöffnete Ordner ({path}) existiert nicht mehr.",
+  "cw_files_likely_fits": "Etwa {safe} neue Daten passen hier voraussichtlich hin.",
   "cw_files_list_truncated": "Dieser Freigabeordner ist zu groß, um ihn ganz aufzulisten: Nur die ersten 100.000 Einträge werden gezeigt.",
   "cw_files_load_all": "Alle laden",
   "cw_files_mesh_home": "Dieser Ordner ist ein Mesh Drive. Seine Sync-Datei ist ausgeblendet: Verschiebe den Ordner nicht und benenne ihn nicht um.",

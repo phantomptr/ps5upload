@@ -504,6 +504,7 @@
   "cw_files_kind_file": "Arquivo",
   "cw_files_kind_link": "Link",
   "cw_files_last_gone": "A última pasta que você abriu ({path}) não existe mais.",
+  "cw_files_likely_fits": "Cerca de {safe} de dados novos devem caber aqui.",
   "cw_files_list_truncated": "Esta pasta compartilhada é grande demais para ser listada inteira: só os primeiros 100.000 itens são mostrados.",
   "cw_files_load_all": "Carregar tudo",
   "cw_files_mesh_home": "Esta pasta é um Mesh Drive. O arquivo de sincronização está oculto: não mova nem renomeie a pasta.",

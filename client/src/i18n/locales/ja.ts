@@ -5899,6 +5899,7 @@ c2c_test_deep_bad: "4 KiB のテスト送信が届きませんでした: {detail
 "cw_files_filter_on": "絞り込み中",
 "cw_files_items": "{n} 件",
 "cw_files_free": "空き {free}",
+"cw_files_likely_fits": "ここには新しいデータが約 {safe} 入る見込みです。",
 "cw_files_del_one": "「{name}」を削除しますか？",
 "cw_files_del_many": "{n} 件を削除しますか？",
 "cw_files_del_list_many": "「{name}」ほか {more} 件。",

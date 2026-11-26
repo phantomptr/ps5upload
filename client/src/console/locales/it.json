@@ -504,6 +504,7 @@
   "cw_files_kind_file": "File",
   "cw_files_kind_link": "Collegamento",
   "cw_files_last_gone": "L'ultima cartella aperta ({path}) non esiste più.",
+  "cw_files_likely_fits": "Qui dovrebbero entrare circa {safe} di nuovi dati.",
   "cw_files_list_truncated": "Questa cartella condivisa è troppo grande per essere elencata per intero: sono mostrati solo i primi 100.000 elementi.",
   "cw_files_load_all": "Carica tutto",
   "cw_files_mesh_home": "Questa cartella è un Mesh Drive. Il suo file di sincronizzazione è nascosto: non spostare né rinominare la cartella.",

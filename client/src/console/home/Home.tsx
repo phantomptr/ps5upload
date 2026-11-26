@@ -27,6 +27,8 @@ export interface Volume {
   fs_type: string;
   total_bytes: number;
   free_bytes: number;
+  /** What a new copy may take: free less the helper's safety reserve. */
+  allocatable_bytes?: number;
   writable: boolean;
   source_image?: string;
 }

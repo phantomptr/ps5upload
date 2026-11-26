@@ -504,6 +504,7 @@
   "cw_files_kind_file": "Archivo",
   "cw_files_kind_link": "Enlace",
   "cw_files_last_gone": "La última carpeta que tenías abierta ({path}) ya no existe.",
+  "cw_files_likely_fits": "Es probable que quepan aquí unos {safe} de datos nuevos.",
   "cw_files_list_truncated": "Esta carpeta compartida es demasiado grande para mostrarla entera: solo se muestran sus primeros 100.000 elementos.",
   "cw_files_load_all": "Cargar todo",
   "cw_files_mesh_home": "Esta carpeta es un Mesh Drive. Su archivo de sincronización está oculto: no muevas ni renombres la carpeta.",
