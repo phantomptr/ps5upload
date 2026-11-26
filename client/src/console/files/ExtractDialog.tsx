@@ -12,7 +12,7 @@ import { filesErrorText } from "./Files";
 import { joinPath, volumeOf } from "./move";
 import { freeName, statOrNull } from "./paste";
 import { PathPicker } from "./PathPicker";
-import { extractInfo, type ExtractInfo } from "./opJob";
+import { checkUnavailable, extractInfo, type ExtractInfo } from "./opJob";
 
 type Load = { info: ExtractInfo } | { error: string | null; generic: boolean } | null;
 
@@ -149,7 +149,7 @@ export function ExtractDialog({
       (e: unknown) => {
         if (!live) return;
         // A helper without the check (or a check that could not run): let the helper decide.
-        const generic = e instanceof ApiError && (e.status === 0 || e.status >= 500 || e.code === "http_404");
+        const generic = checkUnavailable(e);
         setState({ error: generic ? null : extractErrorText(e), generic });
       },
     );

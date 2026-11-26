@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Save, Undo2 } from "lucide-react";
 import { ApiError } from "../../api";
-import { errorText } from "../../home/Home";
+import { filesErrorText } from "../Files";
 import { t } from "../../strings";
 import { encodeText, saveText, stampOf, type FileStamp } from "../transfer";
 
@@ -11,7 +11,7 @@ export function saveErrorText(e: unknown): string | null {
   if (e === "too_large" || (e instanceof ApiError && e.code === "too_large")) return t("cw_files_edit_too_large");
   if (e instanceof ApiError && e.code === "gone") return t("cw_files_edit_gone");
   if (e instanceof ApiError && e.code === "no_space") return t("cw_files_edit_no_space");
-  return errorText(e);
+  return filesErrorText(e);
 }
 
 /**

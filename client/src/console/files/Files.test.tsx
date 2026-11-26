@@ -18,6 +18,8 @@ import { clearClipboard, getClipboard, setClipboard } from "./clipboard";
 import { ConflictDialog } from "./ConflictDialog";
 import { IntoItselfError, renameEntry } from "./move";
 import { TextPrompt } from "./TextPrompt";
+import { PickerWait } from "./PathPicker";
+import { UploadDialog } from "./UploadDialog";
 import type { DirState, Entry } from "./useDir";
 
 const mockCall = vi.mocked(call);
@@ -372,13 +374,19 @@ describe("Files listing controls", () => {
     clearClipboard();
   });
 
-  it("a waiting paste conflict shows its dialog over anything else", () => {
+  it("a waiting paste conflict shows its dialog over anything else, which stays open under it", () => {
     const answer = vi.fn();
     const conflict = { item: "/data/a/x.txt", dest: "/data/games/x.txt", destDir: false, canReplace: true, left: 2 };
     const p = props({ ask: { kind: "sheet", names: ["b"] }, conflict: { conflict, answer } });
     const els = elements(FilesView(p));
     const d = els.find((e) => e.type === ConflictDialog)!;
-    expect(els.find((e) => e.type === ActionsSheet)).toBeUndefined();
+    // The open dialog is kept (an Upload dialog closed stops its uploads), and the question is
+    // after it: the last modal in the page is the one the controller works in.
+    const sheet = els.findIndex((e) => e.type === ActionsSheet);
+    expect(sheet).toBeGreaterThan(-1);
+    expect(els.indexOf(d)).toBeGreaterThan(sheet);
+    const up = elements(FilesView(props({ ask: { kind: "upload" }, conflict: { conflict, answer } })));
+    expect(up.some((e) => e.type === UploadDialog)).toBe(true);
     (d.props.onAnswer as (x: unknown) => void)({ choice: "skip", all: false });
     expect(answer).toHaveBeenCalledWith({ choice: "skip", all: false });
 
@@ -435,5 +443,19 @@ describe("failed items stay selected after a batch", () => {
     expect(failedNamesIn(r, "/data")).toEqual(["b", "d"]);
     expect(failedNamesIn(r, "/mnt/usb0")).toEqual([]);
     expect(failedNamesIn({ started: [], moved: [], failed: [], jobFailed: ["/x"], skipped: [] }, "/")).toEqual(["x"]);
+  });
+});
+
+describe("Copy to… / Move to…", () => {
+  it("says why a folder could not be read, with Retry, instead of loading for good", () => {
+    const retry = vi.fn();
+    const failed = renderToStaticMarkup(<PickerWait dir={{ error: new ApiError(403, "path_not_allowed") }} onRetry={retry} />);
+    expect(failed).toContain(t("cw_files_err_denied").replace("'", "&#x27;"));
+    expect(failed).toContain('data-action="retry"');
+    expect(failed).not.toContain(t("cw_home_loading"));
+    const btn = elements(PickerWait({ dir: { error: new ApiError(500, "timeout") }, onRetry: retry })).find((e) => e.props["data-action"] === "retry")!;
+    (btn.props.onClick as () => void)();
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(renderToStaticMarkup(<PickerWait dir={{ error: null }} onRetry={retry} />)).toContain(t("cw_home_loading"));
   });
 });

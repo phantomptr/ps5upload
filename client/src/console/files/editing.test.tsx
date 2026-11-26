@@ -118,6 +118,8 @@ describe("text editing", () => {
     expect(saveErrorText(new ApiError(413, "too_large"))).toBe(t("cw_files_edit_too_large"));
     expect(saveErrorText(new ApiError(404, "gone"))).toBe(t("cw_files_edit_gone"));
     expect(saveErrorText(new ApiError(507, "no_space"))).toBe(t("cw_files_edit_no_space"));
+    // a protected folder in plain words, not "That did not work (path_not_allowed)"
+    expect(saveErrorText(new ApiError(403, "path_not_allowed"))).toBe(t("cw_files_err_denied"));
   });
 });
 
@@ -164,5 +166,8 @@ describe("upload and download (another device only)", () => {
     expect(s).toBe(
       [t("cw_files_up_done", { n: 2 }), t("cw_files_up_skipped", { n: 1 }), t("cw_files_up_failed", { n: 1, reason: t("cw_files_up_no_space") })].join(" · "),
     );
+    const denied = uploadSummaryText({ uploaded: [], skipped: [], failed: [{ name: "d", error: new ApiError(403, "path_not_allowed") }], stopped: [] });
+    expect(denied).toContain(t("cw_files_err_denied"));
+    expect(denied).not.toContain("path_not_allowed");
   });
 });

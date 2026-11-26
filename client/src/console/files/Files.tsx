@@ -1284,11 +1284,10 @@ export function FilesView(p: FilesViewProps) {
           ) : null}
         </>
       )}
-      {p.conflict ? (
-        <ConflictDialog key={p.conflict.conflict.item} conflict={p.conflict.conflict} onAnswer={p.conflict.answer} />
-      ) : (
-        askView(p)
-      )}
+      {askView(p)}
+      {/* Over the open dialog, which stays: closing it would stop an upload or drop an editor's
+          unsaved text. Last in the page, so it is the topmost modal. */}
+      {p.conflict ? <ConflictDialog key={p.conflict.conflict.item} conflict={p.conflict.conflict} onAnswer={p.conflict.answer} /> : null}
     </div>
   );
 }

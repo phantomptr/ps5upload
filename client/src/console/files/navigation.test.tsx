@@ -171,7 +171,9 @@ describe("path bar", () => {
     mockCall.mockRejectedValueOnce(new ApiError(403, "path_not_allowed"));
     expect(await checkFolder("/data/ps5upload/ava")).toBe(t("cw_files_err_denied"));
     expect(await checkFolder("relative")).toBe(t("cw_files_goto_bad"));
-    expect(mockCall).toHaveBeenCalledTimes(4);
+    mockCall.mockRejectedValueOnce(new ApiError(0, "offline"));
+    expect(await checkFolder("/data")).toBe(t("cw_home_err_offline"));
+    expect(mockCall).toHaveBeenCalledTimes(5);
   });
 
   it("go to path is a text prompt with that check; OK navigates", () => {

@@ -145,6 +145,14 @@ export async function unpackInfo(path: string): Promise<UnpackInfo> {
 }
 
 /** Why a decompress cannot start (checked on the page before it is sent), or null. */
+/**
+ * The pre-start check could not say (it timed out, or this helper has no such route: it answers
+ * 404 "not_found", a missing file has its own code): Start warns and lets the helper decide.
+ */
+export function checkUnavailable(e: unknown): boolean {
+  return e instanceof ApiError && (e.status === 0 || e.status >= 500 || e.code === "http_404" || e.code === "not_found");
+}
+
 export function unpackBlocker(info: UnpackInfo, name: string | null): "exists" | "space" | null {
   if (info.exists && (name == null || name === info.name)) return "exists";
   if (info.free != null && info.free < info.need) return "space";

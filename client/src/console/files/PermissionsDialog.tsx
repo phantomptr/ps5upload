@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { Check, Square, SquareCheck } from "lucide-react";
-import { call } from "../api";
-import { errorText } from "../home/Home";
+import { ApiError, call } from "../api";
 import { t } from "../strings";
 import { Modal } from "../ui/Modal";
+import { filesErrorText } from "./Files";
 import { watchOp } from "./opJob";
 import { hasPerm, keepsPermissions, modeLetters, modeText, PERM_BITS, PERM_WHO, togglePerm, type PermBit, type PermWho } from "./permissions";
 
@@ -15,7 +15,8 @@ export async function applyMode(path: string, mode: number, recursive: boolean):
   const r = await call<{ job?: string }>("/api/fs/chmod", { path, mode: modeText(mode), recursive });
   if (r && typeof r.job === "string") {
     const end = await watchOp(r.job);
-    if (end.end !== "done") throw new Error(end.end === "failed" ? (end.status.message ?? "failed") : end.end);
+    // gone: the console no longer has the job (said as such); failed: its first word (no paths)
+    if (end.end !== "done") throw end.end === "failed" ? new ApiError(500, (end.status.message ?? "failed").split(":")[0]) : end.end;
   }
 }
 
@@ -55,7 +56,7 @@ export function PermissionsDialog({
       () => onDone(mode),
       (e: unknown) => {
         setBusy(false);
-        setError(errorText(e));
+        setError(e === "gone" ? t("cw_files_op_gone") : filesErrorText(e));
       },
     );
   };
