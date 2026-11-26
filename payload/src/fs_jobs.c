@@ -16,6 +16,7 @@
 #include "ava1_op.h"
 #include "blake3.h"
 #include "path_policy.h"
+#include "utf8_cut.h"
 
 #define MAX_DEPTH 64
 
@@ -569,6 +570,8 @@ static void fail_note(void *arg, const char *path, const char *what) {
     int e = errno; /* the walkers report right after the failing call */
     if (f->n++ == 0) {
         snprintf(f->first, sizeof f->first, "%s", path);
+        /* A path longer than the buffer is cut on a character, never inside one. */
+        f->first[utf8_whole_prefix(f->first, strlen(f->first))] = '\0';
         snprintf(f->what, sizeof f->what, "%s", what);
         /* "mount", "path too long", "too deep" are the walker's own refusals, not an errno. */
         f->err = (strcmp(what, "mount") == 0 || strcmp(what, "path too long") == 0 || strcmp(what, "too deep") == 0)
@@ -578,7 +581,8 @@ static void fail_note(void *arg, const char *path, const char *what) {
 }
 
 /* The cause of a partly failed walk: `<token>: <what> <first path>: <errno text> (<n> left)`, cut
- * to the status line, keeping the END of a long path (the part that tells folders apart). A path
+ * to the status line, keeping the END of a long path (the part that tells folders apart), from a
+ * whole character on (a byte cut put half of one first: text that is not UTF-8). A path
  * under `base` (the parent of the folder the job works on) is shown from that folder down. */
 static void fail_message(const fail_t *f, const char *token, const char *unit) {
     char shown[110];
@@ -587,9 +591,9 @@ static void fail_message(const fail_t *f, const char *token, const char *unit) {
     if (bl > 1 && strncmp(p, f->base, bl) == 0 && p[bl] == '/' && p[bl + 1]) p += bl + 1;
     l = strlen(p);
     if (l > keep) {
+        size_t from = utf8_tail_start(p, l, keep - 3);
         memcpy(shown, "...", 3);
-        memcpy(shown + 3, p + l - (keep - 3), keep - 3);
-        shown[keep] = '\0';
+        memcpy(shown + 3, p + from, l - from + 1);
     } else {
         memcpy(shown, p, l + 1);
     }
