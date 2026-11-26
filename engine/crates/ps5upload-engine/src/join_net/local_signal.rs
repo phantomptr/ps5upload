@@ -28,6 +28,11 @@ pub(crate) const FRAME_MAX: usize = super::hub::FRAME_MAX;
 const HELLO_WAIT: Duration = Duration::from_secs(10);
 /// A signalling socket is closed after this long (ICE has long finished or failed by then).
 pub(crate) const SIGNAL_FOR: Duration = Duration::from_secs(if cfg!(test) { 20 } else { 60 });
+/// The signals one socket may send: an offer and its candidates, several times over. The hub
+/// holds a guest to a count like this; with none here, anything on the network could feed the
+/// driver offers as fast as it could write them, with no key, and every offer is a new peer
+/// connection built on the one task that carries all the guests' pictures.
+pub(crate) const SIGNALS_MAX: usize = 64;
 
 fn frame(v: serde_json::Value) -> Message {
     Message::Text(v.to_string().into())
@@ -139,6 +144,7 @@ pub(crate) async fn session(
     );
     let (sig_tx, mut sig_rx) = mpsc::unbounded_channel::<(String, serde_json::Value)>();
     let until = tokio::time::Instant::now() + SIGNAL_FOR;
+    let mut signals = 0usize;
     loop {
         tokio::select! {
             _ = tokio::time::sleep_until(until) => break,
@@ -160,6 +166,14 @@ pub(crate) async fn session(
                 match v.get("t").and_then(|x| x.as_str()).unwrap_or("") {
                     "leave" => break,
                     "signal" => {
+                        signals += 1;
+                        if signals > SIGNALS_MAX {
+                            // As the hub says it, then the socket closes.
+                            let _ = s
+                                .send(frame(serde_json::json!({"t": "error", "why": "rate_limited"})))
+                                .await;
+                            break;
+                        }
                         let data = v.get("data").cloned().unwrap_or_default();
                         let field = |k: &str| data.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
                         match field("type").as_str() {

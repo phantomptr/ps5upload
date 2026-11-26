@@ -409,6 +409,59 @@ async fn an_app_guest_signals_the_internet_invite_to_the_engine_without_the_hub(
     set_live(console, 0);
 }
 
+/// The engine's own signalling socket takes a bounded number of signals, as the hub does: it
+/// needs no key, and each offer on it is a peer connection the driver builds. One that sends more
+/// is told so and closed, long before the socket's own time is up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_engines_signalling_socket_takes_a_bounded_number_of_signals() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as TMsg;
+    let _turn = PARTY_TESTS.lock().await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        internet_invites: false,
+        stun: Vec::new(),
+        upnp: false,
+        ..Settings::default()
+    });
+    let console = "10.77.0.52";
+    set_helper(console, Arc::new(FakeHelper::default()));
+    set_live(console, 1);
+    open_party(console).await;
+    let signal = serve().await.replace("/api/join/ws", "/api/join/signal");
+    let (mut ws, _) = tokio_tungstenite::connect_async(&signal).await.unwrap();
+    ws.send(TMsg::Text(r#"{"v":1,"t":"join","lan":true}"#.into()))
+        .await
+        .unwrap();
+    let max = crate::join_net::local_signal::SIGNALS_MAX;
+    let candidate = serde_json::json!({
+        "v": 1, "t": "signal", "to": "host",
+        "data": {"type": "candidate", "candidate": "candidate:1 1 udp 1 192.0.2.1 9 typ host"},
+    })
+    .to_string();
+    for _ in 0..max + 1 {
+        // The socket may close under the last ones.
+        if ws.send(TMsg::Text(candidate.clone().into())).await.is_err() {
+            break;
+        }
+    }
+    let mut said = false;
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(Ok(m)) = ws.next().await {
+            match m {
+                TMsg::Text(t) => said |= t.as_str() == r#"{"t":"error","why":"rate_limited"}"#,
+                TMsg::Close(_) => break,
+                _ => {}
+            }
+        }
+    })
+    .await;
+    assert!(closed.is_ok(), "the socket stayed open past its signals");
+    assert!(said, "told why");
+    close_party(console).await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_live(console, 0);
+}
+
 /// A guest on the home network with the Wi-Fi's own link (no internet invite, no hub at all)
 /// joins over WebRTC signalled on the engine's socket: the link carries the engine's
 /// certificate, the answer has it, the invite key goes in the hello on the channel, the picture
