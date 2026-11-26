@@ -254,6 +254,14 @@ async fn release_inhibitor(handle: Handle) {
     }
 }
 
+/// caffeinate's arguments: the four assertions, held only while `app_pid` runs (`-w`). Kill on
+/// drop and the exit handler cover a clean exit only; after a crash, a Force Quit or a SIGTERM
+/// caffeinate passed to launchd and kept the Mac and its display awake until a reboot.
+#[cfg(any(target_os = "macos", test))]
+fn caffeinate_args(app_pid: u32) -> Vec<String> {
+    vec!["-disu".into(), "-w".into(), app_pid.to_string()]
+}
+
 #[cfg(target_os = "macos")]
 fn acquire_inhibitor() -> Result<Option<Handle>, String> {
     use tokio::process::Command;
@@ -261,7 +269,7 @@ fn acquire_inhibitor() -> Result<Option<Handle>, String> {
     // -u assert user activity. Combined flags cover both idle sleep and
     // display sleep, matching v1.5.4's 'prevent-display-sleep' blocker.
     let child = Command::new("caffeinate")
-        .args(["-disu"])
+        .args(caffeinate_args(std::process::id()))
         // Kill the child if its Handle is ever dropped — belt to the
         // exit-handler's suspenders (the HOLDER static itself isn't
         // dropped at exit, so keep_awake_release_on_exit covers that path).
@@ -482,5 +490,39 @@ mod hold_tests {
             .status()
             .unwrap();
         assert!(out.success());
+    }
+
+    /// macOS: caffeinate lets go when the app is gone, however it went.
+    #[test]
+    fn caffeinate_holds_only_while_the_app_runs() {
+        assert_eq!(super::caffeinate_args(4321), ["-disu", "-w", "4321"]);
+    }
+
+    /// The real caffeinate, told to wait for a process that ends: it ends with it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn caffeinate_ends_with_the_process_it_waits_for() {
+        let mut stand_in = std::process::Command::new("sleep")
+            .arg("1")
+            .spawn()
+            .unwrap();
+        let mut c = std::process::Command::new("caffeinate")
+            .args(super::caffeinate_args(stand_in.id()))
+            .spawn()
+            .unwrap();
+        stand_in.wait().unwrap();
+        let started = std::time::Instant::now();
+        let ended = loop {
+            if c.try_wait().unwrap().is_some() {
+                break true;
+            }
+            if started.elapsed() > std::time::Duration::from_secs(10) {
+                let _ = c.kill();
+                let _ = c.wait();
+                break false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        assert!(ended, "caffeinate outlived the process it held for");
     }
 }
