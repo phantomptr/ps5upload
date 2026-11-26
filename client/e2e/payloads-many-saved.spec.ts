@@ -11,6 +11,8 @@ import { routeEngine, seedConsole } from "./fixtures/engine";
 // Arabic).
 
 const SHOTS = process.env.PS5UPLOAD_SHOTS;
+// A wide font, as Linux CI has (the label specs do the same).
+const WIDE_FONT = "*{font-family:Verdana,'DejaVu Sans',sans-serif!important}";
 
 const proc = (pid: number, comm: string, extra: Record<string, unknown> = {}) => ({
   pid,
@@ -210,6 +212,32 @@ test.describe("desktop", () => {
     await expect(root.locator('[data-card="nanodns"]')).not.toContainText("Installed");
 
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/many-1280-dark.png`, fullPage: false });
+  });
+
+  // A row that runs and is in the boot list has more buttons: its name and path still get the
+  // width every other row's get (they share one column for their actions), so its path is cut at
+  // the same place.
+  test("every row's text column is as wide as the others, the running one too", async ({ page }) => {
+    const root = await open(page);
+    await page.addStyleTag({ content: WIDE_FONT });
+    const saved = root.getByTestId("pm-saved-list");
+    const widths = await saved.getByTestId("pm-row-text").evaluateAll((els) =>
+      els.map((e) => Math.round(e.getBoundingClientRect().width)),
+    );
+    expect(widths).toHaveLength(20);
+    expect(Math.max(...widths) - Math.min(...widths)).toBeLessThanOrEqual(1);
+    // The actions end at the same place in every row.
+    const ends = await saved.getByTestId("pm-row-actions").evaluateAll((els) =>
+      els.map((e) => Math.round(e.getBoundingClientRect().right)),
+    );
+    expect(Math.max(...ends) - Math.min(...ends)).toBeLessThanOrEqual(1);
+    // The running row keeps every button.
+    const first = saved.locator("li").first();
+    for (const name of ["Launch", "Don't load at boot", "Stop", "Delete"]) {
+      await expect(first.getByRole("button", { name, exact: true })).toBeVisible();
+    }
+    await expectNoOverflow(page, root, "1280 wide font");
+    if (SHOTS) await page.screenshot({ path: `${SHOTS}/many-1280-aligned.png` });
   });
 
   test("the filter box narrows a long list, by keyboard too", async ({ page }) => {

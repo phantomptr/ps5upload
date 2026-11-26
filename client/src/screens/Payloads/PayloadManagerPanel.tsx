@@ -132,6 +132,18 @@ export function runningOrigin(tr: Translator, ours: boolean, bootN: number | nul
  *  saved list or the settings (boot list, helper at boot, adding a payload). */
 export default function PayloadManagerPanel({
   running,
+/** The saved list on a computer or tablet: the rows share one column for their actions (as wide
+ *  as the widest row's, up to a limit, its buttons wrapping inside it), so every row's name and
+ *  path get the same width. Before, a row with more buttons (running, and in the boot list) had
+ *  a narrower text column and cut its path earlier than the others. Where the browser has no
+ *  subgrid (old WebKit), each row keeps its own flexible layout. */
+// Written out whole: Tailwind only makes the classes it finds spelled out in the source.
+const SAVED_LIST =
+  "grid gap-1.5 supports-[grid-template-columns:subgrid]:roomy:grid-cols-[minmax(0,1fr)_fit-content(28rem)]";
+const SAVED_ROW =
+  "supports-[grid-template-columns:subgrid]:roomy:col-span-2 supports-[grid-template-columns:subgrid]:roomy:grid supports-[grid-template-columns:subgrid]:roomy:grid-cols-subgrid";
+const SAVED_ACTIONS = "supports-[grid-template-columns:subgrid]:roomy:justify-end";
+
   onChanged,
   part,
 }: { running?: Readonly<Record<string, PmRunning>>; onChanged?: () => void; part: PmPanelPart }) {
@@ -480,9 +492,9 @@ export default function PayloadManagerPanel({
       <li
         key={p.path}
         data-pm-card={live?.cardId}
-        className="flex flex-wrap items-center gap-3 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3.5 py-2.5 text-sm"
+        className={`flex flex-wrap items-center gap-3 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3.5 py-2.5 text-sm ${SAVED_ROW}`}
       >
-        <div className="min-w-[min(100%,14rem)] flex-1">
+        <div className="min-w-[min(100%,14rem)] flex-1" data-testid="pm-row-text">
           <div className="flex flex-wrap items-center gap-2">
             {/* A long file name takes the lines it needs, and keeps its own order in a
                 right-to-left language. */}
@@ -540,7 +552,7 @@ export default function PayloadManagerPanel({
             </div>
           )}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className={`flex flex-wrap items-center gap-2 ${SAVED_ACTIONS}`} data-testid="pm-row-actions">
           {live?.webUrl && (
             <Button
               variant="ghost"
@@ -723,13 +735,13 @@ export default function PayloadManagerPanel({
                 {tr("payloads_search_no_match", { query: q }, `No payloads match "${q}".`)}
               </p>
             )}
-            {shownStored.length > 0 && <ul className="grid gap-1.5">{shownStored.map(row)}</ul>}
+            {shownStored.length > 0 && <ul className={SAVED_LIST}>{shownStored.map(row)}</ul>}
             {shownUsb.length > 0 && (
               <>
                 <h4 className="pt-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
                   {tr("pm_usb_header", { n: onUsb.length }, `On USB · ${onUsb.length}`)}
                 </h4>
-                <ul className="grid gap-1.5">{shownUsb.map(row)}</ul>
+                <ul className={SAVED_LIST}>{shownUsb.map(row)}</ul>
               </>
             )}
           </>
