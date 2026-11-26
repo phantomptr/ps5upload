@@ -1247,9 +1247,9 @@ export interface Volume {
   fs_type: string;
   total_bytes: number;
   free_bytes: number;
-  /** Space deliberately excluded from large-upload capacity (the internal
-   * PS5 allocator hides a fixed reserve from statfs; external filesystems keep
-   * a smaller metadata/activity margin). Present on current payloads. */
+  /** A small working margin left out of what an upload may take (room for metadata and for
+   * other activity on the drive; at most 1 GiB). It is not what the PS5 holds back on internal
+   * storage: that is already out of `free_bytes`, and its growth is in `likely_fits_bytes`. */
   safety_reserve_bytes?: number;
   /** Bytes a new upload may safely allocate after the reserve above. */
   allocatable_bytes?: number;
@@ -2203,10 +2203,14 @@ export async function fetchHwPower(transferAddr: string): Promise<HwPower> {
   return invoke<HwPower>("ps5_hw_power", { addr });
 }
 
-/** "Console Storage" aggregate matching what PS5 Settings shows
- *  (added in 2.2.26). Sums `/user effective + /system_data + /system_ex`
- *  with reserved-space accounting. Distinct from `fsListVolumes` —
- *  that returns per-volume detail; this is the single-line summary. */
+/** The internal drive as its filesystem counts it (`statfs` on `/user`, `/system_data` and
+ *  `/system_ex`; added in 2.2.26). NOT the PS5's Settings > Storage figures: that screen can
+ *  show a smaller drive and much less free space (#944: 175 GB here, 71 GB there, on one 2 TB
+ *  console), by a rule not known here. `user_free_bytes` is `/user`'s free space for a writer, with
+ *  `user_reserved_bytes` (what the filesystem holds back) already left out: never subtract it
+ *  again. `total/free/used_bytes` are the three partitions together, so `free_bytes` counts
+ *  system-partition space nothing can be copied into. Distinct from `fetchVolumes`, which
+ *  returns per-volume detail. */
 export interface HwStorage {
   total_bytes: number;
   free_bytes: number;

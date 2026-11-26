@@ -2,6 +2,8 @@
 // this package, is it already installed, and does it fit. Pure, so the panel
 // stays a view and these stay tested.
 
+import { volumeAllocatableBytes, volumeLikelyFitsBytes, type Volume } from "../api/ps5";
+
 export type Verdict = "ok" | "warn" | "bad" | "unknown";
 
 /** "01.002.000" / "1.2" → [1, 2, 0] for comparison. */
@@ -42,12 +44,14 @@ export function installedCheck(pkgVer: string, installedVer: string | null) {
   return { verdict: "warn" as Verdict, relation: "same" as const };
 }
 
-/** Whether `size` fits in `freeBytes`; unknown when free space can't be read. */
-export function spaceCheck(size: number, freeBytes: number | null) {
-  if (freeBytes == null) return { verdict: "unknown" as Verdict, shortBy: 0 };
-  return size <= freeBytes
-    ? { verdict: "ok" as Verdict, shortBy: 0 }
-    : { verdict: "bad" as Verdict, shortBy: size - freeBytes };
+/** Whether `size` fits in `roomBytes`; unknown when free space can't be read. With
+ *  `likelyBytes` (what is likely to fit, less than the room on internal storage, where the PS5
+ *  holds back more as it writes), a package between the two is "may not fit", not "fits". */
+export function spaceCheck(size: number, roomBytes: number | null, likelyBytes: number | null = null) {
+  if (roomBytes == null) return { verdict: "unknown" as Verdict, shortBy: 0 };
+  if (size > roomBytes) return { verdict: "bad" as Verdict, shortBy: size - roomBytes };
+  if (likelyBytes != null && size > likelyBytes) return { verdict: "warn" as Verdict, shortBy: 0 };
+  return { verdict: "ok" as Verdict, shortBy: 0 };
 }
 
 /** Firmware check that only compares like with like: a PS4 package declares a
@@ -96,12 +100,18 @@ export function installedFromPreflight(
   return { ...installedCheck(pkgVer, ver), installedVer: ver };
 }
 
-/** Free bytes on the roomiest single drive: a package lands on one drive, so
- *  the sum across drives would over-promise. Null when nothing is readable. */
-export function largestFreeBytes(
-  volumes: { free_bytes: number; is_placeholder?: boolean; writable?: boolean }[],
-): number | null {
+/** The room on the roomiest single drive: a package lands on one drive, so the sum across
+ *  drives would over-promise. `room` is what a copy may take (free less a small working
+ *  margin), `likely` what is likely to fit. Not the raw free space: on internal storage that
+ *  said "Fits" for a package the PS5 would run out of room for (#944). Null when nothing is
+ *  readable. */
+export function largestRoom(volumes: readonly Volume[]): { room: number; likely: number } | null {
   const real = volumes.filter((v) => !v.is_placeholder && v.writable !== false);
   if (real.length === 0) return null;
-  return Math.max(...real.map((v) => v.free_bytes));
+  let best: { room: number; likely: number } | null = null;
+  for (const v of real) {
+    const room = volumeAllocatableBytes(v);
+    if (!best || room > best.room) best = { room, likely: volumeLikelyFitsBytes(v) };
+  }
+  return best;
 }

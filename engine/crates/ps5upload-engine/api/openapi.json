@@ -6076,49 +6076,60 @@
         "type": "object"
       },
       "HwStorage": {
-        "description": "\"Console Storage\" aggregate that matches what PS5 Settings shows.\nSums the three partitions Sony's UI counts (`/user effective +\n/system_data + /system_ex`) and accounts for the reserved-pool slice\nthe FS keeps for root. Per-partition fields are also surfaced for\nthe diagnostics card. Distinct from `fs_list_volumes`: that returns\nper-volume detail; this is the single-line summary.",
+        "description": "The console's internal storage as its filesystem counts it: `statfs` on `/user`,\n`/system_data` and `/system_ex`, nothing else.\n\n**These are not the figures of the PS5's own Settings > Storage screen** (#944). On one\n2 TB console this reported 175.5 GB in `user_free_bytes` and a 1.995 TB `/user`, while its\nStorage screen showed 71.35 GB free of 1.89 TB. How the console arrives at its figures is\nnot known to this API, and nothing here models it. Read these as what the filesystem says,\nand expect the console's screen to show less.\n\nWhat a copy can count on is `/api/ps5/volumes` (`allocatable_bytes`, `likely_fits_bytes`),\nwhich starts from the same `user_free_bytes`.\n\nDistinct from `fs_list_volumes`: that returns per-volume detail; this is the summary of the\ninternal drive with its partitions.",
         "properties": {
           "free_bytes": {
+            "description": "Free on the three partitions together. Includes the system partitions' own free space,\nwhich nothing can be copied into: for room on the drive read `user_free_bytes`.",
             "minimum": 0,
             "type": "integer"
           },
           "reserved_bytes": {
+            "description": "The same number as `user_reserved_bytes` (the system partitions' are not counted).",
             "minimum": 0,
             "type": "integer"
           },
           "system_data_free_bytes": {
+            "description": "Free on `/system_data` (`f_bavail`).",
             "minimum": 0,
             "type": "integer"
           },
           "system_data_total_bytes": {
+            "description": "Size of `/system_data`.",
             "minimum": 0,
             "type": "integer"
           },
           "system_ex_free_bytes": {
+            "description": "Free on `/system_ex` (`f_bavail`).",
             "minimum": 0,
             "type": "integer"
           },
           "system_ex_total_bytes": {
+            "description": "Size of `/system_ex`; 0 when the firmware has no such mount.",
             "minimum": 0,
             "type": "integer"
           },
           "total_bytes": {
+            "description": "Size of the three partitions together (`user` + `system_data` + `system_ex`).",
             "minimum": 0,
             "type": "integer"
           },
           "used_bytes": {
+            "description": "`total_bytes - free_bytes`. Includes what the filesystem holds back (`reserved_bytes`),\nnot only stored data.",
             "minimum": 0,
             "type": "integer"
           },
           "user_free_bytes": {
+            "description": "Free on `/user` for a writer (`f_bavail`); 0 once the drive is written into what it\nholds back. `user_reserved_bytes` is already left out of it: never subtract it again.",
             "minimum": 0,
             "type": "integer"
           },
           "user_reserved_bytes": {
+            "description": "What the filesystem holds back on `/user` (`f_bfree - f_bavail`): free blocks that are\nnot offered to a writer. Not a fixed pool: measured on two consoles it grows by about a\nfifth of what is written and comes back when data is deleted.",
             "minimum": 0,
             "type": "integer"
           },
           "user_total_bytes": {
+            "description": "Size of `/user`, the partition games and files are on (`/data` is a folder of it).",
             "minimum": 0,
             "type": "integer"
           }
@@ -37606,7 +37617,7 @@
     },
     "/api/ps5/hw/storage": {
       "get": {
-        "description": "\"Console Storage\" aggregate. Same shape PS5 Settings shows: total\nacross `/user effective + /system_data + /system_ex`, free across\nthe same set, plus the per-partition breakdown for diagnostics.",
+        "description": "`statfs` counters for `/user`, `/system_data` and `/system_ex`. These are not the figures of the PS5's Settings > Storage screen, which can show a smaller drive and less free space. `user_free_bytes` already leaves out `user_reserved_bytes`; do not subtract it again. For how much a copy can take, read `allocatable_bytes` and `likely_fits_bytes` in `/api/ps5/volumes`.",
         "parameters": [
           {
             "in": "query",
@@ -37648,7 +37659,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "The console's internal storage, as PS5 Settings counts it",
+        "summary": "The console's internal storage, as its filesystem counts it",
         "tags": [
           "hardware"
         ],

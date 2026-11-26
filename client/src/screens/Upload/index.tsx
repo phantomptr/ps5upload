@@ -4126,22 +4126,22 @@ function DestinationCard({
     availableVolumes.length > 0
       ? availableVolumes.map((v) => v.path).sort()
       : [...FALLBACK_VOLUMES].sort();
-  // Build a {path → usable-bytes} map so we can show "/mnt/ext1 (450 GB
-  // usable)" inline. Only when we actually got the live list back.
+  // Build a {path → likely-to-fit bytes} map so we can show "/mnt/ext1 (room for
+  // about 450 GiB)" inline. Only when we actually got the live list back.
   //
-  // Deliberately the ALLOCATABLE figure, not raw free_bytes. On internal
-  // storage the PS5 holds back a large content-allocator reserve that
-  // statfs never reflects, so free_bytes overstates what an upload can
-  // actually use — a FW 12.00 report showed /data advertising 143 GB free
-  // while only ~63 GB was writable, and the 118 GiB upload it green-lit
-  // died at 53% after 17 minutes. Showing the number that actually governs
-  // is what lets someone pick a workable destination up front.
+  // Deliberately what is LIKELY TO FIT, not raw free_bytes. On internal storage
+  // the PS5 holds back more as data is written, so free_bytes overstates what an
+  // upload can use: a FW 12.00 report showed /data advertising 143 GB free while
+  // only ~63 GB was writable, and the 118 GiB upload it green-lit died at 53%
+  // after 17 minutes. It is an estimate ("about"): the PS5's own Storage screen
+  // can show less still (#944), and nothing here knows that figure.
   const usableBytesByPath = new Map<string, number>();
   for (const v of availableVolumes) {
     // What is likely to fit, which on internal storage is less than what is allocatable.
     usableBytesByPath.set(v.path, volumeLikelyFitsBytes(v));
   }
-  const formatUsable = (bytes: number) => `${formatBytes(bytes)} usable`;
+  const formatUsable = (bytes: number) =>
+    tr("upload_dest_room", { size: formatBytes(bytes) }, "room for about {size}");
 
   return (
     <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-3 p-4">

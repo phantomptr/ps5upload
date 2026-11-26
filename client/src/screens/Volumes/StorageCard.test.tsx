@@ -55,8 +55,45 @@ describe("StorageCard — default package drive", () => {
         onUseForPackages={() => {}}
       />,
     );
-    expect(withKept).toContain("61.6 GiB kept by the console for its own use");
-    expect(html(vol("/data", { fs_type: "nullfs" }), null)).not.toContain("kept by the console");
+    expect(withKept).toContain(
+      "61.6 GiB is held back by the PS5 for itself. It is not free space, and it grows as data is written.",
+    );
+    expect(html(vol("/data", { fs_type: "nullfs" }), null)).not.toContain("held back by the PS5");
+  });
+
+  // #944: a 2 TB console with 175 GB free and 308 GB held back. Free is shown as it is (the
+  // held-back space is already out of it), what is likely to fit is said for what it is, and the
+  // card does not claim to match the PS5's own Storage screen.
+  it("says which number means room, and that the PS5's own screen can show less", () => {
+    const internal = vol("/data", {
+      fs_type: "nullfs",
+      total_bytes: 1995416338432,
+      free_bytes: 175467069440,
+      safety_reserve_bytes: 1073741824,
+      allocatable_bytes: 174393327616,
+      likely_fits_bytes: 144432988160,
+    });
+    const out = renderToStaticMarkup(
+      <StorageCard
+        volume={internal}
+        packageDrive={null}
+        consoleKeptBytes={307929022464}
+        onUseForPackages={() => {}}
+      />,
+    );
+    expect(out).toContain("163 GiB");
+    expect(out).toContain("287 GiB is held back by the PS5 for itself.");
+    expect(out).toContain("About 135 GiB of new data is likely to fit here.");
+    expect(out).toContain("The PS5&#x27;s own Storage screen can show less free space.");
+    // GiB throughout: no decimal GB beside it.
+    expect(out).not.toMatch(/\d GB\b/);
+    // No longer worded as if the gap were all held back by the system.
+    expect(out).not.toContain("headroom");
+  });
+
+  it("says nothing about the PS5's screen on a drive that is not internal storage", () => {
+    const out = html(vol("/mnt/ext0", { allocatable_bytes: 300e9, likely_fits_bytes: 300e9 }), null);
+    expect(out).not.toContain("Storage screen");
   });
 
   it("offers nothing on a read-only drive", () => {

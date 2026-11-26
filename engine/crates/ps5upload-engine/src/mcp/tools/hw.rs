@@ -45,9 +45,10 @@ pub(super) fn tools() -> Vec<ToolDef> {
         ToolDef {
             name: "hw_storage",
             title: "Console storage",
-            description: "A console's internal storage as PS5 Settings counts it: total, free and \
-                          used bytes, with each partition. External drives are listed by the API's \
-                          /api/ps5/volumes.",
+            description: "A console's internal storage as its filesystem counts it: total, free, \
+                          used and held-back bytes, with each partition. The PS5's own Settings > \
+                          Storage screen can show less free space than user_free_bytes. External \
+                          drives are listed by the API's /api/ps5/volumes.",
             kind: Kind::Read,
             schema: object(json!({ "console": console_optional() }), &[]),
             run: |ctx, args| Box::pin(storage(ctx, args)),

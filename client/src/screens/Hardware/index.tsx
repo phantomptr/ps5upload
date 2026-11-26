@@ -27,6 +27,8 @@ import {
   Spinner,
 } from "../../components";
 import { useTr } from "../../state/lang";
+import { formatBytes as formatSize } from "../../lib/format";
+import { consoleStorageRows } from "./consoleStorage";
 import { useConfirm } from "../../components/ConfirmDialog";
 import PowerTelemetryPanel from "./PowerTelemetryPanel";
 import GameFpsPanel from "./GameFpsPanel";
@@ -150,17 +152,6 @@ function formatKernelFw(v: number): string {
   return `${major.toString(16).padStart(2, "0")}.${minor
     .toString(16)
     .padStart(2, "0")}.${point.toString(16).padStart(4, "0")}`;
-}
-
-/** Friendlier "Console Storage" formatter that mirrors the GB units PS5
- *  Settings shows. Uses GB (decimal 10^9) deliberately — Sony's UI uses
- *  GB even though the underlying counts are GiB-sized; keep parity so
- *  users can compare to what their PS5 reports. */
-function formatStorageGB(n: number): string {
-  if (n <= 0) return "—";
-  const gb = n / 1_000_000_000;
-  if (gb >= 1000) return `${(gb / 1000).toFixed(2)} TB`;
-  return `${gb.toFixed(0)} GB`;
 }
 
 function formatUptime(sec: number): string {
@@ -834,36 +825,7 @@ export default function HardwareScreen() {
               Prefixed key — see the note on FanThresholdCard below. */}
           <FwSpoofCard key={`fwspoof-${host ?? ""}`} host={host ?? ""} payloadUp={payloadStatus === "up"} />
 
-          {storage && (
-            <SensorCard
-              icon={<HardDrive size={14} />}
-              title={tr("hardware_storage", undefined, "Console Storage")}
-            >
-              <StatRow
-                label={tr("hw_storage_total", undefined, "Total")}
-                value={formatStorageGB(storage.total_bytes)}
-              />
-              <StatRow
-                label={tr("hw_storage_free", undefined, "Free")}
-                value={formatStorageGB(storage.free_bytes)}
-              />
-              <StatRow
-                label={tr("hw_storage_used", undefined, "Used")}
-                value={formatStorageGB(storage.used_bytes)}
-              />
-              {storage.reserved_bytes > 0 && (
-                <StatRow
-                  label={tr("hw_storage_reserved", undefined, "Reserved")}
-                  value={formatStorageGB(storage.reserved_bytes)}
-                  hint={tr(
-                    "hw_storage_reserved_hint",
-                    undefined,
-                    "FS-kept slice not counted as free",
-                  )}
-                />
-              )}
-            </SensorCard>
-          )}
+          {storage && <ConsoleStorageCard storage={storage} />}
 
           {/* Drive sensors — USB / extended storage temperatures and
               capacity via SCSI LOG SENSE. Read on demand alongside temps
@@ -889,12 +851,12 @@ export default function HardwareScreen() {
                             ? tr("hw_drive_no_temp", undefined, "No temp sensor")
                             : "—"
                     }
-                    hint={d.size_bytes > 0 ? formatStorageGB(d.size_bytes) : undefined}
+                    hint={d.size_bytes > 0 ? formatSize(d.size_bytes) : undefined}
                   />
                   {d.fs_total_bytes != null && d.fs_total_bytes > 0 && (
                     <StatRow
                       label={tr("hw_drive_free", undefined, "Free")}
-                      value={formatStorageGB(d.fs_free_bytes ?? 0)}
+                      value={formatSize(d.fs_free_bytes ?? 0)}
                     />
                   )}
                 </div>
@@ -970,14 +932,54 @@ export default function HardwareScreen() {
   );
 }
 
+/** The internal drive as its filesystem counts it, in the units every other screen uses.
+ *
+ *  It used to be in decimal GB "to compare with the PS5's Settings", next to GiB everywhere
+ *  else in the app: the same free space read 175 GB here and 163 GiB on Volumes. And the
+ *  comparison does not hold (#944): the PS5's Storage screen can show a smaller drive and less
+ *  free. The card says so instead of inviting the comparison. */
+export function ConsoleStorageCard({ storage }: { storage: HwStorage }) {
+  const tr = useTr();
+  const rows = consoleStorageRows(storage);
+  return (
+    <SensorCard
+      icon={<HardDrive size={14} />}
+      title={tr("hardware_storage", undefined, "Console Storage")}
+      footer={
+        <p className="mt-2 text-xs leading-snug text-[var(--color-muted)]" data-testid="hw-storage-note">
+          {tr(
+            "hw_storage_note",
+            undefined,
+            "As the drive's filesystem counts it. The PS5's own Storage screen can show less free space: it holds more back for the system.",
+          )}
+        </p>
+      }
+    >
+      <StatRow label={tr("hw_storage_total", undefined, "Total")} value={formatSize(rows.totalBytes)} />
+      <StatRow label={tr("hw_storage_used", undefined, "Used")} value={formatSize(rows.usedBytes)} />
+      {rows.heldBackBytes > 0 && (
+        <StatRow
+          label={tr("hw_storage_held_back", undefined, "Held back by the PS5")}
+          value={formatSize(rows.heldBackBytes)}
+          hint={tr("hw_storage_held_back_hint", undefined, "Counted in Used. Not free space.")}
+        />
+      )}
+      <StatRow label={tr("hw_storage_free", undefined, "Free")} value={formatSize(rows.freeBytes)} />
+    </SensorCard>
+  );
+}
+
 function SensorCard({
   icon,
   title,
   children,
+  footer,
 }: {
   icon: React.ReactNode;
   title: string;
   children: React.ReactNode;
+  /** Under the rows, outside the list (a note on what they mean). */
+  footer?: React.ReactNode;
 }) {
   return (
     <section className="surface-panel min-w-0 p-5 sm:p-6">
@@ -988,6 +990,7 @@ function SensorCard({
         <span>{title}</span>
       </header>
       <dl className="flex flex-col">{children}</dl>
+      {footer}
     </section>
   );
 }

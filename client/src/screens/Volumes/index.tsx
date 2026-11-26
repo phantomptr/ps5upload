@@ -446,7 +446,8 @@ export function StorageCard({
   onFreeUp,
 }: {
   volume: Volume;
-  /** The console's own reserved pool on this drive (internal storage only), as it reports it. */
+  /** What the console holds back on this drive now (internal storage only): free blocks its
+   *  filesystem does not offer a writer. Already left out of `free_bytes`. */
   consoleKeptBytes?: number | null;
   /** This console's chosen package drive; null = internal storage. */
   packageDrive: string | null;
@@ -462,7 +463,7 @@ export function StorageCard({
     ? isInternalVolume(packageDrive)
     : packageDrive === v.path.replace(/\/+$/, "");
   // What is likely to fit: on internal storage less than free, since the PS5 holds back
-  // more as data is written. The line under the bar shows it with the difference.
+  // more as data is written. The line under the bar says it.
   const uploadSafeBytes =
     v.allocatable_bytes === undefined ? undefined : volumeLikelyFitsBytes(v);
   const pct =
@@ -510,32 +511,37 @@ export function StorageCard({
               {tr("volumes_pct_used_storage", undefined, "% used")}
             </span>
           </div>
+          {/* Three figures on internal storage, each said for what it is (#944): what the PS5
+              holds back now (already left out of "free": never taken off again), what is
+              likely to fit, and that the PS5's own screen can show less than any of them. */}
           {consoleKeptBytes !== null && consoleKeptBytes > 0 && (
-            <div className="mb-2 text-xs text-[var(--color-muted)]">
+            <div className="mb-2 text-xs text-[var(--color-muted)]" data-testid="volumes-held-back">
               {tr(
-                "volumes_kept_by_console",
+                "volumes_held_back",
                 { kept: formatBytes(consoleKeptBytes) },
-                "{kept} kept by the console for its own use",
+                "{kept} is held back by the PS5 for itself. It is not free space, and it grows as data is written.",
               )}
             </div>
           )}
           {uploadSafeBytes !== undefined &&
             uploadSafeBytes < v.free_bytes && (
-              <div className="mb-2 text-xs text-[var(--color-muted)]">
+              <div className="mb-2 text-xs text-[var(--color-muted)]" data-testid="volumes-likely-fits">
                 {tr(
-                  "volumes_upload_safe_capacity",
-                  {
-                    safe: formatBytes(uploadSafeBytes),
-                    // Everything between "free" and "likely to fit": the working margin,
-                    // and on internal storage what the PS5 holds back as it writes.
-                    reserve: formatBytes(
-                      Math.max(0, v.free_bytes - uploadSafeBytes),
-                    ),
-                  },
-                  "{safe} safe for new uploads · {reserve} kept as system/filesystem headroom",
+                  "volumes_likely_fits",
+                  { safe: formatBytes(uploadSafeBytes) },
+                  "About {safe} of new data is likely to fit here.",
                 )}
               </div>
             )}
+          {isInternalVolume(v.path) && (
+            <div className="mb-2 text-xs text-[var(--color-muted)]" data-testid="volumes-ps5-shows-less">
+              {tr(
+                "volumes_ps5_shows_less",
+                undefined,
+                "The PS5's own Storage screen can show less free space. When the two differ, go by the smaller one.",
+              )}
+            </div>
+          )}
           <ProgressBar
             size="sm"
             value={pct / 100}

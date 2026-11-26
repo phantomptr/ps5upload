@@ -509,13 +509,16 @@ pub fn run_health_scan(addr: &str, engine_version: &str) -> HealthReport {
     // ── storage ─────────────────────────────────────────────────────
     match crate::hw::hw_storage(addr) {
         Ok(st) => {
-            let status = classify_free_space(st.free_bytes, st.total_bytes);
-            let pct = free_pct(st.free_bytes, st.total_bytes);
+            // The partition content is on, not the three-partition totals: those count the
+            // system partitions' own free space, so a full console read as having room (#944).
+            let (free_bytes, total_bytes) = st.content_space();
+            let status = classify_free_space(free_bytes, total_bytes);
+            let pct = free_pct(free_bytes, total_bytes);
             let detail = match pct {
                 Some(pct) => format!(
                     "{} free of {} ({pct:.1}%).",
-                    human_bytes(st.free_bytes),
-                    human_bytes(st.total_bytes)
+                    human_bytes(free_bytes),
+                    human_bytes(total_bytes)
                 ),
                 None => "The console did not report a storage size.".to_string(),
             };
@@ -523,8 +526,8 @@ pub fn run_health_scan(addr: &str, engine_version: &str) -> HealthReport {
                 Some(pct) => (
                     "storage",
                     vec![
-                        ("free", human_bytes(st.free_bytes)),
-                        ("total", human_bytes(st.total_bytes)),
+                        ("free", human_bytes(free_bytes)),
+                        ("total", human_bytes(total_bytes)),
                         ("pct", format!("{pct:.1}")),
                     ],
                 ),

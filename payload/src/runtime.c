@@ -2052,11 +2052,11 @@ static int handle_fs_list_volumes(runtime_state_t *state) {
             avail > safety_reserve ? avail - safety_reserve : 0;
         /* Reserve model: total is the FULL partition (f_blocks×f_bsize) and
          * the UFS root reserve (bfree-bavail) is left to fall into `used`
-         * (used = total - avail). This matches the PS5 Settings → Storage
-         * screen, which was confirmed against a live console to count the
-         * reserve as used rather than shaving it off the headline total.
+         * (used = total - avail). These are the filesystem's counters, not
+         * the PS5 Settings → Storage figures, which can show a smaller drive
+         * and much less free space (#944).
          * (An earlier build published total = raw - reserve here, which on a
-         * 2 TB Pro understated the /data total by ~292 GB / 15% vs Settings.)
+         * 2 TB Pro understated the /data total by ~292 GB / 15%.)
          * bfs/exfat report bavail≈bfree so their reserve is ~0 and this is a
          * no-op for USB/M.2 drives. */
         int writable   = (mnts[i].f_flags & MNT_RDONLY) ? 0 : 1;

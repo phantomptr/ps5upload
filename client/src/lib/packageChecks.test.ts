@@ -25,9 +25,14 @@ describe("package checks", () => {
     expect(spaceCheck(100, 400).verdict).toBe("ok");
     expect(spaceCheck(100, null).verdict).toBe("unknown");
   });
+  it("space: between what is likely to fit and the room, it may not fit (#944)", () => {
+    expect(spaceCheck(100, 120, 90)).toEqual({ verdict: "warn", shortBy: 0 });
+    expect(spaceCheck(80, 120, 90).verdict).toBe("ok");
+    expect(spaceCheck(130, 120, 90)).toEqual({ verdict: "bad", shortBy: 10 });
+  });
 });
 
-import { installedFromPreflight, largestFreeBytes, platformFirmwareCheck } from "./packageChecks";
+import { installedFromPreflight, largestRoom, platformFirmwareCheck } from "./packageChecks";
 
 describe("review fixes", () => {
   it("never compares a PS4 package's firmware with the PS5's", () => {
@@ -83,8 +88,27 @@ describe("review fixes", () => {
   it("space is measured against the roomiest single drive, not the sum", () => {
     const v = (path: string, free: number, extra: Record<string, unknown> = {}) =>
       ({ path, free_bytes: free, total_bytes: free * 2, writable: true, fs_type: "x", ...extra }) as never;
-    expect(largestFreeBytes([v("/data", 100), v("/mnt/ext0", 300)])).toBe(300);
-    expect(largestFreeBytes([v("/data", 100), v("/mnt/x", 900, { is_placeholder: true })])).toBe(100);
-    expect(largestFreeBytes([])).toBeNull();
+    expect(largestRoom([v("/data", 100), v("/mnt/ext0", 300)])?.room).toBe(300);
+    expect(largestRoom([v("/data", 100), v("/mnt/x", 900, { is_placeholder: true })])?.room).toBe(100);
+    expect(largestRoom([])).toBeNull();
+  });
+
+  it("space on internal storage is what a copy can take, not the raw free space (#944)", () => {
+    const GIB = 1024 ** 3;
+    // The 2 TB console of the report: 163 GiB free, of which about 135 GiB is likely to fit.
+    const data = {
+      path: "/data",
+      fs_type: "nullfs",
+      total_bytes: 1995416338432,
+      free_bytes: 175467069440,
+      writable: true,
+      safety_reserve_bytes: GIB,
+      allocatable_bytes: 174393327616,
+      likely_fits_bytes: 144432988160,
+    };
+    const room = largestRoom([data]);
+    expect(room).toEqual({ room: 174393327616, likely: 144432988160 });
+    // A 150 GiB package: it used to read "Fits on the target drive".
+    expect(spaceCheck(150 * GIB, room!.room, room!.likely).verdict).toBe("warn");
   });
 });

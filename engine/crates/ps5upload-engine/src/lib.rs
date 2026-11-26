@@ -4236,9 +4236,9 @@ async fn ps5_smp_meta_stats_route(
     }
 }
 
-/// "Console Storage" aggregate. Same shape PS5 Settings shows: total
-/// across `/user effective + /system_data + /system_ex`, free across
-/// the same set, plus the per-partition breakdown for diagnostics.
+/// The internal drive as its filesystem counts it (`statfs` on `/user`, `/system_data` and
+/// `/system_ex`), with each partition. Not the PS5's Settings > Storage figures: that screen
+/// can show less free space (see `HwStorage`).
 async fn ps5_hw_storage(
     State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
