@@ -9432,6 +9432,7 @@ rp_users_add_hint: "Um auch als anderer Benutzer zu spielen, melde dich auf der 
 "two_panes_move_body": "Jeder Eintrag wird zuerst kopiert. Das Original wird erst gelöscht, wenn seine Kopie vollständig da ist.",
 "two_panes_move_ok": "Verschieben",
 "two_panes_move_ask": "Die markierten Einträge verschieben?",
+"two_panes_move_files_only": "Verschieben nur für Dateien: Die App kann nicht jede Datei eines kopierten Ordners prüfen. Ordner kopieren.",
 "two_panes_moved": "{count} Einträge nach {place} verschoben",
 "two_panes_unverified": "Kopiert, aber das Original bleibt: Die Kopie ließ sich nicht prüfen",
 "two_panes_not_removed": "Kopiert, aber das Original ließ sich nicht löschen",

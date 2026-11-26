@@ -9377,6 +9377,7 @@ rp_users_add_hint: "Per giocare anche come un altro utente, accedi con quell’u
 "two_panes_move_body": "Ogni elemento viene prima copiato. L'originale viene eliminato solo quando la copia è completa.",
 "two_panes_move_ok": "Sposta",
 "two_panes_move_ask": "Spostare gli elementi spuntati?",
+"two_panes_move_files_only": "Qui si spostano solo file: l'app non può controllare ogni file di una cartella copiata. Copia le cartelle.",
 "two_panes_moved": "{count} elementi spostati in {place}",
 "two_panes_unverified": "Copiato, ma l'originale è stato tenuto: non è stato possibile controllare la copia",
 "two_panes_not_removed": "Copiato, ma non è stato possibile eliminare l'originale",

@@ -9716,6 +9716,7 @@ rp_users_add_hint: "Ha másik felhasználóként is játszanál, jelentkezz be a
 "two_panes_move_body": "Minden elem előbb átmásolódik. Az eredeti csak akkor törlődik, ha a másolata teljesen ott van.",
 "two_panes_move_ok": "Áthelyezés",
 "two_panes_move_ask": "Áthelyezed a bejelölt elemeket?",
+"two_panes_move_files_only": "Itt csak fájl helyezhető át: az alkalmazás nem tudja ellenőrizni egy másolt mappa minden fájlját. Mappát másolj.",
 "two_panes_moved": "{count} elem áthelyezve ide: {place}",
 "two_panes_unverified": "Átmásolva, de az eredeti megmaradt: a másolatot nem sikerült ellenőrizni",
 "two_panes_not_removed": "Átmásolva, de az eredetit nem sikerült törölni",

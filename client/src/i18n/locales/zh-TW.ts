@@ -9377,6 +9377,7 @@ rp_users_add_hint: "若也想以其他使用者遊玩，請在 PS5 上登入該�
 "two_panes_move_body": "每個項目會先複製。只有副本完整到達後，才會刪除原件。",
 "two_panes_move_ok": "移動",
 "two_panes_move_ask": "移動勾選的項目？",
+"two_panes_move_files_only": "這裡只能移動檔案：應用程式無法檢查已複製資料夾中的每個檔案。資料夾請複製。",
 "two_panes_moved": "已將 {count} 個項目移動到 {place}",
 "two_panes_unverified": "已複製，但保留了原件：無法檢查副本",
 "two_panes_not_removed": "已複製，但無法刪除原件",

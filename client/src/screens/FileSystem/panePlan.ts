@@ -80,18 +80,33 @@ export type PaneBlock =
   /** Nothing in the app deletes files on this computer, so it can't move from it. */
   | "no-delete-computer"
   /** Nothing in the app deletes files on a saved server, so it can't move from one. */
-  | "no-delete-server";
+  | "no-delete-server"
+  /** A folder's copy here can't be checked file by file before its original goes: files only. */
+  | "files-only";
 
-export type PaneRoute = { ok: true; via: PaneVia } | { ok: false; block: PaneBlock };
+export type PaneRoute =
+  /** `engineMoves`: the engine itself checks the copy and deletes the source (a move to a
+   *  saved server, #953); otherwise a move is copy, check here, then delete. */
+  | { ok: true; via: PaneVia; engineMoves?: boolean }
+  | { ok: false; block: PaneBlock };
 
 /** The operation `op` toward `toward` uses with the other pane on `place`, or why there is none.
- *  A move is a copy and then the source deleted, so it is offered only where the app can delete
- *  the source: the PS5 and another console, never this computer or a saved server. */
-export function paneRoute(place: Place, toward: Toward, op: PaneOp): PaneRoute {
+ *  `folders`: the items to send include a folder.
+ *
+ *  A move deletes the source only after its copy was checked whole. Never from this computer or
+ *  a saved server: the app deletes files on neither. To a saved server the engine checks every
+ *  file and folder and deletes the source itself. To this computer and between consoles the app
+ *  checks a file by its size, but has no cheap way to check every file of a folder, so a folder
+ *  there is copied, not moved. */
+export function paneRoute(place: Place, toward: Toward, op: PaneOp, folders = false): PaneRoute {
+  if (op === "move" && toward === "ps5" && place.kind !== "console")
+    return { ok: false, block: place.kind === "server" ? "no-delete-server" : "no-delete-computer" };
+  if (op === "move" && folders && place.kind !== "server") return { ok: false, block: "files-only" };
   if (place.kind === "console") return { ok: true, via: "console-send" };
-  if (toward === "other") return { ok: true, via: place.kind === "server" ? "download-server" : "download" };
-  if (op === "move") return { ok: false, block: place.kind === "server" ? "no-delete-server" : "no-delete-computer" };
-  return { ok: true, via: "upload" };
+  if (toward === "ps5") return { ok: true, via: "upload" };
+  if (place.kind === "server")
+    return op === "move" ? { ok: true, via: "download-server", engineMoves: true } : { ok: true, via: "download-server" };
+  return { ok: true, via: "download" };
 }
 
 /** How one copy ended: landed, failed, or stopped by the user (nothing after it runs). */

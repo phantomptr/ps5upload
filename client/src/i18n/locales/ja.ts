@@ -9443,6 +9443,7 @@ rp_users_add_hint: "別のユーザーでもプレイするには、PS5 でそ�
 "two_panes_move_body": "各項目はまずコピーされます。元の項目は、コピーがすべて届いてから削除されます。",
 "two_panes_move_ok": "移動",
 "two_panes_move_ask": "チェックした項目を移動しますか？",
+"two_panes_move_files_only": "ここで移動できるのはファイルだけです：コピーしたフォルダーの全ファイルは確認できません。フォルダーはコピーしてください。",
 "two_panes_moved": "{count} 個の項目を{place}に移動しました",
 "two_panes_unverified": "コピーしましたが、元の項目は残しました：コピーを確認できませんでした",
 "two_panes_not_removed": "コピーしましたが、元の項目を削除できませんでした",

@@ -9661,6 +9661,7 @@ rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim 
 "two_panes_move_body": "Każdy element jest najpierw kopiowany. Oryginał jest usuwany dopiero, gdy jego kopia jest kompletna.",
 "two_panes_move_ok": "Przenieś",
 "two_panes_move_ask": "Przenieść zaznaczone elementy?",
+"two_panes_move_files_only": "Tu przenoszą się tylko pliki: aplikacja nie sprawdzi każdego pliku skopiowanego folderu. Foldery kopiuj.",
 "two_panes_moved": "Przeniesiono elementy ({count}) do: {place}",
 "two_panes_unverified": "Skopiowano, ale oryginał zostaje: nie udało się sprawdzić kopii",
 "two_panes_not_removed": "Skopiowano, ale nie udało się usunąć oryginału",

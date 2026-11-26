@@ -9426,6 +9426,7 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "two_panes_move_body": "Mỗi mục được sao chép trước. Bản gốc chỉ bị xóa khi bản sao đã có đầy đủ.",
 "two_panes_move_ok": "Di chuyển",
 "two_panes_move_ask": "Di chuyển các mục đã chọn?",
+"two_panes_move_files_only": "Ở đây chỉ di chuyển được tệp: ứng dụng không thể kiểm tra từng tệp của thư mục đã sao chép. Hãy sao chép thư mục.",
 "two_panes_moved": "Đã di chuyển {count} mục sang {place}",
 "two_panes_unverified": "Đã sao chép, nhưng giữ lại bản gốc: không kiểm tra được bản sao",
 "two_panes_not_removed": "Đã sao chép, nhưng không xóa được bản gốc",

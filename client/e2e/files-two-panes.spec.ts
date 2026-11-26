@@ -93,14 +93,16 @@ function fakeEngine() {
           };
         }
         if (path === "/api/transfer/download") {
-          const body = req.postDataJSON() as { src_path: string; dest_dir: string };
+          const body = req.postDataJSON() as { src_path: string; dest_dir: string; remove_source?: boolean };
           const id = `dl${++n}`;
-          log.push(`download ${body.src_path} -> ${body.dest_dir}`);
-          const { e } = entryAt(body.src_path);
+          log.push(`download ${body.src_path} -> ${body.dest_dir}${body.remove_source ? " (engine move)" : ""}`);
+          const { dir: srcDir, e } = entryAt(body.src_path);
           const landIt = () => {
             if (!e) return;
             if (body.dest_dir.startsWith("remote://nas")) land(nas, "/" + body.dest_dir.replace(/^remote:\/\/nas\/?/, ""), e);
             else land(pc, body.dest_dir, e);
+            // The engine's move (#953) deletes the source itself once the copy checked out.
+            if (body.remove_source) ps5[srcDir] = (ps5[srcDir] ?? []).filter((x) => x.name !== e.name);
           };
           jobs[id] = { status: state.download === "fail" ? "failed" : state.download === "hold" ? "running" : "done", land: landIt };
           if (jobs[id].status === "done") landIt();
@@ -269,6 +271,55 @@ test.describe("transfers", () => {
       "delete /data/notes.txt",
     ]);
     await expect(row(main, "notes.txt")).toHaveCount(0, { timeout: 20_000 });
+    await expect(otherRow(page, "notes.txt")).toBeVisible();
+  });
+
+  test("a ticked folder can't Move to this computer (Copy only), and says why", async ({ page }) => {
+    const { main } = await openFiles(page, { twoPanes: true });
+    await expect(otherRow(page, "patch.pkg")).toBeVisible();
+    await row(main, "notes.txt").getByRole("checkbox").check();
+    await expect(page.getByTestId("two-panes-move-other")).toBeEnabled();
+    await row(main, "homebrew").getByRole("checkbox").check();
+    await expect(page.getByTestId("two-panes-move-other")).toBeDisabled();
+    await expect(page.getByTestId("two-panes-copy-other")).toBeEnabled();
+    await expect(page.getByTestId("two-panes-actions")).toContainText("Move takes files only here");
+    // The PS5 side's selection bar is narrower than the window: its actions wrap, none cut or
+    // over another.
+    const boxes = await main
+      .getByTestId("fs-selection-actions")
+      .locator(":scope > button")
+      .evaluateAll((els) =>
+        els.map((el) => {
+          const r = el.getBoundingClientRect();
+          return { l: r.left, r: r.right, t: r.top, b: r.bottom, cut: el.scrollWidth > el.clientWidth + 1 };
+        }),
+      );
+    expect(boxes.filter((b) => b.cut)).toEqual([]);
+    for (let i = 0; i < boxes.length; i++)
+      for (let j = i + 1; j < boxes.length; j++) {
+        const [a, b] = [boxes[i], boxes[j]];
+        const overlap = a.l < b.r - 1 && b.l < a.r - 1 && a.t < b.b - 1 && b.t < a.b - 1;
+        expect(overlap, `buttons ${i} and ${j} overlap`).toBe(false);
+      }
+    await shot(page, "folder-copy-only");
+  });
+
+  test("Move PS5 → saved server is the engine's own move: files and folders, no delete from the app", async ({ page }) => {
+    const { main, engine } = await openFiles(page, { twoPanes: true });
+    await other(page).getByTestId("two-panes-place").selectOption({ label: "NAS" });
+    await expect(otherRow(page, "backups")).toBeVisible();
+    await row(main, "homebrew").getByRole("checkbox").check();
+    await row(main, "notes.txt").getByRole("checkbox").check();
+    await expect(page.getByTestId("two-panes-move-other")).toBeEnabled();
+    await page.getByTestId("two-panes-move-other").click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Move", exact: true }).click();
+    await expect.poll(() => engine.log, { timeout: 20_000 }).toEqual([
+      "download /data/homebrew -> remote://nas (engine move)",
+      "download /data/notes.txt -> remote://nas (engine move)",
+    ]);
+    await expect(row(main, "notes.txt")).toHaveCount(0, { timeout: 20_000 });
+    await expect(row(main, "homebrew")).toHaveCount(0);
+    await expect(otherRow(page, "homebrew")).toBeVisible();
     await expect(otherRow(page, "notes.txt")).toBeVisible();
   });
 

@@ -9441,6 +9441,7 @@ rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사�
 "two_panes_move_body": "각 항목을 먼저 복사합니다. 사본이 완전히 도착한 뒤에만 원본을 지웁니다.",
 "two_panes_move_ok": "이동",
 "two_panes_move_ask": "선택한 항목을 이동할까요?",
+"two_panes_move_files_only": "여기서는 파일만 이동할 수 있습니다: 앱이 복사한 폴더의 모든 파일을 확인할 수 없습니다. 폴더는 복사하세요.",
 "two_panes_moved": "{count}개 항목을 {place}(으)로 옮겼습니다",
 "two_panes_unverified": "복사했지만 원본은 남겨 두었습니다: 사본을 확인할 수 없었습니다",
 "two_panes_not_removed": "복사했지만 원본을 지울 수 없었습니다",

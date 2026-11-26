@@ -9439,6 +9439,7 @@ rp_users_add_hint: "Para jogar também como outro usuário, entre com esse usuá
 "two_panes_move_body": "Cada item é copiado primeiro. O original só é apagado depois que a cópia estiver completa.",
 "two_panes_move_ok": "Mover",
 "two_panes_move_ask": "Mover os itens marcados?",
+"two_panes_move_files_only": "Aqui só arquivos são movidos: o app não consegue conferir cada arquivo de uma pasta copiada. Copie as pastas.",
 "two_panes_moved": "{count} itens movidos para {place}",
 "two_panes_unverified": "Copiado, mas o original foi mantido: não foi possível conferir a cópia",
 "two_panes_not_removed": "Copiado, mas não foi possível apagar o original",

@@ -9383,6 +9383,7 @@ rp_users_add_hint: "若也想以其他用户游玩，请在 PS5 上登录该用�
 "two_panes_move_body": "每个项目会先复制。只有副本完整到达后，才会删除原件。",
 "two_panes_move_ok": "移动",
 "two_panes_move_ask": "移动勾选的项目？",
+"two_panes_move_files_only": "这里只能移动文件：应用无法检查已复制文件夹中的每个文件。文件夹请复制。",
 "two_panes_moved": "已将 {count} 个项目移动到 {place}",
 "two_panes_unverified": "已复制，但保留了原件：无法检查副本",
 "two_panes_not_removed": "已复制，但无法删除原件",

@@ -9440,6 +9440,7 @@ rp_users_add_hint: "Pour jouer aussi avec un autre utilisateur, connectez-vous �
 "two_panes_move_body": "Chaque élément est d'abord copié. L'original n'est supprimé qu'une fois sa copie complète.",
 "two_panes_move_ok": "Déplacer",
 "two_panes_move_ask": "Déplacer les éléments cochés ?",
+"two_panes_move_files_only": "Ici, seuls les fichiers se déplacent : l'app ne peut pas vérifier chaque fichier d'un dossier copié. Copiez les dossiers.",
 "two_panes_moved": "{count} éléments déplacés vers {place}",
 "two_panes_unverified": "Copié, mais l'original est conservé : la copie n'a pas pu être vérifiée",
 "two_panes_not_removed": "Copié, mais l'original n'a pas pu être supprimé",

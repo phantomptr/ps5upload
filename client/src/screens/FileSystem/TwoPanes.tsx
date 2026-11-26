@@ -65,8 +65,13 @@ export interface PsSide {
   /** A download is running on this console: Files runs one at a time. */
   downloadBusy: boolean;
   /** Files' Download of `item` (in the PS5 folder `from`) into a folder already chosen: on this
-   *  computer, or `remote://` on a saved server. */
-  download: (item: PaneItem, into: { dir: string; from: string }, server?: Connection) => Promise<CopyOutcome>;
+   *  computer, or `remote://` on a saved server. `move` (a saved server only): the engine checks
+   *  every file and folder of the copy, then deletes the source itself (#953). */
+  download: (
+    item: PaneItem,
+    to: { dir: string; from: string; move?: boolean },
+    server?: Connection,
+  ) => Promise<CopyOutcome>;
   /** Files' Add files, into the folder shown. */
   upload: (paths: string[], known: FsPickedItem[]) => Promise<void>;
   clearSelection: () => void;
@@ -78,6 +83,12 @@ const join = (dir: string, name: string) => `${dir === "/" ? "" : dir.replace(/\
 function blockText(tr: ReturnType<typeof useTr>, block: PaneBlock): string {
   if (block === "no-delete-server")
     return tr("two_panes_no_move_server", undefined, "No Move from here: the app doesn't delete files on saved servers.");
+  if (block === "files-only")
+    return tr(
+      "two_panes_move_files_only",
+      undefined,
+      "Move takes files only here: the app can't check every file of a copied folder. Copy folders.",
+    );
   return isTauriEnv()
     ? tr("two_panes_no_move_computer", undefined, "No Move from here: the app never deletes files on this computer.")
     : tr("two_panes_no_move_app_computer", undefined, "No Move from here: the app never deletes files on its computer.");
@@ -127,9 +138,9 @@ export function TwoPanes({
 
   const run = async (toward: Toward, op: PaneOp) => {
     if (!place || dir === null) return;
-    const route = paneRoute(place, toward, op);
-    if (!route.ok) return;
     const items = sourceOf(toward);
+    const route = paneRoute(place, toward, op, items.some((i) => i.isDir));
+    if (!route.ok) return;
     if (items.length === 0) return;
     const fromDir = ps.path;
     const toDir = toward === "other" ? dir : ps.path;
@@ -224,14 +235,17 @@ export function TwoPanes({
     } else {
       destPlace = place;
       const server = route.via === "download-server" ? servers.find((s) => s.id === (place as { id: string }).id) : undefined;
-      const into = { dir: placeTransferPath(place, dir), from: fromDir };
+      // A move to a saved server is the engine's own (#953): it checks every file's size and
+      // every folder on the server, and only then deletes the source. A job that ends done has
+      // done all of that; one that fails keeps the source.
+      const into = { dir: placeTransferPath(place, dir), from: fromDir, move: !!route.engineMoves };
       copy = (item) => ps.download(item, into, server);
     }
     if (toward === "other") ps.clearSelection();
     else pane.clearSelection();
 
     const srcAddr = consoleAddr(toward === "other" ? here : (place as { host: string }).host);
-    const result = await runPaneTransfer(items, op, {
+    const result = await runPaneTransfer(items, route.engineMoves ? "copy" : op, {
       copy,
       verify: async (item) => {
         if (unsettled.has(item.path)) return false;
@@ -304,7 +318,13 @@ export function TwoPanes({
     <div ref={rootRef} className="flex items-start gap-3" data-two-panes="" onKeyDown={onKeyDown}>
       {confirmNode}
       {/* The PS5 side keeps the larger share: its rows carry their own action buttons. */}
-      <section data-pane="ps5" aria-label={psName} className="min-w-0 flex-[3_1_0%]">
+      {/* Narrower than the window, the selection bar's actions wrap onto more lines, each with
+          its whole label, instead of squeezing over each other. */}
+      <section
+        data-pane="ps5"
+        aria-label={psName}
+        className="min-w-0 flex-[3_1_0%] [&_[data-testid='fs-selection-actions']]:flex-wrap [&_[data-testid='fs-selection-actions']>button]:shrink-0 [&_[data-testid='fs-selection-actions']>button]:whitespace-nowrap"
+      >
         {children}
       </section>
       {!hidden && (
@@ -318,7 +338,8 @@ export function TwoPanes({
             data-testid="two-panes-actions"
           >
             {actions.map(({ toward, op }) => {
-              const route = place ? paneRoute(place, toward, op) : null;
+              // A ticked folder can make a Move "files only": the reason shows while it is ticked.
+              const route = place ? paneRoute(place, toward, op, sourceOf(toward).some((i) => i.isDir)) : null;
               const count = toward === "other" ? ps.selected.length : pane.selected.size;
               const usesDownload = route?.ok && (route.via === "download" || route.via === "download-server");
               const disabled =

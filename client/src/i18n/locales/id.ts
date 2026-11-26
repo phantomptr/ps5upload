@@ -9433,6 +9433,7 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "two_panes_move_body": "Setiap item disalin dulu. Aslinya dihapus hanya setelah salinannya lengkap.",
 "two_panes_move_ok": "Pindahkan",
 "two_panes_move_ask": "Pindahkan item yang dicentang?",
+"two_panes_move_files_only": "Di sini hanya file yang bisa dipindah: aplikasi tidak bisa memeriksa setiap file dari folder yang disalin. Salin folder.",
 "two_panes_moved": "{count} item dipindahkan ke {place}",
 "two_panes_unverified": "Tersalin, tetapi aslinya disimpan: salinan tidak bisa diperiksa",
 "two_panes_not_removed": "Tersalin, tetapi aslinya tidak bisa dihapus",

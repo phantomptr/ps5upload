@@ -36,14 +36,27 @@ describe("which transfer each pair of places uses (#952)", () => {
         expect(paneRoute(otherConsole, toward, op)).toEqual({ ok: true, via: "console-send" });
   });
 
-  it("a move off the PS5 is offered wherever a copy is (the PS5 can delete its own files)", () => {
+  it("files move off the PS5 to this computer and to a saved server", () => {
     expect(paneRoute(computer, "other", "move")).toEqual({ ok: true, via: "download" });
-    expect(paneRoute(server, "other", "move")).toEqual({ ok: true, via: "download-server" });
+    // To a saved server the engine checks the copy and deletes the source itself (#953).
+    expect(paneRoute(server, "other", "move")).toEqual({ ok: true, via: "download-server", engineMoves: true });
+    expect(paneRoute(server, "other", "copy")).toEqual({ ok: true, via: "download-server" });
+  });
+
+  it("a folder moves only where every file of its copy is checked: to a saved server", () => {
+    expect(paneRoute(server, "other", "move", true)).toEqual({ ok: true, via: "download-server", engineMoves: true });
+    expect(paneRoute(computer, "other", "move", true)).toEqual({ ok: false, block: "files-only" });
+    expect(paneRoute(otherConsole, "other", "move", true)).toEqual({ ok: false, block: "files-only" });
+    expect(paneRoute(otherConsole, "ps5", "move", true)).toEqual({ ok: false, block: "files-only" });
+    // Copying a folder is fine everywhere.
+    expect(paneRoute(computer, "other", "copy", true)).toEqual({ ok: true, via: "download" });
+    expect(paneRoute(otherConsole, "ps5", "copy", true)).toEqual({ ok: true, via: "console-send" });
   });
 
   it("no move from this computer or a saved server: nothing in the app deletes files there", () => {
     expect(paneRoute(computer, "ps5", "move")).toEqual({ ok: false, block: "no-delete-computer" });
     expect(paneRoute(server, "ps5", "move")).toEqual({ ok: false, block: "no-delete-server" });
+    expect(paneRoute(computer, "ps5", "move", true)).toEqual({ ok: false, block: "no-delete-computer" });
   });
 });
 

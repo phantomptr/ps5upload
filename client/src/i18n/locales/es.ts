@@ -9377,6 +9377,7 @@ rp_users_add_hint: "Para jugar también como otro usuario, inicia sesión con es
 "two_panes_move_body": "Cada elemento se copia primero. El original se borra solo cuando su copia está completa.",
 "two_panes_move_ok": "Mover",
 "two_panes_move_ask": "¿Mover los elementos marcados?",
+"two_panes_move_files_only": "Aquí solo se mueven archivos: la app no puede comprobar cada archivo de una carpeta copiada. Copia las carpetas.",
 "two_panes_moved": "{count} elementos movidos a {place}",
 "two_panes_unverified": "Copiado, pero se conserva el original: no se pudo comprobar la copia",
 "two_panes_not_removed": "Copiado, pero no se pudo borrar el original",

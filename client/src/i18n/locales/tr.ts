@@ -9431,6 +9431,7 @@ rp_users_add_hint: "Başka bir kullanıcıyla da oynamak için PS5'te o kullanı
 "two_panes_move_body": "Her öğe önce kopyalanır. Orijinali ancak kopyası eksiksiz oradayken silinir.",
 "two_panes_move_ok": "Taşı",
 "two_panes_move_ask": "İşaretli öğeler taşınsın mı?",
+"two_panes_move_files_only": "Burada yalnızca dosyalar taşınır: uygulama kopyalanan bir klasörün her dosyasını denetleyemez. Klasörleri kopyala.",
 "two_panes_moved": "{count} öğe şuraya taşındı: {place}",
 "two_panes_unverified": "Kopyalandı ama orijinal tutuldu: kopya denetlenemedi",
 "two_panes_not_removed": "Kopyalandı ama orijinal silinemedi",
