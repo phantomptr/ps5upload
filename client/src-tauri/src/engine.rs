@@ -655,8 +655,12 @@ fn open_engine_log(path: &Path) -> Option<Arc<Mutex<EngineLog>>> {
 /// file from a previous instance, etc.), the caller goes on appending
 /// to the existing log and lets it grow past the cap. Worst case is a
 /// larger log file, which is recoverable; the alternative of failing
-/// to open at all loses diagnostics entirely.
-fn rotate_engine_log(path: &Path) {
+/// to open at all loses diagnostics entirely. Whether it rotated.
+///
+/// Reports through `log_line`, never `eprintln!`: this runs on the engine's stderr drain, and with
+/// the app's own stderr gone a panic there stopped the drain (the engine then blocked on a full
+/// pipe, and its exit was never seen).
+fn rotate_engine_log(path: &Path) -> bool {
     let old_file = |n: usize| {
         if n == 1 {
             path.with_extension("log.old")
@@ -669,12 +673,16 @@ fn rotate_engine_log(path: &Path) {
         let _ = std::fs::rename(old_file(n), old_file(n + 1));
     }
     let old = old_file(1);
-    if let Err(e) = std::fs::rename(path, &old) {
-        eprintln!(
-            "[engine-log] rotate {} -> {} failed: {e} (continuing)",
-            path.display(),
-            old.display()
-        );
+    match std::fs::rename(path, &old) {
+        Ok(()) => true,
+        Err(e) => {
+            log_line(format_args!(
+                "[engine-log] rotate {} -> {} failed: {e} (continuing)",
+                path.display(),
+                old.display()
+            ));
+            false
+        }
     }
 }
 
@@ -684,6 +692,10 @@ struct EngineLog {
     path: PathBuf,
     file: std::fs::File,
     len: u64,
+    /// The size at which the next rotation is tried: the cap, or after a failed one another cap
+    /// further on. Tried again on every line, a failed rotation shifted the older files along each
+    /// time (deleting the oldest) and cost a reopen per line.
+    rotate_at: u64,
 }
 
 impl EngineLog {
@@ -697,6 +709,7 @@ impl EngineLog {
             path: path.to_path_buf(),
             file,
             len,
+            rotate_at: ENGINE_LOG_MAX_BYTES,
         })
     }
 
@@ -706,17 +719,21 @@ impl EngineLog {
         let _ = writeln!(self.file, "{line}");
         let _ = self.file.flush();
         self.len = self.len.saturating_add(line.len() as u64 + 1);
-        if self.len > ENGINE_LOG_MAX_BYTES {
-            // Reopen first so a failed rotation keeps appending to the same file.
-            rotate_engine_log(&self.path);
+        if self.len > self.rotate_at {
+            if !rotate_engine_log(&self.path) {
+                // Keeps appending to this file; tried again a cap further on.
+                self.rotate_at = self.len.saturating_add(ENGINE_LOG_MAX_BYTES);
+                return;
+            }
             match Self::open(&self.path) {
                 Ok(next) => *self = next,
                 Err(e) => {
-                    eprintln!(
+                    log_line(format_args!(
                         "[engine-log] reopen {} after rotation failed: {e}",
                         self.path.display()
-                    );
+                    ));
                     self.len = 0;
+                    self.rotate_at = ENGINE_LOG_MAX_BYTES;
                 }
             }
         }
@@ -1523,6 +1540,34 @@ mod engine_log_tests {
         assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
         log.write_line("after");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "after\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A rotation that fails keeps the log appending, and is not tried again on the next line
+    /// (each try shifted the older files along): only a cap further on.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_rotation_is_not_tried_on_every_line() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ps5upload-englog-ro-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("engine.log");
+        let mut log = EngineLog::open(&path).unwrap();
+        let line = "x".repeat(1023);
+        for _ in 0..ENGINE_LOG_MAX_BYTES / 1024 {
+            log.write_line(&line);
+        }
+        // No rename can happen in the folder now.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        log.write_line("past the cap");
+        let after_failure = std::fs::metadata(&path).unwrap().len();
+        assert_eq!(after_failure, ENGINE_LOG_MAX_BYTES + 13);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // The folder would take a rotation again, but the next line does not try.
+        log.write_line("next");
+        assert!(!path.with_extension("log.old").exists());
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), after_failure + 5);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
