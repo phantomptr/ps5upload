@@ -1220,7 +1220,8 @@ struct Pass<'a> {
 ///
 /// A linked console holds what its partner held, so a file of the size agreed on counts as agreed
 /// on. That is a guess (the two consoles' times cannot be compared), so this first pass deletes
-/// nothing and what it replaces there goes to the trash. A file of another size changed there.
+/// nothing, what it replaces there goes to the trash, and a file of another size there (changed
+/// there, or never given the home console's last edit) is a conflict here: both are kept.
 fn seed_via_base(home: &Base, via_hub: &Listing) -> Base {
     home.iter()
         .filter_map(|(path, agreed)| {
@@ -2328,9 +2329,20 @@ impl Pass<'_> {
         });
         skipped.extend(unread.iter().cloned());
         let mut held = 0;
-        // The first pass through a linked console deletes nothing there (its base is a guess).
+        // The first pass through a linked console deletes nothing there (its base is a guess),
+        // and never puts that console's copy over a file here: which of the two is newer is not
+        // known (the home console may have had an edit, this folder got it and the linked console
+        // did not, before it went away), so both are kept, as a conflict. (It used to come over
+        // with nothing kept, and the older copy then went on to the home console too.)
         if self.seed.is_some() {
             ops.retain(|o| !matches!(o, Op::DeleteHub(_)));
+            for o in ops.iter_mut() {
+                if let Op::Download(p) = o {
+                    if member.contains_key(p.as_str()) {
+                        *o = Op::Conflict(p.clone());
+                    }
+                }
+            }
         }
         let mut held_paths = Vec::new();
         // A confirmation covers the deletes it was given for: used up once a pass got through them.
@@ -5982,17 +5994,25 @@ mod tests {
         let (r, home) = rig_failed_over();
         r.pass_from(Some(home)).unwrap();
         let (side, hub) = (&r.side.store, &r.hub.store);
-        // Nothing renamed: no conflict copies from a base that was missing.
-        assert_eq!(r.status().conflicts, 0);
-        assert!(side.names().iter().all(|n| !n.contains("conflict")));
+        // No conflict copies from a base that was missing: one only, for the file of another
+        // size there (which of the two is newer is not known).
+        assert_eq!(r.status().conflicts, 1);
+        let copies: Vec<String> = side
+            .names()
+            .into_iter()
+            .filter(|n| n.contains("conflict"))
+            .collect();
+        assert_eq!(copies.len(), 1, "{copies:?}");
+        assert!(copies[0].starts_with("changed-there (conflict from "));
         // A file deleted here does not come back, and is not deleted there on a guess.
         assert!(!side.has("deleted-here.txt"));
         assert!(hub.has("deleted-here.txt"));
         // An edit here goes up, and what it replaced there is kept in the trash.
         assert_eq!(hub.get("edited-here.txt").unwrap(), b"edited, longer");
         assert_eq!(*hub.trashed.lock().unwrap(), ["edited-here.txt"]);
-        // A file of another size changed there: it comes here.
+        // A file of another size there comes here, and this folder's copy is kept beside it.
         assert_eq!(side.get("changed-there.txt").unwrap(), b"changed there");
+        assert_eq!(side.get(&copies[0]).unwrap(), b"agreed");
         // Unchanged stays; new goes up.
         assert_eq!(hub.get("new-here.txt").unwrap(), b"new");
         assert_eq!(side.get("same.txt").unwrap(), b"agreed");
@@ -6014,6 +6034,72 @@ mod tests {
         r.pass_from(Some(Base::new())).unwrap();
         assert!(r.side.store.has("deleted-here.txt"), "nothing to go by");
         assert!(r.hub.store.trashed.lock().unwrap().is_empty());
+    }
+
+    /// The home console had an edit, this folder got it, and the home console went away before
+    /// the linked console did. The first pass through the linked console keeps the newer file
+    /// here (a conflict copy) instead of putting the older one over it, and when the home console
+    /// is back the newer one reaches it too.
+    #[test]
+    fn failing_over_never_puts_an_older_copy_over_a_newer_file_here() {
+        let r = Rig::new();
+        let home_hub = Arc::new(MemStore::default());
+        home_hub.clock.store(500, Ordering::SeqCst);
+        home_hub.put("save.dat", b"newer save");
+        r.side.store.put("save.dat", b"newer save");
+        let home: Base = [(
+            "save.dat".to_string(),
+            BaseEntry {
+                m: r.side.store.meta("save.dat").unwrap(),
+                h: home_hub.meta("save.dat").unwrap(),
+            },
+        )]
+        .into();
+        r.hub.store.put("save.dat", b"old");
+        r.pass_from(Some(home.clone())).unwrap();
+        let side = &r.side.store;
+        let copies: Vec<String> = side
+            .names()
+            .into_iter()
+            .filter(|n| n.contains("conflict"))
+            .collect();
+        assert_eq!(copies.len(), 1, "{:?}", side.names());
+        assert_eq!(side.get(&copies[0]).unwrap(), b"newer save");
+        assert_eq!(side.get("save.dat").unwrap(), b"old");
+        assert!(side.trashed.lock().unwrap().is_empty());
+        // The copy reaches the linked console on the next pass.
+        r.look_again();
+        r.pass().unwrap();
+        assert_eq!(r.hub.store.get(&copies[0]).unwrap(), b"newer save");
+        // The home console is back: the older file goes there as a change made here, and the
+        // newer one with it, as the copy.
+        let home_id = format!("{}-home", r.id);
+        side.bases.lock().unwrap().insert(home_id.clone(), home);
+        let back = MemSide {
+            store: side.clone(),
+            hub: home_hub.clone(),
+            ..Default::default()
+        };
+        let home_side = MemSide {
+            store: home_hub.clone(),
+            ..Default::default()
+        };
+        Pass {
+            addr: "home",
+            drive: &r.drive,
+            member_id: home_id,
+            side: &back,
+            hub: &home_side,
+            device_name: "Here".into(),
+            side_rev: None,
+            lost: Arc::default(),
+            stop: Arc::default(),
+            wanted: None,
+            seed: None,
+        }
+        .run()
+        .unwrap();
+        assert_eq!(home_hub.get(&copies[0]).unwrap(), b"newer save");
     }
 
     #[test]
