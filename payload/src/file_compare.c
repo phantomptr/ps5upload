@@ -1,6 +1,7 @@
 #include "file_compare.h"
 
 #include <fcntl.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -46,4 +47,19 @@ done:
     free(ba);
     free(bb);
     return rc;
+}
+
+int keep_aside(const char *path, char *kept, size_t kept_sz) {
+    if (!kept || kept_sz == 0) return -1;
+    for (int i = 1; i <= 99; i++) {
+        int n = i == 1 ? snprintf(kept, kept_sz, "%s.unsaved", path)
+                       : snprintf(kept, kept_sz, "%s.%d.unsaved", path, i);
+        if (n < 0 || (size_t)n >= kept_sz) break;
+        struct stat st;
+        if (lstat(kept, &st) == 0) continue;
+        if (rename(path, kept) == 0) return 0;
+        break;
+    }
+    snprintf(kept, kept_sz, "%s", path);
+    return -1;
 }
