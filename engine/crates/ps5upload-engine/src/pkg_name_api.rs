@@ -121,7 +121,8 @@ fn whole(path: &Path) -> Result<(), String> {
 }
 
 /// `GET /api/pkg/name?path=`: the names a package on this computer holds (one per language)
-/// and whether they can be changed. `refusal` is set when they can't: `code` is `retail` for an
+/// and whether they can be changed. `room` is how long a new name may be in this package, in
+/// UTF-8 bytes (`default_name`: changing the default name only; `all_languages`). `refusal` is set when they can't: `code` is `retail` for an
 /// official package, `patch` for a delta update, `no_name`, or `unsupported` with the reason.
 pub(crate) async fn get_handler(Query(q): Query<NameQuery>) -> Response {
     let read = tokio::task::spawn_blocking(move || -> Result<NameResponse, Failure> {

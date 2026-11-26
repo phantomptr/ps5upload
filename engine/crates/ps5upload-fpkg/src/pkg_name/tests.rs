@@ -674,3 +674,80 @@ fn a_manifest_digest_is_set_only_over_the_one_it_holds() {
     let e = set_manifest_digest(&mut xml, "param-digest", &old, &new).unwrap_err();
     assert!(e.contains("is not the container's"), "{e}");
 }
+
+/// The room `read` reports is exact for plain text: a name of that many bytes fits, one more
+/// does not. With and without whitespace to give up, for the default name and for every
+/// language.
+#[test]
+fn the_room_a_ps5_package_reports_is_what_fits() {
+    for (label, param) in [
+        ("compact", compact_param()),
+        ("pretty", pretty_param()),
+        ("top", pretty_param_with_a_top_name()),
+    ] {
+        let dir = TempDir::new(&format!("ps5-room-{label}"));
+        let pkg = ps5_package(dir.path(), &param);
+        let names = read(&pkg).unwrap();
+        let room = names.room.expect("a fake package says its room");
+        assert!(room.default_name <= MAX_NAME_BYTES && room.all_languages <= MAX_NAME_BYTES);
+        for (all, bytes) in [(false, room.default_name), (true, room.all_languages)] {
+            let fits = "n".repeat(bytes);
+            let p = plan(&pkg, &fits, all)
+                .unwrap_or_else(|e| panic!("{label} all={all}: {bytes} bytes should fit: {e}"));
+            assert!(p.changed > 0);
+            if bytes < MAX_NAME_BYTES {
+                let over = "n".repeat(bytes + 1);
+                let e = plan(&pkg, &over, all).unwrap_err().to_string();
+                assert!(
+                    e.contains("too long for this package"),
+                    "{label} all={all}: {e}"
+                );
+            }
+        }
+        // A name written to the limit still checks out on disk.
+        let p = plan(&pkg, &"n".repeat(room.all_languages), true).unwrap();
+        apply(&pkg, &p);
+        check(&pkg, &p).unwrap();
+        assert!(full_verify(&pkg).ok(), "{label}");
+    }
+    // No whitespace at all: exactly the old name's length.
+    let dir = TempDir::new("ps5-room-exact");
+    let pkg = ps5_package(dir.path(), &compact_param());
+    let room = read(&pkg).unwrap().room.unwrap();
+    assert!(room.default_name >= MARKED.len(), "{room:?}");
+}
+
+#[test]
+fn the_room_a_ps4_package_reports_is_what_fits() {
+    let dir = TempDir::new("ps4-room");
+    let pkg = ps4_package(dir.path());
+    let room = read(&pkg)
+        .unwrap()
+        .room
+        .expect("a fake package says its room");
+    for (all, bytes) in [(false, room.default_name), (true, room.all_languages)] {
+        assert!(bytes > 0 && bytes <= MAX_NAME_BYTES);
+        plan(&pkg, &"n".repeat(bytes), all)
+            .unwrap_or_else(|e| panic!("all={all}: {bytes} bytes should fit: {e}"));
+        if bytes < MAX_NAME_BYTES {
+            let e = plan(&pkg, &"n".repeat(bytes + 1), all)
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("too long for this package"), "all={all}: {e}");
+        }
+    }
+}
+
+#[test]
+fn a_package_that_can_not_be_renamed_reports_no_room() {
+    let dir = TempDir::new("no-room");
+    let delta = dir.path().join("delta.pkg");
+    std::fs::write(
+        &delta,
+        [crate::lih::MAGIC.as_slice(), &[0u8; 64][..]].concat(),
+    )
+    .unwrap();
+    let names = read(&delta).unwrap();
+    assert!(names.refusal.is_some());
+    assert_eq!(names.room, None);
+}

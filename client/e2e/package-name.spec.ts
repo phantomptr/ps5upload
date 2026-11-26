@@ -11,6 +11,8 @@ interface Fake {
   /** The name the package holds now. */
   name: string;
   refusal: { code: string; reason: string } | null;
+  /** The package's own room for a name, in bytes (absent: the engine's overall limit). */
+  room?: { default_name: number; all_languages: number };
   /** Every POST /api/pkg/name body, in order. */
   renames: unknown[];
   /** How many times the package's header was read. */
@@ -47,6 +49,7 @@ async function fakeEngine(page: Page, fake: Fake) {
         other_names: 1,
         refusal: fake.refusal,
         max_bytes: 127,
+        ...(fake.room ? { room: fake.room } : {}),
       };
     }
     if (path === "/api/pkg/name" && req.method() === "POST") {
@@ -109,6 +112,47 @@ test("a picked package's name is changed before it is installed", async ({ page 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(0);
 
+});
+
+// A name longer than the package has room for (in bytes, as the engine counts) is said in the
+// field itself, in the app's language, and never sent.
+test("a name too long for the package is refused in the field, before anything is sent", async ({ page }) => {
+  const fake: Fake = {
+    name: MARKED,
+    refusal: null,
+    renames: [],
+    headerReads: 0,
+    room: { default_name: 30, all_languages: 30 },
+  };
+  await fakeEngine(page, fake);
+  await pickPackage(page);
+  const card = page.getByTestId("pkg-name-card");
+  await expect(card).toBeVisible({ timeout: 20_000 });
+  const input = card.getByTestId("pkg-name-input");
+  const save = card.getByTestId("pkg-name-save");
+  await expect(input).toHaveValue(MARKED);
+  await expect(card.getByTestId("pkg-name-room")).toHaveCount(0);
+
+  await input.fill("A Game");
+  await expect(card.getByTestId("pkg-name-room")).toHaveText("Bytes left for the name: 24");
+  await expect(save).toBeEnabled();
+
+  // Eleven Japanese letters: 33 bytes, three more than fit.
+  await input.fill("テ".repeat(11));
+  const tooLong = card.getByTestId("pkg-name-too-long");
+  await expect(tooLong).toContainText("This name is too long for this package. Bytes that fit: 30. Bytes over: 3.");
+  await expect(save).toBeDisabled();
+  await input.press("Enter");
+  await page.waitForTimeout(200);
+  expect(fake.renames).toEqual([]);
+  await card.screenshot({ path: process.env.PKG_NAME_LONG_SHOT ?? "/dev/null" }).catch(() => {});
+
+  // Ten fit exactly.
+  await input.fill("テ".repeat(10));
+  await expect(card.getByTestId("pkg-name-room")).toHaveText("Bytes left for the name: 0");
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect.poll(() => fake.renames.length).toBe(1);
 });
 
 test("an official package shows its name and why it can't be changed", async ({ page }) => {

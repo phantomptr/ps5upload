@@ -77,6 +77,26 @@ describe("the Name on the PS5 card", () => {
     expect(failed).toContain("The name was not changed: a PS5 is installing from this package");
   });
 
+  it("shows the bytes left while the name is changed, and says so itself when it is too long", () => {
+    const roomy = names({ room: { default_name: 30, all_languages: 30 } });
+    // Untouched: no counter.
+    const idle = render(state({ names: roomy }));
+    expect(idle).not.toContain("pkg-name-room");
+    expect(idle).not.toContain("pkg-name-too-long");
+    // Changed and fitting: how many bytes are left, and Change name can be pressed.
+    const fits = render(state({ names: roomy, value: "A Game" }));
+    expect(fits).toContain("Bytes left for the name: 24");
+    expect(saveButton(fits)).not.toContain('disabled=""');
+    // Too long (33 bytes in 11 letters): said here, and Change name is off.
+    const over = render(state({ names: roomy, value: "テ".repeat(11) }));
+    expect(over).toContain('data-testid="pkg-name-too-long"');
+    expect(over).toContain('role="alert"');
+    expect(over).toContain("This name is too long for this package. Bytes that fit: 30. Bytes over: 3.");
+    expect(over).toContain('aria-invalid="true"');
+    expect(over).not.toContain("Bytes left for the name");
+    expect(saveButton(over)).toContain('disabled=""');
+  });
+
   it("an official package shows its name and why it stays", () => {
     const html = render(
       state({ names: names({ refusal: { code: "retail", reason: "this is an official package" } }) }),

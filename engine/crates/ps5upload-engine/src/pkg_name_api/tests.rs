@@ -151,6 +151,10 @@ async fn a_package_is_renamed_through_the_routes() {
     assert_eq!(names["other_names"], 1);
     assert_eq!(names["max_bytes"], 127);
     assert_eq!(names["entries"].as_array().unwrap().len(), 3);
+    // The package's own room for a new name, for the field to count against before it asks.
+    let room = |which: &str| names["room"][which].as_u64().expect("the room is a number");
+    assert!(room("default_name") >= NAME.len() as u64 && room("default_name") <= 127);
+    assert!(room("all_languages") >= 1 && room("all_languages") <= room("default_name"));
 
     let path = pkg.to_string_lossy().into_owned();
     let (status, done) = post(json!({ "path": path, "name": " A Game " })).await;

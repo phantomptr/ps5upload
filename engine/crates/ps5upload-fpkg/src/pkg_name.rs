@@ -98,6 +98,20 @@ impl Refusal {
     }
 }
 
+/// How long a new name may be in this package, in UTF-8 bytes of plain text. A rename never
+/// moves anything in the package, so the room is what the package itself has: the old names'
+/// own bytes and the whitespace its `param.json` and manifest can give up (PS5), or the fixed
+/// room of its `param.sfo` strings (PS4); never more than [`MAX_NAME_BYTES`]. A character that
+/// has to be written escaped (`"` and `\` in `param.json`; `&`, `<` and `>` in the manifest)
+/// takes more than its own bytes, so such a name can still be refused a few bytes earlier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Room {
+    /// Changing only the entries that hold the current default name.
+    pub default_name: usize,
+    /// Giving every language the name.
+    pub all_languages: usize,
+}
+
 /// A package's names as it holds them.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Names {
@@ -111,6 +125,8 @@ pub struct Names {
     pub other_names: usize,
     /// Why the name can't be changed; `None` when it can.
     pub refusal: Option<Refusal>,
+    /// How long a new name may be; `None` when it can't be changed.
+    pub room: Option<Room>,
 }
 
 /// Bytes to write at an offset of the package.
@@ -238,6 +254,7 @@ fn names_of(
         other_names,
         entries,
         refusal,
+        room: None,
     }
 }
 
@@ -284,6 +301,17 @@ impl ParamDoc {
             })
             .collect()
     }
+}
+
+/// The longest plain name `edit_param` can put into the entries `which`: each takes the name
+/// and its two quotes, out of the old literals' bytes and all the whitespace between tokens.
+fn param_room(doc: &ParamDoc, which: &[usize]) -> usize {
+    if which.is_empty() {
+        return MAX_NAME_BYTES;
+    }
+    let old: usize = which.iter().map(|i| doc.names[*i].span.len()).sum();
+    let spare: usize = doc.whitespace.iter().map(|r| r.len()).sum();
+    ((old + spare) / which.len()).saturating_sub(2)
 }
 
 /// Where a value sits in a `param.json`, as far as names go.
@@ -675,6 +703,18 @@ fn manifest_indentation(xml: &[u8]) -> Vec<Range<usize>> {
     out
 }
 
+/// The longest plain name `set_manifest_name` can put in place of `old`: the old name's bytes
+/// and all the indentation the manifest can give up. `None` when the manifest's name is not
+/// changed with the package's (it has none, or holds another).
+fn manifest_room(xml: &[u8], old: &str) -> Option<usize> {
+    let inner = element(xml, "titleName")?;
+    if xml_unescape(&String::from_utf8_lossy(&xml[inner.clone()])) != old {
+        return None;
+    }
+    let spare: usize = manifest_indentation(xml).iter().map(|r| r.len()).sum();
+    Some(inner.len() + spare)
+}
+
 /// `xml` with `<titleName>` changed from `old` to `new`, at the same length: spaces after
 /// the element when it gets shorter, indentation given up when it gets longer. `None` when
 /// the manifest has no such element or it holds another name (left as it is).
@@ -916,6 +956,45 @@ impl Ps5 {
             default,
             self.refusal.clone(),
         )
+    }
+
+    /// [`Ps5::names`] with the room a new name has: `param.json`'s and, when the package's
+    /// manifest repeats the name, the manifest's (the smaller of the two counts).
+    fn names_with_room(&mut self) -> Names {
+        let mut names = self.names();
+        if names.refusal.is_some() {
+            return names;
+        }
+        let Some((_, doc)) = &self.param else {
+            return names;
+        };
+        // A manifest that can't be read here limits nothing here: the rename itself reads it
+        // again and says what is wrong with it.
+        let manifest = si::read(&mut self.file)
+            .ok()
+            .flatten()
+            .and_then(|zip| {
+                let m = zip
+                    .members
+                    .iter()
+                    .find(|m| m.name.ends_with("pfsimage.xml"))?;
+                if m.size > MAX_MANIFEST {
+                    return None;
+                }
+                self.file.read_at(m.offset, m.size as usize).ok()
+            })
+            .and_then(|xml| manifest_room(&xml, &names.name))
+            .unwrap_or(usize::MAX);
+        let room = |all: bool| {
+            param_room(doc, &targets(&names.entries, &names.name, all))
+                .min(manifest)
+                .min(MAX_NAME_BYTES)
+        };
+        names.room = Some(Room {
+            default_name: room(false),
+            all_languages: room(true),
+        });
+        names
     }
 
     /// The container checks that hold, by name.
@@ -1405,6 +1484,28 @@ impl Ps4 {
         )
     }
 
+    /// [`Ps4::names`] with the room a new name has: the smallest `param.sfo` string it would
+    /// go into, less its zero byte.
+    fn names_with_room(&self) -> Names {
+        let mut names = self.names();
+        if names.refusal.is_some() {
+            return names;
+        }
+        let room = |all: bool| {
+            targets(&names.entries, &names.name, all)
+                .iter()
+                .map(|i| self.names[*i].data.len().saturating_sub(1))
+                .min()
+                .unwrap_or(MAX_NAME_BYTES)
+                .min(MAX_NAME_BYTES)
+        };
+        names.room = Some(Room {
+            default_name: room(false),
+            all_languages: room(true),
+        });
+        names
+    }
+
     fn plan(mut self, name: &str, all: bool, reader_reads_name: bool) -> Result<Plan> {
         let names = self.names();
         if let Some(r) = &self.refusal {
@@ -1574,8 +1675,8 @@ fn load(path: &Path) -> Result<Loaded> {
 /// The names the package at `path` holds, and whether they can be changed.
 pub fn read(path: &Path) -> Result<Names> {
     Ok(match load(path)? {
-        Loaded::Ps5(p) => p.names(),
-        Loaded::Ps4(p) => p.names(),
+        Loaded::Ps5(mut p) => p.names_with_room(),
+        Loaded::Ps4(p) => p.names_with_room(),
         Loaded::Refused(names) => names,
     })
 }
