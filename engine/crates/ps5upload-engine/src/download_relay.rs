@@ -73,7 +73,10 @@ fn walk_console(
                     continue;
                 }
                 let path = format!("{dir}/{name}");
-                let r = format!("{rel}/{name}");
+                // One name, as the server takes it: the listing comes from the console, and a
+                // name holding `/` (or `..` behind a backslash, which a Windows or SMB server
+                // reads as a separator) would be written outside the folder that was chosen.
+                let r = remote::path::join(&rel, &name).map_err(remote_err)?;
                 match kind.as_str() {
                     "dir" => stack.push((path, r)),
                     "file" => out.push((path, r, size)),
@@ -352,6 +355,33 @@ mod tests {
             ]
         );
         assert_eq!(dirs, ["game", "game/saves", "game/sub"]);
+    }
+
+    /// A listing name that would leave the chosen folder fails the walk; an odd but plain one
+    /// (a backslash inside a name, as some games have) is kept.
+    #[test]
+    fn a_listing_name_never_leaves_the_chosen_folder() {
+        for bad in ["x/../../../../other/f", "..\\..\\f", "a\0b"] {
+            let r = walk_console("/data/game", |dir, _| {
+                let page = match dir {
+                    "/data/game" => vec![(bad.to_string(), "file".to_string(), 1)],
+                    _ => Vec::new(),
+                };
+                Ok((page, false))
+            });
+            assert!(r.is_err(), "{bad:?}: {r:?}");
+        }
+        let (files, _) = walk_console("/data/game", |dir, _| {
+            let page = match dir {
+                "/data/game" => {
+                    vec![("options\\gabindings.xml".to_string(), "file".to_string(), 1)]
+                }
+                _ => Vec::new(),
+            };
+            Ok((page, false))
+        })
+        .unwrap();
+        assert_eq!(files[0].1, "game/options\\gabindings.xml");
     }
 
     /// A console name Windows cannot hold is staged under another, and an ordinary one as is.
