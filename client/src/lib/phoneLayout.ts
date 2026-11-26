@@ -28,6 +28,17 @@ export function usePhoneLayout(): boolean {
   return useSyncExternalStore(phoneLayout.subscribe, phoneLayout.snapshot, () => false);
 }
 
+/** True while `query` matches, live (one watcher per query). */
+const watchers = new Map<string, ReturnType<typeof watch>>();
+export function useMediaQuery(query: string): boolean {
+  let w = watchers.get(query);
+  if (!w) {
+    w = watch(query);
+    watchers.set(query, w);
+  }
+  return useSyncExternalStore(w.subscribe, w.snapshot, () => false);
+}
+
 /** True while the shell's phone top bar is on show (below `md`), live. */
 export function usePhoneTopBar(): boolean {
   return useSyncExternalStore(phoneTopBar.subscribe, phoneTopBar.snapshot, () => false);

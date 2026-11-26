@@ -96,13 +96,14 @@ export function fsKeyAction(e: KeyLike): FsKeyAction | null {
   }
 }
 
-/** True when keystrokes belong to a text field or an open dialog, not the file list. */
+/** True when keystrokes belong to a text field, an open dialog, or a part of the page that keeps
+ *  its own keys (`data-keys-own`: the other side of the two panes), not the file list. */
 export function keysBelongElsewhere(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   if (!el || typeof el.closest !== "function") return false;
   const tag = el.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable) return true;
-  return !!el.closest('[role="dialog"],[role="menu"]');
+  return !!el.closest('[role="dialog"],[role="menu"],[data-keys-own]');
 }
 
 /** Normalizes a typed path: absolute, single slashes, no trailing slash (except "/"). */
