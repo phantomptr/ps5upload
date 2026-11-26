@@ -293,8 +293,9 @@ struct Live {
     pad: Mutex<std::collections::VecDeque<ControllerState>>,
     /// Every controller's latest state: the page (source 0) and phones (pad_link.rs).
     sources: crate::pad_link::PadSources,
-    /// A Play Together guest has the stream's controller: see [`guest_seat`].
-    guest_seat: AtomicBool,
+    /// The Play Together guest (their id, 0: none) who has the stream's controller: see
+    /// [`guest_seat`]. Only their input lands on it, so a kicked guest's late input is dropped.
+    guest_seat: AtomicU64,
     stop: AtomicBool,
     viewer: Mutex<Option<Viewer>>,
     /// Since when no page has been attached.
@@ -635,16 +636,17 @@ pub(crate) fn stream_seat_kept(host: &str) -> bool {
 /// A guest has the stream's controller, or no longer. The page stays off it meanwhile; the
 /// picture back on takes it back from the guest ([`Live::set_picture`]), so two people never share
 /// one player.
-pub(crate) fn guest_seat(host: &str, on: bool) {
+pub(crate) fn guest_seat(host: &str, guest: Option<u64>) {
     if let Some(l) = live_on(host) {
-        l.set_guest_seat(on);
+        l.set_guest_seat(guest);
     }
 }
 
-/// The guest's state on the stream's controller (None: let go).
-pub(crate) fn push_guest_pad(host: &str, state: Option<ControllerState>) {
+/// Guest `guest`'s state on the stream's controller (None: let go). Dropped unless they are the
+/// one who has it: a kicked guest's input still on its way never lands.
+pub(crate) fn push_guest_pad(host: &str, guest: u64, state: Option<ControllerState>) {
     if let Some(l) = live_on(host) {
-        l.push_pad(GUEST_SEAT_SOURCE, state);
+        l.push_guest_pad(guest, state);
     }
 }
 
@@ -990,7 +992,7 @@ impl Live {
             keep_alive,
             pad: Default::default(),
             sources: Default::default(),
-            guest_seat: AtomicBool::new(false),
+            guest_seat: AtomicU64::new(0),
             stop: AtomicBool::new(false),
             viewer: Mutex::new(None),
             alone_since: Mutex::new(None),
@@ -1167,8 +1169,8 @@ impl Live {
             }
             // The host's controller plays again at once: a friend on it moves to a pad of
             // their own (join.rs), never sharing Player 1 with the host (#720).
-            if self.guest_seat.load(Ordering::Relaxed) {
-                self.set_guest_seat(false);
+            if self.seat_held() {
+                self.set_guest_seat(None);
                 crate::join::seat_needed(&self.host, "the picture is back on");
             }
             if let Some(h) = self.video_header.lock().ok().and_then(|g| g.clone()) {
@@ -1203,9 +1205,7 @@ impl Live {
     /// Free for a guest: the picture off here, no guest on it, nothing held on it, and no
     /// linked phone playing (`phones_playing`: one quiet a moment still merges into it, #720).
     fn seat_free_given(&self, phones_playing: bool) -> bool {
-        self.seat_kept_given(phones_playing)
-            && !self.guest_seat.load(Ordering::Relaxed)
-            && self.sources.is_empty()
+        self.seat_kept_given(phones_playing) && !self.seat_held() && self.sources.is_empty()
     }
 
     /// The guest on the stream's controller may keep it: the picture is still off here and no
@@ -1214,8 +1214,29 @@ impl Live {
         self.picture_off() && !phones_playing
     }
 
-    fn set_guest_seat(&self, on: bool) {
-        if self.guest_seat.swap(on, Ordering::Relaxed) == on {
+    /// A guest has the stream's controller.
+    fn seat_held(&self) -> bool {
+        self.guest_seat.load(Ordering::Relaxed) != 0
+    }
+
+    /// Guest `guest`'s state on the stream's controller, when they are the one who has it.
+    fn push_guest_pad(&self, guest: u64, state: Option<ControllerState>) {
+        if guest == 0 || self.guest_seat.load(Ordering::Relaxed) != guest {
+            return;
+        }
+        self.push_pad(GUEST_SEAT_SOURCE, state);
+    }
+
+    /// Guest `guest` has the stream's controller (None: no guest has it).
+    fn set_guest_seat(&self, guest: Option<u64>) {
+        let id = guest.unwrap_or(0);
+        let had = self.guest_seat.swap(id, Ordering::Relaxed);
+        let on = id != 0;
+        if had != 0 && had != id && on {
+            // Straight from one guest to another: what the one before held is let go.
+            self.push_pad(GUEST_SEAT_SOURCE, None);
+        }
+        if (had != 0) == on {
             // Off and already off: a guest's last state pushed just after the give-back (its
             // frame raced the seat being taken back) would otherwise stay held on the host's
             // controller for good. The tick says off every 250 ms, so this clears it.
@@ -1236,7 +1257,7 @@ impl Live {
 
     /// The page's controller counts: its picture is on and no guest has the stream's controller.
     fn page_pad_open(&self) -> bool {
-        !self.picture_off() && !self.guest_seat.load(Ordering::Relaxed)
+        !self.picture_off() && !self.seat_held()
     }
 
     /// With no page attached, the session still has a reason to run: the picture is off here on
@@ -1373,9 +1394,9 @@ impl Live {
         if state.is_some()
             && source != PAGE_SOURCE
             && source != GUEST_SEAT_SOURCE
-            && self.guest_seat.load(Ordering::Relaxed)
+            && self.seat_held()
         {
-            self.set_guest_seat(false);
+            self.set_guest_seat(None);
             let host = self.host.clone();
             if let Ok(rt) = tokio::runtime::Handle::try_current() {
                 rt.spawn(async move { crate::join::seat_needed(&host, "a phone plays") });
@@ -2663,13 +2684,13 @@ mod tests {
         l.set_picture(false);
         assert!(l.seat_free_given(false), "the picture is off: it sits idle");
 
-        l.set_guest_seat(true);
+        l.set_guest_seat(Some(7));
         assert!(!l.seat_free(), "one guest has it");
         let cross = ControllerState {
             buttons: 1,
             ..Default::default()
         };
-        l.push_pad(GUEST_SEAT_SOURCE, Some(cross));
+        l.push_guest_pad(7, Some(cross));
         assert_eq!(l.pad.lock().unwrap().back().map(|p| p.buttons), Some(1));
 
         assert!(!l.page_pad_open());
@@ -2681,12 +2702,51 @@ mod tests {
             l.page_pad_open(),
             "picture back: the stream's controller is the host's"
         );
-        assert!(!l.guest_seat.load(Ordering::Relaxed));
+        assert!(!l.seat_held());
         assert_eq!(
             l.pad.lock().unwrap().back().map(|p| p.buttons),
             Some(0),
             "what they held is let go"
         );
+    }
+
+    #[test]
+    fn a_kicked_guests_late_input_never_lands_on_the_stream_controller() {
+        let l = Live::new("ps5-test".into(), false, Duration::from_secs(60));
+        l.playing.store(true, Ordering::Relaxed);
+        l.set_picture(false);
+        let pressed = |b: u32| ControllerState {
+            buttons: b,
+            ..Default::default()
+        };
+        let last = |l: &Live| l.pad.lock().unwrap().back().map(|p| p.buttons);
+        l.set_guest_seat(Some(7));
+        l.push_guest_pad(7, Some(pressed(1)));
+        assert_eq!(last(&l), Some(1), "the guest who has it plays");
+
+        // Kicked: their seat is let go, then input already on its way arrives.
+        l.set_guest_seat(None);
+        assert_eq!(last(&l), Some(0));
+        l.push_guest_pad(7, Some(pressed(2)));
+        assert_eq!(last(&l), Some(0), "a kicked guest's late input is dropped");
+        assert!(!l.sources.contains(GUEST_SEAT_SOURCE));
+        assert!(
+            l.seat_free_given(false),
+            "nothing is held: the seat is free again"
+        );
+
+        // The next guest has it: the one before still cannot reach it.
+        l.set_guest_seat(Some(8));
+        l.push_guest_pad(7, Some(pressed(4)));
+        assert_eq!(last(&l), Some(0), "not the one before's");
+        l.push_guest_pad(8, Some(pressed(8)));
+        assert_eq!(last(&l), Some(8));
+        // Handed straight to another guest: what the one before held is let go.
+        l.set_guest_seat(Some(9));
+        assert_eq!(last(&l), Some(0));
+        l.push_guest_pad(8, None);
+        l.push_guest_pad(0, Some(pressed(16)));
+        assert_eq!(last(&l), Some(0), "nobody has id 0");
     }
 
     #[test]

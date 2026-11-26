@@ -1116,10 +1116,11 @@ pub(crate) enum Effect {
     Say(mpsc::Sender<Out>, Out),
     Link(link::Cmd),
     Log(String),
-    /// The guest on [`STREAM_SEAT`]'s controller state (None: let go).
-    SeatPad(Option<ControllerState>),
-    /// Whether a guest has the stream's controller, so the host's page is kept off it.
-    Seat(bool),
+    /// The guest (by id) on [`STREAM_SEAT`]'s controller state (None: let go). Dropped unless
+    /// they are the one who has it, so a kicked guest's late input never lands.
+    SeatPad(u64, Option<ControllerState>),
+    /// Which guest has the stream's controller (None: none), so the host's page is kept off it.
+    Seat(Option<u64>),
     /// Move this guest off the stream's controller onto a helper pad ([`move_off_seat`]).
     MoveOff(u64),
 }
@@ -1337,7 +1338,7 @@ impl Party {
                 }
                 if g.player == STREAM_SEAT {
                     g.seat_input_at = None;
-                    fx.push(Effect::SeatPad(None));
+                    fx.push(Effect::SeatPad(g.id, None));
                 }
             }
         }
@@ -1378,8 +1379,8 @@ impl Party {
         // (One moving off it already let it go.)
         if g.player == STREAM_SEAT && g.seat_move == SeatMove::No {
             g.seat_input_at = None;
-            fx.push(Effect::SeatPad(None));
-            fx.push(Effect::Seat(false));
+            fx.push(Effect::SeatPad(g.id, None));
+            fx.push(Effect::Seat(None));
         }
         g.seat_move = SeatMove::No;
         let s = &g.stats;
@@ -1520,8 +1521,8 @@ impl Party {
             } else {
                 SeatMove::Wanted
             };
-            fx.push(Effect::SeatPad(None));
-            fx.push(Effect::Seat(false));
+            fx.push(Effect::SeatPad(g.id, None));
+            fx.push(Effect::Seat(None));
             fx.push(Effect::Log(format!(
                 "join: the stream's controller on {console} goes back to the host ({why}); its guest moves to a pad of their own"
             )));
@@ -1639,13 +1640,15 @@ impl Party {
                 .is_some_and(|t| now.duration_since(t) >= vpad::NEUTRAL_AFTER)
             {
                 g.seat_input_at = None;
-                fx.push(Effect::SeatPad(None));
+                fx.push(Effect::SeatPad(g.id, None));
             }
         }
         // Held while a guest keeps it (also on a session that replaced the old one), and let go
         // when none does: a claim racing a give-back (the picture back on) heals here.
         if live.is_some() {
-            fx.push(Effect::Seat(self.guests.iter().any(|g| g.on_seat())));
+            fx.push(Effect::Seat(
+                self.guests.iter().find(|g| g.on_seat()).map(|g| g.id),
+            ));
         }
         for id in gone {
             fx.extend(self.leave(id, "timeout", now));
@@ -1842,8 +1845,8 @@ fn apply(console: &str, fx: Vec<Effect>) {
             }
             Effect::Link(c) => link::send(console, c),
             Effect::Log(s) => crate::log_at!(Info, "together", "{s}"),
-            Effect::SeatPad(state) => crate::rp_stream_api::push_guest_pad(console, state),
-            Effect::Seat(on) => crate::rp_stream_api::guest_seat(console, on),
+            Effect::SeatPad(id, state) => crate::rp_stream_api::push_guest_pad(console, id, state),
+            Effect::Seat(guest) => crate::rp_stream_api::guest_seat(console, guest),
             Effect::MoveOff(id) => match tokio::runtime::Handle::try_current() {
                 Ok(h) => {
                     h.spawn(move_off_seat(console.to_string(), id));
@@ -2693,7 +2696,7 @@ async fn resume<S: GuestSocket>(socket: &mut S, token: &str) -> Option<Admit> {
         let fx = if g.seat_move == SeatMove::No {
             g.seat_input_at = None;
             g.playing = false;
-            vec![Effect::SeatPad(None), Effect::Seat(false)]
+            vec![Effect::SeatPad(id, None), Effect::Seat(None)]
         } else {
             Vec::new()
         };
@@ -3009,7 +3012,7 @@ async fn ask<S: GuestSocket>(
             if !ok {
                 return Some(Admit::Refused("closed"));
             }
-            crate::rp_stream_api::guest_seat(&console, true);
+            crate::rp_stream_api::guest_seat(&console, Some(gid));
             crate::log_at!(
                 Info,
                 "together",
@@ -3202,7 +3205,7 @@ fn forward_pad(key: &str, console: &str, id: u64, gen: u64, mut st: PadState) {
     if let Some((slot, strip, token)) = mask.flatten() {
         st.buttons &= !strip;
         if slot == STREAM_SEAT {
-            crate::rp_stream_api::push_guest_pad(console, Some(controller_state(&st)));
+            crate::rp_stream_api::push_guest_pad(console, id, Some(controller_state(&st)));
         } else {
             link::send(
                 console,
@@ -6012,20 +6015,22 @@ mod tests {
         let session = p.session;
         let seat_pads = |fx: &[Effect]| {
             fx.iter()
-                .filter(|e| matches!(e, Effect::SeatPad(None)))
+                .filter(|e| matches!(e, Effect::SeatPad(_, None)))
                 .count()
         };
         p.guest_mut(id).unwrap().seat_input_at = Some(t);
         let (fx, _) = p.tick(t + Duration::from_millis(100), Some(session));
         assert_eq!(seat_pads(&fx), 0, "still fresh");
-        assert!(fx.iter().any(|e| matches!(e, Effect::Seat(true))));
+        assert!(fx
+            .iter()
+            .any(|e| matches!(e, Effect::Seat(Some(g)) if *g == id)));
         let (fx, _) = p.tick(t + vpad::NEUTRAL_AFTER, Some(session));
         assert_eq!(seat_pads(&fx), 1, "quiet: nothing stays held");
         let (fx, _) = p.tick(t + vpad::NEUTRAL_AFTER * 2, Some(session));
         assert_eq!(seat_pads(&fx), 0, "and only once");
         let fx = p.leave(id, "left", t);
         assert_eq!(seat_pads(&fx), 1);
-        assert!(fx.iter().any(|e| matches!(e, Effect::Seat(false))));
+        assert!(fx.iter().any(|e| matches!(e, Effect::Seat(None))));
         assert!(
             !fx.iter().any(|e| matches!(e, Effect::Link(_))),
             "no helper pad was ever made for it"
@@ -6060,7 +6065,7 @@ mod tests {
     fn seat_claims(fx: &[Effect]) -> Vec<bool> {
         fx.iter()
             .filter_map(|e| match e {
-                Effect::Seat(on) => Some(*on),
+                Effect::Seat(on) => Some(on.is_some()),
                 _ => None,
             })
             .collect()
@@ -6107,7 +6112,7 @@ mod tests {
         // the guest moves to a pad of their own.
         let (fx, _) = p.tick_seat(t, Some(s), false);
         assert_eq!(moves(&fx), vec![id]);
-        assert!(fx.iter().any(|e| matches!(e, Effect::SeatPad(None))));
+        assert!(fx.iter().any(|e| matches!(e, Effect::SeatPad(_, None))));
         assert_eq!(
             seat_claims(&fx),
             vec![false, false],
