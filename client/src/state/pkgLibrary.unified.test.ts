@@ -183,6 +183,84 @@ describe("statusToOutcome — maps the unified verdict to the UI outcome", () =>
     expect(o.errMessage).toBe(hint);
   });
 
+  it("the reach check's facts are worded by the app, and mark the row for the firewall fix (#942)", () => {
+    const o = statusToOutcome(
+      status({
+        phase: "failed",
+        verdict: "failed",
+        reason: "stream_unreachable",
+        code: 0,
+        // The engine's own English, for the log.
+        hint: "The PS5 cannot connect to this computer at http://192.168.1.3:19113 (timed out after 4000 ms)… set PS5UPLOAD_PKG_HOST_IP…",
+        reach: {
+          stage: "check",
+          origin: "http://192.168.1.3:19113",
+          cause: "timed_out",
+          waited_s: 0,
+          source: "host_file",
+        },
+      }),
+    );
+    expect(o.installed).toBe(false);
+    expect(o.streamUnreachable).toBe(true);
+    expect(o.errMessage).toContain("The PS5 can't connect to this computer (192.168.1.3:19113)");
+    expect(o.errMessage).toContain("allow PS5Upload through the firewall");
+    expect(o.errMessage).toContain("Retry via upload");
+    expect(o.errMessage).not.toContain("PS5UPLOAD_PKG_HOST_IP");
+  });
+
+  it("a PS5 that never asked for the package fails with how long it was waited for", () => {
+    const o = statusToOutcome(
+      status({
+        phase: "failed",
+        verdict: "failed",
+        reason: "stream_unreachable",
+        code: 0,
+        hint: "The PS5 was handed the package and asked this computer for none of it in 60 s…",
+        reach: {
+          stage: "no_fetch",
+          origin: "http://192.168.1.3:19113",
+          cause: "unknown",
+          waited_s: 60,
+          source: "host_file",
+        },
+      }),
+    );
+    expect(o.streamUnreachable).toBe(true);
+    expect(o.errMessage).toContain("after 60 seconds, so the install was stopped");
+  });
+
+  it("every unreachable stream marks the row, whichever way it was found, and nothing else does", () => {
+    expect(
+      statusToOutcome(
+        status({ phase: "failed", verdict: "failed", reason: "stream_unreachable", code: 0x80431068 }),
+      ).streamUnreachable,
+    ).toBe(true);
+    expect(
+      statusToOutcome(status({ phase: "failed", verdict: "failed", reason: "sony_refused" })).streamUnreachable,
+    ).toBeUndefined();
+    expect(statusToOutcome(status({})).streamUnreachable).toBeUndefined();
+  });
+
+  it("a running install says what it waits for instead of \"installing — 0%\" (#942)", () => {
+    const running = (over: Partial<InstallStatus>) =>
+      sampleFromStatus(status({ phase: "install", route: "stream", verdict: null, ...over }));
+    expect(running({ waiting: "console_fetch" }).note).toBe(
+      "Waiting for the PS5 to start fetching the package from this computer…",
+    );
+    expect(running({ phase: "deliver", waiting: "reach_check" }).note).toBe(
+      "Checking that the PS5 can reach this computer…",
+    );
+    expect(running({ phase: "deliver", waiting: "previous_install" }).note).toMatch(/starts by itself/);
+    // Nothing waited for: the numbers speak.
+    expect(running({}).note).toBeUndefined();
+    expect(running({ waiting: null }).note).toBeUndefined();
+    // A job that has ended says its result, not a wait left on it.
+    expect(
+      sampleFromStatus(status({ phase: "failed", verdict: "failed", waiting: "console_fetch" })).note,
+    ).toBeUndefined();
+  });
+
   it("a proxy refusal says to turn the PS5's proxy off", () => {
     const o = statusToOutcome(
       status({ phase: "failed", verdict: "failed", reason: "stream_proxy", code: 0x80431084 }),

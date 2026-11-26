@@ -30,6 +30,8 @@ export interface InstallResult {
   mayNotLaunch?: boolean;
   /** A stream install the PS5 never fetched from: uploading it may work. */
   stagedFallbackRecommended?: boolean;
+  /** The PS5 could not reach this computer to fetch the package: the row offers the firewall fix. */
+  streamUnreachable?: boolean;
 }
 
 /** The numbers behind an install's percentage, so the queue row can show

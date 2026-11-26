@@ -8,6 +8,8 @@ pub mod history;
 
 pub mod deliver;
 
+pub mod reach;
+
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -767,6 +769,335 @@ async fn net_diag_for(ip: &str, origin: &str) -> Option<crate::win_net::NetDiag>
         .flatten()
 }
 
+/// A stream the console cannot start: the words for the person, the facts for the app, and what
+/// Windows said about the link.
+struct ReachBlock {
+    message: String,
+    fail: reach::ReachFail,
+    diag: Option<crate::win_net::NetDiag>,
+}
+
+/// What the app shows in place of the usual cause when the engine runs in a bridged container.
+const CONTAINER_REACH_DETAIL: &str = "The engine runs in a container, so that address is the container's own, which the PS5 cannot reach. Run the container with host networking, or set PS5UPLOAD_PKG_HOST_IP to the Docker host's LAN address and publish port 19113.";
+
+/// Asks the helper whether the console can connect to this engine, before a stream is handed
+/// over (#942, and #342 before it). `Some` only when it definitely cannot, at every address of
+/// this computer worth trying; `None` when it can (the address it reached is then the one its
+/// link carries) or when the check could not run, which must never stop an install that might
+/// work. See `reach`.
+async fn reach_block(ip: &str, ps5_addr: &str, source: &str) -> Option<ReachBlock> {
+    let origin = crate::pkg_install::engine_origin_for_ps5(ps5_addr).ok()?;
+    let (host, port) = reach::split_origin(&origin)?;
+    let first: std::net::IpAddr = host.parse().ok()?;
+    let bridged = crate::pkg_install::bridged_container_without_pkg_host_ip();
+    let pinned = crate::pkg_install::pkg_host_ip_pinned();
+    let (mgmt, console) = (crate::console_addr(ip), ip.to_string());
+    let (outcome, routed) = tokio::task::spawn_blocking(move || {
+        // A pinned address is the operator's word, and a container has only its own.
+        let others = if pinned || bridged {
+            Vec::new()
+        } else {
+            crate::pkg_install::console_ip_for(&console)
+                .map(|c| reach::alternatives(first, c, &reach::local_addrs()))
+                .unwrap_or_default()
+        };
+        let outcome = reach::choose_reachable(first, &others, &mut |addr, timeout_ms| {
+            ps5upload_core::diagnostics::net_reach(&mgmt, &addr.to_string(), port, timeout_ms)
+                .map_err(|e| format!("{e:#}"))
+        });
+        (outcome, crate::pkg_install::lan_ip_for_ps5(&console).ok())
+    })
+    .await
+    .ok()?;
+    let answer = match outcome {
+        reach::ReachOutcome::Reachable(addr) => {
+            if !pinned {
+                // The routing table's own answer needs no note; another address is remembered,
+                // and it is what the link built next carries.
+                crate::pkg_install::set_reachable_host(
+                    ps5_addr,
+                    (Some(addr) != routed).then_some(addr),
+                );
+            }
+            if addr != first {
+                crate::log_at!(
+                    Info,
+                    "install",
+                    "the PS5 cannot connect to this computer at {origin} but can at {}: giving it that address",
+                    reach::origin_for(addr, port)
+                );
+            }
+            return None;
+        }
+        reach::ReachOutcome::Unknown => return None,
+        reach::ReachOutcome::Unreachable(answer) => answer,
+    };
+    // Windows: which adapter and category the console is on (never in a container).
+    let diag = if bridged {
+        None
+    } else {
+        net_diag_for(ip, &origin).await
+    };
+    let detail = if bridged {
+        Some(CONTAINER_REACH_DETAIL.to_string())
+    } else {
+        diag.as_ref().and_then(|d| d.explain())
+    };
+    Some(ReachBlock {
+        message: reach_block_message_for(&origin, &answer, bridged, diag.as_ref()),
+        fail: reach::ReachFail {
+            stage: reach::ReachStage::Check,
+            origin,
+            cause: reach::cause_of(&answer),
+            waited_s: 0,
+            source: source.to_string(),
+            detail,
+        },
+        diag,
+    })
+}
+
+/// The reason a reach check failed, in words. A timeout means packets are being dropped (a
+/// firewall on this computer, or client isolation on the network); a refusal means nothing
+/// accepted the connection on that port.
+fn reach_block_message_for(
+    origin: &str,
+    r: &ps5upload_core::diagnostics::NetReach,
+    bridged_container: bool,
+    diag: Option<&crate::win_net::NetDiag>,
+) -> String {
+    if bridged_container {
+        return stream_unreachable_hint_for(Some(origin), 0, true, None);
+    }
+    let how = if r.err.is_empty() {
+        format!("after {} ms", r.ms)
+    } else {
+        format!("{} after {} ms", r.err, r.ms)
+    };
+    if let Some(why) = diag.and_then(|d| d.explain()) {
+        return format!(
+            "The PS5 cannot connect to this computer at {origin} ({how}), so a stream install cannot start. {why} {HOST_IP_ADVICE} Upload & install copies the package to the PS5 instead and does not need this connection."
+        );
+    }
+    let cause = match reach::cause_of(r) {
+        reach::ReachCause::TimedOut => "the connection timed out, which usually means a firewall on this computer is silently dropping it (on Windows, allow ps5upload for both Private and Public networks; a PS5 connected through Internet Connection Sharing sits on a Public network), or the Wi-Fi isolates devices from each other",
+        reach::ReachCause::Refused => "the connection was refused, so nothing is accepting connections on that port for the PS5: a firewall rule that rejects it, or the engine listening on another address",
+        _ => "the network would not let it through",
+    };
+    format!(
+        "The PS5 cannot connect to this computer at {origin} ({how}), so a stream install cannot start: {cause}. {HOST_IP_ADVICE} Upload & install copies the package to the PS5 instead and does not need this connection."
+    )
+}
+
+/// What a link handed to the console's installer came to.
+enum HandedOver {
+    /// The daemon's answer (or why none came).
+    Reply(Result<ic::InstallReply, String>),
+    /// The console never asked for the package: the wait was given up after this many seconds.
+    NeverAsked(u64),
+}
+
+/// Hands `url` (a link into pkg-host session `sid`) to the console's installer and waits for its
+/// answer, the way `install_call` does, with one more way out: a console that has not asked for
+/// the package `reach::NO_FETCH_GIVE_UP` after the handover is not going to (#942). Either way
+/// out (that, or the user's Stop) leaves Sony's call in flight on the console; it is followed to
+/// its end in the background (`follow_abandoned`).
+async fn hand_over_url(
+    state: &PkgInstallStateHandle,
+    job: &str,
+    ip: &str,
+    url: String,
+    hint_name: String,
+    sid: &str,
+) -> HandedOver {
+    let call = {
+        let i = ip.to_string();
+        tokio::task::spawn_blocking(move || ic::install_url(&i, &url, &hint_name))
+    };
+    state
+        .jobs
+        .update(job, |s| s.waiting = Some(reach::Waiting::ConsoleFetch));
+    let asked = || {
+        let asked = {
+            let s = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            s.get(sid).is_none_or(|x| x.requests_served > 0)
+        };
+        if asked {
+            state.jobs.update(job, |s| s.waiting = None);
+        }
+        asked
+    };
+    let out = reach::watch_handover(
+        call,
+        state.jobs.stop_requested(job),
+        asked,
+        reach::NO_FETCH_GIVE_UP,
+        std::time::Duration::from_secs(1),
+    )
+    .await;
+    state.jobs.update(job, |s| s.waiting = None);
+    match out {
+        Ok(reach::Handover::Answered(reply)) => HandedOver::Reply(reply),
+        Ok(reach::Handover::Stopped(call)) => {
+            follow_abandoned(state, ip, call);
+            HandedOver::Reply(Err("stopped by the user".into()))
+        }
+        Ok(reach::Handover::NeverAsked(call)) => {
+            follow_abandoned(state, ip, call);
+            HandedOver::NeverAsked(reach::NO_FETCH_GIVE_UP.as_secs())
+        }
+        Err(e) => HandedOver::Reply(Err(format!("install task failed: {e}"))),
+    }
+}
+
+/// How long a daemon whose answer never came back is given to let go of its Sony call. Its own
+/// watchdog ends it 16 minutes into a call, a minute after this engine stops listening for the
+/// answer.
+const ABANDONED_FREE_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Follows an install call nobody waits for any more to its end, and leaves the daemon fit for
+/// the next install (`reach::after_abandoned`). Until then the console's next install waits
+/// (`state.abandoned`): the daemon makes one Sony call at a time.
+fn follow_abandoned(
+    state: &PkgInstallStateHandle,
+    ip: &str,
+    call: tokio::task::JoinHandle<Result<ic::InstallReply, String>>,
+) {
+    let guard = state.abandoned.begin(ip);
+    let ip = ip.to_string();
+    tokio::spawn(async move {
+        let reply = call
+            .await
+            .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
+        let after = reach::after_abandoned(&reply);
+        crate::log_at!(
+            Info,
+            "install",
+            "the install call left on the PS5 ended ({reply:?}); the installer daemon: {after:?}"
+        );
+        match after {
+            reach::AfterAbandoned::Leave => {}
+            reach::AfterAbandoned::Recycle => recycle_daemon(&ip).await,
+            reach::AfterAbandoned::RecycleWhenFree => {
+                let host = ip.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    use ps5upload_core::payload_lifecycle as pl;
+                    let addr = pl::join_host_port(&host, pl::INSTALLER_PORT);
+                    let deadline = std::time::Instant::now() + ABANDONED_FREE_WAIT;
+                    // A forced stop is refused while the call is in flight, and taken the moment
+                    // it returns; the daemon's own watchdog closes the port if it never does.
+                    while std::time::Instant::now() < deadline
+                        && pl::port_is_open(&addr, std::time::Duration::from_millis(500))
+                    {
+                        let _ = ic::stop_forced(&host);
+                        std::thread::sleep(std::time::Duration::from_secs(3));
+                    }
+                })
+                .await;
+            }
+        }
+        drop(guard);
+    });
+}
+
+/// What stands in for the daemon's answer when the wait for it was given up (`HandedOver`).
+const NEVER_ASKED: &str = "the PS5 never asked for the package";
+
+/// The reach check for `req`'s console, shown meanwhile as what the job is waiting for. `None`
+/// also when the user stopped the job during it (the caller's `ended_by_stop` follows).
+async fn reach_check(
+    state: &PkgInstallStateHandle,
+    job: &str,
+    ip: &str,
+    req: &InstallRequest,
+) -> Option<ReachBlock> {
+    state
+        .jobs
+        .update(job, |s| s.waiting = Some(reach::Waiting::ReachCheck));
+    let block = unless_stopped(
+        state,
+        job,
+        reach_block(ip, &req.ps5_addr, req.source.kind()),
+    )
+    .await
+    .flatten();
+    state.jobs.update(job, |s| s.waiting = None);
+    block
+}
+
+/// Ends `job` as a stream the console could not start, with why.
+async fn fail_unreachable(
+    state: &PkgInstallStateHandle,
+    job: &str,
+    req: &InstallRequest,
+    started: std::time::Instant,
+    block: ReachBlock,
+) {
+    crate::log_at!(
+        Warn,
+        "install",
+        "{}: {}",
+        correlation_tag(job),
+        block.message
+    );
+    state.jobs.update(job, |s| {
+        s.phase = Phase::Failed;
+        s.verdict = Some(Verdict::Failed);
+        s.reason = Some(FailReason::StreamUnreachable);
+        s.code = 0;
+        s.hint = Some(block.message.clone());
+        s.net_diag = block.diag.clone();
+        s.reach = Some(block.fail.clone());
+    });
+    finalize(state, job, req, started).await;
+}
+
+/// Ends `job` for a console that was handed the link `waited_s` seconds ago and never asked for
+/// the package. Its session (`served.0`, at origin `served.1`) goes now: a console that does
+/// come for it later is told the install is over, and a retry of the package is not refused as
+/// already running. Sony's call, still in flight, is followed to its end in the background
+/// (`follow_abandoned`); nothing here waits for it.
+async fn fail_never_asked(
+    state: &PkgInstallStateHandle,
+    job: &str,
+    req: &InstallRequest,
+    started: std::time::Instant,
+    served: (Option<&str>, Option<&str>),
+    waited_s: u64,
+) {
+    let (session, served_from) = served;
+    if let Some(sid) = session {
+        crate::pkg_install::release_serve_session(&state.sessions, sid);
+    }
+    let origin = served_from.unwrap_or_default().to_string();
+    let bridged = crate::pkg_install::bridged_container_without_pkg_host_ip();
+    let diag = if bridged {
+        None
+    } else {
+        net_diag_for(&console_id(&req.ps5_addr), &origin).await
+    };
+    let block = ReachBlock {
+        message: format!(
+            "The PS5 was handed the package and asked this computer for none of it in {waited_s} s, so the install was stopped. {}",
+            stream_unreachable_hint(served_from, 0, diag.as_ref())
+        ),
+        fail: reach::ReachFail {
+            stage: reach::ReachStage::NoFetch,
+            origin,
+            cause: reach::ReachCause::Unknown,
+            waited_s,
+            source: req.source.kind().to_string(),
+            detail: if bridged {
+                Some(CONTAINER_REACH_DETAIL.to_string())
+            } else {
+                diag.as_ref().and_then(|d| d.explain())
+            },
+        },
+        diag,
+    };
+    fail_unreachable(state, job, req, started, block).await;
+}
+
 /// True when `path` is a game's own installed file on the console —
 /// `…/user/app/<id>/…`, `…/user/patch/<id>/…`, `…/user/addcont/<id>/…`, on
 /// internal storage or extended storage (`/mnt/ext*/user/…`). Installing one
@@ -1384,6 +1715,40 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     });
     let deliver_started = std::time::Instant::now();
 
+    // A stream: can the console reach us at all? A firewall that drops the connection
+    // otherwise shows only as a Sony call that does not come back for many minutes (#942), or
+    // as 0x80431068 after 30 s (#342). Asked before anything is sent to the console, so a "no"
+    // leaves nothing behind there and Upload & install can run at once. Asked first of all:
+    // the answer does not have to wait for an earlier install's call (below).
+    if matches!(req.source, Source::HostFile(_) | Source::Remote { .. }) {
+        if let Some(block) = reach_check(&state, &job, &ip, &req).await {
+            fail_unreachable(&state, &job, &req, started, block).await;
+            return;
+        }
+        if ended_by_stop(&state, &job, &req, started, None).await {
+            return;
+        }
+    }
+
+    // An earlier install's call is still in flight on this console (its job stopped waiting
+    // for it): the daemon makes one Sony call at a time, so this one would only queue behind
+    // it, unseen. Wait here instead, where the app can say so.
+    if state.abandoned.pending(&ip) {
+        crate::log_at!(
+            Info,
+            "install",
+            "{tag}: waiting for the install call an earlier job left on the PS5 to end"
+        );
+        state
+            .jobs
+            .update(&job, |s| s.waiting = Some(reach::Waiting::PreviousInstall));
+        let _ = unless_stopped(&state, &job, state.abandoned.settled(&ip)).await;
+        state.jobs.update(&job, |s| s.waiting = None);
+        if ended_by_stop(&state, &job, &req, started, None).await {
+            return;
+        }
+    }
+
     // ensure the daemon. It is sent as a companion image, so it runs alongside
     // the helper and never displaces it.
     let elf = crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Installer).ok();
@@ -1427,6 +1792,10 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     state.jobs.update(&job, |s| s.phase = Phase::Install);
     let mut served_from: Option<String> = None;
     let mut serve_failure: Option<FailReason> = None;
+    // The console could not reach this engine for a stream tried after its own refusal.
+    let mut blocked: Option<ReachBlock> = None;
+    // The console was handed a link and never asked for the package (seconds waited).
+    let mut never_asked: Option<u64> = None;
     let (reply, session_id, shortened): (Result<ic::InstallReply, String>, Option<String>, bool) =
         match &req.source {
             Source::ConsolePath(path) => {
@@ -1465,20 +1834,42 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                             .await;
                         }
                         let console_url = format!("ps5://{ip}{path}");
-                        match serve_session_unless_stopped(&state, &job, &req, &console_url, None)
-                            .await
-                        {
-                            Ok((sid, url)) => {
+                        // The console has to reach this engine for its copy to come back to it.
+                        // When it cannot, the refusal above stands (and the last resort below
+                        // may apply); a stream that was asked for fails as unreachable.
+                        let serve = match reach_check(&state, &job, &ip, &req).await {
+                            Some(block) => {
+                                crate::log_at!(Warn, "install", "{tag}: {}", block.message);
+                                blocked = Some(block);
+                                None
+                            }
+                            None => Some(
+                                serve_session_unless_stopped(
+                                    &state,
+                                    &job,
+                                    &req,
+                                    &console_url,
+                                    None,
+                                )
+                                .await,
+                            ),
+                        };
+                        match serve {
+                            None => (r, None, false),
+                            Some(Ok((sid, url))) => {
                                 served_from = origin_of(&url);
                                 route = Route::Stream;
                                 state.jobs.update(&job, |s| s.route = Some(Route::Stream));
-                                let (i, u, h) = (ip.clone(), url, hint_name.clone());
-                                let r2 =
-                                    install_call(&state, &job, move || ic::install_url(&i, &u, &h))
-                                        .await;
-                                (r2, Some(sid), false)
+                                let h = hint_name.clone();
+                                match hand_over_url(&state, &job, &ip, url, h, &sid).await {
+                                    HandedOver::Reply(r2) => (r2, Some(sid), false),
+                                    HandedOver::NeverAsked(waited_s) => {
+                                        never_asked = Some(waited_s);
+                                        (Err(NEVER_ASKED.into()), Some(sid), false)
+                                    }
+                                }
                             }
-                            Err(e) => {
+                            Some(Err(e)) => {
                                 crate::log_at!(
                                     Warn,
                                     "install",
@@ -1544,18 +1935,34 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                                 "{tag}: the console refused the link (0x{code:08X}); proxying it through this engine instead"
                             );
                         }
-                        match serve_session_unless_stopped(&state, &job, &req, url, None).await {
-                            Ok((sid, purl)) => {
+                        // As for the console's own copy above: this engine's proxy is no use to a
+                        // console that cannot reach it.
+                        let serve = match reach_check(&state, &job, &ip, &req).await {
+                            Some(block) => {
+                                crate::log_at!(Warn, "install", "{tag}: {}", block.message);
+                                blocked = Some(block);
+                                None
+                            }
+                            None => Some(
+                                serve_session_unless_stopped(&state, &job, &req, url, None).await,
+                            ),
+                        };
+                        match serve {
+                            None => (r, None, was_short),
+                            Some(Ok((sid, purl))) => {
                                 served_from = origin_of(&purl);
                                 route = Route::Stream;
                                 state.jobs.update(&job, |s| s.route = Some(Route::Stream));
-                                let (i, u, h) = (ip.clone(), purl, hint_name.clone());
-                                let r2 =
-                                    install_call(&state, &job, move || ic::install_url(&i, &u, &h))
-                                        .await;
-                                (r2, Some(sid), false)
+                                let h = hint_name.clone();
+                                match hand_over_url(&state, &job, &ip, purl, h, &sid).await {
+                                    HandedOver::Reply(r2) => (r2, Some(sid), false),
+                                    HandedOver::NeverAsked(waited_s) => {
+                                        never_asked = Some(waited_s);
+                                        (Err(NEVER_ASKED.into()), Some(sid), false)
+                                    }
+                                }
                             }
-                            Err(e) => {
+                            Some(Err(e)) => {
                                 crate::log_at!(
                                     Warn,
                                     "install",
@@ -1577,15 +1984,19 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 }
             }
             Source::HostFile(_) | Source::Remote { .. } => {
+                // The console was asked whether it reaches this engine before the daemon was
+                // brought up (above).
                 match create_serve_session(&state, &job, &req, remote_opened.take()).await {
                     Ok((sid, url)) => {
                         served_from = origin_of(&url);
-                        // No reach pre-check: hand the URL to the console and let it try. If it
-                        // never fetches, the failure below explains why (firewall, host IP).
-                        let (i, u, h) = (ip.clone(), url, hint_name.clone());
-                        let r =
-                            install_call(&state, &job, move || ic::install_url(&i, &u, &h)).await;
-                        (r, Some(sid), false)
+                        let h = hint_name.clone();
+                        match hand_over_url(&state, &job, &ip, url, h, &sid).await {
+                            HandedOver::Reply(r) => (r, Some(sid), false),
+                            HandedOver::NeverAsked(waited_s) => {
+                                never_asked = Some(waited_s);
+                                (Err(NEVER_ASKED.into()), Some(sid), false)
+                            }
+                        }
                     }
                     Err(e) => {
                         serve_failure = e.reason;
@@ -1595,6 +2006,18 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             }
         };
     if ended_by_stop(&state, &job, &req, started, session_id.as_deref()).await {
+        return;
+    }
+    // The console has the link and never asked for the package: stop waiting and say so.
+    if let Some(waited_s) = never_asked {
+        state.jobs.update(&job, |s| {
+            s.metrics.phase_ms.insert(
+                "deliver".into(),
+                deliver_started.elapsed().as_millis() as u64,
+            );
+        });
+        let served = (session_id.as_deref(), served_from.as_deref());
+        fail_never_asked(&state, &job, &req, started, served, waited_s).await;
         return;
     }
     // The guarded last resort (see `path_fallback_allowed`): the console refused its own
@@ -1654,6 +2077,15 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             route = Route::Path;
             via_plain_path = true;
             state.jobs.update(&job, |s| s.route = Some(Route::Path));
+        }
+    }
+    // A stream that was asked for outright ("Retry with Stream", "Stream through this
+    // computer") and could not start: the console was never asked for anything else, so the
+    // unreachable stream is the answer, unless the last resort took over.
+    if let Some(block) = blocked.take() {
+        if !via_plain_path && (req.options.force_stream || req.options.proxy_link) {
+            fail_unreachable(&state, &job, &req, started, block).await;
+            return;
         }
     }
     let deliver_ms = deliver_started.elapsed().as_millis() as u64;
@@ -2983,6 +3415,164 @@ mod tests {
         assert!(h.contains("0x80431064"), "{h}");
         assert!(h.contains("firewall"), "{h}");
         assert!(h.contains("Upload & install"), "{h}");
+    }
+
+    #[test]
+    fn a_failed_reach_check_names_the_likely_cause() {
+        use ps5upload_core::diagnostics::NetReach;
+        // #942, and #342 before it: the console could not get in on this computer's port; the
+        // dropped connection timed out.
+        let dropped = NetReach {
+            ok: false,
+            timed_out: true,
+            errno: 0,
+            err: "timed out".into(),
+            ms: 4000,
+        };
+        let m = reach_block_message_for("http://192.168.1.3:19113", &dropped, false, None);
+        assert!(m.contains("192.168.1.3:19113"), "{m}");
+        assert!(m.contains("firewall"), "{m}");
+        assert!(m.contains("Public"), "{m}");
+        assert!(m.contains("Upload & install"), "{m}");
+        assert!(m.contains("PS5UPLOAD_PKG_HOST_IP"), "{m}");
+        // The app's own check for "the console could not reach this computer" reads it.
+        assert!(m.contains("cannot connect to this computer"), "{m}");
+        let refused = NetReach {
+            ok: false,
+            timed_out: false,
+            errno: 61,
+            err: "Connection refused".into(),
+            ms: 3,
+        };
+        let m = reach_block_message_for("http://x:1", &refused, false, None);
+        assert!(m.contains("refused"), "{m}");
+        // In a bridged container the firewall is not the cause: the address is.
+        let c = reach_block_message_for("http://172.17.0.2:19113", &dropped, true, None);
+        assert!(
+            c.contains("--network host") && c.contains("172.17.0.2"),
+            "{c}"
+        );
+        // Windows knew the adapter and its category: that replaces the general paragraph.
+        let d = crate::win_net::NetDiag {
+            adapter: "Ethernet 3".into(),
+            local_ip: "192.168.1.3".into(),
+            category: crate::win_net::NetCategory::Public,
+            firewall_enabled: Some(true),
+            allowed_by_rule: Some(false),
+        };
+        let w = reach_block_message_for("http://192.168.1.3:19113", &dropped, false, Some(&d));
+        assert!(
+            w.contains("Ethernet 3") && w.contains("Public network"),
+            "{w}"
+        );
+        assert!(!w.contains("Internet Connection Sharing"), "{w}");
+    }
+
+    fn started_job(addr: &str) -> (PkgInstallStateHandle, String) {
+        let state = std::sync::Arc::new(crate::pkg_install::PkgInstallState::default());
+        let job = state.jobs.begin(addr).unwrap();
+        (state, job)
+    }
+
+    /// The reach check said no before anything was sent to the console: the job fails at once
+    /// as an unreachable stream, with the facts the app words, and the console is free for
+    /// Upload & install.
+    #[tokio::test]
+    async fn a_failed_reach_check_ends_the_job_as_an_unreachable_stream() {
+        let (state, job) = started_job("192.0.2.99:9114");
+        let req = bare_req(Source::HostFile("/pkgs/game.pkg".into()));
+        let block = ReachBlock {
+            message: "The PS5 cannot connect to this computer at http://192.0.2.3:19113".into(),
+            fail: reach::ReachFail {
+                stage: reach::ReachStage::Check,
+                origin: "http://192.0.2.3:19113".into(),
+                cause: reach::ReachCause::TimedOut,
+                waited_s: 0,
+                source: "host_file".into(),
+                detail: None,
+            },
+            diag: None,
+        };
+        fail_unreachable(&state, &job, &req, std::time::Instant::now(), block).await;
+        let st = state.jobs.get(&job).unwrap();
+        assert_eq!(st.phase, Phase::Failed);
+        assert_eq!(st.verdict, Some(Verdict::Failed));
+        assert_eq!(st.reason, Some(FailReason::StreamUnreachable));
+        assert_eq!(st.code, 0);
+        assert!(st.hint.unwrap().contains("cannot connect to this computer"));
+        let reach = st.reach.unwrap();
+        assert_eq!(reach.stage, reach::ReachStage::Check);
+        assert_eq!(reach.cause, reach::ReachCause::TimedOut);
+        assert_eq!(reach.source, "host_file");
+        assert!(
+            state.jobs.begin("192.0.2.99").is_ok(),
+            "the console is free again"
+        );
+    }
+
+    /// The watchdog's end of a job: said why, and the session the console never came for is
+    /// released, so the same package can be tried again at once and a late fetch gets a "gone".
+    #[tokio::test]
+    async fn a_console_that_never_asked_fails_the_job_and_frees_its_session() {
+        let (state, job) = started_job("192.0.2.98:9114");
+        let req = bare_req(Source::HostFile("/pkgs/game.pkg".into()));
+        let mut session = crate::pkg_install::tests::dummy_session(Vec::new());
+        session.id = "sid-1".into();
+        state
+            .sessions
+            .lock()
+            .unwrap()
+            .insert("sid-1".into(), session);
+        fail_never_asked(
+            &state,
+            &job,
+            &req,
+            std::time::Instant::now(),
+            (Some("sid-1"), Some("http://192.0.2.3:19113")),
+            60,
+        )
+        .await;
+        let st = state.jobs.get(&job).unwrap();
+        assert_eq!(st.phase, Phase::Failed);
+        assert_eq!(st.reason, Some(FailReason::StreamUnreachable));
+        let hint = st.hint.unwrap();
+        assert!(
+            hint.contains("asked this computer for none of it in 60 s"),
+            "{hint}"
+        );
+        assert!(
+            hint.contains("never reached this computer at http://192.0.2.3:19113"),
+            "{hint}"
+        );
+        assert!(hint.contains("firewall"), "{hint}");
+        let reach = st.reach.unwrap();
+        assert_eq!(reach.stage, reach::ReachStage::NoFetch);
+        assert_eq!(reach.waited_s, 60);
+        assert_eq!(reach.origin, "http://192.0.2.3:19113");
+        assert!(state.sessions.lock().unwrap()["sid-1"].cancelled);
+        assert!(state.jobs.begin("192.0.2.98").is_ok());
+    }
+
+    /// Sony's call was still in flight when the job stopped waiting. The console's next install
+    /// waits for it (the daemon makes one call at a time) and goes on once it has ended.
+    #[tokio::test(start_paused = true)]
+    async fn the_call_left_on_the_console_is_followed_to_its_end() {
+        let state = std::sync::Arc::new(crate::pkg_install::PkgInstallState::default());
+        let call = tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+            // A verdict on the package: the daemon is left as it is, nothing is sent to it.
+            Ok(ic::InstallReply::Sony {
+                code: 0x80B2_116F,
+                hint: None,
+            })
+        });
+        follow_abandoned(&state, "192.0.2.50", call);
+        assert!(state.abandoned.pending("192.0.2.50"));
+        assert!(!state.abandoned.pending("192.0.2.51"));
+        let t0 = tokio::time::Instant::now();
+        state.abandoned.settled("192.0.2.50").await;
+        assert_eq!(t0.elapsed(), std::time::Duration::from_secs(600));
+        assert!(!state.abandoned.pending("192.0.2.50"));
     }
 
     #[test]

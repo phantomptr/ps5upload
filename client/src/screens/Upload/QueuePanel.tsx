@@ -1732,7 +1732,7 @@ export function QueueRow({
       {partialUploadPath(item) && (
         <PartialFileNote id={item.id} path={partialUploadPath(item)!} />
       )}
-      {item.status === "failed" && isStreamUnreachableError(item.error) && (
+      {item.status === "failed" && (item.streamUnreachable || isStreamUnreachableError(item.error)) && (
         <NetworkFixActions diag={null} />
       )}
 
