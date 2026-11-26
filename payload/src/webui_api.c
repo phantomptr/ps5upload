@@ -966,7 +966,9 @@ static void r_fs_extract_info(const char *b, size_t n, uint8_t *out, int fd) {
  * payload): {"path"}. A job, because the converter has to be started first; its result, read with
  * /api/jobs/status: {"path","format","size","files","data_bytes","title_id","content_id","title",
  * "content_version","master_version","packed","has_eboot","warnings","zstd_runtime"} (the newest
- * zstd runtime on the console, or null: a zstd build is refused without one). */
+ * zstd runtime on the console, or null: a zstd build is refused without one), and for a game in
+ * asset packs "unpacked_bytes" (about its size as plain files) and "unpack_keeps_emulator" (false:
+ * a .pkg with "unpack_packs" has to leave the emulator out). */
 static void r_convert_inspect(const char *b, size_t n, uint8_t *out, int fd) {
     run_path_job(b, n, out, fd, AVA1_JOB_OP_CONSOLE_CONVERT, ",\"action\":\"inspect\"");
 }
@@ -974,8 +976,10 @@ static void r_convert_inspect(const char *b, size_t n, uint8_t *out, int fd) {
 /* Convert a game on the console (CONSOLE_CONVERT "build"): {"path","dest","format": "exfat"|"ffpkg"|
  * "ffpfs"|"ffpfsc"|"pkg"|"folder", optional "zstd": bool, "zstd_level": 1..22 (sent on only with
  * zstd), "verify": "fast"|"full", "inner": "exfat"|"ffpkg"|"ffpfs" and "ffpfsc_level":
- * "fast"|"balanced"|"smallest" (with "ffpfsc"), "pkg_level": "stored"|"fast"|"balanced" (with
- * "pkg")}. The job's result: {"path"}. The helper's operation checks the paths again
+ * "fast"|"balanced"|"smallest" (with "ffpfsc"), "pkg_level": "stored"|"fast"|"balanced",
+ * "unpack_packs": bool and, with it, "leave_out_ampr_emu": bool (with "pkg": a game in asset packs
+ * as plain files, without its AMPR emulator)}. The job's result: {"path"}. The helper's operation
+ * checks the paths again
  * (console_convert.c); this route refuses what the page may never name and what is not
  * well-formed (cc_start_tail). */
 static void r_convert_start(const char *b, size_t n, uint8_t *out, int fd) {

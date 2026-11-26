@@ -21,9 +21,11 @@
  *   [,"format":"exfat"|"ffpkg"|"ffpfs"|"ffpfsc"|"pkg"|"folder"]
  *   [,"inner":"exfat"|"ffpkg"|"ffpfs"][,"ffpfsc_level":"fast"|"balanced"|"smallest"]  (ffpfsc)
  *   [,"pkg_level":"stored"|"fast"|"balanced"]  (pkg: a debug package, written, not installed)
+ *   [,"unpack_packs":true[,"leave_out_ampr_emu":true]]  (pkg, of a game in LZ4 or zstd asset packs)
  *   [,"zstd":true[,"zstd_level":1..22]][,"verify":"fast"|"full"]}
  * "inspect" (the default) reads what the source is; the job's result is the converter's answer
- * ({"path","format","size","files","title_id","title",...}) and "zstd_runtime": the version of the
+ * ({"path","format","size","files","title_id","title",...; for a game in asset packs also
+ * "unpacked_bytes" and "unpack_keeps_emulator"}) and "zstd_runtime": the version of the
  * newest zstd runtime on the console (CONVERT_RUNTIME_DIR), or null when there is none, so the page
  * can say a zstd build needs it. "build" writes `dest` in `format`
  * (through `<dest>.partial` beside it, renamed in place at the end). A `dest` that exists is
@@ -31,6 +33,13 @@
  * it; a failed or stopped build's `.partial` is removed. Result of a build: {"path":"<dest>"}.
  * A zstd build is handed the newest runtime's file ("zstd_runtime" in request.json), and refused
  * with convert_no_zstd_runtime, before the converter is started, when there is none.
+ * "unpack_packs" (a .pkg only; absent: the game is packaged as it is, packs and all) packages a
+ * packed game as its plain files, decoded as the package is written. The game's own AMPR emulator
+ * stays only when it is one that suits plain files (the converter's rule, the desktop app's: see
+ * engine/crates/ps5upload-convert-core/src/unpack_packs.rs); otherwise the converter refuses with
+ * convert_unpack_needs_emulator, since the console fetches no other emulator, and
+ * "leave_out_ampr_emu" (with "unpack_packs" only) leaves every libSceAmpr.sprx out instead. A game
+ * that is not in packs is refused with convert_not_packed.
  * One job at a time (convert_busy); a build is also refused while a package install or an
  * archive extraction runs (the three would share the drive and the console's memory). */
 #ifndef PS5UPLOAD_CONSOLE_CONVERT_H
@@ -95,20 +104,27 @@ typedef struct {
     char inner[8];            /* with "ffpfsc": the image inside it (exfat, ffpkg, ffpfs) */
     char ffpfsc_level[12];    /* with "ffpfsc": fast, balanced or smallest */
     char pkg_level[12];       /* with "pkg": stored, fast or balanced */
+    int unpack_packs;         /* with "pkg": a game in asset packs goes in as plain files */
+    int leave_out_ampr_emu;   /* with unpack_packs: no libSceAmpr.sprx in the package */
 } cc_build_t;
 
 /* request.json for job `id`: {"id","op","path"} and, with `b`, {"dest","format","zstd","verify"}
  * (and, with zstd on, "zstd_level" when a level was chosen and "zstd_runtime" when one is set;
- * with format "ffpfsc", "inner" and "ffpfsc_level" when set; with "pkg", "pkg_level" when set).
+ * with format "ffpfsc", "inner" and "ffpfsc_level" when set; with "pkg", "pkg_level" when set,
+ * "unpack_packs":true when asked and, with that, "leave_out_ampr_emu":true when asked).
  * Returns the length, or -1 when it does not fit `cap`. */
 int cc_request_json(char *out, size_t cap, const char *id, const char *op, const char *path, const cc_build_t *b);
 
 /* The page's /api/convert/start body (`json`, `n` bytes) as the op's arguments after "path": the
  * text `,"action":"build","dest":...,"format":...,"zstd":...,"verify":...` and, when chosen,
- * "zstd_level" (with zstd), "inner" and "ffpfsc_level" (with "ffpfsc"), "pkg_level" (with "pkg").
+ * "zstd_level" (with zstd), "inner" and "ffpfsc_level" (with "ffpfsc"), "pkg_level",
+ * "unpack_packs":true and "leave_out_ampr_emu":true (with "pkg").
  * `dest` is the route's, already checked. NULL when written, else the refusal's token: bad_format,
- * bad_verify, bad_zstd, convert_bad_inner, convert_bad_ffpfsc_level, convert_bad_pkg_level, or
- * bad_path when it does not fit `cap`. An absent or "" word is the converter's default. */
+ * bad_verify, bad_zstd, convert_bad_inner, convert_bad_ffpfsc_level, convert_bad_pkg_level,
+ * convert_bad_unpack (one of the two is not true or false, or the emulator is left out of a game
+ * that stays in its packs), or bad_path when it does not fit `cap`. An absent or "" word is the
+ * converter's default; an absent "unpack_packs" or "leave_out_ampr_emu" is false (a page from
+ * before them builds what it always did). */
 const char *cc_start_tail(const char *json, size_t n, const char *dest, char *out, size_t cap);
 
 typedef struct {
