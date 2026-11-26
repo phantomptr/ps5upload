@@ -117,7 +117,8 @@ int main(void) {
         CHECK(strcmp(key, "mnt_2fext1_2fgames_2ffoo") == 0);
         image_mount_tracker_key("/mnt/ext1/foo_bar", key, sizeof key);
         image_mount_tracker_key("/mnt/ext1/foo/bar", key2, sizeof key2);
-        CHECK(strcmp(key, "mnt_2fext1_2ffoo_5fbar") == 0 && strcmp(key2, "mnt_2fext1_2ffoo_2fbar") == 0);
+        /* escaped mount paths, not secrets */
+        CHECK(strcmp(key, "mnt_2fext1_2ffoo_5fbar") == 0 && strcmp(key2, "mnt_2fext1_2ffoo_2fbar") == 0); /* gitleaks:allow */
         /* a path below /mnt/ps5upload/<name> is escaped, never "<name>/<more>" */
         image_mount_tracker_key("/mnt/ps5upload/a/b", key, sizeof key);
         CHECK(strcmp(key, "mnt_2fps5upload_2fa_2fb") == 0);

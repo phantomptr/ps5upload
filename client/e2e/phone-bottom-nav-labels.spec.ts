@@ -16,10 +16,12 @@ for (const route of ["/home", "/console"]) {
     await expect(nav).toBeVisible({ timeout: 60_000 });
     const labels = nav.locator("a > span.truncate");
     await expect(labels).toHaveCount(6);
-    const cut = await labels.evaluateAll((els) =>
-      els.filter((el) => el.scrollWidth > el.clientWidth).map((el) => el.textContent),
-    );
-    expect(cut).toEqual([]);
+    const cut = () =>
+      labels.evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth).map((el) => el.textContent));
+    expect(await cut()).toEqual([]);
+    // A wide font, as on Linux and some Android phones.
+    await page.addStyleTag({ content: "*{font-family:Verdana,'DejaVu Sans',sans-serif!important}" });
+    expect(await cut(), "wide font").toEqual([]);
     // The bar itself stays inside the screen.
     const box = (await nav.boundingBox())!;
     expect(box.x).toBeGreaterThanOrEqual(0);

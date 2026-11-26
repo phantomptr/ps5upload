@@ -32,7 +32,8 @@ export default function NetworkPanel({ mgmtAddr }: { mgmtAddr: string }) {
     try {
       const d = await netInterfacesGet(mgmtAddr);
       if (myId !== reqIdRef.current) return;
-      setData(d);
+      // An answer with no list (an older helper, a cut reply) is an empty list, not a crash.
+      setData({ ...d, interfaces: Array.isArray(d?.interfaces) ? d.interfaces : [] });
     } catch (e) {
       if (myId !== reqIdRef.current) return;
       setError(humanizeCaught(e));

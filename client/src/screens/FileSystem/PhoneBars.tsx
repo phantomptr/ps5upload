@@ -185,7 +185,7 @@ export function PhoneSelectionActions({
       aria-label={label}
       data-testid="fs-selection-actions-bar"
       // Where the bottom navigation floats (TabNav), the same shape.
-      className="glass-float elev-2 fixed inset-x-3 bottom-[calc(var(--safe-bottom)_+_0.6rem)] z-40 flex h-16 items-stretch justify-around gap-0.5 rounded-full p-1.5 roomy:hidden"
+      className="glass-float elev-2 fixed inset-x-3 bottom-[calc(var(--safe-bottom)_+_0.6rem)] z-40 flex min-h-16 items-stretch justify-around gap-0.5 rounded-[2rem] p-1.5 roomy:hidden"
     >
       {actions.map((a) => (
         <button
@@ -202,7 +202,7 @@ export function PhoneSelectionActions({
           }
         >
           <a.icon size={20} aria-hidden />
-          <span className="line-clamp-2 max-w-full px-0.5 text-center text-[0.625rem] leading-[1.15] tracking-tight break-words hyphens-auto">{a.label}</span>
+          <span className="line-clamp-3 max-w-full px-0.5 text-center text-[0.625rem] leading-[1.15] tracking-tight break-words hyphens-auto">{a.label}</span>
         </button>
       ))}
     </div>

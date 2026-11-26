@@ -7,6 +7,10 @@ import { routeEngine, seedConsole } from "./fixtures/engine";
 // "Рекомендуется" in Workshop's three choices, and German's "Hochladen & installieren" under the
 // sidebar's pin and hide buttons.
 
+// A wide font, as on Linux and some Android phones: the app's own font stack falls to whatever
+// the system has, and labels that fit in a Mac's letters were cut there.
+const WIDE_FONT = "*{font-family:Verdana,'DejaVu Sans',sans-serif!important}";
+
 async function open(page: Page, lang: string, route: string) {
   await seedConsole(page);
   await page.addInitScript((lang) => window.localStorage.setItem("ps5upload.lang", lang), lang);
@@ -44,8 +48,9 @@ test.describe("phone", () => {
   });
 
   test("Files in German and Russian: the selection bar shows each action's whole name", async ({ page }) => {
-    for (const lang of ["de", "ru"]) {
+    for (const [lang, wide] of [["de", false], ["ru", false], ["de", true], ["ru", true]] as const) {
       const main = await open(page, lang, "/files");
+      if (wide) await page.addStyleTag({ content: WIDE_FONT });
       await main.getByTestId("fs-phone-more").click({ timeout: 60_000 });
       // "Select" in the header's menu: selection mode with nothing picked yet.
       await page.getByRole("menuitem").nth(4).click();
@@ -56,7 +61,7 @@ test.describe("phone", () => {
           .filter((el) => el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1)
           .map((el) => el.textContent),
       );
-      expect(cut, lang).toEqual([]);
+      expect(cut, `${lang}${wide ? " (wide font)" : ""}`).toEqual([]);
       const box = (await bar.boundingBox())!;
       for (const b of await bar.locator("button").all()) {
         const r = (await b.boundingBox())!;
