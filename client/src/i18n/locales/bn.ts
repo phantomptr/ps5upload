@@ -190,6 +190,8 @@ update_skipped_note: "আপনি v{version} বাদ দিয়েছেন
 update_unskip: "বাদ দেবেন না",
 update_toast_installs_on_quit: "বন্ধ করলে ইনস্টল হবে",
 update_install_failed_title: "আপডেট ইনস্টল হয়নি",
+update_finishing_title: "আপডেট শেষ হচ্ছে…",
+update_finishing_body: "শেষ হলে PS5Upload নিজে থেকেই আবার চালু হবে।",
 update_install_failed_body: "v{version} ইনস্টল করা যায়নি, তাই PS5Upload এখনও পুরোনো সংস্করণে আছে।",
 update_install_failed_reason: "কারণ: {message}",
 update_quit_app: "PS5Upload বন্ধ করুন",

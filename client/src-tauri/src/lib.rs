@@ -166,6 +166,10 @@ pub fn run() {
     // for it before anything else, or its single-instance lock sends this launch away.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     commands::self_install::wait_for_previous_instance();
+    // The program file as it is now: an install still working from the last quit may replace
+    // it under this launch (`update_wait_for_install` then starts the new one).
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    commands::self_install::note_program();
 
     let builder = tauri::Builder::default();
     // Single-instance MUST run before any other setup (window creation,
@@ -734,6 +738,7 @@ pub fn run() {
             commands::update_install_on_quit,
             commands::update_quit_for_manual_install,
             commands::update_last_install,
+            commands::update_wait_for_install,
             commands::update_forget_failure,
             commands::update_old_downloads,
             commands::update_remove_old_downloads,

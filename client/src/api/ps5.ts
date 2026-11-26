@@ -5767,12 +5767,23 @@ export interface LastInstall {
   message: string;
   /** Not reported before: say so once. */
   new: boolean;
+  /** The installer is still working (the app was opened again while an install from the last
+   *  quit runs): nothing is judged yet. Wait for it with `updateWaitForInstall`. */
+  pending?: boolean;
 }
 
 /** The last install's outcome (null when there was none). Also deletes what a finished
  *  install left in the app's updates folder. Once per launch. */
 export async function updateLastInstall(): Promise<LastInstall | null> {
   return invoke<LastInstall | null>("update_last_install");
+}
+
+/** An install is still working (`LastInstall.pending`): wait for it, at most a few minutes.
+ *  "relaunch": the app quits now and starts again as the new version. "report": it ended and
+ *  this copy is unchanged; `updateLastInstall` now says what happened. "keep-running": it is
+ *  still working; carry on and say nothing. */
+export async function updateWaitForInstall(): Promise<"relaunch" | "report" | "keep-running"> {
+  return invoke<"relaunch" | "report" | "keep-running">("update_wait_for_install");
 }
 
 /** Forget a failed install so that version may be installed by itself again ("Try again"). */

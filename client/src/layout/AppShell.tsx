@@ -16,6 +16,7 @@ import ConsoleTabs from "./ConsoleTabs";
 import ActivityBar from "./ActivityBar";
 import { WhatsNewOnLaunch } from "./UpdateToast";
 import UpdateBanner from "./UpdateBanner";
+import UpdateFinishing from "./UpdateFinishing";
 import { useWebUpdateStore } from "./WebUpdateToast";
 import { Button } from "../components/Button";
 import {
@@ -1902,6 +1903,8 @@ export default function AppShell() {
                 that runs a newer helper than this app (lib/updateNotice). A routine update is a
                 dot on Settings and a row there. Pinned above the scroll area. */}
             <UpdateBanner />
+            {/* Opened again while an update from the last quit is still replacing the app. */}
+            <UpdateFinishing />
             {/* The first launch of a new version: its release notes, once. */}
             <WhatsNewOnLaunch />
             {/* Vertical scroll only. overflow-x-hidden is a backstop: the
