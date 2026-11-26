@@ -6,6 +6,11 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Files on a phone**
+- **Name and path fields get the full width (#936).** New folder, New file, Rename, Download from a link and Go to path no longer squeeze the text box: on a phone the field takes the width of the card and its buttons sit on their own line, so you can see what you type and the buttons never break mid-word. Tablets and computers look as before.
+
+## 12.6.34
+
 **Payloads**
 - **Your own payload sources are back.** In Payloads, add a GitHub, Gitea or Forgejo project that publishes payload files, and pick the file once (for example `kstuff.elf`). Its card shows the release you have, says when a newer one is out, and has Download, Update and Send to PS5. Nothing happens on its own: it checks only when you open Payloads or press Check, downloads only when you press Download, and before sending shows the file, its release, size and checksum. Only add projects you trust. The built-in list stays a guide with links.
 
