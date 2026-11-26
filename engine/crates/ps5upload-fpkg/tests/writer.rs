@@ -371,6 +371,71 @@ fn a_package_of_a_game_that_declares_no_languages_gets_its_default_alone() {
     assert_eq!(v["chunkDefaultLanguage"], "de-DE");
 }
 
+/// A libSceAmpr game whose own `ampr_emu.index` is stale: the check of the folder says so (it
+/// matters for the folder used as it is), but the package gets an index made from the files it
+/// carries, so the build reports no warning about it.
+#[test]
+fn a_stale_index_the_build_replaces_is_no_warning() {
+    let source_dir = TempDir::new("stale-warning-source");
+    let output_dir = TempDir::new("stale-warning-out");
+    write_tree(source_dir.path());
+    let mut eboot = vec![0u8; 8192];
+    eboot[4096..4096 + 14].copy_from_slice(b"libSceAmpr.prx");
+    std::fs::write(source_dir.path().join("eboot.bin"), &eboot).unwrap();
+    // The index of some other day: a file that is gone, and eboot.bin at another size.
+    let stale = ps5upload_fpkg::ampr_index::build(
+        &[
+            ("eboot.bin".to_string(), 100),
+            ("data/gone.bin".to_string(), 5),
+        ],
+        0,
+    )
+    .unwrap();
+    std::fs::write(source_dir.path().join("ampr_emu.index"), &stale).unwrap();
+
+    let inspection = build::inspect(source_dir.path(), output_dir.path()).unwrap();
+    let check = inspection
+        .checks
+        .iter()
+        .find(|c| c.name == "ampr_emu.index for a libSceAmpr title")
+        .expect("the index check");
+    assert!(!check.ok, "{}", check.detail);
+    assert!(check.detail.contains("is stale"), "{}", check.detail);
+    assert_eq!(check.applies_to, Some(source::applies::SOURCE_AS_IS));
+
+    let request = BuildRequest {
+        time: Some((1_700_000_000, 0)),
+        seed: Some([7; 16]),
+        ..BuildRequest::new(source_dir.path(), output_dir.path())
+    };
+    let report = build::build(&request, &mut |_| {}).unwrap();
+    assert!(report.verify.ok());
+    assert!(
+        !report.warnings.iter().any(|w| w.contains("ampr_emu.index")),
+        "{:?}",
+        report.warnings
+    );
+    // What went in is the fresh one: every file of the image at its size (the icons are the
+    // container's, so the image and its index leave them out).
+    let mut pkg = source::open(&report.path).unwrap();
+    let index = pkg.read("ampr_emu.index").unwrap();
+    assert_ne!(index, stale);
+    let mut listed: Vec<(String, u64)> = ps5upload_fpkg::ampr_index::parse(&index)
+        .unwrap()
+        .into_iter()
+        .map(|e| (e.path, e.size))
+        .collect();
+    let mut carried: Vec<(String, u64)> = pkg
+        .files()
+        .iter()
+        .filter(|f| f.path != "ampr_emu.index" && !f.path.starts_with("sce_sys/icon0."))
+        .map(|f| (f.path.clone(), f.size))
+        .collect();
+    listed.sort();
+    carried.sort();
+    assert_eq!(listed, carried);
+}
+
 /// A game whose param.json names a content id with a path in it (36 characters, like a real
 /// one) is refused: the id names the package file, which landed outside the chosen folder.
 #[test]

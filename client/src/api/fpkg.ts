@@ -26,6 +26,19 @@ export interface FpkgCheck {
   name: string;
   ok: boolean;
   detail: string;
+  /** On a finding about the game's own `ampr_emu.index`, which outputs it matters for:
+   *  `packs_kept` only for one that keeps the game's asset packs (that one carries the index as
+   *  it is), `source_as_is` for none (everything made from the game gets a fresh index).
+   *  Absent: it matters whatever is made. */
+  applies_to?: "packs_kept" | "source_as_is" | (string & {});
+}
+
+/** Whether a failed check is a warning for what is about to be made. `packsKept`: the output
+ *  holds the game in the asset packs the source has it in (never for a game in no packs). */
+export function checkMatters(check: FpkgCheck, packsKept: boolean): boolean {
+  if (check.applies_to === "packs_kept") return packsKept;
+  if (check.applies_to === "source_as_is") return false;
+  return true;
 }
 
 /** One compression level's estimated package size and build time for a game. */

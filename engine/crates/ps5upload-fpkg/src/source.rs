@@ -482,6 +482,35 @@ pub struct Check {
     pub name: String,
     pub ok: bool,
     pub detail: String,
+    /// Set on a finding about a file of the source that not everything made from it carries:
+    /// which outputs the finding matters for ([`applies`]). Absent: it matters whatever is
+    /// made.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub applies_to: Option<&'static str>,
+}
+
+/// The outputs a finding about the source's own `ampr_emu.index` matters for
+/// ([`Check::applies_to`]). The source is checked before anyone has said what to make of it,
+/// and most of what is made gets a fresh index; a warning about the old one is then about a
+/// file that never ships.
+pub mod applies {
+    /// Only an output that keeps the game's asset packs (a package, image or folder with the
+    /// packs as they are): it carries the source's index byte for byte. Unpacking the packs or
+    /// making new ones writes a fresh index.
+    pub const PACKS_KEPT: &str = "packs_kept";
+    /// Only the source used as it is (uploaded or mounted): a game that is not in packs gets a
+    /// fresh index in every package, image and folder made from it.
+    pub const SOURCE_AS_IS: &str = "source_as_is";
+
+    /// Whether a finding marked `applies_to` matters for an output whose game is still in the
+    /// packs the source has it in (`packs_kept`; `false` too for a game in no packs).
+    pub fn to_output(applies_to: Option<&str>, packs_kept: bool) -> bool {
+        match applies_to {
+            Some(PACKS_KEPT) => packs_kept,
+            Some(SOURCE_AS_IS) => false,
+            _ => true,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -504,6 +533,7 @@ impl Readiness {
             name: name.to_string(),
             ok,
             detail: detail.into(),
+            applies_to: None,
         });
     }
 }
@@ -974,9 +1004,21 @@ fn scan_for(tree: &mut dyn SourceTree, rel: &str, start: u64, len: u64, needle: 
 
 /// Does the folder's own `ampr_emu.index` describe the folder? `ampr_emu` trusts its sizes, so
 /// a stale one is worth saying, even though a package always carries a freshly generated one.
-fn ampr_index_check(tree: &mut dyn SourceTree) -> (bool, String) {
-    let name = crate::ampr_index::NAME;
+/// A finding that does not hold says which outputs it matters for ([`applies`]): the index of
+/// a game in packs ships only in an output that keeps the packs, and anyone else's ships in
+/// nothing made from the game.
+fn ampr_index_check(tree: &mut dyn SourceTree) -> (bool, String, Option<&'static str>) {
     let packs = packed_kind(tree).ok().flatten();
+    let (ok, detail) = ampr_index_verdict(tree, packs);
+    let applies_to = (!ok).then_some(match packs {
+        Some(_) => applies::PACKS_KEPT,
+        None => applies::SOURCE_AS_IS,
+    });
+    (ok, detail, applies_to)
+}
+
+fn ampr_index_verdict(tree: &mut dyn SourceTree, packs: Option<&'static str>) -> (bool, String) {
+    let name = crate::ampr_index::NAME;
     let Some(at) = tree
         .files()
         .iter()
@@ -988,7 +1030,8 @@ fn ampr_index_check(tree: &mut dyn SourceTree) -> (bool, String) {
                 false,
                 format!(
                     "the game is in {} asset packs and has no {name}: the AMPR runtime finds a \
-                     packed file only through its record there, so none would be served",
+                     packed file only through its record there, so none would be served from \
+                     anything that keeps the packs",
                     packs.unwrap_or_default()
                 ),
             );
@@ -1001,12 +1044,19 @@ fn ampr_index_check(tree: &mut dyn SourceTree) -> (bool, String) {
             ),
         );
     };
-    // A packed game's index goes into a package or image as it is; anyone else's is made again.
-    let regenerated = if packs.is_some() {
-        "a packed game keeps its index as it is, so convert it again (zstd packs) or rebuild \
-         the index"
-    } else {
-        "a package or a game image carries one generated from its files instead"
+    // A packed game's index goes as it is into whatever keeps the packs; anyone else's is made
+    // again in everything made from the game.
+    let regenerated = match packs {
+        Some("zstd") => {
+            "it goes as it is into a package, image or folder that keeps the packs; unpacking \
+             the asset packs or making new zstd packs writes a fresh one, and so does Rebuild \
+             AMPR index"
+        }
+        Some(_) => {
+            "it goes as it is into a package, image or folder that keeps the packs; unpacking \
+             the asset packs writes a fresh one"
+        }
+        None => "a package, image or folder made from it carries one generated from its files",
     };
     let Ok(bytes) = read_small(tree, &at, MAX_INDEX_BYTES) else {
         return (
@@ -1168,8 +1218,13 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Readiness {
     // CE-108255-1); the same build with the index at the folder root played (FW 5.10).
     // A game in packs is read through its index whatever its eboot imports.
     if imports_ampr(tree, "eboot.bin") || packed_kind(tree).ok().flatten().is_some() {
-        let (ok, detail) = ampr_index_check(tree);
-        r.push("ampr_emu.index for a libSceAmpr title", ok, detail);
+        let (ok, detail, applies_to) = ampr_index_check(tree);
+        r.checks.push(Check {
+            name: "ampr_emu.index for a libSceAmpr title".to_string(),
+            ok,
+            detail,
+            applies_to,
+        });
     }
 
     // A module named in another letter case than the path eboot.bin loads: fine in an exFAT
@@ -1798,6 +1853,8 @@ mod tests {
         let ampr = check(&dir);
         assert!(ampr.ok, "{}", ampr.detail);
         assert!(ampr.detail.contains("matches"), "{}", ampr.detail);
+        // A finding that holds matters whatever is made.
+        assert_eq!(ampr.applies_to, None);
 
         // A stale one (a file grew after it was made) is reported, never passed unchecked.
         std::fs::write(dir.join("eboot.bin"), [eboot.clone(), vec![0; 16]].concat()).unwrap();
@@ -1805,6 +1862,15 @@ mod tests {
         assert!(!ampr.ok, "{}", ampr.detail);
         assert!(
             ampr.detail.contains("eboot.bin is listed at 8192 bytes"),
+            "{}",
+            ampr.detail
+        );
+        // The game is in no packs: everything made from it gets a fresh index, so the finding
+        // is about this folder used as it is and no warning for a package, image or folder.
+        assert_eq!(ampr.applies_to, Some(applies::SOURCE_AS_IS));
+        assert!(!applies::to_output(ampr.applies_to, false));
+        assert!(
+            ampr.detail.contains("carries one generated from its files"),
             "{}",
             ampr.detail
         );
@@ -1857,6 +1923,15 @@ mod tests {
             "{}",
             ampr.detail
         );
+        // A packed game's index ships in whatever keeps the packs, and only there.
+        assert_eq!(ampr.applies_to, Some(applies::PACKS_KEPT));
+        assert!(applies::to_output(ampr.applies_to, true));
+        assert!(!applies::to_output(ampr.applies_to, false));
+        assert!(
+            ampr.detail.contains("unpacking the asset packs"),
+            "{}",
+            ampr.detail
+        );
         // Without the packed file listed, it is never served.
         std::fs::write(dir.join("ampr_emu.index"), &index).unwrap();
         let ampr = check(&dir);
@@ -1868,6 +1943,41 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A finding with no scope matters for every output; one about the source's own index
+    /// only where that index ships.
+    #[test]
+    fn a_finding_matters_only_where_its_file_ships() {
+        for packs_kept in [false, true] {
+            assert!(applies::to_output(None, packs_kept));
+            assert!(applies::to_output(Some("something new"), packs_kept));
+            assert!(!applies::to_output(Some(applies::SOURCE_AS_IS), packs_kept));
+            assert_eq!(
+                applies::to_output(Some(applies::PACKS_KEPT), packs_kept),
+                packs_kept
+            );
+        }
+        // On the wire only when set, so a reader that knows nothing of it sees what it did.
+        let plain = Check {
+            name: "x".into(),
+            ok: true,
+            detail: "y".into(),
+            applies_to: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&plain).unwrap(),
+            r#"{"name":"x","ok":true,"detail":"y"}"#
+        );
+        let scoped = Check {
+            ok: false,
+            applies_to: Some(applies::PACKS_KEPT),
+            ..plain
+        };
+        assert_eq!(
+            serde_json::to_string(&scoped).unwrap(),
+            r#"{"name":"x","ok":false,"detail":"y","applies_to":"packs_kept"}"#
+        );
     }
 
     #[test]

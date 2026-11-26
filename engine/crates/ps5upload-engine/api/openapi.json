@@ -1975,6 +1975,13 @@
       "Check": {
         "description": "One readiness finding: what was checked, whether it holds, and what was seen.",
         "properties": {
+          "applies_to": {
+            "description": "Set on a finding about a file of the source that not everything made from it carries:\nwhich outputs the finding matters for ([`applies`]). Absent: it matters whatever is\nmade.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "detail": {
             "type": "string"
           },

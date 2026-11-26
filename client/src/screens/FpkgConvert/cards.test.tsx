@@ -480,6 +480,50 @@ describe("GameCard archive source", () => {
     // The game being made stays put.
     expect(html).toMatch(/id="fpkg-source"[^>]*disabled|disabled[^>]*id="fpkg-source"/);
   });
+
+  // The check under ① is of the source as it is. A packed game's own ampr_emu.index goes into
+  // what keeps the packs, and a fresh one into anything else: the finding is a warning only for
+  // the first (a .ffpkg in zstd packs made into a .pkg warned although the package was fine).
+  it("warns about the game's stale index only when what is made carries it", () => {
+    const stale = "the folder's ampr_emu.index is stale (7 listed missing, 0 unlisted, 10 sizes differ)";
+    const inspection = (applies_to?: string): FpkgInspection =>
+      ({
+        source: "image /games/Packed.ffpkg",
+        files: 3,
+        bytes: 3 << 20,
+        content_id: "UP9000-PPSA01234_00-PACKEDGAME000000",
+        title: "Packed Game",
+        planned_size: 3 << 20,
+        output_free: 1 << 40,
+        packs: "zstd",
+        checks: [
+          { name: "eboot.bin present", ok: true, detail: "the title module" },
+          { name: "ampr_emu.index for a libSceAmpr title", ok: false, detail: stale, applies_to },
+        ],
+      }) as FpkgInspection;
+    const render = (applies_to: string | undefined, packsKept: boolean) =>
+      renderToStaticMarkup(
+        <MemoryRouter>
+          <GameCard {...props("/games/Packed.ffpkg")} inspection={inspection(applies_to)} packsKept={packsKept} />
+        </MemoryRouter>,
+      );
+    const warned = (html: string) => html.includes("text-[var(--color-warn)]") && html.includes("⚠");
+    // The packs stay: the stale index ships, and it is a warning.
+    const kept = render("packs_kept", true);
+    expect(warned(kept)).toBe(true);
+    expect(kept).not.toContain("check-replaced");
+    // Unpacked (or packed again): a fresh index is written. No warning; the finding is still
+    // there to read with the other checks.
+    const unpacked = render("packs_kept", false);
+    expect(warned(unpacked)).toBe(false);
+    expect(unpacked).toContain("✓");
+    expect(unpacked).toContain("Checks passed: 1");
+    expect(unpacked).toMatch(/data-testid="check-replaced"[^>]*>[^<]*is stale \(7 listed missing/);
+    // A game in no packs gets a fresh index in everything made from it.
+    expect(warned(render("source_as_is", false))).toBe(false);
+    // A finding with no scope (an older engine, or any other check) warns as before.
+    expect(warned(render(undefined, false))).toBe(true);
+  });
 });
 
 describe("unfinished swaps", () => {

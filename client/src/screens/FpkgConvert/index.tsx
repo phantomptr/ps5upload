@@ -852,6 +852,11 @@ export default function WorkshopScreen() {
       : undefined;
   const pkgUnpackOn = !!pkgUnpackChoice?.on;
   const pkgLeavesOutEmu = pkgUnpackOn && leaveOutEmu;
+  // Whether what is about to be made holds the game in the packs it is in now, and so carries
+  // its own ampr_emu.index as it is. Unpacking it or making new packs writes a fresh index, and
+  // a warning about the old one would be about a file that never ships.
+  const packsKept =
+    !!inspection?.packs && !inspection.ps4_game && (build.kind === "pkg" ? !pkgUnpackOn : !unpackOn && !packsOn);
   // "Remove backport libraries" is for an image or folder of the one game checked, when its
   // fakelib holds any; not with an update merged in (the merged game is another source).
   const backport =
@@ -1090,6 +1095,7 @@ export default function WorkshopScreen() {
       }
       canBrowse={canBrowse}
       inspection={inspection}
+      packsKept={packsKept}
       checking={checking}
       locked={locked}
       queueStarts={queueAutoStart}

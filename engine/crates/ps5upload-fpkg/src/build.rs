@@ -353,8 +353,13 @@ fn build_mode(
         ));
     }
     let readiness = source::readiness(tree.as_mut());
+    // Only what this package will carry: `tree` is the game as it is packaged, so a game still
+    // in packs here keeps its own `ampr_emu.index`, and any other gets one generated below. A
+    // stale index that is about to be replaced is no warning.
+    let packs_kept = source::packed_kind(tree.as_mut()).ok().flatten().is_some();
     let warnings: Vec<String> = readiness
         .warnings()
+        .filter(|c| source::applies::to_output(c.applies_to, packs_kept))
         .map(|c| format!("{}: {}", c.name, c.detail))
         .collect();
     let param_json =
@@ -1608,6 +1613,7 @@ fn licence_only(source_path: &Path, info: &crate::ps4_pkg::Ps4Info) -> Inspectio
         planned_size: 0,
         output_free: None,
         checks: vec![source::Check {
+            applies_to: None,
             name: "add-on data".into(),
             ok: false,
             detail: crate::ps4_pkg::LICENCE_ONLY.into(),
@@ -1656,6 +1662,7 @@ pub fn inspect_with_update(
         name: "nothing left out".into(),
         ok: false,
         detail,
+        applies_to: None,
     }));
     // A PS4 game: param.sfo, no param.json. What a PS5 package needs is no warning for it.
     let has = |name: &str| files.iter().any(|f| f.path.eq_ignore_ascii_case(name));

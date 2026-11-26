@@ -354,13 +354,22 @@ pub(crate) mod tests {
         out: &Path,
         reader: ps5upload_fpkg::build::SourceReader,
     ) -> Box<dyn SourceTree> {
+        let built = package_report(src, out, Some(reader));
+        ps5upload_fpkg::source::open(&built.path).unwrap()
+    }
+
+    /// [`package`]'s build report; without a `reader` the game goes in as it is, packs and all.
+    fn package_report(
+        src: &Path,
+        out: &Path,
+        reader: Option<ps5upload_fpkg::build::SourceReader>,
+    ) -> ps5upload_fpkg::build::BuildReport {
         std::fs::create_dir_all(out).unwrap();
         let mut request = ps5upload_fpkg::build::BuildRequest::new(src, out);
         request.level = ps5upload_fpkg::kraken::Level::Fast;
-        request.reader = Some(reader);
-        let built = ps5upload_fpkg::build::build(&request, &mut |_| {})
-            .unwrap_or_else(|e| panic!("{}: {e}", src.display()));
-        ps5upload_fpkg::source::open(&built.path).unwrap()
+        request.reader = reader;
+        ps5upload_fpkg::build::build(&request, &mut |_| {})
+            .unwrap_or_else(|e| panic!("{}: {e}", src.display()))
     }
 
     /// Unpacking as Convert does it, `emulator` replacing one that only suits packs (`None`:
@@ -463,6 +472,79 @@ pub(crate) mod tests {
         let names = names_of(&*bare);
         assert!(!names.iter().any(|n| is_emulator_file(n)), "{names:?}");
         assert_index_lists_the_package(&mut *bare);
+    }
+
+    /// A zstd-packed game whose own `ampr_emu.index` no longer describes it (a loose file
+    /// resized and another gone since the packs were made). The check of the source says so,
+    /// and says where it matters: in what keeps the packs. A package with the packs unpacked
+    /// carries a fresh index of its own files and reports no warning (the report that
+    /// "7 listed missing, 10 sizes differ" was shown for a package that installed and
+    /// played); a package that keeps the packs carries the stale index and still warns.
+    #[test]
+    fn a_stale_index_warns_only_where_it_ships() {
+        const CHECK: &str = "ampr_emu.index for a libSceAmpr title";
+        let scratch = Scratch::new("pkg-stale");
+        let root = &scratch.0;
+        let src = game(root, true);
+        // A loose file the index will list and the game will then lose.
+        std::fs::write(src.join("sce_sys/extra.dat"), b"gone later").unwrap();
+        let packed = root.join("packed");
+        zstd_packed(&src, &packed);
+        // What a run left is not in the index either way; it would only add "unlisted".
+        std::fs::remove_file(packed.join("ampr_commands.bin")).unwrap();
+        std::fs::remove_file(packed.join("ampr_emu.log")).unwrap();
+        let fresh = ps5upload_fpkg::build::inspect(&packed, root).unwrap();
+        let before = fresh.checks.iter().find(|c| c.name == CHECK).unwrap();
+        assert!(before.ok, "{}", before.detail);
+
+        // The source goes stale: eboot.bin grows, the loose file goes.
+        let mut eboot = std::fs::read(packed.join("eboot.bin")).unwrap();
+        eboot.extend_from_slice(&[0u8; 4096]);
+        std::fs::write(packed.join("eboot.bin"), &eboot).unwrap();
+        std::fs::remove_file(packed.join("sce_sys/extra.dat")).unwrap();
+        let stale = std::fs::read(packed.join(ampr_index::NAME)).unwrap();
+
+        let inspection = ps5upload_fpkg::build::inspect(&packed, root).unwrap();
+        assert_eq!(inspection.packs, Some("zstd"));
+        let check = inspection.checks.iter().find(|c| c.name == CHECK).unwrap();
+        assert!(!check.ok);
+        assert!(
+            check.detail.contains(
+                "is stale (1 listed missing, 0 unlisted, 1 sizes differ; eboot.bin is listed at"
+            ),
+            "{}",
+            check.detail
+        );
+        assert_eq!(
+            check.applies_to,
+            Some(ps5upload_fpkg::source::applies::PACKS_KEPT)
+        );
+
+        // Unpacked into a package: a fresh index of what the package carries, and no warning.
+        // (ampr-emu-ng came with the packs and is replaced, as in any unpack.)
+        let reader = unpacking(Some(ampr_emu("0.4.2.1")));
+        let unpacked = package_report(&packed, &root.join("unpacked"), Some(reader));
+        assert!(
+            !unpacked.warnings.iter().any(|w| w.contains(CHECK)),
+            "{:?}",
+            unpacked.warnings
+        );
+        let mut pkg = ps5upload_fpkg::source::open(&unpacked.path).unwrap();
+        assert_ne!(pkg.read(ampr_index::NAME).unwrap(), stale);
+        assert_index_lists_the_package(&mut *pkg);
+        assert_eq!(pkg.read("eboot.bin").unwrap(), eboot);
+
+        // The packs kept: the stale index is what the package carries, and the build says so.
+        let kept = package_report(&packed, &root.join("kept"), None);
+        assert!(
+            kept.warnings
+                .iter()
+                .any(|w| w.starts_with(CHECK) && w.contains("is stale")),
+            "{:?}",
+            kept.warnings
+        );
+        let mut pkg = ps5upload_fpkg::source::open(&kept.path).unwrap();
+        assert_eq!(pkg.read(ampr_index::NAME).unwrap(), stale);
     }
 
     /// The same for an LZ4-packed image of a libSceAmpr game: its ampr_emu, new enough, is

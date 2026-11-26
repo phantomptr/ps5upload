@@ -1,6 +1,8 @@
 // #933: a game in asset packs made into a .pkg. "Unpack the asset packs" is ticked by default,
 // "Leave out the AMPR emulator" sits under it unticked (and goes away when unpacking is off), and
 // both reach the engine's package build. A plain game is offered neither.
+// The packed game's own ampr_emu.index is stale: that is a warning only while the package would
+// keep the packs (and the index with them), not while it unpacks them and gets a fresh one.
 import { expect, test } from "@playwright/test";
 
 test("a packed game's package is unpacked by default and can leave the emulator out", async ({ page }) => {
@@ -15,7 +17,19 @@ test("a packed game's package is unpacked by default and can leave the emulator 
     title: source.endsWith("Packed") ? "Packed Game" : "Plain Game",
     planned_size: 3 << 20,
     output_free: 1 << 40,
-    checks: [{ name: "eboot.bin", ok: true, detail: "ok" }],
+    checks: [
+      { name: "eboot.bin", ok: true, detail: "ok" },
+      ...(source.endsWith("Packed")
+        ? [
+            {
+              name: "ampr_emu.index for a libSceAmpr title",
+              ok: false,
+              detail: "the folder's ampr_emu.index is stale (7 listed missing, 0 unlisted, 10 sizes differ)",
+              applies_to: "packs_kept",
+            },
+          ]
+        : []),
+    ],
     ...(source.endsWith("Packed") ? { packs: "zstd" } : {}),
   });
   await page.route(
@@ -64,9 +78,16 @@ test("a packed game's package is unpacked by default and can leave the emulator 
   await expect(unpack).toBeChecked();
   const leaveOut = main.getByTestId("leave-out-ampr-emu").getByRole("checkbox");
   await expect(leaveOut).not.toBeChecked();
+  // Unpacked, the package gets a fresh index: the game's stale one is no warning.
+  const stale = main.getByText(/ampr_emu\.index is stale/);
+  await expect(stale).toBeHidden();
+  await expect(main.getByText("Checks passed: 1")).toBeVisible();
   await unpack.uncheck();
   await expect(main.getByTestId("leave-out-ampr-emu")).toHaveCount(0);
+  // With the packs kept, the stale index goes into the package: said under the game.
+  await expect(stale).toBeVisible();
   await unpack.check();
+  await expect(stale).toBeHidden();
   await leaveOut.check();
 
   await main.getByRole("button", { name: "Convert only" }).first().click();
