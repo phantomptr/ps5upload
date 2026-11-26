@@ -814,17 +814,22 @@ static void put_settings(buf_t *b) {
 
 static int do_hello(const uint8_t caller[32], const char *body, size_t n, char *out, size_t cap,
                     const mesh_online_t *on, int non) {
-    char name[NAME_MAX_], kind[KIND_MAX], os[OS_MAX], app[APP_MAX], hex[65], tmp[NAME_MAX_];
+    char name[NAME_MAX_], kind[KIND_MAX], os[OS_MAX], app[APP_MAX], hex[65], *tmp;
     uint8_t ev[32];
     int evicted = 0, isnew = 0, i;
     uint32_t ip = 0;
     dev_t_ *d;
     buf_t b = { out, 0, cap, 0 };
     name[0] = kind[0] = os[0] = app[0] = 0;
-    if (webui_json_str(body, n, "name", tmp, sizeof tmp) == 1) clean_field(name, sizeof name, tmp);
-    if (webui_json_str(body, n, "kind", tmp, sizeof tmp) == 1) clean_field(kind, sizeof kind, tmp);
-    if (webui_json_str(body, n, "os", tmp, sizeof tmp) == 1) clean_field(os, sizeof os, tmp);
-    if (webui_json_str(body, n, "app", tmp, sizeof tmp) == 1) clean_field(app, sizeof app, tmp);
+    /* Each read whole (a string never decodes longer than the body that holds it), then cut to its
+     * field on a character boundary, as the engine cuts it. A name of 64 bytes or more did not fit
+     * the buffer and was dropped: the console went on showing the old one. */
+    if (!(tmp = malloc(n + 1))) return fail(out, cap, "out_of_memory");
+    if (webui_json_str(body, n, "name", tmp, n + 1) == 1) clean_field(name, sizeof name, tmp);
+    if (webui_json_str(body, n, "kind", tmp, n + 1) == 1) clean_field(kind, sizeof kind, tmp);
+    if (webui_json_str(body, n, "os", tmp, n + 1) == 1) clean_field(os, sizeof os, tmp);
+    if (webui_json_str(body, n, "app", tmp, n + 1) == 1) clean_field(app, sizeof app, tmp);
+    free(tmp);
     for (i = 0; i < non; i++)
         if (memcmp(on[i].key, caller, 32) == 0) ip = on[i].ip;
     pthread_mutex_lock(&g_mu);
@@ -1128,7 +1133,7 @@ static int do_lock(const uint8_t caller[32], const char *body, size_t n, char *o
 }
 
 static int do_device(const uint8_t caller[32], const char *body, size_t n, char *out, size_t cap) {
-    char op[16], id[80], name[NAME_MAX_ * 2];
+    char op[16], id[80];
     uint8_t key[32];
     int forget = 0, r;
     dev_t_ *d, *me;
@@ -1174,11 +1179,20 @@ static int do_device(const uint8_t caller[32], const char *body, size_t n, char 
         return fail(out, cap, "not_found");
     }
     if (!strcmp(op, "rename")) {
-        if (webui_json_str(body, n, "name", name, sizeof name) != 1) {
+        /* Read whole and cut as a hello's name is (one of 128 bytes or more was refused). */
+        char *name = malloc(n + 1);
+        int got;
+        if (!name) {
+            pthread_mutex_unlock(&g_mu);
+            return fail(out, cap, "out_of_memory");
+        }
+        got = webui_json_str(body, n, "name", name, n + 1);
+        if (got == 1) clean_field(d->nick, sizeof d->nick, name);
+        free(name);
+        if (got != 1) {
             pthread_mutex_unlock(&g_mu);
             return fail(out, cap, "bad_request");
         }
-        clean_field(d->nick, sizeof d->nick, name);
     } else if (!strcmp(op, "remove")) {
         add_event("removed", caller, "%s removed %s", me ? shown_name(me) : "A device", shown_name(d));
         d->used = 0;

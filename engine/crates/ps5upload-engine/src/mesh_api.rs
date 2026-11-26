@@ -170,7 +170,26 @@ fn default_name() -> String {
 }
 
 fn name() -> String {
-    saved_name().unwrap_or_else(default_name)
+    mesh_name(&saved_name().unwrap_or_else(default_name))
+}
+
+/// The most a console keeps of a device name, in bytes (the helper's 64-byte field, `mesh.c`).
+const NAME_BYTES: usize = 63;
+
+/// A device name as every console keeps it: a control character is a space, and it is cut to
+/// [`NAME_BYTES`] on a character boundary, as the helper cuts it (`clean_field`). A longer one
+/// used to be dropped whole by the helper, so the consoles went on showing the old name, while
+/// this engine wrote the new one into its drives.
+pub(crate) fn mesh_name(s: &str) -> String {
+    let s: String = s
+        .chars()
+        .map(|c| if c < ' ' || c == '\u{7f}' { ' ' } else { c })
+        .collect();
+    let mut end = s.len().min(NAME_BYTES);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_string()
 }
 
 /// This device's name, as the consoles list it.
@@ -274,7 +293,8 @@ pub struct MeSet {
 }
 
 pub async fn me_set(Json(req): Json<MeSet>) -> Response {
-    let n: String = req.name.trim().chars().take(60).collect();
+    // Kept as the consoles will keep it, so this device shows the name they show.
+    let n = mesh_name(req.name.trim());
     let r = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
         let path = me_path().ok_or_else(|| anyhow::anyhow!("no data directory"))?;
         if n.is_empty() {
@@ -661,9 +681,11 @@ pub async fn device(Json(req): Json<DeviceReq>) -> Response {
     let Some(addr) = crate::required_console_addr(req.addr) else {
         return crate::missing_console_addr();
     };
+    // A new name, cut as the console keeps it.
+    let name = req.name.as_deref().map(mesh_name);
     answer(move || {
         let r = call(&addr, || {
-            mesh::device(&addr, &req.op, &req.id, req.name.as_deref())
+            mesh::device(&addr, &req.op, &req.id, name.as_deref())
         })?;
         Ok(with_supported(r))
     })
@@ -895,6 +917,21 @@ mod tests {
         let v = presence_due(addr, now).unwrap();
         assert!(serde_json::to_vec(&v).unwrap().len() <= 1400);
         assert!(!v.as_array().unwrap().is_empty());
+    }
+
+    /// Cut where the helper cuts it (payload/tests/mesh_selftest.c checks the same names there):
+    /// at most 63 bytes, never inside a character, control characters as spaces.
+    #[test]
+    fn a_device_name_is_cut_as_the_console_cuts_it() {
+        assert_eq!(mesh_name("Gaming PC"), "Gaming PC");
+        assert_eq!(mesh_name(&"x".repeat(300)), "x".repeat(63));
+        // 35 two-byte letters: 31 fit (62 bytes), the 32nd would be cut in half.
+        assert_eq!(mesh_name(&"é".repeat(35)), "é".repeat(31));
+        // A four-byte character over the edge goes whole.
+        let s = format!("{}😀", "a".repeat(61));
+        assert_eq!(mesh_name(&s), "a".repeat(61));
+        assert_eq!(mesh_name("tab\there\u{7f}"), "tab here ");
+        assert!(mesh_name(&"ü".repeat(100)).len() <= NAME_BYTES);
     }
 
     #[test]

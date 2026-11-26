@@ -261,6 +261,51 @@ static void test_hello_and_state(void) {
     CHECK(has(call(MESH_STATE, 1, "{}"), "\"nick\":\"My phone\""));
 }
 
+/* `"name":"<n times s>"` into out. */
+static void name_of(char *out, size_t cap, const char *key, const char *s, int times) {
+    size_t o = (size_t)snprintf(out, cap, "\"%s\":\"", key);
+    while (times-- > 0 && o + strlen(s) + 3 < cap) o += (size_t)snprintf(out + o, cap - o, "%s", s);
+    snprintf(out + o, cap - o, "\"");
+}
+
+/* A long name is cut to 63 bytes on a character boundary, as the engine cuts it (its test
+ * a_device_name_is_cut_as_the_console_cuts_it checks the same names): it was dropped whole, and the
+ * console went on showing the old one. */
+static void test_long_names(void) {
+    char body[1200], want[400];
+    const char *r;
+    start();
+    online(1, 0x0100a8c0u);
+    call(MESH_HELLO, 1, "{\"name\":\"Old name\"}");
+    /* 35 two-byte letters: 31 fit. */
+    name_of(want, sizeof want, "name", "\xc3\xa9", 35);
+    snprintf(body, sizeof body, "{%s}", want);
+    CHECK(has(call(MESH_HELLO, 1, body), "\"ok\":true"));
+    r = call(MESH_STATE, 1, "{}");
+    name_of(want, sizeof want, "name", "\xc3\xa9", 31);
+    CHECK(has(r, want) && !has(r, "\"name\":\"Old name\""));
+    /* Plain letters: 63 of 300. */
+    name_of(want, sizeof want, "name", "x", 300);
+    snprintf(body, sizeof body, "{%s,\"kind\":\"desktop\"}", want);
+    call(MESH_HELLO, 1, body);
+    name_of(want, sizeof want, "name", "x", 63);
+    r = call(MESH_STATE, 1, "{}");
+    CHECK(has(r, want) && has(r, "\"kind\":\"desktop\""));
+    /* A four-byte character over the edge goes whole. */
+    name_of(want, sizeof want, "name", "a", 61);
+    snprintf(body, sizeof body, "{%.*s\xf0\x9f\x98\x80\"}", (int)strlen(want) - 1, want);
+    call(MESH_HELLO, 1, body);
+    CHECK(has(call(MESH_STATE, 1, "{}"), want));
+    /* A nickname too. */
+    name_of(want, sizeof want, "name", "\xc3\xbc", 100);
+    snprintf(body, sizeof body,
+             "{\"op\":\"rename\",\"id\":\"01000000000000000000000000000000000000000000000000000000000000ab\",%s}",
+             want);
+    CHECK(has(call(MESH_DEVICE, 1, body), "\"ok\":true"));
+    name_of(want, sizeof want, "nick", "\xc3\xbc", 31);
+    CHECK(has(call(MESH_STATE, 1, "{}"), want));
+}
+
 static void test_locks(void) {
     const char *r;
     start();
@@ -463,6 +508,7 @@ int main(void) {
     test_ask_limits();
     test_older_app_is_listed();
     test_hello_and_state();
+    test_long_names();
     test_locks();
     test_docs();
     test_doc_unreadable();
