@@ -317,6 +317,53 @@ fn refuse_case_twins(m: &Manifest, root: &Path) -> io::Result<()> {
     }
 }
 
+/// The in-place part file of the file at `rel` (root-relative), as a merge writes it.
+fn part_name(rel: &str) -> String {
+    format!("{rel}.ava-part")
+}
+
+/// A file of `m` and another entry of `m` at that file's in-place part file (`X` and
+/// `X.ava-part`), compared as `fold` (lowercased) or exactly.
+fn part_name_clash(m: &Manifest, fold: bool) -> Option<(&str, &str)> {
+    let key = |p: &str| if fold { p.to_lowercase() } else { p.to_owned() };
+    let paths: std::collections::HashMap<String, &str> = m
+        .entries
+        .iter()
+        .map(|e| (key(&e.path), e.path.as_str()))
+        .collect();
+    m.entries
+        .iter()
+        .filter(|e| e.kind == gen::ENTRY_FILE)
+        .find_map(|e| {
+            paths
+                .get(&key(&part_name(&e.path)))
+                .map(|other| (e.path.as_str(), *other))
+        })
+}
+
+/// Err when `m`, downloaded into the folder `root` that already exists, holds both `X` and
+/// `X.ava-part`. Such a download writes each large file as `<name>.ava-part` beside its place
+/// and renames it at the end, so the one path was two files at once: `X` ended with the other
+/// file's bytes, or `X.ava-part` was renamed away as `X`. A folder that does not exist yet is
+/// staged whole and writes nothing under a part name, so the same tree downloads fine there.
+fn refuse_part_name_clash(m: &Manifest, root: &Path) -> io::Result<()> {
+    let Some((a, b)) = part_name_clash(m, true) else {
+        return Ok(());
+    };
+    if part_name_clash(m, false).is_none() && !ignores_case(root) {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "{b:?} is the name this app gives {a:?} while it is written into a folder that already exists; download to a folder that does not have {} yet",
+            root.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| root.display().to_string())
+        ),
+    ))
+}
+
 /// `m` with every path in the form it is kept under on this computer
 /// (`host_names::escape_path`). The entries keep their order, so their file ids.
 fn kept_manifest(m: &Manifest) -> io::Result<Manifest> {
@@ -340,6 +387,11 @@ impl Sink for CheckedSink {
         };
         if !self.single {
             refuse_case_twins(m, &self.root)?;
+        }
+        // Into a folder that already exists (not staged), large files go through in-place
+        // part files: the decision as the `LocalSink` holds it, a resume's included.
+        if !self.single && self.inner.resume_key().is_some_and(|(_, staged)| !staged) {
+            refuse_part_name_clash(m, &self.root)?;
         }
         *self.landed.lock().unwrap() = Some(m.clone());
         if self.single && self.root.is_dir() {
@@ -1085,12 +1137,24 @@ fn remove_part_files(job_dir: &Path, target: &Path, escape_names: bool) {
     }) else {
         return;
     };
-    for e in m.entries.iter().filter(|e| e.kind == gen::ENTRY_FILE) {
-        let mut p = target.join(&e.path).into_os_string();
-        p.push(".ava-part");
+    for rel in part_files(&m) {
         // `remove_file` takes a symlink itself, never what it points at.
-        let _ = std::fs::remove_file(PathBuf::from(p));
+        let _ = std::fs::remove_file(target.join(rel));
     }
+}
+
+/// The in-place part files (root-relative) of the files of `m`, but for a part name that is
+/// itself a path of `m` in any case: that file is the tree's own (a real `X.ava-part`, landed
+/// or about to be replaced), never `X`'s part file.
+fn part_files(m: &Manifest) -> Vec<String> {
+    let paths: std::collections::HashSet<String> =
+        m.entries.iter().map(|e| e.path.to_lowercase()).collect();
+    m.entries
+        .iter()
+        .filter(|e| e.kind == gen::ENTRY_FILE)
+        .map(|e| part_name(&e.path))
+        .filter(|p| !paths.contains(&p.to_lowercase()))
+        .collect()
 }
 
 fn journal_is_empty(dir: &Path) -> bool {
@@ -2296,6 +2360,73 @@ mod tests {
         sink.prepare(&m).unwrap();
         sink.finish().expect("the folder is this job's own");
         assert_eq!(std::fs::read(target.join("a.bin")).unwrap(), b"abc");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A console folder holding both `X` and `X.ava-part`, downloaded into a folder that already
+    /// exists: `X` is written as `X.ava-part` until it is complete, so the two were one file and
+    /// one of them ended with the other's bytes. Refused before anything is written, and the
+    /// failure's clean-up leaves the `X.ava-part` already there alone (it is the tree's, not a
+    /// part file). Into a new folder (staged whole, no part names) the same tree is fine.
+    #[test]
+    fn a_tree_holding_x_and_x_ava_part_is_refused_into_an_existing_folder_only() {
+        let d = std::env::temp_dir().join(format!("p5a-partname-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let (job, target) = (d.join("job"), d.join("Game"));
+        std::fs::create_dir_all(&job).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        let file = |path: &str| manifest::Entry {
+            kind: gen::ENTRY_FILE,
+            mode: 0o644,
+            size: 5 << 20,
+            mtime: 0,
+            path: path.into(),
+            root: None,
+        };
+        let sink = |root: &Path| CheckedSink {
+            inner: LocalSink::new(root.to_path_buf(), false),
+            root: root.to_path_buf(),
+            single: false,
+            escape_names: false,
+            landed: Mutex::new(None),
+        };
+        for m in [
+            Manifest {
+                entries: vec![file("a/X"), file("a/X.ava-part")],
+            },
+            Manifest {
+                entries: vec![file("a/X.ava-part"), file("a/X")],
+            },
+        ] {
+            let e = sink(&target).prepare(&m).unwrap_err();
+            assert_eq!(e.kind(), io::ErrorKind::InvalidData);
+            assert!(e.to_string().contains("X.ava-part"), "{e}");
+            // A new folder is staged: nothing there is written under a part name.
+            sink(&d.join("New")).prepare(&m).unwrap();
+        }
+        // Different names are no clash.
+        let fine = Manifest {
+            entries: vec![file("a/X"), file("a/Y.ava-part"), file("X.ava-part")],
+        };
+        sink(&target).prepare(&fine).unwrap();
+
+        // The refusal is final: the clean-up runs on the saved manifest, and the tree's own
+        // `X.ava-part` (here from an earlier download) is not X's part file.
+        let m = Manifest {
+            entries: vec![file("a/X"), file("a/X.ava-part"), file("a/Y")],
+        };
+        journal::write_manifest(&job, &m).unwrap();
+        std::fs::create_dir_all(target.join("a")).unwrap();
+        std::fs::write(target.join("a/X.ava-part"), b"real").unwrap();
+        std::fs::write(target.join("a/Y.ava-part"), b"p").unwrap();
+        let part = d.join("Game.ava-part");
+        let refused = terminal(SendError::Source(invalid("clash")));
+        cleanup_after_failure(&refused, &job, &part, &target, false, false);
+        assert_eq!(std::fs::read(target.join("a/X.ava-part")).unwrap(), b"real");
+        assert!(
+            !target.join("a/Y.ava-part").exists(),
+            "Y's part file is the job's"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
