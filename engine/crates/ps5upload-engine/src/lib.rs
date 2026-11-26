@@ -7066,6 +7066,12 @@ async fn ps5_pkg_metadata(
 }
 
 /// GET /api/ps5/volumes?addr=IP:PORT — enumerate mounted PS5 storage volumes.
+///
+/// `total_bytes` and `free_bytes` are the filesystem's own counters (`statfs`), not the figures
+/// of the PS5's Settings > Storage screen, which can show less free space. On internal storage
+/// `free_bytes` already leaves out what the filesystem holds back (`user_reserved_bytes` in
+/// `/api/ps5/hw/storage`). For how much a copy can take, read `allocatable_bytes` and
+/// `likely_fits_bytes`.
 async fn ps5_volumes(
     State(state): State<AppState>,
     Query(q): Query<AddrQuery>,

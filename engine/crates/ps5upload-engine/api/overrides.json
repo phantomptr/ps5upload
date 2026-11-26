@@ -1175,6 +1175,75 @@
   },
   "PUT /api/shared/{name}": {
    "summary": "Write a shared document, 409 when another write came first"
+  },
+  "GET /api/ps5/tailnet": {
+   "summary": "The console's Tailscale node: state, address, peers and who may reach it"
+  },
+  "POST /api/ps5/tailnet": {
+   "summary": "Put the console on Tailscale, pause, sign out, rename it or change who may reach it"
+  },
+  "GET /api/tailnet": {
+   "summary": "This engine's own Tailscale node and the consoles it reaches through it"
+  },
+  "POST /api/tailnet": {
+   "summary": "Turn this engine's own Tailscale node on or off, or change it"
+  },
+  "GET /api/tailnet/route": {
+   "summary": "Why the engine reaches a console the way it does now"
+  },
+  "GET /api/tailnet/via": {
+   "summary": "How the engine reaches one console now: on the home network, or through Tailscale direct or relayed"
+  },
+  "POST /api/console-backup/backup": {
+   "summary": "Back up the chosen parts of a console (saves, captures, payload settings, homebrew) into a folder on this computer"
+  },
+  "POST /api/console-backup/restore": {
+   "summary": "Put a console backup from this computer back onto a console"
+  },
+  "GET /api/console-backup/status": {
+   "summary": "How the running console backup or restore stands"
+  },
+  "POST /api/save-backup/runs/continue": {
+   "summary": "Continue the last save backup run, or retry some of its saves"
+  },
+  "GET /api/save-backup/folders": {
+   "summary": "The folder backups a console may be given back, per folder, newest first"
+  },
+  "POST /api/save-backup/folders/restore": {
+   "summary": "Put a folder backup back where it came from"
+  },
+  "GET /api/save-backup/console/list": {
+   "summary": "One game's save backups on the console's chosen drives"
+  },
+  "POST /api/save-backup/export": {
+   "summary": "Save a save backup as a file for a friend or another PS5"
+  },
+  "POST /api/ps5/pldmgr/autoload": {
+   "summary": "Set Payload Manager's boot autoload switch and list, and read it back"
+  },
+  "GET /api/ps5/rp/controller": {
+   "summary": "What Remote Play sends the console's controller, per controller"
+  },
+  "GET /api/ps5/rp/pair/attempts": {
+   "summary": "The last Remote Play pairing tries and how each ended"
+  },
+  "GET /api/join/profiles": {
+   "summary": "The profiles signed in on a console and which one each guest plays as"
+  },
+  "GET /api/share/{id}": {
+   "summary": "One outgoing share and how it stands"
+  },
+  "GET /api/share/receive/{id}": {
+   "summary": "One incoming share and how it stands"
+  },
+  "POST /api/ps5/kraken/remove": {
+   "summary": "Remove a game Kraken Mount mounts, deleting its source"
+  },
+  "POST /api/ps5/smp/rescan": {
+   "summary": "Ask the console's mounter to scan for games again now"
+  },
+  "GET /api/payloads/{id}/releases/latest": {
+   "summary": "A payload's newest release"
   }
  },
  "tags": {

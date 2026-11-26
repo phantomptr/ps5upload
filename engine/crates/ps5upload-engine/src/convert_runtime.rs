@@ -550,8 +550,9 @@ pub(crate) async fn put_handler(Json(req): Json<ConvertRuntimeRequest>) -> impl 
     }
 }
 
-/// POST /api/ps5/convert-ampr-emu {host} — put ampr_emu (the release the desktop app installs
-/// into games, digest checked, from this computer's cache or downloaded) on the console under
+/// POST /api/ps5/convert-ampr-emu {host} — put the AMPR emulator on the console for Convert on
+/// the PS5. That is ampr_emu, the release the desktop app installs into games (digest checked,
+/// from this computer's cache or downloaded), written under
 /// /data/ps5upload/convert/runtime/ampr_emu-<version>/, so Convert on the PS5 can keep an
 /// emulator when it unpacks asset packs. Only on request, never on its own. Answers {version,
 /// path, written}; written is false when that version was already there. 502 when it could not

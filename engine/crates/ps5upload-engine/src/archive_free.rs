@@ -153,12 +153,16 @@ pub(crate) struct FreeCheckReq {
     password: Option<String>,
 }
 
-/// POST /api/fpkg/extract/free-check — whether an archive can be unpacked with its own space
-/// given back (`free_archive` on `/api/fpkg/extract`), and how: `mode` is `entries` (a `.zip`:
-/// freed file by file), `blocks` (a `.7z` of more than one block: block by block), `parts` (a
-/// multi-part `.rar`: part by part) or `end` (anything else: deleted once the unpack is
-/// finished and checked). `parts` counts the blocks or parts (1 otherwise); `game` is `folder`
-/// or `image`. Changes nothing. 400 with the plain reason when it can't be done.
+/// POST /api/fpkg/extract/free-check — whether an archive can be unpacked with its space given
+/// back. Asks before `free_archive` on `/api/fpkg/extract`, and says how it would go: `mode` is
+/// `entries` (a `.zip`: freed file by file), `blocks` (a `.7z` of more than one block: block by
+/// block), `parts` (a multi-part `.rar`: part by part) or `end` (anything else: deleted once the
+/// unpack is finished and checked). `parts` counts the blocks or parts (1 otherwise); `game` is
+/// `folder` or `image`. `archive_bytes` is the archive's size (every part), `unpacked` what it
+/// unpacks to, `same_drive` whether it sits on the output folder's drive (only then does its
+/// freed space count), `needed` the free bytes the unpack and the build after it need, and
+/// `free` the output folder's free bytes (null when they could not be read). Changes nothing.
+/// 400 with the plain reason when it can't be done, including too little room.
 pub(crate) async fn free_check_handler(Json(req): Json<FreeCheckReq>) -> impl IntoResponse {
     let source = crate::fpkg_api::resolve_engine_path(&req.source);
     if archive_extract::archive_kind(&source).is_none() || !source.is_file() {
