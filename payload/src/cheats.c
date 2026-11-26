@@ -1323,8 +1323,17 @@ static int load_cheat_file(const char *path, int format, cheat_file_t *cf) {
 
 /* ── State persistence (sidecar JSON) ────────────────────────────── */
 
+/* Named by the title id in upper case, whatever the spelling asked with: the watcher reads it by
+ * the running game's own id (upper case), while a cheat file named in lower case listed its title
+ * that way and a toggle saved under it, so on a case-sensitive /data that game's saved switches
+ * were never applied at launch. */
 static void state_path(const char *title_id, char *out, size_t cap) {
-    snprintf(out, cap, "%s/%s.json", CHEATS_STATE_DIR, title_id);
+    char upper[64];
+    size_t i = 0;
+    for (; title_id[i] && i + 1 < sizeof upper; i++)
+        upper[i] = (char)toupper((unsigned char)title_id[i]);
+    upper[i] = '\0';
+    snprintf(out, cap, "%s/%s.json", CHEATS_STATE_DIR, upper);
 }
 
 /* The sidecar is {"<flat index>":true,...}: one flat index across every cheat file of the
@@ -3477,6 +3486,10 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
                           rg_title, title_id);
         return -1;
     }
+    /* From here the running game's own id, as the watcher spells it: an off that could not be
+     * saved, and the crash guard's hold, are looked up by it. Asked with another case, the hold
+     * a switch is to lift stayed, and the game the guard paused could not be resumed. */
+    title_id = rg_title;
 
     /* Auto-enable the engine when a cheat of the running game is turned on. Only here, after the
      * checks above: done first, a request that was then refused (no game, another game, no cheat

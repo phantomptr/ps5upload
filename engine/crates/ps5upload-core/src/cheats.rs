@@ -1057,14 +1057,20 @@ pub fn cheats_import_local(addr: &str, source: &std::path::Path) -> Result<Cheat
         .take(256 * 1024 + 1)
         .read_to_end(&mut bytes)?;
     let (path, bytes) = prepare_local_cheat(filename, &bytes)?;
-    let title = &filename[..9];
+    // Upper case, as the helper names the title's saved switches and the watcher reads them: a
+    // lower-case name looked for `state/ppsa01339.json` and never found saved switches to refuse.
+    let title = filename[..9].to_ascii_uppercase();
     ensure!(
         !cheats_status(addr)?.enabled,
         "Turn off the cheat engine before importing"
     );
     let list = cheats_list(addr)?;
     ensure!(
-        !list.truncated && !list.titles.iter().any(|t| t.title_id == title),
+        !list.truncated
+            && !list
+                .titles
+                .iter()
+                .any(|t| t.title_id.eq_ignore_ascii_case(&title)),
         "Remove existing cheats for this title before importing (this clears saved toggle state)"
     );
     let state = format!("/data/ps5upload/cheats/state/{title}.json");
@@ -1125,7 +1131,9 @@ mod tests {
                     serde_json::json!({"titles": if self.existing { vec![serde_json::json!({"title_id":"PPSA13197"})] } else { vec![] }})
                 } else if method == m::FS_STAT {
                     let b: serde_json::Value = serde_json::from_slice(body)?;
-                    if b["path"].as_str().unwrap().contains("/state/") && !self.state {
+                    // The helper names saved switches by the title id in upper case only.
+                    let p = b["path"].as_str().unwrap();
+                    if p.contains("/state/") && (!self.state || !p.ends_with("/PPSA13197.json")) {
                         return Err(MgmtError {
                             label: "FS_STAT".into(),
                             status: 1,
@@ -1176,6 +1184,25 @@ mod tests {
                 assert_eq!(writes[0]["mode"], "create");
             }
         }
+        // A game patch named in lower case (taken, and written as PPSA13197.xml): its title's
+        // saved switches are found all the same, and refuse it.
+        let lower = dir.join("ppsa13197.xml");
+        std::fs::write(
+            &lower,
+            b"<Patch><Metadata Title=\"D\" Name=\"x\" AppVer=\"01.000.000\"><PatchList>\
+              <Line Type=\"bytes\" Address=\"0x400000\" Value=\"90\"/></PatchList></Metadata></Patch>",
+        )
+        .unwrap();
+        let f = Arc::new(Fake {
+            active: false,
+            existing: false,
+            state: true,
+            writes: Mutex::new(vec![]),
+        });
+        let _g = mgmt::scoped_transport(f.clone());
+        let e = cheats_import_local("h", &lower).unwrap_err().to_string();
+        assert!(e.contains("Saved toggle state"), "{e}");
+        assert!(f.writes.lock().unwrap().is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
