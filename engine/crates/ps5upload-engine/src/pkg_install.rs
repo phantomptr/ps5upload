@@ -4652,7 +4652,7 @@ mod persist_tests {
             "serve_only": true, "staging_path": null,
             "created_at_unix": now_unix(), "last_activity_unix": now_unix()
         }]);
-        let dir = std::env::temp_dir().join(format!("ps5u-persist-{id}"));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-persist-{id}"));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("s.json");
         std::fs::write(&file, saved.to_string()).unwrap();
@@ -4663,7 +4663,7 @@ mod persist_tests {
     /// The same package going to two consoles is two installs, not a retry to refuse.
     #[test]
     fn a_rival_is_the_same_package_for_the_same_console() {
-        let dir = std::env::temp_dir().join(format!("ps5u-rival-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-rival-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let pkg = dir.join("game.pkg");
         std::fs::write(&pkg, vec![7u8; 64]).unwrap();
@@ -4686,7 +4686,7 @@ mod persist_tests {
     /// unchanged.
     #[test]
     fn sessions_survive_a_restart_while_their_files_do() {
-        let dir = std::env::temp_dir().join(format!("ps5u-persist-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-persist-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let pkg = dir.join("game.pkg");
         std::fs::write(&pkg, vec![7u8; 4096]).unwrap();
@@ -4727,7 +4727,7 @@ mod persist_tests {
     /// "already running" — measured on the Phat, 0 of 820 MB "in flight".
     #[test]
     fn a_released_session_stops_blocking_and_is_not_restored() {
-        let dir = std::env::temp_dir().join(format!("ps5u-release-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-release-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let pkg = dir.join("game.pkg");
         std::fs::write(&pkg, vec![7u8; 4096]).unwrap();
@@ -5408,7 +5408,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
     /// keeps a rename off it (`pkg_name_api`). Another package's session never does.
     #[test]
     fn serving_names_the_session_that_reads_a_package() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-serving-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5upload-serving-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (a, b) = (dir.join("a.pkg"), dir.join("b.pkg"));
         std::fs::write(&a, b"a").unwrap();
@@ -5583,7 +5583,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
     }
 
     fn scratch_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ps5upload-crc-{tag}-{}", Uuid::new_v4()));
+        let d = crate::test_tmp::temp_path(format!("ps5upload-crc-{tag}-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -5884,7 +5884,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
 
     #[test]
     fn split_range_reads_within_one_part() {
-        let dir = std::env::temp_dir().join(format!("pkg-test-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("pkg-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let p1 = dir.join("a.pkg");
         std::fs::write(&p1, b"abcdefghij").unwrap();
@@ -5895,7 +5895,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
 
     #[test]
     fn split_range_crosses_parts() {
-        let dir = std::env::temp_dir().join(format!("pkg-test2-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("pkg-test2-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let p1 = dir.join("a.pkg");
         let p2 = dir.join("a.pkg.0");
@@ -5913,7 +5913,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
     /// bytes when a chunk crosses into the next part or the reads go backwards.
     #[test]
     fn split_range_read_chunk_by_chunk_keeps_the_part_open() {
-        let dir = std::env::temp_dir().join(format!("pkg-test3-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("pkg-test3-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let (p1, p2) = (dir.join("a.pkg"), dir.join("a.pkg.0"));
         std::fs::write(&p1, b"AAAAaa").unwrap();
@@ -6398,7 +6398,7 @@ mod browser_file_intake_tests {
     /// and be refused as "an install of this exact package is already running".
     #[tokio::test]
     async fn two_copy_link_clicks_at_once_get_one_link() {
-        let dir = std::env::temp_dir().join(format!("ps5u-link-race-{}", Uuid::new_v4()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-link-race-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let pkg = dir.join("game.pkg");
         let mut bytes: Vec<u8> = (0..8192).map(|i| (i * 31 + 7) as u8).collect();

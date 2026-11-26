@@ -5526,7 +5526,7 @@ mod tests {
     /// this disk really does.
     #[test]
     fn a_folder_says_itself_whether_it_ignores_case() {
-        let dir = std::env::temp_dir().join(format!("ps5u-mesh-case-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-mesh-case-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("probe.txt"), b"x").unwrap();
@@ -5595,7 +5595,7 @@ mod tests {
     #[test]
     fn only_a_folder_with_nothing_of_the_drive_left_is_pruned() {
         use super::Side;
-        let root = std::env::temp_dir().join(format!("mesh-prune-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("mesh-prune-{}", std::process::id()));
         std::fs::create_dir_all(root.join("gone/inner")).unwrap();
         std::fs::write(root.join("gone/.DS_Store"), b"x").unwrap();
         std::fs::create_dir_all(root.join("kept")).unwrap();
@@ -6165,7 +6165,7 @@ mod tests {
     #[test]
     fn a_local_walk_goes_on_past_a_folder_it_cannot_open() {
         use std::os::unix::fs::PermissionsExt;
-        let root = std::env::temp_dir().join(format!("ps5u-mesh-walk-{}", new_id()));
+        let root = crate::test_tmp::temp_path(format!("ps5u-mesh-walk-{}", new_id()));
         std::fs::create_dir_all(root.join("shut")).unwrap();
         std::fs::write(root.join("shut/inside.txt"), b"x").unwrap();
         std::fs::write(root.join("open.txt"), b"x").unwrap();
@@ -6978,7 +6978,7 @@ mod tests {
 
     impl AwayRig {
         fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!(
+            let dir = crate::test_tmp::temp_path(format!(
                 "ps5u-mesh-{name}-{}-{}",
                 std::process::id(),
                 new_id()
@@ -7134,7 +7134,7 @@ mod tests {
 
     #[test]
     fn a_refused_request_takes_back_only_what_it_made() {
-        let root = std::env::temp_dir().join(format!("ps5u-mesh-prep-{}", new_id()));
+        let root = crate::test_tmp::temp_path(format!("ps5u-mesh-prep-{}", new_id()));
         std::fs::create_dir_all(&root).unwrap();
         // A new folder: all of it goes.
         let fresh = root.join("fresh");
@@ -7303,7 +7303,7 @@ mod tests {
 
     #[test]
     fn a_local_folder_is_checked_before_use() {
-        let root = std::env::temp_dir().join(format!("mesh-check-{}", new_id()));
+        let root = crate::test_tmp::temp_path(format!("mesh-check-{}", new_id()));
         std::fs::create_dir_all(root.join("has")).unwrap();
         std::fs::write(root.join("has").join("one.txt"), b"1").unwrap();
         std::fs::write(root.join("file.txt"), b"x").unwrap();
@@ -7335,7 +7335,7 @@ mod tests {
 
     #[test]
     fn a_local_walk_skips_markers_trash_and_clutter() {
-        let dir = std::env::temp_dir().join(format!("mesh-walk-{}", new_id()));
+        let dir = crate::test_tmp::temp_path(format!("mesh-walk-{}", new_id()));
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::create_dir_all(dir.join(TRASH).join("2026-01-01")).unwrap();
         std::fs::write(dir.join(MARKER), b"x").unwrap();

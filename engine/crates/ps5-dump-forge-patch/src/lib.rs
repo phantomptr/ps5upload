@@ -966,7 +966,7 @@ mod tests {
     fn image() -> (Tmp, PathBuf, Vec<u8>) {
         static N: AtomicUsize = AtomicUsize::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("forge-patch-{}-{n}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("forge-patch-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("game.ffpkg");
@@ -1467,3 +1467,8 @@ mod tests {
         }
     }
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[cfg(test)]
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

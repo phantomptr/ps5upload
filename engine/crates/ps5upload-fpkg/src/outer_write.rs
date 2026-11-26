@@ -700,7 +700,7 @@ mod tests {
             "UP0000-PPSA01234_00-TESTGAME00000000",
             &outer.plaintext_digests,
         );
-        let path = std::env::temp_dir().join(format!("outer-big-{}.bin", std::process::id()));
+        let path = crate::test_tmp::temp_path(format!("outer-big-{}.bin", std::process::id()));
         std::fs::write(&path, &outer.image).unwrap();
         let mut file = crate::PkgFile::open(&path).unwrap();
         let fih = crate::fih::Fih {
@@ -741,7 +741,7 @@ mod tests {
         assert_eq!(outer.plaintext_digests.len(), 9);
 
         // Round-trip through the reader.
-        let path = std::env::temp_dir().join(format!("outer-write-{}.bin", std::process::id()));
+        let path = crate::test_tmp::temp_path(format!("outer-write-{}.bin", std::process::id()));
         let cnt = crate::cnt::test_support::minimal_cnt(
             "UP0000-PPSA01234_00-TESTGAME00000000",
             &outer.plaintext_digests,
@@ -819,7 +819,7 @@ mod tests {
             "the seed slot carries the marker the console serves plaintext for"
         );
 
-        let path = std::env::temp_dir().join(format!("outer-plain-{}.bin", std::process::id()));
+        let path = crate::test_tmp::temp_path(format!("outer-plain-{}.bin", std::process::id()));
         let cnt = crate::cnt::test_support::minimal_cnt(
             "UP0000-PPSA01234_00-TESTGAME00000000",
             &outer.plaintext_digests,

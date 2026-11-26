@@ -566,7 +566,7 @@ mod tests {
 
     impl Scratch {
         fn new(name: &str) -> Self {
-            let root = std::env::temp_dir().join(format!(
+            let root = crate::test_tmp::temp_path(format!(
                 "ps5upload-core-unpack-{name}-{}",
                 std::process::id()
             ));

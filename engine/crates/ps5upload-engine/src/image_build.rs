@@ -538,7 +538,8 @@ mod tests {
     /// read-back does: a cancel leaves nothing that looks like a good image.
     #[test]
     fn a_cancel_during_the_pack_read_back_removes_the_image() {
-        let root = std::env::temp_dir().join(format!("ps5upload-lz4cancel-{}", std::process::id()));
+        let root =
+            crate::test_tmp::temp_path(format!("ps5upload-lz4cancel-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = ampr_game(&root);
         let packs = Lz4Packs {
@@ -583,7 +584,7 @@ mod tests {
     /// this app installs) kept.
     #[test]
     fn an_lz4_packed_image_unpacks_into_the_plain_game() {
-        let root = std::env::temp_dir().join(format!("ps5upload-imgunlz4-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-imgunlz4-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = ampr_game(&root);
         let out = root.join("PPSA99999-app.exfat");

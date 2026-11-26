@@ -222,7 +222,7 @@ fn readers_are_capped() {
 // ---- With ffmpeg: real codec data through the feed and muxer, checked by ffprobe ----
 
 pub(crate) fn tmp_dir(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ps5upload-rp-live-{name}-{}", std::process::id()));
+    let d = crate::test_tmp::temp_path(format!("ps5upload-rp-live-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }

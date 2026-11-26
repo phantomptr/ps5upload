@@ -19,7 +19,7 @@ struct TempDir(PathBuf);
 impl TempDir {
     fn new(name: &str) -> Self {
         let dir =
-            std::env::temp_dir().join(format!("fpkg-pkgsource-{}-{name}", std::process::id()));
+            crate::test_tmp::temp_path(format!("fpkg-pkgsource-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
@@ -678,3 +678,7 @@ fn a_package_browses_read_only() {
     );
     assert_eq!(sub.empty_dirs(), ["hollow"]);
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

@@ -59,7 +59,7 @@ mod tempdir {
     impl Dir {
         pub fn new() -> Dir {
             static N: AtomicU32 = AtomicU32::new(0);
-            let p = std::env::temp_dir().join(format!(
+            let p = crate::test_tmp::temp_path(format!(
                 "ava1-t8-{}-{}",
                 std::process::id(),
                 N.fetch_add(1, Ordering::Relaxed)
@@ -356,3 +356,7 @@ fn waiting_for_a_free_port_does_not_wait() {
     );
     assert!(t.elapsed() < Duration::from_millis(500));
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

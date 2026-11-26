@@ -300,7 +300,7 @@ mod tests {
     #[tokio::test]
     async fn a_file_lands_under_its_name_through_a_temporary_one() {
         let fs = MemFs::new(&[("/games/old.bin", b"stale")]);
-        let dir = std::env::temp_dir().join(format!("relay-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("relay-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let staged = dir.join("old.bin");
         std::fs::write(&staged, b"fresh bytes").unwrap();
@@ -399,7 +399,7 @@ mod tests {
     #[tokio::test]
     async fn a_cancelled_write_leaves_nothing_behind() {
         let fs = MemFs::new(&[]);
-        let dir = std::env::temp_dir().join(format!("relay-c-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("relay-c-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let staged = dir.join("x.bin");
         std::fs::write(&staged, vec![7u8; 3 << 20]).unwrap();

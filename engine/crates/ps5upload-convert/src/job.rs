@@ -1669,7 +1669,7 @@ mod tests {
     fn a_file_too_big_for_the_drive_has_its_cause() {
         let plan = Plan {
             source: std::env::temp_dir(),
-            dest: std::env::temp_dir().join("g.exfat"),
+            dest: crate::test_tmp::temp_path("g.exfat"),
             image: Some(ImageFormat::Exfat),
             ffpfsc: None,
             mode: VerifyMode::Full,

@@ -36,8 +36,10 @@ impl Nas {
             .id;
         let dest =
             ServerDest::with(remote, &id, "/out", tokio::runtime::Handle::current()).unwrap();
-        let dir =
-            std::env::temp_dir().join(format!("ps5upload-toserver-{tag}-{}", uuid::Uuid::new_v4()));
+        let dir = crate::test_tmp::temp_path(format!(
+            "ps5upload-toserver-{tag}-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         Self { mem, dest, dir }
     }
@@ -754,7 +756,7 @@ async fn against_a_real_server() {
         std::process::id()
     );
     let dest = ServerDest::with(remote, &id, &run, tokio::runtime::Handle::current()).unwrap();
-    let scratch = std::env::temp_dir().join(format!("ps5u-e2e-{}", uuid::Uuid::new_v4()));
+    let scratch = crate::test_tmp::temp_path(format!("ps5u-e2e-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&scratch).unwrap();
     let (src, _) = game(&scratch, 24 << 20);
     let never = Arc::new(AtomicBool::new(false));

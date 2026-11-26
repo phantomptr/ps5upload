@@ -2558,7 +2558,7 @@ mod slot_held_tests {
 
     #[test]
     fn the_last_session_survives_a_restart_on_disk() {
-        let dir = std::env::temp_dir().join(format!("ps5u-rp-slot-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-rp-slot-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join(SLOT_FILE);
         let mut m = std::collections::HashMap::new();

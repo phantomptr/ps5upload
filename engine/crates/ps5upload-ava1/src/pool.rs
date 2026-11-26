@@ -1290,7 +1290,7 @@ mod identity_summary_tests {
 
     #[test]
     fn the_startup_summary_names_the_key_and_the_paired_count() {
-        let d = std::env::temp_dir().join(format!("p5a-summary-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-summary-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let p = Pool::new(d.join("ava"));
         assert_eq!(p.identity_prefix().len(), 8);
@@ -1337,7 +1337,7 @@ mod peek_tests {
 
     #[tokio::test]
     async fn a_peek_reads_the_key_and_name_and_never_gets_admitted() {
-        let d = std::env::temp_dir().join(format!("p5a-peek-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-peek-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let pool = Pool::new(d.join("ava"));
         let console = Arc::new(Identity::generate().unwrap());
@@ -1415,7 +1415,7 @@ mod gc_tests {
     use super::*;
 
     fn tmp(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ps5u-poolgc-{tag}-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("ps5u-poolgc-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -1484,7 +1484,7 @@ mod not_paired_ttl_tests {
     /// is remembered for the longer not-paired time, not the plain refusal time.
     #[test]
     fn a_not_paired_refusal_is_remembered_for_its_own_time() {
-        let d = std::env::temp_dir().join(format!("p5a-np-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-np-{}", std::process::id()));
         let pool = Pool::new(d.join("ava"))
             .with_refusal_ttl(Duration::from_millis(1))
             .with_not_paired_ttl(Duration::from_secs(60));

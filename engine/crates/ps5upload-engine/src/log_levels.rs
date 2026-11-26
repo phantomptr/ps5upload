@@ -400,7 +400,7 @@ mod tests {
 
     #[test]
     fn a_save_leaves_the_file_whole_and_no_temporary_behind() {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::test_tmp::temp_path(format!(
             "ps5upload-log-levels-save-{}-{}",
             std::process::id(),
             clog::now_ms()

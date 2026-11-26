@@ -613,7 +613,7 @@ mod tests {
     /// the game reads back as it was.
     #[test]
     fn a_game_reads_back_through_its_packs_in_every_format() {
-        let root = std::env::temp_dir().join(format!("ps5upload-zstd-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-zstd-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let src = game(&root);
@@ -685,7 +685,8 @@ mod tests {
     /// `prepare` makes always matches.
     #[test]
     fn packs_that_disagree_with_ampr_emu_index_are_refused() {
-        let root = std::env::temp_dir().join(format!("ps5upload-zstd-join-{}", std::process::id()));
+        let root =
+            crate::test_tmp::temp_path(format!("ps5upload-zstd-join-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = game(&root);
         let mut tree = FolderSource::open(&src).unwrap();
@@ -737,7 +738,7 @@ mod tests {
     /// source; the result opens as the game it was.
     #[test]
     fn zstd_packs_go_into_every_image_plain_and_compressed() {
-        let root = std::env::temp_dir().join(format!("ps5upload-zstdall-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-zstdall-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let src = game(&root);
@@ -801,7 +802,7 @@ mod tests {
     #[test]
     fn a_game_folder_packs_into_a_folder_that_reads_back() {
         let root =
-            std::env::temp_dir().join(format!("ps5upload-zstd-folder-{}", std::process::id()));
+            crate::test_tmp::temp_path(format!("ps5upload-zstd-folder-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let src = game(&root);
@@ -902,7 +903,7 @@ mod tests {
     #[test]
     fn a_profile_rule_keeps_its_files_loose() {
         let root =
-            std::env::temp_dir().join(format!("ps5upload-zstd-rules-{}", std::process::id()));
+            crate::test_tmp::temp_path(format!("ps5upload-zstd-rules-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let src = game(&root);
@@ -985,7 +986,7 @@ mod tests {
     #[test]
     fn a_game_that_does_not_import_ampr_is_packed_too() {
         let root =
-            std::env::temp_dir().join(format!("ps5upload-zstd-noampr-{}", std::process::id()));
+            crate::test_tmp::temp_path(format!("ps5upload-zstd-noampr-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let src = game(&root);
@@ -1067,7 +1068,7 @@ mod tests {
     #[test]
     fn a_folder_that_does_not_read_back_as_the_source_is_not_kept() {
         let root =
-            std::env::temp_dir().join(format!("ps5upload-zstd-folder-bad-{}", std::process::id()));
+            crate::test_tmp::temp_path(format!("ps5upload-zstd-folder-bad-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let src = game(&root);

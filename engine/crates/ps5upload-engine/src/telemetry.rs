@@ -723,7 +723,7 @@ mod refused_upload_tests {
             default_ps5_addr: "127.0.0.1".to_string(),
             events_tx: events_tx.clone(),
         };
-        let missing = std::env::temp_dir().join(format!(
+        let missing = crate::test_tmp::temp_path(format!(
             "ps5upload-untagged-{}-missing.bin",
             std::process::id()
         ));

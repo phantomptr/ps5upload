@@ -928,7 +928,7 @@ async fn every_name_for_the_console_works_on_the_routes_that_lacked_them() {
 #[tokio::test]
 async fn ps4_updates_and_addons_are_told_and_refused_in_words() {
     let app = app();
-    let root = std::env::temp_dir().join(format!("ps5upload-ps4-kinds-{}", std::process::id()));
+    let root = crate::test_tmp::temp_path(format!("ps5upload-ps4-kinds-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let put = |name: &str, gz: &[u8]| {
@@ -1032,7 +1032,7 @@ async fn ps4_updates_and_addons_are_told_and_refused_in_words() {
 #[tokio::test]
 async fn a_ps4_game_becomes_a_ps4_package() {
     let app = app();
-    let root = std::env::temp_dir().join(format!("ps5upload-ps4-pkg-{}", std::process::id()));
+    let root = crate::test_tmp::temp_path(format!("ps5upload-ps4-pkg-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let put = |name: &str, gz: &[u8]| {
@@ -1203,7 +1203,7 @@ async fn a_packed_game_packages_as_plain_files_without_its_emulator() {
 #[tokio::test]
 async fn a_folder_build_with_zstd_packs_takes_a_game_folder_and_refuses_what_cannot_work() {
     let app = app();
-    let root = std::env::temp_dir().join(format!("ps5upload-zstd-req-{}", std::process::id()));
+    let root = crate::test_tmp::temp_path(format!("ps5upload-zstd-req-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let game = root.join("PPSA99996-app");
     std::fs::create_dir_all(game.join("sce_sys")).unwrap();
@@ -1321,7 +1321,7 @@ async fn job_end(st: &AppState, resp: HttpResponse<Body>) -> JobState {
 async fn lz4_packs_go_into_a_folder_and_any_image() {
     let st = state();
     let app = app_with(st.clone(), Default::default(), "");
-    let root = std::env::temp_dir().join(format!("ps5upload-api-lz4-{}", std::process::id()));
+    let root = crate::test_tmp::temp_path(format!("ps5upload-api-lz4-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let game = lz4_game(&root);
     let out = root.join("out");
@@ -1428,7 +1428,7 @@ async fn lz4_packs_go_straight_to_a_server() {
         .id;
     let st = state();
     let app = app_with(st.clone(), Default::default(), "");
-    let root = std::env::temp_dir().join(format!("ps5upload-api-lz4srv-{}", std::process::id()));
+    let root = crate::test_tmp::temp_path(format!("ps5upload-api-lz4srv-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let game = lz4_game(&root);
     let out = root.join("never");
@@ -1525,7 +1525,7 @@ async fn an_image_and_a_folder_go_straight_to_a_server() {
         .id;
     let st = state();
     let app = app_with(st.clone(), Default::default(), "");
-    let root = std::env::temp_dir().join(format!("ps5upload-api-toserver-{}", std::process::id()));
+    let root = crate::test_tmp::temp_path(format!("ps5upload-api-toserver-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let game = root.join("PPSA99995-app");
     std::fs::create_dir_all(game.join("sce_sys")).unwrap();

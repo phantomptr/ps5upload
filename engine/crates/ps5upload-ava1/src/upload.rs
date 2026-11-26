@@ -1857,7 +1857,7 @@ mod list_destination_tests {
 
     #[test]
     fn a_zip_that_cannot_be_read_is_retryable_but_a_bad_one_is_unsupported() {
-        let d = std::env::temp_dir().join(format!("p5a-zip-open-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-zip-open-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         let cfg = ps5upload_core::transfer::TransferConfig::new("c");
         let pool = crate::pool::Pool::unavailable();
@@ -2159,7 +2159,7 @@ mod tests {
 
     #[test]
     fn no_identity_is_terminal_immediately() {
-        let d = std::env::temp_dir().join(format!("gate-noid-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("gate-noid-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("identity")).unwrap();
         let pool = Pool::new(d.clone());

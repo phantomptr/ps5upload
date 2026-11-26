@@ -23,7 +23,7 @@ impl Scratch {
     fn dir(tag: &str) -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let root = std::env::temp_dir().join(format!(
+        let root = crate::test_tmp::temp_path(format!(
             "fpkg-mounts-{tag}-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
@@ -334,7 +334,7 @@ fn outer_file(pkg: &Path, name: &str) -> Vec<u8> {
 #[test]
 fn a_build_from_an_exfat_mount_verifies_and_round_trips() {
     let fixture = fixture();
-    let out = std::env::temp_dir().join(format!("fpkg-mount-build-{}", std::process::id()));
+    let out = crate::test_tmp::temp_path(format!("fpkg-mount-build-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out).unwrap();
 
@@ -758,3 +758,7 @@ fn a_remote_path_goes_to_the_registered_opener() {
     let tree = source::open(Path::new(&url)).unwrap();
     assert_eq!(tree.files().len(), FIXTURE_FILES.len());
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

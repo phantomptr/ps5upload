@@ -115,7 +115,7 @@ mod tests {
     /// alone refuses it.
     #[test]
     fn zstd_zip_entries_read_through_the_engine() {
-        let d = std::env::temp_dir().join(format!("ps5u-archive-shim-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("ps5u-archive-shim-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         let data: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();

@@ -24,7 +24,7 @@ fn a_flat_path_table_is_read_no_further_than_it_goes() {
 /// as failing its checks. It used to index past the list and take the job down.
 #[test]
 fn an_image_without_its_first_inodes_is_reported_not_indexed() {
-    let dir = std::env::temp_dir().join(format!("fpkg-verify-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("fpkg-verify-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let source = dir.join("game");
     let put = |path: &str, data: &[u8]| {
@@ -171,7 +171,7 @@ fn damage_names_the_worst_thing_the_checks_found() {
 /// cut short, and with only its trailing install manifest gone.
 #[test]
 fn a_damaged_package_says_how_it_is_damaged() {
-    let dir = std::env::temp_dir().join(format!("fpkg-verify-damage-{}", std::process::id()));
+    let dir = crate::test_tmp::temp_path(format!("fpkg-verify-damage-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let source = dir.join("game");
     let put = |path: &str, data: &[u8]| {

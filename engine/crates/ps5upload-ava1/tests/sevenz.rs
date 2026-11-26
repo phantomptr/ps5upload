@@ -28,7 +28,7 @@ use sevenz_rust2::{
 };
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("p5z-{tag}-{}", std::process::id()));
+    let d = crate::test_tmp::temp_path(format!("p5z-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -1025,3 +1025,7 @@ fn an_entrys_own_mtime_is_carried_into_the_manifest() {
     assert_eq!(t("dated"), 1_709_209_840);
     assert_eq!(t("undated"), 0);
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

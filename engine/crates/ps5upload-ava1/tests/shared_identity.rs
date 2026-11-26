@@ -10,7 +10,7 @@ use ava1::server::{self, ServerCtx};
 use ps5upload_ava1::Pool;
 
 fn temp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("p5a-shared-{tag}-{}", std::process::id()));
+    let d = crate::test_tmp::temp_path(format!("p5a-shared-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -138,3 +138,7 @@ async fn the_session_that_failed_is_forgotten_and_a_stale_cached_one_is_too() {
     assert!(!Arc::ptr_eq(&s2, &s3));
     assert!(!s3.is_closed());
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

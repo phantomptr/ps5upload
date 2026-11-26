@@ -603,7 +603,7 @@ mod tests {
     /// creates the file nor cuts what the builder wrote.
     #[test]
     fn the_sync_handle_writes_and_never_creates_or_truncates() {
-        let dir = std::env::temp_dir().join(format!("ps5u-sync-handle-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-sync-handle-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("g.pkg.partial");
@@ -626,7 +626,7 @@ mod tests {
     fn a_growing_file_is_synced_as_it_grows() {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
-        let dir = std::env::temp_dir().join(format!("ps5u-growth-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-growth-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("g.pkg.partial");
@@ -867,7 +867,7 @@ mod tests {
 
     #[test]
     fn a_new_name_never_replaces_what_is_there() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-safe-new-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5upload-safe-new-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let (from, to) = (dir.join("a.partial"), dir.join("a"));
@@ -892,7 +892,7 @@ mod tests {
 
     #[test]
     fn a_removal_leaves_nothing() {
-        let f = std::env::temp_dir().join(format!("ps5upload-safe-{}", std::process::id()));
+        let f = crate::test_tmp::temp_path(format!("ps5upload-safe-{}", std::process::id()));
         std::fs::write(&f, b"x").unwrap();
         remove_file(&f).unwrap();
         assert!(!f.exists());

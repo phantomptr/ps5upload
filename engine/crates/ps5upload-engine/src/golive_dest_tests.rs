@@ -14,7 +14,7 @@ fn session(codec: &'static str, height: u32, fps: u32, kbps: u32) -> SessionInfo
 }
 
 fn tmp() -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("ps5upload-golive-{}", uuid::Uuid::new_v4()));
+    let d = crate::test_tmp::temp_path(format!("ps5upload-golive-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }

@@ -915,7 +915,7 @@ mod tests {
     }
 
     fn tmp(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ps5upload-coll-{tag}-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("ps5upload-coll-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -1361,7 +1361,9 @@ mod tests {
             "Game",
             "01.000.000",
         );
-        let gone = s(&std::env::temp_dir().join("ps5upload-coll-never-there-461"));
+        let gone = s(&crate::test_tmp::temp_path(
+            "ps5upload-coll-never-there-461",
+        ));
         let mut prev = Library::default();
         let kept = PkgCacheEntry::default();
         prev.pkg_cache.insert(format!("{gone}|a.pkg"), kept.clone());

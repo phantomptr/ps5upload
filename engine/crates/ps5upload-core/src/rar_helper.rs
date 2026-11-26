@@ -555,7 +555,7 @@ mod tests {
 
     #[test]
     fn a_missing_helper_says_rar_support_is_not_installed() {
-        let bin = std::env::temp_dir().join("ps5upload-no-such-dir/ps5upload-unrar-missing");
+        let bin = crate::test_tmp::temp_path("ps5upload-no-such-dir/ps5upload-unrar-missing");
         let e = list_with(&bin, "/x/game.rar", None).err().unwrap();
         assert_eq!(e.code, Code::Helper);
         assert_eq!(e.to_string(), MISSING);

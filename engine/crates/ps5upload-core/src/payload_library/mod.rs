@@ -505,7 +505,7 @@ pub(crate) mod test_support {
     impl TempDir {
         pub fn new(tag: &str) -> Self {
             let dir =
-                std::env::temp_dir().join(format!("ps5upload-library-{tag}-{}", unique_suffix()));
+                crate::test_tmp::temp_path(format!("ps5upload-library-{tag}-{}", unique_suffix()));
             std::fs::create_dir_all(&dir).unwrap();
             Self(dir)
         }

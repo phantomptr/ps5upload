@@ -279,7 +279,7 @@ mod tests {
     }
 
     async fn serve(tag: &str) -> Harness {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::test_tmp::temp_path(format!(
             "ps5upload-payloads-api-{tag}-{}",
             std::process::id()
         ));

@@ -349,7 +349,7 @@ mod tests {
 
     fn plan_of(mode: free::FreeMode, archive: u64, unpacked: u64, peak: u64) -> free::FreePlan {
         // A real plan of a small zip, with the figures under test put in.
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::test_tmp::temp_path(format!(
             "ps5u-free-room-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn a_kept_folder_is_known_by_any_path_in_it_and_gets_a_name_of_its_own() {
-        let base = std::env::temp_dir().join(format!("ps5u-kept-{}", uuid::Uuid::new_v4()));
+        let base = crate::test_tmp::temp_path(format!("ps5u-kept-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&base).unwrap();
         let first = kept_dest(&base, Path::new("/dl/Game.part1.rar"));
         assert_eq!(first, base.join("Game.unpacked"));

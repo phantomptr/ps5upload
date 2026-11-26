@@ -648,7 +648,7 @@ mod tests {
     fn outer_file(pkg: &[u8], name: &str) -> Option<Vec<u8>> {
         use std::sync::atomic::{AtomicU32, Ordering};
         static SEQ: AtomicU32 = AtomicU32::new(0);
-        let path = std::env::temp_dir().join(format!(
+        let path = crate::test_tmp::temp_path(format!(
             "naps-sample-{}-{}-{}.pkg",
             std::process::id(),
             name.replace(['/', '.'], "_"),

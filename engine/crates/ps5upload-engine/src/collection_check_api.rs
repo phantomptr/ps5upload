@@ -698,7 +698,7 @@ mod tests {
     struct Scratch(std::path::PathBuf);
     impl Scratch {
         fn new(tag: &str) -> Self {
-            let d = std::env::temp_dir().join(format!("ps5u-check-{tag}-{}", std::process::id()));
+            let d = crate::test_tmp::temp_path(format!("ps5u-check-{tag}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&d);
             std::fs::create_dir_all(&d).unwrap();
             Scratch(d)

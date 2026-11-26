@@ -2853,7 +2853,7 @@ mod tests {
 
     #[test]
     fn a_file_that_cannot_be_read_is_kept_aside_not_emptied() {
-        let dir = std::env::temp_dir().join(format!("ps5u-state-load-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-state-load-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("save-sync.json");
@@ -3287,7 +3287,7 @@ mod tests {
     /// Save Data's "Backed up …" line: the newest of each game and user, tags left off.
     #[test]
     fn the_newest_backup_of_each_game_and_user() {
-        let base = std::env::temp_dir().join(format!("ps5u-latest-{}", std::process::id()));
+        let base = crate::test_tmp::temp_path(format!("ps5u-latest-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let t = base.join("PPSA01234");
         std::fs::create_dir_all(&t).unwrap();
@@ -3349,7 +3349,7 @@ mod tests {
     /// it carries files; the sender's sce_sys never goes in.
     #[test]
     fn a_shared_save_is_checked_and_its_sce_sys_left_out() {
-        let base = std::env::temp_dir().join(format!("ps5u-share-{}", std::process::id()));
+        let base = crate::test_tmp::temp_path(format!("ps5u-share-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let dir = base.join("PPSA01234");
         std::fs::create_dir_all(dir.join(SYS_DIR)).unwrap();
@@ -3382,7 +3382,7 @@ mod tests {
     /// the API has no sign-in, so a path from a request must not reach the rest of the disk).
     #[test]
     fn a_ps4_import_reads_only_inside_the_backup_folder() {
-        let base = std::env::temp_dir().join(format!("ps5u-src-{}", std::process::id()));
+        let base = crate::test_tmp::temp_path(format!("ps5u-src-{}", std::process::id()));
         let root = base.join("backups");
         let inside = root
             .join("PS4 10.0.0.2 1 2026-10-30 1200")
@@ -3750,7 +3750,7 @@ mod tests {
 
     #[test]
     fn a_loose_save_restores_only_its_own_entries() {
-        let dir = std::env::temp_dir().join(format!("ps5u-ps2-loose-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-ps2-loose-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("Mcd002.ps2")).unwrap();
         std::fs::write(dir.join("Mcd001.ps2"), b"card").unwrap();
@@ -3941,7 +3941,7 @@ mod tests {
 
     #[test]
     fn backups_are_listed_newest_first_and_names_cannot_escape() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-savebk-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5upload-savebk-{}", std::process::id()));
         let title = dir.join("PPSA01234");
         std::fs::create_dir_all(&title).unwrap();
         for s in [
@@ -3991,7 +3991,7 @@ mod tests {
         st.move_to("");
         assert_eq!(st.read_dirs(), ["/old", "/new"]);
 
-        let base = std::env::temp_dir().join(format!("ps5u-dirs-{}", std::process::id()));
+        let base = crate::test_tmp::temp_path(format!("ps5u-dirs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let (old, new) = (base.join("old"), base.join("new"));
         for (dir, stamp) in [

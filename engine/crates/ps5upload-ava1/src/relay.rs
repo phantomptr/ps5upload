@@ -1082,7 +1082,7 @@ mod tests {
                 file("fresh_large", size),
             ],
         };
-        let dir = std::env::temp_dir().join(format!("relay-skip-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("relay-skip-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         // The destination: file 0 fully durable, file 1 groups 0 and 1 durable

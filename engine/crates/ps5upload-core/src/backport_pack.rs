@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn inspect_sorts_a_real_pack_layout() {
         // The richer pack shape: every role present at once.
-        let dir = std::env::temp_dir().join(format!("packtest-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("packtest-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         for sub in ["fakelib", "sce_module", "prx", "sce_sys/about"] {
             std::fs::create_dir_all(dir.join(sub)).unwrap();

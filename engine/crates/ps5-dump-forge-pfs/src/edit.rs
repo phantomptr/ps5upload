@@ -1617,7 +1617,7 @@ mod tests {
         static N: AtomicU32 = AtomicU32::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
         let path =
-            std::env::temp_dir().join(format!("forge-pfs-edit-{}-{n}.ffpfs", std::process::id()));
+            crate::test_tmp::temp_path(format!("forge-pfs-edit-{}-{n}.ffpfs", std::process::id()));
         File::create(&path)?.write_all(img)?;
         let mut f = File::open(&path)?;
         let v = Volume::open_within(&mut f, limit);
@@ -1862,7 +1862,7 @@ mod tests {
         files.extend([("A_", 3), ("B@", 4), ("eboot.bin", 5)]);
         let img = build(&files, &["empty"]);
         let path =
-            std::env::temp_dir().join(format!("forge-pfs-peak-{}.ffpfs", std::process::id()));
+            crate::test_tmp::temp_path(format!("forge-pfs-peak-{}.ffpfs", std::process::id()));
         std::fs::write(&path, &img).unwrap();
         let mut f = File::open(&path).unwrap();
         let (v, top) = counting::peak_of(|| Volume::open(&mut f).unwrap().unwrap());
@@ -1892,7 +1892,7 @@ mod tests {
         static N: AtomicU32 = AtomicU32::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
         let path =
-            std::env::temp_dir().join(format!("forge-pfs-plan-{}-{n}.ffpfs", std::process::id()));
+            crate::test_tmp::temp_path(format!("forge-pfs-plan-{}-{n}.ffpfs", std::process::id()));
         File::create(&path).unwrap().write_all(img).unwrap();
         let mut f = File::open(&path).unwrap();
         let out = super::plan(&mut f, ops);

@@ -180,7 +180,7 @@ fn engine_on(path: Option<PathBuf>, fake: Option<&Fake>) -> Engine {
 }
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = crate::test_tmp::temp_path(format!(
         "ps5u-queue-{name}-{}-{}",
         std::process::id(),
         Uuid::new_v4().simple()

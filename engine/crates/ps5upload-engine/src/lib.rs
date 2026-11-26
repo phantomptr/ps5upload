@@ -15340,7 +15340,7 @@ mod cancel_registry_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_cancelled_download_job_ends_cancelled() {
-        let dir = std::env::temp_dir().join(format!("dl-cancel-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("dl-cancel-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("host/share")).unwrap();
         std::fs::write(dir.join("host/share/f.bin"), vec![7u8; 1 << 20]).unwrap();
@@ -15418,7 +15418,7 @@ mod helpers_tests {
     /// "N bytes of 0" while the whole tree was sent.
     #[test]
     fn the_folder_plan_matches_excludes_inside_the_source_only() {
-        let base = std::env::temp_dir().join(format!("ps5u-plan-{}", std::process::id()));
+        let base = crate::test_tmp::temp_path(format!("ps5u-plan-{}", std::process::id()));
         let root = base.join("data").join("Games").join("G");
         std::fs::create_dir_all(root.join("data")).unwrap();
         std::fs::write(root.join("eboot.bin"), b"12345").unwrap();
@@ -15452,7 +15452,7 @@ mod helpers_tests {
     /// A stopped folder upload's walk ends at its next folder, not at the end of the source.
     #[test]
     fn a_stopped_walk_ends_at_once() {
-        let root = std::env::temp_dir().join(format!("ps5upload-walkstop-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-walkstop-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("a/b")).unwrap();
         std::fs::write(root.join("a/b/f.bin"), b"xyz").unwrap();
@@ -16916,7 +16916,7 @@ mod archive_packages_tests {
 
     #[test]
     fn a_zip_lists_only_its_packages_at_any_depth() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-arcpkg-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5upload-arcpkg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         let path = dir.join("bundle.zip");
         let mut zw = zip::ZipWriter::new(std::fs::File::create(&path).expect("create"));
@@ -16960,7 +16960,7 @@ mod speed_test_file_tests {
     /// test's 2 GiB); anything younger may be another engine's and stays.
     #[test]
     fn the_start_sweep_takes_what_was_there_before_and_nothing_newer() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-sweep-{}", uuid::Uuid::new_v4()));
+        let dir = crate::test_tmp::temp_path(format!("ps5upload-sweep-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(dir.join("old-share")).unwrap();
         std::fs::write(dir.join("old-share").join("save.zip"), b"x").unwrap();
         std::fs::write(dir.join("ps5upload-speedtest.bin"), b"x").unwrap();
@@ -16979,7 +16979,8 @@ mod speed_test_file_tests {
 
     #[test]
     fn a_forgotten_speed_test_is_removed_unless_a_newer_one_runs() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-speedexp-{}", uuid::Uuid::new_v4()));
+        let dir =
+            crate::test_tmp::temp_path(format!("ps5upload-speedexp-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(dir.join("back")).unwrap();
         std::fs::write(dir.join("ps5upload-speedtest.bin"), b"x").unwrap();
         let latest = std::sync::atomic::AtomicU64::new(2);
@@ -17000,7 +17001,7 @@ mod speed_test_file_tests {
 
     #[test]
     fn the_file_has_the_asked_size_and_does_not_repeat() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-speedfile-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5upload-speedfile-{}", std::process::id()));
         let path = dir.join("f.bin");
         assert_eq!(
             write_speed_test_file(&path, 2).expect("write"),
@@ -17021,7 +17022,7 @@ mod module_case_upload_tests {
 
     #[test]
     fn a_game_folder_uploads_its_modules_under_the_eboot_spelling() {
-        let d = std::env::temp_dir().join(format!("ps5u-modcase-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("ps5u-modcase-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("Media/Modules")).unwrap();
         let mut eboot = vec![0u8; 4096];
@@ -17093,4 +17094,18 @@ mod no_delay_tests {
         let (io, _) = l.accept().await;
         assert!(io.nodelay().unwrap());
     }
+}
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[cfg(test)]
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;
+
+/// A per-process scratch folder that product code picks under `cfg!(test)` (a test data
+/// directory): under `cargo test` it is removed when the test process exits; otherwise unchanged.
+pub(crate) fn test_scratch(path: std::path::PathBuf) -> std::path::PathBuf {
+    #[cfg(test)]
+    return test_tmp::remove_at_exit(path);
+    #[cfg(not(test))]
+    path
 }

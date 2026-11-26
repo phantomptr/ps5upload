@@ -639,7 +639,7 @@ mod tests {
     fn the_magic_names_a_patch() {
         assert!(is_lih(b"\x7FLIH\0\0"));
         assert!(!is_lih(b"\x7FFIH") && !is_lih(b"\x7FL"));
-        let dir = std::env::temp_dir().join(format!("fpkg-lih-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-lih-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (patch, whole) = (dir.join("patch.pkg"), dir.join("whole.pkg"));
         std::fs::write(&patch, b"\x7FLIH and the rest").unwrap();

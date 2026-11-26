@@ -19,7 +19,7 @@ use ps5upload_ava1::Pool;
 use ps5upload_core::download::DownloadKind;
 
 fn temp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("p5a-fds-{tag}-{}", std::process::id()));
+    let d = crate::test_tmp::temp_path(format!("p5a-fds-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -179,3 +179,7 @@ async fn scenario(tag: &str, log_small: &str, hog: bool) {
     }
     assert_eq!(seen, n);
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

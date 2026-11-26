@@ -954,7 +954,7 @@ mod tests {
         use std::sync::atomic::{AtomicU32, Ordering};
         static N: AtomicU32 = AtomicU32::new(0);
         let id = N.fetch_add(1, Ordering::SeqCst);
-        let p = std::env::temp_dir().join(format!(
+        let p = crate::test_tmp::temp_path(format!(
             "ps5upload-test-{}-{}-{}",
             tag,
             std::process::id(),
@@ -1781,7 +1781,7 @@ mod tests {
     #[test]
     fn zip_folder_sets_executable_dir_mode() {
         let tmp =
-            std::env::temp_dir().join(format!("ps5upload-test-zipperms-{}", std::process::id()));
+            crate::test_tmp::temp_path(format!("ps5upload-test-zipperms-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let title = "CUSA03474";
         let inner = tmp.join(title);

@@ -41,7 +41,7 @@ impl Drop for TempDir {
 pub fn tempdir() -> TempDir {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let p = std::env::temp_dir().join(format!("ps5u-ava1t-{}-{n}", std::process::id()));
+    let p = test_tmp::temp_path(format!("ps5u-ava1t-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     TempDir(p)
@@ -481,3 +481,7 @@ pub async fn abs_console(slow: bool) -> AbsConsole {
         proxy,
     }
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[path = "../../../../test-support/test_tmp.rs"]
+pub mod test_tmp;

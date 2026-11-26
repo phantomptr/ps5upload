@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn engine_file_paths_still_work() {
-        let path = std::env::temp_dir().join(format!("avatar-{}", uuid::Uuid::new_v4()));
+        let path = crate::test_tmp::temp_path(format!("avatar-{}", uuid::Uuid::new_v4()));
         std::fs::write(&path, b"native image").unwrap();
         let bytes = read(path.to_str().unwrap());
         std::fs::remove_file(path).unwrap();

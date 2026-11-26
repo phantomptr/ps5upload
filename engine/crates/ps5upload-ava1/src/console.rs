@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn nothing_listening_is_helper_not_ava1_with_the_exact_message() {
-        let d = std::env::temp_dir().join(format!("p5a-console-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-console-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         // Port 1 is never a listener: the attempt is refused at once.
         let p = Pool::new(d.join("ava")).with_addr("127.0.0.1:1");
@@ -436,7 +436,7 @@ mod tests {
     /// A pool whose every console refuses at once (port 1) and whose DDP answers `code`;
     /// the counter is how many times DDP was asked.
     fn refusing(tag: &str, code: Option<u16>) -> (Pool, Arc<AtomicUsize>, std::path::PathBuf) {
-        let d = std::env::temp_dir().join(format!("p5a-rest-{tag}-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-rest-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let asked = Arc::new(AtomicUsize::new(0));
         let n = asked.clone();
@@ -493,7 +493,7 @@ mod tests {
     #[test]
     fn a_timeout_with_no_ddp_reply_is_unreachable_in_plain_words() {
         let (_l, addr) = silent_listener();
-        let d = std::env::temp_dir().join(format!("p5a-rest-timeout-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-rest-timeout-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let p = Pool::new(d.join("ava"))
             .with_addr(addr)

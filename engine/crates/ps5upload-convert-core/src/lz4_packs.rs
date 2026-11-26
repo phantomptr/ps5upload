@@ -403,7 +403,7 @@ mod tests {
     /// filesystem (and container) and then through the packs as the game it was.
     #[test]
     fn lz4_packs_go_into_every_image_plain_and_compressed() {
-        let root = std::env::temp_dir().join(format!("ps5upload-lz4all-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-lz4all-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = ampr_game(&root);
         for format in [ImageFormat::Exfat, ImageFormat::Ffpkg, ImageFormat::Ffpfs] {
@@ -450,7 +450,7 @@ mod tests {
     /// server that starts over in another engine process go on from what is already there.
     #[test]
     fn packing_again_gives_the_same_bytes() {
-        let root = std::env::temp_dir().join(format!("ps5upload-lz4same-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-lz4same-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = ampr_game(&root);
         let cancel = AtomicBool::new(false);
@@ -490,7 +490,7 @@ mod tests {
     /// the packs; the spool is gone and a damaged volume fails the read-back.
     #[test]
     fn an_lz4_packed_folder_reads_back_to_the_source() {
-        let root = std::env::temp_dir().join(format!("ps5upload-lz4dir-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-lz4dir-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = ampr_game(&root);
         let target = root.join("out/PPSA99998-app");

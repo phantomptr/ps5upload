@@ -60,7 +60,7 @@ struct Temp(PathBuf);
 
 impl Temp {
     fn new(name: &str) -> Self {
-        let p = std::env::temp_dir().join(format!("fpkg-ampr-{}-{name}", std::process::id()));
+        let p = crate::test_tmp::temp_path(format!("fpkg-ampr-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         Self(p)
@@ -220,3 +220,7 @@ fn a_compress_profile_plans_what_drakmor_plans() {
         assert_eq!(&reader.read_file(i, &mut tree, "").unwrap(), data, "{rel}");
     }
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

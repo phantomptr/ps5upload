@@ -6,6 +6,7 @@ set -eu
 crate=$(cd "$(dirname "$0")/.." && pwd)
 engine=$(cd "$crate/../.." && pwd)
 tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/ps5upload-hub"
 cp "$crate/Cargo.toml" "$tmp/ps5upload-hub/"
 cp -R "$crate/src" "$crate/tests" "$tmp/ps5upload-hub/"
@@ -19,4 +20,4 @@ offline=--offline
 [ "${HUB_LOCK_ONLINE:-}" = 1 ] && offline=
 (cd "$tmp" && cargo metadata --format-version 1 $offline >/dev/null)
 cp "$tmp/Cargo.lock" "$crate/deploy/Cargo.lock"
-echo "wrote $crate/deploy/Cargo.lock (scratch copy left in $tmp)"
+echo "wrote $crate/deploy/Cargo.lock"

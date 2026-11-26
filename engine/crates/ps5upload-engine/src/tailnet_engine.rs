@@ -1023,7 +1023,7 @@ mod tests {
     }
 
     fn tmp(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("tn-{tag}-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("tn-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let _ = std::fs::create_dir_all(&d);
         d

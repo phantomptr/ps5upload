@@ -1550,3 +1550,8 @@ mod tests {
         assert_eq!(super::console_host("ps5.lan:9113"), "ps5.lan");
     }
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[cfg(test)]
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

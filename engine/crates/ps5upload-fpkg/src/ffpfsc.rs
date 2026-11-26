@@ -951,7 +951,7 @@ mod tests {
     }
 
     fn temp(name: &str) -> TempDir {
-        let d = std::env::temp_dir().join(format!("ffpfsc-{}-{name}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("ffpfsc-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         TempDir(d)

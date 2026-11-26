@@ -91,3 +91,8 @@ mod step_tests {
         assert_eq!(super::step(0, 4096), 0);
     }
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[cfg(test)]
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

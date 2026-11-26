@@ -44,7 +44,7 @@ pub(crate) struct Loopback {
 impl Loopback {
     pub(crate) async fn start(tag: &str, chaos: Option<ava1_chaos::ChaosConfig>) -> Self {
         let dir =
-            std::env::temp_dir().join(format!("ps5upload-tocon-{tag}-{}", std::process::id()));
+            crate::test_tmp::temp_path(format!("ps5upload-tocon-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let ava = dir.join("engine");
         let key = Identity::load_or_create(&ava.join("identity"))
@@ -478,7 +478,7 @@ fn not_enough_room_is_refused_with_the_consoles_figures() {
 
 #[test]
 fn a_second_try_keeps_the_first_tries_time_until_the_image_is_done() {
-    let data = std::env::temp_dir().join(format!("ps5upload-tocon-stamp-{}", std::process::id()));
+    let data = crate::test_tmp::temp_path(format!("ps5upload-tocon-stamp-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&data);
     let first = console_stamp(Some(&data), "10.0.0.2", "/data/g.exfat");
     std::thread::sleep(Duration::from_millis(1100));

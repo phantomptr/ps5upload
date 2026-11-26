@@ -1814,7 +1814,7 @@ mod tests {
     }
 
     fn scratch(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ps5u-trash-{tag}-{}", uuid::Uuid::new_v4()));
+        let d = crate::test_tmp::temp_path(format!("ps5u-trash-{tag}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -1928,7 +1928,7 @@ mod tests {
 
     #[test]
     fn a_permanent_delete_takes_a_file_or_a_whole_folder_and_never_follows_a_link() {
-        let d = std::env::temp_dir().join(format!("ps5u-del-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("ps5u-del-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("Game-app/sce_sys")).unwrap();
         std::fs::write(d.join("Game-app/sce_sys/param.json"), b"{}").unwrap();
@@ -1966,7 +1966,7 @@ mod tests {
 
     #[test]
     fn same_named_folders_get_their_own_undo_logs() {
-        let d = std::env::temp_dir().join(format!("ps5u-logs-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("ps5u-logs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         let a = unique_log_base(&d, "organize_1_fpkg");
@@ -1989,7 +1989,7 @@ mod tests {
             .id;
         let root = format!("remote://{id}/games/fpkg");
         let now = origin_of(FsPath::new(&root)).unwrap();
-        let d = std::env::temp_dir().join(format!("ps5u-place-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("ps5u-place-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         let log = |origin: Option<organize::Origin>, root: &str| {
             let p = d.join(format!("organize_{}.json", uuid::Uuid::new_v4()));

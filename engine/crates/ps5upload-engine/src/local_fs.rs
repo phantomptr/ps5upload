@@ -373,7 +373,7 @@ mod tests {
 
     #[test]
     fn list_dir_sorts_dirs_first_then_files_case_insensitive() {
-        let tmp = std::env::temp_dir().join(format!("ps5_engine_lf_{}", std::process::id()));
+        let tmp = crate::test_tmp::temp_path(format!("ps5_engine_lf_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(tmp.join("Zsub")).unwrap();
         std::fs::create_dir_all(tmp.join("alpha")).unwrap();
@@ -417,7 +417,7 @@ mod tests {
     }
 
     fn tmp_dir(tag: &str) -> String {
-        let p = std::env::temp_dir().join(format!("ps5_browse_{}_{tag}", std::process::id()));
+        let p = crate::test_tmp::temp_path(format!("ps5_browse_{}_{tag}", std::process::id()));
         std::fs::create_dir_all(&p).unwrap();
         p.to_string_lossy().into_owned()
     }

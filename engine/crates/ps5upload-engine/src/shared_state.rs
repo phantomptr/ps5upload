@@ -365,7 +365,7 @@ mod place_tests {
 
     #[test]
     fn a_directory_that_cannot_be_made_is_nowhere_too() {
-        let file = std::env::temp_dir().join(format!("shared-state-{}", std::process::id()));
+        let file = crate::test_tmp::temp_path(format!("shared-state-{}", std::process::id()));
         std::fs::write(&file, b"x").unwrap();
         let got = place_from(Some(file.join("sub").display().to_string()), None, false);
         let _ = std::fs::remove_file(&file);
@@ -375,7 +375,7 @@ mod place_tests {
     #[test]
     fn tests_stay_in_memory_unless_given_a_directory() {
         assert_eq!(place_from(None, None, true), Place::Memory);
-        let dir = std::env::temp_dir().join(format!("shared-state-dir-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("shared-state-dir-{}", std::process::id()));
         let got = place_from(Some(dir.display().to_string()), None, true);
         assert_eq!(got, Place::File(dir.join("web-shared.json")));
         let _ = std::fs::remove_dir_all(&dir);
@@ -383,7 +383,7 @@ mod place_tests {
 
     #[test]
     fn the_data_directory_is_used_when_nothing_is_set() {
-        let dir = std::env::temp_dir().join(format!("shared-state-data-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("shared-state-data-{}", std::process::id()));
         let got = place_from(None, Some(dir.clone()), false);
         assert_eq!(got, Place::File(dir.join("state").join("web-shared.json")));
         let _ = std::fs::remove_dir_all(&dir);
@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn saved_and_loaded_through_the_file() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-shared-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5upload-shared-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("web-shared.json");
         let mut docs = Docs::new();
@@ -431,7 +431,8 @@ mod tests {
 
     #[test]
     fn a_damaged_file_loads_empty_and_is_kept_under_a_new_name() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-shared-bad-{}", std::process::id()));
+        let dir =
+            crate::test_tmp::temp_path(format!("ps5upload-shared-bad-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("web-shared.json");
         std::fs::write(&file, b"{ not json").unwrap();

@@ -2546,7 +2546,7 @@ mod tests {
         let mut d = std::env::temp_dir();
         d.push(format!("ps5upload-pkg-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&d);
-        d
+        crate::test_tmp::remove_at_exit(d)
     }
 
     /// A 4 KiB-block image whose root directory (inode 2) lists, besides `.` and `..`, the entries
@@ -2688,7 +2688,7 @@ mod tests {
             "UP0000-PPSA01234_00-TESTGAME00000000",
             &[("TITLE", "Reader")],
         );
-        let path = std::env::temp_dir().join(format!("pkg-reader-{}.pkg", std::process::id()));
+        let path = crate::test_tmp::temp_path(format!("pkg-reader-{}.pkg", std::process::id()));
         std::fs::write(&path, &bytes).unwrap();
         let by_path = parse_pkg(&path).unwrap();
         let mut cur = std::io::Cursor::new(bytes.clone());
@@ -2722,3 +2722,8 @@ mod tests {
         assert_eq!(known_entry_name(0x040A), None);
     }
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[cfg(test)]
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

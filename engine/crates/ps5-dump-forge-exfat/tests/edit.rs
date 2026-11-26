@@ -17,7 +17,7 @@ impl TempDir {
     fn new(tag: &str) -> Self {
         static N: AtomicU32 = AtomicU32::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::test_tmp::temp_path(format!(
             "ps5-dump-forge-exfat-edit-{tag}-{}-{n}",
             std::process::id()
         ));
@@ -482,3 +482,7 @@ fn every_op_in_one_plan() {
     std::fs::create_dir_all(tree.join("data")).unwrap();
     std::fs::copy(&image, keep.join("every-op.exfat")).unwrap();
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

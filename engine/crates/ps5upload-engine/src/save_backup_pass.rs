@@ -2018,7 +2018,7 @@ mod tests {
     /// what was left, and leaves what was verified alone.
     #[test]
     fn a_run_continues_after_an_engine_restart() {
-        let dir = std::env::temp_dir().join(format!("ps5u-pass-restart-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-pass-restart-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("save-backup-runs.json");
@@ -2328,8 +2328,10 @@ mod tests {
             };
             assert_eq!(on_share(&fs).len(), 1, "{how:?}");
             let zip = fs.bytes(&on_share(&fs)[0]).unwrap();
-            let local = std::env::temp_dir()
-                .join(format!("ps5u-folder-{}-{how:?}.zip", std::process::id()));
+            let local = crate::test_tmp::temp_path(format!(
+                "ps5u-folder-{}-{how:?}.zip",
+                std::process::id()
+            ));
             std::fs::write(&local, &zip).unwrap();
             assert_eq!(folders::noted_path(&local).as_deref(), Some(GRIM));
             let _ = std::fs::remove_file(&local);

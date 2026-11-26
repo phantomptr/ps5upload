@@ -937,7 +937,7 @@ mod tests {
             let mut img = image_with_dirs();
             let at = 2 * 512 + (cluster as usize - 2) * 4096 + 64 + at;
             img[at..at + 2].copy_from_slice(&unit.to_le_bytes());
-            let path = std::env::temp_dir().join(format!(
+            let path = crate::test_tmp::temp_path(format!(
                 "fpkg-exfat-{}-bad-name-{cluster}",
                 std::process::id()
             ));
@@ -994,7 +994,7 @@ mod tests {
     }
 
     fn synthetic_at(name: &str) -> (std::path::PathBuf, ExFat) {
-        let path = std::env::temp_dir().join(format!("fpkg-exfat-{}-{name}", std::process::id()));
+        let path = crate::test_tmp::temp_path(format!("fpkg-exfat-{}-{name}", std::process::id()));
         std::fs::write(&path, synthetic_image()).unwrap();
         let volume = ExFat::open(&path).unwrap();
         (path, volume)
@@ -1088,7 +1088,7 @@ mod tests {
         let at = HEAP + (5 - 2) * CLUSTER;
         img[at..at + 96].copy_from_slice(&flat(ghost));
         let path =
-            std::env::temp_dir().join(format!("fpkg-exfat-{}-full-root", std::process::id()));
+            crate::test_tmp::temp_path(format!("fpkg-exfat-{}-full-root", std::process::id()));
         std::fs::write(&path, img).unwrap();
         let mut volume = ExFat::open(&path).unwrap();
         let walked = volume.walk_tree();
@@ -1111,7 +1111,7 @@ mod tests {
         // big.bin's stream record is the root's second record: valid length 4096 of 8192.
         let at = HEAP + (4 - 2) * CLUSTER + 32;
         img[at + 8..at + 16].copy_from_slice(&4096u64.to_le_bytes());
-        let path = std::env::temp_dir().join(format!("fpkg-exfat-{}-valid", std::process::id()));
+        let path = crate::test_tmp::temp_path(format!("fpkg-exfat-{}-valid", std::process::id()));
         std::fs::write(&path, img).unwrap();
         let mut volume = ExFat::open(&path).unwrap();
         let files = volume.walk().unwrap();
@@ -1163,7 +1163,7 @@ mod tests {
     #[test]
     fn empty_directories_are_kept() {
         let path =
-            std::env::temp_dir().join(format!("fpkg-exfat-{}-empty-dirs", std::process::id()));
+            crate::test_tmp::temp_path(format!("fpkg-exfat-{}-empty-dirs", std::process::id()));
         std::fs::write(&path, image_with_dirs()).unwrap();
         let source = ExFatSource::open(&path).unwrap();
         std::fs::remove_file(&path).ok();
@@ -1181,7 +1181,7 @@ mod tests {
         // `nest/deeper` now starts where the root does.
         let at = 2 * 512 + (9 - 2) * 4096 + 32 + 20;
         img[at..at + 4].copy_from_slice(&4u32.to_le_bytes());
-        let path = std::env::temp_dir().join(format!("fpkg-exfat-{}-cycle", std::process::id()));
+        let path = crate::test_tmp::temp_path(format!("fpkg-exfat-{}-cycle", std::process::id()));
         std::fs::write(&path, img).unwrap();
         let err = ExFatSource::open(&path).err().unwrap();
         std::fs::remove_file(&path).ok();
@@ -1196,7 +1196,7 @@ mod tests {
         // `big.bin`'s stream record: the second record of the root, in cluster 4.
         let at = 2 * 512 + (4 - 2) * 4096 + 32 + 24;
         img[at..at + 8].copy_from_slice(&(1u64 << 60).to_le_bytes());
-        let path = std::env::temp_dir().join(format!("fpkg-exfat-{}-huge", std::process::id()));
+        let path = crate::test_tmp::temp_path(format!("fpkg-exfat-{}-huge", std::process::id()));
         std::fs::write(&path, img).unwrap();
         let err = ExFatSource::open(&path).err().unwrap();
         std::fs::remove_file(&path).ok();
@@ -1217,7 +1217,7 @@ mod tests {
 
     #[test]
     fn a_short_image_is_refused() {
-        let dir = std::env::temp_dir().join(format!("fpkg-exfat-short-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-exfat-short-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let img = dir.join("short.exfat");
         std::fs::write(&img, [0u8; 100]).unwrap();
@@ -1231,7 +1231,7 @@ mod tests {
 
     #[test]
     fn an_image_with_no_exfat_volume_is_refused() {
-        let dir = std::env::temp_dir().join(format!("fpkg-exfat-none-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-exfat-none-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let img = dir.join("blank.exfat");
         std::fs::write(&img, [0u8; 4096]).unwrap();
@@ -1245,7 +1245,7 @@ mod tests {
 
     #[test]
     fn a_bogus_cluster_shift_is_refused() {
-        let dir = std::env::temp_dir().join(format!("fpkg-exfat-shift-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-exfat-shift-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let img = dir.join("shift.exfat");
         let mut boot = vec![0u8; 8192];
@@ -1267,7 +1267,7 @@ mod tests {
     /// cap holds.
     #[test]
     fn a_cluster_over_32_mib_is_refused() {
-        let dir = std::env::temp_dir().join(format!("fpkg-exfat-big-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-exfat-big-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let img = dir.join("big.exfat");
         let mut boot = vec![0u8; 8192];
@@ -1287,7 +1287,7 @@ mod tests {
 
     #[test]
     fn a_heap_past_the_image_is_refused() {
-        let dir = std::env::temp_dir().join(format!("fpkg-exfat-heap-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-exfat-heap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let img = dir.join("heap.exfat");
         let mut boot = vec![0u8; 8192];
@@ -1313,7 +1313,7 @@ mod tests {
     #[test]
     fn the_walk_reads_no_more_directory_bytes_than_the_volume_holds() {
         let path =
-            std::env::temp_dir().join(format!("fpkg-exfat-{}-dir-budget", std::process::id()));
+            crate::test_tmp::temp_path(format!("fpkg-exfat-{}-dir-budget", std::process::id()));
         std::fs::write(&path, image_with_dirs()).unwrap();
         let mut volume = ExFat::open(&path).unwrap();
         std::fs::remove_file(&path).ok();
@@ -1338,7 +1338,7 @@ mod tests {
         // And `junk` (the root's eleventh record) runs on over `nest` and `deeper`.
         let at = at + 3 * 32;
         img[at..at + 8].copy_from_slice(&(3 * 4096u64).to_le_bytes());
-        let path = std::env::temp_dir().join(format!("fpkg-exfat-{}-overlap", std::process::id()));
+        let path = crate::test_tmp::temp_path(format!("fpkg-exfat-{}-overlap", std::process::id()));
         std::fs::write(&path, img).unwrap();
         let err = ExFatSource::open(&path).err().map(|e| e.to_string());
         std::fs::remove_file(&path).ok();

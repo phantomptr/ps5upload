@@ -674,9 +674,9 @@ static STORE_ERROR: Mutex<Option<String>> = Mutex::new(None);
 /// The folder they live in. Tests keep to one of their own.
 fn store_dir() -> Option<PathBuf> {
     if cfg!(test) {
-        return Some(
+        return Some(crate::test_scratch(
             std::env::temp_dir().join(format!("ps5upload-golive-store-{}", std::process::id())),
-        );
+        ));
     }
     crate::remote::store::data_dir()
 }

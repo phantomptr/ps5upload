@@ -91,7 +91,7 @@ fn a_single_flipped_byte_fails_verification() {
     };
     // Inside outer block 3 (the inode table): its imagedigs check must fail.
     bytes[0x10000 + 3 * 0x10000 + 100] ^= 0x01;
-    let tmp = std::env::temp_dir().join(format!("fpkg-tamper-{}.pkg", std::process::id()));
+    let tmp = crate::test_tmp::temp_path(format!("fpkg-tamper-{}.pkg", std::process::id()));
     std::fs::write(&tmp, &bytes).unwrap();
     let report = verify_package(&tmp, DEFAULT_PASSCODE).unwrap();
     std::fs::remove_file(&tmp).ok();
@@ -101,3 +101,7 @@ fn a_single_flipped_byte_fails_verification() {
         .iter()
         .any(|c| !c.ok && c.name.starts_with("outer block 3")));
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[path = "../../../test-support/test_tmp.rs"]
+mod test_tmp;

@@ -370,7 +370,7 @@ mod tests {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
             let dir =
-                std::env::temp_dir().join(format!("ps5upload-icontest-{}", std::process::id()));
+                crate::test_tmp::temp_path(format!("ps5upload-icontest-{}", std::process::id()));
             let _ = fs::remove_dir_all(&dir);
             // SAFETY: single-threaded test setup, before any read of the var.
             unsafe { std::env::set_var("PS5UPLOAD_CACHE_DIR", &dir) };

@@ -551,7 +551,7 @@ mod observation_tests {
     use super::*;
 
     fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("fakelibs-obs-{tag}-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fakelibs-obs-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -1762,7 +1762,7 @@ mod tests {
     fn tempdir() -> TempDir {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let p = std::env::temp_dir().join(format!(
+        let p = crate::test_tmp::temp_path(format!(
             "ps5upload-fakelibs-test-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)

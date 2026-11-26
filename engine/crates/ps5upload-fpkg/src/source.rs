@@ -1266,7 +1266,7 @@ mod tests {
 
     #[test]
     fn packed_kind_reads_the_pack_index_magic() {
-        let base = std::env::temp_dir().join(format!("fpkg-packed-kind-{}", std::process::id()));
+        let base = crate::test_tmp::temp_path(format!("fpkg-packed-kind-{}", std::process::id()));
         std::fs::remove_dir_all(&base).ok();
         let kind = |name: &str, files: &[(&str, &[u8])]| {
             let dir = base.join(name);
@@ -1296,7 +1296,7 @@ mod tests {
     /// A folder's `ampr_emu.index` that doesn't read: the finding says why, not only that.
     #[test]
     fn a_damaged_index_finding_names_the_reason() {
-        let dir = std::env::temp_dir().join(format!("fpkg-index-why-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-index-why-{}", std::process::id()));
         std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("eboot.bin"), b"x").unwrap();
@@ -1323,7 +1323,7 @@ mod tests {
     /// the progress callback sees the count climb to the total.
     #[test]
     fn folder_heads_match_one_at_a_time_and_keep_order() {
-        let dir = std::env::temp_dir().join(format!("fpkg-heads-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-heads-{}", std::process::id()));
         std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         let mut paths = Vec::new();
@@ -1353,7 +1353,7 @@ mod tests {
     /// A file that cannot be opened fails the read with its own name, as before.
     #[test]
     fn folder_heads_name_the_missing_file() {
-        let dir = std::env::temp_dir().join(format!("fpkg-heads-miss-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-heads-miss-{}", std::process::id()));
         std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(&dir).unwrap();
         for i in 0..40 {
@@ -1374,7 +1374,7 @@ mod tests {
     /// Stop while the headers are read ends the walk as cancelled.
     #[test]
     fn folder_heads_stop_when_asked() {
-        let dir = std::env::temp_dir().join(format!("fpkg-heads-stop-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-heads-stop-{}", std::process::id()));
         std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(&dir).unwrap();
         let paths: Vec<String> = (0..2000).map(|i| format!("f{i}.bin")).collect();
@@ -1394,7 +1394,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn symlinks_count_as_their_targets() {
-        let base = std::env::temp_dir().join(format!("fpkg-symlink-{}", std::process::id()));
+        let base = crate::test_tmp::temp_path(format!("fpkg-symlink-{}", std::process::id()));
         let (real, staged) = (base.join("real"), base.join("staged"));
         std::fs::remove_dir_all(&base).ok();
         std::fs::create_dir_all(real.join("sub")).unwrap();
@@ -1415,7 +1415,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_dangling_link_and_a_backslash_name_are_refused_by_name() {
-        let base = std::env::temp_dir().join(format!("fpkg-badname-{}", std::process::id()));
+        let base = crate::test_tmp::temp_path(format!("fpkg-badname-{}", std::process::id()));
         std::fs::remove_dir_all(&base).ok();
         std::fs::create_dir_all(&base).unwrap();
         std::fs::write(base.join("eboot.bin"), b"12345").unwrap();
@@ -1743,7 +1743,7 @@ mod tests {
 
     #[test]
     fn junk_is_skipped_and_sizes_are_recorded() {
-        let dir = std::env::temp_dir().join(format!("fpkg-scan-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-scan-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sce_sys/about")).unwrap();
         std::fs::write(dir.join("eboot.bin"), [0u8; 10]).unwrap();
@@ -1773,7 +1773,7 @@ mod tests {
 
     #[test]
     fn content_version_packs_as_bcd() {
-        let dir = std::env::temp_dir().join(format!("fpkg-ver-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-ver-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sce_sys")).unwrap();
         std::fs::write(
@@ -1791,7 +1791,7 @@ mod tests {
 
     #[test]
     fn a_folder_source_reads_ranges_and_reports_itself() {
-        let dir = std::env::temp_dir().join(format!("fpkg-tree-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-tree-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("eboot.bin"), b"0123456789").unwrap();
@@ -1826,7 +1826,7 @@ mod tests {
     /// is never called would be invisible, which is the failure this guards.
     #[test]
     fn readiness_reports_an_ampr_dependency() {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::test_tmp::temp_path(format!(
             "fpkg-ready-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
@@ -2009,7 +2009,7 @@ mod tests {
 
     #[test]
     fn readiness_names_the_source_and_its_size() {
-        let dir = std::env::temp_dir().join(format!("fpkg-named-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-named-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sce_sys")).unwrap();
         std::fs::write(dir.join("eboot.bin"), [0u8; 1024]).unwrap();
@@ -2039,7 +2039,7 @@ mod tests {
 
     #[test]
     fn an_unknown_source_kind_is_an_error() {
-        let dir = std::env::temp_dir().join(format!("fpkg-kind-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-kind-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let img = dir.join("game.iso");
@@ -2062,7 +2062,7 @@ mod tests {
         send::<crate::ufs2_source::Ufs2Source>();
         send::<Box<dyn SourceTree>>();
 
-        let dir = std::env::temp_dir().join(format!("fpkg-send-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("fpkg-send-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("eboot.bin"), b"moved").unwrap();
         let mut tree = open(&dir).unwrap();

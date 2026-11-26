@@ -4,7 +4,7 @@
 use super::*;
 
 fn tmp() -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ps5upload-ffmpeg-{}", uuid::Uuid::new_v4()));
+    let d = crate::test_tmp::temp_path(format!("ps5upload-ffmpeg-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }

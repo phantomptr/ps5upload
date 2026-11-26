@@ -144,7 +144,7 @@ mod tests {
     struct Dir(PathBuf);
     impl Dir {
         fn new(name: &str) -> Self {
-            let p = std::env::temp_dir().join(format!(
+            let p = crate::test_tmp::temp_path(format!(
                 "ampr-pack-{}-{name}-{:?}",
                 std::process::id(),
                 std::thread::current().id()

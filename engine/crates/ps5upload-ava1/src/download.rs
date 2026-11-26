@@ -1501,7 +1501,7 @@ mod tests {
     #[test]
     fn landed_files_keep_the_ps5_times() {
         // #812: a clip downloaded from the PS5 was dated when it arrived.
-        let d = std::env::temp_dir().join(format!("p5a-mtime-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-mtime-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("Clips/sub")).unwrap();
         std::fs::write(d.join("Clips/a.mp4"), b"a").unwrap();
@@ -1579,7 +1579,7 @@ mod tests {
     /// against what the disk under the temp folder really does.
     #[test]
     fn names_that_differ_only_in_case_are_refused_where_the_disk_merges_them() {
-        let dir = std::env::temp_dir().join(format!("ps5u-dl-case-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-dl-case-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("probe")).unwrap();
         let really = dir.join("PROBE").exists();
@@ -1613,7 +1613,7 @@ mod tests {
     /// `VOL` and said the disk folds case.
     #[test]
     fn the_case_question_is_asked_inside_the_destination_never_above_it() {
-        let dir = std::env::temp_dir().join(format!("ps5u-dl-case-at-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-dl-case-at-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("vol")).unwrap();
         let folds = std::fs::create_dir(dir.join("VOL")).is_err();
@@ -1824,7 +1824,7 @@ mod tests {
 
     #[test]
     fn a_descriptor_shortage_is_waited_out_not_terminal() {
-        let d = std::env::temp_dir().join(format!("p5a-emfile-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-emfile-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("share/G")).unwrap();
         for i in 0..3u8 {
@@ -1900,7 +1900,7 @@ mod tests {
     // download as a bad manifest.
     #[test]
     fn a_zip_download_restarts_when_a_file_is_sent_again() {
-        let d = std::env::temp_dir().join(format!("p5a-zip-retry-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-zip-retry-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("share/G")).unwrap();
         for i in 0..3u8 {
@@ -2043,7 +2043,7 @@ mod tests {
         bps: u64,
         damage: Option<fn(&Path)>,
     ) -> (u64, u64, u64) {
-        let d = std::env::temp_dir().join(format!("p5a-zip-{tag}-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-zip-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("share/G")).unwrap();
         let mut want = Vec::new();
@@ -2252,7 +2252,7 @@ mod tests {
     // delivered, in (file, offset) order, with no gaps.
     #[test]
     fn a_fresh_ordered_job_delivers_every_byte_in_order() {
-        let d = std::env::temp_dir().join(format!("p5a-ord-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-ord-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("share/G")).unwrap();
         let sizes = [3 << 20, 100, (2 << 20) + 17, 1 << 20, 5];
@@ -2309,7 +2309,7 @@ mod tests {
 
     #[test]
     fn a_rewrite_from_offset_zero_is_a_restart_and_a_gap_is_not() {
-        let d = std::env::temp_dir().join(format!("p5a-zip-sink-rw-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-zip-sink-rw-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         let mut m = files(&["a", "b"]);
@@ -2331,7 +2331,7 @@ mod tests {
 
     #[test]
     fn a_recoverable_local_failure_keeps_its_journal_and_staging() {
-        let d = std::env::temp_dir().join(format!("p5a-keep-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-keep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let (job, part) = (d.join("job"), d.join("Game.ava-part"));
         let fill = || {
@@ -2400,7 +2400,7 @@ mod tests {
 
     #[test]
     fn a_stale_staging_path_is_cleared_only_for_a_fresh_journal() {
-        let d = std::env::temp_dir().join(format!("p5a-stale-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-stale-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("j")).unwrap();
         assert!(journal_is_empty(&d.join("missing")));
@@ -2421,7 +2421,7 @@ mod tests {
     /// finish must take the folder that is there as its own.
     #[test]
     fn a_retry_after_the_folder_was_renamed_into_place_finishes() {
-        let d = std::env::temp_dir().join(format!("p5a-landed-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-landed-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         let target = d.join("Game");
@@ -2465,7 +2465,7 @@ mod tests {
     /// part file). Into a new folder (staged whole, no part names) the same tree is fine.
     #[test]
     fn a_tree_holding_x_and_x_ava_part_is_refused_into_an_existing_folder_only() {
-        let d = std::env::temp_dir().join(format!("p5a-partname-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-partname-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let (job, target) = (d.join("job"), d.join("Game"));
         std::fs::create_dir_all(&job).unwrap();
@@ -2569,7 +2569,7 @@ mod tests {
         }
 
         // And through the real clean-up: only the safe file's part goes.
-        let d = std::env::temp_dir().join(format!("p5a-hostile-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-hostile-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let (job, target) = (d.join("job"), d.join("in").join("Game"));
         std::fs::create_dir_all(&job).unwrap();
@@ -2594,7 +2594,7 @@ mod tests {
 
     #[test]
     fn a_final_failure_into_an_existing_folder_removes_its_in_place_part_files_only() {
-        let d = std::env::temp_dir().join(format!("p5a-inplace-{}", std::process::id()));
+        let d = crate::test_tmp::temp_path(format!("p5a-inplace-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let (job, target) = (d.join("job"), d.join("Game"));
         std::fs::create_dir_all(&job).unwrap();

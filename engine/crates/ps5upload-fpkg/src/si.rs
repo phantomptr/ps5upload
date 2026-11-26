@@ -138,7 +138,7 @@ mod tests {
     /// not draw, and always catches a wrong first or last one or a wrong length.
     #[test]
     fn chunk_crc_sampled_checks_its_draw_and_the_length() {
-        let path = std::env::temp_dir().join(format!("ps5upload-crc-{}", std::process::id()));
+        let path = crate::test_tmp::temp_path(format!("ps5upload-crc-{}", std::process::id()));
         let bytes: Vec<u8> = (0..BLOCK * 300).map(|i| (i * 7 % 251) as u8).collect();
         std::fs::write(&path, &bytes).unwrap();
         let mut f = PkgFile::open(&path).unwrap();

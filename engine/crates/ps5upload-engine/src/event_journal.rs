@@ -487,7 +487,7 @@ mod tests {
     struct TmpDir(PathBuf);
     impl TmpDir {
         fn new(tag: &str) -> Self {
-            let p = std::env::temp_dir().join(format!("evj-{tag}-{}", std::process::id()));
+            let p = crate::test_tmp::temp_path(format!("evj-{tag}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&p);
             std::fs::create_dir_all(&p).unwrap();
             TmpDir(p)

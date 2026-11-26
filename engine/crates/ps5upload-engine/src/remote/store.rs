@@ -130,11 +130,15 @@ pub fn data_dir() -> Option<PathBuf> {
 /// and fills the Docker Desktop VM's disk), and on Fedora and Arch desktops it is RAM. Neither is a
 /// place for tens of gigabytes.
 pub fn staging_root() -> PathBuf {
-    staging_root_from(
-        std::env::var_os("PS5UPLOAD_STAGING_DIR"),
-        // A test's copies stay in the temp folder, not in the user's data folder.
-        if cfg!(test) { None } else { data_dir() },
-    )
+    let pinned = std::env::var_os("PS5UPLOAD_STAGING_DIR");
+    // A test's copies stay in a temp folder of the test process's own (removed when it exits),
+    // not in the user's data folder.
+    if cfg!(test) && pinned.as_ref().is_none_or(|v| v.is_empty()) {
+        return crate::test_scratch(
+            std::env::temp_dir().join(format!("ps5upload-staging-{}", std::process::id())),
+        );
+    }
+    staging_root_from(pinned, data_dir())
 }
 
 fn staging_root_from(pinned: Option<std::ffi::OsString>, data: Option<PathBuf>) -> PathBuf {
@@ -472,7 +476,7 @@ fn decrypt(key: &[u8; 32], blob: &str) -> Option<Secret> {
 
 #[cfg(test)]
 pub(crate) fn test_dir() -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ps5upload-remote-{}", uuid::Uuid::new_v4()));
+    let d = crate::test_tmp::temp_path(format!("ps5upload-remote-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }

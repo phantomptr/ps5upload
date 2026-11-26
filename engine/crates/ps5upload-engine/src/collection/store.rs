@@ -295,7 +295,7 @@ mod tests {
     /// A settings file that does not read is kept, not left where the next save writes over it.
     #[test]
     fn a_settings_file_that_does_not_read_is_kept_aside() {
-        let dir = std::env::temp_dir().join(format!("ps5u-coll-settings-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-coll-settings-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("settings.json"), br#"{"roots": 5}"#).unwrap();
@@ -346,7 +346,7 @@ mod tests {
     /// those fields is new since: it must read as empty, and a save must not grow it for nothing.
     #[test]
     fn an_older_index_still_loads() {
-        let dir = std::env::temp_dir().join(format!("ps5u-old-index-{}", uuid::Uuid::new_v4()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-old-index-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("index.json"),
