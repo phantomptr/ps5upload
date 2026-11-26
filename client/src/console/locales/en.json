@@ -510,6 +510,7 @@
   "cw_files_load_all": "Load all",
   "cw_files_mesh_home": "This folder is a Mesh Drive. Its sync file is hidden: don't move or rename the folder.",
   "cw_files_more": "Show more",
+  "cw_files_move_source_left": "“{name}” was copied, but the original is still on the PS5.",
   "cw_files_move_to": "Move to…",
   "cw_files_name": "Name",
   "cw_files_new_file": "New file",

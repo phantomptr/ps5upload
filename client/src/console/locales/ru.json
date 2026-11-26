@@ -510,6 +510,7 @@
   "cw_files_load_all": "Загрузить все",
   "cw_files_mesh_home": "Эта папка — Mesh Drive. Её файл синхронизации скрыт: не перемещайте и не переименовывайте папку.",
   "cw_files_more": "Показать ещё",
+  "cw_files_move_source_left": "«{name}» скопирован, но оригинал всё ещё на PS5.",
   "cw_files_move_to": "Переместить в…",
   "cw_files_name": "Имя",
   "cw_files_new_file": "Новый файл",

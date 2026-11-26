@@ -510,6 +510,7 @@
   "cw_files_load_all": "すべて読み込む",
   "cw_files_mesh_home": "このフォルダーは Mesh Drive です。同期ファイルは非表示です。フォルダーを移動したり名前を変えたりしないでください。",
   "cw_files_more": "さらに表示",
+  "cw_files_move_source_left": "「{name}」はコピーされましたが、元のファイルは PS5 に残っています。",
   "cw_files_move_to": "移動先…",
   "cw_files_name": "名前",
   "cw_files_new_file": "新しいファイル",

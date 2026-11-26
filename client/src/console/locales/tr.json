@@ -510,6 +510,7 @@
   "cw_files_load_all": "Tümünü yükle",
   "cw_files_mesh_home": "Bu klasör bir Mesh Drive'dır. Eşitleme dosyası gizlidir: klasörü taşımayın veya adını değiştirmeyin.",
   "cw_files_more": "Daha fazla göster",
+  "cw_files_move_source_left": "“{name}” kopyalandı, ancak aslı hâlâ PS5'te.",
   "cw_files_move_to": "Şuraya taşı…",
   "cw_files_name": "Ad",
   "cw_files_new_file": "Yeni dosya",

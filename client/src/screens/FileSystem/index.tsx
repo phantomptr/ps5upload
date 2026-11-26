@@ -2912,11 +2912,18 @@ export default function FileSystemScreen() {
   /** Save a file or folder under the current dir to the host. Same
    *  flow as Library's per-row Download — pick a host folder, kick
    *  off `transfer_download`, poll jobStatus to terminal. Single-
-   *  flight at the screen level: only one download at a time. */
-  const runDownload = async (entry: DirEntry, asZip = false, server?: Connection) => {
+   *  flight at the screen level: only one download at a time.
+   *  `to`: a folder already picked on `server`, and `move` to delete the
+   *  source once the engine checked the copy there (#953). True once done. */
+  const runDownload = async (
+    entry: DirEntry,
+    asZip = false,
+    server?: Connection,
+    to?: { dir: string; move: boolean },
+  ): Promise<boolean> => {
     // Single-flight per console: only one download at a time on THIS
     // console (others download concurrently into their own slots).
-    if (fsDownload.active) return;
+    if (fsDownload.active) return false;
     const addr = consoleAddr(host);
     const remote = joinPath(path, entry.name);
     const kind: "file" | "folder" = entry.kind === "dir" ? "folder" : "file";
@@ -2936,14 +2943,16 @@ export default function FileSystemScreen() {
           'Save "{name}" as a .zip',
         ),
       });
-      if (!destZip || typeof destZip !== "string") return;
+      if (!destZip || typeof destZip !== "string") return false;
       dest = destZip;
       rootName = destZip.split(/[\\/]/).pop() || `${entry.name}.zip`;
       start = () =>
         startTransferDownloadZip(remote, destZip, addr, kind, systemFileRead);
     } else {
       // A saved server (8.0.0): the engine pulls it off the console and writes it there.
-      const picked = server
+      const picked = to
+        ? to.dir
+        : server
         ? await pickLocalPath({
             mode: "folder",
             source: { connectionId: server.id },
@@ -2967,11 +2976,11 @@ export default function FileSystemScreen() {
               'Pick a destination folder for "{name}"',
             ),
           });
-      if (typeof picked !== "string") return;
+      if (typeof picked !== "string") return false;
       dest = picked;
       rootName = entry.name;
       start = () =>
-        startTransferDownload(remote, picked, addr, kind, systemFileRead);
+        startTransferDownload(remote, picked, addr, kind, systemFileRead, !!to?.move);
     }
     setError(null);
     let jobId: string;
@@ -2994,7 +3003,7 @@ export default function FileSystemScreen() {
         { body: friendly },
       );
       fsDownload.end(friendly);
-      return;
+      return false;
     }
     labelEngineJob(jobId, "download", rootName);
     const myRunId = fsDownload.begin({
@@ -3027,13 +3036,17 @@ export default function FileSystemScreen() {
     };
     // A failed status read keeps polling (the engine is still downloading);
     // the banner says contact is lost and its Cancel still stops the job.
+    let ok = false;
     await pollFsDownload(
       jobId,
       {
         isLive,
         onProgress: (p) => fsDownload.setProgress(p),
         onLostContact: (e) => fsDownload.setLostContact(e),
-        onDone: () => fsDownload.end(null),
+        onDone: () => {
+          ok = true;
+          fsDownload.end(null);
+        },
         onFailed: (error) =>
           fail(
             tr("fs_download_failed", { error }, "Download failed: {error}"),
@@ -3041,6 +3054,33 @@ export default function FileSystemScreen() {
       },
       { jobStatus: (id) => jobStatus(id) },
     );
+    return ok;
+  };
+
+  /** Copy or move `list` into one folder picked on `server` (#953), one item after another: a
+   *  failed, cancelled or refused item stops the rest. A move deletes each source on the PS5
+   *  only after the engine checked its copy on the server. */
+  const runServerTransfer = async (list: DirEntry[], server: Connection, move: boolean) => {
+    if (list.length === 0 || fsDownload.active) return;
+    const what =
+      list.length === 1
+        ? list[0].name
+        : tr("fs_move_n_items", { count: list.length }, `${list.length} items`);
+    const dir = await pickLocalPath({
+      mode: "folder",
+      source: { connectionId: server.id },
+      title: tr(
+        "fs_download_server_title",
+        { name: what, server: server.name },
+        'Pick a folder on {server} for "{name}"',
+      ),
+    });
+    if (typeof dir !== "string") return;
+    setSelected(new Set());
+    for (const entry of list) {
+      if (!(await runDownload(entry, false, server, { dir, move }))) break;
+    }
+    if (move) void refresh();
   };
 
   const selectionActive = selected.size > 0;
@@ -3554,6 +3594,19 @@ export default function FileSystemScreen() {
           startPath={parent(moveItems[0]?.path ?? path)}
           onCancel={() => setMoveItems(null)}
           onConfirm={confirmMove}
+          servers={savedServers}
+          onServer={(id, move) => {
+            const server = savedServers.find((c) => c.id === id);
+            const names = new Set(moveItems.map((i) => i.name));
+            setMoveItems(null);
+            if (server) {
+              void runServerTransfer(
+                (entries ?? []).filter((e) => names.has(e.name)),
+                server,
+                move,
+              );
+            }
+          }}
         />
       )}
       {rowMenu && menuEntry && (

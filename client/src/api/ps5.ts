@@ -1095,6 +1095,9 @@ export async function startTransferDownload(
   transferAddr: string,
   kind: "file" | "folder",
   unsafeRead: boolean = false,
+  /** A move to a saved server (`destDir` is `remote://…`): the engine deletes the source on the
+   *  PS5 only once the copy is complete and checked there. */
+  removeSource: boolean = false,
 ): Promise<string> {
   const res = await invoke<{ job_id: string }>("transfer_download", {
     req: {
@@ -1103,6 +1106,7 @@ export async function startTransferDownload(
       addr: transferAddr,
       kind,
       unsafe_read: unsafeRead,
+      ...(removeSource ? { remove_source: true } : {}),
     },
   });
   return res.job_id;

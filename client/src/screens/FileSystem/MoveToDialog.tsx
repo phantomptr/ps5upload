@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { FolderInput, HardDrive, Usb } from "lucide-react";
+import { FolderInput, HardDrive, Network, Usb } from "lucide-react";
 
 import type { Volume } from "../../api/ps5";
 import { Button, Modal } from "../../components";
@@ -26,6 +26,8 @@ export function MoveToDialog({
   startPath,
   onCancel,
   onConfirm,
+  servers = [],
+  onServer,
 }: {
   open: boolean;
   host: string;
@@ -35,6 +37,10 @@ export function MoveToDialog({
   startPath: string;
   onCancel: () => void;
   onConfirm: (dest: string) => void;
+  /** Saved servers (a NAS share, FTP…), offered as destinations off the PS5 (#953). */
+  servers?: { id: string; name: string }[];
+  /** A server picked: `move` deletes the originals once the copy there is checked. */
+  onServer?: (id: string, move: boolean) => void;
 }) {
   const tr = useTr();
   const [dest, setDest] = useState(startPath);
@@ -112,6 +118,38 @@ export function MoveToDialog({
             })}
           </div>
         </div>
+
+        {onServer && servers.length > 0 && (
+          <div data-testid="move-servers">
+            <div className="mb-1 text-[11px] font-semibold uppercase text-[var(--color-muted)]">
+              {tr("fs_move_servers", undefined, "Saved servers")}
+            </div>
+            <div className="grid gap-1">
+              {servers.map((c) => (
+                <div
+                  key={c.id}
+                  className="flex items-center gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3.5 py-1.5 text-xs"
+                >
+                  <Network size={14} className="shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                  <Button size="sm" variant="ghost" onClick={() => onServer(c.id, false)}>
+                    {tr("fs_move_server_copy", undefined, "Copy there…")}
+                  </Button>
+                  <Button size="sm" variant="primary" onClick={() => onServer(c.id, true)}>
+                    {tr("fs_move_server_move", undefined, "Move there…")}
+                  </Button>
+                </div>
+              ))}
+            </div>
+            <p className="mt-1 text-xs text-[var(--color-muted)]">
+              {tr(
+                "fs_move_server_hint",
+                undefined,
+                "A move copies to the server, checks the copy, then removes the originals from the PS5.",
+              )}
+            </p>
+          </div>
+        )}
 
         <ConsoleFolderBrowser
           open={open}

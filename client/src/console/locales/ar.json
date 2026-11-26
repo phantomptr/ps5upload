@@ -510,6 +510,7 @@
   "cw_files_load_all": "تحميل الكل",
   "cw_files_mesh_home": "هذا المجلد محرك Mesh. ملف المزامنة مخفي: لا تنقل المجلد ولا تعِد تسميته.",
   "cw_files_more": "عرض المزيد",
+  "cw_files_move_source_left": "تم نسخ “{name}”، لكن الأصل لا يزال على PS5.",
   "cw_files_move_to": "نقل إلى…",
   "cw_files_name": "الاسم",
   "cw_files_new_file": "ملف جديد",
