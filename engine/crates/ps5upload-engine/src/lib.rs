@@ -518,6 +518,14 @@ fn job_failed_from_err(started_at_ms: u64, completed_at_ms: u64, err: &anyhow::E
         };
     }
     let (reason, detail) = extract_payload_error(err);
+    // A cancel is a state of its own, said as `error_reason: "cancelled"` however the error that
+    // carried it is worded: a transfer's `transfer_cancelled` wrapped in context ("uploading x:
+    // transfer_cancelled") ended as a failure, so a paused queue item was held as failed.
+    let reason = if err.chain().any(|c| c.to_string() == "transfer_cancelled") {
+        Some(CANCELLED_REASON.to_string())
+    } else {
+        reason
+    };
     // Central choke point for ALL async transfer-job failures (file, dir,
     // reconcile, download). Logging here means a mid-transfer death — the
     // "upload failed halfway through" case — shows the engine's full error
@@ -1828,6 +1836,18 @@ fn signal_transfer_cancel(job_id: Uuid) -> bool {
     }
 }
 
+/// The `error_reason` of a job that was stopped rather than failed: the one way a job's end says
+/// "cancelled" ([`stopped_reason`], [`job_failed_from_err`]). Readers (the queue, Tasks) take it,
+/// and the older words beside it ([`is_cancelled_end`]).
+pub(crate) const CANCELLED_REASON: &str = "cancelled";
+
+/// Whether a failed job's snapshot fields say it was stopped: its `error_reason` (the typed
+/// answer), or, from a job recorded before that was set, its `error` as the transfer words it.
+pub(crate) fn is_cancelled_end(error_reason: Option<&str>, error: Option<&str>) -> bool {
+    matches!(error_reason, Some(CANCELLED_REASON | "transfer_cancelled"))
+        || matches!(error, Some("transfer_cancelled" | "cancelled"))
+}
+
 /// Jobs a Stop was sent to and that have not ended yet: their failure is a stop, said on the wire
 /// as `error_reason: "cancelled"` ([`stopped_reason`]).
 fn stopped_jobs() -> &'static Mutex<std::collections::HashSet<Uuid>> {
@@ -1849,7 +1869,7 @@ fn stopped_reason(job_id: Uuid, state: &mut JobState) {
         .remove(&job_id);
     if let JobState::Failed { error_reason, .. } = state {
         if stopped && error_reason.is_none() {
-            *error_reason = Some("cancelled".into());
+            *error_reason = Some(CANCELLED_REASON.into());
         }
     }
 }
@@ -16354,6 +16374,36 @@ mod helpers_tests {
             }
             _ => panic!("expected Failed state"),
         }
+    }
+
+    /// A cancel wrapped in context is still a cancel: typed as `error_reason: "cancelled"`, the
+    /// raw chain kept.
+    #[test]
+    fn a_cancel_however_worded_is_a_cancel() {
+        let e = anyhow::anyhow!("transfer_cancelled")
+            .context("uploading Game/eboot.bin")
+            .context("the upload stopped");
+        match job_failed_from_err(0, 1, &e) {
+            JobState::Failed {
+                error,
+                error_reason,
+                ..
+            } => {
+                assert_eq!(error_reason.as_deref(), Some(CANCELLED_REASON));
+                assert!(error.ends_with("transfer_cancelled"), "{error}");
+                assert!(is_cancelled_end(error_reason.as_deref(), Some(&error)));
+            }
+            _ => panic!("expected Failed state"),
+        }
+        // A failure that only mentions the word is not one.
+        let e = anyhow::anyhow!("the server said: transfer_cancelled_by_peer is unknown");
+        match job_failed_from_err(0, 1, &e) {
+            JobState::Failed { error_reason, .. } => assert_eq!(error_reason, None),
+            _ => panic!("expected Failed state"),
+        }
+        assert!(!is_cancelled_end(None, Some("uploading x: failed")));
+        assert!(is_cancelled_end(Some("transfer_cancelled"), None));
+        assert!(is_cancelled_end(None, Some("cancelled")));
     }
 
     #[test]

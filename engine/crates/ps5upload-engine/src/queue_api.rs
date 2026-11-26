@@ -1255,8 +1255,11 @@ fn job_end(state: &Value) -> Option<End> {
         "done" => Some(End::with_status(Status::Done)),
         "failed" => {
             let error = field("error").unwrap_or("the job failed");
-            // A build's own word for it.
-            if error == "transfer_cancelled" || error == "cancelled" {
+            // Stopped, not failed: the job's typed reason says so, however its error is worded
+            // ("cancelled; nothing was written", "uploading x: transfer_cancelled"). Read from the
+            // error alone, those were failures: a paused item was held as failed, and a run set
+            // to stop on a failure stopped.
+            if crate::is_cancelled_end(field("error_reason"), field("error")) {
                 return Some(End {
                     code: Some("cancelled".to_string()),
                     ..End::with_status(Status::Cancelled)
@@ -1954,6 +1957,19 @@ mod tests {
                 .status,
             Status::Cancelled
         );
+        // A cancel worded otherwise, typed by its reason (as the engine sets it for a job that
+        // was stopped, and for a cancel wrapped in context): cancelled, not failed.
+        for job in [
+            json!({ "status": "failed", "error": "cancelled; nothing was written",
+                    "error_reason": "cancelled" }),
+            json!({ "status": "failed", "error": "uploading x: transfer_cancelled",
+                    "error_reason": "cancelled" }),
+            json!({ "status": "failed", "error": "raw", "error_reason": "transfer_cancelled" }),
+        ] {
+            let end = job_end(&job).unwrap();
+            assert_eq!(end.status, Status::Cancelled, "{job}");
+            assert_eq!(end.code.as_deref(), Some("cancelled"));
+        }
 
         assert!(install_end(&json!({ "phase": "deliver" })).is_none());
         let done = install_end(&json!({ "phase": "done", "verdict": "may_not_launch" })).unwrap();
