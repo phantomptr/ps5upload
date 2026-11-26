@@ -2291,6 +2291,18 @@ button {
     min-width: 0;
     margin-inline-start: 0.5rem;
   }
+  /* A drive's free space under its name: beside it, with Eject, the name had no room left. */
+  .cw-file-main[data-drive] {
+    flex-wrap: wrap;
+  }
+  .cw-file-main[data-drive] .cw-file-meta {
+    flex: 1 1 100%;
+    margin: 0.3rem 0 0;
+    text-align: start;
+  }
+  .cw-file-main[data-drive] .cw-bar {
+    width: 100%;
+  }
   .cw-dialog {
     max-width: calc(100vw - 1rem);
     max-height: calc(100% - 1rem);
