@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { call } from "../api";
+import { ApiError, call } from "../api";
 import { t } from "../strings";
+import { pollWhileVisible } from "../ui/visiblePoll";
 
 /** One device in the helper's /api/mesh answer (the device list every PS5Upload app sees). */
 export interface ConsoleDevice {
@@ -75,18 +76,14 @@ export function useConsoleMesh(): {
   const read = useCallback(async () => {
     try {
       setMesh(await call<ConsoleMesh>("/api/mesh", {}));
-    } catch {
-      // An older helper has no /api/mesh: nothing to show.
-      setMesh(null);
+    } catch (e) {
+      // An older helper has no /api/mesh (404): nothing to show. A read that failed (a busy
+      // helper, a timeout) keeps the last answer: the section and an ask's prompt stay.
+      if (e instanceof ApiError && e.status === 404) setMesh(null);
     }
   }, []);
-  useEffect(() => {
-    void read();
-    const id = window.setInterval(() => {
-      if (!document.hidden) void read();
-    }, DEVICES_POLL_MS);
-    return () => window.clearInterval(id);
-  }, [read]);
+  // A read at a time: one can take up to the call's timeout, far past the interval.
+  useEffect(() => pollWhileVisible(read, DEVICES_POLL_MS), [read]);
   const run = async (op: "allow" | "decline" | "remove", id: string) => {
     setBusy(true);
     setErr(null);

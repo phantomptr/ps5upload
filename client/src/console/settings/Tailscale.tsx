@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { call } from "../api";
+import { ApiError, call } from "../api";
 import { t } from "../strings";
 import { encodeQr, qrPath } from "../ui/qr";
+import { pollWhileVisible } from "../ui/visiblePoll";
 
 /** What the helper's /api/tailnet answers (the node's status, as the app's Connection panel reads it). */
 export interface ConsoleTailnet {
@@ -93,9 +94,10 @@ export function TailscaleSection() {
     try {
       setSt(await call<ConsoleTailnet>("/api/tailnet", { op: "status" }));
       setMissing(false);
-    } catch {
-      // An older helper has no /api/tailnet: say nothing rather than an error.
-      setMissing(true);
+    } catch (e) {
+      // An older helper has no /api/tailnet (404): say nothing rather than an error. Any other
+      // failed read keeps what the section shows.
+      if (e instanceof ApiError && e.status === 404) setMissing(true);
     }
   }, []);
 
@@ -104,8 +106,7 @@ export function TailscaleSection() {
   }, [read]);
   useEffect(() => {
     if (!st?.enabled || st.state === "running") return;
-    const id = window.setInterval(() => void read(), TAILNET_POLL_MS);
-    return () => window.clearInterval(id);
+    return pollWhileVisible(read, TAILNET_POLL_MS);
   }, [st?.enabled, st?.state, read]);
 
   const run = async (op: "enable" | "disable" | "logout" | "renew" | "allow_add" | "blocked_ignore", ip?: string) => {
