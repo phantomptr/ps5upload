@@ -108,6 +108,97 @@ int main(void) {
     CHECK(!image_mount_tracker_trusted("/mnt/ps5upload", "/dev/ssd0.user"));
     CHECK(!image_mount_tracker_trusted("/data", NULL) && !image_mount_tracker_trusted(NULL, "/dev/lvd1"));
 
+    /* A tracker's file name. The forms earlier helpers wrote stay as they were. */
+    {
+        char key[IMAGE_MOUNT_KEY_MAX + 1], key2[IMAGE_MOUNT_KEY_MAX + 1], small[64] = "x";
+        image_mount_tracker_key("/mnt/ps5upload/GTA5", key, sizeof key);
+        CHECK(strcmp(key, "GTA5") == 0);
+        image_mount_tracker_key("/mnt/ext1/games/foo", key, sizeof key);
+        CHECK(strcmp(key, "mnt_2fext1_2fgames_2ffoo") == 0);
+        image_mount_tracker_key("/mnt/ext1/foo_bar", key, sizeof key);
+        image_mount_tracker_key("/mnt/ext1/foo/bar", key2, sizeof key2);
+        /* escaped mount paths, not secrets */
+        CHECK(strcmp(key, "mnt_2fext1_2ffoo_5fbar") == 0 && strcmp(key2, "mnt_2fext1_2ffoo_2fbar") == 0); /* gitleaks:allow */
+        /* a path below /mnt/ps5upload/<name> is escaped, never "<name>/<more>" */
+        image_mount_tracker_key("/mnt/ps5upload/a/b", key, sizeof key);
+        CHECK(strcmp(key, "mnt_2fps5upload_2fa_2fb") == 0);
+        image_mount_tracker_key("/mnt/ps5upload/", key, sizeof key);
+        CHECK(strcmp(key, "mnt_2fps5upload_2f") == 0);
+        image_mount_tracker_key(NULL, key, sizeof key);
+        CHECK(key[0] == '\0');
+        image_mount_tracker_key("/data/x", small, sizeof small); /* a buffer that could not hold every key */
+        CHECK(small[0] == '\0');
+
+        /* The longest key that is still the plain one: 251 bytes, "<key>.src" is 255. */
+        char mp[1024];
+        memset(mp, 'a', sizeof mp);
+        mp[0] = '/';
+        mp[1 + IMAGE_MOUNT_KEY_MAX] = '\0';
+        image_mount_tracker_key(mp, key, sizeof key);
+        CHECK(strlen(key) == IMAGE_MOUNT_KEY_MAX && strcmp(key, mp + 1) == 0);
+
+        /* One byte more, and a folder of 28 Japanese letters under /data/homebrew (84 bytes, nine
+         * key bytes for each letter): the key still names a file that can be made, holds only
+         * file-name-safe bytes, and is the same every time. */
+        mp[1 + IMAGE_MOUNT_KEY_MAX] = 'a';
+        mp[2 + IMAGE_MOUNT_KEY_MAX] = '\0';
+        image_mount_tracker_key(mp, key, sizeof key);
+        CHECK(strlen(key) == IMAGE_MOUNT_KEY_HEAD + 34 && strstr(key, "_x") == key + IMAGE_MOUNT_KEY_HEAD);
+        char cjk[512] = "/data/homebrew/";
+        for (int i = 0; i < 28; i++) strcat(cjk, "\xe3\x82\xb2"); /* U+30B2 */
+        image_mount_tracker_key(cjk, key, sizeof key);
+        image_mount_tracker_key(cjk, key2, sizeof key2);
+        CHECK(strcmp(key, key2) == 0);
+        CHECK(strlen(key) + strlen(".src") <= 255 && strlen(key) > 34);
+        CHECK(strspn(key, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._") == strlen(key));
+        /* the kept part ends between two bytes of the path: "_HH" triplets, then "_x" + 32 hex digits */
+        const char *x = strstr(key, "_x");
+        CHECK(x != NULL && strlen(x) == 34 && strspn(x + 2, "0123456789abcdef") == 32);
+        CHECK(x != NULL && strncmp(key, "data_2fhomebrew_2f_e3_82_b2", 27) == 0 && (x - key - 18) % 3 == 0);
+
+        /* Two long mount points that differ only at the end (they shared one key) have two keys. */
+        strcat(cjk, "/1");
+        image_mount_tracker_key(cjk, key, sizeof key);
+        cjk[strlen(cjk) - 1] = '2';
+        image_mount_tracker_key(cjk, key2, sizeof key2);
+        CHECK(strcmp(key, key2) != 0 && strncmp(key, key2, IMAGE_MOUNT_KEY_HEAD - 8) == 0);
+    }
+
+    /* A caller's mount point is compared with the kernel's name for it, so it is first written the
+     * same way: one slash between components, no "." component. What cannot be one is refused. */
+    {
+        static const struct {
+            const char *in, *out; /* out NULL: refused */
+        } cases[] = {
+            { "/data/games/foo", "/data/games/foo" },
+            { "/data//games/foo", "/data/games/foo" },
+            { "//data///games////foo", "/data/games/foo" },
+            { "/data/./games/./foo", "/data/games/foo" },
+            { "/./data/games/foo", "/data/games/foo" },
+            { "/data/.hidden/..foo/a.", "/data/.hidden/..foo/a." },
+            { "/mnt/usb0", "/mnt/usb0" },
+            { "/data/games/foo/", NULL },
+            { "/data/games/foo//", NULL },
+            { "/data/games/foo/.", NULL },
+            { "/data/games/../foo", NULL },
+            { "/data/games/foo/..", NULL },
+            { "/..", NULL },
+            { "/", NULL },
+            { "//", NULL },
+            { "/.", NULL },
+            { "", NULL },
+            { "data/games", NULL },
+        };
+        for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+            char buf[64];
+            snprintf(buf, sizeof buf, "%s", cases[i].in);
+            int rc = image_mount_point_normalise(buf);
+            if (cases[i].out) CHECK(rc == 0 && strcmp(buf, cases[i].out) == 0);
+            else CHECK(rc == -1);
+        }
+        CHECK(image_mount_point_normalise(NULL) == -1);
+    }
+
     CHECK(image_mount_kind("exfatfs", "/dev/lvd2") == IMAGE_MOUNT_YES);
     CHECK(image_mount_kind("ufs", "/dev/md3") == IMAGE_MOUNT_YES);
     CHECK(image_mount_kind("nullfs", "/mnt/shadowmnt/G_ca51a0d7") == IMAGE_MOUNT_YES);

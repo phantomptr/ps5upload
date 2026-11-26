@@ -137,6 +137,7 @@ import { isTauriEnv } from "../lib/tauriEnv";
 import { createQueueLeader } from "../lib/queueLeader";
 import { isJobUnknownError } from "../lib/pollRead";
 import { krakenGuard } from "../lib/krakenGuard";
+import { humanizePs5Error } from "../lib/humanizeError";
 
 /** The engine job id currently uploading on each console (bare host key).
  *  runOne records it so stopHost/stop can ask the engine to TRULY cancel the
@@ -269,6 +270,9 @@ export interface QueueItem {
   /** Install-only: a stream install the PS5 never fetched from — offer
    *  "Retry via upload", which copies the file to the PS5 first. */
   fallbackToUpload?: boolean;
+  /** Install-only: the failure is the PS5 not reaching this computer for a stream (said by the
+   *  engine, so true whatever language `error` is in): the row offers the firewall fix. */
+  streamUnreachable?: boolean;
   /** Pkg-only: run the installer once the .pkg upload commits (default on —
    *  staging a pkg exists to install it). Mirrors installSettings, captured at
    *  add time so toggling the default mid-queue doesn't disturb queued rows. */
@@ -837,6 +841,7 @@ export function retryFailedRow(it: QueueItem): QueueItem {
         installProgress: null,
         installNote: null,
         fallbackToUpload: false,
+        streamUnreachable: false,
       }
     : next;
 }
@@ -1850,7 +1855,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
             mountWarnings.push(
               tx(
                 "queue_register_failed",
-                { error: e instanceof Error ? e.message : String(e) },
+                // The helper's reason in words where it has them (a system app's title ID, …).
+                { error: humanizePs5Error(e instanceof Error ? e.message : String(e)) },
                 "Couldn't add it to the home screen automatically: {error}. You can still do it from the Library.",
               ),
             );
@@ -2454,6 +2460,9 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
                 !isRemotePath(next.install.source)
                   ? { fallbackToUpload: true }
                   : {}),
+                ...(isInstall && e instanceof InstallItemError && e.result.streamUnreachable
+                  ? { streamUnreachable: true }
+                  : {}),
               }),
             }));
             scheduleSave();
@@ -2870,6 +2879,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           installProgress: null,
           installNote: null,
           fallbackToUpload: false,
+          streamUnreachable: false,
           completedAt: null,
         }),
       }));

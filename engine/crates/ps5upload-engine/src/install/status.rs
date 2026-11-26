@@ -149,6 +149,14 @@ pub struct InstallStatus {
     /// this computer; the UI offers the fixes it implies. Never set off Windows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub net_diag: Option<crate::win_net::NetDiag>,
+    /// With `FailReason::StreamUnreachable` from the reach check or the no-request watchdog
+    /// (#942): where the console was sent and how its connect ended, for the client to word.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reach: Option<super::reach::ReachFail>,
+    /// On a running job: what it is waiting for before the console has moved a byte (an earlier
+    /// install's call, the reach check, the console's first request). Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting: Option<super::reach::Waiting>,
     /// Epoch seconds (the engine has no date crate and stamps time this way
     /// everywhere, e.g. session `created_at_unix`); the client formats it.
     pub started_at: u64,
@@ -180,6 +188,8 @@ impl InstallStatus {
             replaces: None,
             package_type: None,
             net_diag: None,
+            reach: None,
+            waiting: None,
             started_at: now,
             updated_at: now,
         }
@@ -239,6 +249,8 @@ mod tests {
             replaces: None,
             package_type: None,
             net_diag: None,
+            reach: None,
+            waiting: None,
             started_at: 1_790_000_000,
             updated_at: 1_790_000_001,
         };

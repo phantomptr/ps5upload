@@ -188,6 +188,46 @@ fn an_owed_invalidation_is_settled_by_the_next_poll() {
 }
 
 #[test]
+fn a_request_that_cannot_start_keeps_the_owed_invalidation() {
+    let _g = fresh();
+    rp::request(T0);
+    let inv = rp::counts().invalidate;
+    assert!(rp::cancel(), "the live PIN is owed an invalidation");
+    // Remote Play cannot be prepared right now: the request fails before it reaches Sony.
+    rp::set_prepare(-1);
+    assert_eq!(rp::request(T0 + 1_000), -1);
+    assert_eq!(rp::view(T0 + 1_000).state, FAILED);
+    assert_eq!(
+        rp::counts().invalidate,
+        inv,
+        "the failed request invalidated nothing"
+    );
+    // The cancelled PIN is still given up, once.
+    rp::set_prepare(0);
+    rp::settle();
+    rp::settle();
+    assert_eq!(rp::counts().invalidate, inv + 1);
+}
+
+#[test]
+fn a_request_that_cannot_start_gives_up_the_live_pin_it_replaced() {
+    let _g = fresh();
+    rp::request(T0);
+    assert_eq!(rp::view(T0).state, WAITING);
+    let inv = rp::counts().invalidate;
+    rp::set_prepare(-1);
+    assert_eq!(rp::request(T0 + 1_000), -1);
+    assert_eq!(rp::view(T0 + 1_000).pin, "");
+    rp::set_prepare(0);
+    rp::settle();
+    assert_eq!(
+        rp::counts().invalidate,
+        inv + 1,
+        "the PIN no longer shown is no longer good on the console"
+    );
+}
+
+#[test]
 fn cancel_when_nothing_is_live_owes_nothing() {
     let _g = fresh();
     assert!(!rp::cancel());

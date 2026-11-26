@@ -5,6 +5,7 @@
 // TCP send) stay in-process.
 
 import { trStatic } from "../lib/trStatic";
+import type { InstallWaiting, ReachFail } from "../lib/streamReach";
 import { discardBody } from "../lib/discardBody";
 import { requestStatusRecheck } from "../lib/statusRecheck";
 import { formatBytes } from "../lib/format";
@@ -6743,6 +6744,12 @@ export interface InstallStatus {
   /** Windows only: the local adapter facing the console and what Windows says about it, set
    *  when the console could not reach this computer. Absent elsewhere and from an older engine. */
   net_diag?: NetDiag | null;
+  /** With `reason: "stream_unreachable"` from the engine's reach check or its no-request
+   *  watchdog: where the PS5 was sent and how its connect ended (lib/streamReach words it).
+   *  Absent from an older engine. */
+  reach?: ReachFail | null;
+  /** On a running job: what it waits for before the PS5 has moved a byte. */
+  waiting?: InstallWaiting | null;
   started_at: number;
   updated_at: number;
 }

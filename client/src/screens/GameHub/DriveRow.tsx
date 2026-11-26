@@ -1184,7 +1184,7 @@ function LibraryRowImpl({
             {
               body: tr(
                 "library_move_register_failed",
-                { dest: path, error: e instanceof Error ? e.message : String(e) },
+                { dest: path, error: humanizePs5Error(e instanceof Error ? e.message : String(e)) },
                 "Moved to {dest}, but its home-screen tile could not be put back: {error}. Register it from its row.",
               ),
             },
@@ -1657,6 +1657,9 @@ function LibraryRowImpl({
           }
         } else if (/0x80990002|already\s*registered/i.test(regMsg)) {
           // proceed to launch
+        } else if (/register_system_title|register_title_id_unsafe/.test(regMsg)) {
+          // The helper will not register this title ID whatever its DRM type: say why.
+          throw regErr;
         } else {
           setMountNote(
             tr(

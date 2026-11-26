@@ -9,7 +9,8 @@ import { useTr } from "../../state/lang";
  * fake package from a retail one, so the note names the requirement and lets the reader decide
  * whether it applies. The firmware limit is on the folded line, so it is read before anyone
  * installs: PS5 fake games play up to 13.60, and above 11.60 only with a kstuff build that
- * supports fake packages there (November 2026); PS4 fake packages are fine. The load order is behind the fold.
+ * supports fake packages there (kstuff 1.15 or newer; the catalogue's may be older, which the
+ * kstuff line says); PS4 fake packages are fine. The load order is behind the fold.
  */
 export function FpkgNote({ className = "mb-4" }: { className?: string }) {
   const tr = useTr();
@@ -26,8 +27,8 @@ export function FpkgNote({ className = "mb-4" }: { className?: string }) {
           </span>
           <span>
             {tr(
-              "pkglib.fpkgsupport.firmware_v3",
-              "PS5 fake packages play on firmware up to 13.60. Above 11.60 they need a kstuff build with fake-package support for that firmware (released November 2026): with an older kstuff the package installs, but the game doesn't start. PS4 fake packages are fine.",
+              "pkglib.fpkgsupport.firmware_v4",
+              "PS5 fake packages play on firmware up to 13.60. Above 11.60 they need kstuff 1.15 or newer: with an older kstuff the package installs, but the game doesn't start. PS4 fake packages are fine.",
             )}
           </span>
         </span>
@@ -48,8 +49,8 @@ export function FpkgNote({ className = "mb-4" }: { className?: string }) {
             <li>
               <strong className="text-[var(--color-text)]">kstuff</strong>{" "}
               {tr(
-                "pkglib.fpkgsupport.kstuff_v2",
-                "— the build with PS5 fake-package support for your firmware (above 11.60: the November 2026 build or newer)",
+                "pkglib.fpkgsupport.kstuff_v3",
+                "— the build with PS5 fake-package support for your firmware. Above 11.60: kstuff 1.15 or newer. The catalog's copy may be older: get 1.15 from its author and send it with Send payload.",
               )}
             </li>
             <li className="break-words">

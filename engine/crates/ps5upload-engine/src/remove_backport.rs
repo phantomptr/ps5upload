@@ -132,7 +132,12 @@ fn param_json(tree: &mut dyn SourceTree) -> Option<serde_json::Value> {
         .iter()
         .find(|f| f.path.eq_ignore_ascii_case("sce_sys/param.json"))
         .map(|f| f.path.clone())?;
-    serde_json::from_slice(&tree.read(&path).ok()?).ok()
+    // Its size is the image's own claim: a crafted image that lists a terabyte param.json (all
+    // holes) is not read, where a plain `read` grew a buffer that large and ended the engine.
+    let bytes =
+        ps5upload_fpkg::source::read_small(tree, &path, ps5upload_fpkg::source::MAX_PARAM_BYTES)
+            .ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 /// Why the backport can't be removed: `eboot.bin`'s SDK is lower than `param.json`'s
@@ -427,6 +432,19 @@ mod tests {
             ("fakelib2/libSceGnm.sprx", b"\x7fELF another".to_vec()),
             ("ampr_emu.index", b"index".to_vec()),
         ])
+    }
+
+    /// An image may give its param.json any size (a terabyte of holes): it is then unreadable,
+    /// never read whole. A plain read grew a buffer that large.
+    #[test]
+    fn a_param_json_the_image_calls_huge_is_not_read() {
+        let mut t = game(0x0900_0000);
+        assert!(param_json(&mut t).is_some());
+        let listed = t.listed.iter_mut().find(|f| f.path == "sce_sys/param.json");
+        listed.unwrap().size = 1 << 40;
+        // The tree would still hand the bytes over: it is the listed size that refuses it.
+        assert!(param_json(&mut t).is_none());
+        assert!(blocked(&mut t).is_some());
     }
 
     fn paths(tree: &dyn SourceTree) -> Vec<&str> {

@@ -73,6 +73,106 @@ static inline int image_mount_tracker_trusted(const char *mount_point, const cha
     return image_mount_from_is_unit(from);
 }
 
+/* The longest tracker key: a tracker is the file "<key>.src", and a file name holds 255 bytes. */
+#define IMAGE_MOUNT_KEY_MAX 251
+/* A longer key keeps this much of itself, then "_x" and 32 hex digits of a hash of the mount point. */
+#define IMAGE_MOUNT_KEY_HEAD (IMAGE_MOUNT_KEY_MAX - 34)
+
+/* The tracker file name (no extension) of the mount at `mount_point`, into `out` (at least
+ * IMAGE_MOUNT_KEY_MAX + 1 bytes, or the key is ""). Three forms:
+ *
+ *   - /mnt/ps5upload/<leaf>: the leaf as it is (fs.mount lets no slash or dot into it);
+ *   - any other mount point: the path without its first slash, every byte that is not a letter, a
+ *     digit, '-' or '.' written "_HH" (its hex), so "/mnt/ext1/games/foo" is
+ *     "mnt_2fext1_2fgames_2ffoo" and no two mount points share a key;
+ *   - when that is longer than IMAGE_MOUNT_KEY_MAX (each byte of a Japanese or Chinese folder name
+ *     takes three): its first IMAGE_MOUNT_KEY_HEAD bytes, cut between two bytes of the path, then
+ *     "_x" and a hash of the whole mount point. "_x" is no escape ('x' is no hex digit), so such a
+ *     key is never another mount point's plain key.
+ *
+ * The third form is new. The key used to be cut at 255 bytes instead: its tracker's name was then
+ * too long to create, so the image was mounted with no tracker, the Volumes list did not show it
+ * and fs.unmount refused it as "not our mount" until the console restarted; and two mount points
+ * that began with the same 85 such bytes shared one key. A key of up to IMAGE_MOUNT_KEY_MAX bytes is
+ * the same as it was, so the trackers of mounts made by an earlier helper still resolve. */
+static inline void image_mount_tracker_key(const char *mount_point, char *out, size_t out_cap) {
+    static const char HEX[] = "0123456789abcdef";
+    static const char BASE[] = "/mnt/ps5upload/";
+    size_t i, j = 0, head = 0, total = 0;
+    unsigned long long h1 = 1469598103934665603ull, h2 = 0x9e3779b97f4a7c15ull;
+    if (!out || out_cap == 0) return;
+    out[0] = '\0';
+    if (!mount_point || out_cap < IMAGE_MOUNT_KEY_MAX + 1) return;
+    if (strncmp(mount_point, BASE, sizeof(BASE) - 1) == 0 && mount_point[sizeof(BASE) - 1] != '\0' &&
+        strchr(mount_point + sizeof(BASE) - 1, '/') == NULL &&
+        strlen(mount_point + sizeof(BASE) - 1) <= IMAGE_MOUNT_KEY_MAX) {
+        snprintf(out, out_cap, "%s", mount_point + sizeof(BASE) - 1);
+        return;
+    }
+    for (i = (mount_point[0] == '/') ? 1u : 0u; mount_point[i] != '\0'; i++) {
+        unsigned char c = (unsigned char)mount_point[i];
+        int plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                    c == '-' || c == '.';
+        size_t n = plain ? 1u : 3u;
+        if (total + n <= IMAGE_MOUNT_KEY_MAX) {
+            if (plain) {
+                out[j++] = (char)c;
+            } else {
+                out[j++] = '_';
+                out[j++] = HEX[(c >> 4) & 0xF];
+                out[j++] = HEX[c & 0xF];
+            }
+        }
+        total += n;
+        if (total <= IMAGE_MOUNT_KEY_HEAD) head = total;
+    }
+    if (total <= IMAGE_MOUNT_KEY_MAX) {
+        out[j] = '\0';
+        return;
+    }
+    for (i = 0; mount_point[i] != '\0'; i++) {
+        unsigned char c = (unsigned char)mount_point[i];
+        h1 = (h1 ^ c) * 1099511628211ull;
+        h2 = (h2 ^ c) * 0x100000001b3ull;
+        h2 ^= h2 >> 29;
+    }
+    snprintf(out + head, out_cap - head, "_x%016llx%016llx", h1, h2);
+}
+
+/* A caller's mount point rewritten, in place, the way the kernel's mount table names it: one slash
+ * between components and no "." component ("/data//games/./foo" becomes "/data/games/foo"). 0, or
+ * -1 for a path that cannot be a mount point: not absolute, "/" itself, one that ends in a slash,
+ * or one with a ".." component (never followed lexically: path_policy.c).
+ *
+ * fs.mount kept the string as it was sent, and everything after compared it with the kernel's
+ * name: the "something is already mounted here" check, the tracker, the Volumes list, and at
+ * unmount the search for the image unit to detach. With a doubled slash none of them matched: a
+ * second request stacked another image on the first, the mount was not listed, and unmounting it
+ * left its LVD/MD unit attached. */
+static inline int image_mount_point_normalise(char *p) {
+    size_t r = 0, w = 0;
+    if (!p || p[0] != '/') return -1;
+    while (p[r] != '\0') {
+        size_t start, len;
+        while (p[r] == '/') r++;
+        if (p[r] == '\0') return -1; /* "/", or a trailing slash */
+        start = r;
+        while (p[r] != '\0' && p[r] != '/') r++;
+        len = r - start;
+        if (len == 1 && p[start] == '.') {
+            if (p[r] == '\0') return -1; /* ends in "/." */
+            continue;
+        }
+        if (len == 2 && p[start] == '.' && p[start + 1] == '.') return -1;
+        p[w++] = '/';
+        memmove(p + w, p + start, len);
+        w += len;
+    }
+    if (w == 0) return -1;
+    p[w] = '\0';
+    return 0;
+}
+
 /* What statfs says about the mount holding `path`: its f_fstypename and f_mntfromname copied into
  * `fstype` and `from` (NUL-terminated). Non-zero when statfs failed. */
 typedef int (*image_mount_look_fn)(const char *path, char *fstype, size_t fstype_n, char *from,

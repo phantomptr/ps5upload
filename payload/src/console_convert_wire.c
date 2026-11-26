@@ -51,6 +51,13 @@ int cc_request_json(char *out, size_t cap, const char *id, const char *op, const
         if (strcmp(b->format, "pkg") == 0 && b->pkg_level[0] &&
             put_member(out, cap, &at, 1, "pkg_level", b->pkg_level) != 0)
             return -1;
+        /* Only when asked: absent, the converter packages the game as it is. */
+        if (strcmp(b->format, "pkg") == 0 && b->unpack_packs) {
+            w = snprintf(out + at, cap - at, ",\"unpack_packs\":true%s",
+                         b->leave_out_ampr_emu ? ",\"leave_out_ampr_emu\":true" : "");
+            if (w < 0 || (size_t)w >= cap - at) return -1;
+            at += (size_t)w;
+        }
         if (strcmp(b->format, "ffpfsc") == 0) {
             if (b->inner[0] && put_member(out, cap, &at, 1, "inner", b->inner) != 0) return -1;
             if (b->ffpfsc_level[0] && put_member(out, cap, &at, 1, "ffpfsc_level", b->ffpfsc_level) != 0) return -1;
@@ -80,7 +87,7 @@ const char *cc_start_tail(const char *json, size_t n, const char *dest, char *ou
     char format[16], verify[16];
     uint64_t level = 0;
     size_t at = 0;
-    int zstd = 0, rc, w;
+    int zstd = 0, unpack = 0, leave_out = 0, rc, w;
     if (cap) out[0] = 0;
     if (webui_json_str(json, n, "format", format, sizeof format) != 1 || !cc_format_ok(format)) return "bad_format";
     rc = webui_json_str(json, n, "verify", verify, sizeof verify);
@@ -98,9 +105,15 @@ const char *cc_start_tail(const char *json, size_t n, const char *dest, char *ou
             0)
             return "convert_bad_ffpfsc_level";
     }
-    if (strcmp(format, "pkg") == 0 &&
-        start_word(json, n, "pkg_level", words.pkg_level, sizeof words.pkg_level, cc_pkg_level_ok) != 0)
-        return "convert_bad_pkg_level";
+    if (strcmp(format, "pkg") == 0) {
+        if (start_word(json, n, "pkg_level", words.pkg_level, sizeof words.pkg_level, cc_pkg_level_ok) != 0)
+            return "convert_bad_pkg_level";
+        /* Absent is false. The emulator is left out only of a game that is unpacked: in its packs
+         * nothing else reads it. */
+        if (webui_json_bool(json, n, "unpack_packs", &unpack) < 0 ||
+            webui_json_bool(json, n, "leave_out_ampr_emu", &leave_out) < 0 || (leave_out && !unpack))
+            return "convert_bad_unpack";
+    }
     /* console_convert.c reads it back with fsj_json_str: every word is a plain one by now, and
      * dest is escaped. */
     w = snprintf(out, cap, ",\"action\":\"build\"");
@@ -121,6 +134,10 @@ const char *cc_start_tail(const char *json, size_t n, const char *dest, char *ou
         (words.ffpfsc_level[0] && put_member(out, cap, &at, 1, "ffpfsc_level", words.ffpfsc_level) != 0) ||
         (words.pkg_level[0] && put_member(out, cap, &at, 1, "pkg_level", words.pkg_level) != 0))
         return "bad_path";
+    if (unpack) {
+        w = snprintf(out + at, cap - at, ",\"unpack_packs\":true%s", leave_out ? ",\"leave_out_ampr_emu\":true" : "");
+        if (w < 0 || (size_t)w >= cap - at) return "bad_path";
+    }
     return NULL;
 }
 

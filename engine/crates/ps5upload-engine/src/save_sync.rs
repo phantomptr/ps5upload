@@ -276,6 +276,19 @@ impl Env for Live {
     }
 }
 
+/// The game a sync key is for, when neither console answers with the save itself: the key
+/// alone for a PS5 or PS4 save, `kind:game:user` for a PlayStation 2 emulator's, and for a
+/// Switch emulator's `switch:game` or, for any but ProsperoEden, `switch:emulator:game`.
+/// (That last one showed the emulator's own ID as the game on every such row.)
+fn title_of_key(key: &str) -> &str {
+    let mut parts = key.split(':');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(kind), Some(_), Some(game)) if kind == crate::emulator_saves::KIND => game,
+        (_, Some(game), _) => game,
+        _ => key,
+    }
+}
+
 /// The helper's power phase in which nothing runs: going to rest (1) or settling after a wake
 /// (2). An older helper says 0; a phase a newer one adds is not waited on.
 pub fn settling_phase(phase: u8) -> bool {
@@ -479,7 +492,7 @@ pub fn check(
         let kept = state.items.get(&ik).cloned().unwrap_or_default();
         let title_id = any
             .map(|e| e.title_id.clone())
-            .unwrap_or_else(|| key.split(':').nth(1).unwrap_or(&key).to_string());
+            .unwrap_or_else(|| title_of_key(&key).to_string());
         let mut row = SyncRow {
             key: key.clone(),
             title_id: title_id.to_ascii_uppercase(),
@@ -1291,6 +1304,19 @@ pub async fn post_dismiss(Json(b): Json<SyncDismissBody>) -> Response {
 mod tests {
     use super::*;
     use std::cell::RefCell;
+
+    /// A row with no console answering names its game from the key, whatever shape the key
+    /// has. Another Switch emulator's key carries the emulator before the game.
+    #[test]
+    fn a_row_shown_offline_names_the_game_not_the_emulator() {
+        assert_eq!(title_of_key("PPSA01234"), "PPSA01234");
+        assert_eq!(title_of_key("ps2:SLUS20312:1"), "SLUS20312");
+        assert_eq!(title_of_key("switch:0100000000010000"), "0100000000010000");
+        assert_eq!(
+            title_of_key("switch:PPSA98515:0100000000010000"),
+            "0100000000010000"
+        );
+    }
 
     fn save(title: &str, user: u32, kind: &str, size: i64) -> SaveEntry {
         SaveEntry {

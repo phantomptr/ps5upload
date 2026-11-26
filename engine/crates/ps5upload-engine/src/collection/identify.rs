@@ -165,7 +165,7 @@ fn package(path: &Path, set_size: Option<u64>) -> PkgInfo {
 
 /// A `.ffpfs` image: PS5 games keep `sce_sys/param.json`.
 fn pfs_image(path: &Path) -> PkgInfo {
-    use ps5upload_fpkg::source::SourceTree;
+    use ps5upload_fpkg::source::{read_small, MAX_PARAM_BYTES};
     let Some((reader, _)) = open_any(path) else {
         return failed(READ_FAILED);
     };
@@ -174,7 +174,8 @@ fn pfs_image(path: &Path) -> PkgInfo {
             Ok(t) => t,
             Err(e) => return failed(e.to_string()),
         };
-    let Ok(bytes) = tree.read("sce_sys/param.json") else {
+    // Never more than a param.json may be, whatever size the image gives it.
+    let Ok(bytes) = read_small(&mut tree, "sce_sys/param.json", MAX_PARAM_BYTES) else {
         return failed("no sce_sys/param.json in this image");
     };
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {

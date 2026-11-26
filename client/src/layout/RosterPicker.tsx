@@ -154,7 +154,8 @@ export default function RosterPicker() {
         <div className="min-w-0 flex-1 leading-tight">
           {active ? (
             <>
-              <div className="truncate font-medium text-[var(--color-text)]">
+              {/* Its own direction: in Arabic or Persian a Latin name was cut at its start. */}
+              <div dir="auto" className="truncate font-medium text-[var(--color-text)] rtl:[text-align:right]">
                 {active.name}
                 {fwLabel && <span className="font-normal text-[var(--color-muted)]">{` · FW ${fwLabel}`}</span>}
               </div>

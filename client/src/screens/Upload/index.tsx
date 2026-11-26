@@ -119,6 +119,7 @@ import {
   type BatchRow,
 } from "../../state/uploadBatch";
 import { BatchReview } from "./BatchReview";
+import { PackageNameCard } from "./PackageNameCard";
 import { PkgChoiceField, PkgCopyHint } from "./PkgChoiceField";
 import {
   krakenCopyDestination,
@@ -1954,6 +1955,16 @@ function Step2Options(props: {
           volume/bandwidth/excludes config that doesn't apply. */}
       {source.kind === "pkg" ? (
         <>
+          {/* The name the package gives its game, changed in the package before it is sent
+              (#937). A package on a saved server or on the PS5 is not a file the engine can
+              change. */}
+          {!isRemotePath(source.path) && !source.path.startsWith("ps5://") && (
+            <PackageNameCard
+              path={source.path}
+              disabled={inFlight || detecting}
+              onRenamed={(p) => void useUploadStore.getState().pickFile(p)}
+            />
+          )}
           <PkgFinisherCard
             pkgInfo={source.pkgInfo ?? null}
             onView={

@@ -219,22 +219,102 @@ static void test_bad_utf8_lists_clean(void) {
     CHECK(strstr(list_since(0), "Vie infinie ?t?") != NULL);
 }
 
-/* A list reply never runs past its buffer, however small. */
+/* 1 when `s` is one whole JSON object as notif_list writes it: every string closed, every brace and
+ * bracket closed in order, nothing after the last brace, and no comma right before a "]". */
+static int whole_json(const char *s) {
+    char stack[8];
+    int depth = 0, in_str = 0;
+    char prev = 0;
+    if (s[0] != '{') return 0;
+    for (const char *p = s; *p; p++) {
+        char c = *p;
+        if (in_str) {
+            if (c == '\\') {
+                if (!p[1]) return 0;
+                p++;
+            } else if (c == '"') {
+                in_str = 0;
+            }
+            prev = c;
+            continue;
+        }
+        if (depth == 0 && p != s) return 0; /* text after the object closed */
+        if (c == '"') {
+            in_str = 1;
+        } else if (c == '{' || c == '[') {
+            if (depth == (int)sizeof(stack)) return 0;
+            stack[depth++] = c;
+        } else if (c == '}' || c == ']') {
+            if (depth == 0 || stack[depth - 1] != (c == '}' ? '{' : '[')) return 0;
+            if (prev == ',') return 0;
+            depth--;
+        }
+        prev = c;
+    }
+    return depth == 0 && !in_str;
+}
+
+/* A list reply never runs past its buffer, however small, and is always one the engine can parse:
+ * a buffer too small for every entry holds fewer of them, each whole, never half of one. */
 static void test_small_buffers(void) {
     wipe();
     char msg[200];
     memset(msg, '"', sizeof(msg) - 1); /* each escapes to two bytes */
     msg[sizeof(msg) - 1] = 0;
     for (int i = 0; i < 5; i++) notif_send(msg, NOTIF_LEVEL_INFO);
-    for (size_t cap = 1; cap < 1200; cap += 7) {
+    int most = 0;
+    for (size_t cap = 1; cap < 2600; cap += 7) {
         char *buf = malloc(cap); /* exact, so ASan sees any overrun */
         size_t written = 0;
         if (!buf) abort();
         CHECK(notif_list(0, buf, cap, &written) == 0);
         CHECK(written < cap);
         CHECK(buf[written] == 0);
+        CHECK(strlen(buf) == written);
+        if (written) {
+            int entries = count_of(buf, "{\"seq\":");
+            CHECK(whole_json(buf));
+            CHECK(strstr(buf, "],\"seq\":5}") != NULL);
+            CHECK(entries == count_of(buf, "\"}"));
+            CHECK(entries >= most); /* more room never lists fewer */
+            most = entries;
+        }
         free(buf);
     }
+    CHECK(most == 5);
+
+    /* The same with every byte at its longest escape (six for one), up to the helper's own 32 KiB. */
+    wipe();
+    char ctl[NOTIF_MSG_MAX];
+    memset(ctl, 0x01, sizeof(ctl) - 1);
+    ctl[sizeof(ctl) - 1] = 0;
+    for (int i = 0; i < NOTIF_RING_SIZE; i++) notif_send(ctl, NOTIF_LEVEL_ERROR);
+    char *big = malloc(32768);
+    size_t written = 0;
+    if (!big) abort();
+    CHECK(notif_list(0, big, 32768, &written) == 0);
+    CHECK(written < 32768 && whole_json(big));
+    CHECK(count_of(big, "{\"seq\":") > 0 && count_of(big, "{\"seq\":") < NOTIF_RING_SIZE);
+    free(big);
+}
+
+/* A message that starts with a space, a tab or a line break comes back as it was saved, and so do
+ * the ones after it: the saved length says where it ends, and nothing before it is skipped. */
+static void test_leading_whitespace(void) {
+    static const char *const msgs[] = { " one space first", "\nline break first", "\t\ttabs first",
+                                        "   ", "\n", " \n 9 9 0 3\nabc", "after them" };
+    const size_t n = sizeof(msgs) / sizeof(msgs[0]);
+    wipe();
+    for (size_t i = 0; i < n; i++) CHECK(notif_send(msgs[i], NOTIF_LEVEL_INFO) == 0);
+    char before[8192];
+    snprintf(before, sizeof(before), "%s", list_since(0));
+    restart();
+    CHECK(s_count == n);
+    for (size_t i = 0; i < n && i < s_count; i++) {
+        CHECK(strcmp(s_ring[i].message, msgs[i]) == 0);
+        CHECK(s_ring[i].seq == i + 1);
+    }
+    CHECK(strcmp(list_since(0), before) == 0);
 }
 
 /* Cut at any byte: whatever loads is a prefix of what was saved, with no crash and no garbage. */
@@ -339,6 +419,7 @@ int main(void) {
     test_long_message();
     test_bad_utf8_lists_clean();
     test_small_buffers();
+    test_leading_whitespace();
     test_truncated_anywhere();
     test_damaged();
     test_failed_write_keeps_the_store();

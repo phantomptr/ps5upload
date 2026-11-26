@@ -2502,15 +2502,39 @@ pub async fn fpkg_ampr_index(source: String) -> Result<JsonValue, String> {
 }
 
 /// Unpack a game archive into the output folder; runs as an engine job whose `dest` is the
-/// game found inside. POST /api/fpkg/extract.
+/// game found inside. With `free_archive` the archive is deleted as it unpacks (asked for
+/// and confirmed on the screen, never on by itself). POST /api/fpkg/extract.
 #[tauri::command]
 pub async fn fpkg_extract(
     source: String,
     output_dir: Option<String>,
     password: Option<String>,
+    free_archive: Option<bool>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/fpkg/extract");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "source": source,
+            "output_dir": output_dir,
+            "password": password,
+            "free_archive": free_archive.unwrap_or(false),
+        }),
+    )
+    .await
+}
+
+/// Whether an archive can be unpacked with its own space given back, and how; changes
+/// nothing. POST /api/fpkg/extract/free-check.
+#[tauri::command]
+pub async fn fpkg_extract_free_check(
+    source: String,
+    output_dir: Option<String>,
+    password: Option<String>,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/fpkg/extract/free-check");
     post_json(
         &url,
         &serde_json::json!({
@@ -2522,12 +2546,17 @@ pub async fn fpkg_extract(
     .await
 }
 
-/// Remove an archive's unpack folder. POST /api/fpkg/extract/cleanup.
+/// Remove an archive's unpack folder; with `kept`, the folder an unpack that freed its archive
+/// kept. POST /api/fpkg/extract/cleanup.
 #[tauri::command]
-pub async fn fpkg_extract_cleanup(path: String) -> Result<JsonValue, String> {
+pub async fn fpkg_extract_cleanup(path: String, kept: Option<bool>) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/fpkg/extract/cleanup");
-    post_json(&url, &serde_json::json!({ "path": path })).await
+    post_json(
+        &url,
+        &serde_json::json!({ "path": path, "kept": kept.unwrap_or(false) }),
+    )
+    .await
 }
 
 /// Workshop jobs the engine is running now, whoever started them.

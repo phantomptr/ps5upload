@@ -42,8 +42,8 @@ export function parsePS5Firmware(kernel: string | null | undefined): string | nu
 }
 
 /** The newest firmware a PS5 fake (FPKG) GAME is known to play on: 13.60, since a kstuff build
- *  with fake-package support up to it was released in November 2026 (11.61 to 13.60 need that
- *  build). No public jailbreak goes above it, so nothing warns about firmware past it. */
+ *  with fake-package support up to it exists: kstuff 1.15 (11.61 to 13.60 need 1.15 or
+ *  newer). No public jailbreak goes above it, so nothing warns about firmware past it. */
 export const LAST_PS5_FAKE_GAME_FIRMWARE = "13.60";
 
 /** True when `id` (a content id such as `UP4433-PPSA17221_00-MINECRAFTPS50000`
@@ -57,10 +57,10 @@ export function isPs5GameId(id: string | null | undefined): boolean {
 
 /** The newest firmware where a PS5 fake GAME played with any kstuff that loads fake packages.
  *  Above it, up to LAST_PS5_FAKE_GAME_FIRMWARE, the game starts only with a kstuff build that
- *  supports fake packages on that firmware (released November 2026). */
+ *  supports fake packages on that firmware (kstuff 1.15 or newer). */
 export const LAST_PS5_FAKE_GAME_FIRMWARE_OLD_KSTUFF = "11.60";
 
-/** The console's firmware when a PS5 fake GAME there needs the November 2026 (or newer) kstuff
+/** The console's firmware when a PS5 fake GAME there needs kstuff 1.15 (or newer)
  *  to start: a PS5 game id and a firmware above 11.60, up to LAST_PS5_FAKE_GAME_FIRMWARE. Else
  *  null (also for an unknown firmware). Used to explain a launch that failed. */
 export function ps5FakeGameNeedsNewKstuff(

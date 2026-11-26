@@ -1380,7 +1380,7 @@
             "type": "boolean"
           },
           "language": {
-            "description": "A PlayGo language code (`fr-FR`, …) the package declares as its only one.",
+            "description": "The languages the package declares to PlayGo. Absent or empty: the game's own, read from\nits `sce_sys/playgo-scenario.json` or `playgo-chunk.dat`, and only its default language\n(`param.json`'s `localizedParameters.defaultLanguage`) when it has neither. A language\ncode (`fr-FR`, …): that one alone, as the default too. `all`: every language, starting\nin the game's default (what packages declared before they kept to the game's own).",
             "type": [
               "string",
               "null"
@@ -1975,6 +1975,13 @@
       "Check": {
         "description": "One readiness finding: what was checked, whether it holds, and what was seen.",
         "properties": {
+          "applies_to": {
+            "description": "Set on a finding about a file of the source that not everything made from it carries:\nwhich outputs the finding matters for ([`applies`]). Absent: it matters whatever is\nmade.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "detail": {
             "type": "string"
           },
@@ -2944,6 +2951,49 @@
         "required": [
           "x",
           "y"
+        ],
+        "type": "object"
+      },
+      "Damage": {
+        "description": "What a package's problems add up to, for a screen to say in plain words. Counts that don't\nbelong to the `kind` are 0.",
+        "properties": {
+          "block_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "blocks_bad": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "blocks_total": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bytes_have": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bytes_need": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "checks_failed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "- `data`: `blocks_bad` of the `blocks_total` data blocks (`block_bytes` each) are not\n  the bytes the package's own digests say they are. The usual result of a copy or\n  download that was interrupted or went wrong.\n- `truncated`: the file ends early. It is `bytes_have` long and the package needs at\n  least `bytes_need`; both are 0 when only the very end of the file is missing.\n- `structure`: `checks_failed` checks of the image's own tables fail though no data\n  block was found bad.\n- `metadata`: only `checks_failed` checks of what the package says about itself fail;\n  every block of the game's data is right. Seen on packages edited after they were made.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "blocks_bad",
+          "blocks_total",
+          "block_bytes",
+          "bytes_have",
+          "bytes_need",
+          "checks_failed"
         ],
         "type": "object"
       },
@@ -3973,6 +4023,10 @@
       },
       "ExtractCleanupReq": {
         "properties": {
+          "kept": {
+            "description": "The folder is one an unpack with `free_archive` kept (`<archive>.unpacked`): removed\nonly when asked for by this, once what was made from the game in it is finished.",
+            "type": "boolean"
+          },
           "path": {
             "description": "The game path an unpack reported, or its unpack folder.",
             "type": "string"
@@ -3985,6 +4039,10 @@
       },
       "ExtractReq": {
         "properties": {
+          "free_archive": {
+            "description": "DESTROYS THE ARCHIVE: its own space is given back while it unpacks, so the job fits on\na drive with no room for both. A `.zip` is cut short behind each file as it is\nunpacked, a `.7z` of several blocks behind each block, and a multi-part `.rar` loses\neach part as it is finished; anything else is deleted the moment the unpack has\nfinished and been checked. Ask `/api/fpkg/extract/free-check` first. Off unless set.",
+            "type": "boolean"
+          },
           "output_dir": {
             "type": [
               "string",
@@ -4643,6 +4701,31 @@
           "file_count",
           "skipped_paths",
           "meta_source"
+        ],
+        "type": "object"
+      },
+      "FreeCheckReq": {
+        "properties": {
+          "output_dir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "password": {
+            "description": "RAR only; never logged.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "description": "A `.zip`, `.7z`, `.rar` (the first part of a multi-part set), tar or `.zst` on this\ncomputer.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
         ],
         "type": "object"
       },
@@ -9257,6 +9340,89 @@
         ],
         "type": "object"
       },
+      "NameEntry": {
+        "description": "One name a package holds: `key` is the language (`en-US`; empty for a PS5 package's\ntop-level `titleName`) or the `param.sfo` key (`TITLE`, `TITLE_03`).",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "name"
+        ],
+        "type": "object"
+      },
+      "NameResponse": {
+        "allOf": [
+          {
+            "properties": {
+              "max_bytes": {
+                "description": "The longest name accepted, in UTF-8 bytes.",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "max_bytes"
+            ],
+            "type": "object"
+          },
+          {
+            "$ref": "#/components/schemas/Names"
+          }
+        ],
+        "description": "What `GET /api/pkg/name` answers."
+      },
+      "Names": {
+        "description": "A package's names as it holds them.",
+        "properties": {
+          "content_id": {
+            "type": "string"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/NameEntry"
+            },
+            "type": "array"
+          },
+          "name": {
+            "description": "The name the console shows unless its language has another: the default language's\n(`TITLE` on PS4).",
+            "type": "string"
+          },
+          "other_names": {
+            "description": "How many entries hold a name other than `name`.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "refusal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Refusal"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the name can't be changed; `None` when it can."
+          }
+        },
+        "required": [
+          "platform",
+          "content_id",
+          "name",
+          "entries",
+          "other_names",
+          "refusal"
+        ],
+        "type": "object"
+      },
       "NetInterface": {
         "properties": {
           "flags": {
@@ -10500,6 +10666,13 @@
         ],
         "type": "object"
       },
+      "Platform": {
+        "enum": [
+          "ps5",
+          "ps4"
+        ],
+        "type": "string"
+      },
       "PlayerBody": {
         "properties": {
           "addr": {
@@ -10751,6 +10924,10 @@
           },
           "file": {
             "description": "The file inside the copy, or empty for the copy as a whole.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "For a failed check of a package, what the check looks at: `data` (the game's data\nblocks), `structure` (the image's own tables), `metadata` (what the package says about\nitself: header, digests, install manifest) or `truncated` (the file ends early).\nAbsent for any other problem.",
             "type": "string"
           }
         },
@@ -11565,6 +11742,22 @@
         ],
         "type": "object"
       },
+      "Refusal": {
+        "description": "Why a package's name can't be changed. `code` is for the app to word: `retail` (signed by\nits publisher), `patch` (a delta update, which holds no name of its own to change),\n`no_name`, or `unsupported` (anything else; `reason` says what).",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "reason"
+        ],
+        "type": "object"
+      },
       "RegisterResult": {
         "description": "Response shape from APP_REGISTER_ACK.",
         "properties": {
@@ -11889,6 +12082,68 @@
         },
         "required": [
           "id"
+        ],
+        "type": "object"
+      },
+      "RenameRequest": {
+        "properties": {
+          "all_languages": {
+            "description": "Give every language this name. Otherwise only the entries that hold the package's\ncurrent default name change, and a language with its own name keeps it.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The new name: at most 127 bytes of UTF-8, no line breaks.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The package, on the engine's computer.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "name"
+        ],
+        "type": "object"
+      },
+      "RenameResponse": {
+        "description": "What `POST /api/pkg/name` answers.",
+        "properties": {
+          "changed": {
+            "description": "How many of its name entries changed (0: it already had this name).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "The name it has now.",
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "previous": {
+            "description": "The name it had.",
+            "type": "string"
+          },
+          "warning": {
+            "description": "Set when the change is in the package and checked, but the removal of its undo journal\ncould not be confirmed saved.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "written_bytes": {
+            "description": "Bytes written into the package.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "platform",
+          "previous",
+          "name",
+          "changed",
+          "written_bytes"
         ],
         "type": "object"
       },
@@ -16012,6 +16267,17 @@
           "bytes_total": {
             "minimum": 0,
             "type": "integer"
+          },
+          "damage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Damage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "With `method` `package` and `state` `problems`: what the problems add up to."
           },
           "error": {
             "type": [
@@ -23045,7 +23311,7 @@
     },
     "/api/fpkg/extract": {
       "post": {
-        "description": "POST /api/fpkg/extract — unpack a game archive into the output folder, as a job. Done's\n`dest` is the game found inside (a folder or an image), which the build then reads; the\nunpack folder is removed by `/api/fpkg/extract/cleanup`, on failure, or by a later run.",
+        "description": "POST /api/fpkg/extract — unpack a game archive into the output folder, as a job. Done's\n`dest` is the game found inside (a folder or an image), which the build then reads; the\nunpack folder is removed by `/api/fpkg/extract/cleanup`, on failure, or by a later run.\n\nWith `free_archive` the archive is deleted as it is unpacked (`archive_free`): everything\nthat can be checked is checked first and refused with nothing changed (400, or 409 while\nsomething else uses the archive). The game is unpacked into `<archive>.unpacked` in the\noutput folder, which nothing removes but `/api/fpkg/extract/cleanup` with `kept`. A job\nthat fails with part of the archive gone has `error_reason: \"archive_partly_deleted\"` and\nthe folder holding what was unpacked in `error_detail`.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -23075,6 +23341,10 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
           "500": {
             "$ref": "#/components/responses/Error",
             "description": "Engine error"
@@ -23101,7 +23371,7 @@
     },
     "/api/fpkg/extract/cleanup": {
       "post": {
-        "description": "POST /api/fpkg/extract/cleanup — remove an unpack folder once its build is over.",
+        "description": "POST /api/fpkg/extract/cleanup — remove an unpack folder once its build is over. A folder\nan unpack with `free_archive` made is removed only with `kept`, and only one this engine\nmade since it started; any other path is refused.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -23146,6 +23416,66 @@
           }
         },
         "summary": "Remove an unpack folder once its build is over",
+        "tags": [
+          "workshop"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/fpkg/extract/free-check": {
+      "post": {
+        "description": "POST /api/fpkg/extract/free-check — whether an archive can be unpacked with its own space\ngiven back (`free_archive` on `/api/fpkg/extract`), and how: `mode` is `entries` (a `.zip`:\nfreed file by file), `blocks` (a `.7z` of more than one block: block by block), `parts` (a\nmulti-part `.rar`: part by part) or `end` (anything else: deleted once the unpack is\nfinished and checked). `parts` counts the blocks or parts (1 otherwise); `game` is `folder`\nor `image`. Changes nothing. 400 with the plain reason when it can't be done.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FreeCheckReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "archive_bytes": {},
+                    "free": {},
+                    "game": {},
+                    "mode": {},
+                    "needed": {},
+                    "parts": {},
+                    "same_drive": {},
+                    "unpacked": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
         "tags": [
           "workshop"
         ],
@@ -28765,6 +29095,115 @@
         "x-ps5upload": {
           "access": "loopback",
           "response_schema": "literal"
+        }
+      }
+    },
+    "/api/pkg/name": {
+      "get": {
+        "description": "`GET /api/pkg/name?path=`: the names a package on this computer holds (one per language)\nand whether they can be changed. `refusal` is set when they can't: `code` is `retail` for an\nofficial package, `patch` for a delta update, `no_name`, or `unsupported` with the reason.",
+        "parameters": [
+          {
+            "description": "The package, on the engine's computer.",
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NameResponse"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The names a package on this computer holds (one per language) and whether they can be changed",
+        "tags": [
+          "install"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "struct"
+        }
+      },
+      "post": {
+        "description": "`POST /api/pkg/name` `{path, name, all_languages}`: gives a fake package on this computer\nanother name, in place. 409 while the package is in use (an install, an upload or a build\nreads it, or another program has it open); 400 with the reason when it can't be done (an\nofficial package, a name that does not fit). On any failure the file is as it was.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenameResponse"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Gives a fake package on this computer another name, in place",
+        "tags": [
+          "install"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "struct"
         }
       }
     },

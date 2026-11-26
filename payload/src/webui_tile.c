@@ -683,6 +683,10 @@ static uint16_t g_req_port;
 static int g_worker_running;
 static int g_busy;          /* a request or the start sweep is being applied */
 static int g_sweep_pending; /* webui_tile_sweep_request not yet run */
+/* The generation the last request a worker applied had (0: none yet). Kept here, not in the
+ * worker: a worker ends when it has nothing left to do, and the next one must not take the old
+ * request for a new one. */
+static unsigned g_req_applied;
 static int g_last_failed;   /* the last ensure/remove the worker applied returned -1 */
 static webui_tile_result_t g_last_result;
 static const char *g_last_error = ""; /* webui_tile_last_error */
@@ -832,11 +836,16 @@ static void note_result(webui_tile_result_t r) {
  * (webui_tile_settle_with) until a new request stops it. g_busy covers the first two only: the
  * page's spinner ends when the removal is done, not when the watch is. */
 static void *tile_worker(void *arg) {
-    unsigned done = 0;
+    unsigned done;
     int watch = 0, uninstalled = 0;
     (void)arg;
     proc_name_set_self(TILE_THREAD_NAME);
     pthread_mutex_lock(&g_req_mu);
+    /* What the worker before this one applied. Starting from 0, a worker started for a sweep
+     * (Minion turned off with the tile already off) saw the last request as not applied yet: it
+     * ran that removal a second time in full, which re-registers and uninstalls a tile whose
+     * record Sony kept, and dropped the sweep it was started for. */
+    done = g_req_applied;
     for (;;) {
         unsigned gen = g_req_gen;
         int tile = g_req_tile;
@@ -852,6 +861,7 @@ static void *tile_worker(void *arg) {
             if (r == WEBUI_TILE_RESULT_FAILED && !tile) why = "removal_incomplete";
             pthread_mutex_lock(&g_req_mu);
             done = gen;
+            g_req_applied = gen;
             note_result(r);
             g_last_error = r == WEBUI_TILE_RESULT_FAILED ? (why && *why ? why : "failed") : "";
             watch = !tile;

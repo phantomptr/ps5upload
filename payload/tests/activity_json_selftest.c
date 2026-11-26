@@ -210,6 +210,47 @@ int main(void) {
     check(strstr(buf, "NPXS40000") == NULL,
           "still drops Sony's own system apps");
 
+    /* ── 5. a reply buffer of any size: whole entries, or an error ───── */
+    printf("small reply buffers\n");
+    {
+        int cut = 0, whole = 0, grew = 1, last = -1;
+        assert(activity_get_json(buf, sizeof(buf), &written) == 0);
+        size_t full = written;
+        for (size_t cap = 1; cap <= full + 8; cap++) {
+            char *small = malloc(cap); /* exact, so a sanitizer sees an overrun */
+            size_t w = 0;
+            assert(small);
+            if (activity_get_json(small, cap, &w) == 0) {
+                /* every object that opens closes, and the list and the reply end */
+                int depth = 0, in_str = 0, bad = w >= cap || small[w] != '\0' || w < 2 ||
+                                                 strcmp(small + w - 2, "]}") != 0;
+                int entries = 0;
+                for (size_t i = 0; i < w && !bad; i++) {
+                    char c = small[i];
+                    if (in_str) {
+                        if (c == '\\') i++;
+                        else if (c == '"') in_str = 0;
+                    } else if (c == '"') {
+                        in_str = 1;
+                    } else if (c == '{' || c == '[') {
+                        if (c == '{' && depth == 2) entries++;
+                        depth++;
+                    } else if (c == '}' || c == ']') {
+                        depth--;
+                    }
+                }
+                if (bad || depth != 0 || in_str) cut++;
+                else whole++;
+                if (entries < last) grew = 0;
+                last = entries;
+            }
+            free(small);
+        }
+        check(whole > 0, "replies that fit are answered");
+        check(cut == 0, "no reply ends inside an entry, whatever the buffer's size");
+        check(grew, "a larger buffer never lists fewer titles");
+    }
+
     if (failures) {
         printf("\n%d check(s) failed\n", failures);
         return 1;

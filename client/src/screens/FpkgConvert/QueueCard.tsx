@@ -108,6 +108,8 @@ export function QueueCard(p: QueueCardProps) {
         return tr("cq_tag_unpack", undefined, "unpacked");
       case "no-emulator":
         return tr("cq_tag_no_emulator", undefined, "no AMPR emulator");
+      case "free-archive":
+        return tr("cq_tag_free_archive", undefined, "deletes archive");
       case "level":
         return t.level === "fast"
           ? tr("cq_tag_level_fast", undefined, "fast")
@@ -190,7 +192,10 @@ export function QueueCard(p: QueueCardProps) {
                     {queueTags(i).map((t) => (
                       <span
                         key={t.kind}
-                        className="shrink-0 rounded bg-[var(--color-surface-3)] px-1.5 py-px font-mono text-[10px] text-[var(--color-muted)]"
+                        className={`shrink-0 rounded bg-[var(--color-surface-3)] px-1.5 py-px font-mono text-[10px] ${
+                          // The one tag that says something is destroyed.
+                          t.kind === "free-archive" ? "text-[var(--color-bad)]" : "text-[var(--color-muted)]"
+                        }`}
                         data-testid={`cq-tag-${t.kind}`}
                       >
                         {tagText(t)}

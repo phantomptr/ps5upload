@@ -71,6 +71,22 @@ impl Archive {
     pub fn pack_sizes(&self) -> &[u64] {
         &self.pack_sizes
     }
+
+    /// (ps5upload addition, see README.md) Where block `block`'s packed bytes are in the
+    /// archive file: the offset of its first packed stream and the offset just past its last.
+    /// `None` for a block that is not there, or sizes that do not add up.
+    pub fn block_pack_range(&self, block: usize) -> Option<(u64, u64)> {
+        let first = *self.stream_map.block_first_pack_stream_index.get(block)?;
+        let count = self.blocks.get(block)?.packed_streams.len();
+        let start = SIGNATURE_HEADER_SIZE
+            .checked_add(self.pack_pos)?
+            .checked_add(*self.stream_map.pack_stream_offsets.get(first)?)?;
+        let mut end = start;
+        for size in self.pack_sizes.get(first..first.checked_add(count)?)? {
+            end = end.checked_add(*size)?;
+        }
+        Some((start, end))
+    }
 }
 
 #[derive(Debug, Default, Clone)]

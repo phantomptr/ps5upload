@@ -4,7 +4,7 @@
 import type { ReactNode } from "react";
 import { FolderInput, Gamepad2 } from "lucide-react";
 
-import type { FpkgInspection } from "../../api/fpkg";
+import { checkMatters, type FpkgInspection } from "../../api/fpkg";
 import { Button, Card, Input } from "../../components";
 import { AddSources, GAME_FILE_FILTERS } from "../../components/AddSources";
 import { PathLabel } from "../../components/BrowseButton";
@@ -78,12 +78,19 @@ export interface GameCardProps {
   onPassword: (value: string) => void;
   /** What else can be done with this source (Workshop's Look Inside, Open as a Drive). */
   tools?: ReactNode;
+  /** What is about to be made keeps the game's asset packs, and with them its own
+   *  ampr_emu.index. Anything else gets a fresh index, so a finding about the old one is no
+   *  warning then (`checkMatters`). */
+  packsKept?: boolean;
 }
 
 export function GameCard(props: GameCardProps) {
   const tr = useTr();
   const { inspection } = props;
-  const warnings = inspection?.checks.filter((c) => !c.ok) ?? [];
+  const failed = inspection?.checks.filter((c) => !c.ok) ?? [];
+  const warnings = failed.filter((c) => checkMatters(c, !!props.packsKept));
+  // About a file this output replaces: listed with the checks, not as a warning.
+  const replaced = failed.filter((c) => !checkMatters(c, !!props.packsKept));
   const passed = inspection?.checks.filter((c) => c.ok) ?? [];
   const fw = inspection ? firmwareLine(inspection, tr) : null;
   return (
@@ -156,9 +163,9 @@ export function GameCard(props: GameCardProps) {
               id="fpkg-source"
               label={tr("fpkg.source", undefined, "Game source")}
               placeholder={tr(
-                "fpkg.sourcePlaceholder",
+                "fpkg.sourcePlaceholder_v2",
                 undefined,
-                "/games/PPSA09519.exfat, /games/my-game, /downloads/game.7z",
+                "/games/PPSA90001.exfat, /games/my-game, /games/backup.7z",
               )}
               value={props.source}
               disabled={props.locked}
@@ -271,7 +278,7 @@ export function GameCard(props: GameCardProps) {
             <div className="text-[var(--color-muted)]">
               {fw}
               {fw ? " · " : ""}
-              {tr("fpkg.checksPassed", { count: passed.length }, "{count} checks passed")}
+              {tr("fpkg.checksPassed_v2", { count: passed.length }, "Checks passed: {count}")}
             </div>
             <Ps4KindNote inspection={inspection} />
             {!!inspection.unsigned_executables && (
@@ -288,7 +295,7 @@ export function GameCard(props: GameCardProps) {
                 {c.name}: {c.detail}
               </div>
             ))}
-            {passed.length > 0 && (
+            {passed.length + replaced.length > 0 && (
               <details>
                 <summary className="cursor-pointer text-[var(--color-muted)]">
                   {tr("fpkg.showChecks", undefined, "Show checks")}
@@ -296,6 +303,11 @@ export function GameCard(props: GameCardProps) {
                 <ul className="mt-1 flex flex-col gap-0.5 text-[var(--color-muted)]">
                   {passed.map((c) => (
                     <li key={c.name}>
+                      {c.name} — {c.detail}
+                    </li>
+                  ))}
+                  {replaced.map((c) => (
+                    <li key={c.name} data-testid="check-replaced">
                       {c.name} — {c.detail}
                     </li>
                   ))}

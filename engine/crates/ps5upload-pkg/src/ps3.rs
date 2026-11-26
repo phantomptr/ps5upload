@@ -230,6 +230,9 @@ fn ps3_kind(meta: &Meta, category: &str) -> (Kind, bool, String) {
     )
 }
 
+/// The longest item name read, in bytes (real ones are short paths, `USRDIR/EBOOT.BIN`).
+const MAX_ITEM_NAME: u64 = 1024;
+
 /// Reads a PS3 package. `size` is the file's length (for "complete").
 pub fn parse_ps3<R: Read + Seek>(r: &mut R, size: u64) -> Result<Ps3Package, String> {
     let mut raw = [0u8; 128];
@@ -247,7 +250,11 @@ pub fn parse_ps3<R: Read + Seek>(r: &mut R, size: u64) -> Result<Ps3Package, Str
                 let (name_off, name_size) = (u64::from(be32(e, 0)), u64::from(be32(e, 4)));
                 let (file_off, file_size) = (be64(e, 8), be64(e, 16));
                 let ds = h.data_size;
+                // An item's name is a path inside the package. One that claims more is no
+                // name: every item pointing its "name" at the whole data area made this
+                // decrypt the file once per item (a 16 MiB file, half a million times).
                 if name_size == 0
+                    || name_size > MAX_ITEM_NAME
                     || name_size > ds
                     || name_off + name_size > ds
                     || file_off.saturating_add(file_size) > ds
@@ -383,6 +390,53 @@ mod tests {
         }
         out.extend_from_slice(&plain);
         out
+    }
+
+    /// A package whose every item calls the whole data area its name is read once, not once
+    /// per item: 2048 such items over 64 KiB used to read 128 MiB.
+    #[test]
+    fn an_item_name_as_long_as_the_package_is_not_read() {
+        struct Counting<R>(R, u64);
+        impl<R: Read> Read for Counting<R> {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let n = self.0.read(buf)?;
+                self.1 += n as u64;
+                Ok(n)
+            }
+        }
+        impl<R: Seek> Seek for Counting<R> {
+            fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+                self.0.seek(to)
+            }
+        }
+        let (data_off, items) = (0xC0u64, 2048usize);
+        let mut plain = vec![0u8; items * 32];
+        let size = plain.len() as u32;
+        for e in plain.chunks_mut(32) {
+            e[4..8].copy_from_slice(&size.to_be_bytes());
+        }
+        let mut hdr = [0u8; 128];
+        hdr[..4].copy_from_slice(&PS3_MAGIC);
+        hdr[6..8].copy_from_slice(&1u16.to_be_bytes());
+        hdr[0x14..0x18].copy_from_slice(&(items as u32).to_be_bytes());
+        hdr[0x18..0x20].copy_from_slice(&(data_off + plain.len() as u64).to_be_bytes());
+        hdr[0x20..0x28].copy_from_slice(&data_off.to_be_bytes());
+        hdr[0x28..0x30].copy_from_slice(&(plain.len() as u64).to_be_bytes());
+        hdr[0x30..0x54].copy_from_slice(b"UP0001-NPUB30001_00-TESTGAME00000000");
+        let h = header(&hdr).unwrap();
+        for (i, chunk) in plain.chunks_mut(16).enumerate() {
+            for (b, k) in chunk.iter_mut().zip(keystream(&h, i as u64)) {
+                *b ^= k;
+            }
+        }
+        let mut pkg = hdr.to_vec();
+        pkg.resize(data_off as usize, 0);
+        pkg.extend_from_slice(&plain);
+        let len = pkg.len() as u64;
+        let mut r = Counting(Cursor::new(pkg), 0);
+        let parsed = parse_ps3(&mut r, len).unwrap();
+        assert_eq!(parsed.content_id, "UP0001-NPUB30001_00-TESTGAME00000000");
+        assert!(r.1 < 4 * len, "read {} bytes of a {len}-byte package", r.1);
     }
 
     /// Measured on Sony's own update packages for flOw (NPUA80001 2.10) and LittleBigPlanet 2

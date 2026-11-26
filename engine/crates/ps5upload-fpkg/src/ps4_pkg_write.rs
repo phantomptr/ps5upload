@@ -208,7 +208,7 @@ impl Mt {
 
 /// `Crypto.RSA2048EncryptKey`: EME-PKCS#1 v1.5 encryption whose non-zero padding comes from
 /// MT19937 seeded with `SHA256(SHA256(modulus ‖ data))`, so the same input always wraps the same.
-fn mt_wrap(modulus: &[u8], data: &[u8]) -> Vec<u8> {
+pub(crate) fn mt_wrap(modulus: &[u8], data: &[u8]) -> Vec<u8> {
     let size = modulus.len();
     let mut block = vec![0u8; size];
     block[1] = 2;
@@ -246,7 +246,7 @@ fn mt_wrap(modulus: &[u8], data: &[u8]) -> Vec<u8> {
     out
 }
 
-fn public_key(i: usize) -> &'static [u8] {
+pub(crate) fn public_key(i: usize) -> &'static [u8] {
     &keys::PS4_PKG_PUBLIC_MODULI[i * 256..(i + 1) * 256]
 }
 

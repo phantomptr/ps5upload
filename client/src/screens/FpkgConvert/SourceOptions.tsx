@@ -1,8 +1,12 @@
 // Choices under ③ Options that are about the one game checked under ①, and are never
 // remembered: they are off again for the next game.
 
-import type { BackportInfo } from "../../api/fpkg";
+import { useEffect, useRef, useState } from "react";
+
+import { fpkg, type ArchiveFreeCheck, type BackportInfo } from "../../api/fpkg";
 import { Toggle } from "../../components";
+import { useConfirm } from "../../components/ConfirmDialog";
+import { archiveErrorText, archiveIsUnpacked } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
 
 /** Why the game's backport cannot be left out of what is being made now, or null when it can:
@@ -157,6 +161,176 @@ export function DeleteSourceOption({
           {why}
         </div>
       )}
+    </div>
+  );
+}
+
+/** "Free the archive's space while it unpacks": for an archive on this computer that the run
+ *  unpacks to disk (a package of it always; an image or folder only when the game inside is a
+ *  game image or an update is merged in). It DELETES the archive as it unpacks, so it is off
+ *  unless turned on for this one game, and turning it on first asks the engine whether and how
+ *  it can be done (`fpkg.freeCheck`, which changes nothing) and then asks the user, with what
+ *  is lost if anything goes wrong. Never remembered: the screen holds the answer for the one
+ *  source it was given for. */
+export function FreeArchiveOption({
+  source,
+  outputDir,
+  password,
+  kind,
+  merge = false,
+  checked,
+  onChange,
+}: {
+  /** The archive that would go. */
+  source: string;
+  /** Where the game is unpacked (and the room is checked). */
+  outputDir?: string;
+  /** A .rar's password, for the check. */
+  password?: string;
+  /** What is being made of it. */
+  kind: "pkg" | "image" | "folder";
+  /** An update is merged in (the game is unpacked for that). */
+  merge?: boolean;
+  /** The user said yes for this source. */
+  checked: boolean;
+  /** `check`: what the engine found, when turned on. */
+  onChange: (on: boolean, check?: ArchiveFreeCheck) => void;
+}) {
+  const tr = useTr();
+  const { confirm, dialog } = useConfirm();
+  // What the engine said about this archive, for the notes under the switch.
+  const [check, setCheck] = useState<ArchiveFreeCheck | null>(null);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  // Only the answer for the archive shown now may land.
+  const asked = useRef(0);
+  useEffect(() => {
+    asked.current += 1;
+    setCheck(null);
+    setRefusal(null);
+    setChecking(false);
+  }, [source]);
+
+  // Known not to be unpacked for what is being made: there is nothing to free.
+  const notNeeded = check !== null && !archiveIsUnpacked(source, kind, { merge, game: check.game });
+  const on = checked && !notNeeded && !refusal;
+
+  const turnOn = async () => {
+    const mine = ++asked.current;
+    setRefusal(null);
+    setChecking(true);
+    let found: ArchiveFreeCheck;
+    try {
+      found = await fpkg.freeCheck(source, outputDir, password || undefined);
+    } catch (e) {
+      if (mine !== asked.current) return;
+      setChecking(false);
+      setRefusal(archiveErrorText(e instanceof Error ? e.message : String(e)));
+      return;
+    }
+    if (mine !== asked.current) return;
+    setChecking(false);
+    setCheck(found);
+    if (!archiveIsUnpacked(source, kind, { merge, game: found.game })) return;
+    const how =
+      found.mode === "entries"
+        ? tr("fpkg.free.how_entries", undefined, "A .zip is freed file by file as it unpacks.")
+        : found.mode === "blocks"
+          ? tr("fpkg.free.how_blocks", { count: found.parts }, "This .7z is in {count} blocks. Each block is deleted once everything in it is unpacked, starting from the end of the archive.")
+          : found.mode === "parts"
+          ? tr(
+              "fpkg.free.how_parts",
+              { count: found.parts },
+              "This archive has {count} parts. Each part is deleted once everything in it is unpacked; a file that runs across several parts keeps them until it is whole.",
+            )
+          : tr("fpkg.free.end_note", undefined, "This kind of archive can't be freed bit by bit: until unpacking is done there has to be room for the archive and the unpacked game together.");
+    const atEnd = found.mode === "end";
+    const ok = await confirm({
+      title: atEnd
+        ? tr("fpkg.free.confirm_title_end", undefined, "Delete this archive once it is unpacked?")
+        : tr("fpkg.free.confirm_title", undefined, "Delete this archive while it unpacks?"),
+      message: `${
+        atEnd
+          ? tr(
+              "fpkg.free.confirm_body_end",
+              undefined,
+              "This deletes the archive as soon as it is unpacked and checked, to make room for the next step. The archive is deleted for good, not moved to the Trash. If the steps after unpacking fail or are stopped, the archive is already gone and can't be brought back; you keep the unpacked game. Only use this for an archive you can get again.",
+            )
+          : tr(
+              "fpkg.free.confirm_body",
+              undefined,
+              "This frees the archive's space while it unpacks, so the job fits on a smaller drive. The archive is deleted for good, not moved to the Trash. If unpacking or the steps after it fail or are stopped, the archive is already gone and can't be brought back; you keep whatever was unpacked so far. Only use this for an archive you can get again.",
+            )
+      } ${how}`,
+      details: [source],
+      confirmLabel:
+        found.mode === "end"
+          ? tr("fpkg.free.confirm_yes_end", undefined, "Delete it once it is unpacked")
+          : tr("fpkg.free.confirm_yes", undefined, "Delete it while it unpacks"),
+      destructive: true,
+    });
+    if (mine !== asked.current) return;
+    if (ok) onChange(true, found);
+  };
+
+  return (
+    <div className="space-y-1" data-testid="free-archive-option">
+      <Toggle
+        checked={on}
+        disabled={checking}
+        onChange={(next) => {
+          if (next) void turnOn();
+          else onChange(false);
+        }}
+        label={
+          <span>
+            {tr("fpkg.free.label", undefined, "Free the archive's space while it unpacks")}{" "}
+            <span
+              className="rounded border border-[var(--color-bad)] px-1 py-px text-[10px] font-semibold uppercase text-[var(--color-bad)]"
+              data-testid="free-archive-danger"
+            >
+              {tr("fpkg.free.danger", undefined, "Dangerous")}
+            </span>
+          </span>
+        }
+        hint={tr(
+          "fpkg.free.hint",
+          undefined,
+          "For a drive with no room for the archive and the unpacked game together. The archive is deleted as it unpacks and can't be brought back. If anything fails on the way, you keep only what was unpacked so far. For this game only: it is off again afterwards.",
+        )}
+      />
+      {checking && (
+        <div className="text-xs text-[var(--color-muted)]" data-testid="free-archive-checking">
+          {tr("fpkg.free.checking", undefined, "Checking the archive…")}
+        </div>
+      )}
+      {on && check && (
+        <div className="text-xs text-[var(--color-bad)]" data-testid="free-archive-path">
+          {check.mode === "end"
+            ? tr("fpkg.free.path_end", { path: source }, "Will be deleted as soon as it is unpacked: {path}")
+            : tr("fpkg.free.path", { path: source }, "Will be deleted while it unpacks: {path}")}
+        </div>
+      )}
+      {on && check?.mode === "end" && (
+        <div className="text-xs text-[var(--color-warn)]" data-testid="free-archive-end-note">
+          {tr("fpkg.free.end_note", undefined, "This kind of archive can't be freed bit by bit: until unpacking is done there has to be room for the archive and the unpacked game together.")}
+        </div>
+      )}
+      {notNeeded && (
+        <div className="text-xs text-[var(--color-muted)]" data-testid="free-archive-not-needed">
+          {tr(
+            "fpkg.free.not_needed",
+            undefined,
+            "Not needed here: an image or a folder is made straight from this archive with nothing unpacked, so there is no extra space to free. It applies when a package is made.",
+          )}
+        </div>
+      )}
+      {refusal && (
+        <div className="text-xs text-[var(--color-warn)]" data-testid="free-archive-refused">
+          {tr("fpkg.free.refused", { reason: refusal }, "Not available: {reason}")}
+        </div>
+      )}
+      {dialog}
     </div>
   );
 }

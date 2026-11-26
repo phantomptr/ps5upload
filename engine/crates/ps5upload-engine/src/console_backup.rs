@@ -441,10 +441,13 @@ fn scan(host: &str) -> Result<(), String> {
 // ── backup ──────────────────────────────────────────────────────────────
 
 /// Where a console folder sits in a backup: its path under `files/`. None for a path that could
-/// climb out of the backup, which a manifest edited by hand might hold.
+/// climb out of the backup, which a manifest edited by hand might hold, or a folder on the
+/// console named to do it. A backslash is one: on Windows it separates folders too, so
+/// `/data/..\..\x` (one name on the console) was a path out of the backup there.
 pub fn local_path(root: &Path, console_path: &str) -> Option<PathBuf> {
     let rel = console_path.strip_prefix('/')?;
     if rel.is_empty()
+        || rel.contains('\\')
         || rel
             .split('/')
             .any(|p| p.is_empty() || p == "." || p == "..")
@@ -456,7 +459,7 @@ pub fn local_path(root: &Path, console_path: &str) -> Option<PathBuf> {
 
 /// A path a backup may put things in on the console: only what a backup can hold.
 pub fn restorable(console_path: &str) -> bool {
-    if console_path.split('/').any(|p| p == "..") {
+    if console_path.contains('\\') || console_path.split('/').any(|p| p == "..") {
         return false;
     }
     if console_path == CAPTURES_DIR {
@@ -929,6 +932,10 @@ mod tests {
         assert_eq!(local_path(root, "/data/../../x"), None);
         assert_eq!(local_path(root, "data/x"), None);
         assert_eq!(local_path(root, "/"), None);
+        // One name on the console, a path out of the backup on Windows.
+        assert_eq!(local_path(root, "/data/..\\..\\x"), None);
+        assert!(!restorable("/data/..\\..\\x"));
+        assert!(!restorable("/data/a\\b"));
     }
 
     #[test]

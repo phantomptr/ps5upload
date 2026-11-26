@@ -688,12 +688,12 @@ function AppSettingsTab() {
                     ? tr(
                         "keep_awake_on_mobile",
                         undefined,
-                        "Keep the screen on while PS5 Upload is in the foreground",
+                        "Keep the screen on while PS5Upload is in the foreground",
                       )
                     : tr(
                         "keep_awake_on",
                         undefined,
-                        "Keep the computer awake while PS5 Upload is open",
+                        "Keep the computer awake while PS5Upload is open",
                       )}
                 </span>
               }

@@ -30,7 +30,13 @@
  */
 
 #define PROFILE_SLOT_COUNT     16
+/* A buffer a slot's name is READ into (offact reads with 32, and the console accepts that). */
 #define PROFILE_NAME_MAX       32
+/* The size the registry's user_name entity has: 16 bytes of name and the NUL. It is the only size
+ * a WRITE may pass (any other is answered 0x800D0208, #940), and the longest name a user can have
+ * (sceUserServiceGetUserName fills the same 17). Bytes, not letters: UTF-8. */
+#define PROFILE_NAME_FIELD     17
+#define PROFILE_NAME_BYTES_MAX (PROFILE_NAME_FIELD - 1)
 #define PROFILE_TYPE_MAX       17
 #define PROFILE_DEFAULT_FLAGS  0x1002
 
@@ -43,6 +49,8 @@
  * On failure *out_err_code (when the variant has one) carries Sony's raw
  * rc or a SYS_REGISTRY_ERR_* sentinel. */
 int profile_slot_get_name(int slot, char out[PROFILE_NAME_MAX], uint32_t *out_err_code);
+/* A name longer than PROFILE_NAME_BYTES_MAX is refused (SYS_REGISTRY_ERR_VALUE_TOO_LONG) and
+ * nothing is written: it is never cut to fit. An empty one is SYS_REGISTRY_ERR_NULL_ARG. */
 int profile_slot_set_name(int slot, const char *name, uint32_t *out_err_code);
 int profile_slot_get_id(int slot, uint64_t *out, uint32_t *out_err_code);
 int profile_slot_set_id(int slot, uint64_t id, uint32_t *out_err_code);
@@ -96,7 +104,8 @@ int profile_user_name(uint32_t uid, char *name_out, size_t name_out_size);
 /* Rename a local console user via sceUserServiceSetUserName. Returns 0 on
  * success, -1 on failure (incl. the symbol not being exported on this
  * firmware). This is the *active profile* display name, distinct from the
- * offline-account slots above. */
+ * offline-account slots above. A name longer than PROFILE_NAME_BYTES_MAX
+ * is refused here, before Sony sees it. */
 int profile_set_local_username(uint32_t uid, const char *name);
 
 /* ── Avatar apply ───────────────────────────────────────────────────────

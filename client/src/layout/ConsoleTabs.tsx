@@ -103,7 +103,8 @@ function ConsoleTab({
       }
     >
       <StatusDot host={host} />
-      <span className="truncate">{name}</span>
+      {/* Its own direction: in Arabic or Persian a Latin name was cut at its start. */}
+      <span className="truncate" dir="auto">{name}</span>
       {busy && (
         <span
           className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full"

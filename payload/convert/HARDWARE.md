@@ -157,6 +157,34 @@ Then `pkg_level` `fast` on the same game (`log2f`; write down the time: the page
 about 15 minutes for 30 GB), then Stop during `compress`: `cancelled` within a second or two,
 nothing left.
 
+## Run 3e: a `.pkg` of a game in asset packs, unpacked
+
+No new import (the ELF's import list is unchanged): the LZ4 and zstd pack readers were already
+linked for a packed game that is packed again (`zstd_packs::readable_for_packing`), and the unpack
+code is the engine's (`ps5upload-convert-core` `unpack_packs`). New on the
+console: a package built from a source that is decoded as it is read, and the emulator rule
+without a download. Not run on a console yet.
+
+1. A libSceAmpr game in zstd packs made by PS5Upload (ampr-emu-ng in `fakelib`). Minion, Convert,
+   `.pkg`: "Unpack the asset packs" is on, and Convert is held with the sentence that the game has
+   no emulator that works with plain files. Turn on "Leave out the AMPR emulator" and convert.
+   Proven when: it ends `ok`; `convert.log` has `unpack packs: zstd packs decoded, N plain files, a
+   new ampr_emu.index lists them; left out fakelib/libSceAmpr.sprx` and `.pkg at Kraken level ...
+   asset packs unpacked, the AMPR emulator left out`; the package is about the plain game's size;
+   it installs, and the game starts. The last is the open question: only Spider-Man 2 on FW 5.10
+   has started from such a package.
+2. The same request without leaving the emulator out, sent by hand:
+   `fetch('/api/convert/start',{method:'POST',body:JSON.stringify({path:'<game>',dest:'/data/out.pkg',format:'pkg',unpack_packs:true})})`
+   ends `convert_unpack_needs_emulator` before anything is written (no `.pkg`, no `.partial`).
+3. A game in LZ4 packs with ampr_emu 0.4.2.1 or newer: unpacked with the emulator kept (`ampr_emu
+   0.4.2.1 at fakelib/libSceAmpr.sprx stays`), it installs and starts.
+4. A game that does not read through libSceAmpr, in zstd packs: unpacked with the switch off it
+   keeps its emulator; with it on the package has neither the emulator nor an `ampr_emu.index`.
+5. Stop during `compress` of run 1: `cancelled` within a second or two, nothing left. Write down
+   the time of run 1 against run 3d's on the same game unpacked: decoding the packs is the
+   difference.
+6. "Unpack the asset packs" off: the package holds the packs as before (run 3d's result).
+
 ## Run 4: Stop, and a full drive
 
 Start run 3 on a large game and press Stop at about 10 %, then at about 50 %, then during

@@ -64,6 +64,8 @@
 #define SYS_REGISTRY_ERR_NULL_ARG      0xE0003001U
 #define SYS_REGISTRY_ERR_NO_SYMBOL     0xE0003002U
 #define SYS_REGISTRY_ERR_BUFFER_TOO_SMALL 0xE0003003U
+/* The value does not fit the key's field: refused here, never cut to fit. */
+#define SYS_REGISTRY_ERR_VALUE_TOO_LONG 0xE0003004U
 
 /* Read an int (4-byte) registry value. Returns 0 on success and
  * writes *out_val. On failure returns -1 with *out_err_code set to
@@ -81,11 +83,11 @@ int sys_registry_get_str(uint32_t key,
                           char *buf, size_t buf_size,
                           uint32_t *out_err_code);
 
-/* Write a string registry value. `len` is the field width Sony
- * expects for the key (e.g. 32 for an account-name slot), NOT
- * strlen(buf) — Sony copies a fixed-width field. Same return
- * convention as the other writers. Added for the profile (offline
- * account) feature, which renames account-name slots. */
+/* Write a string registry value. `len` is the size the key's entity is
+ * registered with (17 for an account-name slot: 16 bytes and the NUL),
+ * NOT strlen(buf) and not the caller's buffer size — Sony reads that
+ * many bytes, and answers 0x800D0208 (SCE_REGMGR_ERROR_PRM_SIZE) to any
+ * other size (#940). Same return convention as the other writers. */
 int sys_registry_set_str(uint32_t key,
                          const char *buf, size_t len,
                          uint32_t *out_err_code);

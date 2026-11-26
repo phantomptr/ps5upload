@@ -637,6 +637,31 @@ static void fan_status(void) {
     CHECK(webui_fan_status_json(t, strlen(t), out, 40) == -1);
 }
 
+/* #928: the zone the page shows times in on the console's own browser. */
+static void tz_minutes(void) {
+    long m = 12345;
+    /* Recife, UTC-3, no summer time: the report's console */
+    CHECK(webui_tz_minutes(1, -180, 1, 0, &m) == 1 && m == -180);
+    /* summer time moves the clock an hour ahead: Berlin in July, New York in July */
+    CHECK(webui_tz_minutes(1, 60, 1, 1, &m) == 1 && m == 120);
+    CHECK(webui_tz_minutes(1, -300, 1, 1, &m) == 1 && m == -240);
+    /* a flag that could not be read is no summer time; any value but 1 is none either */
+    CHECK(webui_tz_minutes(1, 60, 0, 1, &m) == 1 && m == 60);
+    CHECK(webui_tz_minutes(1, 60, 1, 2, &m) == 1 && m == 60);
+    /* UTC itself, half- and quarter-hour zones, and both ends of the map */
+    CHECK(webui_tz_minutes(1, 0, 1, 0, &m) == 1 && m == 0);
+    CHECK(webui_tz_minutes(1, 330, 1, 0, &m) == 1 && m == 330);
+    CHECK(webui_tz_minutes(1, 345, 1, 0, &m) == 1 && m == 345);
+    CHECK(webui_tz_minutes(1, -720, 1, 0, &m) == 1 && m == -720);
+    CHECK(webui_tz_minutes(1, 840, 1, 0, &m) == 1 && m == 840);
+    /* not read, or no real zone: the page is told nothing, and *out is left alone */
+    m = 777;
+    CHECK(webui_tz_minutes(0, -180, 1, 0, &m) == 0 && m == 777);
+    CHECK(webui_tz_minutes(1, 841, 1, 0, &m) == 0 && m == 777);
+    CHECK(webui_tz_minutes(1, -721, 1, 0, &m) == 0 && m == 777);
+    CHECK(webui_tz_minutes(1, 0x7fffffff, 1, 1, &m) == 0 && m == 777);
+}
+
 static void focus_running(void) {
     char tid[16];
     uint32_t app = 0;
@@ -1052,6 +1077,7 @@ int main(void) {
     mime_types();
     kv_lines();
     fan_status();
+    tz_minutes();
     focus_running();
     focus_running_fallback_games_only();
     cheats_status();

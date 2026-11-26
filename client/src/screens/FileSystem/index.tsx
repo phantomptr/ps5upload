@@ -17,6 +17,7 @@ import {
   RowActionsMenu,
   RowActionsTrigger,
   RowMenu,
+  SelectionMoreMenu,
   type RowActionsContext,
   type RowMenuItem,
 } from "./RowActions";
@@ -103,7 +104,7 @@ import {
 } from "./fsGuards";
 import { pickSaveDest as saveDialog } from "../../lib/pickSaveDest";
 import { isTauriEnv } from "../../lib/tauriEnv";
-import { isWindows } from "../../lib/platform";
+import { isIOS, isWindows } from "../../lib/platform";
 import {
   PageHeader,
   Button,
@@ -277,7 +278,9 @@ import { formatNumber, formatDuration } from "../../lib/formatDate";
 import { Modal } from "../../components/Modal";
 import { childToReveal, REVEAL_MS } from "../../lib/revealChild";
 import { useBackDismiss, useScreenBack } from "../../lib/systemBack";
-import { usePhoneLayout } from "../../lib/phoneLayout";
+import { usePhoneLayout, usePhoneTopBar } from "../../lib/phoneLayout";
+import { ltr } from "../../i18n";
+import NotificationInbox from "../../layout/NotificationInbox";
 import { createLongPress } from "../../lib/longPress";
 import { backUpTarget, filesBackStep, folderTitle } from "./phoneFiles";
 import { PhoneFolderRow, PhoneSelectionActions, PhoneSelectionRow } from "./PhoneBars";
@@ -3152,6 +3155,19 @@ export default function FileSystemScreen() {
     root.setAttribute("data-selection-bar", "");
     return () => root.removeAttribute("data-selection-bar");
   }, [phoneSelecting]);
+  // One bar at the top, not two (#936): on a phone the compact header carries the bell, and the
+  // app's top bar gives it its place (`html[data-screen-bar]`, index.css). Only where that bar
+  // shows (below `md`: a phone held sideways that wide has the bell in the row beside the
+  // sidebar), and not over a view, which has no such header. An iPhone keeps the app's bar: its
+  // arrows are the only way back there.
+  const phoneTopBar = usePhoneTopBar();
+  const ownTopBar = phone && phoneTopBar && view === null && !isIOS();
+  useEffect(() => {
+    if (!ownTopBar) return;
+    const root = document.documentElement;
+    root.setAttribute("data-screen-bar", "");
+    return () => root.removeAttribute("data-screen-bar");
+  }, [ownTopBar]);
   // A long press on a row starts selection mode with that row (a finger, in the phone layout);
   // in selection mode it ticks or unticks the row, as a tap does.
   const [longPress] = useState(() =>
@@ -3354,7 +3370,7 @@ export default function FileSystemScreen() {
   const addBusy = loading || !host?.trim() || localBusy !== null;
 
   /** The phone's menus, by the button that opened them. */
-  const phoneMenus: Record<NonNullable<typeof phoneMenu>["kind"], RowMenuItem[]> = {
+  const phoneMenus: Record<Exclude<NonNullable<typeof phoneMenu>["kind"], "selection">, RowMenuItem[]> = {
     more: [
       {
         icon: Upload,
@@ -3394,7 +3410,8 @@ export default function FileSystemScreen() {
         const external = v.path.startsWith("/mnt/usb") || v.path.startsWith("/mnt/ext");
         return {
           icon: external ? Usb : HardDrive,
-          label: `${v.path} · ${formatBytes(v.free_bytes)} ${tr("fs_free", "free")}`,
+          // The path and the size keep their order in a right-to-left language ("/data", not "data/").
+          label: `${ltr(v.path)} · ${ltr(formatBytes(v.free_bytes))} ${tr("fs_free", "free")}`,
           run: () => setPath(v.path),
           current: currentVolumePath === v.path,
         };
@@ -3416,7 +3433,11 @@ export default function FileSystemScreen() {
     ],
     "add-file": addSources.file,
     "add-folder": addSources.folder,
-    selection: [
+  };
+  /** More in the bar of selection actions: `always` for any selection, `several` unless exactly
+   *  one item is selected (then its row's own actions are there instead, SelectionMoreMenu). */
+  const selectionMenu: { always: RowMenuItem[]; several: RowMenuItem[] } = {
+    always: [
       {
         icon: Scissors,
         label: tr("fs_cut", undefined, "Cut"),
@@ -3438,6 +3459,8 @@ export default function FileSystemScreen() {
         run: () => void runChmod777(),
         disabled: bulkOp.op !== null || chmodBusy,
       },
+    ],
+    several: [
       {
         icon: Archive,
         label: tr("fs_snapshot_action", undefined, "Snapshot…"),
@@ -3687,7 +3710,18 @@ export default function FileSystemScreen() {
           items={pageMoreItems()}
         />
       )}
-      {phoneMenu && (
+      {phoneMenu?.kind === "selection" && (
+        <SelectionMoreMenu
+          {...selectionMenu}
+          // One item selected: what its own ⋮ offers, so nothing is out of reach of a long press.
+          sole={selectedEntries.length === 1 ? selectedEntries[0] : null}
+          ctx={rowActionsCtx}
+          done={endSelection}
+          anchor={phoneMenu.anchor}
+          onClose={() => setPhoneMenu(null)}
+        />
+      )}
+      {phoneMenu && phoneMenu.kind !== "selection" && (
         <RowMenu
           // A new menu at the same button (⋮, then where to add from) measures itself again.
           key={phoneMenu.kind}
@@ -3997,6 +4031,8 @@ export default function FileSystemScreen() {
                     key={v.path}
                     type="button"
                     onClick={() => setPath(v.path)}
+                    // A path and a size: left to right in every language ("250 GiB", not "GiB 250").
+                    dir="ltr"
                     title={`${v.path} · ${formatBytes(v.free_bytes)} ${tr("fs_free", "free")}`}
                     aria-current={active ? "true" : undefined}
                     // Exactly ONE thing is highlighted: the drive you are
@@ -4122,6 +4158,7 @@ export default function FileSystemScreen() {
                 moreLabel={tr("fs_more", undefined, "More")}
                 moreOpen={phoneMenu?.kind === "more" || phoneMenu?.kind === "add-file" || phoneMenu?.kind === "add-folder"}
                 onMore={(box) => togglePhoneMenu("more", box)}
+                bell={ownTopBar ? <NotificationInbox variant="row" /> : undefined}
                 disabled={!host?.trim()}
               />
             )}
@@ -4166,6 +4203,9 @@ export default function FileSystemScreen() {
                         <button
                           type="button"
                           onClick={() => setPath(c.path)}
+                          // The first crumb is only an icon: its name is the path it opens.
+                          aria-label={i === 0 ? c.path : undefined}
+                          title={i === 0 ? c.path : undefined}
                           {...(i < arr.length - 1 ? dropProps(c.path) : {})}
                           className={
                             (dropTarget === c.path ? "ring-2 ring-[var(--color-accent)] " : "") +
@@ -4795,6 +4835,18 @@ export default function FileSystemScreen() {
                 const isSelected = selected.has(e.name);
                 const isRevealed =
                   revealed !== null && revealed.dir === path && revealed.name === e.name;
+                // The row's box. A wide window has it before the icon, always. A phone shows it
+                // only while selecting, at the end of the row where ⋮ was, so the icon and the
+                // name stay where they are when selection mode starts (#936).
+                const rowBox = (
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleSelected(e.name)}
+                    aria-label={e.name}
+                    className="h-3.5 w-3.5! shrink-0 phone:h-5 phone:w-5!"
+                  />
+                );
                 return (
                   <li
                     key={e.name}
@@ -4857,14 +4909,7 @@ export default function FileSystemScreen() {
                         : "border-[var(--glass-edge)] bg-[var(--color-surface-raised)] hover:bg-[var(--color-float)]")
                     }
                   >
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() => toggleSelected(e.name)}
-                      aria-label={e.name}
-                      // A phone shows the boxes only in selection mode (#936).
-                      className={`h-3.5 w-3.5! shrink-0 phone:h-5 phone:w-5! ${selecting ? "" : "phone:hidden"}`}
-                    />
+                    {!phone && rowBox}
                     <Icon
                       size={16}
                       className={
@@ -4906,7 +4951,8 @@ export default function FileSystemScreen() {
                           }
                           disabled={!isDir}
                         >
-                          {e.name}
+                          {/* A name keeps its own order in a right-to-left language ("(1).pkg"). */}
+                          <bdi>{e.name}</bdi>
                         </button>
                         <div className="flex items-center gap-2 roomy:contents" data-testid="fs-row-meta">
                           {(() => {
@@ -4938,31 +4984,39 @@ export default function FileSystemScreen() {
                       </div>
                     )}
                     <RowActionButtons entry={e} ctx={rowActionsCtx} />
-                    <RowActionsTrigger
-                      label={tr(
-                        "fs_row_actions",
-                        { name: e.name },
-                        `Actions for ${e.name}`,
-                      )}
-                      open={actionsMenuEntry?.name === e.name}
-                      hidden={phoneSelecting}
-                      onToggle={(r) =>
-                        setActionsMenu((cur) =>
-                          cur && cur.path === path && cur.name === e.name
-                            ? null
-                            : {
-                                path,
-                                name: e.name,
-                                anchor: {
-                                  left: r.left,
-                                  right: r.right,
-                                  top: r.top,
-                                  bottom: r.bottom,
+                    {/* On a phone ⋮ and the box share one place: selecting, ⋮ keeps its room but
+                        is not shown, and the box sits over it. */}
+                    <span
+                      className={phone ? "grid shrink-0 place-items-center *:col-start-1 *:row-start-1" : "contents"}
+                      data-testid="fs-row-end"
+                    >
+                      <RowActionsTrigger
+                        label={tr(
+                          "fs_row_actions",
+                          { name: e.name },
+                          `Actions for ${e.name}`,
+                        )}
+                        open={actionsMenuEntry?.name === e.name}
+                        hidden={phoneSelecting}
+                        onToggle={(r) =>
+                          setActionsMenu((cur) =>
+                            cur && cur.path === path && cur.name === e.name
+                              ? null
+                              : {
+                                  path,
+                                  name: e.name,
+                                  anchor: {
+                                    left: r.left,
+                                    right: r.right,
+                                    top: r.top,
+                                    bottom: r.bottom,
+                                  },
                                 },
-                              },
-                        )
-                      }
-                    />
+                          )
+                        }
+                      />
+                      {phone && selecting && rowBox}
+                    </span>
                   </li>
                 );
               })}

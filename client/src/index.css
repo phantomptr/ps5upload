@@ -430,6 +430,16 @@ body {
   backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
 }
 
+/* A floating layer opened inside another glass surface (the bell in the Files header on a
+ * phone). The blur of `.glass-float` stops at that surface there, so what is under the layer
+ * would read through its near-opaque tint sharp: this one is fully opaque. */
+.float-solid {
+  background:
+    linear-gradient(var(--color-float), var(--color-float)),
+    var(--atmosphere-base);
+  border: 1px solid var(--glass-edge);
+}
+
 .surface-panel {
   border: 1px solid var(--glass-edge);
   border-radius: var(--radius-panel);
@@ -1185,6 +1195,20 @@ html[data-keyboard] [data-testid="activity-pill"] { display: none !important; }
    same query as the `phone:` variant, where that bar of actions shows. */
 @media not all and (min-width: 40rem), (pointer: coarse) and (max-height: 520px) {
   html[data-selection-bar] [data-bottom-nav] { display: none !important; }
+  /* The app's top bar in the phone layout (#936): its bell at the 44px a finger needs, no more,
+     so the bar takes as little of the screen as it can. */
+  [data-top-bar] .icon-orb-button { width: 44px; height: 44px; }
+}
+/* A screen whose own header carries the bell on a phone (Files, #936) takes the top bar's place:
+   only the room the system keeps at the top is left of it. Below `md`, where that bar shows
+   (PHONE_TOP_BAR_QUERY in lib/phoneLayout.ts). */
+@media (max-width: 767.98px) {
+  html[data-screen-bar] [data-top-bar] {
+    min-height: 0;
+    padding-top: var(--safe-top);
+    padding-bottom: 0;
+  }
+  html[data-screen-bar] [data-top-bar] > * { display: none; }
 }
 /* The tabs down a column the system leaves empty (an iPhone Duo folded, TabNav.tsx useSideRail):
    under its icons, at the bottom where a thumb reaches, and the page gets its height back. */
@@ -1416,6 +1440,19 @@ textarea.input {
 }
 .input::placeholder {
   color: var(--color-muted);
+}
+/* Right-to-left languages: what is written left to right whatever the language (a path, an
+ * address, an ID, a size with its unit: the app's monospace and tabular text) keeps its own
+ * order. Without this "/data/games" read "data/games/" and "512 B" read "B 512". Text in the
+ * language itself is untouched: each element takes the direction of its first letter. */
+:root[dir="rtl"] :where(.font-mono, code, kbd, samp, pre, .tabular-nums) {
+  unicode-bidi: plaintext;
+}
+
+/* A hint longer than its field ends in "…", not mid-word ("…content ID o" on a phone). Only
+ * while the hint shows: typed text is never touched. */
+:where(input, textarea):placeholder-shown {
+  text-overflow: ellipsis;
 }
 
 /* Touch-target floor for form controls (docs/v5-mobile-design.md §4.1).

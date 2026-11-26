@@ -13,6 +13,14 @@ pub struct Member {
     /// Absolute offset of the member's bytes in the package.
     pub offset: u64,
     pub size: u64,
+    /// Absolute offset of the member's local file header.
+    pub local: u64,
+    /// Absolute offset of the member's central directory record.
+    pub central: u64,
+    /// The CRC-32 the central directory records for it.
+    pub crc: u32,
+    /// Its general-purpose flags (bit 3: the sizes and CRC follow the data instead).
+    pub flags: u16,
 }
 
 pub struct Si {
@@ -52,7 +60,10 @@ pub fn read(file: &mut PkgFile) -> Result<Option<Si>> {
         if pos + 46 > cd.len() || le32(&cd, pos) != CENTRAL_SIG {
             return format_err("SI central directory is malformed");
         }
+        let central = cd_abs + pos as u64;
+        let flags = le16(&cd, pos + 8);
         let method = le16(&cd, pos + 10);
+        let crc = le32(&cd, pos + 16);
         let size = le32(&cd, pos + 24) as u64;
         let name_len = le16(&cd, pos + 28) as usize;
         let extra = le16(&cd, pos + 30) as usize;
@@ -71,7 +82,15 @@ pub fn read(file: &mut PkgFile) -> Result<Option<Si>> {
             return format_err(format!("SI member {name} has no local header"));
         }
         let offset = local + 30 + le16(&lh, 26) as u64 + le16(&lh, 28) as u64;
-        members.push(Member { name, offset, size });
+        members.push(Member {
+            name,
+            offset,
+            size,
+            local,
+            central,
+            crc,
+            flags,
+        });
     }
     Ok(Some(Si { zip_start, members }))
 }

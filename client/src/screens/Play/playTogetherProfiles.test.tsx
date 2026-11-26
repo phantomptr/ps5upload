@@ -61,6 +61,14 @@ describe("Guests play as: the host's panel", () => {
     expect(seat).not.toContain('data-testid="pt-ask-profile"');
     expect(renderToStaticMarkup(<JoinAsks addr="c" asks={asks} />)).not.toContain("pt-ask-profile");
   });
+
+  it("the Allow prompt starts at the top of a phone's small picture, so Allow and No stay inside it", () => {
+    // 7rem down (clear of the stream bar on a computer), a wrapped prompt ran out of the bottom of
+    // a phone's picture and "No" was cut off.
+    const html = renderToStaticMarkup(<JoinAsks addr="c" asks={[{ id: 11, name: "Dee" }]} />);
+    const cls = (html.match(/class="([^"]*)" data-testid="pt-ask"/)?.[1] ?? "").split(" ");
+    expect(cls).toEqual(expect.arrayContaining(["top-28", "phone:top-2", "phone:max-w-[calc(100%-1rem)]", "flex-wrap"]));
+  });
 });
 
 describe("Guests play as: Settings", () => {

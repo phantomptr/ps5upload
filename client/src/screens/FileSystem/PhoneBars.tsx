@@ -2,7 +2,7 @@
 // selection actions that takes the bottom navigation's place while selecting. Tablets and
 // computers never show either (`roomy:hidden`); they keep the page header and the selection bar.
 
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import { CheckCheck, FolderOpen, MoreVertical, Search, X } from "lucide-react";
 
 import { Spinner } from "../../components";
@@ -65,6 +65,7 @@ export function PhoneFolderRow({
   moreLabel,
   moreOpen,
   onMore,
+  bell,
   disabled,
 }: {
   title: string;
@@ -79,6 +80,8 @@ export function PhoneFolderRow({
   moreLabel: string;
   moreOpen: boolean;
   onMore: (box: DOMRect) => void;
+  /** The notification bell, when this header stands in for the app's top bar. */
+  bell?: ReactNode;
   /** No console to act on. */
   disabled: boolean;
 }) {
@@ -104,6 +107,7 @@ export function PhoneFolderRow({
           testId="fs-phone-drives"
         />
       )}
+      {bell}
       <IconButton
         icon={MoreVertical}
         label={moreLabel}
@@ -181,7 +185,7 @@ export function PhoneSelectionActions({
       aria-label={label}
       data-testid="fs-selection-actions-bar"
       // Where the bottom navigation floats (TabNav), the same shape.
-      className="glass-float elev-2 fixed inset-x-3 bottom-[calc(var(--safe-bottom)_+_0.6rem)] z-40 flex h-16 items-stretch justify-around gap-0.5 rounded-full p-1.5 roomy:hidden"
+      className="glass-float elev-2 fixed inset-x-3 bottom-[calc(var(--safe-bottom)_+_0.6rem)] z-40 flex min-h-16 items-stretch justify-around gap-0.5 rounded-[2rem] p-1.5 roomy:hidden"
     >
       {actions.map((a) => (
         <button
@@ -198,7 +202,7 @@ export function PhoneSelectionActions({
           }
         >
           <a.icon size={20} aria-hidden />
-          <span className="max-w-full truncate px-0.5">{a.label}</span>
+          <span className="line-clamp-3 max-w-full px-0.5 text-center text-[0.625rem] leading-[1.15] tracking-tight break-words hyphens-auto">{a.label}</span>
         </button>
       ))}
     </div>

@@ -216,7 +216,7 @@ export function TabBottomNav() {
                 // `min-w-0` + a truncating label: six tabs share a phone's width, and a
                 // long translation ("Konsole", "Aufgaben") otherwise widens its own tab
                 // until the labels touch.
-                "nav-pill relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-full text-[0.6875rem] font-medium",
+                "nav-pill relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-full text-[0.6875rem] font-medium [container-type:inline-size]",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]",
               ]
                 .filter(Boolean)
@@ -228,7 +228,10 @@ export function TabBottomNav() {
                 <Icon size={21} strokeWidth={1.8} className="nav-pill-icon" aria-hidden />
                 {showPlaying && <PlayingDot />}
               </span>
-              <span className="max-w-full truncate px-0.5">{base}</span>
+              {/* Tight letters, no side padding, and letters sized to the tab: at 360 px a tab is
+                  52 px wide, and "Console" in the open tab's bolder letters needs all of it in a
+                  wide font (Android's and Linux's are wider than a Mac's). */}
+              <span className="max-w-full truncate text-[min(0.6875rem,17.5cqw)] tracking-tight">{base}</span>
             </Link>
           );
         })}
@@ -261,7 +264,7 @@ export function TabBottomNav() {
               />
             )}
           </span>
-          <span className="max-w-full truncate px-0.5">{tr("v5_tab_more", undefined, "More")}</span>
+          <span className="max-w-full truncate tracking-tight">{tr("v5_tab_more", undefined, "More")}</span>
         </Link>
       </nav>
     </>

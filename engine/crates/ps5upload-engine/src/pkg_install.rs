@@ -260,6 +260,9 @@ pub struct PkgInstallState {
     /// Unified-install (spec 2) job store: one install per console, statuses
     /// polled via `/api/pkg/install/status`.
     pub jobs: crate::install::JobStore,
+    /// Install calls a job stopped waiting for while the console's daemon was still in them
+    /// (see `install::reach`): the console's next install waits for them to end.
+    pub abandoned: crate::install::reach::AbandonedCalls,
 }
 
 pub type PkgInstallStateHandle = Arc<PkgInstallState>;
@@ -281,6 +284,7 @@ impl PkgInstallState {
             sessions: Mutex::new(sessions),
             sessions_saved_unix: std::sync::atomic::AtomicU64::new(0),
             jobs: crate::install::JobStore::new(),
+            abandoned: Default::default(),
         }
     }
 }
@@ -1011,6 +1015,11 @@ pub fn api_router(state: PkgInstallStateHandle) -> Router {
         )
         .route("/api/files/upload/{id}", delete(pkg_upload_delete_handler))
         .route("/api/pkg/parse-split", post(parse_split_handler))
+        // The name a fake package gives its game, read and changed in the package (#937).
+        .route(
+            "/api/pkg/name",
+            get(crate::pkg_name_api::get_handler).post(crate::pkg_name_api::set_handler),
+        )
         // Read-only UFS2 image inspector for .ffpkg / .ufs files.
         // Lets the renderer surface "what's in this image?" before
         // a multi-GB upload. See ps5upload_pkg::ufs2 for the parser.
@@ -2178,6 +2187,26 @@ pub(crate) async fn install_start_handler(
                  cancel it first."
             ),
         );
+    }
+
+    // A package being renamed in place (`pkg_name_api`) is never served half written: the
+    // rename claims the file before it looks for sessions (`serving`), and this looks for the
+    // claim once the session is in the table, so one of the two always sees the other.
+    {
+        let parts = session.parts.clone();
+        let renamed = tokio::task::spawn_blocking(move || {
+            parts
+                .iter()
+                .find_map(|p| crate::image_edit_in_place::busy(p))
+        })
+        .await
+        .unwrap_or(None);
+        if let Some(why) = renamed {
+            let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            sessions.remove(&session_id);
+            persist::save(&sessions);
+            return json_err(StatusCode::CONFLICT, &why);
+        }
     }
 
     // Serve-only (Stream beta): the session + its /pkg-host/ listener are now
@@ -3733,20 +3762,29 @@ async fn resolve_parts_and_meta(req: &InstallStartRequest) -> Result<ResolvedSou
     // each split part) from disk. On a cold or network-hosted pkg that's
     // blocking I/O; run it OFF the async reactor so concurrent install-starts
     // across consoles can't park reactor worker threads. (Mirrors parse_handler.)
+    //
+    // A package on this computer may have been renamed in place (`pkg_name_api`): a rename
+    // that runs now refuses the install, and one a crash interrupted is undone before the
+    // package is read, so the console is never served it half changed.
     if let Some(p) = &req.split_root {
         let p = p.clone();
-        let m: SplitPkgMetadata =
-            tokio::task::spawn_blocking(move || parse_split_pkg(std::path::Path::new(&p)))
-                .await
-                .map_err(|e| format!("split pkg parse task panicked/cancelled: {e}"))?
-                .map_err(|e| format!("{e}"))?;
+        let m: SplitPkgMetadata = tokio::task::spawn_blocking(move || {
+            let path = std::path::Path::new(&p);
+            crate::image_edit_in_place::before_open(path)?;
+            parse_split_pkg(path).map_err(|e| format!("{e}"))
+        })
+        .await
+        .map_err(|e| format!("split pkg parse task panicked/cancelled: {e}"))??;
         Ok((m.parts, m.part_sizes, m.total_size, m.head, None))
     } else if let Some(p) = &req.path {
         let p = p.clone();
-        let meta = tokio::task::spawn_blocking(move || parse_pkg(std::path::Path::new(&p)))
-            .await
-            .map_err(|e| format!("pkg parse task panicked/cancelled: {e}"))?
-            .map_err(|e| format!("{e}"))?;
+        let meta = tokio::task::spawn_blocking(move || {
+            let path = std::path::Path::new(&p);
+            crate::image_edit_in_place::before_open(path)?;
+            parse_pkg(path).map_err(|e| format!("{e}"))
+        })
+        .await
+        .map_err(|e| format!("pkg parse task panicked/cancelled: {e}"))??;
         let size = meta.size;
         Ok((vec![meta.path.clone()], vec![size], size, meta, None))
     } else {
@@ -4058,13 +4096,76 @@ async fn peer_is_console(host: &str, peer: IpAddr) -> bool {
     answer
 }
 
+/// The console's address: as given, or what its name resolves to (an IPv4 address when it has
+/// one, as the helper listens on IPv4).
+pub(crate) fn console_ip_for(ps5_host: &str) -> std::io::Result<IpAddr> {
+    use std::net::ToSocketAddrs;
+    let host = ps5_host.trim_matches(|c| c == '[' || c == ']');
+    if let Some(ip) = console_ip_literal(host) {
+        return Ok(ip);
+    }
+    let found: Vec<IpAddr> = (host, 1).to_socket_addrs()?.map(|a| a.ip()).collect();
+    found
+        .iter()
+        .find(|ip| ip.is_ipv4())
+        .or(found.first())
+        .copied()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "the console's name has no address",
+            )
+        })
+}
+
 pub fn lan_ip_for_ps5(ps5_host: &str) -> std::io::Result<IpAddr> {
-    let sock = std::net::UdpSocket::bind("0.0.0.0:0")?;
+    // The console's address first, so the socket is of its family: an IPv4 socket cannot
+    // "connect" to an IPv6 console, and `host:1` does not even parse for a bare IPv6 address
+    // (a stream install to such a console failed with "could not determine local LAN IP").
+    let target = std::net::SocketAddr::new(console_ip_for(ps5_host)?, 1);
+    let any = if target.is_ipv6() {
+        std::net::SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED), 0)
+    } else {
+        std::net::SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)
+    };
+    let sock = std::net::UdpSocket::bind(any)?;
     // UDP "connect" doesn't actually send anything — it just sets the
     // peer for routing-table lookup, so local_addr() returns the IP
     // the OS would use. Port number is arbitrary.
-    sock.connect(format!("{ps5_host}:1"))?;
+    sock.connect(target)?;
     Ok(sock.local_addr()?.ip())
+}
+
+/// This computer's address a console was found to reach when it could not reach the one the
+/// routing table names (`install::reach`): a second adapter on the console's network. Kept for
+/// the life of the engine and checked again before every stream install.
+fn reachable_hosts() -> &'static Mutex<HashMap<String, IpAddr>> {
+    static HOSTS: std::sync::OnceLock<Mutex<HashMap<String, IpAddr>>> = std::sync::OnceLock::new();
+    HOSTS.get_or_init(Mutex::default)
+}
+
+/// Records (or, with `None`, forgets) the address `ps5_addr`'s console reaches this computer on.
+pub(crate) fn set_reachable_host(ps5_addr: &str, host: Option<IpAddr>) {
+    let key = strip_host_port(ps5_addr).to_ascii_lowercase();
+    let mut hosts = reachable_hosts().lock().unwrap_or_else(|e| e.into_inner());
+    match host {
+        Some(ip) => {
+            hosts.insert(key, ip);
+        }
+        None => {
+            hosts.remove(&key);
+        }
+    }
+}
+
+fn reachable_host(ps5_host: &str) -> Option<IpAddr> {
+    let hosts = reachable_hosts().lock().unwrap_or_else(|e| e.into_inner());
+    hosts.get(&ps5_host.to_ascii_lowercase()).copied()
+}
+
+/// Whether `PS5UPLOAD_PKG_HOST_IP` pins the address consoles are given.
+pub(crate) fn pkg_host_ip_pinned() -> bool {
+    std::env::var("PS5UPLOAD_PKG_HOST_IP").is_ok_and(|v| !v.trim().is_empty())
 }
 
 /// True when this engine runs in a container. The one test for it: the images set
@@ -4140,7 +4241,11 @@ pub(crate) fn engine_origin_for_ps5(ps5_addr: &str) -> std::io::Result<String> {
                 format!("PS5UPLOAD_PKG_HOST_IP='{v}' is not a valid IP: {e}"),
             )
         })?,
-        _ => lan_ip_for_ps5(&ps5_host_only)?,
+        // An address the console was found to reach wins over the routing table's guess.
+        _ => match reachable_host(&ps5_host_only) {
+            Some(ip) => ip,
+            None => lan_ip_for_ps5(&ps5_host_only)?,
+        },
     };
     // PS5UPLOAD_PKG_HOST_PORT is the same pin for the port: a container published on another host
     // port (`-p 8080:19113`) listens on 19113 inside, and the PS5 can only reach it on 8080.
@@ -4436,6 +4541,35 @@ fn gc_old_sessions(map: &mut HashMap<String, InstallSession>, now: u64, max_age:
     before - map.len()
 }
 
+/// Why the package at `path` (a file on this computer) can't be changed now: a console is
+/// installing from it, or it is shared as an install link. `None` when no session serves it.
+/// "Installing" is what [`is_rival`] means by it: a session that has not ended and that a
+/// console fetched from, or the app asked about, within the last `RIVAL_ACTIVE_WINDOW_SEC`.
+pub(crate) fn serving(state: &PkgInstallState, path: &std::path::Path) -> Option<String> {
+    let real = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let me = real(path);
+    let now = now_unix();
+    let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+    sessions
+        .values()
+        .filter(|s| !s.cancelled && s.remote.is_none())
+        .filter(|s| {
+            s.shared_link
+                || (s.terminal_status.is_none()
+                    && now.saturating_sub(s.last_activity_unix.max(s.created_at_unix))
+                        < RIVAL_ACTIVE_WINDOW_SEC)
+        })
+        .find(|s| s.parts.iter().any(|p| real(p) == me))
+        .map(|s| {
+            if s.shared_link {
+                "this package is shared as an install link: stop sharing it first".to_string()
+            } else {
+                "a PS5 is installing from this package: wait for the install to end, or stop it"
+                    .to_string()
+            }
+        })
+}
+
 /// Whether `other` is a live install of the same package to the same console as `new`.
 fn is_rival(other: &InstallSession, new: &InstallSession, now: u64) -> bool {
     !other.cancelled
@@ -4584,7 +4718,7 @@ mod persist_tests {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     // ── payload-restore (web UI helper redeploy) ──
 
     /// The browser build's `restoreMainPayload` posts here. An empty address
@@ -5031,6 +5165,63 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         assert!(blank.unwrap().starts_with("http://127.0.0.1:19113/"));
     }
 
+    /// The address a console is given is the one this computer reaches it from. For a console
+    /// at an IPv6 address that could not be worked out at all: the lookup socket was IPv4.
+    #[test]
+    fn the_address_given_to_a_console_is_of_the_consoles_own_kind() {
+        assert_eq!(
+            lan_ip_for_ps5("127.0.0.1").unwrap(),
+            "127.0.0.1".parse::<IpAddr>().unwrap()
+        );
+        // No IPv6 on this machine (some CI containers): nothing to say about it.
+        if std::net::UdpSocket::bind("[::1]:0").is_err() {
+            return;
+        }
+        let v6: IpAddr = "::1".parse().unwrap();
+        assert_eq!(lan_ip_for_ps5("::1").unwrap(), v6);
+        assert_eq!(lan_ip_for_ps5("[::1]").unwrap(), v6);
+        let _g = ENV_LOCK.lock().unwrap();
+        std::env::set_var("PS5UPLOAD_ENGINE_PORT", "19113");
+        let url = pkg_host_url_for("[::1]:9120", "s", "IV0001-X");
+        std::env::remove_var("PS5UPLOAD_ENGINE_PORT");
+        assert!(url.unwrap().starts_with("http://[::1]:19113/pkg-host/s/"));
+    }
+
+    #[test]
+    fn a_console_given_by_address_needs_no_lookup_and_a_name_prefers_ipv4() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        assert_eq!(console_ip_for("192.168.1.25").unwrap(), ip("192.168.1.25"));
+        assert_eq!(console_ip_for("[fd00::25]").unwrap(), ip("fd00::25"));
+        assert_eq!(console_ip_for("fe80::1%en0").unwrap(), ip("fe80::1"));
+        // "localhost" has both kinds on most machines; the helper listens on IPv4.
+        assert_eq!(console_ip_for("localhost").unwrap(), ip("127.0.0.1"));
+    }
+
+    /// `install::reach` found the console reaches this computer on another of its addresses
+    /// than the routing table names: that one goes into the link, until it is forgotten. A
+    /// pinned address still wins.
+    #[test]
+    fn an_address_the_console_was_found_to_reach_goes_into_its_link() {
+        let _g = ENV_LOCK.lock().unwrap();
+        std::env::set_var("PS5UPLOAD_ENGINE_PORT", "19113");
+        let console = "127.0.0.1:9120";
+        let found: IpAddr = "192.0.2.77".parse().unwrap();
+        set_reachable_host(console, Some(found));
+        let with = engine_origin_for_ps5(console);
+        // Another console (the same machine under its name) is not given it.
+        let other = engine_origin_for_ps5("localhost:9120");
+        std::env::set_var("PS5UPLOAD_PKG_HOST_IP", "192.0.2.199");
+        let pinned = engine_origin_for_ps5(console);
+        std::env::remove_var("PS5UPLOAD_PKG_HOST_IP");
+        set_reachable_host(console, None);
+        let without = engine_origin_for_ps5(console);
+        std::env::remove_var("PS5UPLOAD_ENGINE_PORT");
+        assert_eq!(with.unwrap(), "http://192.0.2.77:19113");
+        assert_eq!(other.unwrap(), "http://127.0.0.1:19113");
+        assert_eq!(pinned.unwrap(), "http://192.0.2.199:19113");
+        assert_eq!(without.unwrap(), "http://127.0.0.1:19113");
+    }
+
     #[test]
     fn a_peer_is_compared_with_the_console_as_addresses() {
         let ip = |s: &str| s.parse::<IpAddr>().unwrap();
@@ -5118,7 +5309,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         assert!(!out.starts_with('.'));
     }
 
-    fn dummy_session(parts: Vec<(PathBuf, u64)>) -> InstallSession {
+    pub(crate) fn dummy_session(parts: Vec<(PathBuf, u64)>) -> InstallSession {
         let total: u64 = parts.iter().map(|(_, s)| s).sum();
         InstallSession {
             id: "test".into(),
@@ -5153,6 +5344,44 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
             shared_link: false,
             shared_any: false,
         }
+    }
+
+    /// A package is "being installed from" while a session that has not ended was fetched
+    /// from (or asked about) lately, and for as long as it is shared as a link: `serving`
+    /// keeps a rename off it (`pkg_name_api`). Another package's session never does.
+    #[test]
+    fn serving_names_the_session_that_reads_a_package() {
+        let dir = std::env::temp_dir().join(format!("ps5upload-serving-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a.pkg"), dir.join("b.pkg"));
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
+        let state = PkgInstallState::default();
+        let put = |change: &dyn Fn(&mut InstallSession)| {
+            let mut s = dummy_session(vec![(a.clone(), 1)]);
+            change(&mut s);
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.clear();
+            sessions.insert("s".into(), s);
+        };
+        assert_eq!(serving(&state, &a), None, "no session at all");
+        put(&|_| {});
+        assert!(serving(&state, &a).unwrap().contains("installing from"));
+        assert_eq!(serving(&state, &b), None, "another package");
+        // The same file by another spelling of its path.
+        assert!(serving(&state, &dir.join(".").join("a.pkg")).is_some());
+        put(&|s| s.cancelled = true);
+        assert_eq!(serving(&state, &a), None, "stopped");
+        put(&|s| s.last_activity_unix = now_unix() - RIVAL_ACTIVE_WINDOW_SEC - 1);
+        assert_eq!(serving(&state, &a), None, "nothing fetched it lately");
+        put(&|s| {
+            s.shared_link = true;
+            s.last_activity_unix = 0;
+        });
+        assert!(serving(&state, &a)
+            .unwrap()
+            .contains("shared as an install link"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A long install must not be reaped while the console is still pulling.

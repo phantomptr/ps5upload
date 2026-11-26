@@ -155,10 +155,15 @@ Anything touching real transfer behaviour still needs hardware — see
   network, a VPN or a virtual adapter that address is one the PS5 cannot
   reach. `PS5UPLOAD_PKG_HOST_IP` pins the LAN IP the console is given (publish
   port 19113 when the engine is in a container; `compose.yaml` uses host
-  networking instead). Every stream-unreachable failure — the pre-install
-  reach check, a Sony refusal before any byte was fetched, and an accepted
-  install the console never fetched from — ends in `install/mod.rs`
-  `stream_unreachable_hint_for`, which names this variable.
+  networking instead). Before a stream is handed over, the helper is asked to
+  connect to that address (`install/reach.rs`): if it cannot, this computer's
+  other addresses on the console's network are tried, and if none answers the
+  install fails at once instead of waiting on Sony. A console that is handed
+  the link and makes no request in 120 s fails the same way. Every
+  stream-unreachable failure — the reach check, the 120 s watchdog, a Sony
+  refusal before any byte was fetched, and an accepted install the console
+  never fetched from — names this variable in its hint, and the first two
+  also carry the facts in the status's `reach` field.
 
 ## Where the web UI's file browser opens (`PS5UPLOAD_BROWSE_ROOTS`)
 

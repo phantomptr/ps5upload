@@ -517,17 +517,68 @@ struct OkResult {
     err_code: u32,
 }
 
+/// The longest name a console user (and the account slot that carries it) can have, in UTF-8
+/// BYTES: the registry's `user_name` field is 17 bytes, the last one the NUL. Keep in sync with
+/// `PROFILE_NAME_BYTES_MAX` in payload/include/profile.h.
+pub const USER_NAME_MAX_BYTES: usize = 16;
+
+/// Why `name` cannot be a user's name, or `Ok`. Checked before anything is sent: a name that does
+/// not fit is refused whole, never cut (a cut could split a letter).
+pub fn check_user_name(name: &str) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("the name is empty".to_string());
+    }
+    if name.chars().any(char::is_control) {
+        return Err("the name has a character the PS5 does not accept".to_string());
+    }
+    if name.len() > USER_NAME_MAX_BYTES {
+        return Err(format!(
+            "the name is too long: the PS5 keeps {USER_NAME_MAX_BYTES} bytes and this one is {} \
+             (accented and non-Latin letters take 2 or more each)",
+            name.len()
+        ));
+    }
+    Ok(())
+}
+
+/// What a failed registry write means, from the code the helper sent back: the helper's own
+/// (0xE0003xxx) or Sony's. Only codes whose meaning is known get words; the rest stay a number,
+/// with no guess about the cause (#940: every failure used to be blamed on missing privileges).
+pub fn registry_err_text(err_code: u32) -> String {
+    use crate::sys_time::{
+        SYS_REGISTRY_ERR_NO_SYMBOL, SYS_REGISTRY_ERR_NULL_ARG, SYS_REGISTRY_ERR_VALUE_TOO_LONG,
+    };
+    match err_code {
+        SYS_REGISTRY_ERR_VALUE_TOO_LONG => format!(
+            "the name is too long: the PS5 keeps {USER_NAME_MAX_BYTES} bytes \
+             (accented and non-Latin letters take 2 or more each)"
+        ),
+        SYS_REGISTRY_ERR_NULL_ARG => "the slot number or the name is missing".to_string(),
+        SYS_REGISTRY_ERR_NO_SYMBOL => {
+            "this firmware does not give the helper the registry call it needs".to_string()
+        }
+        // SCE_REGMGR_ERROR_PRM_SIZE
+        0x800D_0208 => "the console refused the size of the value (registry error 0x800D0208). \
+                        Update the helper on the PS5 and try again"
+            .to_string(),
+        // SCE_REGMGR_ERROR_PRM_REGID
+        0x800D_0203 => {
+            "this firmware has no such registry entry (registry error 0x800D0203)".to_string()
+        }
+        c => format!("the console refused the change (registry error 0x{c:08X})"),
+    }
+}
+
 /// Rename an offline-account name slot (1-based).
 pub fn profile_set_username(addr: &str, slot: i32, name: &str) -> Result<()> {
+    if let Err(why) = check_user_name(name) {
+        bail!("{why}");
+    }
     let body = serde_json::to_vec(&serde_json::json!({ "slot": slot, "name": name }))?;
     let resp = round_trip_body(addr, m::PROFILE_SET_USERNAME, &body, "PROFILE_SET_USERNAME")?;
     let r: OkResult = serde_json::from_slice(&resp)?;
     if !r.ok {
-        bail!(
-            "rename rejected by the console (registry err_code 0x{:08X}) — \
-             needs a ucred-elevated payload",
-            r.err_code
-        );
+        bail!("could not rename: {}", registry_err_text(r.err_code));
     }
     Ok(())
 }
@@ -555,6 +606,9 @@ pub struct Activated {
 /// [`ProfileInfo::users`]). Distinct from [`profile_set_username`], which
 /// renames an offline-account registry slot.
 pub fn profile_set_local_username(addr: &str, uid: u32, name: &str) -> Result<()> {
+    if let Err(why) = check_user_name(name) {
+        bail!("{why}");
+    }
     let body = serde_json::to_vec(&serde_json::json!({ "uid": uid, "name": name }))?;
     let resp = round_trip_body(
         addr,
@@ -566,8 +620,8 @@ pub fn profile_set_local_username(addr: &str, uid: u32, name: &str) -> Result<()
     if !r.ok {
         bail!(
             "the console rejected the rename — sceUserServiceSetUserName \
-             isn't available on this firmware, or the name is invalid \
-             (max 16 chars, no control characters)"
+             isn't available on this firmware, or the console does not \
+             accept this name"
         );
     }
     Ok(())
@@ -1088,6 +1142,53 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&j).unwrap();
         assert_eq!(v["firstName"], "Daisy");
         assert_eq!(v["isOfficiallyVerified"], "true");
+    }
+
+    #[test]
+    fn user_name_limit_is_bytes_and_never_cuts() {
+        assert!(check_user_name("david").is_ok());
+        assert!(check_user_name("0123456789abcdef").is_ok());
+        assert!(check_user_name("0123456789abcdefg").is_err());
+        // Eight 2-byte letters fit; six 3-byte ones are 18 bytes though only 6 letters.
+        assert!(check_user_name("éééééééé").is_ok());
+        let e = check_user_name("日本語日本語").unwrap_err();
+        assert!(e.contains("too long") && e.contains("18"), "{e}");
+        assert!(check_user_name("").is_err());
+        assert!(check_user_name("   ").is_err());
+        assert!(check_user_name("a\nb").is_err());
+        // Nothing is sent for a bad name: the address is never dialled.
+        let e = profile_set_username("127.0.0.1:1", 1, "0123456789abcdefg").unwrap_err();
+        assert!(format!("{e:#}").contains("too long"));
+        let e = profile_set_local_username("127.0.0.1:1", 7, "日本語日本語").unwrap_err();
+        assert!(format!("{e:#}").contains("too long"));
+    }
+
+    #[test]
+    fn registry_errors_say_what_is_known_and_no_more() {
+        // #940: a size rejection is not a privilege problem.
+        let size = registry_err_text(0x800D_0208);
+        assert!(
+            size.contains("size") && size.contains("0x800D0208"),
+            "{size}"
+        );
+        assert!(registry_err_text(0x800D_0203).contains("no such registry entry"));
+        assert!(
+            registry_err_text(crate::sys_time::SYS_REGISTRY_ERR_VALUE_TOO_LONG)
+                .contains("too long")
+        );
+        let unknown = registry_err_text(0x800D_0299);
+        assert!(unknown.contains("0x800D0299"), "{unknown}");
+        for code in [
+            0x800D_0208,
+            0x800D_0203,
+            0x800D_0299,
+            0xE000_3001,
+            0xE000_3002,
+            0,
+        ] {
+            let t = registry_err_text(code);
+            assert!(!t.contains("ucred") && !t.contains("elevated"), "{t}");
+        }
     }
 
     #[test]

@@ -23,6 +23,8 @@ use crate::transfer::{
     sevenz_decode_threads,
 };
 
+pub mod free;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchiveKind {
     Zip,
@@ -157,6 +159,7 @@ pub fn extract(
     let mut sink = Sink {
         dest,
         discard: false,
+        durable: false,
         done: 0,
         total,
         on_bytes,
@@ -185,6 +188,7 @@ pub fn test(
     let mut sink = Sink {
         dest: Path::new("."),
         discard: true,
+        durable: false,
         done: 0,
         total,
         on_bytes,
@@ -213,6 +217,9 @@ struct Sink<'a> {
     dest: &'a Path,
     /// Read and count, write nothing (a [`test`]).
     discard: bool,
+    /// Every file is flushed to the drive before it counts as written, and one that fails part
+    /// way is removed ([`free`]: the archive's own copy of it is about to go).
+    durable: bool,
     done: u64,
     total: u64,
     on_bytes: &'a mut dyn FnMut(u64, u64),
@@ -264,6 +271,19 @@ impl Sink<'_> {
     }
 
     fn file(&mut self, rel: &str, from: &mut dyn Read) -> Result<()> {
+        self.file_checked(rel, from, None, None)
+    }
+
+    /// [`Sink::file`], with the size and CRC-32 the archive lists for it (each when known)
+    /// compared with what was written. A durable sink flushes the file to the drive before it
+    /// returns, and removes a file it could not finish.
+    fn file_checked(
+        &mut self,
+        rel: &str,
+        from: &mut dyn Read,
+        size: Option<u64>,
+        crc: Option<u32>,
+    ) -> Result<()> {
         let p = host_path(self.dest, rel)?;
         let mut out = if self.discard {
             None
@@ -274,7 +294,26 @@ impl Sink<'_> {
             }
             Some(File::create(&p).with_context(|| format!("create {}", p.display()))?)
         };
+        let written = self.copy_checked(rel, from, out.as_mut(), &p, size, crc);
+        if written.is_err() && self.durable && out.is_some() {
+            drop(out);
+            let _ = std::fs::remove_file(&p);
+        }
+        written
+    }
+
+    fn copy_checked(
+        &mut self,
+        rel: &str,
+        from: &mut dyn Read,
+        mut out: Option<&mut File>,
+        p: &Path,
+        size: Option<u64>,
+        crc: Option<u32>,
+    ) -> Result<()> {
         let mut buf = vec![0u8; 1 << 20];
+        let mut hasher = crc.map(|_| crc32fast::Hasher::new());
+        let mut got = 0u64;
         loop {
             self.check_cancel()?;
             let n = match from.read(&mut buf) {
@@ -287,8 +326,25 @@ impl Sink<'_> {
                 out.write_all(&buf[..n])
                     .with_context(|| format!("write {}", p.display()))?;
             }
+            if let Some(h) = hasher.as_mut() {
+                h.update(&buf[..n]);
+            }
+            got += n as u64;
             self.done += n as u64;
             (self.on_bytes)(self.done, self.total.max(self.done));
+        }
+        if let Some(size) = size.filter(|s| *s != got) {
+            bail!("unpack {rel}: {got} bytes came out, the archive lists {size}");
+        }
+        if let (Some(h), Some(crc)) = (hasher, crc) {
+            if h.finalize() != crc {
+                bail!("unpack {rel}: its checksum does not match the archive's");
+            }
+        }
+        if self.durable {
+            if let Some(out) = out {
+                free::flush_file(out).with_context(|| format!("flush {}", p.display()))?;
+            }
         }
         Ok(())
     }
@@ -484,7 +540,13 @@ fn extract_tar(archive: &Path, sink: &mut Sink) -> Result<()> {
             self.keep(r)
         }
         fn end(&mut self) -> std::io::Result<()> {
-            self.out = None;
+            if let Some((f, p)) = self.out.take() {
+                if self.sink.durable {
+                    free::flush_file(&f).map_err(|e| {
+                        std::io::Error::new(e.kind(), format!("flush {}: {e}", p.display()))
+                    })?;
+                }
+            }
             Ok(())
         }
     }

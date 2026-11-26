@@ -168,7 +168,7 @@ test("the next game gets its own choices while one is being made", async ({ page
   // ② and ③ are open for the next game, and say so.
   await expect(main.getByTestId("next-game-note")).toHaveCount(2);
   await expect(main.locator("#fpkg-output")).toBeEnabled();
-  await choice.getByRole("radio", { name: "A package (.pkg)" }).click();
+  await choice.getByRole("radio", { name: "A fake package (FPKG, .pkg)" }).click();
 
   // A game folder goes into the queue behind the folder build.
   await main.getByRole("button", { name: "Choose folder" }).first().click();

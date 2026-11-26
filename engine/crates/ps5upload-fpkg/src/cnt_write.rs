@@ -122,7 +122,9 @@ pub const SCENARIO_LANGUAGES: [&str; 31] = [
 ///
 /// `language` narrows it to one of [`SCENARIO_LANGUAGES`], as the default and the only language
 /// supported: a game that asks PlayGo which languages it has (Battlefield 6 imports
-/// `scePlayGoGetLanguageMask`) is then told that one. An unknown code is ignored.
+/// `scePlayGoGetLanguageMask`) is then told that one. `None` (or a code that is not one of
+/// them) is the document with all 31 and `en-US` as the default, which a build writes only when
+/// asked for every language ([`ALL_LANGUAGES`]).
 pub fn playgo_scenario_json(language: Option<&str>) -> Vec<u8> {
     let chosen = language.and_then(known_language);
     let list: &[&str] = match &chosen {
@@ -137,23 +139,70 @@ fn known_language(code: &str) -> Option<&'static str> {
     SCENARIO_LANGUAGES.iter().copied().find(|k| *k == code)
 }
 
+/// The value of a build's language option that declares every language, as packages did
+/// before they kept to the game's own.
+pub const ALL_LANGUAGES: &str = "all";
+
+/// Where a game's languages were read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclaredBy {
+    /// Its own `sce_sys/playgo-scenario.json`.
+    Scenario,
+    /// The language mask of its own `sce_sys/playgo-chunk.dat`.
+    ChunkTable,
+    /// Neither names a language: all of them, starting in the default language of its `param.json`.
+    ParamDefault,
+    /// Nothing names a language at all: all of them, starting in `en-US`.
+    Nothing,
+}
+
 /// The languages a game ships with and the one it starts in, as the game itself declares them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GameLanguages {
     pub supported: Vec<&'static str>,
     pub default: &'static str,
+    pub declared_by: DeclaredBy,
 }
 
-/// The game's own languages, so a package keeps them rather than a made-up set.
+/// The languages `mask` names ([`crate::playgo::language_mask`]), in [`SCENARIO_LANGUAGES`]'
+/// order. Empty for a mask with every bit set: that one names no language in particular.
+pub fn languages_of_mask(mask: u64) -> Vec<&'static str> {
+    if mask == u64::MAX {
+        return Vec::new();
+    }
+    SCENARIO_LANGUAGES
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| mask & (1u64 << (63 - i)) != 0)
+        .map(|(_, l)| *l)
+        .collect()
+}
+
+/// The game's own languages, so a package declares those and no others.
 ///
-/// A dump carries the `sce_sys/playgo-scenario.json` of the package it was installed from, but
-/// that file is one packaging generates (see `sdk_rules`), so it is never copied. Its language
-/// list and default are what the game shipped with: an EU copy declares its own languages and
-/// default, where the generated document declared all 31 (Japanese first) with `en-US` as the
-/// default. Read from that file when it names any known language; else the default language
-/// from `param.json`'s `localizedParameters` with every language supported; else `None` (the
-/// generated document, as before).
-pub fn game_languages(scenario: &[u8], param_json: &[u8]) -> Option<GameLanguages> {
+/// A dump can carry the `sce_sys/playgo-scenario.json` and `playgo-chunk.dat` of the package it
+/// was installed from. Packaging generates both (see `sdk_rules`), so neither is copied, but
+/// what they say about languages is the game's own. In order:
+///
+/// 1. the scenario's language list and default, when it names a known language;
+/// 2. the languages in the chunk table's mask (`chunk_dat`, [`languages_of_mask`]), starting in
+///    `param.json`'s default language when the mask holds it;
+/// 3. otherwise all 31, starting in `param.json`'s default language
+///    (`localizedParameters.defaultLanguage`), or in `en-US` when it names none.
+///
+/// Most dumps carry neither PlayGo file (none of ten game folders looked at had a scenario, two
+/// had a chunk table). For those the console's "Manage Game Content" may list a language pack
+/// for each of the 31 (#939); one language chosen under Game language lists none. A single
+/// language is not guessed for them, as a game that asks PlayGo for its language mask would be
+/// locked to it. The languages `param.json` gives the title a name in are not used for this: a
+/// game with thirty of those was seen with a chunk table and scenario of `en-US` alone.
+pub fn game_languages(scenario: &[u8], chunk_dat: &[u8], param_json: &[u8]) -> GameLanguages {
+    let param_default = crate::source::parse_param_json(param_json).and_then(|p| {
+        p.get("localizedParameters")?
+            .get("defaultLanguage")?
+            .as_str()
+            .and_then(known_language)
+    });
     if let Some(v) = crate::source::parse_param_json(scenario) {
         let mut supported: Vec<&'static str> = Vec::new();
         let listed = v.get("chunkSupportedLanguages").and_then(|a| a.as_array());
@@ -170,19 +219,40 @@ pub fn game_languages(scenario: &[u8], param_json: &[u8]) -> Option<GameLanguage
                 .filter_map(|key| v.get(*key)?.as_str().and_then(known_language))
                 .find(|d| supported.contains(d))
                 .unwrap_or(first);
-            return Some(GameLanguages { supported, default });
+            return GameLanguages {
+                supported,
+                default,
+                declared_by: DeclaredBy::Scenario,
+            };
         }
     }
-    let param = crate::source::parse_param_json(param_json)?;
-    let default = param
-        .get("localizedParameters")?
-        .get("defaultLanguage")?
-        .as_str()
-        .and_then(known_language)?;
-    Some(GameLanguages {
+    let masked = crate::playgo::language_mask(chunk_dat)
+        .map(languages_of_mask)
+        .unwrap_or_default();
+    if let Some(first) = masked.first().copied() {
+        let default = param_default
+            .filter(|d| masked.contains(d))
+            .unwrap_or(first);
+        return GameLanguages {
+            supported: masked,
+            default,
+            declared_by: DeclaredBy::ChunkTable,
+        };
+    }
+    // Nothing in the game names its languages. All 31 then, starting in the game's default: a
+    // game that asks PlayGo which languages it may use (some do) keeps every one it has. One
+    // language alone here would lock such a game to it, and that can't be told from the files.
+    // The cost is known (#939): the console may list a language pack for each; choosing one
+    // language under Game language avoids that.
+    GameLanguages {
         supported: SCENARIO_LANGUAGES.to_vec(),
-        default,
-    })
+        default: param_default.unwrap_or("en-US"),
+        declared_by: if param_default.is_some() {
+            DeclaredBy::ParamDefault
+        } else {
+            DeclaredBy::Nothing
+        },
+    }
 }
 
 /// The scenario document supporting `list`, starting in `default`.
@@ -203,17 +273,30 @@ fn scenario_json(list: &[&str], default: &str) -> Vec<u8> {
     .into_bytes()
 }
 
-/// The PlayGo scenario entry; see [`playgo_scenario_json`]. A language chosen for the package
-/// wins; without one, the game's own languages (`game`, see [`game_languages`]) when known.
-pub fn playgo_scenario_extra(language: Option<&str>, game: Option<&GameLanguages>) -> ExtraEntry {
-    let data = match (language.and_then(known_language), game) {
-        (None, Some(g)) => scenario_json(&g.supported, g.default),
-        _ => playgo_scenario_json(language),
-    };
+/// The languages a package declares: `language` when it is one of [`SCENARIO_LANGUAGES`] (that
+/// one alone), all 31 starting in the game's default when it is [`ALL_LANGUAGES`], and otherwise
+/// the game's own (`game`, see [`game_languages`]) exactly.
+pub fn declared_languages(
+    language: Option<&str>,
+    game: &GameLanguages,
+) -> (Vec<&'static str>, &'static str) {
+    match language {
+        Some(ALL_LANGUAGES) => (SCENARIO_LANGUAGES.to_vec(), game.default),
+        Some(code) => match known_language(code) {
+            Some(one) => (vec![one], one),
+            None => (game.supported.clone(), game.default),
+        },
+        None => (game.supported.clone(), game.default),
+    }
+}
+
+/// The PlayGo scenario entry; see [`playgo_scenario_json`] and [`declared_languages`].
+pub fn playgo_scenario_extra(language: Option<&str>, game: &GameLanguages) -> ExtraEntry {
+    let (supported, default) = declared_languages(language, game);
     ExtraEntry {
         id: crate::cnt::ids::PLAYGO_SCENARIO_JSON,
         name: "playgo-scenario.json",
-        data,
+        data: scenario_json(&supported, default),
         key_index: None,
     }
 }
@@ -995,6 +1078,23 @@ mod tests {
         );
     }
 
+    /// The scenario a package of `game` carries with `language` chosen (`None`: nothing).
+    fn declared(language: Option<&str>, game: &GameLanguages) -> serde_json::Value {
+        serde_json::from_slice(&playgo_scenario_extra(language, game).data).unwrap()
+    }
+
+    /// A chunk table as a dump carries it, supporting the languages in `mask`.
+    fn chunk_table(mask: u64) -> Vec<u8> {
+        let mut d = crate::playgo::chunk_dat(
+            "UP0000-PPSA01234_00-TESTGAME00000000",
+            &[vec![0]],
+            &[(0, 0x10000)],
+            false,
+        );
+        d[0x38..0x40].copy_from_slice(&mask.to_le_bytes());
+        d
+    }
+
     /// An EU dump's own scenario: the package keeps its languages and default (Discord report:
     /// an EU game converted from an image came up in Japanese, the package having declared all
     /// 31 languages, Japanese first, with en-US as the default).
@@ -1002,11 +1102,12 @@ mod tests {
     fn the_games_own_languages_are_kept() {
         let own = br#"{"scenarioCount":1,"scenarioDefaultId":0,"scenarioDefaultLanguage":"en-GB","scenarios":[{"id":0,"type":"playmode"}],"chunkDefaultLanguage":"en-GB","chunkSupportedLanguages":["en-GB","fr-FR","de-DE","xx-XX","fr-FR"]}"#;
         let param = br#"{"localizedParameters":{"defaultLanguage":"en-US"}}"#;
-        let game = game_languages(own, param).unwrap();
+        // Its scenario wins over a chunk table that says something else.
+        let game = game_languages(own, &chunk_table(0x4000_0000_0000_0000), param);
         assert_eq!(game.supported, ["en-GB", "fr-FR", "de-DE"]);
         assert_eq!(game.default, "en-GB");
-        let v: serde_json::Value =
-            serde_json::from_slice(&playgo_scenario_extra(None, Some(&game)).data).unwrap();
+        assert_eq!(game.declared_by, DeclaredBy::Scenario);
+        let v = declared(None, &game);
         assert_eq!(v["scenarioDefaultLanguage"], "en-GB");
         assert_eq!(v["chunkDefaultLanguage"], "en-GB");
         assert_eq!(
@@ -1015,31 +1116,117 @@ mod tests {
         );
         assert!(v["scenarios"][0].get("ja-JP").is_none());
         // A language chosen for the package still wins.
-        let chosen: serde_json::Value =
-            serde_json::from_slice(&playgo_scenario_extra(Some("de-DE"), Some(&game)).data)
-                .unwrap();
+        let chosen = declared(Some("de-DE"), &game);
         assert_eq!(
             chosen["chunkSupportedLanguages"],
             serde_json::json!(["de-DE"])
         );
         // A default the game's list doesn't hold falls back to its first language.
         let odd = br#"{"chunkDefaultLanguage":"ja-JP","chunkSupportedLanguages":["fr-FR"]}"#;
-        assert_eq!(game_languages(odd, b"").unwrap().default, "fr-FR");
+        assert_eq!(game_languages(odd, b"", b"").default, "fr-FR");
     }
 
-    /// No scenario of its own: `param.json`'s default language with every language, and with
-    /// neither, the document LibProsperoPkg writes, as before.
+    /// A game that declares one language (its chunk table's mask, as read out of a real dump:
+    /// `0x4000_0000_0000_0000` is `en-US`): the package declares that one, not 31 (#939).
     #[test]
-    fn without_a_scenario_the_param_default_or_the_reference() {
-        let param =
-            br#"{"localizedParameters":{"defaultLanguage":"en-GB","en-GB":{"titleName":"X"}}}"#;
-        let game = game_languages(b"", param).unwrap();
-        assert_eq!(game.supported.len(), 31);
-        assert_eq!(game.default, "en-GB");
-        assert!(game_languages(b"", b"{}").is_none());
-        assert!(game_languages(br#"{"chunkSupportedLanguages":[]}"#, b"not json").is_none());
+    fn a_game_with_one_language_declares_that_one() {
+        let param = br#"{"localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"X"},"ja-JP":{"titleName":"Y"}}}"#;
+        let game = game_languages(b"", &chunk_table(0x4000_0000_0000_0000), param);
+        assert_eq!(game.supported, ["en-US"]);
+        assert_eq!(game.default, "en-US");
+        assert_eq!(game.declared_by, DeclaredBy::ChunkTable);
+        let v = declared(None, &game);
+        assert_eq!(v["chunkSupportedLanguages"], serde_json::json!(["en-US"]));
+        assert_eq!(v["chunkDefaultLanguage"], "en-US");
+        assert_eq!(v["scenarioDefaultLanguage"], "en-US");
+        let named: Vec<&String> = v["scenarios"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .filter(|k| k.contains('-'))
+            .collect();
+        assert_eq!(named, ["en-US"]);
+    }
+
+    /// A game that declares several: exactly those, starting in `param.json`'s default when
+    /// the game has it, else in the first. The mask of a real package with all 31
+    /// (`0xFFFF_FFFE_0000_0000`) reads as the 31.
+    #[test]
+    fn a_game_with_several_languages_declares_those() {
+        // ja-JP (bit 63), en-US (62), fr-FR (61) and de-DE (59).
+        let mask = 0xE800_0000_0000_0000u64;
+        let param = br#"{"localizedParameters":{"defaultLanguage":"fr-FR"}}"#;
+        let game = game_languages(b"", &chunk_table(mask), param);
+        assert_eq!(game.supported, ["ja-JP", "en-US", "fr-FR", "de-DE"]);
+        assert_eq!(game.default, "fr-FR");
+        let v = declared(None, &game);
         assert_eq!(
-            playgo_scenario_extra(None, None).data,
+            v["chunkSupportedLanguages"],
+            serde_json::json!(["ja-JP", "en-US", "fr-FR", "de-DE"])
+        );
+        assert_eq!(v["chunkDefaultLanguage"], "fr-FR");
+        // The default is not one of them: the first.
+        let other = br#"{"localizedParameters":{"defaultLanguage":"ko-KR"}}"#;
+        assert_eq!(
+            game_languages(b"", &chunk_table(mask), other).default,
+            "ja-JP"
+        );
+        assert_eq!(
+            languages_of_mask(0xFFFF_FFFE_0000_0000),
+            SCENARIO_LANGUAGES.to_vec()
+        );
+        // The last language is the lowest bit used; nothing below it names one.
+        assert_eq!(languages_of_mask(1 << 33), ["uk-UA"]);
+        assert!(languages_of_mask(0xFFFF_FFFF).is_empty());
+    }
+
+    /// A game that declares none (no PlayGo file of its own, or a chunk table with every bit
+    /// set, which names no language): all 31, starting in its `param.json` default or in
+    /// `en-US`. One language is never guessed for it (a game that asks PlayGo for its languages
+    /// would be locked to that one), and the languages `param.json` names the title in are not
+    /// used either.
+    #[test]
+    fn a_game_that_declares_no_languages_keeps_them_all() {
+        let param = br#"{"localizedParameters":{"defaultLanguage":"en-GB","en-GB":{"titleName":"X"},"fr-FR":{"titleName":"Y"},"de-DE":{"titleName":"Z"}}}"#;
+        for chunk in [Vec::new(), chunk_table(u64::MAX), b"not a table".to_vec()] {
+            let game = game_languages(b"", &chunk, param);
+            assert_eq!(game.supported, SCENARIO_LANGUAGES.to_vec());
+            assert_eq!(game.default, "en-GB");
+            assert_eq!(game.declared_by, DeclaredBy::ParamDefault);
+            let v = declared(None, &game);
+            assert_eq!(v["chunkSupportedLanguages"].as_array().unwrap().len(), 31);
+            assert_eq!(v["chunkDefaultLanguage"], "en-GB");
+        }
+        for param in [&b"{}"[..], b"not json", b""] {
+            let game = game_languages(br#"{"chunkSupportedLanguages":[]}"#, b"", param);
+            assert_eq!(game.supported, SCENARIO_LANGUAGES.to_vec());
+            assert_eq!(game.default, "en-US");
+            assert_eq!(game.declared_by, DeclaredBy::Nothing);
+        }
+    }
+
+    /// The language option changes only what was asked: one language is that one alone, "all"
+    /// is the 31 starting in the game's own default, and a code that is no language leaves the
+    /// game's own.
+    #[test]
+    fn the_language_option_changes_only_what_was_asked() {
+        let param = br#"{"localizedParameters":{"defaultLanguage":"en-GB"}}"#;
+        let game = game_languages(b"", &chunk_table(0x6000_0000_0000_0000), param);
+        assert_eq!(game.supported, ["en-US", "fr-FR"]);
+        let one = declared(Some("ko-KR"), &game);
+        assert_eq!(one["chunkSupportedLanguages"], serde_json::json!(["ko-KR"]));
+        assert_eq!(one["chunkDefaultLanguage"], "ko-KR");
+        assert_eq!(one["scenarioDefaultLanguage"], "ko-KR");
+        let all = declared(Some(ALL_LANGUAGES), &game);
+        assert_eq!(all["chunkSupportedLanguages"].as_array().unwrap().len(), 31);
+        assert_eq!(all["chunkDefaultLanguage"], "en-US");
+        let unknown = declared(Some("xx-XX"), &game);
+        assert_eq!(unknown, declared(None, &game));
+        // With nothing declared and every language asked for: the document packages used to
+        // carry, byte for byte.
+        let nothing = game_languages(b"", b"", b"");
+        assert_eq!(
+            playgo_scenario_extra(Some(ALL_LANGUAGES), &nothing).data,
             playgo_scenario_json(None)
         );
     }

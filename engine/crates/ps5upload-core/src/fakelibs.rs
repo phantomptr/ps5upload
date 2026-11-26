@@ -107,7 +107,8 @@ fn declared_end(head: &[u8]) -> Option<u64> {
     let phentsize = u16le(head, 0x36)? as usize;
     for i in 0..u16le(head, 0x38)? as usize {
         let at = phoff.checked_add(i.checked_mul(phentsize)?)?;
-        end = end.max(u64le(head, at + 8)?.saturating_add(u64le(head, at + 0x20)?));
+        let (offset, size) = (at.checked_add(8)?, at.checked_add(0x20)?);
+        end = end.max(u64le(head, offset)?.saturating_add(u64le(head, size)?));
     }
     Some(end)
 }
@@ -154,8 +155,14 @@ pub fn param_site(data: &[u8]) -> Option<usize> {
     let phnum = u16le(elf, 0x38)? as usize;
     let mut headers = Vec::with_capacity(phnum);
     for i in 0..phnum {
+        // Every sum of a field from the file is checked: these are a scanned or imported
+        // library's own bytes, and a header near the top of the address range overflowed.
         let at = phoff.checked_add(i * phentsize)?;
-        headers.push((u32le(elf, at)?, u64le(elf, at + 8)?, u64le(elf, at + 0x20)?));
+        headers.push((
+            u32le(elf, at)?,
+            u64le(elf, at.checked_add(8)?)?,
+            u64le(elf, at.checked_add(0x20)?)?,
+        ));
     }
     for (i, &(ptype, off, filesz)) in headers.iter().enumerate() {
         if ptype != PT_SCE_PROCPARAM && ptype != PT_SCE_MODULEPARAM {
@@ -164,20 +171,27 @@ pub fn param_site(data: &[u8]) -> Option<usize> {
         let mut site = entries
             .iter()
             .find(|&&(id, _, sz)| id as usize == i && sz == filesz)
-            .map(|&(_, o, _)| o as usize);
+            .and_then(|&(_, o, _)| usize::try_from(o).ok());
         if site.is_none() && base == 0 {
-            site = Some(off as usize);
+            site = usize::try_from(off).ok();
         }
         if site.is_none() {
             // A param segment often has no entry of its own and must be reached
             // through the PT_LOAD that contains it.
             for (j, &(t2, off2, sz2)) in headers.iter().enumerate() {
-                if t2 == 1 && off2 <= off && off + 0x18 <= off2 + sz2 {
+                let inside = off2 <= off
+                    && off
+                        .checked_add(0x18)
+                        .zip(off2.checked_add(sz2))
+                        .is_some_and(|(end, load_end)| end <= load_end);
+                if t2 == 1 && inside {
                     if let Some(&(_, o, _)) = entries
                         .iter()
                         .find(|&&(id, _, sz)| id as usize == j && sz == sz2)
                     {
-                        site = Some((o + (off - off2)) as usize);
+                        site = o
+                            .checked_add(off - off2)
+                            .and_then(|at| usize::try_from(at).ok());
                         break;
                     }
                 }
@@ -192,7 +206,9 @@ pub fn param_site(data: &[u8]) -> Option<usize> {
         } else {
             MOD_MAGIC
         };
-        if u32le(data, site + 8) == Some(want) {
+        // A site is only one the file holds whole (0x18 bytes): callers read at `site + 0x10`.
+        let whole = site.checked_add(0x18).is_some_and(|end| end <= data.len());
+        if whole && u32le(data, site + 8) == Some(want) {
             return Some(site);
         }
     }
@@ -1046,14 +1062,37 @@ impl Corpus {
     fn store_build(&mut self, name: &str, sha: &str, data: &[u8], set_id: &str) -> Result<()> {
         let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
         let ext = name.rsplit_once('.').map(|(_, e)| e).unwrap_or("sprx");
-        let rel = format!("builds/{stem}/{}.{ext}", &sha[..8]);
+        let builds = self
+            .manifest
+            .libraries
+            .iter()
+            .find(|e| e.name == name)
+            .map_or(&[][..], |e| e.builds.as_slice());
+        let rel = match builds.iter().find(|b| b.sha256 == sha) {
+            // A build the corpus already lists stays where it is.
+            Some(b) => b.path.clone(),
+            None => {
+                let short = format!("builds/{stem}/{}.{ext}", sha.get(..8).unwrap_or(sha));
+                // Another build of this library under the same eight characters keeps its
+                // file: this one goes under its whole digest.
+                if builds.iter().any(|b| b.path == short) {
+                    format!("builds/{stem}/{sha}.{ext}")
+                } else {
+                    short
+                }
+            }
+        };
         let abs = self.root.join(&rel);
-        if !abs.exists() {
+        // "It exists" is not "it is this build": a write that a full disk or a crash cut short
+        // left a short file under the name, and every later scan then listed the build whole
+        // (size and digest from the incoming bytes) over that short file. What is on disk is
+        // compared, and written through a temporary name when it is not the build.
+        if !std::fs::read(&abs).is_ok_and(|have| have == data) {
             if let Some(dir) = abs.parent() {
                 std::fs::create_dir_all(dir)
                     .with_context(|| format!("creating {}", dir.display()))?;
             }
-            std::fs::write(&abs, data).with_context(|| format!("writing {}", abs.display()))?;
+            write_whole(&abs, data).with_context(|| format!("writing {}", abs.display()))?;
         }
         let entry = match self.manifest.libraries.iter_mut().find(|e| e.name == name) {
             Some(e) => e,
@@ -1182,6 +1221,40 @@ mod tests {
         assert!(!looks_backported((0x1209_0001, 0x1000_0040)));
         // Not a Sony pair at all.
         assert!(!looks_backported((0xDEAD_BEEF, 0x1234_5678)));
+    }
+
+    /// A library whose header fields sit at the top of the number range (a scanned or imported
+    /// file's own bytes) is read as "no such segment", not added up past the range.
+    #[test]
+    fn header_fields_at_the_top_of_the_range_do_not_overflow() {
+        // An ELF whose program headers "start" four bytes before the end of the range.
+        let mut elf = vec![0u8; 0x100];
+        elf[..4].copy_from_slice(b"\x7fELF");
+        elf[0x20..0x28].copy_from_slice(&(u64::MAX - 4).to_le_bytes());
+        elf[0x36..0x38].copy_from_slice(&0x38u16.to_le_bytes());
+        elf[0x38..0x3a].copy_from_slice(&1u16.to_le_bytes());
+        assert_eq!(declared_end(&elf), None);
+        assert_eq!(param_site(&elf), None);
+        assert_eq!(sdk_pair(&elf), None);
+        let _ = code_id(&elf);
+
+        // A param segment whose offset and its PT_LOAD's size end past the range.
+        let mut elf = vec![0u8; 0x200];
+        elf[..4].copy_from_slice(b"\x7fELF");
+        elf[0x20..0x28].copy_from_slice(&0x40u64.to_le_bytes());
+        elf[0x36..0x38].copy_from_slice(&0x38u16.to_le_bytes());
+        elf[0x38..0x3a].copy_from_slice(&2u16.to_le_bytes());
+        let mut header = |i: usize, ptype: u32, offset: u64, size: u64| {
+            let at = 0x40 + i * 0x38;
+            elf[at..at + 4].copy_from_slice(&ptype.to_le_bytes());
+            elf[at + 8..at + 16].copy_from_slice(&offset.to_le_bytes());
+            elf[at + 0x20..at + 0x28].copy_from_slice(&size.to_le_bytes());
+        };
+        header(0, PT_SCE_MODULEPARAM, u64::MAX - 4, 0x20);
+        header(1, 1, u64::MAX - 8, 0x40);
+        assert_eq!(param_site(&elf), None);
+        assert_eq!(sdk_pair(&elf), None);
+        let _ = code_id(&elf);
     }
 
     #[test]
@@ -1617,6 +1690,47 @@ mod tests {
             reopened.manifest().libraries[0].builds[0].sdk,
             Some([0x0904_0001, 0x0400_0031])
         );
+    }
+
+    /// A library file a full disk or a crash cut short stays under its name. The next scan of
+    /// the same library found a file there and wrote nothing, listing the build whole over the
+    /// short file. What is on disk is now compared, and written again when it is not the build.
+    #[test]
+    fn a_build_cut_short_on_disk_is_written_again() {
+        let dir = tempdir();
+        let whole = self_with((0x0904_0001, 0x0400_0031), 0xAA, 0x11);
+        let origin = || Origin::Import {
+            source: "pack.zip".into(),
+            at: "2026-09-09T00:00:00Z".into(),
+        };
+        // Where the build goes, learned from a corpus elsewhere.
+        let elsewhere = tempdir();
+        let mut c = Corpus::open(&elsewhere);
+        c.add_set(
+            "first",
+            origin(),
+            vec![incoming("libSceAgc.sprx", whole.clone())],
+        )
+        .unwrap();
+        let rel = c.manifest().libraries[0].builds[0].path.clone();
+        assert!(std::fs::read(elsewhere.join(&rel)).unwrap() == whole);
+        // Here the file is cut short and no manifest lists it: what a write that failed
+        // half way leaves (the manifest is only written once every library is stored).
+        let path = dir.join(&rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &whole[..whole.len() / 2]).unwrap();
+        let mut c = Corpus::open(&dir);
+        c.add_set(
+            "again",
+            origin(),
+            vec![incoming("libSceAgc.sprx", whole.clone())],
+        )
+        .unwrap();
+        assert!(
+            std::fs::read(&path).unwrap() == whole,
+            "the short file was left as the build"
+        );
+        assert_eq!(c.manifest().libraries[0].builds.len(), 1);
     }
 
     /// A directory unique to this call. An earlier version keyed on pid plus

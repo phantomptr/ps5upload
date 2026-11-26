@@ -7,6 +7,8 @@ export interface StreamFailFacts {
   sourceKind?: string;
   install?: { via?: string; source?: string } | null;
   error?: string | null;
+  /** The engine said the PS5 could not reach this computer (in whatever language `error` is). */
+  streamUnreachable?: boolean;
 }
 
 /**
@@ -31,6 +33,6 @@ export function streamInstallFailHelp(item: StreamFailFacts): {
     !isRemotePath(item.install.source);
   return {
     retryViaUpload: localStream,
-    hint: localStream && !isStreamUnreachableError(item.error),
+    hint: localStream && !item.streamUnreachable && !isStreamUnreachableError(item.error),
   };
 }

@@ -112,6 +112,11 @@ export function humanizePs5Error(
     }
   }
 
+  // A folder whose title ID the helper will not put on the home screen (install_guard.h): one of
+  // the console's own apps, or no title ID at all.
+  if (/register_system_title/.test(raw)) return te("err_register_system_title");
+  if (/register_title_id_unsafe/.test(raw)) return te("err_register_title_id_unsafe");
+
   // ─── Remote Play pairing ───────────────────────────────────────────
   // The console refused the registration with "a pairing is pending" (rp_regist.rs), also when
   // Enable Remote Play on its own screen is not on, whatever the registry says: unpairing and

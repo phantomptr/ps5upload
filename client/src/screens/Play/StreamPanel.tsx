@@ -1343,7 +1343,9 @@ export function StreamPanel({
           {playing && kbm.pointerHeld && prefs.kbmChip && !settingsOpen && !pip && !kbm.hint && (
             <KbmReleaseChip low={showBar && !compact} />
           )}
-          {playing && kbm.hint && !settingsOpen && !pip && (
+          {/* Not under a friend's request to join (JoinAsks), which sits over the same spot: the
+              card shows once that is answered. */}
+          {playing && kbm.hint && !settingsOpen && !pip && joinHost.asks.length === 0 && (
             <KbmCaptureCard
               key={kbm.hint.n}
               reason={kbm.hint.reason}

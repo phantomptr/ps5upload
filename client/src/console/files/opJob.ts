@@ -44,7 +44,10 @@ const defaultDeps: OpDeps = {
 /** POST `route` {path, …} and return the job it started. */
 export async function startOp(
   route: "/api/fs/hash" | "/api/fs/crc32" | "/api/fs/unpack" | "/api/fs/extract" | "/api/convert/inspect" | "/api/convert/start",
-  body: { path: string; name?: string } | ExtractBody | { path: string; dest: string; format: string; zstd: boolean; zstd_level?: number; verify: string },
+  body:
+    | { path: string; name?: string }
+    | ExtractBody
+    | { path: string; dest: string; format: string; zstd: boolean; zstd_level?: number; verify: string; unpack_packs?: true; leave_out_ampr_emu?: true },
 ): Promise<string> {
   const r = await call<{ job?: unknown }>(route, body);
   if (!r || typeof r.job !== "string") throw new ApiError(500, "bad_reply");

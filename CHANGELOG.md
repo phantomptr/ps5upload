@@ -6,6 +6,64 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Upload & Install**
+- **Change a fake package's name before installing it (#937).** Pick one package and edit "Name on the PS5". The name is changed inside the package, in place, without rebuilding it, and checked afterwards. Packages signed by Sony, split packages and packages on a server are refused.
+- **Stream & install no longer sits at 0% in silence (#942).** Before it starts, the app checks that the PS5 can reach this computer. If it can't, or the PS5 never fetches any of the package, the install stops with the likely cause (most often this computer's firewall) and offers Retry via upload.
+
+**Convert**
+- **Free an archive's space while it unpacks (dangerous, off by default).** For a drive with no room for the archive and the unpacked game together. A .zip is freed file by file, a .7z block by block, and a multi-part .rar part by part; other archives are deleted once unpacked and checked. The archive is deleted for good: if anything fails on the way, you keep only what was unpacked so far. It asks every time, and it is for one game only.
+- **".pkg" now says what it is:** a fake package (FPKG).
+- **The PS5's own Convert page has the unpack options too.** For a .pkg of a packed game: unpack the asset packs, and leave out the AMPR emulator. Keeping the emulator is offered only where it is known to work with plain files.
+- **The unpack options are easy to find.** For a package, Options starts with "Asset packs and AMPR", which says what to do before a game is checked and when a game has no packs. The queue's per-game choices have them too.
+- **A package follows the game's own languages (#939).** When the game's own PlayGo data names its languages, the package declares those, not all 31. "Every language" and a single language can still be chosen.
+- **No more false "ampr_emu.index is stale" warning** when the output gets a fresh index anyway.
+
+**The PS5 helper**
+- **The app says when the helper on the PS5 is out of date (#941).** A notice on Home, a toast and the bell, with an Update helper button. It never sends by itself, and waits while a transfer, an install or a game start is running.
+
+**Games**
+- **A damaged package says so in plain words.** The copy check now reads, for example, "This file's data is damaged: 56,116 of 1,529,208 blocks don't match (3.7%, about 3.43 GB)", with what to do. The technical lines are under Details.
+
+**Payloads**
+- A search box appears once the saved list is long, and each section shows how many it lists.
+- **Fake PS5 games on firmware 11.61 to 13.60 need kstuff 1.15 or newer.** The notes now name the version instead of a date, and say the catalog's copy may be older.
+
+**Accounts**
+- **Renaming a user works again (#940).** The console refused every rename with error 0x800D0208, because the name was sent with the wrong size. Names are limited to 16 bytes, and a refusal now says why instead of blaming missing privileges.
+
+**Files and the phone layout (#936)**
+- **Selecting no longer moves the rows.** On a phone the tick box appears at the end of the row, where ⋮ was.
+- **One short top bar.** On Android phones the back and forward arrows are gone (the system Back does that) and the bar is shorter; in Files the bell moves into the Files bar. iPhones keep the arrows.
+- **The bottom More menu has every action** the row's ⋮ has when one item is selected.
+
+**Save Data**
+- **Backup times on the console's own page are right (#928).** They showed three hours off for some time zones.
+- **Restoring a "before restore" backup can no longer delete that same backup.**
+- Copying an emulator save to a console that has no folder for it yet now works.
+
+**Fixes found in an audit**
+- A finished Convert output that could not be renamed at the end is no longer deleted when you start the same build again.
+- A folder upload from an SFTP or FTP server sends linked files whole, not their first few bytes.
+- Two downloads of the same file into one folder can no longer delete the finished copy.
+- Damaged or crafted packages and images are refused instead of crashing the engine or filling the disk. Extracting from an .ffpkg refuses a path with ".." in it.
+- A game folder whose ID belongs to a system app can no longer be registered over that app.
+- The shell's recursive chmod no longer follows links out of the folder.
+- A cancelled Remote Play PIN stops working on the console right away.
+- An image mounted at a long or oddly written path can be listed and unmounted again.
+- Notifications saved on the console read back correctly after a restart.
+
+**Look and wording**
+- Clipped labels fixed on phones and in long languages (bottom tabs, Files selection bar, Workshop choices, "1 copy" on game cards, the sidebar in German).
+- Arabic and Persian: paths, names and sizes keep their order.
+- A partial backup restore shows as a warning, not a success. Small close buttons are easier to hit.
+- Counts read right for one item ("Checks passed: 1").
+- Translations of the newest texts were reviewed in all 21 languages.
+
+**Website**
+- New screenshots from a made-up console with invented games, and the pages, README and FAQ cover the last ten releases.
+
+## 12.6.30
+
 **Files on phones**
 - **Back closes what's open first (#932).** On Android, Back used to leave Files even with a menu open. Now it closes the open menu or dialog, then leaves selection, then goes up one folder, and only leaves Files at the top of a drive.
 - **More room for your files (#936).** On a phone, the top of Files is now one compact bar that stays put while you scroll: the folder name, Search, the drive switcher and ⋮ for the rest, with the path below it (beside it when the phone is sideways).

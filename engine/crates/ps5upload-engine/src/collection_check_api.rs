@@ -2,7 +2,9 @@
 //!
 //! What "checked" means depends on what the copy is, and the result says which it was:
 //! - `package`: a PS5 debug package Convert can open is verified block by block against the
-//!   digests it carries (the same check Convert runs on what it builds).
+//!   digests it carries (the same check Convert runs on what it builds). What its problems add
+//!   up to is in `damage`: data that is not what the package says (how many blocks of how
+//!   many), a file cut short, or only the package's own header information not matching.
 //! - `archive`: every entry of a `.zip` / `.7z` / `.rar` is decoded and its checksum checked.
 //! - `files`: a game folder or image has every file read back through its filesystem.
 //! - `bytes`: anything else (a retail or PS4 package, a copy on a server) is read from the first
@@ -34,6 +36,65 @@ pub struct Problem {
     /// The file inside the copy, or empty for the copy as a whole.
     pub file: String,
     pub error: String,
+    /// For a failed check of a package, what the check looks at: `data` (the game's data
+    /// blocks), `structure` (the image's own tables), `metadata` (what the package says about
+    /// itself: header, digests, install manifest) or `truncated` (the file ends early).
+    /// Absent for any other problem.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+}
+
+/// What a package's problems add up to, for a screen to say in plain words. Counts that don't
+/// belong to the `kind` are 0.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Damage {
+    /// - `data`: `blocks_bad` of the `blocks_total` data blocks (`block_bytes` each) are not
+    ///   the bytes the package's own digests say they are. The usual result of a copy or
+    ///   download that was interrupted or went wrong.
+    /// - `truncated`: the file ends early. It is `bytes_have` long and the package needs at
+    ///   least `bytes_need`; both are 0 when only the very end of the file is missing.
+    /// - `structure`: `checks_failed` checks of the image's own tables fail though no data
+    ///   block was found bad.
+    /// - `metadata`: only `checks_failed` checks of what the package says about itself fail;
+    ///   every block of the game's data is right. Seen on packages edited after they were made.
+    pub kind: String,
+    pub blocks_bad: u64,
+    pub blocks_total: u64,
+    pub block_bytes: u64,
+    pub bytes_have: u64,
+    pub bytes_need: u64,
+    pub checks_failed: u64,
+}
+
+impl Damage {
+    fn of(damage: ps5upload_fpkg::verify::Damage) -> Self {
+        use ps5upload_fpkg::verify::Damage as D;
+        let kind = |k: &str| Damage {
+            kind: k.into(),
+            ..Damage::default()
+        };
+        match damage {
+            D::Truncated { have, need } => Damage {
+                bytes_have: have,
+                bytes_need: need,
+                ..kind("truncated")
+            },
+            D::Data { bad, total } => Damage {
+                blocks_bad: bad,
+                blocks_total: total,
+                block_bytes: ps5upload_fpkg::BLOCK,
+                ..kind("data")
+            },
+            D::Structure { failed } => Damage {
+                checks_failed: failed,
+                ..kind("structure")
+            },
+            D::Metadata { failed } => Damage {
+                checks_failed: failed,
+                ..kind("metadata")
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -50,6 +111,9 @@ pub struct CheckStatus {
     pub files_total: u64,
     pub problems: Vec<Problem>,
     pub problems_total: u64,
+    /// With `method` `package` and `state` `problems`: what the problems add up to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub damage: Option<Damage>,
     pub error: Option<String>,
     pub started_ms: u64,
     pub finished_ms: u64,
@@ -71,12 +135,17 @@ impl Job {
         f(&mut self.status.lock().unwrap_or_else(|e| e.into_inner()));
     }
     fn problem(&self, file: &str, error: impl Into<String>) {
+        self.problem_of("", file, error);
+    }
+    /// [`Self::problem`] of a `kind` ([`Problem::kind`]).
+    fn problem_of(&self, kind: &str, file: &str, error: impl Into<String>) {
         self.update(|s| {
             s.problems_total += 1;
             if s.problems.len() < MAX_PROBLEMS {
                 s.problems.push(Problem {
                     file: file.to_string(),
                     error: error.into(),
+                    kind: kind.to_string(),
                 });
             }
         });
@@ -283,6 +352,15 @@ fn package(job: &Job, path: &Path) -> Result<bool, String> {
         &job.cancel,
         &mut progress,
     ) {
+        // A retail package got as far as a report: its blocks can't be read with a debug
+        // key, so "every block fails" would be about the key, not the file.
+        Ok(report) if !report.is_debug() => {
+            job.update(|s| {
+                s.bytes_done = 0;
+                s.bytes_total = 0;
+            });
+            Ok(false)
+        }
         Ok(report) => {
             for c in report.checks.iter().filter(|c| !c.ok) {
                 let what = if c.detail.is_empty() {
@@ -290,8 +368,10 @@ fn package(job: &Job, path: &Path) -> Result<bool, String> {
                 } else {
                     format!("{} ({})", c.name, c.detail)
                 };
-                job.problem("", format!("failed: {what}"));
+                job.problem_of(c.kind.as_str(), "", format!("failed: {what}"));
             }
+            let damage = report.damage().map(Damage::of);
+            job.update(|s| s.damage = damage);
             Ok(true)
         }
         Err(_) if job.cancelled() => Err("cancelled".into()),
@@ -565,6 +645,130 @@ mod tests {
         let j = job();
         j.cancel.store(true, Ordering::Relaxed);
         assert_eq!(bytes(&j, &f).unwrap_err(), "cancelled");
+    }
+
+    /// A small debug package, as Convert builds one.
+    fn debug_package(dir: &Path) -> std::path::PathBuf {
+        let source = dir.join("game");
+        std::fs::create_dir_all(source.join("sce_sys")).unwrap();
+        std::fs::create_dir_all(source.join("data")).unwrap();
+        std::fs::write(source.join("eboot.bin"), [7u8; 4096]).unwrap();
+        std::fs::write(source.join("data/big.bin"), vec![0x5Au8; 3 << 20]).unwrap();
+        std::fs::write(
+            source.join("sce_sys/param.json"),
+            br#"{"contentId":"UP0000-PPSA01234_00-TESTGAME00000000","contentVersion":"01.000.000","titleId":"PPSA01234"}"#,
+        )
+        .unwrap();
+        let out = dir.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let mut request = ps5upload_fpkg::build::BuildRequest::new(&source, &out);
+        request.time = Some((1_700_000_000, 0));
+        // Stored, so a byte of the game's data sits in the file as it is.
+        request.level = ps5upload_fpkg::kraken::Level::Stored;
+        ps5upload_fpkg::build::build(&request, &mut |_| {})
+            .unwrap()
+            .path
+    }
+
+    /// The check of the package at `path`, finished.
+    fn checked(path: &Path) -> CheckStatus {
+        let j = job();
+        run(&j, path, "pkg").unwrap();
+        let s = j.status.lock().unwrap().clone();
+        s
+    }
+
+    /// The three things a package check can tell apart, each with what the screen needs to
+    /// say it in plain words: damaged data (how many blocks of how many), a file cut short
+    /// (how long it is and has to be), and only the package's own information not matching.
+    #[test]
+    fn a_package_check_says_what_kind_of_damage_it_found() {
+        use std::io::{Seek, SeekFrom, Write};
+        let t = Scratch::new("damage");
+        let good = debug_package(t.path());
+        let whole = std::fs::read(&good).unwrap();
+        let ok = checked(&good);
+        assert_eq!(ok.method, "package");
+        assert_eq!(ok.problems_total, 0, "{:?}", ok.problems);
+        assert_eq!(ok.damage, None);
+
+        let mut file = ps5upload_fpkg::PkgFile::open(&good).unwrap();
+        let head = file.read_at(0, ps5upload_fpkg::fih::HEADER_LEN).unwrap();
+        let fih = ps5upload_fpkg::fih::parse(&head).unwrap();
+        drop(file);
+        let block = ps5upload_fpkg::BLOCK;
+        let blocks = fih.pfs_size / block;
+
+        // Two blocks of the image overwritten, as a faulty copy leaves them.
+        let bad = t.path().join("data.pkg");
+        std::fs::write(&bad, &whole).unwrap();
+        let mut f = std::fs::OpenOptions::new().write(true).open(&bad).unwrap();
+        for index in [3u64, 9] {
+            f.seek(SeekFrom::Start(fih.pfs_offset + index * block + 100))
+                .unwrap();
+            f.write_all(&[0xEE; 64]).unwrap();
+        }
+        drop(f);
+        let s = checked(&bad);
+        assert_eq!(s.method, "package");
+        assert!(s.problems_total >= 1, "{:?}", s.problems);
+        assert_eq!(
+            s.damage,
+            Some(Damage {
+                kind: "data".into(),
+                blocks_bad: 2,
+                blocks_total: blocks,
+                block_bytes: 65536,
+                ..Damage::default()
+            })
+        );
+        let data: Vec<&Problem> = s.problems.iter().filter(|p| p.kind == "data").collect();
+        assert_eq!(data.len(), 1, "{:?}", s.problems);
+        assert!(
+            data[0].error.contains(&format!("2 of {blocks} failed")),
+            "{}",
+            data[0].error
+        );
+        // The technical lines stay as they were, for a bug report.
+        assert!(s.problems.iter().all(|p| p.error.starts_with("failed: ")));
+
+        // Cut off inside the image: the file ends before the package does.
+        let short = t.path().join("short.pkg");
+        let cut = (fih.pfs_offset + fih.pfs_size / 2) as usize;
+        std::fs::write(&short, &whole[..cut]).unwrap();
+        let s = checked(&short);
+        assert_eq!(s.method, "package");
+        assert_eq!(s.problems_total, 1, "{:?}", s.problems);
+        assert_eq!(s.problems[0].kind, "truncated");
+        let damage = s.damage.unwrap();
+        assert_eq!(damage.kind, "truncated");
+        assert_eq!(damage.bytes_have, cut as u64);
+        assert!(damage.bytes_need > cut as u64 && damage.bytes_need <= whole.len() as u64);
+
+        // One byte of the container's own digests changed: nothing of the game's data is wrong.
+        let meta = t.path().join("meta.pkg");
+        std::fs::write(&meta, &whole).unwrap();
+        let mut f = std::fs::OpenOptions::new().write(true).open(&meta).unwrap();
+        f.seek(SeekFrom::Start(fih.cnt_offset + 0x100)).unwrap();
+        let was = whole[fih.cnt_offset as usize + 0x100];
+        f.write_all(&[was ^ 0xFF]).unwrap();
+        drop(f);
+        let s = checked(&meta);
+        assert_eq!(s.method, "package");
+        let damage = s.damage.clone().unwrap();
+        assert_eq!(damage.kind, "metadata", "{:?}", s.problems);
+        assert_eq!(damage.checks_failed, s.problems_total);
+        assert_eq!(damage.blocks_bad, 0);
+        assert!(s.problems.iter().all(|p| p.kind == "metadata"));
+
+        // On the wire: the old fields as they were, the new ones beside them.
+        let v = serde_json::to_value(checked(&bad)).unwrap();
+        assert_eq!(v["damage"]["kind"], "data");
+        assert_eq!(v["damage"]["blocks_bad"], 2);
+        assert_eq!(v["problems"][0]["file"], "");
+        assert!(v["problems"][0]["error"].is_string());
+        let clean = serde_json::to_value(ok).unwrap();
+        assert!(clean.get("damage").is_none());
     }
 
     #[test]

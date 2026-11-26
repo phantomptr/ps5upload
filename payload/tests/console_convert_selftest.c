@@ -133,6 +133,7 @@ typedef enum {
     FAKE_NEVER,
     FAKE_DIED,
     FAKE_FAILS,
+    FAKE_NEEDS_EMULATOR, /* the converter refuses an unpack that would keep the game's emulator */
     FAKE_STAGES,
     FAKE_PID,   /* reports pid g_fake_pid, then Stop, and never ends */
     FAKE_STOLEN /* another job takes the folder (its record and status), then this one fails */
@@ -223,6 +224,12 @@ static void *fake_main(void *arg) {
                    "\"detail\":\"read all 5 bytes\"}\n",
                    id, (long)g_alive);
         break;
+    case FAKE_NEEDS_EMULATOR:
+        put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"failed\","
+                   "\"cause\":\"convert_unpack_needs_emulator\","
+                   "\"detail\":\"/data/g: the game's AMPR emulator can't stay beside plain files\"}\n",
+                   id, (long)g_alive);
+        break;
     case FAKE_BUILD_UNTIL_CANCEL: {
         unsigned done = 0;
         while (!exists(cancel)) {
@@ -307,7 +314,7 @@ static int run_op(fake_t fake, const char *args, ava1_op_ctx_t *c) {
 
 static void test_wire(void) {
     char buf[4096], got[1024];
-    cc_build_t b = {"/data/out \"q\".exfat", "exfat", 1, 1, 0, NULL, "", "", ""};
+    cc_build_t b = {"/data/out \"q\".exfat", "exfat", 1, 1, 0, NULL, "", "", "", 0, 0};
     cc_status_t s;
     const char *full = "{\"id\":\"ab\",\"pid\":77,\"op\":\"build\",\"state\":\"running\",\"stage\":\"write\","
                        "\"bytes_done\":5,\"bytes_total\":9,\"result\":{\"a\":\"}\",\"b\":[1,{\"c\":2}]}}\n";
@@ -349,6 +356,38 @@ static void test_wire(void) {
         len = cc_request_json(buf, sizeof buf, "ab12", "build", "/data/g", &b);
         CHECK(len > 0 && webui_json_str(buf, (size_t)len, "zstd_runtime", got, sizeof got) == 0);
         b.zstd_runtime = NULL;
+    }
+    {
+        /* A packed game as plain files: asked of a .pkg only, said only when asked (absent, the
+         * converter packages the game as it is), the emulator left out only with it. */
+        cc_build_t p = {"/data/o.pkg", "pkg", 0, 0, 0, NULL, "", "", "fast", 0, 0};
+        int v = 0;
+        len = cc_request_json(buf, sizeof buf, "ab12", "build", "/data/g", &p);
+        CHECK(len > 0 && webui_json_bool(buf, (size_t)len, "unpack_packs", &v) == 0 &&
+              webui_json_bool(buf, (size_t)len, "leave_out_ampr_emu", &v) == 0);
+        p.unpack_packs = 1;
+        len = cc_request_json(buf, sizeof buf, "ab12", "build", "/data/g", &p);
+        CHECK(len > 0 && webui_json_bool(buf, (size_t)len, "unpack_packs", &v) == 1 && v == 1 &&
+              webui_json_bool(buf, (size_t)len, "leave_out_ampr_emu", &v) == 0);
+        CHECK(webui_json_str(buf, (size_t)len, "pkg_level", got, sizeof got) == 1 && strcmp(got, "fast") == 0);
+        p.leave_out_ampr_emu = 1;
+        len = cc_request_json(buf, sizeof buf, "ab12", "build", "/data/g", &p);
+        v = 0;
+        CHECK(len > 0 && webui_json_bool(buf, (size_t)len, "unpack_packs", &v) == 1 && v == 1);
+        v = 0;
+        CHECK(webui_json_bool(buf, (size_t)len, "leave_out_ampr_emu", &v) == 1 && v == 1);
+        /* Left out without the unpack: not said (the op refuses it before it gets here). */
+        p.unpack_packs = 0;
+        len = cc_request_json(buf, sizeof buf, "ab12", "build", "/data/g", &p);
+        CHECK(len > 0 && !strstr(buf, "unpack_packs") && !strstr(buf, "leave_out_ampr_emu"));
+        /* Any other format: never. */
+        p.unpack_packs = 1;
+        p.format = "exfat";
+        len = cc_request_json(buf, sizeof buf, "ab12", "build", "/data/g", &p);
+        CHECK(len > 0 && !strstr(buf, "unpack_packs") && !strstr(buf, "leave_out_ampr_emu"));
+        /* It fits or it is refused whole, as every other member. */
+        p.format = "pkg";
+        CHECK(cc_request_json(buf, 120, "ab12", "build", "/data/g", &p) == -1);
     }
     len = cc_request_json(buf, sizeof buf, "ab12", "inspect", "/data/g", NULL);
     CHECK(len > 0 && webui_json_str(buf, (size_t)len, "dest", got, sizeof got) == 0);
@@ -539,6 +578,23 @@ static void test_wire(void) {
         CHECK(strcmp(TAIL("{\"format\":\"ffpfsc\",\"inner\":\"exfatexfatexfat\"}"), "convert_bad_inner") == 0);
         CHECK(strcmp(TAIL("{\"format\":\"ffpfsc\",\"ffpfsc_level\":\"max\"}"), "convert_bad_ffpfsc_level") == 0);
         CHECK(strcmp(TAIL("{\"format\":\"pkg\",\"pkg_level\":\"smallest\"}"), "convert_bad_pkg_level") == 0);
+        /* A packed game as plain files, with a .pkg: absent or false is not passed on (a page from
+         * before the option builds what it always did); the emulator is left out only with it. */
+        CHECK(TAIL("{\"format\":\"pkg\"}") == NULL && !strstr(tail, "unpack") && !strstr(tail, "leave_out"));
+        CHECK(TAIL("{\"format\":\"pkg\",\"unpack_packs\":false,\"leave_out_ampr_emu\":false}") == NULL &&
+              !strstr(tail, "unpack") && !strstr(tail, "leave_out"));
+        CHECK(TAIL("{\"format\":\"pkg\",\"unpack_packs\":true}") == NULL && strstr(tail, ",\"unpack_packs\":true") &&
+              !strstr(tail, "leave_out"));
+        CHECK(TAIL("{\"format\":\"pkg\",\"pkg_level\":\"stored\",\"unpack_packs\":true,\"leave_out_ampr_emu\":true}") ==
+                  NULL &&
+              strstr(tail, ",\"pkg_level\":\"stored\",\"unpack_packs\":true,\"leave_out_ampr_emu\":true"));
+        CHECK(strcmp(TAIL("{\"format\":\"pkg\",\"leave_out_ampr_emu\":true}"), "convert_bad_unpack") == 0 && !tail[0]);
+        CHECK(strcmp(TAIL("{\"format\":\"pkg\",\"unpack_packs\":\"yes\"}"), "convert_bad_unpack") == 0);
+        CHECK(strcmp(TAIL("{\"format\":\"pkg\",\"unpack_packs\":true,\"leave_out_ampr_emu\":1}"), "convert_bad_unpack") ==
+              0);
+        /* With another format they are not read (nor refused), as its other words. */
+        CHECK(TAIL("{\"format\":\"exfat\",\"unpack_packs\":true,\"leave_out_ampr_emu\":\"x\"}") == NULL &&
+              !strstr(tail, "unpack") && !strstr(tail, "leave_out"));
         CHECK(strcmp(TAIL("{\"format\":\"iso\"}"), "bad_format") == 0);
         CHECK(strcmp(TAIL("{\"format\":\"exfat\",\"verify\":\"some\"}"), "bad_verify") == 0);
         CHECK(strcmp(TAIL("{\"format\":\"exfat\",\"zstd\":true,\"zstd_level\":23}"), "bad_zstd") == 0);
@@ -698,11 +754,57 @@ static void test_op(void) {
                  game, cdest);
         CHECK(run_op(FAKE_FAILS, args, c) == AVA1_ERR_IO);
         CHECK(webui_json_str(g_request, strlen(g_request), "pkg_level", got, sizeof got) == 1 && strcmp(got, "stored") == 0);
+        {
+            /* A packed game as plain files: both words reach request.json, and neither is there
+             * when the page did not ask (the converter then packages the game as it is). */
+            int v = 0;
+            CHECK(!strstr(g_request, "unpack_packs") && !strstr(g_request, "leave_out_ampr_emu"));
+            snprintf(args, sizeof args,
+                     "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"pkg\",\"unpack_packs\":true}",
+                     game, cdest);
+            CHECK(run_op(FAKE_FAILS, args, c) == AVA1_ERR_IO);
+            CHECK(webui_json_bool(g_request, strlen(g_request), "unpack_packs", &v) == 1 && v == 1 &&
+                  !strstr(g_request, "leave_out_ampr_emu"));
+            snprintf(args, sizeof args,
+                     "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"pkg\",\"unpack_packs\":true,"
+                     "\"leave_out_ampr_emu\":true}",
+                     game, cdest);
+            CHECK(run_op(FAKE_FAILS, args, c) == AVA1_ERR_IO);
+            v = 0;
+            CHECK(webui_json_bool(g_request, strlen(g_request), "leave_out_ampr_emu", &v) == 1 && v == 1);
+            /* The converter's own refusal (the game's emulator can't stay beside plain files, and
+             * the console fetches no other) reaches the page as its cause. */
+            snprintf(args, sizeof args,
+                     "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"pkg\",\"unpack_packs\":true}",
+                     game, cdest);
+            CHECK(run_op(FAKE_NEEDS_EMULATOR, args, c) == AVA1_ERR_IO &&
+                  strcmp(c->message, "convert_unpack_needs_emulator") == 0);
+            /* The emulator left out of a game that stays in its packs, or a word that is neither
+             * true nor false: refused before a converter is started. */
+            snprintf(args, sizeof args,
+                     "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"pkg\","
+                     "\"leave_out_ampr_emu\":true}",
+                     game, cdest);
+            CHECK(run_op(FAKE_NEVER, args, c) == AVA1_ERR_PROTOCOL && strcmp(c->message, "convert_bad_unpack") == 0 &&
+                  !g_request[0]);
+            snprintf(args, sizeof args,
+                     "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"pkg\",\"unpack_packs\":\"yes\"}",
+                     game, cdest);
+            CHECK(run_op(FAKE_NEVER, args, c) == AVA1_ERR_PROTOCOL && strcmp(c->message, "convert_bad_unpack") == 0 &&
+                  !g_request[0]);
+        }
         snprintf(args, sizeof args,
                  "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"ffpkg\",\"inner\":\"exfat\"}", game,
                  dest);
         CHECK(run_op(FAKE_FAILS, args, c) == AVA1_ERR_IO);
         CHECK(webui_json_str(g_request, strlen(g_request), "inner", got, sizeof got) == 0);
+        /* With an image the two words are not read: nothing of them in the request. */
+        snprintf(args, sizeof args,
+                 "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"ffpkg\",\"unpack_packs\":true,"
+                 "\"leave_out_ampr_emu\":true}",
+                 game, dest);
+        CHECK(run_op(FAKE_FAILS, args, c) == AVA1_ERR_IO);
+        CHECK(!strstr(g_request, "unpack_packs") && !strstr(g_request, "leave_out_ampr_emu"));
         {
             /* Minion's page through /api/convert/start (cc_start_tail, then the op as the route
              * starts it): its image inside, .ffpfsc level and .pkg level reach request.json. */
@@ -725,6 +827,19 @@ static void test_op(void) {
             CHECK(run_op(FAKE_FAILS, args, c) == AVA1_ERR_IO);
             CHECK(webui_json_str(g_request, strlen(g_request), "pkg_level", got, sizeof got) == 1 &&
                   strcmp(got, "balanced") == 0);
+            {
+                /* And its two unpack switches. */
+                int v = 0, w = 0;
+                snprintf(body, sizeof body,
+                         "{\"path\":\"%s\",\"dest\":\"%s\",\"format\":\"pkg\",\"pkg_level\":\"fast\","
+                         "\"unpack_packs\":true,\"leave_out_ampr_emu\":true}",
+                         game, cdest);
+                CHECK(cc_start_tail(body, strlen(body), cdest, tail, sizeof tail) == NULL);
+                snprintf(args, sizeof args, "{\"path\":\"%s\"%s}", game, tail);
+                CHECK(run_op(FAKE_FAILS, args, c) == AVA1_ERR_IO);
+                CHECK(webui_json_bool(g_request, strlen(g_request), "unpack_packs", &v) == 1 && v == 1 &&
+                      webui_json_bool(g_request, strlen(g_request), "leave_out_ampr_emu", &w) == 1 && w == 1);
+            }
         }
     }
 

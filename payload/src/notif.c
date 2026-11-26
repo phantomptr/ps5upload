@@ -162,8 +162,12 @@ void notif_init(void) {
         unsigned long long seq = 0, ts = 0;
         int level = 0;
         size_t mlen = 0;
-        int got = fscanf(f, "%llu %llu %d %zu\n", &seq, &ts, &level, &mlen);
-        if (got != 4) break;
+        /* No "\n" at the end of the format: in scanf that is "any run of whitespace", and it ate
+         * the spaces, tabs and newlines a message STARTS with. The fread below then ran on into the
+         * next entry's header, and that entry and every one after it came back wrong or not at all.
+         * Exactly one byte ends the header line. */
+        int got = fscanf(f, "%llu %llu %d %zu", &seq, &ts, &level, &mlen);
+        if (got != 4 || fgetc(f) != '\n') break;
         if (mlen >= NOTIF_MSG_MAX) mlen = NOTIF_MSG_MAX - 1;
 
         notif_entry_t *entry = &s_ring[s_write_idx];
@@ -335,26 +339,30 @@ int notif_send_serialised(const char *msg, int level) {
     return rc;
 }
 
-static size_t append_str(char *buf, size_t cap, size_t off,
-                         const char *str) {
-    size_t len = strlen(str);
-    if (off + len + 1 >= cap) {
-        return off;
-    }
-    memcpy(buf + off, str, len);
-    return off + len;
-}
+/* The longest tail: "],\"seq\":" and 20 digits, "}" and the NUL. */
+#define NOTIF_LIST_TAIL 32
+/* One entry: its head (a comma, two 20-digit numbers and a level), the message with every byte
+ * escaped ("\u00xx", six for one), the closing quote and brace, and the escaper's spare byte. */
+#define NOTIF_LIST_HEAD 96
+#define NOTIF_LIST_ENTRY (NOTIF_LIST_HEAD + (NOTIF_MSG_MAX - 1) * 6 + 2 + 2)
 
 int notif_list(uint64_t since_seq, char *buf, size_t cap,
                size_t *written) {
+    static const char head[] = "{\"notifications\":[";
     if (!buf || cap == 0) return -1;
 
-    size_t off = append_str(buf, cap, 0, "{\"notifications\":[");
-    if (off == 0) {
-        buf[cap - 1] = '\0';
-        if (written) *written = cap - 1;
+    /* Room for the head and the tail is kept before anything else, and an entry goes in whole or
+     * not at all: a full buffer means fewer entries, never a reply cut in the middle of one. (It
+     * used to leave a comma and half an entry before the tail, which the engine could not parse:
+     * the list then stayed unreadable until it was cleared.) */
+    if (cap < sizeof(head) + NOTIF_LIST_TAIL) {
+        buf[0] = '\0';
+        if (written) *written = 0;
         return 0;
     }
+    memcpy(buf, head, sizeof(head) - 1);
+    size_t off = sizeof(head) - 1;
+    const size_t lim = cap - NOTIF_LIST_TAIL;
 
     uint64_t latest_seq;
     int first = 1;
@@ -373,43 +381,29 @@ int notif_list(uint64_t since_seq, char *buf, size_t cap,
         if (!e->used) continue;
         if (e->seq <= since_seq) continue;
 
-        if (!first) {
-            if (off + 1 + 1 >= cap) break;
-            buf[off++] = ',';
-        }
-
-        char prefix[96];
-        int n = snprintf(prefix, sizeof(prefix),
-            "{\"seq\":%llu,\"ts\":%llu,\"level\":\"%s\",\"msg\":\"",
+        char ent[NOTIF_LIST_ENTRY];
+        int n = snprintf(ent, NOTIF_LIST_HEAD,
+            "%s{\"seq\":%llu,\"ts\":%llu,\"level\":\"%s\",\"msg\":\"",
+            first ? "" : ",",
             (unsigned long long)e->seq,
             (unsigned long long)e->timestamp,
             level_to_str(e->level));
-        if (n < 0 || (size_t)n >= sizeof(prefix)) {
-            break;
-        }
-        off = append_str(buf, cap, off, prefix);
-        if (off + 1 >= cap) break;
-
-        off = json_escape_append(buf, cap, off, e->message);
-        if (off + 3 >= cap) break;
-
-        buf[off++] = '"';
-        buf[off++] = '}';
+        if (n < 0 || n >= NOTIF_LIST_HEAD) break;
+        /* 2 kept back for the quote and the brace (the escaper stops a byte short of its cap). */
+        size_t el = json_escape_append(ent, sizeof(ent) - 2, (size_t)n, e->message);
+        ent[el++] = '"';
+        ent[el++] = '}';
+        if (off + el > lim) break;
+        memcpy(buf + off, ent, el);
+        off += el;
         first = 0;
     }
 
     pthread_mutex_unlock(&s_ring_mtx);
 
-    char suffix[40];
-    int n = snprintf(suffix, sizeof(suffix), "],\"seq\":%llu}",
+    int n = snprintf(buf + off, cap - off, "],\"seq\":%llu}",
                      (unsigned long long)latest_seq);
-    if (n > 0 && (size_t)n < sizeof(suffix)) {
-        off = append_str(buf, cap, off, suffix);
-    } else {
-        if (off + 1 < cap) buf[off++] = ']';
-    }
-
-    if (off >= cap) off = cap - 1;
+    if (n > 0 && (size_t)n < cap - off) off += (size_t)n;
     buf[off] = '\0';
     if (written) *written = off;
     return 0;

@@ -864,6 +864,16 @@ code {
 .phones .device:nth-child(2) {
   margin-top: 48px;
 }
+/* Three phones side by side: narrower, and the third a little lower than the first. */
+.phones.three {
+  gap: 14px;
+}
+.phones.three .device {
+  width: min(190px, 31%);
+}
+.phones.three .device:nth-child(3) {
+  margin-top: 20px;
+}
 
 /* Keyboard & mouse (10.4): the "New in" tag over a tour heading, a small note, a sideways phone. */
 .tour-text .tag {
@@ -1721,7 +1731,8 @@ code {
 }
 @media (max-width: 900px) {
   .faq-layout {
-    grid-template-columns: 1fr;
+    /* Not 1fr: a wide code block or table in an open answer would widen the whole page. */
+    grid-template-columns: minmax(0, 1fr);
     gap: 12px;
   }
   .faq-toc {

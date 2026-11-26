@@ -4,7 +4,9 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 import { useUploadSettingsStore } from "./uploadSettings";
 import {
+  archiveSurelyUnpacked,
   buildExtension,
+  freesArchive,
   hydrateConvertQueue,
   imageBuildWith,
   packsOf,
@@ -50,6 +52,50 @@ describe("the Convert queue", () => {
     const [item] = useConvertQueue.getState().items;
     expect(item.password).toBe("secret");
     expect(JSON.stringify(savedItems(useConvertQueue.getState().items))).not.toContain("secret");
+  });
+
+  it("never saves the choice to delete an archive as it unpacks, and drops it after the game's turn", async () => {
+    useConvertQueue
+      .getState()
+      .add({ source: "/g/A.zip", freeArchive: true, compression: "balanced", then: "keep", host: null });
+    const [item] = useConvertQueue.getState().items;
+    expect(item.freeArchive).toBe(true);
+    expect(queueTags(item)).toEqual([{ kind: "free-archive" }]);
+    // Not in what is saved, and not in what a saved queue gives back.
+    const saved = savedItems(useConvertQueue.getState().items);
+    expect(JSON.stringify(saved)).not.toContain("freeArchive");
+    expect(savedItems([{ ...item, freeArchive: true }])[0]).not.toHaveProperty("freeArchive");
+    // Its turn, stopped with the archive already gone: the row says where the game is, and
+    // the choice is off again.
+    void useConvertQueue.getState().start();
+    await flush();
+    (builds[0].resolve as (r: unknown) => void)({
+      ok: false,
+      cancelled: true,
+      archiveGone: true,
+      message: "cancelled The archive is partly deleted and can't be used again. Everything unpacked before it stopped is kept in /out/A.unpacked.",
+    });
+    await flush();
+    const after = useConvertQueue.getState().items[0];
+    expect(after.status).toBe("cancelled");
+    expect(after.error).toContain("/out/A.unpacked");
+    expect(after.freeArchive).toBeUndefined();
+  });
+
+  it("offers deleting an archive only where the build is sure to unpack it", () => {
+    expect(archiveSurelyUnpacked("/g/A.zip", "pkg")).toBe(true);
+    expect(archiveSurelyUnpacked("/g/A.part1.rar", "pkg")).toBe(true);
+    expect(archiveSurelyUnpacked("/g/A.tar.zst", "image")).toBe(true);
+    // An image or folder may be made straight from the archive: known only when it runs.
+    expect(archiveSurelyUnpacked("/g/A.zip", "image")).toBe(false);
+    expect(archiveSurelyUnpacked("/g/A.7z", "folder")).toBe(false);
+    expect(archiveSurelyUnpacked("/g/A.exfat", "pkg")).toBe(false);
+    expect(archiveSurelyUnpacked("remote://nas/g/A.zip", "pkg")).toBe(false);
+    // Changed to an image while it waits, the game no longer deletes its archive (nor says so).
+    const image = { source: "/g/A.zip", freeArchive: true, build: { kind: "image" as const, format: "exfat" as const, compress: false } };
+    expect(freesArchive(image)).toBe(false);
+    expect(freesArchive({ source: "/g/A.zip", freeArchive: true })).toBe(true);
+    expect(freesArchive({ source: "/g/A.zip" })).toBe(false);
   });
 
   it("offers a refused .rar again with a password, and starts the queue", async () => {

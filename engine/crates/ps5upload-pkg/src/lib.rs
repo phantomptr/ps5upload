@@ -107,12 +107,19 @@ pub fn extract_from_ffpkg(
     inner_path: &str,
     dest_dir: &Path,
 ) -> Result<FfpkgExtractResult, Ufs2Error> {
-    let mut img = Ufs2Image::open(ffpkg_path)?;
     let components: Vec<&str> = inner_path
         .trim_matches('/')
         .split('/')
         .filter(|s| !s.is_empty())
         .collect();
+    // The last component names what is written under `dest_dir`, and the image has real "."
+    // and ".." entries: "sce_sys/.." would resolve and then write beside `dest_dir`, not in it.
+    if let Some(bad) = components.iter().find(|c| !is_safe_child_name(c)) {
+        return Err(Ufs2Error::NotFound {
+            component: format!("{bad} (not a name inside the image)"),
+        });
+    }
+    let mut img = Ufs2Image::open(ffpkg_path)?;
     let inode = if components.is_empty() {
         img.read_inode(ufs2::ROOT_INODE)?
     } else {
@@ -250,10 +257,14 @@ fn extract_file<R: Read + Seek>(
     inode: &ufs2::Inode,
     path: &Path,
 ) -> Result<u64, Ufs2Error> {
+    // No file is larger than the image it is in. The image's real length, not the size its
+    // superblock claims: a few KiB of image that claimed a terabyte, holding one file of holes
+    // that size, was written out as zeros until the disk was full.
     let sb = &img.superblock;
-    let cap = sb
+    let claimed = sb
         .size_fragments
         .saturating_mul(u64::from(sb.fragment_size));
+    let cap = claimed.min(img.image_len().map_err(Ufs2Error::Io)?);
     if inode.size > cap {
         return Err(Ufs2Error::FileTooLarge {
             size: inode.size,
@@ -354,6 +365,9 @@ pub fn inspect_ffpkg(path: &Path) -> Result<FfpkgInspection, Ufs2Error> {
     })
 }
 
+/// The most entries a `param.sfo` is read with (a real one has a few dozen).
+pub const MAX_SFO_ENTRIES: usize = 256;
+
 /// Parse the string keys from a PARAM.SFO blob. Reuses the same
 /// layout the PKG parser already understands (PSF magic at +0,
 /// key/data tables, entries with format codes).
@@ -373,6 +387,11 @@ fn parse_sfo_string_keys(
     let key_table_off = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
     let data_table_off = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
     let entry_count = u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]) as usize;
+    // A real param.sfo has a few dozen entries. Each entry's value is copied out, and an entry
+    // may claim the whole file as its value: thousands of them made gigabytes of copies.
+    if entry_count > MAX_SFO_ENTRIES {
+        return Err("SFO entry count out of range".into());
+    }
     let mut out = std::collections::HashMap::new();
     let table_off: usize = 20;
     for i in 0..entry_count {
@@ -775,7 +794,15 @@ pub fn parse_pkg_from<R: Read + Seek>(
             meta.category =
                 kind::category_from_header(meta.content_type, content_flags).to_string();
         }
-        meta.package_type = Some(if is_patch { "PS5DP" } else { "PS5GD" }.to_string());
+        // An add-on is `PS5AC`, as the same bytes read through ranges give it
+        // (`package_type_for_category_and_platform`): `PS5GD` here made the type depend on
+        // where the package was read from.
+        let package_type = match meta.category.as_str() {
+            _ if is_patch => "PS5DP",
+            "ac" => "PS5AC",
+            _ => "PS5GD",
+        };
+        meta.package_type = Some(package_type.to_string());
     } else {
         meta.package_type = derive_package_type(&meta.category);
         meta.platform = derive_platform(magic, &meta.content_id, &meta.title_id);
@@ -1065,7 +1092,7 @@ pub fn sfo_params(buf: &[u8]) -> Result<Vec<(String, SfoValue)>, &'static str> {
     let keys_off = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]) as usize;
     let data_off = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]) as usize;
     let n = u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]) as usize;
-    if keys_off > buf.len() || data_off > buf.len() || n > 256 {
+    if keys_off > buf.len() || data_off > buf.len() || n > MAX_SFO_ENTRIES {
         return Err("SFO offsets / count out of range");
     }
     if 0x14 + n * 0x10 > buf.len() {
@@ -1906,6 +1933,40 @@ mod tests {
         assert_eq!(fih(0x20).category, "gd");
     }
 
+    /// The same add-on read as a file on this computer is an add-on by its package type too
+    /// (it said `PS5GD`, a game, while the ranged read above said add-on).
+    #[test]
+    fn a_local_fih_add_on_has_the_add_on_package_type() {
+        let local = |content_type: u32, flags: u32| {
+            let cnt_base = 0x10000usize;
+            let mut cnt = build_pkg_multi(
+                "UP0000-PPSA01234_00-DELUXEUPGRADE000",
+                &[("TITLE", "Deluxe Upgrade")],
+            );
+            cnt[0x74..0x78].copy_from_slice(&content_type.to_be_bytes());
+            cnt[0x78..0x7c].copy_from_slice(&flags.to_be_bytes());
+            let mut pkg = vec![0u8; cnt_base];
+            pkg[0..4].copy_from_slice(&PKG_MAGIC_FIH.to_be_bytes());
+            pkg[0x06..0x08].copy_from_slice(&3u16.to_le_bytes());
+            pkg[0x58..0x60].copy_from_slice(&(cnt_base as u64).to_le_bytes());
+            pkg.extend_from_slice(&cnt);
+            let size = pkg.len() as u64;
+            parse_pkg_from(&mut std::io::Cursor::new(pkg), size, Path::new("a.pkg"))
+                .expect("should parse embedded CNT")
+        };
+        let add_on = local(0x21, 0x0a02_0000);
+        assert_eq!(add_on.category, "ac");
+        assert_eq!(add_on.package_type.as_deref(), Some("PS5AC"));
+        assert_eq!(
+            local(0x20, 0x0a02_0000).package_type.as_deref(),
+            Some("PS5GD")
+        );
+        assert_eq!(
+            local(0x20, 0x0a12_0000).package_type.as_deref(),
+            Some("PS5DP")
+        );
+    }
+
     #[test]
     fn package_type_mapping_is_platform_specific() {
         assert_eq!(
@@ -2240,6 +2301,22 @@ mod tests {
         sfo
     }
 
+    /// A param.sfo that counts more entries than any real one is refused before its values are
+    /// copied out: each entry may claim the whole file, so thousands of them were gigabytes.
+    #[test]
+    fn an_sfo_with_too_many_entries_is_refused() {
+        let entries = MAX_SFO_ENTRIES + 1;
+        let mut sfo = vec![0u8; 20 + entries * 16 + 16];
+        sfo[..4].copy_from_slice(b"\0PSF");
+        let tables = (20 + entries * 16) as u32;
+        sfo[8..12].copy_from_slice(&tables.to_le_bytes());
+        sfo[12..16].copy_from_slice(&tables.to_le_bytes());
+        sfo[16..20].copy_from_slice(&(entries as u32).to_le_bytes());
+        assert!(parse_sfo_string_keys(&sfo).is_err());
+        sfo[16..20].copy_from_slice(&(MAX_SFO_ENTRIES as u32).to_le_bytes());
+        assert!(parse_sfo_string_keys(&sfo).is_ok());
+    }
+
     #[test]
     fn sfo_params_decodes_text_and_integers() {
         let sfo = build_sfo_typed(
@@ -2332,6 +2409,38 @@ mod tests {
         ufs2::Ufs2Image::from_parts(std::io::Cursor::new(image), sb)
     }
 
+    /// A file is never larger than the image it is in, whatever the superblock says the image
+    /// is: one of holes "a terabyte long" in a 24 KiB image is refused, not written out.
+    #[test]
+    fn a_file_larger_than_the_image_is_not_extracted() {
+        let mut img = looping_root(&[]);
+        img.superblock.size_fragments = 1 << 28; // "a terabyte" of 4 KiB fragments
+        let holes = ufs2::Inode {
+            number: 9,
+            mode: 0x81a4,
+            size: 1 << 40,
+            direct: [0; 12],
+            indirect: [0; 3],
+            mtime: 0,
+        };
+        let dest = tempdir().join("larger-than-image");
+        let _ = std::fs::remove_dir_all(&dest);
+        std::fs::create_dir_all(&dest).unwrap();
+        let e = extract_file(&mut img, &holes, &dest.join("holes.bin")).unwrap_err();
+        assert!(matches!(e, Ufs2Error::FileTooLarge { .. }), "{e}");
+        assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0);
+        // One that fits is still written.
+        let small = ufs2::Inode {
+            size: 8192,
+            ..holes
+        };
+        assert_eq!(
+            extract_file(&mut img, &small, &dest.join("ok.bin")).unwrap(),
+            8192
+        );
+        let _ = std::fs::remove_dir_all(&dest);
+    }
+
     /// A directory that lists itself is refused at once. Two such entries in one directory used
     /// to double the work at each of the 64 levels the depth cap allowed: an extract that never
     /// ended, making folders all the while.
@@ -2360,6 +2469,30 @@ mod tests {
             assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0, "{names:?}");
             let _ = std::fs::remove_dir_all(&dest);
         }
+    }
+
+    /// "." and ".." are real entries in the image, so they would resolve: "sce_sys/.." is the
+    /// root, written as `dest/..`, beside the folder that was chosen. Refused before the image
+    /// is even opened.
+    #[test]
+    fn an_extract_path_with_a_dot_component_is_refused() {
+        let nowhere = Path::new("/nonexistent/image.ffpkg");
+        let dest = tempdir().join("dot-component");
+        for inner in [
+            "..",
+            "sce_sys/..",
+            "sce_sys/../..",
+            ".",
+            "a/./b",
+            "a\\..\\b",
+        ] {
+            let e = extract_from_ffpkg(nowhere, inner, &dest).unwrap_err();
+            assert!(matches!(e, Ufs2Error::NotFound { .. }), "{inner}: {e}");
+        }
+        assert!(!dest.exists());
+        // A plain path gets as far as opening the image.
+        let e = extract_from_ffpkg(nowhere, "sce_sys/icon0.png", &dest).unwrap_err();
+        assert!(matches!(e, Ufs2Error::Io(_)), "{e}");
     }
 
     #[test]

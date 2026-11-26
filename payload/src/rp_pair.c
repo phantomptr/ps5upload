@@ -68,6 +68,9 @@ int rp_pair_request(rp_pair_t *p, const rp_pair_ops_t *ops, int64_t now_ms) {
      * before asking for another costs nothing, so it is done every time,
      * owed or not. */
     pthread_mutex_lock(&p->mtx);
+    /* A PIN the console may still hold: one whose invalidation is owed (cancelled, expired), or
+     * the live one this request replaces. It is given up by the invalidate below, and only then. */
+    int owed = p->invalidate_owed || (p->state == RP_PAIR_WAITING && p->pin[0] != 0);
     p->gen++;
     p->state = RP_PAIR_IDLE;
     clear_pin_locked(p);
@@ -84,6 +87,10 @@ int rp_pair_request(rp_pair_t *p, const rp_pair_ops_t *ops, int64_t now_ms) {
     if (ops->prepare && ops->prepare(ops->ctx, why, sizeof(why)) != 0) {
         pthread_mutex_lock(&p->mtx);
         if (p->gen == gen) fail_locked(p, why[0] ? why : "Remote Play is not available");
+        /* The invalidate below is not reached, so what was owed stays owed. It used to be
+         * forgotten here: the cancelled (or replaced) PIN stayed good on the console until Sony's
+         * own expiry while the app showed it as gone. The next poll or settle gives it up. */
+        if (owed) p->invalidate_owed = 1;
         pthread_mutex_unlock(&p->mtx);
         return -1;
     }

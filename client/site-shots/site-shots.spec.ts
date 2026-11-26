@@ -1,12 +1,22 @@
 import { readFileSync } from "node:fs";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 // The website's screenshots (site/assets/shots), taken from the real app against a made-up
 // console: fictional games with drawn covers (make-art.py), a drawn game picture for the stream,
 // a generic console name, user and address. No real console, account, game or file appears.
 //
+// What may be in a picture, checked on every change here:
+//   - games: invented titles only, with ids in the PPSA9xxxx / CUSA9xxxx range no real game uses;
+//   - people: first names and "Player One", no account names, emails or online ids;
+//   - addresses: 192.168.1.x at home, 100.101.102.x on the made-up tailnet, example.com hosts;
+//   - files: the owner's own backups under /Volumes/Games and on the console's drives, named
+//     after the game ("Neon Drift.pkg"), never after a download or a release;
+//   - no serial numbers, hardware addresses, keys or tokens (the invite keys here are counting
+//     patterns), and nothing from the computer that takes the pictures.
+//
 // Every language the app has gets its own set, from the app running in that language: English
-// in out/, the others in out/<code>/. SHOT_LANGS=de,fr takes only those.
+// in out/, the others in out/<code>/. SHOT_LANGS=de,fr takes only those; SHOTS_PORT=14620 uses
+// a dev server of its own instead of one already on 1420.
 //
 //   cd client && npx playwright test -c site-shots.config.ts && node site-shots/to-webp.mjs
 
@@ -14,57 +24,183 @@ const HOST = "192.168.1.50";
 const OUT = process.env.SHOTS_DIR ?? "site-shots/out";
 const LANGS = (process.env.SHOT_LANGS ?? "en,zh-CN,zh-TW,hi,es,ar,bn,pl,pt-BR,ru,ja,de,fr,ko,tr,vi,id,it,th,hu,fa").split(",");
 const art = (name: string) => readFileSync(new URL(`./art/${name}.png`, import.meta.url));
+/** The app's own version, so the pictures never show an old one. */
+const VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
+const FIRMWARE = "10.01";
 
-const GAMES: Array<[string, string, string, number]> = [
-  ["PPSA90001", "Neon Drift", "PS5", 48.2e9],
-  ["PPSA90002", "Skyward Isles", "PS5", 61.7e9],
-  ["PPSA90003", "Iron Harbor", "PS5", 33.9e9],
-  ["PPSA90004", "Lumen Trail", "PS5", 12.4e9],
-  ["PPSA90005", "Pocket Galaxy", "PS5", 8.1e9],
-  ["PPSA90006", "Frostline", "PS5", 27.5e9],
-  ["CUSA90007", "Ember Knights", "PS4", 19.3e9],
-  ["CUSA90008", "Tidal Run", "PS4", 6.6e9],
+const ROOT = "/Volumes/Games";
+type CopyType = "pkg" | "folder" | "mount.exfat" | "mount.ffpfsc";
+/** The made-up library: id, title, platform, size, version, and how the copy is kept. */
+const GAMES: Array<[string, string, "PS5" | "PS4", number, string, CopyType]> = [
+  ["PPSA90001", "Neon Drift", "PS5", 48.2e9, "01.000", "pkg"],
+  ["PPSA90002", "Skyward Isles", "PS5", 61.7e9, "01.000", "pkg"],
+  ["PPSA90003", "Iron Harbor", "PS5", 33.9e9, "01.002", "mount.exfat"],
+  ["PPSA90004", "Lumen Trail", "PS5", 12.4e9, "01.000", "pkg"],
+  ["PPSA90005", "Pocket Galaxy", "PS5", 8.1e9, "01.000", "folder"],
+  ["PPSA90006", "Frostline", "PS5", 27.5e9, "01.000", "pkg"],
+  ["CUSA90007", "Ember Knights", "PS4", 19.3e9, "01.00", "pkg"],
+  ["CUSA90008", "Tidal Run", "PS4", 6.6e9, "01.00", "pkg"],
+  ["PPSA90009", "Clockwork Garden", "PS5", 15.8e9, "01.001", "mount.ffpfsc"],
+  ["PPSA90010", "Lantern Marsh", "PS5", 22.6e9, "01.000", "pkg"],
+  ["PPSA90011", "Copper Canyon", "PS5", 41.3e9, "01.003", "pkg"],
+  ["PPSA90012", "Kite Season", "PS5", 3.4e9, "01.000", "mount.exfat"],
+  ["CUSA90013", "Mosswood Tales", "PS4", 9.8e9, "01.00", "pkg"],
+  ["CUSA90014", "Midnight Tram", "PS4", 4.2e9, "01.00", "pkg"],
 ];
-const NOW = 1761800000;
+/** Updates and add-ons kept beside their game: kind, what the file is called, version, size. */
+const EXTRAS: Record<string, Array<["patch" | "dlc", string, string, number]>> = {
+  PPSA90001: [["patch", "update 01.004", "01.004", 3.1e9]],
+  PPSA90002: [["dlc", "Storm Season", "01.000", 4.4e9]],
+  PPSA90006: [["patch", "update 01.002", "01.002", 1.7e9]],
+  CUSA90007: [
+    ["patch", "update 01.32", "01.32", 2.3e9],
+    ["dlc", "The Ashen Keep", "01.00", 1.2e9],
+  ],
+};
+/** What the console has installed, and at which version. */
+const INSTALLED: Record<string, string> = {
+  PPSA90001: "01.000",
+  PPSA90002: "01.000",
+  PPSA90003: "01.002",
+  PPSA90005: "01.000",
+  CUSA90007: "01.32",
+  PPSA90009: "01.001",
+  PPSA90012: "01.000",
+  CUSA90013: "01.00",
+};
+// 21 November 2026, early evening.
+const NOW = Math.floor(Date.UTC(2026, 10, 21, 18, 40) / 1000);
+const EXT: Record<CopyType, string> = { pkg: ".pkg", folder: "", "mount.exfat": ".exfat", "mount.ffpfsc": ".ffpfsc" };
+const contentId = (id: string, title: string, tail = "") =>
+  `UP9000-${id}_00-${(title.replace(/[^A-Za-z]/g, "").toUpperCase() + tail).padEnd(16, "0").slice(0, 16)}`;
+const extraName = (title: string, kind: string, label: string) => (kind === "patch" ? `${title} (${label}).pkg` : `${title} - ${label}.pkg`);
 
 function library() {
   const games: Record<string, unknown> = {};
-  GAMES.forEach(([id, title, platform, size], i) => {
-    const file = `${title.replace(/ /g, "")}.pkg`;
+  let locations = 0;
+  let total = 0;
+  GAMES.forEach(([id, title, platform, size, version, type], i) => {
+    const container = `${platform}/${title}`;
+    const added = NOW - i * 5 * 86400 - i * 4321;
+    const copy = (name: string, type: string, bytes: number, pkg: Record<string, unknown>) => ({
+      root: ROOT,
+      container,
+      name,
+      type,
+      path: `${container}/${name}`,
+      absolute_path: `${ROOT}/${container}/${name}`,
+      size_bytes: bytes,
+      added_ts: added,
+      pkg: { platform, title, title_id: id, ...pkg },
+    });
+    const copies = [copy(`${title}${EXT[type]}`, type, size, { content_id: contentId(id, title), version, kind: "base" })];
+    for (const [kind, label, v, bytes] of EXTRAS[id] ?? []) {
+      copies.push(copy(extraName(title, kind, label), "pkg", bytes, { content_id: contentId(id, title, kind === "dlc" ? "DLC1" : ""), version: v, kind }));
+    }
+    const bytes = copies.reduce((a, c) => a + c.size_bytes, 0);
+    locations += copies.length;
+    total += bytes;
     games[id] = {
       game_id: id,
       title,
       platform,
-      sources: ["/Volumes/Games"],
-      locations: [
-        {
-          root: "/Volumes/Games",
-          container: "",
-          name: file,
-          type: "pkg",
-          path: file,
-          absolute_path: `/Volumes/Games/${file}`,
-          size_bytes: size,
-          added_ts: NOW - i * 86400,
-          pkg: { platform, title, title_id: id, version: "01.000", kind: "base" },
-        },
-      ],
-      total_size_bytes: size,
+      sources: [ROOT],
+      locations: copies,
+      total_size_bytes: bytes,
       copies: 1,
       is_duplicate: false,
-      added_ts: NOW - i * 86400,
+      added_ts: added,
       local_cover: `covers/${id}.png`,
       cover_stamp: `1-${NOW}`,
     };
   });
-  const total = GAMES.reduce((a, g) => a + g[3], 0);
   return {
-    roots: ["/Volumes/Games"],
+    roots: [ROOT],
     missing_roots: [],
-    generated_at: "2026-10-30T10:00:00Z",
-    summary: { total_games: GAMES.length, total_locations: GAMES.length, total_size_bytes: total, duplicates_count: 0, reclaimable_bytes: 0 },
+    generated_at: new Date(NOW * 1000).toISOString(),
+    summary: { total_games: GAMES.length, total_locations: locations, total_size_bytes: total, duplicates_count: 0, reclaimable_bytes: 0 },
     games,
   };
+}
+
+/** Each game against the console: installed or not, and the update or add-on it could take. */
+function consoleGames() {
+  return GAMES.map(([id, title, platform]) => {
+    const offers = (EXTRAS[id] ?? []).map(([kind, label, v, bytes]) => ({
+      kind,
+      offer: {
+        path: `${ROOT}/${platform}/${title}/${extraName(title, kind, label)}`,
+        name: extraName(title, kind, label),
+        version: v,
+        content_id: contentId(id, title, kind === "dlc" ? "DLC1" : ""),
+        title: kind === "patch" ? title : `${title}: ${label}`,
+        size_bytes: bytes,
+        category: kind === "patch" ? "gp" : "ac",
+      },
+    }));
+    const have = INSTALLED[id];
+    const update = offers.find((o) => o.kind === "patch" && have && o.offer.version > have)?.offer;
+    return {
+      game_id: id,
+      installed: !!have,
+      ...(have ? { installed_version: have } : {}),
+      ...(update ? { update } : {}),
+      dlc_missing: have && id === "PPSA90002" ? offers.filter((o) => o.kind === "dlc").map((o) => o.offer) : [],
+      non_package_copy: false,
+    };
+  });
+}
+
+/** The console's drives and folders, as Files shows them: the owner's games, images and backups. */
+type Entry = { name: string; kind: "dir" | "file"; size: number; mtime: number };
+const dirEntry = (name: string, agoH: number): Entry => ({ name, kind: "dir", size: 0, mtime: NOW - agoH * 3600 - 947 });
+const fileEntry = (name: string, size: number, agoH: number): Entry => ({ name, kind: "file", size, mtime: NOW - agoH * 3600 - 1371 });
+const FILES_START = "/data/games";
+const LISTINGS: Record<string, Entry[]> = {
+  "/data": [
+    dirEntry("games", 3),
+    dirEntry("homebrew", 26),
+    dirEntry("payloads", 190),
+    dirEntry("save-backups", 20),
+    dirEntry("screenshots", 49),
+    fileEntry("controller-layout.json", 3_184, 310),
+    fileEntry("fan-curve.json", 742, 96),
+    fileEntry("notes.txt", 2_048, 5),
+  ],
+  [FILES_START]: [
+    dirEntry("Copper Canyon", 3),
+    dirEntry("Pocket Galaxy", 172),
+    dirEntry("Skyward Isles", 51),
+    fileEntry("Clockwork Garden.ffpfsc", 11.9e9, 220),
+    fileEntry("Iron Harbor.exfat", 33.9e9, 75),
+    fileEntry("Kite Season.exfat", 3.4e9, 29),
+    fileEntry("Lantern Marsh.pkg", 22.6e9, 8),
+    fileEntry("Midnight Tram.pkg", 4.2e9, 340),
+    fileEntry("Mosswood Tales save notes.txt", 1_612, 12),
+  ],
+  "/mnt/ext0": [dirEntry("games", 100), dirEntry("captures", 60), dirEntry("save-backups", 20)],
+};
+const VOLUMES = [
+  { path: "/data", fs_type: "ufs", total_bytes: 824.6e9, free_bytes: 268.3e9, writable: true, is_placeholder: false },
+  { path: "/mnt/ext0", fs_type: "exfat", total_bytes: 2000.4e9, free_bytes: 1213.7e9, writable: true, is_placeholder: false },
+];
+
+/** An upload in progress, as the app's own task list holds it: the status bar names it with its
+ *  speed and time left (the module the app itself loaded, so this is the app's own store). */
+async function runningUpload(page: Page) {
+  await page.evaluate(async (host) => {
+    const url = "/src/state/tasks.ts";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mod: any = await import(/* @vite-ignore */ url);
+    const s = mod.useTaskStore.getState();
+    const id = s.registerTask({ kind: "upload-dir", origin: "site-shots", label: "Copper Canyon", consoleId: host });
+    s.updateTask(id, {
+      stage: "Sending",
+      progress: { current: 15.42e9, total: 41.3e9, unit: "bytes" },
+      rate: { bytesPerSec: 109.4e6 },
+      eta: 235,
+    });
+  }, HOST);
 }
 
 const READINESS = {
@@ -202,7 +338,7 @@ const CONSOLE_KEY = "ab".repeat(32);
 const HB_ID = "HBRW00001";
 const SHARE_LINK = "https://ps5upload.phantomptr.com/share/#room=Demo0Share0Not0Real00&fp=AB&hub=hub.example.com";
 const meshDevice = (id: string, name: string, kind: string, os: string, ip: string, online: boolean, via: string, agoS: number) => ({
-  id: id.repeat(32).slice(0, 64), name, nick: "", kind, os, app: "12.3.0", first: 1, last: Date.now() - agoS * 1000, ip, online, blocked: false, activity: [], via,
+  id: id.repeat(32).slice(0, 64), name, nick: "", kind, os, app: VERSION, first: 1, last: Date.now() - agoS * 1000, ip, online, blocked: false, activity: [], via,
 });
 function meshState(asking: boolean) {
   return {
@@ -210,7 +346,7 @@ function meshState(asking: boolean) {
     rev: asking ? 2 : 1,
     now: Date.now(),
     you: "me".padEnd(64, "0"),
-    helper: "12.3.0",
+    helper: VERSION,
     settings: { require_approval: true, prune_days: 90 },
     asks: asking ? [{ id: "cd".repeat(32), name: "Mia's phone", ip: "192.168.1.34", at: Date.now() - 4000 }] : [],
     devices: [
@@ -227,7 +363,7 @@ function meshState(asking: boolean) {
 function consolesAnswer(asking: boolean) {
   return (path: string) => {
     if (path === "/api/mesh/state") return meshState(asking);
-    if (path === "/api/mesh/me") return { id: "me", name: "MacBook", kind: "desktop", os: "macOS", app: "12.3.0" };
+    if (path === "/api/mesh/me") return { id: "me", name: "MacBook", kind: "desktop", os: "macOS", app: VERSION };
     if (path === "/api/mesh/device") return { supported: true, ok: true, rev: 3 };
     if (path === "/api/tailnet")
       return { ...TS_APP, consoles: [{ host: HOST, ip: "100.101.102.50", name: "living-room-ps5u", via: "lan", latency_ms: 18.4, tested_at: Date.now() - 86400_000 }] };
@@ -253,7 +389,7 @@ function consolesAnswer(asking: boolean) {
 function shareAnswer(state: { share: Record<string, unknown> }) {
   return (path: string, req: import("@playwright/test").Request) => {
     const m = req.method();
-    if (path === "/api/mesh/me") return { id: "me", name: "Alex's MacBook", kind: "desktop", os: "macOS", app: "12.3.0" };
+    if (path === "/api/mesh/me") return { id: "me", name: "Alex's MacBook", kind: "desktop", os: "macOS", app: VERSION };
     if (path === "/api/ps5/apps/installed") return { titles: [{ title_id: HB_ID, title_name: "Pocket Galaxy", origin: "folder" }] };
     if (path === `/api/games/${HB_ID}`)
       return {
@@ -290,6 +426,87 @@ const shareMade = (requests: unknown[]) => ({
   expires_in_s: 86_340, url: SHARE_LINK, lan_url: null, works: "anywhere", items: [], requests,
 });
 
+/** Scrolls the element's own scrolling box so the element's top sits `y` px down the window. */
+const scrollToY = (el: HTMLElement | SVGElement, y: number) => {
+  let box = el.parentElement;
+  while (box && !(box.scrollHeight > box.clientHeight && /auto|scroll/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
+  if (box) box.scrollTop += el.getBoundingClientRect().top - y;
+};
+
+/** The first covers have loaded: no grey boxes in the picture. */
+const coversLoaded = (page: Page) =>
+  page.waitForFunction(
+    () => {
+      const imgs = Array.from(document.querySelectorAll<HTMLImageElement>('main img[src*="/cover"]')).filter((i) => i.getBoundingClientRect().top < window.innerHeight);
+      return imgs.length > 0 && imgs.every((i) => i.complete && i.naturalWidth > 0);
+    },
+    undefined,
+    { timeout: 90_000 },
+  );
+
+/** A picture of some elements together, with a little of the page around them. */
+async function shotAround(page: Page, parts: Locator[], path: string, pad = { x: 10, y: 10 }) {
+  const boxes = (await Promise.all(parts.map((l) => l.boundingBox()))).filter((b) => !!b);
+  const x0 = Math.min(...boxes.map((b) => b.x)) - pad.x;
+  const y0 = Math.min(...boxes.map((b) => b.y)) - pad.y;
+  const x1 = Math.max(...boxes.map((b) => b.x + b.width)) + pad.x;
+  const y1 = Math.max(...boxes.map((b) => b.y + b.height)) + pad.y;
+  await page.screenshot({ path, animations: "disabled", caret: "hide", clip: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 } });
+}
+
+/** A finger held on `target`, as a phone sends it (e2e/files-phone-header.spec.ts). */
+async function longPress(page: Page, target: Locator) {
+  await target.scrollIntoViewIfNeeded();
+  const box = (await target.boundingBox())!;
+  const x = box.x + Math.min(40, box.width / 2);
+  const y = box.y + box.height / 2;
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+  await page.waitForTimeout(800);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await cdp.detach();
+}
+
+/** The game Convert checks in the pictures: a folder kept in zstd asset packs. */
+const CONVERT_SOURCE = `${ROOT}/PS5/Pocket Galaxy`;
+const RENAMED = "Lantern Marsh";
+
+/** Upload & Install's queue, mid-run: one game copied, one on its way, two packages waiting.
+ *  Set in the app's own queue store, so the rows are the app's rows. */
+async function uploadQueue(page: Page) {
+  await page.evaluate(
+    async ({ host, now, root }) => {
+      const url = "/src/state/uploadQueue.ts";
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mod: any = await import(/* @vite-ignore */ url);
+      const row = (name: string, kind: string, from: string, patch: Record<string, unknown>) => ({
+        id: `q-${name}`, sourceKind: kind, sourcePath: `${root}/${from}`, displayName: name,
+        resolvedDest: `/data/games/${name}`, addr: host, strategy: "resume", reconcileMode: "fast",
+        excludes: [], mountAfterUpload: false, mountReadOnly: false, registerAfterUpload: false,
+        txIdHex: `site${name.length}`, status: "pending", bytesSent: 0, totalBytes: 0,
+        bytesPerSec: 0, filesFinalized: 0, filesFinalizingTotal: 0, mountedAt: null,
+        registeredAs: null, mountWarnings: [], error: null, errorReason: null, errorDetail: null,
+        addedAt: now - 1_500_000, startedAt: null, completedAt: null, ...patch,
+      });
+      mod.useUploadQueueStore.setState({
+        items: [
+          row("Kite Season.exfat", "file", "PS5/Kite Season/Kite Season.exfat", {
+            status: "done", bytesSent: 3.4e9, totalBytes: 3.4e9, startedAt: now - 1_480_000, completedAt: now - 1_440_000,
+          }),
+          row("Copper Canyon", "folder", "PS5/Copper Canyon", {
+            status: "running", bytesSent: 15.42e9, totalBytes: 41.3e9, bytesPerSec: 109.4e6, startedAt: now - 150_000,
+          }),
+          row("Lantern Marsh.pkg", "file", "PS5/Lantern Marsh/Lantern Marsh.pkg", { totalBytes: 22.6e9 }),
+          row("Frostline (update 01.002).pkg", "file", "PS5/Frostline/Frostline (update 01.002).pkg", { totalBytes: 1.7e9 }),
+        ],
+        running: true,
+        runningHosts: { [host]: true },
+      });
+    },
+    { host: HOST, now: Date.now(), root: ROOT },
+  );
+}
+
 /** The made-up console, as the engine would answer for it. */
 async function fakeConsole(
   page: Page,
@@ -301,12 +518,14 @@ async function fakeConsole(
     tailnet?: boolean;
     /** A second PS5 on the list (12.2.0's Consoles page). */
     two?: boolean;
+    /** No friend asking to join (a picture about something else on the stream). */
+    nobodyAsking?: boolean;
     /** Answers first; undefined falls through to the rest. */
     extra?: (path: string, req: import("@playwright/test").Request) => unknown;
   },
 ) {
   await page.addInitScript(
-    ([host, paired, theme, now, lang, two]) => {
+    ([host, paired, theme, now, lang, two, start]) => {
       const ls = window.localStorage;
       ls.setItem("ps5upload.theme", theme);
       ls.setItem("ps5upload.lang", lang);
@@ -331,11 +550,18 @@ async function fakeConsole(
       // The last game seen playing, for Home's Continue.
       ls.setItem(
         "ps5upload.play_time.v2",
-        JSON.stringify({ byHost: { [host]: { PPSA90001: 5400 } }, lastSeenByHost: { [host]: { PPSA90001: now * 1000 } }, lastSampleMs: 0 }),
+        JSON.stringify({
+          byHost: { [host]: { PPSA90001: 41_820, PPSA90002: 97_260, CUSA90007: 18_540, PPSA90005: 6_300 } },
+          lastSeenByHost: {
+            [host]: { PPSA90001: now * 1000, PPSA90002: (now - 93_000) * 1000, CUSA90007: (now - 400_000) * 1000, PPSA90005: (now - 900_000) * 1000 },
+          },
+          lastSampleMs: 0,
+        }),
       );
+      ls.setItem("ps5upload.fs.lastPath", JSON.stringify({ [host]: start }));
       if (paired) ls.setItem("ps5upload.play_setup.v1", JSON.stringify({ rest: { [host]: true }, played: {}, homeHidden: false }));
     },
-    [HOST, opts.paired, opts.theme, NOW, opts.lang, !!opts.two] as const,
+    [HOST, opts.paired, opts.theme, NOW, opts.lang, !!opts.two, FILES_START] as const,
   );
   await page.route("**/api/collection/games/*/cover*", (route) => {
     const id = new URL(route.request().url()).pathname.split("/")[4];
@@ -356,7 +582,10 @@ async function fakeConsole(
         const got = await opts.extra(path, route.request());
         if (got !== undefined) return json(got);
       }
-      if (path.startsWith("/api/join")) return json(joinState(path, !!opts.internet));
+      if (path.startsWith("/api/join")) {
+        const state = joinState(path, !!opts.internet);
+        return json(opts.nobodyAsking && "pending" in state ? { ...state, pending: [] } : state);
+      }
       if (opts.tailnet) {
         if (path === "/api/ps5/tailnet") return json(TS_CONSOLE);
         if (path === "/api/tailnet") return json(TS_APP);
@@ -364,16 +593,16 @@ async function fakeConsole(
       }
       switch (path) {
         case "/api/version":
-          return json({ version: "12.3.0", caps: {} });
+          return json({ version: VERSION, caps: {} });
         case "/api/ps5/status":
-          return json({ ok: true, command_count: 1, instance_id: 1, ps5_kernel: "releases/10.00", ucred_elevated: true, version: "12.3.0" });
+          return json({ ok: true, command_count: 1, instance_id: 1, ps5_kernel: `releases/${FIRMWARE}`, ucred_elevated: true, version: VERSION });
         case "/api/ps5/rp/session":
           return json({ host: null });
         // Awake, as the console's own discovery reply says (the power card).
         case "/api/ps5/power/ddp-status":
           return json({
             code: 200, status_text: "Ok", host_id: "000000000000", host_name: "Living Room PS5", host_type: "PS5",
-            system_version: "10000000", running_app_name: "", running_app_titleid: "",
+            system_version: "10010000", running_app_name: "", running_app_titleid: "",
           });
         case "/api/ps5/remoteplay/readiness":
           return json(READINESS);
@@ -399,67 +628,74 @@ async function fakeConsole(
         case "/api/collection/library":
           return json(library());
         case "/api/collection/settings":
-          return json({ roots: ["/Volumes/Games"], refresh_secs: null, sweep_sidecars: false, trash_available: true });
+          return json({ roots: [ROOT], refresh_secs: null, sweep_sidecars: false, trash_available: true });
         case "/api/collection/scan":
-          return json({ running: false, deep: false, found: 8, done: 8, started_ms: 0, finished_ms: 0, error: null, games: 8, locations: 8 });
+          return json({ running: false, deep: false, found: 19, done: 19, started_ms: 0, finished_ms: 0, error: null, games: GAMES.length, locations: 19 });
         case "/api/collection/console":
-          return json({
-            games: GAMES.slice(0, 5).map(([id]) => ({ game_id: id, installed: true, installed_version: "01.000", dlc_missing: [], non_package_copy: false })),
-          });
+          return json({ games: consoleGames() });
         case "/api/ps5/apps/installed":
           return json({
-            titles: GAMES.slice(0, 5).map(([id, title]) => ({ title_id: id, title_name: title, origin: "pkg", image_backed: false, source: "", system: false })),
+            titles: GAMES.filter(([id]) => INSTALLED[id]).map(([id, title, , , , type]) => ({
+              title_id: id, title_name: title, origin: type === "pkg" ? "pkg" : "folder", image_backed: type.startsWith("mount."), source: "", system: false,
+            })),
             registered_unavailable: false,
             incomplete: false,
           });
         case "/api/games/installed":
-          return json(GAMES.slice(0, 5).map(([id, title]) => ({ title_id: id, title, hosts: [HOST] })));
+          return json(GAMES.filter(([id]) => INSTALLED[id]).map(([id, title]) => ({ title_id: id, title, hosts: [HOST] })));
         case "/api/ps5/saves/list":
           return json({
-            saves: GAMES.map(([id, , platform], i) => ({
+            // Last saved anywhere from this afternoon to a few weeks ago.
+            saves: GAMES.filter(([id]) => INSTALLED[id]).map(([id, , platform], i) => ({
               title_id: id,
               user_id: 0x10000000,
               path: platform === "PS5" ? `/user/home/10000000/savedata_prospero/${id}` : `/user/home/10000000/savedata/${id}`,
-              size: (i + 2) * 1_572_864,
-              mtime: NOW - i * 7200,
+              size: [11_534_336, 3_145_728, 26_214_400, 1_048_576, 7_340_032, 2_097_152, 524_288, 5_242_880][i % 8],
+              mtime: NOW - [2_700, 94_000, 262_000, 431_000, 780_000, 1_120_000, 1_900_000, 2_650_000][i % 8],
               kind: platform === "PS5" ? "ps5" : "ps4",
             })),
           });
-        case "/api/ps5/list-dir":
-          return json({
-            entries: [
-              { name: "homebrew", kind: "dir", size: 0, mtime: NOW - 3600 },
-              { name: "games", kind: "dir", size: 0, mtime: NOW - 7200 },
-              { name: "screenshots", kind: "dir", size: 0, mtime: NOW - 9000 },
-              { name: "notes.txt", kind: "file", size: 2048, mtime: NOW - 600 },
-              { name: "config.ini", kind: "file", size: 512, mtime: NOW - 86400 },
-            ],
-            truncated: false,
-          });
+        case "/api/ps5/list-dir": {
+          const dir = new URL(route.request().url()).searchParams.get("path") ?? "/data";
+          const entries = LISTINGS[dir.replace(/(.)\/$/, "$1")] ?? [];
+          return json({ path: dir, entries, truncated: false, total_scanned: entries.length, returned: entries.length });
+        }
         case "/api/ps5/files/prefs":
           return json({ supported: true, favorites: [], recent: [], last: null });
         case "/api/ps5/volumes":
+          return json({ volumes: VOLUMES });
+        case "/api/jobs":
+          return json([]);
+        // Convert's check of the game folder (#933: a game in asset packs).
+        case "/api/fpkg/inspect":
           return json({
-            volumes: [
-              { path: "/data", fs_type: "ufs", total_bytes: 825e9, free_bytes: 410e9, writable: true },
-              { path: "/mnt/ext0", fs_type: "exfat", total_bytes: 2000e9, free_bytes: 1240e9, writable: true },
-            ],
+            source: `folder ${CONVERT_SOURCE}`,
+            files: 1_284,
+            bytes: 8.1e9,
+            content_id: contentId("PPSA90005", "Pocket Galaxy"),
+            title: "Pocket Galaxy",
+            planned_size: 11.6e9,
+            output_free: 412e9,
+            checks: ["eboot.bin", "sce_sys/param.json", "sce_sys/icon0.png", "sce_module"].map((name) => ({ name, ok: true, detail: "ok" })),
+            packs: "zstd",
           });
+        case "/api/fpkg/estimate":
+          return route.fulfill({ status: 500, contentType: "application/json", body: '{"error":"no"}' });
         case "/api/ps5/hw/temps":
           tick++;
           return json({
-            cpu_temp: 50 + (tick % 4), soc_temp: 56 + (tick % 3), m2_temp: 41, cpu_freq_mhz: 3500, soc_clock_mhz: 0,
+            cpu_temp: 52 + (tick % 4), soc_temp: 57 + (tick % 3), m2_temp: 43, cpu_freq_mhz: 3500, soc_clock_mhz: 0,
             soc_power_mw: 0, cpu_usage_pct: 18 + (tick % 7), fan_duty_pct: 35, product_shape: 0, fan_pinned_c: 0,
           });
         case "/api/ps5/hw/power":
           return json({
-            operating_time_sec: 1_800_000, operating_time_hours: 500, operating_time_minutes: 0, boot_count: 120,
+            operating_time_sec: 6_417_480, operating_time_hours: 1782, operating_time_minutes: 38, boot_count: 413,
             power_consumption_mw: 0, load_avg_1m: 0.4, load_avg_5m: 0.3, load_avg_15m: 0.2,
           });
         case "/api/ps5/health/scan":
           return json({
             addr: HOST,
-            duration_ms: 640,
+            duration_ms: 612,
             checks: [
               { id: "payload", title: "Helper running", category: "connectivity", status: "pass", detail: "Connected", remedy: "" },
               { id: "clock", title: "Clock in sync", category: "system", status: "pass", detail: "Off by 0s", remedy: "" },
@@ -556,7 +792,7 @@ const MAC_UA =
 /** A console that can make a keyboard and a mouse (FW 13.60), in the given mode for every game. */
 async function fakeKbm(page: Page, mode: "native" | "mixed" | "controller" | null) {
   const json = (body: unknown) => ({ contentType: "application/json", body: JSON.stringify(body) });
-  await page.route("**/api/version", (route) => route.fulfill(json({ version: "11.0.4", caps: {} })));
+  await page.route("**/api/version", (route) => route.fulfill(json({ version: VERSION, caps: {} })));
   await page.route("**/api/ps5/status*", (route) =>
     route.fulfill(json({ ok: true, command_count: 1, instance_id: 1, ps5_kernel: "releases/13.60", ucred_elevated: true })),
   );
@@ -608,7 +844,46 @@ for (const lang of LANGS) {
                 if (/FPKG/.test(d.textContent ?? "")) (d as HTMLElement).style.display = "none";
               }
             });
+            // A queue mid-run, and the same upload in the status bar from here on.
+            await uploadQueue(page);
+            await runningUpload(page);
+            // The queue from its heading down: what runs now, what is next, what is done.
+            await page.getByTestId("queue-row").first().evaluate(scrollToY, 288);
+            await page.waitForTimeout(600);
           }
+          // Games: the filters and the first rows of covers, not the page's heading.
+          if (name === "games") {
+            const cover = page.locator('main img[src*="/cover"]').first();
+            await cover.evaluate(scrollToY, 330);
+            await cover.evaluate((el) => {
+              const edge = 68; // where the page shows from, under the app's top bar
+              let box = el.parentElement;
+              while (box && !(box.scrollHeight > box.clientHeight && /auto|scroll/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
+              if (!box) return;
+              const rows = () =>
+                Array.from(document.querySelectorAll("main button, main input, main select"))
+                  .map((b) => b.getBoundingClientRect())
+                  .filter((r) => r.height > 0 && r.top < edge + 2 && r.bottom > edge);
+              // A row cut through: show all of it. Only its last few pixels left: hide those.
+              const cut = rows().filter((r) => r.bottom > edge + 12);
+              if (cut.length) box.scrollTop -= edge + 12 - Math.min(...cut.map((r) => r.top));
+              const slivers = rows().filter((r) => r.bottom <= edge + 12);
+              if (slivers.length) box.scrollTop += Math.max(...slivers.map((r) => r.bottom)) - edge + 4;
+            });
+            await coversLoaded(page);
+            await page.waitForTimeout(400);
+          }
+          // Workshop: a game picked and checked, as it is just before a conversion.
+          if (name === "workshop") {
+            const source = page.getByRole("main").locator("#fpkg-source");
+            await source.fill(CONVERT_SOURCE);
+            await source.blur();
+            await expect(page.getByRole("main").getByTestId("unpack-option")).toBeVisible({ timeout: 30_000 });
+            await page.mouse.move(8, 8);
+            await page.waitForTimeout(600);
+          }
+          await page.mouse.move(8, 8);
+          await page.waitForTimeout(250);
           await shot(page, name, theme);
         }
       });
@@ -637,6 +912,94 @@ for (const lang of LANGS) {
         await page.getByTestId("rp-pad-mode-watch").click().catch(() => {});
         await page.waitForTimeout(800);
         await shot(page, "phones", theme);
+      });
+    });
+
+    // 12.6.31: a picked package's "Name on the PS5", and 12.6.30: Convert unpacking asset packs.
+    // Both are a part of the screen, close up: a narrow window, so the words stay readable in a
+    // small picture beside the site's text.
+    test.describe(`${lang} close-ups ${theme}`, () => {
+      test.use({ viewport: { width: 640, height: 1000 }, deviceScaleFactor: 2 });
+
+      test(`the package name card (${theme})`, async ({ page }) => {
+        const file = `${RENAMED}.pkg`;
+        const id = contentId("PPSA90010", RENAMED);
+        await fakeConsole(page, {
+          paired: true,
+          theme,
+          lang,
+          extra: (path) => {
+            if (path === "/api/files/upload") return { upload_id: "up-1", path: `${ROOT}/PS5/${RENAMED}/${file}`, size: 22.6e9, filename: file };
+            if (path === "/api/pkg/parse-split") return { head: { content_id: id, title: RENAMED, category: "gd", platform: "ps5" }, parts: [], total_size: 22.6e9 };
+            if (path === "/api/pkg/name")
+              return {
+                platform: "ps5", content_id: id, name: RENAMED,
+                entries: [{ key: "en-US", name: RENAMED }, { key: "fr-FR", name: "Le Marais aux lanternes" }],
+                other_names: 1, refusal: null, max_bytes: 127,
+              };
+            return undefined;
+          },
+        });
+        await page.goto("/send", { waitUntil: "domcontentloaded" });
+        const picker = page.locator('input[type="file"][multiple]').first();
+        await picker.waitFor({ state: "attached", timeout: 30_000 });
+        await picker.setInputFiles({ name: file, mimeType: "application/octet-stream", buffer: Buffer.from("made-up package") });
+        const card = page.getByTestId("pkg-name-card");
+        await expect(card).toBeVisible({ timeout: 30_000 });
+        await card.getByTestId("pkg-name-input").fill(`${RENAMED}: Deluxe`);
+        await expect(card.getByTestId("pkg-name-save")).toBeEnabled();
+        await card.evaluate(scrollToY, 200);
+        await page.mouse.move(8, 8);
+        await page.waitForTimeout(500);
+        await shotAround(page, [card], `${dir}/pkg-name-${theme}.png`);
+      });
+
+      test(`convert unpacks asset packs (${theme})`, async ({ page }) => {
+        await fakeConsole(page, { paired: true, theme, lang });
+        await page.goto("/workshop", { waitUntil: "domcontentloaded" });
+        const main = page.getByRole("main");
+        const source = main.locator("#fpkg-source");
+        await source.waitFor({ timeout: 30_000 });
+        await source.fill(CONVERT_SOURCE);
+        await source.blur();
+        const unpack = main.getByTestId("unpack-option");
+        await expect(unpack.getByRole("checkbox")).toBeChecked({ timeout: 30_000 });
+        await unpack.evaluate(scrollToY, 240);
+        await page.mouse.move(8, 8);
+        await page.waitForTimeout(500);
+        await shotAround(page, [unpack, main.getByTestId("leave-out-ampr-emu")], `${dir}/convert-unpack-${theme}.png`, { x: 12, y: 3 });
+      });
+    });
+
+    // 12.6.30: the Android app on a TV (MainActivity's bridge says so): a new install's first
+    // screen offers Join Play Together, in focus for the remote.
+    test.describe(`${lang} tv ${theme}`, () => {
+      test.use({ viewport: { width: 960, height: 540 }, deviceScaleFactor: 2 });
+
+      test(`the app on a TV (${theme})`, async ({ page }) => {
+        await page.addInitScript(
+          ([lang, theme]) => {
+            (window as unknown as { PS5UploadTv: { isTv(): boolean } }).PS5UploadTv = { isTv: () => true };
+            const ls = window.localStorage;
+            ls.setItem("ps5upload.lang", lang);
+            ls.setItem("ps5upload.theme", theme);
+            ls.setItem("ps5upload.join.name", "Sam");
+            ls.setItem("ps5upload.join.guided", "1");
+          },
+          [lang, theme] as const,
+        );
+        await page.route(
+          (url) => url.pathname.startsWith("/api/"),
+          (route) => {
+            const path = new URL(route.request().url()).pathname;
+            const body = path === "/api/version" ? { version: VERSION, caps: {} } : path === "/api/ps5/rp/session" ? { host: null } : {};
+            return route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
+          },
+        );
+        await page.goto("/", { waitUntil: "domcontentloaded" });
+        await expect(page.getByTestId("tv-join-go")).toBeFocused({ timeout: 30_000 });
+        await page.waitForTimeout(800);
+        await shot(page, "tv-join", theme);
       });
     });
 
@@ -863,7 +1226,7 @@ for (const lang of LANGS) {
       test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1.5, userAgent: MAC_UA });
 
       test(`kbm: the first capture and the release chip (${theme})`, async ({ page }) => {
-        await fakeConsole(page, { paired: true, theme, lang });
+        await fakeConsole(page, { paired: true, theme, lang, nobodyAsking: true });
         await fakeKbm(page, "native");
         await page.goto("/home", { waitUntil: "domcontentloaded" });
         const frames = await streamOf(page, { w: 1920, h: 1080 });
@@ -892,7 +1255,7 @@ for (const lang of LANGS) {
       });
 
       test(`kbm settings (${theme})`, async ({ page }) => {
-        await fakeConsole(page, { paired: true, theme, lang });
+        await fakeConsole(page, { paired: true, theme, lang, nobodyAsking: true });
         await fakeKbm(page, "native");
         await page.goto("/home", { waitUntil: "domcontentloaded" });
         const frames = await streamOf(page, { w: 1920, h: 1080 });
@@ -925,7 +1288,7 @@ for (const lang of LANGS) {
       test.use({ viewport: { width: 844, height: 390 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
 
       test(`phone touchpad (${theme})`, async ({ page }) => {
-        await fakeConsole(page, { paired: true, theme, lang });
+        await fakeConsole(page, { paired: true, theme, lang, nobodyAsking: true });
         await fakeKbm(page, null);
         await page.goto("/home", { waitUntil: "domcontentloaded" });
         const frames = await streamOf(page, { w: 1280, h: 720 });
@@ -987,22 +1350,27 @@ for (const lang of LANGS) {
       test.use({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
 
       test(`phone screens (${theme})`, async ({ page }) => {
-        await fakeConsole(page, { paired: true, theme, lang });
+        await fakeConsole(page, { paired: true, theme, lang, nobodyAsking: true });
         await page.goto("/home", { waitUntil: "domcontentloaded" });
         await expect(page.getByTestId("home-play")).toBeVisible({ timeout: 30_000 });
         await page.waitForTimeout(1500);
         await shot(page, "m-home", theme);
         await page.goto("/games", { waitUntil: "domcontentloaded" });
         await page.waitForTimeout(2500);
-        // Down to the covers.
-        await page.evaluate(() => {
-          const img = document.querySelector('main img[src*="/cover"]');
-          img?.scrollIntoView({ block: "start" });
-          document.querySelector("main")?.scrollBy?.(0, -90);
-          window.scrollBy(0, -90);
-        });
+        // Down to the covers, the first row whole under the app's bar.
+        await page.locator('main img[src*="/cover"]').first().evaluate(scrollToY, 84);
+        await coversLoaded(page);
         await page.waitForTimeout(600);
         await shot(page, "m-games", theme);
+        // 12.6.30: Files on a phone. A long press starts selecting; the actions are at the bottom.
+        await page.goto("/files", { waitUntil: "domcontentloaded" });
+        const fileRow = (name: string) => page.getByRole("main").locator(`li[data-fs-name="${name}"]`);
+        await expect(fileRow("Kite Season.exfat")).toBeVisible({ timeout: 30_000 });
+        await longPress(page, fileRow("Kite Season.exfat"));
+        await expect(page.getByRole("main").getByRole("toolbar")).toBeVisible({ timeout: 10_000 });
+        await fileRow("Lantern Marsh.pkg").tap();
+        await page.waitForTimeout(600);
+        await shot(page, "m-files", theme);
         const frames = await streamOf(page, { w: 1280, h: 720 });
         await fakeStream(page, frames);
         await page.goto("/play", { waitUntil: "domcontentloaded" });

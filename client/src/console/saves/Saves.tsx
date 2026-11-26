@@ -8,7 +8,8 @@ import { parseDbPage } from "../games/model";
 import { CARD_PX } from "../library/Library";
 import { onNavAction } from "../nav";
 import type { SectionContext } from "../sections";
-import { getLanguage, t } from "../strings";
+import { t } from "../strings";
+import { formatDateTime } from "../time";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Modal } from "../ui/Modal";
 import {
@@ -83,7 +84,7 @@ export interface SavesViewProps {
   onCloseGame: (appId: number) => void;
 }
 
-const when = (b: Backup) => new Date(b.when).toLocaleString(getLanguage());
+const when = (b: Backup) => formatDateTime(b.when);
 
 const kindText = (k: SaveKind) =>
   k === "savedata_prospero" ? t("cw_saves_kind_prospero") : k === "savedata" ? t("cw_saves_kind_ps4") : t("cw_saves_kind_meta");

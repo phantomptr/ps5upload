@@ -19,6 +19,8 @@ use super::{Entry, Page, RemoteError, RemoteFile, RemoteFs};
 
 /// Longest wait for any one server step.
 const STEP: Duration = Duration::from_secs(30);
+/// The most links of one folder looked up for what they point at (one request each).
+const MAX_LINKS_FOLLOWED: usize = 256;
 
 async fn timed<T>(
     host: &str,
@@ -228,14 +230,19 @@ impl SftpFs {
                 .map_err(|e| sftp_err(host, e))
         })
         .await?;
+        let mut links: Vec<usize> = Vec::new();
         let mut out: Vec<Entry> = listed
             .filter(|e| {
                 let n = e.file_name();
                 n != "." && n != ".."
             })
-            .map(|e| {
+            .enumerate()
+            .map(|(i, e)| {
                 let m = e.metadata();
                 let is_dir = m.is_dir();
+                if m.is_symlink() {
+                    links.push(i);
+                }
                 Entry {
                     name: e.file_name(),
                     is_dir,
@@ -244,6 +251,26 @@ impl SftpFs {
                 }
             })
             .collect();
+        // A listing describes a link itself: its size is the length of the path it holds. An
+        // upload planned with that sent that many bytes of the file and ended as done. A link
+        // to a file is listed as its file (what opening it reads); one to a folder, or to
+        // nothing, stays as listed.
+        for i in links.into_iter().take(MAX_LINKS_FOLLOWED) {
+            let full = format!("{}/{}", dir.trim_end_matches('/'), out[i].name);
+            let target = timed(host, "a file lookup", async {
+                self.sftp
+                    .metadata(full)
+                    .await
+                    .map_err(|e| sftp_err(host, e))
+            })
+            .await;
+            if let Ok(m) = target {
+                if !m.is_dir() {
+                    out[i].size = m.size.unwrap_or(0);
+                    out[i].mtime = m.mtime.map(i64::from);
+                }
+            }
+        }
         out.sort_by_key(|e| e.name.to_lowercase());
         Ok(out)
     }

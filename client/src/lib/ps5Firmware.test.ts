@@ -41,7 +41,7 @@ describe("parsePS5Firmware", () => {
 describe("ps5FakeGameNeedsNewKstuff", () => {
   const K = (fw: string) => `FreeBSD 11.0-RELEASE-p0 #1 r229358/releases/${fw} Jul 17 2026`;
   const PS5_GAME = "UP4433-PPSA17221_00-MINECRAFTPS50000";
-  it("names 11.61 to 13.60, where a fake PS5 game needs the November 2026 kstuff", () => {
+  it("names 11.61 to 13.60, where a fake PS5 game needs kstuff 1.15 or newer", () => {
     expect(ps5FakeGameNeedsNewKstuff(K("11.61"), PS5_GAME)).toBe("11.61");
     expect(ps5FakeGameNeedsNewKstuff(K("12.70"), PS5_GAME)).toBe("12.70");
     expect(ps5FakeGameNeedsNewKstuff(K("13.60"), "PPSA17221")).toBe("13.60");

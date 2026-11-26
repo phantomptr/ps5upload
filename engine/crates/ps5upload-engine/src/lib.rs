@@ -22,6 +22,7 @@ mod api_errors;
 mod app_dump_api;
 #[cfg(test)]
 mod archive_build_tests;
+mod archive_free;
 mod archive_tree;
 mod ava1_api;
 mod browser_payload;
@@ -99,6 +100,7 @@ mod pad_link;
 mod payload_updates_api;
 mod payloads_api;
 mod pkg_install;
+mod pkg_name_api;
 mod pkg_sidecar;
 mod pldmgr_api;
 mod profile_image;
@@ -8784,6 +8786,13 @@ async fn transfer_zip_handler(
     let Some(busy) = helper_stop::try_enter(&addr) else {
         return helper_stop::stopping_refusal();
     };
+    // Read until the upload ends: an unpack that frees this archive as it goes
+    // (`archive_free`) is refused meanwhile, and this upload while one runs.
+    let reading =
+        match crate::image_edit_in_place::Reading::take(std::path::Path::new(&req.zip_path)) {
+            Ok(r) => r,
+            Err(why) => return json_err(StatusCode::CONFLICT, why).into_response(),
+        };
     let caller_supplied_tx_id = req.tx_id.is_some();
     let tx_id = match parse_or_random_tx_id(req.tx_id.as_deref()) {
         Ok(id) => id,
@@ -8914,6 +8923,7 @@ async fn transfer_zip_handler(
     tokio::task::spawn_blocking(move || {
         // Marks the console busy for the job: a helper stop is refused meanwhile.
         let _busy = busy;
+        let _reading = reading;
         let _stop_guard = TickerStopGuard::new(stop_ticker);
         let mut fail_guard =
             JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
@@ -9315,6 +9325,10 @@ async fn profile_username_handler(Json(req): Json<ProfileUsernameReq>) -> impl I
     };
     let slot = req.slot;
     let name = req.name;
+    // A name the console cannot hold is the request's fault (400), not the console's (502).
+    if let Err(why) = ps5upload_core::profile::check_user_name(&name) {
+        return json_err(StatusCode::BAD_REQUEST, why).into_response();
+    }
     crate::log_info!("profile_set_username: addr={addr} slot={slot}");
     let r = tokio::task::spawn_blocking(move || {
         ps5upload_core::profile::profile_set_username(&addr, slot, &name)
@@ -9336,6 +9350,10 @@ async fn profile_local_username_handler(
     };
     let uid = req.uid;
     let name = req.name;
+    // A name the console cannot hold is the request's fault (400), not the console's (502).
+    if let Err(why) = ps5upload_core::profile::check_user_name(&name) {
+        return json_err(StatusCode::BAD_REQUEST, why).into_response();
+    }
     crate::log_info!("profile_set_local_username: addr={addr} uid={uid}");
     let r = tokio::task::spawn_blocking(move || {
         ps5upload_core::profile::profile_set_local_username(&addr, uid, &name)
@@ -10395,6 +10413,13 @@ async fn transfer_7z_handler(
     let Some(busy) = helper_stop::try_enter(&addr) else {
         return helper_stop::stopping_refusal();
     };
+    // Read until the upload ends: an unpack that frees this archive as it goes
+    // (`archive_free`) is refused meanwhile, and this upload while one runs.
+    let reading =
+        match crate::image_edit_in_place::Reading::take(std::path::Path::new(&req.archive_path)) {
+            Ok(r) => r,
+            Err(why) => return json_err(StatusCode::CONFLICT, why).into_response(),
+        };
     let caller_supplied_tx_id = req.tx_id.is_some();
     let tx_id = match parse_or_random_tx_id(req.tx_id.as_deref()) {
         Ok(id) => id,
@@ -10500,6 +10525,7 @@ async fn transfer_7z_handler(
     tokio::task::spawn_blocking(move || {
         // Marks the console busy for the job: a helper stop is refused meanwhile.
         let _busy = busy;
+        let _reading = reading;
         let _stop_guard = TickerStopGuard::new(stop_ticker);
         let mut fail_guard =
             JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
@@ -10672,6 +10698,13 @@ async fn transfer_tar_handler(
     let Some(busy) = helper_stop::try_enter(&addr) else {
         return helper_stop::stopping_refusal();
     };
+    // Read until the upload ends: an unpack that frees this archive as it goes
+    // (`archive_free`) is refused meanwhile, and this upload while one runs.
+    let reading =
+        match crate::image_edit_in_place::Reading::take(std::path::Path::new(&req.archive_path)) {
+            Ok(r) => r,
+            Err(why) => return json_err(StatusCode::CONFLICT, why).into_response(),
+        };
     let caller_supplied_tx_id = req.tx_id.is_some();
     let tx_id = match parse_or_random_tx_id(req.tx_id.as_deref()) {
         Ok(id) => id,
@@ -10780,6 +10813,7 @@ async fn transfer_tar_handler(
     tokio::task::spawn_blocking(move || {
         // Marks the console busy for the job: a helper stop is refused meanwhile.
         let _busy = busy;
+        let _reading = reading;
         let _stop_guard = TickerStopGuard::new(stop_ticker);
         let mut fail_guard =
             JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
@@ -10911,6 +10945,13 @@ async fn transfer_rar_handler(
     let Some(busy) = helper_stop::try_enter(&addr) else {
         return helper_stop::stopping_refusal();
     };
+    // Read until the upload ends: an unpack that frees this archive as it goes
+    // (`archive_free`) is refused meanwhile, and this upload while one runs.
+    let reading =
+        match crate::image_edit_in_place::Reading::take(std::path::Path::new(&req.archive_path)) {
+            Ok(r) => r,
+            Err(why) => return json_err(StatusCode::CONFLICT, why).into_response(),
+        };
     let caller_supplied_tx_id = req.tx_id.is_some();
     let tx_id = match parse_or_random_tx_id(req.tx_id.as_deref()) {
         Ok(id) => id,
@@ -11017,6 +11058,7 @@ async fn transfer_rar_handler(
     tokio::task::spawn_blocking(move || {
         // Marks the console busy for the job: a helper stop is refused meanwhile.
         let _busy = busy;
+        let _reading = reading;
         let _stop_guard = TickerStopGuard::new(stop_ticker);
         let mut fail_guard =
             JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
@@ -13484,6 +13526,10 @@ fn build_app_and_mcp(
         )
         .route("/api/fpkg/estimate", post(fpkg_api::fpkg_estimate_handler))
         .route("/api/fpkg/extract", post(fpkg_api::fpkg_extract_handler))
+        .route(
+            "/api/fpkg/extract/free-check",
+            post(archive_free::free_check_handler),
+        )
         .route(
             "/api/fpkg/extract/cleanup",
             post(fpkg_api::fpkg_extract_cleanup_handler),

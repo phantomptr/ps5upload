@@ -18,6 +18,14 @@ describe("humanizePs5Error", () => {
     ).toBe(en.err_link_changed);
   });
 
+  it("says in words why a folder's title ID is not put on the home screen", () => {
+    // The helper's codes (install_guard.h) reached the user as they are.
+    expect(humanizePs5Error("engine HTTP 502: register_system_title")).toBe(en.err_register_system_title);
+    expect(humanizePs5Error("register failed: register_title_id_unsafe")).toBe(en.err_register_title_id_unsafe);
+    expect(en.err_register_system_title).not.toMatch(/register_/);
+    expect(en.err_register_title_id_unsafe).toContain("PPSA01234");
+  });
+
   it("says the next step for a pairing the PS5 refuses as pending (80108b03)", () => {
     const m = humanizePs5Error("registration failed (HTTP 403): anything (reason 80108B03)");
     expect(m).toBe(en.err_pair_pending);

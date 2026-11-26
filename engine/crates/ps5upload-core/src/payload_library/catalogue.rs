@@ -113,7 +113,7 @@ pub(super) const CATALOGUE: &[CatalogueEntry] = &[
         id: "kstuff-echostretch",
         display_name: "kstuff-lite (EchoStretch)",
         role: "Kernel exploit + R/W primitive",
-        description: "Kernel patcher for the full PS5 firmware range. Resolves kernel symbols at runtime via the SDK's NID table, so the same binary covers FW 1.00 → 13.60. Required by ShadowMountPlus and most other privileged payloads. Load this first.",
+        description: "Kernel patcher for the full PS5 firmware range. Resolves kernel symbols at runtime via the SDK's NID table, so the same binary covers FW 1.00 → 13.60. Required by ShadowMountPlus and most other privileged payloads. Load this first. Fake PS5 games on firmware 11.61 to 13.60 need kstuff 1.15 or newer; the releases listed here may be older, so get kstuff 1.15 from its author and send it as a payload file.",
         repo_host: "github.com",
         repo_owner: "EchoStretch",
         repo_name: "kstuff-lite",

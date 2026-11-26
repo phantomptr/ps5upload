@@ -54,6 +54,10 @@ extern unsigned int ps5upload_convert_elf_len;
 #ifndef CONVERT_KILL_AFTER_MS
 #define CONVERT_KILL_AFTER_MS 10000
 #endif
+/* For a killed converter to be gone before its unfinished output is removed. */
+#ifndef CONVERT_KILL_WAIT_MS
+#define CONVERT_KILL_WAIT_MS 10000
+#endif
 /* The console's idle timer is reset this often while a build runs, so it does not enter rest
  * mode on its own in the middle of one (rest mode ends every payload). */
 #ifndef CONVERT_POWER_TICK_MS
@@ -587,6 +591,12 @@ static int follow(ava1_op_ctx_t *c, const char *id, const char *dest, const cc_b
         } else if (cancel_sent && now_ms() - cancel_at > CONVERT_KILL_AFTER_MS) {
             fprintf(stderr, "convert: the converter (pid %llu) did not stop; killing it\n", (unsigned long long)s->pid);
             if (pid_signallable(s->pid)) (void)kill((pid_t)s->pid, SIGKILL);
+            /* Until it is really gone, not a fixed half second (as archive_extract.c waits): a
+             * process inside a long write to a slow drive ends only when that write returns, and
+             * the caller removes the unfinished output next. Removed under a writer still putting
+             * files into it, part of it stayed on the drive with nothing left to clear it. Bounded,
+             * so a pid that never goes away cannot hold the job (and its lock) for good. */
+            for (int i = 0; i < CONVERT_KILL_WAIT_MS / 100 && pid_alive(s->pid); i++) sleep_ms(100);
             sleep_ms(500);
             ava1_op_message(c, "convert_cancelled");
             free(cur_buf);
@@ -641,12 +651,24 @@ static const char *check_build(const char *json, const char *src, int src_is_dir
     b->inner[0] = 0;
     b->ffpfsc_level[0] = 0;
     b->pkg_level[0] = 0;
+    b->unpack_packs = 0;
+    b->leave_out_ampr_emu = 0;
     if (strcmp(format, "pkg") == 0) {
+        uint64_t unpack = 0, leave_out = 0;
         /* zstd packs go into an image or a folder; the level is the converter's default when absent. */
         if (b->zstd) return "convert_bad_format";
         if (fsj_json_present(json, "pkg_level") &&
             (!fsj_json_str(json, "pkg_level", b->pkg_level, sizeof b->pkg_level) || !cc_pkg_level_ok(b->pkg_level)))
             return "convert_bad_pkg_level";
+        /* A packed game as plain files, with or without its emulator: both false when absent, and
+         * the emulator is left out only of a game that is unpacked. Whether the game is in packs,
+         * and whether its own emulator can stay, is the converter's to say (it reads the game). */
+        if ((fsj_json_present(json, "unpack_packs") && !fsj_json_u64(json, "unpack_packs", &unpack)) ||
+            (fsj_json_present(json, "leave_out_ampr_emu") && !fsj_json_u64(json, "leave_out_ampr_emu", &leave_out)) ||
+            (leave_out && !unpack))
+            return "convert_bad_unpack";
+        b->unpack_packs = unpack != 0;
+        b->leave_out_ampr_emu = leave_out != 0;
     }
     if (strcmp(format, "ffpfsc") == 0) {
         /* The image inside it and how hard it is compressed: the converter's defaults when absent. */
@@ -716,7 +738,7 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
                    : strncmp(bad, "convert_missing", 15) == 0 || strncmp(bad, "convert_bad_format", 18) == 0 ||
                              strcmp(bad, "convert_bad_verify") == 0 || strcmp(bad, "convert_bad_zstd_level") == 0 ||
                              strcmp(bad, "convert_bad_inner") == 0 || strcmp(bad, "convert_bad_ffpfsc_level") == 0 ||
-                             strcmp(bad, "convert_bad_pkg_level") == 0
+                             strcmp(bad, "convert_bad_pkg_level") == 0 || strcmp(bad, "convert_bad_unpack") == 0
                          ? AVA1_ERR_PROTOCOL
                          : AVA1_ERR_PATH;
         }

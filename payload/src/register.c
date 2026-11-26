@@ -1092,6 +1092,14 @@ int register_remount_nullfs(const char *title_id, const char *src_path,
         if (err_reason_out) *err_reason_out = "register_args_invalid";
         return -1;
     }
+    /* Not over one of the console's own apps, nor for an id that is no title id (install_guard.h). */
+    {
+        const char *refused = install_guard_register_id_refusal(title_id);
+        if (refused) {
+            if (err_reason_out) *err_reason_out = refused;
+            return -1;
+        }
+    }
     /* A bind over /system_ex/app/<id> of a title the console installed would hide its own (#884). */
     {
         install_guard_hit_t hit;
@@ -1324,6 +1332,16 @@ int register_title_from_path(const char *src_path,
     if (!is_safe_component(title_id)) {
         if (err_reason_out) *err_reason_out = "register_title_id_unsafe";
         return -1;
+    }
+    /* The id is whatever the folder's own param.json says. Only a title id goes on, and never one
+     * of the console's own apps (NPXS...): install_guard.h says what each did. Before ANY write. */
+    {
+        const char *refused = install_guard_register_id_refusal(title_id);
+        if (refused) {
+            fprintf(stderr, "[register] %s: title id refused (%s)\n", src_path, refused);
+            if (err_reason_out) *err_reason_out = refused;
+            return -1;
+        }
     }
 
     /* 0a -- never over an install of the console's own (#884). Staging /user/app/<id> and asking

@@ -85,13 +85,21 @@ const tree = () =>
 const at = (iso: string): OpDeps["now"] => () => new Date(iso);
 
 describe("save backups: model", () => {
-  it("names a backup by its local date and time, and reads the name back", () => {
-    const d = new Date(2026, 9, 27, 21, 5, 9);
-    expect(backupName(d)).toBe("2026-10-27_21-05-09");
-    expect(backupName(d, true)).toBe("2026-10-27_21-05-09_auto");
-    expect(parseBackupName("2026-10-27_21-05-09")).toEqual({ name: "2026-10-27_21-05-09", when: d.getTime(), auto: false });
-    expect(parseBackupName("2026-10-27_21-05-09_auto")?.auto).toBe(true);
+  it("names a backup by the moment it was made (UTC, marked), and reads the name back", () => {
+    const d = new Date(Date.UTC(2026, 9, 27, 21, 5, 9));
+    expect(backupName(d)).toBe("2026-10-27_21-05-09Z");
+    expect(backupName(d, true)).toBe("2026-10-27_21-05-09Z_auto");
+    expect(parseBackupName("2026-10-27_21-05-09Z")).toEqual({ name: "2026-10-27_21-05-09Z", when: d.getTime(), auto: false });
+    expect(parseBackupName("2026-10-27_21-05-09Z_auto")).toEqual({ name: "2026-10-27_21-05-09Z_auto", when: d.getTime(), auto: true });
     expect(parseBackupName("../x")).toBeNull();
+    expect(parseBackupName("2026-10-27_21-05-09z")).toBeNull();
+    expect(parseBackupName("2026-10-27_21-05-09_autoZ")).toBeNull();
+  });
+
+  it("still reads a backup named before #928: the wall clock of the browser that made it", () => {
+    const local = new Date(2026, 9, 27, 21, 5, 9);
+    expect(parseBackupName("2026-10-27_21-05-09")).toEqual({ name: "2026-10-27_21-05-09", when: local.getTime(), auto: false });
+    expect(parseBackupName("2026-10-27_21-05-09_auto")?.auto).toBe(true);
   });
 
   it("lists the users with a home folder, named and in the system's order", async () => {
@@ -202,9 +210,9 @@ describe("save backups: model", () => {
     expect(await loadBackups(U, "PPSA04609", c.call, usb)).toEqual([expect.objectContaining({ name })]);
     expect(await loadBackups(U, "PPSA04609", c.call)).toEqual([]); // nothing on the internal drive
 
-    d.now = at("2026-10-28T09:30:00");
+    d.now = at("2026-10-28T09:30:00Z");
     const safety = await restore(U, "PPSA04609", name, ["savedata_prospero", "savedata_prospero_meta"], d, usb);
-    expect(safety).toBe("2026-10-28_09-30-00_auto");
+    expect(safety).toBe("2026-10-28_09-30-00Z_auto");
     expect((await loadBackups(U, "PPSA04609", c.call)).map((b) => b.name)).toEqual([safety]);
     expect(c.files.has(`${HOME}/savedata_prospero/PPSA04609/sdimg_SAVEDATA00`)).toBe(true);
 

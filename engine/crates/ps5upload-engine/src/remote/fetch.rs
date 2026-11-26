@@ -312,6 +312,8 @@ struct CopyPlan {
     dest_dir: PathBuf,
     dest: PathBuf,
     made_dir: bool,
+    /// The names this copy writes, held as its own until the job ends.
+    targets: Targets,
 }
 
 /// The refusals: too many files, sizes that do not add up, no room, a name already taken.
@@ -387,11 +389,24 @@ fn plan_copy(
             format!("{} already exists", taken.display()),
         ));
     }
+    // A name is free only if no copy running now is on its way to it: its file is not there
+    // until the copy ends. Two copies of one file into one folder both passed the look above,
+    // wrote the same `.partial`, and the one that lost deleted the finished file of the other.
+    let wanted = std::iter::once(dest.clone())
+        .chain(siblings.iter().map(|(_, e)| dest_dir.join(&e.name)))
+        .collect();
+    let targets = Targets::claim(wanted).map_err(|taken| {
+        (
+            StatusCode::CONFLICT,
+            format!("{} is already being copied", taken.display()),
+        )
+    })?;
     Ok(CopyPlan {
         total,
         dest_dir,
         dest,
         made_dir,
+        targets,
     })
 }
 
@@ -431,6 +446,7 @@ async fn run_copy(run: RunCopy) {
         dest_dir,
         dest,
         made_dir,
+        targets: _targets,
     } = plan;
     // A RAR set's other volumes land beside the first.
     let sibling_copies: Vec<(String, Entry, PathBuf)> = siblings
@@ -790,6 +806,36 @@ const OUTPUT_COPY_DIR: &str = ".ps5upload-source";
 fn copying() -> &'static Mutex<std::collections::HashSet<PathBuf>> {
     static COPYING: OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = OnceLock::new();
     COPYING.get_or_init(Default::default)
+}
+
+/// The names (files or folders) the copies running now will write.
+fn targets() -> &'static Mutex<std::collections::HashSet<PathBuf>> {
+    static TARGETS: OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = OnceLock::new();
+    TARGETS.get_or_init(Default::default)
+}
+
+/// The names one copy writes, its own until dropped: no other copy takes one of them.
+struct Targets(Vec<PathBuf>);
+
+impl Targets {
+    /// All of `wanted`, or the first of them another running copy already has.
+    fn claim(wanted: Vec<PathBuf>) -> Result<Self, PathBuf> {
+        let mut held = targets().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(taken) = wanted.iter().find(|p| held.contains(*p)) {
+            return Err(taken.clone());
+        }
+        held.extend(wanted.iter().cloned());
+        Ok(Targets(wanted))
+    }
+}
+
+impl Drop for Targets {
+    fn drop(&mut self) {
+        let mut held = targets().lock().unwrap_or_else(|e| e.into_inner());
+        for p in &self.0 {
+            held.remove(p);
+        }
+    }
 }
 
 /// Marks a folder as being copied into, for as long as it lives.
@@ -1321,6 +1367,43 @@ mod tests {
         for ok in ["Game.pkg", "ゲーム", "a b (1).rar", "..hidden"] {
             assert!(unsafe_leaf(ok).is_none(), "{ok}");
         }
+    }
+
+    /// Two copies of one file into one folder: the second is refused while the first runs (its
+    /// file is not there yet, so "already exists" could not tell). Both used to write the same
+    /// partial, and the one that lost deleted the finished file of the other.
+    #[tokio::test]
+    async fn a_second_copy_to_a_name_still_being_copied_is_refused() {
+        let dest_dir = crate::remote::store::test_dir();
+        let entry = Entry {
+            name: "a.pkg".into(),
+            is_dir: false,
+            size: 1,
+            mtime: None,
+        };
+        let plan = |d: &FetchDeps| {
+            plan_copy(
+                d,
+                &FetchBody {
+                    path: String::new(),
+                    dest_dir: Some(dest_dir.display().to_string()),
+                },
+                "/dl/a.pkg",
+                &[(String::new(), entry.clone())],
+                &[],
+            )
+        };
+        let (d, _jobs) = deps(plenty);
+        let first = plan(&d)
+            .map_err(|e| e.1)
+            .expect("the first copy is planned");
+        let second = plan(&d).err().expect("the second is refused");
+        assert_eq!(second.0, StatusCode::CONFLICT);
+        assert!(second.1.contains("already being copied"), "{}", second.1);
+        // Once the first has ended the name is free again (nothing was written here).
+        drop(first);
+        assert!(plan(&d).is_ok());
+        let _ = std::fs::remove_dir_all(&dest_dir);
     }
 
     /// A file or a RAR volume whose name starts with a backslash is refused before anything is

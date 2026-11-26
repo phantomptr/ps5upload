@@ -234,6 +234,8 @@ pub const SYS_TIME_ERR_FALLBACK: u32 = 0xE0002003;
 pub const SYS_REGISTRY_ERR_NULL_ARG: u32 = 0xE0003001;
 pub const SYS_REGISTRY_ERR_NO_SYMBOL: u32 = 0xE0003002;
 pub const SYS_REGISTRY_ERR_BUFFER_TOO_SMALL: u32 = 0xE0003003;
+/// The value does not fit the key's field; the helper refused it, nothing was written.
+pub const SYS_REGISTRY_ERR_VALUE_TOO_LONG: u32 = 0xE0003004;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PsTime {

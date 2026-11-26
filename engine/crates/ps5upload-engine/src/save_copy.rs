@@ -1474,7 +1474,9 @@ impl Console for Live<'_> {
         user_id: u32,
     ) -> Result<(), String> {
         let s = local::settings();
-        local::put_in_place(self.host, title_id, src, folder, user_id, &s, None, false)
+        local::put_in_place(
+            self.host, title_id, src, folder, user_id, &s, None, false, None,
+        )
     }
     fn put_back(
         &self,

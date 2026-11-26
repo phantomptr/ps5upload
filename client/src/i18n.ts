@@ -245,7 +245,33 @@ export function t(
     }
   }
   if (!vars) return raw;
-  return interpolate(raw, vars);
+  return interpolate(raw, RTL_CODES.has(langCode) ? isolatedForRtl(vars) : vars);
+}
+
+/** The right-to-left languages (state/lang.ts sets the page's direction for the same two). */
+const RTL_CODES: ReadonlySet<string> = new Set(["ar", "fa"]);
+
+/**
+ * In a right-to-left sentence, a value written left to right (a path, an address, a file name, a
+ * size with its unit) is kept whole and in its own order: without this "/data" read "data/" and
+ * "512 B" read "B 512". Each such value goes between LEFT-TO-RIGHT ISOLATE and POP DIRECTIONAL
+ * ISOLATE, which draw nothing. Plain numbers and text in the language itself need none.
+ */
+export function isolatedForRtl(vars: Record<string, string | number>): Record<string, string | number> {
+  const out: Record<string, string | number> = {};
+  for (const [name, value] of Object.entries(vars)) {
+    const s = String(value);
+    const leftToRight = /[A-Za-z/\\]/.test(s) && !/[\u0590-\u08FF\uFB1D-\uFEFC]/.test(s);
+    out[name] = leftToRight ? `\u2066${s}\u2069` : value;
+  }
+  return out;
+}
+
+/** `s` (a path, a size) kept whole and left to right inside a label put together in code,
+ *  while the page reads right to left: between the same two marks as isolatedForRtl. */
+export function ltr(s: string): string {
+  const rtl = typeof document !== "undefined" && document.documentElement.dir === "rtl";
+  return rtl ? `\u2066${s}\u2069` : s;
 }
 
 /** Fill `{name}` placeholders in `raw` from `vars`; unknown names are left as they are. */

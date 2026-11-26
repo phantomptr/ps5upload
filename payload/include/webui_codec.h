@@ -126,6 +126,14 @@ int webui_fan_status_json(const char *text, size_t n, char *out, size_t cap);
  * WKAL...), system apps (NPXS...) and the page's own tile (WEBUI_TILE_TITLE_ID) are not games. */
 int webui_is_game_title_id(const char *tid);
 
+/* The console's time zone for the page, in minutes ahead of UTC that its clock shows (#928: the
+ * PS5's own browser has no zone, so the page shows times with this one). From the registry's zone
+ * offset (`tz_min`: minutes ahead of UTC, without summer time) and its summer-time flag (`summer`:
+ * 1 while it is in effect, which moves the clock an hour ahead); tz_ok / summer_ok say whether each
+ * could be read. 1 with *out set; 0 when the zone was not read or is no real zone (beyond -12:00 or
+ * +14:00), so the page keeps the browser's own. A flag that was not read counts as no summer time. */
+int webui_tz_minutes(int tz_ok, int tz_min, int summer_ok, int summer, long *out);
+
 /* From a PROC_FOCUS reply ({"apps":[{"title_id":..,"app_id":..},...],"focus_app_id":N,
  * "big_app_id":N,...}): what Home shows as running (and may close). First the app that owns the
  * screen (focus_app_id, else big_app_id) when its title id is set, not a system app (NPXS...) and

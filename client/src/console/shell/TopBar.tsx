@@ -7,6 +7,9 @@ export interface ConsoleStatus {
   model: string | null;
   temp_c: number | null;
   running: { title_id: string; app_id: number; name: string | null } | null;
+  /** The console's time zone, minutes ahead of UTC (summer time included); null when it cannot
+   *  tell, absent from an older helper. The console's own browser has no zone (time.ts). */
+  tz_min?: number | null;
 }
 
 const BRAND = "PS5Upload Minion";

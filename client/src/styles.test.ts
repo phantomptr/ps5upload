@@ -41,4 +41,14 @@ describe("global CSS", () => {
     // The layered block itself is still there.
     expect(CSS).toMatch(/@layer components\s*\{[^@]*\.input,\s*\.select\s*\{[^}]*padding:/);
   });
+
+  it("keeps paths, IDs and sizes in their own order in right-to-left languages", () => {
+    expect(CSS).toMatch(
+      /:root\[dir="rtl"\] :where\(\.font-mono, code, kbd, samp, pre, \.tabular-nums\)\s*\{\s*unicode-bidi:\s*plaintext;\s*\}/,
+    );
+  });
+
+  it("ends a hint that is longer than its field in an ellipsis, only while the hint shows", () => {
+    expect(CSS).toMatch(/:where\(input, textarea\):placeholder-shown\s*\{\s*text-overflow:\s*ellipsis;\s*\}/);
+  });
 });

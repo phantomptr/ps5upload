@@ -7,12 +7,20 @@
 //! all. Here each byte that is not part of valid UTF-8 stands for itself as one character of a
 //! private-use range, and turning the text back into bytes gives the exact name again.
 //!
-//! The range is U+10FF80..=U+10FFFF (the end of Supplementary Private Use Area-B), one character
-//! per byte 0x80..=0xFF. A real name that holds one of those characters (valid UTF-8, four bytes
+//! The range is U+10FF00..=U+10FF7F (in Supplementary Private Use Area-B), one character per
+//! byte 0x80..=0xFF. A real name that holds one of those characters (valid UTF-8, four bytes
 //! each) is read byte by byte the same way, so it comes back unchanged too.
+//!
+//! Until 12.6.30 the range was U+10FF80..=U+10FFFF. Its last two, U+10FFFE and U+10FFFF, are
+//! not characters at all, and macOS refuses a file name holding one: a name with byte 0xFE or
+//! 0xFF (`ю` and `я` in Windows-1251, `þ` and `ÿ` in Latin-1) could be listed and opened on the
+//! server but not copied to a Mac. A name written the old way (in a saved path) still turns
+//! back into the same bytes.
 
 /// The character that stands for byte 0x80; byte `b` is `ESCAPE_BASE + (b - 0x80)`.
-const ESCAPE_BASE: u32 = 0x10_FF80;
+const ESCAPE_BASE: u32 = 0x10_FF00;
+/// Where the stand-ins were before: still read back, never written.
+const OLD_ESCAPE_BASE: u32 = 0x10_FF80;
 
 fn escape(b: u8) -> char {
     // Only bytes 0x80..=0xFF are ever escaped (ASCII is always valid UTF-8).
@@ -21,9 +29,10 @@ fn escape(b: u8) -> char {
 
 fn unescape(c: char) -> Option<u8> {
     let n = u32::from(c);
-    (ESCAPE_BASE..=ESCAPE_BASE + 0x7F)
-        .contains(&n)
-        .then(|| (n - ESCAPE_BASE + 0x80) as u8)
+    [ESCAPE_BASE, OLD_ESCAPE_BASE]
+        .into_iter()
+        .find(|base| (*base..=*base + 0x7F).contains(&n))
+        .map(|base| (n - base + 0x80) as u8)
 }
 
 fn push_text(out: &mut String, text: &str) {
@@ -127,6 +136,30 @@ mod tests {
         let raw = format!("x{stand_in}y");
         let text = decode(raw.as_bytes());
         assert_eq!(encode(&text), raw.as_bytes());
+    }
+
+    /// No stand-in is one of the code points that are not characters (U+..FFFE, U+..FFFF):
+    /// macOS refuses a file name holding one, so a name with byte 0xFE or 0xFF could not be
+    /// copied to a Mac. A name written with the old stand-ins still gives its bytes back.
+    #[test]
+    fn no_stand_in_is_a_noncharacter_and_old_ones_still_read() {
+        for b in 0x80..=0xFFu8 {
+            let text = decode(&[b]);
+            let c = text.chars().next().unwrap();
+            assert_eq!(text.chars().count(), 1);
+            assert!(u32::from(c) & 0xFFFE != 0xFFFE, "byte {b:#x} is {c:?}");
+            assert_eq!(encode(&text), [b]);
+            let old = char::from_u32(OLD_ESCAPE_BASE + u32::from(b - 0x80)).unwrap();
+            assert_eq!(encode(&format!("a{old}")), [b'a', b]);
+        }
+        // A real name holding an old stand-in (valid UTF-8) comes back as it was, too.
+        let raw = "x\u{10FFE9}y".as_bytes();
+        assert_eq!(encode(&decode(raw)), raw);
+        // The file system here takes such a name.
+        let name = decode(b"\xFF\xFE.bin");
+        let path = std::env::temp_dir().join(format!("ps5u-name-{}-{name}", std::process::id()));
+        std::fs::write(&path, b"x").expect("a name with the stand-ins can be made here");
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]

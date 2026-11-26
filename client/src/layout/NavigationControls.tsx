@@ -6,6 +6,8 @@ import {
   useNavigationType,
 } from "react-router";
 
+import { usePhoneLayout } from "../lib/phoneLayout";
+import { isIOS } from "../lib/platform";
 import { useTr } from "../state/lang";
 
 function browserHistoryIndex(): number | null {
@@ -35,6 +37,11 @@ export default function NavigationControls() {
       navigationType === "PUSH" ? index : Math.max(previous, index),
     );
   }, [location.key, navigationType]);
+
+  // The phone layout has no arrows (#936): the phone's own Back goes back (lib/systemBack), and
+  // the room is the page's. An iPhone has no Back button, so it keeps them.
+  const phone = usePhoneLayout();
+  if (phone && !isIOS()) return null;
 
   const backLabel = tr("navigation_back", undefined, "Back");
   const forwardLabel = tr("navigation_forward", undefined, "Forward");

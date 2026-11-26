@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { formatBytes } from "../../lib/format";
 import { t } from "../strings";
 import { ConvertView, progressLine, type ConvertViewProps } from "./Convert";
 import type { ConvertRun, Inspection } from "./model";
@@ -16,6 +17,8 @@ const INFO: Inspection = {
   contentVersion: "01.000.000",
   masterVersion: null,
   packed: "zstd",
+  unpackedBytes: 3_000_000_000,
+  unpackKeepsEmulator: true,
   hasEboot: true,
   warnings: [],
   zstdRuntime: "0.4.1",
@@ -35,6 +38,8 @@ function props(over: Partial<ConvertViewProps> = {}): ConvertViewProps {
     inner: "exfat",
     ffpfscLevel: "balanced",
     pkgLevel: "fast",
+    unpack: true,
+    leaveOutEmulator: false,
     verify: "fast",
     run: null,
     onPickSource: vi.fn(),
@@ -46,6 +51,8 @@ function props(over: Partial<ConvertViewProps> = {}): ConvertViewProps {
     onInner: vi.fn(),
     onFfpfscLevel: vi.fn(),
     onPkgLevel: vi.fn(),
+    onUnpack: vi.fn(),
+    onLeaveOutEmulator: vi.fn(),
     onVerify: vi.fn(),
     onStart: vi.fn(),
     onStop: vi.fn(),
@@ -104,6 +111,67 @@ describe("Convert", () => {
     expect(h).toContain(esc(t("cw_convert_pkg_note")));
     expect(h).not.toContain('data-action="convert-zstd"');
     expect(progressLine(run({ message: "convert_stage_check" }))).toBe(t("cw_convert_stage_read"));
+  });
+
+  const pkg = (over: Partial<ConvertViewProps> = {}) => props({ format: "pkg", dest: "/data/games/PPSA01234.pkg", ...over });
+  const info = (over: Partial<Inspection>) => ({ phase: "done" as const, info: { ...INFO, ...over } });
+
+  it("a .pkg of a game in asset packs unpacks them unless turned off, and can leave the emulator out", () => {
+    const h = html(pkg());
+    expect(h).toContain("data-convert-unpack");
+    expect(h).toMatch(/aria-checked="true"[^>]*data-action="convert-unpack"/);
+    expect(h).toContain(esc(t("cw_convert_unpack")));
+    // The note names the packs and the size the plain files come to.
+    expect(h).toContain(esc(t("cw_convert_unpack_note", { kind: "zstd", size: formatBytes(3_000_000_000) })));
+    expect(h).toMatch(/aria-checked="false"[^>]*data-action="convert-leave-out-emulator"/);
+    expect(h).toContain(esc(t("cw_convert_leave_out_emu")));
+    expect(h).toContain(esc(t("cw_convert_leave_out_emu_note")));
+    expect(h).not.toContain("data-convert-blocked");
+    expect(h).toMatch(/data-action="convert-go"(?![^>]*disabled)/);
+    expect(html(pkg({ leaveOutEmulator: true }))).toMatch(/aria-checked="true"[^>]*data-action="convert-leave-out-emulator"/);
+    // Off: the packs go in as they are, and there is no emulator to leave out of them.
+    const off = html(pkg({ unpack: false, leaveOutEmulator: true }));
+    expect(off).toMatch(/aria-checked="false"[^>]*data-action="convert-unpack"/);
+    expect(off).not.toContain("convert-leave-out-emulator");
+    expect(off).toMatch(/data-action="convert-go"(?![^>]*disabled)/);
+  });
+
+  it("an emulator that can't stay with plain files holds Convert until it is left out", () => {
+    const stuck = info({ unpackKeepsEmulator: false });
+    const h = html(pkg({ inspected: stuck }));
+    expect(h).toContain('data-convert-blocked="emulator"');
+    expect(h).toContain(esc(t("cw_convert_unpack_needs_emulator")));
+    expect(h).toMatch(/data-action="convert-go"[^>]*disabled/);
+    // Either way out builds: the emulator left out, or the packs kept as they are.
+    for (const way of [{ leaveOutEmulator: true }, { unpack: false }]) {
+      const ok = html(pkg({ inspected: stuck, ...way }));
+      expect(ok).not.toContain("data-convert-blocked");
+      expect(ok).toMatch(/data-action="convert-go"(?![^>]*disabled)/);
+    }
+    // Nothing of it with another output: the game is written as it is there.
+    const image = html(props({ inspected: stuck }));
+    expect(image).not.toContain("data-convert-blocked");
+    expect(image).toMatch(/data-action="convert-go"(?![^>]*disabled)/);
+  });
+
+  it("the unpack is offered only for a .pkg of a game whose packs the converter read", () => {
+    expect(html(props())).not.toContain("data-convert-unpack");
+    expect(html(pkg({ inspected: info({ packed: null, unpackedBytes: null, unpackKeepsEmulator: null }) }))).not.toContain(
+      "data-convert-unpack",
+    );
+    // An answer from a helper before these options: packed, but no size to unpack to.
+    const old = html(pkg({ inspected: info({ unpackedBytes: null, unpackKeepsEmulator: null }) }));
+    expect(old).not.toContain("data-convert-unpack");
+    expect(old).toMatch(/data-action="convert-go"(?![^>]*disabled)/);
+  });
+
+  it("the free-space note counts the plain files when the packs are unpacked", () => {
+    // 2 GB of packs that unpack to 3 GB, 2.5 GB free.
+    const free = 2_500_000_000;
+    expect(html(pkg({ free }))).toContain("data-convert-space");
+    expect(html(pkg({ free, unpack: false }))).not.toContain("data-convert-space");
+    expect(html(props({ free }))).not.toContain("data-convert-space");
+    expect(html(pkg({ free: 4_000_000_000 }))).not.toContain("data-convert-space");
   });
 
   it("offers the six outputs, and the zstd levels only with zstd on", () => {

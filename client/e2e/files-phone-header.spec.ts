@@ -150,6 +150,32 @@ for (const phone of PHONES) {
       await expect(header.getByRole("button", { name: "usb0" })).toBeVisible();
       // No boxes until selecting.
       await expect(row(page, "file-01.pkg").getByRole("checkbox")).toBeHidden();
+      // One bar at the top: no Back and Forward arrows (the phone's Back goes back), and one
+      // bell. Where the app's own top bar would show (below 768 px) the bell is in this header
+      // and that bar is gone; wider, it stays in the row beside the sidebar.
+      await expect(page.getByRole("navigation", { name: "View history" }).locator("visible=true")).toHaveCount(0);
+      const bell = page.getByRole("button", { name: "Open notifications" }).locator("visible=true");
+      await expect(bell).toHaveCount(1);
+      if (phone.viewport.width < 768) {
+        await expect(header.getByRole("button", { name: "Open notifications" })).toBeVisible();
+        await expect(page.locator("[data-top-bar]").getByText("PS5Upload")).toBeHidden();
+        expect((await header.boundingBox())!.y).toBeLessThan(24);
+        // Its panel hangs under the header, inside the window.
+        await bell.tap();
+        const panel = page.getByTestId("notifications-panel").locator("visible=true");
+        await expect(panel).toBeVisible();
+        const p = (await panel.boundingBox())!;
+        const h = (await header.boundingBox())!;
+        expect(p.y).toBeGreaterThanOrEqual(h.y + h.height);
+        expect(p.x).toBeGreaterThanOrEqual(0);
+        expect(p.x + p.width).toBeLessThanOrEqual(phone.viewport.width);
+        await expect(panel).toHaveCSS("opacity", "1");
+        await shot(page, `bell-${phone.viewport.width}x${phone.viewport.height}`);
+        expect(await back(page)).toBe(true);
+        await expect(panel).toHaveCount(0);
+      } else {
+        await expect(header.getByRole("button", { name: "Open notifications" })).toHaveCount(0);
+      }
       await shot(page, `header-${phone.viewport.width}x${phone.viewport.height}`);
 
       const scroller = page.locator("[data-scroll-root]");
@@ -174,12 +200,47 @@ for (const phone of PHONES) {
       page,
     }) => {
       await openFiles(page);
+      // Where each row's parts are before selecting: starting selection mode moves none of them.
+      const parts = async (name: string) => ({
+        row: await row(page, name).boundingBox(),
+        icon: await row(page, name).locator("svg").first().boundingBox(),
+        name: await row(page, name).locator("[data-fs-open]").boundingBox(),
+      });
+      const before = { games: await parts("games"), file: await parts("file-01.pkg") };
+      const dots = (await main(page).getByRole("button", { name: "Actions for file-01.pkg" }).boundingBox())!;
       // A folder: held, it is selected, not opened.
       await longPress(page, row(page, "games"));
       await expect(count(page)).toHaveText("1 selected");
       await expect(title(page)).toBeHidden();
       await expect(row(page, "games").getByRole("checkbox")).toBeChecked();
       await expect(row(page, "file-01.pkg").getByRole("checkbox")).toBeVisible();
+      expect({ games: await parts("games"), file: await parts("file-01.pkg") }).toEqual(before);
+      // The box is where ⋮ was, which is out of sight and out of reach meanwhile.
+      await expect(main(page).getByRole("button", { name: "Actions for file-01.pkg" })).toBeHidden();
+      const tick = (await row(page, "file-01.pkg").getByRole("checkbox").boundingBox())!;
+      const mid = (b: { x: number; y: number; width: number; height: number }) => ({
+        x: b.x + b.width / 2,
+        y: b.y + b.height / 2,
+      });
+      expect(Math.abs(mid(tick).x - mid(dots).x)).toBeLessThan(4);
+      expect(Math.abs(mid(tick).y - mid(dots).y)).toBeLessThan(2);
+      expect(tick.x).toBeGreaterThan(before.file.name!.x + before.file.name!.width - 1);
+      // One item selected: More has what that row's ⋮ has, less what the bar shows as buttons.
+      await actionsBar(page).getByRole("button", { name: "More", exact: true }).tap();
+      for (const name of ["Cut", "Set permissions (777)", "Properties & permissions", "What takes space?", "Snapshot…"])
+        await expect(menu(page).getByRole("menuitem", { name, exact: true })).toBeVisible();
+      for (const name of ["Rename", "Delete"])
+        await expect(menu(page).getByRole("menuitem", { name, exact: true })).toHaveCount(0);
+      await shot(page, `selection-more-one-${phone.viewport.width}x${phone.viewport.height}`);
+      // Picking one of them acts on the item and leaves selection mode.
+      await menu(page).getByRole("menuitem", { name: "What takes space?", exact: true }).click();
+      await expect(main(page).getByTestId("fs-view")).toBeVisible();
+      await expect(actionsBar(page)).toHaveCount(0);
+      await main(page).getByRole("button", { name: "Back to files" }).tap();
+      await expect(title(page)).toHaveText("homebrew");
+      await expect(row(page, "file-01.pkg").getByRole("checkbox")).toBeHidden();
+      await longPress(page, row(page, "games"));
+      await expect(count(page)).toHaveText("1 selected");
       await expect(page.locator("[data-bottom-nav]")).toBeHidden();
       const bar = actionsBar(page);
       await expect(bar).toBeInViewport();
@@ -207,6 +268,10 @@ for (const phone of PHONES) {
       await bar.getByRole("button", { name: "More", exact: true }).tap();
       await expect(menu(page).getByRole("menuitem", { name: "Cut" })).toBeVisible();
       await expect(menu(page).getByRole("menuitem", { name: "Set permissions (777)" })).toBeVisible();
+      await expect(menu(page).getByRole("menuitem", { name: "Snapshot…" })).toBeVisible();
+      // Several selected: nothing that acts on one item.
+      for (const name of ["Properties & permissions", "What takes space?", "Replace file", "Install"])
+        await expect(menu(page).getByRole("menuitem", { name, exact: true })).toHaveCount(0);
       expect(await back(page)).toBe(true);
       await expect(menu(page)).toHaveCount(0);
       await expect(count(page)).toHaveText("3 selected");
@@ -302,6 +367,102 @@ test.describe("desktop width", () => {
     await row(page, "file-01.pkg").getByRole("checkbox").check();
     await expect(main(page).getByTestId("fs-selection-bar")).toBeVisible();
     await expect(actionsBar(page)).toHaveCount(0);
+    // The box before the icon, the arrows, and the bell in the top row: as they were.
+    const box = (await row(page, "file-01.pkg").getByRole("checkbox").boundingBox())!;
+    const icon = (await row(page, "file-01.pkg").locator("svg").first().boundingBox())!;
+    expect(box.x + box.width).toBeLessThanOrEqual(icon.x);
+    const arrows = page.getByRole("navigation", { name: "View history" }).locator("visible=true");
+    await expect(arrows).toHaveCount(1);
+    await expect(arrows.getByRole("button", { name: "Back" })).toBeVisible();
+    await expect(arrows.getByRole("button", { name: "Forward" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open notifications" }).locator("visible=true")).toHaveCount(1);
+    await expect(main(page).getByTestId("fs-header").getByRole("button", { name: "Open notifications" })).toHaveCount(0);
     await shot(page, "desktop-1280x800");
+  });
+});
+
+test.describe("a tablet (700x1000, touch)", () => {
+  test.use({ viewport: { width: 700, height: 1000 }, hasTouch: true, isMobile: true });
+
+  test("keeps the app's top bar with its arrows, and the page header", async ({ page }) => {
+    await openFiles(page);
+    const bar = page.locator("[data-top-bar]");
+    await expect(bar.getByText("PS5Upload")).toBeVisible();
+    await expect(bar.getByRole("button", { name: "Back" })).toBeVisible();
+    await expect(bar.getByRole("button", { name: "Forward" })).toBeVisible();
+    await expect(bar.getByRole("button", { name: "Open notifications" })).toBeVisible();
+    await expect(main(page).getByRole("button", { name: "Add files", exact: true })).toBeVisible();
+    await expect(main(page).getByTestId("fs-header").getByRole("button", { name: "Open notifications" })).toHaveCount(0);
+    await expect(row(page, "file-01.pkg").getByRole("checkbox")).toBeVisible();
+    await shot(page, "tablet-700x1000");
+  });
+});
+
+test.describe("an iPhone (no Back button)", () => {
+  test.use({
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+    isMobile: true,
+    userAgent:
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1",
+  });
+
+  test("keeps the arrows, and so the app's top bar over Files", async ({ page }) => {
+    await openFiles(page, { app: false });
+    const bar = page.locator("[data-top-bar]");
+    await expect(bar.getByRole("button", { name: "Back" })).toBeVisible();
+    await expect(bar.getByRole("button", { name: "Open notifications" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open notifications" }).locator("visible=true")).toHaveCount(1);
+    await expect(title(page)).toHaveText("homebrew");
+    // The arrows go back: from another screen to Files.
+    await page.locator("[data-bottom-nav]").getByRole("link", { name: "More" }).tap();
+    await expect(page).toHaveURL(/\/more$/);
+    await bar.getByRole("button", { name: "Back" }).tap();
+    await expect(page).toHaveURL(/\/files/);
+    await shot(page, "iphone-390x844");
+  });
+});
+
+test.describe("the app's top bar on a phone, on the other screens (#936)", () => {
+  test.use({ viewport: { width: 360, height: 800 }, hasTouch: true, isMobile: true });
+
+  test("a short bar with the bell and no arrows; it comes back when Files is left", async ({ page }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "ps5upload.notifications.v1",
+        JSON.stringify([{ id: "n1", ts: Date.now(), level: "success", title: "Upload finished", read: false }]),
+      );
+    });
+    await openFiles(page, { app: false });
+    const bar = page.locator("[data-top-bar]");
+    const header = main(page).getByTestId("fs-header");
+    // In Files the bell, with what is unread, is in the header.
+    await expect(header.getByRole("button", { name: "Open notifications" })).toBeVisible();
+    await expect(header.getByTestId("notifications-badge")).toHaveText("1");
+    await expect(bar.getByText("PS5Upload")).toBeHidden();
+
+    await page.locator("[data-bottom-nav]").getByRole("link", { name: "More" }).tap();
+    await expect(page).toHaveURL(/\/more$/);
+    await expect(bar.getByText("PS5Upload")).toBeVisible();
+    await expect(bar.getByRole("button", { name: "Back" })).toHaveCount(0);
+    const bell = bar.getByRole("button", { name: "Open notifications" });
+    await expect(bell).toBeVisible();
+    await expect(bell.getByTestId("notifications-badge")).toHaveText("1");
+    // Short, and the bell still a comfortable tap.
+    expect((await bar.boundingBox())!.height).toBeLessThanOrEqual(50);
+    const b = (await bell.boundingBox())!;
+    expect(b.width).toBeGreaterThanOrEqual(44);
+    expect(b.height).toBeGreaterThanOrEqual(44);
+    await shot(page, "top-bar-more-360x800");
+    await bell.tap();
+    await expect(page.getByTestId("notifications-panel").locator("visible=true")).toBeVisible();
+    await shot(page, "top-bar-bell-360x800");
+    await page.keyboard.press("Escape");
+
+    // The phone's Back goes back through the screens, as the arrows did.
+    await page.goBack();
+    await expect(page).toHaveURL(/\/files/);
+    await expect(header.getByRole("button", { name: "Open notifications" })).toBeVisible();
+    await expect(bar.getByText("PS5Upload")).toBeHidden();
   });
 });

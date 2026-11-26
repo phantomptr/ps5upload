@@ -79,6 +79,7 @@ import {
 import { useTaskStore } from "./tasks";
 import { useToastStore } from "./toasts";
 import { parsePS5Firmware } from "../lib/ps5Firmware";
+import { reachFailText, waitingNote } from "../lib/streamReach";
 import { gamePath } from "../lib/gamePage";
 import {
   enqueueInstall,
@@ -334,7 +335,11 @@ export function statusToOutcome(st: InstallStatus): PkgInstallOutcome {
     return { installed: false, unverified: true, mayNotLaunch: false, errMessage };
   }
   if (!installed) {
-    if (st.patch_verdict === "regressed") {
+    if (st.reason === "stream_unreachable" && st.reach) {
+      // The engine's reach check or its no-request watchdog (#942): its facts, in the user's
+      // language. The engine's own hint says the same in English, for the log.
+      errMessage = reachFailText(st.reach);
+    } else if (st.patch_verdict === "regressed") {
       errMessage = trStatic("pkg.patch_regressed", PKG_PATCH_REGRESSED_HINT);
     } else if (st.patch_verdict === "did_not_apply") {
       errMessage = trStatic(
@@ -394,6 +399,7 @@ export function statusToOutcome(st: InstallStatus): PkgInstallOutcome {
     ...(!installed && st.retry_with_stream ? { retryWithStream: true } : {}),
     ...(!installed && st.reason === "staged_refused" ? { stagedRefused: true } : {}),
     ...(!installed && st.net_diag ? { netDiag: st.net_diag } : {}),
+    ...(!installed && st.reason === "stream_unreachable" ? { streamUnreachable: true } : {}),
   };
 }
 
@@ -415,6 +421,7 @@ export function sampleFromStatus(st: InstallStatus): InstallSample {
           : st.phase; // done | failed
   const served = st.metrics.served_bytes;
   const past = st.phase === "install" || st.phase === "verify" || st.phase === "done";
+  const waiting = st.phase === "done" || st.phase === "failed" ? null : waitingNote(st.waiting);
   return {
     phase,
     installedBytes: past ? served : 0,
@@ -424,10 +431,13 @@ export function sampleFromStatus(st: InstallStatus): InstallSample {
     stalled: false,
     acceptedUnverified: false,
     // The PS5 has the whole package and the engine is checking it landed: say so, rather than
-    // a bare 99% that reads as stuck (#776).
+    // a bare 99% that reads as stuck (#776). Before any byte has moved, say what is waited for
+    // (#942: "installing — 0%" for as long as the PS5 could not reach this computer).
     ...(st.phase === "verify"
       ? { note: trStatic("pkg.verifying", "Verifying the exact installed package on the PS5…") }
-      : {}),
+      : waiting
+        ? { note: waiting }
+        : {}),
   };
 }
 
@@ -1214,6 +1224,8 @@ interface PkgLibraryState {
     /** True when the same package should be retried through staged/file mode,
      * which bypasses Sony's HTTP/proxy path. */
     stagedFallbackRecommended?: boolean;
+    /** The PS5 could not reach this computer to fetch the package. */
+    streamUnreachable?: boolean;
     /** Download-first only: a different file already has the download's name. The caller
      *  asks Resume or Replace and starts again with `existing`. */
     existingFile?: { path: string; existingBytes: number; total: number };
@@ -1394,6 +1406,9 @@ export interface PkgInstallOutcome {
   /** Windows: the adapter facing the console and its network category, when the console could
    *  not reach this computer. The row offers the fixes it implies. */
   netDiag?: NetDiag;
+  /** The PS5 could not reach this computer to fetch the package (whatever language the message
+   *  is in): the row offers the firewall fix. */
+  streamUnreachable?: boolean;
   /** It never started: it looked too big and nobody said to go on. */
   noSpace?: boolean;
   /** The person stopped it. Not a failure to report. */
@@ -4017,6 +4032,7 @@ const makePkgLibraryStore = () =>
         return finishStreamTask({
           ok: false,
           stagedFallbackRecommended: true,
+          ...(outcome.streamUnreachable ? { streamUnreachable: true } : {}),
           message: outcome.errMessage || trStatic("pkg.not_complete", "The install didn't complete."),
         });
       } catch (e) {

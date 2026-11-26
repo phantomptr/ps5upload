@@ -88,15 +88,44 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, bytes).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    // On the disk before it takes the name: a power cut after the rename otherwise left the
+    // name on a file with nothing in it.
+    let written = (|| {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()
+    })();
+    written.map_err(|e| format!("{}: {e}", tmp.display()))?;
     std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// The Collection's settings (its folders above all). A file that is there but does not read
+/// (cut short, damaged) is kept beside itself as `settings.json.bad-<time>` and the defaults
+/// are used: read as "no folders yet" and left in place, it was written over by the next
+/// change of any setting, and the list of folders was gone for good.
 pub fn load_settings_at(dir: &Path) -> Settings {
-    std::fs::read(dir.join("settings.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+    let path = dir.join("settings.json");
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Settings::default();
+    };
+    match serde_json::from_slice(&bytes) {
+        Ok(settings) => settings,
+        Err(e) => {
+            let aside = path.with_extension(format!("json.bad-{}", crate::now_ms()));
+            let kept = std::fs::rename(&path, &aside).is_ok();
+            crate::log_warn!(
+                "collection: the settings file could not be read ({e}); {}; starting from the \
+                 defaults",
+                if kept {
+                    "it is kept beside itself as settings.json.bad-<time>"
+                } else {
+                    "it could not be set aside"
+                }
+            );
+            Settings::default()
+        }
+    }
 }
 
 pub fn save_settings_at(dir: &Path, s: &Settings) -> Result<(), String> {
@@ -262,6 +291,33 @@ pub fn to_markdown(lib: &Library, generated: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A settings file that does not read is kept, not left where the next save writes over it.
+    #[test]
+    fn a_settings_file_that_does_not_read_is_kept_aside() {
+        let dir = std::env::temp_dir().join(format!("ps5u-coll-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("settings.json"), br#"{"roots": 5}"#).unwrap();
+        let loaded = serde_json::to_value(load_settings_at(&dir)).unwrap();
+        assert_eq!(loaded, serde_json::to_value(Settings::default()).unwrap());
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 1, "{names:?}");
+        assert!(names[0].starts_with("settings.json.bad-"), "{names:?}");
+        assert_eq!(
+            std::fs::read(dir.join(&names[0])).unwrap(),
+            br#"{"roots": 5}"#
+        );
+        // A save and a load after it are the settings again.
+        save_settings_at(&dir, &Settings::default()).unwrap();
+        assert!(dir.join("settings.json").is_file());
+        let _ = load_settings_at(&dir);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn sizes_and_dates_print_like_the_source_app() {

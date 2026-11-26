@@ -4,6 +4,8 @@ import {
   t as translate,
   ensureLocale,
   ensureLocaleWithRetry,
+  isolatedForRtl,
+  ltr,
   pickLanguage,
   type LanguageCode,
 } from "./i18n";
@@ -74,6 +76,30 @@ describe("translate (i18n.ts t())", () => {
     const out = translate("en", "pkglib.group.count", { n: 5 });
     expect(out).toContain("5");
     expect(out).not.toContain("{n}");
+  });
+
+  it("in Arabic and Persian a path, a file name or a size keeps its own order inside the sentence", async () => {
+    // Between LEFT-TO-RIGHT ISOLATE and POP DIRECTIONAL ISOLATE: "/data" read "data/" without.
+    const lri = "\u2066";
+    const pdi = "\u2069";
+    expect(isolatedForRtl({ path: "/data/games", size: "512 B", name: "notes (1).txt", host: "192.168.1.50" })).toEqual({
+      path: `${lri}/data/games${pdi}`,
+      size: `${lri}512 B${pdi}`,
+      name: `${lri}notes (1).txt${pdi}`,
+      // Digits and dots read the same either way.
+      host: "192.168.1.50",
+    });
+    // A count stays a number, and text in the language itself is left alone.
+    expect(isolatedForRtl({ count: 3, word: "ملف" })).toEqual({ count: 3, word: "ملف" });
+    for (const lang of ["ar", "fa"] as const) {
+      await ensureLocale(lang);
+      expect(translate(lang, "fs_recent_remove_x_missing {p}", { p: "/mnt/usb0" })).toBe(`fs_recent_remove_x_missing ${lri}/mnt/usb0${pdi}`);
+    }
+    // A label put together in code: only while the page reads right to left.
+    expect(ltr("/data")).toBe("/data");
+    // Every other language gets the value as it is.
+    expect(translate("de", "missing {p}", { p: "/mnt/usb0" })).toBe("missing /mnt/usb0");
+    expect(translate("en", "missing {p}", { p: "/mnt/usb0" })).toBe("missing /mnt/usb0");
   });
 
   it("leaves unknown placeholders unchanged", () => {

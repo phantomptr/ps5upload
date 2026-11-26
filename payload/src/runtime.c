@@ -621,6 +621,21 @@ static void extract_json_string_field(const char *json, const char *field,
     if (json_copy_unescaped_string(start, end, out, out_len) != 0) out[0] = '\0';
 }
 
+/* 1 when the body has `"field":"..."` with a value that is not empty. extract_json_string_field
+ * leaves "" for a value that does not fit its buffer, the same as for a field that is not there:
+ * a caller for whom "not there" means "choose for me" asks this to tell the two apart. */
+static int json_string_field_given(const char *json, const char *field) {
+    char needle[64];
+    const char *pos;
+    if (!json || !field) return 0;
+    snprintf(needle, sizeof(needle), "\"%s\":", field);
+    pos = strstr(json, needle);
+    if (!pos) return 0;
+    pos += strlen(needle);
+    while (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r') pos++;
+    return pos[0] == '"' && pos[1] != '"' && pos[1] != '\0';
+}
+
 static uint64_t extract_json_uint64_field(const char *json, const char *field) {
     char needle[64];
     const char *pos = NULL;
@@ -804,77 +819,11 @@ int mntinfo_snapshot(struct statfs **out) {
     return n;
 }
 
-/* Encode a mount_point to a filesystem-safe tracker filename (no
- * extension). Two formats coexist for backward compatibility:
- *
- *   - Legacy /mnt/ps5upload/<name> mounts use the leaf <name> as the
- *     key (matches files written by every payload up through 2.2.24).
- *   - User-chosen mount paths (anywhere `is_path_allowed` accepts —
- *     /mnt/ext1/games/foo, /data/mounts/bar, etc.) hex-escape every
- *     non-alphanumeric byte. So `/mnt/ext1/games/foo` becomes
- *     `mnt_2fext1_2fgames_2ffoo` (the `_2f` triplet is the hex of
- *     '/'; `_5f` would be the hex of a literal underscore).
- *
- * Why hex-escape rather than a flat `/` → `_` substitution: paths
- * `/mnt/ext1/foo_bar` and `/mnt/ext1/foo/bar` would both encode to
- * `mnt_ext1_foo_bar` under a flat substitution — silently
- * colliding. With per-byte hex escaping every distinct mount_point
- * has a distinct key, no matter how many underscores its segments
- * contain. The triplet form (`_HH`) is one byte longer per escaped
- * char but stays well within the 256-byte key buffer for any
- * realistic PS5 path.
- *
- * The legacy format is stable across upgrades — existing PS5s with
- * trackers from earlier versions keep showing source-image strings
- * in the Volumes tab without re-mount. */
+/* A mount point's tracker file name (no extension): include/image_mount.h, where the host
+ * self-test covers it. A /mnt/ps5upload/<name> mount keeps its leaf, any other mount point is
+ * hex-escaped, and one too long for a file name ends in a hash. */
 static void mount_tracker_key(const char *mount_point, char *out, size_t out_cap) {
-    if (!out || out_cap == 0) return;
-    out[0] = '\0';
-    if (!mount_point) return;
-    const size_t base_len = strlen(FS_MOUNT_BASE);
-    /* Legacy: /mnt/ps5upload/<name> with non-empty leaf. Use the leaf
-     * as the key so trackers written by 2.2.24 and earlier still
-     * resolve. The leaf is constrained by handle_fs_mount to contain
-     * no slashes / dots, so it's safe to use verbatim. Defensive
-     * extra check: if the "leaf" actually contains a slash (a path
-     * like /mnt/ps5upload/foo/bar can reach this code via a future
-     * caller that bypasses handle_fs_mount's name validation), fall
-     * through to the hex-escape branch so the tracker key stays
-     * collision-free instead of silently producing `foo/bar.src` —
-     * a path-traversal-shaped filename whose stat()/open() then
-     * fails on a non-existent intermediate directory. */
-    if (strncmp(mount_point, FS_MOUNT_BASE "/", base_len + 1) == 0 &&
-        mount_point[base_len + 1] != '\0' &&
-        strchr(mount_point + base_len + 1, '/') == NULL) {
-        snprintf(out, out_cap, "%s", mount_point + base_len + 1);
-        return;
-    }
-    /* New: hex-escape every non-alphanumeric byte, skipping a single
-     * leading slash. Each escaped byte takes 3 chars (`_` + 2 hex
-     * digits), so we need 3 bytes of headroom per escaped char plus
-     * 1 for the NUL. Stop early if the buffer would overflow rather
-     * than truncate mid-escape (a partial `_5` would be ambiguous). */
-    static const char HEX[] = "0123456789abcdef";
-    size_t i = (mount_point[0] == '/') ? 1u : 0u;
-    size_t j = 0;
-    while (mount_point[i] != '\0') {
-        unsigned char c = (unsigned char)mount_point[i++];
-        const int needs_escape =
-            !((c >= 'a' && c <= 'z') ||
-              (c >= 'A' && c <= 'Z') ||
-              (c >= '0' && c <= '9') ||
-              c == '-' || c == '.');
-        if (needs_escape) {
-            if (j + 4 > out_cap) break; /* room for "_HH\0" */
-            out[j++] = '_';
-            out[j++] = HEX[(c >> 4) & 0xF];
-            out[j++] = HEX[c & 0xF];
-        } else {
-            if (j + 2 > out_cap) break; /* room for "X\0" */
-            out[j++] = (char)c;
-        }
-    }
-    out[j] = '\0';
+    image_mount_tracker_key(mount_point, out, out_cap);
 }
 
 /* Read the .src tracker written at mount time. Returns 1 on success
@@ -957,8 +906,10 @@ static void mount_tracker_write(const char *mount_point, const char *src_path) {
      * a stable per-thread integer suffix. The suffix only needs to
      * disambiguate concurrent writers — collisions across distinct
      * (process, thread) pairs are vanishingly unlikely on PS5. */
-    n = snprintf(tracker_tmp, sizeof(tracker_tmp), "%s.tmp.%d.%lx",
-                 tracker, (int)getpid(),
+    /* Not "<tracker>.tmp...": added to a long key that made a name over 255 bytes, which cannot be
+     * created, and the mount was left with no tracker. */
+    n = snprintf(tracker_tmp, sizeof(tracker_tmp), "%s/.tracker-tmp.%d.%lx",
+                 PS5UPLOAD2_MOUNTS_DIR, (int)getpid(),
                  (unsigned long)(uintptr_t)pthread_self());
     if (n < 0 || (size_t)n >= sizeof(tracker_tmp)) return;
     int fd = open(tracker_tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -3221,6 +3172,16 @@ static int fs_mount_request(runtime_state_t *state, const char *request_body,
          * instead of a JSON true/false keeps extract_json_uint64_field
          * happy and avoids adding a bool parser. */
         read_only = (extract_json_uint64_field(request_body, "read_only") != 0) ? 1 : 0;
+        /* A mount point or name too long for its buffer reads as "" (extract_json_string_field),
+         * and "" means "none given": the image was then mounted at /mnt/ps5upload/<a name made
+         * from the image's> instead of where the caller asked, and answered as a success.
+         * Refused instead, before anything is attached. */
+        if (mount_point[0] == '\0' && json_string_field_given(request_body, "mount_point")) {
+            return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_bad_mount_point", 24);
+        }
+        if (mount_name[0] == '\0' && json_string_field_given(request_body, "mount_name")) {
+            return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_name_too_long", 22);
+        }
     }
     if (!is_path_allowed(image_path)) {
         return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_path_not_allowed", 25);
@@ -3328,8 +3289,10 @@ static int fs_mount_request(runtime_state_t *state, const char *request_body,
         if (!is_path_allowed(mount_point) || path_tree_op_refused(mount_point)) {
             return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_path_not_allowed", 25);
         }
-        size_t mp_len = strlen(mount_point);
-        if (mp_len > 1 && mount_point[mp_len - 1] == '/') {
+        /* Written as the kernel will name it (one slash between components, no "."), before it
+         * is compared with the mount table, tracked or answered: image_mount.h. A trailing slash
+         * and ".." are refused there, as the trailing slash was here. */
+        if (image_mount_point_normalise(mount_point) != 0) {
             return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_bad_mount_point", 24);
         }
         if (strcmp(mount_point, FS_MOUNT_BASE) == 0) {
@@ -3405,9 +3368,14 @@ static int fs_mount_request(runtime_state_t *state, const char *request_body,
              * (or a log trawl) can tell whether LVD refused a policy
              * check or MD refused a sector-size, etc. */
             char errbuf[256];
+            /* strerror answers from one buffer of its own: two calls in one snprintf printed the
+             * same text twice (md's, or lvd's), so the reason LVD refused was lost. Copied out
+             * first. */
+            char lvd_why[96];
+            snprintf(lvd_why, sizeof(lvd_why), "%s", strerror(lvd_errno));
             int el = snprintf(errbuf, sizeof(errbuf),
-                              "fs_mount_attach_failed: lvd=%s md=%s",
-                              strerror(lvd_errno), strerror(md_errno));
+                              "fs_mount_attach_failed: lvd=%s (%d) md=%s (%d)",
+                              lvd_why, lvd_errno, strerror(md_errno), md_errno);
             if (el < 0) el = 0;
             if ((size_t)el >= sizeof(errbuf)) el = (int)sizeof(errbuf) - 1;
             return mgmt_reply(MGMT_FRAME_ERROR, errbuf, (uint64_t)el);
@@ -5808,7 +5776,10 @@ static int handle_cheats_toggle(runtime_state_t *state, const char *body) {
                            err, sizeof(err));
     cheat_inc_cmd_count(state);
 
-    char resp[512];
+    /* Holds the longest reason whole: 255 bytes that are all quotes or backslashes double when
+     * escaped. At 512 such a reply did not fit, and the length snprintf returned (what it would
+     * have written) had mgmt_reply send up to 23 bytes from past the end of this buffer. */
+    char resp[2 * 256 + 2 + 64];
     int len;
     if (rc == 0) {
         char tid_esc[CHEATS_TITLE_ID_LEN * 6 + 1];
@@ -5825,7 +5796,11 @@ static int handle_cheats_toggle(runtime_state_t *state, const char *body) {
         len = snprintf(resp, sizeof(resp),
                        "{\"ok\":false,\"err\":\"%s\"}", err_esc);
     }
-    return mgmt_reply(MGMT_FRAME_CHEATS_TOGGLE_ACK, resp, (uint64_t)(len > 0 ? len : 0));
+    if (len < 0 || (size_t)len >= sizeof(resp)) {
+        const char *e = "{\"ok\":false,\"err\":\"reply too long\"}";
+        return mgmt_reply(MGMT_FRAME_CHEATS_TOGGLE_ACK, e, strlen(e));
+    }
+    return mgmt_reply(MGMT_FRAME_CHEATS_TOGGLE_ACK, resp, (uint64_t)len);
 }
 
 static int handle_cheats_delete(runtime_state_t *state, const char *body) {
@@ -10013,9 +9988,11 @@ static int handle_profile_info(void) {
 
 static int handle_profile_set_username(const char *body) {
     int slot = (int)extract_json_uint64_field(body, "slot");
-    char name[PROFILE_NAME_MAX] = {0};
+    /* Room for more than a name may hold, so one that is too long is seen as too long and refused
+     * (profile_slot_set_name), not cut down to the buffer and written. */
+    char name[64] = {0};
     extract_json_string_field(body, "name", name, sizeof(name));
-    uint32_t err = 0;
+    uint32_t err = SYS_REGISTRY_ERR_NULL_ARG; /* a bad slot or no name: nothing was asked of Sony */
     int rc = -1;
     if (slot >= 1 && slot <= PROFILE_SLOT_COUNT && name[0]) {
         pthread_mutex_lock(&sony_api_lock);
@@ -10023,12 +10000,14 @@ static int handle_profile_set_username(const char *body) {
         usleep(SONY_API_POST_SLEEP_US);
         pthread_mutex_unlock(&sony_api_lock);
     }
-    char nesc[PROFILE_NAME_MAX * 2 + 2];
+    /* A refused name may have been cut by the buffer in the middle of a letter: not echoed. */
+    if (strlen(name) > PROFILE_NAME_BYTES_MAX) name[0] = '\0';
+    char nesc[sizeof(name) * 2 + 2];
     json_escape_into(name, nesc, sizeof(nesc));
-    char resp[256];
+    char resp[320];
     int len = snprintf(resp, sizeof(resp),
         "{\"ok\":%s,\"slot\":%d,\"name\":\"%s\",\"err_code\":%u}",
-        rc == 0 ? "true" : "false", slot, nesc, err);
+        rc == 0 ? "true" : "false", slot, nesc, rc == 0 ? 0u : err);
     return mgmt_reply(MGMT_FRAME_PROFILE_SET_USERNAME_ACK, resp, (uint64_t)len);
 }
 

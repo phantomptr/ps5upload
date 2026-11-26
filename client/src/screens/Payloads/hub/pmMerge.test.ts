@@ -191,6 +191,37 @@ describe("cards once the saved list is known", () => {
     expect(g.also.map((c) => c.id)).toEqual(["proc:elfldr"]);
   });
 
+  it("counts a long list as its rows plus the cards shown: 20 saved, 4 found, 1 also running", () => {
+    // Twenty saved (kstuff among them, running), Payload Manager, three payloads known only by
+    // the settings they left, elfldr running, and LZ4 Compression's data folder left behind.
+    const entries = hubEntries([
+      ...CATALOG,
+      info("nanodns", "nanoDNS", "nanodns.elf", "/data/nanodns/nanodns.ini"),
+      info("hush", "Hush", "hush", "/data/hush/config.ini"),
+      info("lz4-compression", "LZ4 Compression (theghostonline)", null, "/data/LZ4Compression"),
+    ]);
+    const cards = detectHubCards({
+      entries,
+      processes: [proc(102, "kstuff.elf"), proc(106, "elfldr.elf"), proc(90, "pldmgr.elf")],
+      markers: new Set([
+        "/data/shadowmount/debug.log",
+        "/data/nanodns/nanodns.ini",
+        "/data/hush/config.ini",
+        "/data/LZ4Compression",
+      ]),
+      answering: new Set(["payload-manager"]),
+    });
+    const twenty = [saved("kstuff-1.13-fpkg.elf"), ...Array.from({ length: 19 }, (_, i) => saved(`tool-${i}.elf`))];
+    const d = matchDetail(twenty, cards, entries);
+    const g = groupCards(cards, d.matched, d.ambiguous);
+    expect(g.top.map((c) => c.id).sort()).toEqual(["hush", "nanodns", "payload-manager", "shadowmountplus"]);
+    expect(g.also.map((c) => c.id)).toEqual(["proc:elfldr"]);
+    expect([...g.hidden]).toEqual(["kstuff-echostretch"]);
+    // The number at the top is the three sections added up.
+    expect(payloadCount(g.top.length + g.also.length, twenty.length)).toBe(20 + 4 + 1);
+    expect(cards.some((c) => c.state === "installed")).toBe(false);
+  });
+
   it("matches .bin and upper-case file names, and a renamed file not at all", () => {
     const cards = cardsFor([proc(102, "kstuff.elf"), proc(96, "nanodns.elf")]);
     const m = matchSavedToCards([saved("KSTUFF.BIN"), saved("dns-helper.elf")], cards, ENTRIES);

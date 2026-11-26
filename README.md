@@ -35,24 +35,28 @@
   archives and any other file, and works out what each is. PS4 `.pkg` and PS5 fake packages
   (base, update, DLC) install from your computer (**Stream & install** or **Upload & install**),
   a NAS/SMB share, a USB drive or a link. If the PS5 refuses one route, the app offers another.
+  A picked fake package shows **Name on the PS5**: change it there and the game installs under
+  that name.
   An installed PS5 fake package plays on firmware up to 13.60; above 11.60 it needs a kstuff build
-  with fake-package support for that firmware (November 2026 or newer). **Kraken Mount** can mount
+  with fake-package support for that firmware: kstuff 1.15 or newer. **Kraken Mount** can mount
   the package instead (Upload & Install offers it when Kraken Mount runs). PS4 fake packages are fine.
 - **Games.** One grid with every game once: your copies in your folders (including folders on
-  a NAS, scanned in place) grouped with their updates and DLC, what each PS5 has installed, and
-  the games on its drives. Play (or close) an installed game right from its card. Each game's
+  a NAS, scanned in place) grouped with their updates and DLC, what each PS5 has installed (at
+  its real version, a PS4 game's update included), and the games on its drives. Play (or close) an installed game right from its card. Each game's
   page holds everything you can do with it: install, play, mount, add to the home screen, move,
   back up, convert, dump. Organize, de-duplicate and clean up the
   drives. Replaces PS Game Library.
 - **Convert games (Workshop).** Build an installable package from a decrypted game folder or an
   image, or write a game folder as a game image (`.exfat`, `.ffpkg`, `.ffpfs`, or the smaller
   `.ffpfsc`) that ShadowMount+ mounts. A PS4 game (or a PS4 game merged with its update) can
-  also become a PS4 fake package. An image or folder can be written straight to a server (SMB,
+  also become a PS4 fake package. A game kept in zstd or LZ4 asset packs is unpacked into plain
+  files when it becomes a package. An image or folder can be written straight to a server (SMB,
   NFS, FTP, SFTP or WebDAV) with nothing stored on your computer. A queue makes games one after
   another and hands each to Upload & Install to install or upload.
 - **Browse and manage.** Files, games, disk images (mount, edit in place), screenshots and
   video clips; register, launch, stop and uninstall games; copy, move (Move to…), delete, set
-  permissions.
+  permissions. On a phone, Files keeps one compact bar on top, a long press starts selecting,
+  and Copy, Move, Rename and Delete sit in a bar at the bottom.
 - **Save Data.** Automatic backups to a folder (or a server), **Back up now** and **Restore…**;
   **Copy to…** another user on the same PS5, or a file for a friend or another PS5 that loads
   under their own account; open a save for save editors. PS1 (PSSwanStation), PS2 (Crux2,
@@ -86,7 +90,8 @@
     drop keeps their place; when you stop Play, they're told at once. Friends anywhere join from
     an **internet invite** (no Tailscale or VPN needed), and a link opens in the PS5Upload app
     when they have it. Guests play as the PS5 profile you choose, or the TV asks them. Phone
-    controllers and watch links work over the internet too.
+    controllers and watch links work over the internet too. A friend can join from a TV with
+    its remote, and on Android TV the app opens on **Join Play Together**.
   - **Go live** to YouTube, Twitch, Kick, Facebook or any RTMP/SRT server, several at once,
     straight from Play (desktop apps and the web UI), or add the stream to **OBS** for your own
     scenes and overlays.
@@ -119,7 +124,7 @@
   of each other's way. Settings are backed up daily, to the engine and to each console.
   **Mesh Drive** keeps a folder the same on all of them, at home on the
   console, with an optional join password and every device's state visible from any of them.
-- **Runs everywhere:** macOS, Windows, Linux, Android, iPhone (sideloaded), or any browser through the self-hosted
+- **Runs everywhere:** macOS, Windows, Linux, Android (phones, tablets, Android TV and Google TV), iPhone (sideloaded), or any browser through the self-hosted
   Docker web UI ([compose file](engine/compose.yaml), see
   [Self-hosted engine and web UI](#self-hosted-engine-and-web-ui)). 21 languages.
 
@@ -133,7 +138,7 @@
 ## A quick look
 
 <img width="1080" alt="Play: a PS5 game streaming in the app, with the stream's controls on the picture." src="site/assets/shots/play-dark.webp" />
-<img width="1080" alt="Play Together: friends joining a game from a link or a QR code." src="site/assets/shots/together-dark.webp" />
+<img width="1080" alt="Play Together: friends joining a game from a link or a QR code." src="site/assets/shots/together-net-dark.webp" />
 <img width="1080" alt="Games: a grid of game covers with their sizes and where they are." src="site/assets/shots/games-dark.webp" />
 
 ## Install

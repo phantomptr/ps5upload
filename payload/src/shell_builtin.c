@@ -812,7 +812,9 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
             return 0;
         }
         char val[1024] = {0};
-        size_t vl = sizeof(val);
+        /* One byte short of the buffer: a value that fills all of it has no NUL, and the "%s"
+         * below then read on past the end of `val`. */
+        size_t vl = sizeof(val) - 1;
         if (sysctlbyname(argv[1], val, &vl, NULL, 0) != 0) {
             len = shell_appendf(&out, &cap, len,
                                  "sysctl: %s: %s\n", argv[1], strerror(errno));
@@ -1409,6 +1411,11 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
                     any_err = 1;
                     continue;
                 }
+                /* A link found in the tree is left alone: chmod() follows it, and its target is
+                 * outside the tree, a file the words of the command never named (and that
+                 * shell_protected_arg never judged: a link to the trust store's key was made
+                 * unreadable this way). fs_jobs.c's recursive chmod skips them the same way. */
+                if (ent->fts_info == FTS_SL || ent->fts_info == FTS_SLNONE) continue;
                 if (chmod(ent->fts_accpath, (mode_t)mode) != 0) {
                     len = shell_appendf(&out, &cap, len,
                                          "chmod: %s: %s\n", ent->fts_path,

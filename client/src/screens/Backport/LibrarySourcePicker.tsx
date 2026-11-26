@@ -353,8 +353,8 @@ export function summariseSweep(
   // HAS fakelib folders reads as a broken scan, when in fact those titles were
   // never downgraded and what is in them is not a backport.
   if (totals.notBackported > 0) {
-    return tr("fakelibs_scan_not_backported", { count: totals.notBackported },
-      `${totals.notBackported} game(s) have a fakelib/ but were never downgraded, so their files are not a backport and were skipped.`);
+    return tr("fakelibs_scan_not_backported_v2", { count: totals.notBackported },
+      "Games with a fakelib/ that were never downgraded: {count}. Their files are not a backport and were skipped.");
   }
   return tr("fakelibs_scan_none", undefined,
     "No backported games found, so there were no libraries to collect.");
