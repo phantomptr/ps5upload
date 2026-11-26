@@ -169,33 +169,7 @@ pub(crate) fn check_shape(m: &Manifest, single: bool) -> io::Result<()> {
 fn check_shape_with(m: &Manifest, single: bool, escape_names: bool) -> io::Result<()> {
     let bad = |why: String| io::Error::new(io::ErrorKind::InvalidData, why);
     for e in &m.entries {
-        manifest::check_path(&e.path).map_err(|e| bad(e.to_string()))?;
-        if escape_names {
-            // Component by component: a '\' is part of a name here, never a separator.
-            let kept = ps5upload_core::host_names::escape_path(&e.path)
-                .map_err(|why| bad(format!("{:?}: {why}", e.path)))?;
-            if kept
-                .split('/')
-                .any(|c| c.contains('\\') || host_unsafe_component(c).is_some())
-            {
-                return Err(bad(format!("{:?} cannot be kept on this computer", e.path)));
-            }
-            continue;
-        }
-        // A backslash is a separator on Windows: `a\..\b` would climb out of the root.
-        if e.path.contains('\\') {
-            return Err(bad(format!("{:?} contains a backslash", e.path)));
-        }
-        // Peer-supplied names are written on THIS computer, whatever it is. A ':' makes
-        // `C:/x` a drive path and `C:evil` a drive-relative one on Windows (and an
-        // alternate data stream on NTFS); the reserved device names and a trailing dot
-        // or space name something other than the file asked for. Refused everywhere so
-        // the console's data lands the same way on every host.
-        for comp in e.path.split('/') {
-            if let Some(why) = host_unsafe_component(comp) {
-                return Err(bad(format!("{:?}: {why}", e.path)));
-            }
-        }
+        kept_path(&e.path, escape_names)?;
     }
     if single {
         let files = m
@@ -211,6 +185,42 @@ fn check_shape_with(m: &Manifest, single: bool, escape_names: bool) -> io::Resul
         }
     }
     Ok(())
+}
+
+/// The root-relative path a manifest `path` is written under on this computer, after the
+/// checks every peer-supplied path passes before anything is written (or removed) under it:
+/// itself, or with `escape_names` its reversible form. Err for a path that could climb out of
+/// the root or name something else on some host.
+fn kept_path(path: &str, escape_names: bool) -> io::Result<String> {
+    let bad = |why: String| io::Error::new(io::ErrorKind::InvalidData, why);
+    manifest::check_path(path).map_err(|e| bad(e.to_string()))?;
+    if escape_names {
+        // Component by component: a '\' is part of a name here, never a separator.
+        let kept = ps5upload_core::host_names::escape_path(path)
+            .map_err(|why| bad(format!("{path:?}: {why}")))?;
+        if kept
+            .split('/')
+            .any(|c| c.contains('\\') || host_unsafe_component(c).is_some())
+        {
+            return Err(bad(format!("{path:?} cannot be kept on this computer")));
+        }
+        return Ok(kept);
+    }
+    // A backslash is a separator on Windows: `a\..\b` would climb out of the root.
+    if path.contains('\\') {
+        return Err(bad(format!("{path:?} contains a backslash")));
+    }
+    // Peer-supplied names are written on THIS computer, whatever it is. A ':' makes
+    // `C:/x` a drive path and `C:evil` a drive-relative one on Windows (and an
+    // alternate data stream on NTFS); the reserved device names and a trailing dot
+    // or space name something other than the file asked for. Refused everywhere so
+    // the console's data lands the same way on every host.
+    for comp in path.split('/') {
+        if let Some(why) = host_unsafe_component(comp) {
+            return Err(bad(format!("{path:?}: {why}")));
+        }
+    }
+    Ok(path.to_owned())
 }
 
 /// `LocalSink` plus the checks above. The landing root is `dest_dir/<basename>` for both
@@ -1130,29 +1140,29 @@ fn remove_part_files(job_dir: &Path, target: &Path, escape_names: bool) {
     let Ok(m) = journal::read_manifest(job_dir) else {
         return;
     };
-    let Ok(m) = (if escape_names {
-        kept_manifest(&m)
-    } else {
-        Ok(m)
-    }) else {
-        return;
-    };
-    for rel in part_files(&m) {
+    for rel in part_files(&m, escape_names) {
         // `remove_file` takes a symlink itself, never what it points at.
         let _ = std::fs::remove_file(target.join(rel));
     }
 }
 
-/// The in-place part files (root-relative) of the files of `m`, but for a part name that is
-/// itself a path of `m` in any case: that file is the tree's own (a real `X.ava-part`, landed
-/// or about to be replaced), never `X`'s part file.
-fn part_files(m: &Manifest) -> Vec<String> {
-    let paths: std::collections::HashSet<String> =
-        m.entries.iter().map(|e| e.path.to_lowercase()).collect();
-    m.entries
+/// The in-place part files (root-relative, by their kept names with `escape_names`) of the
+/// files of `m`, but for a part name that is itself a path of `m` in any case: that file is
+/// the tree's own (a real `X.ava-part`, landed or about to be replaced), never `X`'s part file.
+/// Only paths that pass the writer's own checks (`kept_path`): the journal saves the manifest
+/// before `prepare` checks it, so a refused one is read back here, and on Windows `..\x`,
+/// `C:x` or `C:\x` joined onto the folder would name a file outside it.
+fn part_files(m: &Manifest, escape_names: bool) -> Vec<String> {
+    let kept: Vec<(u8, String)> = m
+        .entries
         .iter()
-        .filter(|e| e.kind == gen::ENTRY_FILE)
-        .map(|e| part_name(&e.path))
+        .filter_map(|e| Some((e.kind, kept_path(&e.path, escape_names).ok()?)))
+        .collect();
+    let paths: std::collections::HashSet<String> =
+        kept.iter().map(|(_, p)| p.to_lowercase()).collect();
+    kept.iter()
+        .filter(|(kind, _)| *kind == gen::ENTRY_FILE)
+        .map(|(_, p)| part_name(p))
         .filter(|p| !paths.contains(&p.to_lowercase()))
         .collect()
 }
@@ -2427,6 +2437,73 @@ mod tests {
             !target.join("a/Y.ava-part").exists(),
             "Y's part file is the job's"
         );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The clean-up after a failed download removes part files at the paths of the journal's
+    /// saved manifest, which is saved before `prepare` checks it: a refused manifest comes back
+    /// here. Its hostile paths (on Windows `..\x` climbs, `C:x` and `C:\x` name another place, a
+    /// device name is no file) are skipped by the writer's own checks on every host, so the test
+    /// means the same on this one.
+    #[test]
+    fn the_failure_clean_up_removes_nothing_at_a_path_the_writer_refuses() {
+        let file = |path: &str| manifest::Entry {
+            kind: gen::ENTRY_FILE,
+            mode: 0o644,
+            size: 5 << 20,
+            mtime: 0,
+            path: path.into(),
+            root: None,
+        };
+        let hostile = [
+            "..\\x",
+            "a\\..\\..\\x",
+            "C:x",
+            "C:\\Windows\\x",
+            "\\\\server\\share\\x",
+            "\\x",
+            "/abs/x",
+            "../x",
+            "a/../../x",
+            "CON",
+            "a/NUL.txt",
+            "x.",
+            "a/b:stream",
+        ];
+        let mut entries: Vec<_> = hostile.iter().map(|p| file(p)).collect();
+        entries.push(file("ok/y"));
+        let m = Manifest { entries };
+        assert_eq!(part_files(&m, false), vec!["ok/y.ava-part".to_string()]);
+        // Kept names: whatever the escape makes of them stays one name inside the folder.
+        for p in part_files(&m, true) {
+            assert!(
+                !p.contains('\\') && !p.contains(':') && !p.starts_with('/'),
+                "{p:?}"
+            );
+            assert!(p.split('/').all(|c| c != ".." && c != "."), "{p:?}");
+        }
+
+        // And through the real clean-up: only the safe file's part goes.
+        let d = std::env::temp_dir().join(format!("p5a-hostile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let (job, target) = (d.join("job"), d.join("in").join("Game"));
+        std::fs::create_dir_all(&job).unwrap();
+        std::fs::create_dir_all(target.join("ok")).unwrap();
+        journal::write_manifest(&job, &m).unwrap();
+        std::fs::write(target.join("ok/y.ava-part"), b"p").unwrap();
+        std::fs::write(d.join("x.ava-part"), b"not the job's").unwrap();
+        std::fs::write(d.join("in").join("x.ava-part"), b"not the job's").unwrap();
+        cleanup_after_failure(
+            &anyhow!("transfer_cancelled"),
+            &job,
+            &d.join("in").join("Game.ava-part"),
+            &target,
+            false,
+            false,
+        );
+        assert!(!target.join("ok/y.ava-part").exists());
+        assert!(d.join("x.ava-part").exists());
+        assert!(d.join("in").join("x.ava-part").exists());
         let _ = std::fs::remove_dir_all(&d);
     }
 
