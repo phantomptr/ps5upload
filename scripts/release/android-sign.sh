@@ -47,6 +47,8 @@ fi
 echo "Unsigned APKs: $arm64 ${armv7:-(no armv7)}"
 
 work="$(mktemp -d)"
+# The decoded release keystore lives here: never leave it behind in the temp folder.
+trap 'rm -rf "$work"' EXIT
 keystore="$work/release.jks"
 
 if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then

@@ -94,4 +94,6 @@ if (( failed )); then
   done
   exit 1
 fi
+# The logs are kept to read only when something failed.
+rm -rf "$logs"
 echo "release-check: all passed"
