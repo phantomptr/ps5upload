@@ -719,7 +719,7 @@ mod tests {
     struct Temp(PathBuf);
     impl Temp {
         fn new(tag: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!(
+            let dir = crate::test_tmp::temp_path(format!(
                 "ps5upload-usb-{tag}-{}-{:?}",
                 std::process::id(),
                 std::time::SystemTime::now()

@@ -603,7 +603,7 @@ mod tests {
 
     #[test]
     fn a_write_then_read_round_trips_and_leaves_no_temporary_file() {
-        let dir = std::env::temp_dir().join(format!("ps5u-window-state-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-window-state-{}", std::process::id()));
         let path = dir.join(FILE_NAME);
         let s = saved(10.0, 20.0, 1300.0, 850.0);
         write(&path, &s).unwrap();

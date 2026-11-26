@@ -954,7 +954,7 @@ mod tests {
     /// that the app log is correctly time-windowed.
     #[test]
     fn assemble_zip_bundles_everything_and_windows_the_log() {
-        let root = std::env::temp_dir().join(format!("ps5up-bugreport-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5up-bugreport-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let logs = root.join("logs");
         let engine = root.join("engine");
@@ -1083,7 +1083,7 @@ mod tests {
     /// Unticking sections drops them; report.json + README are always present.
     #[test]
     fn assemble_zip_respects_include_flags() {
-        let root = std::env::temp_dir().join(format!("ps5up-bugreport2-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5up-bugreport2-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let dest = root.join("out.zip");
@@ -1124,7 +1124,7 @@ mod tests {
     fn extras_the_bundle_already_has_do_not_fail_it() {
         // Every desktop report failed with "Duplicate filename: README.txt": the report
         // builder sends its own README.txt, and the bundle had already written one.
-        let root = std::env::temp_dir().join(format!("ps5up-bugreport4-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5up-bugreport4-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let dest = root.join("out.zip");
@@ -1173,7 +1173,7 @@ mod tests {
 
     #[test]
     fn extra_entries_are_redacted_and_bad_paths_listed_as_missing() {
-        let root = std::env::temp_dir().join(format!("ps5up-bugreport3-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5up-bugreport3-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let dest = root.join("out.zip");
@@ -1236,7 +1236,8 @@ mod tests {
     /// helper's PIN line is gone.
     #[test]
     fn logs_are_capped_and_cuts_named() {
-        let root = std::env::temp_dir().join(format!("ps5up-bugreport-cap-{}", std::process::id()));
+        let root =
+            crate::test_tmp::temp_path(format!("ps5up-bugreport-cap-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("e")).unwrap();
         // Four engine logs of 5 MiB each: three fit at 4 MiB (the 12 MiB total), the oldest is left out.
@@ -1363,7 +1364,7 @@ mod tests {
 
     #[test]
     fn engine_log_tail_starts_on_a_line_boundary() {
-        let root = std::env::temp_dir().join(format!("ps5upload-tail-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5upload-tail-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let p = root.join("engine.log");

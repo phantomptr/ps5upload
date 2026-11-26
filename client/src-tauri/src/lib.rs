@@ -879,7 +879,7 @@ mod asset_scope_tests {
         {
             let p = p.as_str().unwrap();
             let raw = match p.strip_prefix("$TEMP/") {
-                Some(rest) => std::env::temp_dir().join(rest),
+                Some(rest) => crate::test_tmp::temp_path(rest),
                 None => PathBuf::from(p),
             };
             out.push(glob::Pattern::new(&raw.to_string_lossy()).unwrap());
@@ -930,7 +930,7 @@ mod asset_scope_tests {
         let clip = scratch.join("sub").join("clip.mp4");
         std::fs::write(&clip, b"mp4").unwrap();
         // A game folder's cover (Upload), wherever the folder is.
-        let other = std::env::temp_dir().join(format!("ps5upload-scope-{}", std::process::id()));
+        let other = crate::test_tmp::temp_path(format!("ps5upload-scope-{}", std::process::id()));
         let game = other.join("My Game").join("sce_sys");
         std::fs::create_dir_all(&game).unwrap();
         let icon = game.join("icon0.png");
@@ -960,7 +960,7 @@ mod asset_scope_tests {
     fn a_cover_is_served_in_any_letter_case_and_nothing_else_is() {
         let scope = scope();
         let root =
-            std::env::temp_dir().join(format!("ps5upload-scope-case-{}", std::process::id()));
+            crate::test_tmp::temp_path(format!("ps5upload-scope-case-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         for (game, dir, icon) in [
             ("Upper", "SCE_SYS", "ICON0.PNG"),
@@ -1027,3 +1027,8 @@ mod profile_tests {
         );
     }
 }
+
+// Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
+#[cfg(test)]
+#[path = "../../../engine/test-support/test_tmp.rs"]
+mod test_tmp;

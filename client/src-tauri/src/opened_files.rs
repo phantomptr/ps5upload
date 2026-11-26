@@ -99,7 +99,7 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("ps5upload-opened-{}-{}", name, std::process::id()));
+            crate::test_tmp::temp_path(format!("ps5upload-opened-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

@@ -8,7 +8,7 @@ struct Scratch(PathBuf);
 impl Scratch {
     fn new(name: &str) -> Self {
         let dir =
-            std::env::temp_dir().join(format!("ps5upload-config-{name}-{}", std::process::id()));
+            crate::test_tmp::temp_path(format!("ps5upload-config-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         Self(dir)
     }

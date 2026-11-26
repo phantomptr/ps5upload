@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn window_filter_keeps_unparseable_and_recent() {
-        let dir = std::env::temp_dir().join(format!("ps5up-diaglog-test-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5up-diaglog-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("app-20260605.jsonl");

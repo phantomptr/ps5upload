@@ -284,7 +284,7 @@ mod tests {
 
     #[tokio::test]
     async fn local_list_dir_sorts_dirs_first_then_files_case_insensitive() {
-        let tmp = std::env::temp_dir().join(format!("ps5_lf_{}", std::process::id()));
+        let tmp = crate::test_tmp::temp_path(format!("ps5_lf_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(tmp.join("Zsub")).unwrap();
         std::fs::create_dir_all(tmp.join("alpha")).unwrap();
@@ -313,7 +313,7 @@ mod tests {
     }
 
     fn inbox_fixture(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-        let tmp = std::env::temp_dir().join(format!("ps5u_inbox_{name}_{}", std::process::id()));
+        let tmp = crate::test_tmp::temp_path(format!("ps5u_inbox_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let inbox = tmp.join("com.app-Inbox");
         std::fs::create_dir_all(&inbox).unwrap();
@@ -709,7 +709,8 @@ mod paging_tests {
 
     #[test]
     fn pages_follow_the_listing_order_and_end_cleanly() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-local-page-{}", std::process::id()));
+        let dir =
+            crate::test_tmp::temp_path(format!("ps5upload-local-page-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("folder")).unwrap();
         for name in ["b.txt", "A.txt", "c.txt"] {

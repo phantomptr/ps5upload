@@ -498,7 +498,7 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
+        let d = crate::test_tmp::temp_path(format!(
             "ps5upload-update-files-{name}-{}",
             std::process::id()
         ));

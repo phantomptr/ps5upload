@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn newest_first_ordering() {
-        let dir = std::env::temp_dir().join(format!("ps5up-shots-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5up-shots-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         for n in [
@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn delete_removes_named_pngs_and_never_leaves_the_folder() {
-        let root = std::env::temp_dir().join(format!("ps5up-shots-del-{}", std::process::id()));
+        let root = crate::test_tmp::temp_path(format!("ps5up-shots-del-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let dir = root.join("bug-screenshots");
         std::fs::create_dir_all(&dir).unwrap();

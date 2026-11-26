@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn a_new_download_keeps_only_its_own_file_and_part() {
-        let dir = std::env::temp_dir().join(format!("ps5u-apk-others-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-apk-others-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         for n in ["new.apk", "new.apk.part", "old.apk", "old.apk.part"] {
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn only_a_zip_counts_as_an_apk() {
-        let dir = std::env::temp_dir().join(format!("ps5u-apk-head-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5u-apk-head-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("x.apk");

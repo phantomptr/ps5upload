@@ -558,7 +558,7 @@ mod tests {
 
     impl Scratch {
         fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!(
+            let dir = crate::test_tmp::temp_path(format!(
                 "ps5upload-persistence-{name}-{}",
                 std::process::id()
             ));

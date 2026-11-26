@@ -1258,7 +1258,7 @@ mod checksum_tests {
     #[test]
     fn an_install_starts_only_a_checked_file_that_is_unchanged() {
         use sha2::Digest;
-        let dir = std::env::temp_dir().join(format!("ps5upload-verified-{}", std::process::id()));
+        let dir = crate::test_tmp::temp_path(format!("ps5upload-verified-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("PS5Upload-9.9.9-mac-arm64.dmg");
         std::fs::write(&file, b"the release").unwrap();
