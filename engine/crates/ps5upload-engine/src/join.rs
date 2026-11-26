@@ -1468,11 +1468,13 @@ impl Party {
         if g.playing {
             return None;
         }
+        // PS first, in an earlier state; ✕ after it picks, whether PS is still down or not. A ✕
+        // with PS held used to count as no pick: the guest was signed in with PS never taken.
+        let had_ps = g.ps_pressed;
         if buttons & vpad::button::PS != 0 {
             g.ps_pressed = true;
-            return None;
         }
-        if !(g.ps_pressed && buttons & vpad::button::CROSS != 0) {
+        if !(had_ps && buttons & vpad::button::CROSS != 0) {
             return None;
         }
         g.playing = true;
@@ -5792,6 +5794,29 @@ mod tests {
         assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
         p.leave(id, "left", t);
         assert_eq!(p.strip_mask(id), None);
+    }
+
+    /// A guest who keeps PS down while pressing ✕ on "Who's using this controller?" has picked a
+    /// user like any other: PS is off for them after it. (It counted as no pick, so they were
+    /// signed in with a PS button that still worked.)
+    #[test]
+    fn a_pick_with_ps_still_held_turns_ps_off_too() {
+        let mut p = party();
+        let t = Instant::now();
+        let id = admit(&mut p, "A", t);
+        let (tx, _rx) = conn();
+        p.attach(id, 1, tx);
+        let ps = vpad::button::PS;
+        let cross = vpad::button::CROSS;
+        // Both at once, with no PS before: PS only just went down, the picker is not up yet.
+        assert_eq!(p.saw_input(id, ps | cross), None);
+        assert_eq!(p.strip_mask(id), Some((2, vpad::button::CREATE)));
+        assert_eq!(p.saw_input(id, ps), None);
+        assert!(
+            p.saw_input(id, ps | cross).is_some(),
+            "PS, then ✕ with PS still down"
+        );
+        assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
     }
 
     #[test]
