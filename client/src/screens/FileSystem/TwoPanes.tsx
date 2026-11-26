@@ -161,7 +161,7 @@ export function TwoPanes({
           ? await krakenKeptPaths(srcHost, items.map((i) => ({ path: i.path, isDir: i.isDir }))).catch(() => [])
           : [];
         const ok = await confirm({
-          title: tr("two_panes_move_title", { count: items.length }, "Move {count} items?"),
+          title: tr("two_panes_move_ask", undefined, "Move the ticked items?"),
           message:
             tr(
               "two_panes_move_body",
@@ -303,7 +303,8 @@ export function TwoPanes({
   return (
     <div ref={rootRef} className="flex items-start gap-3" data-two-panes="" onKeyDown={onKeyDown}>
       {confirmNode}
-      <section data-pane="ps5" aria-label={psName} className="min-w-0 flex-1">
+      {/* The PS5 side keeps the larger share: its rows carry their own action buttons. */}
+      <section data-pane="ps5" aria-label={psName} className="min-w-0 flex-[3_1_0%]">
         {children}
       </section>
       {!hidden && (
@@ -312,7 +313,8 @@ export function TwoPanes({
             role="toolbar"
             aria-orientation="vertical"
             aria-label={tr("two_panes_actions", undefined, "Copy or move between the two sides")}
-            className="sticky top-2 flex w-28 shrink-0 flex-col gap-1.5 pt-10"
+            // As wide as its longest button label, in any language and font.
+            className="sticky top-2 flex w-max min-w-24 shrink-0 flex-col gap-1.5 pt-10"
             data-testid="two-panes-actions"
           >
             {actions.map(({ toward, op }) => {
@@ -329,7 +331,7 @@ export function TwoPanes({
                   <Button
                     variant={op === "copy" ? "secondary" : "ghost"}
                     size="sm"
-                    className="w-full justify-start"
+                    className="w-full justify-start whitespace-nowrap"
                     disabled={disabled}
                     onClick={() => void run(toward, op)}
                     aria-label={
@@ -350,7 +352,8 @@ export function TwoPanes({
                     {label}
                   </Button>
                   {route && !route.ok && (
-                    <p id={reasonId} className="mt-0.5 text-[11px] leading-snug text-[var(--color-muted)]">
+                    // w-0 min-w-full: the note wraps to the buttons' width instead of widening them.
+                    <p id={reasonId} className="mt-0.5 w-0 min-w-full text-[11px] leading-snug text-[var(--color-muted)]">
                       {blockText(tr, route.block)}
                     </p>
                   )}
@@ -526,7 +529,7 @@ function OtherPane({
       // Its keys are its own: the PS5 list's shortcuts (Enter, Backspace, Ctrl+A) stay over there.
       data-keys-own=""
       data-testid="two-panes-other"
-      className="sticky top-2 flex max-h-[calc(100dvh-6rem)] min-w-0 flex-1 flex-col rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)]"
+      className="sticky top-2 flex max-h-[calc(100dvh-6rem)] min-w-0 flex-[2_1_0%] flex-col rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)]"
     >
       <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] p-2">
         <select
