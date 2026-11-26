@@ -570,6 +570,13 @@ Manager loads it at boot** if you want it at boot) on a payload, and **Sync with
 copies the ones you keep into it when they change and adds the marked ones to its boot list.
 Nothing else in its list is changed. Payload Manager has to be running on the PS5 for this.
 
+**Q: How do I add my own payload source (a custom GitHub or Gitea repo)?**
+You can't any more. Since 12.6.0 ps5upload doesn't download payloads, so adding a repo or a
+payload list was taken out. Download the payload from its project page yourself and send the file
+from **Payloads → Send payload**; it is kept in the send history so you can send it again. Repos
+you added before still show in **Payloads › Catalog** with a **Custom** badge, and **Remove**
+takes them out.
+
 **Q: The Send button says "Waiting for the helper to start…" for a long time.**
 That is the normal probe window, up to 20 seconds. If it times out, the helper likely crashed on
 load; send it again.
