@@ -422,6 +422,18 @@ fn kept_manifest(m: &Manifest) -> io::Result<Manifest> {
 }
 
 impl Sink for CheckedSink {
+    /// The checks that need nothing from the disk, run by the library before the job's journal
+    /// or manifest is written (ava1 1.0.13): a manifest refused here leaves no trace. `prepare`
+    /// runs them again with the disk checks.
+    fn check(&self, m: &Manifest) -> io::Result<()> {
+        check_shape_with(m, self.single, self.escape_names)?;
+        if self.escape_names {
+            self.inner.check(&kept_manifest(m)?)
+        } else {
+            self.inner.check(m)
+        }
+    }
+
     fn prepare(&self, m: &Manifest) -> io::Result<()> {
         check_shape_with(m, self.single, self.escape_names)?;
         let kept;
@@ -729,6 +741,11 @@ impl Drop for ZipSink {
 }
 
 impl Sink for ZipSink {
+    /// The manifest's shape, checked before the library writes anything of the job.
+    fn check(&self, m: &Manifest) -> io::Result<()> {
+        check_shape(m, self.single)
+    }
+
     /// Truncates: `File::create` discards whatever an earlier attempt left in the part
     /// file, so two archives' bytes are never mixed.
     fn prepare(&self, m: &Manifest) -> io::Result<()> {
