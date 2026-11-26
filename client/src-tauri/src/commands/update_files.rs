@@ -738,7 +738,8 @@ mod tests {
     /// install is judged as usual.
     #[test]
     fn a_launch_during_an_install_waits_instead_of_reporting_a_failure() {
-        let dir = tmp("pending");
+        // A folder of its own: "pending" is the test above's, and the two run at once.
+        let dir = tmp("installing");
         let r = record(&dir, "10.5.1");
         std::fs::write(&r.file, b"zip").unwrap();
         write_record(&dir, &r).unwrap();
