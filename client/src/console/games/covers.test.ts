@@ -47,6 +47,27 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("where a cover is looked for", () => {
+  it("appmeta first, then the app folder on every drive the installed list reads, the M.2 drive's too", async () => {
+    expect(covers.coverPaths("PPSA01234")).toEqual([
+      "/user/appmeta/PPSA01234/icon0.png",
+      "/user/app/PPSA01234/sce_sys/icon0.png",
+      "/mnt/ext0/user/app/PPSA01234/sce_sys/icon0.png",
+      "/mnt/ext1/user/app/PPSA01234/sce_sys/icon0.png",
+    ]);
+    // a title only on the M.2 drive: the other places answer 404, its own folder has the icon
+    const { ApiError } = await import("../api");
+    callBlob.mockImplementation(async (_route: string, body: { path: string }) => {
+      if (body.path.startsWith("/mnt/ext1/")) return new Blob(["x"], { type: "image/png" });
+      throw new ApiError(404, "not_found");
+    });
+    stubImage(() => false);
+    await covers.loadCover("PPSA01234");
+    expect(callBlob.mock.calls.map((c) => (c[1] as { path: string }).path).pop()).toBe("/mnt/ext1/user/app/PPSA01234/sce_sys/icon0.png");
+    expect(made).toHaveLength(1); // that one was read and drawn
+  });
+});
+
 describe("cover shrinking gives its object URLs back", () => {
   it("bytes that are no picture: no cover, the URL revoked, not asked for again", async () => {
     stubImage(() => false);
