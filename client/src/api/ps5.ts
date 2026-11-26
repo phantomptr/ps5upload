@@ -7,6 +7,7 @@
 import { trStatic } from "../lib/trStatic";
 import type { InstallWaiting, ReachFail } from "../lib/streamReach";
 import { discardBody } from "../lib/discardBody";
+import { notifyPathsGone } from "../lib/fsPathsGone";
 import { requestStatusRecheck } from "../lib/statusRecheck";
 import { formatBytes } from "../lib/format";
 import {
@@ -1502,6 +1503,7 @@ export async function fsDelete(
 ): Promise<void> {
   const addr = toMgmtAddr(transferAddr);
   await fsLongOp("/api/ps5/fs/delete", { addr, path, op_id: opId ?? 0 });
+  notifyPathsGone(transferAddr, [path]);
 }
 
 /** Decompress a `.ffpfsc` on the console into the image it holds, beside it (#453). Resolves
@@ -1659,6 +1661,7 @@ export async function fsMove(
 ): Promise<void> {
   const addr = toMgmtAddr(transferAddr);
   await fsLongOp("/api/ps5/fs/move", { addr, from, to, op_id: opId ?? 0, overwrite: overwrite ?? false });
+  if (from !== to) notifyPathsGone(transferAddr, [from]);
 }
 
 export async function fsChmod(

@@ -2543,6 +2543,8 @@ export default function FileSystemScreen() {
     const addr = consoleAddr(host);
     const errors: string[] = [...refused];
     const duplicated: string[] = [];
+    // The items that went through cleanly: they leave the clipboard afterwards.
+    const done: ClipboardItem[] = [];
     try {
       for (let i = 0; i < items.length; i++) {
         // Between-items cancel check. We *also* drive in-flight
@@ -2662,6 +2664,8 @@ export default function FileSystemScreen() {
                       delErr instanceof Error ? delErr.message : String(delErr)
                     })`,
                   );
+                  // Still where it was, so still staged.
+                  continue;
                 }
               } else {
                 throw e;
@@ -2670,6 +2674,7 @@ export default function FileSystemScreen() {
           } else {
             await fsCopy(addr, item.path, target, opId, overwrite);
           }
+          done.push(item);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           // The engine maps the payload's "fs_copy_cancelled" error
@@ -2715,14 +2720,31 @@ export default function FileSystemScreen() {
     if (problemMsgs.length > 0) {
       setError(problemMsgs.join(" · "));
     }
-    // Only clear the clipboard when every cut succeeded cleanly — a
-    // partial failure means the user might want to retry the leftover
-    // items. Copies always keep the clipboard (same-items-many-places
-    // is the usual copy workflow).
-    // This console's clipboard, and only if it still holds what was pasted. The store's
-    // live half belongs to the SELECTED console, which this one may no longer be.
-    if (!staged && op === "cut" && problemMsgs.length === 0)
-      useFsClipboardStore.getState().clearFor(host, pasted);
+    // What went through leaves the clipboard, a copy as well as a cut (#936): the bar used to
+    // stay after a copy had finished, as if there were still something to do. What failed, was
+    // refused or was not reached before Stop stays staged, to try again. This console's
+    // clipboard: the store's live half belongs to the SELECTED console, which this one may no
+    // longer be. (A moved source has left it already: lib/fsPathsGone.)
+    if (!staged)
+      useFsClipboardStore.getState().drop(
+        host,
+        done.map((i) => i.path),
+      );
+    // A word that it is done, which goes by itself (#936).
+    const notPasted = pasted.length - done.length;
+    if (problemMsgs.length > 0)
+      toast({
+        tone: "warn",
+        message: tr("fs_paste_failed", { count: notPasted }, `Items not pasted: ${notPasted}`),
+      });
+    else if (done.length > 0)
+      toast({
+        tone: "success",
+        message:
+          op === "cut"
+            ? tr("fs_paste_done_move", { count: done.length }, `Items moved: ${done.length}`)
+            : tr("fs_paste_done_copy", { count: done.length }, `Items copied: ${done.length}`),
+      });
     await refresh();
   };
 
