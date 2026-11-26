@@ -41886,7 +41886,7 @@
     },
     "/api/ps5/rp/pad-link/kick": {
       "post": {
-        "description": "`POST /api/ps5/rp/pad-link/kick {id}`: let a phone go, and keep it out until the link closes\n(the link's key alone would let it back in with one tap).",
+        "description": "`POST /api/ps5/rp/pad-link/kick {id}`: let a phone go, and keep it out until the link closes\n(the link's key alone would let it back in with one tap). One on the home network: the QR code\ngets a new key, since the phone has the old one and makes up its device id itself (a new one,\nor none, was a way back in). The other phones come back by their device ([`Link::allowed`]).",
         "requestBody": {
           "content": {
             "application/json": {
