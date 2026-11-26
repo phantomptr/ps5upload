@@ -9422,6 +9422,17 @@
               }
             ],
             "description": "Why the name can't be changed; `None` when it can."
+          },
+          "room": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Room"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How long a new name may be; `None` when it can't be changed."
           }
         },
         "required": [
@@ -9430,7 +9441,8 @@
           "name",
           "entries",
           "other_names",
-          "refusal"
+          "refusal",
+          "room"
         ],
         "type": "object"
       },
@@ -12342,6 +12354,26 @@
         },
         "required": [
           "id"
+        ],
+        "type": "object"
+      },
+      "Room": {
+        "description": "How long a new name may be in this package, in UTF-8 bytes of plain text. A rename never\nmoves anything in the package, so the room is what the package itself has: the old names'\nown bytes and the whitespace its `param.json` and manifest can give up (PS5), or the fixed\nroom of its `param.sfo` strings (PS4); never more than [`MAX_NAME_BYTES`]. A character that\nhas to be written escaped (`\"` and `\\` in `param.json`; `&`, `<` and `>` in the manifest)\ntakes more than its own bytes, so such a name can still be refused a few bytes earlier.",
+        "properties": {
+          "all_languages": {
+            "description": "Giving every language the name.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "default_name": {
+            "description": "Changing only the entries that hold the current default name.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "default_name",
+          "all_languages"
         ],
         "type": "object"
       },
@@ -29119,7 +29151,7 @@
     },
     "/api/pkg/name": {
       "get": {
-        "description": "`GET /api/pkg/name?path=`: the names a package on this computer holds (one per language)\nand whether they can be changed. `refusal` is set when they can't: `code` is `retail` for an\nofficial package, `patch` for a delta update, `no_name`, or `unsupported` with the reason.",
+        "description": "`GET /api/pkg/name?path=`: the names a package on this computer holds (one per language)\nand whether they can be changed. `room` is how long a new name may be in this package, in\nUTF-8 bytes (`default_name`: changing the default name only; `all_languages`). `refusal` is set when they can't: `code` is `retail` for an\nofficial package, `patch` for a delta update, `no_name`, or `unsupported` with the reason.",
         "parameters": [
           {
             "description": "The package, on the engine's computer.",
