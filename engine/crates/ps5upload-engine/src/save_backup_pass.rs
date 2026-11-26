@@ -1013,10 +1013,25 @@ pub(crate) fn add_items(
     run.add(items).zip(entries).collect()
 }
 
+/// Why a save is not copied now: its game (or emulator) is running and may be writing it.
+pub(crate) fn running_now(app: &str) -> String {
+    format!("{app} is running on the PS5: its save waits until it is closed")
+}
+
+/// The title of `e`'s writer that is running, if one is: the game, or the emulator whose save it
+/// is (either of an emulator's titles).
+fn writer_running<'a>(e: &'a SaveEntry, running: &BTreeSet<String>) -> Option<&'a str> {
+    crate::emulator_saves::titles_of(crate::emulator_saves::app_of(e))
+        .into_iter()
+        .find(|a| running.contains(&a.to_ascii_uppercase()))
+}
+
 /// Continue or Retry: the last run's saves again, each in the places it is not verified in yet
 /// (`only`: these saves only, by id; their failed places too). Saves done carry over as they are,
 /// so the run still shows the whole. The saves are looked up again on their consoles (one gone
-/// from the console is dropped); a console that does not answer leaves its saves waiting.
+/// from the console is dropped); a console that does not answer leaves its saves waiting. So
+/// does one that can't say what is running on it, and a save whose game is running waits too, as
+/// a new pass would leave it: a save being written is never copied.
 pub(crate) fn carry_over(
     console: &dyn Console,
     run: &RunRef<'_>,
@@ -1024,6 +1039,7 @@ pub(crate) fn carry_over(
     only: Option<&BTreeSet<String>>,
 ) -> Vec<(usize, String, SaveEntry)> {
     let mut lists: BTreeMap<String, Result<Vec<SaveEntry>, String>> = BTreeMap::new();
+    let mut running: BTreeMap<String, Result<BTreeSet<String>, String>> = BTreeMap::new();
     let mut todo = Vec::new();
     for old in &last.items {
         let redo = match only {
@@ -1068,6 +1084,28 @@ pub(crate) fn carry_over(
                 None
             }
         };
+        // A console folder (#899) has no game; a save waits while its game runs, and while the
+        // console can't say whether it does.
+        let busy = match &entry {
+            Some(e) if it.kind != "folder" => {
+                match running
+                    .entry(it.host.clone())
+                    .or_insert_with(|| console.running(&it.host))
+                {
+                    Ok(titles) => writer_running(e, titles).map(running_now),
+                    Err(why) => {
+                        run.unreached(&it.host, why);
+                        Some(format!("could not ask the PS5 what is running: {why}"))
+                    }
+                }
+            }
+            _ => None,
+        };
+        if let Some(why) = busy {
+            it.error = Some(why);
+            run.add(vec![it]);
+            continue;
+        }
         match entry {
             Some(e) => {
                 it.mtime = e.mtime;
@@ -1255,8 +1293,12 @@ pub(crate) fn plan_share_host(
 ) -> Result<Vec<(Item, SaveEntry)>, String> {
     use crate::save_backup_server::{due_saves, Pick};
     let saves = p.console.list_saves(host)?;
-    // A game running now is still writing its save; one closed is not.
-    let running = p.console.running(host).unwrap_or_default();
+    // A game running now is still writing its save; one closed is not. A console that can't say
+    // what runs is not taken to run nothing: it is not planned now, as one that does not answer.
+    let running = p
+        .console
+        .running(host)
+        .map_err(|e| format!("could not ask the PS5 what is running: {e}"))?;
     let done = p.records.done(Place::Share);
     let drive_done = p.records.done(Place::Drive);
     let mut copies = copies;
@@ -1548,6 +1590,8 @@ mod tests {
         pub id: RefCell<Option<String>>,
         /// What looking at any folder fails with now (None: it works).
         pub folder_err: RefCell<Option<String>>,
+        /// The titles running (upper-case), or why that can't be asked.
+        pub running: RefCell<Result<BTreeSet<String>, String>>,
     }
 
     const GONE: &str =
@@ -1596,7 +1640,7 @@ mod tests {
             Ok(self.saves.clone())
         }
         fn running(&self, _host: &str) -> Result<BTreeSet<String>, String> {
-            Ok(BTreeSet::new())
+            self.running.borrow().clone()
         }
         fn read_save(&self, _host: &str, e: &SaveEntry, tmp: &Path) -> Result<(), String> {
             if self.crashed() {
@@ -1714,6 +1758,7 @@ mod tests {
             folders: RefCell::default(),
             id: RefCell::new(Some(PS5_ID.into())),
             folder_err: RefCell::default(),
+            running: RefCell::new(Ok(BTreeSet::new())),
         }
     }
 
@@ -2414,6 +2459,98 @@ mod tests {
             it.error.as_deref(),
             Some("the folder is no longer on the PS5")
         );
+        again.finish(None);
+    }
+
+    /// The audit's cases. A share pass took a console that could not say what runs on it as
+    /// running nothing, and Continue/Retry did not ask at all: either could copy a save its game
+    /// was writing. Unknown is not "nothing runs"; a save whose game runs waits.
+    #[test]
+    fn a_save_is_never_copied_while_its_game_runs_or_that_cannot_be_asked() {
+        let s = settings();
+        let c = console(0, 0);
+        let game = c.saves[0].title_id.clone();
+        // A new pass, the console unable to say what runs: nothing is planned there.
+        *c.running.borrow_mut() = Err("the helper did not answer".into());
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let fs = MemFs::new(&[]);
+        let server: Arc<dyn RemoteFs> = Arc::new(fs.share());
+        let open = || Ok((Arc::clone(&server), "/b".to_string()));
+        let records = MemRecords::default();
+        let after = |_: &str, _: &SaveEntry| {};
+        let p = SharePass {
+            s: &s,
+            console: &c,
+            records: &records,
+            retry: &Retry::instant(),
+            rt: rt.handle().clone(),
+            open: &open,
+            forget: &|| {},
+            keep_going: &|| true,
+            after_share: &after,
+        };
+        assert!(plan_share_host(&p, None, HOST, None, false, false)
+            .unwrap_err()
+            .contains("could not ask the PS5 what is running"));
+        // Saying a game runs: its saves wait, every other one is planned.
+        *c.running.borrow_mut() = Ok(BTreeSet::from([game.clone()]));
+        let items = plan_share_host(&p, None, HOST, None, false, false).unwrap();
+        assert!(!items.is_empty());
+        assert!(items.iter().all(|(_, e)| e.title_id != game));
+
+        // A run that left everything, continued.
+        let journal = Journal::open(None);
+        let run = journal.begin(Which::Share, "manual").unwrap();
+        let mut left = Vec::new();
+        for e in c.saves.iter().take(2) {
+            left.push(journal::new_item(
+                HOST,
+                e,
+                done_key(HOST, &e.path),
+                &[Place::Share],
+            ));
+        }
+        let other = c.saves[1].title_id.clone();
+        assert_ne!(other, game);
+        run.add(left);
+        run.finish(Some(("console_gone".into(), "gone".into())));
+        let last = journal.last(Which::Share).unwrap();
+
+        // Can't be asked: nothing is copied, everything waits, and says why.
+        *c.running.borrow_mut() = Err("the helper did not answer".into());
+        let again = journal.begin(Which::Share, "continue").unwrap();
+        assert!(carry_over(&c, &again, &last, None).is_empty());
+        for i in 0..2 {
+            let it = again.item(i).unwrap();
+            assert_eq!(it.outcome(), Outcome::Left);
+            assert!(it.error.as_deref().unwrap().contains("what is running"));
+        }
+        again.finish(None);
+
+        // The game running: its save waits; the other one goes.
+        *c.running.borrow_mut() = Ok(BTreeSet::from([game.clone()]));
+        let again = journal.begin(Which::Share, "continue").unwrap();
+        let todo = carry_over(&c, &again, &last, None);
+        assert_eq!(todo.len(), 1);
+        assert_eq!(todo[0].2.title_id, other);
+        let waiting = (0..2)
+            .map(|i| again.item(i).unwrap())
+            .find(|it| it.title_id == game)
+            .unwrap();
+        assert_eq!(waiting.outcome(), Outcome::Left);
+        assert_eq!(waiting.error, Some(running_now(&game)));
+        again.finish(None);
+
+        // Retry of that save alone, the game still running: still waits.
+        let ids = BTreeSet::from([waiting.id.clone()]);
+        let again = journal.begin(Which::Share, "retry").unwrap();
+        assert!(carry_over(&c, &again, &last, Some(&ids)).is_empty());
+        again.finish(None);
+
+        // The game closed: Continue copies it.
+        *c.running.borrow_mut() = Ok(BTreeSet::new());
+        let again = journal.begin(Which::Share, "continue").unwrap();
+        assert_eq!(carry_over(&c, &again, &last, None).len(), 2);
         again.finish(None);
     }
 }

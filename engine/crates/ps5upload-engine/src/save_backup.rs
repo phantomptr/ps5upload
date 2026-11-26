@@ -1754,11 +1754,35 @@ pub(crate) fn mark_restored(host: &str, save_path: &str) {
     let _ = save(DONE_FILE, &done);
 }
 
+/// Whether `save_path` is one of the places this app keeps the saves of `title_id` in: the
+/// console's own (`/user/home/<user>/savedata_prospero/<TITLE>`, a PS5 game's, or
+/// `/user/home/<user>/savedata/<TITLE>`, a PS4 game's; the user is its hex number), a Switch
+/// game's in the Switch emulator (`…/<profile>/<TITLE>`, see [`crate::emulator_saves`]), or a
+/// PlayStation or PlayStation 2 emulator's cards or saved states, under that emulator's own title
+/// (see [`crate::ps2_saves`]). Anything else is no save folder of `title_id`, however it ends.
+fn known_save_place(save_path: &str, title_id: &str) -> bool {
+    let parts: Vec<&str> = save_path.split('/').collect();
+    let console = matches!(
+        parts.as_slice(),
+        ["", "user", "home", user, "savedata_prospero" | "savedata", title]
+            if (1..=8).contains(&user.len())
+                && user.bytes().all(|b| b.is_ascii_hexdigit())
+                && *title == title_id
+    );
+    console
+        || (crate::emulator_saves::place_of(save_path).is_some()
+            && save_path.ends_with(&format!("/{title_id}")))
+        || crate::ps2_saves::place_of(save_path).is_some_and(|p| p.emulator.app == title_id)
+}
+
 /// A restore empties the console folder `save_path` and fills it from a backup, and unpacks the
 /// backup under `title_id` here: refused unless `title_id` is one plain name ([`plain`]) and
 /// `save_path` is a plain absolute path, with no `.`, `..` or empty part, no backslash and
 /// no control character. Otherwise a path such as `/user/home/1/savedata_prospero/../../../x/CUSA1`
-/// ends with the title ID and passed, and the folder it reaches was emptied.
+/// ends with the title ID and passed, and the folder it reaches was emptied. And it must be one
+/// of the app's own save places for that title ([`known_save_place`]): a plain path that merely
+/// ends with the title ID (`/data/games/PPSA01234`, say) is some other folder, and is not
+/// emptied either.
 pub(crate) fn save_folder_ok(save_path: &str, title_id: &str) -> Result<(), String> {
     if !plain(title_id) {
         return Err(format!("{title_id:?} is not a title ID"));
@@ -1770,8 +1794,8 @@ pub(crate) fn save_folder_ok(save_path: &str, title_id: &str) -> Result<(), Stri
             .split('/')
             .skip(1)
             .all(|part| !part.is_empty() && part != "." && part != "..");
-    if !plain_path {
-        return Err(format!("{save_path} is not a save folder"));
+    if !plain_path || !known_save_place(save_path, title_id) {
+        return Err(format!("{save_path} is not a save folder of {title_id}"));
     }
     Ok(())
 }
@@ -3727,6 +3751,52 @@ mod tests {
         assert!(save_folder_ok(ok, "PPSA01234").is_ok());
         assert!(save_writer(ok, "PPSA01234", 1).is_ok());
         assert!(save_folder_ok("/data/PCSX2/*.ps2", "PPSA99203").is_ok());
+    }
+
+    /// The audit's case: any plain path that ended with the title ID passed, so a restore could
+    /// empty a folder that is no save at all. Only the app's own save places are taken, each
+    /// for its own title.
+    #[test]
+    fn only_the_apps_own_save_places_are_save_folders() {
+        for (path, title) in [
+            ("/user/home/1/savedata_prospero/PPSA01234", "PPSA01234"),
+            ("/user/home/1de82450/savedata_prospero/PPSA01234", "PPSA01234"),
+            ("/user/home/1de82450/savedata/CUSA01234", "CUSA01234"),
+            (
+                "/data/prosperoeden/user/nand/user/save/0000000000000000/1F1E1D1C1B1A19181716151413121110/0100F2C0115B6000",
+                "0100F2C0115B6000",
+            ),
+            ("/data/crux2/memcards", "PPSA99249"),
+            ("/data/PCSX2/savestates", "PPSA99203"),
+            ("/data/PCSX2/*.p2s", "PPSA99203"),
+        ] {
+            assert!(save_folder_ok(path, title).is_ok(), "{path} {title}");
+        }
+        for (path, title) in [
+            // Ends with the title, and is some other folder.
+            ("/data/games/PPSA01234", "PPSA01234"),
+            ("/user/app/PPSA01234", "PPSA01234"),
+            ("/mnt/ext1/PPSA01234", "PPSA01234"),
+            (
+                "/user/home/1/savedata_prospero/PPSA01234/sce_sys",
+                "sce_sys",
+            ),
+            ("/user/home/1/other/PPSA01234", "PPSA01234"),
+            ("/user/home/nothex/savedata_prospero/PPSA01234", "PPSA01234"),
+            (
+                "/user/home/123456789/savedata_prospero/PPSA01234",
+                "PPSA01234",
+            ),
+            // A save place, of another title.
+            ("/user/home/1/savedata_prospero/PPSA01234", "PPSA09999"),
+            ("/data/crux2/memcards", "PPSA99203"),
+            ("/data/PCSX2/memcards", "PPSA99249"),
+            // The Switch emulator's root, or a game folder named with another ID.
+            ("/data/prosperoeden/user/nand/user/save", "save"),
+        ] {
+            let e = save_folder_ok(path, title).unwrap_err();
+            assert!(e.contains("is not a save folder"), "{path} {title}: {e}");
+        }
     }
 
     #[test]
