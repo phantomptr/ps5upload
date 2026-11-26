@@ -15712,6 +15712,10 @@
             "description": "\"file\" or \"folder\". The caller already knows from context\n(Library/FileSystem row) so we trust the hint and skip a\nstat round-trip just to classify.",
             "type": "string"
           },
+          "remove_source": {
+            "description": "A move to a saved server (`dest_dir` is `remote://…`): once the copy is complete and\nchecked on the server, the source is deleted on the console. A failed or cancelled copy\nleaves it (download_relay::finish_move). Refused with any other destination.",
+            "type": "boolean"
+          },
           "src_path": {
             "description": "Path on the PS5 to download. For `kind: \"folder\"` this is the\nroot of the tree; for `kind: \"file\"` it's the file itself.",
             "type": "string"

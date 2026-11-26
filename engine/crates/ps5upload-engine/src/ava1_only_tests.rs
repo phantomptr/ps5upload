@@ -333,6 +333,7 @@ async fn transfer_download_with_no_ava1_listener_is_helper_not_ava1() {
         kind: "file".to_string(),
         unsafe_read: false,
         escape_names: false,
+        remove_source: false,
     };
     let resp = transfer_download_handler(State(state_for(&jobs)), Json(req))
         .await
@@ -358,6 +359,7 @@ async fn transfer_download_takes_a_name_windows_refuses_only_when_keeping_names(
                 kind: "file".to_string(),
                 unsafe_read: false,
                 escape_names,
+                remove_source: false,
             };
             let resp = transfer_download_handler(State(state_for(&jobs)), Json(req))
                 .await
@@ -371,6 +373,36 @@ async fn transfer_download_takes_a_name_windows_refuses_only_when_keeping_names(
         }
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #953: a move off the console (`remove_source`) goes only to a saved server, never takes a
+/// drive or a top folder as a whole, and never rides on `unsafe_read`; each is refused up front.
+#[tokio::test(flavor = "multi_thread")]
+async fn transfer_download_refuses_a_move_it_should_not_make() {
+    let cases = [
+        ("/data/x", "/tmp/somewhere", false),
+        ("/data", "remote://abc/games", false),
+        ("/mnt/usb0", "remote://abc/games", false),
+        ("/mnt/usb0/", "remote://abc/games", false),
+        ("/data/x", "remote://abc/games", true),
+    ];
+    for (src, dest, unsafe_read) in cases {
+        let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::new(Mutex::new(HashMap::new()));
+        let req = TransferDownloadReq {
+            addr: Some("127.0.0.1:9113".to_string()),
+            src_path: src.to_string(),
+            dest_dir: dest.to_string(),
+            kind: "folder".to_string(),
+            unsafe_read,
+            escape_names: false,
+            remove_source: true,
+        };
+        let resp = transfer_download_handler(State(state_for(&jobs)), Json(req))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{src} -> {dest}");
+        assert!(jobs.lock().unwrap().is_empty(), "{src}: no job starts");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

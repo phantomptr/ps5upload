@@ -11849,6 +11849,11 @@ struct TransferDownloadReq {
     /// with `unescape_names` puts it back exactly. The saves code's downloads (#729).
     #[serde(default)]
     escape_names: bool,
+    /// A move to a saved server (`dest_dir` is `remote://…`): once the copy is complete and
+    /// checked on the server, the source is deleted on the console. A failed or cancelled copy
+    /// leaves it (download_relay::finish_move). Refused with any other destination.
+    #[serde(default)]
+    remove_source: bool,
 }
 
 /// Where an AVA1 download lands (Task 25).
@@ -11858,8 +11863,9 @@ enum Ava1DownloadTarget {
     Folder(std::path::PathBuf, bool),
     /// One `.zip` at this path, Stored (resumable) or Deflated (cannot resume).
     Zip(std::path::PathBuf, ps5upload_ava1::download::ZipCompression),
-    /// A folder on a saved server (`remote://id/dir`), through this engine (download_relay.rs).
-    Server(String),
+    /// A folder on a saved server (`remote://id/dir`), through this engine (download_relay.rs);
+    /// `true` moves (the source is deleted once the copy is checked).
+    Server(String, bool),
 }
 
 /// Starts a console -> computer download over AVA1 and answers `ACCEPTED` with the job id.
@@ -11896,7 +11902,7 @@ fn start_ava1_download(
     let dest_display = match &target {
         Ava1DownloadTarget::Folder(dir, _) => dir.join(&basename).to_string_lossy().to_string(),
         Ava1DownloadTarget::Zip(zip, _) => zip.to_string_lossy().to_string(),
-        Ava1DownloadTarget::Server(dir) => format!("{}/{basename}", dir.trim_end_matches('/')),
+        Ava1DownloadTarget::Server(dir, _) => format!("{}/{basename}", dir.trim_end_matches('/')),
     };
     crate::log_info!("transfer_download: job={job_id} protocol=ava1 src={src} dest={dest_display}");
     let progress = Arc::new(AtomicU64::new(0));
@@ -12000,12 +12006,13 @@ fn start_ava1_download(
                     &counters,
                     Some(cancel),
                 ),
-                Ava1DownloadTarget::Server(dir) => download_relay::to_server(
+                Ava1DownloadTarget::Server(dir, remove_source) => download_relay::to_server(
                     &addr,
                     &src,
                     kind,
                     dir,
                     unsafe_read,
+                    *remove_source,
                     &counters,
                     cancel,
                     &crate::remote::store::data_dir()
@@ -12127,14 +12134,29 @@ async fn transfer_download_handler(
         if let Err(e) = crate::remote::path::parse(&req.dest_dir) {
             return json_err(StatusCode::BAD_REQUEST, format!("{e}")).into_response();
         }
+        // A move deletes on the console: only what Files could delete, never a whole drive.
+        if req.remove_source && (req_unsafe || !download_relay::movable_source(trimmed_src)) {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                format!("{trimmed_src} can't be moved off the PS5; copy it instead"),
+            )
+            .into_response();
+        }
         return start_ava1_download(
             &state,
             mgmt_addr,
             req.src_path.clone(),
             kind,
             req_unsafe,
-            Ava1DownloadTarget::Server(req.dest_dir.clone()),
+            Ava1DownloadTarget::Server(req.dest_dir.clone(), req.remove_source),
         );
+    }
+    if req.remove_source {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "remove_source needs a saved server as dest_dir",
+        )
+        .into_response();
     }
 
     let dest_dir = std::path::PathBuf::from(&req.dest_dir);
