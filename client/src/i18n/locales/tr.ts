@@ -4552,6 +4552,7 @@ drive_detail_changed_here: "{path} eşitlenirken bu cihazda değişti. Bir sonra
 drive_detail_changed_there: "{path} eşitlenirken {console} üzerinde değişti. Bir sonraki sefer eşitlenecek.",
 drive_detail_too_many_files: "{limit} dosyadan fazla: Mesh Drive için çok fazla.",
 drive_detail_list_unreadable: "Bu sürüm konsolun sürücü listesini okuyamıyor. Bu uygulamayı güncelle.",
+drive_detail_console_list_unreadable: "Konsol sürücü listesini okuyamadı. Okuyabilene kadar hiçbir şey değişmez.",
 drive_detail_link_record_damaged: "{console} üzerindeki bağlantı kaydı bozuk.",
 drive_detail_too_many_for_console: "İkinci bir konsoldaki sürücü klasörü için çok fazla dosya.",
 drive_removed: "Artık bu sürücüde değil",

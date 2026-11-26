@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "mesh.h"
@@ -325,6 +326,57 @@ static void test_docs(void) {
     CHECK(has(call(MESH_DOC_GET, 1, "{\"name\":\"user\"}"), "\"rev\":1"));
 }
 
+/* The bytes of v1/doc-<name>, or "" (a static buffer). */
+static const char *doc_file(const char *name) {
+    static char text[4096];
+    char path[512];
+    size_t n = 0;
+    FILE *f;
+    snprintf(path, sizeof path, "%s/v1/doc-%s", g_dir, name);
+    text[0] = 0;
+    if ((f = fopen(path, "rb"))) {
+        n = fread(text, 1, sizeof text - 1, f);
+        fclose(f);
+    }
+    text[n] = 0;
+    return text;
+}
+
+/* A document that is there but cannot be read is never answered as one never written (every
+ * engine then forgot the drives on this console), and never written over. */
+static void test_doc_unreadable(void) {
+    char path[512];
+    const char *r;
+    FILE *f;
+    start();
+    CHECK(has(call(MESH_DOC_PUT, 1, "{\"name\":\"drives\",\"base\":0,\"doc\":{\"drives\":[{\"id\":\"a\"}]}}"),
+              "\"saved\":true"));
+    snprintf(path, sizeof path, "%s/v1/doc-drives", g_dir);
+    /* It cannot be opened (when run as root, anything can: then this part proves nothing). */
+    CHECK(chmod(path, 0) == 0);
+    if (access(path, R_OK) != 0) {
+        r = call(MESH_DOC_GET, 1, "{\"name\":\"drives\"}");
+        CHECK(has(r, "\"ok\":false") && has(r, "\"err\":\"doc_unreadable\"") && !has(r, "\"doc\""));
+        r = call(MESH_DOC_PUT, 1, "{\"name\":\"drives\",\"base\":0,\"doc\":{\"drives\":[]}}");
+        CHECK(has(r, "\"err\":\"doc_unreadable\"") && !has(r, "\"saved\""));
+    }
+    CHECK(chmod(path, 0600) == 0);
+    r = call(MESH_DOC_GET, 1, "{\"name\":\"drives\"}");
+    CHECK(has(r, "\"rev\":1") && has(r, "{\"drives\":[{\"id\":\"a\"}]}"));
+    /* It is not a document (cut short): the same, and it stays as it is. */
+    if ((f = fopen(path, "wb"))) {
+        fputs("4\n{\"drives\":[{\"id\":", f);
+        fclose(f);
+    }
+    CHECK(has(call(MESH_DOC_GET, 1, "{\"name\":\"drives\"}"), "\"err\":\"doc_unreadable\""));
+    CHECK(has(call(MESH_DOC_PUT, 1, "{\"name\":\"drives\",\"base\":0,\"doc\":{}}"), "\"err\":\"doc_unreadable\""));
+    CHECK(has(call(MESH_DOC_PUT, 1, "{\"name\":\"drives\",\"base\":4,\"doc\":{}}"), "\"err\":\"doc_unreadable\""));
+    CHECK(!strcmp(doc_file("drives"), "4\n{\"drives\":[{\"id\":"));
+    /* One never written is still none. */
+    r = call(MESH_DOC_GET, 1, "{\"name\":\"other\"}");
+    CHECK(has(r, "\"ok\":true") && has(r, "\"rev\":0") && has(r, "\"doc\":null"));
+}
+
 static void test_persist_and_prune(void) {
     const char *r;
     start();
@@ -375,6 +427,7 @@ int main(void) {
     test_hello_and_state();
     test_locks();
     test_docs();
+    test_doc_unreadable();
     test_persist_and_prune();
     test_events();
     {

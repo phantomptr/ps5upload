@@ -40,6 +40,7 @@ describe("driveDetailText", () => {
       "confirm_deletes",
       "too_many_files",
       "list_unreadable",
+      "console_list_unreadable",
       "link_record_damaged",
       "too_many_for_console",
     ]) {

@@ -1184,25 +1184,45 @@ static int doc_name_ok(const char *s) {
     return 1;
 }
 
-/* A document file: "<rev>\n<json>". Under g_mu. *rev 0 and NULL when there is none. */
-static char *doc_load(const char *name, uint64_t *rev, size_t *len) {
+/* A document file: "<rev>\n<json>". Under g_mu. 1: read (*doc, *len, *rev); 0: there is none (never
+ * written; *rev 0); -1: it is there but could not be read (an I/O error, no memory, too large, not
+ * a document). A file that could not be read is never answered as none: every engine then took the
+ * console for one without drives (forgetting every folder it keeps there), and the next write, on
+ * revision 0, replaced what was in it. */
+static int doc_load(const char *name, uint64_t *rev, char **doc, size_t *len) {
     char path[512], file[64], *p, *nl;
-    size_t n;
+    size_t n, max = MESH_DOC_MAX + 32;
+    FILE *f;
+    int bad;
     *rev = 0;
     *len = 0;
+    *doc = NULL;
     snprintf(file, sizeof file, "doc-%s", name);
     path_of(path, sizeof path, file);
-    if (!(p = read_all(path, MESH_DOC_MAX + 32, &n))) return NULL;
+    if (!(f = fopen(path, "rb"))) return errno == ENOENT ? 0 : -1;
+    if (!(p = malloc(max + 1))) {
+        fclose(f);
+        return -1;
+    }
+    n = fread(p, 1, max + 1, f);
+    bad = ferror(f) || n > max;
+    fclose(f);
+    if (bad) {
+        free(p);
+        return -1;
+    }
+    p[n] = 0;
     nl = memchr(p, '\n', n);
     if (!nl || !is_one(nl + 1, n - (size_t)(nl + 1 - p), '{')) {
         free(p);
-        return NULL;
+        return -1;
     }
     *rev = strtoull(p, NULL, 10);
     *len = n - (size_t)(nl + 1 - p);
     memmove(p, nl + 1, *len);
     p[*len] = 0;
-    return p;
+    *doc = p;
+    return 1;
 }
 
 static int doc_count(void) {
@@ -1223,11 +1243,14 @@ static int do_doc_get(const char *body, size_t n, char *out, size_t cap) {
     uint64_t rev;
     size_t len;
     char *doc;
+    int got;
     buf_t b = { out, 0, cap, 0 };
     if (webui_json_str(body, n, "name", name, sizeof name) != 1 || !doc_name_ok(name)) return fail(out, cap, "bad_request");
     pthread_mutex_lock(&g_mu);
-    doc = doc_load(name, &rev, &len);
+    got = doc_load(name, &rev, &doc, &len);
     pthread_mutex_unlock(&g_mu);
+    /* Not "none": what is in it is unknown, and a caller keeps what it has. */
+    if (got < 0) return fail(out, cap, "doc_unreadable");
     putf(&b, "{\"ok\":true,\"rev\":%llu,\"doc\":", (unsigned long long)rev);
     if (doc) put(&b, doc, len);
     else puts_(&b, "null");
@@ -1249,7 +1272,11 @@ static int do_doc_put(const char *body, size_t n, char *out, size_t cap) {
         return fail(out, cap, "bad_request");
     if (vl > MESH_DOC_MAX) return fail(out, cap, "too_large");
     pthread_mutex_lock(&g_mu);
-    cur = doc_load(name, &rev, &len);
+    /* Never written over what could not be read: it may hold every drive. */
+    if (doc_load(name, &rev, &cur, &len) < 0) {
+        pthread_mutex_unlock(&g_mu);
+        return fail(out, cap, "doc_unreadable");
+    }
     if (base == rev) {
         if (!cur && doc_count() >= MESH_DOCS_MAX) {
             pthread_mutex_unlock(&g_mu);

@@ -4552,6 +4552,7 @@ drive_detail_changed_here: "{path} เปลี่ยนไปบนอุปก
 drive_detail_changed_there: "{path} เปลี่ยนไปบน {console} ระหว่างซิงค์ จะซิงค์ในครั้งถัดไป",
 drive_detail_too_many_files: "มีไฟล์มากกว่า {limit} ไฟล์: มากเกินไปสำหรับ Mesh Drive",
 drive_detail_list_unreadable: "เวอร์ชันนี้อ่านรายการไดรฟ์ของคอนโซลไม่ได้ อัปเดตแอปนี้",
+drive_detail_console_list_unreadable: "คอนโซลอ่านรายการไดรฟ์ของตัวเองไม่ได้ จะไม่มีอะไรเปลี่ยนจนกว่าจะอ่านได้",
 drive_detail_link_record_damaged: "บันทึกของลิงก์บน {console} เสียหาย",
 drive_detail_too_many_for_console: "ไฟล์มากเกินไปสำหรับโฟลเดอร์ไดรฟ์บนคอนโซลเครื่องที่สอง",
 drive_removed: "ไม่อยู่ในไดรฟ์นี้แล้ว",

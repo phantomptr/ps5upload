@@ -80,6 +80,12 @@ export function driveDetailText(
         a,
         "This version cannot read the console's drive list. Update this app.",
       );
+    case "console_list_unreadable":
+      return tr(
+        "drive_detail_console_list_unreadable",
+        a,
+        "The console couldn't read its drive list. Nothing changes until it can.",
+      );
     case "link_record_damaged":
       return tr(
         "drive_detail_link_record_damaged",

@@ -4545,6 +4545,7 @@ drive_detail_changed_here: "تغيّر {path} على هذا الجهاز أثن�
 drive_detail_changed_there: "تغيّر {path} على {console} أثناء مزامنته. ستتم مزامنته في المرة القادمة.",
 drive_detail_too_many_files: "أكثر من {limit} ملف: عدد كبير جدًا على Mesh Drive.",
 drive_detail_list_unreadable: "لا يستطيع هذا الإصدار قراءة قائمة المحركات على وحدة التحكم. حدّث هذا التطبيق.",
+drive_detail_console_list_unreadable: "تعذّر على وحدة التحكم قراءة قائمة المحركات لديها. لن يتغير شيء حتى تتمكن من ذلك.",
 drive_detail_link_record_damaged: "سجل الرابط على {console} تالف.",
 drive_detail_too_many_for_console: "عدد كبير جدًا من الملفات لمجلد محرك على وحدة تحكم ثانية.",
 drive_removed: "لم يعد في هذا المحرك",

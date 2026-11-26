@@ -4564,6 +4564,7 @@ drive_detail_changed_here: "同期中にこのデバイスで {path} が変更�
 drive_detail_changed_there: "同期中に {console} で {path} が変更されました。次回同期されます。",
 drive_detail_too_many_files: "ファイルが {limit} 個を超えています。Mesh Drive には多すぎます。",
 drive_detail_list_unreadable: "このバージョンでは本体のドライブ一覧を読み取れません。このアプリを更新してください。",
+drive_detail_console_list_unreadable: "本体がドライブ一覧を読み取れませんでした。読み取れるまで何も変わりません。",
 drive_detail_link_record_damaged: "{console} のリンク記録が破損しています。",
 drive_detail_too_many_for_console: "2 台目の本体のドライブフォルダーにはファイルが多すぎます。",
 drive_removed: "このドライブから外れました",

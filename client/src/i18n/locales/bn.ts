@@ -4545,6 +4545,7 @@ drive_detail_changed_here: "সিঙ্ক চলাকালে এই ডি�
 drive_detail_changed_there: "সিঙ্ক চলাকালে {console}-এ {path} বদলে গেছে। পরের বার সিঙ্ক হবে।",
 drive_detail_too_many_files: "{limit}টির বেশি ফাইল: Mesh Drive-এর জন্য অনেক বেশি।",
 drive_detail_list_unreadable: "এই সংস্করণ কনসোলের ড্রাইভ তালিকা পড়তে পারে না। এই অ্যাপ আপডেট করুন।",
+drive_detail_console_list_unreadable: "কনসোল তার ড্রাইভ তালিকা পড়তে পারেনি। পড়তে না পারা পর্যন্ত কিছুই বদলাবে না।",
 drive_detail_link_record_damaged: "{console}-এ লিংকের রেকর্ড নষ্ট হয়ে গেছে।",
 drive_detail_too_many_for_console: "দ্বিতীয় কনসোলের ড্রাইভ ফোল্ডারের জন্য অনেক বেশি ফাইল।",
 drive_removed: "আর এই ড্রাইভে নেই",

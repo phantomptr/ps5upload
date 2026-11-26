@@ -4504,6 +4504,7 @@ drive_detail_changed_here: "同步期间 {path} 在此设备上发生了变化�
 drive_detail_changed_there: "同步期间 {path} 在 {console} 上发生了变化。下次会同步。",
 drive_detail_too_many_files: "超过 {limit} 个文件：对 Mesh Drive 来说太多了。",
 drive_detail_list_unreadable: "此版本无法读取主机的盘列表。请更新此应用。",
+drive_detail_console_list_unreadable: "主机无法读取它的盘列表。在能读取之前，不会有任何更改。",
 drive_detail_link_record_damaged: "{console} 上的链接记录已损坏。",
 drive_detail_too_many_for_console: "文件太多，无法放入第二台主机上的盘文件夹。",
 drive_removed: "已不在此盘中",

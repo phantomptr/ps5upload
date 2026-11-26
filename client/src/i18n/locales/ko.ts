@@ -4562,6 +4562,7 @@ drive_detail_changed_here: "동기화 중에 이 기기에서 {path}이(가) 바
 drive_detail_changed_there: "동기화 중에 {console}에서 {path}이(가) 바뀌었습니다. 다음에 동기화됩니다.",
 drive_detail_too_many_files: "파일이 {limit}개를 넘습니다. Mesh Drive에는 너무 많습니다.",
 drive_detail_list_unreadable: "이 버전은 본체의 드라이브 목록을 읽을 수 없습니다. 이 앱을 업데이트하세요.",
+drive_detail_console_list_unreadable: "본체가 드라이브 목록을 읽지 못했습니다. 읽을 수 있을 때까지 아무것도 바뀌지 않습니다.",
 drive_detail_link_record_damaged: "{console}의 연결 기록이 손상되었습니다.",
 drive_detail_too_many_for_console: "두 번째 본체의 드라이브 폴더에 넣기에는 파일이 너무 많습니다.",
 drive_removed: "더 이상 이 드라이브에 없음",

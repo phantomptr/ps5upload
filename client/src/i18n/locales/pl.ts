@@ -4782,6 +4782,7 @@ drive_detail_changed_here: "{path} zmienił się na tym urządzeniu podczas sync
 drive_detail_changed_there: "{path} zmienił się na {console} podczas synchronizacji. Zostanie zsynchronizowany następnym razem.",
 drive_detail_too_many_files: "Ponad {limit} plików: za dużo dla Mesh Drive.",
 drive_detail_list_unreadable: "Ta wersja nie może odczytać listy dysków konsoli. Zaktualizuj tę aplikację.",
+drive_detail_console_list_unreadable: "Konsola nie mogła odczytać swojej listy dysków. Nic się nie zmieni, dopóki jej się to nie uda.",
 drive_detail_link_record_damaged: "Zapis połączenia na {console} jest uszkodzony.",
 drive_detail_too_many_for_console: "Za dużo plików dla folderu dysku na drugiej konsoli.",
 drive_removed: "Już nie należy do tego dysku",

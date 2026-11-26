@@ -4852,6 +4852,7 @@ drive_detail_changed_here: "{path} هنگام همگام‌سازی در این 
 drive_detail_changed_there: "{path} هنگام همگام‌سازی در {console} تغییر کرد. دفعهٔ بعد همگام می‌شود.",
 drive_detail_too_many_files: "بیش از {limit} فایل: برای یک Mesh Drive بیش از حد است.",
 drive_detail_list_unreadable: "این نسخه نمی‌تواند فهرست درایوهای کنسول را بخواند. این برنامه را به‌روزرسانی کنید.",
+drive_detail_console_list_unreadable: "کنسول نتوانست فهرست درایوهای خود را بخواند. تا وقتی بتواند، چیزی تغییر نمی‌کند.",
 drive_detail_link_record_damaged: "رکورد پیوند روی {console} خراب است.",
 drive_detail_too_many_for_console: "فایل‌ها برای پوشهٔ درایو روی کنسول دوم بیش از حد است.",
 drive_removed: "دیگر در این درایو نیست",

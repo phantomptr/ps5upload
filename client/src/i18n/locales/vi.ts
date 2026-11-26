@@ -4547,6 +4547,7 @@ drive_detail_changed_here: "{path} đã thay đổi trên thiết bị này tron
 drive_detail_changed_there: "{path} đã thay đổi trên {console} trong khi đồng bộ. Nó sẽ được đồng bộ vào lần sau.",
 drive_detail_too_many_files: "Hơn {limit} tệp: quá nhiều cho một Mesh Drive.",
 drive_detail_list_unreadable: "Phiên bản này không đọc được danh sách drive của console. Hãy cập nhật ứng dụng này.",
+drive_detail_console_list_unreadable: "Console không đọc được danh sách drive của nó. Sẽ không có gì thay đổi cho đến khi đọc được.",
 drive_detail_link_record_damaged: "Bản ghi liên kết trên {console} bị hỏng.",
 drive_detail_too_many_for_console: "Quá nhiều tệp cho một thư mục drive trên console thứ hai.",
 drive_removed: "Không còn trong drive này",

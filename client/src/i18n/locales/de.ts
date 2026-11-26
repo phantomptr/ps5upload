@@ -4553,6 +4553,7 @@ drive_detail_changed_here: "{path} wurde auf diesem Gerät während der Synchron
 drive_detail_changed_there: "{path} wurde auf {console} während der Synchronisierung geändert. Es wird beim nächsten Mal synchronisiert.",
 drive_detail_too_many_files: "Mehr als {limit} Dateien: zu viele für ein Mesh Drive.",
 drive_detail_list_unreadable: "Diese Version kann die Drive-Liste der Konsole nicht lesen. Aktualisiere diese App.",
+drive_detail_console_list_unreadable: "Die Konsole konnte ihre Drive-Liste nicht lesen. Bis sie es kann, ändert sich nichts.",
 drive_detail_link_record_damaged: "Der Datensatz der Verknüpfung auf {console} ist beschädigt.",
 drive_detail_too_many_for_console: "Zu viele Dateien für einen Drive-Ordner auf einer zweiten Konsole.",
 drive_removed: "Nicht mehr in diesem Drive",

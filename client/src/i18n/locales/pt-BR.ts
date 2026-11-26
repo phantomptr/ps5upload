@@ -4560,6 +4560,7 @@ drive_detail_changed_here: "{path} mudou neste dispositivo durante a sincroniza�
 drive_detail_changed_there: "{path} mudou em {console} durante a sincronização. Ele será sincronizado na próxima vez.",
 drive_detail_too_many_files: "Mais de {limit} arquivos: demais para um Mesh Drive.",
 drive_detail_list_unreadable: "Esta versão não consegue ler a lista de drives do console. Atualize este app.",
+drive_detail_console_list_unreadable: "O console não conseguiu ler a lista de drives dele. Nada muda até que consiga.",
 drive_detail_link_record_damaged: "O registro do vínculo em {console} está danificado.",
 drive_detail_too_many_for_console: "Arquivos demais para uma pasta de drive em um segundo console.",
 drive_removed: "Não está mais neste drive",

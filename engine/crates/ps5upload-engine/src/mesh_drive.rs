@@ -237,11 +237,58 @@ fn new_id() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// The helper refused with `token` (`{"ok":false,"err":token}`, or the bare token).
+fn helper_refused(e: &anyhow::Error, token: &str) -> bool {
+    e.chain()
+        .filter_map(|c| c.downcast_ref::<ps5upload_core::mgmt::MgmtError>())
+        .any(|m| {
+            m.cause == token
+                || serde_json::from_str::<Value>(&m.cause)
+                    .is_ok_and(|v| v.get("err").and_then(Value::as_str) == Some(token))
+        })
+}
+
+/// The console answered, but its drive list could not be read (by the console, or by this
+/// version): not "away", and not "no drives". Nothing is written or forgotten from it.
+fn list_unreadable(e: &anyhow::Error) -> bool {
+    matches!(
+        Said::of(e).code.as_str(),
+        "list_unreadable" | "console_list_unreadable"
+    )
+}
+
 /// `{rev, doc}` from the console; None for a helper without documents.
 fn doc_read(addr: &str) -> Result<Option<(u64, DriveDoc)>> {
-    let Some(v) = crate::mesh_api::call(addr, || mesh::doc_get(addr, "drives"))? else {
-        return Ok(None);
+    drive_doc_of(crate::mesh_api::call(addr, || {
+        mesh::doc_get(addr, "drives")
+    }))
+}
+
+/// [`doc_read`] from the helper's answer.
+fn drive_doc_of(answer: Result<Option<Value>>) -> Result<Option<(u64, DriveDoc)>> {
+    let unreadable = || {
+        said_err(
+            "console_list_unreadable",
+            &[],
+            "the console could not read its drive list; nothing changes until it can",
+        )
     };
+    let v = match answer {
+        Ok(Some(v)) => v,
+        Ok(None) => return Ok(None),
+        // A helper that could not read the file says so (an older one answered `doc: null`, as
+        // for a console that never had a drive: the two cannot be told apart from here).
+        Err(e) if helper_refused(&e, "doc_unreadable") => return Err(unreadable()),
+        Err(e) => return Err(e),
+    };
+    // A refusal that reached here as an answer is never a list (it has no `doc`: none).
+    if v.get("ok").and_then(Value::as_bool) == Some(false) {
+        let err = v.get("err").and_then(Value::as_str).unwrap_or("refused");
+        if err == "doc_unreadable" {
+            return Err(unreadable());
+        }
+        bail!("the console refused to read its drive list: {err}");
+    }
     let rev = v.get("rev").and_then(Value::as_u64).unwrap_or(0);
     // A list this version cannot read is never taken as empty: writing it back would drop every
     // drive in it.
@@ -624,8 +671,8 @@ fn confirm_away(addr: &str, e: &anyhow::Error) -> Option<AwayWhy> {
         return Some(w);
     }
     match doc_read(addr) {
-        Err(e2) => Some(away_why(&e2).unwrap_or(AwayWhy::Unreachable)),
-        Ok(_) => None,
+        Err(e2) if !list_unreadable(&e2) => Some(away_why(&e2).unwrap_or(AwayWhy::Unreachable)),
+        _ => None,
     }
 }
 
@@ -2873,8 +2920,10 @@ fn sync_member(lm: &LocalMember, me: &str) -> Result<()> {
         // Its own console is away: a linked console holds the same drive (after a second miss
         // in a row: one dropped read is not "away").
         Err(e) => {
-            let said = Said::of(&e);
-            if away_why(&e).is_none() && said.code == "list_unreadable" {
+            // It answered, but its list could not be read: this folder stays as it is (never
+            // taken as "the drive is gone"), and says why.
+            if away_why(&e).is_none() && list_unreadable(&e) {
+                let said = Said::of(&e);
                 set_status(&lm.member, |s| {
                     s.state = "error".into();
                     s.say(said);
@@ -2987,6 +3036,8 @@ fn failover(lm: &LocalMember, running: &RunningPass) -> Result<()> {
         let doc = match doc_read(b) {
             Ok(Some((_, doc))) => doc,
             Ok(None) => continue,
+            // It answers, but its list cannot be read: not away, and not a way through either.
+            Err(e) if list_unreadable(&e) => continue,
             Err(e) => {
                 mark_away(b, away_why(&e).unwrap_or(AwayWhy::Unreachable));
                 continue;
@@ -3085,6 +3136,7 @@ fn sync_links(me: &str) {
         let doc = match doc_read(&a) {
             Ok(Some((_, doc))) => doc,
             Ok(None) => continue,
+            Err(e) if list_unreadable(&e) => continue,
             Err(e) => {
                 mark_away(&a, away_why(&e).unwrap_or(AwayWhy::Unreachable));
                 continue;
@@ -3155,6 +3207,11 @@ fn run_link(id: &str, lo: &str, hi: &str) -> Result<()> {
     let dlo = match doc_read(lo) {
         Ok(Some((_, d))) => d,
         Ok(None) => return Ok(()),
+        // It answers, but its list cannot be read: the link waits, and says why.
+        Err(e) if list_unreadable(&e) => {
+            set_link_state(hi, id, lo, "error", &Said::of(&e), false, None);
+            return Ok(());
+        }
         Err(e) => {
             mark_away(lo, away_why(&e).unwrap_or(AwayWhy::Unreachable));
             set_link_state(hi, id, lo, "offline", &Said::default(), false, None);
@@ -3167,6 +3224,10 @@ fn run_link(id: &str, lo: &str, hi: &str) -> Result<()> {
     let dhi = match doc_read(hi) {
         Ok(Some((_, d))) => d,
         Ok(None) => return Ok(()),
+        Err(e) if list_unreadable(&e) => {
+            set_link_state(lo, id, hi, "error", &Said::of(&e), false, None);
+            return Ok(());
+        }
         Err(e) => {
             mark_away(hi, away_why(&e).unwrap_or(AwayWhy::Unreachable));
             set_link_state(lo, id, hi, "offline", &Said::default(), false, None);
@@ -6608,6 +6669,47 @@ mod tests {
         let back = serde_json::to_value(&doc).unwrap();
         assert!(back["drives"][0]["members"][0].get("error_code").is_none());
         assert!(back["drives"][0]["links"][0].get("error_args").is_none());
+    }
+
+    /// A helper that could not read its drive list says so. That is never "no drives" (every
+    /// folder kept there was forgotten, and the next write replaced the list), and not "away"
+    /// either: the folder stays and says why.
+    #[test]
+    fn a_drive_list_the_console_could_not_read_is_not_an_empty_one() {
+        let refused = |cause: &str| -> anyhow::Error {
+            ps5upload_core::mgmt::MgmtError {
+                label: "MESH_DOC_GET".into(),
+                status: 7,
+                cause: cause.into(),
+            }
+            .into()
+        };
+        let answers = [
+            Err(refused(r#"{"ok":false,"err":"doc_unreadable"}"#)),
+            Err(refused("doc_unreadable")),
+            Ok(Some(json!({"ok": false, "err": "doc_unreadable"}))),
+        ];
+        for a in answers {
+            let e = drive_doc_of(a).unwrap_err();
+            assert!(list_unreadable(&e), "{e:#}");
+            assert_eq!(Said::of(&e).code, "console_list_unreadable");
+            assert_eq!(away_why(&e), None);
+        }
+        // Another refusal stays what it was, and is no list either.
+        let e = drive_doc_of(Err(refused(r#"{"ok":false,"err":"fs_no_space"}"#))).unwrap_err();
+        assert!(!list_unreadable(&e));
+        assert!(drive_doc_of(Ok(Some(json!({"ok": false, "err": "busy"})))).is_err());
+        // One never written is none (an older helper answers the same for one it could not read).
+        let (rev, doc) = drive_doc_of(Ok(Some(json!({"ok": true, "rev": 0, "doc": null}))))
+            .unwrap()
+            .unwrap();
+        assert_eq!((rev, doc.drives.len()), (0, 0));
+        // One this version cannot read is kept apart from both.
+        let e = drive_doc_of(Ok(Some(
+            json!({"ok": true, "rev": 3, "doc": {"drives": 5}}),
+        )))
+        .unwrap_err();
+        assert!(list_unreadable(&e));
     }
 
     #[test]

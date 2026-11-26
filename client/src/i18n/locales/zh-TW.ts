@@ -4498,6 +4498,7 @@ drive_detail_changed_here: "同步期間 {path} 在此裝置上有變動。下�
 drive_detail_changed_there: "同步期間 {path} 在 {console} 上有變動。下次會同步。",
 drive_detail_too_many_files: "超過 {limit} 個檔案：對 Mesh Drive 來說太多了。",
 drive_detail_list_unreadable: "此版本無法讀取主機的磁碟清單。請更新此應用程式。",
+drive_detail_console_list_unreadable: "主機無法讀取它的磁碟清單。在能讀取之前，不會有任何變更。",
 drive_detail_link_record_damaged: "{console} 上的連結記錄已損壞。",
 drive_detail_too_many_for_console: "檔案太多，無法放入第二台主機上的磁碟資料夾。",
 drive_removed: "已不在此磁碟中",

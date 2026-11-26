@@ -4554,6 +4554,7 @@ drive_detail_changed_here: "{path} berubah di perangkat ini saat disinkronkan. A
 drive_detail_changed_there: "{path} berubah di {console} saat disinkronkan. Akan disinkronkan lain kali.",
 drive_detail_too_many_files: "Lebih dari {limit} file: terlalu banyak untuk Mesh Drive.",
 drive_detail_list_unreadable: "Versi ini tidak bisa membaca daftar drive konsol. Perbarui aplikasi ini.",
+drive_detail_console_list_unreadable: "Konsol tidak bisa membaca daftar drive-nya. Tidak ada yang berubah sampai bisa.",
 drive_detail_link_record_damaged: "Catatan tautan di {console} rusak.",
 drive_detail_too_many_for_console: "Terlalu banyak file untuk folder drive di konsol kedua.",
 drive_removed: "Tidak lagi di drive ini",

@@ -5291,6 +5291,7 @@ drive_detail_changed_here: "{path} changed on this device while it was syncing. 
 drive_detail_changed_there: "{path} changed on {console} while it was syncing. It syncs next time.",
 drive_detail_too_many_files: "More than {limit} files: too many for a Mesh Drive.",
 drive_detail_list_unreadable: "This version cannot read the console's drive list. Update this app.",
+drive_detail_console_list_unreadable: "The console couldn't read its drive list. Nothing changes until it can.",
 drive_detail_link_record_damaged: "The link's record on {console} is damaged.",
 drive_detail_too_many_for_console: "Too many files for a drive folder on a second console.",
 drive_removed: "No longer in this drive",

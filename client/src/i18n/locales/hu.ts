@@ -4837,6 +4837,7 @@ drive_detail_changed_here: "A(z) {path} megváltozott ezen az eszközön szinkro
 drive_detail_changed_there: "A(z) {path} megváltozott itt: {console}, szinkronizálás közben. Legközelebb szinkronizálódik.",
 drive_detail_too_many_files: "Több mint {limit} fájl: túl sok egy Mesh Drive-hoz.",
 drive_detail_list_unreadable: "Ez a verzió nem tudja olvasni a konzol meghajtólistáját. Frissítsd az alkalmazást.",
+drive_detail_console_list_unreadable: "A konzol nem tudta beolvasni a meghajtólistáját. Amíg nem sikerül, semmi sem változik.",
 drive_detail_link_record_damaged: "A kapcsolat rekordja itt sérült: {console}.",
 drive_detail_too_many_for_console: "Túl sok fájl egy második konzolon lévő meghajtómappához.",
 drive_removed: "Már nincs ebben a meghajtóban",

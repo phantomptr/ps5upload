@@ -4498,6 +4498,7 @@ drive_detail_changed_here: "{path} изменился на этом устрой
 drive_detail_changed_there: "{path} изменился на {console} во время синхронизации. Он синхронизируется в следующий раз.",
 drive_detail_too_many_files: "Больше {limit} файлов: слишком много для Mesh Drive.",
 drive_detail_list_unreadable: "Эта версия не может прочитать список дисков консоли. Обновите приложение.",
+drive_detail_console_list_unreadable: "Консоль не смогла прочитать свой список дисков. Пока не сможет, ничего не изменится.",
 drive_detail_link_record_damaged: "Запись связи на {console} повреждена.",
 drive_detail_too_many_for_console: "Слишком много файлов для папки диска на второй консоли.",
 drive_removed: "Больше не в этом диске",

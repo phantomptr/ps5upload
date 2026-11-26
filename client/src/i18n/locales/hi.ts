@@ -4559,6 +4559,7 @@ drive_detail_changed_here: "सिंक के दौरान इस डिव
 drive_detail_changed_there: "सिंक के दौरान {console} पर {path} बदल गया। यह अगली बार सिंक होगा।",
 drive_detail_too_many_files: "{limit} से ज़्यादा फ़ाइलें: Mesh Drive के लिए बहुत ज़्यादा।",
 drive_detail_list_unreadable: "यह संस्करण कंसोल की ड्राइव सूची नहीं पढ़ सकता। इस ऐप को अपडेट करें।",
+drive_detail_console_list_unreadable: "कंसोल अपनी ड्राइव सूची नहीं पढ़ सका। जब तक वह पढ़ नहीं पाता, कुछ नहीं बदलेगा।",
 drive_detail_link_record_damaged: "{console} पर लिंक का रिकॉर्ड ख़राब है।",
 drive_detail_too_many_for_console: "दूसरे कंसोल पर ड्राइव फ़ोल्डर के लिए बहुत ज़्यादा फ़ाइलें।",
 drive_removed: "अब इस ड्राइव में नहीं",

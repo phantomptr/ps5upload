@@ -75,8 +75,8 @@ enum {
     MESH_LOCK = 4,     /* {op:take|release,name,ttl,force,label} -> {ok,got,...} */
     MESH_DEVICE = 5,   /* {op:rename|remove|block|unblock|allow|decline,id,name} -> {ok} */
     MESH_SETTINGS = 6, /* {require_approval?,prune_days?} -> settings */
-    MESH_DOC_GET = 7,  /* {name} -> {rev,doc} */
-    MESH_DOC_PUT = 8,  /* {name,base,doc} -> {ok,saved,rev[,doc]} */
+    MESH_DOC_GET = 7,  /* {name} -> {rev,doc} (doc null: never written; err doc_unreadable: unknown) */
+    MESH_DOC_PUT = 8,  /* {name,base,doc} -> {ok,saved,rev[,doc]} (never over a doc_unreadable one) */
     MESH_ANNOUNCE = 9, /* {kind,text} -> {ok,rev} */
 };
 
