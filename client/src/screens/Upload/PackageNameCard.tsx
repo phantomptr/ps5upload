@@ -11,6 +11,11 @@ import { Button, Checkbox, Input } from "../../components";
 import { useTr } from "../../state/lang";
 import { createNameFlow, nameRoom, saveBlocked, type NameFlowState } from "./pkgNameFlow";
 
+/** A line that appears after something was done (the name changed, or is too long) is brought
+ *  into view, clear of the sticky actions and the tab bar (the scroll area's
+ *  `scroll-padding-bottom`, index.css): on a phone it appeared under them. */
+const showWhole = (el: HTMLElement | null) => el?.scrollIntoView?.({ block: "nearest" });
+
 export function PackageNameView({
   state,
   disabled = false,
@@ -98,7 +103,7 @@ export function PackageNameView({
             </Button>
           </div>
           {room && tooLong ? (
-            <p id="pkg-name-room" role="alert" className="text-xs text-[var(--color-bad)]" data-testid="pkg-name-too-long">
+            <p id="pkg-name-room" role="alert" ref={showWhole} className="text-xs text-[var(--color-bad)]" data-testid="pkg-name-too-long">
               {tr(
                 "upload_pkg_name_too_long",
                 { count: -room.left, limit: room.limit },
@@ -133,7 +138,7 @@ export function PackageNameView({
             )}
           </p>
           {state.saved && state.saved.changed > 0 && (
-            <p className="text-xs text-[var(--color-good)]" data-testid="pkg-name-saved">
+            <p ref={showWhole} className="text-xs text-[var(--color-good)]" data-testid="pkg-name-saved">
               {tr("upload_pkg_name_saved", undefined, "Name changed.")}
             </p>
           )}
