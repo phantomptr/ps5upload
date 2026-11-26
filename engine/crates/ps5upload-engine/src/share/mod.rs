@@ -846,8 +846,107 @@ pub(crate) fn build_item(
             item.files.push(inline("note.txt", t.into_bytes())?);
         }
     }
+    if item.kind != ItemKind::App {
+        check_carried(&item)?;
+    }
     item.name = item.name.chars().take(120).collect();
     Ok(item)
+}
+
+/// A file's first bytes (up to [`retail::HEAD`]); none when they can't be read.
+fn head_of(loc: &Loc) -> Vec<u8> {
+    use std::io::Read;
+    match loc {
+        Loc::Local(p) => {
+            let mut b = Vec::new();
+            if let Ok(f) = std::fs::File::open(p) {
+                let _ = f.take(retail::HEAD as u64).read_to_end(&mut b);
+            }
+            b
+        }
+        Loc::Console { addr, path } => {
+            ps5upload_core::fs_ops::fs_read(addr, path, 0, retail::HEAD as u64).unwrap_or_default()
+        }
+        Loc::Inline(d) => d[..d.len().min(retail::HEAD)].to_vec(),
+    }
+}
+
+/// The rule for an item that isn't the app (retail.rs [`retail::carried`]): a save, screenshots
+/// or cheats carry no game. A package, a mount image or an app folder among its files is judged
+/// as the app would be (homebrew goes; retail, or what can't be read, is refused), and an
+/// archive, whose contents can't be checked, is refused. A save is a zip: its entries are looked
+/// at instead.
+fn check_carried(item: &Item) -> Result<(), ItemRefused> {
+    use retail::Carried;
+    let mut judged: Vec<String> = Vec::new();
+    for f in &item.files {
+        let (full, addr) = match &f.loc {
+            Loc::Local(p) => (p.to_string_lossy().into_owned(), None),
+            Loc::Console { addr, path } => (path.clone(), Some(addr.as_str())),
+            // What this engine wrote from the page's data (controls, cheats on, a note).
+            Loc::Inline(_) => continue,
+        };
+        let Some(c) = retail::carried(&full, &head_of(&f.loc)) else {
+            continue;
+        };
+        match c {
+            Carried::Archive if item.kind == ItemKind::Save => match &f.loc {
+                Loc::Local(p) => save_zip_carries_nothing(p)?,
+                _ => return Err(retail::Refusal::Unknown.into()),
+            },
+            Carried::Archive => {
+                return Err("An archive can't be checked, so it can't be shared."
+                    .to_string()
+                    .into())
+            }
+            Carried::Package(format) => {
+                // A package on a console can't be read here: it can't be shown to be homebrew.
+                let build = match addr {
+                    Some(_) => retail::Build::default(),
+                    None => local_build(Path::new(&full), format),
+                };
+                check_app(&build)?;
+            }
+            Carried::AppFile => {
+                let dir = retail::app_folder_of(&full).to_string();
+                if judged.contains(&dir) {
+                    continue;
+                }
+                let build = match addr {
+                    Some(addr) => console_build(addr, &dir),
+                    None => local_build(Path::new(&dir), "folder"),
+                };
+                check_app(&build)?;
+                judged.push(dir);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A save's zip holds a save: no package, mount image or program in it. (A save keeps its own
+/// `sce_sys/param.sfo`, which is not an app's.)
+fn save_zip_carries_nothing(zip: &Path) -> Result<(), ItemRefused> {
+    let archive = std::fs::File::open(zip)
+        .ok()
+        .and_then(|f| zip::ZipArchive::new(std::io::BufReader::new(f)).ok())
+        .ok_or_else(|| ItemRefused::from("This file is not a shared save.".to_string()))?;
+    for name in archive.file_names() {
+        let name =
+            name.map_err(|_| ItemRefused::from("This file is not a shared save.".to_string()))?;
+        let program = match retail::carried(&name, &[]) {
+            Some(retail::Carried::Package(_)) => true,
+            Some(retail::Carried::AppFile) => {
+                let n = name.to_ascii_lowercase();
+                !(n.ends_with("/param.sfo") || n.ends_with("/param.json"))
+            }
+            _ => false,
+        };
+        if program {
+            return Err(retail::Refusal::Unknown.into());
+        }
+    }
+    Ok(())
 }
 
 /// `name`, or `name (2)`… when another file has it.

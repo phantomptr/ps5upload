@@ -179,8 +179,7 @@ async fn a_retail_app_is_refused_by_the_engine_whatever_the_page_sent() {
     assert_eq!(v["items"][0]["files"], 3);
     let _ = cancel(axum::extract::Path(v["id"].as_str().unwrap().to_string())).await;
     // A save of a retail game is allowed: player data.
-    let save = tmp("save").join("PPSA01234 save shared.zip");
-    std::fs::write(&save, b"PK zip").unwrap();
+    let save = save_zip(&[("sdimg_sce_sdmemory/save.dat", b"progress")]);
     let body: ShareCreateBody = serde_json::from_value(json!({
         "title_id": "PPSA01234",
         "items": [{"kind": "save", "path": save}],
@@ -189,6 +188,87 @@ async fn a_retail_app_is_refused_by_the_engine_whatever_the_page_sent() {
     let (s, v) = body_of(create(HeaderMap::new(), Json(body)).await).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     let _ = cancel(axum::extract::Path(v["id"].as_str().unwrap().to_string())).await;
+}
+
+/// A shared-save file of PPSA01234 holding these files (below `PPSA01234/`).
+fn save_zip(files: &[(&str, &[u8])]) -> PathBuf {
+    let dir = tmp("savezip");
+    let src = dir.join("src");
+    for (name, bytes) in files {
+        let p = src.join("PPSA01234").join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, bytes).unwrap();
+    }
+    let zip = dir.join("PPSA01234 save shared.zip");
+    ps5upload_core::save_archive::zip_folder(&src, "PPSA01234", &zip).unwrap();
+    zip
+}
+
+/// The rule is not only the app's: a retail game sent as a save, screenshots or cheats is refused
+/// the same way, as a folder, a package or an image, whatever its name. Homebrew still goes.
+#[tokio::test]
+async fn a_retail_game_is_refused_whatever_item_it_is_sent_as() {
+    use super::retail::tests as rt;
+    let _hub = test_hub("ws://127.0.0.1:9/ws", false).await;
+    let refused = |v: &Value| v["error"].as_str().unwrap_or("").to_string();
+    // A retail game's folder as screenshots.
+    let game = app_with_param(rt::astro_bot());
+    let (s, v) = make(json!([{"kind": "media", "path": game}])).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    assert_eq!(v["code"], "retail");
+    // A folder of screenshots that holds one.
+    let shots = tmp("shots");
+    std::fs::write(shots.join("a.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+    let inside = shots.join("x/Game");
+    std::fs::create_dir_all(inside.join("sce_sys")).unwrap();
+    std::fs::write(
+        inside.join("sce_sys/param.json"),
+        rt::astro_bot().to_string(),
+    )
+    .unwrap();
+    let (s, v) = make(json!([{"kind": "media", "path": shots}])).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    // A retail package, named as a package and renamed as a picture.
+    let dir = crate::inspect::test_fixtures::scratch();
+    let pkg =
+        crate::inspect::test_fixtures::write_cnt_pkg_sfo(dir.join("r.pkg"), &rt::ps4_retail());
+    let (s, v) = make(json!([{"kind": "media", "path": pkg}])).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    let renamed = dir.join("shot.jpg");
+    std::fs::copy(&pkg, &renamed).unwrap();
+    let (s, v) = make(json!([{"kind": "media", "path": renamed}])).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    assert_eq!(v["code"], "retail");
+    // As a save: the package itself, or a game inside the save's zip.
+    let (s, v) = make(json!([{"kind": "save", "path": renamed}])).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    let zipped = save_zip(&[("eboot.bin", b"\x7FELF"), ("sce_sys/param.sfo", b"x")]);
+    let (s, v) = make(json!([{"kind": "save", "path": zipped}])).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    assert!(refused(&v).contains("can't confirm"), "{v}");
+    // An archive as screenshots can't be checked.
+    let (s, v) = make(json!([{"kind": "media", "path": zipped}])).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert!(refused(&v).contains("archive"), "{v}");
+    // A save keeps its own sce_sys/param.sfo; screenshots and a homebrew package go.
+    let save = save_zip(&[
+        ("sdimg_sce_sdmemory/sce_sys/param.sfo", b"PSF"),
+        ("sdimg_sce_sdmemory/save.dat", b"progress"),
+    ]);
+    let hb =
+        crate::inspect::test_fixtures::write_cnt_pkg_sfo(dir.join("h.pkg"), &rt::ps4_homebrew());
+    let only_shots = tmp("only-shots");
+    std::fs::write(only_shots.join("a.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+    std::fs::write(only_shots.join("b.mp4"), b"\0\0\0\x18ftypmp42").unwrap();
+    for item in [
+        json!({"kind": "save", "path": save}),
+        json!({"kind": "media", "path": only_shots}),
+        json!({"kind": "media", "path": hb}),
+    ] {
+        let (s, v) = make(json!([item])).await;
+        assert_eq!(s, StatusCode::OK, "{item}: {v}");
+        let _ = cancel(axum::extract::Path(v["id"].as_str().unwrap().to_string())).await;
+    }
 }
 
 /// Packages and images in the Collection are judged by the PARAM inside them.
