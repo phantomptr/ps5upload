@@ -245,7 +245,7 @@
   "cw_convert_stopped": "Durduruldu. Yazdığı hiçbir şey tutulmadı.",
   "cw_convert_title": "Dönüştür",
   "cw_convert_unpack": "Varlık paketlerini aç (yeniden düz dosyalar)",
-  "cw_convert_unpack_needs_emulator_v2": "Bu oyun dosyalarını AMPR üzerinden okuyor ve düz dosyalarla çalışan bir öykünücüsü yok. AMPR öykünücüsünü uygulamadan bu PS5'e koy (Ayarlar › Bu PS5) ya da AMPR öykünücüsünü dahil etme seçeneğini aç.",
+  "cw_convert_unpack_needs_emulator_v2": "Bu oyun dosyalarını AMPR üzerinden okuyor ve düz dosyalarla çalışan bir öykünücüsü yok. AMPR öykünücüsünü uygulamadan bu PS5'e koyun (Ayarlar › Bu PS5) ya da AMPR öykünücüsünü dahil etme seçeneğini açın.",
   "cw_convert_unpack_note": "Bu oyun {kind} varlık paketlerinde. Açıksa paket her dosyayı düz dosya olarak içerir ve varlık paketlerini dışarıda bırakır; böylece boyutu oyunun paketlenmeden önceki haline yakındır ({size}). Kapalıysa varlık paketleri olduğu gibi girer ve onları yalnızca öykünücü okuyabilir.",
   "cw_convert_verify": "Yazdıktan sonra denetle",
   "cw_convert_verify_fast": "Hızlı denetim",
