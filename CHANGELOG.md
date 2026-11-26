@@ -4,6 +4,52 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+**Fake PS5 packages**
+- **Two ways to play them, explained side by side.** Install the package (on firmware 11.61 to 13.60 with the latest kstuff, which supports fake packages up to 13.60), or mount it with Kraken Mount. Upload & Install, Convert, the hint after a game doesn't start, the Payloads catalog, the FAQ and the website now all say this the same way, and the note is information rather than a warning.
+
+**Files on a phone (#936)**
+- **The header stays put** when the list is pulled past its ends.
+- **Copy and Move use a bar at the bottom.** Staged items show there with Paste here and Cancel, and a short message says when they are copied or moved. Pasted items leave the clipboard. Back still goes up folders while something is staged, and lets go of it at the top of the drive.
+
+**Upload & Install**
+- **The console page's queue no longer says "Stopped part-way" while an upload is still running (#945).** After a reload it checks again before giving up, and picks up uploads that are still going or that finished meanwhile. The same fix stops a second upload starting beside a running one in Files.
+
+**Cheats**
+- **PS4 cheats find the game's code (#946).** A PS4 game now always gets a place to look, and nothing is written unless every location holds the cheat's original bytes. If it still fails, the message names the address and what it found.
+- Downloading another cheat file for a game no longer switches on cheats you never chose. Some cheat files lost lines when read; they don't any more.
+
+**Convert**
+- **"Put the AMPR emulator on this PS5"** (Settings › This PS5): the console's own Convert page can then keep an AMPR emulator when it unpacks asset packs, as the app does. Nothing is downloaded unless you press it.
+- A PFS image whose last block is short now reads. A game's AMPR index that won't read says why. Files a dumping tool leaves at a game's top level stay out of packages. The newest zstd AMPR emulators are recognised by name.
+
+**Saves**
+- Opening or closing a save in Save Data while a copy, sync or backup runs is refused, instead of putting the job's files into your save.
+- A save copy reports a failure when the save was closed under it, and puts the target's save back.
+- Unsaved edits kept aside after a crash no longer overwrite each other.
+- A game started during a long backup run is left alone until it closes.
+
+**Remote Play**
+- Typing "moved" in a console text field no longer ends the stream.
+- Stop works at once while a stream is starting, and a stopped stream no longer blocks other devices.
+
+**Games**
+- A game whose folder was left behind after an uninstall no longer shows as Installed.
+- Titles no longer show in the wrong language variant, and very long names no longer hide games from the installed list.
+- Covers show for titles on the M.2 drive.
+
+**Phones and the app**
+- **iPhone and iPad (#950):** when the engine inside the app isn't answering, the app says why and has Try again.
+- On a Mac, a crash during a transfer no longer keeps the Mac awake until restart. The engine restarts by itself after a crash again, and a restart during start-up no longer leaves no engine.
+
+**The console's own page**
+- Fixes on phones (the page no longer runs off the side), USB game scans, Files dialogs, Convert, Search, New file, user switching during a save task, device prompts, cheat downloads and covers on the M.2 drive. Refusals and counts are in plain words, game names show instead of IDs, and the sidebar fits the PS5's own browser.
+
+**Under the hood**
+- The transfer library AVA1 1.0.13 is in use everywhere.
+- The API documentation and the AI-agent tools cover the newest features; translations of the newest texts were reviewed in all 21 languages.
+
 ## 12.6.32
 
 **Storage**
