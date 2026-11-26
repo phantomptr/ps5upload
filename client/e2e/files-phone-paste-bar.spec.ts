@@ -213,6 +213,10 @@ for (const viewport of PHONES) {
           return out;
         });
         expect(scrollingAncestors).toEqual([]);
+        // The room under the end is the list's own now (where the bottom bar floats), not the page's.
+        expect(await page.locator("[data-scroll-root]").evaluate((el) => getComputedStyle(el).paddingBottom)).toBe("0px");
+        if (viewport.width < 768)
+          expect(parseFloat(await list.evaluate((el) => getComputedStyle(el).paddingBottom))).toBeGreaterThanOrEqual(88);
         expect(await header(page).evaluate((h) => h.closest("[data-files-scroll]") === null)).toBe(true);
         // Keyboard and screen-reader order: the header, then the list.
         expect(
