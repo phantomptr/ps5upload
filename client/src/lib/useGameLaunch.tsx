@@ -86,13 +86,14 @@ export function useGameLaunch(
       const kernel =
         useConnectionStore.getState().runtimeByHost[hostOf(launchHost)]
           ?.ps5Kernel;
-      // 11.61 to 13.60: a fake PS5 game starts only with the newer kstuff (November 2026).
+      // 11.61 to 13.60: a fake PS5 game starts only with kstuff 1.15 or newer. The catalogue's kstuff
+      // may be an older one, so the hint says where the file goes: the Send payload tab.
       const kfw = ps5FakeGameNeedsNewKstuff(kernel, titleId);
       if (!kfw) return body;
       return `${body} ${tr(
-        "fakegame.fw.launch_kstuff",
+        "fakegame.fw.launch_kstuff_v2",
         { fw: kfw },
-        `If this game was installed from a fake package: on FW ${kfw} it starts only with a kstuff build that supports fake packages there (November 2026 or newer). Load that kstuff, then press Play again.`,
+        `If this game was installed from a fake package: on FW ${kfw} it starts only with kstuff 1.15 or newer. The catalog's copy may be older: get kstuff 1.15 from its author, send it with Send payload, then press Play again.`,
       )}`;
     },
     [tr],

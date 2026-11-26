@@ -38,7 +38,7 @@
   A picked fake package shows **Name on the PS5**: change it there and the game installs under
   that name.
   An installed PS5 fake package plays on firmware up to 13.60; above 11.60 it needs a kstuff build
-  with fake-package support for that firmware (November 2026 or newer). **Kraken Mount** can mount
+  with fake-package support for that firmware: kstuff 1.15 or newer. **Kraken Mount** can mount
   the package instead (Upload & Install offers it when Kraken Mount runs). PS4 fake packages are fine.
 - **Games.** One grid with every game once: your copies in your folders (including folders on
   a NAS, scanned in place) grouped with their updates and DLC, what each PS5 has installed (at

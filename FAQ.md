@@ -88,7 +88,7 @@ can stop them too; the PS5Upload helper usually keeps running through it.
 
 **Q: Which payloads must be running before I install a package?**
 In this order: **kstuff** (the build with PS5 fake-package support for your firmware; above 11.60
-that is the November 2026 build or newer), **a53_ppr_install_fast.elf**
+that is kstuff 1.15 or newer), **a53_ppr_install_fast.elf**
 (needed for PS5 fake packages) and **ShadowMount+**, plus the ps5upload helper. **Upload &
 Install** shows the same list in its fake-package note at the top. Many setups also run **nanoDNS** (keeps
 the console away from PSN and update servers) and **ftpsrv-ps5**; send those from **Payloads**.
@@ -97,8 +97,7 @@ running.
 
 **Q: Which firmware limits apply to what I install?**
 - **PS5 fake *game* packages play on firmware up to 13.60.** Above 11.60 (11.61, 12.xx, 13.xx)
-  they need a kstuff build with fake-package support for that firmware, released in November
-  2026; with an older kstuff the package installs, but the game does not start. PS4 fake packages work and PS5 homebrew apps launch. The note at the
+  they need kstuff 1.15 or newer; with an older kstuff the package installs, but the game does not start. PS4 fake packages work and PS5 homebrew apps launch. The note at the
   top of **Upload & Install** says so before you send anything.
 - On **13.60**, Stream & install is the dependable route.
 
@@ -2089,10 +2088,12 @@ refuses to start the title. Check these in order.
 
 1. **A PS5 fake game on firmware above 11.60 with an older kstuff.** An
    installed PS5 fake package plays on FW 11.61, 12.xx and 13.xx only with a
-   kstuff build that supports fake packages on that firmware, released in
-   November 2026. With an older kstuff the package installs, but the game does
-   not start: load the newer kstuff, reboot if an older one was running, and
-   launch again; when a launch fails on these firmware versions, the app says
+   kstuff build that supports fake packages on that firmware: kstuff 1.15 or
+   newer. With an older kstuff the package installs, but the game does
+   not start: load kstuff 1.15 or newer, reboot if an older one was running, and
+   launch again. The kstuff that Payloads › Catalog links to may be an older
+   version without this support: get kstuff 1.15 from its author and send the
+   file with **Payloads › Send payload**; when a launch fails on these firmware versions, the app says
    so. You can also mount the
    package with Kraken Mount instead: with Kraken Mount running on the PS5,
    Upload & Install puts the `.pkg` in a folder it scans, and the game plays
@@ -2311,7 +2312,7 @@ offers the two ways a package can reach the PS5:
 
 The note at the top of the screen lists the payloads fake packages need, and says that **PS5
 fake games play on firmware up to 13.60, and above 11.60 only with a kstuff build that supports
-fake packages there** (November 2026 or newer); with an older one the package installs, but the
+fake packages there** (kstuff 1.15 or newer); with an older one the package installs, but the
 game does not start. PS4 fake packages are fine. What is installing or waiting shows in the screen's queue
 and in the progress bar, and keeps going when you open another screen. Installs from a link or
 an archive (**From a Link or an Archive**) and from the PS5 or a USB drive (**Already on the
@@ -2778,7 +2779,7 @@ The routes:
 | Content | Stream & install | Upload & install | Folder dump + ShadowMount+ | exFAT image + ShadowMount+ |
 |---|---|---|---|---|
 | **PS4 package** (base game) | Works. The most reliable route; PS4 fake packages play on every firmware. | Works on FW 13.60 from 6.3.1 (a 3.6 GiB base installed over itself on both of our consoles). Before 6.3.1 Sony refused it with `0x80B2116F`; see the firmware note below. | Works (PS4 folder dumps). | Works. |
-| **PS5 package** (fake / FPKG game) | Installs. **Plays on firmware up to 13.60; above 11.60 it needs a kstuff build with fake-package support for that firmware (November 2026 or newer).** Kraken Mount can mount the package instead. | Same as Stream. | Works for a decrypted PS5 dump — the route people use on 13.60. | Works — also the route used on 13.60. |
+| **PS5 package** (fake / FPKG game) | Installs. **Plays on firmware up to 13.60; above 11.60 it needs kstuff 1.15 or newer.** Kraken Mount can mount the package instead. | Same as Stream. | Works for a decrypted PS5 dump — the route people use on 13.60. | Works — also the route used on 13.60. |
 | **PS5 homebrew app** (for example Itemzflow, `IV0002-ITEM00001`) | Works and launches, including on FW 13.60. | Works. | n/a | n/a |
 | **Patch / update** | Works (verified: a PS4 base plus its patch, streamed). Install the base first. | Works on FW 13.60 from 6.3.1 (a PS4 1.00 base took its 1.04 patch this way). Install the base first. | n/a — copy the update into the game folder. | n/a |
 | **DLC** | Works after its base is installed. | Works after its base is installed. | n/a | n/a |
