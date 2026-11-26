@@ -469,6 +469,9 @@ pub(crate) fn offered(v: &Value) -> Vec<Offered> {
                         refused,
                     }
                 })
+                // A kind this build has no part for (a newer sender's) is not offered: the
+                // receiving page names each item by its kind, and an unknown one stopped the app.
+                .filter(|o| super::manifest::ItemKind::from_word(&o.kind).is_some())
                 .collect()
         })
         .unwrap_or_default()

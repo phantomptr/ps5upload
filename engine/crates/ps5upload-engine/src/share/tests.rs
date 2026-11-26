@@ -240,6 +240,23 @@ fn the_receiver_checks_the_offered_build() {
     assert_eq!(items[4].refused, None);
 }
 
+/// An item of a kind this build does not know (a newer sender's, or none at all) is left out of
+/// the offer: the receiving page named it by its kind and stopped with an error.
+#[test]
+fn an_offered_item_of_an_unknown_kind_is_left_out() {
+    let items = wire::offered(&json!({"items": [
+        {"id": "i1", "kind": "trophy", "name": "A", "size": 1, "files": 1},
+        {"id": "i2", "name": "B"},
+        {"id": "i3", "kind": "App", "name": "C"},
+        {"id": "i4", "kind": "note", "name": "D"},
+    ]}));
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        (items[0].id.as_str(), items[0].kind.as_str()),
+        ("i4", "note")
+    );
+}
+
 async fn body_of(r: Response) -> (StatusCode, Value) {
     body(r).await
 }
@@ -853,7 +870,7 @@ async fn silent_sender(mut sock: wire::MemSocket, hold: tokio::sync::oneshot::Re
     }
     assert!(next(&mut sock).await.get("hello").is_some());
     let offer = json!({"offer": {"from": "S", "title": "t", "items": [
-        {"id": "i1", "kind": "file", "name": "thing", "size": 10, "files": 1}
+        {"id": "i1", "kind": "media", "name": "thing", "size": 10, "files": 1}
     ]}});
     sock.send(wire::text(offer)).await.unwrap();
     assert!(next(&mut sock).await.get("accept").is_some());
