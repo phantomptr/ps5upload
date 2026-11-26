@@ -34,6 +34,33 @@ pub const PROTOCOL_VERSION: u64 = 1;
 pub const ROOM_LEN: usize = 22;
 pub const SECRET_LEN: usize = 43;
 pub const GID_LEN: usize = 12;
+/// The last character of a room id made from its host's secret ([`room_for_secret`]). A room id
+/// of 16 random bytes (what older apps make) never ends in it: the last of its 22 base64url
+/// characters holds 2 bits only, so it is always `A`, `Q`, `g` or `w`.
+pub const BOUND_ROOM_MARK: char = 'h';
+/// What a bound room id hashes before the secret: the id is never a prefix of the hash the hub
+/// keeps for reclaims.
+const BOUND_ROOM_DOMAIN: &[u8] = b"ps5upload-hub room\0";
+
+/// The room id a host's secret gives: 21 base64url characters of a SHA-256 of the secret (126
+/// bits), then [`BOUND_ROOM_MARK`]. The hub opens a room with an id of this form only for the
+/// secret it was made from, so a link holder cannot open it with a secret of their own, also
+/// after a hub restart (when the hub has no rooms at all): the id is the proof, nothing is stored.
+pub fn room_for_secret(secret: &str) -> String {
+    let h = Sha256::new()
+        .chain_update(BOUND_ROOM_DOMAIN)
+        .chain_update(secret.as_bytes())
+        .finalize();
+    let mut id = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(h);
+    id.truncate(ROOM_LEN - 1);
+    id.push(BOUND_ROOM_MARK);
+    id
+}
+
+/// A room id of the bound form ([`room_for_secret`]): only its own secret may host it.
+pub fn is_bound_room(room: &str) -> bool {
+    room.len() == ROOM_LEN && room.ends_with(BOUND_ROOM_MARK)
+}
 /// Messages queued for one peer before it counts as too slow.
 const PEER_QUEUE: usize = 64;
 /// The hard frame cap given to the WebSocket layer. Frames between the protocol limit and this
@@ -98,6 +125,8 @@ struct Room {
 struct Guest {
     peer: Peer,
     signals: Window,
+    /// When it joined: a guest still here [`Config::guest_max_age`] later is removed.
+    joined: Instant,
 }
 
 #[derive(Clone)]
@@ -567,6 +596,12 @@ fn on_host(
     if !is_b64url(secret, SECRET_LEN) {
         return Err(ErrorKind::BadSecret);
     }
+    // A bound id opens for its own secret only. Before, the first `host` for an id after a hub
+    // restart took it with any secret: anyone with the link could open the room as theirs, its
+    // host got `room_taken` from then on, and the guests' offers went to them.
+    if is_bound_room(room_id) && room_for_secret(secret) != room_id {
+        return Err(ErrorKind::RoomTaken);
+    }
     let hash = hash_secret(secret);
     let now = Instant::now();
     let mut st = shared.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -654,6 +689,7 @@ fn on_join(
         Guest {
             peer: me.clone(),
             signals: Window::new(now),
+            joined: now,
         },
     );
     host.send(
@@ -830,6 +866,7 @@ pub(crate) async fn sweeper(shared: Arc<Shared>, stun_table: Arc<Mutex<RateTable
                 st.remove_room(&id);
                 Metrics::inc(&shared.metrics.rooms_expired);
             }
+            expire_guests(&mut st, now, cfg.guest_max_age, &shared.metrics);
             st.joins.sweep(now, cfg.rate_window);
         }
         stun_table
@@ -858,6 +895,34 @@ pub(crate) async fn sweeper(shared: Arc<Shared>, stun_table: Arc<Mutex<RateTable
                         ("refused", Field::N(m.refused_total())),
                     ],
                 );
+            }
+        }
+    }
+}
+
+/// Removes the guests that joined `max_age` ago or more. The hub only introduces a guest: every
+/// client leaves its room once its connection to the host is up (the guest page and the share
+/// client from the start), well within a minute and a half, so one still here has not made a
+/// session and will not. Before, a few sockets that joined and then sat idle (answering pings)
+/// kept a room full for as long as they liked. The guest gets `timeout` (4000), its host `left`.
+fn expire_guests(st: &mut State, now: Instant, max_age: Duration, m: &Metrics) {
+    for r in st.rooms.values_mut() {
+        let old: Vec<String> = r
+            .guests
+            .iter()
+            .filter(|(_, g)| now.duration_since(g.joined) >= max_age)
+            .map(|(gid, _)| gid.clone())
+            .collect();
+        for gid in old {
+            let Some(g) = r.guests.remove(&gid) else {
+                continue;
+            };
+            m.error(ErrorKind::Timeout);
+            Metrics::inc(&m.guests_expired);
+            g.peer.send(Out::Text(error_text(ErrorKind::Timeout)), m);
+            g.peer.send(Out::Close(CLOSE_PROTOCOL, "timeout"), m);
+            if let Some(h) = &r.host {
+                h.send(Out::Text(json!({"t": "left", "gid": gid}).to_string()), m);
             }
         }
     }
@@ -1037,6 +1102,34 @@ mod tests {
         assert!(handle_text(&r.sh, role, me, ip(), twice).is_ok());
         let got: Value = serde_json::from_str(&text(r.host.2.try_recv().ok())).unwrap();
         assert_eq!(got["data"], json!({"b": 2}));
+    }
+
+    #[test]
+    fn a_bound_room_id_is_the_secrets_and_a_random_one_is_never_bound() {
+        let a = random_b64(32);
+        let b = random_b64(32);
+        let ra = room_for_secret(&a);
+        assert_eq!(ra, room_for_secret(&a));
+        assert_ne!(ra, room_for_secret(&b));
+        assert!(is_b64url(&ra, ROOM_LEN) && is_bound_room(&ra), "{ra}");
+        // Not a piece of the hash kept for reclaims.
+        let kept = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash_secret(&a));
+        assert!(!kept.starts_with(&ra[..ROOM_LEN - 1]));
+        // What older apps make: 16 random bytes. Never of the bound form.
+        for _ in 0..2_000 {
+            let old = random_b64(16);
+            assert_eq!(old.len(), ROOM_LEN);
+            assert!(!is_bound_room(&old), "{old}");
+        }
+        // In process: a bound id with another secret is refused, with its own taken.
+        let sh = shared(Config::default());
+        let (p, _rx) = peer(1);
+        let host = |room: &str, secret: &str| {
+            let msg = json!({"v": 1, "t": "host", "room": room, "secret": secret}).to_string();
+            handle_text(&sh, &mut Role::None, &p, ip(), &msg).map(|_| ())
+        };
+        assert!(matches!(host(&ra, &b), Err(ErrorKind::RoomTaken)));
+        assert!(host(&ra, &a).is_ok());
     }
 
     /// `cargo test -p ps5upload-hub --release forward_cost -- --ignored --nocapture`: the time the

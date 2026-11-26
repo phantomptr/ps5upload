@@ -9,6 +9,11 @@
 //! ping goes every 20 s. A dropped connection is made again with backoff, with the same room and
 //! secret (the hub gives the room back). The room closes when the invite does: Play Together
 //! closed, or the invite expired with nobody from the internet still in.
+//!
+//! The room id is made from the secret (`ps5upload_hub::hub::room_for_secret`), so a hub opens it
+//! for this engine only, also when it has just restarted and has no rooms: before, anyone with the
+//! link could open the room first with a secret of their own. A hub from before that takes the id
+//! as any other.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -57,8 +62,8 @@ struct St {
 }
 
 pub(crate) struct Shared {
-    id: Mutex<String>,
-    secret: String,
+    /// The room id and the secret it is made from ([`new_keys`]), changed together.
+    keys: Mutex<(String, String)>,
     url: String,
     kind: Kind,
     st: Mutex<St>,
@@ -77,9 +82,23 @@ pub(crate) const OFFLINE_AFTER: Duration = Duration::from_secs(if cfg!(test) { 2
 /// Whether the room is still wanted (asked every few seconds and before each connect).
 pub(crate) type Wanted = Box<dyn Fn() -> bool + Send + Sync>;
 
+/// A new secret and the room id made from it: the hub opens a room of that id for that secret
+/// only (`ps5upload_hub::hub::room_for_secret`).
+fn new_keys() -> Option<(String, String)> {
+    let secret = super::random_b64(32)?;
+    Some((ps5upload_hub::hub::room_for_secret(&secret), secret))
+}
+
 impl Shared {
     fn id(&self) -> String {
-        self.id.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.keys
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .0
+            .clone()
+    }
+    fn keys(&self) -> (String, String) {
+        self.keys.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
     fn set(&self, state: &'static str, error: Option<String>) {
         let mut g = self.st.lock().unwrap_or_else(|e| e.into_inner());
@@ -103,8 +122,7 @@ impl Room {
     /// Opens a room of `kind` on the hub at `url`, kept while `wanted` says so (and this lives).
     pub(crate) fn start(kind: Kind, wanted: Wanted, url: String) -> Option<Room> {
         let shared = Arc::new(Shared {
-            id: Mutex::new(super::random_b64(16)?),
-            secret: super::random_b64(32)?,
+            keys: Mutex::new(new_keys()?),
             url,
             kind,
             st: Mutex::new(St {
@@ -296,8 +314,8 @@ async fn session(
     stop: &mut watch::Receiver<()>,
     backoff: &mut Duration,
 ) -> End {
-    let room = shared.id();
-    let hello = serde_json::json!({"v": 1, "t": "host", "room": room, "secret": shared.secret});
+    let (room, secret) = shared.keys();
+    let hello = serde_json::json!({"v": 1, "t": "host", "room": room, "secret": secret});
     if ws.send(frame(hello)).await.is_err() {
         return End::Again;
     }
@@ -371,10 +389,10 @@ async fn session(
                         crate::log_at!(Debug, "together", "join: the hub says {why}");
                         let hosted_once = shared.st.lock().unwrap_or_else(|e| e.into_inner()).hosted_once;
                         if why == "room_taken" && !hosted_once {
-                            // Someone else's room by that name: another name, before anyone
-                            // has the link.
-                            if let Some(id) = super::random_b64(16) {
-                                *shared.id.lock().unwrap_or_else(|e| e.into_inner()) = id;
+                            // Someone else's room by that name (on a hub that takes any id
+                            // with any secret): another name, before anyone has the link.
+                            if let Some(keys) = new_keys() {
+                                *shared.keys.lock().unwrap_or_else(|e| e.into_inner()) = keys;
                                 return End::Now;
                             }
                         }
@@ -439,5 +457,19 @@ mod backoff_tests {
         }
         assert!(seen.len() > 10, "spread out");
         assert!(BACKOFF_MAX <= Duration::from_secs(5));
+    }
+
+    /// The room id is made from the secret, so the hub opens it for this engine only; still the
+    /// form every hub takes (22 base64url characters, a 43-character secret).
+    #[test]
+    fn a_room_id_is_made_from_its_secret() {
+        let (room, secret) = new_keys().unwrap();
+        assert_eq!((room.len(), secret.len()), (22, 43));
+        assert!(room
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert_eq!(room, ps5upload_hub::hub::room_for_secret(&secret));
+        assert!(ps5upload_hub::hub::is_bound_room(&room));
+        assert_ne!(new_keys().unwrap(), (room, secret));
     }
 }

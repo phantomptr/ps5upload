@@ -658,6 +658,9 @@ mod tests {
         loop {
             let v = room.json("K", None, None);
             if v["state"] == "hosted" {
+                // The room id is made from the engine's secret: this hub opens it for that secret
+                // only (it refuses any other, also after a restart), and it took this one.
+                assert!(ps5upload_hub::hub::is_bound_room(&room.id()), "{v}");
                 // The link names the public hub, never the loopback one.
                 assert_eq!(v["hub"], "play.example.test", "{v}");
                 assert!(

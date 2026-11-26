@@ -117,6 +117,7 @@ pub struct Metrics {
     pub joins: AtomicU64,
     pub signals: AtomicU64,
     pub rooms_expired: AtomicU64,
+    pub guests_expired: AtomicU64,
     pub stun_requests: AtomicU64,
     pub stun_ignored: AtomicU64,
     pub stun_limited: AtomicU64,
@@ -167,6 +168,7 @@ impl Metrics {
             &self.joins,
             &self.signals,
             &self.rooms_expired,
+            &self.guests_expired,
             &self.stun_requests,
             &self.stun_ignored,
             &self.stun_limited,
@@ -218,6 +220,11 @@ impl Metrics {
             "hub_rooms_expired_total",
             "Rooms removed after their host stayed away.",
             &self.rooms_expired,
+        );
+        counter(
+            "hub_guests_expired_total",
+            "Guests removed for staying in a room past the longest a join takes.",
+            &self.guests_expired,
         );
         counter(
             "hub_stun_requests_total",
