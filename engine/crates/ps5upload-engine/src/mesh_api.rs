@@ -360,6 +360,22 @@ struct NotedJob {
     host: String,
     kind: &'static str,
     title: String,
+    /// When it was noted: the job is not in the job map until its planning is done (a stat of
+    /// every file for a big list), and is not forgotten for that meanwhile.
+    at: Instant,
+}
+
+/// How long a noted transfer may take to show up in the job map before it counts as one that
+/// never started.
+const NOTED_PLANNING: Duration = Duration::from_secs(600);
+
+/// Whether a noted job stays: running, or not in the map yet and still within its planning time.
+fn noted_stays(state: Option<&crate::JobState>, noted_at: Instant, now: Instant) -> bool {
+    match state {
+        Some(crate::JobState::Running { .. }) => true,
+        Some(_) => false,
+        None => now.saturating_duration_since(noted_at) < NOTED_PLANNING,
+    }
 }
 
 fn noted_jobs() -> &'static Mutex<HashMap<uuid::Uuid, NotedJob>> {
@@ -387,6 +403,7 @@ pub(crate) fn note_job(job: uuid::Uuid, addr: &str, kind: &'static str, dest: &s
                 host: ps5upload_core::events::console_host(addr),
                 kind,
                 title,
+                at: Instant::now(),
             },
         );
 }
@@ -413,7 +430,8 @@ fn engine_job_items(addr: &str) -> Vec<Value> {
     let host = ps5upload_core::events::console_host(addr);
     let jobs = jobs.lock().unwrap_or_else(|e| e.into_inner());
     let mut noted = noted_jobs().lock().unwrap_or_else(|e| e.into_inner());
-    noted.retain(|id, _| matches!(jobs.get(id), Some(crate::JobState::Running { .. })));
+    let now = Instant::now();
+    noted.retain(|id, n| noted_stays(jobs.get(id), n.at, now));
     noted
         .iter()
         .filter(|(_, n)| n.host == host)
@@ -786,6 +804,26 @@ mod tests {
             .expect("a push")
             .to_string()
             .contains("\"H\""));
+    }
+
+    /// A transfer is noted before its job is in the map (it plans first: a stat of every file of
+    /// a big list). A look at the presence meanwhile forgot it for good, so it was never shown.
+    #[test]
+    fn a_noted_transfer_still_planning_is_not_forgotten() {
+        let t = Instant::now();
+        assert!(noted_stays(None, t, t + Duration::from_secs(30)));
+        assert!(!noted_stays(None, t, t + NOTED_PLANNING));
+        let failed = crate::JobState::Failed {
+            started_at_ms: 0,
+            completed_at_ms: 0,
+            elapsed_ms: 0,
+            error: "x".into(),
+            error_reason: None,
+            error_detail: None,
+            error_console: None,
+            error_space: None,
+        };
+        assert!(!noted_stays(Some(&failed), t, t));
     }
 
     #[test]
