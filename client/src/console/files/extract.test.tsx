@@ -175,7 +175,7 @@ describe("extract dialog", () => {
     expect((el.props.check as (v: string) => string | null)("")).toBe(t("cw_files_extract_pw_empty"));
     (el.props.onSubmit as (v: string) => void)("hunter2");
     // With the folder the extract began in: the folder shown may be another by now.
-    expect(onExtract).toHaveBeenCalledWith("g.zip", start, "hunter2", "/data/began");
+    expect(onExtract).toHaveBeenCalledWith("g.zip", start, "hunter2", "/data/began", false);
   });
 });
 

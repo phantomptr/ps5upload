@@ -369,7 +369,10 @@ export interface FilesViewProps {
   onLoadPayload?: (name: string) => void;
   /** Extract `name` (an archive in the folder shown) as `start` says; `password` once one was asked for. */
   /** `dir`: the archive's folder, when it is not (or may no longer be) the one shown. */
-  onExtract?: (name: string, start: ExtractStart, password?: string, dir?: string) => void;
+  onExtract?: (name: string, start: ExtractStart, password?: string, dir?: string, over?: boolean) => void;
+  /** An extract's password question over the open dialog, and its Cancel. */
+  pwOver?: PwAsk | null;
+  onPwOverCancel?: () => void;
   onMkdir: (name: string) => void;
   onPicked: (op: "copy" | "move", names: string[], destDir: string) => void;
   /** Open `dir` in Files with `name` focused (a search result); null name: the folder itself. */
@@ -686,6 +689,28 @@ function namesTitle(names: string[]): string {
 }
 
 /** The modal for `p.ask` (a plain call, not a component: tests read its props). */
+type PwAsk = Extract<FilesAsk, { kind: "extractpw" }>;
+
+/** An extract's password question: as the dialog, or `over` the one open (which stays). */
+function pwPrompt(p: FilesViewProps, a: PwAsk, over: boolean) {
+  return (
+    <TextPrompt
+      title={t("cw_files_extract_pw_title", { name: a.name })}
+      fieldLabel={t("cw_files_extract_pw_label")}
+      note={
+        <p className={a.wrong ? "cw-field-error" : "cw-dim"} role={a.wrong ? "alert" : undefined}>
+          {t(a.wrong ? "cw_files_extract_pw_wrong" : "cw_files_extract_pw_body")}
+        </p>
+      }
+      initial=""
+      secret
+      check={(v) => (v ? null : t("cw_files_extract_pw_empty"))}
+      onSubmit={(v) => p.onExtract?.(a.name, a.start, v, a.dir, over)}
+      onCancel={(over ? p.onPwOverCancel : null) ?? p.onDismiss}
+    />
+  );
+}
+
 function askView(p: FilesViewProps) {
   const a = p.ask;
   if (!a) return null;
@@ -891,22 +916,7 @@ function askView(p: FilesViewProps) {
         />
       );
     case "extractpw":
-      return (
-        <TextPrompt
-          title={t("cw_files_extract_pw_title", { name: a.name })}
-          fieldLabel={t("cw_files_extract_pw_label")}
-          note={
-            <p className={a.wrong ? "cw-field-error" : "cw-dim"} role={a.wrong ? "alert" : undefined}>
-              {t(a.wrong ? "cw_files_extract_pw_wrong" : "cw_files_extract_pw_body")}
-            </p>
-          }
-          initial=""
-          secret
-          check={(v) => (v ? null : t("cw_files_extract_pw_empty"))}
-          onSubmit={(v) => p.onExtract?.(a.name, a.start, v, a.dir)}
-          onCancel={p.onDismiss}
-        />
-      );
+      return pwPrompt(p, a, false);
     case "pick":
       return (
         <PathPicker
@@ -1285,6 +1295,7 @@ export function FilesView(p: FilesViewProps) {
         </>
       )}
       {askView(p)}
+      {p.pwOver ? pwPrompt(p, p.pwOver, true) : null}
       {/* Over the open dialog, which stays: closing it would stop an upload or drop an editor's
           unsaved text. Last in the page, so it is the topmost modal. */}
       {p.conflict ? <ConflictDialog key={p.conflict.conflict.item} conflict={p.conflict.conflict} onAnswer={p.conflict.answer} /> : null}
@@ -1398,6 +1409,9 @@ export function Files({ ctx }: { ctx: SectionContext }) {
   /** The dialog open now: a late answer checks it is still the one that asked, and a
    *  finished extract leaves the folder alone while one is open. */
   const askRef = useRef(ask);
+  /** An extract's password question that came while another dialog was open: shown over it (it
+   *  used to replace it, an editor's unsaved text with it), which stays. */
+  const [pwOver, setPwOver] = useState<PwAsk | null>(null);
   useEffect(() => {
     askRef.current = ask;
   }, [ask]);
@@ -1903,12 +1917,14 @@ export function Files({ ctx }: { ctx: SectionContext }) {
   );
 
   const onExtract = useCallback(
-    (name: string, start: ExtractStart, password?: string, askedIn?: string) => {
+    (name: string, start: ExtractStart, password?: string, askedIn?: string, over?: boolean) => {
       // The password prompt of an extract that began in another folder names that folder.
       const began = askedIn ?? path;
       if (began == null || currentBatch()) return;
       const src = joinPath(began, name);
-      setAsk(null);
+      // Asked over another dialog: that one stays.
+      if (over) setPwOver(null);
+      else setAsk(null);
       setMessage(null);
       let end: OpEnd | { end: "error"; error: unknown } = { end: "gone" };
       const body = {
@@ -1942,7 +1958,9 @@ export function Files({ ctx }: { ctx: SectionContext }) {
           const cause = done.end === "failed" ? opCause(done.status) : done.end === "error" && done.error instanceof ApiError ? done.error.code : "";
           if (cause === "fs_extract_password_required" || cause === "fs_extract_wrong_password") {
             // Not a failure yet: ask for the password and run the same extract again.
-            setAsk({ kind: "extractpw", name, start, wrong: cause === "fs_extract_wrong_password", dir: began });
+            const pw: PwAsk = { kind: "extractpw", name, start, wrong: cause === "fs_extract_wrong_password", dir: began };
+            if (askRef.current) setPwOver(pw);
+            else setAsk(pw);
             refresh();
             return;
           }
@@ -2383,6 +2401,8 @@ export function Files({ ctx }: { ctx: SectionContext }) {
         onInstallPkg={onInstallPkg}
         onLoadPayload={onLoadPayload}
         onExtract={onExtract}
+        pwOver={pwOver}
+        onPwOverCancel={() => setPwOver(null)}
         onMkdir={onMkdir}
         onNewFile={onNewFile}
         onDownload={remote ? onDownload : undefined}
