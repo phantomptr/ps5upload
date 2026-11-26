@@ -76,4 +76,25 @@ static inline int cheats_xml_text(const char *start, const char *tag_name, char 
     return cut;
 }
 
+/* Where the element whose opening tag runs from `open_start` to `open_end` (just past its '>')
+ * ends: just past `close_tag` (e.g. "</Cheat>") for a paired element, `open_end` itself for a
+ * self-closing one (<Cheatline .../>). `*body_end` is where its content ends: the '<' of the
+ * closing tag, or `open_end` (no content). NULL when a paired element has no closing tag.
+ * A self-closing element is told by its own tag, never by whether a closing tag follows
+ * somewhere: <Cheatline .../> then <Cheatline>..</Cheatline> took the second line's close for
+ * the first's (its attributes read, the second line skipped), and <Cheat .../> took the next
+ * cheat's lines and close for its own. */
+static inline const char *cheats_xml_element_end(const char *open_start, const char *open_end,
+                                                 const char *close_tag, const char **body_end) {
+    const char *close;
+    if (open_end - open_start >= 2 && open_end[-1] == '>' && open_end[-2] == '/') {
+        *body_end = open_end;
+        return open_end;
+    }
+    close = strstr(open_end, close_tag);
+    if (!close) return NULL;
+    *body_end = close;
+    return close + strlen(close_tag);
+}
+
 #endif /* PS5UPLOAD_CHEATS_XML_ATTR_H */

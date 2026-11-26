@@ -943,9 +943,11 @@ static int parse_shn_file(const char *xml, size_t xml_len,
         const char *cheat_start, *cheat_end;
         if (!xml_find_tag(cursor, "Cheat", &cheat_start, &cheat_end)) break;
 
-        /* Extract the full Cheat tag content (to its matching </Cheat>) */
-        const char *close_cheat = strstr(cheat_end, "</Cheat>");
-        if (!close_cheat) break;
+        /* Extract the full Cheat tag content (to its matching </Cheat>; none for <Cheat .../>) */
+        const char *close_cheat;
+        const char *cheat_after = cheats_xml_element_end(cheat_start, cheat_end, "</Cheat>",
+                                                         &close_cheat);
+        if (!cheat_after) break;
 
         size_t cheat_len = (size_t)(close_cheat - cheat_end);
         char *cheat_buf = (char *)malloc(cheat_len + 1); /* a master code's runs long (#811) */
@@ -977,14 +979,14 @@ static int parse_shn_file(const char *xml, size_t xml_len,
             if (!xml_find_tag(cl_cursor, "Cheatline", &cl_start, &cl_end))
                 break;
 
-            const char *cl_close = strstr(cl_end, "</Cheatline>");
-            const char *cl_real_end;
-            if (cl_close) {
-                cl_real_end = cl_close + strlen("</Cheatline>");
-            } else {
-                /* Self-closing: <Cheatline ... /> */
+            /* Self-closing (<Cheatline ... />) by its own tag; an open tag with no close anywhere
+             * after it is read for its attributes alone, as before. */
+            const char *cl_close;
+            const char *cl_real_end =
+                cheats_xml_element_end(cl_start, cl_end, "</Cheatline>", &cl_close);
+            if (!cl_real_end) {
                 cl_real_end = cl_end;
-                cl_close = cl_start + strlen("<Cheatline");
+                cl_close = cl_end;
             }
 
             size_t cl_len;
@@ -1056,7 +1058,7 @@ static int parse_shn_file(const char *xml, size_t xml_len,
 
         if (m->name[0] || m->mem_count > 0) mod_idx++;
         else cheat_mod_clear(m); /* not kept: the next cheat reuses its place */
-        cursor = close_cheat + strlen("</Cheat>");
+        cursor = cheat_after;
     }
 
     cf->mod_count = mod_idx;
