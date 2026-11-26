@@ -120,13 +120,23 @@ struct Room {
     host_signals: Window,
     hostless_since: Option<Instant>,
     guests: HashMap<String, Guest>,
+    /// Each guest client's signals in this room ([`Config::max_signals_per_guest_client`]),
+    /// kept when its guest goes so that joining again does not refill them. Bounded: at most
+    /// [`GUEST_CLIENTS_PER_SEAT`] per seat, and windows that ran out are dropped.
+    guest_clients: HashMap<IpKey, Window>,
 }
+
+/// Guest clients a room keeps a signal budget for, per seat (8 seats: 32 clients a minute).
+const GUEST_CLIENTS_PER_SEAT: usize = 4;
 
 struct Guest {
     peer: Peer,
     signals: Window,
     /// When it joined: a guest still here [`Config::guest_max_age`] later is removed.
     joined: Instant,
+    /// Who it is (the address [`client_ip`] gave): its signals count toward that client's
+    /// budget in the room too.
+    client: IpKey,
 }
 
 #[derive(Clone)]
@@ -637,6 +647,7 @@ fn on_host(
                 host_signals: Window::new(now),
                 hostless_since: None,
                 guests: HashMap::new(),
+                guest_clients: HashMap::new(),
             },
         );
         Metrics::inc(&shared.metrics.hosts);
@@ -678,6 +689,28 @@ fn on_join(
     if room.guests.len() >= cfg.max_guests_per_room {
         return Err(ErrorKind::RoomFull);
     }
+    // The client's signal budget here outlives its guests: before, each join came with a fresh
+    // one, so one client joining again and again (30 times a minute) sent the host 600 signals
+    // a minute where one guest may send 20. A client that has used it up is refused now rather
+    // than at its first signal. The table holds clients that joined within the window, at most
+    // a few per seat: past that, a new client waits for windows to run out.
+    let cap = cfg
+        .max_guests_per_room
+        .saturating_mul(GUEST_CLIENTS_PER_SEAT);
+    if !room.guest_clients.contains_key(&ip) && room.guest_clients.len() >= cap {
+        room.guest_clients
+            .retain(|_, w| !w.expired(now, cfg.rate_window));
+        if room.guest_clients.len() >= cap {
+            return Err(ErrorKind::RateLimited);
+        }
+    }
+    let budget = room
+        .guest_clients
+        .entry(ip)
+        .or_insert_with(|| Window::new(now));
+    if budget.used_up(now, cfg.rate_window, cfg.max_signals_per_guest_client) {
+        return Err(ErrorKind::RateLimited);
+    }
     let gid = loop {
         let g = random_b64(GID_LEN * 3 / 4);
         if !room.guests.contains_key(&g) {
@@ -690,6 +723,7 @@ fn on_join(
             peer: me.clone(),
             signals: Window::new(now),
             joined: now,
+            client: ip,
         },
     );
     host.send(
@@ -735,6 +769,15 @@ fn on_signal(shared: &Shared, role: &mut Role, msg: &Msg) -> Result<Action, Erro
             {
                 return Err(ErrorKind::RateLimited);
             }
+            // (An entry the sweeper dropped as run out starts again: a guest in the room has a
+            // seat, so this adds at most one per seat past the join's bound.)
+            let client = r
+                .guest_clients
+                .entry(g.client)
+                .or_insert_with(|| Window::new(now));
+            if !client.hit(now, cfg.rate_window, cfg.max_signals_per_guest_client) {
+                return Err(ErrorKind::RateLimited);
+            }
             let Some(h) = &r.host else {
                 return Err(ErrorKind::NoPeer);
             };
@@ -749,11 +792,16 @@ fn on_signal(shared: &Shared, role: &mut Role, msg: &Msg) -> Result<Action, Erro
             let Some(r) = st.rooms.get_mut(room.as_str()) else {
                 return Err(ErrorKind::NoPeer);
             };
+            // Over the host's limit: the signal is dropped and the host stays. Before, the host
+            // was closed (and every guest with it, and again on each reconnect while the window
+            // lasted), and guests make a host send: it answers each offer. So anyone with the
+            // link could cut the host off by offering fast enough.
             if !r
                 .host_signals
                 .hit(now, cfg.rate_window, cfg.max_signals_per_host)
             {
-                return Err(ErrorKind::RateLimited);
+                Metrics::inc(&shared.metrics.host_signals_dropped);
+                return Ok(Action::Reply(Vec::new()));
             }
             let Some(g) = r.guests.get(to) else {
                 return Err(ErrorKind::NoPeer);
@@ -867,6 +915,10 @@ pub(crate) async fn sweeper(shared: Arc<Shared>, stun_table: Arc<Mutex<RateTable
                 Metrics::inc(&shared.metrics.rooms_expired);
             }
             expire_guests(&mut st, now, cfg.guest_max_age, &shared.metrics);
+            for r in st.rooms.values_mut() {
+                r.guest_clients
+                    .retain(|_, w| !w.expired(now, cfg.rate_window));
+            }
             st.joins.sweep(now, cfg.rate_window);
         }
         stun_table
@@ -1132,6 +1184,49 @@ mod tests {
         assert!(host(&ra, &a).is_ok());
     }
 
+    /// The per-client budgets a room keeps are bounded: past a few clients per seat in one window
+    /// a new client is refused (an old one is not) until windows run out.
+    #[test]
+    fn a_rooms_client_budgets_are_bounded() {
+        let window = Duration::from_millis(200);
+        let sh = shared(Config {
+            max_guests_per_room: 1,
+            rate_window: window,
+            ..Config::default()
+        });
+        let (hp, _hrx) = peer(1);
+        let room = "A".repeat(ROOM_LEN);
+        let host = json!({"v": 1, "t": "host", "room": room, "secret": "S".repeat(SECRET_LEN)});
+        assert!(handle_text(&sh, &mut Role::None, &hp, ip(), &host.to_string()).is_ok());
+        let join = json!({"v": 1, "t": "join", "room": room}).to_string();
+        let client = |n: u32| IpKey::V4(0xc633_6400 + n);
+        // Join and leave: one seat, one client at a time.
+        let visit = |n: u32| {
+            let (gp, _grx) = peer(10 + u64::from(n));
+            let mut role = Role::None;
+            let res = handle_text(&sh, &mut role, &gp, client(n), &join).map(|_| ());
+            if res.is_ok() {
+                let leave = json!({"t": "leave"}).to_string();
+                assert!(handle_text(&sh, &mut role, &gp, client(n), &leave).is_ok());
+            }
+            res
+        };
+        let cap = GUEST_CLIENTS_PER_SEAT as u32;
+        for n in 0..cap {
+            assert!(visit(n).is_ok(), "client {n}");
+        }
+        assert!(matches!(visit(cap), Err(ErrorKind::RateLimited)));
+        assert!(visit(0).is_ok(), "a client it has may come back");
+        let kept = |sh: &Shared| {
+            let st = sh.state.lock().unwrap();
+            st.rooms[&room].guest_clients.len()
+        };
+        assert_eq!(kept(&sh), GUEST_CLIENTS_PER_SEAT);
+        std::thread::sleep(window);
+        assert!(visit(cap).is_ok(), "windows ran out");
+        assert_eq!(kept(&sh), 1);
+    }
+
     /// `cargo test -p ps5upload-hub --release forward_cost -- --ignored --nocapture`: the time the
     /// hub spends on one forwarded offer (about 5 KB) and one ICE candidate, in process.
     #[test]
@@ -1139,6 +1234,7 @@ mod tests {
     fn forward_cost() {
         let c = Config {
             max_signals_per_guest: u32::MAX,
+            max_signals_per_guest_client: u32::MAX,
             max_signals_per_host: u32::MAX,
             ..Config::default()
         };

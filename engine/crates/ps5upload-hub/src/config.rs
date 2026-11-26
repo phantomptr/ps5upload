@@ -101,6 +101,12 @@ pub struct Config {
 
     pub max_guests_per_room: usize,
     pub max_signals_per_guest: u32,
+    /// Signals one guest client (an address, see `limits.rs`) may send in one room per window,
+    /// all its guests there together, those that left included: joining again does not refill
+    /// it. Room for a few guests from one home.
+    pub max_signals_per_guest_client: u32,
+    /// Signals a host may send per window, to all its guests together. Past it they are
+    /// dropped, not forwarded; the host stays.
     pub max_signals_per_host: u32,
     pub max_joins_per_ip: u32,
     pub max_rooms: usize,
@@ -157,6 +163,7 @@ impl Default for Config {
             client_ip_header: "x-forwarded-for".to_string(),
             max_guests_per_room: 8,
             max_signals_per_guest: 20,
+            max_signals_per_guest_client: 60,
             max_signals_per_host: 200,
             max_joins_per_ip: 30,
             max_rooms: 5_000,
@@ -258,6 +265,11 @@ impl Config {
             get,
             "HUB_MAX_SIGNALS_PER_GUEST",
             &mut c.max_signals_per_guest,
+        )?;
+        num(
+            get,
+            "HUB_MAX_SIGNALS_PER_GUEST_CLIENT",
+            &mut c.max_signals_per_guest_client,
         )?;
         num(get, "HUB_MAX_SIGNALS_PER_HOST", &mut c.max_signals_per_host)?;
         num(get, "HUB_MAX_JOINS_PER_IP", &mut c.max_joins_per_ip)?;

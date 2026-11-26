@@ -106,6 +106,12 @@ Forwarded as `{"t":"signal","from":"host"|"<gid>","data":<data unchanged>}`.
 - A guest may only address `"host"`; a host only a `gid`. Anything else: `bad_target`, close.
 - A host addressing a `gid` that has gone gets `{"t":"error","why":"no_peer"}`; this one error
   does **not** close the socket (the guest may have left a moment ago).
+- A host over its signal limit is not closed: the signals past it are dropped (not forwarded,
+  no error) until the minute is over. Guests make a host send (it answers each offer), so a
+  limit that closed the host let anyone with the link cut it off.
+- A guest over its own limit, or over its client's in the room (all that client's guests
+  there together, those that left included), gets `rate_limited`, close. Joining again does not
+  refill a client's: while it is used up, that client's `join` to the room gets `rate_limited`.
 
 ### Leave
 
@@ -142,7 +148,7 @@ Forwarded as `{"t":"signal","from":"host"|"<gid>","data":<data unchanged>}`.
 | `room_taken` | `host` with the wrong secret (for a bound room id: one it was not made from) |
 | `no_room` | `join` to a room that does not exist or has no host right now |
 | `room_full` | `join` to a room with 8 guests |
-| `rate_limited` | over a per-minute limit (below) |
+| `rate_limited` | over a per-minute limit (below; a host's signals past its limit are dropped instead) |
 | `server_full` | `host` when the hub has 5,000 rooms |
 | `too_many_rooms` | `host` from a client that already has 8 rooms |
 | `no_peer` | signal to a guest that has gone (not fatal) |
@@ -154,7 +160,8 @@ Forwarded as `{"t":"signal","from":"host"|"<gid>","data":<data unchanged>}`.
 |-------|---------|
 | guests per room | 8 |
 | signals per guest | 20 per minute |
-| signals per host (all its guests together) | 200 per minute |
+| signals per guest client in one room (its guests together, joins again included) | 60 per minute |
+| signals per host (all its guests together) | 200 per minute (past it: dropped) |
 | `join` attempts per client | 30 per minute (found or not) |
 | rooms on the hub | 5,000 |
 | rooms per client | 8 (a room counts toward its creator until removed) |
@@ -196,8 +203,9 @@ IPv6. It ignores every other message and does no TURN.
 
 - `GET /health`: `ok`.
 - `GET /metrics`: Prometheus text, counts only (rooms, guests, connections, hosts, reclaims,
-  joins, signals, expired rooms, STUN requests, errors by kind). Kept private: localhost only
-  behind Caddy, or a separate private port (`HUB_METRICS_LISTEN`) on Fly.
+  joins, signals, dropped host signals, expired rooms and guests, STUN requests, errors by
+  kind). Kept private: localhost only behind Caddy, or a separate private port
+  (`HUB_METRICS_LISTEN`) on Fly.
 
 ## Privacy
 

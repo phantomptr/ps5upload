@@ -71,7 +71,12 @@ impl Window {
         true
     }
 
-    fn expired(&self, now: Instant, window: Duration) -> bool {
+    /// `max` events counted in a window that is still running: the next [`Window::hit`] fails.
+    pub fn used_up(&self, now: Instant, window: Duration, max: u32) -> bool {
+        !self.expired(now, window) && self.count >= max
+    }
+
+    pub fn expired(&self, now: Instant, window: Duration) -> bool {
         now.duration_since(self.start) >= window
     }
 }
@@ -128,7 +133,10 @@ mod tests {
         assert!(win.hit(t0, w, 2));
         assert!(win.hit(t0, w, 2));
         assert!(!win.hit(t0, w, 2));
+        assert!(win.used_up(t0, w, 2));
+        assert!(!win.used_up(t0 + w, w, 2));
         assert!(win.hit(t0 + w, w, 2));
+        assert!(!win.used_up(t0 + w, w, 2));
     }
 
     #[test]
