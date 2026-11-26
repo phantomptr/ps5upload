@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, ExternalLink, Play, Plus, RefreshCw, Skull, Trash2, Upload } from "lucide-react";
+import { ArrowDown, ArrowUp, ExternalLink, Play, Plus, RefreshCw, Search, Skull, Trash2, Upload } from "lucide-react";
 
-import { Badge, Button, Callout, ErrorCard, Select, Spinner, Toggle } from "../../components";
+import { Badge, Button, Callout, ErrorCard, Input, Select, Spinner, Toggle } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import {
   autoloadKey,
@@ -98,6 +98,23 @@ export function unmatchedBootEntries(
     .filter(({ entry }) => !known.has(entry));
 }
 
+/** The saved list gets a box to narrow it once it is longer than this: a list this short is read
+ *  at a glance. */
+export const SAVED_FILTER_MIN = 8;
+
+/** The saved payloads that `query` names: every word of it found, in any order and any case, in
+ *  the payload's name, file name, path, version or source. An empty query keeps them all. */
+export function filterSaved<
+  T extends Pick<PmStoredPayload, "name" | "filename" | "path" | "version" | "source">,
+>(payloads: readonly T[], query: string): T[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [...payloads];
+  return payloads.filter((p) => {
+    const hay = [p.name, p.filename, p.path, p.version, p.source].join("\n").toLowerCase();
+    return words.every((w) => hay.includes(w));
+  });
+}
+
 /** A running saved row's origin line. `bootN`: its place in the boot list when that list is
  *  on (a list turned off starts nothing at boot, so no number is promised). */
 export function runningOrigin(tr: Translator, ours: boolean, bootN: number | null): string {
@@ -132,6 +149,8 @@ export default function PayloadManagerPanel({
   const [inventory, setInventory] = useState<PayloadLocalEntry[]>([]);
   const [catalog, setCatalog] = useState<PayloadInfo[]>([]);
   const [pick, setPick] = useState("");
+  /** What the box above a long saved list holds. */
+  const [query, setQuery] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
   /** Ids whose newest release was asked for on this console. */
   const asked = useRef(new Set<string>());
@@ -465,7 +484,11 @@ export default function PayloadManagerPanel({
       >
         <div className="min-w-[min(100%,14rem)] flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium">{p.name || p.filename}</span>
+            {/* A long file name takes the lines it needs, and keeps its own order in a
+                right-to-left language. */}
+            <span className="min-w-0 font-medium [overflow-wrap:anywhere]" data-testid="pm-row-name">
+              <bdi>{p.name || p.filename}</bdi>
+            </span>
             {p.version && (
               <Badge tone="neutral" variant="outline">
                 {p.version}
@@ -561,6 +584,7 @@ export default function PayloadManagerPanel({
                     disabled={busy !== null || pos <= 0}
                     onClick={() => void setAutoload(autoload.enabled, moveEntry(autoload.list, key, -1))}
                     title={tr("pm_autoload_earlier", undefined, "Load earlier")}
+                    aria-label={tr("pm_autoload_earlier", undefined, "Load earlier")}
                   >
                     <ArrowUp size={12} />
                   </Button>
@@ -570,6 +594,7 @@ export default function PayloadManagerPanel({
                     disabled={busy !== null || pos >= order.length - 1}
                     onClick={() => void setAutoload(autoload.enabled, moveEntry(autoload.list, key, 1))}
                     title={tr("pm_autoload_later", undefined, "Load later")}
+                    aria-label={tr("pm_autoload_later", undefined, "Load later")}
                   >
                     <ArrowDown size={12} />
                   </Button>
@@ -631,6 +656,12 @@ export default function PayloadManagerPanel({
 
   if (part === "saved") {
     const all = stored.length + onUsb.length;
+    // The box shows for a long list only; a query typed before the list got short is dropped.
+    const filterable = all > SAVED_FILTER_MIN;
+    const q = filterable ? query.trim() : "";
+    const shownStored = filterSaved(stored, q);
+    const shownUsb = filterSaved(onUsb, q);
+    const shown = shownStored.length + shownUsb.length;
     return (
       <section className="space-y-2" data-testid="pm-saved-list">
         {dialog}
@@ -661,13 +692,44 @@ export default function PayloadManagerPanel({
           </p>
         ) : (
           <>
-            {stored.length > 0 && <ul className="grid gap-1.5">{stored.map(row)}</ul>}
-            {onUsb.length > 0 && (
+            {filterable && (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <div className="w-full sm:w-64">
+                  <Input
+                    type="search"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape" && query) {
+                        e.preventDefault();
+                        setQuery("");
+                      }
+                    }}
+                    leftIcon={<Search size={14} />}
+                    placeholder={tr("payloads_search_placeholder", undefined, "Search payloads…")}
+                    aria-label={tr("payloads_search", undefined, "Search payloads")}
+                    className="text-xs"
+                    data-testid="pm-filter"
+                  />
+                </div>
+                {/* Said aloud as it changes: the rows below are what is left. */}
+                <span className="text-xs text-[var(--color-muted)]" aria-live="polite" data-testid="pm-filter-count">
+                  {q ? tr("cheats_filter_count", { shown, total: all }, `${shown} of ${all}`) : ""}
+                </span>
+              </div>
+            )}
+            {q && shown === 0 && (
+              <p className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-border)] p-4 text-center text-xs text-[var(--color-muted)]">
+                {tr("payloads_search_no_match", { query: q }, `No payloads match "${q}".`)}
+              </p>
+            )}
+            {shownStored.length > 0 && <ul className="grid gap-1.5">{shownStored.map(row)}</ul>}
+            {shownUsb.length > 0 && (
               <>
                 <h4 className="pt-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
                   {tr("pm_usb_header", { n: onUsb.length }, `On USB · ${onUsb.length}`)}
                 </h4>
-                <ul className="grid gap-1.5">{onUsb.map(row)}</ul>
+                <ul className="grid gap-1.5">{shownUsb.map(row)}</ul>
               </>
             )}
           </>
