@@ -42,7 +42,7 @@ import { pushNotification } from "./notifications";
 import { labelEngineJob } from "../lib/bgWork";
 import { withConsolePrefix } from "./roster";
 import { trStatic } from "../lib/trStatic";
-import { humanizePs5Error } from "../lib/humanizeError";
+import { registerAfterUploadWarning } from "../lib/registerAfterUpload";
 
 /** Module-level shortcut to the recent-host-metrics recorder. Pulled
  *  out as a function (not a direct `store.record`) so future call
@@ -765,9 +765,11 @@ export const useTransferStore = create<TransferState>((set) => {
                 `registered "${uploadName}" as ${res.title_id} after upload`,
               );
             } catch (e) {
-              registerWarning = `Couldn't add it to the home screen automatically: ${humanizePs5Error(
+              // The helper's reason in words; the Library pointer only where the Library could.
+              registerWarning = registerAfterUploadWarning(
                 e instanceof Error ? e.message : String(e),
-              )}. You can still do it from the Library.`;
+                uploadName,
+              );
             }
             // A Stop that landed during the register round-trip: the phase
             // writes below are gated on isLive(), so state stays honest —

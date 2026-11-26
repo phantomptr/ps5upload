@@ -81,6 +81,7 @@ import { discardUploadLeftovers } from "../lib/uploadLeftovers";
 import { clearForReplace, destInFolder, offersConflictActions } from "../lib/destinationConflict";
 import { existingCopyOf, materializeRemote, releaseCopy } from "../lib/materialize";
 import { staticTranslator as tx } from "../lib/trStatic";
+import { registerAfterUploadWarning } from "../lib/registerAfterUpload";
 
 /** Failed status reads in a row (2 s apart) before a found install counts as lost. */
 const FIND_JOB_MAX_UNANSWERED = 150;
@@ -137,7 +138,6 @@ import { isTauriEnv } from "../lib/tauriEnv";
 import { createQueueLeader } from "../lib/queueLeader";
 import { isJobUnknownError } from "../lib/pollRead";
 import { krakenGuard } from "../lib/krakenGuard";
-import { humanizePs5Error } from "../lib/humanizeError";
 
 /** The engine job id currently uploading on each console (bare host key).
  *  runOne records it so stopHost/stop can ask the engine to TRULY cancel the
@@ -1852,14 +1852,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
               ? res.title_name
               : res.title_id;
           } catch (e) {
-            mountWarnings.push(
-              tx(
-                "queue_register_failed",
-                // The helper's reason in words where it has them (a system app's title ID, …).
-                { error: humanizePs5Error(e instanceof Error ? e.message : String(e)) },
-                "Couldn't add it to the home screen automatically: {error}. You can still do it from the Library.",
-              ),
-            );
+            // The helper's reason in words; the Library pointer only where the Library could.
+            mountWarnings.push(registerAfterUploadWarning(e instanceof Error ? e.message : String(e)));
           }
         }
         // Pkg finisher (the queue merge): once the .pkg lands in the staging
