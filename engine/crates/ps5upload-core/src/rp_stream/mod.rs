@@ -886,6 +886,9 @@ pub struct StreamReport {
     pub data_given_up: u64,
     /// Sends that failed for a passing reason and were carried on from.
     pub io_soft_errors: u64,
+    /// The console gave this session its one Remote Play slot (session init answered), which
+    /// it keeps for a while after. False for a stream stopped before that (during the wake).
+    pub slot_taken: bool,
 }
 
 /// Nothing at all from the console for this long: it is gone (the network dropped, or it
@@ -948,6 +951,11 @@ pub fn run_stream(
         host: host.to_string(),
         end: std::cell::RefCell::new(guard::SessionEnd::Dropped),
     };
+    // Every report from here on: the slot was ours.
+    let holding_report = || StreamReport {
+        slot_taken: true,
+        ..StreamReport::default()
+    };
     sink.progress(Progress::Nonce);
     // Take the nonce once, then retry only the ctrl connection while the console
     // refuses or resets it (rp_session's rule: a second session-init would
@@ -976,7 +984,7 @@ pub fn run_stream(
                 std::thread::sleep(Duration::from_secs(1));
                 if sink.stopped() {
                     // The slot stays reserved for a while (`_release` holds off a new session).
-                    return Ok(StreamReport::default());
+                    return Ok(holding_report());
                 }
             }
             r => break r,
@@ -986,7 +994,7 @@ pub fn run_stream(
         Ok(c) => c,
         // Stopped while the console took its time: a stop, as above.
         Err(e) if format!("{e:#}").contains(CTRL_STOPPED) => {
-            return Ok(StreamReport::default());
+            return Ok(holding_report());
         }
         // The console gave a nonce, then refused or reset ctrl: it is booting
         // (rule 2 in guard.rs) or still letting go of a session. Seen on the
@@ -1004,7 +1012,7 @@ pub fn run_stream(
     };
     sink.progress(Progress::SessionId);
     if sink.stopped() {
-        return Ok(StreamReport::default());
+        return Ok(holding_report());
     }
     // DualSense features and the keyboard on, the mic muted twice (chiaki
     // `ctrl_enable_features`); like chiaki, a failed send is not fatal.
@@ -1050,7 +1058,7 @@ pub fn run_stream(
     });
     takion.send_message(1, &big)?;
 
-    let mut report = StreamReport::default();
+    let mut report = holding_report();
     let mut early_streaminfo: Option<Vec<u8>> = None;
     let mut have_bang = false;
     let mut stream_info: Option<proto::StreamInfo> = None;
@@ -1474,7 +1482,10 @@ mod tests {
             Duration::MAX,
             &mut Stopped,
         );
-        assert_eq!(r.unwrap().video.frames, 0);
+        let r = r.unwrap();
+        assert_eq!(r.video.frames, 0);
+        // Never given the console's slot: not remembered as a session it still holds.
+        assert!(!r.slot_taken);
         assert!(t0.elapsed() < Duration::from_secs(1));
     }
 

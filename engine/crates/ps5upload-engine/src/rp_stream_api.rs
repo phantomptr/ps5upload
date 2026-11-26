@@ -1713,6 +1713,13 @@ fn read_slot_file(p: &std::path::Path) -> std::collections::HashMap<String, u64>
         .unwrap_or_default()
 }
 
+/// Whether a session that ended with `end` (its last word) had the console's slot, which the
+/// console keeps a while after: one that ended, given the slot (`slot_taken`, not one stopped
+/// during the wake), or one lost mid-stream.
+fn ended_holding_the_slot(end: &serde_json::Value, slot_taken: bool) -> bool {
+    (end["stage"] == "ended" && slot_taken) || end["code"] == "lost"
+}
+
 /// Our session with `host` ended now: remembered here and on disk.
 fn note_session_ended(host: &str) {
     let Ok(mut g) = SESSION_ENDED.lock() else {
@@ -2042,6 +2049,7 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
                 panic_text(&p)
             ))
         });
+        let slot_taken = matches!(&r, Ok(rep) if rep.slot_taken);
         let end = match r {
             Ok(rep) => serde_json::json!({
                 "stage": "ended",
@@ -2070,8 +2078,8 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         // A session that reached the console holds its slot for a while after: remembered, so a
         // start refused meanwhile is told apart from another device's session. Only a session
         // that got as far as the console's slot: an end, or one lost mid-stream (an unreachable
-        // or refused start never held it).
-        if end["stage"] == "ended" || end["code"] == "lost" {
+        // or refused start never held it, nor did one stopped during the wake).
+        if ended_holding_the_slot(&end, slot_taken) {
             note_session_ended(&l.host);
         }
         // The end and why, with the console's words for a refusal (80108b26 and the like).
@@ -2479,6 +2487,23 @@ mod slot_held_tests {
         let e = anyhow::anyhow!("{}", ps5upload_core::rp_session::SESSION_INIT_CLOSED);
         assert!(slot_held_status("10.9.9.9", &e).is_some());
         assert!(slot_held_status("10.9.9.9", &anyhow::anyhow!("other")).is_none());
+    }
+
+    /// A Start stopped while the PS5 was still waking never had its slot: another device's
+    /// session found afterwards is "in use", not ours being let go.
+    #[test]
+    fn a_stop_during_the_wake_is_not_remembered_as_our_session() {
+        let ended = serde_json::json!({"stage": "ended", "frames": 0});
+        assert!(!ended_holding_the_slot(&ended, false));
+        assert!(ended_holding_the_slot(&ended, true));
+        assert!(ended_holding_the_slot(
+            &serde_json::json!({"stage": "error", "code": "lost"}),
+            false
+        ));
+        assert!(!ended_holding_the_slot(
+            &serde_json::json!({"stage": "error", "code": "unreachable"}),
+            false
+        ));
     }
 
     /// #720 end to end on the engine's side: a session ends (our stop), the app restarts, Start
