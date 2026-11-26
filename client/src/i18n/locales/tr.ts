@@ -7615,6 +7615,8 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "cq_title_v2": "⑤ Kuyruk",
 "cq_about": "Bu bilgisayarda sırayla oluşturulur; her biri eklendiği anda ②, ③ ve ④ nasıl ayarlıysa öyle. ① altından daha fazla ekle, kuyruk çalışırken bile; bekleyen bir oyunu seçenekler düğmesiyle değiştir.",
 "cq_then_send": "Kurulum veya yükleme için ayarlanan bir oyun, oluşturulunca {send} kuyruğuna geçer.",
+"cq_page_close_note": "Bu sayfayı kapatmak, yapılmakta olan oyunu durdurmaz. Sonraki oyun yalnızca bu sayfa açıkken başlar.",
+"cq_stopped_by_close": "Bu sayfa kapatıldığında kuyruk durdu. Yapılmakta olan oyun devam etti. Devam etmek için kuyruğu yeniden başlat.",
 "cq_open_send": "{send} ekranını aç",
 "backup_alike_toggle": "{since} tarihinden beri {count} benzer kopya. Eski birini geri yüklemek için hepsini göster.",
 "add_sources_no_picker": "Bu sürüm bu bilgisayara göz atamıyor — motorun görebildiği bir yol yazın.",

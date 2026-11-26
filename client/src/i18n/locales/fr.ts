@@ -7624,6 +7624,8 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "cq_title_v2": "⑤ File d'attente",
 "cq_about": "Créés l'un après l'autre sur cet ordinateur, chacun selon les réglages de ②, ③ et ④ au moment de son ajout. Ajoutez-en d'autres sous ①, même pendant que la file tourne ; modifiez un jeu en attente avec son bouton d'options.",
 "cq_then_send": "Un jeu à installer ou à envoyer passe dans la file de {send} une fois créé.",
+"cq_page_close_note": "Fermer cette page n’arrête pas le jeu en cours de création. Le jeu suivant ne démarre que si cette page est ouverte.",
+"cq_stopped_by_close": "La file s’est arrêtée à la fermeture de cette page. Le jeu en cours de création a continué. Relancez la file pour continuer.",
 "cq_open_send": "Ouvrir {send}",
 "backup_alike_toggle": "{count} copies identiques depuis le {since}. Affichez-les pour restaurer une copie plus ancienne.",
 "add_sources_no_picker": "Cette version ne peut pas parcourir cette machine — saisissez un chemin visible par le moteur.",

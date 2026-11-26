@@ -7561,6 +7561,8 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "cq_title_v2": "⑤ Coda",
 "cq_about": "Creati uno dopo l'altro su questo computer, ciascuno come erano impostati ②, ③ e ④ quando è stato aggiunto. Aggiungine altri in ①, anche mentre la coda è in corso; modifica un gioco in attesa con il suo pulsante delle opzioni.",
 "cq_then_send": "Un gioco impostato per l'installazione o il caricamento passa alla coda di {send} una volta creato.",
+"cq_page_close_note": "Chiudere questa pagina non ferma il gioco in creazione. Il gioco successivo parte solo mentre questa pagina è aperta.",
+"cq_stopped_by_close": "La coda si è fermata quando questa pagina è stata chiusa. Il gioco in creazione è andato avanti. Avvia di nuovo la coda per continuare.",
 "cq_open_send": "Apri {send}",
 "backup_alike_toggle": "{count} copie uguali dal {since}. Mostrale per ripristinarne una più vecchia.",
 "add_sources_no_picker": "Questa build non può sfogliare questo computer: digita un percorso visibile al motore.",

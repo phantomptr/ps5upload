@@ -101,7 +101,7 @@ import {
   useFpkgConversion,
 } from "./fpkgConversion";
 import { commandTask, taskCapabilities } from "./taskControls";
-import { useTaskStore } from "./tasks";
+import { interruptedAtLoad, useTaskStore } from "./tasks";
 
 const req = { source: "/games/a", outputDir: "/out" };
 const tick = () => vi.advanceTimersByTimeAsync(POLL_MS + 50);
@@ -1078,6 +1078,122 @@ describe("fpkg pipeline", () => {
       packagePath: "/out/A.exfat",
       attached: true,
     });
+  });
+
+  /** As a reload leaves things: the page's run is gone, and its task (which a fresh start-up
+   *  loads from storage) is marked interrupted. */
+  const reload = async () => {
+    useFpkgConversion.setState({ pipeline: { phase: "idle" } });
+    // The closed page's poll ends with it.
+    await tick();
+    useTaskStore.setState((s) => ({
+      tasks: s.tasks.map((t) => {
+        if (t.status !== "running" && t.status !== "paused") return t;
+        interruptedAtLoad.add(t.id);
+        return { ...t, status: "interrupted" as const, endedAtMs: t.updatedAtMs };
+      }),
+    }));
+  };
+  const convertTasks = () => useTaskStore.getState().tasks.filter((t) => t.kind === "fpkg-convert");
+
+  it("a build still running after the page was closed goes on in its own task (#954)", async () => {
+    const running = { status: "running", started_at_ms: 1000, stage: { id: "write", index: 2, count: 4, done: 5, total: 10 } };
+    jobStatus.mockResolvedValue(running);
+    await useFpkgConversion.getState().start(req, { install: false, host: null });
+    await tick();
+    const [task] = convertTasks();
+    expect(task).toMatchObject({ engineJobId: "j1", payload: { jobKind: "build", source: "/games/a" } });
+    await reload();
+    expect(convertTasks()[0].status).toBe("interrupted");
+    // The engine lists it as a Workshop run too: followed once, in the task it had.
+    runningJobs.mockResolvedValueOnce([{ job_id: "j1", kind: "package", source: "/games/a", started_at_ms: 1000 }]);
+    await useFpkgConversion.getState().attachRunning();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "running",
+      source: "/games/a",
+      jobId: "j1",
+      attached: true,
+      taskId: task.id,
+      startedMs: 1000,
+    });
+    expect(convertTasks()).toHaveLength(1);
+    expect(convertTasks()[0]).toMatchObject({ id: task.id, status: "running" });
+    expect(interruptedAtLoad.has(task.id)).toBe(false);
+    await tick();
+    expect(convertTasks()[0].progress).toMatchObject({ current: 5, total: 10 });
+    jobStatus.mockResolvedValue({ status: "done", dest: "/out/a.pkg", bytes_sent: 9 });
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done", packagePath: "/out/a.pkg", attached: true });
+    expect(convertTasks()[0].status).toBe("done");
+  });
+
+  it("a build that finished while the page was closed shows as finished, with its result (#954)", async () => {
+    jobStatus.mockResolvedValue({ status: "running" });
+    await useFpkgConversion.getState().start(req, { install: false, host: null });
+    await tick();
+    await reload();
+    jobStatus.mockResolvedValue({ status: "done", dest: "/out/a.pkg", bytes_sent: 9, started_at_ms: 1 });
+    await useFpkgConversion.getState().attachRunning();
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "done",
+      source: "/games/a",
+      packagePath: "/out/a.pkg",
+      attached: true,
+    });
+    expect(convertTasks()).toHaveLength(1);
+    expect(convertTasks()[0].status).toBe("done");
+  });
+
+  it("a build that failed while the page was closed says why (#954)", async () => {
+    jobStatus.mockResolvedValue({ status: "running" });
+    await useFpkgConversion.getState().start(req, { install: false, host: null });
+    await tick();
+    await reload();
+    jobStatus.mockResolvedValue({ status: "failed", error: "disk full" });
+    await useFpkgConversion.getState().attachRunning();
+    await tick();
+    expect(convertTasks()[0]).toMatchObject({ status: "failed", lastError: { message: "disk full" } });
+  });
+
+  it("a failed read is asked again before a run is called interrupted (#954)", async () => {
+    jobStatus.mockResolvedValue({ status: "running" });
+    await useFpkgConversion.getState().start(req, { install: false, host: null });
+    await tick();
+    await reload();
+    jobStatus.mockReset().mockRejectedValueOnce(new Error("HTTP 503")).mockResolvedValue({ status: "running" });
+    const attached = useFpkgConversion.getState().attachRunning();
+    await vi.advanceTimersByTimeAsync(1500);
+    await attached;
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "running", jobId: "j1", attached: true });
+    expect(convertTasks()).toHaveLength(1);
+    expect(convertTasks()[0].status).toBe("running");
+  });
+
+  it("a run the engine no longer knows stays interrupted (#954)", async () => {
+    jobStatus.mockResolvedValue({ status: "running" });
+    await useFpkgConversion.getState().start(req, { install: false, host: null });
+    await tick();
+    await reload();
+    // The engine restarted (the desktop app quit, the container was recreated): the job died.
+    jobStatus.mockReset().mockRejectedValue(new Error("job not found"));
+    await useFpkgConversion.getState().attachRunning();
+    expect(useFpkgConversion.getState().pipeline.phase).toBe("idle");
+    expect(convertTasks()).toHaveLength(1);
+    expect(convertTasks()[0].status).toBe("interrupted");
+    expect(jobStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("a Convert & install found after a reload is followed as a build: Install waits for the user (#954)", async () => {
+    jobStatus.mockResolvedValue({ status: "running" });
+    await useFpkgConversion.getState().start(req, { install: true, host: "10.0.0.2", method: "stream" });
+    await tick();
+    await reload();
+    jobStatus.mockResolvedValue({ status: "done", dest: "/out/a.pkg", bytes_sent: 9 });
+    await useFpkgConversion.getState().attachRunning();
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done", mode: "convert", packagePath: "/out/a.pkg" });
+    expect(installStream).not.toHaveBeenCalled();
   });
 
   it("does not take over a window that is already busy", async () => {

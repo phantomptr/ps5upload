@@ -7610,6 +7610,8 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "cq_title_v2": "⑤ Hàng đợi",
 "cq_about": "Được tạo lần lượt trên máy tính này, mỗi mục theo thiết lập ②, ③ và ④ lúc được thêm vào. Thêm mục khác ở ①, kể cả khi hàng đợi đang chạy; đổi game đang chờ bằng nút tùy chọn của nó.",
 "cq_then_send": "Game được đặt để cài hoặc tải lên sẽ chuyển sang hàng đợi của {send} sau khi được tạo.",
+"cq_page_close_note": "Đóng trang này không dừng game đang được tạo. Game tiếp theo chỉ bắt đầu khi trang này đang mở.",
+"cq_stopped_by_close": "Hàng đợi đã dừng khi trang này bị đóng. Game đang được tạo vẫn tiếp tục. Hãy bắt đầu lại hàng đợi để tiếp tục.",
 "cq_open_send": "Mở {send}",
 "backup_alike_toggle": "{count} bản sao giống nhau từ {since}. Hiện từng bản để khôi phục bản cũ hơn.",
 "add_sources_no_picker": "Bản dựng này không duyệt được máy này — hãy nhập đường dẫn mà engine thấy được.",

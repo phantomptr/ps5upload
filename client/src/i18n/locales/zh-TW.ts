@@ -7561,6 +7561,8 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "cq_title_v2": "⑤ 佇列",
 "cq_about": "在這台電腦上依序製作，每個都依加入時 ②、③、④ 的設定進行。佇列執行時也可在 ① 中繼續加入；用選項按鈕變更等待中的遊戲。",
 "cq_then_send": "設定為安裝或上傳的遊戲製作完成後會進入「{send}」的佇列。",
+"cq_page_close_note": "關閉此頁面不會停止正在製作的遊戲。下一個遊戲只會在此頁面開啟時開始。",
+"cq_stopped_by_close": "關閉此頁面時佇列已停止。正在製作的遊戲仍在繼續。再次啟動佇列即可繼續。",
 "cq_open_send": "開啟「{send}」",
 "backup_alike_toggle": "自 {since} 起有 {count} 個相同的副本。展開後可還原較舊的副本。",
 "add_sources_no_picker": "此版本無法瀏覽本機，請輸入引擎可存取的路徑。",

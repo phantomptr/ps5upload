@@ -7900,6 +7900,8 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "cq_title_v2": "⑤ Sor",
 "cq_about": "Egymás után készülnek ezen a számítógépen, mindegyik úgy, ahogy a ②, ③ és ④ be volt állítva a hozzáadásakor. Adj hozzá többet az ① alatt, akár a sor futása közben is; egy várakozó játékot a beállítások gombjával módosíthatsz.",
 "cq_then_send": "A telepítésre vagy feltöltésre beállított játék elkészülte után a(z) {send} sorába kerül.",
+"cq_page_close_note": "Az oldal bezárása nem állítja le a készülő játékot. A következő játék csak akkor indul, ha ez az oldal nyitva van.",
+"cq_stopped_by_close": "A sor leállt, amikor ezt az oldalt bezárták. A készülő játék tovább készült. A folytatáshoz indítsd el újra a sort.",
 "cq_open_send": "{send} megnyitása",
 "backup_alike_toggle": "{count} egyforma másolat {since} óta. Jelenítsd meg őket egy régebbi visszaállításához.",
 "add_sources_no_picker": "Ez a kiadás nem tudja tallózni ezt a gépet — írj be egy elérési utat, amelyet a motor lát.",

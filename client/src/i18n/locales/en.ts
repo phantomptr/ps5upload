@@ -7919,6 +7919,8 @@ err_display_crashed: "The app's display hit an error while this ran (React #185)
 "cq_title_v2": "⑤ Queue",
 "cq_about": "Made one after another on this computer, each as ②, ③ and ④ were set when it was added. Add more under ①, even while the queue runs; change a waiting game with its options button.",
 "cq_then_send": "A game set to install or upload goes on to {send}'s queue once it is made.",
+"cq_page_close_note": "Closing this page does not stop the game being made. The next game starts only while this page is open.",
+"cq_stopped_by_close": "The queue stopped when this page was closed. The game it was making went on. Start the queue again to continue.",
 "cq_open_send": "Open {send}",
 "backup_alike_toggle": "{count} alike copies since {since}. Show each to restore an older one.",
 "add_sources_no_picker": "This build cannot browse this machine — type a path the engine can see.",

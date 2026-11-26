@@ -7623,6 +7623,8 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "cq_title_v2": "⑤ Fila",
 "cq_about": "Criados um após o outro neste computador, cada um como ②, ③ e ④ estavam definidos quando foi adicionado. Adicione mais em ①, mesmo com a fila rodando; mude um jogo em espera pelo botão de opções dele.",
 "cq_then_send": "Um jogo definido para instalar ou enviar vai para a fila de {send} assim que é criado.",
+"cq_page_close_note": "Fechar esta página não interrompe o jogo que está sendo criado. O próximo jogo só começa enquanto esta página estiver aberta.",
+"cq_stopped_by_close": "A fila parou quando esta página foi fechada. O jogo que estava sendo criado continuou. Inicie a fila de novo para continuar.",
 "cq_open_send": "Abrir {send}",
 "backup_alike_toggle": "{count} cópias iguais desde {since}. Mostre cada uma para restaurar uma mais antiga.",
 "add_sources_no_picker": "Esta versão não consegue navegar neste computador — digite um caminho que o motor consiga ver.",

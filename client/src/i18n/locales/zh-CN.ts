@@ -7567,6 +7567,8 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "cq_title_v2": "⑤ 队列",
 "cq_about": "在这台电脑上依次制作，每个都按加入时 ②、③、④ 的设置进行。队列运行时也可在 ① 中继续添加；用选项按钮更改等待中的游戏。",
 "cq_then_send": "设置为安装或上传的游戏制作完成后会进入“{send}”的队列。",
+"cq_page_close_note": "关闭此页面不会停止正在制作的游戏。下一个游戏只会在此页面打开时开始。",
+"cq_stopped_by_close": "关闭此页面时队列已停止。正在制作的游戏仍在继续。再次启动队列即可继续。",
 "cq_open_send": "打开“{send}”",
 "backup_alike_toggle": "自 {since} 起有 {count} 个相同的副本。展开后可恢复较旧的副本。",
 "add_sources_no_picker": "此版本无法浏览本机，请输入引擎可访问的路径。",

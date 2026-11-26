@@ -7616,6 +7616,8 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "cq_title_v2": "⑤ Warteschlange",
 "cq_about": "Nacheinander auf diesem Computer erstellt, jedes so, wie ②, ③ und ④ beim Hinzufügen eingestellt waren. Füge unter ① weitere hinzu, auch während die Warteschlange läuft; ein wartendes Spiel änderst du über seine Optionen-Schaltfläche.",
 "cq_then_send": "Ein Spiel, das installiert oder hochgeladen werden soll, kommt nach dem Erstellen in die Warteschlange von {send}.",
+"cq_page_close_note": "Das Schließen dieser Seite stoppt das Spiel nicht, das gerade erstellt wird. Das nächste Spiel startet nur, solange diese Seite offen ist.",
+"cq_stopped_by_close": "Die Warteschlange hat angehalten, als diese Seite geschlossen wurde. Das Spiel, das gerade erstellt wurde, lief weiter. Starte die Warteschlange erneut, um fortzufahren.",
 "cq_open_send": "{send} öffnen",
 "backup_alike_toggle": "{count} gleiche Kopien seit {since}. Einzeln anzeigen, um eine ältere wiederherzustellen.",
 "add_sources_no_picker": "Dieser Build kann diesen Rechner nicht durchsuchen — gib einen Pfad ein, den die Engine sieht.",

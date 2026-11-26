@@ -30,13 +30,13 @@ import {
   type WorkshopRun,
   type ZstdPacks,
 } from "../api/fpkg";
-import { jobCancel, jobPause, jobResume, jobStatus } from "../api/ps5";
+import { jobCancel, jobPause, jobResume, jobStatus, type JobSnapshot } from "../api/ps5";
 import { useConnectionStore } from "./connection";
 import { useRosterStore } from "./roster";
 import { hostOf } from "../lib/addr";
 import { pushNotification } from "./notifications";
 import { pkgLibraryStore, type PkgLibraryStore } from "./pkgLibrary";
-import { useTaskStore } from "./tasks";
+import { interruptedAtLoad, useTaskStore, type Task } from "./tasks";
 import { remoteApi } from "../api/remote";
 import { fetchRemote } from "../lib/materialize";
 import { isRemotePath, parseRemotePath } from "../lib/remotePath";
@@ -326,6 +326,21 @@ function running(): Running | null {
 function update(patch: Partial<Running>) {
   const p = running();
   if (p) useFpkgConversion.setState({ pipeline: { ...p, ...patch } });
+}
+
+/** What a run's engine job is: a build (followed by `poll`) or an archive's unpack. */
+type JobKind = "build" | "extract";
+
+/** The run follows the engine job `jobId` from now on. Its task keeps the job's id and kind, so
+ *  a page closed or reloaded meanwhile finds the job again (`attachRunning`, #954): the engine
+ *  runs it by itself, whether a page watches or not. */
+function follow(jobId: string, kind: JobKind) {
+  update({ jobId });
+  const p = running();
+  if (p?.taskId)
+    useTaskStore
+      .getState()
+      .updateTask(p.taskId, { engineJobId: jobId, payload: { mode: p.mode, source: p.source, jobKind: kind } });
 }
 
 /** Time this run has spent paused up to `now`, the current pause included. */
@@ -791,10 +806,13 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
 }
 
 
-function beginRun(mode: PipelineMode, source: string, host: string | null, stage: PipelineStage) {
+/** `taskId`: the task of a run this page started before it was closed or reloaded (#954), which
+ *  goes on in place of a new one. */
+function beginRun(mode: PipelineMode, source: string, host: string | null, stage: PipelineStage, taskId0?: string) {
   const now = Date.now();
   const taskId =
-    mode === "install"
+    taskId0 ??
+    (mode === "install"
       ? null
       : useTaskStore.getState().registerTask({
           kind: "fpkg-convert",
@@ -802,8 +820,9 @@ function beginRun(mode: PipelineMode, source: string, host: string | null, stage
           label: `${mode === "image" ? "Make image of" : mode === "folder" ? "Make folder of" : "Convert"} ${baseName(source)}`,
           detail: source,
           consoleId: host ?? "",
+          payload: { mode, source },
           control: { owner: "fpkg-convert" },
-        });
+        }));
   reportStage(taskId, stage, 0, 0);
   useFpkgConversion.setState({
     pipeline: {
@@ -940,7 +959,7 @@ export function failureText(p: Extract<Pipeline, { phase: "failed" }>): string {
  *  `free`, the archive is deleted as it unpacks. */
 async function extractArchive(archive: string, outputDir: string | undefined, password?: string, free?: boolean) {
   const { job_id } = await fpkg.extract(archive, outputDir, password, ...(free ? [true as const] : []));
-  update({ jobId: job_id });
+  follow(job_id, "extract");
   for (;;) {
     const s = await readWithRetries(() => jobStatus(job_id));
     if (running()?.jobId === job_id) markPaused(s.status === "running" && s.paused === true);
@@ -985,7 +1004,7 @@ async function prepareThenStart(
     enterStage("check");
     try {
       const { job_id } = await inPlace(local);
-      update({ jobId: job_id });
+      follow(job_id, "build");
       poll(job_id, install);
       return;
     } catch (error) {
@@ -1019,7 +1038,7 @@ async function prepareThenStart(
   enterStage("check");
   try {
     const { job_id } = await startJob(local);
-    update({ jobId: job_id });
+    follow(job_id, "build");
     poll(job_id, install);
   } catch (error) {
     fail("check", error instanceof Error ? error.message : String(error), null);
@@ -1097,6 +1116,61 @@ export function isArchivePasswordError(message: string | undefined): boolean {
 /** Run mode for a job kind the engine reports. */
 function modeOfKind(kind: WorkshopRun["kind"]): PipelineMode {
   return kind === "image" ? "image" : kind === "folder" ? "folder" : "convert";
+}
+
+/** A run this page left going when it was closed or reloaded, as the engine answers for its job. */
+interface LeftRun {
+  task: Task;
+  jobId: string;
+  kind: JobKind;
+  snap: JobSnapshot;
+}
+
+/** The Convert tasks this start-up found running and marked interrupted, with their engine job's
+ *  state now; those the engine does not know (it restarted) or did not answer for are left out
+ *  and stay interrupted. */
+async function leftRunning(): Promise<LeftRun[]> {
+  const tasks = useTaskStore
+    .getState()
+    .tasks.filter((t) => t.kind === "fpkg-convert" && t.status === "interrupted" && interruptedAtLoad.has(t.id));
+  const found = await Promise.all(
+    tasks.map(async (task): Promise<LeftRun | null> => {
+      const jobId = task.engineJobId;
+      if (!jobId) return null;
+      try {
+        const snap = await readWithRetries(() => jobStatus(jobId));
+        return { task, jobId, kind: task.payload.jobKind === "extract" ? "extract" : "build", snap };
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return found.filter((l): l is LeftRun => l !== null);
+}
+
+/** A left run this screen does not follow (it follows one run at a time): a build that ended has
+ *  its task say how; one still running, or an unpack whose build was lost, stays interrupted. */
+function settleLeft({ task, kind, snap }: LeftRun) {
+  if (kind !== "build" || (snap.status !== "done" && snap.status !== "failed")) return;
+  const tasks = useTaskStore.getState();
+  if (!tasks.reopenTask(task.id)) return;
+  if (snap.status === "done") tasks.finishTask(task.id, "done", snap.dest ? { detail: snap.dest } : undefined);
+  else if (isCancelMessage(snap.error ?? "")) tasks.finishTask(task.id, "cancelled");
+  else
+    tasks.finishTask(task.id, "failed", {
+      lastError: { code: "FPKG_FAILED", message: snap.error ?? "The build failed.", recoverable: false },
+    });
+}
+
+/** The run mode a left task is followed in: what it makes. An install that was to follow a build
+ *  is not started from here (another window may be doing it): the result offers Install. */
+function modeOfTask(task: Task): PipelineMode {
+  const mode = task.payload.mode;
+  return mode === "image" || mode === "folder" ? mode : "convert";
+}
+
+function sourceOfTask(task: Task): string {
+  return typeof task.payload.source === "string" ? task.payload.source : (task.detail ?? "");
 }
 
 /** Follow an unpack whose page was closed: the build that was to follow it died with the page, so
@@ -1206,7 +1280,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     beginRun(install ? "convert-install" : "convert", req.source, host, "check");
     try {
       const { job_id } = await fpkg.build({ ...req, fullVerify });
-      update({ jobId: job_id });
+      follow(job_id, "build");
       poll(job_id, then);
     } catch (error) {
       fail("check", error instanceof Error ? error.message : String(error), null);
@@ -1289,7 +1363,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         // Only when it goes to the PS5: a local build's call stays as it was.
         ...buildTail(toConsole ? await consoleDestination(toConsole) : toServer, own?.update, extrasOf(own)),
       );
-      update({ jobId: job_id });
+      follow(job_id, "build");
       poll(job_id, null);
     } catch (error) {
       fail(lz4 ? "pack" : "write", error instanceof Error ? error.message : String(error), null);
@@ -1347,7 +1421,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
           withLz4(extras),
         ),
       );
-      update({ jobId: job_id });
+      follow(job_id, "build");
       poll(job_id, null);
     } catch (error) {
       fail(first, error instanceof Error ? error.message : String(error), null);
@@ -1395,11 +1469,31 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
 
   attachRunning: async () => {
     if (get().pipeline.phase !== "idle") return;
+    // This page's own runs that were going when it was closed or reloaded (#954). The engine
+    // runs a job by itself, so each is asked about: still running, or ended while the page was
+    // away, its task goes on instead of staying "interrupted". A failed read is asked again
+    // (readWithRetries); only an engine that no longer knows the job (it restarted), or no
+    // answer at all, leaves the task interrupted.
+    const left = await leftRunning();
     const runs: WorkshopRun[] | null = await fpkg.runningJobs().catch(() => null);
-    // An engine that answers with no list has nothing to follow.
-    const run = Array.isArray(runs) ? runs[0] : undefined;
-    // Started by hand meanwhile, or nothing to follow.
-    if (!run || get().pipeline.phase !== "idle") return;
+    // An engine that answers with no list has nothing else to follow.
+    const others = (Array.isArray(runs) ? runs : []).filter((r) => !left.some((l) => l.jobId === r.job_id));
+    // Followed on this screen: a run of ours still going, else one from another window, else
+    // one of ours that ended meanwhile (its result and Install, Delete... as if never away).
+    const mine = left.find((l) => l.snap.status === "running") ?? (others.length ? undefined : left[0]);
+    const followed = get().pipeline.phase === "idle" ? mine ?? others[0] : undefined;
+    for (const l of left) if (l !== followed) settleLeft(l);
+    if (!followed) return;
+    if ("task" in followed) {
+      const { task, jobId, kind, snap } = followed;
+      useTaskStore.getState().reopenTask(task.id);
+      beginRun(modeOfTask(task), sourceOfTask(task), task.consoleId || null, kind === "extract" ? "extract" : "check", task.id);
+      update({ jobId, attached: true, startedMs: snap.started_at_ms || Date.now() });
+      if (kind === "extract") void followLostUnpack(jobId);
+      else poll(jobId, null);
+      return;
+    }
+    const run = followed;
     const stage: PipelineStage = run.kind === "extract" ? "extract" : "check";
     beginRun(modeOfKind(run.kind), run.source, null, stage);
     update({ jobId: run.job_id, attached: true, startedMs: run.started_at_ms || Date.now() });

@@ -7845,6 +7845,8 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "cq_title_v2": "⑤ Kolejka",
 "cq_about": "Tworzone jedna po drugiej na tym komputerze, każda tak, jak ustawiono ②, ③ i ④ w chwili dodania. Dodawaj kolejne w ①, nawet w trakcie kolejki; czekającą grę zmienisz jej przyciskiem opcji.",
 "cq_then_send": "Gra ustawiona do instalacji lub przesłania po utworzeniu trafia do kolejki {send}.",
+"cq_page_close_note": "Zamknięcie tej strony nie zatrzymuje tworzonej gry. Następna gra zaczyna się tylko wtedy, gdy ta strona jest otwarta.",
+"cq_stopped_by_close": "Kolejka zatrzymała się po zamknięciu tej strony. Tworzona gra była tworzona dalej. Uruchom kolejkę ponownie, aby kontynuować.",
 "cq_open_send": "Otwórz {send}",
 "backup_alike_toggle": "{count} podobnych kopii od {since}. Pokaż każdą, aby przywrócić starszą.",
 "add_sources_no_picker": "Ta wersja nie może przeglądać tego komputera — wpisz ścieżkę widoczną dla silnika.",

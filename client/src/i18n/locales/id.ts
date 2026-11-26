@@ -7617,6 +7617,8 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "cq_title_v2": "⑤ Antrean",
 "cq_about": "Dibuat satu per satu di komputer ini, masing-masing sesuai pengaturan ②, ③, dan ④ saat ditambahkan. Tambahkan lagi di ①, bahkan saat antrean berjalan; ubah game yang menunggu dengan tombol opsinya.",
 "cq_then_send": "Game yang diatur untuk diinstal atau diunggah akan masuk ke antrean {send} setelah selesai dibuat.",
+"cq_page_close_note": "Menutup halaman ini tidak menghentikan game yang sedang dibuat. Game berikutnya hanya dimulai selama halaman ini terbuka.",
+"cq_stopped_by_close": "Antrean berhenti saat halaman ini ditutup. Game yang sedang dibuat tetap berjalan. Mulai antrean lagi untuk melanjutkan.",
 "cq_open_send": "Buka {send}",
 "backup_alike_toggle": "{count} salinan serupa sejak {since}. Tampilkan masing-masing untuk memulihkan yang lebih lama.",
 "add_sources_no_picker": "Build ini tidak dapat menelusuri komputer ini — ketik jalur yang dapat dilihat engine.",

@@ -7561,6 +7561,8 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "cq_title_v2": "⑤ Cola",
 "cq_about": "Se crean uno tras otro en este ordenador, cada uno según cómo estaban ②, ③ y ④ al añadirlo. Añade más en ①, incluso mientras la cola avanza; cambia un juego en espera con su botón de opciones.",
 "cq_then_send": "Un juego configurado para instalarse o subirse pasa a la cola de {send} una vez creado.",
+"cq_page_close_note": "Cerrar esta página no detiene el juego que se está creando. El siguiente juego solo empieza mientras esta página está abierta.",
+"cq_stopped_by_close": "La cola se detuvo al cerrar esta página. El juego que estaba creando siguió adelante. Inicia la cola otra vez para continuar.",
 "cq_open_send": "Abrir {send}",
 "backup_alike_toggle": "{count} copias iguales desde {since}. Muéstralas para restaurar una más antigua.",
 "add_sources_no_picker": "Esta versión no puede explorar este equipo: escribe una ruta que el motor pueda ver.",
