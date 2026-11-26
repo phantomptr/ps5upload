@@ -592,18 +592,18 @@ fn missing_from_run(lead: &Path, parts: &[String]) -> Vec<String> {
     use crate::collection::split::{named_part, suffix_part};
     let lead = name_of(lead);
     let names: Vec<String> = parts.iter().map(|p| name_of(Path::new(p))).collect();
-    // (the first number a later part has, each part's number, the name a number makes)
     let suffixed: Option<Vec<u32>> = names
         .iter()
         .map(|n| suffix_part(n).map(|(_, k)| k))
         .collect();
-    let (first, have, name): (u32, Vec<u32>, Box<dyn Fn(u32) -> String>) = match suffixed {
-        Some(have) => (0, have, Box::new(move |k| format!("{lead}.{k}"))),
+    // The numbers a later part may have (from `first`), the ones there, and how a name is made:
+    // `{lead}.{k}`, or `{stem}_{k}.pkg`.
+    let (first, have, stem) = match suffixed {
+        Some(have) => (0, have, None),
         None => {
             let Some((stem, _)) = named_part(&lead) else {
                 return Vec::new();
             };
-            let stem = stem.to_string();
             let Some(have) = names
                 .iter()
                 .map(|n| named_part(n).map(|(_, k)| k))
@@ -611,7 +611,7 @@ fn missing_from_run(lead: &Path, parts: &[String]) -> Vec<String> {
             else {
                 return Vec::new();
             };
-            (1, have, Box::new(move |k| format!("{stem}_{k}.pkg")))
+            (1, have, Some(stem.to_string()))
         }
     };
     let last = have.iter().copied().max().unwrap_or(0);
@@ -621,7 +621,10 @@ fn missing_from_run(lead: &Path, parts: &[String]) -> Vec<String> {
     }
     (first..last)
         .filter(|k| !have.contains(k))
-        .map(|k| name(k))
+        .map(|k| match &stem {
+            Some(stem) => format!("{stem}_{k}.pkg"),
+            None => format!("{lead}.{k}"),
+        })
         .collect()
 }
 
