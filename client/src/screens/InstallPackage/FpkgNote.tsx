@@ -1,4 +1,4 @@
-import { AlertTriangle, ChevronDown } from "lucide-react";
+import { ChevronDown, Info } from "lucide-react";
 
 import { PPR_PATCH_REPO } from "../../lib/fpkgPrereqs";
 import { openExternalUrl } from "../../lib/openExternalUrl";
@@ -11,18 +11,22 @@ import { useTr } from "../../state/lang";
  * installs: PS5 fake games play up to 13.60, and above 11.60 only with a kstuff build that
  * supports fake packages there (kstuff 1.15 or newer; the catalogue's may be older, which the
  * kstuff line says); PS4 fake packages are fine. The load order is behind the fold.
+ *
+ * A plain information note, not a warning: fake PS5 games play up to 13.60, so nothing here is
+ * something going wrong (12.6.33; it was still drawn as a warning after 12.6.29 removed the
+ * "won't play" text).
  */
 export function FpkgNote({ className = "mb-4" }: { className?: string }) {
   const tr = useTr();
   return (
     <details
       data-testid="fpkg-note"
-      className={`group ${className} rounded-[var(--radius-field)] border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-warn)]/5 text-[12px] text-[var(--color-muted)]`}
+      className={`group ${className} rounded-[var(--radius-field)] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[12px] text-[var(--color-muted)]`}
     >
       <summary className="flex cursor-pointer list-none items-start gap-2 px-3 py-2 [&::-webkit-details-marker]:hidden">
-        <AlertTriangle size={13} className="mt-0.5 shrink-0 text-[var(--color-warn)]" />
+        <Info size={13} className="mt-0.5 shrink-0 text-[var(--color-muted)]" />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="font-medium text-[var(--color-warn)]">
+          <span className="font-medium text-[var(--color-text)]">
             {tr("pkglib.fpkgsupport.title", "Installing a fake package (FPKG)?")}
           </span>
           <span>
@@ -34,7 +38,7 @@ export function FpkgNote({ className = "mb-4" }: { className?: string }) {
         </span>
         <ChevronDown
           size={14}
-          className="mt-0.5 shrink-0 text-[var(--color-warn)] transition-transform group-open:rotate-180"
+          className="mt-0.5 shrink-0 text-[var(--color-muted)] transition-transform group-open:rotate-180"
         />
       </summary>
       <div className="px-3 pb-3">
