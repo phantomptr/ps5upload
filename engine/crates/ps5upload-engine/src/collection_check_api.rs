@@ -108,8 +108,15 @@ pub struct CheckStatus {
     pub state: String,
     /// `package`, `archive`, `files` or `bytes`: see the module docs.
     pub method: String,
+    /// Of every pass together: a package's full check reads it twice (its blocks, then the
+    /// PlayGo chunk CRCs), and both count here, so `bytes_done` reaches `bytes_total` only at
+    /// the end (#951).
     pub bytes_done: u64,
     pub bytes_total: u64,
+    /// For `method` `package` while it runs: `blocks` (every block against its digest) or
+    /// `playgo` (the PlayGo chunk CRCs, a second read of the package). Absent otherwise.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub phase: String,
     pub files_done: u64,
     pub files_total: u64,
     pub problems: Vec<Problem>,
@@ -365,12 +372,17 @@ fn package(job: &Job, path: &Path) -> Result<bool, String> {
             s.bytes_total = total;
         });
     };
-    match ps5upload_fpkg::verify::verify_streaming_cancellable(
+    let mut phase = |p: ps5upload_fpkg::verify::Phase| job.update(|s| s.phase = p.as_str().into());
+    let verified = ps5upload_fpkg::verify::verify_streaming_phased(
         path,
         ps5upload_fpkg::crypto::DEFAULT_PASSCODE,
         &job.cancel,
         &mut progress,
-    ) {
+        &mut phase,
+    );
+    // A pass names a running check only.
+    job.update(|s| s.phase.clear());
+    match verified {
         // A retail package got as far as a report: its blocks can't be read with a debug
         // key, so "every block fails" would be about the key, not the file.
         Ok(report) if !report.is_debug() => {
@@ -825,6 +837,32 @@ mod tests {
         run(&j, path, "pkg", &[]).unwrap();
         let s = j.status.lock().unwrap().clone();
         s
+    }
+
+    /// #951: the PlayGo CRC pass counts in the check's total (a 200 GB package showed 100%
+    /// through a whole second read), and a finished check names no pass.
+    #[test]
+    fn a_package_check_counts_both_passes_and_ends_with_no_phase() {
+        let t = Scratch::new("phases");
+        let pkg = debug_package(t.path());
+        let mut f = ps5upload_fpkg::PkgFile::open(&pkg).unwrap();
+        let zip_start = ps5upload_fpkg::si::read(&mut f)
+            .unwrap()
+            .expect("an SI ZIP")
+            .zip_start;
+        drop(f);
+        let s = checked(&pkg);
+        assert_eq!(s.method, "package");
+        assert_eq!(s.problems_total, 0, "{:?}", s.problems);
+        assert_eq!(s.bytes_done, s.bytes_total);
+        // Both reads: the image's blocks and everything before the SI ZIP again.
+        assert!(
+            s.bytes_total > zip_start,
+            "{} vs {zip_start}",
+            s.bytes_total
+        );
+        assert!(s.phase.is_empty());
+        assert!(!serde_json::to_string(&s).unwrap().contains("\"phase\""));
     }
 
     /// The three things a package check can tell apart, each with what the screen needs to

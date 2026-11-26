@@ -6633,6 +6633,8 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "copycheck.queued": "Wartet auf Prüfung",
 "copycheck.running": "Wird geprüft…",
 "copycheck.running_pct": "Prüfung {pct}% ({done} von {total})",
+"copycheck.running_blocks_pct": "Datenblöcke werden geprüft: {pct}% ({done} von {total})",
+"copycheck.running_playgo_pct": "PlayGo-Chunks werden geprüft: {pct}% ({done} von {total})",
 "collection.copied_title": "{title} ist in deiner Sammlung",
 "collection.copy_failed": "Kopieren in die Sammlung fehlgeschlagen",
 "collection.no_local_root": "Füge der Sammlung zuerst einen Ordner auf diesem Computer hinzu.",

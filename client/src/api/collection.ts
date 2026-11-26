@@ -86,8 +86,12 @@ export interface CopyCheck {
   path: string;
   state: "queued" | "running" | "ok" | "problems" | "failed" | "cancelled";
   method: "" | "package" | "archive" | "files" | "bytes";
+  /** Of the whole check: a package's two reads (its blocks, then the PlayGo chunk CRCs) count
+   *  in one total (#951). */
   bytes_done: number;
   bytes_total: number;
+  /** A package check while it runs: which read it is on. Absent from an engine that doesn't say. */
+  phase?: "blocks" | "playgo";
   files_done: number;
   files_total: number;
   problems: CopyProblem[];

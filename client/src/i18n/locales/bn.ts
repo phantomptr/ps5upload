@@ -6625,6 +6625,8 @@ library_compressed_hint: "সংকুচিত ইমেজ চালাতে 
 "copycheck.queued": "যাচাইয়ের অপেক্ষায়",
 "copycheck.running": "যাচাই হচ্ছে…",
 "copycheck.running_pct": "যাচাই হচ্ছে {pct}% ({done}/{total})",
+"copycheck.running_blocks_pct": "ডেটা ব্লক যাচাই হচ্ছে: {pct}% ({done}/{total})",
+"copycheck.running_playgo_pct": "PlayGo চাঙ্ক যাচাই হচ্ছে: {pct}% ({done}/{total})",
 "collection.copied_title": "{title} আপনার সংগ্রহে আছে",
 "collection.copy_failed": "সংগ্রহে কপি করা যায়নি",
 "collection.no_local_root": "আগে এই কম্পিউটারের একটি ফোল্ডার সংগ্রহে যোগ করুন।",

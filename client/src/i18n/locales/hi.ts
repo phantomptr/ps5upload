@@ -6639,6 +6639,8 @@ library_compressed_hint: "संपीड़ित इमेज चलाने 
 "copycheck.queued": "जाँच की प्रतीक्षा में",
 "copycheck.running": "जाँच हो रही है…",
 "copycheck.running_pct": "जाँच {pct}% ({done} / {total})",
+"copycheck.running_blocks_pct": "डेटा ब्लॉक की जाँच: {pct}% ({done} / {total})",
+"copycheck.running_playgo_pct": "PlayGo चंक की जाँच: {pct}% ({done} / {total})",
 "collection.copied_title": "{title} आपके संग्रह में है",
 "collection.copy_failed": "संग्रह में कॉपी नहीं हो सकी",
 "collection.no_local_root": "पहले इस कंप्यूटर का कोई फ़ोल्डर संग्रह में जोड़ें।",

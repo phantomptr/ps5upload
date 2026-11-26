@@ -6640,6 +6640,8 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "copycheck.queued": "Aguardando verificação",
 "copycheck.running": "Verificando…",
 "copycheck.running_pct": "Verificando {pct}% ({done} de {total})",
+"copycheck.running_blocks_pct": "Verificando os blocos de dados: {pct}% ({done} de {total})",
+"copycheck.running_playgo_pct": "Verificando os chunks do PlayGo: {pct}% ({done} de {total})",
 "collection.copied_title": "{title} está na sua Coleção",
 "collection.copy_failed": "Falha ao copiar para a Coleção",
 "collection.no_local_root": "Adicione primeiro uma pasta deste computador à Coleção.",

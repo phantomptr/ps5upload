@@ -6627,6 +6627,8 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "copycheck.queued": "Đang chờ kiểm tra",
 "copycheck.running": "Đang kiểm tra…",
 "copycheck.running_pct": "Đang kiểm tra {pct}% ({done}/{total})",
+"copycheck.running_blocks_pct": "Đang kiểm tra các khối dữ liệu: {pct}% ({done}/{total})",
+"copycheck.running_playgo_pct": "Đang kiểm tra các phần PlayGo: {pct}% ({done}/{total})",
 "collection.copied_title": "{title} đã có trong Bộ sưu tập",
 "collection.copy_failed": "Sao chép vào Bộ sưu tập thất bại",
 "collection.no_local_root": "Hãy thêm một thư mục trên máy tính này vào Bộ sưu tập trước.",

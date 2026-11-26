@@ -6578,6 +6578,8 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "copycheck.queued": "Esperando a ser comprobada",
 "copycheck.running": "Comprobando…",
 "copycheck.running_pct": "Comprobando {pct}% ({done} de {total})",
+"copycheck.running_blocks_pct": "Comprobando los bloques de datos: {pct}% ({done} de {total})",
+"copycheck.running_playgo_pct": "Comprobando los fragmentos de PlayGo: {pct}% ({done} de {total})",
 "collection.copied_title": "{title} está en tu Colección",
 "collection.copy_failed": "No se pudo copiar a la Colección",
 "collection.no_local_root": "Primero añade una carpeta de este equipo a la Colección.",

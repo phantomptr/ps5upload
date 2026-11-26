@@ -6641,6 +6641,8 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "copycheck.queued": "En attente de vérification",
 "copycheck.running": "Vérification…",
 "copycheck.running_pct": "Vérification {pct} % ({done} sur {total})",
+"copycheck.running_blocks_pct": "Vérification des blocs de données : {pct} % ({done} sur {total})",
+"copycheck.running_playgo_pct": "Vérification des blocs PlayGo : {pct} % ({done} sur {total})",
 "collection.copied_title": "{title} est dans votre Collection",
 "collection.copy_failed": "La copie vers la Collection a échoué",
 "collection.no_local_root": "Ajoutez d'abord un dossier de cet ordinateur à la Collection.",

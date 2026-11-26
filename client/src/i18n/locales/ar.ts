@@ -6625,6 +6625,8 @@ library_compressed_hint: "تحتاج الصور المضغوطة إلى ShadowMo
 "copycheck.queued": "بانتظار الفحص",
 "copycheck.running": "جارٍ الفحص…",
 "copycheck.running_pct": "جارٍ الفحص {pct}% ({done} من {total})",
+"copycheck.running_blocks_pct": "جارٍ فحص كتل البيانات: {pct}% ({done} من {total})",
+"copycheck.running_playgo_pct": "جارٍ فحص أجزاء PlayGo: {pct}% ({done} من {total})",
 "collection.copied_title": "{title} موجودة في مجموعتك",
 "collection.copy_failed": "فشل النسخ إلى المجموعة",
 "collection.no_local_root": "أضف أولًا مجلدًا من هذا الكمبيوتر إلى المجموعة.",

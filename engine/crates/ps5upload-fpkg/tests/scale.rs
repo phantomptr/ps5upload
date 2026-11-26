@@ -129,13 +129,26 @@ fn the_streaming_writer_reports_progress() {
     .unwrap();
     assert!(report.verify.ok());
     assert!(!samples.is_empty());
-    // One total throughout (the outer image), never exceeded, and the run ends complete.
-    // Each phase sweeps it — writing, then verifying — so the sequence steps back
-    // between phases, which is what the engine's per-phase progress expects.
+    // One total per phase, never exceeded, and the run ends complete. Writing sweeps the outer
+    // image; the read-back sweeps it again and, checking in full, reads everything before the
+    // SI ZIP once more for the PlayGo chunk CRCs (#951), which its total counts too. The
+    // sequence steps back between phases, which is what the engine's per-phase progress
+    // expects.
     let total = samples[0].1;
-    assert!(samples.iter().all(|(_, t)| *t == total), "{samples:?}");
+    let check_total = samples.last().unwrap().1;
+    assert!(check_total > total, "{total} {check_total}");
+    assert!(
+        samples
+            .iter()
+            .all(|(_, t)| *t == total || *t == check_total),
+        "{samples:?}"
+    );
     assert!(samples.iter().all(|(done, t)| done <= t), "{samples:?}");
-    assert_eq!(*samples.last().unwrap(), (total, total), "{samples:?}");
+    assert_eq!(
+        *samples.last().unwrap(),
+        (check_total, check_total),
+        "{samples:?}"
+    );
 }
 
 /// An image past the first indirect slot's 1820 blocks (12 + 1820 blocks = 114 MiB) makes

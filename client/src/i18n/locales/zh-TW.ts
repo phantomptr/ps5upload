@@ -6578,6 +6578,8 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "copycheck.queued": "等待檢查",
 "copycheck.running": "正在檢查…",
 "copycheck.running_pct": "正在檢查 {pct}%（{done}/{total}）",
+"copycheck.running_blocks_pct": "正在檢查資料區塊：{pct}%（{done}/{total}）",
+"copycheck.running_playgo_pct": "正在檢查 PlayGo 區塊：{pct}%（{done}/{total}）",
 "collection.copied_title": "{title} 已在收藏中",
 "collection.copy_failed": "複製到收藏失敗",
 "collection.no_local_root": "請先把這台電腦上的資料夾加入收藏。",

@@ -6634,6 +6634,8 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "copycheck.queued": "Menunggu diperiksa",
 "copycheck.running": "Memeriksa…",
 "copycheck.running_pct": "Memeriksa {pct}% ({done} dari {total})",
+"copycheck.running_blocks_pct": "Memeriksa blok data: {pct}% ({done} dari {total})",
+"copycheck.running_playgo_pct": "Memeriksa chunk PlayGo: {pct}% ({done} dari {total})",
 "collection.copied_title": "{title} ada di Koleksi Anda",
 "collection.copy_failed": "Gagal menyalin ke Koleksi",
 "collection.no_local_root": "Tambahkan dulu folder di komputer ini ke Koleksi.",

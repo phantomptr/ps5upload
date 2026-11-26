@@ -6584,6 +6584,8 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "copycheck.queued": "等待检查",
 "copycheck.running": "正在检查…",
 "copycheck.running_pct": "正在检查 {pct}%（{done}/{total}）",
+"copycheck.running_blocks_pct": "正在检查数据块：{pct}%（{done}/{total}）",
+"copycheck.running_playgo_pct": "正在检查 PlayGo 区块：{pct}%（{done}/{total}）",
 "collection.copied_title": "{title} 已在收藏中",
 "collection.copy_failed": "复制到收藏失败",
 "collection.no_local_root": "请先把这台电脑上的文件夹添加到收藏。",

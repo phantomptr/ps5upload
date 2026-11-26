@@ -6917,6 +6917,8 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "copycheck.queued": "Ellenőrzésre vár",
 "copycheck.running": "Ellenőrzés…",
 "copycheck.running_pct": "Ellenőrzés {pct}% ({done} / {total})",
+"copycheck.running_blocks_pct": "Adatblokkok ellenőrzése: {pct}% ({done} / {total})",
+"copycheck.running_playgo_pct": "A PlayGo-darabok ellenőrzése: {pct}% ({done} / {total})",
 "collection.copied_title": "A(z) {title} a Gyűjteményedben van",
 "collection.copy_failed": "Nem sikerült a Gyűjteménybe másolni",
 "collection.no_local_root": "Először adj hozzá egy mappát erről a számítógépről a Gyűjteményhez.",

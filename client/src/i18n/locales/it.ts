@@ -6578,6 +6578,8 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "copycheck.queued": "In attesa di controllo",
 "copycheck.running": "Controllo…",
 "copycheck.running_pct": "Controllo {pct}% ({done} di {total})",
+"copycheck.running_blocks_pct": "Controllo dei blocchi di dati: {pct}% ({done} di {total})",
+"copycheck.running_playgo_pct": "Controllo dei chunk PlayGo: {pct}% ({done} di {total})",
 "collection.copied_title": "{title} è nella tua Collezione",
 "collection.copy_failed": "Copia nella Collezione non riuscita",
 "collection.no_local_root": "Aggiungi prima alla Collezione una cartella di questo computer.",

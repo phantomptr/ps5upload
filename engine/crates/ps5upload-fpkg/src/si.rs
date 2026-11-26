@@ -97,13 +97,36 @@ pub fn read(file: &mut PkgFile) -> Result<Option<Si>> {
 
 /// CRC-32C of every 64 KiB block before the SI ZIP, little-endian.
 pub fn chunk_crc_table(file: &mut PkgFile, zip_start: u64) -> Result<Vec<u8>> {
+    chunk_crc_table_with(file, zip_start, None, &mut |_| {})
+}
+
+/// [`chunk_crc_table`], which reads the whole package again: `progress` hears the bytes read so
+/// far (of `zip_start`) every 256 blocks and at the end, and it stops with a "cancelled" error
+/// once `cancel` is set (#951: a copy check of a 200 GB package sat at 100% through this pass,
+/// with Cancel unheard).
+pub fn chunk_crc_table_with(
+    file: &mut PkgFile,
+    zip_start: u64,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+    progress: &mut dyn FnMut(u64),
+) -> Result<Vec<u8>> {
     let blocks = zip_start.div_ceil(BLOCK);
     let mut out = Vec::with_capacity(blocks as usize * 4);
     for i in 0..blocks {
+        if i.is_multiple_of(256) {
+            if crate::workshop::checkpoint_opt(cancel) {
+                return format_err("cancelled");
+            }
+            progress(i * BLOCK);
+        }
         let start = i * BLOCK;
         let len = (zip_start - start).min(BLOCK) as usize;
         out.extend_from_slice(&crc32c(&file.read_at(start, len)?).to_le_bytes());
     }
+    if crate::workshop::checkpoint_opt(cancel) {
+        return format_err("cancelled");
+    }
+    progress(zip_start);
     Ok(out)
 }
 

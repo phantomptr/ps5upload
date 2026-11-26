@@ -6632,6 +6632,8 @@ library_compressed_hint: "อิมเมจที่บีบอัดต้อ
 "copycheck.queued": "รอการตรวจ",
 "copycheck.running": "กำลังตรวจ…",
 "copycheck.running_pct": "กำลังตรวจ {pct}% ({done} จาก {total})",
+"copycheck.running_blocks_pct": "กำลังตรวจบล็อกข้อมูล: {pct}% ({done} จาก {total})",
+"copycheck.running_playgo_pct": "กำลังตรวจชังก์ PlayGo: {pct}% ({done} จาก {total})",
 "collection.copied_title": "{title} อยู่ในคอลเลกชันของคุณแล้ว",
 "collection.copy_failed": "คัดลอกไปยังคอลเลกชันไม่สำเร็จ",
 "collection.no_local_root": "เพิ่มโฟลเดอร์บนคอมพิวเตอร์เครื่องนี้ลงในคอลเลกชันก่อน",

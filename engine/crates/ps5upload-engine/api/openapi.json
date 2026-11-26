@@ -16639,6 +16639,7 @@
       "engine.collection_check_api.CheckStatus": {
         "properties": {
           "bytes_done": {
+            "description": "Of every pass together: a package's full check reads it twice (its blocks, then the\nPlayGo chunk CRCs), and both count here, so `bytes_done` reaches `bytes_total` only at\nthe end (#951).",
             "minimum": 0,
             "type": "integer"
           },
@@ -16680,6 +16681,10 @@
             "type": "string"
           },
           "path": {
+            "type": "string"
+          },
+          "phase": {
+            "description": "For `method` `package` while it runs: `blocks` (every block against its digest) or\n`playgo` (the PlayGo chunk CRCs, a second read of the package). Absent otherwise.",
             "type": "string"
           },
           "problems": {

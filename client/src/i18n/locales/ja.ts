@@ -6644,6 +6644,8 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "copycheck.queued": "チェック待ち",
 "copycheck.running": "チェック中…",
 "copycheck.running_pct": "チェック中 {pct}% ({done} / {total})",
+"copycheck.running_blocks_pct": "データブロックをチェック中: {pct}% ({done} / {total})",
+"copycheck.running_playgo_pct": "PlayGo チャンクをチェック中: {pct}% ({done} / {total})",
 "collection.copied_title": "{title} をコレクションに追加しました",
 "collection.copy_failed": "コレクションへのコピーに失敗しました",
 "collection.no_local_root": "先にこのコンピューターのフォルダーをコレクションに追加してください。",

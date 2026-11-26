@@ -6642,6 +6642,8 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "copycheck.queued": "검사 대기 중",
 "copycheck.running": "검사 중…",
 "copycheck.running_pct": "검사 중 {pct}% ({total}개 중 {done}개)",
+"copycheck.running_blocks_pct": "데이터 블록 검사 중: {pct}% ({total} 중 {done})",
+"copycheck.running_playgo_pct": "PlayGo 청크 검사 중: {pct}% ({total} 중 {done})",
 "collection.copied_title": "{title}이(가) 컬렉션에 있습니다",
 "collection.copy_failed": "컬렉션으로 복사하지 못했습니다",
 "collection.no_local_root": "먼저 이 컴퓨터의 폴더를 컬렉션에 추가하세요.",

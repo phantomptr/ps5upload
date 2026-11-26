@@ -6935,6 +6935,8 @@ library_compressed_hint: "Compressed images need ShadowMount+ to play. To edit, 
   "copycheck.queued": "Waiting to be checked",
   "copycheck.running": "Checking…",
   "copycheck.running_pct": "Checking {pct}% ({done} of {total})",
+  "copycheck.running_blocks_pct": "Checking the data blocks: {pct}% ({done} of {total})",
+  "copycheck.running_playgo_pct": "Checking the PlayGo chunks: {pct}% ({done} of {total})",
   // Games tabs and game page ↔ Collection and Convert (7.3.0)
   "collection.copied_title": "{title} is in your Collection",
   "collection.copy_failed": "Copy to Collection failed",

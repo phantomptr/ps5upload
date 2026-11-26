@@ -11,7 +11,9 @@ vi.mock("../../state/lang", async (original) => ({
 }));
 
 import type { CopyCheck, CopyDamage } from "../../api/collection";
-import { CopyProblems } from "./CopyCheckLine";
+import { CopyProblems, runningText } from "./CopyCheckLine";
+import { checkPercent } from "../../state/copyChecks";
+import type { Translator } from "../../state/lang";
 
 const damage = (d: Partial<CopyDamage> & { kind: string }): CopyDamage => ({
   blocks_bad: 0,
@@ -138,5 +140,28 @@ describe("a copy check that found problems", () => {
     expect(html).toContain("data/4.bin: ends early");
     expect(html).not.toContain("data/5.bin");
     expect(html).toContain("and 2 more");
+  });
+});
+
+describe("a running copy check (#951)", () => {
+  const tr = ((key: string, vars?: Record<string, string | number>, fallback?: string) => {
+    let s = fallback ?? key;
+    for (const [k, v] of Object.entries(vars ?? {})) s = s.replace(`{${k}}`, String(v));
+    return s;
+  }) as Translator;
+
+  it("never says 100% while it runs", () => {
+    expect(checkPercent({ bytes_done: 220_484_009_984, bytes_total: 220_484_009_984 })).toBe(99);
+    expect(checkPercent({ bytes_done: 50, bytes_total: 100 })).toBe(50);
+    expect(checkPercent({ bytes_done: 0, bytes_total: 0 })).toBeNull();
+  });
+
+  it("says which read of a package it is on", () => {
+    const blocks = runningText(tr, { bytes_done: 40, bytes_total: 100, phase: "blocks" }, 40);
+    expect(blocks).toMatch(/^Checking the data blocks: 40% /);
+    const playgo = runningText(tr, { bytes_done: 70, bytes_total: 100, phase: "playgo" }, 70);
+    expect(playgo).toMatch(/^Checking the PlayGo chunks: 70% /);
+    // An engine that names no read: as before.
+    expect(runningText(tr, { bytes_done: 70, bytes_total: 100 }, 70)).toMatch(/^Checking 70% /);
   });
 });

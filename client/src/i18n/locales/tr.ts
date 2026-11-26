@@ -6632,6 +6632,8 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "copycheck.queued": "Kontrol bekliyor",
 "copycheck.running": "Kontrol ediliyor…",
 "copycheck.running_pct": "Kontrol ediliyor %{pct} ({done} / {total})",
+"copycheck.running_blocks_pct": "Veri blokları kontrol ediliyor: %{pct} ({done} / {total})",
+"copycheck.running_playgo_pct": "PlayGo parçaları kontrol ediliyor: %{pct} ({done} / {total})",
 "collection.copied_title": "{title} Koleksiyonunda",
 "collection.copy_failed": "Koleksiyona kopyalama başarısız",
 "collection.no_local_root": "Önce bu bilgisayardan bir klasörü Koleksiyona ekleyin.",

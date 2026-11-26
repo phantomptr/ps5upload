@@ -6578,6 +6578,8 @@ library_compressed_hint: "Для запуска сжатых образов ну
 "copycheck.queued": "Ожидает проверки",
 "copycheck.running": "Проверка…",
 "copycheck.running_pct": "Проверка {pct}% ({done} из {total})",
+"copycheck.running_blocks_pct": "Проверка блоков данных: {pct}% ({done} из {total})",
+"copycheck.running_playgo_pct": "Проверка фрагментов PlayGo: {pct}% ({done} из {total})",
 "collection.copied_title": "{title} теперь в Коллекции",
 "collection.copy_failed": "Не удалось скопировать в Коллекцию",
 "collection.no_local_root": "Сначала добавьте в Коллекцию папку на этом компьютере.",

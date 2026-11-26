@@ -6862,6 +6862,8 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "copycheck.queued": "Czeka na sprawdzenie",
 "copycheck.running": "Sprawdzanie…",
 "copycheck.running_pct": "Sprawdzanie: {pct}% ({done} z {total})",
+"copycheck.running_blocks_pct": "Sprawdzanie bloków danych: {pct}% ({done} z {total})",
+"copycheck.running_playgo_pct": "Sprawdzanie fragmentów PlayGo: {pct}% ({done} z {total})",
 "collection.copied_title": "{title} jest w Kolekcji",
 "collection.copy_failed": "Kopiowanie do Kolekcji nie powiodło się",
 "collection.no_local_root": "Najpierw dodaj do Kolekcji folder na tym komputerze.",

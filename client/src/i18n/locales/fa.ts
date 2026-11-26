@@ -6903,6 +6903,8 @@ library_compressed_hint: "برای اجرای ایمیج فشرده به ShadowM
 "copycheck.queued": "در انتظار بررسی",
 "copycheck.running": "در حال بررسی…",
 "copycheck.running_pct": "در حال بررسی {pct}٪ ({done} از {total})",
+"copycheck.running_blocks_pct": "در حال بررسی بلوک‌های داده: {pct}٪ ({done} از {total})",
+"copycheck.running_playgo_pct": "در حال بررسی تکه‌های PlayGo: {pct}٪ ({done} از {total})",
 "collection.copied_title": "{title} در مجموعهٔ شما است",
 "collection.copy_failed": "کپی به مجموعه ناموفق بود",
 "collection.no_local_root": "ابتدا یک پوشه از این رایانه را به مجموعه اضافه کنید.",
