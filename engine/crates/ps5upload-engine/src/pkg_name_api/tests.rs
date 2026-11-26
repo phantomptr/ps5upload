@@ -241,8 +241,24 @@ async fn an_install_served_from_the_package_refuses_the_rename() {
     state.sessions.lock().unwrap().insert("s1".into(), session);
     let (code, why) = rename(&state, &request).unwrap_err();
     assert_eq!(code, StatusCode::CONFLICT);
-    assert!(why.contains("installing from this package"), "{why}");
+    assert!(why.contains("an install of this package"), "{why}");
     no_journal(&pkg);
+    // Quiet for an hour and not ended (a download the PS5 holds or paused): still refused, so a
+    // resumed install never reads renamed bytes. It used to be free after 90 seconds.
+    {
+        let mut sessions = state.sessions.lock().unwrap();
+        let s = sessions.get_mut("s1").unwrap();
+        let hour_ago = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 3600;
+        s.created_at_unix = hour_ago;
+        s.last_activity_unix = hour_ago;
+    }
+    let (code, why) = rename(&state, &request).unwrap_err();
+    assert_eq!(code, StatusCode::CONFLICT);
+    assert!(why.contains("remove it from the queue"), "{why}");
     // Once the install has ended the package is free.
     state
         .sessions

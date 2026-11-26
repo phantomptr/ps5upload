@@ -29173,7 +29173,7 @@
         }
       },
       "post": {
-        "description": "`POST /api/pkg/name` `{path, name, all_languages}`: gives a fake package on this computer\nanother name, in place. 409 while the package is in use (an install, an upload or a build\nreads it, or another program has it open); 400 with the reason when it can't be done (an\nofficial package, a name that does not fit). On any failure the file is as it was.",
+        "description": "`POST /api/pkg/name` `{path, name, all_languages}`: gives a fake package on this computer\nanother name, in place. 409 while the package is in use (an install of it has not finished,\nhowever long ago the PS5 last read from it; an upload or a build reads it, or another program\nhas it open), with what holds it and how to free it; 400 with the reason when it can't be done (an\nofficial package, a name that does not fit). On any failure the file is as it was.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -45922,7 +45922,7 @@
     },
     "/api/queue/{id}/remove": {
       "post": {
-        "description": "POST /api/queue/{id}/remove — drops an item that is not running. A running upload or download\nneeds `cancel: true`: it stops and goes (202). A running install is never removed: the console\ngoes on with it whatever the queue says.",
+        "description": "POST /api/queue/{id}/remove — drops an item that is not running. A running upload or download\nneeds `cancel: true`: it stops and goes (202). A running install is never removed: the console\ngoes on with it whatever the queue says. An install from a package on this computer that has\nended without its session (one the PS5 may resume) gives that session up as it goes: the\npackage is free to rename, and the PS5, should it come back for it, is told it is over.",
         "parameters": [
           {
             "in": "path",
