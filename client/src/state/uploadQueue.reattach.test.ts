@@ -25,6 +25,17 @@ vi.mock("../api/ps5", async (importOriginal) => {
   };
 });
 
+// The hydrate lookup asks again after a failed read (#945): the same retries, without the
+// second's wait between them.
+vi.mock("../lib/pollRead", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/pollRead")>();
+  return {
+    ...actual,
+    readWithRetries: <T>(read: () => Promise<T>) =>
+      actual.readWithRetries(read, () => new Promise((r) => setTimeout(r, 1))),
+  };
+});
+
 const { resolveJob, recordInstalled } = vi.hoisted(() => ({
   resolveJob: vi.fn(),
   recordInstalled: vi.fn(),
@@ -40,6 +51,7 @@ vi.mock("./pkgLibrary", async (importOriginal) => {
 
 import { fsDelete, jobCancel, jobStatus, startTransferFile, uploadQueueLoad } from "../api/ps5";
 import { useUploadQueueStore } from "./uploadQueue";
+import { MAX_POLL_FAILURES } from "../lib/pollRead";
 
 const base = {
   addr: "10.0.0.2:9113",
@@ -238,18 +250,94 @@ describe("the web UI re-attaches to running jobs after a reload", () => {
     expect(row("a")?.attachJobId).toBeUndefined();
   });
 
-  it("leaves an item pending when the engine no longer knows its job", async () => {
+  it("asks again after a failed read instead of calling a live upload stopped (#945)", async () => {
+    vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
+      continueOnFailure: false,
+      items: [{ ...base, id: "retry", status: "running", jobId: "J2" }],
+    } as never);
+    let answer: () => void = () => {};
+    const answered = new Promise<void>((r) => (answer = r));
+    vi.mocked(jobStatus)
+      .mockRejectedValueOnce(new Error("Service unavailable"))
+      .mockImplementationOnce((async () => {
+        await answered;
+        return { status: "running", bytes_sent: 5, total_bytes: 10 };
+      }) as never)
+      .mockResolvedValue({ status: "done", bytes_sent: 10, dest: "/data/big.bin" } as never);
+
+    await useUploadQueueStore.getState().hydrate();
+    await until(() => vi.mocked(jobStatus).mock.calls.length >= 2);
+    // Between the failed read and the answer: checking, never "Stopped part-way".
+    expect(row("retry")?.status).toBe("pending");
+    expect(row("retry")?.checkingJob).toBe(true);
+    expect(row("retry")?.interrupted).toBe(false);
+    answer();
+
+    await until(() => row("retry")?.status === "done");
+    expect(row("retry")?.jobId).toBe("J2");
+    expect(row("retry")?.checkingJob).toBe(false);
+    expect(row("retry")?.interrupted).toBe(false);
+    expect(startTransferFile).not.toHaveBeenCalled();
+    expect(jobCancel).not.toHaveBeenCalled();
+  });
+
+  it("adopts a job that finished while the page was away", async () => {
+    vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
+      continueOnFailure: false,
+      items: [{ ...base, id: "fin", status: "running", jobId: "J3" }],
+    } as never);
+    vi.mocked(jobStatus).mockResolvedValue({ status: "done", bytes_sent: 10, dest: "/data/big.bin" } as never);
+    await useUploadQueueStore.getState().hydrate();
+    await until(() => row("fin")?.status === "done");
+    expect(startTransferFile).not.toHaveBeenCalled();
+    expect(row("fin")?.interrupted).toBe(false);
+  });
+
+  it("offers Resume when the engine no longer knows its job", async () => {
     vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
       continueOnFailure: false,
       items: [{ ...base, id: "b", status: "running", jobId: "GONE" }],
     } as never);
-    vi.mocked(jobStatus).mockRejectedValue(new Error("404"));
+    vi.mocked(jobStatus).mockRejectedValue(new Error("job not found"));
     await useUploadQueueStore.getState().hydrate();
-    await until(() => vi.mocked(jobStatus).mock.calls.some((c) => c[0] === "GONE"));
-    await new Promise((r) => setTimeout(r, 0)); // its refusal handled
+    await until(() => row("b")?.checkingJob === false);
+    // Not asked again: the engine's answer cannot change.
+    expect(vi.mocked(jobStatus).mock.calls.filter((c) => c[0] === "GONE")).toHaveLength(1);
     expect(row("b")?.status).toBe("pending");
+    expect(row("b")?.interrupted).toBe(true);
     expect(row("b")?.attachJobId).toBeUndefined();
     expect(useUploadQueueStore.getState().runningHosts["10.0.0.2"]).toBeFalsy();
+    expect(startTransferFile).not.toHaveBeenCalled();
+  });
+
+  it("ends as stopped part-way, not checking forever, when the engine never answers", async () => {
+    vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
+      continueOnFailure: false,
+      items: [{ ...base, id: "mute", status: "running", jobId: "J4" }],
+    } as never);
+    vi.mocked(jobStatus).mockRejectedValue(new Error("Service unavailable"));
+    await useUploadQueueStore.getState().hydrate();
+    await until(() => row("mute")?.checkingJob === false);
+    expect(vi.mocked(jobStatus).mock.calls.filter((c) => c[0] === "J4")).toHaveLength(
+      MAX_POLL_FAILURES,
+    );
+    expect(row("mute")?.status).toBe("pending");
+    expect(row("mute")?.interrupted).toBe(true);
+    expect(row("mute")?.attachJobId).toBeUndefined();
+    expect(startTransferFile).not.toHaveBeenCalled();
+    expect(jobCancel).not.toHaveBeenCalled();
+  });
+
+  it("asks again after a reload that came while it was still checking", async () => {
+    vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
+      continueOnFailure: false,
+      items: [{ ...base, id: "again", status: "pending", checkingJob: true, jobId: "J5" }],
+    } as never);
+    vi.mocked(jobStatus).mockResolvedValue({ status: "done", bytes_sent: 10, dest: "/data/big.bin" } as never);
+    await useUploadQueueStore.getState().hydrate();
+    await until(() => row("again")?.status === "done");
+    expect(jobStatus).toHaveBeenCalledWith("J5", "10.0.0.2:9113");
+    expect(startTransferFile).not.toHaveBeenCalled();
   });
 
   it("Start all during the lookup waits for it instead of spinning (and hanging the tab)", async () => {

@@ -4336,6 +4336,7 @@ trace_profile_name: "{n} खेल सत्रों से मापा गय
 "collection.trash_n_title": "{n} कॉपियाँ ट्रैश में भेजें?",
 "collection.trash_one_title": "\"{name}\" को ट्रैश में भेजें?",
 queue_install_looking: "जाँच रहे हैं कि यह इंस्टॉल कैसा रहा…",
+queue_checking_job: "जाँच हो रही है कि यह अपलोड अभी भी चल रहा है या नहीं…",
 queue_install_stop_refused: "रोकना सफल नहीं हुआ, इसलिए यह इंस्टॉल अभी चल रहा है। फिर से कोशिश करें, या PS5 पर रद्द करें।",
 queue_install_stop_waiting: "यह इंस्टॉल अभी रुका नहीं है। फिर से कोशिश करें, या PS5 पर रद्द करें।",
 queue_install_stopped: "रोक दिया गया।",

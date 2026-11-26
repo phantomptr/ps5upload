@@ -4322,6 +4322,7 @@ trace_profile_name: "{n}টি খেলার সেশন থেকে মা�
 "collection.trash_n_title": "{n}টি কপি ট্র্যাশে সরাবেন?",
 "collection.trash_one_title": "\"{name}\" ট্র্যাশে সরাবেন?",
 queue_install_looking: "এই ইনস্টল কীভাবে শেষ হলো তা দেখা হচ্ছে…",
+queue_checking_job: "এই আপলোড এখনও চলছে কি না দেখা হচ্ছে…",
 queue_install_stop_refused: "থামানো যায়নি, তাই এই ইনস্টল এখনও চলছে। আবার চেষ্টা করুন, অথবা PS5-এ বাতিল করুন।",
 queue_install_stop_waiting: "এই ইনস্টল এখনও থামেনি। আবার চেষ্টা করুন, অথবা PS5-এ বাতিল করুন।",
 queue_install_stopped: "থামানো হয়েছে।",

@@ -4329,6 +4329,7 @@ trace_profile_name: "วัดจาก {n} เซสชันการเล่
 "collection.trash_n_title": "ย้ายสำเนา {n} รายการไปถังขยะหรือไม่",
 "collection.trash_one_title": "ย้าย \"{name}\" ไปถังขยะหรือไม่",
 queue_install_looking: "กำลังตรวจสอบผลการติดตั้งนี้…",
+queue_checking_job: "กำลังตรวจสอบว่าการอัปโหลดนี้ยังทำงานอยู่หรือไม่…",
 queue_install_stop_refused: "หยุดไม่สำเร็จ การติดตั้งนี้จึงยังทำงานอยู่ ลองอีกครั้งหรือยกเลิกบน PS5",
 queue_install_stop_waiting: "การติดตั้งนี้ยังไม่หยุด ลองอีกครั้งหรือยกเลิกบน PS5",
 queue_install_stopped: "หยุดแล้ว",

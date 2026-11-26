@@ -136,7 +136,7 @@ import { useConnectionStore } from "./connection";
 import { startPs5ToPs5 } from "../api/ava1";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { createQueueLeader } from "../lib/queueLeader";
-import { isJobUnknownError } from "../lib/pollRead";
+import { isJobUnknownError, readWithRetries } from "../lib/pollRead";
 import { krakenGuard } from "../lib/krakenGuard";
 
 /** The engine job id currently uploading on each console (bare host key).
@@ -378,6 +378,10 @@ export interface QueueItem {
    *  finished) when the tab closed: the runner adopts this job instead of starting a new
    *  one, then does the item's post-upload steps. Cleared the moment the runner takes it. */
   attachJobId?: string;
+  /** A reopened page is asking the engine whether this item's job (`jobId`) is still running:
+   *  the row says so instead of "Stopped part-way", which only shows once the engine has said
+   *  the job is gone or ended, or could not be asked. */
+  checkingJob?: boolean;
   /** Mount path the runner produced when `mountAfterUpload` is true and
    *  the image upload + mount succeeded. Surfaced to the row so users
    *  see where the image landed without flipping to the Volumes tab. */
@@ -994,31 +998,46 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
     Object.values(rh).some(Boolean);
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
-  /** Web UI only: the engine kept running these items' jobs while the tab was closed. Ask it
-   *  about each; one that is still running, or finished while the tab was away, goes back to its
-   *  item (`attachJobId`) and the console's queue restarts, so the runner adopts the job,
-   *  shows its progress and does the item's post-upload steps. A job the engine no longer knows
-   *  (it restarted) or one that failed leaves the item pending, to be started again and
-   *  resumed from the console's journal as before. Never throws. */
+  /** The engine can outlive the page (the web UI's tab, a reloaded desktop window, a remote
+   *  engine), so these items' jobs may have carried on while it was away. Ask the engine about
+   *  each (#945): one that is still running, or finished while the page was away, goes back to
+   *  its item (`attachJobId`) and the console's queue restarts, so the runner adopts the job,
+   *  shows its progress and does the item's post-upload steps. A failed read is asked again
+   *  (readWithRetries): a 503 or a timeout says nothing about the job, and calling a live upload
+   *  "Stopped part-way" is what #945 reported. Only an engine that no longer knows the job, a job
+   *  that ended failed, or no answer after the retries makes the row interrupted: it waits for
+   *  Resume, which asks again before starting anything (liveJobFor adopts a job still going).
+   *  Never throws. */
   let reattachLookup: Promise<void> = Promise.resolve();
   const reattachRunning = async (
     list: Array<{ id: string; jobId: string; addr: string }>,
   ) => {
     const hosts = new Set<string>();
-    for (const { id, jobId, addr } of list) {
-      try {
-        const snap = await jobStatus(jobId, addr);
-        if (snap.status === "running" || snap.status === "done") {
-          set((s) => ({ items: patchItem(s.items, id, { attachJobId: jobId }) }));
-          hosts.add(hostOf(addr));
+    const settle = (id: string, patch: Partial<QueueItem>) =>
+      set((s) => ({ items: patchItem(s.items, id, { checkingJob: false, ...patch }) }));
+    // Each item on its own: one console that does not answer must not hold the others' rows.
+    await Promise.all(
+      list.map(async ({ id, jobId, addr }) => {
+        try {
+          const snap = await readWithRetries(() => jobStatus(jobId, addr));
+          if (snap.status === "running" || snap.status === "done") {
+            settle(id, { attachJobId: jobId, interrupted: false });
+            hosts.add(hostOf(addr));
+          } else {
+            settle(id, { interrupted: true });
+          }
+        } catch (e) {
+          settle(id, { interrupted: true });
+          if (!isJobUnknownError(e)) {
+            console.warn(`[upload-queue] could not ask the engine about job ${jobId}:`, e);
+          }
+        } finally {
+          // Looked up: the runner may take this item now (to adopt its job, or to start it fresh).
+          reattaching.delete(id);
         }
-      } catch {
-        /* the engine does not know the job: the item stays pending */
-      } finally {
-        // Looked up: the runner may take this item now (to adopt its job, or to start it fresh).
-        reattaching.delete(id);
-      }
-    }
+      }),
+    );
+    scheduleSave();
     for (const h of hosts) void get().startHost(h, { unattended: true });
   };
 
@@ -2706,6 +2725,9 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           const next = { ...it };
           // Never carried across a reload: a stale id would adopt a job that is not this item's.
           delete next.attachJobId;
+          // A page closed while it was asking about this item's job: ask again below.
+          const wasChecking = !!next.checkingJob && next.status === "pending";
+          delete next.checkingJob;
           // An install that was running is never re-run by itself: Sony may
           // already have accepted it, and repeating a patch install can wipe
           // the base game.
@@ -2727,18 +2749,21 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
             );
             next.completedAt = Date.now();
           }
-          if (next.status === "running" && !installWork) {
+          if ((next.status === "running" || wasChecking) && !installWork) {
             // The engine can outlive this page (the web UI's tab, a reloaded desktop window, a
             // remote engine), so this item's job may still be going: remember it so it can be
-            // re-attached below. An engine that restarted answers "no such job" and the item
-            // simply re-runs.
+            // re-attached below (reattachRunning). Until the engine has answered, the row says
+            // it is checking, not that it stopped (#945).
             if (next.jobId) {
               wasRunning.push({ id: next.id, jobId: next.jobId, addr: next.addr });
               // Hold the runner off this item until its job has been looked up.
               reattaching.add(next.id);
+              next.checkingJob = true;
+              next.interrupted = false;
+            } else {
+              next.interrupted = true;
             }
             next.status = "pending";
-            next.interrupted = true;
             next.stalledForMs = null;
           }
           if (!next.txIdHex) next.txIdHex = generateTxIdHex();
