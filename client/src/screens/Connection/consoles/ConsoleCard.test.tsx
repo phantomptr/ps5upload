@@ -104,7 +104,7 @@ describe("Consoles › a console's card", () => {
     expect(html).not.toContain("Use this PS5");
   });
 
-  it("an older helper: one quiet line says what its automatic update waits for, beside Replace helper", () => {
+  it("an older helper: one quiet line says what its automatic update waits for, beside Update helper", () => {
     const tr = ((_k: string, vars: Record<string, string> | undefined, fallback: string) =>
       fallback.replace(/\{(\w+)\}/g, (_, n) => vars?.[n] ?? "")) as unknown as Translator;
     const note = autoUpdateNote(tr, { state: "waiting", why: "busy-here", to: "12.1.0" });
@@ -112,12 +112,16 @@ describe("Consoles › a console's card", () => {
     expect(html).toContain("Helper v12.0.9 · update available");
     expect(html).toContain('data-testid="console-card-auto-update"');
     expect(html).toContain("once your transfers, installs and streams on this PS5 finish");
-    expect(html).toContain("Replace helper");
+    expect(html).toContain("Update helper");
+    // The one button on the card that asks for a press (#941); a helper that matches keeps the quiet Resend.
+    expect(html).toContain('data-update="true"');
+    expect(card(READY)).not.toContain("data-update");
+    expect(card(READY)).toContain("Resend helper");
     // Not shown for a helper that matches.
     expect(card(READY, { autoUpdateNote: note })).not.toContain("console-card-auto-update");
     expect(autoUpdateNote(tr, { state: "waiting", why: "loader-closed", to: "12.1.0" })).toContain("port 9021");
     expect(autoUpdateNote(tr, { state: "never", why: "off", to: "12.1.0" })).toContain("are off for this PS5");
-    expect(autoUpdateNote(tr, { state: "never", why: "gave-up", to: "12.1.0" })).toContain("Replace helper");
+    expect(autoUpdateNote(tr, { state: "never", why: "gave-up", to: "12.1.0" })).toContain("Press Update helper");
     expect(autoUpdateNote(tr, { state: "updating", to: "12.1.0" })).toBe("Updating the helper to v12.1.0…");
     expect(autoUpdateNote(tr, undefined)).toBeNull();
   });

@@ -9,6 +9,7 @@ import RemotePlayBanner from "./RemotePlayBanner";
 import EngineDownBanner from "./EngineDownBanner";
 import MovedConsoleBanner, { useMovedConsoleWatch } from "./MovedConsoleBanner";
 import LinkDropBanner from "./LinkDropBanner";
+import HelperUpdatePromptHost from "./HelperUpdatePrompt";
 import { InstallAskHost } from "../components/InstallAskHost";
 import { PairingDialog } from "../screens/Connection/PairingDialog";
 import ConsoleTabs from "./ConsoleTabs";
@@ -1927,6 +1928,7 @@ export default function AppShell() {
       {/* v5 Toaster — critical-toast overlay. Mounted last so it
           sits above all other chrome in DOM order. */}
       <Toaster />
+      <HelperUpdatePromptHost />
       <SignInNeededHost />
       <WakePasscodeHost />
       <RemotePlayHost />

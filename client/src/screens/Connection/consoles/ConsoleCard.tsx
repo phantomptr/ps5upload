@@ -13,6 +13,7 @@ import {
   Home as HomeIcon,
   Pencil,
   Power,
+  RefreshCw,
   Send,
   Settings2,
   UserPlus,
@@ -102,7 +103,7 @@ function helperChip(tr: Translator, s: CardStatus): { text: string; tone: "good"
 }
 
 /** The one quiet line under an older helper: what the automatic update is waiting for, or why it
- *  is not doing it (state/helperAutoUpdate). The Replace helper button beside it sends now. */
+ *  is not doing it (state/helperAutoUpdate). The Update helper button beside it sends now. */
 export function autoUpdateNote(tr: Translator, view: AutoUpdateView | undefined): string | null {
   if (!view) return null;
   if (view.state === "updating")
@@ -112,7 +113,7 @@ export function autoUpdateNote(tr: Translator, view: AutoUpdateView | undefined)
   if (view.state === "never") {
     return view.why === "off"
       ? tr("helper_auto_off", undefined, "Automatic helper updates are off for this PS5.")
-      : tr("helper_auto_gave_up", undefined, "Couldn't update the helper by itself. Press Replace helper to send it.");
+      : tr("helper_auto_gave_up_v2", undefined, "Couldn't update the helper by itself. Press Update helper to send it.");
   }
   switch (view.why) {
     case "busy-here":
@@ -601,14 +602,29 @@ export function ConsoleCardView(p: ConsoleCardViewProps) {
 
       <div className="mt-4 flex flex-wrap items-start gap-2 border-t border-[var(--color-border)] pt-4" data-testid="console-card-actions">
         {s.ready ? (
-          <Button size="sm" variant="primary" leftIcon={<UserPlus size={13} />} onClick={p.onInvite} data-testid="consoles-invite-open">
+          <Button
+            size="sm"
+            // One main button a card: with an older helper that is Update helper.
+            variant={s.helper === "update" ? "secondary" : "primary"}
+            leftIcon={<UserPlus size={13} />}
+            onClick={p.onInvite}
+            data-testid="consoles-invite-open"
+          >
             {tr("cs_card_invite", undefined, "Invite a device")}
           </Button>
         ) : null}
         {up || s.helper === "pairing" ? (
-          <Button size="sm" variant="secondary" leftIcon={<Send size={13} />} onClick={p.onResend} data-testid="consoles-resend">
+          <Button
+            size="sm"
+            // An older helper is the one thing on this card that asks for a press (#941).
+            variant={s.helper === "update" ? "primary" : "secondary"}
+            leftIcon={s.helper === "update" ? <RefreshCw size={13} /> : <Send size={13} />}
+            onClick={p.onResend}
+            data-testid="consoles-resend"
+            data-update={s.helper === "update" || undefined}
+          >
             {s.helper === "update"
-              ? tr("connection_payload_outdated_action", undefined, "Replace helper")
+              ? tr("helper_update_action", undefined, "Update helper")
               : tr("connection_send_resend", undefined, "Resend helper")}
           </Button>
         ) : null}

@@ -7,6 +7,7 @@ import { humanizePs5Error } from "./humanizeError";
 import { askToSignIn, isSignInNeeded } from "./signInNeeded";
 import { DOC_ANCHORS, faqLink, installErrorLink } from "./installErrorDoc";
 import { killGame } from "./killGame";
+import { beginLaunch } from "./launchInFlight";
 import {
   handleHomebrewRefusal,
   isHomebrewRefusal,
@@ -102,6 +103,8 @@ export function useGameLaunch(
       const probe = guard.capture();
       if (!probe.host?.trim() || launchingId) return;
       setLaunchingId(t.titleId);
+      // Nothing replaces the helper under a game that is being started (lib/launchInFlight).
+      const launched = beginLaunch(probe.host);
       try {
         const clear = await makeWay(probe.host, t.titleId, t.titleName, nameOf);
         if (probe.isStale() || !clear) return;
@@ -210,6 +213,7 @@ export function useGameLaunch(
           link: installErrorLink(raw),
         });
       } finally {
+        launched();
         setLaunchingId(null);
       }
     },

@@ -16,6 +16,7 @@ import { consoleAddr, hostOf, PAYLOAD_MANAGER_PORT, PS5_LOADER_PORT, transferAdd
 import { getAppVersion } from "../lib/appVersion";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import { sendInFlight, sentAgoMs } from "../lib/helperSendGate";
+import { launchInFlight } from "../lib/launchInFlight";
 import {
   AUTO_UPDATE_SETTLE_MS,
   helperAutoUpdateDecision,
@@ -101,7 +102,8 @@ const ACTIVE = new Set(["running", "paused", "awaiting"]);
 
 /** What this app is running on `host`, or null: transfers, the queue, Files, installs, copies,
  *  extractions, conversions and saves (the task list mirrors the engine's jobs), console-page
- *  tasks, Remote Play and Play Together (a stream of that console), bring-up, a helper send. */
+ *  tasks, a game being started, Remote Play and Play Together (a stream of that console),
+ *  bring-up, a helper send. */
 export function busyHere(host: string): string | null {
   const key = hostOf(host);
   if (transferScreenBusy(host) || consoleBusy(host)) return "a transfer";
@@ -110,6 +112,7 @@ export function busyHere(host: string): string | null {
     .getState()
     .tasks.find((t) => hostOf(t.consoleId) === key && !isTerminal(t.status) && ACTIVE.has(t.status));
   if (task) return task.label || task.kind;
+  if (launchInFlight(host)) return "a game start";
   const rp = useRemotePlayStore.getState();
   if (rp.stream && rp.target && hostOf(rp.target.host) === key) return "Remote Play";
   if (bringUpStatusFor(useBringUpStore.getState(), host).kind === "running") return "a bring-up";

@@ -29,6 +29,8 @@ import { useSensors, useTempsView } from "../../state/sensors";
 import { TempsNote } from "../../components/TempsNote";
 import { Badge, Card, ConsoleChip, Sparkline, Spinner } from "../../components";
 import { SendHelperButton } from "../../components/SendHelperButton";
+import { HelperUpdateNotice } from "../../layout/HelperUpdatePrompt";
+import { useHelperUpdatePromptStore } from "../../state/helperUpdatePrompt";
 import { useTr } from "../../state/lang";
 import { ThanksButton } from "../../components/SupportButton";
 import { ServersCard } from "./ServersCard";
@@ -39,7 +41,7 @@ import { PlayCard } from "./PlayCard";
 import { RecentGames } from "./RecentGames";
 import { greetingPart } from "./greeting";
 import { initials, useGreetedUser } from "./consoleUser";
-import { mgmtAddr } from "../../lib/addr";
+import { hostOf, mgmtAddr } from "../../lib/addr";
 import { TvJoinCard } from "../Play/TvJoinCard";
 import {
   evaluateOperationReadiness,
@@ -91,6 +93,8 @@ export default function HomeScreen() {
   );
 
   const connected = engineStatus === "up" && payloadStatus === "up";
+  // The helper answers but is older than this app: its row reads as a warning, not as fine.
+  const helperOutdated = useHelperUpdatePromptStore((s) => !!s.outdated[hostOf(host) || host]);
   // Asleep is not "setup required": nothing needs setting up, the console only needs a wake.
   const resting =
     !connected && engineStatus === "up" && payloadStatus === "down" && consolePower === "rest";
@@ -339,6 +343,9 @@ export default function HomeScreen() {
                     <SendHelperButton wide />
                   </div>
                 )}
+                {/* An older helper than this app: said here, with the button that updates it
+                    (#941). Shows only while the console answers. */}
+                {connected && host ? <HelperUpdateNotice host={host} /> : null}
                 <Link
                   to="/connection"
                   className="mt-4 flex min-h-12 items-center justify-between gap-2 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] py-1.5 ps-5 pe-1.5 text-sm font-medium shadow-[var(--edge-highlight),var(--shadow-1)] transition-colors hover:bg-[var(--color-float)]"
@@ -382,7 +389,7 @@ export default function HomeScreen() {
                         ? `v${payloadVersion}`
                         : payloadStatus
                   }
-                  tone={payloadStatus === "up" ? "good" : resting ? undefined : "warn"}
+                  tone={payloadStatus === "up" ? (helperOutdated ? "warn" : "good") : resting ? undefined : "warn"}
                 />
                 <MetricRow
                   label={tr("v5_home_krw", "Kernel access")}
