@@ -510,6 +510,7 @@
   "cw_files_load_all": "Tải tất cả",
   "cw_files_mesh_home": "Thư mục này là một Mesh Drive. Tệp đồng bộ của nó bị ẩn: đừng di chuyển hoặc đổi tên thư mục.",
   "cw_files_more": "Hiện thêm",
+  "cw_files_move_has_links": "Trong đó có liên kết mà thư mục chia sẻ mạng không chứa được.",
   "cw_files_move_source_left": "Đã sao chép “{name}”, nhưng bản gốc vẫn còn trên PS5.",
   "cw_files_move_to": "Di chuyển tới…",
   "cw_files_name": "Tên",

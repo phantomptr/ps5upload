@@ -192,6 +192,8 @@ export interface SmbJob {
   error: string | null;
   failed: string;
   reconnects: number;
+  /** Entries the copy left out (links…); absent from a daemon before #953, which no move trusts. */
+  skipped?: number;
 }
 
 export interface SmbJobDeps {
@@ -361,12 +363,12 @@ export async function transferItems(
     if (!deps.move) return;
     const s: SmbJob | null = copied;
     let gone = false;
-    if (s && s.files_done === s.files_total && s.bytes_done === s.bytes_total) {
+    if (s && s.skipped === 0 && s.files_done === s.files_total && s.bytes_done === s.bytes_total) {
       const { job } = await send<{ job: string }>("/api/fs/delete", { path: item });
       if (opts?.waitJob) await opts.waitJob(job, true);
       gone = (await (deps.localStat ?? statOrNull)(item).catch(() => true)) == null;
     }
-    if (!gone) notes.push(new ReplaceError("moved_left", baseName(item)));
+    if (!gone) notes.push(new ReplaceError("moved_left", baseName(item), { why: s?.skipped ? "links" : null }));
   };
 
   /** Replace `dest` with `item`, through a temporary name (replace.ts). */

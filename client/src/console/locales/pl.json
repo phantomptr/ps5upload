@@ -510,6 +510,7 @@
   "cw_files_load_all": "Wczytaj wszystko",
   "cw_files_mesh_home": "Ten folder to Mesh Drive. Jego plik synchronizacji jest ukryty: nie przenoś folderu ani nie zmieniaj jego nazwy.",
   "cw_files_more": "Pokaż więcej",
+  "cw_files_move_has_links": "Zawiera linki, których udział sieciowy nie może przechować.",
   "cw_files_move_source_left": "Skopiowano „{name}”, ale oryginał nadal jest na PS5.",
   "cw_files_move_to": "Przenieś do…",
   "cw_files_name": "Nazwa",

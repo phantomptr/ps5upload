@@ -81,6 +81,9 @@ typedef struct {
     volatile int scanning;        /* 1 while the source tree is being counted */
     volatile int cancel;          /* set by anyone: the copy stops at the next chunk */
     volatile uint32_t reconnects; /* how often a dropped connection was recovered */
+    /* Entries of the source tree the copy leaves out (links and other special entries, macOS
+     * metadata on a download): a move must not delete a source that held any (#953). */
+    volatile uint32_t skipped;
     char current[256];            /* the file being copied (its name), best-effort */
 } copy_progress_t;
 

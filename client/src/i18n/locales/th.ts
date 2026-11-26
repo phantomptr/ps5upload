@@ -6233,6 +6233,7 @@ c2c_test_deep_bad: "การส่งทดสอบ 4 KiB ไปไม่ถ�
 "cw_files_replace_old_left": "แทนที่ “{name}” แล้ว แต่ลบของเก่าไม่ได้ ตอนนี้คือ “{old}”",
 "cw_files_replace_source_left": "แทนที่ “{name}” แล้ว แต่นำต้นฉบับออกจากที่เดิมไม่ได้",
 "cw_files_move_source_left": "คัดลอก “{name}” แล้ว แต่ต้นฉบับยังอยู่ใน PS5",
+"cw_files_move_has_links": "มีลิงก์ที่โฟลเดอร์แชร์บนเครือข่ายเก็บไว้ไม่ได้",
 "cw_files_replace_temp_left": "“{temp}” ยังค้างอยู่ คุณลบได้",
 "cw_files_conflict_replace_all_body": "ไฟล์ที่มีอยู่จะถูกเขียนทับ ส่วนโฟลเดอร์พร้อมทุกอย่างข้างในจะถูกลบเมื่อสำเนาใหม่เสร็จสมบูรณ์ ย้อนกลับไม่ได้",
 "cw_files_paste_halted": "หยุดแล้ว “{name}” ยังคงเหมือนเดิม",

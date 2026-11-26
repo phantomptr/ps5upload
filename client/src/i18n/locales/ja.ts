@@ -6245,6 +6245,7 @@ c2c_test_deep_bad: "4 KiB のテスト送信が届きませんでした: {detail
 "cw_files_replace_old_left": "「{name}」を置き換えましたが、古いものを削除できませんでした。現在は「{old}」です。",
 "cw_files_replace_source_left": "「{name}」を置き換えましたが、元の場所から元のものを削除できませんでした。",
 "cw_files_move_source_left": "「{name}」はコピーされましたが、元のファイルは PS5 に残っています。",
+"cw_files_move_has_links": "ネットワーク共有に保存できないリンクが含まれています。",
 "cw_files_replace_temp_left": "「{temp}」が残っています。削除してかまいません。",
 "cw_files_conflict_replace_all_body": "既存のファイルは上書きされます。フォルダーは新しいコピーが完了してから中身ごと削除されます。元に戻せません。",
 "cw_files_paste_halted": "停止しました。「{name}」は元のままです。",

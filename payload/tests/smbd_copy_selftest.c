@@ -466,6 +466,7 @@ static void t_download_tree(void) {
     rc = copy_run(&src, "Games", &dst, d, &o, &pr, failed, sizeof failed);
     CHECK(rc == 0);
     CHECK(pr.files_total == 3 && pr.files_done == 3);
+    CHECK(pr.skipped == 3); /* the link, ._top.txt and .DS_Store: counted once, not per pass */
     CHECK(pr.bytes_total == sizeof k_big - 1 + 3 && pr.bytes_done == pr.bytes_total);
     lp(f, "游戏/中文 文件夹/存档.bin");
     CHECK(read_file(f, buf, sizeof buf) > 0 && strcmp(buf, k_big) == 0);
@@ -612,6 +613,8 @@ static void t_upload(void) {
     rc = copy_run(&src, s, &dst, "Backup/up", &o, &pr, failed, sizeof failed);
     CHECK(rc == 0);
     CHECK(pr.reconnects >= 1);
+    CHECK(pr.skipped == 1); /* the link: a move must keep this source (#953) */
+    CHECK(pr.files_total == 2);
     x = find(&m, "Backup/up/sub/naïve.txt");
     CHECK(x && x->size == sizeof k_big - 1 && memcmp(x->data, k_big, x->size) == 0);
     x = find(&m, "Backup/up/a.txt");

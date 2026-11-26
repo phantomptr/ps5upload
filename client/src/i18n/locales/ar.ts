@@ -6226,6 +6226,7 @@ c2c_test_deep_bad: "لم يصل الإرسال التجريبي بحجم 4 KiB: 
 "cw_files_replace_old_left": "تم استبدال «{name}»، لكن تعذّر حذف القديم. اسمه الآن «{old}».",
 "cw_files_replace_source_left": "تم استبدال «{name}»، لكن تعذّر حذف الأصل من مكانه.",
 "cw_files_move_source_left": "تم نسخ “{name}”، لكن الأصل لا يزال على PS5.",
+"cw_files_move_has_links": "فهو يحتوي على روابط لا يمكن لمشاركة الشبكة حفظها.",
 "cw_files_replace_temp_left": "بقي «{temp}» في مكانه. يمكنك حذفه.",
 "cw_files_conflict_replace_all_body": "يُكتب فوق الملفات الموجودة هنا. ويُحذف المجلد بكل محتواه بعد اكتمال نسخته الجديدة. لا يمكن التراجع عن ذلك.",
 "cw_files_paste_halted": "توقف. بقي «{name}» كما كان.",

@@ -86,8 +86,10 @@ static int count_tree(ctx_t *c, const char *path, int depth) {
         }
         rc = c->src->ops->readdir(c->src, d, name, sizeof name, &st);
         if (rc <= 0) break;
-        if (st.kind == XK_OTHER) continue;
-        if (c->o->skip_mac_metadata && smbp_skip_download(name)) continue;
+        if (st.kind == XK_OTHER || (c->o->skip_mac_metadata && smbp_skip_download(name))) {
+            c->pr->skipped++; /* counted once, here: the copy pass skips the same entries */
+            continue;
+        }
         if (smbp_join(path, name, child, sizeof child) != 0) {
             rc = XE_BAD_NAME;
             note_failed(c, name);

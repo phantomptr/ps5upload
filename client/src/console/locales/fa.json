@@ -510,6 +510,7 @@
   "cw_files_load_all": "بارگذاری همه",
   "cw_files_mesh_home": "این پوشه یک Mesh Drive است. فایل همگام‌سازی آن پنهان است: پوشه را جابه‌جا نکنید و نامش را تغییر ندهید.",
   "cw_files_more": "نمایش بیشتر",
+  "cw_files_move_has_links": "پیوندهایی دارد که اشتراک شبکه نمی‌تواند نگه دارد.",
   "cw_files_move_source_left": "«{name}» کپی شد، اما اصل آن هنوز روی PS5 است.",
   "cw_files_move_to": "انتقال به…",
   "cw_files_name": "نام",

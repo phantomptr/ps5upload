@@ -6243,6 +6243,7 @@ c2c_test_deep_bad: "4 KiB 테스트 전송이 도착하지 않았습니다: {det
 "cw_files_replace_old_left": "“{name}”을(를) 바꿨지만 이전 항목을 삭제하지 못했습니다. 지금은 “{old}”입니다.",
 "cw_files_replace_source_left": "“{name}”을(를) 바꿨지만 원래 위치의 원본을 지우지 못했습니다.",
 "cw_files_move_source_left": "“{name}”을(를) 복사했지만 원본은 아직 PS5에 있습니다.",
+"cw_files_move_has_links": "네트워크 공유에 저장할 수 없는 링크가 들어 있습니다.",
 "cw_files_replace_temp_left": "“{temp}”이(가) 남아 있습니다. 삭제해도 됩니다.",
 "cw_files_conflict_replace_all_body": "기존 파일은 덮어씁니다. 폴더는 새 복사본이 완성된 뒤 그 안의 모든 것과 함께 삭제됩니다. 되돌릴 수 없습니다.",
 "cw_files_paste_halted": "중지했습니다. “{name}”은(는) 그대로입니다.",

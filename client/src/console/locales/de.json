@@ -510,6 +510,7 @@
   "cw_files_load_all": "Alle laden",
   "cw_files_mesh_home": "Dieser Ordner ist ein Mesh Drive. Seine Sync-Datei ist ausgeblendet: Verschiebe den Ordner nicht und benenne ihn nicht um.",
   "cw_files_more": "Mehr anzeigen",
+  "cw_files_move_has_links": "Es enthält Links, die eine Netzwerkfreigabe nicht speichern kann.",
   "cw_files_move_source_left": "„{name}“ wurde kopiert, aber das Original ist noch auf der PS5.",
   "cw_files_move_to": "Verschieben nach…",
   "cw_files_name": "Name",

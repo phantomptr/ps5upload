@@ -241,7 +241,7 @@ function replaceErrorText(e: ReplaceError): string {
     case "source_left":
       return t("cw_files_replace_source_left", { name: e.item });
     case "moved_left":
-      return t("cw_files_move_source_left", { name: e.item });
+      return t("cw_files_move_source_left", { name: e.item }) + (e.why ? ` ${t("cw_files_move_has_links")}` : "");
     case "temp_left":
       return t("cw_files_replace_temp_left", { temp: baseName(e.temp ?? "") });
   }

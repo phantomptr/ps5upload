@@ -510,6 +510,7 @@
   "cw_files_load_all": "Összes betöltése",
   "cw_files_mesh_home": "Ez a mappa egy Mesh Drive. A szinkronfájlja rejtett: ne helyezd át és ne nevezd át a mappát.",
   "cw_files_more": "Több",
+  "cw_files_move_has_links": "Olyan hivatkozásokat tartalmaz, amelyeket egy hálózati megosztás nem tud tárolni.",
   "cw_files_move_source_left": "A(z) „{name}” átmásolva, de az eredeti még a PS5-ön van.",
   "cw_files_move_to": "Áthelyezés ide…",
   "cw_files_name": "Név",

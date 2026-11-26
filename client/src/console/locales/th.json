@@ -510,6 +510,7 @@
   "cw_files_load_all": "โหลดทั้งหมด",
   "cw_files_mesh_home": "โฟลเดอร์นี้เป็น Mesh Drive ไฟล์ซิงค์ถูกซ่อนไว้: อย่าย้ายหรือเปลี่ยนชื่อโฟลเดอร์",
   "cw_files_more": "แสดงเพิ่ม",
+  "cw_files_move_has_links": "มีลิงก์ที่โฟลเดอร์แชร์บนเครือข่ายเก็บไว้ไม่ได้",
   "cw_files_move_source_left": "คัดลอก “{name}” แล้ว แต่ต้นฉบับยังอยู่ใน PS5",
   "cw_files_move_to": "ย้ายไปที่…",
   "cw_files_name": "ชื่อ",
