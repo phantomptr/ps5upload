@@ -1330,7 +1330,10 @@ impl Party {
                 g.conn = None;
                 g.away_since = Some(now);
                 if g.slot_open {
-                    fx.push(Effect::Link(link::Cmd::Neutral { slot: g.player }));
+                    fx.push(Effect::Link(link::Cmd::Neutral {
+                        slot: g.player,
+                        token: g.pad_token.clone(),
+                    }));
                 }
                 if g.player == STREAM_SEAT {
                     g.seat_input_at = None;
@@ -1367,7 +1370,10 @@ impl Party {
         }
         if g.slot_open {
             g.slot_open = false;
-            fx.push(Effect::Link(link::Cmd::Close { slot: g.player }));
+            fx.push(Effect::Link(link::Cmd::Close {
+                slot: g.player,
+                token: g.pad_token.clone(),
+            }));
         }
         // (One moving off it already let it go.)
         if g.player == STREAM_SEAT && g.seat_move == SeatMove::No {
@@ -1446,7 +1452,14 @@ impl Party {
     }
 
     /// The bits to take from the guest's input now (None: they are not in).
+    #[cfg(test)]
     fn strip_mask(&self, id: u64) -> Option<(u8, u32)> {
+        self.input_to(id).map(|(slot, strip, _)| (slot, strip))
+    }
+
+    /// Where the guest's input goes now: their player, the bits to take from it, and their pad's
+    /// token (the link takes a state only for the pad that token owns).
+    fn input_to(&self, id: u64) -> Option<(u8, u32, &str)> {
         let g = self.guests.iter().find(|g| g.id == id && g.active())?;
         if g.seat_move != SeatMove::No {
             return None; // between the stream's controller and their pad: nowhere to go yet
@@ -1457,7 +1470,7 @@ impl Party {
             (true, true) => vpad::button::SYSTEM,
             (true, false) => vpad::button::CREATE,
         };
-        Some((g.player, strip))
+        Some((g.player, strip, &g.pad_token))
     }
 
     /// A guest's input, before anything is taken from it: while they pick a user, PS then ✕
@@ -1565,7 +1578,10 @@ impl Party {
                     }
                     g.away_since = Some(now);
                     if g.slot_open {
-                        fx.push(Effect::Link(link::Cmd::Neutral { slot: g.player }));
+                        fx.push(Effect::Link(link::Cmd::Neutral {
+                            slot: g.player,
+                            token: g.pad_token.clone(),
+                        }));
                     }
                 }
                 for a in self.pending.drain(..) {
@@ -1590,7 +1606,10 @@ impl Party {
                 if gone >= HOST_GRACE {
                     for g in self.guests.iter_mut().filter(|g| g.active() && g.slot_open) {
                         g.slot_open = false;
-                        fx.push(Effect::Link(link::Cmd::Close { slot: g.player }));
+                        fx.push(Effect::Link(link::Cmd::Close {
+                            slot: g.player,
+                            token: g.pad_token.clone(),
+                        }));
                     }
                 }
             }
@@ -1913,7 +1932,13 @@ async fn move_off_seat(console: String, id: u64) -> bool {
         .is_some();
         if !ok {
             // Out while the pad was made: nobody will close it later.
-            link::send(&console, link::Cmd::Close { slot: player });
+            link::send(
+                &console,
+                link::Cmd::Close {
+                    slot: player,
+                    token,
+                },
+            );
             return false;
         }
         crate::log_at!(
@@ -2748,7 +2773,13 @@ async fn resume<S: GuestSocket>(socket: &mut S, token: &str) -> Option<Admit> {
                 .flatten()
                 .is_some();
                 if !ok {
-                    link::send(&console, link::Cmd::Close { slot: player });
+                    link::send(
+                        &console,
+                        link::Cmd::Close {
+                            slot: player,
+                            token,
+                        },
+                    );
                     return Some(Admit::Refused("expired"));
                 }
             }
@@ -2814,7 +2845,7 @@ async fn open_slot(
         // busy slot is another owner's).
         link::send(
             console,
-            link::Cmd::Abandon {
+            link::Cmd::Close {
                 slot,
                 token: token.to_string(),
             },
@@ -2994,7 +3025,13 @@ async fn ask<S: GuestSocket>(
             .flatten()
             .is_some();
             if !ok {
-                link::send(&console, link::Cmd::Close { slot: player });
+                link::send(
+                    &console,
+                    link::Cmd::Close {
+                        slot: player,
+                        token: pad_token,
+                    },
+                );
                 return Some(Admit::Refused("closed"));
             }
             crate::log_at!(
@@ -3134,8 +3171,12 @@ fn forward_pad(key: &str, console: &str, id: u64, gen: u64, mut st: PadState) {
         if p.is_current(id, gen) {
             said = p.saw_input(id, st.buttons);
         }
-        let m = p.is_current(id, gen).then(|| p.strip_mask(id)).flatten();
-        if let Some((STREAM_SEAT, _)) = m {
+        let m = p
+            .is_current(id, gen)
+            .then(|| p.input_to(id))
+            .flatten()
+            .map(|(slot, strip, token)| (slot, strip, token.to_string()));
+        if let Some((STREAM_SEAT, ..)) = m {
             if let Some(g) = p.guest_mut(id) {
                 g.seat_input_at = Some(now);
             }
@@ -3145,12 +3186,19 @@ fn forward_pad(key: &str, console: &str, id: u64, gen: u64, mut st: PadState) {
     if let Some(line) = said {
         crate::log_at!(Info, "together", "{line}");
     }
-    if let Some((slot, strip)) = mask.flatten() {
+    if let Some((slot, strip, token)) = mask.flatten() {
         st.buttons &= !strip;
         if slot == STREAM_SEAT {
             crate::rp_stream_api::push_guest_pad(console, Some(controller_state(&st)));
         } else {
-            link::send(console, link::Cmd::State { slot, state: st });
+            link::send(
+                console,
+                link::Cmd::State {
+                    slot,
+                    token,
+                    state: st,
+                },
+            );
         }
     }
 }
@@ -4419,14 +4467,18 @@ pub(crate) mod link {
             bind: Option<Bind>,
             reply: oneshot::Sender<OpenResult>,
         },
-        /// The guest's latest state.
-        State { slot: u8, state: PadState },
+        /// The guest's latest state. Like every command about a pad, for the pad `token` owns
+        /// only: a guest let go (kicked) can have one on its way still, and the slot may be the
+        /// next guest's by then.
+        State {
+            slot: u8,
+            token: String,
+            state: PadState,
+        },
         /// Let go of everything (the guest's socket closed).
-        Neutral { slot: u8 },
-        /// Remove the pad.
-        Close { slot: u8 },
-        /// Remove the pad if `token` still owns it (an open its guest stopped waiting for).
-        Abandon { slot: u8, token: String },
+        Neutral { slot: u8, token: String },
+        /// Remove the pad (its guest left, or an open its guest stopped waiting for).
+        Close { slot: u8, token: String },
     }
 
     /// What the link tells join.rs.
@@ -4684,22 +4736,21 @@ pub(crate) mod link {
                     s.waiters.push(reply);
                     self.slots.insert(slot, s);
                 }
-                Cmd::State { slot, state } => {
-                    if let Some(s) = self.slots.get_mut(&slot) {
+                Cmd::State { slot, token, state } => {
+                    if let Some(s) = self.slots.get_mut(&slot).filter(|s| s.token == token) {
                         s.io.push(state);
                         s.last_input = now;
                         s.live = true;
                     }
                 }
-                Cmd::Neutral { slot } => {
-                    if let Some(s) = self.slots.get_mut(&slot) {
+                Cmd::Neutral { slot, token } => {
+                    if let Some(s) = self.slots.get_mut(&slot).filter(|s| s.token == token) {
                         s.io.push(PadState::NEUTRAL);
                         s.last_input = now;
                         s.live = false;
                     }
                 }
-                Cmd::Close { slot } => self.remove(slot),
-                Cmd::Abandon { slot, token } => {
+                Cmd::Close { slot, token } => {
                     if self.slots.get(&slot).is_some_and(|s| s.token == token) {
                         self.remove(slot);
                     }
@@ -5623,8 +5674,8 @@ mod tests {
     fn links(fx: &[Effect]) -> Vec<String> {
         fx.iter()
             .filter_map(|e| match e {
-                Effect::Link(Cmd::Close { slot }) => Some(format!("close{slot}")),
-                Effect::Link(Cmd::Neutral { slot }) => Some(format!("neutral{slot}")),
+                Effect::Link(Cmd::Close { slot, .. }) => Some(format!("close{slot}")),
+                Effect::Link(Cmd::Neutral { slot, .. }) => Some(format!("neutral{slot}")),
                 Effect::Link(_) => Some("other".into()),
                 _ => None,
             })
@@ -6496,6 +6547,67 @@ mod tests {
         rx
     }
 
+    /// A guest let go (kicked) with a state still on its way, and Player 2 the next guest's by
+    /// the time it arrives: that state, the let-go after it and a second close are the old
+    /// guest's, not the new one's (they went by the slot alone).
+    #[test]
+    fn a_guests_late_commands_never_reach_the_next_guest_on_their_slot() {
+        let f = Arc::new(FakeHelper::default());
+        let (mut st, _ev) = link_with(&f);
+        let t = Instant::now();
+        assert_eq!(
+            open_slot_t(&mut st, 2, "a", t).try_recv().unwrap(),
+            OpenResult::Ok
+        );
+        let state = |token: &str, b: u32| Cmd::State {
+            slot: 2,
+            token: token.into(),
+            state: st_(b),
+        };
+        st.on_cmd(state("a", 0x20), t);
+        st.tick(t);
+        st.on_cmd(
+            Cmd::Close {
+                slot: 2,
+                token: "a".into(),
+            },
+            t,
+        );
+        assert_eq!(
+            open_slot_t(&mut st, 2, "b", t).try_recv().unwrap(),
+            OpenResult::Ok
+        );
+        let sent = f.states().len();
+        st.on_cmd(state("a", 0x40), t);
+        st.on_cmd(
+            Cmd::Neutral {
+                slot: 2,
+                token: "a".into(),
+            },
+            t,
+        );
+        st.on_cmd(
+            Cmd::Close {
+                slot: 2,
+                token: "a".into(),
+            },
+            t,
+        );
+        let t = t + Duration::from_millis(50);
+        st.tick(t);
+        assert_eq!(f.states().len(), sent, "nothing of a's reaches b's pad");
+        assert_eq!(
+            f.log().iter().filter(|l| *l == "close2").count(),
+            1,
+            "b's pad stays: {:?}",
+            f.log()
+        );
+        st.on_cmd(state("b", 0x80), t);
+        st.tick(t);
+        let last = f.states().last().cloned().unwrap();
+        assert_eq!((last.token.as_str(), last.state.buttons), ("b", 0x80));
+    }
+
     /// The helper unreachable when a pad's close was sent: the close is lost, and the next open
     /// with the same token finds the pad still there. Kept (the console has it signed in as it
     /// was), not a new pad; after a close that reached it, a new one.
@@ -6509,7 +6621,13 @@ mod tests {
             OpenResult::Ok
         );
         f.down.store(true, Ordering::Relaxed);
-        st.on_cmd(Cmd::Close { slot: 2 }, t);
+        st.on_cmd(
+            Cmd::Close {
+                slot: 2,
+                token: "a".into(),
+            },
+            t,
+        );
         st.tick(t);
         f.down.store(false, Ordering::Relaxed);
         let t = t + Duration::from_secs(1);
@@ -6518,7 +6636,13 @@ mod tests {
             OpenResult::Kept
         );
         assert_eq!(reopens(&ev), 0);
-        st.on_cmd(Cmd::Close { slot: 2 }, t);
+        st.on_cmd(
+            Cmd::Close {
+                slot: 2,
+                token: "a".into(),
+            },
+            t,
+        );
         st.tick(t);
         assert_eq!(
             open_slot_t(&mut st, 2, "a", t).try_recv().unwrap(),
@@ -6543,6 +6667,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 2,
+                token: "a".into(),
                 state: st_(0x20),
             },
             t,
@@ -6550,6 +6675,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 3,
+                token: "b".into(),
                 state: st_(0x40),
             },
             t,
@@ -6564,11 +6690,18 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 2,
+                token: "a".into(),
                 state: st_(0x20),
             },
             t2,
         );
-        st.on_cmd(Cmd::Neutral { slot: 3 }, t2);
+        st.on_cmd(
+            Cmd::Neutral {
+                slot: 3,
+                token: "b".into(),
+            },
+            t2,
+        );
         st.tick(t2);
         let log = f.log();
         assert!(log.contains(&"hb2live".to_string()), "{log:?}");
@@ -6578,6 +6711,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 2,
+                token: "a".into(),
                 state: st_(0x20),
             },
             t3,
@@ -6603,6 +6737,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 2,
+                token: "a".into(),
                 state: held.clone(),
             },
             t,
@@ -6616,6 +6751,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 2,
+                token: "a".into(),
                 state: held.clone(),
             },
             t2,
@@ -6626,6 +6762,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 2,
+                token: "a".into(),
                 state: held.clone(),
             },
             t3,
@@ -6643,6 +6780,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 2,
+                token: "a".into(),
                 state: ps(0, 255),
             },
             t,
@@ -6665,6 +6803,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 2,
+                token: "a".into(),
                 state: st_(0x20),
             },
             t,
@@ -6672,6 +6811,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 2,
+                token: "a".into(),
                 state: st_(0),
             },
             t,
@@ -6694,6 +6834,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 2,
+                token: "a".into(),
                 state: st_(0x20),
             },
             t,
@@ -6704,6 +6845,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 2,
+                token: "a".into(),
                 state: st_(0x40),
             },
             t,
@@ -6974,6 +7116,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 2,
+                token: "a".into(),
                 state: st_(0x40),
             },
             t,
@@ -7064,6 +7207,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 2,
+                token: "a".into(),
                 state: st_(0x20),
             },
             t,
@@ -7103,6 +7247,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 2,
+                token: "a".into(),
                 state: st_(0x40),
             },
             t,
@@ -7125,6 +7270,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 2,
+                token: "a".into(),
                 state: st_(0x80),
             },
             now,
@@ -7173,7 +7319,13 @@ mod tests {
         .unwrap();
         assert!(!link::try_end(&mut st, &rx, key, 77, t), "a pad to serve");
         assert!(link::test_has_link(key), "still reachable for its Close");
-        st.on_cmd(Cmd::Close { slot: 2 }, t);
+        st.on_cmd(
+            Cmd::Close {
+                slot: 2,
+                token: "a".into(),
+            },
+            t,
+        );
         st.tick(t);
         assert!(st.idle());
         assert!(link::try_end(&mut st, &rx, key, 77, t));
@@ -7258,6 +7410,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 2,
+                token: "a".into(),
                 state: odd,
             },
             t,
@@ -7265,6 +7418,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 3,
+                token: "b".into(),
                 state: st_(0x40),
             },
             t,
@@ -7272,6 +7426,7 @@ mod tests {
         st.on_cmd(
             Cmd::State {
                 slot: 4,
+                token: "c".into(),
                 state: st_(0x80),
             },
             t,
@@ -7305,6 +7460,7 @@ mod tests {
             st.on_cmd(
                 Cmd::State {
                     slot: 2,
+                    token: "a".into(),
                     state: odd,
                 },
                 ti,
@@ -7350,7 +7506,7 @@ mod tests {
         // an abandon only removes the pad its token owns
         open_slot_t(&mut st, 3, "b", t);
         st.on_cmd(
-            Cmd::Abandon {
+            Cmd::Close {
                 slot: 3,
                 token: "someone-else".into(),
             },
@@ -7359,7 +7515,7 @@ mod tests {
         st.tick(t);
         assert!(!st.idle());
         st.on_cmd(
-            Cmd::Abandon {
+            Cmd::Close {
                 slot: 3,
                 token: "b".into(),
             },
@@ -7393,7 +7549,13 @@ mod tests {
         let (mut st, _ev) = link_with(&f);
         let t = Instant::now();
         open_slot_t(&mut st, 2, "a", t);
-        st.on_cmd(Cmd::Close { slot: 2 }, t);
+        st.on_cmd(
+            Cmd::Close {
+                slot: 2,
+                token: "a".into(),
+            },
+            t,
+        );
         st.tick(t);
         assert!(f.log().contains(&"close2".to_string()));
         assert!(st.idle());
