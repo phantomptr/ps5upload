@@ -625,6 +625,77 @@ fn a_listing_stops_when_cancelled_and_reports_progress() {
     assert_eq!(live.phase.load(Ordering::Relaxed), 0);
 }
 
+/// A tar whose first member carries `meta` bytes of `kind` (a GNU long name, a PAX header, or
+/// a FIFO's data), then one small file. Compressed with zstd as it is written, so the test
+/// never holds the big part twice.
+fn tar_with_big_member(kind: tar::EntryType, meta: usize, path: &Path, codec: Codec) {
+    // Empty segments are dropped from a name, so this long one is still `game/f.bin`.
+    let name = format!("game/{}f.bin", "/".repeat(meta));
+    let body: Vec<u8> = match kind {
+        tar::EntryType::GNULongName => name.into_bytes(),
+        tar::EntryType::XHeader => {
+            // One record, `<len> path=<value>\n`, its length counting its own digits.
+            let tail = format!(" path={name}\n");
+            let mut len = tail.len();
+            while format!("{len}{tail}").len() != len {
+                len = format!("{len}{tail}").len();
+            }
+            format!("{len}{tail}").into_bytes()
+        }
+        _ => vec![b'a'; meta],
+    };
+    let mut raw = Vec::new();
+    let mut h = header(kind, body.len() as u64);
+    let own: &[u8] = match kind {
+        tar::EntryType::GNULongName => b"././@LongLink",
+        tar::EntryType::XHeader => b"PaxHeaders/x",
+        _ => b"fifo",
+    };
+    h.as_old_mut().name[..own.len()].copy_from_slice(own);
+    h.set_cksum();
+    raw.extend_from_slice(h.as_bytes());
+    raw.extend_from_slice(&body);
+    raw.resize(raw.len().div_ceil(512) * 512, 0);
+    let mut f = header(tar::EntryType::Regular, 2);
+    f.set_path("game/f.bin").unwrap();
+    f.set_cksum();
+    raw.extend_from_slice(f.as_bytes());
+    raw.extend_from_slice(b"ok");
+    raw.resize(raw.len().div_ceil(512) * 512 + 1024, 0);
+    std::fs::write(path, compress(codec, &raw)).unwrap();
+}
+
+/// A long name or PAX header is held whole in memory by the tar reader, as long as its header
+/// says: a compressed archive of a few KiB could ask for gigabytes of it while it was listed.
+/// Over [`MAX_MEMBER_HEADERS`] it is refused as damage; data the reader reads past (a FIFO's,
+/// however big) is not headers and still lists, and the walk reads it the same way.
+#[test]
+fn a_huge_long_name_or_pax_header_is_refused_while_listing() {
+    let d = temp_dir("bighead");
+    let over = (MAX_MEMBER_HEADERS + (1 << 20)) as usize;
+    for codec in [Codec::Zstd, Codec::None] {
+        for kind in [tar::EntryType::GNULongName, tar::EntryType::XHeader] {
+            let p = d.join(format!("h{}-{codec:?}.tar", kind.as_byte()));
+            tar_with_big_member(kind, over, &p, codec);
+            let e = tar_layout(&p).unwrap_err();
+            assert!(
+                matches!(tar_fault_of(&e), Some(TarFault::Corrupt(m)) if m.contains("headers")),
+                "{kind:?} {codec:?}: {e}"
+            );
+            // A real-sized one is fine.
+            tar_with_big_member(kind, 4096, &p, codec);
+            assert_eq!(tar_layout(&p).unwrap().files.len(), 1, "{kind:?} {codec:?}");
+        }
+        let p = d.join(format!("fifo-{codec:?}.tar"));
+        tar_with_big_member(tar::EntryType::Fifo, over, &p, codec);
+        let l = tar_layout(&p).unwrap();
+        assert_eq!(l.files.len(), 1);
+        let c = walk_all(&p, &l, 0, &[]);
+        assert_eq!(c.files["game/f.bin"], b"ok");
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 #[test]
 fn a_walk_over_a_changed_archive_fails_instead_of_misnaming_bytes() {
     let d = temp_dir("drift");

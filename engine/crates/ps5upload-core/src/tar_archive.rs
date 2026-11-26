@@ -701,6 +701,51 @@ pub struct Opened {
     base: u64,
     read: Arc<AtomicU64>,
     failure: Arc<Mutex<Option<(io::ErrorKind, String)>>>,
+    /// What the tar reader may still read before it hands over the next entry
+    /// ([`HeaderBudget`]); `u64::MAX` while no entry is being looked for.
+    budget: Arc<AtomicU64>,
+}
+
+/// What one step of the tar reader (`Entries::next`) may read besides the data the entry before
+/// it left unread: the 512-byte headers of one member, its GNU long name or link and its PAX
+/// header. The tar reader holds a long name and a PAX header whole in memory, as long as the
+/// header says they are, so a compressed archive of a few KiB could ask for gigabytes of them
+/// while it was listed. A real one is a few hundred bytes (a PAX header with extended
+/// attributes some KiB).
+pub const MAX_MEMBER_HEADERS: u64 = 16 << 20;
+
+/// Bounds what the tar reader reads while it looks for the next entry ([`MAX_MEMBER_HEADERS`]).
+#[derive(Clone)]
+struct HeaderBudget(Arc<AtomicU64>);
+
+impl HeaderBudget {
+    /// From now until [`Self::off`]: `unread` (what the entry before left of its data, which
+    /// the reader reads past) and one member's headers.
+    fn on(&self, unread: u64) {
+        self.0
+            .store(unread.saturating_add(MAX_MEMBER_HEADERS), Ordering::Relaxed);
+    }
+
+    fn off(&self) {
+        self.0.store(u64::MAX, Ordering::Relaxed);
+    }
+}
+
+/// What an entry of `kind` leaves of its data for the tar reader to read past: the listing and
+/// the walk read every file's data themselves (or seek past it), nothing else's.
+fn unread_after(kind: &Kind, size: u64) -> u64 {
+    match kind {
+        Kind::File => 0,
+        _ => size,
+    }
+}
+
+fn headers_too_big() -> io::Error {
+    corrupt(format!(
+        "one entry's headers (its long name or PAX header) are over {} MiB, which no real \
+         archive has",
+        MAX_MEMBER_HEADERS >> 20
+    ))
 }
 
 enum Inner {
@@ -709,6 +754,10 @@ enum Inner {
 }
 
 impl Opened {
+    fn header_budget(&self) -> HeaderBudget {
+        HeaderBudget(self.budget.clone())
+    }
+
     /// Compressed bytes read from the file so far.
     pub fn file_bytes_read(&self) -> u64 {
         self.read.load(Ordering::Relaxed)
@@ -731,10 +780,24 @@ impl Opened {
 
 impl Read for Opened {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match &mut self.inner {
-            Inner::Plain(r) => r.read(buf),
-            Inner::Decoded(r) => r.read(buf),
+        let left = self.budget.load(Ordering::Relaxed);
+        // Never more than the budget and one byte: the byte past it is the refusal.
+        let want = buf.len().min(
+            usize::try_from(left)
+                .unwrap_or(usize::MAX)
+                .saturating_add(1),
+        );
+        let n = match &mut self.inner {
+            Inner::Plain(r) => r.read(&mut buf[..want])?,
+            Inner::Decoded(r) => r.read(&mut buf[..want])?,
+        };
+        if left != u64::MAX {
+            if n as u64 > left {
+                return Err(headers_too_big());
+            }
+            self.budget.store(left - n as u64, Ordering::Relaxed);
         }
+        Ok(n)
     }
 }
 
@@ -816,6 +879,7 @@ pub fn open_decoded(path: &Path, offset: u64) -> io::Result<Opened> {
                 base: offset,
                 read,
                 failure,
+                budget: Arc::new(AtomicU64::new(u64::MAX)),
             })
         }
         Codec::Zstd => Box::new(ZstdReader::new(src)),
@@ -833,6 +897,7 @@ pub fn open_decoded(path: &Path, offset: u64) -> io::Result<Opened> {
         base: 0,
         read,
         failure,
+        budget: Arc::new(AtomicU64::new(u64::MAX)),
     })
 }
 
@@ -1007,6 +1072,7 @@ fn list(path: &Path, watch: TarWatch<'_>) -> io::Result<TarLayout> {
         l.phase.store(LIVE_PHASE_LISTING, Ordering::Relaxed);
     }
     let read = opened.read.clone();
+    let budget = opened.header_budget();
     let cancelled = || watch.cancel.is_some_and(|c| c.load(Ordering::Relaxed));
     let report = |n: u64| {
         if let Some(l) = watch.live {
@@ -1027,16 +1093,21 @@ fn list(path: &Path, watch: TarWatch<'_>) -> io::Result<TarLayout> {
         let mut entries = entries(&mut ar, codec == Codec::None).map_err(classify)?;
         let mut next_header = 0u64;
         let mut buf = vec![0u8; 256 << 10];
+        let mut unread = 0u64;
         loop {
             if cancelled() {
                 return Err(io::Error::other(TAR_LISTING_CANCELLED));
             }
-            let Some(entry) = entries.next() else { break };
+            budget.on(unread);
+            let next = entries.next();
+            budget.off();
+            let Some(entry) = next else { break };
             let mut entry = entry.map_err(classify)?;
             // An entry's headers start where the one before it ends: its data, padded to 512.
             let header_offset = next_header;
             next_header = align512(entry.raw_file_position().saturating_add(entry.size()));
             let what = Kind::of(&mut entry)?;
+            unread = unread_after(&what, entry.size());
             let raw = entry.path_bytes().into_owned();
             let name = String::from_utf8(raw)
                 .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
@@ -1455,17 +1526,24 @@ pub fn tar_walk(
         return r.map_err(|e| Tagged::finish(e, &opened));
     }
     let seq = layout.sequential();
+    let budget = opened.header_budget();
     let r = (|| -> io::Result<()> {
         let mut ar = tar::Archive::new(&mut opened);
         let mut entries = entries(&mut ar, !seq).map_err(Tagged::decode)?;
         let mut i = start;
+        let mut unread = 0u64;
         loop {
             if cancel.load(Ordering::Relaxed) {
                 return Err(stopped());
             }
-            let Some(entry) = entries.next() else { break };
+            budget.on(unread);
+            let next = entries.next();
+            budget.off();
+            let Some(entry) = next else { break };
             let mut entry = entry.map_err(Tagged::decode)?;
-            if !matches!(Kind::of(&mut entry)?, Kind::File) {
+            let kind = Kind::of(&mut entry)?;
+            unread = unread_after(&kind, entry.size());
+            if !matches!(kind, Kind::File) {
                 continue;
             }
             let Some(f) = layout.files.get(i) else {
