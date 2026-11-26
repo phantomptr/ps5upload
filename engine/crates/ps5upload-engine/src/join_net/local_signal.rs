@@ -34,6 +34,15 @@ pub(crate) const SIGNAL_FOR: Duration = Duration::from_secs(if cfg!(test) { 20 }
 /// connection built on the one task that carries all the guests' pictures.
 pub(crate) const SIGNALS_MAX: usize = 64;
 
+/// How a home-network join's own room is named ([`Join::Lan`]). An internet invite's room is the
+/// hub's kind of id, which the engine makes without a `-` this early.
+const HOME_ROOM: &str = "lan-";
+
+/// `room` is a home-network join's own: the guest reached this engine itself, on its network.
+pub(crate) fn is_home_room(room: &str) -> bool {
+    room.starts_with(HOME_ROOM)
+}
+
 fn frame(v: serde_json::Value) -> Message {
     Message::Text(v.to_string().into())
 }
@@ -112,7 +121,7 @@ pub(crate) async fn session(
     // mapping, no STUN: the peer is on this engine's network). The peer outlives it.
     let local_room = match join {
         Join::Lan => match super::random_b64(9) {
-            Some(r) => Some(format!("lan-{r}")),
+            Some(r) => Some(format!("{HOME_ROOM}{r}")),
             None => return,
         },
         Join::Room(_) => None,

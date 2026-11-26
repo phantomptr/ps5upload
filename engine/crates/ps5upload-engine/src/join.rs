@@ -2537,11 +2537,18 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
             admit = None; // their spot is gone, but the invite may still let them in again
         }
     }
+    // Nothing to show is enough only on the home network (the LAN socket, or the engine's own
+    // signalling): a guest in an internet invite's room got there with a link, and the link's key
+    // is what a New link or a lapsed invite takes back. Without this an old link still reached
+    // the host's "wants to play" prompt, under whatever name its holder chose.
+    let near = socket
+        .net()
+        .is_none_or(|n| crate::join_net::local_signal::is_home_room(&n.room));
     let entry = match (hello.invite.as_deref(), hello.code.as_deref()) {
         (Some(k), _) if !k.is_empty() => Some(Entry::Key(k.to_string())),
         (_, Some(c)) if !c.trim().is_empty() => Some(Entry::Code(normalize_code(c))),
         // a "Playing nearby" join (the mesh presence): no credential, the host decides
-        _ if hello.resume.is_none() => Some(Entry::Nearby),
+        _ if hello.resume.is_none() && near => Some(Entry::Nearby),
         _ => None,
     };
     let admit = match admit {
