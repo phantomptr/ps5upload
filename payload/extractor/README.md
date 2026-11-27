@@ -59,8 +59,20 @@ into an existing folder, the files already written stay.
   7z AES, zip AES and ZipCrypto passwords.
 - libarchive 3.8.10, RAR readers only (`../third_party/libarchive`, BSD-2): RAR 1.5–4 and RAR5,
   single and multi-volume. 7-Zip's own RAR decoders come from UnRAR, whose license this GPL build
-  cannot take (see `LICENSES/UnRAR-exception.md`). libarchive cannot decrypt RAR, so a
-  password-protected RAR is refused with `fs_extract_rar_encrypted` and the apps say so.
+  cannot take (see `LICENSES/UnRAR-exception.md`).
+- Password-protected RAR (#958): libarchive cannot decrypt RAR, so `src/xrarc.c` reads the
+  volumes and hands libarchive the same archive decrypted, as a stream: encrypted headers
+  (`-hp`) and file data, RAR 3/4 (AES-128) and RAR5 (AES-256), split across volumes or not.
+  `src/xrcrypt.c` has the key derivations (RAR 3's SHA-1 rounds, RAR5's PBKDF2-HMAC-SHA256) on
+  7-Zip's AES and SHA-256; written from the format, not from UnRAR. Nothing decrypted is written
+  anywhere but the extracted files. A missing or wrong password is found before anything is
+  made (`fs_extract_password_required`, `fs_extract_wrong_password`), except for RAR 3/4 with
+  only the data encrypted, which has no password check: its first file fails its CRC and is
+  dropped. RAR5 keys the checksums of encrypted files with the password; libarchive cannot check
+  those, so `xrar.c` checks each file as it is written. RAR 1.5/2.0's own encryption is refused
+  (`fs_extract_unsupported_method`). An archive whose first volume shows no encryption is read by
+  libarchive directly, as before; one that starts encrypting after its first 4096 headers is
+  still refused with `fs_extract_rar_encrypted`.
 
 ## Building and testing
 
@@ -71,5 +83,7 @@ make -C payload/extractor host-test  # host build + tests/run.py (python3; 7zz o
 
 `tests/run.py` covers name traversal, links (in the archive and already in the destination),
 multi-volume sets (7z, RAR4, RAR5) and a missing volume, passwords (7z with and without header
-encryption, zip AES, ZipCrypto, a non-ASCII password), encrypted RAR, truncated and damaged
-archives, out of space before and while writing, conflicts and Stop.
+encryption, zip AES, ZipCrypto, a non-ASCII password), password-protected RAR (RAR 3/4 and RAR5:
+data or headers encrypted, stored, BLAKE2, multi-part, solid multi-part, wrong and missing
+passwords, listing, a missing volume, damage; fixtures from `tests/make_encrypted_rar.py`),
+truncated and damaged archives, out of space before and while writing, conflicts and Stop.

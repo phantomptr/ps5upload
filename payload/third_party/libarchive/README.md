@@ -6,8 +6,8 @@ there).
 
 Only the RAR (1.5–4.x) and RAR5 readers and what they need are kept, built with the hand-written
 `config.h` (no zlib, iconv or crypto library). These readers are independent implementations, not
-derived from UnRAR, so they carry no field-of-use restriction. They cannot decrypt: an encrypted
-RAR is refused by the extractor (`fs_extract_rar_encrypted`).
+derived from UnRAR, so they carry no field-of-use restriction. They cannot decrypt: the extractor
+hands them password-protected archives already decrypted (`payload/extractor/src/xrarc.c`).
 
 The RAR test archives in `payload/extractor/tests/fixtures` come from libarchive's own test suite
 (`libarchive/test/*.rar.uu`, decoded). `rar5-dict128m*.rar` were made with RAR 7.23 (`-md128m`) for #801.
@@ -27,6 +27,9 @@ One file is changed, `archive_read_support_format_rar5.c` (#801), each change ma
 - `copy_string` copies a match in blocks (memmove, or doubling memcpy runs for a repeat shorter
   than the match) when neither run wraps around the window, instead of byte by byte (#826).
   Checked against the byte loop on 3 million random cases.
+- `rar5_read_data` ends a file at its last compressed block, with up to 15 bytes of its data left,
+  and passes over them (#958): the extractor's decrypted stream keeps the padding that
+  encryption adds to whole 16-byte AES blocks.
 
 Keep these when updating.
 
