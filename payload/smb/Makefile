@@ -29,9 +29,9 @@ CFLAGS := -Wall -Wextra -Werror -g -Os -ffunction-sections -fdata-sections \
 LDFLAGS := -Wl,--gc-sections
 LIBS := -lpthread
 
-SRCS := smbd_main.c smbd_jobs.c smbd_copy.c smbd_path.c smbd_json.c smbd_smbfs.c smbd_localfs.c smbd_library.c \
+SRCS := smbd_main.c smbd_jobs.c smbd_copy.c smbd_path.c smbd_json.c smbd_smbfs.c smbd_localfs.c smbd_library.c smbd_image.c \
         ../src/pkg_info.c
-HEADERS := smbd_copy.h smbd_fs.h smbd_jobs.h smbd_json.h smbd_library.h smbd_log.h smbd_path.h \
+HEADERS := smbd_copy.h smbd_fs.h smbd_jobs.h smbd_json.h smbd_library.h smbd_image.h smbd_log.h smbd_path.h \
            ../include/smbd_proto.h ../include/config.h ../include/pkg_info.h
 
 all: $(ELF)

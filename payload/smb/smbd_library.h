@@ -6,15 +6,21 @@
  *
  *   item = {"kind":"pkg"|"folder"|"image","path","name","title","title_id","content_id","version",
  *           "category","type":"game"|"patch"|"dlc"|"app"|"other","platform","fw","sdk","backport","fake",
- *           "size","icon"} ("sdk" the SDK it was built with, "backport" a folder holding fakelib/; "icon" is a file name in icons/, "" when there is none; "path" is the path on
- *           the side scanned: share-relative for a share, absolute for the console)
+ *           "size","icon"[,"meta","mtime"]} ("sdk" the SDK it was built with, "backport" a folder holding fakelib/; "icon" is a file name in icons/, "" when there is none; "path" is the path on
+ *           the side scanned: share-relative for a share, absolute for the console; "meta" and
+ *           "mtime" on an image only: "read" when its own param file named it, else why it could
+ *           not be read (smbd_image.h), and the file's mtime)
  *
  * What counts as a game:
  *   - a .pkg whose header reads (pkg_info.c: title, ids, version, type, firmware, its icon0.png);
  *   - a folder holding sce_sys/param.json (PS5) or sce_sys/param.sfo (PS4): a folder dump (its
  *     icon is sce_sys/icon0.png; it is never walked into);
- *   - a disk image (.exfat, .ffpkg, .ffpfs, .ffpfsc): named after the file, its title id taken
- *     from the name when it carries one ("PPSA01234 Game.exfat").
+ *   - a disk image (.exfat, .ffpkg, .ffpfs, .ffpfsc): named by the sce_sys/param.json (or
+ *     param.sfo) inside it and covered by its icon0.png, read in place with a few small reads
+ *     (smbd_image.h, #963). One that cannot be read (a compressed .ffpfsc) keeps the title id in
+ *     its name ("PPSA01234 Game.exfat") and its "meta" says why. An image whose size and mtime
+ *     match the last result's is taken from it, not read again, so a rescan of a big share
+ *     reads only what is new or changed.
  *
  * Bounded, because a share can be huge: LIB_DEPTH_MAX folders deep, LIB_ENTRIES_MAX entries looked
  * at, LIB_DIR_ENTRIES_MAX per folder, LIB_ITEMS_MAX items, LIB_TIME_MAX_S, covers up to
