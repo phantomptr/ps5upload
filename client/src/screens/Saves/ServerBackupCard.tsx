@@ -16,17 +16,20 @@ import {
   driveKeep,
   isChosen,
   serverConsoleCopySupported,
+  serverIntervalChoices,
+  serverIntervalMinutes,
+  serverMinutesSupported,
   toggleChosen,
   useServerBackupStore,
 } from "../../state/serverSaveBackup";
 import { useTr } from "../../state/lang";
 import { userHex } from "./saveUsers";
-import { ConsoleCopyChoice, useConsoleDrives } from "./AutoBackupCard";
+import { ConsoleCopyChoice, intervalLabel, useConsoleDrives } from "./AutoBackupCard";
 import { BackupLayoutChoice, layoutSupported } from "./BackupLayoutChoice";
 import { BackupProgressModal, BackupRunBar, useBackupRuns } from "./BackupProgress";
 import { FolderBackupChoice, foldersSupported } from "./FolderBackupChoice";
 
-/** Backups to a network share (#592): where, when (every few hours or after a game is closed),
+/** Backups to a network share (#592): where, when (on a schedule, from 10 minutes to a day, or after a game is closed),
  *  which consoles and users, and how the last one went. The engine runs them and verifies each
  *  copy by reading it back from the server; restores are on each game's page. */
 export default function ServerBackupCard({
@@ -87,7 +90,9 @@ export default function ServerBackupCard({
 
   const modeLabel = (m: ServerBackupMode) =>
     m === "interval"
-      ? tr("saves_server_mode_interval", undefined, "Every few hours")
+      ? serverMinutesSupported(settings)
+        ? tr("saves_server_mode_schedule", undefined, "On a schedule")
+        : tr("saves_server_mode_interval", undefined, "Every few hours")
       : m === "after_close"
         ? tr("saves_server_mode_closed", undefined, "After a game is closed")
         : tr("saves_server_mode_off", undefined, "Off");
@@ -165,7 +170,22 @@ export default function ServerBackupCard({
               onChange={(e) => void set({ mode: e.target.value as ServerBackupMode })}
               options={(["off", "interval", "after_close"] as const).map((m) => ({ value: m, label: modeLabel(m) }))}
             />
-            {settings.mode === "interval" && (
+            {settings.mode === "interval" && serverMinutesSupported(settings) && (
+              <Select
+                label={tr("saves_auto_every", undefined, "Back up every")}
+                data-testid="server-backup-every"
+                value={String(serverIntervalMinutes(settings))}
+                onChange={(e) => {
+                  const every_minutes = Number(e.target.value);
+                  if (every_minutes !== serverIntervalMinutes(settings)) void set({ every_minutes });
+                }}
+                options={serverIntervalChoices(serverIntervalMinutes(settings)).map((m) => ({
+                  value: String(m),
+                  label: intervalLabel(m, tr),
+                }))}
+              />
+            )}
+            {settings.mode === "interval" && !serverMinutesSupported(settings) && (
               <label className="text-xs text-[var(--color-muted)]">
                 {tr("saves_server_hours", undefined, "Every (hours)")}
                 <input

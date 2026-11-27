@@ -64,16 +64,26 @@ export function IntervalChoice({
   );
 }
 
-/** "M.2 drive (/mnt/ext0)", "USB drive (/mnt/usb0)". */
+/** The internal storage, as the engine names it for the copy. */
+export const INTERNAL_DRIVE = "/data";
+
+/** "Internal storage (/data)", "M.2 drive (/mnt/ext0)", "USB drive (/mnt/usb0)". */
 export function consoleDriveLabel(path: string, tr: Tr): string {
+  if (path === INTERNAL_DRIVE)
+    return tr("saves_auto_console_drive_internal", { path }, "Internal storage ({path})");
   return path.startsWith("/mnt/usb")
     ? tr("saves_auto_console_drive_usb", { path }, "USB drive ({path})")
     : tr("saves_auto_console_drive_ext", { path }, "M.2 drive ({path})");
 }
 
-/** The drive to start with when the copy is switched on: the first M.2, else the first USB. */
+/** The drive to start with when the copy is switched on: the first M.2, else the first USB, else
+ *  the internal storage (the one a reset of the console wipes). */
 export function firstConsoleDrive(drives: readonly ConsoleDrive[]): string | null {
-  return (drives.find((d) => d.kind === "ext") ?? drives[0])?.path ?? null;
+  return (
+    drives.find((d) => d.kind === "ext") ??
+    drives.find((d) => d.kind === "usb") ??
+    drives[0]
+  )?.path ?? null;
 }
 
 /** "Also keep a copy on a PS5 drive": each backup is copied to the console's M.2 or USB drive
@@ -118,9 +128,9 @@ export function ConsoleCopyChoice({
       </label>
       <p className="mt-1 text-xs text-[var(--color-muted)]">
         {tr(
-          "saves_auto_console_note",
+          "saves_auto_console_note_v2",
           undefined,
-          "Each backup is also copied to ps5upload/save-backups on the PS5's M.2 or USB drive, so your saves survive a reset that wipes the internal storage.",
+          "Each backup is also copied to ps5upload/save-backups on the PS5 drive you choose: its internal storage, an M.2 or a USB drive. A console reset wipes the internal storage, and formatting a drive wipes that drive, so the copy on a computer or network share is the safer one.",
         )}
       </p>
       {!connected ? (
@@ -131,9 +141,18 @@ export function ConsoleCopyChoice({
         <p className="mt-1 text-xs text-[var(--color-bad)]">{loadError}</p>
       ) : drives && drives.length === 0 ? (
         <p className="mt-1 text-xs text-[var(--color-muted)]" data-testid={`${testId}-none`}>
-          {tr("saves_auto_console_no_drive", undefined, "This PS5 has no M.2 or USB drive to copy to.")}
+          {tr("saves_auto_console_no_drive_v2", undefined, "This PS5 has no drive to copy to.")}
         </p>
       ) : null}
+      {drive === INTERNAL_DRIVE && (
+        <p className="mt-1 text-xs text-[var(--color-warn)]" data-testid={`${testId}-internal-warn`}>
+          {tr(
+            "saves_auto_console_internal_warn",
+            undefined,
+            "On the internal storage these copies are lost if the PS5 is reset or its storage is wiped. They help when a save goes wrong, not when the console does.",
+          )}
+        </p>
+      )}
       {on && (
         <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
           <label htmlFor={`${testId}-select`} className="text-xs text-[var(--color-muted)]">

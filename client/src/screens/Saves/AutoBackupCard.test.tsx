@@ -43,10 +43,24 @@ describe("automatic backups: a copy on a PS5 drive", () => {
     useAutoSaveBackupStore.setState({ settings: null, status: null, error: null });
   });
 
-  it("starts on the M.2 drive, else a USB one", () => {
-    expect(firstConsoleDrive([usb, m2])).toBe("/mnt/ext0");
-    expect(firstConsoleDrive([usb])).toBe("/mnt/usb0");
+  const internal: ConsoleDrive = { path: "/data", kind: "internal", total_bytes: 1, free_bytes: 1 };
+
+  it("starts on the M.2 drive, else a USB one, else the internal storage", () => {
+    expect(firstConsoleDrive([internal, usb, m2])).toBe("/mnt/ext0");
+    expect(firstConsoleDrive([internal, usb])).toBe("/mnt/usb0");
+    expect(firstConsoleDrive([internal])).toBe("/data");
     expect(firstConsoleDrive([])).toBeNull();
+  });
+
+  it("says a reset or a format can wipe the copies, and warns more on the internal storage", () => {
+    const html = render({ drives: [internal, m2] });
+    expect(html).toContain("A console reset wipes the internal storage, and formatting a drive wipes that drive");
+    expect(html).toContain("the copy on a computer or network share is the safer one");
+    expect(html).not.toContain("auto-save-backup-console-internal-warn");
+    const on = render({ drive: "/data", drives: [internal, m2] });
+    expect(on).toMatch(/<option value="\/data" selected="">Internal storage \(\/data\)<\/option>/);
+    expect(on).toContain("auto-save-backup-console-internal-warn");
+    expect(on).toContain("lost if the PS5 is reset");
   });
 
   it("is off with no drive picker until switched on", () => {

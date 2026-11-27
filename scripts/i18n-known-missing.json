@@ -144,7 +144,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -305,7 +311,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -464,7 +476,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -637,7 +655,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -804,7 +828,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -967,7 +997,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -1133,7 +1169,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -1298,7 +1340,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -1468,7 +1516,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -1640,7 +1694,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -1812,7 +1872,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -1974,7 +2040,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -2138,7 +2210,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -2305,7 +2383,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -2472,7 +2556,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -2638,7 +2728,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -2804,7 +2900,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -2973,7 +3075,13 @@
       "rp_stats_page_skips",
       "rp_stats_ps5_fps",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -3130,7 +3238,13 @@
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [
@@ -3281,7 +3395,13 @@
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
       "rp_touch_hide",
-      "rp_touch_show"
+      "rp_touch_show",
+      "save_backup_on_console_internal",
+      "saves_auto_console_drive_internal",
+      "saves_auto_console_internal_warn",
+      "saves_auto_console_no_drive_v2",
+      "saves_auto_console_note_v2",
+      "saves_server_mode_schedule"
     ],
     "stale": [],
     "untranslated": [

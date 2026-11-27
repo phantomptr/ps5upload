@@ -13895,7 +13895,7 @@ fn build_app_and_mcp(
             post(save_folders::post_restore),
         )
         .route("/api/save-backup/list", get(save_backup::get_list))
-        // A copy of each backup on the PS5's own M.2 or USB drive.
+        // A copy of each backup on the PS5's own internal, M.2 or USB drive.
         .route(
             "/api/save-backup/console/drives",
             get(save_backup_console::get_drives),

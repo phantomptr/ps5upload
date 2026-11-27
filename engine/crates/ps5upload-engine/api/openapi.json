@@ -3621,7 +3621,7 @@
             "type": "integer"
           },
           "kind": {
-            "description": "`ext` (M.2 / extended storage) or `usb`.",
+            "description": "`internal` (`/data`), `ext` (M.2 / extended storage) or `usb`.",
             "type": "string"
           },
           "path": {
@@ -10508,7 +10508,7 @@
       "Patch": {
         "properties": {
           "console_drive": {
-            "description": "The PS5 drive that also gets a copy of each backup (`/mnt/ext<N>`, `/mnt/usb<N>`); \"\" for\nnone (#885).",
+            "description": "The PS5 drive that also gets a copy of each backup (`/data`, `/mnt/ext<N>`,\n`/mnt/usb<N>`); \"\" for none (#885).",
             "type": [
               "string",
               "null"
@@ -10530,6 +10530,15 @@
             ]
           },
           "every_hours": {
+            "description": "Hours between interval passes, 1 to 168 (clears `every_minutes`).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "every_minutes": {
+            "description": "Minutes between interval passes, 10 to 10080 (10 min, 30 min, 1 hour, 6 hours, a day…).",
             "minimum": 0,
             "type": [
               "integer",
@@ -18144,7 +18153,7 @@
             "type": "array"
           },
           "console_drive": {
-            "description": "The PS5 drive that also gets a copy of each backup (`/mnt/ext<N>`, `/mnt/usb<N>`); \"\" for\nnone.",
+            "description": "The PS5 drive that also gets a copy of each backup (`/data`, `/mnt/ext<N>`,\n`/mnt/usb<N>`); \"\" for none.",
             "type": [
               "string",
               "null"
@@ -48819,7 +48828,7 @@
     },
     "/api/save-backup/console/drives": {
       "get": {
-        "description": "`GET /api/save-backup/console/drives?addr=` — `{drives: [{path, kind, total_bytes,\nfree_bytes}]}`, the console's M.2 and USB drives a copy of each save backup can go to (never\nthe internal storage).",
+        "description": "`GET /api/save-backup/console/drives?addr=` — `{drives: [{path, kind, total_bytes,\nfree_bytes}]}`, the console's drives a copy of each save backup can go to: its internal\nstorage (`/data`), M.2 and USB drives.",
         "parameters": [
           {
             "in": "query",
@@ -48870,7 +48879,6 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "`{drives: [{path, kind, total_bytes, free_bytes}]}`, the console's M.2 and USB drives a copy of each save backup can go to (never the internal storage)",
         "tags": [
           "saves"
         ],
