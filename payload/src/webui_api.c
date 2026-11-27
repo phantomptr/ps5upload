@@ -752,12 +752,17 @@ static void start_path_job(int fd, uint8_t *out, int op, const char *path, const
     q.args_len = len > 0 ? (uint32_t)len : 0;
     ava1_w_init(&w, req, args_cap + 64);
     if (len <= 0 || ava1_job_run_encode(&q, &w) != 0) {
+        /* the tail can hold an archive's password (r_fs_extract wipes its own copy) */
+        memset(args, 0, args_cap);
+        memset(req, 0, args_cap + 64);
         free(args);
         free(req);
         send_bad(fd, "bad_path");
         return;
     }
     st = call(AVA1_METHOD_JOB_RUN, req, w.len, out, &ol);
+    memset(args, 0, args_cap);
+    memset(req, 0, args_cap + 64);
     free(args);
     free(req);
     if (st != AVA1_STATUS_OK) {
