@@ -26,7 +26,8 @@ import { pageCss } from "./vite.pageCss";
 // 768 KiB in 12.1.0, once the page stopped importing the host's whole Remote Play store for rpInput
 // (state/rpInput.ts): kept close, so that does not creep back in. 804 in 12.6.39: the warning not to
 // pick the host's PS5 user took about 2 KiB. 806: the iPhone Home Screen tip (no Fullscreen API there).
-const RAW_BUDGET = 806 * 1024;
+// 807: a phone turned sideways in a browser goes full screen, and Safari's bars fold away.
+const RAW_BUDGET = 807 * 1024;
 const OUT = fileURLToPath(new URL("../engine/crates/ps5upload-engine/src/join_page.html", import.meta.url));
 /** The same page on the website (https://ps5upload.phantomptr.com/join/, .github/workflows/
  *  pages.yml), where internet invites open (#room=…&k=…&fp=…&hub=…, join/rtcTransport.ts). */

@@ -7,7 +7,15 @@ import { TouchControls } from "../screens/Play/TouchControls";
 import { PhoneKeyboardButton, TouchModeToggle, TouchpadSurface } from "../screens/Play/TouchpadOverlay";
 import { KbmSender } from "../lib/kbmInput";
 import { useTr } from "../state/lang";
-import { HomeScreenTip, hasFullscreenApi, isAppleTouch, useHomeScreenTip } from "../lib/pageFill";
+import {
+  HomeScreenTip,
+  hasFullscreenApi,
+  isAppleTouch,
+  sidewaysNow,
+  useCollapseBars,
+  useHomeScreenTip,
+  useTurns,
+} from "../lib/pageFill";
 import { setScreenWakeReason } from "../lib/androidScreenWake";
 import { setPadForwardReason } from "../lib/androidPadBridge";
 import { rpInput } from "../state/rpInput";
@@ -78,15 +86,30 @@ function canRetry(s: PadLinkStage): boolean {
   return !(s.kind === "refused" && (s.why === "kicked" || s.why === "closed"));
 }
 
-/** Fill the screen and hold it sideways, where the browser allows (Android Chrome does). */
+/** Fill the screen, where the browser allows (Android Chrome does). From upright (the Full screen
+ *  button) it also holds the phone sideways; from a turn it does not, so turning upright again
+ *  can leave. */
 async function fillScreen(): Promise<void> {
   try {
-    await document.documentElement.requestFullscreen?.({ navigationUI: "hide" });
-    await (screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }).lock?.("landscape");
+    const upright = !sidewaysNow();
+    if (!document.fullscreenElement) await document.documentElement.requestFullscreen?.({ navigationUI: "hide" });
+    if (upright) await (screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }).lock?.("landscape");
   } catch {
     // Not here (iPhone Safari): the page still fills the window.
   }
 }
+
+/** Out of the browser's full screen (a phone turned upright again). */
+async function leaveScreen(): Promise<void> {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+  } catch {
+    // Nothing to leave.
+  }
+}
+
+/** A touch screen (the pad page's phones). */
+const touchScreen = () => typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
 
 type KbmCapsMsg = { mouse: boolean; keyboard: boolean; reason: string | null };
 
@@ -264,6 +287,12 @@ export function PadApp({
   // computer's Wi-Fi, its own page still works.
   const showLan =
     !!lanUrl && !live && (hubDown || (stage.kind === "refused" && stage.why === "net:no_hub"));
+  // The page already fills the window. A phone turned sideways also asks for the real full screen
+  // where the browser has one (Android Chrome, inside the turn itself), upright again leaves it;
+  // an iPhone browser has none, so its bars fold away where Safari lets them.
+  const touch = touchScreen();
+  useTurns(live && touch && hasFullscreenApi(), (sideways) => void (sideways ? fillScreen() : leaveScreen()));
+  useCollapseBars(live && touch && !portrait && !hasFullscreenApi());
   return (
     <div
       className="fixed inset-0 select-none overflow-hidden bg-black text-white [-webkit-touch-callout:none]"
