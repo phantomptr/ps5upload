@@ -3344,7 +3344,8 @@ static int nudge_old_page(const char *query) {
     return refuse;
 }
 
-/* GET /, GET /api/token, GET /strings/<lang>.json, GET /sw.js, GET /minion.appcache and the retired
+/* GET /, GET /api/token, GET /strings/<lang>.json, GET /sw.js, GET /minion.appcache, the
+ * Home Screen icon and manifest (webui_offline.h), and the retired
  * GET /cache.appcache (410): the server
  * checked Host/Origin but no token (is_api is 0 for all of them). None reaches a helper method, so they stay outside the in-flight RPC
  * gate. The token goes out as JSON with no CORS headers: another site's page cannot read the reply,

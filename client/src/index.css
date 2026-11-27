@@ -351,6 +351,21 @@ body,
   overflow: hidden;
 }
 
+/* The guest pages' full screen in a phone browser without the Fullscreen API (iPhone;
+ * lib/pageFill useCollapseBars): the page one window and a bit tall, so it can be scrolled down
+ * and Safari can fold its bars away (minimal UI). The game is fixed over the visible window and
+ * keeps every touch, so nothing scrolls under a finger. */
+html[data-collapse-bars],
+html[data-collapse-bars] body {
+  height: auto;
+  overflow: visible;
+}
+html[data-collapse-bars] #root {
+  height: auto;
+  min-height: calc(100vh + 1px);
+  min-height: calc(100lvh + 1px);
+}
+
 /* Nothing may stick out past the page (#856). An absolutely placed element with no placed
  * ancestor (a screen-reader-only label in a sideways-scrolling row of chips, say) is measured
  * from the page itself, so one sitting past the right edge made the document wider than the

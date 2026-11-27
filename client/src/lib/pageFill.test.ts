@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
-import { HOME_TIP_KEY, HomeScreenTip, fillWithoutApi, showsFullButton } from "./pageFill";
+import { HOME_TIP_KEY, HomeScreenTip, fillWithoutApi, showsFullButton, sidewaysNow, turnStep } from "./pageFill";
 
 const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 CriOS/131.0 Mobile/15E148";
 
@@ -46,5 +46,28 @@ describe("Full screen without the Fullscreen API", () => {
     const html = renderToStaticMarkup(createElement(HomeScreenTip, { onClose: () => {} }));
     expect(html).toContain("Add to Home Screen");
     expect(html).toContain('data-testid="home-screen-tip-close"');
+  });
+});
+
+describe("A phone turned sideways in a browser", () => {
+  it("goes full on a turn sideways and leaves on a turn upright", () => {
+    expect(turnStep(true, false)).toBe("enter");
+    expect(turnStep(false, true)).toBe("leave");
+    // Already that way: nothing (left full screen sideways stays left until the next turn).
+    expect(turnStep(true, true)).toBeNull();
+    expect(turnStep(false, false)).toBeNull();
+  });
+
+  it("reads sideways from the screen, the older orientation, else the window's shape", () => {
+    vi.stubGlobal("window", { screen: { orientation: { type: "landscape-primary" } }, innerWidth: 400, innerHeight: 800 });
+    expect(sidewaysNow()).toBe(true);
+    vi.stubGlobal("window", { screen: { orientation: { type: "portrait-primary" } }, innerWidth: 800, innerHeight: 400 });
+    expect(sidewaysNow()).toBe(false);
+    vi.stubGlobal("window", { screen: {}, orientation: -90, innerWidth: 400, innerHeight: 800 });
+    expect(sidewaysNow()).toBe(true);
+    vi.stubGlobal("window", { screen: {}, innerWidth: 800, innerHeight: 400 });
+    expect(sidewaysNow()).toBe(true);
+    vi.stubGlobal("window", { screen: {}, innerWidth: 400, innerHeight: 800 });
+    expect(sidewaysNow()).toBe(false);
   });
 });

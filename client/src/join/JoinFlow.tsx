@@ -11,6 +11,7 @@ import type { JoinTransport } from "./rtcTransport";
 import type { NetPath } from "./netPath";
 import { defaultName, lastName, rememberName } from "./guestName";
 import { OpenOnWifi, useHubDown } from "./OpenOnWifi";
+import { sidewaysNow } from "../lib/pageFill";
 
 export { NAME_KEY, defaultName } from "./guestName";
 
@@ -23,12 +24,15 @@ function hasPlace(invite: string | null): boolean {
   }
 }
 
-/** Fill the screen and hold it sideways, where the browser allows (Android Chrome does). */
+/** Fill the screen, where the browser allows (Android Chrome does). From upright (the Full screen
+ *  button) it also holds the phone sideways; from a turn it does not, so turning upright again
+ *  can leave. */
 async function pageFullscreen(on: boolean): Promise<void> {
   try {
     if (on) {
-      await document.documentElement.requestFullscreen?.({ navigationUI: "hide" });
-      await (screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }).lock?.("landscape");
+      const upright = !sidewaysNow();
+      if (!document.fullscreenElement) await document.documentElement.requestFullscreen?.({ navigationUI: "hide" });
+      if (upright) await (screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }).lock?.("landscape");
     } else if (document.fullscreenElement) {
       await document.exitFullscreen();
     }

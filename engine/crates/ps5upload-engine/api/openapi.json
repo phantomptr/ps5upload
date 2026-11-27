@@ -25883,7 +25883,7 @@
     },
     "/api/join/settings": {
       "post": {
-        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninvites?, internet_invites?, hub_url?, page_base?, stun?, reset?, upnp?, video_track?}`: the host's choices (every\nconsole). Fewer players lets nobody go; it only stops new ones. `stream_seat` off moves a friend\non the stream's controller to a pad of their own. `invites` is \"Invites work\": \"anywhere\" (the\none link, through the hub) or \"wifi\" (the home network's link only; 400 `invites` otherwise),\nthe same choice as `internet_invites` on or off, and the one setting kept across restarts.\n\"wifi\" closes the internet rooms (guests already in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `page_base` where the guest pages are (`https://play.example.com/`: links open\n`<page_base>join/`, `pad/` or `share/`; `http://` only to this computer, no query or fragment;\n400 `page_base` otherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none),\n`reset` a list of `hub_url`, `page_base` and `stun` to put back to the default (an empty\n`hub_url` or `page_base` does the same; 400 `reset` for another name). The hub, page base and\nSTUN servers are kept across restarts while they differ from the default, which a self-hosted\nengine may take from `PS5UPLOAD_HUB_URL` and `PS5UPLOAD_PAGE_BASE`; `settings.sources` says\nwhich each is (\"custom\", \"environment\" or \"default\"). `upnp` is whether the\nrouter is asked for a port, `video_track` whether internet guests get the picture as a video\ntrack (new connections; the data channel otherwise).\n\n`guest_profiles` with `addr` (\"Guests play as\" on that console): each guest's player gets the\nprofile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).\nOnly signed-in profiles can be seated. The host's own profile (the one in front) needs `owner`\ntrue, the host's confirmation that the guest may use its saves and trophies (409\n`owner_confirm` otherwise; `owner_unknown` when the console does not say which one is in front,\nfor any profile newly chosen without `owner`); 400 `addr` without a console, 400 `player`, `user` or `duplicate`\nfor a list that is not one profile per player.",
+        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninvites?, internet_invites?, hub_url?, page_base?, stun?, reset?, upnp?, video_track?}`: the host's choices (every\nconsole). Fewer players lets nobody go; it only stops new ones. `stream_seat` off moves a friend\non the stream's controller to a pad of their own. `invites` is \"Invites work\": \"anywhere\" (the\none link, through the hub) or \"wifi\" (the home network's link only; 400 `invites` otherwise),\nthe same choice as `internet_invites` on or off. Every setting here is kept across restarts\n(and for the next Play Together) except `guest_profiles`.\n\"wifi\" closes the internet rooms (guests already in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `page_base` where the guest pages are (`https://play.example.com/`: links open\n`<page_base>join/`, `pad/` or `share/`; `http://` only to this computer, no query or fragment;\n400 `page_base` otherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none),\n`reset` a list of `hub_url`, `page_base` and `stun` to put back to the default (an empty\n`hub_url` or `page_base` does the same; 400 `reset` for another name). The hub, page base and\nSTUN servers are kept across restarts while they differ from the default, which a self-hosted\nengine may take from `PS5UPLOAD_HUB_URL` and `PS5UPLOAD_PAGE_BASE`; `settings.sources` says\nwhich each is (\"custom\", \"environment\" or \"default\"). `upnp` is whether the\nrouter is asked for a port, `video_track` whether internet guests get the picture as a video\ntrack (new connections; the data channel otherwise).\n\n`guest_profiles` with `addr` (\"Guests play as\" on that console): each guest's player gets the\nprofile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).\nOnly signed-in profiles can be seated. The host's own profile (the one in front) needs `owner`\ntrue, the host's confirmation that the guest may use its saves and trophies (409\n`owner_confirm` otherwise; `owner_unknown` when the console does not say which one is in front,\nfor any profile newly chosen without `owner`); 400 `addr` without a console, 400 `player`, `user` or `duplicate`\nfor a list that is not one profile per player.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -54719,6 +54719,44 @@
         "summary": "Read a ZIP archive, with progress lines",
         "tags": [
           "transfer"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/app-icon/{name}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "pages"
         ],
         "x-ps5upload": {
           "access": "loopback",

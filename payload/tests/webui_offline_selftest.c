@@ -24,6 +24,9 @@ unsigned char webui_sw_js[] = "self.addEventListener";
 unsigned int webui_sw_js_len = sizeof webui_sw_js - 1;
 unsigned char webui_cache_appcache[] = "CACHE MANIFEST\n";
 unsigned int webui_cache_appcache_len = sizeof webui_cache_appcache - 1;
+/* And for build/webui_tile_icon.c. */
+unsigned char webui_tile_icon0_png[] = "\x89PNG";
+unsigned int webui_tile_icon0_png_len = sizeof webui_tile_icon0_png - 1;
 
 static void lookup(void) {
     webui_offline_file_t f;
@@ -40,6 +43,19 @@ static void lookup(void) {
     CHECK(webui_offline_find("/minion.appcache", &f) == 1);
     CHECK(strcmp(f.ctype, "text/cache-manifest; charset=utf-8") == 0);
     CHECK(f.data == webui_cache_appcache && f.len == webui_cache_appcache_len);
+
+    memset(&f, 0, sizeof f);
+    CHECK(webui_offline_find("/apple-touch-icon.png", &f) == 1);
+    CHECK(strcmp(f.ctype, "image/png") == 0);
+    CHECK(f.data == webui_tile_icon0_png && f.len == webui_tile_icon0_png_len);
+
+    memset(&f, 0, sizeof f);
+    CHECK(webui_offline_find("/manifest.webmanifest", &f) == 1);
+    CHECK(strcmp(f.ctype, "application/manifest+json") == 0);
+    CHECK(f.len == strlen((const char *)f.data));
+    CHECK(strstr((const char *)f.data, "\"name\":\"PS5Upload\"") != NULL);
+    CHECK(strstr((const char *)f.data, "\"short_name\":\"PS5Upload\"") != NULL);
+    CHECK(strstr((const char *)f.data, "\"src\":\"/apple-touch-icon.png\"") != NULL);
 
     for (i = 0; i < sizeof other / sizeof other[0]; i++) CHECK(webui_offline_find(other[i], &f) == 0);
     CHECK(webui_offline_find(NULL, &f) == 0);

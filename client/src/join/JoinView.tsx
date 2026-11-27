@@ -4,7 +4,15 @@ import { Expand, EyeOff, Gamepad2, LogOut, Minimize, MoreHorizontal, RotateCw, U
 import type { JoinStage } from "../lib/joinClient";
 import { delayTone, playerColor, type JoinStatus } from "../lib/joinProtocol";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
-import { HomeScreenTip, hasFullscreenApi, showsFullButton, useHomeScreenTip } from "../lib/pageFill";
+import {
+  HomeScreenTip,
+  hasFullscreenApi,
+  showsFullButton,
+  turnStep,
+  useCollapseBars,
+  useHomeScreenTip,
+  useTurns,
+} from "../lib/pageFill";
 import { registerBackDismiss } from "../lib/focusTrap";
 import { tvNavActive } from "../lib/tvNav";
 import { gamepadsOf } from "../lib/nativePad";
@@ -442,6 +450,20 @@ export function JoinView({
     mq.addEventListener?.("change", turn);
     return () => mq.removeEventListener?.("change", turn);
   }, [inApp, live, onFullscreen]);
+
+  // A phone in a browser turned sideways: the page's full layout, and the real full screen where
+  // the browser has one (Android Chrome lets the page ask inside the turn itself); upright again
+  // leaves it. An iPhone browser has no full screen to ask for: the bars fold away where Safari
+  // lets them (useCollapseBars).
+  useTurns(!inApp && live && touch, (sideways) => {
+    const step = turnStep(sideways, fullNow.current);
+    if (!step) return;
+    const next = step === "enter";
+    fullNow.current = next;
+    setFull(next);
+    void onFullscreen?.(next);
+  });
+  useCollapseBars(!inApp && live && full && touch && !hasFullscreenApi());
 
   // The app on a TV (#926): the game fills the screen from the start, as a TV app's does. Back
   // shows the buttons, Back again leaves full screen; Full screen is among the buttons.

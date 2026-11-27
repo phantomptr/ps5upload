@@ -20,6 +20,7 @@ mod ampr_index_api;
 mod ampr_trace;
 mod api_errors;
 mod app_dump_api;
+mod app_icon;
 #[cfg(test)]
 mod archive_build_tests;
 mod archive_free;
@@ -921,7 +922,8 @@ pub(crate) fn allow_rules_contain(rules: &[AllowRule], peer: std::net::IpAddr) -
 /// Allow when the path is the PS5-facing `/pkg-host/*`, the peer is on
 /// loopback, or the peer matches one of the configured rules.
 fn loopback_allows(cfg: &LoopbackGuardConfig, peer: std::net::IpAddr, path: &str) -> bool {
-    const OFF_LOOPBACK_ALLOWED: &[&str] = &["/pkg-host/"];
+    // `/app-icon/`: the Home Screen icons and manifests the pages below link (app_icon.rs).
+    const OFF_LOOPBACK_ALLOWED: &[&str] = &["/pkg-host/", "/app-icon/"];
     OFF_LOOPBACK_ALLOWED.iter().any(|p| path.starts_with(p))
         // A phone as a controller (pad_link.rs): its page and its socket, which checks the
         // QR code's key or waits for the computer to allow it.
@@ -14266,6 +14268,7 @@ fn build_app_and_mcp(
         )
         .route("/api/ps5/vinput/report", post(vinput_api::http_report))
         .route("/rp-player", get(rp_stream_api::player))
+        .route("/app-icon/{name}", get(app_icon::file))
         .route("/pad", get(pad_link::page))
         .route("/api/pad/ws", get(pad_link::ws))
         // Play Together (#641): guests as Players 2-4 (join.rs).
@@ -15139,6 +15142,22 @@ mod loopback_guard_tests {
     fn pkg_host_allowed_from_any_peer() {
         let c = cfg(&[]);
         assert!(loopback_allows(&c, ip("10.0.0.7"), "/pkg-host/abc"));
+    }
+
+    #[test]
+    fn home_screen_icons_reach_any_peer() {
+        let c = cfg(&[]);
+        assert!(loopback_allows(
+            &c,
+            ip("192.168.1.30"),
+            "/app-icon/apple-touch-icon.png"
+        ));
+        assert!(loopback_allows(
+            &c,
+            ip("192.168.1.30"),
+            "/app-icon/page.webmanifest"
+        ));
+        assert!(!loopback_allows(&c, ip("192.168.1.30"), "/app-icon"));
     }
 
     #[test]

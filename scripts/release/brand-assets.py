@@ -10,6 +10,10 @@ outlines, so nothing here needs the font installed. This writes:
   client/public/logo-square.png        favicon, sidebar, About, the console page's top bar
   payload/assets/webui_tile_icon0.png  the PS5 home-screen tile (512x512, no transparency)
   site/assets/logo.png, favicon.png    the website
+  engine/.../src/app_icon/, site/app-icon/  a phone's Home Screen icons for the web pages the
+        engine serves (/app-icon/*) and the website's /join and /pad: apple-touch-icon.png
+        (180, opaque), icon-192.png, icon-512.png, icon-maskable-512.png. Only these:
+        python3 scripts/release/brand-assets.py --home-icons
   logo.png                             the README logo (light); branding/png/ has the dark one
   branding/png/                        lockups, icon and mark at full size, the GitHub social
                                        preview and the Discord server icon and banner
@@ -18,7 +22,9 @@ Needs rsvg-convert (brew install librsvg) and Pillow.
 Run it again whenever a master changes:  python3 scripts/release/brand-assets.py
 """
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -62,7 +68,35 @@ def optimise(p: Path) -> None:
     im.save(p, optimize=True)
 
 
+HOME_DIRS = (ROOT / "engine/crates/ps5upload-engine/src/app_icon", ROOT / "site/app-icon")
+WHITE = (255, 255, 255, 255)
+
+
+def home_icons() -> None:
+    """A phone's Home Screen icons. iOS wants an opaque square (it rounds it itself); Android's
+    maskable icon keeps the mark inside the middle 80% circle its masks may cut to."""
+    icon = B / "icon.svg"
+    square = re.sub(r'rx="58"', 'rx="0"', icon.read_text())
+    a, *rest = HOME_DIRS
+    a.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        big = Image.open(render(square, Path(tmp) / "sq.png", w=1024)).convert("RGBA")
+        art = Image.open(render(B / "mark.svg", Path(tmp) / "mark.png", h=1024)).convert("RGBA")
+    big.resize((180, 180), Image.LANCZOS).convert("RGB").save(a / "apple-touch-icon.png", optimize=True)
+    for n in (192, 512):
+        big.resize((n, n), Image.LANCZOS).convert("RGB").save(a / f"icon-{n}.png", optimize=True)
+    on(WHITE, (512, 512), art, 0.56).convert("RGB").save(a / "icon-maskable-512.png", optimize=True)
+    for d in rest:
+        d.mkdir(parents=True, exist_ok=True)
+        for f in a.iterdir():
+            shutil.copyfile(f, d / f.name)
+
+
 def main() -> None:
+    if "--home-icons" in sys.argv:
+        home_icons()
+        print("home screen icons written")
+        return
     PNG.mkdir(parents=True, exist_ok=True)
     icon = B / "icon.svg"
 
@@ -110,6 +144,7 @@ def main() -> None:
     card.convert("RGB").save(PNG / "github-social-preview.png", optimize=True)
     for tmp in ("_mark.png", "_wide.png"):
         (PNG / tmp).unlink()
+    home_icons()
     print("brand assets written")
 
 
