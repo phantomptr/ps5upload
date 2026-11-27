@@ -1356,7 +1356,7 @@ mod tests {
         assert!(s.put_since("k", "a", "/data/games", e(5, now_ms()), now_ms()));
         // Another spelling of the same folder is the same folder.
         s.changed("k", &["/data//games/./X".to_string()]);
-        assert!(s.sizes_in("k", "/data").1.get("games").is_none());
+        assert!(!s.sizes_in("k", "/data").1.contains_key("games"));
     }
 
     /// An old clean-up scan read again (the page polls it) gives no sizes: a size dropped for a
