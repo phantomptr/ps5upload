@@ -26,6 +26,8 @@ export interface UploadItemOptions {
   /** Uniqueness for a package's staged name. */
   nonce: string;
   now: number;
+  /** An unpacked archive's "Choose files" (#969): only these paths go, unpacking to `bytes`. */
+  archiveOnly?: { paths: string[]; bytes: number } | null;
 }
 
 function baseName(path: string): string {
@@ -101,5 +103,11 @@ export function buildUploadQueueItem(
     mountReadOnly: o.mountReadOnly,
     registerAfterUpload: source.kind === "game-folder" && o.registerAfterUpload,
     estimatedBytes: estimatedBytesFor(source),
+    ...(source.kind === "archive" && o.archiveOnly && o.archiveOnly.paths.length > 0
+      ? {
+          archiveOnly: [...o.archiveOnly.paths],
+          estimatedBytes: o.archiveOnly.bytes > 0 ? o.archiveOnly.bytes : estimatedBytesFor(source),
+        }
+      : {}),
   };
 }

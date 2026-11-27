@@ -26,6 +26,7 @@ pub mod archive_tree;
 pub mod folder_build;
 pub mod image_build;
 pub mod lz4_packs;
+pub mod plain_emulator;
 pub mod refusal;
 pub mod safe_write;
 pub mod unpack_packs;

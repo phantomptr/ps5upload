@@ -614,6 +614,34 @@ fail:
     return -1;
 }
 
+int webui_extract_tail(char *out, size_t cap, const char *dest, const char *password, int merge, int replace,
+                       int list, const char *top) {
+    size_t pos = 0, k;
+    if (!cap) return -1;
+    out[0] = '\0';
+    if (!dest || cap < 2) goto fail;
+    out[pos++] = ',';
+    if (put_jstr(out, cap, &pos, "dest", dest, strlen(dest)) != 0) goto fail;
+    if (password) {
+        if (cap - pos < 2) goto fail;
+        out[pos++] = ',';
+        if (put_jstr(out, cap, &pos, "password", password, strlen(password)) != 0) goto fail;
+    }
+    k = (size_t)snprintf(out + pos, cap - pos, ",\"merge\":%s,\"replace\":%s%s", merge ? "true" : "false",
+                         replace ? "true" : "false", list ? ",\"list\":true" : "");
+    if (k >= cap - pos) goto fail;
+    pos += k;
+    if (top && top[0]) {
+        if (cap - pos < 2) goto fail;
+        out[pos++] = ',';
+        if (put_jstr(out, cap, &pos, "top", top, strlen(top)) != 0) goto fail;
+    }
+    return (int)pos;
+fail:
+    memset(out, 0, cap); /* it can hold the password */
+    return -1;
+}
+
 /* ---- errors, types, small parsers ---- */
 
 /* The number after "errno_" in cause, or -1. */

@@ -169,6 +169,47 @@ export interface ExtractBody {
   /** Write into `dest` although it is there; files already there are skipped unless `replace`. */
   merge?: boolean;
   replace?: boolean;
+  /** Only list the archive's top-level names (nothing is written; `dest` is a folder that is there). */
+  list?: boolean;
+  /** Top-level entries renamed or left out, as the extractor takes them ({@link skipTop}). */
+  top?: string;
+}
+
+/** "Choose items" (#969): the extractor's renames that leave these top-level entries out
+ *  ("from/to" pairs joined by "/", an empty `to` = left out). */
+export function skipTop(names: readonly string[]): string {
+  return names.map((n) => `${n}/`).join("/");
+}
+
+/** An archive's top-level names, read on the console without extracting anything. */
+export interface TopListing {
+  top: string[];
+  dirs: string[];
+  /** More names than the extractor could report. */
+  more: boolean;
+}
+
+/** The listing an extract job with `list` ended with; null when the helper is too old to list. */
+export function topListing(result: unknown): TopListing | null {
+  if (!result || typeof result !== "object") return null;
+  const r = result as Record<string, unknown>;
+  if (r.listed !== true) return null;
+  const names = (v: unknown) => (typeof v === "string" ? v.split("/").filter((n) => n !== "") : []);
+  return { top: names(r.top), dirs: names(r.top_dirs), more: r.top_more === true };
+}
+
+/** Read the top-level names of the archive at `path` (`dir`: its own folder). Throws the
+ *  helper's cause (fs_extract_password_required…), or "fs_extract_list_unsupported". */
+export async function listArchiveTop(path: string, dir: string, deps?: OpDeps): Promise<TopListing> {
+  const job = await startOp("/api/fs/extract", { path, dest: dir, list: true });
+  const end = await watchOp(job, {}, deps);
+  if (end.end !== "done") {
+    const cause = end.end === "gone" ? "" : opCause(end.status);
+    throw new ApiError(500, cause || "fs_extract_list_failed");
+  }
+  const listing = topListing(opResult<unknown>(end.status));
+  if (!listing) throw new ApiError(500, "fs_extract_list_unsupported");
+  return listing;
 }
 
 /** /api/fs/extract/info: where an extract would go, before it starts. */

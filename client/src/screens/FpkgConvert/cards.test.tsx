@@ -210,6 +210,55 @@ describe("OptionsCard output place", () => {
   });
 });
 
+describe("OptionsCard for a package of a plain game with an AMPR emulator", () => {
+  const props = {
+    outputDir: "/out",
+    onChangeOutput: () => {},
+    onOutputTyped: () => {},
+    canBrowse: true,
+    compression: "balanced" as const,
+    onCompression: () => {},
+    estimates: undefined,
+    locked: false,
+    gameChecked: true,
+  };
+  it("offers to leave the emulator out, off unless ticked, naming it and the one firmware it was tried on", () => {
+    const html = renderToStaticMarkup(
+      <OptionsCard
+        {...props}
+        plainEmulator={{ on: false, onToggle: () => {}, emulator: "ampr_emu 0.4.2.1", importsAmpr: true }}
+      />,
+    );
+    expect(html).toContain('data-testid="leave-out-plain-ampr-emu"');
+    expect(html).toContain("Leave out the AMPR emulator");
+    expect(html).toContain("carries an AMPR emulator (ampr_emu 0.4.2.1)");
+    expect(html).toContain("firmware 5.10");
+    expect(html).not.toMatch(/data-testid="leave-out-plain-ampr-emu"[^>]*>\s*<input[^>]*checked/);
+    expect(html).not.toContain("unpack-option");
+    const on = renderToStaticMarkup(
+      <OptionsCard {...props} plainEmulator={{ on: true, onToggle: () => {}, emulator: "x", importsAmpr: false }} />,
+    );
+    expect(on).toMatch(/data-testid="leave-out-plain-ampr-emu"[^>]*>\s*<input[^>]*checked/);
+    expect(on).toContain("that its eboot.bin doesn&#x27;t use");
+  });
+  it("says why the emulator stays where it can't go", async () => {
+    const { plainEmulatorKeptText } = await import("./ImageOptions");
+    const tr = ((_k: string, _v: unknown, fallback: string) => fallback) as never;
+    const why = plainEmulatorKeptText(tr, {
+      modules: ["fakelib/libSceAmpr.sprx"],
+      emulator: "x",
+      imports_ampr: true,
+      refusal: "not_an_emulator",
+    });
+    expect(why).toContain("may be a newer system library that a backport needs");
+    expect(plainEmulatorKeptText(tr, { modules: [], emulator: "x", imports_ampr: true })).toBeNull();
+    const html = renderToStaticMarkup(<OptionsCard {...props} plainEmulatorKept={why} />);
+    expect(html).toMatch(/data-testid="pkg-packs-note" data-state="emulator-kept"/);
+    expect(html).toContain("may be a newer system library");
+    expect(html).not.toContain("leave-out-plain-ampr-emu");
+  });
+});
+
 describe("OptionsCard for an image", () => {
   const props = {
     outputDir: "/out",
@@ -354,6 +403,30 @@ describe("OptionsCard for a package of a game in asset packs (#933)", () => {
     expect(plain).not.toContain("Check a game under ① first");
     // One line each, in the same place the options take.
     for (const html of [pending, plain]) expect(html.indexOf("pkg-packs-note")).toBeLessThan(html.indexOf("Output folder"));
+  });
+
+  // Discord: "Leave out the AMPR emulator" was missing for a folder until the output was switched
+  // away and back. While the check ran, the line said to check a game first, as if nothing was
+  // going on; and a plain game carrying its emulator was told only that it had no packs.
+  it("says a check is running, and why a plain game's emulator stays", () => {
+    const checking = renderToStaticMarkup(<OptionsCard {...props} make="pkg" checking />);
+    expect(checking).toMatch(/data-testid="pkg-packs-note" data-state="checking"/);
+    expect(checking).toContain("appear here when the check is done");
+    expect(checking).not.toContain("Check a game under ① first");
+    const emu = renderToStaticMarkup(<OptionsCard {...props} make="pkg" gameChecked keepsEmulator />);
+    expect(emu).toMatch(/data-testid="pkg-packs-note" data-state="none-emulator"/);
+    expect(emu).toContain("goes into the package as it is");
+    // When the check says why it stays, that reason is shown instead.
+    const kept = renderToStaticMarkup(
+      <OptionsCard {...props} make="pkg" gameChecked keepsEmulator plainEmulatorKept="It stays: reason" />,
+    );
+    expect(kept).toContain("It stays: reason");
+    // A game in packs gets the options whatever else is said.
+    const packed = renderToStaticMarkup(
+      <OptionsCard {...props} make="pkg" gameChecked keepsEmulator checking unpack={pkgUnpack(true)} />,
+    );
+    expect(packed).toContain('data-testid="leave-out-ampr-emu"');
+    expect(packed).not.toContain("pkg-packs-note");
   });
 
   it("says nothing of a package's packs for an image, a folder or a PS4 package", () => {
@@ -884,6 +957,34 @@ describe("a waiting game's own options (#669)", () => {
     // A game nobody checked, or one in no packs, has nothing to choose.
     expect(pkgUnpackChoice(waitingItem({ build: { kind: "pkg" } }), () => {})).toBeUndefined();
     expect(pkgUnpackChoice(waitingItem({ build: { kind: "pkg" }, packs: "none" }), () => {})).toBeUndefined();
+  });
+
+  it("offers a waiting plain package's AMPR emulator to leave out, only when ① found one that can go", async () => {
+    const { pkgPlainEmulatorChoice } = await import("./QueueItemOptions");
+    const offered = waitingItem({ build: { kind: "pkg" }, packs: "none", plainAmprEmu: true });
+    const html = await options(offered);
+    expect(html).toMatch(/data-testid="pkg-packs"/);
+    expect(html).toContain('data-testid="leave-out-plain-ampr-emu"');
+    expect(html).not.toMatch(/data-testid="leave-out-plain-ampr-emu"[^>]*>\s*<input[^>]*checked/);
+    expect(html).not.toContain('data-testid="unpack-option"');
+    const on = await options(waitingItem({ build: { kind: "pkg", leaveOutAmprEmu: true }, packs: "none", plainAmprEmu: true }));
+    expect(on).toMatch(/data-testid="leave-out-plain-ampr-emu"[^>]*>\s*<input[^>]*checked/);
+
+    const changes: unknown[] = [];
+    pkgPlainEmulatorChoice(offered, (c) => changes.push(c))!.onToggle(true);
+    pkgPlainEmulatorChoice(offered, (c) => changes.push(c))!.onToggle(false);
+    expect(changes).toEqual([{ build: { kind: "pkg", leaveOutAmprEmu: true } }, { build: { kind: "pkg" } }]);
+    // Not found by ①, a game in packs, or another kind: nothing to choose.
+    expect(pkgPlainEmulatorChoice(waitingItem({ build: { kind: "pkg" }, packs: "none" }), () => {})).toBeUndefined();
+    expect(
+      pkgPlainEmulatorChoice(waitingItem({ build: { kind: "pkg" }, packs: "zstd", plainAmprEmu: true }), () => {}),
+    ).toBeUndefined();
+    expect(
+      pkgPlainEmulatorChoice(
+        waitingItem({ build: { kind: "image", format: "exfat", compress: false }, packs: "none", plainAmprEmu: true }),
+        () => {},
+      ),
+    ).toBeUndefined();
   });
 
   it("changing packs, format or kind keeps the rest of the game's build (#905)", async () => {

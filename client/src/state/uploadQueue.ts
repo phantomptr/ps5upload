@@ -34,6 +34,7 @@ import {
   type ReconcileMode,
 } from "../api/ps5";
 import { fileResumeTxId } from "../lib/fileResumeTx";
+import { withArchiveChoice } from "../lib/archiveChoice";
 import { consoleSettingFor } from "./consoleSettings";
 import {
   moveItemDownWithinGroup,
@@ -242,6 +243,10 @@ export interface QueueItem {
    *  `rar_password_required`); the user re-adds it from the Upload screen.
    *  Null/absent for unencrypted archives and non-rar items. */
   rarPassword?: string | null;
+  /** Archive-only (#969): the entries chosen with "Choose files" (paths inside the archive, a
+   *  folder with everything in it); only those are unpacked and sent. Null/absent = the whole
+   *  archive. Sent as `=path` entries in the transfer's excludes (lib/archiveChoice). */
+  archiveOnly?: string[] | null;
   /** Image-only: mount the uploaded image after the transfer commits. */
   mountAfterUpload: boolean;
   /** Image-only: when mounting, mount read-only (default true — RO
@@ -438,6 +443,7 @@ export type AddQueueItem = Pick<
   | "reconcileMode"
   | "excludes"
   | "rarPassword"
+  | "archiveOnly"
   | "mountAfterUpload"
   | "mountReadOnly"
   | "registerAfterUpload"
@@ -508,6 +514,9 @@ interface QueueState {
    *  inspection): it becomes the row's `estimatedBytes`. A row that already has a size, or is
    *  no longer waiting, is left alone. */
   noteSourceSize: (id: string, bytes: number) => void;
+  /** "Choose files" on a waiting archive row (#969): only `paths` go (null = the whole archive);
+   *  `bytes` is what they unpack to. False when the row is not a waiting archive. */
+  chooseArchiveEntries: (id: string, paths: string[] | null, bytes: number) => boolean;
   moveUp: (id: string) => void;
   moveDown: (id: string) => void;
   /** Drag and drop: put `id` where `targetId` is. Only between waiting rows of the same
@@ -1563,6 +1572,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       const bandwidthCap = useUploadSettingsStore.getState().bandwidthCapMbps;
       const fmt = archiveFormat(item.sourcePath);
       const archivePath = await archiveSourceFor(item);
+      // "Choose files" (#969): only the chosen entries are unpacked and sent.
+      const archiveExcludes = withArchiveChoice(item.excludes, item.archiveOnly);
       if (fmt === "rar") {
         // .rar → host UnRAR extract; carry the (optional) password captured
         // at add time. Resume re-extracts and re-sends only un-acked shards.
@@ -1572,7 +1583,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           item.addr,
           item.rarPassword ?? null,
           item.txIdHex,
-          item.excludes,
+          archiveExcludes,
           bandwidthCap,
         );
       } else {
@@ -1584,7 +1595,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           item.resolvedDest,
           item.addr,
           item.txIdHex,
-          item.excludes,
+          archiveExcludes,
           bandwidthCap,
         );
       }
@@ -3150,6 +3161,24 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       scheduleSave();
     },
 
+    chooseArchiveEntries(id, paths, bytes) {
+      const it = get().items.find((x) => x.id === id);
+      if (!it || it.status !== "pending" || it.sourceKind !== "archive") return false;
+      const next = paths && paths.length > 0 ? [...paths] : null;
+      const same = JSON.stringify(next) === JSON.stringify(it.archiveOnly ?? null);
+      set((s) => ({
+        items: patchItem(s.items, id, {
+          archiveOnly: next,
+          estimatedBytes: knownSize(bytes) || (it.estimatedBytes ?? 0),
+          // Another set of files is another job: an earlier partial send of this row must not
+          // be resumed as if it were this one.
+          ...(same ? {} : { txIdHex: generateTxIdHex() }),
+        }),
+      }));
+      scheduleSave();
+      return true;
+    },
+
     moveUp(id) {
       // Reorder within the item's OWN console and run tier. The panel lists
       // a console's waiting rows in run order (base → update → DLC, then list
@@ -3640,6 +3669,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
     remove: () => undefined,
     cancelItem: () => undefined,
     noteSourceSize: () => undefined,
+    chooseArchiveEntries: () => false,
     moveUp: () => undefined,
     moveDown: () => undefined,
     moveTo: () => undefined,

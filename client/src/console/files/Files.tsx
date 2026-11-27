@@ -42,7 +42,7 @@ import { canEject, DriveList, isImage, isSystemVolume, placeLabel } from "./Driv
 import { InfoDialog } from "./InfoDialog";
 import { BulkRenameDialog } from "./BulkRenameDialog";
 import { runRenames, type RenameItem, type RenameResult, type RenameRow } from "./bulkRename";
-import { isFfpfsc, opCause, opResult, startOp, watchOp, type OpEnd } from "./opJob";
+import { isFfpfsc, opCause, opResult, skipTop, startOp, watchOp, type OpEnd } from "./opJob";
 import { UnpackDialog, unpackCauseText, unpackErrorText } from "./UnpackDialog";
 import { PkgDialog } from "./PkgDialog";
 import { installBusyText, installMessage, installPhaseText, installStoppable, isPayload, isPkg, loadPayload, payloadErrorText, startInstall } from "./pkg";
@@ -1938,6 +1938,8 @@ export function Files({ ctx }: { ctx: SectionContext }) {
         ...(password ? { password } : {}),
         ...(start.merge ? { merge: true } : {}),
         ...(start.replace ? { replace: true } : {}),
+        // "Choose items" (#969): the top-level entries left out.
+        ...(start.skip && start.skip.length > 0 ? { top: skipTop(start.skip) } : {}),
       };
       const run = startBatch(
         "extract",

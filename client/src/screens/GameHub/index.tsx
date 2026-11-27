@@ -44,6 +44,7 @@ import {
   Callout,
   Spinner,
   Toggle,
+  SectionErrorBoundary,
 } from "../../components";
 import { GameIcon } from "../../components/GameIcon";
 import { useTr } from "../../state/lang";
@@ -594,16 +595,18 @@ export default function GameHubScreen() {
               }
             />
             {connectedHost && title_id && (
-              <RestoreHomeScreenCard
-                host={connectedHost}
-                titleId={title_id.toUpperCase()}
-                name={game?.name ?? title_id}
-                reply={restore.reply}
-                onChanged={() => {
-                  restore.refresh();
-                  onConsoleChanged();
-                }}
-              />
+              <SectionErrorBoundary logName="restore card" resetKey={`${connectedHost}/${title_id}`}>
+                <RestoreHomeScreenCard
+                  host={connectedHost}
+                  titleId={title_id.toUpperCase()}
+                  name={game?.name ?? title_id}
+                  reply={restore.reply}
+                  onChanged={() => {
+                    restore.refresh();
+                    onConsoleChanged();
+                  }}
+                />
+              </SectionErrorBoundary>
             )}
             {connectedHost && installedHere && (
               <OnThisPs5Card

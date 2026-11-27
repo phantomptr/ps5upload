@@ -15,8 +15,10 @@ import {
   FullVerifyOption,
   ImageChoice,
   PackagePacks,
+  type PackagePacksState,
   UnpackOption,
   type Lz4Choice,
+  type PlainEmulatorChoice,
   type UnpackChoice,
 } from "./ImageOptions";
 import { NextGameNote } from "./MakeCard";
@@ -62,10 +64,20 @@ export interface OptionsCardProps {
   /** The game is in asset packs and no pack option is on: offer to write plain files again
    *  (an image, a folder, or a package, which also offers to leave the AMPR emulator out). */
   unpack?: UnpackChoice;
+  /** A package of a game in no packs that carries an AMPR emulator the check says can go:
+   *  offer to leave it out. */
+  plainEmulator?: PlainEmulatorChoice;
+  /** Why such a game's emulator stays in its package, when it does. */
+  plainEmulatorKept?: string | null;
   /** The game under ① has been checked (and is one whose files could be looked at: not an
    *  archive). A package then says whether the game is in asset packs; until then, that
    *  checking it shows the options for one that is. */
   gameChecked?: boolean;
+  /** The game under ① is being checked now: a package's asset-pack choices come when it is. */
+  checking?: boolean;
+  /** The checked game reads through AMPR and carries its emulator, in no packs: the package
+   *  keeps it (it is left out only of a game whose packs the package unpacks). */
+  keepsEmulator?: boolean;
   onLanguage?: (code: string) => void;
   /** A game is being made: this card sets what the next game added uses (#669). */
   forNext?: boolean;
@@ -73,6 +85,14 @@ export interface OptionsCardProps {
   ps4?: boolean;
   /** More choices, after the rest. */
   children?: ReactNode;
+}
+
+/** What a package's asset-pack line says when there is nothing to choose (#933). */
+export function packsState(
+  props: Pick<OptionsCardProps, "gameChecked" | "checking" | "keepsEmulator">,
+): PackagePacksState {
+  if (props.gameChecked) return props.keepsEmulator ? "none-emulator" : "none";
+  return props.checking ? "checking" : "pending";
 }
 
 export function OptionsCard(props: OptionsCardProps) {
@@ -91,7 +111,14 @@ export function OptionsCard(props: OptionsCardProps) {
         {/* A package's asset-pack choices first: what they decide (how large the package is, and
             whether it needs the AMPR emulator) matters more than anything below, and under the
             output folder and four compression tiles they were a long way down on a phone. */}
-        {pkg && <PackagePacks unpack={props.unpack} state={props.gameChecked ? "none" : "pending"} />}
+        {pkg && (
+          <PackagePacks
+            unpack={props.unpack}
+            plainEmulator={props.plainEmulator}
+            plainKept={props.plainEmulatorKept}
+            state={packsState(props)}
+          />
+        )}
         <div className="flex flex-col gap-1">
           <label htmlFor="fpkg-output" className="text-[var(--color-muted)]">
             {tr("fpkg.output", undefined, "Output folder")}

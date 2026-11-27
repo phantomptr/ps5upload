@@ -1123,6 +1123,51 @@ async fn a_ps4_game_becomes_a_ps4_package() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A package too big for the firmware it is for fails at once, saying why, before anything is
+/// written: 300 GiB (sparse: no disk used) is past what 9.60 opens. The connected console's
+/// 13.60, which opens it, doesn't override the firmware asked for.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_package_too_big_for_its_firmware_is_refused() {
+    use crate::unpack_packs::tests::{game, Scratch};
+    let app = app();
+    let scratch = Scratch::new("route-too-big");
+    let src = game(&scratch.0, false);
+    let huge = std::fs::File::create(src.join("data/huge.bin")).unwrap();
+    huge.set_len(300 << 30).unwrap();
+    drop(huge);
+    let out = scratch.0.join("out");
+    let body = json!({
+        "source": src, "output_dir": out, "compression": "stored",
+        "firmware": "9.60", "console_firmware": "13.60",
+    });
+    let r = post_json(&app, "/api/fpkg/build", &body.to_string()).await;
+    assert_eq!(r.status(), StatusCode::ACCEPTED);
+    let id = json_of(r).await["job_id"].as_str().unwrap().to_string();
+    let mut done = Value::Null;
+    for _ in 0..3000 {
+        done = json_of(get(&app, &format!("/api/jobs/{id}")).await).await;
+        if done["status"] != "running" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(done["status"], "failed", "{done}");
+    let error = done["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("PS5 firmware 7.xx to 10.xx can't open a fake package larger than 256 GiB"),
+        "{error}"
+    );
+    let written = std::fs::read_dir(&out)
+        .map(|d| {
+            d.filter_map(|e| e.ok())
+                .filter(|e| e.file_name().to_string_lossy().contains(".pkg"))
+                .count()
+        })
+        .unwrap_or(0);
+    assert_eq!(written, 0, "nothing written");
+}
+
 /// A package of a game in asset packs (#933): with `unpack_packs` and `leave_out_ampr_emu` it
 /// carries the game's plain files and no AMPR emulator. Unpacking a game that is not packed, or
 /// leaving the emulator out of one that stays packed, is refused before any job.
@@ -1196,6 +1241,106 @@ async fn a_packed_game_packages_as_plain_files_without_its_emulator() {
         names.iter().any(|n| n == "ampr_emu.index"),
         "a libSceAmpr game keeps its index: {names:?}"
     );
+}
+
+/// A plain game (no asset packs) that carries an AMPR emulator: the inspection says so, and a
+/// package with `leave_out_ampr_emu` alone leaves the emulator's files out and nothing else. A
+/// `libSceAmpr.sprx` that is not an emulator is refused before any job, with the reason.
+#[tokio::test]
+async fn a_plain_game_packages_without_its_ampr_emulator() {
+    use crate::unpack_packs::tests::{ampr_emu, game, Scratch};
+    let app = app();
+    let scratch = Scratch::new("route-plain-emu");
+    let src = game(&scratch.0, true);
+    std::fs::create_dir_all(src.join("fakelib")).unwrap();
+    std::fs::write(src.join("fakelib/libSceAmpr.sprx"), ampr_emu("0.4.2.1")).unwrap();
+    std::fs::write(src.join("fakelib/libSceAgc.sprx"), b"a backport library").unwrap();
+    std::fs::write(src.join("ampr_emu.log"), b"a run's log").unwrap();
+    let out = scratch.0.join("out");
+
+    let r = post_json(
+        &app,
+        "/api/fpkg/inspect",
+        &json!({ "source": src, "output_dir": out }).to_string(),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let seen = json_of(r).await;
+    assert_eq!(
+        seen["plain_ampr_emu"]["modules"],
+        json!(["fakelib/libSceAmpr.sprx"]),
+        "{seen}"
+    );
+    assert_eq!(seen["plain_ampr_emu"]["imports_ampr"], true, "{seen}");
+    assert!(seen["plain_ampr_emu"].get("refusal").is_none(), "{seen}");
+
+    let r = post_json(
+        &app,
+        "/api/fpkg/build",
+        &json!({
+            "source": src, "output_dir": out, "compression": "fast", "leave_out_ampr_emu": true,
+        })
+        .to_string(),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::ACCEPTED);
+    let id = json_of(r).await["job_id"].as_str().unwrap().to_string();
+    let mut done = Value::Null;
+    for _ in 0..3000 {
+        done = json_of(get(&app, &format!("/api/jobs/{id}")).await).await;
+        if done["status"] != "running" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(done["status"], "done", "{done}");
+    let mut pkg =
+        ps5upload_fpkg::source::open(std::path::Path::new(done["dest"].as_str().unwrap())).unwrap();
+    let names: Vec<String> = pkg.files().iter().map(|f| f.path.clone()).collect();
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.ends_with("libSceAmpr.sprx") || n == "ampr_emu.log"),
+        "{names:?}"
+    );
+    assert_eq!(
+        pkg.read("fakelib/libSceAgc.sprx").unwrap(),
+        b"a backport library"
+    );
+    // A libSceAmpr game's package still lists its files, the emulator not among them.
+    let listed = ps5upload_fpkg::ampr_index::parse(&pkg.read("ampr_emu.index").unwrap()).unwrap();
+    assert!(!listed.iter().any(|e| e.path.ends_with("libSceAmpr.sprx")));
+
+    // A libSceAmpr.sprx that is no emulator (a backport's system library) stays.
+    std::fs::write(
+        src.join("fakelib/libSceAmpr.sprx"),
+        b"\x7fELF system library",
+    )
+    .unwrap();
+    let r = post_json(
+        &app,
+        "/api/fpkg/inspect",
+        &json!({ "source": src, "output_dir": out }).to_string(),
+    )
+    .await;
+    let seen = json_of(r).await;
+    assert_eq!(
+        seen["plain_ampr_emu"]["refusal"], "not_an_emulator",
+        "{seen}"
+    );
+    let r = post_json(
+        &app,
+        "/api/fpkg/build",
+        &json!({ "source": src, "output_dir": out, "name": "again", "leave_out_ampr_emu": true })
+            .to_string(),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    let text = json_of(r).await["error"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(text.contains("backport"), "{text}");
 }
 
 /// A packed folder build: a game folder is a source only with `ampr_zstd`, and the request is

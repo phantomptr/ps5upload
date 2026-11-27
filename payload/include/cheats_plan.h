@@ -57,6 +57,21 @@ int cheat_parse_hex(const char *s, uint8_t *out, int max);
 /* Bare or 0x-prefixed hex offset. Returns 0 and fills *out, or -1 when it is not hex. */
 int cheat_parse_offset(const char *s, uint64_t *out);
 
+/* The most bytes one location carries after cheat_loc_split: 240 hex digits, under the
+ * parser's 255-character value field (mem_entry_t in cheats.c). */
+#define CHEAT_SPLIT_BYTES 120
+
+/* One piece of a split location: its offset as "0x..." and its bytes as bare hex. 0 = taken. */
+typedef int (*cheat_split_cb)(void *ctx, const char *offset, const char *on, const char *off);
+
+/* A location whose values are longer than one parsed location holds (a long code cave in a JSON
+ * table): cut it into consecutive pieces of at most CHEAT_SPLIT_BYTES bytes, each at the offset
+ * it starts at, and call cb for each in order. Separators in the values are dropped.
+ * Returns the number of pieces, 0 when the location already fits (cb not called: the caller
+ * keeps it as it is), or -1 when it cannot be split: the offset or a value is not hex, the
+ * values differ in length or have an odd digit, the offset would wrap, or cb failed. */
+int cheat_loc_split(const char *offset, const char *on, const char *off, cheat_split_cb cb, void *ctx);
+
 /* Which state a location is in, from the bytes read before writing. */
 int cheat_loc_state(const cheat_loc_t *l);
 

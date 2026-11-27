@@ -14,7 +14,7 @@ import { t } from "../strings";
 import { ActionsSheet } from "./ActionsSheet";
 import { ExtractDialog, extractCauseText, extractErrorText } from "./ExtractDialog";
 import { busyText, extractMessage, FilesView, sheetActions, type FilesViewProps } from "./Files";
-import { extractInfo, startOp, type ExtractInfo } from "./opJob";
+import { extractInfo, listArchiveTop, skipTop, startOp, topListing, type ExtractInfo, type TopListing } from "./opJob";
 import { TextPrompt } from "./TextPrompt";
 import type { DirState, Entry } from "./useDir";
 
@@ -247,5 +247,73 @@ describe("extract lines", () => {
       expect(extractCauseText(`fs_extract_${c}`), c).toBeTruthy();
     }
     expect(extractErrorText(new ApiError(409, "fs_extract_missing_volume: g.part2.rar"))).toBe(t("cw_files_extract_err_missing_volume"));
+  });
+});
+
+describe("extract: choose items (#969)", () => {
+  const listing: TopListing = { top: ["Game", "readme.txt"], dirs: ["Game"], more: false };
+
+  it("leaves unticked top-level entries out with empty renames", () => {
+    expect(skipTop(["readme.txt"])).toBe("readme.txt/");
+    expect(skipTop(["a", "b c"])).toBe("a//b c/");
+  });
+
+  it("reads a listing job's result; an old helper's answer is no listing", () => {
+    expect(topListing({ top: "Game/readme.txt", top_dirs: "Game", top_more: false, listed: true })).toEqual(listing);
+    expect(topListing({ path: "/data/x/g", files: 3 })).toBeNull();
+    expect(topListing(null)).toBeNull();
+  });
+
+  it("lists the items as switches, all on, and Extract hands the ones turned off", () => {
+    const onStart = vi.fn();
+    const html = renderToStaticMarkup(
+      <ExtractDialog dir="/data/x" name="g.zip" path="/data/x/g.zip" busy={false} onStart={vi.fn()} onCancel={vi.fn()} initial={INFO} />,
+    );
+    expect(html).toContain('data-action="extract-choose"');
+    expect(html).toContain(t("cw_files_extract_choose"));
+    const listed = renderToStaticMarkup(
+      <ExtractDialog
+        dir="/data/x"
+        name="g.zip"
+        path="/data/x/g.zip"
+        busy={false}
+        onStart={onStart}
+        onCancel={vi.fn()}
+        initial={INFO}
+        startItems={listing}
+      />,
+    );
+    expect(listed).toContain('data-extract-item="Game"');
+    expect(listed).toContain("Game/");
+    expect((listed.match(/aria-checked="true"/g) ?? []).length).toBe(2);
+    expect(listed).toContain(t("cw_files_status_filtered", { n: 2, total: 2 }));
+    expect(listed).not.toContain('data-action="extract-choose"');
+  });
+
+  it("listing asks the helper for list mode and reads its result", async () => {
+    const mocked = vi.mocked(call);
+    mocked.mockReset();
+    mocked.mockResolvedValueOnce({ job: "lj" });
+    const deps = {
+      status: vi.fn(async () => ({
+        job: "lj",
+        state: "done" as const,
+        files_done: 0,
+        files_total: 0,
+        bytes_done: 0,
+        bytes_total: 0,
+        message: null,
+        result: JSON.stringify({ top: "Game/readme.txt", top_dirs: "Game", top_more: false, listed: true }),
+        code: null,
+      })),
+      cancel: vi.fn(async () => {}),
+      sleep: vi.fn(async () => {}),
+    };
+    await expect(listArchiveTop("/data/x/g.zip", "/data/x", deps)).resolves.toEqual(listing);
+    expect(mocked).toHaveBeenCalledWith("/api/fs/extract", { path: "/data/x/g.zip", dest: "/data/x", list: true });
+    // A helper that ignored list mode refuses the folder that is there: no listing, nothing written.
+    mocked.mockResolvedValueOnce({ job: "old" });
+    deps.status.mockResolvedValueOnce({ ...(await deps.status()), state: "failed" as never, message: "fs_extract_destination_exists" as never, result: null as never });
+    await expect(listArchiveTop("/data/x/g.zip", "/data/x", deps)).rejects.toMatchObject({ code: "fs_extract_destination_exists" });
   });
 });

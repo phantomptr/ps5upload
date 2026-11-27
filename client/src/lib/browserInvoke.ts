@@ -559,6 +559,7 @@ export async function browserInvoke<T>(
         title_ids?: string[] | null;
         rollback?: boolean;
         install_ended?: boolean;
+        clear?: boolean;
       };
       const q = `?addr=${uenc(req.addr)}${req.title_id ? `&title_id=${uenc(req.title_id)}` : ""}`;
       switch (op) {
@@ -575,12 +576,18 @@ export async function browserInvoke<T>(
             /*long=*/ true,
           );
         case "finish":
-          return postJson<T>("/api/ps5/app/restore/finish", {
-            addr: req.addr,
-            title_id: req.title_id,
-            rollback: req.rollback === true,
-            install_ended: req.install_ended === true,
-          });
+          // Long: a clear runs Sony's uninstall and waits for it to remove the console's copy.
+          return postJson<T>(
+            "/api/ps5/app/restore/finish",
+            {
+              addr: req.addr,
+              title_id: req.title_id,
+              rollback: req.rollback === true,
+              install_ended: req.install_ended === true,
+              clear: req.clear === true,
+            },
+            /*long=*/ true,
+          );
         default:
           throw new Error(`unknown restore step ${op}`);
       }
@@ -966,6 +973,7 @@ export async function browserInvoke<T>(
         name: args["name"],
         compression: args["compression"],
         firmware: args["firmware"],
+        console_firmware: args["consoleFirmware"],
         language: args["language"],
         full_verify: args["fullVerify"] ?? false,
         keep_both: args["keepBoth"] ?? false,

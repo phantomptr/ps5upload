@@ -94,6 +94,14 @@ int webui_rename_detour(const char *from, const char *to, unsigned salt, char *t
  * it does not fit; out is then ""). */
 int webui_path_job_args(char *out, size_t cap, const char *path, const char *name, const char *tail);
 
+/* An archive extract's members after the path, as archive_extract.c reads them:
+ * ,"dest":"…"[,"password":"…"],"merge":b,"replace":b[,"list":true][,"top":"…"]. `password` and
+ * `top` NULL (or `top` "") leave theirs out; `top` is the extractor's "from/to/…" (an empty `to`
+ * leaves that top-level entry out: "Choose items", #969). Returns the length, or -1 when it does
+ * not fit (out is then ""). */
+int webui_extract_tail(char *out, size_t cap, const char *dest, const char *password, int merge, int replace,
+                       int list, const char *top);
+
 /* 16 bytes as 32 lowercase hex characters + NUL. */
 void webui_hex16(const uint8_t id[16], char out[33]);
 /* Exactly 32 hex characters (either case) to 16 bytes: 0, or -1. */

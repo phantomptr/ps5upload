@@ -12,9 +12,14 @@
 //!   4. `finish`: after a verdict of installed, the copy aside is deleted once app.db has the title
 //!      and a package is in place again (the database can lag: it is asked again for a while);
 //!      after a failure the console never took (refused, unreachable, bad request), the package
-//!      and update go back where they were; after anything that may still be running on the
-//!      console (stalled, cancelled, reply lost, unverified), nothing is touched and the restore
-//!      stays pending: the game page offers Finish or Put back later.
+//!      and update go back where they were.
+//!   5. `clear` (#961): an install the console took and then failed (stalled, stopped, nothing on
+//!      the home screen after the wait, or a refusal that left the console's own copy behind)
+//!      stays in the PS5's download queue and blocks every later install until it is deleted. The
+//!      helper removes the console's unfinished copy with Sony's uninstall, the same as deleting
+//!      it on the PS5, and then puts the package back. Only a lost installer reply leaves
+//!      everything as it is (pending: the game page offers Finish or Put back later); Restore all
+//!      stops there, since every later title would wait for the same installer.
 //!
 //! Nothing here writes app.db or appinfo.db; the console's installer does, as for any install.
 
@@ -38,10 +43,12 @@ use crate::pkg_install::PkgInstallStateHandle;
 
 /// The most titles one request restores (each is one install, one after the other).
 const MAX_TITLES: usize = 50;
-/// How long a finished install waits for app.db to list the title before the restore is left
-/// pending (the database lags the files, both ways).
-const SETTLE_TRIES: u32 = 36;
+/// How long a finished install waits for app.db to list the title before it is called failed and
+/// cleared (the database lags the files, both ways; about a minute was measured).
+const SETTLE_TRIES: u32 = 60;
 const SETTLE_EVERY: Duration = Duration::from_secs(5);
+/// How long a clear waits for Sony to finish removing its copy before the restore is left pending.
+const CLEAR_TRIES: u32 = 24;
 
 /// What to do once the install of the copy aside has ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +57,12 @@ pub enum AfterInstall {
     Finish,
     /// The console never took it: put the package back.
     Rollback,
-    /// The console may still be working on it: touch nothing.
+    /// The console took it and it did not finish (stalled, stopped, nothing installed after the
+    /// whole package was read): its unfinished copy, and the failed download in the PS5's queue
+    /// that blocks every later install, go with Sony's uninstall, then the package goes back.
+    Clear,
+    /// Nobody can tell what the console is doing (the installer's answer never came): touch
+    /// nothing.
     Leave,
 }
 
@@ -61,18 +73,64 @@ pub fn after_install(st: Option<&InstallStatus>) -> AfterInstall {
     };
     match (st.phase, st.verdict) {
         (_, Some(Verdict::Installed)) | (_, Some(Verdict::MayNotLaunch)) => AfterInstall::Finish,
-        (_, Some(Verdict::Unverified)) => AfterInstall::Leave,
+        // The console had the whole package and nothing of the game showed up in the wait.
+        (_, Some(Verdict::Unverified)) => AfterInstall::Clear,
         (Phase::Failed, _) | (_, Some(Verdict::Failed)) => match st.reason {
-            // Sony may have accepted it and go on pulling or writing: a package put back now
-            // could be written over, or pulled from under the console.
-            Some(FailReason::Stalled)
-            | Some(FailReason::Cancelled)
-            | Some(FailReason::ReplyLost) => AfterInstall::Leave,
+            // Sony took it and then stopped, or the user stopped it: the uninstall ends whatever
+            // Sony still has of it before the package moves back.
+            Some(FailReason::Stalled) | Some(FailReason::Cancelled) => AfterInstall::Clear,
+            Some(FailReason::ReplyLost) => AfterInstall::Leave,
             _ => AfterInstall::Rollback,
         },
         // Not ended.
         _ => AfterInstall::Leave,
     }
+}
+
+/// A rollback the console's own leftovers stood in the way of: a record of the title or a package
+/// in its place, both written by the failed install (before the restore the title had neither).
+pub fn rollback_needs_clear(r: &RestoreReply) -> bool {
+    r.state == "unsettled"
+        && matches!(
+            r.reason.as_deref(),
+            Some("recorded_without_package" | "on_home_screen" | "place_taken")
+        )
+}
+
+/// The installer itself has stopped answering (a lost reply, or the daemon could not be reached):
+/// every later install would wait for it too. A restart of the PS5 clears it.
+pub fn installer_stuck(st: Option<&InstallStatus>) -> bool {
+    st.is_some_and(|s| {
+        matches!(
+            s.reason,
+            Some(FailReason::ReplyLost) | Some(FailReason::LoaderUnreachable)
+        )
+    })
+}
+
+/// What the user reads when the installer stopped answering.
+pub const INSTALLER_STUCK: &str = "the PS5's installer stopped answering, so nothing more was tried; restart the PS5, then open each game's page to finish or put back its package";
+
+/// One line for the log: how the install of a restore ended, with Sony's code and the phase, so a
+/// bug report shows why a restore failed (#961: several stuck at 99.9%).
+pub fn install_summary(st: Option<&InstallStatus>) -> String {
+    let Some(s) = st else {
+        return "install job unknown".to_string();
+    };
+    format!(
+        "install phase={:?} verdict={:?} reason={:?} route={:?} sony_code=0x{:08X} served={}/{} bytes{}",
+        s.phase,
+        s.verdict,
+        s.reason,
+        s.route,
+        s.code.max(s.metrics.sony_rc),
+        s.metrics.served_bytes,
+        s.metrics.total_bytes,
+        s.hint
+            .as_deref()
+            .map(|h| format!(" hint={h:?}"))
+            .unwrap_or_default()
+    )
 }
 
 /// One title's restore as this engine ran it.
@@ -96,6 +154,10 @@ pub struct RestoreRun {
     pub install_hint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The console's unfinished copy of a failed install was removed (Sony's uninstall) before
+    /// the package went back.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cleared: bool,
     pub updated_at: u64,
 }
 
@@ -111,6 +173,7 @@ impl RestoreRun {
             install_verdict: None,
             install_hint: None,
             error: None,
+            cleared: false,
             updated_at: install::status::now_unix(),
         }
     }
@@ -148,6 +211,33 @@ fn update_run(addr: &str, title_id: &str, f: impl FnOnce(&mut RestoreRun)) {
 
 fn get_run(addr: &str, title_id: &str) -> Option<RestoreRun> {
     with_runs(|m| m.get(&key(addr, title_id)).cloned())
+}
+
+/// Ends a run that is still active (a batch that stopped early, a step that failed without saying
+/// so): it must never stay queued or installing, which would refuse every later restore on that
+/// console until the engine restarts.
+fn end_if_active(addr: &str, title_id: &str, why: &str) {
+    update_run(addr, title_id, |r| {
+        if r.active() {
+            r.phase = "failed".into();
+            r.error.get_or_insert_with(|| why.to_string());
+        }
+    });
+}
+
+/// Ends every run of a batch that is still active when the batch's task ends, however it ends
+/// (a panic included).
+struct BatchGuard {
+    addr: String,
+    titles: Vec<String>,
+}
+
+impl Drop for BatchGuard {
+    fn drop(&mut self) {
+        for t in &self.titles {
+            end_if_active(&self.addr, t, "the restore stopped before this game");
+        }
+    }
 }
 
 fn console_busy(addr: &str) -> bool {
@@ -368,12 +458,23 @@ pub async fn start_handler(
     let queued: Vec<String> = titles.iter().skip(1).cloned().collect();
     let st = state.clone();
     let (job2, prepared2, rest) = (job.clone(), prepared.clone(), queued.clone());
+    let guard = BatchGuard {
+        addr: addr.clone(),
+        titles: titles.clone(),
+    };
     tokio::spawn(async move {
-        run_one(st.clone(), &addr, &first, job2, prepared2).await;
+        let _guard = guard;
+        let mut stuck = run_one(st.clone(), &addr, &first, job2, prepared2).await;
         for t in rest {
-            // A refusal is recorded by begin_one; the next title still goes.
-            if let Ok((job, prepared)) = begin_one(&st, &addr, &t).await {
-                run_one(st.clone(), &addr, &t, job, prepared).await;
+            if stuck {
+                // Every later install would wait for the same installer: say so, try nothing.
+                end_if_active(&addr, &t, INSTALLER_STUCK);
+                continue;
+            }
+            // A refusal or a failed restore is recorded for its title; the next title still goes.
+            match begin_one(&st, &addr, &t).await {
+                Ok((job, prepared)) => stuck = run_one(st.clone(), &addr, &t, job, prepared).await,
+                Err(_) => end_if_active(&addr, &t, "the restore could not start"),
             }
         }
     });
@@ -413,8 +514,24 @@ async fn begin_one(
             });
             return Err(helper_failure(&e));
         }
-        Err(e) => return Err(fail(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+        Err(e) => {
+            end_if_active(addr, id, "the restore could not start");
+            return Err(fail(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+        }
     };
+    crate::log_at!(
+        Info,
+        "install",
+        "restore {id} on {addr}: check {} ({}): {} bytes on {}; free there {} (needs {}), on the console's storage {} (needs {})",
+        check.state,
+        check.reason.as_deref().unwrap_or("-"),
+        check.size.unwrap_or(0),
+        check.where_.as_deref().unwrap_or("?"),
+        check.free_volume.map_or("?".into(), |n| n.to_string()),
+        check.need_volume.map_or("?".into(), |n| n.to_string()),
+        check.free_internal.map_or("?".into(), |n| n.to_string()),
+        check.need_internal.map_or("?".into(), |n| n.to_string()),
+    );
     if !check.restorable() {
         let state_word = check.state.clone();
         return Err(refused(
@@ -457,6 +574,7 @@ async fn begin_one(
             state
                 .jobs
                 .release_unstarted(&job, "the restore could not be prepared");
+            end_if_active(addr, id, "the restore could not be prepared");
             return Err(fail(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
         }
     };
@@ -476,6 +594,30 @@ async fn begin_one(
         "restore {id} on {addr}: {} moved aside to {path}; installing it (job {job})",
         prepared.pkg.as_deref().unwrap_or("?")
     );
+    {
+        // What the console's installer will find at the end of the package: a debug package's
+        // install information (a ZIP with playgo-chunk.crc) that the console may ask for beside
+        // the package. The installer daemon serves a .crc only as a file next to the package,
+        // so a report that shows the console asking for one at 99.9% names that as the cause.
+        let (m, p, size) = (mgmt.clone(), path.clone(), prepared.size.unwrap_or(0));
+        let crc = tokio::task::spawn_blocking(move || {
+            crate::pkg_sidecar::locate_playgo_crc(size, |off, n| console_read(&m, &p, off, n))
+        })
+        .await;
+        crate::log_at!(
+            Info,
+            "install",
+            "restore {id} on {addr}: package {} bytes, kind {}; install information (playgo-chunk.crc) {}",
+            prepared.size.unwrap_or(0),
+            prepared.kind.as_deref().unwrap_or("?"),
+            match crc {
+                Ok(Ok(Some((off, len)))) => format!("at {off}, {len} bytes"),
+                Ok(Ok(None)) => "not in the package".to_string(),
+                Ok(Err(e)) => format!("not read: {e}"),
+                Err(e) => format!("not read: {e}"),
+            }
+        );
+    }
     let mut run = RestoreRun::new(addr, id, "installing");
     run.job = Some(job.clone());
     run.prepared = Some(prepared.clone());
@@ -483,16 +625,86 @@ async fn begin_one(
     Ok((job, prepared))
 }
 
-/// Install the copy aside in the reserved slot, then finish by the install's verdict.
+/// `n` bytes of a console file at `off`, in the helper's read-sized pieces.
+fn console_read(addr: &str, path: &str, off: u64, n: u64) -> std::io::Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(n.min(4 << 20) as usize);
+    while (out.len() as u64) < n {
+        let at = off + out.len() as u64;
+        let piece = ps5upload_core::fs_ops::fs_read(addr, path, at, n - out.len() as u64)
+            .map_err(|e| std::io::Error::other(format!("{e:#}")))?;
+        if piece.is_empty() {
+            return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+        }
+        out.extend_from_slice(&piece);
+    }
+    out.truncate(n as usize);
+    Ok(out)
+}
+
+/// One helper step on the blocking pool.
+async fn helper_step(
+    mgmt: &str,
+    id: &str,
+    f: fn(&str, &str) -> anyhow::Result<RestoreReply>,
+) -> anyhow::Result<RestoreReply> {
+    let (m, i) = (mgmt.to_string(), id.to_string());
+    tokio::task::spawn_blocking(move || f(&m, &i))
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r)
+}
+
+fn finish_rollback(m: &str, i: &str) -> anyhow::Result<RestoreReply> {
+    tr::finish(m, i, true, true)
+}
+
+fn finish_ended(m: &str, i: &str) -> anyhow::Result<RestoreReply> {
+    tr::finish(m, i, false, true)
+}
+
+fn finish_look(m: &str, i: &str) -> anyhow::Result<RestoreReply> {
+    tr::finish(m, i, false, false)
+}
+
+/// Clear the console's unfinished copy and put the package back, waiting a while for Sony to
+/// finish removing its copy. The last answer (`rolled_back`, or why not).
+async fn clear_and_put_back(mgmt: &str, id: &str, tries: u32) -> anyhow::Result<RestoreReply> {
+    let mut result = helper_step(mgmt, id, tr::clear).await;
+    for _ in 0..tries {
+        if !matches!(&result, Ok(r) if r.clearing()) {
+            break;
+        }
+        tokio::time::sleep(SETTLE_EVERY).await;
+        let cleared = matches!(&result, Ok(r) if r.cleared == Some(true));
+        result = helper_step(mgmt, id, finish_rollback).await;
+        if cleared {
+            if let Ok(r) = &mut result {
+                r.cleared.get_or_insert(true);
+            }
+        }
+    }
+    result
+}
+
+/// Install the copy aside in the reserved slot, then finish by the install's verdict. True when
+/// the installer stopped answering (a batch stops there).
 async fn run_one(
     state: PkgInstallStateHandle,
     addr: &str,
     id: &str,
     job: String,
     prepared: RestoreReply,
-) {
+) -> bool {
     let Some(path) = prepared.install_path.clone() else {
-        return;
+        end_if_active(
+            addr,
+            id,
+            "the console did not say where it moved the package",
+        );
+        state
+            .jobs
+            .release_unstarted(&job, "the restore could not be prepared");
+        return false;
     };
     let req = InstallRequest {
         ps5_addr: addr.to_string(),
@@ -505,67 +717,115 @@ async fn run_one(
     };
     install::run_reserved(state.clone(), job.clone(), req).await;
     let st = state.jobs.get(&job);
-    let decision = after_install(st.as_ref());
+    let mut decision = after_install(st.as_ref());
+    let stuck = installer_stuck(st.as_ref());
+    let summary = install_summary(st.as_ref());
+    if decision == AfterInstall::Finish {
+        crate::log_at!(Info, "install", "restore {id} on {addr}: {summary}");
+    } else {
+        // WARN, so a bug report carries why (#961).
+        crate::log_at!(Warn, "install", "restore {id} on {addr}: {summary}");
+    }
     update_run(addr, id, |r| {
         r.phase = "finishing".into();
         r.install_verdict = st.as_ref().and_then(|s| s.verdict);
-        r.install_hint = st.as_ref().and_then(|s| s.hint.clone());
+        r.install_hint = if stuck {
+            Some(INSTALLER_STUCK.to_string())
+        } else {
+            st.as_ref().and_then(|s| s.hint.clone())
+        };
     });
     let mgmt = crate::pkg_install::normalize_mgmt_addr(addr);
     let mut result: anyhow::Result<RestoreReply> = Err(anyhow::anyhow!("not asked"));
     match decision {
         AfterInstall::Finish => {
             for _ in 0..SETTLE_TRIES {
-                let (m, i) = (mgmt.clone(), id.to_string());
-                result = tokio::task::spawn_blocking(move || tr::finish(&m, &i, false, true))
-                    .await
-                    .map_err(anyhow::Error::from)
-                    .and_then(|r| r);
+                result = helper_step(&mgmt, id, finish_ended).await;
                 let waiting = matches!(&result, Ok(r) if r.state == "waiting");
                 if !waiting {
                     break;
                 }
                 tokio::time::sleep(SETTLE_EVERY).await;
             }
+            if matches!(&result, Ok(r) if r.state == "waiting") {
+                // Read in full, and still not on the home screen: the install failed at the end
+                // (the PS5 shows it stopped near 100%), and its download stays in the PS5's queue.
+                crate::log_at!(
+                    Warn,
+                    "install",
+                    "restore {id} on {addr}: the console installed the package but never listed the game in {} s; clearing its copy and putting the package back",
+                    SETTLE_TRIES as u64 * SETTLE_EVERY.as_secs()
+                );
+                decision = AfterInstall::Clear;
+                result = clear_and_put_back(&mgmt, id, CLEAR_TRIES).await;
+            }
         }
         AfterInstall::Rollback => {
-            let (m, i) = (mgmt.clone(), id.to_string());
-            result = tokio::task::spawn_blocking(move || tr::finish(&m, &i, true, true))
-                .await
-                .map_err(anyhow::Error::from)
-                .and_then(|r| r);
+            result = helper_step(&mgmt, id, finish_rollback).await;
+            if matches!(&result, Ok(r) if rollback_needs_clear(r)) {
+                decision = AfterInstall::Clear;
+                result = clear_and_put_back(&mgmt, id, CLEAR_TRIES).await;
+            }
+        }
+        AfterInstall::Clear => {
+            result = clear_and_put_back(&mgmt, id, CLEAR_TRIES).await;
         }
         AfterInstall::Leave => {
             // Only reads where it stands: with neither flag the helper touches nothing.
-            let (m, i) = (mgmt.clone(), id.to_string());
-            result = tokio::task::spawn_blocking(move || tr::finish(&m, &i, false, false))
-                .await
-                .map_err(anyhow::Error::from)
-                .and_then(|r| r);
+            result = helper_step(&mgmt, id, finish_look).await;
         }
+    }
+    if decision == AfterInstall::Clear
+        && matches!(
+            st.as_ref().and_then(|s| s.reason),
+            Some(FailReason::Stalled)
+        )
+        && !state.jobs.active_for(addr)
+    {
+        // A stalled job can keep the installer daemon serving the package for minutes: the next
+        // restore would be refused as busy. Nothing else installs on the console right now.
+        let ip = install::console_id(addr);
+        install::recycle_daemon(&ip).await;
     }
     let phase = match &result {
         Ok(r) if r.state == "restored" => "restored",
         Ok(r) if r.state == "rolled_back" => "rolled_back",
         _ => "pending",
     };
-    crate::log_at!(
-        Info,
-        "install",
-        "restore {id} on {addr}: install {:?}, {decision:?}: {phase} ({})",
-        st.as_ref().and_then(|s| s.verdict),
+    let cleared = matches!(&result, Ok(r) if r.cleared == Some(true));
+    let log_line = format!(
+        "restore {id} on {addr}: {decision:?}: {phase}{} ({})",
+        if cleared {
+            ", the console's unfinished copy removed"
+        } else {
+            ""
+        },
         match &result {
-            Ok(r) => format!("{} {}", r.state, r.reason.as_deref().unwrap_or("")),
+            Ok(r) => format!(
+                "{} {}{}",
+                r.state,
+                r.reason.as_deref().unwrap_or(""),
+                r.sony_rc
+                    .map(|c| format!(" uninstall rc=0x{c:08X}"))
+                    .unwrap_or_default()
+            ),
             Err(e) => format!("{e:#}"),
         }
     );
+    if phase == "restored" {
+        crate::log_at!(Info, "install", "{log_line}");
+    } else {
+        crate::log_at!(Warn, "install", "{log_line}");
+    }
     update_run(addr, id, |r| {
         r.phase = phase.into();
+        r.cleared = cleared;
         match result {
             Ok(reply) => r.result = Some(reply),
             Err(e) => r.error = Some(format!("{e:#}")),
         }
     });
+    stuck
 }
 
 /// `GET /api/ps5/app/restore/status?addr=&title_id=`: how this engine's restore of a title stands.
@@ -611,14 +871,22 @@ pub struct RestoreFinish {
     /// The install has ended (the user saw the game on the home screen): the copy aside may go.
     #[serde(default)]
     pub install_ended: bool,
+    /// Put back after removing what a failed install left on the console (its unfinished copy and
+    /// its download in the PS5's queue) with Sony's uninstall. Only with the copy aside there and
+    /// no update or add-on of the title in place.
+    #[serde(default)]
+    pub clear: bool,
 }
 
-/// `POST /api/ps5/app/restore/finish {addr, title_id, rollback, install_ended}`: finish a restore
-/// left `pending` (an engine restart, a slow database). With `install_ended` the copy aside is
-/// deleted once app.db lists the game and a package is in place; with `rollback` the package and
-/// update go back where they were, only while app.db does not list the game and the place is
-/// free; with neither, nothing changes and the answer says where it stands. Refused (409 `busy`)
-/// while an install or a restore runs on that console. The helper's `finish` answer.
+/// `POST /api/ps5/app/restore/finish {addr, title_id, rollback, install_ended, clear}`: finish a
+/// restore left `pending` (an engine restart, a slow database). With `install_ended` the copy aside
+/// is deleted once app.db lists the game and a package is in place; with `rollback` the package
+/// and update go back where they were, only while app.db does not list the game and the place is
+/// free; with `clear`, what a failed install left (the console's unfinished copy and its download
+/// in the PS5's queue) is removed with Sony's uninstall first, then the package goes back
+/// (`cleared`, `sony_rc`; `reason` `clearing` while Sony is still removing it: ask again); with
+/// none, nothing changes and the answer says where it stands. Refused (409 `busy`) while an install
+/// or a restore runs on that console. The helper's answer.
 pub async fn finish_handler(
     State(state): State<PkgInstallStateHandle>,
     Json(req): Json<RestoreFinish>,
@@ -636,8 +904,22 @@ pub async fn finish_handler(
         );
     }
     let mgmt = crate::pkg_install::normalize_mgmt_addr(&req.addr);
+    if req.clear {
+        crate::log_at!(
+            Info,
+            "install",
+            "restore {id} on {}: put back after clearing, asked by the user",
+            req.addr
+        );
+    }
     let (i, rollback, ended) = (id.clone(), req.rollback, req.install_ended);
-    match tokio::task::spawn_blocking(move || tr::finish(&mgmt, &i, rollback, ended)).await {
+    let answer = if req.clear {
+        // A short wait for Sony to finish removing its copy; the page can ask again after.
+        Ok(clear_and_put_back(&mgmt, &id, CLEAR_TRIES / 4).await)
+    } else {
+        tokio::task::spawn_blocking(move || tr::finish(&mgmt, &i, rollback, ended)).await
+    };
+    match answer {
         Ok(Ok(r)) => {
             let phase = match r.state.as_str() {
                 "restored" => Some("restored"),
@@ -649,6 +931,7 @@ pub async fn finish_handler(
                 let mut run = get_run(&req.addr, &id)
                     .unwrap_or_else(|| RestoreRun::new(&req.addr, &id, phase));
                 run.phase = phase.into();
+                run.cleared = run.cleared || r.cleared == Some(true);
                 run.result = Some(r.clone());
                 set_run(run);
             }
@@ -686,9 +969,10 @@ mod tests {
             ))),
             AfterInstall::Finish
         );
+        // The whole package read and nothing installed in the wait: a failed install to clear.
         assert_eq!(
             after_install(Some(&status(Phase::Done, Some(Verdict::Unverified), None))),
-            AfterInstall::Leave
+            AfterInstall::Clear
         );
         for r in [
             FailReason::SonyRefused,
@@ -703,22 +987,116 @@ mod tests {
                 "{r:?}"
             );
         }
-        for r in [
-            FailReason::Stalled,
-            FailReason::Cancelled,
-            FailReason::ReplyLost,
-        ] {
+        // Taken and then stopped (#961: stuck at 99.9% in the PS5's queue): cleared, put back.
+        for r in [FailReason::Stalled, FailReason::Cancelled] {
             assert_eq!(
                 after_install(Some(&status(Phase::Failed, Some(Verdict::Failed), Some(r)))),
-                AfterInstall::Leave,
+                AfterInstall::Clear,
                 "{r:?}"
             );
         }
+        // Nobody knows what the installer is doing: nothing is touched.
+        assert_eq!(
+            after_install(Some(&status(
+                Phase::Failed,
+                Some(Verdict::Failed),
+                Some(FailReason::ReplyLost)
+            ))),
+            AfterInstall::Leave
+        );
         // Still running: never acted on.
         assert_eq!(
             after_install(Some(&status(Phase::Deliver, None, None))),
             AfterInstall::Leave
         );
+    }
+
+    #[test]
+    fn a_rollback_blocked_by_the_failed_install_is_cleared() {
+        let reply = |state: &str, reason: Option<&str>| RestoreReply {
+            state: state.into(),
+            reason: reason.map(str::to_string),
+            ..Default::default()
+        };
+        for why in ["recorded_without_package", "on_home_screen", "place_taken"] {
+            assert!(
+                rollback_needs_clear(&reply("unsettled", Some(why))),
+                "{why}"
+            );
+        }
+        for (state, why) in [
+            ("rolled_back", None),
+            ("unsettled", Some("db_unreadable")),
+            ("unsettled", Some("move_back_failed")),
+            ("unsettled", Some("clearing")),
+            ("nothing_pending", None),
+        ] {
+            assert!(!rollback_needs_clear(&reply(state, why)), "{state} {why:?}");
+        }
+    }
+
+    #[test]
+    fn a_stuck_installer_is_named_and_the_install_is_summed_up() {
+        assert!(!installer_stuck(None));
+        for r in [FailReason::ReplyLost, FailReason::LoaderUnreachable] {
+            assert!(installer_stuck(Some(&status(
+                Phase::Failed,
+                Some(Verdict::Failed),
+                Some(r)
+            ))));
+        }
+        for r in [
+            FailReason::Stalled,
+            FailReason::SonyRefused,
+            FailReason::Busy,
+        ] {
+            assert!(!installer_stuck(Some(&status(
+                Phase::Failed,
+                Some(Verdict::Failed),
+                Some(r)
+            ))));
+        }
+        let mut st = status(
+            Phase::Failed,
+            Some(Verdict::Failed),
+            Some(FailReason::SonyRefused),
+        );
+        st.code = 0x80B2_116F;
+        st.metrics.served_bytes = 99;
+        st.metrics.total_bytes = 100;
+        st.hint = Some("refused".into());
+        let line = install_summary(Some(&st));
+        for part in [
+            "phase=Failed",
+            "reason=Some(SonyRefused)",
+            "sony_code=0x80B2116F",
+            "served=99/100",
+            "hint=\"refused\"",
+        ] {
+            assert!(line.contains(part), "{line}");
+        }
+        assert_eq!(install_summary(None), "install job unknown");
+    }
+
+    #[test]
+    fn a_batch_that_ends_early_leaves_no_run_active() {
+        let a = "10.9.8.5";
+        set_run(RestoreRun::new(a, "PPSA66661", "restored"));
+        set_run(RestoreRun::new(a, "PPSA66662", "installing"));
+        set_run(RestoreRun::new(a, "PPSA66663", "queued"));
+        assert!(console_busy(a));
+        drop(BatchGuard {
+            addr: a.into(),
+            titles: vec!["PPSA66661".into(), "PPSA66662".into(), "PPSA66663".into()],
+        });
+        assert!(!console_busy(a));
+        assert_eq!(get_run(a, "PPSA66661").unwrap().phase, "restored");
+        let r = get_run(a, "PPSA66663").unwrap();
+        assert_eq!(r.phase, "failed");
+        assert!(r.error.unwrap().contains("stopped"));
+        for t in ["PPSA66661", "PPSA66662", "PPSA66663"] {
+            with_runs(|m| m.remove(&key(a, t)));
+        }
     }
 
     #[test]

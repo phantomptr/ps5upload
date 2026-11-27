@@ -51,6 +51,10 @@ pub struct StreamRequest<'a> {
     pub level: crate::kraken::Level,
     /// How the inner image's metadata region is stored.
     pub metadata_codec: crate::inner::MetaCodec,
+    /// Called once the package's size is known, before the image is written: with the
+    /// package's bytes (the container's own entries estimated) and the layout index's. An
+    /// error stops the build there.
+    pub size_check: Option<&'a dyn Fn(u64, u64) -> Result<()>>,
 }
 
 /// How a build reports itself: phase names, and bytes written of the mount image.
@@ -63,6 +67,8 @@ pub struct Progress<'a> {
 
 pub struct StreamedPackage {
     pub size: u64,
+    /// `naps_pkg_layout.dat`'s length: the header's `napsMetadataSize`.
+    pub layout_index: u64,
     pub outer_size: u64,
     pub cnt_offset: u64,
     pub game_digest: [u8; 32],
@@ -253,6 +259,12 @@ pub fn write_package(
     let lay = layout(inner_blocks, naps.len() as u64)?;
     let outer_size = lay.ndblock * BLOCK;
     let cnt_offset = BLOCK + outer_size;
+    if let Some(check) = request.size_check {
+        check(
+            cnt_offset + crate::package_limit::container_allowance(lay.ndblock),
+            naps.len() as u64,
+        )?;
+    }
 
     // The mode decides one thing: whether every block but the superblock is XTS-transformed.
     // A plaintext image never is, so its keys are not even derived.
@@ -506,6 +518,7 @@ pub fn write_package(
     (progress.bytes)(outer_size, outer_size);
     Ok(StreamedPackage {
         size,
+        layout_index: naps.len() as u64,
         outer_size,
         cnt_offset,
         game_digest,

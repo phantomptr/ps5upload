@@ -89,10 +89,12 @@ impl TarSource {
         }
         // An allow-list ("!*.pkg") picks files out of folders; the folders that hold none of
         // them must not be created on the console as empty shells (as the RAR source does).
-        if excludes.iter().any(|e| e.starts_with('!')) {
+        // Chosen entries ("=Game") keep an empty folder inside a chosen one, and only that.
+        if ps5upload_core::excludes::picks_some(excludes) {
             dirs.retain(|d| {
                 let prefix = format!("{d}/");
                 by_path.keys().any(|f| f.starts_with(&prefix))
+                    || ps5upload_core::excludes::keeps_empty_dir(d, excludes)
             });
         }
         let mut entries: Vec<Entry> = Vec::with_capacity(by_path.len() + dirs.len());

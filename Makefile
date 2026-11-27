@@ -1392,7 +1392,7 @@ test-payload: payload
 		-o $(SELFTEST_DIR)/ps5upload-title-restore-selftest \
 		$(PAYLOAD_DIR)/tests/title_restore_selftest.c $(PAYLOAD_DIR)/src/title_restore.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-title-restore-selftest
-	@echo "✓ restore: only a package no database knows is moved aside (same drive, databases backed up first); a failed install puts it back into a free place, a finished one deletes only the copy aside"
+	@echo "✓ restore: only a package no database knows is moved aside (same drive, databases backed up first); a failed install puts it back into a free place (its unfinished copy uninstalled first), a finished one deletes only the copy aside; the internal drive is asked for 1.2x + 1 GiB"
 	@echo "Running console clean-up rules self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-cleanup-rules-selftest \

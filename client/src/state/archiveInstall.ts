@@ -19,6 +19,7 @@ import {
   type ArchiveTarget,
   isArchiveFirstVolume,
   listRarPackages,
+  packagesForRun,
   type RarInstallResult,
   type RarPhase,
 } from "./rarPackages";
@@ -35,6 +36,8 @@ export interface ArchiveInstallState {
   archive: string;
   /** null until listed (or while a password is needed). */
   packages: RarPackage[] | null;
+  /** "Choose files" (#969): the ticked packages (paths inside the archive); null = all. */
+  chosen?: string[] | null;
   /** Where the packages will be unpacked and whether they fit; null until worked out. */
   target: ArchiveTarget | null;
   password: string | null;
@@ -102,6 +105,7 @@ function put(host: string, patch: Partial<ArchiveInstallState>) {
 const fresh = (archive: string): ArchiveInstallState => ({
   archive,
   packages: null,
+  chosen: null,
   target: null,
   password: null,
   passwordProblem: null,
@@ -143,6 +147,7 @@ async function inspect(host: string, path: string, password: string | null) {
     inspecting: false,
     passwordProblem: null,
     packages: r.packages,
+    chosen: null,
     target: null,
   });
   if (r.packages.length > 0) await planTarget(host);
@@ -153,15 +158,26 @@ export async function planTarget(host: string): Promise<void> {
   const cur = archiveInstallFor(useArchiveInstallStore.getState(), host);
   if (!cur?.packages?.length) return;
   const archive = cur.archive;
+  const { packages } = packagesForRun(cur.packages, cur.chosen);
   let target: ArchiveTarget | null;
   try {
-    target = await planArchiveTarget(host, archive, cur.packages);
+    target = await planArchiveTarget(host, archive, packages);
   } catch {
     target = null; // unknown: the run checks again before it sends anything
   }
   if (archiveInstallFor(useArchiveInstallStore.getState(), host)?.archive !== archive)
     return;
   put(host, { target });
+}
+
+/** "Choose files" (#969): only `paths` of the listed packages are installed (null = all of
+ *  them). Not while a run is going. The space check is worked out again for the choice. */
+export async function chooseArchivePackages(host: string, paths: string[] | null): Promise<void> {
+  const cur = archiveInstallFor(useArchiveInstallStore.getState(), host);
+  if (!cur?.packages || cur.busy) return;
+  const all = paths === null || cur.packages.every((p) => paths.includes(p.path));
+  put(host, { chosen: all ? null : [...paths] });
+  await planTarget(host);
 }
 
 /** The user picked `path`: remember it for this console and read what it holds. */
@@ -253,6 +269,7 @@ export async function runArchiveInstall(host: string): Promise<void> {
       host,
       archivePath: cur.archive,
       password: cur.password,
+      only: cur.chosen ?? null,
       onUnpackJob: (unpackJob) => put(host, { unpackJob }),
       onPhase: (phase) => {
         put(host, { phase });

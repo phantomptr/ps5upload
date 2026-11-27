@@ -29,6 +29,7 @@ import {
   SegmentedControl,
   Select,
   Spinner,
+  SectionErrorBoundary,
 } from "../../components";
 import { pickPath } from "../../lib/pickPath";
 import {
@@ -683,7 +684,9 @@ export default function CollectionScreen({ embedded = false }: { embedded?: bool
     <div className={pageClass}>
       {header}
       {/* #961: games on the PS5's drives that its home screen lost (Rebuild Database). */}
-      <RestoreAllBanner host={host} helperUp={helperUp} />
+      <SectionErrorBoundary logName="restore all banner" resetKey={host}>
+        <RestoreAllBanner host={host} helperUp={helperUp} />
+      </SectionErrorBoundary>
       {s.error && (
         <div className="mb-4">
           <ErrorCard

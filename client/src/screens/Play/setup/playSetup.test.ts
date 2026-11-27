@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { NpState, RemotePlayReadiness } from "../../../api/ps5";
 import {
+  enableKept,
   nextStep,
   playReady,
   setupProgress,
@@ -149,6 +150,26 @@ describe("Play setup", () => {
   it("counts the service already on as signed in when the PSN state can't be read", () => {
     expect(setupStates({ ...base, np: null }).signin).toBe("ok");
     expect(setupStates({ ...base, np: null, readiness: R({ service_enabled: 0 }) }).signin).toBe("todo");
+  });
+
+  it("does not skip the sign-in because the service switch is on (#971)", () => {
+    // An account with an ID, never signed in, and the registry's Remote Play switch already on
+    // (written by this app or anything else): the console greys its own switch out and refuses
+    // pairing, so the sign-in is still the step to do.
+    const s = setupStates({ ...base, np: NP({ online_id: "", auth_dat: false }) });
+    expect([s.account, s.signin, s.service, s.pair]).toEqual(["ok", "todo", "wait", "wait"]);
+    expect(nextStep(s)).toBe("signin");
+    // An online id without its auth file is not signed in either.
+    expect(setupStates({ ...base, np: NP({ auth_dat: false }) }).signin).toBe("todo");
+  });
+
+  it("says whether Turn on and Allow took (#971)", () => {
+    expect(enableKept("service", R())).toBe(true);
+    expect(enableKept("service", R({ service_enabled: 0 }))).toBe(false);
+    expect(enableKept("user", R({ user_enabled: 0 }))).toBe(false);
+    expect(enableKept("user", R())).toBe(true);
+    // Firmware without the per-user setting: nothing to keep.
+    expect(enableKept("user", R({ has_per_user: 0, user_enabled: 0 }))).toBe(true);
   });
 
   it("ticks No payload blocks Remote Play when Hush is off or not loaded", () => {

@@ -23,6 +23,7 @@ mod app_dump_api;
 mod app_icon;
 #[cfg(test)]
 mod archive_build_tests;
+mod archive_choose;
 mod archive_free;
 mod archive_tree;
 mod ava1_api;
@@ -606,6 +607,7 @@ fn extract_payload_error(err: &anyhow::Error) -> (Option<String>, Option<String>
 }
 
 pub(crate) use ps5upload_convert_core::lz4_packs;
+pub(crate) use ps5upload_convert_core::plain_emulator;
 /// Sum file sizes recursively under `root`. Used by transfer_dir_handler
 /// to pre-compute `total_bytes` for progress rendering — transfer_dir
 /// itself walks too but doesn't expose the total before sending starts,
@@ -11328,12 +11330,26 @@ async fn transfer_rar_handler() -> impl IntoResponse {
 async fn rar_packages_handler(Json(req): Json<RarPackagesReq>) -> impl IntoResponse {
     let p = req.archive_path.clone();
     let pw = req.password.clone();
-    let r = tokio::task::spawn_blocking(move || archive_package_entries(&p, pw.as_deref())).await;
+    let r = tokio::task::spawn_blocking(move || {
+        let files = archive_package_entries(&p, pw.as_deref())?;
+        // A ZIP's packages also say what they are (#969): cheap to read there, not in a 7z or RAR.
+        let briefs = if archive_kind_of(&p) == Some(ArchiveKind::Zip) {
+            let wanted: Vec<String> = files.iter().map(|(path, _)| path.clone()).collect();
+            archive_choose::zip_package_briefs(std::path::Path::new(&p), &wanted)
+        } else {
+            Default::default()
+        };
+        anyhow::Ok((files, briefs))
+    })
+    .await;
     match r {
-        Ok(Ok(files)) => {
+        Ok(Ok((files, briefs))) => {
             let mut packages: Vec<serde_json::Value> = files
                 .iter()
-                .map(|(path, size)| serde_json::json!({ "path": path, "size": size }))
+                .map(|(path, size)| match briefs.get(path) {
+                    Some(info) => serde_json::json!({ "path": path, "size": size, "info": info }),
+                    None => serde_json::json!({ "path": path, "size": size }),
+                })
                 .collect();
             packages.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
             (
@@ -11346,6 +11362,35 @@ async fn rar_packages_handler(Json(req): Json<RarPackagesReq>) -> impl IntoRespo
         Err(e) => json_err(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("rar packages task: {e}"),
+        )
+        .into_response(),
+    }
+}
+
+/// `/api/archive/entries` request.
+#[derive(Deserialize)]
+struct ArchiveEntriesReq {
+    archive_path: String,
+    /// RAR only.
+    #[serde(default)]
+    password: Option<String>,
+}
+
+/// POST /api/archive/entries — what a ZIP, 7z, RAR or tar holds, as the rows "Choose files"
+/// ticks (#969): each package, each folder that holds no package, each loose file beside a
+/// package. Read from the listing alone; a ZIP's packages also have their headers read. The
+/// ticked rows go back as `=path` entries in the transfer's `excludes`.
+async fn archive_entries_handler(Json(req): Json<ArchiveEntriesReq>) -> impl IntoResponse {
+    let p = req.archive_path.clone();
+    let pw = req.password.clone();
+    let r = tokio::task::spawn_blocking(move || archive_choose::archive_entries(&p, pw.as_deref()))
+        .await;
+    match r {
+        Ok(Ok(entries)) => (StatusCode::OK, Json(entries)).into_response(),
+        Ok(Err(e)) => json_err(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
+        Err(e) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("archive entries task: {e}"),
         )
         .into_response(),
     }
@@ -14487,6 +14532,7 @@ fn build_app_and_mcp(
         .route("/api/transfer/rar", post(transfer_rar_handler))
         .route("/api/rar/inspect", post(rar_inspect_handler))
         .route("/api/rar/packages", post(rar_packages_handler))
+        .route("/api/archive/entries", post(archive_entries_handler))
         .route("/api/link/probe", post(link_probe_handler))
         .route("/api/link/download", post(link_download_handler))
         .route("/api/transfer/file-list", post(transfer_file_list_handler))

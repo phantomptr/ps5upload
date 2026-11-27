@@ -507,6 +507,30 @@ static void path_job_args(void) {
     CHECK(webui_path_job_args(out, 22, "/data/a.bin", NULL, NULL) == -1);
 }
 
+/* Files › Extract's job members (#969): the folder, a password, merge/replace, a listing, and the
+ * top-level entries left out or renamed, all read back as archive_extract.c reads them. */
+static void extract_tail(void) {
+    char out[512], args[640], back[256];
+    int merge = -1, list = -1;
+    CHECK(webui_extract_tail(out, sizeof out, "/data/x", NULL, 0, 0, 0, NULL) > 0);
+    CHECK(strcmp(out, ",\"dest\":\"/data/x\",\"merge\":false,\"replace\":false") == 0);
+    CHECK(webui_extract_tail(out, sizeof out, "/data/x", "p\"w", 1, 0, 1, "") > 0);
+    CHECK(strcmp(out, ",\"dest\":\"/data/x\",\"password\":\"p\\\"w\",\"merge\":true,\"replace\":false,\"list\":true") ==
+          0);
+    CHECK(webui_extract_tail(out, sizeof out, "/data/\xe5\xae\x8c", NULL, 1, 1, 0, "Game/Game (2)/readme.txt/") > 0);
+    CHECK(webui_path_job_args(args, sizeof args, "/data/a.zip", NULL, out) > 0);
+    CHECK(json_valid(args));
+    CHECK(webui_json_str(args, strlen(args), "top", back, sizeof back) == 1 &&
+          strcmp(back, "Game/Game (2)/readme.txt/") == 0);
+    CHECK(webui_json_str(args, strlen(args), "dest", back, sizeof back) == 1 && strcmp(back, "/data/\xe5\xae\x8c") == 0);
+    CHECK(webui_json_bool(args, strlen(args), "merge", &merge) == 1 && merge == 1);
+    CHECK(webui_json_bool(args, strlen(args), "list", &list) == 0);
+    /* no room, or no folder: nothing, and the password is not left behind */
+    CHECK(webui_extract_tail(out, 40, "/data/x", "secret", 0, 0, 0, NULL) == -1 && out[0] == '\0');
+    CHECK(memchr(out, 's', 40) == NULL);
+    CHECK(webui_extract_tail(out, sizeof out, NULL, NULL, 0, 0, 0, NULL) == -1);
+}
+
 static void name_checks(void) {
     char long_name[300];
     CHECK(webui_name_ok("a.exfat") && webui_name_ok("img (2).exfat") && webui_name_ok("\xe5\xae\x8c.exfat"));
@@ -1070,6 +1094,7 @@ int main(void) {
     jobs_to_json();
     job_status_to_json();
     path_job_args();
+    extract_tail();
     name_checks();
     rename_detours();
     hex_ids();

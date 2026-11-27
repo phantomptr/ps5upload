@@ -21,7 +21,8 @@ export type ConvertStatus = "pending" | "running" | "installing" | "handed" | "d
  *  `zstdLevel`), in any format, compressed or not. A folder's `zstd` / `lz4`: its files in zstd
  *  or LZ4 packs (then a game folder can be the source too). `unpackPacks`: a game in asset
  *  packs written as plain files again (a game folder can then be a folder's source too); a
- *  package of it can also leave the AMPR emulator out (`leaveOutAmprEmu`, #933). */
+ *  package of it can also leave the AMPR emulator out (`leaveOutAmprEmu`, #933), and so can a
+ *  package of a game in no packs that carries one (`leaveOutAmprEmu` alone). */
 export type ConvertBuild =
   | { kind: "pkg"; unpackPacks?: boolean; leaveOutAmprEmu?: boolean }
   | { kind: "image"; format: ImageFormat; compress: boolean; lz4?: AmprLz4Options; unpackPacks?: boolean }
@@ -138,7 +139,8 @@ export function queueTags(item: ConvertItem): QueueTag[] {
   if (packs.kind === "zstd") tags.push({ kind: "zstd", level: packs.level ?? DEFAULT_ZSTD_LEVEL });
   if (packs.kind === "lz4") tags.push({ kind: "lz4" });
   if (b?.unpackPacks) tags.push({ kind: "unpack" });
-  if (b?.kind === "pkg" && b.unpackPacks && b.leaveOutAmprEmu) tags.push({ kind: "no-emulator" });
+  // With the unpack for a packed game, alone for a plain one.
+  if (b?.kind === "pkg" && b.leaveOutAmprEmu && (b.unpackPacks || item.plainAmprEmu)) tags.push({ kind: "no-emulator" });
   if (b?.kind === "image" && b.compress && item.imageLevel) tags.push({ kind: "level", level: item.imageLevel });
   if ((!b || b.kind === "pkg") && item.language) tags.push({ kind: "language", code: item.language });
   if (freesArchive(item)) tags.push({ kind: "free-archive" });
@@ -182,6 +184,9 @@ export interface ConvertItem {
    *  of it is looked at when its turn comes and, like one made from ①, gets its packs
    *  unpacked. */
   packs?: "lz4" | "zstd" | "none";
+  /** The game checked under ① is in no packs and carries an AMPR emulator a package can leave
+   *  out (`build.leaveOutAmprEmu` alone): its queued options offer it too. */
+  plainAmprEmu?: true;
   /** What to do with the package: keep it, or install it (streamed / uploaded first). An image
    *  is kept, or ("upload") put in the Upload queue for the PS5. */
   then: ConvertThen;

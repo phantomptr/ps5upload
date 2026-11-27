@@ -46,6 +46,7 @@ import {
 import { rarPasswordProblem, type RarPasswordProblem } from "../lib/rarPassword";
 import { isRarFirstVolume } from "../lib/rarVolumes";
 import { splitPkgBytes, type ListedFile } from "../lib/splitPkgSize";
+import { chosenPatterns, packagesToUnpack } from "../lib/archiveChoice";
 import { pkgLibraryStore } from "./pkgLibrary";
 
 /** The exclude entry that keeps only packages; the engine lists with the same one. */
@@ -351,6 +352,21 @@ export interface RarInstallOptions {
   onPhase?: (p: RarPhase) => void;
   /** The unpack's engine job while it runs, so it can be stopped; null once it has ended. */
   onUnpackJob?: (jobId: string | null) => void;
+  /** "Choose files" (#969): only these packages (paths inside the archive) are unpacked and
+   *  installed, with the other parts of a set named by part. Null/absent = every package. */
+  only?: readonly string[] | null;
+}
+
+/** The packages a run unpacks: every listed one, or the chosen ones (with their parts). */
+export function packagesForRun(
+  listed: readonly RarPackage[],
+  only: readonly string[] | null | undefined,
+): { packages: RarPackage[]; chosen: string[] | null } {
+  if (!only) return { packages: [...listed], chosen: null };
+  const chosen = packagesToUnpack(listed, new Set(only));
+  if (!chosen) return { packages: [...listed], chosen: null };
+  const keep = new Set(chosen);
+  return { packages: listed.filter((p) => keep.has(p.path)), chosen };
 }
 
 /** How many status reads in a row may fail before an unpack is given up on. It goes on in the
@@ -380,6 +396,7 @@ export async function listRarPackages(
 async function unpack(
   opts: RarInstallOptions,
   dest: string,
+  chosen: readonly string[] | null,
 ): Promise<
   | { ok: true }
   | { ok: false; message: string; password?: RarPasswordProblem; lostJob?: string }
@@ -388,21 +405,15 @@ async function unpack(
   try {
     const addr = consoleAddr(opts.host);
     const kind = archiveKindOf(opts.archivePath);
-    // Each kind has its own reader in the engine; all three take the same allow-list. Only
-    // RAR can be opened with a password.
+    // Each kind has its own reader in the engine; all three take the same allow-list (or the
+    // chosen packages, by path). Only RAR can be opened with a password.
+    const keep = chosen ? chosenPatterns(chosen) : [RAR_PKG_ALLOW, RAR_FPKG_ALLOW];
     jobId =
       kind === "zip"
-        ? await startTransferZip(opts.archivePath, dest, addr, null, [RAR_PKG_ALLOW, RAR_FPKG_ALLOW])
+        ? await startTransferZip(opts.archivePath, dest, addr, null, keep)
         : kind === "7z"
-          ? await startTransfer7z(opts.archivePath, dest, addr, null, [RAR_PKG_ALLOW, RAR_FPKG_ALLOW])
-          : await startTransferRar(
-              opts.archivePath,
-              dest,
-              addr,
-              opts.password ?? null,
-              null,
-              [RAR_PKG_ALLOW, RAR_FPKG_ALLOW],
-            );
+          ? await startTransfer7z(opts.archivePath, dest, addr, null, keep)
+          : await startTransferRar(opts.archivePath, dest, addr, opts.password ?? null, null, keep);
   } catch (e) {
     const msg = messageOf(e);
     const pw = rarPasswordProblem(null, msg);
@@ -480,10 +491,23 @@ export async function installRarPackages(
     };
   }
 
+  const { packages, chosen } = packagesForRun(listed.packages, opts.only);
+  if (packages.length === 0) {
+    return {
+      ok: false,
+      dest: "",
+      outcomes: [],
+      message: trStatic(
+        "arcpkg.none_chosen",
+        "None of the chosen packages is in the archive any more. Choose again.",
+      ),
+    };
+  }
+
   // The package library of the console's default drive, or internal storage: a place Sony's
   // installer can read, and the one the Library screen already lists.
   // Refuse before sending anything when the packages certainly cannot fit.
-  const { dest, space } = await planArchiveTarget(host, archivePath, listed.packages);
+  const { dest, space } = await planArchiveTarget(host, archivePath, packages);
   if (space.kind === "no_room") {
     return {
       ok: false,
@@ -501,7 +525,7 @@ export async function installRarPackages(
     await fsMkdir(transferAddr(host), dir).catch(() => {});
   }
 
-  const unpacked = await unpack(opts, dest);
+  const unpacked = await unpack(opts, dest, chosen);
   if (!unpacked.ok) {
     return {
       ok: false,
@@ -516,8 +540,8 @@ export async function installRarPackages(
   // Identify each package where it now is, to put a base before its patch.
   const outcomes: RarInstallOutcome[] = [];
   const known: RarPackageInfo[] = [];
-  for (const [i, p] of listed.packages.entries()) {
-    opts.onPhase?.({ phase: "reading", index: i + 1, count: listed.packages.length });
+  for (const [i, p] of packages.entries()) {
+    opts.onPhase?.({ phase: "reading", index: i + 1, count: packages.length });
     const consolePath = `${dest}/${p.path}`;
     try {
       const info = await pkgConsoleProbe(consoleAddr(host), consolePath);
@@ -525,7 +549,7 @@ export async function installRarPackages(
         entry: p.path,
         consolePath,
         // A split set's lead carries its parts (same folder in the archive).
-        size: splitPkgBytes(baseOf(p.path), p.size, siblingsOf(p.path, listed.packages)),
+        size: splitPkgBytes(baseOf(p.path), p.size, siblingsOf(p.path, packages)),
         category: info.category ?? "",
         titleId: info.title_id ?? "",
         appVer: info.app_ver ?? "",
