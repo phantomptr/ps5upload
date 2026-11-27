@@ -208,6 +208,20 @@ function StatsLine({
           {tr("rp_stats_audio_gaps", { n: stats.underruns }, `${stats.underruns} gaps`)}
         </>
       )}
+      {/* Where a low frame rate comes from (#972): what the PS5 sent, and pictures skipped
+          because this device fell behind. */}
+      {stats.consoleFps != null && (
+        <>
+          {" · "}
+          {tr("rp_stats_ps5_fps", { n: stats.consoleFps }, `PS5 sent ${stats.consoleFps} fps`)}
+        </>
+      )}
+      {(stats.pageSkips ?? 0) > 0 && (
+        <>
+          {" · "}
+          {tr("rp_stats_page_skips", { n: stats.pageSkips ?? 0 }, `${stats.pageSkips ?? 0} skipped here`)}
+        </>
+      )}
       <LatencyLine stats={stats} />
     </div>
   );

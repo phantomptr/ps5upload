@@ -316,10 +316,17 @@ static int rp_enable_locked(int user_scope, char *out, size_t out_size) {
          * fails closed. */
         if (!rp_fw_has_per_user_enable(fw)) return -2;
 
+        /* The user pairing and the readiness snapshot use (rp_resolve_account_slot): the
+         * foreground one first, else the signed-in one with an account. Writing only the
+         * foreground user's slot allowed nobody on a console where the helper reads no
+         * foreground user (13.60 often), and a different user than the one readiness reports
+         * when the foreground one has no account, so "Allow" left the step open (#971). */
         int uid = 0;
-        rp_user_service_ready();
-        if (sceUserServiceGetForegroundUser(&uid) != 0 || uid <= 0) return -3;
-        int slot = rp_slot_for_user(uid);
+        int slot = rp_resolve_account_slot(&uid, NULL);
+        if (slot < 1) {
+            if (sceUserServiceGetForegroundUser(&uid) != 0 || uid <= 0) return -3;
+            slot = rp_slot_for_user(uid);
+        }
         if (slot < 1) return -3;
 
         uint32_t ec = 0;

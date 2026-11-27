@@ -9440,6 +9440,17 @@ rp_users_add_hint: "若也想以其他使用者遊玩，請在 PS5 上登入該�
 "two_panes_unverified": "已複製，但保留了原件：無法檢查副本",
 "two_panes_not_removed": "已複製，但無法刪除原件",
 backup_restore_partial: "已還原 {count} 個檔案；{missed} 個無法還原",
+"rp_stats_ps5_fps": "PS5 傳送 {n} fps",
+"rp_stats_page_skips": "本機略過 {n} 格",
+"play_setup_service_not_kept": "PS5 沒有保留這個設定：讀回來仍是關閉。請在 PS5 本機開啟 設定 › 系統 › 遠端遊玩 › 啟用遠端遊玩。如果那裡是灰色的，表示帳號還沒登入：重新做第 4 步，重新啟動 PS5，再重新傳送助手。",
+"play_setup_service_greyed": "在 PS5 上，設定 › 系統 › 遠端遊玩 中的「啟用遠端遊玩」必須是開啟的。如果它是灰色的或無法開啟，表示帳號還沒登入：回到第 4 步執行離線登入，重新啟動 PS5 並重新傳送助手，然後再回到這裡。",
+"play_setup_account_lost_title": "帳號 ID 不見了",
+"play_setup_account_lost_body": "本應用程式曾為 {user} 設定帳號 ID {id}，但 PS5 上已經沒有了（重新啟動可能會把它清掉）。請把同一個 ID 放回去：之後的存檔都綁定在這個 ID 上。如果遊玩要求，再配對一次。",
+"play_setup_account_not_kept": "PS5 沒有保留 {id}。請在「連線」中重新傳送助手，然後再試一次。",
+"play_setup_account_reapply": "放回 {id}",
+"play_setup_signin_after_restart": "重新啟動後請再看一下第 3 步：如果帳號 ID 不見了，它會提供一鍵放回同一個 ID。放回之後這一步仍未完成時，才需要再執行一次登入。",
+"profile.accountId.not_kept": "PS5 沒有保留 {next}：帳號讀回來是 {got}。請在「連線」中重新傳送助手，然後再試一次。",
+"profile.accountId.saved_kept": "已儲存，PS5 已讀回確認。重新啟動 PS5 後才會在主機上顯示。如果重新啟動後 ID 不見了，「設定遊玩」會提供放回同一個 ID 的按鈕。",
 };
 
 export default zh_TW;

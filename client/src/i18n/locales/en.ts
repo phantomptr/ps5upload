@@ -9887,6 +9887,17 @@ restore_where_usb: "USB extended storage",
 "join_took_host": "{host}'s game stopped because their PS5 user was picked on your controller. This time, move to Quick Play first, then press ✕.",
 "join_took_host_away": "{host}'s PS5 user was picked on your controller, which ends their game. When it's back and the TV asks who you are, move to Quick Play first, then press ✕.",
 err_launch_program_refused: "The PS5 refused to start this game's program (0x80020016). Usually fake-package and homebrew support (kstuff) isn't loaded, or the package holds program files the console won't accept. Load kstuff and press Play again; if it still won't start, rebuild or re-download the package.",
+"rp_stats_ps5_fps": "PS5 sent {n} fps",
+"rp_stats_page_skips": "{n} skipped here",
+"play_setup_service_not_kept": "The PS5 did not keep the setting: it still reads as off. Turn on Settings › System › Remote Play › Enable Remote Play on the PS5 itself. If it is greyed out there, the account is not signed in: do step 4 again, restart the PS5, then send the helper again.",
+"play_setup_service_greyed": "On the PS5, Settings › System › Remote Play must show Enable Remote Play switched on. If it is greyed out or will not switch on, the account is not signed in yet: go back to step 4, run the offline sign-in, restart the PS5 and send the helper again. Then come back here.",
+"play_setup_account_lost_title": "The account ID is gone",
+"play_setup_account_lost_body": "This app set account ID {id} for {user}, and the PS5 no longer has it (a restart can drop it). Put the same ID back: saves made under it are tied to it. Then pair again if Play asks.",
+"play_setup_account_not_kept": "The PS5 did not keep {id}. Send the helper again from Connection and try once more.",
+"play_setup_account_reapply": "Put {id} back",
+"play_setup_signin_after_restart": "After the restart, check step 3 again: if the account ID is gone, it offers to put the same one back. Run the sign-in again only if this step is still open after that.",
+"profile.accountId.not_kept": "The PS5 did not keep {next}: the account reads {got}. Send the helper again from Connection and try once more.",
+"profile.accountId.saved_kept": "Saved, and the PS5 reads it back. Restart the PS5 to see it on the console. If the ID is gone after a restart, Play › Set up offers to put the same one back.",
 };
 
 export default en;

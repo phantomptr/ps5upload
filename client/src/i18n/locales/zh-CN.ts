@@ -9446,6 +9446,17 @@ rp_users_add_hint: "若也想以其他用户游玩，请在 PS5 上登录该用�
 "two_panes_unverified": "已复制，但保留了原件：无法检查副本",
 "two_panes_not_removed": "已复制，但无法删除原件",
 backup_restore_partial: "已恢复 {count} 个文件；{missed} 个无法恢复",
+"rp_stats_ps5_fps": "PS5 发送 {n} fps",
+"rp_stats_page_skips": "本机跳过 {n} 帧",
+"play_setup_service_not_kept": "PS5 没有保留这个设置：读回来仍是关闭。请在 PS5 本机打开 设置 › 系统 › 远程游玩 › 启用远程游玩。如果那里是灰色的，说明账号还没登录：重新做第 4 步，重启 PS5，再重新发送助手。",
+"play_setup_service_greyed": "在 PS5 上，设置 › 系统 › 远程游玩 中的“启用远程游玩”必须是打开的。如果它是灰色的或打不开，说明账号还没登录：回到第 4 步运行离线登录，重启 PS5 并重新发送助手，然后再回到这里。",
+"play_setup_account_lost_title": "账号 ID 不见了",
+"play_setup_account_lost_body": "本应用曾为 {user} 设置账号 ID {id}，但 PS5 上已经没有了（重启可能会把它清掉）。请把同一个 ID 放回去：之后的存档都绑定在这个 ID 上。如果畅玩要求，再配对一次。",
+"play_setup_account_not_kept": "PS5 没有保留 {id}。请在“连接”中重新发送助手，然后再试一次。",
+"play_setup_account_reapply": "放回 {id}",
+"play_setup_signin_after_restart": "重启后请再看一下第 3 步：如果账号 ID 不见了，它会提供一键放回同一个 ID。放回之后这一步仍未完成时，才需要再运行一次登录。",
+"profile.accountId.not_kept": "PS5 没有保留 {next}：账号读回来是 {got}。请在“连接”中重新发送助手，然后再试一次。",
+"profile.accountId.saved_kept": "已保存，PS5 已读回确认。重启 PS5 后才会在主机上显示。如果重启后 ID 不见了，“设置畅玩”会提供放回同一个 ID 的按钮。",
 };
 
 export default zh_CN;
