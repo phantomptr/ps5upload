@@ -407,6 +407,47 @@ pub(crate) fn skip_rule(
     }
 }
 
+/// One console folder's whole listing (every page), with the walk's per-page deadline.
+pub(crate) fn list_folder(addr: &str, path: &str) -> anyhow::Result<Vec<DirEntry>> {
+    list_all(|offset| {
+        list_dir_with_timeout(
+            addr,
+            path,
+            ListDirOptions {
+                offset,
+                limit: PAGE,
+            },
+            Some(LIST_TIMEOUT),
+        )
+        .map(|l| (l.entries, l.truncated))
+    })
+}
+
+/// Walks `root` on the console at `addr` (what [`start`] runs; Files' folder sizes run it too,
+/// with one worker, for a helper that cannot count a folder itself).
+pub(crate) fn walk_console(
+    addr: &str,
+    root: &str,
+    limits: &Limits,
+    progress: &Progress,
+    cancel: &(dyn Fn() -> bool + Sync),
+) -> anyhow::Result<Walked> {
+    let root = normalize(root);
+    // Best effort: without the volume list a deeper drive is walked like any folder.
+    let mounts: Vec<String> = ps5upload_core::volumes::list_volumes(addr)
+        .map(|l| {
+            l.volumes
+                .into_iter()
+                .map(|v| normalize(&v.path))
+                .filter(|p| p.starts_with(&format!("{}/", root.trim_end_matches('/'))))
+                .collect()
+        })
+        .unwrap_or_default();
+    let skip = skip_rule(&root, mounts);
+    let list = |p: &str| list_folder(addr, p);
+    walk(&root, &list, &skip, limits, progress, cancel)
+}
+
 // ─── Jobs ───────────────────────────────────────────────────────────────────
 
 enum Outcome {
@@ -592,39 +633,9 @@ pub(crate) async fn start(State(state): State<AppState>, Json(req): Json<StartRe
     let j = job.clone();
     tokio::task::spawn_blocking(move || {
         let root = j.path.clone();
-        // Best effort: without the volume list a deeper drive is walked like any folder.
-        let mounts: Vec<String> = ps5upload_core::volumes::list_volumes(&addr)
-            .map(|l| {
-                l.volumes
-                    .into_iter()
-                    .map(|v| normalize(&v.path))
-                    .filter(|p| p.starts_with(&format!("{}/", root.trim_end_matches('/'))))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let skip = skip_rule(&root, mounts);
-        let list = |p: &str| {
-            list_all(|offset| {
-                list_dir_with_timeout(
-                    &addr,
-                    p,
-                    ListDirOptions {
-                        offset,
-                        limit: PAGE,
-                    },
-                    Some(LIST_TIMEOUT),
-                )
-                .map(|l| (l.entries, l.truncated))
-            })
-        };
-        let r = walk(
-            &root,
-            &list,
-            &skip,
-            &Limits::default(),
-            &j.progress,
-            &|| j.abandoned(),
-        );
+        let r = walk_console(&addr, &root, &Limits::default(), &j.progress, &|| {
+            j.abandoned()
+        });
         let took = j.started.elapsed();
         let outcome = match r {
             Ok(w) => {
@@ -639,6 +650,7 @@ pub(crate) async fn start(State(state): State<AppState>, Json(req): Json<StartRe
                     took.as_millis(),
                     w.partial.map(|p| format!(" (partial: {p})")).unwrap_or_default(),
                 ));
+                crate::folder_sizes::record_walk(&addr, &root, &w);
                 Outcome::walked(w)
             }
             Err(e) => Outcome::Failed(format!("{e:#}")),

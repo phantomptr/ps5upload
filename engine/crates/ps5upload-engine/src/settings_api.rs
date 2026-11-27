@@ -176,6 +176,15 @@ const SETTINGS: &[Setting] = &[
         description: "Add an uploaded game folder to the home screen when it lands.",
     },
     Setting {
+        name: "keep_folder_sizes_fresh",
+        key: "ps5upload.files_keep_sizes_fresh",
+        kind: TRUE_FALSE,
+        default: Default_::Bool(false),
+        description: "Files: measure folder sizes the app already knows again, at most once a \
+                      day, only in folders you open and only while nothing else runs on the \
+                      console. Off: a size is measured only when you ask.",
+    },
+    Setting {
         name: "pkg_upload_choice",
         key: "ps5upload.pkg_upload_choice",
         kind: Kind::Choice(&["install", "copy"]),

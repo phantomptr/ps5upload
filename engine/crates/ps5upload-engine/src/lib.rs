@@ -62,6 +62,7 @@ mod fakelibs_api;
 mod fan_boost;
 mod ffmpeg_tool;
 mod folder_build;
+mod folder_sizes;
 mod fpkg_api;
 mod fpkg_firmware;
 mod frame_decode;
@@ -2226,6 +2227,7 @@ async fn ps5_to_ps5_handler(
         return helper_stop::stopping_refusal();
     };
     let busy = (from_busy, to_busy);
+    folder_sizes::changed(&req.to, &[&req.dest]);
     let route_options = {
         let mode = match ps5upload_ava1::c2c::RouteMode::parse(req.route.as_deref()) {
             Ok(m) => m,
@@ -2914,6 +2916,8 @@ async fn ps5_fs_delete(
     let Some(busy) = helper_stop::try_enter(&addr) else {
         return helper_stop::stopping_refusal();
     };
+    // Our own write there: the folder sizes it touches are no longer right (#974).
+    folder_sizes::changed(&addr, &[&req.path]);
     let path = req.path;
     let op_id = req.op_id;
     let started = std::time::Instant::now();
@@ -3002,6 +3006,8 @@ async fn ps5_fs_unpack(
     let Some(busy) = helper_stop::try_enter(&addr) else {
         return helper_stop::stopping_refusal();
     };
+    // Our own write there: the folder sizes it touches are no longer right (#974).
+    folder_sizes::changed(&addr, &[&req.path]);
     let (path, op_id) = (req.path, req.op_id);
     let started = std::time::Instant::now();
     crate::log_at!(
@@ -3097,6 +3103,8 @@ async fn ps5_fs_extract(
     let Some(busy) = helper_stop::try_enter(&addr) else {
         return helper_stop::stopping_refusal();
     };
+    // Our own write there: the folder sizes it touches are no longer right (#974).
+    folder_sizes::changed(&addr, &[&req.dest]);
     let op_id = req.op_id;
     let pairs: Vec<(String, String)> = req
         .top
@@ -3205,6 +3213,8 @@ async fn ps5_fs_move(
     let Some(busy) = helper_stop::try_enter(&addr) else {
         return helper_stop::stopping_refusal();
     };
+    // Our own write there: the folder sizes it touches are no longer right (#974).
+    folder_sizes::changed(&addr, &[&req.from, &req.to]);
     let from = req.from;
     let to = req.to;
     let started = std::time::Instant::now();
@@ -3298,6 +3308,8 @@ async fn ps5_fs_copy(
     let Some(busy) = helper_stop::try_enter(&addr) else {
         return helper_stop::stopping_refusal();
     };
+    // Our own write there: the folder sizes it touches are no longer right (#974).
+    folder_sizes::changed(&addr, &[&req.to]);
     let from = req.from;
     let to = req.to;
     let started = std::time::Instant::now();
@@ -3653,6 +3665,7 @@ async fn ps5_app_unregister(
             return helper_stop::stopping_refusal();
         };
         busy = Some(b);
+        folder_sizes::changed(&addr, &[&want]);
         let (a, t) = (addr.clone(), title_id.clone());
         let refusal =
             match tokio::task::spawn_blocking(move || uninstall_source::current(&a, &t)).await {
@@ -5899,6 +5912,7 @@ async fn ps5_fs_write_bytes(
     };
     let path = req.path;
     let create_only = req.create_only;
+    crate::folder_sizes::changed(&addr, &[&path]);
     let r = tokio::task::spawn_blocking(move || {
         ps5upload_core::diagnostics::fs_write_bytes(&addr, &path, &raw, create_only)
     })
@@ -8067,6 +8081,8 @@ async fn transfer_file_handler(
     let Some(busy) = helper_stop::try_enter(&addr) else {
         return helper_stop::stopping_refusal();
     };
+    // Our own write there: the folder sizes it touches are no longer right (#974).
+    folder_sizes::changed(&addr, &[&req.dest]);
     // A caller-supplied tx_id marks a resume-capable client; the job is reopened by id.
     let caller_supplied_tx_id = req.tx_id.is_some();
     let tx_id = match parse_or_random_tx_id(req.tx_id.as_deref()) {
@@ -8296,6 +8312,8 @@ async fn transfer_dir_handler(
     let Some(busy) = helper_stop::try_enter(&addr) else {
         return helper_stop::stopping_refusal();
     };
+    // Our own write there: the folder sizes it touches are no longer right (#974).
+    folder_sizes::changed(&addr, &[&req.dest_root]);
     // A caller-supplied tx_id signals "reuse if already in the payload's
     // journal" — the cross-session resume flow. Engine-minted tx_ids
     // mean "fresh upload." Encode that into the initial BEGIN_TX flags
@@ -8980,6 +8998,8 @@ async fn transfer_zip_handler(
     let Some(busy) = helper_stop::try_enter(&addr) else {
         return helper_stop::stopping_refusal();
     };
+    // Our own write there: the folder sizes it touches are no longer right (#974).
+    folder_sizes::changed(&addr, &[&req.dest_root]);
     // Read until the upload ends: an unpack that frees this archive as it goes
     // (`archive_free`) is refused meanwhile, and this upload while one runs.
     let reading =
@@ -10607,6 +10627,8 @@ async fn transfer_7z_handler(
     let Some(busy) = helper_stop::try_enter(&addr) else {
         return helper_stop::stopping_refusal();
     };
+    // Our own write there: the folder sizes it touches are no longer right (#974).
+    folder_sizes::changed(&addr, &[&req.dest_root]);
     // Read until the upload ends: an unpack that frees this archive as it goes
     // (`archive_free`) is refused meanwhile, and this upload while one runs.
     let reading =
@@ -10892,6 +10914,8 @@ async fn transfer_tar_handler(
     let Some(busy) = helper_stop::try_enter(&addr) else {
         return helper_stop::stopping_refusal();
     };
+    // Our own write there: the folder sizes it touches are no longer right (#974).
+    folder_sizes::changed(&addr, &[&req.dest_root]);
     // Read until the upload ends: an unpack that frees this archive as it goes
     // (`archive_free`) is refused meanwhile, and this upload while one runs.
     let reading =
@@ -11139,6 +11163,8 @@ async fn transfer_rar_handler(
     let Some(busy) = helper_stop::try_enter(&addr) else {
         return helper_stop::stopping_refusal();
     };
+    // Our own write there: the folder sizes it touches are no longer right (#974).
+    folder_sizes::changed(&addr, &[&req.dest_root]);
     // Read until the upload ends: an unpack that frees this archive as it goes
     // (`archive_free`) is refused meanwhile, and this upload while one runs.
     let reading =
@@ -11512,6 +11538,8 @@ async fn link_download_handler(
     let Some(busy) = helper_stop::try_enter(&addr) else {
         return helper_stop::stopping_refusal();
     };
+    // Our own write there: the folder sizes it touches are no longer right (#974).
+    folder_sizes::changed(&addr, &[&req.dest_dir]);
     let tx_id = match parse_or_random_tx_id(req.tx_id.as_deref()) {
         Ok(id) => id,
         Err(e) => return json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
@@ -11765,6 +11793,8 @@ async fn transfer_file_list_handler(
     let Some(busy) = helper_stop::try_enter(&addr) else {
         return helper_stop::stopping_refusal();
     };
+    // Our own write there: the folder sizes it touches are no longer right (#974).
+    folder_sizes::changed(&addr, &[&req.dest_root]);
     let tx_id = match parse_or_random_tx_id(req.tx_id.as_deref()) {
         Ok(id) => id,
         Err(e) => return json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
@@ -13648,6 +13678,8 @@ fn build_app_and_mcp(
     let browser_payload_installs = pkg_state.clone();
     let health_fix_installs = pkg_state.clone();
     let cleanup_installs = pkg_state.clone();
+    // Files' folder sizes (#974): the measuring worker sleeps until something is queued.
+    folder_sizes::start(pkg_state.clone());
     let app = Router::new()
         .route("/", get(ui_handler))
         .route(
@@ -13689,6 +13721,13 @@ fn build_app_and_mcp(
         .route("/api/ps5/disk-usage", post(disk_usage::start))
         .route("/api/ps5/disk-usage/{id}", get(disk_usage::status))
         .route("/api/ps5/disk-usage/{id}/cancel", post(disk_usage::cancel))
+        .route("/api/ps5/folder-sizes", get(folder_sizes::sizes))
+        .route(
+            "/api/ps5/folder-sizes/queue",
+            get(folder_sizes::queue_status),
+        )
+        .route("/api/ps5/folder-sizes/measure", post(folder_sizes::measure))
+        .route("/api/ps5/folder-sizes/cancel", post(folder_sizes::cancel))
         .route("/api/ps5/cleanup/scan", post(console_cleanup_api::scan))
         .route(
             "/api/ps5/tailnet",
