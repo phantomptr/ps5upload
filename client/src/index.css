@@ -726,12 +726,11 @@ body {
 }
 
 /* TV mode's own screens (#976, layout/TvModeFrame) on any device: the arrows move focus there,
- * so the same ring, thicker, with a glow that reads on a TV across the room. The picture keeps
- * its own (the stage is the game, not a control). */
+ * so the same ring, thicker, to read on a TV across the room. The picture keeps its own (the
+ * stage is the game, not a control). */
 :root[data-tv-mode="1"] :where(a, button, input, select, textarea, summary, [role="button"], [role="menuitem"], [role="tab"], [tabindex]:not([data-testid="rp-stage"])):focus {
   outline: 4px solid var(--color-accent);
   outline-offset: 4px;
-  box-shadow: 0 0 0 10px color-mix(in srgb, var(--color-accent) 22%, transparent);
 }
 
 /* Play Together's guest screens (the /join page, the joined game; #926): black, maybe on a TV
