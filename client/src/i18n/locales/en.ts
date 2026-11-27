@@ -2514,6 +2514,7 @@ sendpayload_probe_no_signature: "No PS5Upload signature found — use only if yo
 sendpayload_probe_read_error: "Couldn't read this file ({error}). Check that it still exists and can be opened, then pick it again.",
 sendpayload_probe_too_small: "This file is empty, so there is nothing to send.",
 sendpayload_probe_ok: "Payload file looks OK.",
+sendpayload_trust_note: "Only send payloads from sources you trust — a malicious .elf, .bin, .js, .lua, or .jar file can do anything on your PS5. ps5upload doesn't bundle or verify third-party loaders; you're responsible for the files you pick.",
 sendpayload_sent_to: "Sent to",
 sendpayload_default: ". Default",
 sendpayload_payload_file: "Payload file",
