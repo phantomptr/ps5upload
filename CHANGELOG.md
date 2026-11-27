@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.40
 
 **Play Together**
 - **Full screen on an iPhone or iPad.** iOS browsers can't put a web page in full screen, so the guest page and the controller page hid their Full screen button there. It's back: it fills the page with the game, and the first time it explains how to get the whole screen (add the page to your Home Screen and open it from there; it rejoins the same game).
