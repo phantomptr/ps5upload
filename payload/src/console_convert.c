@@ -660,12 +660,12 @@ static const char *check_build(const char *json, const char *src, int src_is_dir
         if (fsj_json_present(json, "pkg_level") &&
             (!fsj_json_str(json, "pkg_level", b->pkg_level, sizeof b->pkg_level) || !cc_pkg_level_ok(b->pkg_level)))
             return "convert_bad_pkg_level";
-        /* A packed game as plain files, with or without its emulator: both false when absent, and
-         * the emulator is left out only of a game that is unpacked. Whether the game is in packs,
-         * and whether its own emulator can stay, is the converter's to say (it reads the game). */
+        /* A packed game as plain files, with or without its emulator, or a plain game without
+         * its emulator: both false when absent. Whether the game is in packs, whether its own
+         * emulator can stay, and whether a plain game's can go, is the converter's to say (it
+         * reads the game). */
         if ((fsj_json_present(json, "unpack_packs") && !fsj_json_u64(json, "unpack_packs", &unpack)) ||
-            (fsj_json_present(json, "leave_out_ampr_emu") && !fsj_json_u64(json, "leave_out_ampr_emu", &leave_out)) ||
-            (leave_out && !unpack))
+            (fsj_json_present(json, "leave_out_ampr_emu") && !fsj_json_u64(json, "leave_out_ampr_emu", &leave_out)))
             return "convert_bad_unpack";
         b->unpack_packs = unpack != 0;
         b->leave_out_ampr_emu = leave_out != 0;

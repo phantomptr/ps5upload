@@ -376,10 +376,12 @@ static void test_wire(void) {
         CHECK(len > 0 && webui_json_bool(buf, (size_t)len, "unpack_packs", &v) == 1 && v == 1);
         v = 0;
         CHECK(webui_json_bool(buf, (size_t)len, "leave_out_ampr_emu", &v) == 1 && v == 1);
-        /* Left out without the unpack: not said (the op refuses it before it gets here). */
+        /* Left out without the unpack (a game in no packs): said alone. */
         p.unpack_packs = 0;
         len = cc_request_json(buf, sizeof buf, "ab12", "build", "/data/g", &p);
-        CHECK(len > 0 && !strstr(buf, "unpack_packs") && !strstr(buf, "leave_out_ampr_emu"));
+        v = 0;
+        CHECK(len > 0 && !strstr(buf, "unpack_packs") &&
+              webui_json_bool(buf, (size_t)len, "leave_out_ampr_emu", &v) == 1 && v == 1);
         /* Any other format: never. */
         p.unpack_packs = 1;
         p.format = "exfat";
@@ -588,7 +590,9 @@ static void test_wire(void) {
         CHECK(TAIL("{\"format\":\"pkg\",\"pkg_level\":\"stored\",\"unpack_packs\":true,\"leave_out_ampr_emu\":true}") ==
                   NULL &&
               strstr(tail, ",\"pkg_level\":\"stored\",\"unpack_packs\":true,\"leave_out_ampr_emu\":true"));
-        CHECK(strcmp(TAIL("{\"format\":\"pkg\",\"leave_out_ampr_emu\":true}"), "convert_bad_unpack") == 0 && !tail[0]);
+        /* Alone, for a game in no packs: passed on alone (the converter says whether it can). */
+        CHECK(TAIL("{\"format\":\"pkg\",\"leave_out_ampr_emu\":true}") == NULL && !strstr(tail, "unpack") &&
+              strstr(tail, ",\"leave_out_ampr_emu\":true"));
         CHECK(strcmp(TAIL("{\"format\":\"pkg\",\"unpack_packs\":\"yes\"}"), "convert_bad_unpack") == 0);
         CHECK(strcmp(TAIL("{\"format\":\"pkg\",\"unpack_packs\":true,\"leave_out_ampr_emu\":1}"), "convert_bad_unpack") ==
               0);
@@ -779,11 +783,20 @@ static void test_op(void) {
                      game, cdest);
             CHECK(run_op(FAKE_NEEDS_EMULATOR, args, c) == AVA1_ERR_IO &&
                   strcmp(c->message, "convert_unpack_needs_emulator") == 0);
-            /* The emulator left out of a game that stays in its packs, or a word that is neither
-             * true nor false: refused before a converter is started. */
+            /* The emulator left out alone (a game in no packs): passed on alone; whether it can go
+             * is the converter's to say. */
             snprintf(args, sizeof args,
                      "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"pkg\","
                      "\"leave_out_ampr_emu\":true}",
+                     game, cdest);
+            CHECK(run_op(FAKE_FAILS, args, c) == AVA1_ERR_IO);
+            v = 0;
+            CHECK(!strstr(g_request, "unpack_packs") &&
+                  webui_json_bool(g_request, strlen(g_request), "leave_out_ampr_emu", &v) == 1 && v == 1);
+            /* A word that is neither true nor false: refused before a converter is started. */
+            snprintf(args, sizeof args,
+                     "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"pkg\","
+                     "\"leave_out_ampr_emu\":\"yes\"}",
                      game, cdest);
             CHECK(run_op(FAKE_NEVER, args, c) == AVA1_ERR_PROTOCOL && strcmp(c->message, "convert_bad_unpack") == 0 &&
                   !g_request[0]);

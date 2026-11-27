@@ -228,13 +228,17 @@ pub(crate) struct BuildReq {
     /// With `unpack_packs`: which emulator, `ampr_emu` (the default) or `ampr-emu-ng`.
     #[serde(default)]
     ampr_emu_build: Option<String>,
-    /// With `unpack_packs`: leave the AMPR emulator out of the package (every
-    /// `libSceAmpr.sprx` in `fakelib` and `fakelib2`, and a kept `.orig` copy), so the game
-    /// reads its plain files through the console's own libSceAmpr. `add_ampr_emu` and
-    /// `ampr_emu_build` then do nothing. A libSceAmpr game still gets a fresh `ampr_emu.index`.
-    /// Off by default: one backported game played from a package without its emulator on FW
-    /// 5.10, which is not every game on every firmware. Refused (400) without `unpack_packs`:
-    /// packs are read only through the emulator.
+    /// Leave the AMPR emulator out of the package (every `libSceAmpr.sprx` in `fakelib` and
+    /// `fakelib2`, and a kept `.orig` copy), so the game reads its plain files through the
+    /// console's own libSceAmpr. With `unpack_packs`, for a game in asset packs: `add_ampr_emu`
+    /// and `ampr_emu_build` then do nothing. Without it, for a game that is not in packs and
+    /// carries an emulator (the inspection's `plain_ampr_emu`): the emulator's other files go
+    /// too (our trace marker, `ampr_emu.index`, a run's journal and logs), and every other
+    /// fakelib stays. A libSceAmpr game still gets a fresh `ampr_emu.index`. Off by default:
+    /// one backported game played from a package without its emulator on FW 5.10, which is not
+    /// every game on every firmware. Refused (400) for a game in packs without `unpack_packs`
+    /// (packs are read only through the emulator), and for a plain game where
+    /// `plain_ampr_emu` says why not.
     #[serde(default)]
     leave_out_ampr_emu: bool,
 }
@@ -246,7 +250,7 @@ fn package_unpack_refusal(
     leave_out_emulator: bool,
     packs: Option<&str>,
 ) -> Option<&'static str> {
-    if leave_out_emulator && !unpack {
+    if leave_out_emulator && !unpack && packs.is_some() {
         return Some(
             "leaving out the AMPR emulator goes with unpacking the asset packs: a game in packs \
              reads them only through its emulator",
@@ -349,6 +353,11 @@ struct InspectResponse {
     /// folder build's `remove_backport` would leave out, and why it can't when it can't.
     #[serde(skip_serializing_if = "Option::is_none")]
     backport: Option<crate::remove_backport::BackportReport>,
+    /// Present for a PS5 game that is not in asset packs and carries an AMPR emulator in its
+    /// fakelib: what a package's `leave_out_ampr_emu` would leave out, and why it can't when
+    /// it can't (`refusal`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plain_ampr_emu: Option<crate::plain_emulator::PlainEmulator>,
     /// Why an image or folder build could not move this source to the Trash afterwards
     /// (`delete_source`), whatever it makes: it is on a PS5 or a server, or this engine has no
     /// Trash. Absent when it could.
@@ -365,6 +374,43 @@ fn min_firmware_of(source: &Path, declared: Option<&str>) -> Option<String> {
 fn backport_of(source: &Path) -> Option<crate::remove_backport::BackportReport> {
     let mut tree = ps5upload_fpkg::source::open(source).ok()?;
     crate::remove_backport::report(tree.as_mut())
+}
+
+/// What a plain game carries of an AMPR emulator, when it carries one (see
+/// `ps5upload_convert_core::plain_emulator`). Nothing for a game in packs (Unpack the asset
+/// packs has its own choice) or a PS4 one.
+fn plain_ampr_emu_of(
+    source: &Path,
+    inspection: &build::Inspection,
+) -> Option<crate::plain_emulator::PlainEmulator> {
+    if inspection.packs.is_some() || inspection.ps4_game || inspection.ps4_kind.is_some() {
+        return None;
+    }
+    let mut tree = ps5upload_fpkg::source::open(source).ok()?;
+    match crate::plain_emulator::assess(tree.as_mut()) {
+        Ok(found) => found,
+        Err(e) => {
+            crate::log_at!(Warn, "fpkg", "plain AMPR emulator check: {e}");
+            None
+        }
+    }
+}
+
+/// Why a package of the plain game `source` can't leave its AMPR emulator out, in a sentence;
+/// `None` when it can.
+fn plain_leave_out_refusal(source: &Path) -> Option<String> {
+    use crate::plain_emulator::{assess, refusal_text, CANT_LEAVE_OUT};
+    let mut tree = match ps5upload_fpkg::source::open(source) {
+        Ok(t) => t,
+        Err(e) => return Some(e.to_string()),
+    };
+    match assess(tree.as_mut()) {
+        Ok(Some(found)) => refusal_text(&found),
+        Ok(None) => Some(format!(
+            "{CANT_LEAVE_OUT}: it has none (no libSceAmpr.sprx in fakelib or fakelib2)"
+        )),
+        Err(e) => Some(e),
+    }
 }
 
 /// POST /api/fpkg/inspect — what the source is, whether it looks convertible, and what it
@@ -423,10 +469,12 @@ pub(crate) async fn fpkg_inspect_handler(
         let min_firmware =
             min_firmware_of(Path::new(&source), inspection.required_firmware.as_deref());
         let backport = backport_of(Path::new(&source));
+        let plain_ampr_emu = plain_ampr_emu_of(Path::new(&source), &inspection);
         Ok::<_, ps5upload_fpkg::Error>(InspectResponse {
             inspection,
             min_firmware,
             backport,
+            plain_ampr_emu,
             delete_source_refusal: crate::source_removal::source_refusal(Path::new(&source)),
         })
     })
@@ -531,7 +579,9 @@ pub(crate) async fn fpkg_build_handler(
         .as_deref()
         .filter(|u| !u.trim().is_empty())
         .map(resolve_engine_path);
-    let inspection = {
+    // A plain game's package without its AMPR emulator (no packs to unpack).
+    let plain_leave_out = req.leave_out_ampr_emu && !req.unpack_packs;
+    let (inspection, plain_refusal) = {
         let out = out.clone();
         let source_path = source_path.clone();
         let update = update.clone();
@@ -542,11 +592,17 @@ pub(crate) async fn fpkg_build_handler(
             if let Some(why) = patch_refusal(&source_path) {
                 return Err(ps5upload_fpkg::Error::Format(why));
             }
-            build::inspect_with_update(&source_path, update.as_deref(), &out)
+            let inspection = build::inspect_with_update(&source_path, update.as_deref(), &out)?;
+            // Why it can't, said now rather than as a job that fails. A game in packs is
+            // refused below.
+            let refusal = (plain_leave_out && inspection.packs.is_none())
+                .then(|| plain_leave_out_refusal(&source_path))
+                .flatten();
+            Ok((inspection, refusal))
         })
         .await
         {
-            Ok(Ok(inspection)) => inspection,
+            Ok(Ok(found)) => found,
             Ok(Err(error)) => {
                 return json_err(StatusCode::BAD_REQUEST, error.to_string()).into_response()
             }
@@ -565,15 +621,24 @@ pub(crate) async fn fpkg_build_handler(
     {
         return json_err(StatusCode::BAD_REQUEST, why).into_response();
     }
+    if let Some(why) = plain_refusal {
+        return json_err(StatusCode::BAD_REQUEST, why).into_response();
+    }
     // A packed game read as plain files: decoded as the package is written, its emulator
-    // replaced or left out as asked.
-    let reader = req.unpack_packs.then(|| {
-        build::SourceReader(if req.leave_out_ampr_emu {
+    // replaced or left out as asked. A plain game read without its emulator's files.
+    let reader = if req.unpack_packs {
+        Some(build::SourceReader(if req.leave_out_ampr_emu {
             open_unpacked_without_emulator()
         } else {
             open_unpacked(req.add_ampr_emu, req.ampr_emu_build.clone())
-        })
-    });
+        }))
+    } else if plain_leave_out {
+        Some(build::SourceReader(Arc::new(
+            crate::plain_emulator::open_without_emulator,
+        )))
+    } else {
+        None
+    };
 
     // A PS4 game (or one with its update merged in) becomes a PS4 package; without param.json
     // there is no PS5 title to package (#596).

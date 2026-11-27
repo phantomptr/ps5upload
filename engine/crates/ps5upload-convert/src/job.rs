@@ -14,7 +14,9 @@
 //!   (`"format": "pkg"`, a debug package, written, never installed here) `"pkg_level"` (one of
 //!   [`PKG_LEVELS`], `fast` when absent), and for a game in LZ4 or zstd asset packs
 //!   `"unpack_packs"` (bool: the package holds the plain files again) with
-//!   `"leave_out_ampr_emu"` (bool: no `libSceAmpr.sprx` in it); see [`Unpack`].
+//!   `"leave_out_ampr_emu"` (bool: no `libSceAmpr.sprx` in it); see [`Unpack`]. For a game in
+//!   no packs that carries an AMPR emulator, `"leave_out_ampr_emu"` alone leaves its emulator's
+//!   files out (`ps5upload_convert_core::plain_emulator`).
 //! - `runtime/`: the emulators the desktop app put on the console, never written here:
 //!   `ampr-emu-ng-<version>/libSceAmpr.sprx` (the helper names it in `"zstd_runtime"`) and, when
 //!   the user asked the app for it, `ampr_emu-<version>/libSceAmpr.sprx`, which an unpacked
@@ -43,7 +45,7 @@ use std::time::{Duration, Instant};
 
 use ps5upload_convert_core::folder_build::{self, FolderOut};
 use ps5upload_convert_core::image_build::{self, ImageFormat};
-use ps5upload_convert_core::{safe_write, unpack_packs, zstd_packs};
+use ps5upload_convert_core::{plain_emulator, safe_write, unpack_packs, zstd_packs};
 use ps5upload_fpkg::ffpfsc_block::Level;
 use ps5upload_fpkg::sample::VerifyMode;
 use ps5upload_fpkg::source::SourceTree;
@@ -100,9 +102,12 @@ struct Request {
     /// (the engine's `unpack_packs`). Absent or false: the game goes in as it is, packs and all.
     #[serde(default)]
     unpack_packs: bool,
-    /// With `unpack_packs`: leave the AMPR emulator out of the package (the engine's
-    /// `leave_out_ampr_emu`). Absent or false: the game's own emulator stays, and the build is
-    /// refused (`convert_unpack_needs_emulator`) when it is not one that suits plain files.
+    /// Leave the AMPR emulator out of the package (the engine's `leave_out_ampr_emu`). With
+    /// `unpack_packs`, for a game in packs; absent or false, the game's own emulator stays, and
+    /// the build is refused (`convert_unpack_needs_emulator`) when it is not one that suits
+    /// plain files. Without it, for a game that is not in packs and carries an emulator (the
+    /// inspection's `plain_ampr_emu`): refused (`convert_cant_leave_out_emulator`) where that
+    /// says why not.
     #[serde(default)]
     leave_out_ampr_emu: bool,
     /// The job folder's `runtime/` ([`unpack_packs::CONSOLE_RUNTIME_FOLDER`]), where the app puts
@@ -128,6 +133,9 @@ enum Unpack {
     KeepOwn,
     /// Every `libSceAmpr.sprx` in `fakelib` and `fakelib2` is left out.
     LeaveOut,
+    /// Not an unpack: a game that is not in packs, its AMPR emulator's files left out
+    /// (`ps5upload_convert_core::plain_emulator`).
+    PlainLeaveOut,
 }
 
 impl Unpack {
@@ -142,6 +150,7 @@ impl Unpack {
             }
             Unpack::KeepOwn => unpack_packs::open_with_own_emulator(tree, mtime),
             Unpack::LeaveOut => unpack_packs::open_without_emulator(tree, mtime),
+            Unpack::PlainLeaveOut => plain_emulator::open_without_emulator(tree),
         }))
     }
 }
@@ -151,6 +160,8 @@ impl Unpack {
 fn unpack_refusal(source: &Path, detail: String) -> Refusal {
     let cause = if detail.starts_with(unpack_packs::NEEDS_OTHER_EMULATOR) {
         "convert_unpack_needs_emulator"
+    } else if detail.starts_with(plain_emulator::CANT_LEAVE_OUT) {
+        "convert_cant_leave_out_emulator"
     } else if detail.contains("nothing to unpack") {
         "convert_not_packed"
     } else {
@@ -342,10 +353,9 @@ fn plan(request: &Request, cancel: &Arc<AtomicBool>) -> Result<Plan, Refusal> {
         }
         other => return Err(bad(format!("unknown format {other:?}"))),
     };
-    if request.leave_out_ampr_emu && !request.unpack_packs {
-        // As the engine refuses it: packs are read only through the emulator.
+    if request.leave_out_ampr_emu && pkg.is_none() {
         return Err(bad(
-            "leaving out the AMPR emulator goes with unpacking the asset packs".into(),
+            "leaving out the AMPR emulator is for a .pkg on the console".into(),
         ));
     }
     if request.unpack_packs && pkg.is_none() {
@@ -459,6 +469,16 @@ fn plan(request: &Request, cancel: &Arc<AtomicBool>) -> Result<Plan, Refusal> {
             Unpack::KeepOwn
         };
         Some((how, zstd_packs::now_secs()))
+    } else if request.leave_out_ampr_emu {
+        if inspection.packed.is_some() {
+            // As the engine refuses it: packs are read only through the emulator.
+            return Err(bad(
+                "leaving out the AMPR emulator goes with unpacking the asset packs".into(),
+            ));
+        }
+        // Whether this game's emulator can go is the reader's to say (refused before anything
+        // is written, `convert_cant_leave_out_emulator`).
+        Some((Unpack::PlainLeaveOut, zstd_packs::now_secs()))
     } else {
         None
     };
@@ -919,6 +939,7 @@ fn build_pkg(
                 ", asset packs unpacked, the console's ampr_emu where the game's emulator has to go",
             Some((Unpack::KeepOwn, _)) => ", asset packs unpacked, the game's emulator kept",
             Some((Unpack::LeaveOut, _)) => ", asset packs unpacked, the AMPR emulator left out",
+            Some((Unpack::PlainLeaveOut, _)) => ", the AMPR emulator left out",
             None => "",
         }
     ));
@@ -2206,6 +2227,70 @@ mod tests {
         );
     }
 
+    /// A plain game (no packs) that carries ampr_emu: the inspection offers to leave it out, and
+    /// a `.pkg` with `leave_out_ampr_emu` alone holds the game without the emulator's files and
+    /// with every other fakelib. A `libSceAmpr.sprx` that is no emulator stays: refused before
+    /// anything is written.
+    #[test]
+    fn a_pkg_leaves_a_plain_games_emulator_out() {
+        let tmp = TempDir::new("jobplainemu");
+        let dir = tmp.0.join("convert");
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = packable_game(&tmp.0, true);
+        std::fs::create_dir_all(src.join("fakelib")).unwrap();
+        std::fs::write(src.join("fakelib/libSceAmpr.sprx"), ampr_emu("0.4.2.1")).unwrap();
+        std::fs::write(src.join("fakelib/libSceAgc.sprx"), b"backport library").unwrap();
+        std::fs::write(src.join("ampr_commands.bin"), b"journal").unwrap();
+
+        let seen = crate::inspect(&src).unwrap();
+        let found = seen.plain_ampr_emu.clone().expect("an emulator");
+        assert!(found.offered(), "{found:?}");
+        assert!(found.imports_ampr);
+        assert_eq!(found.emulator, "ampr_emu 0.4.2.1");
+        assert_eq!(
+            json!(seen)["plain_ampr_emu"]["modules"][0],
+            "fakelib/libSceAmpr.sprx"
+        );
+
+        let bare = tmp.0.join("bare.pkg");
+        let (code, s) = pkg_job(&dir, &src, &bare, json!({"leave_out_ampr_emu": true}));
+        assert_eq!(code, 0, "{s}");
+        let mut pkg = packaged(&bare);
+        for name in PLAIN {
+            assert_eq!(
+                pkg.read(name).unwrap(),
+                std::fs::read(src.join(name)).unwrap(),
+                "{name}"
+            );
+        }
+        let names = names_of(&*pkg);
+        assert!(!has_emulator(&names), "{names:?}");
+        assert!(!names.iter().any(|n| n == "ampr_commands.bin"), "{names:?}");
+        assert_eq!(
+            pkg.read("fakelib/libSceAgc.sprx").unwrap(),
+            b"backport library"
+        );
+        // A libSceAmpr game's package keeps a fresh index of exactly what it carries.
+        assert_index_lists_the_package(&mut *pkg);
+
+        // A system library under the emulator's name: not offered, and refused.
+        std::fs::write(
+            src.join("fakelib/libSceAmpr.sprx"),
+            b"\x7fELF system library",
+        )
+        .unwrap();
+        let seen = crate::inspect(&src).unwrap();
+        assert!(!seen.plain_ampr_emu.unwrap().offered());
+        let other = tmp.0.join("other.pkg");
+        let (code, s) = pkg_job(&dir, &src, &other, json!({"leave_out_ampr_emu": true}));
+        assert_eq!(
+            (code, &s["cause"]),
+            (1, &json!("convert_cant_leave_out_emulator")),
+            "{s}"
+        );
+        assert!(!other.exists() && !tmp.0.join("other.pkg.partial").exists());
+    }
+
     /// What an unpack is not asked of: a game that is not in packs, any output but a `.pkg`,
     /// and the emulator left out of a game still in its packs (only the emulator reads them).
     #[test]
@@ -2221,7 +2306,28 @@ mod tests {
             (1, &json!("convert_not_packed")),
             "{s}"
         );
+        // A plain game with no emulator has none to leave out.
         let (code, s) = pkg_job(&dir, &src, &dest, json!({"leave_out_ampr_emu": true}));
+        assert_eq!(
+            (code, &s["cause"]),
+            (1, &json!("convert_cant_leave_out_emulator")),
+            "{s}"
+        );
+        // A game still in its packs: only the emulator reads them.
+        let packed = tmp.0.join("packed");
+        zstd_packed(&dir, &src, &packed, b"NG EMULATOR");
+        let (code, s) = pkg_job(&dir, &packed, &dest, json!({"leave_out_ampr_emu": true}));
+        assert_eq!(
+            (code, &s["cause"]),
+            (1, &json!("convert_bad_request")),
+            "{s}"
+        );
+        let (code, s) = pkg_job(
+            &dir,
+            &src,
+            &tmp.0.join("r.exfat"),
+            json!({"format": "exfat", "leave_out_ampr_emu": true}),
+        );
         assert_eq!(
             (code, &s["cause"]),
             (1, &json!("convert_bad_request")),

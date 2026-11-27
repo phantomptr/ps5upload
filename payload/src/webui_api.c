@@ -969,7 +969,9 @@ static void r_fs_extract_info(const char *b, size_t n, uint8_t *out, int fd) {
  * "content_version","master_version","packed","has_eboot","warnings","zstd_runtime"} (the newest
  * zstd runtime on the console, or null: a zstd build is refused without one), and for a game in
  * asset packs "unpacked_bytes" (about its size as plain files) and "unpack_keeps_emulator" (false:
- * a .pkg with "unpack_packs" has to leave the emulator out). */
+ * a .pkg with "unpack_packs" has to leave the emulator out); for a game in no packs that carries
+ * an AMPR emulator, "plain_ampr_emu" (what a .pkg with "leave_out_ampr_emu" alone leaves out, and
+ * its "refusal" when it can't). */
 static void r_convert_inspect(const char *b, size_t n, uint8_t *out, int fd) {
     run_path_job(b, n, out, fd, AVA1_JOB_OP_CONSOLE_CONVERT, ",\"action\":\"inspect\"");
 }
@@ -978,8 +980,9 @@ static void r_convert_inspect(const char *b, size_t n, uint8_t *out, int fd) {
  * "ffpfs"|"ffpfsc"|"pkg"|"folder", optional "zstd": bool, "zstd_level": 1..22 (sent on only with
  * zstd), "verify": "fast"|"full", "inner": "exfat"|"ffpkg"|"ffpfs" and "ffpfsc_level":
  * "fast"|"balanced"|"smallest" (with "ffpfsc"), "pkg_level": "stored"|"fast"|"balanced",
- * "unpack_packs": bool and, with it, "leave_out_ampr_emu": bool (with "pkg": a game in asset packs
- * as plain files, without its AMPR emulator)}. The job's result: {"path"}. The helper's operation
+ * "unpack_packs": bool and "leave_out_ampr_emu": bool (with "pkg": a game in asset packs as plain
+ * files, and without its AMPR emulator; the second alone, a game in no packs without its
+ * emulator)}. The job's result: {"path"}. The helper's operation
  * checks the paths again
  * (console_convert.c); this route refuses what the page may never name and what is not
  * well-formed (cc_start_tail). */

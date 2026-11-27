@@ -1394,7 +1394,7 @@
             ]
           },
           "leave_out_ampr_emu": {
-            "description": "With `unpack_packs`: leave the AMPR emulator out of the package (every\n`libSceAmpr.sprx` in `fakelib` and `fakelib2`, and a kept `.orig` copy), so the game\nreads its plain files through the console's own libSceAmpr. `add_ampr_emu` and\n`ampr_emu_build` then do nothing. A libSceAmpr game still gets a fresh `ampr_emu.index`.\nOff by default: one backported game played from a package without its emulator on FW\n5.10, which is not every game on every firmware. Refused (400) without `unpack_packs`:\npacks are read only through the emulator.",
+            "description": "Leave the AMPR emulator out of the package (every `libSceAmpr.sprx` in `fakelib` and\n`fakelib2`, and a kept `.orig` copy), so the game reads its plain files through the\nconsole's own libSceAmpr. With `unpack_packs`, for a game in asset packs: `add_ampr_emu`\nand `ampr_emu_build` then do nothing. Without it, for a game that is not in packs and\ncarries an emulator (the inspection's `plain_ampr_emu`): the emulator's other files go\ntoo (our trace marker, `ampr_emu.index`, a run's journal and logs), and every other\nfakelib stays. A libSceAmpr game still gets a fresh `ampr_emu.index`. Off by default:\none backported game played from a package without its emulator on FW 5.10, which is not\nevery game on every firmware. Refused (400) for a game in packs without `unpack_packs`\n(packs are read only through the emulator), and for a plain game where\n`plain_ampr_emu` says why not.",
             "type": "boolean"
           },
           "name": {
@@ -6861,6 +6861,10 @@
                   "string",
                   "null"
                 ]
+              },
+              "plain_ampr_emu": {
+                "description": "Present for a PS5 game that is not in asset packs and carries an AMPR emulator in its\nfakelib: what a package's `leave_out_ampr_emu` would leave out, and why it can't when\nit can't (`refusal`).",
+                "x-rust-type": "crate::plain_emulator::PlainEmulator"
               }
             },
             "required": [
