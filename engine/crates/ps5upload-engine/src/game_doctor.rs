@@ -183,6 +183,14 @@ pub fn evaluate(f: &Facts) -> Vec<DoctorCheck> {
 
 fn fake_package(f: &Facts) -> DoctorCheck {
     const ID: &str = "fake_package";
+    if f.kind == GameKind::Unknown {
+        return check(
+            ID,
+            DoctorStatus::Unknown,
+            "kind_unknown",
+            "The app could not tell how this game is on the console.".into(),
+        );
+    }
     if f.kind != GameKind::Package {
         return check(
             ID,
@@ -383,6 +391,14 @@ fn mount_layer(f: &Facts) -> DoctorCheck {
 
 fn package_size(f: &Facts) -> DoctorCheck {
     const ID: &str = "package_size";
+    if f.kind == GameKind::Unknown {
+        return check(
+            ID,
+            DoctorStatus::Unknown,
+            "kind_unknown",
+            "The app could not tell how this game is on the console.".into(),
+        );
+    }
     if f.kind != GameKind::Package {
         return check(
             ID,
