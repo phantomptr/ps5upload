@@ -469,6 +469,54 @@ int main(void) {
         CHECK(strstr(g_log, "3 images, 1 read, 2 from the last scan, 0 not read") != NULL);
         CHECK(count_icons("share2-") == 2);
         free(icon_name);
+
+        /* A Latin-1 title (not UTF-8: written back as �, three bytes each) that no longer fits
+         * its field from the cache: read again every scan rather than kept with an empty title. */
+        {
+            const char *k[] = { "CATEGORY", "CONTENT_ID", "TITLE", "TITLE_ID" };
+            char latin[101];
+            const char *v[] = { "gd", "EP4293-CUSA22222_00-GAME000000000000", latin, "CUSA22222" };
+            uint8_t sfo[4096];
+            size_t sl;
+            memset(latin, 0xE9, 100);
+            latin[100] = '\0';
+            sl = build_sfo(sfo, k, v, 4);
+            img = fx_exfat(sfo, sl, 1, 0, 1, &n);
+            put("Lib/Latin.exfat", img, n);
+            free(img);
+        }
+        for (int pass = 0; pass < 2; pass++) {
+            sh.opens = 0;
+            memset(&pr, 0, sizeof pr);
+            CHECK(lib_scan(&share, "share2", "Lib", NULL, g_out, NULL, &pr) == 0);
+            CHECK(sh.opens == 1);
+            CHECK(strstr(g_log, "4 images, 1 read, 3 from the last scan, 0 not read") != NULL);
+            j = slurp(share_json);
+            if (j) {
+                const char *l = strstr(j, "\"path\":\"Lib/Latin.exfat\"");
+                CHECK(l && strstr(l, "\"title\":\"\\ufffd") && strstr(l, "\"title_id\":\"CUSA22222\""));
+                free(j);
+            }
+        }
+
+        /* The covers the cache copies from are gone: that scan lists the images without them, and
+         * the next one reads those images again for their covers instead of keeping none for good. */
+        {
+            char cmd[1200];
+            snprintf(cmd, sizeof cmd, "rm -f '%s'/icons/share2-*", g_out);
+            CHECK(system(cmd) == 0);
+        }
+        CHECK(count_icons("share2-") == 0);
+        sh.opens = 0;
+        memset(&pr, 0, sizeof pr);
+        CHECK(lib_scan(&share, "share2", "Lib", NULL, g_out, NULL, &pr) == 0);
+        CHECK(sh.opens == 1 && count_icons("share2-") == 0);
+        sh.opens = 0;
+        memset(&pr, 0, sizeof pr);
+        CHECK(lib_scan(&share, "share2", "Lib", NULL, g_out, NULL, &pr) == 0);
+        CHECK(sh.opens == 3);
+        CHECK(strstr(g_log, "4 images, 3 read, 1 from the last scan, 0 not read") != NULL);
+        CHECK(count_icons("share2-") == 2);
     }
 
     /* a bad source id is refused before anything is read */
