@@ -1938,6 +1938,9 @@ pub struct AppRestoreReq {
     pub rollback: bool,
     #[serde(default)]
     pub install_ended: bool,
+    /// finish: remove what a failed install left on the console first (Sony's uninstall).
+    #[serde(default)]
+    pub clear: bool,
 }
 
 #[tauri::command]
@@ -1966,13 +1969,15 @@ pub async fn ps5_app_restore(op: String, req: AppRestoreReq) -> Result<JsonValue
             .await
         }
         "finish" => {
-            post_json(
+            // Long: a clear runs Sony's uninstall and waits for it to remove the console's copy.
+            post_json_long(
                 &format!("{base}/api/ps5/app/restore/finish"),
                 &serde_json::json!({
                     "addr": req.addr,
                     "title_id": req.title_id,
                     "rollback": req.rollback,
                     "install_ended": req.install_ended,
+                    "clear": req.clear,
                 }),
             )
             .await

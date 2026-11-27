@@ -165,7 +165,7 @@ describe("loader-port commands the DPI fallback depends on", () => {
       op: "start",
       req: { addr: "192.168.1.50", title_ids: ["PPSA01234", "CUSA00900"] },
     });
-    await browserInvoke("ps5_app_restore", { op: "finish", req: { ...req, rollback: true } });
+    await browserInvoke("ps5_app_restore", { op: "finish", req: { ...req, rollback: true, clear: true } });
     expect(calls.map((c) => c.url)).toEqual([
       "http://engine.test:19113/api/ps5/app/restore/check?addr=192.168.1.50&title_id=PPSA01234",
       "http://engine.test:19113/api/ps5/app/restore/status?addr=192.168.1.50&title_id=PPSA01234",
@@ -183,6 +183,7 @@ describe("loader-port commands the DPI fallback depends on", () => {
       title_id: "PPSA01234",
       rollback: true,
       install_ended: false,
+      clear: true,
     });
     await expect(browserInvoke("ps5_app_restore", { op: "nope", req })).rejects.toThrow("unknown restore step");
   });

@@ -6,7 +6,7 @@
 // cannot work (nothing on the console knows the title), so the game's page offers Restore instead:
 // the package already on the console is installed again by the PS5's own installer.
 
-import type { RestoreReply, RestoreRun } from "../api/titleRestore";
+import type { RestorePhase, RestoreReply, RestoreRun } from "../api/titleRestore";
 import { formatBytes } from "./format";
 import { trStatic } from "./trStatic";
 
@@ -26,9 +26,71 @@ export function restoreNeeded(reply: RestoreReply | null | undefined): boolean {
   return !!reply && reply.ok && MISSING_STATES.has(reply.state);
 }
 
-/** Whether a restore phase has ended (nothing more will change without the user). */
+const ACTIVE_PHASES = new Set(["queued", "installing", "finishing"]);
+const PHASES = new Set([...ACTIVE_PHASES, "restored", "rolled_back", "pending", "failed"]);
+
+/** Whether a restore phase has ended (nothing more will change without the user). Only the
+ *  phases known to be running are running: a phase this app does not know (a newer engine, an odd
+ *  answer) must not leave the page, the Games banner and the poll waiting forever. */
 export function restoreEnded(phase: string | undefined): boolean {
-  return phase === "restored" || phase === "rolled_back" || phase === "pending" || phase === "failed";
+  return !phase || !ACTIVE_PHASES.has(phase);
+}
+
+const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+const num = (v: unknown): number | undefined =>
+  typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined;
+const obj = (v: unknown): Record<string, unknown> | undefined =>
+  v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+
+/** A helper answer as the page can render it: strings are strings, numbers are numbers, anything
+ *  else is dropped. Null when it is not an object at all. */
+export function normalizeRestoreReply(raw: unknown): RestoreReply | null {
+  const r = obj(raw);
+  if (!r) return null;
+  const out: RestoreReply = { ok: r.ok === true, title_id: str(r.title_id) ?? "", state: str(r.state) ?? "" };
+  for (const k of [
+    "err", "reason", "where", "volume", "aside", "pkg", "kind", "patch", "install_path", "patch_aside",
+    "backup", "installed", "installed_where", "patch_kept", "kept", "update", "addons",
+  ] as const) {
+    const v = str(r[k]);
+    if (v !== undefined) out[k] = v;
+  }
+  for (const k of ["size", "patch_size", "free_volume", "free_internal", "need_volume", "need_internal", "sony_rc"] as const) {
+    const v = num(r[k]);
+    if (v !== undefined) out[k] = v;
+  }
+  if (r.cleared === true) out.cleared = true;
+  return out;
+}
+
+/** The engine's restore status as the page can render it, whatever came back (#961: the desktop
+ *  app went white during a long Restore all). An unknown phase is kept as `failed` with the raw
+ *  word, so it ends and says what it was. */
+export function normalizeRestoreRun(raw: unknown, titleId: string): RestoreRun {
+  const r = obj(raw);
+  if (!r) return { title_id: titleId, phase: "failed", error: "the engine sent an answer this app can't read" };
+  const rawPhase = str(r.phase);
+  const phase = (rawPhase && PHASES.has(rawPhase) ? rawPhase : "failed") as RestorePhase;
+  const run: RestoreRun = { title_id: str(r.title_id) ?? titleId, phase };
+  if (rawPhase !== phase) run.error = `unknown restore phase ${JSON.stringify(rawPhase ?? null)}`;
+  for (const k of ["job", "install_verdict", "install_hint", "error"] as const) {
+    const v = str(r[k]);
+    if (v !== undefined) run[k] = v;
+  }
+  const prepared = normalizeRestoreReply(r.prepared);
+  if (prepared) run.prepared = prepared;
+  const result = normalizeRestoreReply(r.result);
+  if (result) run.result = result;
+  if (r.cleared === true) run.cleared = true;
+  const install = obj(r.install);
+  if (install) {
+    const m = obj(install.metrics);
+    run.install = {
+      phase: str(install.phase),
+      metrics: m ? { total_bytes: num(m.total_bytes), served_bytes: num(m.served_bytes) } : undefined,
+    };
+  }
+  return run;
 }
 
 export function restoreWhereLabel(where: string | undefined): string {
@@ -70,7 +132,7 @@ export function restoreStateText(reply: RestoreReply | null | undefined, name: s
       return trStatic(
         "restore_state_no_room",
         "{name} is not on the PS5's home screen. Restoring it needs {size} free while the PS5 writes a new copy, on {where} or on the console's storage. Free up space, then open this page again.",
-        { name, where, size: size(reply.size) },
+        { name, where, size: size(reply.need_volume ?? reply.size) },
       );
     case "retail":
       return trStatic(
@@ -126,9 +188,53 @@ export function restoreConfirmText(reply: RestoreReply, name: string): string {
   return parts.join("\n\n");
 }
 
+/** A put-back the failed install's leftovers stand in the way of: the PS5 has a record of the
+ *  title or a package in its place, written by the restore's own install. The engine's `clear`
+ *  removes them (Sony's uninstall) first; same rule as the engine's `rollback_needs_clear`. */
+export function restoreRollbackNeedsClear(r: RestoreReply | null | undefined): boolean {
+  return (
+    !!r &&
+    r.state === "unsettled" &&
+    (r.reason === "recorded_without_package" || r.reason === "on_home_screen" || r.reason === "place_taken")
+  );
+}
+
+/** Why a pending restore is still pending, in words, when the helper said why; null otherwise. */
+export function restorePendingWhy(result: RestoreReply | undefined, name: string): string | null {
+  switch (result?.reason) {
+    case "clearing":
+      return trStatic(
+        "restore_pending_clearing",
+        "{name} could not be restored, and the PS5 is still removing its unfinished copy. Open the game's page in a minute and choose Put back.",
+        { name },
+      );
+    case "update_in_place":
+      return trStatic(
+        "restore_pending_update_in_place",
+        "{name} could not be restored, and the PS5 may still list the failed install. PS5Upload did not remove it, because the game's update is in its place and removing the install could take the update too. Delete the failed download on the PS5, then choose Put back on the game's page.",
+        { name },
+      );
+    case "addons_present":
+      return trStatic(
+        "restore_pending_addons",
+        "{name} could not be restored, and the PS5 may still list the failed install. PS5Upload did not remove it, because the game has add-ons on the PS5 and removing the install could take them too. Delete the failed download on the PS5, then choose Put back on the game's page.",
+        { name },
+      );
+    case "uninstall_refused":
+    case "uninstall_unavailable":
+      return trStatic(
+        "restore_pending_uninstall_refused",
+        "{name} could not be restored, and the PS5 would not remove its failed install. Delete the failed download on the PS5, then choose Put back on the game's page.",
+        { name },
+      );
+    default:
+      return null;
+  }
+}
+
 /** What a finished restore says: the notification's level and words. */
 export function restoreOutcome(
-  run: Pick<RestoreRun, "phase" | "result" | "error" | "install_hint">,
+  run: Pick<RestoreRun, "phase" | "result" | "error" | "install_hint" | "cleared">,
   name: string,
 ): { level: "success" | "info" | "error"; body: string } {
   switch (run.phase) {
@@ -143,23 +249,37 @@ export function restoreOutcome(
             )
           : trStatic("restore_done", "{name} is back on the home screen.", { name }),
       };
-    case "rolled_back":
+    case "rolled_back": {
+      const why = run.install_hint?.trim() || trStatic("restore_install_failed", "the PS5 did not install it.");
       return {
         level: "error",
-        body: trStatic(
-          "restore_rolled_back",
-          "{name} could not be restored: {why} Its package is back where it was; nothing else changed.",
-          { name, why: run.install_hint?.trim() || trStatic("restore_install_failed", "the PS5 did not install it.") },
-        ),
+        body:
+          run.cleared || run.result?.cleared
+            ? trStatic(
+                "restore_rolled_back_cleared",
+                "{name} could not be restored: {why} The PS5's unfinished copy was removed, so it no longer holds up other installs, and the package is back where it was.",
+                { name, why },
+              )
+            : trStatic(
+                "restore_rolled_back",
+                "{name} could not be restored: {why} Its package is back where it was; nothing else changed.",
+                { name, why },
+              ),
       };
+    }
     case "pending":
+      if (/installer stopped answering/i.test(`${run.error ?? ""} ${run.install_hint ?? ""}`)) {
+        return { level: "error", body: restoreInstallerStuckText(name) };
+      }
       return {
         level: "info",
-        body: trStatic(
-          "restore_pending",
-          "{name}: the restore has not finished. The package is kept on the PS5. Check its home screen, then open the game's page to finish.",
-          { name },
-        ),
+        body:
+          restorePendingWhy(run.result, name) ??
+          trStatic(
+            "restore_pending",
+            "{name}: the restore has not finished. The package is kept on the PS5. Check its home screen, then open the game's page to finish.",
+            { name },
+          ),
       };
     default:
       return {
@@ -169,8 +289,18 @@ export function restoreOutcome(
   }
 }
 
+function restoreInstallerStuckText(name: string): string {
+  return trStatic(
+    "restore_installer_stuck",
+    "{name}: the PS5's installer stopped answering, so nothing more was tried. Restart the PS5, then open the game's page to finish or put back its package.",
+    { name },
+  );
+}
+
 /** A failed start or finish in words. Unknown text passes through. */
 export function restoreErrorText(raw: string, name: string): string {
+  raw = typeof raw === "string" ? raw : String(raw ?? "");
+  if (/installer stopped answering/i.test(raw)) return restoreInstallerStuckText(name);
   if (/restore_unsupported/i.test(raw)) {
     return trStatic(
       "restore_unsupported",

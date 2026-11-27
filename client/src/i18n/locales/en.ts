@@ -9898,6 +9898,16 @@ err_launch_program_refused: "The PS5 refused to start this game's program (0x800
 "play_setup_signin_after_restart": "After the restart, check step 3 again: if the account ID is gone, it offers to put the same one back. Run the sign-in again only if this step is still open after that.",
 "profile.accountId.not_kept": "The PS5 did not keep {next}: the account reads {got}. Send the helper again from Connection and try once more.",
 "profile.accountId.saved_kept": "Saved, and the PS5 reads it back. Restart the PS5 to see it on the console. If the ID is gone after a restart, Play › Set up offers to put the same one back.",
+errorboundary_section_failed: "This part of the window hit a problem and was set aside. The rest of the app still works.",
+restore_rolled_back_cleared: "{name} could not be restored: {why} The PS5's unfinished copy was removed, so it no longer holds up other installs, and the package is back where it was.",
+restore_pending_clearing: "{name} could not be restored, and the PS5 is still removing its unfinished copy. Open the game's page in a minute and choose Put back.",
+restore_pending_update_in_place: "{name} could not be restored, and the PS5 may still list the failed install. PS5Upload did not remove it, because the game's update is in its place and removing the install could take the update too. Delete the failed download on the PS5, then choose Put back on the game's page.",
+restore_pending_addons: "{name} could not be restored, and the PS5 may still list the failed install. PS5Upload did not remove it, because the game has add-ons on the PS5 and removing the install could take them too. Delete the failed download on the PS5, then choose Put back on the game's page.",
+restore_pending_uninstall_refused: "{name} could not be restored, and the PS5 would not remove its failed install. Delete the failed download on the PS5, then choose Put back on the game's page.",
+restore_installer_stuck: "{name}: the PS5's installer stopped answering, so nothing more was tried. Restart the PS5, then open the game's page to finish or put back its package.",
+restore_clear_title: "Remove the failed install of {name}?",
+restore_clear_body: "The PS5 still lists this game, or part of it, from the restore. If the game shows on the home screen and starts, choose Cancel and then Finish. If the PS5 shows it as a failed or stuck download, PS5Upload removes it, the same as deleting it on the PS5 (only the PS5's own new copy: the package PS5Upload kept is not touched), and then puts the package back, so other installs can run again.",
+restore_clear_action: "Remove and put back",
 };
 
 export default en;

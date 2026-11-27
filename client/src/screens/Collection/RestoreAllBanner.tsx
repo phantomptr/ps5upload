@@ -6,6 +6,7 @@ import { Button } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { hostOf } from "../../lib/addr";
 import { formatBytes } from "../../lib/format";
+import { normalizeRestoreReply } from "../../lib/titleRestore";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
@@ -31,7 +32,20 @@ export function RestoreAllBanner({ host, helperUp }: { host: string; helperUp: b
     if (!helperUp || !host.trim() || busy) return;
     restoreCandidates(host)
       .then((list) => {
-        if (!cancelled) setFound(list.filter((c) => c.check.state === "restorable"));
+        if (cancelled || !Array.isArray(list)) return;
+        // Only well-formed entries: one odd row must not take the Games list down with it.
+        setFound(
+          list.filter(
+            (c): c is RestoreCandidate =>
+              !!c &&
+              typeof c.title_id === "string" &&
+              normalizeRestoreReply(c.check)?.state === "restorable",
+          ).map((c) => ({
+            ...c,
+            title_name: typeof c.title_name === "string" && c.title_name ? c.title_name : c.title_id,
+            check: normalizeRestoreReply(c.check)!,
+          })),
+        );
       })
       .catch(() => {});
     return () => {
