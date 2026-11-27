@@ -12645,6 +12645,10 @@
               "ps5_addr"
             ]
           },
+          "clear": {
+            "description": "Put back after removing what a failed install left on the console (its unfinished copy and\nits download in the PS5's queue) with Sony's uninstall. Only with the copy aside there and\nno update or add-on of the title in place.",
+            "type": "boolean"
+          },
           "install_ended": {
             "description": "The install has ended (the user saw the game on the home screen): the copy aside may go.",
             "type": "boolean"
@@ -12666,6 +12670,13 @@
       "RestoreReply": {
         "description": "What the helper answered. Fields a state does not use are absent.",
         "properties": {
+          "addons": {
+            "description": "clear refused: the title's add-ons on a drive (the uninstall could take them).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "aside": {
             "description": "The folder the package is moved into while it is installed again.",
             "type": [
@@ -12677,6 +12688,13 @@
             "description": "The folder with the copies of app.db and appinfo.db taken before the move.",
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "cleared": {
+            "description": "clear: Sony's uninstall was asked to remove the console's unfinished copy.",
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -12734,6 +12752,22 @@
               "null"
             ]
           },
+          "need_internal": {
+            "description": "What the console's own storage needs free for the new copy.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "need_volume": {
+            "description": "What the package's own drive needs free for the new copy (its size; on the console's\nstorage 1.2x plus 1 GiB, which its reserve takes as it is written).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
           },
@@ -12784,12 +12818,27 @@
               "null"
             ]
           },
+          "sony_rc": {
+            "description": "clear: Sony's answer to that uninstall (0 accepted).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "state": {
             "description": "check: restorable | registered | record_elsewhere | not_installed | pending |\nfolder_registration | ambiguous | retail | no_room | aside_cross_device | db_unreadable |\ninvalid_title | system_title. prepare: prepared. finish: restored | rolled_back |\nnothing_pending | waiting | unsettled.",
             "type": "string"
           },
           "title_id": {
             "type": "string"
+          },
+          "update": {
+            "description": "clear refused: the title's update left in its place (the uninstall could take it).",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "volume": {
             "type": [
@@ -12838,6 +12887,10 @@
         "properties": {
           "addr": {
             "type": "string"
+          },
+          "cleared": {
+            "description": "The console's unfinished copy of a failed install was removed (Sony's uninstall) before\nthe package went back.",
+            "type": "boolean"
           },
           "error": {
             "type": [
@@ -32380,7 +32433,7 @@
     },
     "/api/ps5/app/restore/finish": {
       "post": {
-        "description": "`POST /api/ps5/app/restore/finish {addr, title_id, rollback, install_ended}`: finish a restore\nleft `pending` (an engine restart, a slow database). With `install_ended` the copy aside is\ndeleted once app.db lists the game and a package is in place; with `rollback` the package and\nupdate go back where they were, only while app.db does not list the game and the place is\nfree; with neither, nothing changes and the answer says where it stands. Refused (409 `busy`)\nwhile an install or a restore runs on that console. The helper's `finish` answer.",
+        "description": "`POST /api/ps5/app/restore/finish {addr, title_id, rollback, install_ended, clear}`: finish a\nrestore left `pending` (an engine restart, a slow database). With `install_ended` the copy aside\nis deleted once app.db lists the game and a package is in place; with `rollback` the package\nand update go back where they were, only while app.db does not list the game and the place is\nfree; with `clear`, what a failed install left (the console's unfinished copy and its download\nin the PS5's queue) is removed with Sony's uninstall first, then the package goes back\n(`cleared`, `sony_rc`; `reason` `clearing` while Sony is still removing it: ask again); with\nnone, nothing changes and the answer says where it stands. Refused (409 `busy`) while an install\nor a restore runs on that console. The helper's answer.",
         "requestBody": {
           "content": {
             "application/json": {

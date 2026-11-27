@@ -619,7 +619,7 @@ fn release_when_quiet(state: &PkgInstallStateHandle, sid: &str) {
 /// closed, so the next install's ensure sends a fresh one. A daemon still
 /// answering while it exits makes that ensure skip sending a new one and then
 /// hit a refused connect.
-async fn recycle_daemon(ip: &str) {
+pub(crate) async fn recycle_daemon(ip: &str) {
     let ip_s = ip.to_string();
     let _ = tokio::task::spawn_blocking(move || {
         // Forced: a plain stop is refused for exactly the job this is clearing.
