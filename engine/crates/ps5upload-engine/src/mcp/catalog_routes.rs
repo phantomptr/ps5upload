@@ -527,6 +527,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/ps5/activity/get"),
     ("POST", "/api/ps5/activity/reset"),
     ("GET", "/api/ps5/app-icon"),
+    ("GET", "/api/ps5/app/doctor"),
     ("POST", "/api/ps5/app/launch"),
     ("POST", "/api/ps5/app/lifecycle"),
     ("POST", "/api/ps5/app/register"),

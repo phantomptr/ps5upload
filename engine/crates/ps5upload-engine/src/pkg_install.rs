@@ -1074,6 +1074,11 @@ pub fn api_router(state: PkgInstallStateHandle) -> Router {
             "/api/ps5/app/restore/finish",
             post(crate::title_restore_api::finish_handler),
         )
+        // "Something wrong?" on the game page: why a game does not show or start, read-only.
+        .route(
+            "/api/ps5/app/doctor",
+            get(crate::game_doctor::doctor_handler),
+        )
         .route(
             "/api/pkg/links",
             get(links_list_handler).post(link_create_handler),

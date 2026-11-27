@@ -1,7 +1,8 @@
 //! Running and starting things on a console: `processes_list`, `processes_kill`, `shell_run`,
 //! `games_installed`, `games_launch`, `games_stop`, `games_register`, `games_unregister`, and
 //! Restore to home screen (#961): `games_restore_list`, `games_restore_check`, `games_restore`,
-//! `games_restore_status`, `games_restore_finish`.
+//! `games_restore_status`, `games_restore_finish`; and `games_doctor` (why a game won't show or
+//! start).
 
 use serde_json::{json, Value};
 
@@ -198,6 +199,34 @@ pub(super) fn tools() -> Vec<ToolDef> {
                 method: "GET",
                 path: "/api/ps5/app/restore/check",
                 done: "Checked the title.",
+            ),
+        },
+        ToolDef {
+            name: "games_doctor",
+            title: "Why a game won't show or start",
+            description: "Checks, in order, the usual reasons a game does not show on the home \
+                          screen or does not start, and says which one failed: `fake_package` \
+                          (kstuff for a fake package; on firmware above 11.60 kstuff 1.15 or \
+                          newer, and kstuff's version can't be read, so that is a hint), \
+                          `mount_layer` (ShadowMount+ for a disk image, an attached folder for a \
+                          folder game), `package_size` (a fake package past its firmware's \
+                          ceiling), `database` (missing from the PS5's app.db), `permissions` (a \
+                          game folder's files the console can't read or run) and `free_space`. \
+                          Each `status` is `pass`, `problem` or `unknown`; `fix` names what the \
+                          app offers. `first_problem` is the first check that found one. \
+                          Changes nothing.",
+            kind: Kind::Read,
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "title_id": text("The title's id, like PPSA01234."),
+                }),
+                &["console", "title_id"],
+            ),
+            run: route!(
+                method: "GET",
+                path: "/api/ps5/app/doctor",
+                done: "Checked the game.",
             ),
         },
         ToolDef {

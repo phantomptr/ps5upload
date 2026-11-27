@@ -66,6 +66,7 @@ mod folder_sizes;
 mod fpkg_api;
 mod fpkg_firmware;
 mod frame_decode;
+mod game_doctor;
 mod game_fps_api;
 mod games_api;
 mod golive_dest;

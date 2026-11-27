@@ -3468,6 +3468,41 @@
         ],
         "type": "object"
       },
+      "DoctorCheck": {
+        "description": "One check's verdict. `reason` is a stable code (the app words each one itself; `message` is\nthe English), `params` the values the words use, `fix` what the app can do about it.",
+        "properties": {
+          "fix": {
+            "description": "`fix_permissions` (make the folder 0777), `restore` (Restore to home screen),\n`register` (register the game again), `start_shadowmount` (load ShadowMount+).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DoctorStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "reason",
+          "message"
+        ],
+        "type": "object"
+      },
       "DoctorFacts": {
         "description": "Everything the doctor asks of the engine.",
         "properties": {
@@ -3508,6 +3543,14 @@
           "reply_samples"
         ],
         "type": "object"
+      },
+      "DoctorStatus": {
+        "enum": [
+          "pass",
+          "problem",
+          "unknown"
+        ],
+        "type": "string"
       },
       "DownloadCancelRequest": {
         "properties": {
@@ -32216,6 +32259,140 @@
             "required": false
           },
           "response_schema": "none"
+        }
+      }
+    },
+    "/api/ps5/app/doctor": {
+      "get": {
+        "description": "`GET /api/ps5/app/doctor?addr=&title_id=`: \"Something wrong?\" for one game, read-only. Checks,\nin order, the usual reasons a game does not show or start: `fake_package` (kstuff for a fake\npackage; a hint, since kstuff's version can't be read), `mount_layer` (ShadowMount+ for a disk\nimage, an attached folder for a folder game), `package_size` (a fake package past its\nfirmware's size ceiling), `database` (missing from the PS5's app.db), `permissions` (a game\nfolder's files other users can't read or run) and `free_space` (the console's own storage).\nEach check has `status` `pass`, `problem` or `unknown` (the app can't tell), a `reason` code,\nan English `message`, `params`, and a `fix` the app offers (`fix_permissions`, `restore`,\n`register`, `start_shadowmount`). Also `kind` (`package`, `folder`, `image`, `unknown`),\n`source`, `firmware` and `first_problem` (the first check that found one, else null).",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "x-aliases": [
+              "console",
+              "host",
+              "ps5_addr"
+            ]
+          },
+          {
+            "in": "query",
+            "name": "title_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "checks": {
+                      "items": {
+                        "$ref": "#/components/schemas/DoctorCheck"
+                      },
+                      "type": "array"
+                    },
+                    "firmware": {
+                      "type": "string"
+                    },
+                    "first_problem": {},
+                    "kind": {},
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "source": {},
+                    "title_id": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "ok": {
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "ok": {
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "\"Something wrong?\" for one game, read-only",
+        "tags": [
+          "games"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host",
+              "ps5_addr"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
         }
       }
     },
