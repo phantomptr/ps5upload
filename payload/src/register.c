@@ -2220,6 +2220,37 @@ int launch_title(const char *title_id, const char **err_reason_out,
     int rc_ss = launch_via_system_service(title_id, fg_user);
     if (launch_sys_ok(rc_ss)) return 0;
 
+    /* #961: a title app.db has no row for cannot be started by any route, and the routes below
+     * for a refused launch are the ShellUI ptrace call (twice) and three more launcher calls. For
+     * a game whose record Rebuild Database dropped (its package still on the drive), that ladder
+     * left the console unsettled: the system UI restarted back to the home screen and homebrew
+     * running inside it stopped (the #961 report). So when app.db, read successfully, does not
+     * know the title, and still does not after a short wait (a register that just ran may not be
+     * written yet), the launch ends here with launch_not_in_database: the app then offers to put
+     * the game back on the home screen instead. An unreadable app.db (-1) keeps the old ladder. */
+    if (register_appdb_has_title(title_id) == 0) {
+        int known = 0;
+        for (int i = 0; i < 6 && !known; i++) {
+            usleep(500 * 1000);
+            /* A refused-looking call that started the title after all (launch_took_effect). */
+            if (proc_find_pid_by_title_id(title_id) > 0) return 0;
+            known = register_appdb_has_title(title_id) != 0;
+        }
+        if (!known) {
+            fprintf(stderr,
+                    "[payload2] launch %s: not in app.db (launcher rc=0x%x): not trying the other "
+                    "routes\n",
+                    title_id, (unsigned)rc_ss);
+            if (reason_buf && reason_cap > 0) {
+                snprintf(reason_buf, reason_cap, "launch_not_in_database: rc=0x%08x", (unsigned int)rc_ss);
+                if (err_reason_out) *err_reason_out = reason_buf;
+            } else if (err_reason_out) {
+                *err_reason_out = "launch_not_in_database";
+            }
+            return -1;
+        }
+    }
+
     (void)shellui_rpc_init();
     if (shellui_rpc_ready()) {
         /* rc > 0 means "Sony's function ran and refused"; the code it gave is
