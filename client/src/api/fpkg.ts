@@ -92,6 +92,12 @@ export interface FpkgInspection {
   ps4_addon_data?: boolean | null;
   /** Inspected with an update merged in: what the merge is. */
   ps4_merge?: Ps4Merge | null;
+  /** The add-on space (acSizeInGib) and size profile (appSizeInGib) param.json declares, which
+   *  the console's package size check counts (lib/packageLimit). */
+  param_sizes?: { ac_gib?: number | null; app_gib?: number | null } | null;
+  /** The package's layout index less 8 bytes per 64 KiB of package (an estimate); 0 for a
+   *  source that isn't a PS5 game. */
+  layout_index_fixed?: number;
   /** Present when the game's fakelib holds backport libraries: what "Remove backport
    *  libraries" would leave out of an image or folder, and why it can't when it can't. */
   backport?: BackportInfo | null;
@@ -226,6 +232,9 @@ export interface FpkgBuildRequest {
   /** The package's minimum firmware, like "5.10"; the game's own when absent. A console older
    *  than the package's minimum refuses to install it. */
   firmware?: string;
+  /** The connected console's firmware ("13.60"): without `firmware`, the package's size is
+   *  checked against what this console opens (the engine refuses one it can't). */
+  consoleFirmware?: string;
   /** The PlayGo language the package declares: one code (`de-DE`, …) for that one alone, `all`
    *  for every language; absent, the game's own (only its default when it names none). */
   language?: string;
@@ -292,6 +301,7 @@ export const fpkg = {
       name: req.name,
       compression: req.compression,
       firmware: req.firmware,
+      consoleFirmware: req.consoleFirmware,
       language: req.language,
       fullVerify: req.fullVerify ?? false,
       keepBoth: req.keepBoth ?? false,

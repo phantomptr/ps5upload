@@ -82,6 +82,8 @@ export interface GameCardProps {
    *  ampr_emu.index. Anything else gets a fresh index, so a finding about the old one is no
    *  warning then (`checkMatters`). */
   packsKept?: boolean;
+  /** Making a PS5 package: whether the console can open one this big (`PackageFitLine`). */
+  sizeLine?: ReactNode;
 }
 
 export function GameCard(props: GameCardProps) {
@@ -280,6 +282,7 @@ export function GameCard(props: GameCardProps) {
               {fw ? " · " : ""}
               {tr("fpkg.checksPassed_v2", { count: passed.length }, "Checks passed: {count}")}
             </div>
+            {props.sizeLine}
             <Ps4KindNote inspection={inspection} />
             {!!inspection.unsigned_executables && (
               <div className="text-xs text-[var(--color-muted)]" data-testid="fake-sign-note">

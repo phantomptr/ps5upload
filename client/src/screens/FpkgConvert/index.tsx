@@ -44,6 +44,8 @@ import { useTr } from "../../state/lang";
 import { pickLocalPath } from "../../state/localPicker";
 import { useTaskStore } from "../../state/tasks";
 import { GameCard } from "./GameCard";
+import { fitFor, PackageFitLine } from "./PackageFitLine";
+import { parsePS5Firmware } from "../../lib/ps5Firmware";
 import { ImageBrowser } from "../LocalImage/ImageBrowser";
 import { isDriveImage, LocalDrivesCard, useLocalDrives } from "../LocalImage/LocalDrives";
 import { BROWSE_IMAGE_EXTENSIONS } from "../LocalImage/imageTypes";
@@ -157,6 +159,8 @@ export default function WorkshopScreen() {
   const destSubpath = useUploadStore((s) => s.destinationSubpath);
   const profiles = useRosterStore((s) => s.profiles);
   const payloadUp = useConnectionStore((s) => s.payloadStatus === "up");
+  // The connected console's firmware: what a package's size is checked against.
+  const consoleFirmware = parsePS5Firmware(useConnectionStore((s) => s.ps5Kernel));
   const canInstall = payloadUp && host.trim() !== "";
   // Kraken Mount on the console: a package made here can be mounted from a drive instead of
   // installed (see lib/mounter).
@@ -1098,6 +1102,10 @@ export default function WorkshopScreen() {
       </div>
     ) : undefined;
 
+  // Making a PS5 package: whether the console can open one this big at the chosen level.
+  const fit = inspection && make === "pkg" && !locked ? fitFor(inspection, compression, estimates, consoleFirmware) : null;
+  const sizeLine = fit ? <PackageFitLine fit={fit} onMakeImage={() => setMake("image")} /> : null;
+
   const gameCard = (
     <GameCard
       source={source}
@@ -1130,6 +1138,7 @@ export default function WorkshopScreen() {
       canBrowse={canBrowse}
       inspection={inspection}
       packsKept={packsKept}
+      sizeLine={sizeLine}
       checking={checking}
       locked={locked}
       queueStarts={queueAutoStart}

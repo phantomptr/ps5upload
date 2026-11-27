@@ -973,6 +973,7 @@ export async function browserInvoke<T>(
         name: args["name"],
         compression: args["compression"],
         firmware: args["firmware"],
+        console_firmware: args["consoleFirmware"],
         language: args["language"],
         full_verify: args["fullVerify"] ?? false,
         keep_both: args["keepBoth"] ?? false,
