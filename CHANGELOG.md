@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.39
 
 **Play Together**
 - **A friend joining can no longer end your game by taking your PS5 user.** When a friend's controller connected, the PS5 asked who was using it with your user picked, and pressing ✕ moved your user to them, which ended your Remote Play. A friend's plain ✕ is now held back until they move off your user, and their page says not to pick it. If the PS5 still ends your stream that way, the app starts it again by itself.
