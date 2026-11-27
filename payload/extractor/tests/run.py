@@ -471,6 +471,27 @@ def test_rar_password_damaged(root):
     check("damaged", "sub/b.bin" not in files_in(out), "the damaged file was kept")
 
 
+def test_rar_hostile_header_sizes(root):
+    # Crafted RAR5 archives (fixtures/README.md), password "pw": a header whose data size runs past
+    # the volume and wraps the scan back onto itself after an encrypted file split mid-block, and a
+    # second encryption header inside the encrypted headers. Both looped forever (one with memory
+    # growing), deaf to Stop; each is a cut archive or damage now, at once.
+    copy_fixtures(root, ["crafted-rar5-size-wrap.rar", "crafted-rar5-enc-header-loop.rar"])
+    for name in ("crafted-rar5-size-wrap.rar", "crafted-rar5-enc-header-loop.rar"):
+        out = os.path.join(root, "o-" + name)
+        p, st, _ = run(root, os.path.join(root, name), out, password="pw", wait=False)
+        try:
+            p.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+            check(name, False, "still running after 20 s")
+            continue
+        with open(st) as f:
+            s = json.load(f)
+        check(name, s["state"] == "failed" and s["message"].startswith(("fs_extract_truncated", "fs_extract_corrupt")), s)
+
+
 # ---- damage ----
 
 

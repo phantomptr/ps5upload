@@ -583,11 +583,20 @@ static int scan5(xrarc_t *t, int *end) {
         return fail(t, XRC_E_CORRUPT);
     if ((hflags & 0x01) && vget(t->hb, hsize, &at, &extra_size)) return fail(t, XRC_E_CORRUPT);
     if ((hflags & 0x02) && vget(t->hb, hsize, &at, &data_size)) return fail(t, XRC_E_CORRUPT);
+    /* The header and its data inside the volume. A data size from the file is a 64-bit number:
+     * one that ran past the end wrapped scan_pos back onto this header, and straddle() / read_cb
+     * then read it again forever (memory growing, Stop never seen). */
+    if (t->scan_pos > t->scan_size || raw_len > t->scan_size - t->scan_pos ||
+        data_size > t->scan_size - t->scan_pos - raw_len)
+        return fail(t, XRC_E_TRUNCATED);
     if (type == 4) {
         /* Encryption header: version, flags, KDF count, salt, [check]. Everything after it is
          * encrypted. */
         uint64_t ver, cflags;
         uint8_t hashkey[32], check[8];
+        /* One per volume, at its start: another one inside the encrypted headers is not an
+         * archive (with the same salt it looped on itself). */
+        if (t->hdr_enc) return fail(t, XRC_E_CORRUPT);
         t->any_enc = 1;
         if (vget(t->hb, hsize, &at, &ver) || vget(t->hb, hsize, &at, &cflags) || at + 17 > hsize)
             return fail(t, XRC_E_CORRUPT);
@@ -673,6 +682,9 @@ static int scan4(xrarc_t *t, int *end) {
         }
     }
     data_off = t->scan_pos + raw_len;
+    /* As in scan5: data past the volume's end (a size that wraps data_off) is a cut archive. */
+    if (t->scan_pos > t->scan_size || raw_len > t->scan_size - t->scan_pos || data_size > t->scan_size - data_off)
+        return fail(t, XRC_E_TRUNCATED);
     if (type == 0x73) {
         t->solid = (flags & 0x0008) ? 1 : 0;
         if (flags & 0x0080) {
