@@ -1537,22 +1537,26 @@ static void r_apps_launch(const char *b, size_t n, uint8_t *out, int fd) {
     else send_json(fd, 200, "{}", 2);
 }
 
-/* {title_id}: APP_UNREGISTER, the PC app's Uninstall. The helper judges the result itself (#476:
- * unregister_outcome.h): {"sony_uninstall_rc":N,"still_present":false} when the title is gone,
+/* {title_id, registration_only?}: APP_UNREGISTER, the PC app's Uninstall. The helper judges the
+ * result itself (#476: unregister_outcome.h): {"sony_uninstall_rc":N,"still_present":false} when the title is gone,
  * still_present:true when Sony accepted but its folders are still there (a big game takes minutes:
  * the page keeps checking), an error ("uninstall_refused:0x..", "uninstall_unavailable") otherwise.
  * Refused (409 game_running) while that game runs. */
 static void r_apps_uninstall(const char *b, size_t n, uint8_t *out, int fd) {
-    char tid[32], req[64];
+    char tid[32], req[96];
     const uint8_t *t;
     size_t ol, tl;
-    int k, st;
+    int k, st, reg_only = 0;
     if (need_app(fd, b, n, tid, sizeof tid, 1) != 0) return;
     if (game_running(out, tid, 0)) {
         send_error(fd, 409, "game_running", 12);
         return;
     }
-    k = snprintf(req, sizeof req, "{\"title_id\":\"%s\"}", tid);
+    /* "registration_only":true (the page is about to delete the game's folder or image): refused
+     * instead of uninstalled when the console's own installer installed this title id (#884). */
+    if (webui_json_bool(b, n, "registration_only", &reg_only) != 1) reg_only = 0;
+    k = snprintf(req, sizeof req, reg_only ? "{\"title_id\":\"%s\",\"registration_only\":true}" : "{\"title_id\":\"%s\"}",
+                 tid);
     st = call_text(AVA1_METHOD_APP_UNREGISTER, req, (size_t)k, out, &ol, &t, &tl);
     send_text_reply(fd, st, out, ol, t, tl);
 }

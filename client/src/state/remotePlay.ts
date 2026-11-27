@@ -186,6 +186,25 @@ export function refusedAtBitrate(code: string, askedKbps: number, played: boolea
   );
 }
 
+/** How soon after one automatic start again (a Play Together friend took this stream's user)
+ *  another may come: a second end that quickly is left to the player. */
+export const GUEST_PICK_RESTART_GAP_MS = 3 * 60_000;
+
+/** When the stream to each console last started again by itself after a friend took its user. */
+const guestPickRestarts = new Map<string, number>();
+
+/** A stream that played was ended by the PS5 because a Play Together friend put its PS5 user on
+ *  their controller (the engine names the player, `guestPicked`): it starts again by itself,
+ *  once per GUEST_PICK_RESTART_GAP_MS for that console. `last` is the last such start (ms). */
+export function restartsAfterGuestPick(
+  e: { code: string; guestPicked?: number },
+  played: boolean,
+  last: number | undefined,
+  now: number,
+): boolean {
+  return e.code === "console_ended" && !!e.guestPicked && played && (last === undefined || now - last >= GUEST_PICK_RESTART_GAP_MS);
+}
+
 export function loadRpPrefs(): RpPrefs {
   try {
     const raw = safeGetItem(PREFS_KEY);
@@ -526,6 +545,24 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
           log.warn("remote-play", `no picture at ${askedKbps} kbit/s (${e.code}: ${e.detail}); starting again at Auto`);
           void import("./rpQuality")
             .then(({ useRpQualityStore }) => useRpQualityStore.getState().startAgain(t, { ...(quality ?? {}), bitrateKbps: 0 }))
+            .catch(() => {});
+          return;
+        }
+        if (restartsAfterGuestPick(e, played, guestPickRestarts.get(t.host), Date.now())) {
+          // A friend's controller took this stream's PS5 user: their pad lets go of it a moment
+          // after (Play Together), and the stream starts again once the PS5 frees its slot.
+          guestPickRestarts.set(t.host, Date.now());
+          pushNotification(
+            "warning",
+            trStatic(
+              "rp_guest_took_user_restart",
+              "Player {n} picked your PS5 user on the TV, so the PS5 ended your stream. It starts again in a few seconds.",
+              { n: String(e.guestPicked) },
+            ),
+          );
+          log.warn("remote-play", `the PS5 ended the stream: Player ${e.guestPicked} took its user on the TV; starting again`);
+          void import("./rpQuality")
+            .then(({ useRpQualityStore }) => useRpQualityStore.getState().startAgain(t, quality ?? {}))
             .catch(() => {});
           return;
         }

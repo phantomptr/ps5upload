@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { backStep, endText, focusWhere, pathLabel, showsGuide } from "./JoinView";
+import { backStep, endText, focusWhere, pathLabel, pickWarning, showsGuide } from "./JoinView";
 
 describe("guest's Back and Esc, for a TV's remote (#926)", () => {
   const base = { checking: false, guide: false, where: "game" as const, full: false };
@@ -68,5 +68,31 @@ describe("guest page: the host's stream's controller (#687, #720)", () => {
       expect(text).toContain("Ann needed their controller back");
       expect(text).toContain("let you in again");
     }
+  });
+});
+
+describe("guest page: never the host's own PS5 user (2026-11-26)", () => {
+  const picking = { state: "picking_user" as const, moveFirst: true, hostUser: "Pat", tookHost: false };
+
+  it("says to move to Quick Play first and names the host's user while the TV may ask", () => {
+    expect(pickWarning(tr, picking, "Ann")).toBe(
+      "Move to Quick Play before pressing ✕. Don't pick Pat: that's Ann's user, and it ends their game.",
+    );
+    // The name not known (yet), or an engine from before it: the host's user all the same.
+    expect(pickWarning(tr, { ...picking, hostUser: null }, "Ann")).toContain("Don't pick Ann's PS5 user");
+    expect(pickWarning(tr, { ...picking, moveFirst: false, hostUser: null }, "Ann")).toContain("Don't pick Ann's PS5 user");
+    // In the menus right after their pick (✕ still after a move).
+    expect(pickWarning(tr, { ...picking, state: "playing" }, "Ann")).toContain("Don't pick Pat");
+  });
+
+  it("says it more firmly once the host's game ended while they picked", () => {
+    expect(pickWarning(tr, { ...picking, tookHost: true }, "Ann")).toBe(
+      "Ann's game stopped because their PS5 user was picked on your controller. This time, move to Quick Play first, then press ✕.",
+    );
+  });
+
+  it("says nothing while they play, or with no status yet", () => {
+    expect(pickWarning(tr, { ...picking, state: "playing", moveFirst: false }, "Ann")).toBeNull();
+    expect(pickWarning(tr, null, "Ann")).toBeNull();
   });
 });

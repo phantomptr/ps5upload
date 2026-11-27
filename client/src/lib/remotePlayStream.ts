@@ -691,6 +691,9 @@ export interface StreamError {
   /** busy_other: the console that is streaming. */
   host?: string;
   detail: string;
+  /** console_ended: the Play Together player (2-4) who most likely ended it by putting this
+   *  stream's PS5 user on their controller ("Who's using this controller?"). */
+  guestPicked?: number;
 }
 
 /** The console waits for the user's sign-in passcode. */
@@ -2251,6 +2254,7 @@ export class RemotePlayStream {
       wait_s?: number;
       snapshot?: unknown;
       reason?: unknown;
+      guest_picked?: unknown;
       picture?: unknown;
     };
     try {
@@ -2360,7 +2364,13 @@ export class RemotePlayStream {
         const why = typeof s.reason === "string" ? s.reason : "";
         this.endReason ??= why ? `console: ${why}` : "ended";
         if (why === "no session") this.o.onError({ code: "no_session", detail: "" });
-        else if (why) this.o.onError({ code: "console_ended", detail: why });
+        else if (why) {
+          // A Play Together friend put this stream's PS5 user on their controller (the engine
+          // says which player when one was picking a user on the TV).
+          const p = s.guest_picked;
+          const guestPicked = typeof p === "number" && p >= 2 && p <= 4 ? p : undefined;
+          this.o.onError({ code: "console_ended", detail: why, ...(guestPicked ? { guestPicked } : {}) });
+        }
         break;
       }
       case "error":

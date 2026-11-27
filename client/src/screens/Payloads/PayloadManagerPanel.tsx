@@ -1,7 +1,34 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, ExternalLink, Play, Plus, RefreshCw, Search, Skull, Trash2, Upload } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ExternalLink,
+  Play,
+  Plus,
+  RefreshCw,
+  Search,
+  Skull,
+  Trash2,
+  Upload,
+} from "lucide-react";
 
-import { Badge, Button, Callout, ErrorCard, Input, OverflowMenu, Select, Spinner, Toggle } from "../../components";
+import {
+  Badge,
+  Button,
+  Callout,
+  ErrorCard,
+  Input,
+  OverflowMenu,
+  Select,
+  Spinner,
+  Toggle,
+} from "../../components";
 import type { OverflowMenuItem } from "../../components";
 import { usePhoneLayout } from "../../lib/phoneLayout";
 import { useConfirm } from "../../components/ConfirmDialog";
@@ -44,15 +71,24 @@ import { useTr, type Translator } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { humanizeCaught } from "../../lib/humanizeError";
-import { listsHelper, loadBootRecord, storedHelper } from "../../lib/helperAtBoot";
-import { turnOffHelperAtBoot, turnOnHelperAtBoot } from "../../state/helperAtBootRuntime";
-import { usePmView, usePmViewStore } from "./hub/pmViewStore";
+import {
+  listsHelper,
+  loadBootRecord,
+  storedHelper,
+} from "../../lib/helperAtBoot";
+import {
+  turnOffHelperAtBoot,
+  turnOnHelperAtBoot,
+} from "../../state/helperAtBootRuntime";
+import { pmViewKey, usePmView, usePmViewStore } from "./hub/pmViewStore";
 
 /** Move `name` within an autoload list, keeping pauses (`!ms`) where they are. */
 export function moveEntry(list: string[], name: string, dir: -1 | 1): string[] {
   const i = list.indexOf(name);
   if (i < 0) return list;
-  const names = list.map((e, idx) => ({ e, idx })).filter((x) => !x.e.startsWith("!"));
+  const names = list
+    .map((e, idx) => ({ e, idx }))
+    .filter((x) => !x.e.startsWith("!"));
   const pos = names.findIndex((x) => x.idx === i);
   const swapWith = names[pos + dir];
   if (!swapWith) return list;
@@ -107,22 +143,35 @@ export const SAVED_FILTER_MIN = 8;
 /** The saved payloads that `query` names: every word of it found, in any order and any case, in
  *  the payload's name, file name, path, version or source. An empty query keeps them all. */
 export function filterSaved<
-  T extends Pick<PmStoredPayload, "name" | "filename" | "path" | "version" | "source">,
+  T extends Pick<
+    PmStoredPayload,
+    "name" | "filename" | "path" | "version" | "source"
+  >,
 >(payloads: readonly T[], query: string): T[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (words.length === 0) return [...payloads];
   return payloads.filter((p) => {
-    const hay = [p.name, p.filename, p.path, p.version, p.source].join("\n").toLowerCase();
+    const hay = [p.name, p.filename, p.path, p.version, p.source]
+      .join("\n")
+      .toLowerCase();
     return words.every((w) => hay.includes(w));
   });
 }
 
 /** A running saved row's origin line. `bootN`: its place in the boot list when that list is
  *  on (a list turned off starts nothing at boot, so no number is promised). */
-export function runningOrigin(tr: Translator, ours: boolean, bootN: number | null): string {
+export function runningOrigin(
+  tr: Translator,
+  ours: boolean,
+  bootN: number | null,
+): string {
   if (ours) return tr("hub_origin_ours", undefined, "PS5Upload's own helper");
   if (bootN !== null) {
-    return tr("pm_origin_list_boot", { n: bootN }, `From your Payload Manager list, starts at boot #${bootN}`);
+    return tr(
+      "pm_origin_list_boot",
+      { n: bootN },
+      `From your Payload Manager list, starts at boot #${bootN}`,
+    );
   }
   return tr("pm_origin_list", undefined, "From your Payload Manager list");
 }
@@ -142,25 +191,42 @@ const SAVED_LIST =
   "grid gap-1.5 supports-[grid-template-columns:subgrid]:roomy:grid-cols-[minmax(0,1fr)_fit-content(28rem)]";
 const SAVED_ROW =
   "supports-[grid-template-columns:subgrid]:roomy:col-span-2 supports-[grid-template-columns:subgrid]:roomy:grid supports-[grid-template-columns:subgrid]:roomy:grid-cols-subgrid";
-const SAVED_ACTIONS = "supports-[grid-template-columns:subgrid]:roomy:justify-end";
+const SAVED_ACTIONS =
+  "supports-[grid-template-columns:subgrid]:roomy:justify-end";
+
+/** What the saved list shows before its first render: the overview "On your PS5" read. */
+function sharedView(part: PmPanelPart, host: string): PmOverview | null {
+  return part === "saved"
+    ? (usePmViewStore.getState().byHost[pmViewKey(host)] ?? null)
+    : null;
+}
 
 export default function PayloadManagerPanel({
   running,
   onChanged,
   part,
-}: { running?: Readonly<Record<string, PmRunning>>; onChanged?: () => void; part: PmPanelPart }) {
+}: {
+  running?: Readonly<Record<string, PmRunning>>;
+  onChanged?: () => void;
+  part: PmPanelPart;
+}) {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const { confirm, dialog } = useConfirm();
   // A phone gets a compact row per saved payload (`row` below).
   const phone = usePhoneLayout();
-  const [view, setView] = useState<PmOverview | null>(null);
+  // The saved list starts from the overview "On your PS5" already read for this console.
+  const [view, setView] = useState<PmOverview | null>(() =>
+    sharedView(part, host),
+  );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   /** The catalogue's current release for each payload this app stored here (native builds:
    *  the catalogue talks to GitHub from the app). */
-  const [latest, setLatest] = useState<Record<string, PayloadReleaseInfo | null>>({});
+  const [latest, setLatest] = useState<
+    Record<string, PayloadReleaseInfo | null>
+  >({});
   /** Catalogue payloads downloaded to this computer (native builds), to store or match. */
   const [inventory, setInventory] = useState<PayloadLocalEntry[]>([]);
   const [catalog, setCatalog] = useState<PayloadInfo[]>([]);
@@ -195,16 +261,22 @@ export default function PayloadManagerPanel({
 
   useEffect(() => {
     genRef.current++;
-    setView(null);
+    setView(sharedView(part, host));
     setLatest({});
     asked.current.clear();
-    void refresh();
-  }, [refresh]);
+    // The saved list goes by the overview "On your PS5" reads on each refresh: a second read
+    // of its own at the same moment can fail against Payload Manager's one-at-a-time server,
+    // and its error then hid the whole list while the tab still counted it.
+    if (part !== "saved") void refresh();
+  }, [refresh, part, host]);
 
-  // "On your PS5" reads the same overview on each refresh: a newer one replaces this.
+  // "On your PS5" reads the same overview on each refresh: a newer one replaces this, and
+  // an answer clears an earlier failed read.
   const shared = usePmView(host);
   useEffect(() => {
-    if (shared) setView((cur) => (cur === shared ? cur : shared));
+    if (!shared) return;
+    setView((cur) => (cur === shared ? cur : shared));
+    setError(null);
   }, [shared]);
 
   const present = !!view?.present;
@@ -226,18 +298,31 @@ export default function PayloadManagerPanel({
     if (!isTauriEnv() || !view?.present) return;
     // Only what this app stored has a known version to compare. Each id is asked once per
     // console: the answers it fills are not what it waits on.
-    const ids = new Set(Object.values(pmRecords(hostOf(host))).map((r) => r.id));
+    const ids = new Set(
+      Object.values(pmRecords(hostOf(host))).map((r) => r.id),
+    );
     const gen = genRef.current;
     for (const id of ids) {
       if (asked.current.has(id)) continue;
       asked.current.add(id);
       payloadsReleases(id)
-        .then((list) => gen === genRef.current && setLatest((m) => ({ ...m, [id]: defaultRelease(list) })))
-        .catch(() => gen === genRef.current && setLatest((m) => ({ ...m, [id]: null })));
+        .then(
+          (list) =>
+            gen === genRef.current &&
+            setLatest((m) => ({ ...m, [id]: defaultRelease(list) })),
+        )
+        .catch(
+          () =>
+            gen === genRef.current && setLatest((m) => ({ ...m, [id]: null })),
+        );
     }
   }, [view, host]);
 
-  const run = async (key: string, work: () => Promise<void>, failTitle: string) => {
+  const run = async (
+    key: string,
+    work: () => Promise<void>,
+    failTitle: string,
+  ) => {
     setBusy(key);
     try {
       await work();
@@ -259,16 +344,33 @@ export default function PayloadManagerPanel({
         await pmLaunch(host, p.path);
         pushNotification(
           "success",
-          withConsolePrefix(host, tr("pm_launched", { name: p.filename }, `Launched ${p.filename}`)),
-          { body: tr("pm_launched_body", undefined, "Check the PS5 for its notification.") },
+          withConsolePrefix(
+            host,
+            tr("pm_launched", { name: p.filename }, `Launched ${p.filename}`),
+          ),
+          {
+            body: tr(
+              "pm_launched_body",
+              undefined,
+              "Check the PS5 for its notification.",
+            ),
+          },
         );
       },
-      tr("pm_launch_failed", { name: p.filename }, `Couldn't launch ${p.filename}`),
+      tr(
+        "pm_launch_failed",
+        { name: p.filename },
+        `Couldn't launch ${p.filename}`,
+      ),
     );
 
   const remove = async (p: PmStoredPayload) => {
     const ok = await confirm({
-      title: tr("pm_delete_confirm_title", { name: p.filename }, `Delete ${p.filename} from Payload Manager?`),
+      title: tr(
+        "pm_delete_confirm_title",
+        { name: p.filename },
+        `Delete ${p.filename} from Payload Manager?`,
+      ),
       message: tr(
         "pm_delete_confirm_body_v2",
         undefined,
@@ -281,7 +383,11 @@ export default function PayloadManagerPanel({
     await run(
       `delete:${p.path}`,
       () => pmDelete(host, p.filename),
-      tr("pm_delete_failed", { name: p.filename }, `Couldn't delete ${p.filename}`),
+      tr(
+        "pm_delete_failed",
+        { name: p.filename },
+        `Couldn't delete ${p.filename}`,
+      ),
     );
   };
 
@@ -311,7 +417,11 @@ export default function PayloadManagerPanel({
               { folder: r.folder },
               `Payload Manager already has a "${r.folder}" folder. Storing into it removes the other files there (an older version, usually).`,
             ),
-        confirmLabel: tr("payloads_pm_store", undefined, "Store in Payload Manager"),
+        confirmLabel: tr(
+          "payloads_pm_store",
+          undefined,
+          "Store in Payload Manager",
+        ),
         destructive: true,
       });
       if (!ok) return false;
@@ -320,9 +430,16 @@ export default function PayloadManagerPanel({
     }
     if (!quiet)
       pushNotification(
-      "success",
-      withConsolePrefix(host, tr("payloads_pm_stored_title", { name: filename }, `Stored ${filename} in Payload Manager`)),
-    );
+        "success",
+        withConsolePrefix(
+          host,
+          tr(
+            "payloads_pm_stored_title",
+            { name: filename },
+            `Stored ${filename} in Payload Manager`,
+          ),
+        ),
+      );
     return true;
   };
 
@@ -333,12 +450,20 @@ export default function PayloadManagerPanel({
       async () => {
         const bytes = await file.arrayBuffer();
         const h = hostOf(host);
-        if (await storeConfirmed(file.name, (c) => pmStoreBytes(h, file.name, bytes, c))) {
+        if (
+          await storeConfirmed(file.name, (c) =>
+            pmStoreBytes(h, file.name, bytes, c),
+          )
+        ) {
           // Not a catalogue payload: no update tracking for it.
           forgetPmStore(h, file.name);
         }
       },
-      tr("pm_add_failed", { name: file.name }, `Couldn't store ${file.name} in Payload Manager`),
+      tr(
+        "pm_add_failed",
+        { name: file.name },
+        `Couldn't store ${file.name} in Payload Manager`,
+      ),
     );
 
   /** A catalogue payload already downloaded to this computer; remembered so updates are offered. */
@@ -350,12 +475,20 @@ export default function PayloadManagerPanel({
       "add:catalogue",
       async () => {
         const h = hostOf(host);
-        if (await storeConfirmed(filename, (c) => pmStore(h, filename, local.path, c))) {
+        if (
+          await storeConfirmed(filename, (c) =>
+            pmStore(h, filename, local.path, c),
+          )
+        ) {
           recordPmStore(h, filename, id, local.version);
           setPick("");
         }
       },
-      tr("pm_add_failed", { name: filename }, `Couldn't store ${filename} in Payload Manager`),
+      tr(
+        "pm_add_failed",
+        { name: filename },
+        `Couldn't store ${filename} in Payload Manager`,
+      ),
     );
   };
 
@@ -391,38 +524,71 @@ export default function PayloadManagerPanel({
                 { folder },
                 `Payload Manager already has a "${folder}" folder. Storing into it removes the other files there (an older version, usually).`,
               ),
-              confirmLabel: tr("payloads_pm_store", undefined, "Store in Payload Manager"),
+              confirmLabel: tr(
+                "payloads_pm_store",
+                undefined,
+                "Store in Payload Manager",
+              ),
               destructive: true,
             }),
           () =>
             confirm({
-              title: tr("helper_boot_list_off_title", undefined, "Payload Manager's boot list is off"),
+              title: tr(
+                "helper_boot_list_off_title",
+                undefined,
+                "Payload Manager's boot list is off",
+              ),
               message: tr(
                 "helper_boot_list_off_confirm",
                 undefined,
                 "While its boot list is off, Payload Manager starts nothing at boot, the helper included. Turn it on?",
               ),
-              confirmLabel: tr("helper_boot_turn_on_list", undefined, "Turn on the boot list"),
+              confirmLabel: tr(
+                "helper_boot_turn_on_list",
+                undefined,
+                "Turn on the boot list",
+              ),
             }),
         );
         if (done)
           pushNotification(
             "success",
-            withConsolePrefix(host, tr("helper_boot_on_title", undefined, "The helper now loads at boot")),
+            withConsolePrefix(
+              host,
+              tr(
+                "helper_boot_on_title",
+                undefined,
+                "The helper now loads at boot",
+              ),
+            ),
           );
       },
-      tr("helper_boot_failed", undefined, "Couldn't change whether the helper loads at boot"),
+      tr(
+        "helper_boot_failed",
+        undefined,
+        "Couldn't change whether the helper loads at boot",
+      ),
     );
 
   if (!host.trim()) {
     return (
-      <ErrorCard title={tr("payloads_no_host", undefined, "No PS5 host set. Connect on the Connection screen first.")} />
+      <ErrorCard
+        title={tr(
+          "payloads_no_host",
+          undefined,
+          "No PS5 host set. Connect on the Connection screen first.",
+        )}
+      />
     );
   }
   if (error) {
     return (
       <ErrorCard
-        title={tr("pm_error_title", undefined, "Couldn't reach Payload Manager")}
+        title={tr(
+          "pm_error_title",
+          undefined,
+          "Couldn't reach Payload Manager",
+        )}
         detail={error}
         onRetry={() => void refresh()}
       />
@@ -440,7 +606,14 @@ export default function PayloadManagerPanel({
     // The saved list is shown only while Payload Manager answers; its card explains the rest.
     if (part === "saved") return null;
     return (
-      <Callout tone="info" title={tr("pm_absent_title", undefined, "Payload Manager isn't running on this PS5")}>
+      <Callout
+        tone="info"
+        title={tr(
+          "pm_absent_title",
+          undefined,
+          "Payload Manager isn't running on this PS5",
+        )}
+      >
         {tr(
           "pm_absent_body_v2",
           undefined,
@@ -463,14 +636,23 @@ export default function PayloadManagerPanel({
   const bootRecord = loadBootRecord(host);
   // On here and stored, but not in the list right now: the next connection puts it back.
   const helperOn = helperListed || (!!bootRecord && !!helperCopy);
-  const inList = (p: PmStoredPayload) => listedEntry(autoload?.list, p) !== null;
-  const stored = view.payloads.filter((p) => p.path.startsWith("/data/pldmgr/"));
-  const onUsb = view.payloads.filter((p) => !p.path.startsWith("/data/pldmgr/"));
+  const inList = (p: PmStoredPayload) =>
+    listedEntry(autoload?.list, p) !== null;
+  const stored = view.payloads.filter((p) =>
+    p.path.startsWith("/data/pldmgr/"),
+  );
+  const onUsb = view.payloads.filter(
+    (p) => !p.path.startsWith("/data/pldmgr/"),
+  );
   // Only against a list read in full: otherwise every entry would look like it names nothing.
-  const unmatched = autoload && !view.payloadsError ? unmatchedBootEntries(autoload.list, view.payloads) : [];
+  const unmatched =
+    autoload && !view.payloadsError
+      ? unmatchedBootEntries(autoload.list, view.payloads)
+      : [];
 
   const records = pmRecords(hostOf(host));
-  const nameOf = (id: string) => catalog.find((c) => c.id === id)?.display_name ?? id;
+  const nameOf = (id: string) =>
+    catalog.find((c) => c.id === id)?.display_name ?? id;
   /** What the tab says about a stored copy: a newer release of the catalogue payload this app
    *  stored there (linked to its page: the app doesn't download payloads), or for one stored by
    *  hand, which catalogue payload it is (Payload Manager keeps no version for it). */
@@ -486,7 +668,9 @@ export default function PayloadManagerPanel({
     // The entry that names it now (slot, file name or path), else the one to add.
     const key = listedEntry(autoload?.list, p) ?? autoloadKey(p);
     const keys = autoloadKeys(p);
-    const order = autoload ? autoload.list.filter((e) => !e.startsWith("!")) : [];
+    const order = autoload
+      ? autoload.list.filter((e) => !e.startsWith("!"))
+      : [];
     const pos = order.indexOf(key);
     // The helper's own entry goes through "Load the PS5Upload helper at boot", so taking it
     // out here is the switch turned off, not something the next connection undoes.
@@ -498,7 +682,9 @@ export default function PayloadManagerPanel({
         ? setHelperAtBoot(!listed)
         : setAutoload(
             autoload.enabled,
-            listed ? autoload.list.filter((e) => !keys.includes(e)) : [...autoload.list, key],
+            listed
+              ? autoload.list.filter((e) => !keys.includes(e))
+              : [...autoload.list, key],
           ));
     };
     if (phone) {
@@ -508,7 +694,12 @@ export default function PayloadManagerPanel({
       const stop = live?.canStop ? live : null;
       const more: OverflowMenuItem[] = [
         ...(live?.webUrl
-          ? [{ label: tr("hub_open_page", undefined, "Open web page"), onSelect: () => void openExternalUrl(live.webUrl!) }]
+          ? [
+              {
+                label: tr("hub_open_page", undefined, "Open web page"),
+                onSelect: () => void openExternalUrl(live.webUrl!),
+              },
+            ]
           : []),
         ...(autoload
           ? [
@@ -525,12 +716,20 @@ export default function PayloadManagerPanel({
           ? [
               {
                 label: tr("pm_autoload_earlier", undefined, "Load earlier"),
-                onSelect: () => void setAutoload(autoload.enabled, moveEntry(autoload.list, key, -1)),
+                onSelect: () =>
+                  void setAutoload(
+                    autoload.enabled,
+                    moveEntry(autoload.list, key, -1),
+                  ),
                 disabled: busy !== null || pos <= 0,
               },
               {
                 label: tr("pm_autoload_later", undefined, "Load later"),
-                onSelect: () => void setAutoload(autoload.enabled, moveEntry(autoload.list, key, 1)),
+                onSelect: () =>
+                  void setAutoload(
+                    autoload.enabled,
+                    moveEntry(autoload.list, key, 1),
+                  ),
                 disabled: busy !== null || pos >= order.length - 1,
               },
             ]
@@ -538,7 +737,11 @@ export default function PayloadManagerPanel({
         ...(to && recorded && to.html_url
           ? [
               {
-                label: tr("pu_out_open_page", { version: to.tag }, `${to.tag} is out — open project page`),
+                label: tr(
+                  "pu_out_open_page",
+                  { version: to.tag },
+                  `${to.tag} is out — open project page`,
+                ),
                 onSelect: () => void openExternalUrl(to.html_url),
               },
             ]
@@ -574,7 +777,11 @@ export default function PayloadManagerPanel({
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
             {/* A long file name takes the lines it needs, and keeps its own order in a
                 right-to-left language. */}
-            <span className="min-w-0 font-medium [overflow-wrap:anywhere]" data-testid="pm-row-name" title={p.path}>
+            <span
+              className="min-w-0 font-medium [overflow-wrap:anywhere]"
+              data-testid="pm-row-name"
+              title={p.path}
+            >
               <bdi>{p.name || p.filename}</bdi>
             </span>
             {live && (
@@ -589,7 +796,11 @@ export default function PayloadManagerPanel({
             )}
             {to && recorded && (
               <Badge tone="warn" variant="outline">
-                {tr("pm_update_available", { tag: to.tag }, `${to.tag} available`)}
+                {tr(
+                  "pm_update_available",
+                  { tag: to.tag },
+                  `${to.tag} available`,
+                )}
               </Badge>
             )}
           </div>
@@ -609,7 +820,13 @@ export default function PayloadManagerPanel({
               variant={live ? "secondary" : "primary"}
               size="sm"
               className="shrink-0"
-              leftIcon={busy === `launch:${p.path}` ? <Spinner size={12} tone="inherit" /> : <Play size={12} />}
+              leftIcon={
+                busy === `launch:${p.path}` ? (
+                  <Spinner size={12} tone="inherit" />
+                ) : (
+                  <Play size={12} />
+                )
+              }
               disabled={busy !== null || !!live?.busy}
               onClick={() => void launch(p)}
             >
@@ -618,7 +835,11 @@ export default function PayloadManagerPanel({
           )}
           <OverflowMenu
             items={more}
-            ariaLabel={tr("pm_row_more", { name: p.filename }, `More for ${p.filename}`)}
+            ariaLabel={tr(
+              "pm_row_more",
+              { name: p.filename },
+              `More for ${p.filename}`,
+            )}
             triggerClassName="h-10 w-10 shrink-0 justify-center px-0"
           />
         </li>
@@ -630,11 +851,17 @@ export default function PayloadManagerPanel({
         data-pm-card={live?.cardId}
         className={`flex flex-wrap items-center gap-3 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3.5 py-2.5 text-sm ${SAVED_ROW}`}
       >
-        <div className="min-w-[min(100%,14rem)] flex-1" data-testid="pm-row-text">
+        <div
+          className="min-w-[min(100%,14rem)] flex-1"
+          data-testid="pm-row-text"
+        >
           <div className="flex flex-wrap items-center gap-2">
             {/* A long file name takes the lines it needs, and keeps its own order in a
                 right-to-left language. */}
-            <span className="min-w-0 font-medium [overflow-wrap:anywhere]" data-testid="pm-row-name">
+            <span
+              className="min-w-0 font-medium [overflow-wrap:anywhere]"
+              data-testid="pm-row-name"
+            >
               <bdi>{p.name || p.filename}</bdi>
             </span>
             {p.version && (
@@ -644,12 +871,20 @@ export default function PayloadManagerPanel({
             )}
             {to && recorded && (
               <Badge tone="warn" variant="outline">
-                {tr("pm_update_available", { tag: to.tag }, `${to.tag} available`)}
+                {tr(
+                  "pm_update_available",
+                  { tag: to.tag },
+                  `${to.tag} available`,
+                )}
               </Badge>
             )}
             {!recorded && matchId && (
               <Badge tone="neutral" variant="outline">
-                {tr("pm_catalogue_match", { name: nameOf(matchId) }, `Catalogue: ${nameOf(matchId)}`)}
+                {tr(
+                  "pm_catalogue_match",
+                  { name: nameOf(matchId) },
+                  `Catalogue: ${nameOf(matchId)}`,
+                )}
               </Badge>
             )}
             {listed && autoload && (
@@ -659,13 +894,24 @@ export default function PayloadManagerPanel({
             )}
             {live && (
               <Badge tone="good" dot>
-                {tr("pm_running_badge", { pid: live.pid }, `Running · PID ${live.pid}`)}
+                {tr(
+                  "pm_running_badge",
+                  { pid: live.pid },
+                  `Running · PID ${live.pid}`,
+                )}
               </Badge>
             )}
           </div>
           {live && (
-            <div className="mt-0.5 text-xs text-[var(--color-muted)]" data-testid="pm-running-origin">
-              {runningOrigin(tr, live.ours, listed && autoload?.enabled ? pos + 1 : null)}
+            <div
+              className="mt-0.5 text-xs text-[var(--color-muted)]"
+              data-testid="pm-running-origin"
+            >
+              {runningOrigin(
+                tr,
+                live.ours,
+                listed && autoload?.enabled ? pos + 1 : null,
+              )}
               {` · ${live.memoryMib.toFixed(1)} MB`}
             </div>
           )}
@@ -679,7 +925,10 @@ export default function PayloadManagerPanel({
             </div>
           )}
           {live?.note}
-          <div className="mt-0.5 truncate font-mono text-xs text-[var(--color-muted)]" title={p.path}>
+          <div
+            className="mt-0.5 truncate font-mono text-xs text-[var(--color-muted)]"
+            title={p.path}
+          >
             {p.path}
           </div>
           {p.source && (
@@ -688,7 +937,10 @@ export default function PayloadManagerPanel({
             </div>
           )}
         </div>
-        <div className={`flex flex-wrap items-center gap-2 ${SAVED_ACTIONS}`} data-testid="pm-row-actions">
+        <div
+          className={`flex flex-wrap items-center gap-2 ${SAVED_ACTIONS}`}
+          data-testid="pm-row-actions"
+        >
           {live?.webUrl && (
             <Button
               variant="ghost"
@@ -723,9 +975,18 @@ export default function PayloadManagerPanel({
                     variant="ghost"
                     size="sm"
                     disabled={busy !== null || pos <= 0}
-                    onClick={() => void setAutoload(autoload.enabled, moveEntry(autoload.list, key, -1))}
+                    onClick={() =>
+                      void setAutoload(
+                        autoload.enabled,
+                        moveEntry(autoload.list, key, -1),
+                      )
+                    }
                     title={tr("pm_autoload_earlier", undefined, "Load earlier")}
-                    aria-label={tr("pm_autoload_earlier", undefined, "Load earlier")}
+                    aria-label={tr(
+                      "pm_autoload_earlier",
+                      undefined,
+                      "Load earlier",
+                    )}
                   >
                     <ArrowUp size={12} />
                   </Button>
@@ -733,9 +994,18 @@ export default function PayloadManagerPanel({
                     variant="ghost"
                     size="sm"
                     disabled={busy !== null || pos >= order.length - 1}
-                    onClick={() => void setAutoload(autoload.enabled, moveEntry(autoload.list, key, 1))}
+                    onClick={() =>
+                      void setAutoload(
+                        autoload.enabled,
+                        moveEntry(autoload.list, key, 1),
+                      )
+                    }
                     title={tr("pm_autoload_later", undefined, "Load later")}
-                    aria-label={tr("pm_autoload_later", undefined, "Load later")}
+                    aria-label={tr(
+                      "pm_autoload_later",
+                      undefined,
+                      "Load later",
+                    )}
                   >
                     <ArrowDown size={12} />
                   </Button>
@@ -755,14 +1025,24 @@ export default function PayloadManagerPanel({
                 "ps5upload doesn't download payloads. Get the newer file from its project page, then store it here.",
               )}
             >
-              {tr("pu_out_open_page", { version: to.tag }, `${to.tag} is out — open project page`)}
+              {tr(
+                "pu_out_open_page",
+                { version: to.tag },
+                `${to.tag} is out — open project page`,
+              )}
             </Button>
           )}
           {/* Running already: launching starts a second copy, so it is not the row's main action. */}
           <Button
             variant={live ? "ghost" : "primary"}
             size="sm"
-            leftIcon={busy === `launch:${p.path}` ? <Spinner size={12} tone="inherit" /> : <Play size={12} />}
+            leftIcon={
+              busy === `launch:${p.path}` ? (
+                <Spinner size={12} tone="inherit" />
+              ) : (
+                <Play size={12} />
+              )
+            }
             disabled={busy !== null || !!live?.busy}
             onClick={() => void launch(p)}
           >
@@ -820,7 +1100,11 @@ export default function PayloadManagerPanel({
         </div>
         {view.payloadsError ? (
           <ErrorCard
-            title={tr("pm_list_failed", undefined, "Couldn't list the stored payloads")}
+            title={tr(
+              "pm_list_failed",
+              undefined,
+              "Couldn't list the stored payloads",
+            )}
             detail={view.payloadsError}
           />
         ) : all === 0 ? (
@@ -847,28 +1131,56 @@ export default function PayloadManagerPanel({
                       }
                     }}
                     leftIcon={<Search size={14} />}
-                    placeholder={tr("payloads_search_placeholder", undefined, "Search payloads…")}
-                    aria-label={tr("payloads_search", undefined, "Search payloads")}
+                    placeholder={tr(
+                      "payloads_search_placeholder",
+                      undefined,
+                      "Search payloads…",
+                    )}
+                    aria-label={tr(
+                      "payloads_search",
+                      undefined,
+                      "Search payloads",
+                    )}
                     className="text-xs"
                     data-testid="pm-filter"
                   />
                 </div>
                 {/* Said aloud as it changes: the rows below are what is left. */}
-                <span className="text-xs text-[var(--color-muted)]" aria-live="polite" data-testid="pm-filter-count">
-                  {q ? tr("cheats_filter_count", { shown, total: all }, `${shown} of ${all}`) : ""}
+                <span
+                  className="text-xs text-[var(--color-muted)]"
+                  aria-live="polite"
+                  data-testid="pm-filter-count"
+                >
+                  {q
+                    ? tr(
+                        "cheats_filter_count",
+                        { shown, total: all },
+                        `${shown} of ${all}`,
+                      )
+                    : ""}
                 </span>
               </div>
             )}
             {q && shown === 0 && (
               <p className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-border)] p-4 text-center text-xs text-[var(--color-muted)]">
-                {tr("payloads_search_no_match", { query: q }, `No payloads match "${q}".`)}
+                {tr(
+                  "payloads_search_no_match",
+                  { query: q },
+                  `No payloads match "${q}".`,
+                )}
               </p>
             )}
-            {shownStored.length > 0 && <ul className={SAVED_LIST}>{shownStored.map(row)}</ul>}
+            {shownStored.length > 0 && (
+              <ul className={SAVED_LIST}>{shownStored.map(row)}</ul>
+            )}
             {shownUsb.length > 0 && (
               <>
                 <h4 className="pt-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-                  {tr("pm_usb_header", { n: onUsb.length }, `On USB · ${onUsb.length}`)}
+                  {tr(
+                    "pm_usb_header",
+                    { n: onUsb.length },
+                    `On USB · ${onUsb.length}`,
+                  )}
                 </h4>
                 <ul className={SAVED_LIST}>{shownUsb.map(row)}</ul>
               </>
@@ -884,12 +1196,22 @@ export default function PayloadManagerPanel({
       {dialog}
       <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
         <div className="text-[var(--color-muted)]">
-          {tr("pm_detected", { version: view.version }, `Payload Manager ${view.version} on the PS5`)}
+          {tr(
+            "pm_detected",
+            { version: view.version },
+            `Payload Manager ${view.version} on the PS5`,
+          )}
         </div>
         <Button
           variant="ghost"
           size="sm"
-          leftIcon={loading ? <Spinner size={12} tone="inherit" /> : <RefreshCw size={12} />}
+          leftIcon={
+            loading ? (
+              <Spinner size={12} tone="inherit" />
+            ) : (
+              <RefreshCw size={12} />
+            )
+          }
           disabled={loading}
           onClick={() => void refresh()}
         >
@@ -906,7 +1228,10 @@ export default function PayloadManagerPanel({
             label={tr("pm_autoload_title", undefined, "Load payloads at boot")}
             hint={tr(
               "pm_autoload_hint",
-              { n: autoload.list.filter((e) => !e.startsWith("!")).length, delay: autoload.delay_s },
+              {
+                n: autoload.list.filter((e) => !e.startsWith("!")).length,
+                delay: autoload.delay_s,
+              },
               `Payload Manager starts the marked payloads in order ${autoload.delay_s}s after the PS5 boots. ${autoload.list.filter((e) => !e.startsWith("!")).length} listed. Pauses between them are kept as set in Payload Manager.`,
             )}
           />
@@ -914,7 +1239,11 @@ export default function PayloadManagerPanel({
       ) : (
         view.autoloadError && (
           <ErrorCard
-            title={tr("pm_autoload_read_failed", undefined, "Couldn't read the autoload list")}
+            title={tr(
+              "pm_autoload_read_failed",
+              undefined,
+              "Couldn't read the autoload list",
+            )}
             detail={view.autoloadError}
           />
         )
@@ -926,7 +1255,11 @@ export default function PayloadManagerPanel({
             checked={helperOn}
             disabled={busy !== null}
             onChange={(on) => void setHelperAtBoot(on)}
-            label={tr("helper_boot_label", undefined, "Load the PS5Upload helper at boot")}
+            label={tr(
+              "helper_boot_label",
+              undefined,
+              "Load the PS5Upload helper at boot",
+            )}
             hint={tr(
               "helper_boot_hint",
               undefined,
@@ -967,7 +1300,11 @@ export default function PayloadManagerPanel({
                 disabled={busy !== null}
                 onClick={() => void setAutoload(true, autoload.list)}
               >
-                {tr("helper_boot_turn_on_list", undefined, "Turn on the boot list")}
+                {tr(
+                  "helper_boot_turn_on_list",
+                  undefined,
+                  "Turn on the boot list",
+                )}
               </Button>
             </div>
           )}
@@ -1003,7 +1340,13 @@ export default function PayloadManagerPanel({
           <Button
             variant="secondary"
             size="sm"
-            leftIcon={busy === "add:local" ? <Spinner size={12} tone="inherit" /> : <Upload size={12} />}
+            leftIcon={
+              busy === "add:local" ? (
+                <Spinner size={12} tone="inherit" />
+              ) : (
+                <Upload size={12} />
+              )
+            }
             disabled={busy !== null}
             onClick={() => fileInput.current?.click()}
           >
@@ -1013,20 +1356,40 @@ export default function PayloadManagerPanel({
             <>
               <div className="min-w-48">
                 <Select
-                  aria-label={tr("pm_add_saved_label", undefined, "Saved catalogue payload")}
+                  aria-label={tr(
+                    "pm_add_saved_label",
+                    undefined,
+                    "Saved catalogue payload",
+                  )}
                   value={pick}
                   onChange={(e) => setPick(e.currentTarget.value)}
                   disabled={busy !== null}
                   options={[
-                    { value: "", label: tr("pm_add_catalogue_pick", undefined, "Catalogue payload…") },
-                    ...inventory.map((e) => ({ value: e.payload_id, label: `${nameOf(e.payload_id)} ${e.version}` })),
+                    {
+                      value: "",
+                      label: tr(
+                        "pm_add_catalogue_pick",
+                        undefined,
+                        "Catalogue payload…",
+                      ),
+                    },
+                    ...inventory.map((e) => ({
+                      value: e.payload_id,
+                      label: `${nameOf(e.payload_id)} ${e.version}`,
+                    })),
                   ]}
                 />
               </div>
               <Button
                 variant="secondary"
                 size="sm"
-                leftIcon={busy === "add:catalogue" ? <Spinner size={12} tone="inherit" /> : <Plus size={12} />}
+                leftIcon={
+                  busy === "add:catalogue" ? (
+                    <Spinner size={12} tone="inherit" />
+                  ) : (
+                    <Plus size={12} />
+                  )
+                }
                 disabled={busy !== null || !pick}
                 onClick={() => void addCatalogue(pick)}
               >
@@ -1045,7 +1408,10 @@ export default function PayloadManagerPanel({
       </section>
 
       {view.payloads.length > 0 && (
-        <p className="text-xs text-[var(--color-muted)]" data-testid="pm-saved-elsewhere">
+        <p
+          className="text-xs text-[var(--color-muted)]"
+          data-testid="pm-saved-elsewhere"
+        >
           {tr(
             "pm_saved_elsewhere",
             undefined,
@@ -1057,7 +1423,11 @@ export default function PayloadManagerPanel({
       {autoload && unmatched.length > 0 && (
         <section data-testid="pm-boot-unmatched">
           <header className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-            {tr("pm_boot_unmatched_header", { n: unmatched.length }, `In the boot list, not found · ${unmatched.length}`)}
+            {tr(
+              "pm_boot_unmatched_header",
+              { n: unmatched.length },
+              `In the boot list, not found · ${unmatched.length}`,
+            )}
           </header>
           <p className="mb-2 text-xs text-[var(--color-muted)]">
             {tr(
@@ -1072,7 +1442,9 @@ export default function PayloadManagerPanel({
                 key={`${n}:${entry}`}
                 className="flex flex-wrap items-center gap-3 rounded-[var(--radius-card)] border border-dashed border-[var(--glass-edge)] px-3.5 py-2 text-sm"
               >
-                <span className="min-w-0 flex-1 break-all font-mono text-xs">{entry}</span>
+                <span className="min-w-0 flex-1 break-all font-mono text-xs">
+                  {entry}
+                </span>
                 <Badge tone="neutral" variant="outline">
                   {tr("pm_autoload_badge", { n }, `boot #${n}`)}
                 </Badge>

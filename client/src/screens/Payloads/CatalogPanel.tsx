@@ -350,9 +350,9 @@ export default function CatalogPanel() {
           </p>
           <p className="mt-1 text-xs text-[var(--color-muted)]">
             {tr(
-              "payloads_fpkg_ppr_note_v2",
+              "payloads_fpkg_ppr_note_v3",
               undefined,
-              "Installing fake packages also needs a53_ppr_install_fast.elf, which is not in this list: no download is published for it, and it is built from the source on GitHub. Upload & Install lists everything fake packages need, in order.",
+                "Up to firmware 11.40, installing fake packages can also need a53_ppr_install_fast.elf, which is not in this list: no download is published for it, and it is built from the source on GitHub. Upload & Install lists everything fake packages need.",
             )}{" "}
             <button
               type="button"

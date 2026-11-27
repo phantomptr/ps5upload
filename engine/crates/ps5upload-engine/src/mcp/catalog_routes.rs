@@ -534,6 +534,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/ps5/app/restore/check"),
     ("POST", "/api/ps5/app/restore/finish"),
     ("GET", "/api/ps5/app/restore/status"),
+    ("GET", "/api/ps5/app/uninstall-source"),
     ("POST", "/api/ps5/app/unregister"),
     ("GET", "/api/ps5/appdb"),
     ("GET", "/api/ps5/appinfo"),

@@ -6,6 +6,30 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Play Together**
+- **A friend joining can no longer end your game by taking your PS5 user.** When a friend's controller connected, the PS5 asked who was using it with your user picked, and pressing ✕ moved your user to them, which ended your Remote Play. A friend's plain ✕ is now held back until they move off your user, and their page says not to pick it. If the PS5 still ends your stream that way, the app starts it again by itself.
+
+**Remote Play**
+- **Show or hide the on-screen controller from the stream.** A button on the stream's bar on a computer, and in the stream menu on a phone or tablet (also in full screen). It was only in Settings before.
+
+**Games**
+- **Uninstall can also delete the game's files.** For a game played from a folder or a disk image, Uninstall asks whether to keep them or delete them too (it shows the size), and deletes only after the uninstall worked; an image is unmounted first. An installed fake package, or a game whose files are already gone, uninstalls as before.
+- **The console's page shows the real title and cover of disk images on a network share (#963)**, and lists several copies of one game as one. Compressed `.ffpfsc` images show their title id with "Title not read".
+
+**Fake packages**
+- **The Workshop says what it builds:** a fake PS5 package with a plaintext game image, the kind the latest kstuff (fake-package support up to 13.60) and Kraken Mount both take, with the two ways to play it side by side. a53_ppr is only mentioned for firmware up to 11.40, and a game installed with an older kstuff may need installing again.
+- **Converting a game in zstd packs to `.pkg` no longer warns that its ampr_emu.index is stale** when the only differences are the files the conversion itself rewrites.
+
+**Starting games**
+- **A game the PS5 refuses to start no longer restarts the PS5's menu.** After the console refused a launch outright (for example 0x80020016), the helper tried a second way in through the menu, which restarted it and could stop ShadowMount+. It now stops and says what the refusal means.
+- **Packages built in the Workshop write their content id into their fake-signed programs**, as the current signing tool does; they were zeros before.
+
+**Payloads**
+- **kstuff that stays in the kernel is explained.** Newer kstuff builds don't keep a running program, so they never show as running and can't be stopped. When the PS5 reports kernel access but no kstuff program runs, the Payloads page and Send payload say kstuff is probably active, how to check, and that changing it needs a restart.
+- **Your saved Payload Manager payloads stay listed on On your PS5.** A failed second request could hide the list while the count still included it.
+
+## 12.6.38
+
 **Games**
 - **Games that vanished from the home screen after Rebuild Database can be put back (#961).** A fake package game still on its drive but no longer on the PS5's home screen now shows **Not on the PS5's home screen** on its page, with **Restore to home screen**; **Restore all** in Games does every such game. The PS5's own installer takes the package back from the drive, so nothing is downloaded. Your database is backed up first, and if the PS5 won't take a game, its files are put back where they were. It needs room for one more copy of the game while it runs.
 - **Pressing Play on such a game no longer unsettles the console.** It used to try harder and harder ways to start a game the PS5 no longer knows, which could restart the PS5's menu. It now stops within seconds and points you to Restore.

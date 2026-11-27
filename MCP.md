@@ -277,7 +277,7 @@ clients let you allow tools one by one, so keep these on "ask".
 | `install_pkg_rename` | Change the name inside a package file on this computer |
 | `convert_ampr_emu_to_console` | Write the AMPR emulator onto the console |
 | `saves_restore` | Replace save data with a backup |
-| `games_unregister` | Remove a title from the console |
+| `games_unregister` | Remove a title from the console, and with `delete_source` the game folder or disk image it plays from |
 | `games_stop`, `processes_kill` | End a game, losing what isn't saved |
 | `power_control` | Rest, reboot or shut down |
 | `shell_run` | Run any command on the console, and read any file there, sign-in keys included |

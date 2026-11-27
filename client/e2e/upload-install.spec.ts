@@ -27,7 +27,7 @@ test("Upload & Install opens with the FPKG note and one drop zone", async ({ pag
   const mount = note.getByTestId("fpkg-way-mount");
   await expect(install).toContainText("the latest kstuff (with fake-package support up to 13.60)");
   await expect(install).toContainText("send the latest one with Send payload");
-  await expect(install).toContainText("If the console refuses the install, also load a53_ppr_install_fast.elf");
+  await expect(install).toContainText("Up to firmware 11.40, if the console refuses the install, also load a53_ppr_install_fast.elf");
   await expect(mount).toContainText("Choose Copy as a file for the package here");
   await expect(mount).toContainText("not PS4 or retail packages");
   // Nothing says Kraken Mount runs here: the mocked engine reports no mounter.

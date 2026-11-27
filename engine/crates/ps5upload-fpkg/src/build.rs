@@ -328,8 +328,20 @@ fn build_mode(
         Some(reader) => (reader.0)(opened).map_err(crate::Error::Format)?,
         None => opened,
     };
-    // An unsigned executable would install and then never start: it goes in fake-signed.
-    let (mut tree, signing) = crate::fself::wrap(opened);
+    let mut opened = opened;
+    // An unsigned executable would install and then never start: it goes in fake-signed, its
+    // NPDRM block naming the content id the package is built under (checked again below).
+    let signing_id = request.content_id.clone().or_else(|| {
+        source::read_small(
+            opened.as_mut(),
+            "sce_sys/param.json",
+            source::MAX_PARAM_BYTES,
+        )
+        .ok()
+        .and_then(|p| source::content_id(&p))
+    });
+    let signing_id = signing_id.filter(|id| id.len() == 36 && content_id_is_plain(id));
+    let (mut tree, signing) = crate::fself::wrap_with(opened, signing_id.as_deref());
     if let Some(line) = signing.describe() {
         progress(&line);
     }

@@ -53,3 +53,24 @@ describe("PlayMenu: Stream on a phone (#731)", () => {
     expect(out).not.toContain("rp-menu-golive");
   });
 });
+
+describe("PlayMenu: the on-screen controller from the stream", () => {
+  it("offers Show or Hide while the picture is on this device, not without it", async () => {
+    const { useRemotePlayStore } = await import("../../state/remotePlay");
+    // A static render reads the store's first state, so change that one.
+    const st = useRemotePlayStore.getInitialState() as unknown as Record<string, unknown>;
+    const was = { pictureHere: st.pictureHere, prefs: st.prefs };
+    try {
+      Object.assign(st, { pictureHere: true, prefs: { volume: 1, muted: false, touchControls: "on" } });
+      const shown = menu({});
+      expect(shown).toContain('data-testid="rp-menu-touch"');
+      expect(shown).toContain("Hide the on-screen controller");
+      st.prefs = { volume: 1, muted: false, touchControls: "off" };
+      expect(menu({})).toContain("Show the on-screen controller");
+      st.pictureHere = false;
+      expect(menu({})).not.toContain('data-testid="rp-menu-touch"');
+    } finally {
+      Object.assign(st, was);
+    }
+  });
+});

@@ -11,14 +11,26 @@
 #include <unistd.h>
 
 #include "pkg_info.h"
+#include "smbd_fs.h"
+#include "smbd_image.h"
 #include "smbd_json.h"
+#include "smbd_log.h"
 #include "smbd_path.h"
 
 typedef struct {
     char *name;
     xkind_t kind;
     uint64_t size;
+    uint64_t mtime;
 } lent_t;
+
+/* An image the last scan read (#963): its item as it was written, kept while its size and mtime
+ * still match so a rescan of a big library reads only what is new or changed. */
+typedef struct {
+    char *path;
+    uint64_t size, mtime;
+    char *obj;
+} cent_t;
 
 typedef struct {
     xfs_t *fs;
@@ -35,6 +47,9 @@ typedef struct {
     uint64_t icon_bytes;
     const char *stopped; /* why the walk ended early, or NULL */
     int fail;            /* a negative xerr_t: the walk was abandoned (the source went away), no result */
+    cent_t *cache;       /* the last result's images (load_cache), ncache of them */
+    size_t ncache;
+    unsigned img_read, img_cached, img_unread;
 } scan_t;
 
 int lib_source_ok(const char *s) {
@@ -199,8 +214,10 @@ static void keep_icon(scan_t *s, const uint8_t *png, size_t n, char *name, size_
 
 /* ---- items ---- */
 
+/* `meta` (images only, else NULL): "read" when the image's own param file named it, else why not
+ * (smbd_image.h: "img_compressed", ...); `mtime` goes with it, the cache's key with the size. */
 static void put_item(scan_t *s, const char *kind, const char *path, const char *name, const pkg_info_t *p,
-                     uint64_t size, const char *icon, int backport) {
+                     uint64_t size, const char *icon, int backport, const char *meta, uint64_t mtime) {
     sj_buf_t *b = &s->items;
     if (s->nitems) sj_raw(b, ",");
     sj_raw(b, "{");
@@ -219,6 +236,10 @@ static void put_item(scan_t *s, const char *kind, const char *path, const char *
     sj_fmt(b, ",\"backport\":%s,\"fake\":%s,\"size\":%llu", backport ? "true" : "false", p->fake ? "true" : "false",
            (unsigned long long)size);
     sj_kv_str(b, 1, "icon", icon);
+    if (meta) {
+        sj_kv_str(b, 1, "meta", meta);
+        sj_fmt(b, ",\"mtime\":%llu", (unsigned long long)mtime);
+    }
     sj_raw(b, "}");
     s->nitems++;
     s->pr->files_total = s->nitems;
@@ -242,20 +263,196 @@ static void add_pkg(scan_t *s, const char *path, const char *name, uint64_t size
             free(png);
         }
         s->fs->ops->close(s->fs, r.fh);
-        put_item(s, "pkg", path, name, p, size, icon, 0);
+        put_item(s, "pkg", path, name, p, size, icon, 0, NULL, 0);
     } else {
         s->fs->ops->close(s->fs, r.fh); /* not a package (a split part, something else named .pkg) */
     }
     free(p);
 }
 
-static void add_image(scan_t *s, const char *path, const char *name, uint64_t size) {
-    pkg_info_t p;
-    memset(&p, 0, sizeof p);
-    lib_title_id_in(name, p.title_id);
-    if (strncmp(p.title_id, "PPSA", 4) == 0) memcpy(p.platform, "ps5", 4);
-    else if (strncmp(p.title_id, "CUSA", 4) == 0) memcpy(p.platform, "ps4", 4);
-    put_item(s, "image", path, name, &p, size, "", 0);
+/* ---- the image cache (#963) ---- */
+
+/* The end of the JSON object or array starting at s[i], strings and their escapes skipped; n when
+ * it does not end. */
+static size_t value_end(const char *s, size_t n, size_t i) {
+    int depth = 0, in_str = 0;
+    for (; i < n; i++) {
+        char c = s[i];
+        if (in_str) {
+            if (c == '\\') i++;
+            else if (c == '"') in_str = 0;
+            continue;
+        }
+        if (c == '"') {
+            in_str = 1;
+        } else if (c == '{' || c == '[') {
+            depth++;
+        } else if (c == '}' || c == ']') {
+            if (--depth == 0) return i + 1;
+        }
+    }
+    return n;
+}
+
+static void free_cache(scan_t *s) {
+    size_t i;
+    for (i = 0; i < s->ncache; i++) {
+        free(s->cache[i].path);
+        free(s->cache[i].obj);
+    }
+    free(s->cache);
+    s->cache = NULL;
+    s->ncache = 0;
+}
+
+/* The images of this source's last result a rescan may take as they are: read ("read"), or
+ * refused for good (any cause but a failed read or memory), with a size and an mtime. */
+static void load_cache(scan_t *s) {
+    char *path = malloc(SMBP_PATH_MAX + 64), *buf = NULL, *ipath = NULL, *tok = NULL;
+    FILE *f = NULL;
+    size_t n = 0, cap = 0, i;
+    const char *items;
+    if (!path) return;
+    snprintf(path, SMBP_PATH_MAX + 64, "%s/%s.json", s->out_dir, s->source);
+    f = fopen(path, "rb");
+    if (!f) goto out;
+    buf = malloc(LIB_RESULT_MAX + 4096 + 1);
+    ipath = malloc(SMBP_PATH_MAX);
+    tok = malloc(64);
+    if (!buf || !ipath || !tok) goto out;
+    n = fread(buf, 1, LIB_RESULT_MAX + 4096, f);
+    buf[n] = '\0';
+    items = strstr(buf, "\"items\":[");
+    if (!items) goto out;
+    for (i = (size_t)(items - buf) + 9; i < n && buf[i] != ']';) {
+        size_t end, len;
+        uint64_t size = 0, mtime = 0;
+        const char *o = buf + i;
+        if (buf[i] != '{') {
+            i++;
+            continue;
+        }
+        end = value_end(buf, n, i);
+        if (end >= n) break;
+        len = end - i;
+        if (sj_str(o, len, "kind", tok, 64) == 1 && !strcmp(tok, "image") && sj_str(o, len, "path", ipath, SMBP_PATH_MAX) == 1 &&
+            sj_u64(o, len, "size", &size) == 1 && sj_u64(o, len, "mtime", &mtime) == 1 && mtime &&
+            sj_str(o, len, "meta", tok, 64) == 1 && strcmp(tok, "img_read") != 0 && strcmp(tok, "img_no_memory") != 0) {
+            cent_t *c;
+            if (s->ncache == cap) {
+                size_t nc = cap ? cap * 2 : 64;
+                cent_t *nv = realloc(s->cache, nc * sizeof *nv);
+                if (!nv) break;
+                s->cache = nv;
+                cap = nc;
+            }
+            c = &s->cache[s->ncache];
+            c->path = strdup(ipath);
+            c->obj = malloc(len + 1);
+            if (!c->path || !c->obj) {
+                free(c->path);
+                free(c->obj);
+                break;
+            }
+            memcpy(c->obj, o, len);
+            c->obj[len] = '\0';
+            c->size = size;
+            c->mtime = mtime;
+            s->ncache++;
+        }
+        i = end;
+    }
+out:
+    if (f) fclose(f);
+    free(buf);
+    free(ipath);
+    free(tok);
+    free(path);
+}
+
+static const cent_t *cache_find(const scan_t *s, const char *path, uint64_t size, uint64_t mtime) {
+    size_t i;
+    if (!mtime) return NULL;
+    for (i = 0; i < s->ncache; i++)
+        if (s->cache[i].size == size && s->cache[i].mtime == mtime && !strcmp(s->cache[i].path, path)) return &s->cache[i];
+    return NULL;
+}
+
+/* A cached item back into p, its cover copied under this scan's name (the old scan's covers go
+ * once the new result is written); its "meta" into meta. */
+static void from_cache(scan_t *s, const cent_t *c, pkg_info_t *p, char *icon, size_t icon_cap, char *meta, size_t meta_cap) {
+    size_t n = strlen(c->obj), il = 0;
+    char old[96];
+    int fake = 0;
+    (void)sj_str(c->obj, n, "title", p->title, sizeof p->title);
+    (void)sj_str(c->obj, n, "title_id", p->title_id, sizeof p->title_id);
+    (void)sj_str(c->obj, n, "content_id", p->content_id, sizeof p->content_id);
+    (void)sj_str(c->obj, n, "version", p->app_ver, sizeof p->app_ver);
+    (void)sj_str(c->obj, n, "category", p->category, sizeof p->category);
+    (void)sj_str(c->obj, n, "platform", p->platform, sizeof p->platform);
+    (void)sj_str(c->obj, n, "fw", p->fw, sizeof p->fw);
+    (void)sj_str(c->obj, n, "sdk", p->sdk, sizeof p->sdk);
+    if (sj_bool(c->obj, n, "fake", &fake) == 1) p->fake = fake;
+    if (sj_str(c->obj, n, "meta", meta, meta_cap) != 1) snprintf(meta, meta_cap, "img_unknown");
+    icon[0] = '\0';
+    if (sj_str(c->obj, n, "icon", old, sizeof old) == 1 && old[0] && !strchr(old, '/') && s->icon_bytes < s->lim.icon_budget) {
+        char *ip = malloc(SMBP_PATH_MAX);
+        uint8_t *png = NULL;
+        xfs_t lfs;
+        if (ip && snprintf(ip, SMBP_PATH_MAX, "%s/icons/%s", s->out_dir, old) < (int)SMBP_PATH_MAX) {
+            localfs_init(&lfs);
+            png = read_small(&lfs, ip, LIB_ICON_MAX, &il);
+        }
+        if (png) keep_icon(s, png, il, icon, icon_cap);
+        free(png);
+        free(ip);
+    }
+}
+
+/* A disk image: named by its own sce_sys/param.json (smbd_image.h), from the last scan while its
+ * size and mtime have not changed; one that cannot be read keeps the title id in its file name,
+ * and says why ("meta") here and in the daemon's log. */
+static void add_image(scan_t *s, const char *path, const char *name, uint64_t size, uint64_t mtime) {
+    pkg_info_t *p = calloc(1, sizeof *p);
+    char icon[96] = "", meta[32] = "read";
+    const cent_t *c = cache_find(s, path, size, mtime);
+    if (!p) return;
+    if (c) {
+        from_cache(s, c, p, icon, sizeof icon, meta, sizeof meta);
+        s->img_cached++;
+    } else {
+        img_meta_t *m = calloc(1, sizeof *m);
+        const char *why = "img_no_memory";
+        rd_t r;
+        r.fs = s->fs;
+        r.chunk = chunk_of(s->fs);
+        if (m && s->fs->ops->open_read(s->fs, path, &r.fh) == 0) {
+            uint64_t left = s->lim.icon_budget > s->icon_bytes ? s->lim.icon_budget - s->icon_bytes : 0;
+            why = img_meta_read(rd_exact, &r, size, left < LIB_ICON_MAX ? (size_t)left : LIB_ICON_MAX, m);
+            s->fs->ops->close(s->fs, r.fh);
+        } else if (m) {
+            why = "img_read";
+        }
+        if (!why) {
+            *p = m->info;
+            if (m->icon) keep_icon(s, m->icon, m->icon_len, icon, sizeof icon);
+            s->img_read++;
+        } else {
+            snprintf(meta, sizeof meta, "%s", why);
+            s->img_unread++;
+            smbd_log("library: %s: title not read (%s)", path, why);
+        }
+        if (m) img_meta_free(m);
+        free(m);
+    }
+    /* What the image did not say: the title id in its name, the platform from that. */
+    if (!p->title_id[0]) lib_title_id_in(name, p->title_id);
+    if (!p->platform[0]) {
+        if (strncmp(p->title_id, "PPSA", 4) == 0) memcpy(p->platform, "ps5", 4);
+        else if (strncmp(p->title_id, "CUSA", 4) == 0) memcpy(p->platform, "ps4", 4);
+    }
+    put_item(s, "image", path, name, p, size, icon, 0, meta, mtime);
+    free(p);
 }
 
 /* `path` is a folder dump when it holds sce_sys/param.json or param.sfo: listed, 1. 0 when not.
@@ -286,7 +483,7 @@ static int try_dump(scan_t *s, const char *path, int backport) {
             png = read_small(s->fs, f, LIB_ICON_MAX, &il);
         if (png) keep_icon(s, png, il, icon, sizeof icon);
         free(png);
-        put_item(s, "folder", path, path[0] ? smbp_base(path) : "", p, 0, icon, backport);
+        put_item(s, "folder", path, path[0] ? smbp_base(path) : "", p, 0, icon, backport, NULL, 0);
     }
     found = 1;
 out:
@@ -345,6 +542,7 @@ static int read_dir(scan_t *s, const char *path, lent_t **out, size_t *count) {
         }
         v[n].kind = st.kind;
         v[n].size = st.size;
+        v[n].mtime = st.mtime;
         n++;
     }
     s->fs->ops->closedir(s->fs, d);
@@ -400,7 +598,7 @@ static void walk(scan_t *s, const char *path, unsigned depth) {
             walk(s, full, depth + 1);
         } else if (e->kind == XK_FILE) {
             if (ends_with_ci(e->name, ".pkg")) add_pkg(s, full, e->name, e->size);
-            else if (is_image(e->name)) add_image(s, full, e->name, e->size);
+            else if (is_image(e->name)) add_image(s, full, e->name, e->size, e->mtime);
         }
     }
     free(full);
@@ -465,6 +663,7 @@ int lib_scan(xfs_t *fs, const char *source, const char *roots, const char *skip_
     (void)mkdir(out_dir, 0777);
     snprintf(path, SMBP_PATH_MAX + 64, "%s/icons", out_dir);
     (void)mkdir(path, 0777);
+    load_cache(s);
     pr->scanning = 1;
     /* Every root once, the first always: "" alone (a share saved without a start folder) is the
      * share's top and must be walked too, which a `while (*at)` loop never did. */
@@ -483,6 +682,10 @@ int lib_scan(xfs_t *fs, const char *source, const char *roots, const char *skip_
         at++;
     }
     pr->scanning = 0;
+    free_cache(s);
+    if (s->img_read + s->img_cached + s->img_unread)
+        smbd_log("library: %s: %u images, %u read, %u from the last scan, %u not read", source,
+                 s->img_read + s->img_cached + s->img_unread, s->img_read, s->img_cached, s->img_unread);
     if (pr->cancel) {
         rc = XE_CANCELLED;
         goto done;

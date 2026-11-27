@@ -113,8 +113,41 @@ pub(super) fn tools() -> Vec<ToolDef> {
                           said no, `still_present` that it is still listed or on the home screen, \
                           `unverified` that the home screen could not be checked, and \
                           `managed_by: shadowmount` that ShadowMount+ adds it back from `image` \
-                          on its next scan while that image is in a scan folder.",
+                          on its next scan while that image is in a scan folder. With \
+                          `delete_source` (the `path` games_uninstall_source named, only when \
+                          the user chose to delete it) the folder or disk image is deleted too, \
+                          once the uninstall succeeded: read `source_deleted` and \
+                          `source_error`.",
             kind: Kind::Destructive { idempotent: true },
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "title_id": text("The title's id, like PPSA01234."),
+                    "delete_source": text(
+                        "Also delete this folder or disk image: the `path` from \
+                         games_uninstall_source. Left out, nothing on the drives is deleted.",
+                    ),
+                }),
+                &["console", "title_id"],
+            ),
+            run: route!(
+                method: "POST",
+                path: "/api/ps5/app/unregister",
+                done: "Asked the console to remove the title.",
+            ),
+        },
+        ToolDef {
+            name: "games_uninstall_source",
+            title: "What an uninstall can also delete",
+            description: "Before games_unregister: whether the title plays from a folder or a \
+                          disk image that could be deleted with it (`offer`), its `kind` \
+                          (`folder` or `image`), `path` and size in `bytes` (`size_partial`: at \
+                          least that). `offer: false` with a `reason` when there is nothing to \
+                          ask: a package install (uninstalling removes it all), a system title, \
+                          a ShadowMount+ title, a source already gone, or one not safe to \
+                          delete. Ask the user before passing `path` on as `delete_source`. \
+                          Changes nothing; a big folder takes up to a minute and a half.",
+            kind: Kind::Read,
             schema: object(
                 json!({
                     "console": console_required(),
@@ -123,9 +156,9 @@ pub(super) fn tools() -> Vec<ToolDef> {
                 &["console", "title_id"],
             ),
             run: route!(
-                method: "POST",
-                path: "/api/ps5/app/unregister",
-                done: "Asked the console to remove the title.",
+                method: "GET",
+                path: "/api/ps5/app/uninstall-source",
+                done: "Checked what the title plays from.",
             ),
         },
         ToolDef {

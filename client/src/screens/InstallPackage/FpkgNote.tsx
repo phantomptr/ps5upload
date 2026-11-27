@@ -67,8 +67,8 @@ export function FpkgNote({ className = "mb-4" }: { className?: string }) {
             </div>
             <div>
               {tr(
-                "pkglib.fpkgsupport.install_kstuff",
-                "On firmware 11.61 to 13.60 that has to be the latest kstuff (with fake-package support up to 13.60): with an older kstuff the package installs, but the game doesn't start. Up to 11.60, any kstuff with fake-package support works.",
+                "pkglib.fpkgsupport.install_kstuff_v2",
+                "On firmware 11.61 to 13.60 that has to be the latest kstuff (with fake-package support up to 13.60): with an older kstuff the package installs, but the game doesn't start. Up to 11.60, any kstuff with fake-package support works. If a game you installed with an older kstuff doesn't start, install it again.",
               )}
             </div>
             <div>
@@ -80,8 +80,8 @@ export function FpkgNote({ className = "mb-4" }: { className?: string }) {
             </div>
             <div className="break-words">
               {tr(
-                "pkglib.fpkgsupport.install_ppr",
-                "If the console refuses the install, also load a53_ppr_install_fast.elf, built from the source on GitHub:",
+                "pkglib.fpkgsupport.install_ppr_v2",
+                "Up to firmware 11.40, if the console refuses the install, also load a53_ppr_install_fast.elf, built from the source on GitHub:",
               )}{" "}
               <button
                 type="button"

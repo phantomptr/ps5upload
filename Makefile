@@ -1135,10 +1135,16 @@ test-payload: payload
 	@echo "Running game library scan self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/smb -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-smbd-library-selftest $(PAYLOAD_DIR)/tests/smbd_library_selftest.c \
-		$(PAYLOAD_DIR)/smb/smbd_library.c $(PAYLOAD_DIR)/smb/smbd_localfs.c $(PAYLOAD_DIR)/smb/smbd_path.c \
-		$(PAYLOAD_DIR)/smb/smbd_json.c $(PAYLOAD_DIR)/src/pkg_info.c
+		$(PAYLOAD_DIR)/smb/smbd_library.c $(PAYLOAD_DIR)/smb/smbd_image.c $(PAYLOAD_DIR)/smb/smbd_localfs.c \
+		$(PAYLOAD_DIR)/smb/smbd_path.c $(PAYLOAD_DIR)/smb/smbd_json.c $(PAYLOAD_DIR)/src/pkg_info.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-smbd-library-selftest
 	@echo "✓ the library scan finds packages, folder dumps and images with their covers, stays inside its limits and never walks a dump"
+	@echo "Running disk image metadata self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/smb -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-smbd-image-selftest $(PAYLOAD_DIR)/tests/smbd_image_selftest.c \
+		$(PAYLOAD_DIR)/smb/smbd_image.c $(PAYLOAD_DIR)/src/pkg_info.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-smbd-image-selftest
+	@echo "✓ .exfat, .ffpkg and .ffpfs images name themselves from sce_sys/param.json with their icon0.png in a few small reads; a compressed or foreign one says why"
 	@echo "Running console page network-share routes self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include -I$(PAYLOAD_DIR)/smb \
 		-I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen -I$(AVA1_C)/third_party/monocypher \
@@ -1512,6 +1518,11 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/shellui_launch_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-shellui-launch-selftest
 	@echo "✓ a Sony launch error reaches the caller as an error with its code, not as 'never ran'"
+	@echo "Running launch route self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o $(SELFTEST_DIR)/ps5upload-launch-route-selftest \
+		$(PAYLOAD_DIR)/tests/launch_route_selftest.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-launch-route-selftest
+	@echo "✓ a launch the console refuses for the title itself stops before the ShellUI route"
 	@echo "Running app.db raw-scan self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o $(SELFTEST_DIR)/ps5upload-appdb-scan-selftest \
 		$(PAYLOAD_DIR)/tests/appdb_scan_selftest.c

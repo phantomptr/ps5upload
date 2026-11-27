@@ -114,6 +114,22 @@ const WATCH_EVERY: Duration = Duration::from_millis(250);
 /// off on the host's device that controller sits idle and still takes one of the console's four
 /// places. No slot, no "Who's using this controller?": it plays as the user the stream signed in.
 const STREAM_SEAT: u8 = 1;
+/// The PS5 ends the host's stream ("Server shutting down") the moment the user it streams as goes
+/// to another controller, and "Who's using this controller?" on a guest's pad lists that user. A
+/// guest whose pad the console asked about this recently (still picking), or who picked a user
+/// this recently, is taken to have picked the host's user when the stream ends that way.
+const PICK_BLAME_ASKED: Duration = Duration::from_secs(120);
+const PICK_BLAME_PICKED: Duration = Duration::from_secs(10);
+/// After a guest's pick on the TV, ✕ still needs a move first this long: the menus after it
+/// (Add User, the one-time guest's Quick Play) may offer the host's user again.
+const PICK_SETTLE: Duration = Duration::from_secs(20);
+/// The d-pad: a press of one moves the console's focus off the user it offered.
+const DPAD: u32 = vpad::button::UP | vpad::button::DOWN | vpad::button::LEFT | vpad::button::RIGHT;
+/// The left stick this far from its centre moves the focus as the d-pad does.
+const STICK_NAV: u8 = 80;
+/// How often, while a guest picks a user on the TV, the console's user in front (the host's) is
+/// looked up again, for the guest's "don't pick <name>" hint.
+const FRONT_USER_EVERY: Duration = Duration::from_secs(30);
 /// Guest → engine binary kind: one pad state.
 pub(crate) const KIND_PAD: u8 = 0x01;
 /// The optional motion block's tag inside a pad frame.
@@ -915,6 +931,21 @@ pub(crate) struct Guest {
     /// While picking: PS was pressed on this pad (the console asks who they are), so the next ✕
     /// picks a user and ends the picking.
     ps_pressed: bool,
+    /// When their pad was last made with no profile (the console asks who they are).
+    asked_at: Option<Instant>,
+    /// When they last picked a user on the TV (their first ✕ that went through).
+    picked_at: Option<Instant>,
+    /// ✕ needs a move first ([`Party::saw_input`]): while they pick, and until this after the pick.
+    cross_guard: bool,
+    settle_until: Option<Instant>,
+    /// A move (d-pad, left stick) since their last ✕; ✕ down in their last state; the ✕ press
+    /// now down goes through.
+    moved: bool,
+    cross_down: bool,
+    cross_open: bool,
+    /// The PS5 ended the host's stream while they picked a user on the TV: most likely they picked
+    /// the host's own ([`Party::blame_pick`]). Their page says so from then on.
+    took_host: bool,
     /// Seated in the profile the host chose ("Guests play as"): its id and name. The console
     /// does not ask, and PS and Create are blocked from the start.
     plays_as: Option<(u32, String)>,
@@ -987,6 +1018,8 @@ impl Guest {
                 self.plays_as = Some((*user, name));
                 self.seat_note = None;
                 self.playing = true;
+                // Nothing to pick: ✕ is theirs from the first state.
+                self.cross_guard = false;
             }
             // The pad they had: signed in (or not yet) as it was.
             link::OpenResult::Kept => {}
@@ -998,6 +1031,12 @@ impl Guest {
                 };
                 self.playing = false;
                 self.ps_pressed = false;
+                self.asked_at = Some(Instant::now());
+                // A new pad: the console offers the user in front again, ✕ waits for a move.
+                self.cross_guard = true;
+                self.settle_until = None;
+                self.moved = false;
+                self.cross_open = false;
             }
         }
     }
@@ -1145,6 +1184,10 @@ pub(crate) struct Party {
     /// (None: no profile chosen, or not asked yet), and when.
     companion: Option<String>,
     companion_at: Option<Instant>,
+    /// The console's user in front (the one the host's stream plays as): its name, for a picking
+    /// guest's "don't pick <name>" hint (None: not known), and when it was last looked up.
+    front_user: Option<String>,
+    front_at: Option<Instant>,
 }
 
 /// How guests reach this engine.
@@ -1178,6 +1221,8 @@ impl Party {
             internet: None,
             companion: None,
             companion_at: None,
+            front_user: None,
+            front_at: None,
         }
     }
 
@@ -1298,6 +1343,14 @@ impl Party {
             left: None,
             playing: false,
             ps_pressed: false,
+            asked_at: None,
+            picked_at: None,
+            cross_guard: player != STREAM_SEAT,
+            settle_until: None,
+            moved: false,
+            cross_down: false,
+            cross_open: false,
+            took_host: false,
             plays_as: None,
             seat: None,
             seat_note: None,
@@ -1466,43 +1519,112 @@ impl Party {
             return None; // between the stream's controller and their pad: nowhere to go yet
         }
         // While picking a user, PS answers "Who's using this controller?"; Create never helps.
-        let strip = match (self.settings.block_system_buttons, g.playing) {
+        let mut strip = match (self.settings.block_system_buttons, g.playing) {
             (false, _) => 0,
             (true, true) => vpad::button::SYSTEM,
             (true, false) => vpad::button::CREATE,
         };
+        // A ✕ with no move before it while the TV may be asking who they are: held back, so the
+        // user the console offers first (the host's own) is never picked by a plain ✕.
+        if g.cross_guard && !g.cross_open {
+            strip |= vpad::button::CROSS;
+        }
         Some((g.player, strip, &g.pad_token))
     }
 
-    /// A guest's input, before anything is taken from it: while they pick a user, PS then ✕
-    /// (a user picked on "Who's using this controller?") means they are in. The helper does not
-    /// say when the console signs a user in on the pad; this is the press that does it. Returns a
-    /// line for the log when they are in.
-    fn saw_input(&mut self, id: u64, buttons: u32) -> Option<String> {
+    /// A guest's input, before anything is taken from it (`buttons` with the left stick as the
+    /// d-pad, [`stick_as_dpad`]); returns a line for the log.
+    ///
+    /// On a pad of their own with no profile chosen, the console asks who is using it ("Who's
+    /// using this controller?", or whether to sign in as the user in front) as soon as it sees the
+    /// pad, PS or not, with the host's own user offered first. ✕ on it moves the host's user to
+    /// the guest's pad and the PS5 ends the host's stream. So, while they pick, a ✕ reaches the
+    /// console only when they moved (d-pad, left stick) since the last ✕: the move takes the
+    /// console off the user it offered. The first ✕ that goes through is their pick: they are in
+    /// (PS and Create are taken from then on when the host blocks them), and ✕ keeps needing a
+    /// move for [`PICK_SETTLE`] more, through the menus that may follow (Add User, Quick Play).
+    /// The helper does not say when the console signs a user in on the pad; this is the press
+    /// that does it.
+    fn saw_input(&mut self, id: u64, buttons: u32, now: Instant) -> Option<String> {
         let block = self.settings.block_system_buttons;
         let g = self.guests.iter_mut().find(|g| g.id == id && g.active())?;
+        let cross = buttons & vpad::button::CROSS != 0;
+        let new_press = cross && !g.cross_down;
+        g.cross_down = cross;
+        g.cross_guard = g.player != STREAM_SEAT
+            && g.plays_as.is_none()
+            && (!g.playing || g.settle_until.is_some_and(|u| now < u));
+        if !g.cross_guard {
+            g.cross_open = true;
+            return None;
+        }
+        // Each press goes through or is held back as a whole (a held ✕ never flickers).
+        if new_press {
+            g.cross_open = g.moved;
+            g.moved = false;
+        }
+        if buttons & DPAD != 0 {
+            g.moved = true;
+        }
         if g.playing {
             return None;
         }
-        // PS first, in an earlier state; ✕ after it picks, whether PS is still down or not. A ✕
-        // with PS held used to count as no pick: the guest was signed in with PS never taken.
-        let had_ps = g.ps_pressed;
-        if buttons & vpad::button::PS != 0 {
+        let first_ps = buttons & vpad::button::PS != 0 && !g.ps_pressed;
+        if first_ps {
             g.ps_pressed = true;
         }
-        if !(had_ps && buttons & vpad::button::CROSS != 0) {
-            return None;
+        if new_press && g.cross_open {
+            g.playing = true;
+            g.picked_at = Some(now);
+            g.settle_until = Some(now + PICK_SETTLE);
+            return Some(format!(
+                "join: Player {} picked a user on the TV{}",
+                g.player,
+                if block {
+                    "; PS and Create are off for them"
+                } else {
+                    ""
+                }
+            ));
         }
-        g.playing = true;
-        Some(format!(
-            "join: Player {} picked a user on the TV{}",
-            g.player,
-            if block {
-                "; PS and Create are off for them"
-            } else {
-                ""
-            }
-        ))
+        if new_press {
+            return Some(format!(
+                "join: Player {}'s ✕ held back: no move since the TV offered a user (the host's own comes first)",
+                g.player
+            ));
+        }
+        first_ps.then(|| {
+            format!(
+                "join: Player {} pressed PS: the TV asks who is using their controller",
+                g.player
+            )
+        })
+    }
+
+    /// The PS5 ended the host's stream the way it does when the user the stream plays as goes to
+    /// another controller ("Server shutting down", as with a controller at the console, #769).
+    /// "Who's using this controller?" on a guest's pad lists that user too, so a guest the
+    /// console was asking about (connected, on a pad of their own, no profile chosen for them,
+    /// the pad made under [`PICK_BLAME_ASKED`] ago) or who picked a user under
+    /// [`PICK_BLAME_PICKED`] ago most likely picked it. That guest (the latest to pick, else the
+    /// latest asked) is marked, so their page tells them; their player, or None when nobody was
+    /// picking (a controller at the console, another device, the PS5 turned off).
+    fn blame_pick(&mut self, now: Instant) -> Option<u8> {
+        let recent =
+            |t: Option<Instant>, d: Duration| t.is_some_and(|t| now.duration_since(t) <= d);
+        let g = self
+            .guests
+            .iter_mut()
+            .filter(|g| {
+                g.active() && g.player != STREAM_SEAT && g.plays_as.is_none() && g.slot_open
+            })
+            .filter(|g| {
+                recent(g.picked_at, PICK_BLAME_PICKED)
+                    || (!g.playing && g.conn.is_some() && recent(g.asked_at, PICK_BLAME_ASKED))
+            })
+            .max_by_key(|g| (g.picked_at, g.asked_at))?;
+        g.took_host = true;
+        Some(g.player)
     }
 
     /// The stream's controller goes back to the host's side, at once: the guest on it stops
@@ -1571,10 +1693,21 @@ impl Party {
                 }
             }
             (None, None) => {
-                // The host's session ended: every guest is told, asks are dropped.
+                // The host's session ended: every guest is told, asks are dropped. One who most
+                // likely ended it (picked the host's user on the TV) hears that first, in a
+                // status with `took_host` (a page from before it reads only the bye).
                 self.host_gone = Some(now);
+                let told: Vec<(u64, serde_json::Value)> = self
+                    .guests
+                    .iter()
+                    .filter(|g| g.active() && g.took_host)
+                    .filter_map(|g| Some((g.id, self.guest_status(g.id)?)))
+                    .collect();
                 for g in self.guests.iter_mut().filter(|g| g.active()) {
                     if let Some(c) = g.conn.take() {
+                        if let Some((_, s)) = told.iter().find(|(id, _)| *id == g.id) {
+                            fx.push(Effect::Say(c.tx.clone(), Out::Text(s.clone())));
+                        }
                         fx.push(Effect::Say(c.tx, Out::Bye("host_stopped")));
                     }
                     g.away_since = Some(now);
@@ -1737,6 +1870,12 @@ impl Party {
             "plays_as": g.plays_as.as_ref().map(|(_, name)| name),
             // The host chose a profile for them that could not be used: the TV asks who they are.
             "seat_note": g.seat_note,
+            // While they pick a user on the TV, ✕ waits for a move first (`move_first`), and the
+            // name of the host's own user there (picking it ends the host's stream), or null.
+            "move_first": g.cross_guard,
+            "host_user": if g.cross_guard { self.front_user.as_deref() } else { None },
+            // The host's stream ended while they picked a user: most likely they picked the host's.
+            "took_host": g.took_host,
             "queue": g.stats.queue.load(Ordering::Relaxed),
             "skipped": g.stats.skipped.load(Ordering::Relaxed),
         }}))
@@ -1755,6 +1894,8 @@ impl Party {
                     "player": g.player,
                     "state": g.state(),
                     "why": g.left.map(|(_, w)| w),
+                    // The host's stream ended while they picked a user on the TV.
+                    "took_host": g.took_host,
                     "since_s": now.duration_since(g.joined_at).as_secs(),
                     "rtt_ms": s.rtt_now(),
                     "rtt_avg_ms": s.rtt_sum.load(Ordering::Relaxed).checked_div(n),
@@ -1820,6 +1961,22 @@ pub(crate) fn test_open_party(console: &str) {
     with_parties(|m| m.insert(host_key(console), p));
 }
 
+/// A party with Player 2 connected, the TV asking who is using their pad, for other modules' tests.
+#[cfg(test)]
+pub(crate) fn test_party_with_picking_guest(console: &str) {
+    let mut p = Party::new(console, 1, "Desk".into(), Settings::default());
+    let Some(id) = p.admit("A", vpad::FIRST_SLOT, Instant::now()).map(|g| g.id) else {
+        return;
+    };
+    let (tx, _rx) = mpsc::channel(16);
+    p.attach(id, 1, tx);
+    if let Some(g) = p.guest_mut(id) {
+        g.slot_open = true;
+        g.pad_made(&link::OpenResult::Ok, Some(None));
+    }
+    with_parties(|m| m.insert(host_key(console), p));
+}
+
 #[cfg(test)]
 pub(crate) fn test_close_party(console: &str) {
     with_parties(|m| m.remove(&host_key(console)));
@@ -1864,6 +2021,36 @@ fn apply(console: &str, fx: Vec<Effect>) {
             },
         }
     }
+}
+
+/// The PS5 ended the host's session on `console` with "Server shutting down" (the user it plays as
+/// went to another controller): the Play Together guest who most likely did it, picking the
+/// host's user on "Who's using this controller?" ([`Party::blame_pick`]), or None. Called before
+/// the session is let go, so the guest is marked before the watch sees the host gone and tells
+/// them. Logged with how long ago the TV asked them and they picked.
+pub(crate) fn guest_took_host(console: &str) -> Option<u8> {
+    let now = Instant::now();
+    let (player, asked, picked) = with_party(&host_key(console), |p| {
+        let n = p.blame_pick(now)?;
+        let g = p.guests.iter().find(|g| g.active() && g.player == n)?;
+        let ago = |t: Option<Instant>| t.map(|t| now.duration_since(t).as_millis());
+        Some((n, ago(g.asked_at), ago(g.picked_at)))
+    })
+    .flatten()?;
+    let asked = asked.map_or_else(
+        || "their pad not asked about".to_string(),
+        |v| format!("their pad made {v} ms before"),
+    );
+    let picked = picked.map_or_else(
+        || "no pick seen".to_string(),
+        |v| format!("their pick seen {v} ms before"),
+    );
+    crate::log_at!(
+        Info,
+        "together",
+        "join: the PS5 ended the host's stream on {console} while Player {player} picked a user on the TV ({asked}, {picked}): most likely they picked the host's user"
+    );
+    Some(player)
 }
 
 /// The host's side needs the stream's controller now (their picture came back on): the guest on
@@ -2114,7 +2301,46 @@ fn spawn_watch(key: String) {
                 return;
             }
             keep_companion(&key, &console, now);
+            keep_front_user(&key, &console, now);
         }
+    });
+}
+
+/// While a guest picks a user on the TV (connected, on a pad of their own, nothing chosen for
+/// them), the console's user in front is looked up every [`FRONT_USER_EVERY`]: the user the
+/// host's stream plays as, which "Who's using this controller?" lists too. Its name goes in that
+/// guest's status (`host_user`) so their page can say not to pick it.
+fn keep_front_user(key: &str, console: &str, now: Instant) {
+    let due = with_party(key, |p| {
+        let picking = p
+            .guests
+            .iter()
+            .any(|g| g.active() && !g.playing && g.conn.is_some() && g.player != STREAM_SEAT);
+        let due = picking
+            && p.host_gone.is_none()
+            && p.front_at
+                .is_none_or(|t| now.duration_since(t) >= FRONT_USER_EVERY);
+        if due {
+            p.front_at = Some(now);
+        }
+        due
+    })
+    .unwrap_or(false);
+    if !due {
+        return;
+    }
+    let (k, c) = (key.to_string(), console.to_string());
+    tokio::spawn(async move {
+        let c2 = c.clone();
+        let r = tokio::task::spawn_blocking(move || link::port_for(&c2).users(&c2)).await;
+        // Not asked again before FRONT_USER_EVERY either way; an unanswered look keeps the last name.
+        let Ok(Ok(users)) = r else { return };
+        let front = users
+            .iter()
+            .find(|u| u.foreground)
+            .map(|u| u.name.clone())
+            .filter(|n| !n.is_empty());
+        with_party(&k, |p| p.front_user = front);
     });
 }
 
@@ -3179,13 +3405,34 @@ fn controller_state(st: &PadState) -> ControllerState {
     }
 }
 
-/// A guest's pad state to their pad (PS and Create taken while they play).
+/// The guest's buttons with the left stick pushed far as the d-pad: what moves the console's
+/// focus on its menus ([`Party::saw_input`]). Only for looking at: the pad gets the stick as it is.
+fn stick_as_dpad(st: &PadState) -> u32 {
+    let c = vpad::STICK_CENTER;
+    let mut b = st.buttons;
+    if st.lx <= c - STICK_NAV {
+        b |= vpad::button::LEFT;
+    }
+    if st.lx >= c + STICK_NAV {
+        b |= vpad::button::RIGHT;
+    }
+    if st.ly <= c - STICK_NAV {
+        b |= vpad::button::UP;
+    }
+    if st.ly >= c + STICK_NAV {
+        b |= vpad::button::DOWN;
+    }
+    b
+}
+
+/// A guest's pad state to their pad (PS and Create taken while they play, ✕ held back while
+/// the TV may offer the host's user: [`Party::saw_input`]).
 fn forward_pad(key: &str, console: &str, id: u64, gen: u64, mut st: PadState) {
     let now = Instant::now();
     let mut said = None;
     let mask = with_party(key, |p| {
         if p.is_current(id, gen) {
-            said = p.saw_input(id, st.buttons);
+            said = p.saw_input(id, stick_as_dpad(&st), now);
         }
         let m = p
             .is_current(id, gen)
@@ -5861,37 +6108,147 @@ mod tests {
         p.attach(id, 1, tx);
         let ps = vpad::button::PS;
         let cross = vpad::button::CROSS;
-        // Picking: PS answers "Who's using"; Create is off from the start.
-        assert_eq!(p.strip_mask(id), Some((2, vpad::button::CREATE)));
-        // ✕ before any PS is not a pick (the console ignores a pad nobody signed in on)
-        assert_eq!(p.saw_input(id, cross), None);
+        let right = vpad::button::RIGHT;
+        let x_held = vpad::button::CREATE | vpad::button::CROSS;
+        // Picking: PS answers "Who's using"; Create is off, and ✕ waits for a move.
+        assert_eq!(p.strip_mask(id), Some((2, x_held)));
         // Time alone never ends the picking (#720: a guest who closed the picker was locked out)
         p.tick(t + Duration::from_secs(600), Some(1));
-        assert_eq!(p.strip_mask(id), Some((2, vpad::button::CREATE)));
-        assert_eq!(p.saw_input(id, ps), None);
-        assert_eq!(p.saw_input(id, 0), None);
-        let line = p.saw_input(id, cross).expect("PS then ✕ picks a user");
+        let t = t + Duration::from_secs(600);
+        assert!(p.saw_input(id, ps, t).unwrap().contains("pressed PS"));
+        assert_eq!(p.strip_mask(id), Some((2, x_held)), "PS passes");
+        assert_eq!(p.saw_input(id, 0, t), None);
+        assert_eq!(p.saw_input(id, right, t), None);
+        assert_eq!(p.saw_input(id, 0, t), None);
+        let line = p.saw_input(id, cross, t).expect("a move, then ✕ picks");
         assert!(line.contains("Player 2 picked a user") && line.contains("PS and Create are off"));
-        assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
+        assert_eq!(
+            p.strip_mask(id),
+            Some((2, vpad::button::SYSTEM)),
+            "the pick's ✕ goes through"
+        );
         assert_eq!(p.guest_status(id).unwrap()["status"]["block_system"], true);
-        // once in, nothing more to see
-        assert_eq!(p.saw_input(id, ps | cross), None);
+        // once in, nothing more to pick
+        assert_eq!(p.saw_input(id, 0, t + PICK_SETTLE), None);
+        assert_eq!(p.saw_input(id, ps | cross, t + PICK_SETTLE), None);
+        assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
         p.settings.block_system_buttons = false;
         assert_eq!(p.strip_mask(id), Some((2, 0)));
         p.settings.block_system_buttons = true;
-        // a new pad (helper restart) asks who they are again: one more PS, then ✕
+        // a new pad (helper restart) asks who they are again: the old move does not carry over
         p.reopened(2, &OpenResult::Ok);
-        assert_eq!(p.strip_mask(id), Some((2, vpad::button::CREATE)));
-        assert_eq!(
-            p.saw_input(id, cross),
-            None,
-            "the old PS press does not carry over"
-        );
-        p.saw_input(id, ps);
-        assert!(p.saw_input(id, cross).is_some());
+        let t = t + PICK_SETTLE + Duration::from_secs(1);
+        assert_eq!(p.saw_input(id, 0, t), None);
+        assert!(p.saw_input(id, cross, t).unwrap().contains("held back"));
+        assert_eq!(p.strip_mask(id), Some((2, x_held)));
+        p.saw_input(id, 0, t);
+        p.saw_input(id, right, t);
+        assert!(p.saw_input(id, cross, t).unwrap().contains("picked"));
         assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
         p.leave(id, "left", t);
         assert_eq!(p.strip_mask(id), None);
+    }
+
+    /// The owner's report (2026-11-26): the guest's pad came up, the PS5 asked to sign in as the
+    /// user in front (the host's) and a plain ✕ did it; the PS5 then ended the host's stream. A ✕
+    /// with no move before it never reaches the console while the TV may be asking.
+    #[test]
+    fn a_plain_cross_on_the_users_the_tv_offers_first_never_reaches_the_console() {
+        let mut p = party();
+        let t = Instant::now();
+        let id = admit(&mut p, "A", t);
+        let (tx, _rx) = conn();
+        p.attach(id, 1, tx);
+        p.guest_mut(id)
+            .unwrap()
+            .pad_made(&OpenResult::Ok, Some(None));
+        let cross = vpad::button::CROSS;
+        let held = |p: &Party| p.strip_mask(id).unwrap().1 & cross != 0;
+        // ✕ straight away, held, pressed again: held back every time, never a pick
+        for _ in 0..3 {
+            assert!(p.saw_input(id, cross, t).unwrap().contains("held back"));
+            assert!(held(&p));
+            assert_eq!(
+                p.saw_input(id, cross, t),
+                None,
+                "held down: still held back"
+            );
+            assert!(held(&p));
+            assert_eq!(p.saw_input(id, 0, t), None);
+        }
+        assert_eq!(
+            p.guest_status(id).unwrap()["status"]["state"],
+            "picking_user"
+        );
+        assert_eq!(p.guest_status(id).unwrap()["status"]["move_first"], true);
+        // a move pressed with the ✕ in the same state does not let that ✕ through
+        assert!(p
+            .saw_input(id, cross | vpad::button::DOWN, t)
+            .unwrap()
+            .contains("held back"));
+        assert!(held(&p));
+        // the move counted for the next press: released, pressed again, it goes through
+        assert_eq!(p.saw_input(id, 0, t), None);
+        assert!(p.saw_input(id, cross, t).unwrap().contains("picked"));
+        assert!(!held(&p));
+        // held across states, it stays through (no flicker that the console reads as a tap)
+        assert_eq!(p.saw_input(id, cross, t), None);
+        assert!(!held(&p));
+        // the menus after the pick (Add User, Quick Play): ✕ still waits for a move a while
+        assert_eq!(p.saw_input(id, 0, t), None);
+        assert_eq!(p.saw_input(id, cross, t + Duration::from_secs(1)), None);
+        assert!(held(&p), "within PICK_SETTLE a new ✕ needs a move again");
+        p.saw_input(id, 0, t + Duration::from_secs(1));
+        p.saw_input(id, vpad::button::LEFT, t + Duration::from_secs(2));
+        p.saw_input(id, cross, t + Duration::from_secs(2));
+        assert!(!held(&p));
+        // then ✕ is theirs: a game needs no move before each ✕
+        p.saw_input(id, 0, t + PICK_SETTLE);
+        p.saw_input(id, cross, t + PICK_SETTLE);
+        assert!(!held(&p));
+        assert_eq!(p.guest_status(id).unwrap()["status"]["move_first"], false);
+    }
+
+    #[test]
+    fn the_left_stick_counts_as_a_move_but_a_resting_or_drifting_one_does_not() {
+        let st = |lx: u8, ly: u8| PadState {
+            lx,
+            ly,
+            rx: 128,
+            ry: 128,
+            ..Default::default()
+        };
+        assert_eq!(stick_as_dpad(&st(128, 128)), 0);
+        assert_eq!(stick_as_dpad(&st(150, 100)), 0, "drift is not a move");
+        assert_eq!(stick_as_dpad(&st(255, 128)), vpad::button::RIGHT);
+        assert_eq!(stick_as_dpad(&st(0, 128)), vpad::button::LEFT);
+        assert_eq!(stick_as_dpad(&st(128, 0)), vpad::button::UP);
+        assert_eq!(stick_as_dpad(&st(128, 255)), vpad::button::DOWN);
+        let mut b = st(128, 128);
+        b.buttons = vpad::button::CROSS;
+        assert_eq!(stick_as_dpad(&b), vpad::button::CROSS);
+    }
+
+    /// Nothing to pick, so ✕ is never held: seated in the profile the host chose, or on the
+    /// host's stream's own controller.
+    #[test]
+    fn a_seated_guest_or_one_on_the_streams_controller_keeps_cross() {
+        let mut p = party();
+        let t = Instant::now();
+        let id = admit(&mut p, "A", t);
+        let (tx, _rx) = conn();
+        p.attach(id, 1, tx);
+        p.guest_mut(id)
+            .unwrap()
+            .pad_made(&OpenResult::Seated(0x2000), Some(None));
+        assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
+        assert_eq!(p.saw_input(id, vpad::button::CROSS, t), None);
+        assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
+        let seat = p.admit("B", STREAM_SEAT, t).unwrap().id;
+        p.guest_mut(seat).unwrap().playing = true;
+        assert_eq!(p.strip_mask(seat), Some((1, vpad::button::SYSTEM)));
+        assert_eq!(p.saw_input(seat, vpad::button::CROSS, t), None);
+        assert_eq!(p.strip_mask(seat), Some((1, vpad::button::SYSTEM)));
     }
 
     /// Their pad found as it was (a close the helper never got): the same pad, still signed in. PS
@@ -5907,15 +6264,27 @@ mod tests {
         p.guest_mut(id)
             .unwrap()
             .pad_made(&OpenResult::Kept, Some(None));
-        assert_eq!(p.strip_mask(id), Some((2, vpad::button::CREATE)));
-        assert_eq!(p.saw_input(id, vpad::button::PS), None);
-        assert!(p.saw_input(id, vpad::button::CROSS).is_some());
+        let x_held = vpad::button::CREATE | vpad::button::CROSS;
+        assert_eq!(p.strip_mask(id), Some((2, x_held)));
+        assert!(p
+            .saw_input(id, vpad::button::PS, t)
+            .unwrap()
+            .contains("pressed PS"));
+        p.saw_input(id, vpad::button::RIGHT, t);
+        assert!(p
+            .saw_input(id, vpad::button::CROSS, t)
+            .unwrap()
+            .contains("picked"));
         assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
         p.guest_mut(id)
             .unwrap()
             .pad_made(&OpenResult::Kept, Some(None));
         assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
-        assert_eq!(p.saw_input(id, vpad::button::PS), None, "nothing to pick");
+        assert_eq!(
+            p.saw_input(id, vpad::button::PS, t + PICK_SETTLE),
+            None,
+            "nothing to pick"
+        );
     }
 
     /// A guest who keeps PS down while pressing ✕ on "Who's using this controller?" has picked a
@@ -5930,15 +6299,148 @@ mod tests {
         p.attach(id, 1, tx);
         let ps = vpad::button::PS;
         let cross = vpad::button::CROSS;
-        // Both at once, with no PS before: PS only just went down, the picker is not up yet.
-        assert_eq!(p.saw_input(id, ps | cross), None);
-        assert_eq!(p.strip_mask(id), Some((2, vpad::button::CREATE)));
-        assert_eq!(p.saw_input(id, ps), None);
+        // Both at once, with no move before: held back, not a pick.
+        assert!(p
+            .saw_input(id, ps | cross, t)
+            .unwrap()
+            .contains("held back"));
+        assert_eq!(
+            p.strip_mask(id),
+            Some((2, vpad::button::CREATE | vpad::button::CROSS))
+        );
+        assert_eq!(p.saw_input(id, ps | vpad::button::LEFT, t), None);
         assert!(
-            p.saw_input(id, ps | cross).is_some(),
-            "PS, then ✕ with PS still down"
+            p.saw_input(id, ps | cross, t).unwrap().contains("picked"),
+            "a move, then ✕ with PS still down"
         );
         assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
+    }
+
+    /// What a guest's socket was told, in order: `text:<took_host>` for a status, `bye:<why>`.
+    fn told(fx: &[Effect]) -> Vec<String> {
+        fx.iter()
+            .filter_map(|e| match e {
+                Effect::Say(_, Out::Text(v)) => Some(format!("text:{}", v["status"]["took_host"])),
+                Effect::Say(_, Out::Bye(w)) => Some(format!("bye:{w}")),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The PS5 ended the host's stream ("Server shutting down") while a guest's pad was being
+    /// asked who is using it: that guest most likely put the host's user on it. They are marked,
+    /// hear it in a status just before the bye, and their page keeps saying so.
+    #[test]
+    fn a_guest_picking_when_the_ps5_ends_the_stream_is_told_they_took_the_hosts_user() {
+        let mut p = party();
+        let t = Instant::now();
+        let id = admit(&mut p, "A", t);
+        let (tx, _rx) = conn();
+        p.attach(id, 1, tx);
+        assert_eq!(p.blame_pick(Instant::now()), None, "no pad asked about yet");
+        p.guest_mut(id)
+            .unwrap()
+            .pad_made(&OpenResult::Ok, Some(None));
+        assert_eq!(p.guest_status(id).unwrap()["status"]["took_host"], false);
+        assert_eq!(p.blame_pick(Instant::now()), Some(2));
+        assert_eq!(p.guest_status(id).unwrap()["status"]["took_host"], true);
+        let (fx, keep) = p.tick(t, None);
+        assert!(keep);
+        assert_eq!(told(&fx), vec!["text:true", "bye:host_stopped"]);
+        // the others hear only the bye
+        let mut q = party();
+        let a = admit(&mut q, "A", t);
+        let (tx, _rx) = conn();
+        q.attach(a, 1, tx);
+        let (fx, _) = q.tick(t, None);
+        assert_eq!(told(&fx), vec!["bye:host_stopped"]);
+    }
+
+    #[test]
+    fn only_a_guest_the_tv_was_asking_or_who_just_picked_is_blamed() {
+        let mut p = party();
+        let t = Instant::now();
+        let id = admit(&mut p, "A", t);
+        let (tx, _rx) = conn();
+        p.attach(id, 1, tx);
+        p.guest_mut(id)
+            .unwrap()
+            .pad_made(&OpenResult::Ok, Some(None));
+        let asked = p.guest_mut(id).unwrap().asked_at.unwrap();
+        // asked long ago and still "picking" (a pick the engine never saw): not them
+        assert_eq!(
+            p.blame_pick(asked + PICK_BLAME_ASKED + Duration::from_secs(1)),
+            None
+        );
+        // their socket gone: they could not have pressed anything
+        let now = asked + Duration::from_secs(5);
+        p.detach(id, 1, now);
+        assert_eq!(p.blame_pick(now), None);
+        let (tx, _rx) = conn();
+        p.attach(id, 2, tx);
+        // picked a moment ago: blamed, even past the asked window
+        p.saw_input(id, vpad::button::RIGHT, now);
+        assert!(p
+            .saw_input(id, vpad::button::CROSS, now)
+            .unwrap()
+            .contains("picked"));
+        assert_eq!(p.blame_pick(now + PICK_BLAME_PICKED), Some(2));
+        p.guest_mut(id).unwrap().took_host = false;
+        // in a while, the pick is old and they play: a later end is not theirs
+        assert_eq!(
+            p.blame_pick(now + PICK_BLAME_PICKED + Duration::from_secs(1)),
+            None
+        );
+        // seated in a profile the host chose: nothing was asked
+        let mut q = party();
+        let b = admit(&mut q, "B", t);
+        let (tx, _rx) = conn();
+        q.attach(b, 1, tx);
+        q.guest_mut(b)
+            .unwrap()
+            .pad_made(&OpenResult::Seated(0x2000), Some(None));
+        assert_eq!(q.blame_pick(Instant::now()), None);
+        assert!(!q.guest_mut(b).unwrap().took_host);
+    }
+
+    /// The module call the stream's end makes: a party with a guest being asked blames them, a
+    /// console without Play Together has nobody.
+    #[test]
+    fn guest_took_host_finds_the_guest_on_that_console_only() {
+        let console = "10.0.0.77";
+        let mut p = Party::new(console, 1, "Desk".into(), Settings::default());
+        let id = admit(&mut p, "A", Instant::now());
+        let (tx, _rx) = conn();
+        p.attach(id, 1, tx);
+        p.guest_mut(id)
+            .unwrap()
+            .pad_made(&OpenResult::Ok, Some(None));
+        with_parties(|m| m.insert(host_key(console), p));
+        assert_eq!(guest_took_host("10.0.0.78"), None);
+        assert_eq!(guest_took_host(console), Some(2));
+        let marked = with_party(&host_key(console), |p| p.guest_mut(id).unwrap().took_host);
+        assert_eq!(marked, Some(true));
+        with_parties(|m| m.remove(&host_key(console)));
+    }
+
+    /// The host's user's name reaches a guest only while ✕ waits for a move (they pick a user).
+    #[test]
+    fn the_host_users_name_is_in_a_picking_guests_status_only() {
+        let mut p = party();
+        let t = Instant::now();
+        let id = admit(&mut p, "A", t);
+        let (tx, _rx) = conn();
+        p.attach(id, 1, tx);
+        p.front_user = Some("Pat".into());
+        let s = p.guest_status(id).unwrap();
+        assert_eq!(s["status"]["host_user"], "Pat");
+        assert_eq!(s["status"]["move_first"], true);
+        p.saw_input(id, vpad::button::RIGHT, t);
+        p.saw_input(id, vpad::button::CROSS, t);
+        p.saw_input(id, 0, t + PICK_SETTLE);
+        let s = p.guest_status(id).unwrap();
+        assert!(s["status"]["host_user"].is_null());
+        assert_eq!(s["status"]["move_first"], false);
     }
 
     #[test]
@@ -7168,9 +7670,13 @@ mod tests {
         // PS and Create taken from the first frame: no picking window
         assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
         assert_eq!(p.guest_status(id).unwrap()["status"]["block_system"], true);
-        // a reopen not seated again: the TV asks, PS goes through while they pick
+        // a reopen not seated again: the TV asks, PS goes through while they pick (✕ waits
+        // for a move)
         p.reopened(2, &OpenResult::Unseated(unseated::FAILED));
-        assert_eq!(p.strip_mask(id), Some((2, vpad::button::CREATE)));
+        assert_eq!(
+            p.strip_mask(id),
+            Some((2, vpad::button::CREATE | vpad::button::CROSS))
+        );
         let s = p.guest_status(id).unwrap();
         assert_eq!(s["status"]["seat_note"], "failed");
         assert!(s["status"]["plays_as"].is_null());
@@ -7179,7 +7685,10 @@ mod tests {
         assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
         // no choice at all: as before
         p.reopened(2, &OpenResult::Ok);
-        assert_eq!(p.strip_mask(id), Some((2, vpad::button::CREATE)));
+        assert_eq!(
+            p.strip_mask(id),
+            Some((2, vpad::button::CREATE | vpad::button::CROSS))
+        );
         assert!(p.guest_status(id).unwrap()["status"]["seat_note"].is_null());
     }
 
@@ -8247,8 +8756,8 @@ mod tests {
         assert_eq!(got, (3, true, SeatMove::No, "picking_user"));
         assert_eq!(
             with_party(&key, |p| p.strip_mask(a)).unwrap(),
-            Some((3, vpad::button::CREATE)),
-            "PS answers 'Who's using this controller?'"
+            Some((3, vpad::button::CREATE | vpad::button::CROSS)),
+            "PS answers 'Who's using this controller?', ✕ waits for a move"
         );
         assert!(f.log().contains(&"open3".to_string()), "{:?}", f.log());
 

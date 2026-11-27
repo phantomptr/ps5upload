@@ -110,6 +110,9 @@ const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(60);
 const MAX_KEEP_ALIVE: Duration = Duration::from_secs(600);
 /// A start while the console's last session is finishing: asked to look again this soon.
 const STOPPING_RETRY_S: u64 = 2;
+/// What the PS5 says when it ends a session because the user it plays as went to another
+/// controller: one at the console (#769), or a Play Together guest's pad picking that user.
+const TAKEN_OVER: &str = "Server shutting down";
 /// Pad states waiting for the stream thread.
 const PAD_QUEUE: usize = 256;
 /// Engine → page binary kind: one DualSense haptics frame (rp_stream `StreamSink::haptics`).
@@ -2075,6 +2078,10 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
             }),
             Err(e) => slot_held_status(&l.host, &e).unwrap_or_else(|| error_status(&e)),
         };
+        // Before the session is let go below: the guest is marked before Play Together sees the
+        // host gone.
+        let mut end = end;
+        note_guest_pick(&l.host, &mut end);
         // A session that reached the console holds its slot for a while after: remembered, so a
         // start refused meanwhile is told apart from another device's session. Only a session
         // that got as far as the console's slot: an end, or one lost mid-stream (an unreachable
@@ -2114,6 +2121,18 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         crate::fan_boost::session_ended(&l.host);
     });
     live
+}
+
+/// A session `host` ended because the user it played as went to another controller
+/// ([`TAKEN_OVER`]): a Play Together guest who put the host's user on their pad ("Who's using this
+/// controller?") is the likely one ([`crate::join::guest_took_host`]). The end then says which
+/// player (`guest_picked`), and the page starts the stream again.
+fn note_guest_pick(host: &str, end: &mut serde_json::Value) {
+    if end["stage"] == "ended" && end["reason"] == TAKEN_OVER {
+        if let Some(n) = crate::join::guest_took_host(host) {
+            end["guest_picked"] = n.into();
+        }
+    }
 }
 
 /// A panic's message, when it has one.
@@ -2953,6 +2972,25 @@ mod tests {
         assert!(live.alone_too_long());
         crate::join::test_close_party("10.0.77.1");
         assert!(!crate::join::needs_session("10.0.77.1"));
+    }
+
+    /// "Server shutting down" while a Play Together guest was being asked who is using their pad:
+    /// the end names their player for the page. Any other end, or no guest picking, names nobody.
+    #[test]
+    fn a_takeover_while_a_guest_picks_names_the_guest() {
+        let host = "10.0.77.9";
+        let ended = |reason: &str| serde_json::json!({"stage": "ended", "reason": reason});
+        let mut e = ended(TAKEN_OVER);
+        note_guest_pick(host, &mut e);
+        assert!(e["guest_picked"].is_null(), "no Play Together: nobody");
+        crate::join::test_party_with_picking_guest(host);
+        let mut other = ended("Remote Play ended");
+        note_guest_pick(host, &mut other);
+        assert!(other["guest_picked"].is_null(), "another reason: nobody");
+        let mut e = ended(TAKEN_OVER);
+        note_guest_pick(host, &mut e);
+        assert_eq!(e["guest_picked"], 2);
+        crate::join::test_close_party(host);
     }
 
     #[test]

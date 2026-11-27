@@ -41,6 +41,7 @@
 #include "sony_api_lock.h"
 #include "proc_list.h"
 #include "shellui_rpc.h"
+#include "launch_route.h"
 #include "kernel_rw_lock.h"
 
 /* Serialization mutex `sony_api_lock` and the 200µs post-call grace
@@ -2251,6 +2252,26 @@ int launch_title(const char *title_id, const char **err_reason_out,
         }
     }
 
+    /* A refusal no other route can change (launch_route.h): report it and stop. The ShellUI
+     * route below runs the launcher on SceShellUI's stack, and for a title the console itself
+     * will not start that only restarts the system UI and the homebrew inside it (a fake
+     * package refused with 0x80020016 on FW 13.60, 2026-11-27). A non-zero return can still
+     * be a launch that is proceeding, so look first. */
+    if (launch_refusal_is_final(rc_ss)) {
+        if (launch_took_effect(title_id)) return 0;
+        fprintf(stderr,
+                "[payload2] launch %s: launcher refused (0x%08x), a refusal the other routes "
+                "cannot change: not trying them\n",
+                title_id, (unsigned int)rc_ss);
+        if (reason_buf && reason_cap > 0) {
+            snprintf(reason_buf, reason_cap, "launch_sony_error_0x%08x", (unsigned int)rc_ss);
+            if (err_reason_out) *err_reason_out = reason_buf;
+        } else if (err_reason_out) {
+            *err_reason_out = "launch_sony_error";
+        }
+        return -1;
+    }
+
     (void)shellui_rpc_init();
     if (shellui_rpc_ready()) {
         /* rc > 0 means "Sony's function ran and refused"; the code it gave is
@@ -2261,8 +2282,8 @@ int launch_title(const char *title_id, const char **err_reason_out,
         if (rc == 0 || rc == -2) {
             /* 0 / -2 mean the ShellUI request was dispatched, not that the
              * title started. When the launcher above had already REFUSED it
-             * (a negative rc, e.g. 0x80940033 for a homebrew app on FW 13.60
-             * with no fake-package support), check before claiming success:
+             * (a negative rc; 0x80940033, measured here for a homebrew app on FW
+             * 13.60, now stops above), check before claiming success:
              * otherwise the UI says "launched" and nothing happens (measured
              * on the Pro, 2026-09-29). ~6 s covers a slow start; a normal
              * launch through the primary path never reaches here. -2 is

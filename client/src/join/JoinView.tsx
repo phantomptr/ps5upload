@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Expand, EyeOff, Gamepad2, LogOut, Minimize, MoreHorizontal, RotateCw, Users, Volume2, VolumeX } from "lucide-react";
 
 import type { JoinStage } from "../lib/joinClient";
-import { delayTone, playerColor } from "../lib/joinProtocol";
+import { delayTone, playerColor, type JoinStatus } from "../lib/joinProtocol";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { registerBackDismiss } from "../lib/focusTrap";
 import { tvNavActive } from "../lib/tvNav";
@@ -34,6 +34,34 @@ export function showsGuide(o: { player: number; guided: boolean; movedOff: boole
 
 /** 42 → "0:42". */
 export { clock };
+
+/** While the TV may ask who is using their controller: the PS5 offers the host's own user first,
+ *  and picking it (even with a plain ✕ on the first question) ends the host's game. What to do
+ *  instead, said more firmly once it happened; null when nothing is being picked. */
+export function pickWarning(
+  tr: Tr,
+  s: Pick<JoinStatus, "state" | "moveFirst" | "hostUser" | "tookHost"> | null,
+  host: string,
+): string | null {
+  if (!s || !(s.state === "picking_user" || s.moveFirst)) return null;
+  if (s.tookHost)
+    return tr(
+      "join_took_host",
+      { host },
+      `${host}'s game stopped because their PS5 user was picked on your controller. This time, move to Quick Play first, then press ✕.`,
+    );
+  return s.hostUser
+    ? tr(
+        "join_not_host_user",
+        { user: s.hostUser, host },
+        `Move to Quick Play before pressing ✕. Don't pick ${s.hostUser}: that's ${host}'s user, and it ends their game.`,
+      )
+    : tr(
+        "join_not_host_user_unnamed",
+        { host },
+        `Move to Quick Play before pressing ✕. Don't pick ${host}'s PS5 user: it ends their game.`,
+      );
+}
 
 /** Which way the connection goes, beside the delay: the home network, Tailscale, the internet. */
 export function pathLabel(tr: Tr, path: NetPath): string {
@@ -668,6 +696,8 @@ export function JoinView({
   const onSeat = player === STREAM_SEAT;
   // Seated in the profile the host chose: nothing to pick on the TV.
   const playsAs = status?.playsAs ?? null;
+  // Picking a user on the TV: never the host's own (it ends their game).
+  const warn = !onSeat && !playsAs ? pickWarning(tr, status, host) : null;
   const leftS = reconnecting ? (stage.deadline - now) / 1000 : 0;
   const toggleFull = () => setFullscreen(!full);
   // A phone in the app, the game in its small box: the buttons go in a bar under the picture
@@ -720,6 +750,11 @@ export function JoinView({
       {picking && !onSeat && (
         <span className="rounded-full bg-white/90 px-2.5 py-1 font-medium text-black" data-testid="join-picking">
           {tr("join_picking", undefined, "Press PS, then pick Quick Play on the TV")}
+        </span>
+      )}
+      {warn && (
+        <span className="rounded-full bg-amber-300 px-2.5 py-1 font-medium text-black" data-testid="join-not-host-user">
+          {warn}
         </span>
       )}
     </>
@@ -1000,6 +1035,14 @@ export function JoinView({
             {tr("join_picking", undefined, "Press PS, then pick Quick Play on the TV")}
           </p>
         )}
+        {warn && pickHint && touch && !chrome.shown && !reconnecting && (
+          <p
+            className="pointer-events-none absolute left-1/2 top-10 z-20 w-max max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-2xl bg-amber-300 px-2.5 py-1 text-center text-xs font-medium text-black"
+            data-testid="join-not-host-user-note"
+          >
+            {warn}
+          </p>
+        )}
 
         {showGuide && !playsAs && (
           <div
@@ -1014,6 +1057,7 @@ export function JoinView({
                 'On your controller, press PS once. The TV asks "Who\'s using this controller?". Pick Quick Play or your own user. The host doesn\'t need to do anything.',
               )}
             </p>
+            {warn && <p className="mt-1 font-medium text-amber-300">{warn}</p>}
             <p className="mt-1 text-white/60">
               {tr(
                 "join_guide_menus",
@@ -1049,13 +1093,24 @@ export function JoinView({
             </button>
             <span className="h-7 w-7 animate-spin rounded-full border-2 border-white/30 border-t-white" aria-hidden />
             {stage.hostStopped ? (
-              <p className="max-w-sm text-base font-medium" data-testid="join-host-away">
-                {tr(
-                  "join_host_away",
-                  { time: clock(leftS) },
-                  `The host stopped playing — waiting for them to start again (${clock(leftS)})`,
+              <>
+                <p className="max-w-sm text-base font-medium" data-testid="join-host-away">
+                  {tr(
+                    "join_host_away",
+                    { time: clock(leftS) },
+                    `The host stopped playing — waiting for them to start again (${clock(leftS)})`,
+                  )}
+                </p>
+                {status?.tookHost && (
+                  <p className="max-w-sm text-sm text-amber-300" data-testid="join-took-host">
+                    {tr(
+                      "join_took_host_away",
+                      { host },
+                      `${host}'s PS5 user was picked on your controller, which ends their game. When it's back and the TV asks who you are, move to Quick Play first, then press ✕.`,
+                    )}
+                  </p>
                 )}
-              </p>
+              </>
             ) : (
               <>
                 <p className="text-base font-medium">{tr("join_reconnecting", undefined, "Reconnecting…")}</p>

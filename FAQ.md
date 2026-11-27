@@ -2215,6 +2215,27 @@ whose title ID can't be read) are counted in a line under the grid; **Show them*
 with the same actions. To dump an installed game to a drive, open it and use **Dump this game**
 under **On <console>**.
 
+**Q: When I uninstall a game, are its files deleted too?**
+That depends on how the game got onto the PS5:
+
+- **Installed from a package** (a fake package installed with the PS5's installer): Uninstall
+  removes it, files and all, as Settings › Storage does. There is nothing else to choose.
+- **Played from a game folder or a disk image** (`.ffpkg`, `.exfat`, `.ffpfs`) that you added to
+  the home screen: Uninstall asks whether to delete that folder or image too, and shows where it is
+  and how much space it frees. **Uninstall only** (picked to start with) takes the game off the
+  home screen and keeps its files. **Uninstall and delete** deletes them once the game is
+  uninstalled; an image is unmounted first. Saves are kept either way. If the folder or image is
+  already gone, it just uninstalls.
+- It only ever deletes the game's own folder or image: never a drive's top level, a top folder of
+  the internal storage, the PS5's own folders, a folder or image another game on the home screen
+  also uses, or a folder with another game inside. For those you get the plain question.
+- Games that **ShadowMount+** or **Kraken Mount** put on the home screen work as before: Kraken
+  Mount's Remove deletes its package or folder, and a ShadowMount+ image stays where it is.
+
+The same choice is in **Games** on the PS5's own page. Through the API or an agent, read
+`GET /api/ps5/app/uninstall-source` (`games_uninstall_source`) first, then pass its `path` as
+`delete_source` to the uninstall.
+
 **Q: After Rebuild Database my games installed from fake packages are gone from the home screen. Do I have to download them again?**
 No. Rebuild Database (Safe Mode) removes games installed from fake packages from the home screen
 and from Settings › Storage, but their files stay on the drive. With the helper running and
@@ -3492,7 +3513,11 @@ Minion, and shows the address to open.
 The SMB shares kept on the PS5: add them in Minion's **Files → Network shares**, or from the
 PC in **Shared Folders → Shares on the PS5**, which adds, edits and removes them and can copy a server
 you already saved (type the password again: the PS5 keeps its own encrypted copy). Minion
-browses them in Files, and **Games → On Drives & Shares** shows the games on them.
+browses them in Files, and **Games → On Drives & Shares** shows the games on them. A game image
+(`.exfat`, `.ffpkg`, `.ffpfs`) shows the title and cover stored inside it, and copies of one game
+on different shares or under different names are one card. A compressed `.ffpfsc` can't be read
+on the console: it shows the title id from its file name, tagged **Title not read**. A rescan reads
+only the images that are new or changed since the last one.
 
 **Q: Can I convert a game on the PS5 itself, without a computer?**
 Yes: Minion's **Convert** section makes an `.exfat`, `.ffpkg`, `.ffpfs` or a plain folder from a
