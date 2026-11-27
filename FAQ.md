@@ -3462,6 +3462,23 @@ on the PS5, and **More → Snapshots** lists them to restore later. It is meant 
 state and configuration — before a bulk operation, not as a game backup.
 For save data specifically, use the Save data screen.
 
+**Q: Why does a folder in Files show "—" for its size? Can it show how big a game folder is?**
+A folder's size means counting everything inside it, so Files never does that on its own. It
+shows a size only when it already knows one, with its age (for example "48.2 GiB · 2 days ago");
+otherwise "—". To get one, use **Measure size** on a folder (its ⋮ menu or right-click, also for
+several selected folders) or **Measure everything here** in the ⋯ menu for every folder in the
+one you're in. Folders are measured in the background, one at a time; **Stop measuring** stops
+them, and measuring waits while a transfer or install runs on that PS5. The size is what the
+folder takes on the drive, so a game converted to zstd packs shows its packed size. Sizes the
+app already worked out are reused for free: a **What takes space?** look at a folder, and the
+clean-up scan. A size is dropped when PS5Upload writes, deletes or moves something in that folder;
+a change made another way (on the PS5 itself, another tool) is not seen, which is why each size
+shows how old it is. Sorting by size puts folders with no known size last. This works for the
+PS5's drives (internal, M.2, USB, and shares mounted on the PS5), not for your computer's side.
+**Settings › Files & saves › Keep folder sizes fresh** (off by default) re-measures sizes the app
+already knows, at most once a day, only in folders you open, and only while nothing else runs on
+that PS5.
+
 ---
 
 ## PS5Upload Minion (on the console)
