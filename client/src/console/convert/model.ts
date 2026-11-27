@@ -126,11 +126,51 @@ export interface Inspection {
    *  an unpacked .pkg has to leave the emulator out here, or be made on a computer (the console
    *  downloads no other emulator). */
   unpackKeepsEmulator: boolean | null;
+  /** A game in no asset packs that carries an AMPR emulator in its fakelib: what a .pkg can leave
+   *  out, or why not. Null for any other game, or a helper from before it. */
+  plainEmulator: PlainEmulator | null;
   hasEboot: boolean;
   warnings: string[];
   /** The zstd runtime on the console (the helper adds it), or null: a zstd build needs one, and
    *  only the desktop app puts it there. */
   zstdRuntime: string | null;
+}
+
+/** Why a plain game's AMPR emulator can't be left out (the converter's
+ *  `plain_emulator::Refusal`): its libSceAmpr.sprx is not an emulator (maybe a backport's system
+ *  library), it has pack files, or its ampr_emu.index lists files it doesn't have. */
+export type PlainEmulatorRefusal = "not_an_emulator" | "pack_files" | "index_lists_missing";
+
+/** What a game in no packs carries of an AMPR emulator (the converter's `plain_ampr_emu`). */
+export interface PlainEmulator {
+  /** Its libSceAmpr.sprx files, by path. */
+  modules: string[];
+  /** What it is: "ampr_emu 0.4.2.1", "an AMPR emulator", … */
+  emulator: string;
+  /** The game imports libSceAmpr: without the emulator, the PS5's own library serves it. */
+  importsAmpr: boolean;
+  /** Why it can't be left out; null when it can. A reason this page doesn't know counts as one. */
+  refusal: PlainEmulatorRefusal | "other" | null;
+}
+
+const REFUSALS: readonly string[] = ["not_an_emulator", "pack_files", "index_lists_missing"];
+
+function parsePlainEmulator(v: unknown): PlainEmulator | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const r = v as Record<string, unknown>;
+  if (!Array.isArray(r.modules) || typeof r.emulator !== "string") return null;
+  const refusal =
+    r.refusal == null
+      ? null
+      : typeof r.refusal === "string" && REFUSALS.includes(r.refusal)
+        ? (r.refusal as PlainEmulatorRefusal)
+        : "other";
+  return {
+    modules: r.modules.filter((m): m is string => typeof m === "string"),
+    emulator: r.emulator,
+    importsAmpr: r.imports_ampr === true,
+    refusal,
+  };
 }
 
 const str = (v: unknown) => (typeof v === "string" && v ? v : null);
@@ -155,6 +195,7 @@ export function parseInspection(raw: unknown): Inspection | null {
     packed: str(r.packed),
     unpackedBytes: typeof r.unpacked_bytes === "number" && Number.isFinite(r.unpacked_bytes) && r.unpacked_bytes >= 0 ? r.unpacked_bytes : null,
     unpackKeepsEmulator: typeof r.unpack_keeps_emulator === "boolean" ? r.unpack_keeps_emulator : null,
+    plainEmulator: parsePlainEmulator(r.plain_ampr_emu),
     hasEboot: r.has_eboot === true,
     warnings: Array.isArray(r.warnings) ? r.warnings.filter((w): w is string => typeof w === "string") : [],
     zstdRuntime: str(r.zstd_runtime),
@@ -167,19 +208,45 @@ export function canUnpack(info: Inspection | null): boolean {
   return info != null && info.packed != null && info.unpackedBytes != null;
 }
 
-/** What a .pkg does with a packed game's asset packs and its AMPR emulator. */
+/** Whether a .pkg of this game can leave out its AMPR emulator without unpacking anything: it is
+ *  in no packs and carries an emulator the converter says can go. */
+export function canLeaveOutPlainEmulator(info: Inspection | null): boolean {
+  return info != null && info.packed == null && info.plainEmulator != null && info.plainEmulator.refusal == null;
+}
+
+/** What a .pkg does with a game's asset packs and its AMPR emulator. */
 export interface UnpackChoice {
   /** The package holds the plain files again (the page's default, as the desktop app's). */
   unpack: boolean;
-  /** With unpack: no libSceAmpr.sprx in the package. */
+  /** No libSceAmpr.sprx in the package: with unpack for a packed game, alone for a plain one. */
   leaveOutEmulator: boolean;
 }
 
-/** `choice` as it applies to `format` and this game: both off for anything but a .pkg of a packed
- *  game, and the emulator is left out only with the unpack. */
+/** `choice` as it applies to `format` and this game: both off for anything but a .pkg; for a
+ *  packed game the emulator is left out only with the unpack, for a plain one only when the
+ *  converter offers it (canLeaveOutPlainEmulator). */
 export function unpackFor(format: OutFormat, info: Inspection | null, choice: UnpackChoice): UnpackChoice {
+  if (format === "pkg" && !canUnpack(info) && canLeaveOutPlainEmulator(info)) {
+    return { unpack: false, leaveOutEmulator: choice.leaveOutEmulator };
+  }
   const unpack = format === "pkg" && canUnpack(info) && choice.unpack;
   return { unpack, leaveOutEmulator: unpack && choice.leaveOutEmulator };
+}
+
+/** Why a plain game's emulator stays, as the page says it; null when it can go or there is none. */
+export function plainEmulatorKeptText(info: Inspection | null): string | null {
+  const found = info != null && info.packed == null ? info.plainEmulator : null;
+  if (!found?.refusal) return null;
+  switch (found.refusal) {
+    case "not_an_emulator":
+      return t("cw_convert_plain_emu_kept_not_emulator");
+    case "pack_files":
+      return t("cw_convert_plain_emu_kept_pack_files");
+    case "index_lists_missing":
+      return t("cw_convert_plain_emu_kept_index_missing");
+    default:
+      return t("cw_convert_plain_emu_kept_other");
+  }
 }
 
 /** Whether the choice can't be built on the console: the plain files would need another emulator
@@ -236,6 +303,7 @@ export const CONVERT_CAUSES: Record<string, string> = {
   convert_no_zstd_runtime: "cw_convert_zstd_no_runtime",
   convert_not_packable: "cw_convert_err_not_packable",
   convert_unpack_needs_emulator: "cw_convert_unpack_needs_emulator_v2",
+  convert_cant_leave_out_emulator: "cw_convert_err_cant_leave_out_emulator",
   convert_not_packed: "cw_convert_err_not_packed",
   convert_dest_read_only: "cw_convert_err_dest_read_only",
   convert_too_big_for_drive: "cw_convert_err_too_big_for_drive",
@@ -322,8 +390,8 @@ export function stageText(message: string | null | undefined): string | null {
 
 /** What /api/convert/start is sent. The zstd level goes only with zstd, the image inside and its
  *  compression only with a .ffpfsc, the package's level only with a .pkg (never with zstd), and
- *  with a .pkg of a packed game `unpack_packs` (and with it `leave_out_ampr_emu`), each only when
- *  on: absent, the helper builds what it always did (cc_start_tail). */
+ *  with a .pkg `unpack_packs` and `leave_out_ampr_emu`, each only when on (unpackFor decides,
+ *  for this game): absent, the helper builds what it always did (cc_start_tail). */
 export interface StartBody {
   path: string;
   dest: string;
@@ -348,7 +416,8 @@ export function startBody(o: {
   inner?: InnerFormat;
   ffpfscLevel?: FfpfscLevel;
   pkgLevel?: PkgLevel;
-  /** With a .pkg of a packed game (unpackFor): the plain files, and without the emulator. */
+  /** With a .pkg, as unpackFor applies them to this game: a packed game's plain files, and
+   *  without the AMPR emulator (with the unpack, or alone for a plain game). */
   unpack?: boolean;
   leaveOutEmulator?: boolean;
 }): StartBody {
@@ -357,10 +426,8 @@ export function startBody(o: {
   if (zstd) body.zstd_level = o.level;
   if (o.format === "pkg") {
     body.pkg_level = o.pkgLevel ?? DEFAULT_PKG_LEVEL;
-    if (o.unpack) {
-      body.unpack_packs = true;
-      if (o.leaveOutEmulator) body.leave_out_ampr_emu = true;
-    }
+    if (o.unpack) body.unpack_packs = true;
+    if (o.leaveOutEmulator) body.leave_out_ampr_emu = true;
   }
   if (o.format === "ffpfsc") {
     body.inner = o.inner ?? "exfat";

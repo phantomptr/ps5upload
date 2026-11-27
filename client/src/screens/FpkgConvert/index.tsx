@@ -52,7 +52,15 @@ import { useConnectionsStore } from "../../state/connections";
 import { MakeCard } from "./MakeCard";
 import { mergeRole, Ps4MergePicker } from "./Ps4Merge";
 import { OptionsCard } from "./OptionsCard";
-import { folderLz4Options, folderPackOptions, folderPacks, packOptions, type UnpackChoice } from "./ImageOptions";
+import {
+  folderLz4Options,
+  folderPackOptions,
+  folderPacks,
+  packOptions,
+  plainEmulatorKeptText,
+  type PlainEmulatorChoice,
+  type UnpackChoice,
+} from "./ImageOptions";
 import {
   DeleteSourceOption,
   FreeArchiveOption,
@@ -256,10 +264,13 @@ export default function WorkshopScreen() {
     zstd?: ZstdPacks,
     /** Write this game's asset packs out as plain files (the game under ①, when ticked). */
     unpack?: boolean,
-    /** With `unpack`, a package's: leave its AMPR emulator out. */
+    /** A package's: leave its AMPR emulator out (with `unpack` for a packed game, alone for the
+     *  plain game under ① whose emulator can go, `plainAmprEmu`). */
     leaveOutAmprEmu?: boolean,
     /** The packs the game is in ("none": in none), when it is the game checked under ①. */
     packs?: ConvertItem["packs"],
+    /** The game under ① is in no packs and carries an AMPR emulator a package can leave out. */
+    plainAmprEmu?: boolean,
   ): boolean | QueueSkip => {
     // A later part of a multi-part archive is read through its first part.
     if (isRarLaterVolume(src)) return "later-part";
@@ -299,13 +310,16 @@ export default function WorkshopScreen() {
               ? { ...build, unpackPacks: true }
               : build.kind === "pkg" && unpack
                 ? { kind: "pkg", unpackPacks: true, ...(leaveOutAmprEmu ? { leaveOutAmprEmu: true } : {}) }
-                : build,
+                : build.kind === "pkg" && plainAmprEmu && leaveOutAmprEmu
+                  ? { kind: "pkg", leaveOutAmprEmu: true }
+                  : build,
       imageDest:
         build.kind === "image"
           ? { volume: u.destinationVolume, subpath: u.destinationSubpath || DEFAULT_IMAGE_SUBPATH }
           : undefined,
       language: lang || undefined,
       packs,
+      ...(plainAmprEmu && build.kind === "pkg" && packs === "none" ? { plainAmprEmu: true as const } : {}),
       then,
       host: then !== "keep" ? host : null,
       deleteAfterInstall: then !== "keep" && deleteAfter,
@@ -704,7 +718,9 @@ export default function WorkshopScreen() {
         update,
         ...(pkgUnpackOn && !update
           ? { unpackPacks: true, ...(pkgLeavesOutEmu ? { leaveOutAmprEmu: true } : {}) }
-          : {}),
+          : plainLeavesOutEmu && !update
+            ? { leaveOutAmprEmu: true }
+            : {}),
       },
       {
         install,
@@ -857,6 +873,19 @@ export default function WorkshopScreen() {
       : undefined;
   const pkgUnpackOn = !!pkgUnpackChoice?.on;
   const pkgLeavesOutEmu = pkgUnpackOn && leaveOutEmu;
+  // A package of a game in no packs that carries an AMPR emulator: leave it out when the check
+  // says it can go (off unless ticked), or say why it stays. Not with an update merged in (the
+  // merged game is another source).
+  const plainEmu =
+    build.kind === "pkg" && inspection && !inspection.packs && !inspection.ps4_game && !mergeReady
+      ? (inspection.plain_ampr_emu ?? null)
+      : null;
+  const plainEmuChoice: PlainEmulatorChoice | undefined =
+    plainEmu && !plainEmu.refusal
+      ? { on: leaveOutEmu, onToggle: setLeaveOutEmu, emulator: plainEmu.emulator, importsAmpr: plainEmu.imports_ampr }
+      : undefined;
+  const plainEmuKept = plainEmulatorKeptText(tr, plainEmu);
+  const plainLeavesOutEmu = !!plainEmuChoice && leaveOutEmu;
   // Whether what is about to be made holds the game in the packs it is in now, and so carries
   // its own ampr_emu.index as it is. Unpacking it or making new packs writes a fresh index, and
   // a warning about the old one would be about a file that never ships.
@@ -1291,6 +1320,8 @@ export default function WorkshopScreen() {
               lz4: locked ? undefined : lz4Choice,
             }}
             unpack={locked ? undefined : (unpackChoice ?? pkgUnpackChoice)}
+            plainEmulator={locked ? undefined : plainEmuChoice}
+            plainEmulatorKept={locked ? null : plainEmuKept}
             // An archive is not looked inside until the run unpacks it: its packs aren't known.
             gameChecked={!locked && inspection !== null && !noFiles && !isArchiveSource(src)}
             checking={!locked && checking}
@@ -1413,11 +1444,12 @@ export default function WorkshopScreen() {
                     : undefined,
                 build.kind === "folder" ? folderPackOptions(lz4Choice, packProfile) : undefined,
                 build.kind === "pkg" ? pkgUnpackOn : unpackOn,
-                build.kind === "pkg" && pkgLeavesOutEmu,
+                build.kind === "pkg" && (pkgLeavesOutEmu || plainLeavesOutEmu),
                 // Checked here: the queue shows this game's own pack choices while it waits.
                 inspection && !noFiles && !isArchiveSource(source.trim()) && !inspection.ps4_game
                   ? (inspection.packs ?? "none")
                   : undefined,
+                !!plainEmuChoice && !noFiles && !isArchiveSource(source.trim()),
               );
               if (r === "not-image" || r === "not-folder" || r === "later-part") setError(skippedText(r, 1));
               else if (!r) setError(tr("cq_already", undefined, "This game is already in the queue."));

@@ -95,10 +95,29 @@ export interface FpkgInspection {
   /** Present when the game's fakelib holds backport libraries: what "Remove backport
    *  libraries" would leave out of an image or folder, and why it can't when it can't. */
   backport?: BackportInfo | null;
+  /** A PS5 game in no asset packs that carries an AMPR emulator in its fakelib: what a package
+   *  can leave out (`leaveOutAmprEmu` alone), and why not when it can't. */
+  plain_ampr_emu?: PlainAmprEmu | null;
   /** Why this source could not be moved to the Trash after an image or folder is made of it,
    *  whatever is made (it is on a PS5 or a server, or the engine has no Trash); absent when
    *  it could. */
   delete_source_refusal?: string | null;
+}
+
+/** What a plain game carries of an AMPR emulator (the engine's `plain_emulator::PlainEmulator`). */
+export interface PlainAmprEmu {
+  /** Its libSceAmpr.sprx files, by path. */
+  modules: string[];
+  /** What it is: "ampr_emu 0.4.2.1", "an AMPR emulator", … */
+  emulator: string;
+  /** The game imports libSceAmpr: without the emulator, the PS5's own library serves it. */
+  imports_ampr: boolean;
+  /** Why it can't be left out; absent when it can. `not_an_emulator`: its libSceAmpr.sprx may
+   *  be a backport's system library. `pack_files`, `index_lists_missing`: something there is
+   *  read only through the emulator. */
+  refusal?: "not_an_emulator" | "pack_files" | "index_lists_missing" | null;
+  /** With a refusal, the facts behind it (a path, a file the index lists). */
+  detail?: string | null;
 }
 
 /** A game's backport, as the check found it (the engine's `remove_backport::BackportReport`). */
@@ -223,7 +242,8 @@ export interface FpkgBuildRequest {
   /** With `unpackPacks`: the AMPR emulator choice (a queued game's own; the settings when
    *  absent), as an image or folder build takes it. */
   amprEmu?: { add: boolean; build: AmprEmuBuild };
-  /** With `unpackPacks`: the AMPR emulator is left out of the package. */
+  /** The AMPR emulator is left out of the package: with `unpackPacks` for a packed game, alone
+   *  for a game in no packs whose inspection offers it (`plain_ampr_emu`). */
   leaveOutAmprEmu?: boolean;
 }
 
@@ -284,7 +304,10 @@ export const fpkg = {
             amprEmuBuild: req.amprEmu?.build ?? useConvertPrefs.getState().amprEmuBuild,
             ...(req.leaveOutAmprEmu ? { leaveOutAmprEmu: true } : {}),
           }
-        : {}),
+        : req.leaveOutAmprEmu
+          ? // A plain game's emulator left out: nothing to unpack, no emulator choice.
+            { leaveOutAmprEmu: true }
+          : {}),
     }),
   /** Unpack a .zip / .7z / .rar into an unpack folder in `outputDir`, as a job; the job's
    *  `dest` is the game found inside. A RAR's password goes with it, never stored. With

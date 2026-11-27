@@ -143,7 +143,11 @@ async function build(item: ConvertItem) {
               : {}),
             ...(pkg?.leaveOutAmprEmu ? { leaveOutAmprEmu: true } : {}),
           }
-        : {}),
+        : // A game in no packs whose AMPR emulator was left out when it was added (the engine
+          // refuses it, with the reason, where it can't go).
+          pkg?.leaveOutAmprEmu
+          ? { leaveOutAmprEmu: true }
+          : {}),
     },
     {
       install: swap,

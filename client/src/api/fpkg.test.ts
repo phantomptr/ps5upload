@@ -77,9 +77,18 @@ describe("fpkg.build", () => {
   });
 
   it("leaves a plain package's call as it was", async () => {
-    await fpkg.build({ source: "/games/G", leaveOutAmprEmu: true });
+    await fpkg.build({ source: "/games/G" });
     const args = vi.mocked(invoke).mock.lastCall?.[1] as Record<string, unknown>;
     for (const key of ["unpackPacks", "leaveOutAmprEmu", "addAmprEmu", "amprEmuBuild"]) {
+      expect(args).not.toHaveProperty(key);
+    }
+  });
+
+  it("sends a plain game's emulator left out alone, with no unpack or emulator choice", async () => {
+    await fpkg.build({ source: "/games/G", leaveOutAmprEmu: true });
+    const args = vi.mocked(invoke).mock.lastCall?.[1] as Record<string, unknown>;
+    expect(args).toMatchObject({ source: "/games/G", leaveOutAmprEmu: true });
+    for (const key of ["unpackPacks", "addAmprEmu", "amprEmuBuild"]) {
       expect(args).not.toHaveProperty(key);
     }
   });
