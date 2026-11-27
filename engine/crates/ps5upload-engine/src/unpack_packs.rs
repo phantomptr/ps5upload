@@ -487,7 +487,7 @@ pub(crate) mod tests {
         let root = &scratch.0;
         let src = game(root, true);
         // A loose file the index will list and the game will then lose.
-        std::fs::write(src.join("sce_sys/extra.dat"), b"gone later").unwrap();
+        std::fs::write(src.join("dlc_emu.ini"), b"gone later").unwrap();
         let packed = root.join("packed");
         zstd_packed(&src, &packed);
         // What a run left is not in the index either way; it would only add "unlisted".
@@ -497,11 +497,14 @@ pub(crate) mod tests {
         let before = fresh.checks.iter().find(|c| c.name == CHECK).unwrap();
         assert!(before.ok, "{}", before.detail);
 
-        // The source goes stale: eboot.bin grows, the loose file goes.
+        // The source goes stale: a loose data file grows, another goes. eboot.bin grows too,
+        // as signing it does in any converted game: the system loads it, not ampr_emu, so its
+        // record is no part of the finding.
+        std::fs::write(packed.join("data/empty.bin"), b"grown").unwrap();
         let mut eboot = std::fs::read(packed.join("eboot.bin")).unwrap();
         eboot.extend_from_slice(&[0u8; 4096]);
         std::fs::write(packed.join("eboot.bin"), &eboot).unwrap();
-        std::fs::remove_file(packed.join("sce_sys/extra.dat")).unwrap();
+        std::fs::remove_file(packed.join("dlc_emu.ini")).unwrap();
         let stale = std::fs::read(packed.join(ampr_index::NAME)).unwrap();
 
         let inspection = ps5upload_fpkg::build::inspect(&packed, root).unwrap();
@@ -509,9 +512,9 @@ pub(crate) mod tests {
         let check = inspection.checks.iter().find(|c| c.name == CHECK).unwrap();
         assert!(!check.ok);
         assert!(
-            check.detail.contains(
-                "is stale (1 listed missing, 0 unlisted, 1 sizes differ; eboot.bin is listed at"
-            ),
+            check
+                .detail
+                .contains("is stale (1 listed missing, 0 unlisted, 1 sizes differ;"),
             "{}",
             check.detail
         );
