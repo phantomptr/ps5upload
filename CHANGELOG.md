@@ -28,6 +28,20 @@ What's new in ps5upload, written for humans.
 **Help**
 - The FAQ covers installing from a laptop over a direct Ethernet cable.
 
+**Fixes from a full review**
+- **Uninstall with "delete the files" re-checks the whole folder right before deleting**, and refuses a folder that holds another game, another game's disk image, or a game whose name differs only in letter case.
+- **Restore:** only one restore can start or finish on a console at a time; a game that can't be checked no longer fails the whole list; when the PS5's uninstall isn't available it says so.
+- **Play Together:** a friend pressing PS no longer resets the guard that keeps a plain ✕ from picking your user; saved switches can't be lost or corrupted when two change at once, and one bad entry no longer resets the rest; a friend mashing buttons can't flood the log.
+- **Folder sizes:** a size measured while something was being written isn't kept; installs, uninstall, clean-up and restore now forget the sizes they change; the same console over Wi-Fi and Tailscale shares its sizes; folders above PS5Upload's own data can be measured.
+- **Something wrong?:** a game on PS5Upload's own disk-image mount no longer asks for ShadowMount+, and the check never waits more than 30 seconds on a console that doesn't answer.
+- **Convert on the PS5** checks a package's size against that console's own firmware.
+- **Archives:** a crafted RAR archive can no longer make the PS5's unpacker hang or grow in memory, Stop works while it checks a password, and passwords and keys are wiped after use. The console page's "Choose items" asks for an archive's password first.
+- **Network shares on the console page:** one failed read no longer loses a game's title for good, lost covers come back, and very long image files read fast.
+- **Cheats:** a cheat line of exactly 255 characters applies.
+- **Workshop:** content ids are written only into fake-signed programs; a typed-in source starts without the last game's options.
+- **TV mode:** a "TV home" button on Play and its setup, and Esc in a text field leaves the field, not the screen.
+- Smaller fixes: Sound on works in one press at volume 0; the guest page's hint goes away; a refused account ID write no longer shows "Saved"; network-share save backups keep other consoles' users; a folder called "constructor" shows no bogus size.
+
 ## 12.6.43
 
 **Install from archives**

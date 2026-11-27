@@ -762,7 +762,7 @@
             ]
           },
           "delete_source": {
-            "description": "Also delete what the title plays from: the `path` `GET /api/ps5/app/uninstall-source`\nnamed (a folder, or a disk image whose mount is taken down first). Refused with 409\nbefore anything is touched when that is no longer what the title plays from. The\nuninstall is then registration-only, and the path is deleted only once it succeeded:\n`source_deleted`, and `source_error` when it was kept.",
+            "description": "Also delete what the title plays from: the `path` `GET /api/ps5/app/uninstall-source`\nnamed (a folder, or a disk image whose mount is taken down first). Refused with 409\nbefore anything is touched when that is no longer what the title plays from\n(`source_changed`), or when a walk of the whole folder, made again here, finds another\ngame in it, a folder it can't read or no end (`source_not_deletable: <reason>`). The\nuninstall is then registration-only, and the path is deleted only once it succeeded:\n`source_deleted`, and `source_error` when it was kept.",
             "type": [
               "string",
               "null"
