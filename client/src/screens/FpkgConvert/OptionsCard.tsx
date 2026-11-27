@@ -111,13 +111,12 @@ export function OptionsCard(props: OptionsCardProps) {
         {/* A package's asset-pack choices first: what they decide (how large the package is, and
             whether it needs the AMPR emulator) matters more than anything below, and under the
             output folder and four compression tiles they were a long way down on a phone. */}
-        {pkg && <PackagePacks unpack={props.unpack} state={packsState(props)} />}
         {pkg && (
           <PackagePacks
             unpack={props.unpack}
             plainEmulator={props.plainEmulator}
             plainKept={props.plainEmulatorKept}
-            state={props.gameChecked ? "none" : "pending"}
+            state={packsState(props)}
           />
         )}
         <div className="flex flex-col gap-1">

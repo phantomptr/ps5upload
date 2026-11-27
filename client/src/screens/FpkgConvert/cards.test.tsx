@@ -415,7 +415,12 @@ describe("OptionsCard for a package of a game in asset packs (#933)", () => {
     expect(checking).not.toContain("Check a game under ① first");
     const emu = renderToStaticMarkup(<OptionsCard {...props} make="pkg" gameChecked keepsEmulator />);
     expect(emu).toMatch(/data-testid="pkg-packs-note" data-state="none-emulator"/);
-    expect(emu).toContain("can be left out only of a game in asset packs");
+    expect(emu).toContain("goes into the package as it is");
+    // When the check says why it stays, that reason is shown instead.
+    const kept = renderToStaticMarkup(
+      <OptionsCard {...props} make="pkg" gameChecked keepsEmulator plainEmulatorKept="It stays: reason" />,
+    );
+    expect(kept).toContain("It stays: reason");
     // A game in packs gets the options whatever else is said.
     const packed = renderToStaticMarkup(
       <OptionsCard {...props} make="pkg" gameChecked keepsEmulator checking unpack={pkgUnpack(true)} />,

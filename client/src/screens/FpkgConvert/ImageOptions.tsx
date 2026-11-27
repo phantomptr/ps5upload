@@ -546,9 +546,8 @@ export function plainEmulatorKeptText(
  *  someone looking for "AMPR" or "asset packs" finds them or finds why they aren't there:
  *  - a game in packs (`unpack`): "Unpack the asset packs", and under it "Leave out the AMPR
  *    emulator";
- *  - a game that was checked and is in no packs (`state` "none"): one line saying so;
- *  - a game in no packs that carries its AMPR emulator ("none-emulator"): that the package keeps
- *    it, and why;
+ *  - a game in no packs that carries its AMPR emulator ("none-emulator"): "Leave out the AMPR
+ *    emulator" when the check says it can go, else why it stays;
  *  - a game being checked ("checking"): that the options come when the check is done;
  *  - a game that was checked and is in no packs (`state` "none"): one line saying so, and when
  *    it carries an AMPR emulator, "Leave out the AMPR emulator" (`plainEmulator`) or why it
@@ -569,7 +568,6 @@ export function PackagePacks({
   state: PackagePacksState;
   plainEmulator?: PlainEmulatorChoice;
   plainKept?: string | null;
-  state: "pending" | "none" | "unchecked";
   compact?: boolean;
 }) {
   const tr = useTr();
@@ -591,7 +589,7 @@ export function PackagePacks({
       </div>
     );
   }
-  if (state === "none" && plainKept) {
+  if ((state === "none" || state === "none-emulator") && plainKept) {
     return (
       <div className="text-xs text-[var(--color-muted)]" data-testid="pkg-packs-note" data-state="emulator-kept">
         <span className="font-medium">{title}</span>
@@ -604,9 +602,9 @@ export function PackagePacks({
       ? tr("fpkg.pkg_packs.none", undefined, "This game has no asset packs, so there is nothing to unpack.")
       : state === "none-emulator"
       ? tr(
-          "fpkg.pkg_packs.none_emulator",
+          "fpkg.pkg_packs.none_emulator_v2",
           undefined,
-          "This game has no asset packs, so there is nothing to unpack. Its AMPR emulator (fakelib/libSceAmpr.sprx) goes into the package as it is: the emulator can be left out only of a game in asset packs, as the package unpacks them.",
+          "This game has no asset packs, so there is nothing to unpack. Its AMPR emulator (fakelib/libSceAmpr.sprx) goes into the package as it is.",
         )
       : state === "checking"
       ? tr(
