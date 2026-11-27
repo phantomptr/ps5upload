@@ -482,8 +482,46 @@ fn store() -> MutexGuard<'static, Store> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
+/// The console's key for its sizes: its identity (the AVA1 key this engine pinned for it) when
+/// known, so the same PS5 reached at home and over the tailnet shares one set of sizes and a
+/// write through either address drops them; else its address.
 fn key_of(addr: &str) -> String {
-    crate::helper_stop::console_key(addr)
+    match identity_of(addr) {
+        Some(id) => format!("ava1:{id}"),
+        None => crate::helper_stop::console_key(addr),
+    }
+}
+
+/// The pinned AVA1 key of the console at `addr`, in hex. A pin never changes for an address
+/// (a changed key is refused, never re-pinned), so one found is kept; none is looked up again.
+#[cfg(not(test))]
+fn identity_of(addr: &str) -> Option<String> {
+    static FOUND: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    let host = crate::helper_stop::console_key(addr);
+    let found = FOUND.get_or_init(Mutex::default);
+    if let Some(id) = found.lock().ok()?.get(&host) {
+        return Some(id.clone());
+    }
+    let key = ps5upload_ava1::pool().pinned_key(&host)?;
+    let id: String = key.iter().map(|b| format!("{b:02x}")).collect();
+    if let Ok(mut g) = found.lock() {
+        if g.len() >= 256 {
+            g.clear();
+        }
+        g.insert(host, id.clone());
+    }
+    Some(id)
+}
+
+/// Tests name consoles' identities themselves ([`tests::same_console`]), never through the
+/// user's own pins.
+#[cfg(test)]
+fn identity_of(addr: &str) -> Option<String> {
+    tests::IDENTITIES.with(|m| {
+        m.borrow()
+            .get(&crate::helper_stop::console_key(addr))
+            .cloned()
+    })
 }
 
 /// PS5Upload is about to write, delete or move `paths` on the console at `addr` (or just did): the
@@ -1435,6 +1473,49 @@ mod tests {
         // Another spelling of the same folder is the same folder.
         s.changed("k", &["/data//games/./X".to_string()]);
         assert!(!s.sizes_in("k", "/data").1.contains_key("games"));
+    }
+
+    thread_local! {
+        pub(super) static IDENTITIES: std::cell::RefCell<HashMap<String, String>> =
+            std::cell::RefCell::new(HashMap::new());
+    }
+
+    /// `addrs` are one console (as its pinned AVA1 key says), for this test thread.
+    fn same_console(id: &str, addrs: &[&str]) {
+        IDENTITIES.with(|m| {
+            for a in addrs {
+                m.borrow_mut().insert(a.to_string(), id.to_string());
+            }
+        });
+    }
+
+    /// The same PS5 at its home address and its tailnet one shares one set of sizes: a size
+    /// measured through one is shown through the other, and a write through either drops it.
+    #[test]
+    fn one_console_at_two_addresses_shares_its_sizes() {
+        same_console("ab12", &["192.168.7.20", "100.64.7.20"]);
+        assert_eq!(key_of("192.168.7.20"), key_of("100.64.7.20:1234"));
+        assert_ne!(key_of("192.168.7.20"), key_of("192.168.7.21"));
+        let at = now_ms();
+        let w = disk_usage::Walked {
+            tree: disk_usage::DuDir {
+                name: "shared-test".into(),
+                bytes: 9,
+                files: 1,
+                ..Default::default()
+            },
+            partial: None,
+        };
+        record_walk("192.168.7.20", "/data/shared-test", &w, at);
+        let (own, _) = store().sizes_in(&key_of("100.64.7.20"), "/data/shared-test");
+        assert_eq!(own.map(|e| e.bytes), Some(9));
+        changed("100.64.7.20", &["/data/shared-test/x"]);
+        assert!(store()
+            .sizes_in(&key_of("192.168.7.20"), "/data/shared-test")
+            .0
+            .is_none());
+        // A console never met keeps its address as its key.
+        assert_eq!(key_of("192.168.7.99"), "192.168.7.99");
     }
 
     /// Snapshots are written after the lock is let go, possibly out of order: an older one that
