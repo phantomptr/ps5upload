@@ -86,7 +86,18 @@ static const char *find_value(const char *j, const char *key) {
 /* 1 when `key` is in the object at all (any value, null included). */
 int fsj_json_present(const char *json, const char *key) { return json && find_value(json, key) != NULL; }
 
+static int json_str_in(const char *json, const char *key, char *out, size_t cap);
+
+/* Never a half-copied value: a refusal (too long, a bad escape) used to leave `out` holding the
+ * bytes copied so far with no NUL, and callers that read it anyway (archive_extract.c's listing
+ * names, a status's state) ran off its end. */
 int fsj_json_str(const char *json, const char *key, char *out, size_t cap) {
+    int ok = json_str_in(json, key, out, cap);
+    if (!ok && cap) out[0] = '\0';
+    return ok;
+}
+
+static int json_str_in(const char *json, const char *key, char *out, size_t cap) {
     const char *p = json ? find_value(json, key) : NULL;
     size_t n = 0;
     if (cap) out[0] = '\0';

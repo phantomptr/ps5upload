@@ -67,7 +67,8 @@ int fsj_path_is_root(const char *path);
 void fsj_register_ops(void);
 
 /* The request-body helpers the operations use (the legacy JSON bodies, read as C text):
- * the string at top-level key `key`, unescaped (1 found, 0 absent or too long), and the
+ * the string at top-level key `key`, unescaped (1 found, 0 absent, too long or malformed: `out`
+ * is then "", never a part of the value), and the
  * unsigned integer or boolean at `key` (1 found; `true` is 1). */
 int fsj_json_str(const char *json, const char *key, char *out, size_t cap);
 int fsj_json_present(const char *json, const char *key);

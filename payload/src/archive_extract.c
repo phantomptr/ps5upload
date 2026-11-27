@@ -471,9 +471,9 @@ int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         status = AVA1_ERR_IO;
         goto unlock;
     }
-    /* fsj_json_str refuses a value that does not fit (or is malformed) and leaves `top` holding
-     * what it copied so far, unterminated: never pass that on (an over-read, and renames cut
-     * short, so an entry the user chose to leave out would be written over what is there). */
+    /* fsj_json_str refuses a value that does not fit (or is malformed) and leaves `top` empty:
+     * the request is refused rather than run without its renames (an entry the user chose to leave
+     * out would be written over what is there). */
     top[0] = 0;
     if (!list && fsj_json_present(json, "top") && !fsj_json_str(json, "top", top, EXTRACT_TOP_MAX)) {
         top[0] = 0;

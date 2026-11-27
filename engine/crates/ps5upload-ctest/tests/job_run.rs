@@ -355,6 +355,23 @@ async fn a_failure_midway_is_state_2_with_the_cause_and_the_rest_deleted() {
     drop(r.srv);
 }
 
+/// fs_jobs.c's request reader never leaves part of a value it refused: a value too long for
+/// the buffer, or one with a bad escape, comes back as "" (archive_extract.c read the listing's
+/// names after a refusal and ran off the end of an unterminated copy).
+#[test]
+fn a_refused_request_string_is_left_empty() {
+    let (rc, out) = c_fsj_json_str(r#"{"top":"abcdefgh"}"#, "top", 4);
+    assert_eq!((rc, out[0]), (0, 0), "too long: {out:?}");
+    let (rc, out) = c_fsj_json_str(r#"{"top":"abc\u00zz"}"#, "top", 16);
+    assert_eq!((rc, out[0]), (0, 0), "bad escape: {out:?}");
+    let (rc, out) = c_fsj_json_str(r#"{"top":"ab\u0000c"}"#, "top", 16);
+    assert_eq!((rc, out[0]), (0, 0), "a NUL: {out:?}");
+    let (rc, out) = c_fsj_json_str(r#"{"top":"abc"#, "top", 16);
+    assert_eq!((rc, out[0]), (0, 0), "unterminated: {out:?}");
+    let (rc, out) = c_fsj_json_str(r#"{"top":"abc"}"#, "top", 4);
+    assert_eq!((rc, &out[..4]), (1, &b"abc\0"[..]), "exactly fits");
+}
+
 extern "C" {
     #[link_name = "geteuid"]
     fn libc_geteuid() -> u32;
