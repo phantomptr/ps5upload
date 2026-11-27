@@ -69,6 +69,7 @@ pub mod sys_time;
 pub mod system_control;
 pub mod tailnet;
 pub mod tar_archive;
+pub mod title_restore;
 pub mod transfer;
 pub mod units;
 pub mod users;

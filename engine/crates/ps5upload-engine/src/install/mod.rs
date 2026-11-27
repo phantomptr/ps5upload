@@ -140,6 +140,18 @@ impl JobStore {
         self.finish(job);
     }
 
+    /// Give back a slot reserved with `begin` for an install that never started (a home-screen
+    /// restore the helper refused after the slot was taken, #961): the job ends failed with `hint`.
+    pub fn release_unstarted(&self, job: &str, hint: &str) {
+        self.update(job, |st| {
+            st.phase = Phase::Failed;
+            st.verdict = Some(Verdict::Failed);
+            st.reason = Some(FailReason::BadRequest);
+            st.hint = Some(hint.to_string());
+        });
+        self.finish(job);
+    }
+
     /// Whether `ps5_addr` has an install running.
     pub fn active_for(&self, ps5_addr: &str) -> bool {
         lock(&self.active).contains_key(&slot_key(ps5_addr))
@@ -1363,6 +1375,14 @@ pub async fn install_handler(
         run_install(st, job2, req).await;
     });
     Json(serde_json::json!({"ok":true,"job":job})).into_response()
+}
+
+/// Run an install in the slot `job` reserved with [`JobStore::begin`]; resolves when the job has
+/// ended, with the slot released. A home-screen restore (#961) reserves the slot before it moves
+/// the package aside, so no other install can start on that console in between.
+pub(crate) async fn run_reserved(state: PkgInstallStateHandle, job: String, req: InstallRequest) {
+    let _slot = SlotRelease::new(state.clone(), job.clone());
+    run_install(state, job, req).await;
 }
 
 #[derive(Debug, Deserialize)]

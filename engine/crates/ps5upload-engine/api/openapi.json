@@ -12628,6 +12628,183 @@
         ],
         "type": "object"
       },
+      "RestoreFinish": {
+        "properties": {
+          "addr": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "host",
+              "ps5_addr"
+            ]
+          },
+          "install_ended": {
+            "description": "The install has ended (the user saw the game on the home screen): the copy aside may go.",
+            "type": "boolean"
+          },
+          "rollback": {
+            "description": "Put the package and its update back where they were (when the game is not on the home\nscreen). Only once nothing installs on the console.",
+            "type": "boolean"
+          },
+          "title_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "addr",
+          "title_id"
+        ],
+        "type": "object"
+      },
+      "RestoreReply": {
+        "description": "What the helper answered. Fields a state does not use are absent.",
+        "properties": {
+          "aside": {
+            "description": "The folder the package is moved into while it is installed again.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "backup": {
+            "description": "The folder with the copies of app.db and appinfo.db taken before the move.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "err": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "free_internal": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "free_volume": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "install_path": {
+            "description": "prepare: the copy aside to install.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "installed": {
+            "description": "finish: where the console installed the game.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "installed_where": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kept": {
+            "description": "finish: the copy aside, kept.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "fake | ps4 | unknown (a retail PS5 package is refused).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "patch": {
+            "description": "The title's update, when one sits on the same drive.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "patch_aside": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "patch_kept": {
+            "description": "finish: the update kept aside because its place was taken.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "patch_size": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "pkg": {
+            "description": "The installed package's place: `<drive>/user/app/<id>/app.pkg`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "check: restorable | registered | record_elsewhere | not_installed | pending |\nfolder_registration | ambiguous | retail | no_room | aside_cross_device | db_unreadable |\ninvalid_title | system_title. prepare: prepared. finish: restored | rolled_back |\nnothing_pending | waiting | unsettled.",
+            "type": "string"
+          },
+          "title_id": {
+            "type": "string"
+          },
+          "volume": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "where": {
+            "description": "internal | m2 | usb | extended: the drive the package is (or was) on.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "title_id",
+          "state"
+        ],
+        "type": "object"
+      },
       "RestoreReq": {
         "properties": {
           "addr": {
@@ -12646,6 +12823,115 @@
         },
         "required": [
           "path"
+        ],
+        "type": "object"
+      },
+      "RestoreRun": {
+        "description": "One title's restore as this engine ran it.",
+        "properties": {
+          "addr": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "install_hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "install_verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Verdict"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "job": {
+            "description": "The install job (`/api/pkg/install/status?job=`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phase": {
+            "description": "queued | installing | finishing | restored | rolled_back | pending | failed",
+            "type": "string"
+          },
+          "prepared": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RestoreReply"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RestoreReply"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The helper's last finish answer."
+          },
+          "title_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "title_id",
+          "addr",
+          "phase",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "RestoreStart": {
+        "properties": {
+          "addr": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "host",
+              "ps5_addr"
+            ]
+          },
+          "title_id": {
+            "description": "One title.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title_ids": {
+            "description": "Several, restored one after the other (\"Restore all\").",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "addr"
         ],
         "type": "object"
       },
@@ -31714,6 +32000,438 @@
               "host"
             ],
             "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "struct"
+        }
+      }
+    },
+    "/api/ps5/app/restore": {
+      "post": {
+        "description": "`POST /api/ps5/app/restore {addr, title_id | title_ids}`: put games installed from a package\nback on the home screen by installing the package already on the console again (no\ndownload). The first title is checked and prepared before this answers: a refusal is 409 with\nthe helper's `restore` answer and nothing changed; another install on the console is 409\n`busy`. Then `{ok, job, prepared, queued}`: `job` is the first title's install\n(`/api/pkg/install/status`); the others follow one after the other. Each title's progress:\n`GET /api/ps5/app/restore/status`.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "job": {},
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "prepared": {},
+                    "queued": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "restore": {}
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "job": {},
+                        "ok": {
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Put games installed from a package back on the home screen by installing the package already on the console again (no download)",
+        "tags": [
+          "games"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host",
+              "ps5_addr"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/ps5/app/restore/candidates": {
+      "get": {
+        "description": "`GET /api/ps5/app/restore/candidates?addr=`: every title with an app folder on the internal\ndrive, USB extended storage or M.2 that app.db does not list, with the helper's check of each\n(`check.state` `restorable` can be put back; `pending` has a restore to finish). Read-only.\napp.db must answer in full: a partial list could make a listed game look missing.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "x-aliases": [
+              "console",
+              "host",
+              "ps5_addr"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "titles": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "games"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host",
+              "ps5_addr"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/ps5/app/restore/check": {
+      "get": {
+        "description": "`GET /api/ps5/app/restore/check?addr=&title_id=`: whether a game installed from a package can\nbe put back on the home screen, read-only. The helper's answer: `state` is `restorable`, or\nwhy not (`registered`: it is on the home screen; `record_elsewhere`: the console still has a\nrecord of it; `not_installed`, `pending` (an earlier restore did not finish),\n`folder_registration`, `ambiguous`, `retail`, `no_room`, `aside_cross_device`, `db_unreadable`,\n`invalid_title`, `system_title`), with `pkg`, `size`, `where`, `kind`, `patch` and the free\nspace. A helper without the method answers 409 `restore_unsupported`.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "x-aliases": [
+              "console",
+              "host",
+              "ps5_addr"
+            ]
+          },
+          {
+            "in": "query",
+            "name": "title_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreReply"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Whether a game installed from a package can be put back on the home screen, read-only",
+        "tags": [
+          "games"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host",
+              "ps5_addr"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "struct"
+        }
+      }
+    },
+    "/api/ps5/app/restore/finish": {
+      "post": {
+        "description": "`POST /api/ps5/app/restore/finish {addr, title_id, rollback, install_ended}`: finish a restore\nleft `pending` (an engine restart, a slow database). With `install_ended` the copy aside is\ndeleted once app.db lists the game and a package is in place; with `rollback` the package and\nupdate go back where they were, only while app.db does not list the game and the place is\nfree; with neither, nothing changes and the answer says where it stands. Refused (409 `busy`)\nwhile an install or a restore runs on that console. The helper's `finish` answer.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreFinish"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreReply"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Finish a restore left `pending` (an engine restart, a slow database)",
+        "tags": [
+          "games"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host",
+              "ps5_addr"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "struct"
+        }
+      }
+    },
+    "/api/ps5/app/restore/status": {
+      "get": {
+        "description": "`GET /api/ps5/app/restore/status?addr=&title_id=`: how this engine's restore of a title stands.\n`phase`: `queued`, `installing` (with `job`, the install's id for `/api/pkg/install/status`;\n`install` is that status), `finishing`, `restored`, `rolled_back` (the install did not take, the\npackage is back where it was), `pending` (the console may still be working on it, or the\ndatabase did not list the game in time: nothing was deleted; finish it later), `failed`\n(refused before anything moved: `error`, and the helper's `result`). 404 when this engine ran\nnone (after a restart: the check's `pending` state says an unfinished one is on the console).",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "x-aliases": [
+              "console",
+              "host",
+              "ps5_addr"
+            ]
+          },
+          {
+            "in": "query",
+            "name": "title_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreRun"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "How this engine's restore of a title stands",
+        "tags": [
+          "games"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host",
+              "ps5_addr"
+            ],
+            "in": "query",
             "name": "addr",
             "required": true
           },
