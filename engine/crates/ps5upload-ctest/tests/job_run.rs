@@ -1224,6 +1224,15 @@ async fn tree_size_of_a_folder_above_the_store_is_not_refused_by_the_data_plane(
     run(&r.me, id(255), gen::JOB_OP_TREE_SIZE, &s).await;
     let st = finished(&r.me, id(255)).await;
     assert_eq!((st.state, st.code), (Some(2), Some(gen::ERR_PATH)));
+    // A link to a folder the policy refuses is judged where it leads, not by its own name.
+    let denied = r.d.join("ps5-denied/x");
+    write_tree(&denied, 3, |_| 4);
+    let link = r.d.join("allowed-link");
+    std::os::unix::fs::symlink(&denied, &link).unwrap();
+    let l = serde_json::json!({ "path": link.to_str().unwrap() }).to_string();
+    run(&r.me, id(0xf1), gen::JOB_OP_TREE_SIZE, &l).await;
+    let st = finished(&r.me, id(0xf1)).await;
+    assert_eq!((st.state, st.code), (Some(2), Some(gen::ERR_PATH)));
     c_set_read_allowed(true);
     c_set_protected(None);
     drop(r.srv);

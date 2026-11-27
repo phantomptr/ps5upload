@@ -43,7 +43,9 @@ typedef struct {
 } fsj_usage_t;
 /* Sums `path`'s tree into *u (zeroed first), never following a link nor leaving the root's device,
  * and skipping (counting in `skipped`) what it must not or cannot read. 0, -1 when the root itself
- * cannot be read, -2 cancelled. `h->file` is called per non-directory with its size. */
+ * cannot be read, -2 cancelled, -3 the root (canonical) is a protected folder or a system tree.
+ * Entries that are the trust store or the SMB store, by any of their names, are skipped.
+ * `h->file` is called per non-directory with its size. */
 int fsj_tree_usage(const char *path, fsj_usage_t *u, const fsj_hooks_t *h);
 
 /* JOB_OP_TREE_SIZE's read rule, set by the helper (ava1_glue.c: fs.read's rule, which refuses the

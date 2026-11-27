@@ -440,7 +440,8 @@ typedef struct {
     fsj_usage_t *u;
     const fsj_hooks_t *h;
     dev_t dev;
-    const char *lex, *canon; /* the trust store's forms (path_protected_forms) */
+    const char *forms; /* every name of the trust store and the SMB store (path_protected_all_forms) */
+    int nforms;
     uint32_t seen;
 } usage_walk_t;
 
@@ -494,7 +495,7 @@ static int usage_in(usage_walk_t *w, char *buf, size_t len, int depth) {
         }
         buf[at] = '/';
         memcpy(buf + at + 1, e->d_name, nl + 1);
-        if (usage_pseudo(buf) || path_under_forms(buf, w->lex, w->canon)) w->u->skipped++;
+        if (usage_pseudo(buf) || path_under_any_form(buf, w->forms, w->nforms)) w->u->skipped++;
         else if (usage_in(w, buf, at + 1 + nl, depth + 1) == -2) rc = -2;
         buf[len] = '\0';
         if (rc == -2) break;
@@ -506,30 +507,33 @@ static int usage_in(usage_walk_t *w, char *buf, size_t len, int depth) {
 int fsj_tree_usage(const char *path, fsj_usage_t *u, const fsj_hooks_t *h) {
     struct stat st;
     usage_walk_t w;
-    char *buf, *lex, *canon;
+    char *buf, *forms;
     size_t len;
-    int rc = -1;
+    int rc = -1, nforms;
     memset(u, 0, sizeof *u);
     buf = malloc(PATH_MAX > USAGE_PATH ? PATH_MAX : USAGE_PATH);
-    lex = malloc(PATH_MAX);
-    canon = malloc(PATH_MAX);
-    if (!buf || !lex || !canon) goto out;
-    /* Walked from its canonical form: the trust store is recognised by its canonical forms too. */
+    forms = malloc((size_t)PATH_PROTECTED_FORMS * PATH_MAX);
+    if (!buf || !forms) goto out;
+    /* Walked from its canonical form: the protected folders are recognised by their canonical
+     * forms too, and a link to one of them is the folder itself. */
     if (!realpath(path, buf)) snprintf(buf, USAGE_PATH, "%s", path);
     len = strlen(buf);
     if (len == 0 || len >= USAGE_PATH || lstat(buf, &st) != 0) goto out;
-    path_protected_forms(lex, canon);
+    nforms = path_protected_all_forms(forms);
+    if (usage_pseudo(buf) || path_under_any_form(buf, forms, nforms)) {
+        rc = -3;
+        goto out;
+    }
     memset(&w, 0, sizeof w);
     w.u = u;
     w.h = h;
     w.dev = dev_of(&st, buf);
-    w.lex = lex;
-    w.canon = canon;
+    w.forms = forms;
+    w.nforms = nforms;
     rc = usage_in(&w, buf, len, 0);
 out:
     free(buf);
-    free(lex);
-    free(canon);
+    free(forms);
     return rc;
 }
 
@@ -860,6 +864,13 @@ static int op_chmod_r(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t n
     return AVA1_STATUS_OK;
 }
 
+/* A folder size's read rule on one form of the path: fsj_size_may_read (else the data plane's
+ * may_read), never the protected folders, never a system tree. */
+static int size_allowed(int (*may)(const char *), const ava1_data_cfg_t *cfg, const char *p) {
+    if (may ? !may(p) : !cfg->may_read || !cfg->may_read(p, 0)) return 0;
+    return !path_in_protected(p) && !usage_pseudo(p);
+}
+
 /* TREE_SIZE {"path"}: what a folder holds (#974), for the apps' Files size column. Names and metadata
  * only, never a file's contents; result {"bytes","alloc","files","dirs","skipped"} (fsj_usage_t). A
  * path the read policy refuses, or the trust store or anything below it, is refused; walking from
@@ -885,12 +896,29 @@ static int op_tree_size(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t
         return AVA1_ERR_PROTOCOL;
     }
     may = __atomic_load_n(&fsj_size_may_read, __ATOMIC_ACQUIRE);
-    if (fsj_normalize_path(path) != 0 || (may ? !may(path) : !cfg->may_read || !cfg->may_read(path, 0)) ||
-        path_in_protected(path) || usage_pseudo(path)) {
+    if (fsj_normalize_path(path) != 0 || !size_allowed(may, cfg, path)) {
         ava1_op_message(c, "fs_size_path_not_allowed");
         return AVA1_ERR_PATH;
     }
+    /* The walk starts from the path's canonical form: judged again there, so a link to a folder
+     * the policy refuses is refused, not sized through. */
+    {
+        char *canon = malloc(PATH_MAX);
+        int resolved = canon && realpath(path, canon) != NULL;
+        /* Not resolvable (gone): the walk reads nothing there and says it is unreadable. */
+        int ok = canon && (!resolved || (strlen(canon) < sizeof path && size_allowed(may, cfg, canon)));
+        if (ok && resolved) snprintf(path, sizeof path, "%s", canon);
+        free(canon);
+        if (!ok) {
+            ava1_op_message(c, "fs_size_path_not_allowed");
+            return AVA1_ERR_PATH;
+        }
+    }
     rc = fsj_tree_usage(path, &u, &h);
+    if (rc == -3) {
+        ava1_op_message(c, "fs_size_path_not_allowed");
+        return AVA1_ERR_PATH;
+    }
     if (rc == -2) {
         ava1_op_message(c, "fs_size_cancelled");
         return AVA1_ERR_CANCELLED;

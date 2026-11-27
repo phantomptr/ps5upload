@@ -51,6 +51,14 @@ int path_tree_op_refused(const char *p);
  * below it (case-insensitive, component boundary). */
 void path_protected_forms(char *lex, char *canon);
 int path_under_forms(const char *p, const char *lex, const char *canon);
+/* For a walker that may start ABOVE the protected folders (a folder size: it skips them rather than
+ * refusing the root): every name of BOTH protected folders, the trust store and the SMB store, each
+ * lexical, canonical and through the /user and /original_user names of /data (data_alias), resolved
+ * once into `forms` (PATH_PROTECTED_FORMS strings of PATH_MAX bytes, one after another). Returns how
+ * many were written. path_under_any_form(entry, forms, n): 1 = the entry is one of them or below. */
+#define PATH_PROTECTED_FORMS 8
+int path_protected_all_forms(char *forms);
+int path_under_any_form(const char *p, const char *forms, int n);
 /* Test hook: the protected directory (NULL restores /data/ps5upload/ava). */
 void path_policy_set_protected(const char *dir);
 
