@@ -331,8 +331,8 @@ pub(crate) fn settings() -> Settings {
 // ── Kept across restarts ─────────────────────────────────────────────────────────────────────────
 
 /// Where the engine keeps "Invites work", the internet friends' port, and the hub, page base and
-/// STUN servers while they differ from this run's defaults (in its data folder). The other Play
-/// Together choices last one engine run, as before.
+/// STUN servers while they differ from this run's defaults, and the host's switches while they
+/// differ from theirs (in its data folder). "Guests play as" lasts one engine run.
 const INVITES_FILE: &str = "play_together.json";
 
 /// "Invites work" as the API says it: "anywhere" (the one link: the internet invite, which also
@@ -466,11 +466,28 @@ fn write_invites(
         video_track: (!s.video_track).then_some(false),
     })
     .map_err(|e| e.to_string())?;
-    // Written aside and renamed over: a crash mid-write never leaves half a file.
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, body)
-        .and_then(|()| std::fs::rename(&tmp, path))
-        .map_err(|e| crate::state_io::describe("the Play Together setting", path, &e))
+    // Written aside, on the disk, and renamed over: a crash mid-write never leaves half a file
+    // (nor, after a power cut, the name on an empty one). Each write has its own file aside:
+    // two at once on one name mixed their bytes (a short body over a long one kept the long
+    // one's tail), and the file then read as nothing saved.
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let tmp = path.with_extension(format!(
+        "json.{}-{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let written = (|| {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(&body)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written.map_err(|e| crate::state_io::describe("the Play Together setting", path, &e))
 }
 
 /// `s` with what was saved put on it: a saved setting wins over the defaults (the environment's
@@ -549,8 +566,17 @@ fn save_invites(s: &Settings) {
     if cfg!(test) {
         return;
     }
+    // One save at a time, of the settings as they are now: two at once (two switches flipped
+    // together) could otherwise rename the older one last and keep it.
+    static SAVING: Mutex<()> = Mutex::new(());
+    let _one = SAVING.lock().unwrap_or_else(|e| e.into_inner());
+    let now = SETTINGS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_else(|| s.clone());
     if let Some(p) = invites_path() {
-        if let Err(e) = write_invites(&p, s, crate::self_host::defaults()) {
+        if let Err(e) = write_invites(&p, &now, crate::self_host::defaults()) {
             crate::log_at!(Warn, "together", "join: {e}");
         }
     }
