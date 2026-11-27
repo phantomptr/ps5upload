@@ -1252,6 +1252,51 @@ fn invites_work_is_saved_and_an_old_off_reads_as_wifi() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The host's switches (Block PS & Create, Play as me, the most players, Ask the router, Picture
+/// as video) are kept for the next Play Together and the next run: a round trip, defaults leave
+/// nothing in the file, and a missing, broken or out-of-range file gives the defaults.
+#[test]
+fn host_switches_survive_a_save_and_load() {
+    let dir = crate::test_tmp::temp_path(format!("ps5u-host-switches-{}", std::process::id()));
+    let p = dir.join(INVITES_FILE);
+    let d = crate::self_host::defaults();
+    let load = |p: &std::path::Path| {
+        let mut s = Settings::default();
+        apply_saved(&mut s, read_invites(p));
+        s
+    };
+    // Nothing saved: the defaults (Block PS & Create on, Play as me off).
+    assert_eq!(load(&p), Settings::default());
+
+    let chosen = Settings {
+        block_system_buttons: false,
+        stream_seat: true,
+        max_players: 2,
+        upnp: false,
+        video_track: false,
+        ..Settings::default()
+    };
+    write_invites(&p, &chosen, d).unwrap();
+    assert_eq!(load(&p), chosen);
+    assert!(!p.with_extension("json.tmp").exists(), "written aside and renamed");
+
+    // Back to the defaults: none of the switches stays in the file.
+    write_invites(&p, &Settings::default(), d).unwrap();
+    let text = std::fs::read_to_string(&p).unwrap();
+    for k in ["block_system_buttons", "stream_seat", "max_players", "upnp", "video_track"] {
+        assert!(!text.contains(k), "{k} left in {text}");
+    }
+    assert_eq!(load(&p), Settings::default());
+
+    // A broken file, or a number of players the settings would refuse: the defaults.
+    std::fs::write(&p, "{\"stream_seat\": tru").unwrap();
+    assert_eq!(load(&p), Settings::default());
+    std::fs::write(&p, r#"{"max_players": 9, "stream_seat": true}"#).unwrap();
+    let s = load(&p);
+    assert_eq!((s.max_players, s.stream_seat), (MAX_GUESTS, true));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The hub, the page base and the STUN servers are kept across restarts (#881) while they differ
 /// from the default: a round trip, a file from before them, a reset that removes them, and a
 /// saved value that wins over a default from the environment.

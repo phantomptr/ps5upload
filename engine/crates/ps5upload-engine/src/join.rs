@@ -377,6 +377,19 @@ struct StoredInvites {
     page_base: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     stun: Option<Vec<String>>,
+    /// The host's switches in the Play Together panel (Block PS & Create, Play as me, the most
+    /// players, Ask the router, Picture as video), each only while it is not the default (absent:
+    /// the default), so the next Play Together and the next run start as the host left them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    block_system_buttons: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_players: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stream_seat: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    upnp: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    video_track: Option<bool>,
 }
 
 /// What the file says, each part checked as the settings check it (None: nothing saved, or
@@ -389,6 +402,11 @@ struct Saved {
     hub_url: Option<String>,
     page_base: Option<String>,
     stun: Option<Vec<String>>,
+    block_system_buttons: Option<bool>,
+    max_players: Option<u8>,
+    stream_seat: Option<bool>,
+    upnp: Option<bool>,
+    video_track: Option<bool>,
 }
 
 fn read_invites(path: &std::path::Path) -> Saved {
@@ -409,6 +427,11 @@ fn read_invites(path: &std::path::Path) -> Saved {
         hub_url: s.hub_url.filter(|h| crate::join_net::hub_url_ok(h)),
         page_base: s.page_base.and_then(|b| crate::join_net::page_base(&b)),
         stun: s.stun.and_then(|v| clean_stun(&v)),
+        block_system_buttons: s.block_system_buttons,
+        max_players: s.max_players.filter(|n| (1..=MAX_GUESTS).contains(n)),
+        stream_seat: s.stream_seat,
+        upnp: s.upnp,
+        video_track: s.video_track,
     }
 }
 
@@ -436,6 +459,11 @@ fn write_invites(
         hub_url: (s.hub_url != d.hub_url).then(|| s.hub_url.clone()),
         page_base: (s.page_base != d.page_base).then(|| s.page_base.clone()),
         stun: (s.stun != d.stun).then(|| s.stun.clone()),
+        block_system_buttons: (!s.block_system_buttons).then_some(false),
+        max_players: (s.max_players != MAX_GUESTS).then_some(s.max_players),
+        stream_seat: s.stream_seat.then_some(true),
+        upnp: (!s.upnp).then_some(false),
+        video_track: (!s.video_track).then_some(false),
     })
     .map_err(|e| e.to_string())?;
     // Written aside and renamed over: a crash mid-write never leaves half a file.
@@ -462,6 +490,21 @@ fn apply_saved(s: &mut Settings, saved: Saved) {
     }
     if let Some(v) = saved.stun {
         s.stun = v;
+    }
+    if let Some(v) = saved.block_system_buttons {
+        s.block_system_buttons = v;
+    }
+    if let Some(v) = saved.max_players {
+        s.max_players = v;
+    }
+    if let Some(v) = saved.stream_seat {
+        s.stream_seat = v;
+    }
+    if let Some(v) = saved.upnp {
+        s.upnp = v;
+    }
+    if let Some(v) = saved.video_track {
+        s.video_track = v;
     }
 }
 
@@ -4348,7 +4391,8 @@ fn clean_stun(v: &[String]) -> Option<Vec<String>> {
 /// console). Fewer players lets nobody go; it only stops new ones. `stream_seat` off moves a friend
 /// on the stream's controller to a pad of their own. `invites` is "Invites work": "anywhere" (the
 /// one link, through the hub) or "wifi" (the home network's link only; 400 `invites` otherwise),
-/// the same choice as `internet_invites` on or off, and the one setting kept across restarts.
+/// the same choice as `internet_invites` on or off. Every setting here is kept across restarts
+/// (and for the next Play Together) except `guest_profiles`.
 /// "wifi" closes the internet rooms (guests already in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`
 /// otherwise), `page_base` where the guest pages are (`https://play.example.com/`: links open
 /// `<page_base>join/`, `pad/` or `share/`; `http://` only to this computer, no query or fragment;
@@ -4481,6 +4525,11 @@ pub async fn set_settings(
         || b.page_base.is_some()
         || b.stun.is_some()
         || b.reset.is_some()
+        || b.block_system_buttons.is_some()
+        || b.max_players.is_some()
+        || b.stream_seat.is_some()
+        || b.upnp.is_some()
+        || b.video_track.is_some()
     {
         save_invites(&s);
     }
