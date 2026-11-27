@@ -29,7 +29,7 @@ import { isMobile } from "../../lib/platform";
 import { getEngineUrl, isLoopbackUrl } from "../../state/engine";
 import { useGoLiveStore } from "../../state/goLive";
 import { useTr } from "../../state/lang";
-import { presetName, problemText, removeAfterConfirm, removeConfirmOptions, runSite } from "./goLiveText";
+import { loadErrorText, presetName, problemText, removeAfterConfirm, removeConfirmOptions, runSite } from "./goLiveText";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useRemotePlayStore } from "../../state/remotePlay";
 import { useRpQualityStore } from "../../state/rpQuality";
@@ -855,9 +855,7 @@ export function GoLivePanel({ onClose }: { onClose: () => void }) {
         <ObsTab />
       ) : loadError ? (
         <p className="text-sm text-[var(--color-warn)]">
-          {loadError === "http_404"
-            ? tr("golive_old_engine", undefined, "This engine can't go live: update PS5Upload on the computer it runs on.")
-            : tr("golive_no_engine", undefined, "Can't reach the engine.")}
+          {loadErrorText(tr, loadError)}
         </p>
       ) : status ? (
         <GoLiveTab status={status} />

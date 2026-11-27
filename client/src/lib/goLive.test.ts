@@ -134,5 +134,20 @@ describe("Go live's API calls", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("not json", { status: 404 })));
     const e2 = await goLiveApi.status().catch((x: unknown) => x);
     expect((e2 as LiveApiError).code).toBe("http_404");
+    // Go live's guard: a device the engine does not let in
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "host_not_local" }), { status: 403 })));
+    const e3 = await goLiveApi.status().catch((x: unknown) => x);
+    expect((e3 as LiveApiError).code).toBe("host_not_local");
+    // the address guard in front of every route: a sentence in error, the code beside it
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ error: "This engine does not answer to the name x.", code: "host_not_allowed" }), { status: 403 })),
+    );
+    const e4 = await goLiveApi.status().catch((x: unknown) => x);
+    expect((e4 as LiveApiError).code).toBe("host_not_allowed");
+    // the allowlist guard answers in plain text
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("loopback only: this engine refused 10.0.0.5.", { status: 403 })));
+    const e5 = await goLiveApi.status().catch((x: unknown) => x);
+    expect((e5 as LiveApiError).code).toBe("http_403");
   });
 });
