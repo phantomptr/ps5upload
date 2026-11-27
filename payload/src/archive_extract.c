@@ -28,6 +28,7 @@
 #include "runtime.h"
 #include "sigpipe_guard.h"
 #include "webui_codec.h"
+#include "monocypher.h" /* crypto_wipe */
 
 /* The extractor ELF, embedded by payload/Makefile (xxd of payload/extractor/ps5upload-extractor.elf). */
 extern unsigned char ps5upload_extractor_elf[];
@@ -123,7 +124,7 @@ static int write_request(const char *id, const char *src, const char *dest, cons
     rc = write(fd, buf, at) == (ssize_t)at ? 0 : -1;
     close(fd);
 out:
-    memset(buf, 0, cap); /* the password */
+    crypto_wipe(buf, cap); /* the password */
     free(buf);
     return rc;
 }
@@ -592,7 +593,7 @@ int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
     (void)unlink(EXTRACT_CANCEL);
 unlock:
     if (password) {
-        memset(password, 0, 1024);
+        crypto_wipe(password, 1024);
         free(password);
     }
     free(top);

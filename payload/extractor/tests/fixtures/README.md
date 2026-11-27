@@ -18,3 +18,7 @@ uudecoded and renamed:
 RAR5 archives built by hand for the extractor's header scanner (xrarc.c): a header whose 64-bit
 data size wraps the scan position back onto itself after an encrypted file split mid-block, and a
 second encryption header inside the encrypted headers. Both used to loop forever.
+
+`crafted-rar4-many-salts.rar` (password: 127 × `x`) is a 1 KB RAR 4 archive with encrypted
+headers, 40 service blocks and 5 salts in turn, so each block costs a fresh key derivation (about
+half a second with that password): Stop has to reach the derivation itself.
