@@ -4555,7 +4555,15 @@ static int rar5_read_data(struct archive_read *a, const void **buff,
 		return ret;
 	}
 
-	if(rar5->file.bytes_remaining == 0 &&
+	/* PS5Upload (#958): the extractor hands this reader password-protected
+	 * archives decrypted (payload/extractor/src/xrarc.c), and encrypted data
+	 * is padded to whole 16-byte AES blocks: after the file's last block,
+	 * up to 15 bytes of padding are left. They are not data (the next
+	 * header skips them), so the file ends there. */
+	if((rar5->file.bytes_remaining == 0 ||
+	    (rar5->file.bytes_remaining < 16 &&
+	     rar5->cstate.block_parsing_finished &&
+	     bf_is_last_block(&rar5->last_block_hdr))) &&
 			rar5->cstate.last_write_ptr == rar5->file.unpacked_size)
 	{
 		/* If all bytes of current file were processed, run
@@ -4565,6 +4573,15 @@ static int rar5_read_data(struct archive_read *a, const void **buff,
 		 * some of the checksums will not match, we'll return an error
 		 * value in the last `archive_read_data` call to signal an error
 		 * to the user. */
+
+		/* PS5Upload (#958): the padding is passed over now; skipping
+		 * it later would mean decoding it in a solid archive. */
+		if(rar5->file.bytes_remaining > 0) {
+			if(ARCHIVE_OK != consume(a,
+			    rar5->file.bytes_remaining))
+				return ARCHIVE_FATAL;
+			rar5->file.bytes_remaining = 0;
+		}
 
 		rar5->file.eof = 1;
 		return verify_global_checksums(a);

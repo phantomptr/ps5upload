@@ -2618,6 +2618,42 @@ async fn each_post_tool_sends_what_its_route_reads() {
     assert_eq!(asked["path"], "/api/ps5/app/unregister");
     reads_as::<crate::AppUnregisterReq>(&asked["body"]);
 
+    let asked = route_of(
+        &server,
+        "games_restore",
+        json!({"console": c, "title_ids": ["PPSA00001", "CUSA00002"]}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/ps5/app/restore");
+    reads_as::<crate::title_restore_api::RestoreStart>(&asked["body"]);
+
+    let asked = route_of(
+        &server,
+        "games_restore_finish",
+        json!({"console": c, "title_id": "PPSA00001", "rollback": true}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/ps5/app/restore/finish");
+    reads_as::<crate::title_restore_api::RestoreFinish>(&asked["body"]);
+
+    for (tool, path) in [
+        ("games_restore_check", "/api/ps5/app/restore/check"),
+        ("games_restore_status", "/api/ps5/app/restore/status"),
+    ] {
+        let asked = route_of(
+            &server,
+            tool,
+            json!({"console": c, "title_id": "PPSA00001"}),
+        )
+        .await;
+        assert_eq!(asked["path"], path);
+        assert_eq!(asked["query"]["addr"], c);
+        assert_eq!(asked["query"]["title_id"], "PPSA00001");
+    }
+    let asked = route_of(&server, "games_restore_list", json!({"console": c})).await;
+    assert_eq!(asked["path"], "/api/ps5/app/restore/candidates");
+    assert_eq!(asked["query"]["addr"], c);
+
     let asked = route_of(&server, "processes_kill", json!({"console": c, "pid": 77})).await;
     assert_eq!(asked["path"], "/api/ps5/process/kill");
     reads_as::<crate::ProcessKillReq>(&asked["body"]);

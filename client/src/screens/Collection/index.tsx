@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { RestoreAllBanner } from "./RestoreAllBanner";
 import {
   CheckSquare,
   FolderPlus,
@@ -681,6 +682,8 @@ export default function CollectionScreen({ embedded = false }: { embedded?: bool
   return (
     <div className={pageClass}>
       {header}
+      {/* #961: games on the PS5's drives that its home screen lost (Rebuild Database). */}
+      <RestoreAllBanner host={host} helperUp={helperUp} />
       {s.error && (
         <div className="mb-4">
           <ErrorCard

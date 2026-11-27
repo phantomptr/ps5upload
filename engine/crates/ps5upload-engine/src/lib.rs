@@ -138,6 +138,7 @@ mod tailnet_discover;
 pub(crate) mod tailnet_engine;
 pub(crate) mod tailnet_system;
 mod telemetry;
+mod title_restore_api;
 mod trophy_fix_routes;
 mod unpack_packs;
 mod vinput_api;

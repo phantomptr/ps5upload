@@ -1053,6 +1053,27 @@ pub fn api_router(state: PkgInstallStateHandle) -> Router {
             post(crate::install::install_stop_handler),
         )
         .route("/api/pkg/install/sessions", get(install_sessions_handler))
+        // Restore to home screen (#961): the package already on the console installed again.
+        .route(
+            "/api/ps5/app/restore",
+            post(crate::title_restore_api::start_handler),
+        )
+        .route(
+            "/api/ps5/app/restore/check",
+            get(crate::title_restore_api::check_handler),
+        )
+        .route(
+            "/api/ps5/app/restore/candidates",
+            get(crate::title_restore_api::candidates_handler),
+        )
+        .route(
+            "/api/ps5/app/restore/status",
+            get(crate::title_restore_api::status_handler),
+        )
+        .route(
+            "/api/ps5/app/restore/finish",
+            post(crate::title_restore_api::finish_handler),
+        )
         .route(
             "/api/pkg/links",
             get(links_list_handler).post(link_create_handler),

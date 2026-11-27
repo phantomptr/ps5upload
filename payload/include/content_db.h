@@ -169,6 +169,20 @@ int content_db_appinfo_json(const char *title_id, const char *keys,
 int content_db_appinfo_get(const char *title_id, const char *key, char *out, size_t cap);
 
 /*
+ * Whether appinfo.db has any row for `title_id` (Settings > Storage's record of the title).
+ * Read-only. 1 / 0, or -1 when appinfo.db could not be read or the id is not a title id.
+ */
+int content_db_appinfo_has_title(const char *title_id);
+
+/*
+ * A consistent copy of the database at `src_path` into a NEW file `dst_path`, through SQLite's
+ * backup API (safe while the shell has the database open; nothing is written to the source).
+ * `dst_path` must not exist yet: an existing file is never replaced. 0, or -1 with a short reason
+ * in `err` (a half-written copy is removed).
+ */
+int content_db_backup_file(const char *src_path, const char *dst_path, char *err, size_t errcap);
+
+/*
  * Set one appinfo.db value. This writes to a live system database.
  *
  * Guarded, because getting it wrong bricks the title's Settings entry:

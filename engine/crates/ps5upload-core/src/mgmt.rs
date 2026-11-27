@@ -207,6 +207,7 @@ methods! {
     (SAVE_OWNER, 199, "SAVE_OWNER"),
     (NODE_UNINSTALL, 200, "NODE_UNINSTALL"),
     (TROPHY_FIX, 201, "TROPHY_FIX"),
+    (APP_RESTORE, 202, "APP_RESTORE"),
 }
 
 /// A management call the payload refused.

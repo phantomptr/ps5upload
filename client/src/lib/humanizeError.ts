@@ -367,6 +367,13 @@ export function humanizePs5Error(
     return te("err_launch_no_user");
   }
 
+  // #961: the console's database has no record of the title (Rebuild Database drops games
+  // installed from fake packages, their files stay). The helper stops there instead of trying the
+  // other launch routes; the game's page offers Restore to home screen.
+  if (/launch_not_in_database/i.test(raw)) {
+    return te("err_launch_not_in_database");
+  }
+
   // ─── Sony launcher error codes (after 2.2.32 auto-retry) ──────────
   // launch_title surfaces sceLncUtilLaunchApp's return value as
   // `launch_sony_error_0xNNNNNNNN`. The codes below are the ones we

@@ -61,7 +61,7 @@ LIBARCHIVE_C := archive_acl.c archive_entry_sparse.c archive_entry_xattr.c archi
   archive_read_support_format_rar.c archive_read_support_format_rar5.c archive_string.c archive_string_sprintf.c \
   archive_time.c archive_util.c archive_virtual.c
 
-OWN_C := src/xmain.c src/xsink.c src/xrun.c src/xreq.c src/xrar.c
+OWN_C := src/xmain.c src/xsink.c src/xrun.c src/xreq.c src/xrar.c src/xrarc.c src/xrcrypt.c
 OWN_CPP := src/x7z.cpp src/xguids.cpp
 
 # Z7_ST: single-threaded (bounded memory, no MT decoders). Z7_EXTRACT_ONLY: no update side.

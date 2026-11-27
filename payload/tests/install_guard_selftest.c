@@ -230,6 +230,20 @@ int main(void) {
     }
     printf("✓ register, re-bind and a registration-only unregister check before touching anything\n");
 
+    /* #961: a launch of a title app.db does not know ends before the ShellUI ptrace route and the
+     * in-process retry ladder (the console's system UI restarted when it ran for such a game). */
+    {
+        const char *body = fn_body("int launch_title(const char *title_id, const char **err_reason_out,");
+        long primary = pos_in(body, "int rc_ss = launch_via_system_service(");
+        long db = pos_in(body, "register_appdb_has_title(title_id) == 0");
+        long refuse = pos_in(body, "\"launch_not_in_database: rc=");
+        long ptrace = pos_in(body, "shellui_rpc_launch_app(");
+        long ladder = pos_in(body, "rc = g_reg.launch_app(title_id, NULL, (void *)&param);");
+        assert(primary >= 0 && db > primary && refuse > db);
+        assert(ptrace > refuse && ladder > refuse);
+    }
+    printf("✓ a launch of a title not in app.db stops before the ShellUI and fallback routes\n");
+
     free(g_src);
     rm_rf(g_root);
     return 0;

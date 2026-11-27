@@ -87,6 +87,8 @@ import { CoverFrame, PlatformTag } from "../../components/GameIconFrame";
 import { ConsolesCard } from "./ConsolesCard";
 import { DrivesCard } from "./DrivesCard";
 import { OnThisPs5Card } from "./OnThisPs5Card";
+import { RestoreHomeScreenCard, useRestoreCheck } from "./RestoreHomeScreen";
+import { restoreNeeded } from "../../lib/titleRestore";
 import { Ps5DrivesCard } from "./Ps5DrivesCard";
 import { installedKindOf } from "./installedKind";
 import { useSmpState } from "./SmpNeeded";
@@ -140,6 +142,10 @@ export default function GameHubScreen() {
   const connectedEntry = gv.view?.consoles.find(
     (c) => c.host === connectedHost,
   );
+  // #961: installed on a drive but missing from the home screen (Rebuild Database drops games
+  // installed from fake packages): Play is replaced by Restore to home screen.
+  const restore = useRestoreCheck(connectedHost, title_id);
+  const notOnHomeScreen = restoreNeeded(restore.reply);
   // Back to wherever the page was opened from; Games when it was opened directly.
   const goBack = () => {
     const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
@@ -572,15 +578,33 @@ export default function GameHubScreen() {
                 setSendHost(h);
               }}
               playBlocked={
-                disc && smp.absent
+                notOnHomeScreen
                   ? tr(
-                      "installed_play_needs_smp",
+                      "restore_play_blocked",
                       undefined,
-                      "Needs ShadowMount+ running to mount and launch",
+                      "Not on the PS5's home screen: restore it first (below)",
                     )
-                  : undefined
+                  : disc && smp.absent
+                    ? tr(
+                        "installed_play_needs_smp",
+                        undefined,
+                        "Needs ShadowMount+ running to mount and launch",
+                      )
+                    : undefined
               }
             />
+            {connectedHost && title_id && (
+              <RestoreHomeScreenCard
+                host={connectedHost}
+                titleId={title_id.toUpperCase()}
+                name={game?.name ?? title_id}
+                reply={restore.reply}
+                onChanged={() => {
+                  restore.refresh();
+                  onConsoleChanged();
+                }}
+              />
+            )}
             {connectedHost && installedHere && (
               <OnThisPs5Card
                 host={connectedHost}

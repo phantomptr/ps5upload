@@ -155,6 +155,38 @@ describe("loader-port commands the DPI fallback depends on", () => {
     expect(res).toEqual({ ok: true, job: "17-1" });
   });
 
+  it("sends each Restore to home screen step to its engine route, as the desktop command does (#961)", async () => {
+    const calls = captureFetch({ ok: true });
+    const req = { addr: "192.168.1.50", title_id: "PPSA01234" };
+    await browserInvoke("ps5_app_restore", { op: "check", req });
+    await browserInvoke("ps5_app_restore", { op: "status", req });
+    await browserInvoke("ps5_app_restore", { op: "candidates", req: { addr: "192.168.1.50" } });
+    await browserInvoke("ps5_app_restore", {
+      op: "start",
+      req: { addr: "192.168.1.50", title_ids: ["PPSA01234", "CUSA00900"] },
+    });
+    await browserInvoke("ps5_app_restore", { op: "finish", req: { ...req, rollback: true } });
+    expect(calls.map((c) => c.url)).toEqual([
+      "http://engine.test:19113/api/ps5/app/restore/check?addr=192.168.1.50&title_id=PPSA01234",
+      "http://engine.test:19113/api/ps5/app/restore/status?addr=192.168.1.50&title_id=PPSA01234",
+      "http://engine.test:19113/api/ps5/app/restore/candidates?addr=192.168.1.50",
+      "http://engine.test:19113/api/ps5/app/restore",
+      "http://engine.test:19113/api/ps5/app/restore/finish",
+    ]);
+    expect(JSON.parse(calls[3].init.body as string)).toEqual({
+      addr: "192.168.1.50",
+      title_id: null,
+      title_ids: ["PPSA01234", "CUSA00900"],
+    });
+    expect(JSON.parse(calls[4].init.body as string)).toEqual({
+      addr: "192.168.1.50",
+      title_id: "PPSA01234",
+      rollback: true,
+      install_ended: false,
+    });
+    await expect(browserInvoke("ps5_app_restore", { op: "nope", req })).rejects.toThrow("unknown restore step");
+  });
+
   it("passes registration_only on to the engine's unregister, as the desktop app does", async () => {
     const calls = captureFetch({ ok: true });
     await browserInvoke("ps5_app_unregister", {

@@ -376,6 +376,31 @@ int main(void) {
         printf("✓ one appinfo value read by title and key\n");
     }
 
+    /* any appinfo row for a title, and a backup copy of a database (#961) */
+    {
+        assert(content_db_appinfo_has_title("PPSA03595") == 1);
+        assert(content_db_appinfo_has_title("PPSA99999") == 0);
+        assert(content_db_appinfo_has_title("nope") == -1);
+        char bk[512], e[160];
+        snprintf(bk, sizeof bk, "%s.restore-backup", CONTENT_DB_APPINFO);
+        unlink(bk);
+        assert(content_db_backup_file(CONTENT_DB_APPINFO, bk, e, sizeof e) == 0);
+        sqlite3 *b = NULL;
+        assert(sqlite3_open_v2(bk, &b, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK);
+        sqlite3_stmt *q = NULL;
+        assert(sqlite3_prepare_v2(b, "SELECT val FROM tbl_appinfo WHERE titleId='PPSA03595' AND key='_org_path'", -1, &q, NULL) == SQLITE_OK);
+        assert(sqlite3_step(q) == SQLITE_ROW);
+        assert(strcmp((const char *)sqlite3_column_text(q, 0), "/mnt/ext1/user/app/PPSA03595") == 0);
+        sqlite3_finalize(q);
+        sqlite3_close(b);
+        /* never over an existing file, and a source that is not there leaves nothing behind */
+        assert(content_db_backup_file(CONTENT_DB_APPINFO, bk, e, sizeof e) == -1 && contains(e, "already exists"));
+        unlink(bk);
+        assert(content_db_backup_file("/nonexistent/x.db", bk, e, sizeof e) == -1);
+        assert(access(bk, F_OK) != 0);
+        printf("✓ appinfo presence by title, and a database copied aside (never over a file)\n");
+    }
+
     /* ── appinfo.db writes ───────────────────────────────────────────── */
     char err[256];
 

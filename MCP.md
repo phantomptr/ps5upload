@@ -294,7 +294,8 @@ clients let you allow tools one by one, so keep these on "ask".
 | `share_cancel` | Stop a share and its transfers |
 | `api_request` | Anything the API can do |
 
-Some tools aren't marked destructive but still matter: `install_pkg`, `games_launch`,
+Some tools aren't marked destructive but still matter: `install_pkg`, `games_launch`, `games_restore`,
+`games_restore_finish`,
 `rp_input`, `rp_start`, `together_invite`, `together_decide`, `settings_set`,
 `console_settings_set`.
 

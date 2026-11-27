@@ -1,5 +1,7 @@
 //! Running and starting things on a console: `processes_list`, `processes_kill`, `shell_run`,
-//! `games_installed`, `games_launch`, `games_stop`, `games_register`, `games_unregister`.
+//! `games_installed`, `games_launch`, `games_stop`, `games_register`, `games_unregister`, and
+//! Restore to home screen (#961): `games_restore_list`, `games_restore_check`, `games_restore`,
+//! `games_restore_status`, `games_restore_finish`.
 
 use serde_json::{json, Value};
 
@@ -124,6 +126,123 @@ pub(super) fn tools() -> Vec<ToolDef> {
                 method: "POST",
                 path: "/api/ps5/app/unregister",
                 done: "Asked the console to remove the title.",
+            ),
+        },
+        ToolDef {
+            name: "games_restore_list",
+            title: "Games missing from the home screen",
+            description: "Games a console has the installed package of (internal drive, USB \
+                          extended storage or M.2) but no home-screen record for, as after \
+                          Settings > Rebuild Database, which drops games installed from fake \
+                          packages. Each title's `check.state`: `restorable` (games_restore can \
+                          put it back), `pending` (an earlier restore to finish with \
+                          games_restore_finish), or why not (`record_elsewhere`, `retail`, \
+                          `no_room`, `ambiguous`, `folder_registration`, `db_unreadable`...). \
+                          Changes nothing. Such a game cannot be started with games_launch.",
+            kind: Kind::Read,
+            schema: object(json!({ "console": console_required() }), &["console"]),
+            run: route!(
+                method: "GET",
+                path: "/api/ps5/app/restore/candidates",
+                done: "The games the console has but does not list.",
+            ),
+        },
+        ToolDef {
+            name: "games_restore_check",
+            title: "Check a game for Restore to home screen",
+            description: "Whether one title can be put back on the home screen (`state` \
+                          `restorable`) and why not otherwise; also its package (`pkg`, `size`, \
+                          `where`), its update (`patch`) and the free space. Changes nothing.",
+            kind: Kind::Read,
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "title_id": text("The title's id, like PPSA01234."),
+                }),
+                &["console", "title_id"],
+            ),
+            run: route!(
+                method: "GET",
+                path: "/api/ps5/app/restore/check",
+                done: "Checked the title.",
+            ),
+        },
+        ToolDef {
+            name: "games_restore",
+            title: "Restore games to the home screen",
+            description: "Puts games that games_restore_list shows as `restorable` back on the \
+                          home screen: the console's own installer installs the package that is \
+                          already on the drive again (no download; it needs free space for one \
+                          more copy while it runs). The helper first copies the console's app \
+                          databases aside and moves the package aside on the same drive; a \
+                          failed install puts it back. One install per console: titles go one \
+                          after the other. Confirm with the user first. Follow each title with \
+                          games_restore_status (`job` is also an install_wait job).",
+            kind: Kind::Write { idempotent: false },
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "title_id": text("One title, like PPSA01234."),
+                    "title_ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Several titles, restored one after the other.",
+                    },
+                }),
+                &["console"],
+            ),
+            run: route!(
+                method: "POST",
+                path: "/api/ps5/app/restore",
+                done: "Started the restore.",
+            ),
+        },
+        ToolDef {
+            name: "games_restore_status",
+            title: "How a restore stands",
+            description: "This engine's restore of one title: `phase` queued, installing (with \
+                          the install's `job` and status), finishing, restored, rolled_back (the \
+                          install did not take; the package is back where it was), pending \
+                          (the console may still be working on it: finish it later with \
+                          games_restore_finish), or failed (refused before anything moved).",
+            kind: Kind::Read,
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "title_id": text("The title's id, like PPSA01234."),
+                }),
+                &["console", "title_id"],
+            ),
+            run: route!(
+                method: "GET",
+                path: "/api/ps5/app/restore/status",
+                done: "How the restore stands.",
+            ),
+        },
+        ToolDef {
+            name: "games_restore_finish",
+            title: "Finish a restore",
+            description: "Finishes a restore left pending. `install_ended`: the user saw the \
+                          game on the home screen, so the copy aside is deleted (only once the \
+                          console lists the game and has its package in place). `rollback`: the \
+                          game did not come back, so the package and its update go back where \
+                          they were (only while the console does not list it). With neither, \
+                          it only says where the restore stands. Refused while an install runs \
+                          on the console. Ask the user which one first.",
+            kind: Kind::Write { idempotent: true },
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "title_id": text("The title's id, like PPSA01234."),
+                    "install_ended": flag("The install has ended and the game shows on the home screen."),
+                    "rollback": flag("Put the package back where it was."),
+                }),
+                &["console", "title_id"],
+            ),
+            run: route!(
+                method: "POST",
+                path: "/api/ps5/app/restore/finish",
+                done: "Asked the console to finish the restore.",
             ),
         },
         ToolDef {

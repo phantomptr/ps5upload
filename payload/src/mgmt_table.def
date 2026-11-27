@@ -155,6 +155,8 @@ MGMT_H1(AVA1_METHOD_SAVE_OWNER, MGMT_FRAME_SAVE_OWNER, MGMT_FRAME_SAVE_OWNER_ACK
 MGMT_H1(AVA1_METHOD_NODE_UNINSTALL, MGMT_FRAME_NODE_UNINSTALL, MGMT_FRAME_NODE_UNINSTALL_ACK, MGMT_SONY, handle_node_uninstall, mgmt_call_text_keep)
 /* trophy files that still name an old account id (trophy_fix.c, #853): file reads and writes only */
 MGMT_H1(AVA1_METHOD_TROPHY_FIX, MGMT_FRAME_TROPHY_FIX, MGMT_FRAME_TROPHY_FIX_ACK, 0, mgmt_w_trophy_fix, mgmt_call_text_keep)
+/* an installed package game back on the home screen after Rebuild Database (title_restore.c, #961): file moves on one drive, read-only database queries */
+MGMT_H1(AVA1_METHOD_APP_RESTORE, MGMT_FRAME_TITLE_RESTORE, MGMT_FRAME_TITLE_RESTORE_ACK, 0, mgmt_w_title_restore, mgmt_call_text_keep)
 /* ---- console file manager (PC side): shared pinned/recent folders, Show on TV / Show on PC ---- */
 MGMT_H0(AVA1_METHOD_FILES_PREFS_GET, MGMT_FRAME_FILES_PREFS_GET, MGMT_FRAME_FILES_PREFS_GET_ACK, 0, handle_files_prefs_get, mgmt_call_text)
 MGMT_H1(AVA1_METHOD_FILES_PREFS_SET, MGMT_FRAME_FILES_PREFS_SET, MGMT_FRAME_FILES_PREFS_SET_ACK, 0, handle_files_prefs_set, mgmt_call_text)
