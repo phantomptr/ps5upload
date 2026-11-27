@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.38
 
 **Games**
 - **Games that vanished from the home screen after Rebuild Database can be put back (#961).** A fake package game still on its drive but no longer on the PS5's home screen now shows **Not on the PS5's home screen** on its page, with **Restore to home screen**; **Restore all** in Games does every such game. The PS5's own installer takes the package back from the drive, so nothing is downloaded. Your database is backed up first, and if the PS5 won't take a game, its files are put back where they were. It needs room for one more copy of the game while it runs.
