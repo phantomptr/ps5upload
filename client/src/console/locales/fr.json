@@ -188,6 +188,7 @@
   "cw_convert_err_partial_in_the_way": "Un dossier portant le nom de la sortie suivi de .partial existe déjà, et ce n'est pas PS5Upload qui l'a laissé. Déplacez-le ou renommez-le, puis recommencez.",
   "cw_convert_err_rar": "Un .rar ne peut pas être converti sur la PS5 : la licence du décodeur RAR ne permet pas de l'intégrer au convertisseur. Décompressez-le d'abord dans Fichiers, ou convertissez-le sur votre ordinateur.",
   "cw_convert_err_too_big_for_drive": "L'image dépasserait les 4 Gio qu'un seul fichier peut faire sur ce disque. Enregistrez-la sur un disque exFAT ou le stockage interne, ou créez plutôt un dossier.",
+  "cw_convert_err_too_big_for_firmware": "Ce paquet serait plus grand que ce que le firmware de cette PS5 peut ouvrir : il s'installerait mais ne démarrerait jamais. Créez plutôt une image du jeu, ou utilisez le paquet d'origine.",
   "cw_convert_err_unreadable": "Une partie du jeu n'a pas pu être lue. Vérifiez le disque et réessayez.",
   "cw_convert_err_unsupported_source": "Ce n'est ni un dossier de jeu, ni une image de jeu (.exfat, .ffpkg, .ffpfs, .ffpfsc), ni une archive .zip ou .7z.",
   "cw_convert_exists": "{name} existe déjà ici. Choisissez un autre dossier, ou gardez les deux.",

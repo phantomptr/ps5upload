@@ -826,6 +826,7 @@ home_low_space_body: "Dọn dẹp tìm các bản cập nhật, gói còn sót v
 "cw_convert_err_not_started": "Trình chuyển đổi không khởi động. Hãy thử lại.",
 "cw_convert_err_rar": "Không thể chuyển đổi .rar trên PS5: giấy phép của bộ giải mã RAR không cho phép dùng nó trong trình chuyển đổi. Hãy giải nén trong Tệp trước, hoặc chuyển đổi trên máy tính.",
 "cw_convert_err_too_big_for_drive": "Ảnh đĩa sẽ lớn hơn mức 4 GiB cho một tệp trên ổ đĩa đó. Hãy lưu vào ổ exFAT hoặc bộ nhớ trong, hoặc tạo thư mục thay vào đó.",
+"cw_convert_err_too_big_for_firmware": "Gói này sẽ lớn hơn mức firmware của PS5 này mở được: nó sẽ cài được nhưng không bao giờ khởi chạy. Hãy tạo ảnh trò chơi thay thế, hoặc dùng gói gốc.",
 "cw_convert_err_unreadable": "Không đọc được một phần của game. Hãy kiểm tra ổ đĩa và thử lại.",
 "cw_convert_err_unsupported_source": "Đây không phải thư mục game, ảnh game (.exfat, .ffpkg, .ffpfs, .ffpfsc) hay tệp nén .zip hoặc .7z.",
 "cw_convert_exists": "{name} đã có ở đó. Hãy chọn thư mục khác, hoặc giữ cả hai.",

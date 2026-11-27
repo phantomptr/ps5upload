@@ -824,6 +824,7 @@ home_low_space_body: "Temizlik; güncellemeleri, kalan paketleri ve hiç oynanma
 "cw_convert_err_not_started": "Dönüştürücü başlamadı. Yeniden deneyin.",
 "cw_convert_err_rar": ".rar dosyası PS5'te dönüştürülemez: RAR kod çözücüsünün lisansı dönüştürücü içinde kullanılmasına izin vermez. Önce Dosyalar'da ayıklayın veya bilgisayarınızda dönüştürün.",
 "cw_convert_err_too_big_for_drive": "İmaj, o sürücüde tek bir dosyanın olabileceği 4 GiB sınırını aşar. exFAT bir sürücüye veya dahili depolamaya kaydedin ya da bunun yerine bir klasör oluşturun.",
+"cw_convert_err_too_big_for_firmware": "Bu paket, bu PS5'in yazılımının açabileceğinden büyük olur: yüklenir ama hiç başlamaz. Bunun yerine bir oyun kalıbı oluşturun veya orijinal paketi kullanın.",
 "cw_convert_err_unreadable": "Oyunun bir kısmı okunamadı. Sürücüyü kontrol edip yeniden deneyin.",
 "cw_convert_err_unsupported_source": "Bu bir oyun klasörü, oyun imajı (.exfat, .ffpkg, .ffpfs, .ffpfsc) ya da .zip veya .7z arşivi değil.",
 "cw_convert_exists": "{name} zaten orada. Başka bir klasör seçin ya da ikisini de tutun.",

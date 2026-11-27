@@ -1123,6 +1123,7 @@ home_low_space_body: "A Takarítás megkeresi a frissítéseket, a maradék csom
 "cw_convert_err_not_started": "Az átalakító nem indult el. Próbáld újra.",
 "cw_convert_err_rar": "Egy .rar nem alakítható át a PS5-ön: a RAR-dekóder licence nem engedi, hogy az átalakítóba kerüljön. Előbb bontsd ki a Fájlokban, vagy alakítsd át a számítógépeden.",
 "cw_convert_err_too_big_for_drive": "A képfájl nagyobb lenne a 4 GiB-nál, amekkora egy fájl lehet azon a meghajtón. Mentsd exFAT meghajtóra vagy a belső tárhelyre, vagy készíts helyette mappát.",
+"cw_convert_err_too_big_for_firmware": "Ez a csomag nagyobb lenne annál, amit ennek a PS5-nek a firmware-e megnyit: települne, de sosem indulna el. Készíts helyette játékképfájlt, vagy használd az eredeti csomagot.",
 "cw_convert_err_unreadable": "A játék egy részét nem sikerült beolvasni. Ellenőrizd a meghajtót, és próbáld újra.",
 "cw_convert_err_unsupported_source": "Ez nem játékmappa, nem játék-képfájl (.exfat, .ffpkg, .ffpfs, .ffpfsc), és nem is .zip vagy .7z archívum.",
 "cw_convert_exists": "{name} már ott van. Válassz másik mappát, vagy tartsd meg mindkettőt.",

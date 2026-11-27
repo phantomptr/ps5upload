@@ -824,6 +824,7 @@ home_low_space_body: "Limpar encontra atualizações, pacotes que sobraram e jog
 "cw_convert_err_not_started": "O conversor não iniciou. Tente de novo.",
 "cw_convert_err_rar": "Um .rar não pode ser convertido no PS5: a licença do decodificador RAR não permite usá-lo dentro do conversor. Extraia-o antes em Arquivos ou converta-o no seu computador.",
 "cw_convert_err_too_big_for_drive": "A imagem passaria dos 4 GiB que um único arquivo pode ter nessa unidade. Salve-a em uma unidade exFAT ou no armazenamento interno, ou crie uma pasta em vez disso.",
+"cw_convert_err_too_big_for_firmware": "Este pacote ficaria maior do que o firmware deste PS5 consegue abrir: seria instalado, mas nunca iniciaria. Crie uma imagem do jogo em vez disso, ou use o pacote original.",
 "cw_convert_err_unreadable": "Parte do jogo não pôde ser lida. Verifique a unidade e tente de novo.",
 "cw_convert_err_unsupported_source": "Isto não é uma pasta de jogo, uma imagem de jogo (.exfat, .ffpkg, .ffpfs, .ffpfsc) nem um arquivo compactado .zip ou .7z.",
 "cw_convert_exists": "{name} já está lá. Escolha outra pasta ou mantenha os dois.",

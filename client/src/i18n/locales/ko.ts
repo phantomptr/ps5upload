@@ -825,6 +825,7 @@ home_low_space_body: "정리에서 지워도 되는 업데이트, 남은 패키�
 "cw_convert_err_not_started": "변환 프로그램이 시작되지 않았습니다. 다시 시도하세요.",
 "cw_convert_err_rar": ".rar은 PS5에서 변환할 수 없습니다. RAR 디코더의 라이선스가 변환 프로그램 안에서 쓰는 것을 허용하지 않습니다. 먼저 파일에서 압축을 풀거나, 컴퓨터에서 변환하세요.",
 "cw_convert_err_too_big_for_drive": "이미지가 그 드라이브에서 파일 하나에 허용되는 4 GiB보다 커집니다. exFAT 드라이브나 내장 저장소에 저장하거나, 폴더로 만드세요.",
+"cw_convert_err_too_big_for_firmware": "이 패키지는 이 PS5의 펌웨어가 열 수 있는 크기보다 커집니다. 설치는 되지만 실행되지 않습니다. 대신 게임 이미지를 만들거나 원본 패키지를 사용하세요.",
 "cw_convert_err_unreadable": "게임의 일부를 읽을 수 없었습니다. 드라이브를 확인하고 다시 시도하세요.",
 "cw_convert_err_unsupported_source": "게임 폴더, 게임 이미지(.exfat, .ffpkg, .ffpfs, .ffpfsc), .zip 또는 .7z 압축 파일이 아닙니다.",
 "cw_convert_exists": "{name}이(가) 이미 있습니다. 다른 폴더를 고르거나 둘 다 남겨 두세요.",

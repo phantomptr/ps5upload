@@ -188,6 +188,7 @@
   "cw_convert_err_partial_in_the_way": "已有一个名为输出名加 .partial 的文件夹，且不是 PS5Upload 留下的。请移走或重命名它，然后重新开始。",
   "cw_convert_err_rar": ".rar 无法在 PS5 上转换：RAR 解码器的许可证不允许将其放入转换程序。请先在“文件”中解压，或在电脑上转换。",
   "cw_convert_err_too_big_for_drive": "镜像会超过那个驱动器上单个文件 4 GiB 的上限。请保存到 exFAT 驱动器或内置存储，或者改为生成文件夹。",
+  "cw_convert_err_too_big_for_firmware": "这个包会超过这台 PS5 的固件能打开的大小：能安装但永远无法启动。请改为制作游戏镜像，或使用原始包。",
   "cw_convert_err_unreadable": "游戏的一部分无法读取。请检查驱动器后重试。",
   "cw_convert_err_unsupported_source": "这不是游戏文件夹、游戏镜像（.exfat、.ffpkg、.ffpfs、.ffpfsc），也不是 .zip 或 .7z 压缩包。",
   "cw_convert_exists": "{name} 已存在。请选择其他文件夹，或两者都保留。",

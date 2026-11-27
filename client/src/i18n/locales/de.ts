@@ -825,6 +825,7 @@ home_low_space_body: "Aufräumen findet Updates, übrig gebliebene Pakete und ni
 "cw_convert_err_not_started": "Der Konverter ist nicht gestartet. Versuche es erneut.",
 "cw_convert_err_rar": "Eine .rar kann nicht auf der PS5 konvertiert werden: Die Lizenz des RAR-Decoders erlaubt ihn nicht im Konverter. Entpacke sie zuerst unter Dateien oder konvertiere sie auf deinem Computer.",
 "cw_convert_err_too_big_for_drive": "Das Abbild wäre größer als die 4 GiB, die eine einzelne Datei auf diesem Laufwerk haben darf. Speichere es auf einem exFAT-Laufwerk oder dem internen Speicher, oder erstelle stattdessen einen Ordner.",
+"cw_convert_err_too_big_for_firmware": "Dieses Paket wäre größer, als die Firmware dieser PS5 öffnet: Es würde installiert, aber nie starten. Erstelle stattdessen ein Spielabbild oder nutze das Originalpaket.",
 "cw_convert_err_unreadable": "Ein Teil des Spiels konnte nicht gelesen werden. Prüfe das Laufwerk und versuche es erneut.",
 "cw_convert_err_unsupported_source": "Das ist kein Spielordner, kein Spiel-Image (.exfat, .ffpkg, .ffpfs, .ffpfsc) und kein .zip- oder .7z-Archiv.",
 "cw_convert_exists": "{name} ist dort schon vorhanden. Wähle einen anderen Ordner oder behalte beide.",

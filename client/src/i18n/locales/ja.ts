@@ -825,6 +825,7 @@ home_low_space_body: "クリーンアップは、消してよいアップデー�
 "cw_convert_err_not_started": "変換プログラムが起動しませんでした。もう一度試してください。",
 "cw_convert_err_rar": ".rar は PS5 上では変換できません。RAR デコーダーのライセンスにより、変換プログラムに組み込めないためです。先に「ファイル」で展開するか、コンピューターで変換してください。",
 "cw_convert_err_too_big_for_drive": "イメージが、そのドライブで 1 つのファイルに許される 4 GiB を超えてしまいます。exFAT のドライブか内蔵ストレージに保存するか、フォルダーとして作成してください。",
+"cw_convert_err_too_big_for_firmware": "このパッケージは、この PS5 のファームウェアが開けるサイズを超えてしまいます。インストールはできても起動しません。代わりにゲームイメージを作成するか、元のパッケージを使ってください。",
 "cw_convert_err_unreadable": "ゲームの一部を読み込めませんでした。ドライブを確認してもう一度試してください。",
 "cw_convert_err_unsupported_source": "これはゲームフォルダー、ゲームイメージ（.exfat、.ffpkg、.ffpfs、.ffpfsc）、.zip / .7z アーカイブのいずれでもありません。",
 "cw_convert_exists": "{name} はすでにあります。別のフォルダーを選ぶか、両方残してください。",
