@@ -193,7 +193,21 @@ export function installTaskWiring() {
             : item.sourceKind === "folder" || item.sourceKind === "game-folder"
               ? "upload-dir"
               : "upload-file";
-        const id = useTaskStore.getState().registerTask({
+        // After a reload the queue picks its upload back up (reattachRunning); the task this
+        // start-up marked "Interrupted" for that item is the same upload, so it runs again
+        // instead of leaving an Interrupted row beside a new one (#954).
+        const tasks = useTaskStore.getState();
+        const earlier = tasks.tasks.find(
+          (t) =>
+            t.origin === "uploadQueue" &&
+            t.status === "interrupted" &&
+            (t.payload as { queueItemId?: string } | undefined)?.queueItemId === item.id,
+        );
+        if (earlier && tasks.reopenTask(earlier.id)) {
+          queueTaskIds.set(item.id, earlier.id);
+          continue;
+        }
+        const id = tasks.registerTask({
           kind,
           origin: "uploadQueue",
           label:

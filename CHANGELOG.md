@@ -6,6 +6,11 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Activity**
+- **An upload still going after you closed the page shows as running when you come back (#954).** The upload itself always carried on, but Activity listed it as "Interrupted" next to a second, running copy. It now picks up the same entry.
+
+## 12.6.36
+
 **Play Together over the internet**
 - **Friends joining from Firefox, a VPN or IPv6 are no longer turned away.** Their browser sends more connection details than the hub allowed per minute, so the hub closed the join and the page said it couldn't reach the hub. The hub now allows a realistic amount for every browser and for several devices behind one home connection, and the join page sends only the details the app can use.
 - The hub answers its address with a trailing slash too, tells search crawlers to stay away, and counts which limit stopped a connection, so problems like this show up straight away.
