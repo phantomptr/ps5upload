@@ -85,7 +85,7 @@ import {
 } from "lucide-react";
 import { useFolderSizes, useFolderSizesStore } from "../../state/folderSizes";
 import { queueActive } from "../../api/folderSizes";
-import { FolderSizeCell, folderSizeState, knownFolderBytes } from "./FolderSizeCell";
+import { FolderSizeCell, folderSizeState, knownFolderBytes, knownFolderSize } from "./FolderSizeCell";
 import { TwoPanesFrame, type PsSide } from "./TwoPanes";
 import { readTwoPanes, TWO_PANES_QUERY, writeTwoPanes, type CopyOutcome } from "./panePlan";
 import { useMediaQuery } from "../../lib/phoneLayout";
@@ -5220,7 +5220,7 @@ export default function FileSystemScreen() {
                           })()}
                           {isDir ? (
                             (() => {
-                              const st = folderSizeState(joinPath(path, e.name), sizeChildren?.[e.name], measureQueue);
+                              const st = folderSizeState(joinPath(path, e.name), knownFolderSize(sizeChildren, e.name), measureQueue);
                               return (
                                 <FolderSizeCell
                                   state={st}

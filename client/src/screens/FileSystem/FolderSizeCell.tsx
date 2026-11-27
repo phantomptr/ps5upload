@@ -32,12 +32,21 @@ export function folderSizeState(
   return known ? { kind: "known", size: known } : { kind: "unknown" };
 }
 
+/** The known size of the sub-folder `name`, by its own entry only: a folder called "constructor"
+ *  or "toString" must not read the plain object's built-ins as a size. */
+export function knownFolderSize(
+  children: Record<string, FolderSize> | undefined,
+  name: string,
+): FolderSize | undefined {
+  return children && Object.prototype.hasOwnProperty.call(children, name) ? children[name] : undefined;
+}
+
 /** The value a size sort uses for a folder: its known size, or undefined (sorted last). */
 export function knownFolderBytes(
   children: Record<string, FolderSize> | undefined,
   name: string,
 ): number | undefined {
-  return children?.[name]?.bytes;
+  return knownFolderSize(children, name)?.bytes;
 }
 
 /** The tooltip of a known size: when, from where, that it does not update by itself. */

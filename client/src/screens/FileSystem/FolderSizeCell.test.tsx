@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EMPTY_QUEUE, type FolderSize, type MeasureQueue } from "../../api/folderSizes";
 import type { Translator } from "../../state/lang";
-import { FolderSizeCell, folderSizeState, folderSizeTitle, knownFolderBytes } from "./FolderSizeCell";
+import { FolderSizeCell, folderSizeState, folderSizeTitle, knownFolderBytes, knownFolderSize } from "./FolderSizeCell";
 
 const tr = ((key: string, vars?: Record<string, string | number>, fallback?: string) => {
   let s = fallback ?? key;
@@ -59,6 +59,17 @@ describe("folderSizeState", () => {
     expect(knownFolderBytes({ a: size({ bytes: 7 }) }, "a")).toBe(7);
     expect(knownFolderBytes({ a: size() }, "b")).toBeUndefined();
     expect(knownFolderBytes(undefined, "a")).toBeUndefined();
+  });
+
+  it("a folder named like an object built-in has no size until one is measured", () => {
+    const children = JSON.parse('{"a":{"bytes":7}}') as Record<string, FolderSize>;
+    for (const name of ["constructor", "toString", "hasOwnProperty", "__proto__"]) {
+      expect(knownFolderSize(children, name)).toBeUndefined();
+      expect(knownFolderBytes(children, name)).toBeUndefined();
+      expect(folderSizeState(`/data/${name}`, knownFolderSize(children, name), queue())).toEqual({ kind: "unknown" });
+    }
+    const own = JSON.parse('{"constructor":{"bytes":9}}') as Record<string, FolderSize>;
+    expect(knownFolderBytes(own, "constructor")).toBe(9);
   });
 });
 
