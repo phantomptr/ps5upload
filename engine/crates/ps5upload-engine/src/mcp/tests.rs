@@ -2612,11 +2612,22 @@ async fn each_post_tool_sends_what_its_route_reads() {
     let asked = route_of(
         &server,
         "games_unregister",
-        json!({"console": c, "title_id": "PPSA00001"}),
+        json!({"console": c, "title_id": "PPSA00001", "delete_source": "/data/homebrew/g"}),
     )
     .await;
     assert_eq!(asked["path"], "/api/ps5/app/unregister");
+    assert_eq!(asked["body"]["delete_source"], "/data/homebrew/g");
     reads_as::<crate::AppUnregisterReq>(&asked["body"]);
+
+    let asked = route_of(
+        &server,
+        "games_uninstall_source",
+        json!({"console": c, "title_id": "PPSA00001"}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/ps5/app/uninstall-source");
+    assert_eq!(asked["query"]["addr"], c);
+    assert_eq!(asked["query"]["title_id"], "PPSA00001");
 
     let asked = route_of(
         &server,

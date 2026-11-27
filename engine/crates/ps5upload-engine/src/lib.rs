@@ -140,6 +140,7 @@ pub(crate) mod tailnet_system;
 mod telemetry;
 mod title_restore_api;
 mod trophy_fix_routes;
+mod uninstall_source;
 mod unpack_packs;
 mod vinput_api;
 mod wake_login_api;
@@ -3573,6 +3574,48 @@ struct AppUnregisterReq {
     /// ignore it. Default false: the game page's Uninstall of a package install.
     #[serde(default)]
     registration_only: bool,
+    /// Also delete what the title plays from: the `path` `GET /api/ps5/app/uninstall-source`
+    /// named (a folder, or a disk image whose mount is taken down first). Refused with 409
+    /// before anything is touched when that is no longer what the title plays from. The
+    /// uninstall is then registration-only, and the path is deleted only once it succeeded:
+    /// `source_deleted`, and `source_error` when it was kept.
+    #[serde(default)]
+    delete_source: Option<String>,
+}
+
+/// What became of the source `delete_source` named.
+#[derive(Debug, Default)]
+struct SourceDelete {
+    deleted: bool,
+    error: Option<String>,
+}
+
+/// Delete the source an uninstall just freed: unmount an image first, then delete it. Nothing
+/// when the uninstall did not finish (Sony refused, or the title is still listed).
+fn delete_uninstalled_source(
+    addr: &str,
+    src: &uninstall_source::UninstallSource,
+    outcome: &ps5upload_core::fs_ops::UnregisterOutcome,
+) -> SourceDelete {
+    let mut out = SourceDelete::default();
+    if outcome.refusal_stands() || outcome.still_present == Some(true) {
+        out.error = Some("uninstall_not_finished".into());
+        return out;
+    }
+    if let Some(mount) = src.mount_point.as_deref() {
+        // The title's own bind went with the uninstall; let that settle before the unmount.
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        if let Err(e) = ps5upload_core::fs_ops::fs_unmount(addr, mount) {
+            out.error = Some(format!("unmount_failed: {e:#}"));
+            return out;
+        }
+    }
+    let timeout = std::time::Duration::from_secs(60 * 60);
+    match fs_delete_with_op_id(addr, &src.path, 0, Some(timeout)) {
+        Ok(()) => out.deleted = true,
+        Err(e) => out.error = Some(format!("{e:#}")),
+    }
+    out
 }
 
 async fn ps5_app_unregister(
@@ -3584,26 +3627,81 @@ async fn ps5_app_unregister(
         return missing_console_addr();
     };
     let title_id = req.title_id;
-    let registration_only = req.registration_only;
+    let delete_source = req
+        .delete_source
+        .map(|p| p.trim().trim_end_matches('/').to_string())
+        .filter(|p| !p.is_empty());
+    // Deleting a game's folder never comes with the uninstall of the console's own install of
+    // the same title id (#884): registration-only then.
+    let registration_only = req.registration_only || delete_source.is_some();
     let started = std::time::Instant::now();
     crate::log_at!(
         Info,
         "files",
-        "app_unregister: addr={addr} title_id={title_id} registration_only={registration_only}"
+        "app_unregister: addr={addr} title_id={title_id} registration_only={registration_only} \
+         delete_source={delete_source:?}"
     );
+    // The source is resolved BEFORE the uninstall: the registration it is read from goes with it.
+    let mut source: Option<uninstall_source::UninstallSource> = None;
+    let mut busy = None;
+    if let Some(want) = delete_source {
+        let Some(b) = helper_stop::try_enter(&addr) else {
+            return helper_stop::stopping_refusal();
+        };
+        busy = Some(b);
+        let (a, t) = (addr.clone(), title_id.clone());
+        let refusal =
+            match tokio::task::spawn_blocking(move || uninstall_source::current(&a, &t)).await {
+                Ok(Ok(src)) if src.path == want => {
+                    source = Some(src);
+                    None
+                }
+                Ok(Ok(src)) => Some(format!("source_changed: the title plays from {}", src.path)),
+                Ok(Err(reason)) => Some(format!("source_not_deletable: {reason}")),
+                Err(e) => Some(e.to_string()),
+            };
+        if let Some(r) = refusal {
+            crate::log_at!(
+                Warn,
+                "files",
+                "app_unregister: {title_id} refused before anything was touched: {r}"
+            );
+            return json_err(StatusCode::CONFLICT, r).into_response();
+        }
+    }
     let title_for_log = title_id.clone();
     // Uninstalling changes which artwork exists, so drop this console's
     // cached images now rather than letting them age out — the user would
     // otherwise see a cover for a title they just removed.
     match tokio::task::spawn_blocking(move || {
+        let _busy = busy;
         icon_cache::invalidate_console(&addr);
-        app_unregister_scoped(&addr, &title_id, registration_only)
+        let outcome = app_unregister_scoped(&addr, &title_id, registration_only)?;
+        let deleted = source.as_ref().map(|src| {
+            (
+                src.path.clone(),
+                delete_uninstalled_source(&addr, src, &outcome),
+            )
+        });
+        Ok::<_, anyhow::Error>((outcome, deleted))
     })
     .await
     .map_err(anyhow::Error::from)
     .and_then(|r| r)
     {
-        Ok(outcome) => {
+        Ok((outcome, deleted)) => {
+            if let Some((path, d)) = &deleted {
+                if d.deleted {
+                    crate::log_at!(Info, "files", "app_unregister: deleted its source {path}");
+                } else {
+                    crate::log_at!(
+                        Warn,
+                        "files",
+                        "app_unregister: kept its source {path}: {}",
+                        d.error.as_deref().unwrap_or("?")
+                    );
+                }
+            }
             if let Some(by) = outcome.managed_by.as_deref() {
                 // #879: ShadowMount+ registers the title again while its image is in a scan
                 // folder; a bug report has to show that, whatever the result below.
@@ -3666,19 +3764,21 @@ async fn ps5_app_unregister(
                     started.elapsed().as_millis()
                 );
             }
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "ok": true,
-                    "sony_uninstall_refused": outcome.refusal_stands(),
-                    "sony_uninstall_rc": format!("0x{:08X}", outcome.sony_uninstall_rc),
-                    "still_present": outcome.still_present,
-                    "unverified": outcome.unverified,
-                    "managed_by": outcome.managed_by,
-                    "image": outcome.image,
-                })),
-            )
-                .into_response()
+            let mut body = serde_json::json!({
+                "ok": true,
+                "sony_uninstall_refused": outcome.refusal_stands(),
+                "sony_uninstall_rc": format!("0x{:08X}", outcome.sony_uninstall_rc),
+                "still_present": outcome.still_present,
+                "unverified": outcome.unverified,
+                "managed_by": outcome.managed_by,
+                "image": outcome.image,
+            });
+            if let Some((path, d)) = deleted {
+                body["source_path"] = path.into();
+                body["source_deleted"] = d.deleted.into();
+                body["source_error"] = d.error.into();
+            }
+            (StatusCode::OK, Json(body)).into_response()
         }
         Err(e) => {
             crate::log_at!(
@@ -13921,6 +14021,10 @@ fn build_app_and_mcp(
         .route("/api/ps5/app/launch", post(ps5_app_launch))
         .route("/api/ps5/app/register", post(ps5_app_register))
         .route("/api/ps5/app/unregister", post(ps5_app_unregister))
+        .route(
+            "/api/ps5/app/uninstall-source",
+            get(uninstall_source::plan_handler),
+        )
         .route("/api/ps5/hw/info", get(ps5_hw_info))
         .route("/api/ps5/hw/temps", get(ps5_hw_temps))
         .route("/api/ps5/syslog/tail", get(ps5_syslog_tail))

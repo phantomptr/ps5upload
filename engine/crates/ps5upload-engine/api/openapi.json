@@ -761,6 +761,13 @@
               "host"
             ]
           },
+          "delete_source": {
+            "description": "Also delete what the title plays from: the `path` `GET /api/ps5/app/uninstall-source`\nnamed (a folder, or a disk image whose mount is taken down first). Refused with 409\nbefore anything is touched when that is no longer what the title plays from. The\nuninstall is then registration-only, and the path is deleted only once it succeeded:\n`source_deleted`, and `source_error` when it was kept.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "registration_only": {
             "description": "Only take off a folder or image registration (#884): a helper from 12.6.16 on then\nrefuses, before touching anything, a title the console's own installer has installed\n(`unregister_title_installed:<where>`), instead of uninstalling that game. Older helpers\nignore it. Default false: the game page's Uninstall of a package install.",
             "type": "boolean"
@@ -16448,6 +16455,81 @@
             "type": "integer"
           }
         },
+        "type": "object"
+      },
+      "UninstallPlan": {
+        "allOf": [
+          {
+            "properties": {
+              "bytes": {
+                "description": "What deleting frees (a folder's: everything below it the walk read).",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "offer": {
+                "description": "The Uninstall may ask about deleting `path`.",
+                "type": "boolean"
+              },
+              "reason": {
+                "description": "Why not: `not_registered` (a package install or a system title: Uninstall removes it\nall), `gone`, `shadowmount`, `image_not_mounted`, `image_unknown`, `unsafe_path`,\n`shared_image`, `shared_folder`, `not_a_game`, `holds_other_game`, `unreadable`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "size_partial": {
+                "description": "The folder walk stopped early: `bytes` is at least that much.",
+                "type": "boolean"
+              },
+              "title_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title_id",
+              "offer"
+            ],
+            "type": "object"
+          },
+          {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UninstallSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        ],
+        "description": "The answer of `GET /api/ps5/app/uninstall-source`."
+      },
+      "UninstallSource": {
+        "description": "What a game plays from, which an Uninstall may delete.",
+        "properties": {
+          "kind": {
+            "description": "`folder` or `image`.",
+            "type": "string"
+          },
+          "mount_point": {
+            "description": "An image's mount, unmounted before the image is deleted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The folder, or the image file.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "path"
+        ],
         "type": "object"
       },
       "UnlinkReq": {
@@ -32439,6 +32521,81 @@
         }
       }
     },
+    "/api/ps5/app/uninstall-source": {
+      "get": {
+        "description": "`GET /api/ps5/app/uninstall-source?addr=&title_id=`: whether Uninstall can also delete the\nfolder or disk image the title plays from, what that is and its size. Read-only. A folder's\nsize is walked (up to 90 s; `size_partial` past that). `offer: false` with a `reason` when\nthere is nothing to delete: a package install (Uninstall removes it all), a system title,\na ShadowMount+ title, a source already gone, or one that is not safe to delete.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          {
+            "in": "query",
+            "name": "title_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UninstallPlan"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Whether Uninstall can also delete the folder or disk image the title plays from, what that is and its size",
+        "tags": [
+          "games"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "struct"
+        }
+      }
+    },
     "/api/ps5/app/unregister": {
       "post": {
         "requestBody": {
@@ -32484,6 +32641,29 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "502": {
             "$ref": "#/components/responses/Error",
