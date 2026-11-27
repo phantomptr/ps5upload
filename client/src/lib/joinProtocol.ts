@@ -84,6 +84,13 @@ export interface JoinStatus {
   playsAs: string | null;
   /** The host chose a profile for them that couldn't be used: the TV asks who they are. */
   seatNote: string | null;
+  /** The TV may be asking who they are: ✕ reaches it only after a move (d-pad or left stick),
+   *  so the user it offers first (the host's own) is never picked by a plain ✕. */
+  moveFirst: boolean;
+  /** While they pick: the name of the host's own PS5 user (picking it ends the host's game). */
+  hostUser: string | null;
+  /** The host's game ended while they picked a user: most likely they picked the host's. */
+  tookHost: boolean;
 }
 
 /** The picture as an internet connection's video track (join/rtcTransport): the browser's own
@@ -169,6 +176,9 @@ export function readServerMessage(text: string): ServerMessage | null {
         streamSeat: s.stream_seat === true,
         playsAs: typeof s.plays_as === "string" && s.plays_as ? s.plays_as : null,
         seatNote: typeof s.seat_note === "string" && s.seat_note ? s.seat_note : null,
+        moveFirst: s.move_first === true,
+        hostUser: typeof s.host_user === "string" && s.host_user ? s.host_user : null,
+        tookHost: s.took_host === true,
       },
     };
   }
