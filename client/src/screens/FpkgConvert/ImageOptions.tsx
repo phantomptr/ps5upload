@@ -472,15 +472,21 @@ export function UnpackOption({ unpack, compact }: { unpack: UnpackChoice; compac
  *  - a game in packs (`unpack`): "Unpack the asset packs", and under it "Leave out the AMPR
  *    emulator";
  *  - a game that was checked and is in no packs (`state` "none"): one line saying so;
+ *  - a game in no packs that carries its AMPR emulator ("none-emulator"): that the package keeps
+ *    it, and why;
+ *  - a game being checked ("checking"): that the options come when the check is done;
  *  - a game not checked yet ("pending"): one line saying that checking it shows them;
  *  - a waiting game that was never checked ("unchecked", the queue): what happens to it. */
+/** What a package's asset-pack line says when there is nothing to choose: see {@link PackagePacks}. */
+export type PackagePacksState = "pending" | "checking" | "none" | "none-emulator" | "unchecked";
+
 export function PackagePacks({
   unpack,
   state,
   compact,
 }: {
   unpack?: UnpackChoice;
-  state: "pending" | "none" | "unchecked";
+  state: PackagePacksState;
   compact?: boolean;
 }) {
   const tr = useTr();
@@ -501,6 +507,18 @@ export function PackagePacks({
   const text =
     state === "none"
       ? tr("fpkg.pkg_packs.none", undefined, "This game has no asset packs, so there is nothing to unpack.")
+      : state === "none-emulator"
+      ? tr(
+          "fpkg.pkg_packs.none_emulator",
+          undefined,
+          "This game has no asset packs, so there is nothing to unpack. Its AMPR emulator (fakelib/libSceAmpr.sprx) goes into the package as it is: the emulator can be left out only of a game in asset packs, as the package unpacks them.",
+        )
+      : state === "checking"
+      ? tr(
+          "fpkg.pkg_packs.checking",
+          undefined,
+          "Checking the game under ①. If it is in asset packs, the options to unpack them and to leave out the AMPR emulator appear here when the check is done.",
+        )
       : state === "unchecked"
         ? tr(
             "fpkg.pkg_packs.unchecked",

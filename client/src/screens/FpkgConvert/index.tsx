@@ -1293,6 +1293,14 @@ export default function WorkshopScreen() {
             unpack={locked ? undefined : (unpackChoice ?? pkgUnpackChoice)}
             // An archive is not looked inside until the run unpacks it: its packs aren't known.
             gameChecked={!locked && inspection !== null && !noFiles && !isArchiveSource(src)}
+            checking={!locked && checking}
+            keepsEmulator={
+              !locked &&
+              !inspection?.packs &&
+              !!inspection?.ampr_packs &&
+              inspection.ampr_packs.kind !== "no_ampr" &&
+              !inspection.ampr_packs.emulator_missing
+            }
             language={locked ? nextLanguage : language}
             onLanguage={locked ? setNextLanguage : setLanguage}
             onCompression={setCompression}

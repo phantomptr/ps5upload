@@ -356,6 +356,25 @@ describe("OptionsCard for a package of a game in asset packs (#933)", () => {
     for (const html of [pending, plain]) expect(html.indexOf("pkg-packs-note")).toBeLessThan(html.indexOf("Output folder"));
   });
 
+  // Discord: "Leave out the AMPR emulator" was missing for a folder until the output was switched
+  // away and back. While the check ran, the line said to check a game first, as if nothing was
+  // going on; and a plain game carrying its emulator was told only that it had no packs.
+  it("says a check is running, and why a plain game's emulator stays", () => {
+    const checking = renderToStaticMarkup(<OptionsCard {...props} make="pkg" checking />);
+    expect(checking).toMatch(/data-testid="pkg-packs-note" data-state="checking"/);
+    expect(checking).toContain("appear here when the check is done");
+    expect(checking).not.toContain("Check a game under ① first");
+    const emu = renderToStaticMarkup(<OptionsCard {...props} make="pkg" gameChecked keepsEmulator />);
+    expect(emu).toMatch(/data-testid="pkg-packs-note" data-state="none-emulator"/);
+    expect(emu).toContain("can be left out only of a game in asset packs");
+    // A game in packs gets the options whatever else is said.
+    const packed = renderToStaticMarkup(
+      <OptionsCard {...props} make="pkg" gameChecked keepsEmulator checking unpack={pkgUnpack(true)} />,
+    );
+    expect(packed).toContain('data-testid="leave-out-ampr-emu"');
+    expect(packed).not.toContain("pkg-packs-note");
+  });
+
   it("says nothing of a package's packs for an image, a folder or a PS4 package", () => {
     const image = renderToStaticMarkup(
       <OptionsCard {...props} make="image" image={{ format: "ffpkg", compress: false, onChoice: () => {} }} />,
