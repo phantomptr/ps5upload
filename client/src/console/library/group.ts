@@ -46,6 +46,12 @@ export interface GameGroup {
   dlc: number;
   backports: number;
   fake: boolean;
+  /**
+   * No part names the game and a disk image among them could not be read on the console (#963):
+   * the card shows the title id (or the file name) and says the title was not read. The first such
+   * image's cause ("img_compressed", ...), "" when the title is known or nothing says why.
+   */
+  titleUnread: string;
 }
 
 const TITLE_ID = /^[A-Z]{4}\d{5}$/;
@@ -144,7 +150,18 @@ function bestTitle(parts: Part[]): string {
   const any = base ?? parts.find((p) => p.entry.title && p.role !== "dlc") ?? parts.find((p) => p.entry.title);
   if (any) return any.entry.title;
   const e = parts[0].entry;
-  return titleFromFileName(e.name, baseTitleId(e)) || displayName(e);
+  const id = baseTitleId(e);
+  const fromName = titleFromFileName(e.name, id);
+  // a file named by its title id alone ("PPSA23012.exfat") shows as the id, not as the file name
+  if (id && fromName === e.name && nameKey(e.name) === id.toLowerCase()) return id;
+  return fromName || displayName(e);
+}
+
+/** Why the game's title is not known: an unread disk image's cause (GameGroup.titleUnread). */
+function unreadCause(parts: Part[]): string {
+  if (parts.some((p) => p.entry.title)) return "";
+  const img = parts.find((p) => p.entry.kind === "image" && p.entry.meta && p.entry.meta !== "read");
+  return img ? img.entry.meta : "";
 }
 
 const maxFw = (a: string, b: string) => (!a ? b : !b ? a : compareVersions(a, b) >= 0 ? a : b);
@@ -193,6 +210,7 @@ export function groupEntries(entries: Entry[]): GameGroup[] {
       dlc: parts.filter((p) => p.role === "dlc").length,
       backports: parts.filter((p) => p.role === "backport").length,
       fake: parts.some((p) => p.entry.fake),
+      titleUnread: unreadCause(parts),
     });
   }
   return out.sort((a, b) => a.title.localeCompare(b.title));

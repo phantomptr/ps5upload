@@ -295,6 +295,9 @@ function Detail({ g, p }: { g: GameGroup; p: LibraryViewProps }) {
               </div>
             ))}
           </dl>
+          {g.titleUnread ? (
+            <p className="cw-msg cw-dim">{t(g.titleUnread === "img_compressed" ? "cw_lib_unread_compressed" : "cw_lib_unread_other")}</p>
+          ) : null}
           {newer ? (
             <p className="cw-msg is-error">{t("cw_lib_fw_newer", { need: g.fw, have: p.firmware ?? "" })}</p>
           ) : null}
@@ -346,6 +349,7 @@ function GameCard({ g, p }: { g: GameGroup; p: LibraryViewProps }) {
         <span className="cw-libcard-name">{g.title}</span>
         <span className="cw-libcard-meta cw-dim">{meta}</span>
         <span className="cw-gcard-tags">
+          {g.titleUnread ? <span className="cw-tag">{t("cw_lib_title_unread")}</span> : null}
           {g.updates ? <span className="cw-tag">{kindText("patch")}</span> : null}
           {g.dlc ? <span className="cw-tag">{t("cw_lib_badge_dlc", { n: g.dlc })}</span> : null}
           {g.backports ? (

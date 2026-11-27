@@ -33,6 +33,12 @@ export interface LibItem {
   size: number;
   /** A file name in LIB_DIR/icons, "" without a cover. */
   icon: string;
+  /**
+   * A disk image only (#963): "read" when the console read the sce_sys/param.json inside it, else why
+   * it could not ("img_compressed", "img_unknown", ...: payload/smb/smbd_image.h). "" for anything
+   * else, and for an image an older helper listed by its file name only.
+   */
+  meta: string;
 }
 
 export interface LibScan {
@@ -94,6 +100,7 @@ export function parseScan(text: string): LibScan | null {
       fake: r.fake === true,
       size: typeof r.size === "number" ? r.size : 0,
       icon: /^[\w-]+\.png$/.test(str(r.icon)) ? str(r.icon) : "",
+      meta: /^[a-z_]{1,32}$/.test(str(r.meta)) ? str(r.meta) : "",
     });
   }
   return {
