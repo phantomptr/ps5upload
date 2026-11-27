@@ -499,6 +499,24 @@ static void test_split_long_location(void) {
         CHECK(cheat_loc_is_cave(&l));
     }
 
+    /* Exactly 255 characters (127 bytes and one space) fill the parser's 256-byte field, which the
+     * apply refuses as possibly cut short: that location is split too. */
+    {
+        char on255[300] = "", off255[300] = "";
+        for (int i = 0; i < 127; i++) {
+            strcat(on255, i == 63 ? "90 " : "90");
+            strcat(off255, i == 63 ? "CC " : "CC");
+        }
+        CHECK(strlen(on255) == 255 && strlen(off255) == 255);
+        pieces_t e = {0, -1, {{0}}, {{0}}, {{0}}};
+        CHECK(cheat_loc_split("0x10", on255, off255, take_piece, &e) == 2);
+        CHECK(e.n == 2 && strlen(e.on[0]) == 240 && strlen(e.on[1]) == 14);
+        CHECK(strcmp(e.off[0], "0x10") == 0 && strcmp(e.off[1], "0x88") == 0);
+        /* One character less fits the field and is left as it is. */
+        on255[254] = off255[254] = '\0';
+        CHECK(cheat_loc_split("0x10", on255, off255, take_piece, &e) == 0 && e.n == 2);
+    }
+
     /* Short locations are left to the caller as they are. */
     pieces_t q = {0, -1, {{0}}, {{0}}, {{0}}};
     CHECK(cheat_loc_split("A0", "90 90", "80 80", take_piece, &q) == 0 && q.n == 0);
