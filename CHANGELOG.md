@@ -11,6 +11,9 @@ What's new in ps5upload, written for humans.
 - **Turning the phone sideways goes full screen in a browser**, on the friend's page and the controller page, as it already did in the app. On an Android phone the browser's bars go away; on an iPhone the page folds Safari's bars away as far as iOS allows (for the whole screen there, add the page to the Home Screen).
 - Each PS press a friend makes after picking a user is noted in the log, saying whether it went to the PS5, so "PS does nothing" can be traced.
 
+**Web pages**
+- **Added to a phone's Home Screen, every PS5Upload page shows the PS5Upload logo and the name "PS5Upload"**: the web UI (Docker or self-hosted), a friend's Play Together page, the controller page and the console's own page, in Safari, Chrome and other phone browsers. Remove an icon you added before and add it again to get the new one.
+
 ## 12.6.40
 
 **Play Together**
