@@ -265,6 +265,18 @@ impl Store {
             .collect();
         // Marked even when no size is known yet: a measure running now must not keep one.
         let at = now_ms();
+        // As many consoles as sizes are kept for, the one written to longest ago dropped first
+        // (a caller naming console after console grows nothing).
+        if !self.marks.contains_key(key) && self.marks.len() >= MAX_CONSOLES {
+            if let Some(oldest) = self
+                .marks
+                .iter()
+                .min_by_key(|(_, m)| m.back().map_or(0, |(_, t)| *t))
+                .map(|(k, _)| k.clone())
+            {
+                self.marks.remove(&oldest);
+            }
+        }
         let marks = self.marks.entry(key.to_string()).or_default();
         for p in &paths {
             marks.push_back((p.clone(), at));
@@ -1357,6 +1369,20 @@ mod tests {
         // Another spelling of the same folder is the same folder.
         s.changed("k", &["/data//games/./X".to_string()]);
         assert!(!s.sizes_in("k", "/data").1.contains_key("games"));
+    }
+
+    /// Writes are remembered for a bounded number of consoles and writes each.
+    #[test]
+    fn remembered_writes_stay_bounded() {
+        let mut s = Store::load(None);
+        for i in 0..MAX_CONSOLES * 3 {
+            s.changed(&format!("console-{i}"), &["/data/x".to_string()]);
+        }
+        assert_eq!(s.marks.len(), MAX_CONSOLES);
+        for i in 0..MAX_MARKS + 10 {
+            s.changed("one", &[format!("/data/{i}")]);
+        }
+        assert_eq!(s.marks["one"].len(), MAX_MARKS);
     }
 
     /// An old clean-up scan read again (the page polls it) gives no sizes: a size dropped for a
