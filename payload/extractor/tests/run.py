@@ -368,11 +368,107 @@ def test_rar_multivolume(root):
     check("rar missing volume", s["state"] == "failed" and s["message"].startswith(("fs_extract_missing_volume", "fs_extract_truncated")), s)
 
 
-def test_rar_encrypted(root):
+def test_rar_mixed_passwords(root):
+    # libarchive's own fixtures: a.txt and c.txt have no password, b.txt has "password", d.txt
+    # another one. The files the password opens are written; d.txt is a wrong password.
     copy_fixtures(root, ["rar4-encrypted.rar", "rar5-encrypted.rar"])
     for n in ("rar4-encrypted.rar", "rar5-encrypted.rar"):
-        s = run(root, os.path.join(root, n), os.path.join(root, "o-" + n), password="password")
-        check(n, s["message"] == "fs_extract_rar_encrypted", s)
+        out = os.path.join(root, "o-" + n)
+        s = run(root, os.path.join(root, n), out, password="password")
+        check(n, s["state"] == "failed" and s["message"] == "fs_extract_wrong_password", s)
+        check(n, "d.txt" not in tree(out), "a file was kept under a wrong password")
+        s = run(root, os.path.join(root, n), os.path.join(root, "none-" + n))
+        check(n + " none", s["message"] == "fs_extract_password_required", s)
+
+
+# #958: password-protected RAR, made by tests/make_encrypted_rar.py (RAR 7 and RAR 6).
+sys.path.insert(0, HERE)
+import make_encrypted_rar as pwrar  # noqa: E402
+
+PW_RAR = {
+    "pw-rar5-data.rar": 1, "pw-rar5-headers.rar": 1, "pw-rar5-stored.rar": 1, "pw-rar5-blake2.rar": 1,
+    "pw-rar5-multi.part1.rar": 3, "pw-rar5-solid-multi.part1.rar": 3, "pw-rar5-stored-multi.part1.rar": 4,
+    "pw-rar4-data.rar": 1, "pw-rar4-headers.rar": 1, "pw-rar4-stored.rar": 1, "pw-rar4-multi.part1.rar": 3,
+}
+
+
+def pw_rar_copy(root, first):
+    n = PW_RAR[first]
+    names = [first] if n == 1 else [first.replace(".part1.", f".part{i}.") for i in range(1, n + 1)]
+    copy_fixtures(root, names)
+    return os.path.join(root, first), names
+
+
+def pw_of(name):
+    return pwrar.PW5 if "rar5" in name else pwrar.PW4
+
+
+def files_in(top):
+    return {k.replace(os.sep, "/"): v for k, v in tree(top).items()} if os.path.exists(top) else {}
+
+
+def test_rar_passwords(root):
+    want = pwrar.encrypted_rar_files()
+    for first in PW_RAR:
+        arc, _ = pw_rar_copy(root, first)
+        out = os.path.join(root, "ok-" + first)
+        s = run(root, arc, out, password=pw_of(first))
+        got = files_in(out)
+        check(first, s["state"] == "done" and got == want, (s, sorted(got)))
+        check(first, s["files"] == len(want), s)
+        # No password: refused before the folder is made.
+        out = os.path.join(root, "none-" + first)
+        s = run(root, arc, out)
+        check(first + " none", s["message"] == "fs_extract_password_required", s)
+        check(first + " none", not os.path.exists(out), "a folder was made without the password")
+        # A wrong one: refused, nothing written. RAR 3/4 with only the data encrypted has no
+        # password check, so its first file is decoded (and dropped) first; the helper then removes
+        # the folder this run made.
+        out = os.path.join(root, "bad-" + first)
+        s = run(root, arc, out, password="not the password")
+        check(first + " wrong", s["state"] == "failed" and s["message"] == "fs_extract_wrong_password", s)
+        check(first + " wrong", not files_in(out), files_in(out))
+        if first not in ("pw-rar4-data.rar", "pw-rar4-stored.rar"):
+            check(first + " wrong", not os.path.exists(out), "a folder was made under a wrong password")
+
+
+def test_rar_password_list_and_volumes(root):
+    # Listing: the names are readable without the password unless the headers are encrypted.
+    arc, _ = pw_rar_copy(root, "pw-rar5-data.rar")
+    s = run(root, arc, os.path.join(root, "l1"), list_only=True)
+    check("list data-only", s["state"] == "done" and sorted(s["top"].split("/")) == ["a.txt", "sub"], s)
+    arc, _ = pw_rar_copy(root, "pw-rar4-headers.rar")
+    s = run(root, arc, os.path.join(root, "l2"), list_only=True)
+    check("list headers none", s["message"] == "fs_extract_password_required", s)
+    s = run(root, arc, os.path.join(root, "l3"), list_only=True, password=pwrar.PW4)
+    check("list headers", s["state"] == "done" and sorted(s["top"].split("/")) == ["a.txt", "sub"], s)
+    # A volume missing in the middle of an encrypted file.
+    arc, names = pw_rar_copy(root, "pw-rar5-multi.part1.rar")
+    os.unlink(os.path.join(root, names[1]))
+    s = run(root, arc, os.path.join(root, "m1"), password=pwrar.PW5)
+    check("missing volume", s["state"] == "failed"
+          and s["message"].startswith(("fs_extract_missing_volume", "fs_extract_truncated")), s)
+    # Not enough room: known before anything is made (the sizes come from the decrypted headers).
+    arc, _ = pw_rar_copy(root, "pw-rar4-headers.rar")
+    s = run(root, arc, os.path.join(root, "sp"), password=pwrar.PW4, env={"XTEST_FREE": str(1 << 20)})
+    check("space", s["message"].startswith("fs_extract_no_space: needs"), s)
+    check("space", not os.path.exists(os.path.join(root, "sp")), "made the folder anyway")
+
+
+def test_rar_password_damaged(root):
+    # Damaged encrypted data under the right password (RAR5 checks the password itself): damage,
+    # not a wrong password, and the damaged file is not kept.
+    arc, _ = pw_rar_copy(root, "pw-rar5-data.rar")
+    data = bytearray(open(arc, "rb").read())
+    at = data.find(b"b.bin")
+    for i in range(at + 2000, at + 2016):
+        data[i] ^= 0x5A
+    with open(arc, "wb") as f:
+        f.write(data)
+    out = os.path.join(root, "o")
+    s = run(root, arc, out, password=pwrar.PW5)
+    check("damaged", s["state"] == "failed" and s["message"].startswith("fs_extract_corrupt"), s)
+    check("damaged", "sub/b.bin" not in files_in(out), "the damaged file was kept")
 
 
 # ---- damage ----
