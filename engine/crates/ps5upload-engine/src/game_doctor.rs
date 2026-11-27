@@ -145,6 +145,9 @@ pub struct Facts {
     pub folder_modes: FolderModes,
     /// Usable bytes on the console's own storage (`/user`).
     pub free_internal: Option<u64>,
+    /// A game registered from this app's own image mount (`/mnt/ps5upload/...`): whether that
+    /// mount is there now (`None`: not such a game, or the volumes could not be read).
+    pub app_mount: Option<bool>,
 }
 
 impl Default for Facts {
@@ -165,6 +168,7 @@ impl Default for Facts {
             restore_state: None,
             folder_modes: FolderModes::NotRead,
             free_internal: None,
+            app_mount: None,
         }
     }
 }
@@ -179,6 +183,26 @@ pub fn evaluate(f: &Facts) -> Vec<DoctorCheck> {
         permissions(f),
         free_space(f),
     ]
+}
+
+/// This app's own image mounts (`fs.mount`): a game registered under one plays from it.
+const APP_MOUNTS: &str = "/mnt/ps5upload";
+
+/// The game runs from one of this app's own image mounts.
+fn on_app_mount(src: &str) -> bool {
+    src.strip_prefix(APP_MOUNTS)
+        .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Whether one of `volumes` (mount points) is the app mount `src` lies on.
+pub fn app_mount_present(src: &str, volumes: &[String]) -> bool {
+    volumes.iter().any(|v| {
+        let v = v.trim_end_matches('/');
+        on_app_mount(v)
+            && src
+                .strip_prefix(v)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
 }
 
 fn fake_package(f: &Facts) -> DoctorCheck {
@@ -314,6 +338,29 @@ fn mount_layer(f: &Facts) -> DoctorCheck {
             "kind_unknown",
             "The app could not tell how this game is on the console.".into(),
         ),
+        // This app mounted the image itself: no other mounter is needed while it is mounted.
+        GameKind::Image if f.source.as_deref().is_some_and(on_app_mount) => match f.app_mount {
+            Some(true) => check(
+                ID,
+                DoctorStatus::Pass,
+                "app_mount",
+                "PS5Upload mounted the game's disk image, and it is mounted.".into(),
+            ),
+            Some(false) => check(
+                ID,
+                DoctorStatus::Problem,
+                "app_mount_gone",
+                "PS5Upload mounted this game's disk image, and it is not mounted now (a restart \
+                 takes mounts down). Mount the image again in Files, then start the game."
+                    .into(),
+            ),
+            None => check(
+                ID,
+                DoctorStatus::Unknown,
+                "app_mount_unknown",
+                "The app could not tell whether the game's disk image is mounted.".into(),
+            ),
+        },
         GameKind::Image => match f.mounter {
             Mounter::Shadowmount | Mounter::Both => check(
                 ID,
@@ -948,6 +995,12 @@ pub fn gather(addr: &str, title_id: &str) -> Facts {
             }
         }
     }
+    if let Some(src) = f.source.as_deref().filter(|s| on_app_mount(s)) {
+        f.app_mount = ps5upload_core::volumes::list_volumes(addr).ok().map(|l| {
+            let paths: Vec<String> = l.volumes.into_iter().map(|v| v.path).collect();
+            app_mount_present(src, &paths)
+        });
+    }
     if matches!(f.kind, GameKind::Folder | GameKind::Image) {
         f.mounter = ps5upload_core::smp::collect_status(addr)
             .map(|s| s.mounter)
@@ -1471,7 +1524,57 @@ mod tests {
             f.free_internal = free;
             out.push(f);
         }
+        // mount_layer: this app's own image mount
+        for mounted in [Some(true), Some(false), None] {
+            out.push(app_image(mounted));
+        }
         out
+    }
+
+    /// A game registered from this app's own image mount, that mount there (or not, or unknown).
+    fn app_image(mounted: Option<bool>) -> Facts {
+        let mut f = folder(FolderModes::NotRead);
+        f.kind = GameKind::Image;
+        f.source = Some("/mnt/ps5upload/Game/PPSA00001-app".into());
+        f.mounter = Mounter::None;
+        f.app_mount = mounted;
+        f
+    }
+
+    /// This app's own image mount is a working mount layer: no ShadowMount+ asked for while it is
+    /// mounted, and a gone mount is said as that.
+    #[test]
+    fn the_apps_own_image_mount_needs_no_other_mounter() {
+        for (mounted, status, reason) in [
+            (Some(true), DoctorStatus::Pass, "app_mount"),
+            (Some(false), DoctorStatus::Problem, "app_mount_gone"),
+            (None, DoctorStatus::Unknown, "app_mount_unknown"),
+        ] {
+            for m in [Mounter::None, Mounter::Kraken] {
+                let mut f = app_image(mounted);
+                f.mounter = m;
+                let c = mount_layer(&f);
+                assert_eq!((c.status, c.reason), (status, reason), "{mounted:?} {m:?}");
+                assert_eq!(c.fix, None);
+            }
+        }
+        let vols = vec!["/data".to_string(), "/mnt/ps5upload/Game".to_string()];
+        assert!(app_mount_present(
+            "/mnt/ps5upload/Game/PPSA00001-app",
+            &vols
+        ));
+        assert!(app_mount_present("/mnt/ps5upload/Game", &vols));
+        assert!(!app_mount_present("/mnt/ps5upload/Game2/x", &vols));
+        assert!(!app_mount_present("/mnt/ps5upload/Other/x", &vols));
+        // The mount root itself is no game's mount.
+        assert!(!app_mount_present(
+            "/mnt/ps5upload/x",
+            &["/mnt/ps5upload".into()]
+        ));
+        // A ShadowMount+ image is not ours.
+        let mut f = app_image(Some(true));
+        f.source = Some("/mnt/shadowmnt/Game.ffpkg_1/x".into());
+        assert_eq!(mount_layer(&f).reason, "no_mounter");
     }
 
     /// The app words every reason itself (`doctor_<id>_<reason>` in the client's en.ts); its
