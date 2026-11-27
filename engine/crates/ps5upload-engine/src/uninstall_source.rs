@@ -544,7 +544,7 @@ mod tests {
         })
     }
 
-    const ADDR: &str = "192.0.2.10:9113";
+    const ADDR: &str = "192.0.2.10";
 
     #[test]
     fn a_folder_is_offered_only_while_it_is_there_and_holds_a_game() {
