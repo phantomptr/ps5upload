@@ -80,7 +80,12 @@ import {
   ListChecks,
   Server,
   Columns2,
+  Ruler,
+  Square,
 } from "lucide-react";
+import { useFolderSizes, useFolderSizesStore } from "../../state/folderSizes";
+import { queueActive } from "../../api/folderSizes";
+import { FolderSizeCell, folderSizeState, knownFolderBytes } from "./FolderSizeCell";
 import { TwoPanesFrame, type PsSide } from "./TwoPanes";
 import { readTwoPanes, TWO_PANES_QUERY, writeTwoPanes, type CopyOutcome } from "./panePlan";
 import { useMediaQuery } from "../../lib/phoneLayout";
@@ -1958,10 +1963,50 @@ export default function FileSystemScreen() {
   // the toolbar instead of by highlighting.
   // ── FileZilla-style browsing: sort columns, keyboard, row menu, typed path ──
   const [sort, setSort] = useState<SortState>({ key: "name", desc: false });
+  // Folder sizes already known (#974): measured on request, by What takes space?, or by a transfer.
+  // Fetched once per listing; nothing is measured unless asked.
+  const sizesAddr = host?.trim() ? consoleAddr(host) : null;
+  const { sizes: folderSizes, queue: measureQueue } = useFolderSizes(sizesAddr, path, entries);
+  // (Kept per console and folder, so these are always the open folder's.)
+  const sizeChildren = folderSizes?.children;
   const sortedEntries = useMemo(
-    () => (entries ? sortEntries(entries, sort) : []),
-    [entries, sort],
+    () =>
+      entries
+        ? sortEntries(entries, sort, (name) => knownFolderBytes(sizeChildren, name))
+        : [],
+    [entries, sort, sizeChildren],
   );
+  const measuringHere = queueActive(measureQueue);
+  /** Measure these folders of the open one, in the background. */
+  const measureFolders = (names: string[]) => {
+    if (!sizesAddr || names.length === 0) return;
+    useFolderSizesStore
+      .getState()
+      .measure(sizesAddr, names.map((n) => joinPath(path, n)))
+      .catch((e) =>
+        pushNotification("error", tr("fs_measure_failed", undefined, "Could not measure the folder size"), {
+          body: humanizeCaught(e),
+        }),
+      );
+  };
+  const measureAllHere = () => {
+    if (!sizesAddr) return;
+    useFolderSizesStore
+      .getState()
+      .measureAllIn(sizesAddr, path)
+      .catch((e) =>
+        pushNotification("error", tr("fs_measure_failed", undefined, "Could not measure the folder size"), {
+          body: humanizeCaught(e),
+        }),
+      );
+  };
+  const stopMeasuring = () => {
+    if (!sizesAddr) return;
+    useFolderSizesStore
+      .getState()
+      .cancel(sizesAddr)
+      .catch(() => {});
+  };
   // A folder can hold 100,000 entries: only those near the screen are rendered.
   const rowsListRef = useRef<HTMLUListElement | null>(null);
   // The phone layout (#936).
@@ -3321,6 +3366,7 @@ export default function FileSystemScreen() {
     remove: (e) => void runDelete(e.name),
     snapshot: (e) => snapshotPaths([joinPath(path, e.name)]),
     space: (e) => openSpace(joinPath(path, e.name)),
+    measure: sizesAddr ? (e) => measureFolders([e.name]) : undefined,
   };
   const actionsMenuEntry =
     actionsMenu && actionsMenu.path === path
@@ -3349,6 +3395,21 @@ export default function FileSystemScreen() {
       run: () => snapshotPaths([path]),
       disabled: !host?.trim() || path === "/",
     },
+    {
+      icon: Ruler,
+      label: tr("fs_measure_all_here", undefined, "Measure everything here"),
+      run: measureAllHere,
+      disabled: !sizesAddr || !(entries ?? []).some((x) => x.kind === "dir"),
+    },
+    ...(measuringHere
+      ? [
+          {
+            icon: Square,
+            label: tr("fs_measure_stop", undefined, "Stop measuring"),
+            run: stopMeasuring,
+          },
+        ]
+      : []),
   ];
 
   /** The page's ⋯ menu: the folder's views, a link download, the drive's tools and search. */
@@ -3539,6 +3600,15 @@ export default function FileSystemScreen() {
         run: () => void runChmod777(),
         disabled: bulkOp.op !== null || chmodBusy,
       },
+      ...(sizesAddr && selectedEntries.some((x) => x.kind === "dir")
+        ? [
+            {
+              icon: Ruler,
+              label: tr("fs_measure_size", undefined, "Measure size"),
+              run: () => measureFolders(selectedEntries.filter((x) => x.kind === "dir").map((x) => x.name)),
+            },
+          ]
+        : []),
     ],
     several: [
       {
@@ -3736,6 +3806,18 @@ export default function FileSystemScreen() {
                     label: tr("fs_space_action", undefined, "What takes space?"),
                     run: () => openSpace(joinPath(path, menuEntry.name)),
                     disabled: !host?.trim(),
+                  },
+                  {
+                    icon: Ruler,
+                    label: tr("fs_measure_size", undefined, "Measure size"),
+                    // Right-clicking one of several ticked rows measures every ticked folder.
+                    run: () =>
+                      measureFolders(
+                        selected.has(menuEntry.name)
+                          ? selectedEntries.filter((x) => x.kind === "dir").map((x) => x.name)
+                          : [menuEntry.name],
+                      ),
+                    disabled: !sizesAddr,
                   },
                 ]
               : []),
@@ -5136,15 +5218,23 @@ export default function FileSystemScreen() {
                               </span>
                             );
                           })()}
-                          <span
-                            className={
-                              "shrink-0 text-xs text-[var(--color-muted)] tabular-nums " +
-                              // A folder's dash would be a line of its own on a phone.
-                              (isDir ? "phone:hidden" : "")
-                            }
-                          >
-                            {isDir ? "—" : formatBytes(e.size)}
-                          </span>
+                          {isDir ? (
+                            (() => {
+                              const st = folderSizeState(joinPath(path, e.name), sizeChildren?.[e.name], measureQueue);
+                              return (
+                                <FolderSizeCell
+                                  state={st}
+                                  tr={tr}
+                                  // A folder's dash would be a line of its own on a phone.
+                                  className={st.kind === "unknown" ? "phone:hidden" : ""}
+                                />
+                              );
+                            })()
+                          ) : (
+                            <span className="shrink-0 text-xs text-[var(--color-muted)] tabular-nums">
+                              {formatBytes(e.size)}
+                            </span>
+                          )}
                         </div>
                       </div>
                     )}

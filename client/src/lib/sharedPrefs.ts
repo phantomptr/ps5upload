@@ -45,6 +45,7 @@ export const SHARED_KEYS: readonly string[] = [
   "ps5upload.keep_ps5_awake",
   "ps5upload.auto_bring_up",
   "ps5upload.system_file_read",
+  "ps5upload.files_keep_sizes_fresh",
   "ps5upload.rest_after_upload",
   "ps5upload.register_after_upload",
   "ps5upload.pkg_upload_choice",
@@ -96,6 +97,9 @@ export const MESH_KEYS: readonly string[] = SHARED_KEYS.filter(
     k !== "ps5upload.convert.output_dir" &&
     k !== "ps5upload.save_path" &&
     k !== "ps5upload.log_level" &&
+    // Measuring folder sizes in the background is this engine's work: shared, every device that
+    // uses the console would measure the same folders again.
+    k !== "ps5upload.files_keep_sizes_fresh" &&
     // How THIS device reaches each console (a phone on mobile data goes direct), keyed by the
     // address it uses: another device's routes mean nothing here.
     k !== "ps5upload.c2c.routes.v1" &&

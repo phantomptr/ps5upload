@@ -111,6 +111,7 @@ import { LinuxGraphicsSettings } from "./LinuxGraphicsSettings";
 import { linuxGraphicsPossible } from "../../lib/linuxGraphics";
 import { trayPossible } from "../../state/tray";
 import { GentleToggle } from "../FpkgConvert/GentleToggle";
+import { useKeepSizesFresh } from "../../state/folderSizes";
 // useAuditLogStore + AuditEntry moved to screens/AuditLog/index.tsx
 // (2.12.0 — promoted out of Settings junk drawer).
 
@@ -906,6 +907,8 @@ function AppSettingsTab() {
             )}
           />
         </Section>
+
+        <FolderSizesSection />
 
         <SavePathSection />
 
@@ -2447,3 +2450,25 @@ function ReleaseNotes({
  * reintroduce the choice later, restore from the commit that added
  * register.c (user rejected Safe mode because it hashed every remote
  * file and crashed the payload on large libraries). */
+
+/** Files' folder sizes (#974): off by default, nothing is measured unless asked. The engine reads
+ *  the switch from the shared settings, so every app and the web UI of one engine share it. */
+function FolderSizesSection() {
+  const tr = useTr();
+  const keepFresh = useKeepSizesFresh((s) => s.keepFresh);
+  const setKeepFresh = useKeepSizesFresh((s) => s.setKeepFresh);
+  return (
+    <Section title={tr("settings_card_folder_sizes", undefined, "Folder sizes")}>
+      <Toggle
+        checked={keepFresh}
+        onChange={(checked) => setKeepFresh(checked)}
+        label={tr("settings_keep_sizes_fresh", undefined, "Keep folder sizes fresh")}
+        hint={tr(
+          "settings_keep_sizes_fresh_hint",
+          undefined,
+          "Counts again the folder sizes Files already knows, at most once a day, only in folders you open, and only while nothing else runs on the console. Off: a size is counted only when you choose Measure size.",
+        )}
+      />
+    </Section>
+  );
+}
