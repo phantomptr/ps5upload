@@ -92,7 +92,10 @@ export const useTitleRestoreStore = create<TitleRestoreState>((set) => {
         for (const item of items) {
           put(host, item, { title_id: item.titleId, phase: "failed", error: raw });
         }
-        throw new Error(restoreErrorText(raw, items[0].name));
+        const wrapped = new Error(restoreErrorText(raw, items[0].name));
+        // The target is ES2020 (no Error cause option); attach it by hand (preserve-caught-error).
+        (wrapped as Error & { cause?: unknown }).cause = e;
+        throw wrapped;
       }
       void follow(host, items);
     },
