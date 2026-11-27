@@ -2215,6 +2215,29 @@ whose title ID can't be read) are counted in a line under the grid; **Show them*
 with the same actions. To dump an installed game to a drive, open it and use **Dump this game**
 under **On <console>**.
 
+**Q: After Rebuild Database my games installed from fake packages are gone from the home screen. Do I have to download them again?**
+No. Rebuild Database (Safe Mode) removes games installed from fake packages from the home screen
+and from Settings › Storage, but their files stay on the drive. With the helper running and
+fake-package support (kstuff) loaded, open such a game in **Games**: instead of **Play** it says
+it is not on the PS5's home screen and offers **Restore to home screen**. When several are
+missing, **Games** shows **Restore all** above the grid.
+
+Restore installs the game again from the package that is already on the PS5, with the PS5's own
+installer, the same way as the first install. Nothing is downloaded. What happens, in order: a
+copy of the PS5's game database is saved in `/data/ps5upload/backup/restore/`; the package
+(`…/user/app/<title ID>/app.pkg`) is moved into a `ps5upload/restore` folder on the same drive;
+the PS5 installs it from there, writing a new copy where **Settings › Storage › Installation
+Location** says (so that drive needs room for one more copy while it runs); then the moved copy
+is deleted. If the install fails, the package is put back where it was. The game's update file
+is kept aside during the install and put back afterwards as a file; install the update package
+again to update the game. Don't start the game or turn the PS5 off while it runs.
+
+A game that the PS5 still lists, a retail game, and a game added from a folder are never
+touched. Pressing **Play** on a game that is not on the home screen no longer tries to start it:
+nothing on the PS5 knows the game until it is restored. If a restore was interrupted (the app or
+the PS5 was closed), the game's page says so and offers **Finish** (when the game is back on the
+home screen) or **Put back** (when it is not).
+
 **Q: What is the Collection?**
 It is what the **Games** grid shows of this computer: every game you keep on its drives and
 saved servers, grouped by game: its full copies, its updates and DLC, the duplicates and the
