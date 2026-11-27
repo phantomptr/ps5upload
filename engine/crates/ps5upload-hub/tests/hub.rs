@@ -1258,9 +1258,9 @@ async fn the_limit_that_fired_is_counted() {
 
 /// One home (one IPv4: a family, or a carrier-grade NAT) with three devices joining one Play
 /// Together, each trying twice within the minute (the first try dropped and the page made a new
-/// one), with the page as it was before it asked for one set of candidates: its offer, then 40
-/// candidates (Firefox found 20 on one plain network for the page's data channel, video and
-/// audio; IPv6 or a VPN doubles that). The host answers each try with its answer and 10
+/// one), with the page as it was before it left out the candidates the engine drops: its offer,
+/// then 40 candidates (Firefox found 20 on one plain network for the page's data channel, video
+/// and audio; IPv6 or a VPN doubles that). The host answers each try with its answer and 10
 /// candidates. Returns how many times a limit fired.
 async fn family_session(c: Config) -> u64 {
     let t = start(Config {

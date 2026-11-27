@@ -166,8 +166,8 @@ impl Default for Config {
             // signal each. Firefox on one network found 20 for the Play Together page as it was
             // (a data channel, a video and an audio track: a set of candidates for each), so with
             // the offer it went past the old 20 and was closed before it could connect; a home
-            // with IPv6 or a VPN finds twice as many. The pages now ask for one set and leave out
-            // the candidates the engine cannot use, a fifth as many; older pages stay in use.
+            // with IPv6 or a VPN finds twice as many. The pages now leave out the candidates the
+            // engine cannot use (about half); older pages stay in use.
             max_signals_per_guest: 60,
             // Room for a home of three or four, each trying twice in the minute with such a page.
             max_signals_per_guest_client: 300,

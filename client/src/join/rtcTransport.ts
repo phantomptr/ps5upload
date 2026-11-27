@@ -133,6 +133,19 @@ export { NET_CLOSE, netFailure, type NetWhy };
 export const STUN_SERVERS = ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"];
 /** ICE must reach "connected" (and the channel open) this soon, or the networks can't meet. */
 export const ICE_TIMEOUT_MS = 15_000;
+
+/** A candidate the engine can use: UDP, with an address. It drops `.local` (mDNS) ones and has
+ *  no TCP (join_net/rtc.rs, `Cmd::Remote`). Each candidate sent is a signal the hub counts, and
+ *  it closes a guest past its per-minute limit: the browser gathers a set for each of the page's
+ *  sections (data, video, audio), and Firefox found 20 on one plain network, half of them
+ *  `.local` or TCP. A line of a shape this does not know is sent as before. */
+export function usefulCandidate(line: string): boolean {
+  // candidate:<foundation> <component> <transport> <priority> <address> <port> typ <type> ...
+  const f = line.trim().replace(/^a=/, "").split(/\s+/);
+  if (f.length < 8 || f[6] !== "typ") return true;
+  return f[2].toLowerCase() === "udp" && !f[4].toLowerCase().endsWith(".local");
+}
+
 /** The hub closed with 1001 (going away: it is restarting for an update) before the host
  *  answered: try again after this long, for at most HUB_BACK_FOR_MS. The hosts reconnect and open
  *  their rooms again within seconds, so a `no_room` in that time means "not back yet". */
@@ -462,6 +475,7 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
         const c = e.candidate;
         // The end of gathering (null or empty) needs nothing: the engine takes what came.
         if (!c || !c.candidate) return;
+        if (!usefulCandidate(c.candidate)) return;
         const data = { type: "candidate", candidate: c.candidate, sdpMid: c.sdpMid ?? "0" };
         // Found while the hub was still connecting: right behind the offer (never ahead of it).
         if (this.offerSent) this.signal(data);

@@ -176,10 +176,10 @@ Forwarded as `{"t":"signal","from":"host"|"<gid>","data":<data unchanged>}`.
 A *client* is an IPv4 address or an IPv6 /64. Behind a reverse proxy, the client address comes
 from the proxy's header (last entry) only when the proxy is configured as trusted.
 
-A guest's signals are its offer and each ICE candidate, one signal each, so a client should send
-few: one transport for all its sections (`bundlePolicy: "max-bundle"`), and none of the
-candidates the host cannot use (the engine takes UDP candidates with an address; `.local` and
-TCP ones it drops). The guest pages do both: about 5 signals a try instead of 20 to 40.
+A guest's signals are its offer and each ICE candidate, one signal each, so a client should not
+send the candidates the host cannot use: the engine takes UDP candidates with an address and
+drops `.local` (mDNS) and TCP ones. The guest pages leave those out (Firefox on one network: 11
+signals a try instead of 21).
 
 ## Close codes
 

@@ -26,6 +26,7 @@ import {
   sdpFingerprint,
   STUN_SERVERS,
   trackCodecs,
+  usefulCandidate,
   type InternetInvite,
 } from "./rtcTransport";
 
@@ -72,6 +73,27 @@ describe("internet invite link", () => {
     expect(hubSocketUrl("localhost:8787")).toBe("ws://localhost:8787/ws");
     expect(hubSocketUrl("[::1]:8787")).toBe("ws://[::1]:8787/ws");
     expect(hubSocketUrl("127.0.0.1.evil.example")).toBe("wss://127.0.0.1.evil.example/ws");
+  });
+});
+
+describe("the candidates the page sends", () => {
+  it("are the UDP ones with an address: the engine drops .local ones and has no TCP", () => {
+    for (const ok of [
+      "candidate:1 1 udp 2122260223 192.0.2.1 5000 typ host generation 0",
+      "candidate:2 1 UDP 1686052607 203.0.113.9 6000 typ srflx raddr 0.0.0.0 rport 0",
+      "a=candidate:3 1 udp 1 2001:db8::1 7000 typ srflx",
+      // A shape this does not know goes as before.
+      "candidate:x",
+    ]) {
+      expect(usefulCandidate(ok), ok).toBe(true);
+    }
+    for (const no of [
+      "candidate:4 1 udp 2122260223 0f3c1a2b-1111-4222-8333-944445555666.local 5001 typ host",
+      "candidate:5 1 TCP 2105524479 192.0.2.1 9 typ host tcptype active",
+      "candidate:6 1 tcp 1 203.0.113.9 443 typ srflx tcptype passive",
+    ]) {
+      expect(usefulCandidate(no), no).toBe(false);
+    }
   });
 });
 
@@ -374,6 +396,9 @@ describe("the WebRTC transport", () => {
     expect(dc.binaryType).toBe("arraybuffer");
     expect(hub.signals("offer")).toEqual([{ t: "signal", to: "host", data: { type: "offer", sdp: "v=0\r\nOFFER\r\n" } }]);
     pc.onicecandidate?.({ candidate: { candidate: "candidate:1 1 udp 1 192.0.2.1 5000 typ host", sdpMid: "0" } });
+    // What the engine can't use is not sent: each candidate is a signal the hub counts.
+    pc.onicecandidate?.({ candidate: { candidate: "candidate:7 1 udp 1 0f3c1a2b-1111-4222-8333-944445555666.local 5001 typ host generation 0", sdpMid: "0" } });
+    pc.onicecandidate?.({ candidate: { candidate: "candidate:8 1 TCP 1 192.0.2.1 9 typ host tcptype active", sdpMid: "0" } });
     pc.onicecandidate?.({ candidate: null });
     expect(hub.signals("candidate")).toEqual([
       { t: "signal", to: "host", data: { type: "candidate", candidate: "candidate:1 1 udp 1 192.0.2.1 5000 typ host", sdpMid: "0" } },
