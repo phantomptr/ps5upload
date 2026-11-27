@@ -6,6 +6,33 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Install from archives**
+- **Choose what to install or unpack from an archive (#969).** When a .zip, .7z, .rar or tar holds several packages or folders (a game, its update and add-ons), "Choose files…" lists what's inside with checkboxes; only what you tick is installed, uploaded or unpacked. Packages inside a .zip show their game, version and type first. Extract on the PS5 (in the app and on the console's own page) can leave out top-level items the same way.
+
+**Fake packages (Workshop)**
+- **The Workshop won't build a package the PS5 can't open.** The PS5 limits how large a fake package it will open: on firmware 13.x the package plus the add-on space the game reserves must stay under 450 GiB (256 GiB on 7 to 10, and so on). Before any work, the check shows how much room is left, and a package that wouldn't fit is refused with the reason and a "Make a game image instead" button.
+- **Leave out the AMPR emulator from a game that isn't in asset packs.** Offered when the check says it's safe (the library in the game is the emulator, and nothing points at packs), off by default; otherwise it says why the emulator stays.
+- While a game is being checked, the options line says so, instead of "Check a game first".
+- A game's emulator log (`playgo.log` and similar at the game's top level) no longer makes the AMPR index look out of date.
+
+**Restore to home screen (#961)**
+- **A restore that fails no longer blocks the rest.** The PS5's unfinished copy is removed (which also clears it from the PS5's downloads), the package goes back where it was, and Restore all carries on with the next game. It stops only when the PS5's installer stops answering, and says to restart the PS5.
+- The room check now counts what the PS5's internal storage really uses (about 1.2 times the package plus 1 GiB), the likely cause of restores failing near the end of a long batch; each restore logs room, Sony's code and how it ended.
+- A restore no longer stays "queued" or "being restored" after its run ended or the engine stopped answering.
+- **A screen that hits an error shows "Try again" instead of a blank window**, and the rest of the app keeps working.
+
+**Remote Play**
+- **Pairing setup (#971):** the offline sign-in step only ticks once the account really is signed in, "Allow" writes the same user that pairing uses and checks it took, and a changed account ID is read back; if a restart drops it, the setup offers to put it back.
+- **The stream's stats show "PS5 sent N fps" and "N skipped here" (#972)**, so a stuttering picture shows whether the PS5 or this computer is behind.
+
+**Cheats**
+- **Large cheat tables apply.** A patch longer than about 85 bytes failed with "Patch bytes exceed helper limit"; long patches are now split safely, and the limits match the helper's (64 cheats, 4096 locations each). Errors name the cheat and the limit.
+
+**Uninstall**
+- A failed uninstall says what the PS5 refused, instead of an install error.
+
+## 12.6.42
+
 **Docker and the self-hosted web UI**
 - **Go live works from a phone or another computer.** Opening the web UI from a device the engine lets in (`PS5UPLOAD_ALLOW_IP`), Go live said "Can't reach the engine": Docker Desktop makes every visitor look like the computer itself, so the engine refused them. It now lets in the devices the setting lists, as it does for everything else, and stream keys still never leave the engine. Play Together's host controls had the same problem and work now too.
 - **Go live can run in the Docker image**, on ARM (Apple Silicon, ARM NAS boxes) and x86 alike: the image now carries what the downloaded ffmpeg needs to start, including the certificates for secure stream sites.
