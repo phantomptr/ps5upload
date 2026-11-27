@@ -328,6 +328,40 @@ pub(crate) fn settings() -> Settings {
         .unwrap_or_default()
 }
 
+/// At most one log line a second of one kind for one guest, and how many were skipped since
+/// the last one that went out.
+#[derive(Debug, Default, Clone)]
+struct LogGate {
+    last: Option<Instant>,
+    skipped: u32,
+}
+
+impl LogGate {
+    const EVERY: Duration = Duration::from_secs(1);
+
+    /// `Some(skipped since the last)` when a line may go out now; `None` (counted) when not.
+    fn pass(&mut self, now: Instant) -> Option<u32> {
+        if self
+            .last
+            .is_some_and(|t| now.saturating_duration_since(t) < Self::EVERY)
+        {
+            self.skipped = self.skipped.saturating_add(1);
+            return None;
+        }
+        self.last = Some(now);
+        Some(std::mem::take(&mut self.skipped))
+    }
+
+    /// What a line adds for the lines skipped before it.
+    fn more(skipped: u32) -> String {
+        if skipped == 0 {
+            String::new()
+        } else {
+            format!(" ({skipped} more not logged)")
+        }
+    }
+}
+
 // ── Kept across restarts ─────────────────────────────────────────────────────────────────────────
 
 /// Where the engine keeps "Invites work", the internet friends' port, and the hub, page base and
@@ -409,12 +443,33 @@ struct Saved {
     video_track: Option<bool>,
 }
 
+/// Each field read on its own: one that doesn't parse (a hand-edited `max_players: 300`) is
+/// left at its default, and every other kept setting still loads.
 fn read_invites(path: &std::path::Path) -> Saved {
-    let Some(s) = std::fs::read(path)
+    let Some(serde_json::Value::Object(o)) = std::fs::read(path)
         .ok()
-        .and_then(|b| serde_json::from_slice::<StoredInvites>(&b).ok())
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
     else {
         return Saved::default();
+    };
+    fn field<T: serde::de::DeserializeOwned>(
+        o: &serde_json::Map<String, serde_json::Value>,
+        key: &str,
+    ) -> Option<T> {
+        serde_json::from_value(o.get(key)?.clone()).ok()
+    }
+    let s = StoredInvites {
+        invites: field(&o, "invites"),
+        internet_invites: field(&o, "internet_invites"),
+        port: field(&o, "port"),
+        hub_url: field(&o, "hub_url"),
+        page_base: field(&o, "page_base"),
+        stun: field(&o, "stun"),
+        block_system_buttons: field(&o, "block_system_buttons"),
+        max_players: field(&o, "max_players"),
+        stream_seat: field(&o, "stream_seat"),
+        upnp: field(&o, "upnp"),
+        video_track: field(&o, "video_track"),
     };
     let anywhere = match s.invites.as_deref() {
         Some("anywhere") => Some(true),
@@ -1015,6 +1070,10 @@ pub(crate) struct Guest {
     /// was taken or sent on (a friend's "PS does nothing" report needs that line).
     ps_down: bool,
     cross_open: bool,
+    /// The PS-press and held-back-✕ lines, each at most one a second ([`LogGate`]): nothing
+    /// limits how fast a guest's page sends pad states.
+    ps_log: LogGate,
+    cross_log: LogGate,
     /// The PS5 ended the host's stream while they picked a user on the TV: most likely they picked
     /// the host's own ([`Party::blame_pick`]). Their page says so from then on.
     took_host: bool,
@@ -1423,6 +1482,8 @@ impl Party {
             cross_down: false,
             ps_down: false,
             cross_open: false,
+            ps_log: LogGate::default(),
+            cross_log: LogGate::default(),
             took_host: false,
             plays_as: None,
             seat: None,
@@ -1624,17 +1685,22 @@ impl Party {
         let ps = buttons & vpad::button::PS != 0;
         let new_ps = ps && !g.ps_down;
         g.ps_down = ps;
-        let ps_line = (new_ps && g.playing).then(|| {
-            format!(
-                "join: Player {} pressed PS: {}",
-                g.player,
-                if block {
-                    "taken (Block PS & Create is on)"
-                } else {
-                    "sent to the PS5"
-                }
-            )
-        });
+        let player = g.player;
+        let ps_line = if new_ps && g.playing {
+            g.ps_log.pass(now).map(|skipped| {
+                format!(
+                    "join: Player {player} pressed PS: {}{}",
+                    if block {
+                        "taken (Block PS & Create is on)"
+                    } else {
+                        "sent to the PS5"
+                    },
+                    LogGate::more(skipped)
+                )
+            })
+        } else {
+            None
+        };
         let cross = buttons & vpad::button::CROSS != 0;
         let new_press = cross && !g.cross_down;
         g.cross_down = cross;
@@ -1680,10 +1746,12 @@ impl Party {
             ));
         }
         if new_press {
-            return Some(format!(
-                "join: Player {}'s ✕ held back: no move since the TV offered a user (the host's own comes first)",
-                g.player
-            ));
+            return g.cross_log.pass(now).map(|skipped| {
+                format!(
+                    "join: Player {player}'s ✕ held back: no move since the TV offered a user (the host's own comes first){}",
+                    LogGate::more(skipped)
+                )
+            });
         }
         first_ps.then(|| {
             format!(
@@ -4419,6 +4487,95 @@ fn clean_stun(v: &[String]) -> Option<Vec<String>> {
     (v.len() <= 8 && v.iter().all(|x| stun_server_ok(x))).then_some(v)
 }
 
+/// `b`'s changes made to the settings in `cell`, under its lock from the read to the store, so
+/// two requests at once never lose one's change: the settings as stored and whether invites
+/// worked anywhere before. `Err(field)` for a value refused, with nothing changed.
+fn update_settings(
+    cell: &Mutex<Option<Settings>>,
+    b: &SettingsBody,
+    d: &crate::self_host::Defaults,
+) -> Result<(Settings, bool), &'static str> {
+    let mut g = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let mut s = g.clone().unwrap_or_default();
+    let was_anywhere = s.internet_invites;
+    apply_body(&mut s, b, d)?;
+    *g = Some(s.clone());
+    Ok((s, was_anywhere))
+}
+
+/// `b`'s changes made to `s`; `Err(field)` at the first value refused.
+fn apply_body(
+    s: &mut Settings,
+    b: &SettingsBody,
+    d: &crate::self_host::Defaults,
+) -> Result<(), &'static str> {
+    if let Some(v) = b.block_system_buttons {
+        s.block_system_buttons = v;
+    }
+    if let Some(v) = b.max_players {
+        s.max_players = v.clamp(1, MAX_GUESTS);
+    }
+    if let Some(v) = b.stream_seat {
+        s.stream_seat = v;
+    }
+    if let Some(v) = b.internet_invites {
+        s.internet_invites = v;
+    }
+    match b.invites.as_deref() {
+        None => {}
+        Some("anywhere") => s.internet_invites = true,
+        Some("wifi") => s.internet_invites = false,
+        Some(_) => return Err("invites"),
+    }
+    if let Some(v) = &b.hub_url {
+        let v = v.trim();
+        if v.is_empty() {
+            s.hub_url = d.hub_url.clone();
+        } else if crate::join_net::hub_url_ok(v) {
+            s.hub_url = v.to_string();
+        } else {
+            return Err("hub_url");
+        }
+    }
+    if let Some(v) = &b.page_base {
+        if v.trim().is_empty() {
+            s.page_base = d.page_base.clone();
+        } else {
+            match crate::join_net::page_base(v) {
+                Some(v) => s.page_base = v,
+                None => return Err("page_base"),
+            }
+        }
+    }
+    if let Some(v) = &b.stun {
+        match clean_stun(v) {
+            Some(v) => s.stun = v,
+            None => return Err("stun"),
+        }
+    }
+    for what in b.reset.iter().flatten() {
+        match what.as_str() {
+            "hub_url" => s.hub_url = d.hub_url.clone(),
+            "page_base" => s.page_base = d.page_base.clone(),
+            "stun" => s.stun = d.stun.clone(),
+            _ => return Err("reset"),
+        }
+    }
+    if let Some(v) = b.upnp {
+        s.upnp = v;
+    }
+    if let Some(v) = b.port {
+        if !port_ok(v) {
+            return Err("port");
+        }
+        s.port = v;
+    }
+    if let Some(v) = b.video_track {
+        s.video_track = v;
+    }
+    Ok(())
+}
+
 /// `POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,
 /// invites?, internet_invites?, hub_url?, page_base?, stun?, reset?, upnp?, video_track?}`: the host's choices (every
 /// console). Fewer players lets nobody go; it only stops new ones. `stream_seat` off moves a friend
@@ -4448,13 +4605,13 @@ fn clean_stun(v: &[String]) -> Option<Vec<String>> {
 pub async fn set_settings(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
-    Json(b): Json<SettingsBody>,
+    Json(mut b): Json<SettingsBody>,
 ) -> Response {
     if let Some(r) = guard(&peer, &headers) {
         return r;
     }
     let mut seats = None;
-    if let Some(v) = b.guest_profiles {
+    if let Some(v) = b.guest_profiles.take() {
         let Some(addr) = b.addr.clone().filter(|a| !a.trim().is_empty()) else {
             return bad(StatusCode::BAD_REQUEST, "addr");
         };
@@ -4474,73 +4631,11 @@ pub async fn set_settings(
         }
         seats = Some((addr, v));
     }
-    let mut s = settings();
-    if let Some(v) = b.block_system_buttons {
-        s.block_system_buttons = v;
-    }
-    if let Some(v) = b.max_players {
-        s.max_players = v.clamp(1, MAX_GUESTS);
-    }
-    if let Some(v) = b.stream_seat {
-        s.stream_seat = v;
-    }
-    let was_anywhere = s.internet_invites;
-    if let Some(v) = b.internet_invites {
-        s.internet_invites = v;
-    }
-    match b.invites.as_deref() {
-        None => {}
-        Some("anywhere") => s.internet_invites = true,
-        Some("wifi") => s.internet_invites = false,
-        Some(_) => return bad(StatusCode::BAD_REQUEST, "invites"),
-    }
     let d = crate::self_host::defaults();
-    if let Some(v) = &b.hub_url {
-        let v = v.trim();
-        if v.is_empty() {
-            s.hub_url = d.hub_url.clone();
-        } else if crate::join_net::hub_url_ok(v) {
-            s.hub_url = v.to_string();
-        } else {
-            return bad(StatusCode::BAD_REQUEST, "hub_url");
-        }
-    }
-    if let Some(v) = &b.page_base {
-        if v.trim().is_empty() {
-            s.page_base = d.page_base.clone();
-        } else {
-            match crate::join_net::page_base(v) {
-                Some(v) => s.page_base = v,
-                None => return bad(StatusCode::BAD_REQUEST, "page_base"),
-            }
-        }
-    }
-    if let Some(v) = &b.stun {
-        match clean_stun(v) {
-            Some(v) => s.stun = v,
-            None => return bad(StatusCode::BAD_REQUEST, "stun"),
-        }
-    }
-    for what in b.reset.iter().flatten() {
-        match what.as_str() {
-            "hub_url" => s.hub_url = d.hub_url.clone(),
-            "page_base" => s.page_base = d.page_base.clone(),
-            "stun" => s.stun = d.stun.clone(),
-            _ => return bad(StatusCode::BAD_REQUEST, "reset"),
-        }
-    }
-    if let Some(v) = b.upnp {
-        s.upnp = v;
-    }
-    if let Some(v) = b.port {
-        if !port_ok(v) {
-            return bad(StatusCode::BAD_REQUEST, "port");
-        }
-        s.port = v;
-    }
-    if let Some(v) = b.video_track {
-        s.video_track = v;
-    }
+    let (s, was_anywhere) = match update_settings(&SETTINGS, &b, d) {
+        Ok(v) => v,
+        Err(why) => return bad(StatusCode::BAD_REQUEST, why),
+    };
     // Everything checked: the profiles take effect with the rest (each pad made from now on).
     if let Some((addr, v)) = &seats {
         set_seat_profiles(addr, v.clone());
@@ -4551,7 +4646,6 @@ pub async fn set_settings(
             v.len()
         );
     }
-    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
     if ((b.internet_invites.is_some() || b.invites.is_some()) && s.internet_invites != was_anywhere)
         || b.port.is_some()
         || b.hub_url.is_some()
@@ -6254,9 +6348,20 @@ mod tests {
         assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
         p.settings.block_system_buttons = false;
         assert_eq!(p.strip_mask(id), Some((2, 0)));
-        let line = p.saw_input(id, ps, t + PICK_SETTLE).expect("PS is logged");
-        assert!(line.contains("pressed PS: sent to the PS5"), "{line}");
+        // At most one PS line a second: a press within it is counted, and said with the next.
+        assert_eq!(
+            p.saw_input(id, ps, t + PICK_SETTLE),
+            None,
+            "within a second"
+        );
         assert_eq!(p.saw_input(id, 0, t + PICK_SETTLE), None);
+        let a_second_on = t + PICK_SETTLE + Duration::from_secs(1);
+        let line = p.saw_input(id, ps, a_second_on).expect("PS is logged");
+        assert!(
+            line.contains("pressed PS: sent to the PS5 (1 more not logged)"),
+            "{line}"
+        );
+        assert_eq!(p.saw_input(id, 0, a_second_on), None);
         p.settings.block_system_buttons = true;
         // a new pad (helper restart) asks who they are again: the old move does not carry over
         p.reopened(2, &OpenResult::Ok);
@@ -6288,7 +6393,9 @@ mod tests {
         let cross = vpad::button::CROSS;
         let held = |p: &Party| p.strip_mask(id).unwrap().1 & cross != 0;
         // ✕ straight away, held, pressed again: held back every time, never a pick
-        for _ in 0..3 {
+        for i in 0..3 {
+            // One held-back line a second at most (the next test counts the ones skipped).
+            let t = t + Duration::from_secs(i);
             assert!(p.saw_input(id, cross, t).unwrap().contains("held back"));
             assert!(held(&p));
             assert_eq!(
@@ -6299,6 +6406,7 @@ mod tests {
             assert!(held(&p));
             assert_eq!(p.saw_input(id, 0, t), None);
         }
+        let t = t + Duration::from_secs(3);
         assert_eq!(
             p.guest_status(id).unwrap()["status"]["state"],
             "picking_user"
@@ -6330,6 +6438,112 @@ mod tests {
         p.saw_input(id, cross, t + PICK_SETTLE);
         assert!(!held(&p));
         assert_eq!(p.guest_status(id).unwrap()["status"]["move_first"], false);
+    }
+
+    /// A guest mashing ✕ on the question (or PS once playing) writes one line a second at most,
+    /// each saying how many it stood for.
+    #[test]
+    fn a_guest_mashing_buttons_logs_one_line_a_second() {
+        let mut p = party();
+        let t = Instant::now();
+        let id = admit(&mut p, "A", t);
+        let (tx, _rx) = conn();
+        p.attach(id, 1, tx);
+        p.guest_mut(id)
+            .unwrap()
+            .pad_made(&OpenResult::Ok, Some(None));
+        let cross = vpad::button::CROSS;
+        let mut lines = Vec::new();
+        for i in 0..50u64 {
+            let at = t + Duration::from_millis(i * 40);
+            lines.extend(p.saw_input(id, cross, at));
+            lines.extend(p.saw_input(id, 0, at));
+        }
+        // 50 presses over 2 s: the first, then one at 1 s and one at 2 s at most.
+        assert!(lines.len() <= 3 && lines.len() >= 2, "{lines:?}");
+        assert!(lines[1].contains("held back") && lines[1].contains("more not logged)"));
+        let after = t + Duration::from_secs(5);
+        let line = p.saw_input(id, cross, after).unwrap();
+        let skipped: u32 = lines[1..]
+            .iter()
+            .chain(std::iter::once(&line))
+            .filter_map(|l| {
+                l.rsplit_once(" (")?
+                    .1
+                    .strip_suffix(" more not logged)")?
+                    .parse::<u32>()
+                    .ok()
+            })
+            .sum();
+        assert_eq!(skipped as usize + lines.len() + 1, 51, "{lines:?} {line}");
+    }
+
+    /// Two settings changes at once both land: each holds the settings from read to store.
+    #[test]
+    fn settings_changed_at_once_lose_neither_change() {
+        let cell: Mutex<Option<Settings>> = Mutex::new(None);
+        let d = crate::self_host::defaults();
+        std::thread::scope(|scope| {
+            for i in 0..8u16 {
+                let cell = &cell;
+                scope.spawn(move || {
+                    for _ in 0..200 {
+                        let body = if i % 2 == 0 {
+                            r#"{"upnp": false}"#
+                        } else {
+                            r#"{"video_track": false}"#
+                        };
+                        let b: SettingsBody = serde_json::from_str(body).unwrap();
+                        update_settings(cell, &b, d).unwrap();
+                        // the other field put back: each must survive the other's update
+                        let back: SettingsBody = serde_json::from_str(if i % 2 == 0 {
+                            r#"{"upnp": true}"#
+                        } else {
+                            r#"{"video_track": true}"#
+                        })
+                        .unwrap();
+                        update_settings(cell, &back, d).unwrap();
+                    }
+                });
+            }
+        });
+        let s = cell.lock().unwrap().clone().unwrap();
+        assert!(s.upnp && s.video_track);
+        // Without a race to show it, the plain rule: two different fields both land.
+        let cell: Mutex<Option<Settings>> = Mutex::new(None);
+        let b: SettingsBody = serde_json::from_str(r#"{"upnp": false}"#).unwrap();
+        update_settings(&cell, &b, d).unwrap();
+        let b: SettingsBody = serde_json::from_str(r#"{"max_players": 2}"#).unwrap();
+        let (s, _) = update_settings(&cell, &b, d).unwrap();
+        assert!(!s.upnp && s.max_players == 2);
+        // A refused value changes nothing, the fields before it in the body included.
+        let b: SettingsBody =
+            serde_json::from_str(r#"{"upnp": true, "invites": "nowhere"}"#).unwrap();
+        assert_eq!(update_settings(&cell, &b, d).unwrap_err(), "invites");
+        assert!(!cell.lock().unwrap().as_ref().unwrap().upnp);
+    }
+
+    /// The kept settings file read field by field: one that doesn't parse is left at its
+    /// default, the others load.
+    #[test]
+    fn one_bad_kept_setting_keeps_the_others() {
+        let dir = crate::test_tmp::temp_path(format!("join-kept-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(INVITES_FILE);
+        std::fs::write(
+            &path,
+            r#"{"invites":"wifi","max_players":300,"upnp":"yes","video_track":false,"port":40000}"#,
+        )
+        .unwrap();
+        let saved = read_invites(&path);
+        assert_eq!(saved.anywhere, Some(false));
+        assert_eq!(saved.max_players, None);
+        assert_eq!(saved.upnp, None);
+        assert_eq!(saved.video_track, Some(false));
+        assert_eq!(saved.port, Some(40000));
+        std::fs::write(&path, b"[1,2]").unwrap();
+        assert_eq!(read_invites(&path), Saved::default());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// PS while they pick asks "Who's using this controller?" again, with the host's user offered
