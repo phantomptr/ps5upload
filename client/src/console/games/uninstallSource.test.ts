@@ -86,6 +86,27 @@ describe("planSource", () => {
     const gone = consoleWith({}, { "/api/fs/stat": { missing: true } });
     expect(await planSource("PPSA00001", gone.fn, gone.walk)).toBeNull();
   });
+
+  it("Cancel stops the folder walk at once, not at its time limit", async () => {
+    // A deep folder: every folder holds another one.
+    const read: string[] = [];
+    let stop = false;
+    const c = consoleWith({});
+    const walk = {
+      now: () => 0,
+      list: async (path: string) => {
+        read.push(path);
+        if (read.length === 3) stop = true; // Cancel pressed while the third folder is read
+        return { entries: [{ name: "d", kind: "dir", size: 0, mtime: null }] as never };
+      },
+    };
+    expect(await planSource("PPSA00001", c.fn, walk, () => stop)).toBeNull();
+    expect(read.length).toBe(3);
+    // Cancelled before the walk: the folder is not even looked at.
+    const early = consoleWith({});
+    expect(await planSource("PPSA00001", early.fn, early.walk, () => true)).toBeNull();
+    expect(early.calls.map(([r]) => r)).not.toContain("/api/fs/stat");
+  });
 });
 
 describe("deleteSource", () => {

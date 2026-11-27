@@ -515,6 +515,12 @@ export function Games({ ctx, switcher }: { ctx: SectionContext; switcher?: React
   const [busy, setBusy] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
   const live = useRef(true);
+  /** The folder walk of the Uninstall question open now (planSource), stopped on Cancel. */
+  const planWalk = useRef<{ stopped: boolean } | null>(null);
+  const stopPlan = () => {
+    if (planWalk.current) planWalk.current.stopped = true;
+    planWalk.current = null;
+  };
   const root = useRef<HTMLDivElement>(null);
   const { refreshStatus } = ctx;
 
@@ -742,9 +748,14 @@ export function Games({ ctx, switcher }: { ctx: SectionContext; switcher?: React
         onAsk={(a) => {
           setAskError(null);
           setAsk(a);
+          // A walk for an earlier question stops now: only this one is asked.
+          stopPlan();
           if (a.kind === "uninstall" && asksAboutSource(a.game) && a.source === undefined) {
             const id = a.game.titleId;
-            void planSource(id).then((source) => {
+            const token = { stopped: false };
+            planWalk.current = token;
+            void planSource(id, undefined, undefined, () => token.stopped || !live.current).then((source) => {
+              if (planWalk.current === token) planWalk.current = null;
               if (!live.current) return;
               setAsk((cur) => (cur?.kind === "uninstall" && cur.game.titleId === id ? { ...cur, source } : cur));
             });
@@ -755,6 +766,8 @@ export function Games({ ctx, switcher }: { ctx: SectionContext; switcher?: React
         onSaves={ctx.canOpen("saves") ? (g) => ctx.openSection("saves", { title: g.titleId }) : undefined}
         onDismiss={() => {
           if (!busy) {
+            // Cancel while the game's folder is still being sized: the walk stops with it.
+            stopPlan();
             setAsk(null);
             setAskError(null);
           }
