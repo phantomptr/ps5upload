@@ -941,3 +941,68 @@ async fn without_ffmpeg_the_status_says_so_and_srt_is_refused() {
     assert!(store.remove(&srt));
     assert!(store.remove(&rtmp));
 }
+
+/// Go live answers this computer by a loopback name and the peers `PS5UPLOAD_ALLOW_IP` admits,
+/// including a browser that Docker Desktop's host networking hands over from 127.0.0.1 but which
+/// addressed the engine by an admitted address. Everyone else gets `host_not_local`.
+#[test]
+fn guard_answers_this_computer_and_admitted_peers_only() {
+    let h = |v: &str| {
+        let mut m = HeaderMap::new();
+        m.insert("host", v.parse().unwrap());
+        m
+    };
+    let allow = crate::parse_allow_ips("192.168.0.0/24,100.64.0.0/10");
+    let lo: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+    let refused = |r: Option<Response>| r.is_some_and(|r| r.status() == StatusCode::FORBIDDEN);
+    // loopback, by a loopback name
+    assert!(guard_with(lo, &h("127.0.0.1:19113"), &allow).is_none());
+    assert!(guard_with(lo, &h("localhost:19113"), &allow).is_none());
+    assert!(guard_with("::1".parse().unwrap(), &h("[::1]:19113"), &allow).is_none());
+    // an admitted peer, by any name
+    assert!(guard_with(
+        "192.168.0.50".parse().unwrap(),
+        &h("192.168.0.34:19113"),
+        &allow
+    )
+    .is_none());
+    assert!(guard_with(
+        "100.101.1.2".parse().unwrap(),
+        &h("nas.local:19113"),
+        &allow
+    )
+    .is_none());
+    // Docker Desktop host networking: from 127.0.0.1, by the engine's LAN or tailnet address
+    assert!(guard_with(lo, &h("192.168.0.34:19113"), &allow).is_none());
+    assert!(guard_with(lo, &h("100.101.50.12:19113"), &allow).is_none());
+    // a peer that is not admitted
+    assert!(refused(guard_with(
+        "10.9.9.9".parse().unwrap(),
+        &h("192.168.0.34:19113"),
+        &allow
+    )));
+    assert!(refused(guard_with(
+        "192.168.0.50".parse().unwrap(),
+        &h("x:1"),
+        &[]
+    )));
+    // loopback by a re-pointed name (DNS rebinding), or by an address nobody admitted
+    assert!(refused(guard_with(lo, &h("evil.example:19113"), &allow)));
+    assert!(refused(guard_with(lo, &h("203.0.113.9:19113"), &allow)));
+    assert!(refused(guard_with(lo, &h("192.168.0.34:19113"), &[])));
+    let mut none = HeaderMap::new();
+    assert!(refused(guard_with(lo, &none, &allow)));
+    none.insert("host", "".parse().unwrap());
+    assert!(refused(guard_with(lo, &none, &allow)));
+}
+
+/// The refusal says which rule refused, so the page can say what it means.
+#[tokio::test]
+async fn guard_refusal_is_host_not_local() {
+    let mut h = HeaderMap::new();
+    h.insert("host", "evil.example".parse().unwrap());
+    let r = guard_with("127.0.0.1".parse().unwrap(), &h, &[]).unwrap();
+    let body = axum::body::to_bytes(r.into_body(), 1 << 16).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["error"], "host_not_local");
+}

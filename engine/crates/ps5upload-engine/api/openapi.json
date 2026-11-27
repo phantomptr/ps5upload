@@ -25424,7 +25424,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "console": {
             "aliases": [
               "console",
@@ -25474,7 +25474,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "console": {
             "aliases": [
               "console",
@@ -25531,7 +25531,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "literal"
         }
       }
@@ -25580,7 +25580,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "console": {
             "aliases": [
               "console",
@@ -25637,7 +25637,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "console": {
             "aliases": [
               "console",
@@ -25699,7 +25699,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "console": {
             "aliases": [
               "console",
@@ -25754,7 +25754,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "console": {
             "aliases": [
               "console",
@@ -25830,7 +25830,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "console": {
             "aliases": [
               "console",
@@ -25875,7 +25875,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "websocket",
           "websocket": true
         }
@@ -25930,7 +25930,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "console": {
             "aliases": [
               "console",
@@ -52220,7 +52220,7 @@
           "go-live"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "json-unknown"
         }
       }
@@ -52276,7 +52276,7 @@
           "go-live"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "literal"
         }
       },
@@ -52341,7 +52341,7 @@
           "go-live"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "json-unknown"
         }
       }
@@ -52458,7 +52458,7 @@
           "go-live"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "literal"
         }
       }
@@ -52521,7 +52521,7 @@
           "go-live"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "literal"
         }
       }
@@ -52574,7 +52574,7 @@
           "go-live"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "literal"
         }
       }
@@ -52629,7 +52629,7 @@
           "go-live"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "literal"
         }
       }
