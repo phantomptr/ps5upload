@@ -3401,8 +3401,10 @@ The PS5Upload helper serves it on port 9180. It has seven sections, on the left:
 - **Files**: browse, copy, move, rename, delete, view, verify and search; set permissions, make
   and edit text files. **Network shares** adds an SMB share (a PC or NAS) you can browse like a
   drive and copy to and from. **Extract** unpacks a `.zip`, `.7z`, `.rar` (multi-part too) or
-  `.tar` on the console into a folder there (password-protected `.zip` and `.7z` work,
-  password-protected `.rar` does not). Pick a `.pkg` on internal storage or USB to see its icon,
+  `.tar` on the console into a folder there. Password-protected `.zip`, `.7z` and `.rar` work: it
+  asks for the password, also when a `.rar` hides its file list behind it. For a multi-part
+  `.rar`, pick the first part (`.part1.rar`, or the `.rar` of an old `.r00` set) with the others in
+  the same folder. Pick a `.pkg` on internal storage or USB to see its icon,
   title, version and type and **Install** it (a USB package is copied to internal storage first,
   then the copy removed). **Load payload** sends an `.elf` or `.bin` on the console to the
   payload loader, after a confirm.

@@ -6,6 +6,9 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Extract on the console**
+- **Password-protected RAR archives can be extracted on the PS5 (#958).** In Files on the console page and in the app's file screen, Extract now asks for the password of a `.rar` the way it does for `.zip` and `.7z`. This covers new and old RAR archives, multi-part sets, and archives whose file list is hidden behind the password. A wrong password is said plainly and leaves no files behind.
+
 **Activity**
 - **An upload still going after you closed the page shows as running when you come back (#954).** The upload itself always carried on, but Activity listed it as "Interrupted" next to a second, running copy. It now picks up the same entry.
 
