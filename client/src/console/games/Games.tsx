@@ -41,6 +41,7 @@ import {
   type Show,
   type SortMode,
 } from "./model";
+import { deleteSource, planSource, type SourcePlan } from "./uninstallSource";
 
 /** The process list (which game runs) is read this often while Games is open. */
 export const GAMES_POLL_MS = 5_000;
@@ -55,7 +56,19 @@ const CLOSE_WAIT_MS = 6_000;
 /** An action's result line clears itself after this long. */
 const MESSAGE_MS = 10_000;
 
-export type GameAsk = { kind: "uninstall"; game: Game } | { kind: "close"; game: Game; run: RunningGame };
+export type GameAsk =
+  | {
+      kind: "uninstall";
+      game: Game;
+      /** A folder or image game: its files are being looked at (undefined), can go too, or not (null). */
+      source?: SourcePlan | null;
+    }
+  | { kind: "close"; game: Game; run: RunningGame };
+
+/** A folder or disk-image game: Uninstall first looks at whether its files can go too. */
+export function asksAboutSource(g: Game): boolean {
+  return g.origin === "registered" && !!g.source;
+}
 
 export function placeLabel(p: Place): string {
   switch (p) {
@@ -132,6 +145,8 @@ export interface GamesViewProps {
   onToggleHidden: (g: Game) => void;
   onAsk: (a: GameAsk) => void;
   onConfirm: () => void;
+  /** Uninstall and delete the game's folder or image. */
+  onConfirmDelete?: () => void;
   onDismiss: () => void;
   /** Open the game's save backups (the Saves section); absent: no button. */
   onSaves?: (g: Game) => void;
@@ -272,12 +287,33 @@ function GameSheet({ g, p, children }: { g: Game; p: GamesViewProps; children?: 
   );
 }
 
-function askCopy(a: GameAsk): { title: string; body: string; confirm: string } {
+/** "path (size)" of the files an Uninstall can delete. */
+function sourceLine(s: SourcePlan): string {
+  if (s.bytes == null) return s.path;
+  const size = s.partial ? t("cw_games_size_at_least", { size: formatBytes(s.bytes) }) : formatBytes(s.bytes);
+  return `${s.path} (${size})`;
+}
+
+export function askCopy(a: GameAsk): { title: string; body: string; confirm: string; alt?: string; checking?: boolean } {
   if (a.kind === "close")
     return {
       title: t("cw_home_confirm_close_title", { name: a.game.name }),
       body: t("cw_home_confirm_close_body"),
       confirm: t("cw_home_close_game"),
+    };
+  if (asksAboutSource(a.game) && a.source === undefined)
+    return {
+      title: t("cw_games_confirm_uninstall_title", { name: a.game.name }),
+      body: t("cw_games_checking_files"),
+      confirm: t("cw_games_uninstall"),
+      checking: true,
+    };
+  if (a.source)
+    return {
+      title: t("cw_games_confirm_uninstall_title", { name: a.game.name }),
+      body: t("cw_games_confirm_uninstall_choose", { path: sourceLine(a.source) }),
+      confirm: t("cw_games_uninstall_only"),
+      alt: t(a.source.kind === "folder" ? "cw_games_uninstall_delete_folder" : "cw_games_uninstall_delete_image"),
     };
   return {
     title: t("cw_games_confirm_uninstall_title", { name: a.game.name }),
@@ -303,9 +339,11 @@ export function GamesView(p: GamesViewProps) {
         title={copy.title}
         body={copy.body}
         confirmLabel={copy.confirm}
-        danger
-        busy={p.busy}
+        danger={!copy.alt}
+        busy={p.busy || copy.checking}
         error={p.askError}
+        altLabel={copy.alt}
+        onAlt={p.onConfirmDelete}
         onConfirm={p.onConfirm}
         onCancel={p.onDismiss}
       />
@@ -613,8 +651,10 @@ export function Games({ ctx, switcher }: { ctx: SectionContext; switcher?: React
     [load],
   );
 
-  const onConfirm = useCallback(async () => {
+  const onConfirm = useCallback(async (deleteIt = false) => {
     if (!ask || busy) return;
+    // Still looking at the game's files: the question is not asked yet.
+    if (ask.kind === "uninstall" && asksAboutSource(ask.game) && ask.source === undefined) return;
     setBusy(true);
     setAskError(null);
     try {
@@ -624,8 +664,30 @@ export function Games({ ctx, switcher }: { ctx: SectionContext; switcher?: React
         refreshStatus();
         setMessage({ tone: "info", text: t("cw_games_closed", { name: ask.game.name }) });
       } else {
-        const r = await call<{ still_present?: boolean } | null>("/api/apps/uninstall", { title_id: ask.game.titleId });
-        if (r?.still_present === true) {
+        const plan = deleteIt && ask.source ? ask.source : null;
+        // Deleting its files never comes with the uninstall of a console-installed game of the same id (#884).
+        const r = await call<{ still_present?: boolean } | null>(
+          "/api/apps/uninstall",
+          plan ? { title_id: ask.game.titleId, registration_only: true } : { title_id: ask.game.titleId },
+        );
+        if (plan) {
+          // Only once the uninstall is done: the files of a title still listed stay.
+          const kept =
+            r?.still_present === true ||
+            (await deleteSource(plan).then(
+              () => false,
+              () => true,
+            ));
+          setMessage({
+            tone: kept ? "error" : "info",
+            text: t(kept ? "cw_games_source_kept" : "cw_games_uninstalled_deleted", {
+              name: ask.game.name,
+              path: plan.path,
+            }),
+          });
+          setData((d) => (d ? { ...d, games: d.games.filter((x) => x.titleId !== ask.game.titleId) } : d));
+          void load();
+        } else if (r?.still_present === true) {
           setMessage({ tone: "info", text: t("cw_games_removing_note", { name: ask.game.name }) });
           void watchRemoval(ask.game);
         } else {
@@ -680,8 +742,16 @@ export function Games({ ctx, switcher }: { ctx: SectionContext; switcher?: React
         onAsk={(a) => {
           setAskError(null);
           setAsk(a);
+          if (a.kind === "uninstall" && asksAboutSource(a.game) && a.source === undefined) {
+            const id = a.game.titleId;
+            void planSource(id).then((source) => {
+              if (!live.current) return;
+              setAsk((cur) => (cur?.kind === "uninstall" && cur.game.titleId === id ? { ...cur, source } : cur));
+            });
+          }
         }}
         onConfirm={() => void onConfirm()}
+        onConfirmDelete={() => void onConfirm(true)}
         onSaves={ctx.canOpen("saves") ? (g) => ctx.openSection("saves", { title: g.titleId }) : undefined}
         onDismiss={() => {
           if (!busy) {

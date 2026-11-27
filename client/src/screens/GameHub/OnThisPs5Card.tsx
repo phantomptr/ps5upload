@@ -15,6 +15,7 @@ import {
   appdbQuery,
   appResume,
   appSuspend,
+  appUninstallSource,
   appUnregister,
   fsChmod,
   krakenRemove,
@@ -51,6 +52,7 @@ import { useCollectionItems, useCollectionLoaded } from "./collectionLink";
 import { InstalledKindBadge, installedKindOf } from "./installedKind";
 import { readRunningApps } from "./runningAppsRead";
 import { SmpNeededWarning, useSmpState } from "./SmpNeeded";
+import { asksAboutSource, uninstallChoices } from "./uninstallChoice";
 
 /** A game installed from a package is gone once uninstalled: say so when the Collection on
  *  this computer (once read) has no copy of it to install again. */
@@ -98,7 +100,7 @@ export function OnThisPs5Card({
 }) {
   const tr = useTr();
   const guard = useStaleHostGuard();
-  const { confirm, dialog } = useConfirm();
+  const { confirm, choose, dialog } = useConfirm();
   const kind = installedKindOf(title);
   // Read for a disk image (is ShadowMount+ there?) and for an installed-looking title, which may
   // be one Kraken Mount mounts: it leaves no mount.lnk of ours, so it reads as installed.
@@ -223,12 +225,41 @@ export function OnThisPs5Card({
     }
     const probe = guard.capture();
     const t = title;
-    const ok = await confirm({
-      title: tr(
-        "installed_uninstall_confirm_title",
-        { name: t.titleName },
-        `Uninstall ${t.titleName}?`,
-      ),
+    const confirmTitle = tr(
+      "installed_uninstall_confirm_title",
+      { name: t.titleName },
+      `Uninstall ${t.titleName}?`,
+    );
+    // A game played from a folder or a disk image: ask whether that goes too. Already gone, or not
+    // safe to delete: the plain question below.
+    let deleteSource: string | undefined;
+    let choices: ReturnType<typeof uninstallChoices> = null;
+    if (asksAboutSource(t, { kraken: krakenTitle, smp: smpTitle })) {
+      setBusy("uninstall");
+      const src = await appUninstallSource(probe.host, t.titleId);
+      setBusy(null);
+      if (probe.isStale()) return;
+      choices = uninstallChoices(src, tr);
+      if (choices) {
+        const picked = await choose({
+          title: confirmTitle,
+          message: tr(
+            "installed_uninstall_confirm_choose",
+            undefined,
+            "This takes the game off the home screen. Its files can stay on the drive, or be deleted to free the space. Saves are kept either way.",
+          ),
+          choices,
+          confirmLabel: tr("installed_uninstall", undefined, "Uninstall"),
+          destructive: true,
+        });
+        if (picked === null || probe.isStale()) return;
+        if (picked === "delete") deleteSource = src.path;
+      }
+    }
+    const ok =
+      !!choices ||
+      (await confirm({
+      title: confirmTitle,
       message: t.system
         ? tr(
             "installed_uninstall_confirm_system",
@@ -260,16 +291,40 @@ export function OnThisPs5Card({
             ) + noCopyWarning(t, tr),
       confirmLabel: tr("installed_uninstall", undefined, "Uninstall"),
       destructive: true,
-    });
+    }));
     if (!ok || probe.isStale()) return;
     setBusy("uninstall");
     setActionError(null);
     try {
-      const res = await appUnregister(transferAddr(probe.host), t.titleId);
+      const res = await appUnregister(
+        transferAddr(probe.host),
+        t.titleId,
+        deleteSource ? { deleteSource } : undefined,
+      );
       audit("app_uninstall", withConsolePrefix(probe.host, t.titleName), {
         context: t.titleId,
       });
+      if (deleteSource && res.sourceDeleted) {
+        audit("fs_delete", withConsolePrefix(probe.host, deleteSource), { context: t.titleId });
+      }
       if (probe.isStale()) return;
+      if (deleteSource && !res.sourceDeleted) {
+        // Uninstalled, but the files stayed: say so, with why.
+        pushNotification("warning", withConsolePrefix(probe.host, t.titleName), {
+          body: tr(
+            "installed_uninstall_source_kept",
+            {
+              name: t.titleName,
+              path: deleteSource,
+              reason:
+                res.sourceError === "uninstall_not_finished"
+                  ? tr("installed_uninstall_not_finished", undefined, "the PS5 still lists the game")
+                  : humanizePs5Error(res.sourceError ?? ""),
+            },
+            "{name} was uninstalled, but {path} was not deleted ({reason}). Delete it in Files to free the space.",
+          ),
+        });
+      }
       if (res.unverified) {
         // #879: app.db could not be read: the removal is not confirmed, so never "done".
         pushNotification("warning", withConsolePrefix(probe.host, t.titleName), {
