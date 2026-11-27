@@ -189,6 +189,11 @@ pub(crate) struct BuildReq {
     /// 5.10). A console older than the declared minimum refuses the install with `0x80a3000d`.
     #[serde(default)]
     firmware: Option<String>,
+    /// The connected console's firmware (`13.60`), when the caller knows one. With no
+    /// `firmware`, the package's size is checked against what this console opens; with neither,
+    /// against 13.x's ceiling (see `ps5upload_fpkg::package_limit`).
+    #[serde(default)]
+    console_firmware: Option<String>,
     /// `fast`, `balanced` (the default) or `smallest`: how hard the Kraken encoder works.
     #[serde(default)]
     compression: Option<String>,
@@ -241,6 +246,19 @@ pub(crate) struct BuildReq {
     /// `plain_ampr_emu` says why not.
     #[serde(default)]
     leave_out_ampr_emu: bool,
+}
+
+/// The firmware a package build checks its size against: the one the user asked the package
+/// for, then the connected console's. Either may be absent or unreadable.
+fn size_target(
+    firmware: Option<&str>,
+    console: Option<&str>,
+) -> ps5upload_fpkg::package_limit::SizeTarget {
+    use ps5upload_fpkg::package_limit::Firmware;
+    ps5upload_fpkg::package_limit::SizeTarget {
+        target: firmware.and_then(Firmware::parse),
+        console: console.and_then(Firmware::parse),
+    }
 }
 
 /// Why a package build's `unpack_packs` / `leave_out_ampr_emu` can't go ahead for a game in
@@ -795,6 +813,7 @@ pub(crate) async fn fpkg_build_handler(
         if let Some(passcode) = req.passcode.filter(|p| !p.is_empty()) {
             request.passcode = passcode;
         }
+        request.size_target = size_target(req.firmware.as_deref(), req.console_firmware.as_deref());
         request.firmware = req.firmware.filter(|v| !v.trim().is_empty());
         // Without an explicit one, the package declares the firmware the game runs on.
         if request.firmware.is_none() {
@@ -1238,6 +1257,25 @@ async fn ps4_package_build(
 #[cfg(test)]
 mod path_tests {
     use super::*;
+
+    #[test]
+    fn a_build_checks_its_size_against_the_target_then_the_console() {
+        use ps5upload_fpkg::package_limit::{check, Firmware, SizeTarget};
+        let req: BuildReq =
+            serde_json::from_str(r#"{"source":"/g","firmware":"9.60","console_firmware":"13.60"}"#)
+                .unwrap();
+        let t = size_target(req.firmware.as_deref(), req.console_firmware.as_deref());
+        assert_eq!(t.target, Firmware::parse("9.60"));
+        assert_eq!(t.console, Firmware::parse("13.60"));
+        assert_eq!(
+            size_target(Some(" "), Some("garbage")),
+            SizeTarget::default()
+        );
+        let sizes = Default::default();
+        // 300 GiB: past what 9.60 opens, within what 13.60 does.
+        assert!(!check(300 << 30, false, t.target, t.console, None, &sizes).fits());
+        assert!(check(300 << 30, false, None, t.console, None, &sizes).fits());
+    }
 
     #[test]
     fn a_build_takes_the_language_it_was_asked_for() {

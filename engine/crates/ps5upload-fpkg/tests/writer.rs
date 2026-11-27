@@ -968,6 +968,77 @@ fn estimates_rank_the_levels_and_cover_the_game() {
     assert!(e.fast.seconds <= e.smallest.seconds);
 }
 
+/// A package too big for the console it is for is refused before a byte of the game is read or
+/// written: 300 GiB (a sparse file, so no disk is used) is past what 9.60 opens.
+#[cfg(unix)]
+#[test]
+fn a_package_too_big_for_its_firmware_is_refused_before_any_work() {
+    use ps5upload_fpkg::package_limit::Firmware;
+    let source_dir = TempDir::new("too-big-src");
+    let out = TempDir::new("too-big-out");
+    write_tree(source_dir.path());
+    let huge = std::fs::File::create(source_dir.path().join("data/huge.bin")).unwrap();
+    huge.set_len(300 << 30).unwrap();
+    drop(huge);
+    let mut request = BuildRequest::new(source_dir.path(), out.path());
+    request.level = ps5upload_fpkg::kraken::Level::Stored;
+    request.size_target.target = Firmware::parse("9.60");
+    let started = std::time::Instant::now();
+    let mut lines = Vec::new();
+    let err = build::build(&request, &mut |l| lines.push(l.to_string()))
+        .map(|_| ())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("This package would be 300.5 GiB. PS5 firmware 7.xx to 10.xx can't open a fake package larger than 256 GiB")
+            && err.contains("Keep it as a game image instead"),
+        "{err}"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(60));
+    assert!(
+        !lines.iter().any(|l| l.contains("planning")),
+        "refused before planning: {lines:?}"
+    );
+    assert_eq!(
+        std::fs::read_dir(out.path()).unwrap().count(),
+        0,
+        "nothing written"
+    );
+}
+
+/// The layout index a build reports is the descriptor it wrote, and the plan predicts it.
+#[test]
+fn a_build_reports_its_layout_index() {
+    let source_dir = TempDir::new("index-src");
+    let out = TempDir::new("index-out");
+    write_tree(source_dir.path());
+    for i in 0..300 {
+        let dir = source_dir.path().join(format!("data/many/{}", i % 9));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("f{i}.bin")), vec![i as u8; 100 + i * 37]).unwrap();
+    }
+    let mut request = BuildRequest::new(source_dir.path(), out.path());
+    request.time = Some((1_700_000_000, 0));
+    let report = build::build(&request, &mut |_| {}).unwrap();
+    let naps = outer_file(&report.path, "naps_pkg_layout.dat");
+    assert_eq!(report.layout_index, naps.len() as u64);
+    assert!(report.warnings.iter().all(|w| !w.contains("layout index")));
+    // Predicted from the plan and the stored image's length, which the descriptor records.
+    let image = outer_file(&report.path, "pfs_image.dat");
+    let blocks = ps5upload_fpkg::kraken_image::describe(&naps).unwrap();
+    let files = u64::from_le_bytes(naps[0..8].try_into().unwrap()) & 0xFF_FFFF;
+    let mount = blocks.last().map(|b| b.logical + b.len).unwrap();
+    assert_eq!(
+        ps5upload_fpkg::kraken_image::layout_len(
+            files + 1 - 3,
+            mount,
+            image.len() as u64,
+            blocks.len() as u64
+        ),
+        report.layout_index
+    );
+}
+
 // Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
 #[path = "../../../test-support/test_tmp.rs"]
 mod test_tmp;

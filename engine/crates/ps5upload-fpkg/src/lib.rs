@@ -47,6 +47,7 @@ pub mod module_case;
 pub mod naps;
 pub mod outer;
 pub mod outer_write;
+pub mod package_limit;
 pub mod pfs_source;
 pub mod pfsc;
 pub mod pfsc_reader;

@@ -1364,6 +1364,13 @@
               "null"
             ]
           },
+          "console_firmware": {
+            "description": "The connected console's firmware (`13.60`), when the caller knows one. With no\n`firmware`, the package's size is checked against what this console opens; with neither,\nagainst 13.x's ceiling (see `ps5upload_fpkg::package_limit`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "content_id": {
             "description": "Overrides the content id `param.json` declares.",
             "type": [
@@ -6920,6 +6927,11 @@
             "minimum": 0,
             "type": "integer"
           },
+          "layout_index_fixed": {
+            "description": "The package's layout index (`napsMetadataSize`) less its 8 bytes per 64 KiB of stored\nimage: add those for the package's size to get the whole, an estimate until it is built.\n0 for a source that isn't a PS5 game.",
+            "minimum": 0,
+            "type": "integer"
+          },
           "output_free": {
             "description": "Bytes free where the output would go; `None` where the platform does not say.",
             "minimum": 0,
@@ -6934,6 +6946,10 @@
               "string",
               "null"
             ]
+          },
+          "param_sizes": {
+            "$ref": "#/components/schemas/ParamSizes",
+            "description": "The add-on space (`acSizeInGib`) and size profile (`appSizeInGib`) the game's\n`param.json` declares, which the console's size check counts\n([`crate::package_limit`])."
           },
           "planned_size": {
             "description": "The package's estimated size (what the free-space check uses).",
@@ -7031,7 +7047,9 @@
           "ps4_kind",
           "ps4_title_id",
           "ps4_addon_data",
-          "ps4_merge"
+          "ps4_merge",
+          "param_sizes",
+          "layout_index_fixed"
         ],
         "type": "object"
       },
@@ -10275,6 +10293,30 @@
         "required": [
           "key",
           "value"
+        ],
+        "type": "object"
+      },
+      "ParamSizes": {
+        "description": "What a game's `param.json` reserves: `acSizeInGib` (add-on space) and `appSizeInGib` (the\napplication's size profile). Found wherever they are in the file (`appSizeInGib` sits under\n`kernel` in the games measured).",
+        "properties": {
+          "ac_gib": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "app_gib": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ac_gib",
+          "app_gib"
         ],
         "type": "object"
       },

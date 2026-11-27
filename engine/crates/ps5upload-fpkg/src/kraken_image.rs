@@ -140,6 +140,38 @@ fn plan_blocks(plan: &Plan) -> (Vec<Todo>, u64) {
     (todo, end)
 }
 
+/// How many blocks [`compress`] cuts `plan` into, without making them: [`plan_blocks`]'s count.
+pub fn block_count(plan: &Plan) -> u64 {
+    let mut blocks = 0u64;
+    let mut end = 0u64;
+    for (afid, &fi) in plan.afid_order.iter().enumerate() {
+        let f = &plan.files[fi];
+        let span = match plan.afid_order.get(afid + 1) {
+            Some(&next) => plan.files[next].logical_offset - f.logical_offset,
+            None => f.size,
+        };
+        blocks += span.div_ceil(UBLOCK);
+        end = end.max(f.logical_offset + f.size);
+    }
+    blocks += plan.meta_base.saturating_sub(end).div_ceil(UBLOCK);
+    blocks += (plan.ndblock * crate::BLOCK)
+        .saturating_sub(plan.meta_base)
+        .div_ceil(UBLOCK);
+    blocks
+}
+
+/// The length of the descriptor [`layout`] writes for an image of `image_len` stored bytes cut
+/// into `blocks` blocks stored back to back (as [`compress`] stores them), over a mount of
+/// `mount_size` bytes holding `files` files. Its records: one per block, one anchor opening each
+/// window of 16, the terminator and the sentinel.
+pub fn layout_len(files: u64, mount_size: u64, image_len: u64, blocks: u64) -> u64 {
+    let records = blocks + blocks.div_ceil(15).max(1) + 2;
+    let groups = mount_size.div_ceil(UBLOCK) / 8 + 1;
+    let head = (16 + 8 * image_len.div_ceil(crate::BLOCK) + 6 * (files + 3) + 10 * groups)
+        .next_multiple_of(8);
+    (head + 3 + 9 * records).next_multiple_of(8)
+}
+
 /// Store every block uncompressed instead of compressing it: `PS5UPLOAD_FPKG_KRAKEN_STORE=1`.
 /// Compression is the default since the console's hardware decoder accepted our blocks (a
 /// compressed Minecraft played on a FW 5.10 console); storing stays available as a fallback.
@@ -953,6 +985,58 @@ mod tests {
             halves: halves.to_vec(),
             delta: [false; 2],
             owner,
+        }
+    }
+
+    /// `layout_len` is the length `layout` writes for blocks stored back to back, as `compress`
+    /// stores them, at every window boundary.
+    #[test]
+    fn the_layout_length_is_known_before_the_layout() {
+        for count in [1u64, 2, 14, 15, 16, 29, 30, 31, 100] {
+            let mut blocks = Vec::new();
+            let mut at = 0u64;
+            for i in 0..count {
+                let len = if i % 3 == 0 { 0x1000 } else { 0x40000 };
+                let logical = blocks
+                    .last()
+                    .map_or(0, |p: &StoredBlock| p.logical + u64::from(p.len));
+                blocks.push(b(
+                    logical,
+                    len,
+                    at,
+                    &[(len.min(0x20000), false)],
+                    Owner::File(i as usize),
+                ));
+                at += u64::from(len.min(0x20000));
+            }
+            let mount = blocks.last().map_or(0, |p| p.logical + u64::from(p.len));
+            let starts: Vec<u64> = blocks.iter().map(|p| p.logical).collect();
+            let img = image_of(blocks, mount, mount, mount);
+            let blob = layout(&img, &starts).unwrap();
+            assert_eq!(
+                blob.len() as u64,
+                layout_len(count, mount, img.image_len, count),
+                "{count} blocks"
+            );
+        }
+    }
+
+    /// `block_count` counts the blocks `plan_blocks` makes.
+    #[test]
+    fn the_block_count_matches_the_blocks_planned() {
+        let mut files = vec![crate::source::SourceFile {
+            path: "eboot.bin".into(),
+            size: 0x9_1234,
+        }];
+        for i in 0..200u64 {
+            files.push(crate::source::SourceFile {
+                path: format!("data/{}/f{i}", i % 7),
+                size: (i * 7919) % 0x9_0000,
+            });
+        }
+        for spread in [false, true] {
+            let plan = plan::build_with(&files, spread).unwrap();
+            assert_eq!(block_count(&plan), plan_blocks(&plan).0.len() as u64);
         }
     }
 

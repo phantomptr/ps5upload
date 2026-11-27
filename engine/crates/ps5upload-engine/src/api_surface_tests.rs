@@ -1123,6 +1123,51 @@ async fn a_ps4_game_becomes_a_ps4_package() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A package too big for the firmware it is for fails at once, saying why, before anything is
+/// written: 300 GiB (sparse: no disk used) is past what 9.60 opens. The connected console's
+/// 13.60, which opens it, doesn't override the firmware asked for.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_package_too_big_for_its_firmware_is_refused() {
+    use crate::unpack_packs::tests::{game, Scratch};
+    let app = app();
+    let scratch = Scratch::new("route-too-big");
+    let src = game(&scratch.0, false);
+    let huge = std::fs::File::create(src.join("data/huge.bin")).unwrap();
+    huge.set_len(300 << 30).unwrap();
+    drop(huge);
+    let out = scratch.0.join("out");
+    let body = json!({
+        "source": src, "output_dir": out, "compression": "stored",
+        "firmware": "9.60", "console_firmware": "13.60",
+    });
+    let r = post_json(&app, "/api/fpkg/build", &body.to_string()).await;
+    assert_eq!(r.status(), StatusCode::ACCEPTED);
+    let id = json_of(r).await["job_id"].as_str().unwrap().to_string();
+    let mut done = Value::Null;
+    for _ in 0..3000 {
+        done = json_of(get(&app, &format!("/api/jobs/{id}")).await).await;
+        if done["status"] != "running" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(done["status"], "failed", "{done}");
+    let error = done["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("PS5 firmware 7.xx to 10.xx can't open a fake package larger than 256 GiB"),
+        "{error}"
+    );
+    let written = std::fs::read_dir(&out)
+        .map(|d| {
+            d.filter_map(|e| e.ok())
+                .filter(|e| e.file_name().to_string_lossy().contains(".pkg"))
+                .count()
+        })
+        .unwrap_or(0);
+    assert_eq!(written, 0, "nothing written");
+}
+
 /// A package of a game in asset packs (#933): with `unpack_packs` and `leave_out_ampr_emu` it
 /// carries the game's plain files and no AMPR emulator. Unpacking a game that is not packed, or
 /// leaving the emulator out of one that stays packed, is refused before any job.
