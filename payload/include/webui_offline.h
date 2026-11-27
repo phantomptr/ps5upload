@@ -32,13 +32,19 @@ extern unsigned int webui_cache_appcache_len;
 #define WEBUI_APPCACHE_PATH "/minion.appcache"
 #define WEBUI_APPCACHE_RETIRED_PATH "/cache.appcache"
 
+/* A phone's "Add to Home Screen" (client/src/console/index.html links both): the tile icon
+ * (webui_tile.h) and a small web app manifest, named "PS5Upload". */
+#define WEBUI_HOME_ICON_PATH "/apple-touch-icon.png"
+#define WEBUI_MANIFEST_PATH "/manifest.webmanifest"
+
 typedef struct {
     const char *ctype;
     const unsigned char *data;
     size_t len;
 } webui_offline_file_t;
 
-/* The file a request path names exactly ("/sw.js", WEBUI_APPCACHE_PATH): 1 and *out filled, else 0. */
+/* The file a request path names exactly ("/sw.js", WEBUI_APPCACHE_PATH, WEBUI_HOME_ICON_PATH,
+ * WEBUI_MANIFEST_PATH): 1 and *out filled, else 0. */
 int webui_offline_find(const char *path, webui_offline_file_t *out);
 
 /* 1 for a manifest path the page no longer uses (WEBUI_APPCACHE_RETIRED_PATH): answer 410 Gone, so
