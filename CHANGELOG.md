@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.36
 
 **Play Together over the internet**
 - **Friends joining from Firefox, a VPN or IPv6 are no longer turned away.** Their browser sends more connection details than the hub allowed per minute, so the hub closed the join and the page said it couldn't reach the hub. The hub now allows a realistic amount for every browser and for several devices behind one home connection, and the join page sends only the details the app can use.
