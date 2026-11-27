@@ -1836,6 +1836,11 @@ impl Party {
                 // its guests' pictures ended with the old one, so they come back to the new).
                 self.session = s;
                 self.host_gone = None;
+                // Who ended the last session is settled: blamed again, they would hear it for
+                // the host's next ordinary Stop too.
+                for g in self.guests.iter_mut() {
+                    g.took_host = false;
+                }
                 for g in self.guests.iter_mut().filter(|g| g.active()) {
                     if let Some(c) = g.conn.take() {
                         fx.push(Effect::Say(c.tx, Out::Bye("host_stopped")));
@@ -6730,6 +6735,14 @@ mod tests {
         let (fx, keep) = p.tick(t, None);
         assert!(keep);
         assert_eq!(told(&fx), vec!["text:true", "bye:host_stopped"]);
+        // The host plays again and the guest comes back: that blame is settled, and the host's
+        // next ordinary Stop is not put on them.
+        let _ = p.tick(t, Some(p.session + 1));
+        assert_eq!(p.guest_status(id).unwrap()["status"]["took_host"], false);
+        let (tx, _rx2) = conn();
+        p.attach(id, 3, tx);
+        let (fx, _) = p.tick(t, None);
+        assert_eq!(told(&fx), vec!["bye:host_stopped"]);
         // the others hear only the bye
         let mut q = party();
         let a = admit(&mut q, "A", t);

@@ -1252,6 +1252,44 @@ fn invites_work_is_saved_and_an_old_off_reads_as_wifi() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Two saves at once (two switches flipped together are two requests) never leave a file that
+/// doesn't read: each is written whole, one after the other.
+#[test]
+fn saves_at_once_leave_a_file_that_reads() {
+    let dir = crate::test_tmp::temp_path(format!("ps5u-invites-race-{}", std::process::id()));
+    let p = dir.join(INVITES_FILE);
+    let d = crate::self_host::defaults();
+    let long = Settings {
+        internet_invites: false,
+        port: 41234,
+        stun: vec!["stun.example.net:3478".into(); 8],
+        block_system_buttons: false,
+        ..Settings::default()
+    };
+    let short = Settings {
+        internet_invites: false,
+        ..Settings::default()
+    };
+    std::thread::scope(|s| {
+        for set in [&long, &short] {
+            let p = &p;
+            s.spawn(move || {
+                for _ in 0..200 {
+                    write_invites(p, set, d).unwrap();
+                }
+            });
+        }
+    });
+    let body = std::fs::read(&p).unwrap();
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(&body).is_ok(),
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_eq!(read_invites(&p).anywhere, Some(false));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The host's switches (Block PS & Create, Play as me, the most players, Ask the router, Picture
 /// as video) are kept for the next Play Together and the next run: a round trip, defaults leave
 /// nothing in the file, and a missing, broken or out-of-range file gives the defaults.
