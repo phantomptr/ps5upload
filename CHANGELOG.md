@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.43
 
 **Install from archives**
 - **Choose what to install or unpack from an archive (#969).** When a .zip, .7z, .rar or tar holds several packages or folders (a game, its update and add-ons), "Choose files…" lists what's inside with checkboxes; only what you tick is installed, uploaded or unpacked. Packages inside a .zip show their game, version and type first. Extract on the PS5 (in the app and on the console's own page) can leave out top-level items the same way.
