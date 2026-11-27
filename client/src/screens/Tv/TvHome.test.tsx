@@ -3,7 +3,7 @@ import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { leaveAfterAsking, tvCardState, tvFocusTarget, tvPrimary } from "./tvCard";
-import { escapeGoesBack, escapeLeavesField, isTextField } from "../../layout/TvModeFrame";
+import { escapeGoesBack, escapeLeavesField, isTextField, TvHomeButton } from "../../layout/TvModeFrame";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("../../state/lang", async (orig) => ({
@@ -22,6 +22,7 @@ const { default: TvHome } = await import("./index");
 const { useRosterStore } = await import("../../state/roster");
 const { useConnectionStore, EMPTY_HOST_RUNTIME } = await import("../../state/connection");
 const { useRemotePlayStore } = await import("../../state/remotePlay");
+const { useTvModeStore } = await import("../../state/tvMode");
 type Profiles = ReturnType<typeof useRosterStore.getState>["profiles"];
 
 const LIVING: Profiles[number] = {
@@ -217,5 +218,32 @@ describe("Back in TV mode", () => {
       expect(escapeLeavesField(key(other), false)).toBe(false);
       expect(escapeGoesBack(key(other), false)).toBe(true);
     }
+  });
+});
+
+describe("TV home button (#976): a way back on screens with no navigation", () => {
+  const at = (path: string) =>
+    renderToStaticMarkup(
+      <MemoryRouter initialEntries={[path]}>
+        <TvHomeButton />
+      </MemoryRouter>,
+    );
+
+  it("on Play and its setup in TV mode", () => {
+    useTvModeStore.setState({ pref: true, fullApp: false });
+    expect(at("/play")).toContain('data-testid="tv-back-home"');
+    expect(at("/play/setup")).toContain('data-testid="tv-back-home"');
+    expect(at("/play")).toContain("TV home");
+    // Not on the home itself, nor on a screen of the full app.
+    expect(at("/tv")).not.toContain("tv-back-home");
+    expect(at("/settings")).not.toContain("tv-back-home");
+  });
+
+  it("not when TV mode is off, or rested with Full app", () => {
+    useTvModeStore.setState({ pref: false, fullApp: false });
+    expect(at("/play")).not.toContain("tv-back-home");
+    useTvModeStore.setState({ pref: true, fullApp: true });
+    expect(at("/play")).not.toContain("tv-back-home");
+    useTvModeStore.setState({ pref: null, fullApp: false });
   });
 });

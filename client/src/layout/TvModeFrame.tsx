@@ -4,7 +4,7 @@
 
 import { useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { Tv } from "lucide-react";
+import { ArrowLeft, Tv } from "lucide-react";
 
 import { openModalCount, takeBackStep } from "../lib/focusTrap";
 import { canLeaveApp } from "../lib/tvNav";
@@ -97,6 +97,28 @@ export function useTvFrame(): boolean {
     };
   }, [lean, navigate]);
   return lean;
+}
+
+/** On TV mode's own screens other than its home (Play, Play's setup): a button back to the home.
+ *  The frame has no navigation, and a touch screen without a system Back (an iPhone, a page
+ *  opened from the Home Screen) had no way back otherwise. Esc and the system Back still work. */
+export function TvHomeButton() {
+  const tr = useTr();
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const on = useTvMode();
+  if (!on || !isTvRoute(pathname) || pathname.replace(/\/+$/, "") === "/tv") return null;
+  return (
+    <button
+      type="button"
+      onClick={() => navigate("/tv", { replace: true })}
+      className="inline-flex min-h-10 shrink-0 items-center gap-2 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-3)] px-4 text-sm font-semibold text-[var(--color-text)] hover:bg-[var(--color-surface-raised)]"
+      data-testid="tv-back-home"
+    >
+      <ArrowLeft size={16} className="shrink-0 rtl:rotate-180" aria-hidden />
+      {tr("tv_back_home", undefined, "TV home")}
+    </button>
+  );
 }
 
 /** In the full app while this device wants TV mode: one line, and the way back to it. */

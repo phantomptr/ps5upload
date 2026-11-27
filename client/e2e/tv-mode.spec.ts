@@ -197,6 +197,8 @@ test("on a TV: Full app and back, and Switch console", async ({ page }) => {
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/play\/setup$/);
   await expect(page.locator('[data-screen="/play/setup"] h1:visible')).toBeVisible({ timeout: 30_000 });
+  // The way back on screen too (a remote can reach it; a touch screen needs it).
+  await expect(page.locator('[data-screen="/play/setup"] [data-testid="tv-back-home"]:visible')).toBeVisible();
   expect(await systemBack(page)).toBe(false); // the app moves the history, as MainActivity does
   await page.goBack();
   await expect(page).toHaveURL(/\/tv$/);
@@ -242,6 +244,13 @@ test("on a computer: the switch in Settings, arrows and Esc, and off again", asy
   await page.keyboard.press("Escape");
   await expect(page).toHaveURL(/\/tv$/);
 
+  // Without a keyboard (a touch screen, a page opened from the Home Screen): TV home, on screen.
+  await page.locator('[data-testid="tv-join-go"]:visible').click();
+  await expect(page.getByTestId("join-a-friend")).toBeVisible();
+  await page.locator('[data-testid="tv-back-home"]:visible').click();
+  await expect(page).toHaveURL(/\/tv$/);
+  await expect(page.locator('[data-testid="tv-back-home"]:visible')).toHaveCount(0);
+
   // Esc on the home leaves nothing (a browser has no app to leave).
   await page.keyboard.press("Escape");
   await expect(page).toHaveURL(/\/tv$/);
@@ -283,6 +292,24 @@ for (const [label, viewport] of [
         return out;
       });
       expect(bad, lang).toEqual([]);
+
+      // Play's header in TV mode: TV home beside Set up.
+      await page.goto("/play", { waitUntil: "domcontentloaded" });
+      const back = page.locator('[data-testid="tv-back-home"]:visible');
+      await expect(back).toBeVisible({ timeout: 30_000 });
+      await page.addStyleTag({ content: WIDE_FONT });
+      const badPlay = await page.evaluate(() => {
+        const out: string[] = [];
+        for (const id of ["tv-back-home", "play-setup-button"]) {
+          for (const b of document.querySelectorAll<HTMLElement>(`[data-screen="/play"] [data-testid="${id}"]`)) {
+            const r = b.getBoundingClientRect();
+            if (b.scrollWidth > b.clientWidth + 1 || r.left < -1 || r.right > window.innerWidth + 1) out.push(b.innerText);
+          }
+        }
+        if (document.documentElement.scrollWidth > window.innerWidth + 1) out.push("page scrolls sideways");
+        return out;
+      });
+      expect(badPlay, `${lang} /play`).toEqual([]);
     }
   });
 }

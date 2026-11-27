@@ -15,6 +15,7 @@ import { StreamPanel } from "./StreamPanel";
 import { JoinAFriend } from "./JoinAFriend";
 import { useJoinStore } from "../../state/joinSession";
 import { useTvMode } from "../../state/tvMode";
+import { TvHomeButton } from "../../layout/TvModeFrame";
 import { useScreenBack } from "../../lib/systemBack";
 
 /** Play my PS5 (Remote Play), Play together (host friends on it), Join a friend's game, or
@@ -112,18 +113,22 @@ export default function PlayScreen() {
               )
         }
         right={
-          // Easy to find (10.0.1): a filled button with the progress while setup isn't done.
-          <Button
-            variant={setupDone ? "secondary" : "primary"}
-            size="md"
-            leftIcon={<ListChecks size={16} />}
-            onClick={() => navigate("/play/setup")}
-            data-testid="play-setup-button"
-          >
-            {setupDone
-              ? tr("play_setup_short", undefined, "Set up")
-              : tr("play_setup_button_progress", { done: setup.progress.done, total: setup.progress.total }, `Set up Play · ${setup.progress.done}/${setup.progress.total}`)}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* TV mode (#976): the way back to its home on a screen with no navigation. */}
+            <TvHomeButton />
+            {/* Easy to find (10.0.1): a filled button with the progress while setup isn't done. */}
+            <Button
+              variant={setupDone ? "secondary" : "primary"}
+              size="md"
+              leftIcon={<ListChecks size={16} />}
+              onClick={() => navigate("/play/setup")}
+              data-testid="play-setup-button"
+            >
+              {setupDone
+                ? tr("play_setup_short", undefined, "Set up")
+                : tr("play_setup_button_progress", { done: setup.progress.done, total: setup.progress.total }, `Set up Play · ${setup.progress.done}/${setup.progress.total}`)}
+            </Button>
+          </div>
         }
       />
       {!lean && !tv && (

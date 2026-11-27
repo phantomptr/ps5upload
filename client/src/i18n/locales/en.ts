@@ -10056,6 +10056,7 @@ tv_mode_hint: "A simple screen for playing with a remote or a controller: your P
 tv_mode_hint_tv: "A simple screen for playing with a remote or a controller: your PS5 and a big Play button. On by itself on this TV. Full app is one button away.",
 tv_full_app: "Full app",
 tv_return: "Back to TV mode",
+tv_back_home: "TV home",
 tv_return_body: "This is the full app. TV mode has the console and Play on one screen.",
 tv_no_console_title: "No PS5 yet",
 tv_add_console: "Add your PS5",
