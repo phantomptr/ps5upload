@@ -7,6 +7,7 @@ import { TouchControls } from "../screens/Play/TouchControls";
 import { PhoneKeyboardButton, TouchModeToggle, TouchpadSurface } from "../screens/Play/TouchpadOverlay";
 import { KbmSender } from "../lib/kbmInput";
 import { useTr } from "../state/lang";
+import { HomeScreenTip, hasFullscreenApi, isAppleTouch, useHomeScreenTip } from "../lib/pageFill";
 import { setScreenWakeReason } from "../lib/androidScreenWake";
 import { setPadForwardReason } from "../lib/androidPadBridge";
 import { rpInput } from "../state/rpInput";
@@ -168,6 +169,7 @@ export function PadApp({
   const computer = computerName ?? tr("pad_net_computer", undefined, "the computer");
   const [stage, setStage] = useState<PadLinkStage>({ kind: "connecting" });
   const [attempt, setAttempt] = useState(0);
+  const homeTip = useHomeScreenTip();
   const [portrait, setPortrait] = useState(() => typeof window !== "undefined" && window.innerHeight > window.innerWidth);
   const [light, setLight] = useState<[number, number, number] | null>(null);
   const [client, setClient] = useState<PadClient | null>(null);
@@ -268,6 +270,7 @@ export function PadApp({
       style={{ touchAction: "none" }}
       data-testid="pad-app"
     >
+      {homeTip.tip && <HomeScreenTip onClose={homeTip.hide} />}
       <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-center gap-2 px-3 pt-[max(6px,env(safe-area-inset-top))] text-xs text-white/80">
         <span
           className="inline-block h-2 w-2 shrink-0 rounded-full"
@@ -288,10 +291,10 @@ export function PadApp({
               : tr("pad_watch_watching", { host: stage.host }, `Watching ${stage.host}`)
             : stageText(tr, stage, computer)}
         </span>
-        {live && typeof document !== "undefined" && !!document.documentElement.requestFullscreen && !document.fullscreenElement && (
+        {live && typeof document !== "undefined" && !document.fullscreenElement && (hasFullscreenApi() || isAppleTouch()) && (
           <button
             type="button"
-            onClick={() => void fillScreen()}
+            onClick={() => (hasFullscreenApi() ? void fillScreen() : homeTip.showIfNeeded())}
             className="flex items-center gap-1 rounded-full bg-white/15 px-2 py-1"
             data-testid="pad-full"
           >

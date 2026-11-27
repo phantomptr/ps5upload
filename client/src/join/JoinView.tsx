@@ -4,6 +4,7 @@ import { Expand, EyeOff, Gamepad2, LogOut, Minimize, MoreHorizontal, RotateCw, U
 import type { JoinStage } from "../lib/joinClient";
 import { delayTone, playerColor, type JoinStatus } from "../lib/joinProtocol";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
+import { HomeScreenTip, hasFullscreenApi, showsFullButton, useHomeScreenTip } from "../lib/pageFill";
 import { registerBackDismiss } from "../lib/focusTrap";
 import { tvNavActive } from "../lib/tvNav";
 import { gamepadsOf } from "../lib/nativePad";
@@ -336,6 +337,7 @@ export function JoinView({
   const view = useRef<HTMLDivElement>(null);
   const game = useRef<HTMLDivElement>(null);
   const [full, setFull] = useState(false);
+  const homeTip = useHomeScreenTip();
   const [guided, setGuided] = useState(() => safeGetItem(GUIDED_KEY) === "1");
   const [portrait, setPortrait] = useState(() => typeof window !== "undefined" && window.innerHeight > window.innerWidth);
   const pad = usePadReady();
@@ -801,10 +803,14 @@ export function JoinView({
           {tr("join_no_sound", undefined, "No sound in this browser")}
         </span>
       )}
-      {(inApp || (typeof document !== "undefined" && !!document.documentElement.requestFullscreen)) && (
+      {showsFullButton(inApp, full) && (
         <button
           type="button"
-          onClick={() => void toggleFull()}
+          onClick={() => {
+            // No Fullscreen API (every iPhone browser): the page's full layout, and once the tip.
+            if (!inApp && !hasFullscreenApi() && !full) homeTip.showIfNeeded();
+            void toggleFull();
+          }}
           aria-label={full ? tr("join_exit_fullscreen", undefined, "Leave full screen") : tr("pad_fill", undefined, "Full screen")}
           className="flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-1 hover:bg-white/25"
           data-testid="join-full"
@@ -863,6 +869,7 @@ export function JoinView({
   const fullInApp = inApp && full;
   return (
     <div className="space-y-2" ref={view} data-join-ui="">
+      {homeTip.tip && <HomeScreenTip onClose={homeTip.hide} />}
       <div
         className={`${box} select-none text-white [-webkit-touch-callout:none]`}
         style={{ touchAction: "none" }}
