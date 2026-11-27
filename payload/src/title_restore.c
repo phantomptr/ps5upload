@@ -1,10 +1,12 @@
 /* ps5upload — putting an installed package game back on the home screen (#961). See title_restore.h.
  *
- * Only file operations: stat, mkdir, a same-device rename (checked first with cross_device.h),
- * unlink of our own copy, and the small record file. No Sony call (the install itself is the
- * engine's, through the installer daemon), so no sony_api_lock. One restore operation at a time
+ * File operations: stat, mkdir, a same-device rename (checked first with cross_device.h), unlink
+ * of our own copy, and the small record file. The install itself is the engine's, through the
+ * installer daemon. The one Sony call, clear's uninstall, goes through env->uninstall (runtime.c:
+ * unregister_title_ex, which takes sony_api_lock itself). One restore operation at a time
  * (g_restore_lock): two finishes of one title must not both move its package. */
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -38,7 +40,7 @@ typedef struct {
     const char *state;
     const char *reason; /* a word for logs and the UI, may be NULL */
     int vol;            /* index of the volume with the package (or the pending record), -1 none */
-    uint64_t size, patch_size, free_volume, free_internal;
+    uint64_t size, patch_size, free_volume, free_internal, need_volume, need_internal;
     int have_patch;     /* a patch.pkg on the package's drive */
     const char *kind;   /* "fake" | "ps4" | "unknown" */
     int free_known;
@@ -90,6 +92,11 @@ static int tr_volumes(const title_restore_env_t *env, const char *id, tr_vol_t *
         snprintf(v[i].root, sizeof v[i].root, "%s", vol[0] ? vol : "/user");
     }
     return n;
+}
+
+uint64_t title_restore_internal_need(uint64_t size) {
+    /* x1.2 plus one ~1 GiB reserve step, as measured (title_restore.h, Room). */
+    return size + size / 5 + (1ull << 30);
 }
 
 static int free_of(const title_restore_env_t *env, const char *dir, uint64_t *out) {
@@ -235,11 +242,15 @@ static void inspect(const title_restore_env_t *env, const char *id, tr_vol_t *v,
         }
     }
     /* The installer writes a whole new copy where Settings › Storage › Installation location says:
-     * the package's own drive or the console's. One of them needs the room. */
+     * the package's own drive or the console's. One of them needs the room, and the console's own
+     * storage needs more than the package's size (title_restore_internal_need). */
     int fv = free_of(env, pv->root, &in->free_volume);
     int fi = free_of(env, "/user", &in->free_internal);
     in->free_known = fv == 0 || fi == 0;
-    if (in->free_known && !((fv == 0 && in->free_volume >= in->size) || (fi == 0 && in->free_internal >= in->size))) {
+    in->need_internal = title_restore_internal_need(in->size);
+    in->need_volume = pv->vol[0] ? in->size : in->need_internal;
+    if (in->free_known && !((fv == 0 && in->free_volume >= in->need_volume) ||
+                            (fi == 0 && in->free_internal >= in->need_internal))) {
         in->state = "no_room";
         return;
     }
@@ -301,15 +312,17 @@ static void put_info(tr_out_t *o, const char *id, const tr_vol_t *v, const tr_in
     if (in->have_patch)
         put(o, ",\"patch\":\"%s\",\"patch_size\":%llu", pv->patch, (unsigned long long)in->patch_size);
     if (in->free_known)
-        put(o, ",\"free_volume\":%llu,\"free_internal\":%llu", (unsigned long long)in->free_volume,
-            (unsigned long long)in->free_internal);
+        put(o, ",\"free_volume\":%llu,\"free_internal\":%llu,\"need_volume\":%llu,\"need_internal\":%llu",
+            (unsigned long long)in->free_volume, (unsigned long long)in->free_internal,
+            (unsigned long long)in->need_volume, (unsigned long long)in->need_internal);
 }
 
 /* ---- the record ---- */
 
 typedef struct {
-    int app;   /* app.pkg was moved aside */
-    int patch; /* patch.pkg was moved aside */
+    int app;     /* app.pkg was moved aside */
+    int patch;   /* patch.pkg was moved aside */
+    int cleared; /* Sony's uninstall was asked to remove its unfinished copy (clear) */
     char backup[256];
 } tr_record_t;
 
@@ -320,7 +333,7 @@ static int write_record(const title_restore_env_t *env, const tr_vol_t *v, const
     snprintf(tmp, sizeof tmp, "%s.tmp", p);
     FILE *f = fopen(tmp, "w");
     if (!f) return -1;
-    int ok = fprintf(f, "app=%d\npatch=%d\nbackup=%s\n", r->app, r->patch, r->backup) > 0;
+    int ok = fprintf(f, "app=%d\npatch=%d\ncleared=%d\nbackup=%s\n", r->app, r->patch, r->cleared, r->backup) > 0;
     ok = fflush(f) == 0 && ok;
     fsync(fileno(f));
     ok = fclose(f) == 0 && ok;
@@ -342,6 +355,7 @@ static int read_record(const title_restore_env_t *env, const tr_vol_t *v, tr_rec
         line[strcspn(line, "\r\n")] = '\0';
         if (strncmp(line, "app=", 4) == 0) r->app = atoi(line + 4) == 1;
         else if (strncmp(line, "patch=", 6) == 0) r->patch = atoi(line + 6) == 1;
+        else if (strncmp(line, "cleared=", 8) == 0) r->cleared = atoi(line + 8) == 1;
         else if (strncmp(line, "backup=", 7) == 0 && !strchr(line + 7, '"') && !strchr(line + 7, '\\'))
             snprintf(r->backup, sizeof r->backup, "%s", line + 7);
     }
@@ -521,6 +535,76 @@ static int patch_back(const title_restore_env_t *env, const tr_vol_t *pv, const 
     return safe_move(env, aside_patch, pv->patch) == 0;
 }
 
+/* Entries in a folder (console path), "." and ".." not counted; -1 when it is not there. */
+static int dir_entries(const title_restore_env_t *env, const char *path) {
+    char p[TR_PATH];
+    if (real_path(env, path, p, sizeof p) != 0) return -1;
+    DIR *d = opendir(p);
+    if (!d) return -1;
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL)
+        if (strcmp(e->d_name, ".") != 0 && strcmp(e->d_name, "..") != 0) n++;
+    closedir(d);
+    return n;
+}
+
+/* After clear: Sony's uninstall has finished with the title's app folders. No app.pkg in any of
+ * them, and each folder the same before and after a settle: Sony removes an uninstalled title's
+ * files after its call returns (minutes for a large game on FW 9.60), and a package moved back
+ * into a folder it is still emptying would go with them. */
+static int uninstall_settled(const title_restore_env_t *env, const tr_vol_t *v, int nv) {
+    int before[TITLE_RESTORE_MAX_VOLUMES];
+    if (installed_somewhere(env, v, nv) >= 0) return 0;
+    for (int i = 0; i < nv; i++) before[i] = dir_entries(env, v[i].app_dir);
+    if (env && env->settle) env->settle();
+    if (installed_somewhere(env, v, nv) >= 0) return 0;
+    for (int i = 0; i < nv; i++)
+        if (dir_entries(env, v[i].app_dir) != before[i]) return 0;
+    return 1;
+}
+
+/* The package and its update back where they were: the end of a rollback, after the caller's own
+ * checks. Writes the reply's state and closes it. `refused`: clear's uninstall answered with an
+ * error, so a title Sony still holds is named that way rather than as still being cleared. */
+static int put_back(const title_restore_env_t *env, const char *id, const tr_vol_t *v, int nv, const tr_vol_t *pv,
+                    const tr_record_t *rec, const char *aside_pkg, const char *aside_patch, int have_patch_aside,
+                    int refused, tr_out_t *o) {
+    int db = env && env->appdb_has ? env->appdb_has(id) : -1;
+    const char *busy = refused ? "uninstall_refused" : "clearing";
+    if (db < 0) {
+        put(o, ",\"state\":\"unsettled\",\"reason\":\"db_unreadable\",\"kept\":\"%s\"}", aside_pkg);
+        return done(o);
+    }
+    if (db == 1) {
+        /* The console has a record of the title: its files are never moved by us. */
+        put(o, ",\"state\":\"unsettled\",\"reason\":\"%s\",\"kept\":\"%s\"}",
+            rec->cleared ? busy : "recorded_without_package", aside_pkg);
+        return done(o);
+    }
+    if (rec->cleared && !uninstall_settled(env, v, nv)) {
+        put(o, ",\"state\":\"unsettled\",\"reason\":\"%s\",\"kept\":\"%s\"}", busy, aside_pkg);
+        return done(o);
+    }
+    /* Roll back: the package goes back only into a free place. */
+    if (exists(env, pv->pkg, NULL)) {
+        put(o, ",\"state\":\"unsettled\",\"reason\":\"place_taken\",\"kept\":\"%s\"}", aside_pkg);
+        return done(o);
+    }
+    if (mkdirs(env, pv->app_dir) != 0 || safe_move(env, aside_pkg, pv->pkg) != 0) {
+        put(o, ",\"state\":\"unsettled\",\"reason\":\"move_back_failed\",\"kept\":\"%s\"}", aside_pkg);
+        return done(o);
+    }
+    int back = have_patch_aside ? patch_back(env, pv, aside_patch) : 0;
+    if (!have_patch_aside || back) remove_record(env, pv);
+    fprintf(stderr, "[restore] %s: not restored; %s put back%s\n", id, pv->pkg,
+            rec->cleared ? " after the console's unfinished copy was removed" : "");
+    put(o, ",\"state\":\"rolled_back\"");
+    if (have_patch_aside) put(o, back ? ",\"patch\":\"%s\"" : ",\"patch_kept\":\"%s\"", back ? pv->patch : aside_patch);
+    put(o, "}");
+    return done(o);
+}
+
 static int op_finish(const title_restore_env_t *env, const char *id, int flags, tr_out_t *o) {
     tr_vol_t v[TITLE_RESTORE_MAX_VOLUMES];
     int nv = tr_volumes(env, id, v, TITLE_RESTORE_MAX_VOLUMES);
@@ -552,9 +636,16 @@ static int op_finish(const title_restore_env_t *env, const char *id, int flags, 
     int landed = installed_somewhere(env, v, nv);
     if ((flags & TITLE_RESTORE_ROLLBACK) && db == 1) {
         /* Asked to put it back, but the console has a record of the title now: its files are never
-         * moved by us, and the copy aside is not deleted on a put-back either. */
+         * moved by us, and the copy aside is not deleted on a put-back either. After a clear, the
+         * record is Sony's uninstall still running. */
         put(o, ",\"state\":\"unsettled\",\"reason\":\"%s\",\"kept\":\"%s\"}",
-            landed >= 0 ? "on_home_screen" : "recorded_without_package", aside_pkg);
+            rec.cleared ? "clearing" : landed >= 0 ? "on_home_screen" : "recorded_without_package", aside_pkg);
+        return done(o);
+    }
+    if (rec.cleared && !(flags & TITLE_RESTORE_ROLLBACK)) {
+        /* The console's copy was uninstalled (clear): this restore failed, whatever is in place
+         * now is Sony still removing it, and our copy is the only good one. It only goes back. */
+        put(o, ",\"state\":\"unsettled\",\"reason\":\"clearing\",\"kept\":\"%s\"}", aside_pkg);
         return done(o);
     }
     if (db == 1 && landed >= 0 && !(flags & TITLE_RESTORE_INSTALL_ENDED)) {
@@ -590,27 +681,79 @@ static int op_finish(const title_restore_env_t *env, const char *id, int flags, 
             db == 1 ? "recorded_without_package" : "not_on_home_screen", aside_pkg);
         return done(o);
     }
-    if (db == 1) {
-        /* The console has a record of the title: its files are never moved by us. */
-        put(o, ",\"state\":\"unsettled\",\"reason\":\"recorded_without_package\",\"kept\":\"%s\"}", aside_pkg);
+    return put_back(env, id, v, nv, pv, &rec, aside_pkg, aside_patch, have_patch_aside, 0, o);
+}
+
+/* A restore whose install failed after the console took it: Sony's own unfinished copy (and its
+ * entry in the download queue) removed with Sony's uninstall, then the package put back. */
+static int op_clear(const title_restore_env_t *env, const char *id, tr_out_t *o) {
+    tr_vol_t v[TITLE_RESTORE_MAX_VOLUMES];
+    int nv = tr_volumes(env, id, v, TITLE_RESTORE_MAX_VOLUMES);
+    int at = find_pending(env, v, nv);
+    if (at < 0) {
+        put(o, "{\"ok\":true,\"title_id\":\"%s\",\"state\":\"nothing_pending\"}", id);
         return done(o);
     }
-    /* Roll back: the package goes back only into a free place. */
-    if (exists(env, pv->pkg, NULL)) {
-        put(o, ",\"state\":\"unsettled\",\"reason\":\"place_taken\",\"kept\":\"%s\"}", aside_pkg);
+    const tr_vol_t *pv = &v[at];
+    tr_record_t rec;
+    (void)read_record(env, pv, &rec);
+    char aside_pkg[TR_PATH], aside_patch[TR_PATH];
+    aside_file(pv, "app.pkg", aside_pkg, sizeof aside_pkg);
+    aside_file(pv, "patch.pkg", aside_patch, sizeof aside_patch);
+    put(o, "{\"ok\":true,\"title_id\":\"%s\",\"where\":\"%s\",\"volume\":\"%s\",\"aside\":\"%s\",\"pkg\":\"%s\"",
+        id, where_word(pv), pv->root, pv->aside, pv->pkg);
+    if (rec.backup[0]) put(o, ",\"backup\":\"%s\"", rec.backup);
+    /* Sony's uninstall takes whatever the console holds of the title. Only while our copy is safe
+     * aside, and nothing else of the title is in its place. */
+    if (!exists(env, aside_pkg, NULL)) {
+        put(o, ",\"state\":\"unsettled\",\"reason\":\"no_copy_aside\"}");
         return done(o);
     }
-    if (mkdirs(env, pv->app_dir) != 0 || safe_move(env, aside_pkg, pv->pkg) != 0) {
-        put(o, ",\"state\":\"unsettled\",\"reason\":\"move_back_failed\",\"kept\":\"%s\"}", aside_pkg);
+    for (int i = 0; i < nv; i++) {
+        if (exists(env, v[i].patch, NULL)) {
+            put(o, ",\"state\":\"unsettled\",\"reason\":\"update_in_place\",\"update\":\"%s\",\"kept\":\"%s\"}",
+                v[i].patch, aside_pkg);
+            return done(o);
+        }
+        char addcont[TR_PATH];
+        int an = snprintf(addcont, sizeof addcont, "%s/user/addcont/%s", v[i].vol, id);
+        if (an > 0 && (size_t)an < sizeof addcont && dir_entries(env, addcont) > 0) {
+            put(o, ",\"state\":\"unsettled\",\"reason\":\"addons_present\",\"addons\":\"%s\",\"kept\":\"%s\"}",
+                addcont, aside_pkg);
+            return done(o);
+        }
+    }
+    int db = env && env->appdb_has ? env->appdb_has(id) : -1;
+    if (db < 0) {
+        put(o, ",\"state\":\"unsettled\",\"reason\":\"db_unreadable\",\"kept\":\"%s\"}", aside_pkg);
         return done(o);
     }
-    int back = have_patch_aside ? patch_back(env, pv, aside_patch) : 0;
-    if (!have_patch_aside || back) remove_record(env, pv);
-    fprintf(stderr, "[restore] %s: not restored; %s put back\n", id, pv->pkg);
-    put(o, ",\"state\":\"rolled_back\"");
-    if (have_patch_aside) put(o, back ? ",\"patch\":\"%s\"" : ",\"patch_kept\":\"%s\"", back ? pv->patch : aside_patch);
-    put(o, "}");
-    return done(o);
+    int leftovers = db == 1 || installed_somewhere(env, v, nv) >= 0;
+    for (int i = 0; i < nv && !leftovers; i++)
+        if (dir_entries(env, v[i].app_dir) > 0) leftovers = 1;
+    int refused = 0;
+    if (leftovers && !rec.cleared) {
+        if (!env || !env->uninstall) {
+            put(o, ",\"state\":\"unsettled\",\"reason\":\"uninstall_unavailable\",\"kept\":\"%s\"}", aside_pkg);
+            return done(o);
+        }
+        /* Recorded before the call: an interruption is known to be a cleared restore. */
+        rec.cleared = 1;
+        (void)write_record(env, pv, &rec);
+        uint32_t rc = 0;
+        int ran = env->uninstall(id, &rc);
+        fprintf(stderr, "[restore] %s: clearing the console's unfinished install: uninstall %s rc=0x%08X\n", id,
+                ran == 0 ? "ran" : "unavailable", (unsigned)rc);
+        if (ran != 0) {
+            put(o, ",\"state\":\"unsettled\",\"reason\":\"uninstall_unavailable\",\"kept\":\"%s\"}", aside_pkg);
+            return done(o);
+        }
+        put(o, ",\"cleared\":true,\"sony_rc\":%u", (unsigned)rc);
+        refused = rc != 0;
+    } else if (rec.cleared) {
+        put(o, ",\"cleared\":true");
+    }
+    return put_back(env, id, v, nv, pv, &rec, aside_pkg, aside_patch, exists(env, aside_patch, NULL), refused, o);
 }
 
 int title_restore_run(const title_restore_env_t *env, const char *op, const char *title_id, int flags,
@@ -636,6 +779,7 @@ int title_restore_run(const title_restore_env_t *env, const char *op, const char
     int n;
     if (strcmp(op, "prepare") == 0) n = op_prepare(env, id, stamp, &o);
     else if (strcmp(op, "finish") == 0) n = op_finish(env, id, flags, &o);
+    else if (strcmp(op, "clear") == 0) n = op_clear(env, id, &o);
     else {
         put(&o, "{\"ok\":false,\"err\":\"bad_request\"}");
         n = done(&o);
