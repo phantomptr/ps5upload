@@ -600,8 +600,6 @@ fn is_archive_file(path: &Path) -> bool {
         )
 }
 
-/// Removes what a stopped or failed build of `dest` left: the names the helper also cleans up.
-/// A `.partial` folder only when it carries the build's marker.
 /// Makes every folder and file under `root` (and `root`) 0777, the mode the helper gives
 /// everything it writes (payload/src/main.c, third_party/ava1/c/ava1_internal.h): the PS5's
 /// loader refuses a game whose files lack execute for everyone ("can't start the game",
@@ -642,6 +640,8 @@ fn open_up(_root: &Path) -> u64 {
     0
 }
 
+/// Removes what a stopped or failed build of `dest` left: the names the helper also cleans up.
+/// A `.partial` folder only when it carries the build's marker.
 fn remove_leftovers(dest: &Path) {
     let partial = folder_build::partial_of(dest);
     if partial.is_dir() {
