@@ -846,6 +846,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/workshop/settings"),
     ("POST", "/api/zip/inspect"),
     ("POST", "/api/zip/inspect/stream"),
+    ("GET", "/app-icon/{name}"),
     ("GET", "/join"),
     ("GET", "/pad"),
     ("GET", "/pkg-host/link/{file}"),
