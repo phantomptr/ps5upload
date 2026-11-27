@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { CheckCircle2, Copy, Download, ExternalLink, MessageSquare } from "lucide-react";
+import { CheckCircle2, Copy, Download, ExternalLink, FolderOpen, MessageSquare } from "lucide-react";
 
-import { Button, Input } from "../../components";
+import { Button, Checkbox, Input } from "../../components";
+import { openLocalPath } from "../../lib/openLocalPath";
+import { isTauriEnv } from "../../lib/tauriEnv";
 import { useTr } from "../../state/lang";
 import type { BuiltReport } from "../../lib/reportBuilder";
 import type { SavedReport } from "../../lib/saveReport";
@@ -9,6 +11,11 @@ import { publicOutputs, type ReportForm } from "../../lib/reportOutputs";
 import { DISCORD_REPORT_URL } from "../../lib/reportProblem";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { writeClipboard } from "../../lib/clipboard";
+
+/** The saved zip's file name, from a path with either separator. */
+export function fileNameOf(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
 
 /** The report is saved: Post to GitHub · Post to Discord · Download zip. */
 export default function SendPanel({
@@ -26,10 +33,20 @@ export default function SendPanel({
 }) {
   const tr = useTr();
   const [discordFallback, setDiscordFallback] = useState<string | null>(null);
+  // A link opens the issue form but can't put a file in it: issues came in saying "the attached
+  // zip" with none. Posting asks first that the zip will be dragged in.
+  const [willAttach, setWillAttach] = useState(false);
+  const [revealFailed, setRevealFailed] = useState(false);
+  const desktop = isTauriEnv();
+  const zipName = fileNameOf(saved.dest);
 
   // Redacted like the zip: an issue is public.
   const outputs = () => publicOutputs(form, built.problemLines, true);
   const postGithub = () => void openExternalUrl(outputs().githubUrl);
+  const showZip = () => {
+    setRevealFailed(false);
+    void openLocalPath(saved.dest).then((ok) => setRevealFailed(!ok));
+  };
   const postDiscord = async () => {
     const text = outputs().discordText;
     // Copy first: a page that lost focus to the browser can't write the clipboard.
@@ -44,7 +61,28 @@ export default function SendPanel({
         <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-[var(--color-good)]" />
         <div className="min-w-0">
           <div className="text-sm font-medium">{tr("br_saved", undefined, "Report saved")}</div>
-          <div className="break-all text-xs text-[var(--color-muted)]">{saved.dest}</div>
+          <div className="break-all text-xs text-[var(--color-muted)]" data-testid="br-saved-path">
+            {desktop
+              ? saved.dest
+              : tr("br_saved_browser", { name: zipName }, `${zipName}, in your browser's downloads`)}
+          </div>
+          {desktop && (
+            <Button
+              className="mt-1.5"
+              size="sm"
+              variant="secondary"
+              leftIcon={<FolderOpen size={12} />}
+              onClick={showZip}
+              data-testid="br-show-zip"
+            >
+              {tr("br_show_zip", undefined, "Show in folder")}
+            </Button>
+          )}
+          {revealFailed && (
+            <div className="mt-1 text-xs text-[var(--color-warn)]">
+              {tr("br_show_zip_failed", { path: saved.dest }, `Couldn't open the folder. The zip is at ${saved.dest}.`)}
+            </div>
+          )}
           {built.missing.length > 0 && (
             <div className="mt-1 text-xs text-[var(--color-warn)]">
               {tr("br_missing", { n: built.missing.length }, `${built.missing.length} things couldn't be read (see MISSING.txt in the zip).`)}
@@ -57,11 +95,29 @@ export default function SendPanel({
           {
             key: "gh",
             button: (
-              <Button className="w-full" variant="primary" leftIcon={<ExternalLink size={14} />} onClick={postGithub}>
-                {tr("br_post_github", undefined, "Post to GitHub")}
-              </Button>
+              <>
+                <Checkbox
+                  checked={willAttach}
+                  onChange={setWillAttach}
+                  label={tr("br_will_attach", undefined, "I'll drag the zip into the issue before I submit it")}
+                />
+                <Button
+                  className="w-full"
+                  variant="primary"
+                  leftIcon={<ExternalLink size={14} />}
+                  onClick={postGithub}
+                  disabled={!willAttach}
+                  data-testid="br-post-github"
+                >
+                  {tr("br_post_github", undefined, "Post to GitHub")}
+                </Button>
+              </>
             ),
-            hint: tr("br_post_github_hint", undefined, "Drag the zip (just saved) into the issue, then Submit."),
+            hint: tr(
+              "br_post_github_hint_v2",
+              { name: zipName },
+              `The app can't attach the zip for you. In the issue, drag ${zipName} into the "Bug report zip" box, wait for its link to appear, then Submit.`,
+            ),
           },
           {
             key: "dc",
@@ -70,7 +126,11 @@ export default function SendPanel({
                 {tr("br_post_discord", undefined, "Post to Discord")}
               </Button>
             ),
-            hint: tr("br_post_discord_hint", undefined, "The text is copied: paste it (Ctrl/⌘+V), then drag in the zip."),
+            hint: tr(
+              "br_post_discord_hint_v2",
+              { name: zipName },
+              `The text is copied: paste it (Ctrl/⌘+V), then drag in ${zipName} before you send.`,
+            ),
           },
           {
             key: "zip",

@@ -3984,7 +3984,8 @@ Say what went wrong and what you were doing, fill in your setup (firmware, other
 **Read them from the console** fills them in), pick **when it happened**, attach screenshots if
 you have them, then press **Create report**. The `.zip` is saved, and **Post to GitHub** or **Post
 to Discord** (the **#bugs-report** channel) opens the place to send it, with the text ready to
-paste; drag the zip in. Both are read. A report with logs is worth ten "it doesn't work"
+paste. The app can't attach the zip for you: drag it in yourself before you submit (on GitHub, into
+the issue's **Bug report zip** box; **Show in folder** finds it). Both are read. A report with logs is worth ten "it doesn't work"
 messages: it usually has the exact error in it.
 
 **Q: What's in the report?**
