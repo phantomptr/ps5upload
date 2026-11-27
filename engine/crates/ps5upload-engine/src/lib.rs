@@ -3593,7 +3593,9 @@ struct AppUnregisterReq {
     registration_only: bool,
     /// Also delete what the title plays from: the `path` `GET /api/ps5/app/uninstall-source`
     /// named (a folder, or a disk image whose mount is taken down first). Refused with 409
-    /// before anything is touched when that is no longer what the title plays from. The
+    /// before anything is touched when that is no longer what the title plays from
+    /// (`source_changed`), or when a walk of the whole folder, made again here, finds another
+    /// game in it, a folder it can't read or no end (`source_not_deletable: <reason>`). The
     /// uninstall is then registration-only, and the path is deleted only once it succeeded:
     /// `source_deleted`, and `source_error` when it was kept.
     #[serde(default)]
@@ -3668,16 +3670,20 @@ async fn ps5_app_unregister(
         busy = Some(b);
         folder_sizes::changed(&addr, &[&want]);
         let (a, t) = (addr.clone(), title_id.clone());
-        let refusal =
-            match tokio::task::spawn_blocking(move || uninstall_source::current(&a, &t)).await {
-                Ok(Ok(src)) if src.path == want => {
-                    source = Some(src);
-                    None
-                }
-                Ok(Ok(src)) => Some(format!("source_changed: the title plays from {}", src.path)),
-                Ok(Err(reason)) => Some(format!("source_not_deletable: {reason}")),
-                Err(e) => Some(e.to_string()),
-            };
+        // A folder is walked again, whole (it may hold another game the answer of
+        // uninstall-source did not see, or that answer may be old).
+        let refusal = match tokio::task::spawn_blocking(move || {
+            uninstall_source::checked_for_delete(&a, &t, &want)
+        })
+        .await
+        {
+            Ok(Ok(src)) => {
+                source = Some(src);
+                None
+            }
+            Ok(Err(refusal)) => Some(refusal),
+            Err(e) => Some(e.to_string()),
+        };
         if let Some(r) = refusal {
             crate::log_at!(
                 Warn,

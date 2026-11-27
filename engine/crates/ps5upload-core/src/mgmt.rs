@@ -440,6 +440,12 @@ pub fn scoped_transport(t: Arc<dyn MgmtTransport>) -> ScopedTransport {
     ScopedTransport { prev }
 }
 
+/// This thread's [`scoped_transport`], if any: for work this thread hands to threads of its own
+/// (a folder walk's workers), so a test's transport reaches them too.
+pub fn scoped_now() -> Option<Arc<dyn MgmtTransport>> {
+    SCOPED.with(|s| s.borrow().clone())
+}
+
 pub struct ScopedTransport {
     prev: Option<Arc<dyn MgmtTransport>>,
 }

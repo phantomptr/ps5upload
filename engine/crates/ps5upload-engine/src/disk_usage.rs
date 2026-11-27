@@ -248,12 +248,16 @@ pub(crate) fn walk(
     // The walk usually runs on a blocking thread of the engine's runtime; the listers reach
     // the helper through it, so each worker enters it too.
     let rt = tokio::runtime::Handle::try_current().ok();
+    // A test's console stand-in (set for this thread only) answers the workers too.
+    let scoped = ps5upload_core::mgmt::scoped_now();
     std::thread::scope(|s| {
         for _ in 0..limits.workers.max(1) {
             let rt = rt.clone();
+            let scoped = scoped.clone();
             let (shared, cv) = (&shared, &cv);
             s.spawn(move || {
                 let _rt = rt.as_ref().map(|h| h.enter());
+                let _transport = scoped.map(ps5upload_core::mgmt::scoped_transport);
                 worker(shared, cv, list, skip, limits, progress, cancel, started);
             });
         }
