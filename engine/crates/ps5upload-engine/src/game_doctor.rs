@@ -148,6 +148,9 @@ pub struct Facts {
     /// A game registered from this app's own image mount (`/mnt/ps5upload/...`): whether that
     /// mount is there now (`None`: not such a game, or the volumes could not be read).
     pub app_mount: Option<bool>,
+    /// The console did not answer everything within [`BUDGET`]: what could not be read is
+    /// "can't tell (timed out)".
+    pub timed_out: bool,
 }
 
 impl Default for Facts {
@@ -169,21 +172,44 @@ impl Default for Facts {
             folder_modes: FolderModes::NotRead,
             free_internal: None,
             app_mount: None,
+            timed_out: false,
         }
     }
 }
 
-/// Every check, in order.
+/// Every check, in order. When the console ran out of time, a check that can't tell says so.
 pub fn evaluate(f: &Facts) -> Vec<DoctorCheck> {
-    vec![
+    let checks = vec![
         fake_package(f),
         mount_layer(f),
         package_size(f),
         database(f),
         permissions(f),
         free_space(f),
-    ]
+    ];
+    if !f.timed_out {
+        return checks;
+    }
+    checks
+        .into_iter()
+        .map(|c| {
+            if c.status == DoctorStatus::Unknown {
+                check(
+                    c.id,
+                    DoctorStatus::Unknown,
+                    "timed_out",
+                    "The console did not answer in time, so the app can't tell.".into(),
+                )
+            } else {
+                c
+            }
+        })
+        .collect()
 }
+
+/// How long the doctor waits for the console in all: every helper call it makes ends by then
+/// (`mgmt::scoped_deadline`), so a helper that never answers holds its thread no longer.
+pub const BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// This app's own image mounts (`fs.mount`): a game registered under one plays from it.
 const APP_MOUNTS: &str = "/mnt/ps5upload";
@@ -894,6 +920,20 @@ fn folder_modes(addr: &str, src: &str) -> FolderModes {
 /// Reads every fact for `title_id` on the console at `addr` (the helper's address). Blocking;
 /// each read that fails leaves its fact unknown.
 pub fn gather(addr: &str, title_id: &str) -> Facts {
+    gather_within(addr, title_id, BUDGET)
+}
+
+/// [`gather`] with every helper call ended by `budget` from now.
+fn gather_within(addr: &str, title_id: &str, budget: std::time::Duration) -> Facts {
+    let started = std::time::Instant::now();
+    let _deadline = ps5upload_core::mgmt::scoped_deadline(started + budget);
+    let mut f = gather_facts(addr, title_id);
+    // A call cut short by the deadline ends a moment before it: near enough is out of time.
+    f.timed_out = started.elapsed() + std::time::Duration::from_millis(200) >= budget;
+    f
+}
+
+fn gather_facts(addr: &str, title_id: &str) -> Facts {
     use ps5upload_core::fs_ops::{app_list_registered, fs_exists, fs_read};
     let mut f = Facts {
         ps5_game: title_id.starts_with("PPSA"),
@@ -1045,7 +1085,9 @@ pub struct DoctorQuery {
 /// Each check has `status` `pass`, `problem` or `unknown` (the app can't tell), a `reason` code,
 /// an English `message`, `params`, and a `fix` the app offers (`fix_permissions`, `restore`,
 /// `register`, `start_shadowmount`). Also `kind` (`package`, `folder`, `image`, `unknown`),
-/// `source`, `firmware` and `first_problem` (the first check that found one, else null).
+/// `source`, `firmware` and `first_problem` (the first check that found one, else null). It waits
+/// for the console 30 s in all: a check it could not finish by then is `unknown` with reason
+/// `timed_out`.
 pub async fn doctor_handler(Query(q): Query<DoctorQuery>) -> Response {
     let id = q.title_id.trim().to_ascii_uppercase();
     if !ps5upload_core::title_restore::valid_title_id(&id) {
@@ -1528,6 +1570,15 @@ mod tests {
         for mounted in [Some(true), Some(false), None] {
             out.push(app_image(mounted));
         }
+        // Out of time: every check that can't tell says so.
+        out.push(Facts {
+            timed_out: true,
+            ..Facts::default()
+        });
+        out.push(Facts {
+            timed_out: true,
+            ..folder(FolderModes::NotRead)
+        });
         out
     }
 
@@ -1575,6 +1626,53 @@ mod tests {
         let mut f = app_image(Some(true));
         f.source = Some("/mnt/shadowmnt/Game.ffpkg_1/x".into());
         assert_eq!(mount_layer(&f).reason, "no_mounter");
+    }
+
+    /// A helper that takes every call and never answers: each call waits out its whole timeout.
+    struct Silent;
+
+    impl ps5upload_core::mgmt::MgmtTransport for Silent {
+        fn call(
+            &self,
+            _addr: &str,
+            _method: ps5upload_core::mgmt::Method,
+            label: &str,
+            _body: &[u8],
+            timeout: std::time::Duration,
+        ) -> anyhow::Result<Option<Vec<u8>>> {
+            std::thread::sleep(timeout);
+            anyhow::bail!("{label}: timed out")
+        }
+    }
+
+    /// A silent helper holds the doctor no longer than its budget, and what it could not read
+    /// is "can't tell (timed out)".
+    #[test]
+    fn a_silent_helper_holds_the_doctor_no_longer_than_its_budget() {
+        let _t = ps5upload_core::mgmt::scoped_transport(std::sync::Arc::new(Silent));
+        let started = std::time::Instant::now();
+        let f = gather_within(
+            "192.0.2.9",
+            "PPSA00001",
+            std::time::Duration::from_millis(300),
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(f.timed_out);
+        let checks = evaluate(&f);
+        assert!(checks
+            .iter()
+            .all(|c| c.status != DoctorStatus::Unknown || c.reason == "timed_out"));
+        assert!(checks.iter().any(|c| c.reason == "timed_out"));
+        // In time, nothing is said to have timed out.
+        let f = Facts {
+            timed_out: false,
+            ..Facts::default()
+        };
+        assert!(evaluate(&f).iter().all(|c| c.reason != "timed_out"));
     }
 
     /// The app words every reason itself (`doctor_<id>_<reason>` in the client's en.ts); its

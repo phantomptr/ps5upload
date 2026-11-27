@@ -10053,6 +10053,12 @@ doctor_free_space_free_unknown: "The free space on the console's storage could n
 doctor_free_space_internal_full: "Only {free_gb} GB is free on the console's storage. Games keep their saves and data there: free some space.",
 doctor_free_space_internal_low: "Only {free_gb} GB is free on the console's storage. A game needs some room there for its saves; how much is not known.",
 doctor_free_space_ok: "{free_gb} GB is free on the console's storage.",
+doctor_fake_package_timed_out: "The console did not answer in time, so the app can't tell.",
+doctor_mount_layer_timed_out: "The console did not answer in time, so the app can't tell.",
+doctor_package_size_timed_out: "The console did not answer in time, so the app can't tell.",
+doctor_database_timed_out: "The console did not answer in time, so the app can't tell.",
+doctor_permissions_timed_out: "The console did not answer in time, so the app can't tell.",
+doctor_free_space_timed_out: "The console did not answer in time, so the app can't tell.",
 doctor_fake_package_kind_unknown: "The app could not tell how this game is on the console.",
 doctor_package_size_kind_unknown: "The app could not tell how this game is on the console.",
 // TV mode (#976).
