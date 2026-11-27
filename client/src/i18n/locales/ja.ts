@@ -5407,7 +5407,6 @@ install_path_fallback_label: "PS5 がこのコンピューターに接続でき�
 "installed_fix_permissions_done": "権限を修正しました。このゲームのフォルダー内のすべてのファイルが 0777 になりました。プレイを押してください。",
 "installed_fix_permissions_short": "権限を修正",
 "installed_launch_homebrew_refused": "PS5 がこのゲームの起動を拒否しました（0x80940033）。本体は現在、自作アプリやフェイクパッケージのゲームを起動しない状態です。kstuff を読み込み直して（または再起動してもう一度脱獄して）から、もう一度プレイを押してください。",
-"fakegame.fw.launch_kstuff_v3": "このゲームをフェイクパッケージからインストールした場合：FW {fw} では最新の kstuff（13.60 までのフェイクパッケージ対応）を読み込んだときだけ起動します。読み込んでからもう一度プレイを押すか、Kraken Mount でパッケージをマウントして遊んでください。",
 "installed_launch_no_kstuff": "kstuff が実行されていないため、PS5 がこのゲームの起動を拒否しました（0x80940033）。kstuff がないと、本体は自作アプリやフェイクパッケージのゲームを起動しません。kstuff を読み込んで（オートローダー、または 接続 → セットアップ）、もう一度プレイを押してください。",
 job_why_lanes: "接続数: 平均 {avg}、最大 {max}。チャンク {chunk}",
 job_why_loading: "読み込み中…",

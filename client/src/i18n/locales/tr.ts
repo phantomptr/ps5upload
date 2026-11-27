@@ -5395,7 +5395,6 @@ install_path_fallback_label: "PS5 bu bilgisayara ulaşamadığında dosya yoluyl
 "installed_fix_permissions_done": "İzinler düzeltildi: bu oyunun klasöründeki her dosya artık 0777. Oyna'ya bas.",
 "installed_fix_permissions_short": "İzinleri düzelt",
 "installed_launch_homebrew_refused": "PS5 bu oyunu başlatmayı reddetti (0x80940033). Konsol şu anda homebrew ya da sahte paket oyunlarını başlatmıyor: kstuff'ı yeniden yükle (ya da yeniden başlatıp jailbreak'i tekrar çalıştır), sonra yeniden Oyna'ya bas.",
-"fakegame.fw.launch_kstuff_v3": "Bu oyun sahte paketten yüklendiyse: FW {fw} üzerinde yalnızca en son kstuff (13.60'a kadar sahte paket desteği) yüklüyken başlar. Onu yükleyip yeniden Oyna'ya basın ya da paketi Kraken Mount ile bağlayarak oynayın.",
 "installed_launch_no_kstuff": "PS5 bu oyunu başlatmayı reddetti (0x80940033), çünkü kstuff çalışmıyor. O olmadan konsol hiçbir homebrew ya da sahte paket oyununu başlatmaz. kstuff'ı yükle (autoloader'ınla ya da Bağlantı → Kur ile) ve yeniden Oyna'ya bas.",
 job_why_lanes: "Bağlantılar: ortalama {avg}, en fazla {max}; blok {chunk}",
 job_why_loading: "Yükleniyor…",

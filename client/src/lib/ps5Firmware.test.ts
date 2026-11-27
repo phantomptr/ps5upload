@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { parsePS5Firmware, ps5FakeGameNeedsNewKstuff } from "./ps5Firmware";
+import {
+  fakeGameLaunchHint,
+  fakePackageNeedsLatestKstuff,
+  parsePS5Firmware,
+  ps5FakeGameNeedsNewKstuff,
+} from "./ps5Firmware";
 
 describe("parsePS5Firmware", () => {
   it("extracts from 'releases/09.60' kernel string", () => {
@@ -52,5 +57,20 @@ describe("ps5FakeGameNeedsNewKstuff", () => {
     expect(ps5FakeGameNeedsNewKstuff(K("13.60"), "CUSA00207")).toBeNull();
     expect(ps5FakeGameNeedsNewKstuff(K("13.60"), "IV0002-ITEM00001_00-ITEMZFLOWIV00000")).toBeNull();
     expect(ps5FakeGameNeedsNewKstuff(null, PS5_GAME)).toBeNull();
+  });
+  it("fakePackageNeedsLatestKstuff reads the firmware alone", () => {
+    expect(fakePackageNeedsLatestKstuff(K("13.40"))).toBe("13.40");
+    expect(fakePackageNeedsLatestKstuff(K("11.60"))).toBeNull();
+    expect(fakePackageNeedsLatestKstuff(K("13.61"))).toBeNull();
+    expect(fakePackageNeedsLatestKstuff(null)).toBeNull();
+  });
+  it("fakeGameLaunchHint says the fake-package rule, the CE code and both ways", () => {
+    const hint = fakeGameLaunchHint(K("13.40"), PS5_GAME);
+    expect(hint).toContain("on firmware 11.61 to 13.60 (this PS5 has 13.40) a fake package needs the latest kstuff");
+    expect(hint).toContain("with an older kstuff it installs but won't start (the PS5 shows CE-100022-5)");
+    expect(hint).toContain("Kraken Mount");
+    expect(hint).not.toMatch(/instead|better|recommended|alternative|fallback|1\.1\d/i);
+    expect(fakeGameLaunchHint(K("11.50"), PS5_GAME)).toBeNull();
+    expect(fakeGameLaunchHint(K("13.40"), "CUSA00207")).toBeNull();
   });
 });

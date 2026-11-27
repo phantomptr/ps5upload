@@ -5341,7 +5341,6 @@ install_path_fallback_label: "Instalar por ruta de archivo cuando la PS5 no pued
 "installed_fix_permissions_done": "Permisos corregidos: todos los archivos de la carpeta de este juego son ahora 0777. Pulsa Jugar.",
 "installed_fix_permissions_short": "Corregir permisos",
 "installed_launch_homebrew_refused": "La PS5 se negó a iniciar este juego (0x80940033). La consola no está iniciando homebrew ni juegos de paquetes falsos en este momento: vuelve a cargar kstuff (o reinicia y vuelve a ejecutar el jailbreak) y pulsa Jugar de nuevo.",
-"fakegame.fw.launch_kstuff_v3": "Si este juego se instaló desde un paquete falso: en el FW {fw} solo arranca con el kstuff más reciente (compatible con paquetes falsos hasta 13.60) cargado. Cárgalo y vuelve a pulsar Jugar, o juégalo montando el paquete con Kraken Mount.",
 "installed_launch_no_kstuff": "La PS5 se negó a iniciar este juego (0x80940033) porque kstuff no se está ejecutando. Sin él, la consola no inicia ningún homebrew ni juego de paquete falso. Carga kstuff (tu autoloader, o Conexión → Configurar) y pulsa Jugar de nuevo.",
 job_why_lanes: "Conexiones: {avg} de media, {max} como máximo; bloque {chunk}",
 job_why_loading: "Cargando…",

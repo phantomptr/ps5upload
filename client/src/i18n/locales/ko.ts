@@ -5405,7 +5405,6 @@ install_path_fallback_label: "PS5가 이 컴퓨터에 연결할 수 없을 때 �
 "installed_fix_permissions_done": "권한이 수정되었습니다. 이 게임 폴더의 모든 파일이 이제 0777입니다. 실행을 누르세요.",
 "installed_fix_permissions_short": "권한 수정",
 "installed_launch_homebrew_refused": "PS5가 이 게임의 시작을 거부했습니다(0x80940033). 지금 본체가 홈브루나 가짜 패키지 게임을 시작하지 않는 상태입니다. kstuff를 다시 로드한 다음(또는 재부팅 후 탈옥을 다시 실행한 다음) 실행을 다시 누르세요.",
-"fakegame.fw.launch_kstuff_v3": "이 게임을 가짜 패키지로 설치했다면: FW {fw}에서는 최신 kstuff(13.60까지 가짜 패키지 지원)를 불러온 상태에서만 시작됩니다. 불러온 뒤 플레이를 다시 누르거나, Kraken Mount로 패키지를 마운트해 플레이하세요.",
 "installed_launch_no_kstuff": "kstuff가 실행 중이 아니어서 PS5가 이 게임의 시작을 거부했습니다(0x80940033). kstuff가 없으면 본체는 홈브루나 가짜 패키지 게임을 시작하지 않습니다. kstuff를 로드하고(오토로더, 또는 연결 → 설정) 실행을 다시 누르세요.",
 job_why_lanes: "연결: 평균 {avg}개, 최대 {max}개, 청크 {chunk}",
 job_why_loading: "불러오는 중…",

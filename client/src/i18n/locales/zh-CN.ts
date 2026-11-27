@@ -5347,7 +5347,6 @@ install_path_fallback_label: "当 PS5 无法连接到这台电脑时，按文件
 "installed_fix_permissions_done": "权限已修复：此游戏文件夹中的所有文件现在都是 0777。请按运行。",
 "installed_fix_permissions_short": "修复权限",
 "installed_launch_homebrew_refused": "PS5 拒绝启动这款游戏（0x80940033）。主机当前不会启动自制程序或伪造软件包游戏：请重新加载 kstuff（或重启后再次运行越狱），然后再次按运行。",
-"fakegame.fw.launch_kstuff_v3": "如果此游戏是从伪造软件包安装的：在 FW {fw} 上，只有加载最新的 kstuff（支持 13.60 及以下的伪造软件包）后才能启动。请加载它后再次按“开始游戏”，或用 Kraken Mount 挂载该软件包来游玩。",
 "installed_launch_no_kstuff": "由于 kstuff 没有运行，PS5 拒绝启动这款游戏（0x80940033）。没有它，主机不会启动任何自制程序或伪造软件包游戏。请加载 kstuff（你的自动加载器，或 连接 → 设置），然后再次按运行。",
 job_why_lanes: "连接数：平均 {avg}，最多 {max}；分块 {chunk}",
 job_why_loading: "正在加载…",

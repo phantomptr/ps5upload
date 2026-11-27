@@ -5680,7 +5680,6 @@ install_path_fallback_label: "Telepítés fájlútvonal alapján, ha a PS5 nem �
 "installed_fix_permissions_done": "Jogosultságok javítva: a játék mappájában minden fájl most 0777. Nyomd meg a Játék gombot.",
 "installed_fix_permissions_short": "Jogosultságok javítása",
 "installed_launch_homebrew_refused": "A PS5 megtagadta a játék indítását (0x80940033). A konzol most nem indít homebrew-t és hamis csomagos játékot: töltsd be újra a kstuffot (vagy indítsd újra, és futtasd újra a jailbreaket), majd nyomd meg újra a Játék gombot.",
-"fakegame.fw.launch_kstuff_v3": "Ha ez a játék hamis csomagból települt: FW {fw} alatt csak a legújabb kstuff betöltésével indul (hamiscsomag-támogatás 13.60-ig). Töltsd be, és nyomd meg újra a Játék gombot, vagy játssz vele úgy, hogy a csomagot a Kraken Mounttal csatolod.",
 "installed_launch_no_kstuff": "A PS5 megtagadta a játék indítását (0x80940033), mert a kstuff nem fut. Nélküle a konzol semmilyen homebrew-t vagy hamis csomagos játékot nem indít. Töltsd be a kstuffot (az autoloadereddel vagy a Kapcsolat → Beállítás menüben), és nyomd meg újra a Játék gombot.",
 job_why_lanes: "Kapcsolatok: átlagosan {avg}, legfeljebb {max}; blokk {chunk}",
 job_why_loading: "Betöltés…",

@@ -5390,7 +5390,6 @@ install_path_fallback_label: "Cài theo đường dẫn tệp khi PS5 không k�
 "installed_fix_permissions_done": "Đã sửa quyền: mọi tệp trong thư mục của trò chơi này giờ là 0777. Nhấn Chơi.",
 "installed_fix_permissions_short": "Sửa quyền",
 "installed_launch_homebrew_refused": "PS5 đã từ chối khởi chạy trò chơi này (0x80940033). Hiện tại máy không khởi chạy homebrew hay trò chơi từ gói giả: hãy tải lại kstuff (hoặc khởi động lại và chạy jailbreak lần nữa), rồi nhấn Chơi lần nữa.",
-"fakegame.fw.launch_kstuff_v3": "Nếu game này được cài từ gói giả: trên FW {fw} game chỉ khởi động khi đã nạp kstuff mới nhất (hỗ trợ gói giả đến 13.60). Hãy nạp nó rồi bấm lại Chơi, hoặc chơi bằng cách gắn gói với Kraken Mount.",
 "installed_launch_no_kstuff": "PS5 đã từ chối khởi chạy trò chơi này (0x80940033) vì kstuff không chạy. Không có nó, máy không khởi chạy homebrew hay trò chơi từ gói giả nào. Hãy tải kstuff (bằng autoloader của bạn, hoặc Kết nối → Thiết lập) rồi nhấn Chơi lần nữa.",
 job_why_lanes: "Kết nối: trung bình {avg}, tối đa {max}; khối {chunk}",
 job_why_loading: "Đang tải…",
