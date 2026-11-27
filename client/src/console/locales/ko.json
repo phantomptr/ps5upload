@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "압축 파일 폴더로 돌아가기",
   "cw_files_extract_body_v2": "새 폴더에 압축을 풉니다. 압축 파일은 그대로 남습니다.",
   "cw_files_extract_change": "변경…",
+  "cw_files_extract_choose": "항목 선택…",
   "cw_files_extract_delete_after": "압축 해제 후 압축 파일 삭제",
   "cw_files_extract_delete_failed": "압축 파일을 삭제하지 못했습니다.",
   "cw_files_extract_deleted": "압축 파일을 삭제했습니다.",

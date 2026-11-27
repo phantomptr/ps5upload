@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "بازگشت به پوشهٔ آرشیو",
   "cw_files_extract_body_v2": "آن را در یک پوشهٔ جدید استخراج می‌کند. آرشیو باقی می‌ماند.",
   "cw_files_extract_change": "تغییر…",
+  "cw_files_extract_choose": "انتخاب موارد…",
   "cw_files_extract_delete_after": "حذف فایل فشرده پس از استخراج",
   "cw_files_extract_delete_failed": "فایل فشرده حذف نشد.",
   "cw_files_extract_deleted": "فایل فشرده حذف شد.",

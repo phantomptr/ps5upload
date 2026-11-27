@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "Back to the archive's folder",
   "cw_files_extract_body_v2": "Extracts it into a new folder. The archive is kept.",
   "cw_files_extract_change": "Change…",
+  "cw_files_extract_choose": "Choose items…",
   "cw_files_extract_delete_after": "Delete the archive after extracting",
   "cw_files_extract_delete_failed": "The archive could not be deleted.",
   "cw_files_extract_deleted": "The archive was deleted.",

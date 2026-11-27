@@ -6444,6 +6444,7 @@ c2c_test_deep_bad: "การส่งทดสอบ 4 KiB ไปไม่ถ�
 "cw_files_extract_replace_title": "แทนที่ไฟล์ใน “{name}” ไหม",
 "cw_files_extract_replace_body": "ไฟล์ในโฟลเดอร์นั้นที่ชื่อตรงกับไฟล์ในไฟล์บีบอัดจะถูกเขียนทับ ย้อนกลับไม่ได้",
 "cw_files_extract_go": "แตกไฟล์",
+"cw_files_extract_choose": "เลือกรายการ…",
 cw_files_extract_delete_after: "ลบไฟล์บีบอัดหลังแตกไฟล์",
 cw_files_extract_kept_archive: "เก็บไฟล์บีบอัดไว้ เพราะแตกออกมาได้ไม่ครบทุกรายการ",
 cw_files_extract_deleted: "ลบไฟล์บีบอัดแล้ว",

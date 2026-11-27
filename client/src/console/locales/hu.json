@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "Vissza az archívum mappájába",
   "cw_files_extract_body_v2": "Egy új mappába bontja ki. Az archívum megmarad.",
   "cw_files_extract_change": "Módosítás…",
+  "cw_files_extract_choose": "Elemek kiválasztása…",
   "cw_files_extract_delete_after": "Archívum törlése kicsomagolás után",
   "cw_files_extract_delete_failed": "Az archívumot nem sikerült törölni.",
   "cw_files_extract_deleted": "Az archívum törölve.",

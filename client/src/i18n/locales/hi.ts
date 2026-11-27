@@ -6451,6 +6451,7 @@ c2c_test_deep_bad: "4 KiB का परीक्षण नहीं पहुँ
 "cw_files_extract_replace_title": "“{name}” में फ़ाइलें बदलें?",
 "cw_files_extract_replace_body": "उस फ़ोल्डर में आर्काइव की किसी फ़ाइल के नाम वाली फ़ाइलें ओवरराइट हो जाएँगी। इसे पूर्ववत नहीं किया जा सकता।",
 "cw_files_extract_go": "एक्सट्रैक्ट करें",
+"cw_files_extract_choose": "आइटम चुनें…",
 cw_files_extract_delete_after: "एक्सट्रैक्ट करने के बाद आर्काइव मिटाएँ",
 cw_files_extract_kept_archive: "आर्काइव रखा गया, क्योंकि हर एंट्री नहीं निकली।",
 cw_files_extract_deleted: "आर्काइव मिटा दिया गया।",

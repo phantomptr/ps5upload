@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "アーカイブのフォルダーに戻す",
   "cw_files_extract_body_v2": "新しいフォルダーに展開します。アーカイブは残ります。",
   "cw_files_extract_change": "変更…",
+  "cw_files_extract_choose": "項目を選択…",
   "cw_files_extract_delete_after": "展開後にアーカイブを削除",
   "cw_files_extract_delete_failed": "アーカイブを削除できませんでした。",
   "cw_files_extract_deleted": "アーカイブを削除しました。",

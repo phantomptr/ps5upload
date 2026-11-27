@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "回到压缩包所在文件夹",
   "cw_files_extract_body_v2": "解压到一个新文件夹。压缩包会保留。",
   "cw_files_extract_change": "更改…",
+  "cw_files_extract_choose": "选择项目…",
   "cw_files_extract_delete_after": "解压后删除压缩包",
   "cw_files_extract_delete_failed": "无法删除压缩包。",
   "cw_files_extract_deleted": "压缩包已删除。",

@@ -6437,6 +6437,7 @@ c2c_test_deep_bad: "لم يصل الإرسال التجريبي بحجم 4 KiB: 
 "cw_files_extract_replace_title": "استبدال الملفات في «{name}»؟",
 "cw_files_extract_replace_body": "ستُستبدل الملفات في ذلك المجلد التي تحمل اسم ملف في الأرشيف. لا يمكن التراجع عن ذلك.",
 "cw_files_extract_go": "استخراج",
+"cw_files_extract_choose": "اختر العناصر…",
 cw_files_extract_delete_after: "حذف الأرشيف بعد الاستخراج",
 cw_files_extract_kept_archive: "تم الإبقاء على الأرشيف، لأن بعض العناصر لم تُستخرج.",
 cw_files_extract_deleted: "تم حذف الأرشيف.",

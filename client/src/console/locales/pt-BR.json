@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "Voltar para a pasta do arquivo compactado",
   "cw_files_extract_body_v2": "Extrai em uma pasta nova. O arquivo compactado é mantido.",
   "cw_files_extract_change": "Alterar…",
+  "cw_files_extract_choose": "Escolher itens…",
   "cw_files_extract_delete_after": "Excluir o arquivo após extrair",
   "cw_files_extract_delete_failed": "Não foi possível excluir o arquivo.",
   "cw_files_extract_deleted": "O arquivo foi excluído.",

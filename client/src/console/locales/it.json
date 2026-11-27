@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "Torna alla cartella dell'archivio",
   "cw_files_extract_body_v2": "Lo estrae in una nuova cartella. L'archivio viene conservato.",
   "cw_files_extract_change": "Cambia…",
+  "cw_files_extract_choose": "Scegli elementi…",
   "cw_files_extract_delete_after": "Elimina l'archivio dopo l'estrazione",
   "cw_files_extract_delete_failed": "Impossibile eliminare l'archivio.",
   "cw_files_extract_deleted": "L'archivio è stato eliminato.",

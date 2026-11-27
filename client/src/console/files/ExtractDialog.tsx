@@ -12,7 +12,7 @@ import { filesErrorText } from "./Files";
 import { joinPath, volumeOf } from "./move";
 import { freeName, statOrNull } from "./paste";
 import { PathPicker } from "./PathPicker";
-import { checkUnavailable, extractInfo, type ExtractInfo } from "./opJob";
+import { checkUnavailable, extractInfo, listArchiveTop, type ExtractInfo, type TopListing } from "./opJob";
 
 type Load = { info: ExtractInfo } | { error: string | null; generic: boolean } | null;
 
@@ -23,6 +23,8 @@ export interface ExtractStart {
   replace: boolean;
   /** Delete the archive once every entry came out. */
   deleteAfter?: boolean;
+  /** "Choose items" (#969): top-level entries of the archive left out. */
+  skip?: string[];
 }
 
 /** An extract cause token (fs_extract_no_space, …) as a sentence, or null when it has none. */
@@ -108,6 +110,8 @@ export function ExtractDialog({
   confirming = false,
   volumes = [],
   startParent = null,
+  listTop = listArchiveTop,
+  startItems = null,
 }: {
   dir: string;
   name: string;
@@ -126,7 +130,46 @@ export function ExtractDialog({
   volumes?: Volume[];
   /** Another folder to extract into, already picked (tests). */
   startParent?: string | null;
+  /** Reads the archive's top-level names for "Choose items" (tests pass their own). */
+  listTop?: (path: string, dir: string) => Promise<TopListing>;
+  /** Items already listed (tests). */
+  startItems?: TopListing | null;
 }) {
+  // "Choose items" (#969): the archive's top-level entries, and those left unticked.
+  const [items, setItems] = useState<TopListing | null>(startItems);
+  const [itemsLoading, setItemsLoading] = useState(false);
+  const [itemsError, setItemsError] = useState<string | null>(null);
+  const [skipped, setSkipped] = useState<Set<string>>(new Set());
+  const skip = items && skipped.size > 0 ? { skip: items.top.filter((n) => skipped.has(n)) } : {};
+  const noneChosen = !!items && !items.more && items.top.length > 0 && items.top.every((n) => skipped.has(n));
+  const loadItems = () => {
+    setItemsLoading(true);
+    setItemsError(null);
+    listTop(path, dir).then(
+      (l) => {
+        setItemsLoading(false);
+        setItems(l);
+        setSkipped(new Set());
+      },
+      (e: unknown) => {
+        setItemsLoading(false);
+        // A helper too old to list says so as a refused folder: the plain sentence fits better.
+        const code = e instanceof ApiError ? e.code : "";
+        setItemsError(
+          code.startsWith("fs_extract_list") || code.startsWith("fs_extract_destination_exists")
+            ? t("cw_files_err_read")
+            : (extractErrorText(e) ?? t("cw_files_err_read")),
+        );
+      },
+    );
+  };
+  const toggleItem = (n: string) =>
+    setSkipped((cur) => {
+      const next = new Set(cur);
+      if (next.has(n)) next.delete(n);
+      else next.add(n);
+      return next;
+    });
   const [state, setState] = useState<Load>(initial ? { info: initial } : null);
   const [outName, setOutName] = useState<string | null>(null);
   const [naming, setNaming] = useState(false);
@@ -182,7 +225,7 @@ export function ExtractDialog({
   }, [elsewhere, dest, taken]);
   const exists = outName == null && (elsewhere ? otherTaken === true : !!info && info.exists);
   const checking = elsewhere && otherTaken == null;
-  const canStart = !busy && !naming && !exists && !checking && (info != null || generic);
+  const canStart = !busy && !naming && !exists && !checking && !noneChosen && (info != null || generic);
   const otherVolume = elsewhere ? volumeOf(parent, volumes) : null;
   const free = elsewhere ? (otherVolume ? otherVolume.free_bytes : null) : info ? info.free : null;
   useEffect(() => {
@@ -253,6 +296,60 @@ export function ExtractDialog({
               <span>{t("cw_files_extract_beside")}</span>
             </button>
           ) : null}
+          {items == null ? (
+            <button
+              type="button"
+              className="cw-focusable cw-button"
+              data-action="extract-choose"
+              aria-busy={itemsLoading || undefined}
+              disabled={itemsLoading}
+              onClick={loadItems}
+            >
+              <span>{itemsLoading ? t("cw_home_loading") : t("cw_files_extract_choose")}</span>
+            </button>
+          ) : (
+            <div className="cw-extract-items" data-extract-items="">
+              <p className="cw-dim">
+                {t("cw_files_status_filtered", {
+                  n: items.top.filter((n) => !skipped.has(n)).length,
+                  total: items.top.length,
+                })}
+              </p>
+              <button type="button" className="cw-focusable cw-button" data-action="extract-items-all" onClick={() => setSkipped(new Set())}>
+                <span>{t("cw_files_select_all")}</span>
+              </button>
+              <button
+                type="button"
+                className="cw-focusable cw-button"
+                data-action="extract-items-none"
+                onClick={() => setSkipped(new Set(items.top))}
+              >
+                <span>{t("cw_files_select_none")}</span>
+              </button>
+              {items.top.map((n) => {
+                const on = !skipped.has(n);
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    role="checkbox"
+                    aria-checked={on}
+                    className="cw-focusable cw-button"
+                    data-extract-item={n}
+                    onClick={() => toggleItem(n)}
+                  >
+                    <span className="cw-mono">{items.dirs.includes(n) ? `${n}/` : n}</span>
+                    <span className={`cw-tag${on ? " is-on" : ""}`}>{t(on ? "cw_settings_on" : "cw_settings_off")}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {itemsError ? (
+            <p className="cw-field-error" role="alert" data-extract-items-error="">
+              {itemsError}
+            </p>
+          ) : null}
           {checking ? <p className="cw-dim">{t("cw_home_loading")}</p> : null}
           <p className="cw-dim">{t("cw_files_extract_space_note")}</p>
           {exists ? (
@@ -298,7 +395,7 @@ export function ExtractDialog({
               className="cw-focusable cw-button"
               data-action="extract-merge"
               disabled={busy}
-              onClick={() => onStart({ dest, merge: true, replace: false, deleteAfter })}
+              onClick={() => onStart({ dest, merge: true, replace: false, deleteAfter, ...skip })}
             >
               <span>{t("cw_files_extract_merge")}</span>
             </button>
@@ -318,7 +415,7 @@ export function ExtractDialog({
             className="cw-focusable cw-button is-primary"
             data-action="extract-go"
             disabled={!canStart}
-            onClick={() => onStart({ dest, merge: false, replace: false, deleteAfter })}
+            onClick={() => onStart({ dest, merge: false, replace: false, deleteAfter, ...skip })}
           >
             <span>{t("cw_files_extract_go")}</span>
           </button>
@@ -342,7 +439,7 @@ export function ExtractDialog({
           body={t("cw_files_extract_replace_body")}
           confirmLabel={t("cw_files_extract_merge_replace")}
           danger
-          onConfirm={() => onStart({ dest, merge: true, replace: true, deleteAfter })}
+          onConfirm={() => onStart({ dest, merge: true, replace: true, deleteAfter, ...skip })}
           onCancel={() => setConfirmReplace(false)}
         />
       ) : null}

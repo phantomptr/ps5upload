@@ -6454,6 +6454,7 @@ c2c_test_deep_bad: "4 KiB 테스트 전송이 도착하지 않았습니다: {det
 "cw_files_extract_replace_title": "“{name}”의 파일을 바꿀까요?",
 "cw_files_extract_replace_body": "그 폴더에서 압축 파일 안의 파일과 이름이 같은 파일은 덮어씁니다. 되돌릴 수 없습니다.",
 "cw_files_extract_go": "압축 풀기",
+"cw_files_extract_choose": "항목 선택…",
 cw_files_extract_delete_after: "압축 해제 후 압축 파일 삭제",
 cw_files_extract_kept_archive: "모든 항목이 풀리지 않아 압축 파일을 남겨 두었습니다.",
 cw_files_extract_deleted: "압축 파일을 삭제했습니다.",

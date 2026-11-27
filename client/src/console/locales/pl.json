@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "Wróć do folderu archiwum",
   "cw_files_extract_body_v2": "Rozpakowuje go do nowego folderu. Archiwum zostaje.",
   "cw_files_extract_change": "Zmień…",
+  "cw_files_extract_choose": "Wybierz elementy…",
   "cw_files_extract_delete_after": "Usuń archiwum po rozpakowaniu",
   "cw_files_extract_delete_failed": "Nie udało się usunąć archiwum.",
   "cw_files_extract_deleted": "Archiwum zostało usunięte.",

@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "العودة إلى مجلد الأرشيف",
   "cw_files_extract_body_v2": "يفك ضغطه في مجلد جديد. يبقى الأرشيف.",
   "cw_files_extract_change": "تغيير…",
+  "cw_files_extract_choose": "اختر العناصر…",
   "cw_files_extract_delete_after": "حذف الأرشيف بعد الاستخراج",
   "cw_files_extract_delete_failed": "تعذّر حذف الأرشيف.",
   "cw_files_extract_deleted": "تم حذف الأرشيف.",

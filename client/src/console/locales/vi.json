@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "Quay lại thư mục của tệp nén",
   "cw_files_extract_body_v2": "Giải nén nó vào một thư mục mới. Tệp nén được giữ lại.",
   "cw_files_extract_change": "Đổi…",
+  "cw_files_extract_choose": "Chọn mục…",
   "cw_files_extract_delete_after": "Xóa tệp nén sau khi giải nén",
   "cw_files_extract_delete_failed": "Không xóa được tệp nén.",
   "cw_files_extract_deleted": "Đã xóa tệp nén.",

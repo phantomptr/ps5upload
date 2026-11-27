@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "Volver a la carpeta del archivo comprimido",
   "cw_files_extract_body_v2": "Lo extrae en una carpeta nueva. El archivo comprimido se conserva.",
   "cw_files_extract_change": "Cambiar…",
+  "cw_files_extract_choose": "Elegir elementos…",
   "cw_files_extract_delete_after": "Eliminar el archivo tras extraer",
   "cw_files_extract_delete_failed": "No se pudo eliminar el archivo.",
   "cw_files_extract_deleted": "Se eliminó el archivo.",

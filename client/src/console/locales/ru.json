@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "Обратно в папку архива",
   "cw_files_extract_body_v2": "Распаковывает его в новую папку. Архив сохраняется.",
   "cw_files_extract_change": "Изменить…",
+  "cw_files_extract_choose": "Выбрать элементы…",
   "cw_files_extract_delete_after": "Удалить архив после распаковки",
   "cw_files_extract_delete_failed": "Не удалось удалить архив.",
   "cw_files_extract_deleted": "Архив удалён.",

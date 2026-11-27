@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "আর্কাইভের ফোল্ডারে ফিরে যান",
   "cw_files_extract_body_v2": "এটিকে একটি নতুন ফোল্ডারে এক্সট্র্যাক্ট করে। আর্কাইভটি থেকে যায়।",
   "cw_files_extract_change": "পরিবর্তন…",
+  "cw_files_extract_choose": "আইটেম বেছে নিন…",
   "cw_files_extract_delete_after": "এক্সট্র্যাক্টের পর আর্কাইভ মুছুন",
   "cw_files_extract_delete_failed": "আর্কাইভ মোছা যায়নি।",
   "cw_files_extract_deleted": "আর্কাইভ মুছে ফেলা হয়েছে।",

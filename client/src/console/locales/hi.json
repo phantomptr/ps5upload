@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "आर्काइव के फ़ोल्डर पर वापस जाएँ",
   "cw_files_extract_body_v2": "इसे एक नए फ़ोल्डर में एक्सट्रैक्ट करता है। आर्काइव रहता है।",
   "cw_files_extract_change": "बदलें…",
+  "cw_files_extract_choose": "आइटम चुनें…",
   "cw_files_extract_delete_after": "एक्सट्रैक्ट करने के बाद आर्काइव मिटाएँ",
   "cw_files_extract_delete_failed": "आर्काइव नहीं मिटाया जा सका।",
   "cw_files_extract_deleted": "आर्काइव मिटा दिया गया।",

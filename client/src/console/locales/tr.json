@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "Arşivin klasörüne dön",
   "cw_files_extract_body_v2": "Onu yeni bir klasöre çıkarır. Arşiv saklanır.",
   "cw_files_extract_change": "Değiştir…",
+  "cw_files_extract_choose": "Öğeleri seç…",
   "cw_files_extract_delete_after": "Çıkardıktan sonra arşivi sil",
   "cw_files_extract_delete_failed": "Arşiv silinemedi.",
   "cw_files_extract_deleted": "Arşiv silindi.",

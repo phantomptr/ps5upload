@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "Revenir au dossier de l'archive",
   "cw_files_extract_body_v2": "L'extrait dans un nouveau dossier. L'archive est conservée.",
   "cw_files_extract_change": "Changer…",
+  "cw_files_extract_choose": "Choisir les éléments…",
   "cw_files_extract_delete_after": "Supprimer l'archive après l'extraction",
   "cw_files_extract_delete_failed": "L'archive n'a pas pu être supprimée.",
   "cw_files_extract_deleted": "L'archive a été supprimée.",

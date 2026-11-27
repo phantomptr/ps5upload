@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "回到壓縮檔所在資料夾",
   "cw_files_extract_body_v2": "解壓縮到一個新資料夾。壓縮檔會保留。",
   "cw_files_extract_change": "變更…",
+  "cw_files_extract_choose": "選擇項目…",
   "cw_files_extract_delete_after": "解壓後刪除壓縮檔",
   "cw_files_extract_delete_failed": "無法刪除壓縮檔。",
   "cw_files_extract_deleted": "壓縮檔已刪除。",

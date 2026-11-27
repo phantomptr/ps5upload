@@ -6456,6 +6456,7 @@ c2c_test_deep_bad: "4 KiB のテスト送信が届きませんでした: {detail
 "cw_files_extract_replace_title": "「{name}」のファイルを置き換えますか？",
 "cw_files_extract_replace_body": "そのフォルダー内でアーカイブ内のファイルと同じ名前のファイルは上書きされます。元に戻せません。",
 "cw_files_extract_go": "展開",
+"cw_files_extract_choose": "項目を選択…",
 cw_files_extract_delete_after: "展開後にアーカイブを削除",
 cw_files_extract_kept_archive: "すべての項目を取り出せなかったため、アーカイブは残しました。",
 cw_files_extract_deleted: "アーカイブを削除しました。",

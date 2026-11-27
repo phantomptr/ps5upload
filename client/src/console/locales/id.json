@@ -430,6 +430,7 @@
   "cw_files_extract_beside": "Kembali ke folder arsip",
   "cw_files_extract_body_v2": "Mengekstraknya ke folder baru. Arsipnya tetap disimpan.",
   "cw_files_extract_change": "Ubah…",
+  "cw_files_extract_choose": "Pilih item…",
   "cw_files_extract_delete_after": "Hapus arsip setelah diekstrak",
   "cw_files_extract_delete_failed": "Arsip tidak bisa dihapus.",
   "cw_files_extract_deleted": "Arsip telah dihapus.",

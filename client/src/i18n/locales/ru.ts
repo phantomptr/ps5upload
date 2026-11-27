@@ -6390,6 +6390,7 @@ c2c_test_deep_bad: "Тестовая отправка 4 КиБ не дошла: 
 "cw_files_extract_replace_title": "Заменить файлы в «{name}»?",
 "cw_files_extract_replace_body": "Файлы в этой папке с тем же именем, что и файл в архиве, будут перезаписаны. Это нельзя отменить.",
 "cw_files_extract_go": "Извлечь",
+"cw_files_extract_choose": "Выбрать элементы…",
 cw_files_extract_delete_after: "Удалить архив после распаковки",
 cw_files_extract_kept_archive: "Архив сохранён, так как извлечены не все элементы.",
 cw_files_extract_deleted: "Архив удалён.",

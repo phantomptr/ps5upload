@@ -730,7 +730,8 @@ static const char *op_task_kind(int op) {
 static void start_path_job(int fd, uint8_t *out, int op, const char *path, const char *name, const char *tail) {
     char *args;
     uint8_t *req;
-    size_t args_cap = 6 * API_PATH + 6 * 256 + 64, ol;
+    /* The path and name escaped, and the tail as it is (an extract's can be long: #969). */
+    size_t args_cap = 6 * API_PATH + 6 * 256 + 64 + (tail ? strlen(tail) : 0), ol;
     ava1_job_run_t q;
     ava1_w_t w;
     int st, len;
@@ -889,13 +890,19 @@ static void r_fs_unpack_info(const char *b, size_t n, uint8_t *out, int fd) {
     send_json(fd, 200, j, at);
 }
 
+/* The extractor's room for top-level renames (XJ_TOP, payload/extractor/src/xjob.h). */
+#define XTOP_MAX (8192u)
+
 /* Extract an archive on the console (ARCHIVE_EXTRACT, run by the extractor payload): {"path", "dest",
- * optional "password", "merge", "replace"}. The job's result: {"path","files","dirs","bytes","skipped",
- * "unsafe","links"}. */
+ * optional "password", "merge", "replace", "list", "top"}. The job's result: {"path","files","dirs",
+ * "bytes","skipped","unsafe","links"}; with "list" (nothing written, `dest` a folder that is there) it
+ * is {"top","top_dirs","top_more","listed":true}. "top" leaves out or renames top-level entries. */
+
 static void r_fs_extract(const char *b, size_t n, uint8_t *out, int fd) {
-    char path[API_PATH], dest[API_PATH], password[XPASS_MAX], *tail;
-    size_t at = 0, cap = 3 * API_PATH + 3 * XPASS_MAX + 64;
-    int merge = 0, replace = 0, rc;
+    char path[API_PATH], dest[API_PATH], password[XPASS_MAX], *tail, *top;
+    /* Every character of the three strings escaped as \u00XX at worst, and the members' names. */
+    size_t cap = 6 * (API_PATH + XPASS_MAX + XTOP_MAX) + 128;
+    int merge = 0, replace = 0, list = 0, rc, rt, len;
     if (need_path(fd, b, n, "path", path, sizeof path) != 0) return;
     if (need_path(fd, b, n, "dest", dest, sizeof dest) != 0) return;
     rc = webui_json_str(b, n, "password", password, sizeof password);
@@ -903,31 +910,36 @@ static void r_fs_extract(const char *b, size_t n, uint8_t *out, int fd) {
         send_bad(fd, "bad_password");
         return;
     }
-    if (webui_json_bool(b, n, "merge", &merge) < 0 || webui_json_bool(b, n, "replace", &replace) < 0) {
+    if (webui_json_bool(b, n, "merge", &merge) < 0 || webui_json_bool(b, n, "replace", &replace) < 0 ||
+        webui_json_bool(b, n, "list", &list) < 0) {
+        memset(password, 0, sizeof password);
         send_bad(fd, "bad_merge");
         return;
     }
+    top = malloc(XTOP_MAX);
     tail = malloc(cap);
-    if (!tail) {
+    if (!top || !tail) {
+        free(top);
+        free(tail);
+        memset(password, 0, sizeof password);
         send_error(fd, 500, "out_of_memory", 13);
         return;
     }
-    /* archive_extract.c reads it back with fsj_json_str (\" \\ \uXXXX understood). */
-    at = (size_t)snprintf(tail, cap, ",\"dest\":\"");
-    at += webui_json_escape(tail + at, cap - at, dest, strlen(dest));
-    if (at + 16 < cap) at += (size_t)snprintf(tail + at, cap - at, "\"%s", rc == 1 ? ",\"password\":\"" : "");
-    if (rc == 1 && at < cap) {
-        at += webui_json_escape(tail + at, cap - at, password, strlen(password));
-        if (at + 2 < cap) at += (size_t)snprintf(tail + at, cap - at, "\"");
+    /* "Choose items" and Keep both (#969): top-level entries left out or renamed, "from/to/…". */
+    rt = webui_json_str(b, n, "top", top, XTOP_MAX);
+    if (rt < 0) {
+        free(top);
+        free(tail);
+        memset(password, 0, sizeof password);
+        send_bad(fd, "bad_top");
+        return;
     }
-    if (at + 40 < cap)
-        at += (size_t)snprintf(tail + at, cap - at, ",\"merge\":%s,\"replace\":%s", merge ? "true" : "false",
-                               replace ? "true" : "false");
-    else
-        at = cap; /* did not fit */
+    /* archive_extract.c reads it back with fsj_json_str (\" \\ \uXXXX understood). */
+    len = webui_extract_tail(tail, cap, dest, rc == 1 ? password : NULL, merge, replace, list,
+                             rt == 1 ? top : NULL);
     memset(password, 0, sizeof password);
-    if (at >= cap) {
-        memset(tail, 0, cap);
+    free(top);
+    if (len < 0) {
         free(tail);
         send_bad(fd, "bad_path");
         return;

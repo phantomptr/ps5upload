@@ -6437,6 +6437,7 @@ c2c_test_deep_bad: "4 KiB-এর পরীক্ষামূলক পাঠা�
 "cw_files_extract_replace_title": "“{name}”-এর ফাইল প্রতিস্থাপন করবেন?",
 "cw_files_extract_replace_body": "ওই ফোল্ডারে আর্কাইভের কোনো ফাইলের নামের ফাইলগুলো ওভাররাইট হবে। এটি আর ফেরানো যাবে না।",
 "cw_files_extract_go": "এক্সট্র্যাক্ট করুন",
+"cw_files_extract_choose": "আইটেম বেছে নিন…",
 cw_files_extract_delete_after: "এক্সট্র্যাক্টের পর আর্কাইভ মুছুন",
 cw_files_extract_kept_archive: "আর্কাইভটি রাখা হয়েছে, কারণ সব এন্ট্রি বের হয়নি।",
 cw_files_extract_deleted: "আর্কাইভ মুছে ফেলা হয়েছে।",
