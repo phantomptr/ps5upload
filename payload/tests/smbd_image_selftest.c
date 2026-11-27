@@ -204,11 +204,96 @@ static void test_foreign(void) {
     free(junk);
 }
 
+/* A read that fails at any point of any image is "img_read" (the library's cache does not keep it,
+ * so the next scan tries again), or the image read without its cover: never "img_damaged" or
+ * "img_no_param", which the cache keeps for as long as the file is unchanged. The UFS2 reader
+ * turned a failed inode read under sce_sys into damage. */
+static void sweep_failures(const char *label, const uint8_t *img, size_t n) {
+    img_meta_t m;
+    mem_t mm;
+    unsigned total, k;
+    const char *why = run(img, n, 1024 * 1024, &m, &mm);
+    CHECK(why == NULL);
+    img_meta_free(&m);
+    total = mm.reads;
+    for (k = 1; k < total; k++) {
+        memset(&mm, 0, sizeof mm);
+        mm.b = img;
+        mm.n = n;
+        mm.fail_after = k; /* read k+1 and the later ones fail */
+        why = img_meta_read(mem_rd, &mm, n, 1024 * 1024, &m);
+        if (why && strcmp(why, "img_read") != 0) {
+            fprintf(stderr, "%s: read #%u failing gave %s\n", label, k + 1, why);
+            g_fail++;
+        }
+        img_meta_free(&m);
+    }
+}
+
+static void test_failed_reads(void) {
+    const char *pj = fx_param_json("PPSA01234", "Venus Vacation");
+    size_t n;
+    uint8_t *img = fx_ufs2((const uint8_t *)pj, strlen(pj), 0, 110000, &n);
+    sweep_failures("ufs2", img, n);
+    free(img);
+    img = fx_exfat((const uint8_t *)pj, strlen(pj), 0, 6000, 1, &n);
+    sweep_failures("exfat", img, n);
+    free(img);
+    img = fx_pfs((const uint8_t *)pj, strlen(pj), 5000, NULL, 0, NULL, 0, &n);
+    sweep_failures("pfs", img, n);
+    free(img);
+}
+
+/* exFAT folders that are long FAT chains (512-byte clusters, every link in another FAT sector, all
+ * deleted entries so each lookup reads the whole 1 MiB): a folder is read window by window, and each
+ * window used to walk its chain again from the first cluster, ~800,000 reads for one image. */
+#define LC_CS 512u
+#define LC_DIRCL 2048u
+#define LC_NCL (2 * LC_DIRCL + 16)
+#define LC_FAT 512u
+#define LC_HEAP (LC_FAT + ((LC_NCL * 4u + 511u) / 512u) * 512u)
+static uint8_t *lc_cl(uint8_t *img, uint32_t c) { return img + LC_HEAP + (size_t)(c - 2) * LC_CS; }
+static uint32_t lc_chain(uint32_t base, uint32_t k) { return base + (k % 2 ? LC_DIRCL / 2 + k / 2 : k / 2); }
+
+static void test_long_chains(void) {
+    size_t n = LC_HEAP + (size_t)LC_NCL * LC_CS, i;
+    uint8_t *img = calloc(1, n);
+    uint32_t k, rbase = 2, sbase = 2 + LC_DIRCL;
+    img_meta_t m;
+    mem_t mm;
+    const char *why;
+    memcpy(img + 3, "EXFAT   ", 8);
+    fx_le32(img + 0x50, LC_FAT / 512);
+    fx_le32(img + 0x58, LC_HEAP / 512);
+    fx_le32(img + 0x5C, LC_NCL);
+    fx_le32(img + 0x60, lc_chain(rbase, 0));
+    img[0x6C] = 9;
+    img[0x6D] = 0;
+    for (k = 0; k < LC_DIRCL; k++) {
+        fx_le32(img + LC_FAT + lc_chain(rbase, k) * 4u, k + 1 < LC_DIRCL ? lc_chain(rbase, k + 1) : 0xFFFFFFFFu);
+        fx_le32(img + LC_FAT + lc_chain(sbase, k) * 4u, k + 1 < LC_DIRCL ? lc_chain(sbase, k + 1) : 0xFFFFFFFFu);
+        for (i = 0; i < LC_CS; i += 32) {
+            lc_cl(img, lc_chain(rbase, k))[i] = 0x05;
+            lc_cl(img, lc_chain(sbase, k))[i] = 0x05;
+        }
+    }
+    fx_ex_entry(lc_cl(img, lc_chain(rbase, LC_DIRCL - 1)) + LC_CS - 96, "sce_sys", 1, lc_chain(sbase, 0),
+                (uint64_t)LC_DIRCL * LC_CS, 0);
+    why = run(img, n, 1024 * 1024, &m, &mm);
+    CHECK(why && strcmp(why, "img_no_param") == 0);
+    /* each cluster's FAT sector and data about once per folder pass: a few thousand reads */
+    CHECK(mm.reads < 20000);
+    img_meta_free(&m);
+    free(img);
+}
+
 int main(void) {
     test_exfat();
     test_ufs2();
     test_pfs();
     test_foreign();
+    test_failed_reads();
+    test_long_chains();
     if (g_fail) {
         fprintf(stderr, "smbd_image_selftest: %d failure(s)\n", g_fail);
         return 1;
