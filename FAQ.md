@@ -1846,6 +1846,23 @@ game or packages is unpacked; anything else (payloads, a jailbreak update such a
 is sent as the file. When it can't tell, nothing is picked and it asks before uploading. Copying
 a file into a folder in **Files** never unpacks it.
 
+**Q: An archive holds several games, updates or DLC. Can I pick only some of them?**
+Yes, like in an archive app. Everything is ticked to start with; untick what you don't want:
+
+- **Upload** (an archive that is unpacked): **Choose files…** under the archive, or on its row in
+  the queue while it waits. Each package is its own row, a folder goes whole, and a package
+  inside a `.zip` also says which game, version and kind (game, update or DLC) it is. Only the
+  ticked items are read out of the archive and sent; the rest is skipped, not unpacked anywhere.
+- **Install packages from an archive**: tick the packages to install. Only those are unpacked to
+  the PS5 and installed, base game first. The other parts of a split package (`Game_0.pkg`,
+  `Game_1.pkg`, …) come along with the first part.
+- **Extract on the PS5** (File system › Extract in the app, or Files › Extract on the console's
+  page): **Choose items…** lists the archive's top-level files and folders; untick any to leave
+  them out.
+
+Works for `.zip`, `.7z`, `.rar` (multi-part too) and tar archives. A password-protected RAR needs
+its password before its files can be listed.
+
 **Q: Does an archive upload need free space on my PC?**
 No. The archive is decompressed and sent at the same time, so you only need room for the archive
 you already have. The `PS5UPLOAD_ARCHIVE_STAGE_MB` and `PS5UPLOAD_ZIP_RAM_THRESHOLD_MB` variables
@@ -2465,7 +2482,8 @@ remove it.
 Yes: **Upload & Install → From a Link or an Archive → Install packages from an archive**. Only the `.pkg` files in the
 archive are unpacked, straight to the PS5 (nothing is extracted on your computer), and installed
 one by one: the base game first, then its update, then DLC. If an install fails, the unpacked
-files stay on the PS5 so you can retry.
+files stay on the PS5 so you can retry. To install only some of them, untick the others in the
+list before you start.
 
 - A **multi-part RAR** (`.part1.rar`, `.part2.rar`, …) works: choose the first part and keep the
   others in the same folder.

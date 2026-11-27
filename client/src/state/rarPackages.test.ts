@@ -49,6 +49,7 @@ import {
   isArchiveFirstVolume,
   isRarFirstVolume,
   orderForInstall,
+  packagesForRun,
   removeConsoleFolder,
   siblingsOf,
 } from "./rarPackages";
@@ -424,5 +425,59 @@ describe("archives of any kind", () => {
     expect(call[1]).toBe("/user/data/ps5upload/pkg_library/7z_Bundle");
     expect(call[4]).toEqual(["!*.pkg", "!*.fpkg"]);
     expect(vi.mocked(startTransferRar)).not.toHaveBeenCalled();
+  });
+});
+
+describe("choose which packages of an archive to install (#969)", () => {
+  it("unpacks and installs only the chosen packages, by path", async () => {
+    vi.mocked(rarPackages).mockResolvedValue([
+      { path: "Game/Base.pkg", size: 20 },
+      { path: "Update/Patch.pkg", size: 10 },
+      { path: "DLC/Extra.pkg", size: 5 },
+    ]);
+    probeAs({
+      "Game/Base.pkg": { category: "gd", title_id: "PPSA1" },
+      "DLC/Extra.pkg": { category: "ac", title_id: "PPSA1" },
+    });
+    const r = await installRarPackages({
+      host: HOST,
+      archivePath: "/x/Multi.rar",
+      only: ["DLC/Extra.pkg", "Game/Base.pkg"],
+    });
+    expect(r.ok).toBe(true);
+    // Only the chosen entries are read out of the archive: no allow-list, their paths.
+    expect(vi.mocked(startTransferRar).mock.calls[0][5]).toEqual(["=Game/Base.pkg", "=DLC/Extra.pkg"]);
+    expect(installFromConsolePath.mock.calls.map((c) => c[0])).toEqual([
+      "/user/data/ps5upload/pkg_library/rar_Multi/Game/Base.pkg",
+      "/user/data/ps5upload/pkg_library/rar_Multi/DLC/Extra.pkg",
+    ]);
+    expect(r.outcomes.map((o) => o.entry)).toEqual(["Game/Base.pkg", "DLC/Extra.pkg"]);
+  });
+
+  it("every package chosen is the whole allow-list, as before", async () => {
+    vi.mocked(rarPackages).mockResolvedValue([{ path: "Base.pkg", size: 20 }]);
+    probeAs({ "Base.pkg": { category: "gd", title_id: "PPSA1" } });
+    await installRarPackages({ host: HOST, archivePath: "/x/B.zip", only: ["Base.pkg"] });
+    expect(vi.mocked(startTransferZip).mock.calls[0][4]).toEqual(["!*.pkg", "!*.fpkg"]);
+  });
+
+  it("a set named by part brings its other parts along with its lead", () => {
+    const listed = [
+      { path: "G/Game_0.pkg", size: 4 },
+      { path: "G/Game_1.pkg", size: 4 },
+      { path: "G/Patch.pkg", size: 1 },
+    ];
+    const r = packagesForRun(listed, ["G/Game_0.pkg"]);
+    expect(r.chosen).toEqual(["G/Game_0.pkg", "G/Game_1.pkg"]);
+    expect(r.packages.map((p) => p.path)).toEqual(["G/Game_0.pkg", "G/Game_1.pkg"]);
+    expect(packagesForRun(listed, null).chosen).toBeNull();
+  });
+
+  it("says so when none of the chosen packages is listed any more, before sending anything", async () => {
+    vi.mocked(rarPackages).mockResolvedValue([{ path: "Base.pkg", size: 20 }]);
+    const r = await installRarPackages({ host: HOST, archivePath: "/x/B.7z", only: [] });
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain("None of the chosen packages");
+    expect(vi.mocked(startTransfer7z)).not.toHaveBeenCalled();
   });
 });

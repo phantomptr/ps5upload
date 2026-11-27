@@ -4,6 +4,7 @@
 // a separate module keeps the (very large) ps5 api mock in the older store tests untouched.
 
 import { invoke } from "../lib/invokeLogged";
+import type { PackageBrief } from "./archiveEntries";
 
 export type LinkKind = "pkg" | "file" | "refused";
 
@@ -77,6 +78,8 @@ export interface RarPackage {
   /** Path inside the archive ('/'-separated). */
   path: string;
   size: number;
+  /** What its header says: read for a package inside a ZIP only (#969). */
+  info?: PackageBrief;
 }
 
 /** The `.pkg` entries of a RAR (any folder depth), from the headers alone. Throws with
