@@ -4,6 +4,7 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -410,6 +411,116 @@ int fsj_tree_size(const char *path, uint64_t *bytes, uint64_t *files, int depth,
     return tree_size_in(path, bytes, files, depth, h, dev_of(&st, path));
 }
 
+/* ---- folder usage (JOB_OP_TREE_SIZE, #974) ---- */
+
+#define USAGE_PATH 1024
+/* Entries between two short naps: a size is background work, the drive is everyone else's first. */
+#define USAGE_NAP_EVERY 256u
+#define USAGE_NAP_US 500
+
+/* System trees a size never enters: device nodes, and the per-app sandboxes that mount (nullfs)
+ * folders found elsewhere, where an installed game would count twice. */
+static int usage_pseudo(const char *p) {
+    return strcmp(p, "/dev") == 0 || strcmp(p, "/proc") == 0 || strcmp(p, "/mnt/sandbox") == 0;
+}
+
+typedef struct {
+    fsj_usage_t *u;
+    const fsj_hooks_t *h;
+    dev_t dev;
+    const char *lex, *canon; /* the trust store's forms (path_protected_forms) */
+    uint32_t seen;
+} usage_walk_t;
+
+/* `buf` (USAGE_PATH bytes) holds the entry's path, `len` long; it is extended in place for the
+ * children and put back before returning. 0, -1 (the root itself unreadable), -2 cancelled. */
+static int usage_in(usage_walk_t *w, char *buf, size_t len, int depth) {
+    struct stat st;
+    DIR *d;
+    struct dirent *e;
+    size_t at;
+    int rc = 0;
+    if (cancelled(w->h)) return -2;
+    if ((++w->seen % USAGE_NAP_EVERY) == 0) usleep(USAGE_NAP_US);
+    if (lstat(buf, &st) != 0) {
+        if (depth == 0) return -1;
+        w->u->skipped++;
+        return 0;
+    }
+    /* Another drive mounted inside: its own folder, measured on its own. */
+    if (depth > 0 && dev_of(&st, buf) != w->dev) {
+        w->u->skipped++;
+        return 0;
+    }
+    w->u->alloc += (uint64_t)st.st_blocks * 512u;
+    if (!S_ISDIR(st.st_mode)) {
+        uint64_t size = S_ISREG(st.st_mode) ? (uint64_t)st.st_size : 0;
+        w->u->bytes += size;
+        w->u->files++;
+        visited(w->h, size);
+        return 0;
+    }
+    if (depth > 0) w->u->dirs++;
+    if (depth >= MAX_DEPTH) {
+        w->u->skipped++;
+        return 0;
+    }
+    d = opendir(buf);
+    if (!d) {
+        if (depth == 0) return -1;
+        w->u->skipped++;
+        return 0;
+    }
+    at = (len == 1 && buf[0] == '/') ? 0 : len; /* "/" + name, never "//name" */
+    while ((e = readdir(d)) != NULL) {
+        size_t nl;
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        nl = strlen(e->d_name);
+        if (at + 1 + nl >= USAGE_PATH) {
+            w->u->skipped++;
+            continue;
+        }
+        buf[at] = '/';
+        memcpy(buf + at + 1, e->d_name, nl + 1);
+        if (usage_pseudo(buf) || path_under_forms(buf, w->lex, w->canon)) w->u->skipped++;
+        else if (usage_in(w, buf, at + 1 + nl, depth + 1) == -2) rc = -2;
+        buf[len] = '\0';
+        if (rc == -2) break;
+    }
+    closedir(d);
+    return rc;
+}
+
+int fsj_tree_usage(const char *path, fsj_usage_t *u, const fsj_hooks_t *h) {
+    struct stat st;
+    usage_walk_t w;
+    char *buf, *lex, *canon;
+    size_t len;
+    int rc = -1;
+    memset(u, 0, sizeof *u);
+    buf = malloc(PATH_MAX > USAGE_PATH ? PATH_MAX : USAGE_PATH);
+    lex = malloc(PATH_MAX);
+    canon = malloc(PATH_MAX);
+    if (!buf || !lex || !canon) goto out;
+    /* Walked from its canonical form: the trust store is recognised by its canonical forms too. */
+    if (!realpath(path, buf)) snprintf(buf, USAGE_PATH, "%s", path);
+    len = strlen(buf);
+    if (len == 0 || len >= USAGE_PATH || lstat(buf, &st) != 0) goto out;
+    path_protected_forms(lex, canon);
+    memset(&w, 0, sizeof w);
+    w.u = u;
+    w.h = h;
+    w.dev = dev_of(&st, buf);
+    w.lex = lex;
+    w.canon = canon;
+    rc = usage_in(&w, buf, len, 0);
+out:
+    free(buf);
+    free(lex);
+    free(canon);
+    return rc;
+}
+
 /* ---- paths ---- */
 
 int fsj_normalize_path(char *path) {
@@ -737,6 +848,56 @@ static int op_chmod_r(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t n
     return AVA1_STATUS_OK;
 }
 
+/* TREE_SIZE {"path"}: what a folder holds (#974), for the apps' Files size column. Names and metadata
+ * only, never a file's contents; result {"bytes","alloc","files","dirs","skipped"} (fsj_usage_t). A
+ * path the read policy refuses, or the trust store or anything below it, is refused; walking from
+ * above the store skips it. Progress counts the files seen (no total: the walk is the count). */
+static int op_tree_size(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t n) {
+    char path[1024], resp[256];
+    fsj_usage_t u;
+    fail_t f;
+    fsj_hooks_t h;
+    const ava1_data_cfg_t *cfg = ava1_data_cfg();
+    int rc, len;
+    (void)arg;
+    (void)n;
+    memset(&f, 0, sizeof f);
+    f.c = c;
+    h.cancelled = fail_cancelled;
+    h.file = fail_file;
+    h.failed = NULL;
+    h.arg = &f;
+    if (!fsj_json_str((const char *)args, "path", path, sizeof path) || !path[0]) {
+        ava1_op_message(c, "fs_size_missing_path");
+        return AVA1_ERR_PROTOCOL;
+    }
+    if (fsj_normalize_path(path) != 0 || !cfg->may_read || !cfg->may_read(path, 0) || path_in_protected(path) ||
+        usage_pseudo(path)) {
+        ava1_op_message(c, "fs_size_path_not_allowed");
+        return AVA1_ERR_PATH;
+    }
+    rc = fsj_tree_usage(path, &u, &h);
+    if (rc == -2) {
+        ava1_op_message(c, "fs_size_cancelled");
+        return AVA1_ERR_CANCELLED;
+    }
+    if (rc != 0) {
+        ava1_op_message(c, "fs_size_unreadable");
+        return AVA1_ERR_IO;
+    }
+    len = snprintf(resp, sizeof resp, "{\"bytes\":%llu,\"alloc\":%llu,\"files\":%llu,\"dirs\":%llu,\"skipped\":%llu}",
+                   (unsigned long long)u.bytes, (unsigned long long)u.alloc, (unsigned long long)u.files,
+                   (unsigned long long)u.dirs, (unsigned long long)u.skipped);
+    if (len < 0 || (size_t)len >= sizeof resp || ava1_op_set_result(c, resp, (size_t)len) != 0) {
+        ava1_op_message(c, "fs_size_reply_too_large");
+        return AVA1_ERR_INTERNAL;
+    }
+    PLOG(PLOG_DEBUG, PLOG_FILES, "[fs_jobs] size %s: %llu bytes (%llu on disk), %llu files, %llu skipped", path,
+         (unsigned long long)u.bytes, (unsigned long long)u.alloc, (unsigned long long)u.files,
+         (unsigned long long)u.skipped);
+    return AVA1_STATUS_OK;
+}
+
 /* Opens `path` for reading under the read policy. Returns the fd or -1 with the cause
  * and status set. */
 static int open_for_read(ava1_op_ctx_t *c, const char *args, const char *tag, char *path, size_t cap, struct stat *st,
@@ -915,4 +1076,5 @@ void fsj_register_ops(void) {
     (void)ava1_op_register(AVA1_JOB_OP_HASH, op_hash, NULL);
     (void)ava1_op_register(AVA1_JOB_OP_CRC32, op_crc32, NULL);
     (void)ava1_op_register(AVA1_JOB_OP_FFPFSC_UNPACK, fsj_op_ffpfsc_unpack, NULL);
+    (void)ava1_op_register(AVA1_JOB_OP_TREE_SIZE, op_tree_size, NULL);
 }

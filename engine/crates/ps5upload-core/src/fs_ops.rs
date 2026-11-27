@@ -220,6 +220,57 @@ pub fn fs_hash_with_timeout(
     Ok(parsed)
 }
 
+/// What a folder on the console holds (#974), the helper's `JOB_OP_TREE_SIZE` result: `bytes`
+/// is the files' sizes added up, `alloc` what everything below takes on the drive (a zstd-packed
+/// game counts what its packs really take), `skipped` what was not counted (an unreadable folder,
+/// another drive mounted inside, a system tree).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TreeSize {
+    pub bytes: u64,
+    #[serde(default)]
+    pub alloc: u64,
+    #[serde(default)]
+    pub files: u64,
+    #[serde(default)]
+    pub dirs: u64,
+    #[serde(default)]
+    pub skipped: u64,
+}
+
+/// A helper from before `JOB_OP_TREE_SIZE` refuses the operation with `unknown_op`; the caller
+/// then measures another way.
+pub fn is_unknown_op(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<mgmt::MgmtError>()
+        .is_some_and(|m| m.cause == "unknown_op")
+}
+
+/// A folder's size on the console, counted by the helper next to the drive (one job, metadata
+/// only). `op_id` lets [`mgmt::op_cancel`] stop it; a cancelled count is the error `cancelled`.
+pub fn tree_size(
+    addr: &str,
+    path: &str,
+    op_id: u64,
+    deadline: std::time::Duration,
+) -> Result<TreeSize> {
+    let body =
+        serde_json::to_vec(&serde_json::json!({ "path": path })).context("serialize tree_size")?;
+    match mgmt::run_op(
+        addr,
+        mgmt::ops::TREE_SIZE,
+        &format!("FS_SIZE({path})"),
+        &body,
+        &mgmt::JobCall {
+            op_id,
+            subject: path,
+            deadline,
+        },
+    ) {
+        Ok(resp) => serde_json::from_slice(&resp).context("decode FS_SIZE result"),
+        Err(e) if is_cancel(&e, "fs_size_cancelled") => bail!("cancelled"),
+        Err(e) => Err(e),
+    }
+}
+
 /// What [`ffpfsc_unpack`] wrote: the image beside the `.ffpfsc`, and its size.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UnpackResult {

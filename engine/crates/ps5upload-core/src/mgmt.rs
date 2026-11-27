@@ -396,6 +396,7 @@ job_ops! {
     (ARCHIVE_EXTRACT, 12, "ARCHIVE_EXTRACT", "fs_extract"),
     (APP_DUMP, 13, "APP_DUMP", "app_dump"),
     (CONSOLE_CONVERT, 14, "CONSOLE_CONVERT", "console_convert"),
+    (TREE_SIZE, 15, "FS_SIZE", "fs_size"),
 }
 
 /// How one long operation is run and followed.

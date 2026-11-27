@@ -166,6 +166,7 @@ ps5upload registers these operations (`JOB_OP_*` in `app.toml`; `ava1_op_registe
 | 12 | `JOB_OP_ARCHIVE_EXTRACT` | a `.zip`/`.7z`/`.rar`/`.tar.*` on the console extracted into a folder there | yes |
 | 13 | `JOB_OP_APP_DUMP` | an installed, running title's files copied to a drive, optionally decrypted | no (`AVA1_OP_ONCE`) |
 | 14 | `JOB_OP_CONSOLE_CONVERT` | a game folder or image on the console inspected or converted there (`payload/src/console_convert.c`) | yes |
+| 15 | `JOB_OP_TREE_SIZE` | a folder's size: its files' bytes and what everything below takes on the drive, names and metadata only (#974) | yes |
 
 - `args` is the operation's request body: the same legacy JSON the FTX2 frame carried (at most
   60 KiB).

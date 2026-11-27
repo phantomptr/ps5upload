@@ -1110,3 +1110,73 @@ async fn a_finished_op_stays_listed_for_a_grace_then_is_released_on_the_next_rea
     assert_eq!(status_code(&r.me, id(210)).await, gen::ERR_UNKNOWN_JOB);
     drop(r.srv);
 }
+
+// ---- folder size (#974) ----
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tree_size_counts_bytes_and_disk_use_and_skips_mounts_links_and_the_trust_store() {
+    let r = rig("jr-size").await;
+    let tree = r.d.join("g");
+    write_tree(&tree, 200, |i| 100 + i);
+    let expected: u64 = (0..200u64).map(|i| 100 + i).sum();
+    // Another drive mounted inside, a link (counted as an entry, never followed) and the trust store.
+    write_tree(&tree.join("mnt"), 5, |_| 4000);
+    std::os::unix::fs::symlink(tree.join("d00"), tree.join("link")).unwrap();
+    let store = tree.join("ava");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(store.join("identity"), vec![7u8; 9000]).unwrap();
+    let store = store.canonicalize().unwrap();
+    c_set_cross_name("mnt");
+    c_set_protected(Some(&store));
+    let a = serde_json::json!({ "path": tree.to_str().unwrap() }).to_string();
+    assert_eq!(
+        run(&r.me, id(250), gen::JOB_OP_TREE_SIZE, &a).await.0,
+        gen::STATUS_OK
+    );
+    let st = finished(&r.me, id(250)).await;
+    assert_eq!(st.state, Some(1), "{:?}", st.current);
+    let v: serde_json::Value = serde_json::from_slice(&st.result.unwrap()).unwrap();
+    assert_eq!(v["bytes"], expected, "{v}");
+    assert_eq!(v["files"], 201, "200 files and the link: {v}");
+    assert_eq!(
+        v["dirs"], 37,
+        "the d00..d36 folders, not the mount nor the store: {v}"
+    );
+    assert_eq!(v["skipped"], 2, "the mount and the store: {v}");
+    assert!(
+        v["alloc"].as_u64().unwrap() >= expected,
+        "what the files take on disk is at least their bytes: {v}"
+    );
+    // The store itself, and a relative path, are refused.
+    let s = serde_json::json!({ "path": store.to_str().unwrap() }).to_string();
+    run(&r.me, id(251), gen::JOB_OP_TREE_SIZE, &s).await;
+    let st = finished(&r.me, id(251)).await;
+    assert_eq!((st.state, st.code), (Some(2), Some(gen::ERR_PATH)));
+    run(
+        &r.me,
+        id(252),
+        gen::JOB_OP_TREE_SIZE,
+        r#"{"path":"relative/x"}"#,
+    )
+    .await;
+    let st = finished(&r.me, id(252)).await;
+    assert_eq!((st.state, st.code), (Some(2), Some(gen::ERR_PATH)));
+    c_set_protected(None);
+    c_set_cross_name("");
+
+    // A slow walk reports progress and stops when cancelled.
+    c_set_fsj_delay_us(5_000);
+    run(&r.me, id(253), gen::JOB_OP_TREE_SIZE, &a).await;
+    loop {
+        if status(&r.me, id(253)).await.files_done > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(cancel(&r.me, id(253)).await, gen::STATUS_OK);
+    let st = finished(&r.me, id(253)).await;
+    c_set_fsj_delay_us(0);
+    assert_eq!((st.state, st.code), (Some(2), Some(gen::ERR_CANCELLED)));
+    assert!(st.result.is_none());
+    drop(r.srv);
+}
