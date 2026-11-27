@@ -1624,6 +1624,11 @@ impl Party {
             g.cross_open = g.moved;
             g.moved = false;
         }
+        // PS while they pick puts the question up again, the host's user offered first: a move
+        // before it was on the last one. (A move in the same state as the PS still counts.)
+        if new_ps && !g.playing {
+            g.moved = false;
+        }
         if buttons & DPAD != 0 {
             g.moved = true;
         }
@@ -6299,6 +6304,52 @@ mod tests {
         p.saw_input(id, cross, t + PICK_SETTLE);
         assert!(!held(&p));
         assert_eq!(p.guest_status(id).unwrap()["status"]["move_first"], false);
+    }
+
+    /// PS while they pick asks "Who's using this controller?" again, with the host's user offered
+    /// first: a move made before it took the focus off the old question, not this one, so the
+    /// next ✕ still needs a move after the PS.
+    #[test]
+    fn a_move_before_ps_does_not_open_cross_on_the_question_ps_brings_up() {
+        let mut p = party();
+        let t = Instant::now();
+        let id = admit(&mut p, "A", t);
+        let (tx, _rx) = conn();
+        p.attach(id, 1, tx);
+        p.guest_mut(id)
+            .unwrap()
+            .pad_made(&OpenResult::Ok, Some(None));
+        let cross = vpad::button::CROSS;
+        let held = |p: &Party| p.strip_mask(id).unwrap().1 & cross != 0;
+        // a move on the question the TV put up first, then PS (the question again)
+        p.saw_input(id, vpad::button::RIGHT, t);
+        p.saw_input(id, 0, t);
+        p.saw_input(id, vpad::button::PS, t);
+        p.saw_input(id, 0, t);
+        assert!(p.saw_input(id, cross, t).unwrap().contains("held back"));
+        assert!(held(&p));
+        assert_eq!(
+            p.guest_status(id).unwrap()["status"]["state"],
+            "picking_user"
+        );
+        // a move after the PS: the next ✕ picks
+        p.saw_input(id, 0, t);
+        p.saw_input(id, vpad::button::DOWN, t);
+        p.saw_input(id, 0, t);
+        assert!(p.saw_input(id, cross, t).unwrap().contains("picked"));
+        assert!(!held(&p));
+        // PS held down while moving is not a new question: the move counts (so does one in the
+        // same state as the PS)
+        let id2 = admit(&mut p, "B", t);
+        let (tx, _rx2) = conn();
+        p.attach(id2, 1, tx);
+        p.guest_mut(id2)
+            .unwrap()
+            .pad_made(&OpenResult::Ok, Some(None));
+        let ps = vpad::button::PS;
+        p.saw_input(id2, ps, t);
+        p.saw_input(id2, ps | vpad::button::LEFT, t);
+        assert!(p.saw_input(id2, ps | cross, t).unwrap().contains("picked"));
     }
 
     #[test]
