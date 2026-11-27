@@ -255,6 +255,14 @@ describe("humanizePs5Error", () => {
         /corrupted/i,
       );
     });
+    it("80020016 → the console refused the program (kstuff or the package)", () => {
+      const out = humanizePs5Error(
+        "payload rejected APP_LAUNCH: launch_sony_error_0x80020016",
+      );
+      expect(out).toMatch(/refused to start this game's program \(0x80020016\)/);
+      expect(out).toMatch(/kstuff/);
+      expect(out).not.toMatch(/launcher returned/i);
+    });
     it("unknown launcher code falls back to generic 'returned 0xN' copy", () => {
       const out = humanizePs5Error("launch_sony_error_0x80940099");
       expect(out).toMatch(/launcher returned/i);

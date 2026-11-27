@@ -9876,6 +9876,7 @@ restore_where_usb: "USB extended storage",
 "join_not_host_user_unnamed": "Move to Quick Play before pressing ✕. Don't pick {host}'s PS5 user: it ends their game.",
 "join_took_host": "{host}'s game stopped because their PS5 user was picked on your controller. This time, move to Quick Play first, then press ✕.",
 "join_took_host_away": "{host}'s PS5 user was picked on your controller, which ends their game. When it's back and the TV asks who you are, move to Quick Play first, then press ✕.",
+err_launch_program_refused: "The PS5 refused to start this game's program (0x80020016). Usually fake-package and homebrew support (kstuff) isn't loaded, or the package holds program files the console won't accept. Load kstuff and press Play again; if it still won't start, rebuild or re-download the package.",
 };
 
 export default en;

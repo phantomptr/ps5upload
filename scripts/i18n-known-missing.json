@@ -2,6 +2,7 @@
   "ar": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -94,6 +95,7 @@
   "bn": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -190,6 +192,7 @@
   "de": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -288,6 +291,7 @@
   "es": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -386,6 +390,7 @@
   "fa": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -480,6 +485,7 @@
   "fr": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -577,6 +583,7 @@
   "hi": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -673,6 +680,7 @@
   "hu": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -774,6 +782,7 @@
   "id": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -877,6 +886,7 @@
   "it": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -980,6 +990,7 @@
   "ja": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -1073,6 +1084,7 @@
   "ko": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -1168,6 +1180,7 @@
   "pl": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -1266,6 +1279,7 @@
   "pt-BR": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -1364,6 +1378,7 @@
   "ru": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -1461,6 +1476,7 @@
   "th": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -1558,6 +1574,7 @@
   "tr": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -1658,6 +1675,7 @@
   "vi": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -1757,6 +1775,7 @@
   "zh-CN": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",
@@ -1850,6 +1869,7 @@
   "zh-TW": {
     "missing": [
       "err_launch_not_in_database",
+      "err_launch_program_refused",
       "fpkg.aboutFake_v3",
       "installed_uninstall_confirm_choose",
       "installed_uninstall_delete_folder",

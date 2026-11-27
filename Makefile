@@ -1518,6 +1518,11 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/shellui_launch_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-shellui-launch-selftest
 	@echo "✓ a Sony launch error reaches the caller as an error with its code, not as 'never ran'"
+	@echo "Running launch route self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o $(SELFTEST_DIR)/ps5upload-launch-route-selftest \
+		$(PAYLOAD_DIR)/tests/launch_route_selftest.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-launch-route-selftest
+	@echo "✓ a launch the console refuses for the title itself stops before the ShellUI route"
 	@echo "Running app.db raw-scan self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o $(SELFTEST_DIR)/ps5upload-appdb-scan-selftest \
 		$(PAYLOAD_DIR)/tests/appdb_scan_selftest.c

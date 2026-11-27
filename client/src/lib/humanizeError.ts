@@ -397,6 +397,11 @@ export function humanizePs5Error(
     if (code === "80940033") {
       return te("err_launch_homebrew_refused");
     }
+    // SCE kernel EINVAL: the console refused to start the program itself. The helper stops here
+    // rather than trying the ShellUI route, which only restarted the system UI for it.
+    if (code === "80020016") {
+      return te("err_launch_program_refused");
+    }
     return te("err_launch_unknown", { code });
   }
 
