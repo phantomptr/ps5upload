@@ -25,6 +25,21 @@ export interface ExtractStart {
   deleteAfter?: boolean;
   /** "Choose items" (#969): top-level entries of the archive left out. */
   skip?: string[];
+  /** The archive's password, when "Choose items" needed it to list the archive. */
+  password?: string;
+}
+
+/** "Choose items" of an archive with a password: asked for (`wrong`: the one given was refused). */
+export interface ItemsPassword {
+  wrong: boolean;
+}
+
+/** A listing that failed for want of the password (or a wrong one): ask for it; null otherwise. */
+export function itemsPasswordAsk(e: unknown): ItemsPassword | null {
+  const code = e instanceof ApiError ? e.code : "";
+  if (code.startsWith("fs_extract_password_required")) return { wrong: false };
+  if (code.startsWith("fs_extract_wrong_password")) return { wrong: true };
+  return null;
 }
 
 /** An extract cause token (fs_extract_no_space, …) as a sentence, or null when it has none. */
@@ -112,6 +127,7 @@ export function ExtractDialog({
   startParent = null,
   listTop = listArchiveTop,
   startItems = null,
+  startItemsPw = null,
 }: {
   dir: string;
   name: string;
@@ -131,28 +147,47 @@ export function ExtractDialog({
   /** Another folder to extract into, already picked (tests). */
   startParent?: string | null;
   /** Reads the archive's top-level names for "Choose items" (tests pass their own). */
-  listTop?: (path: string, dir: string) => Promise<TopListing>;
+  listTop?: (path: string, dir: string, password?: string) => Promise<TopListing>;
   /** Items already listed (tests). */
   startItems?: TopListing | null;
+  /** The archive asked for a password to list it (tests). */
+  startItemsPw?: ItemsPassword | null;
 }) {
   // "Choose items" (#969): the archive's top-level entries, and those left unticked.
   const [items, setItems] = useState<TopListing | null>(startItems);
   const [itemsLoading, setItemsLoading] = useState(false);
   const [itemsError, setItemsError] = useState<string | null>(null);
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
-  const skip = items && skipped.size > 0 ? { skip: items.top.filter((n) => skipped.has(n)) } : {};
+  // A password-protected archive lists only with its password: asked here, and the extract then
+  // uses the same one (no second question).
+  const [itemsPw, setItemsPw] = useState<ItemsPassword | null>(startItemsPw);
+  const [pwText, setPwText] = useState("");
+  const [listedPw, setListedPw] = useState<string | null>(null);
+  const skip = {
+    ...(items && skipped.size > 0 ? { skip: items.top.filter((n) => skipped.has(n)) } : {}),
+    ...(listedPw ? { password: listedPw } : {}),
+  };
   const noneChosen = !!items && !items.more && items.top.length > 0 && items.top.every((n) => skipped.has(n));
   const loadItems = () => {
+    const pw = itemsPw ? pwText : "";
+    if (itemsPw && !pw) return;
     setItemsLoading(true);
     setItemsError(null);
-    listTop(path, dir).then(
+    listTop(path, dir, pw || undefined).then(
       (l) => {
         setItemsLoading(false);
         setItems(l);
         setSkipped(new Set());
+        setItemsPw(null);
+        setListedPw(pw || null);
       },
       (e: unknown) => {
         setItemsLoading(false);
+        const ask = itemsPasswordAsk(e);
+        if (ask) {
+          setItemsPw(ask);
+          return;
+        }
         // A helper too old to list says so as a refused folder: the plain sentence fits better.
         const code = e instanceof ApiError ? e.code : "";
         setItemsError(
@@ -297,16 +332,42 @@ export function ExtractDialog({
             </button>
           ) : null}
           {items == null ? (
-            <button
-              type="button"
-              className="cw-focusable cw-button"
-              data-action="extract-choose"
-              aria-busy={itemsLoading || undefined}
-              disabled={itemsLoading}
-              onClick={loadItems}
-            >
-              <span>{itemsLoading ? t("cw_home_loading") : t("cw_files_extract_choose")}</span>
-            </button>
+            <>
+              {itemsPw ? (
+                <div data-extract-items-pw="">
+                  <p className={itemsPw.wrong ? "cw-field-error" : "cw-dim"} role={itemsPw.wrong ? "alert" : undefined}>
+                    {t(itemsPw.wrong ? "cw_files_extract_pw_wrong" : "cw_files_extract_pw_body")}
+                  </p>
+                  <label className="cw-field">
+                    <span className="cw-dim">{t("cw_files_extract_pw_label")}</span>
+                    <input
+                      className="cw-focusable cw-input"
+                      type="password"
+                      autoComplete="off"
+                      value={pwText}
+                      onChange={(e) => setPwText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          loadItems();
+                        }
+                      }}
+                      data-extract-items-password=""
+                    />
+                  </label>
+                </div>
+              ) : null}
+              <button
+                type="button"
+                className="cw-focusable cw-button"
+                data-action="extract-choose"
+                aria-busy={itemsLoading || undefined}
+                disabled={itemsLoading || (!!itemsPw && !pwText)}
+                onClick={loadItems}
+              >
+                <span>{itemsLoading ? t("cw_home_loading") : t("cw_files_extract_choose")}</span>
+              </button>
+            </>
           ) : (
             <div className="cw-extract-items" data-extract-items="">
               <p className="cw-dim">
