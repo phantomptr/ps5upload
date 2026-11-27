@@ -3492,7 +3492,11 @@ Minion, and shows the address to open.
 The SMB shares kept on the PS5: add them in Minion's **Files → Network shares**, or from the
 PC in **Shared Folders → Shares on the PS5**, which adds, edits and removes them and can copy a server
 you already saved (type the password again: the PS5 keeps its own encrypted copy). Minion
-browses them in Files, and **Games → On Drives & Shares** shows the games on them.
+browses them in Files, and **Games → On Drives & Shares** shows the games on them. A game image
+(`.exfat`, `.ffpkg`, `.ffpfs`) shows the title and cover stored inside it, and copies of one game
+on different shares or under different names are one card. A compressed `.ffpfsc` can't be read
+on the console: it shows the title id from its file name, tagged **Title not read**. A rescan reads
+only the images that are new or changed since the last one.
 
 **Q: Can I convert a game on the PS5 itself, without a computer?**
 Yes: Minion's **Convert** section makes an `.exfat`, `.ffpkg`, `.ffpfs` or a plain folder from a
