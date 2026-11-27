@@ -22,6 +22,7 @@
 #define MAX_DEPTH 64
 
 uint32_t fsj_test_file_delay_us;
+int (*fsj_size_may_read)(const char *path);
 const char *fsj_test_cross_name;
 
 /* The device of an entry, with the test hook's "this one is a mount" applied. */
@@ -869,6 +870,7 @@ static int op_tree_size(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t
     fail_t f;
     fsj_hooks_t h;
     const ava1_data_cfg_t *cfg = ava1_data_cfg();
+    int (*may)(const char *);
     int rc, len;
     (void)arg;
     (void)n;
@@ -882,8 +884,9 @@ static int op_tree_size(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t
         ava1_op_message(c, "fs_size_missing_path");
         return AVA1_ERR_PROTOCOL;
     }
-    if (fsj_normalize_path(path) != 0 || !cfg->may_read || !cfg->may_read(path, 0) || path_in_protected(path) ||
-        usage_pseudo(path)) {
+    may = __atomic_load_n(&fsj_size_may_read, __ATOMIC_ACQUIRE);
+    if (fsj_normalize_path(path) != 0 || (may ? !may(path) : !cfg->may_read || !cfg->may_read(path, 0)) ||
+        path_in_protected(path) || usage_pseudo(path)) {
         ava1_op_message(c, "fs_size_path_not_allowed");
         return AVA1_ERR_PATH;
     }

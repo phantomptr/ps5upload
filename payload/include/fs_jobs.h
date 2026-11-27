@@ -46,6 +46,12 @@ typedef struct {
  * cannot be read, -2 cancelled. `h->file` is called per non-directory with its size. */
 int fsj_tree_usage(const char *path, fsj_usage_t *u, const fsj_hooks_t *h);
 
+/* JOB_OP_TREE_SIZE's read rule, set by the helper (ava1_glue.c: fs.read's rule, which refuses the
+ * trust store and anything in it but not a folder above it: the walk skips the store). NULL: the
+ * data plane's may_read, which also refuses every folder above the store (/, /user, /data,
+ * /data/ps5upload), so those could not be sized. */
+extern int (*fsj_size_may_read)(const char *path);
+
 /* The walkers never cross into another device than the root's: a nested mount (a USB drive
  * under a game folder, an image mounted inside it) is skipped, reported through `failed("mount")`
  * and counted as an error, so deleting a tree can never empty a volume mounted below it. */

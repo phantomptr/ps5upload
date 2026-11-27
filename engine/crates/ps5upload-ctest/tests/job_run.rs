@@ -1197,3 +1197,34 @@ async fn tree_size_counts_bytes_and_disk_use_and_skips_mounts_links_and_the_trus
     assert!(st.result.is_none());
     drop(r.srv);
 }
+
+/// A folder above the trust store is sized by fs.read's rule (fsj_size_may_read, ava1_glue.c), not
+/// by the data plane's may_read: on the console that one refuses the store's ancestors too (/,
+/// /user, /data, /data/ps5upload), so the Files size column could never size them. Here the data
+/// plane refuses every read, as it does for those folders on the console.
+#[tokio::test(flavor = "multi_thread")]
+async fn tree_size_of_a_folder_above_the_store_is_not_refused_by_the_data_plane() {
+    let r = rig("jr-size-above").await;
+    let tree = r.d.join("data");
+    write_tree(&tree, 10, |_| 50);
+    let store = tree.join("ps5upload/ava");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(store.join("identity"), vec![7u8; 9000]).unwrap();
+    let store = store.canonicalize().unwrap();
+    c_set_protected(Some(&store));
+    c_set_read_allowed(false);
+    let a = serde_json::json!({ "path": tree.to_str().unwrap() }).to_string();
+    run(&r.me, id(254), gen::JOB_OP_TREE_SIZE, &a).await;
+    let st = finished(&r.me, id(254)).await;
+    assert_eq!(st.state, Some(1), "{:?} {:?}", st.code, st.current);
+    let v: serde_json::Value = serde_json::from_slice(&st.result.unwrap()).unwrap();
+    assert_eq!(v["bytes"], 500, "the store is skipped: {v}");
+    // The store itself is still refused.
+    let s = serde_json::json!({ "path": store.to_str().unwrap() }).to_string();
+    run(&r.me, id(255), gen::JOB_OP_TREE_SIZE, &s).await;
+    let st = finished(&r.me, id(255)).await;
+    assert_eq!((st.state, st.code), (Some(2), Some(gen::ERR_PATH)));
+    c_set_read_allowed(true);
+    c_set_protected(None);
+    drop(r.srv);
+}
