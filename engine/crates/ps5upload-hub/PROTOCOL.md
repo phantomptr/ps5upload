@@ -159,8 +159,8 @@ Forwarded as `{"t":"signal","from":"host"|"<gid>","data":<data unchanged>}`.
 | Limit | Default |
 |-------|---------|
 | guests per room | 8 |
-| signals per guest | 20 per minute |
-| signals per guest client in one room (its guests together, joins again included) | 60 per minute |
+| signals per guest | 60 per minute (was 20: one try of a browser that trickles each candidate went past it) |
+| signals per guest client in one room (its guests together, joins again included) | 300 per minute (was 60) |
 | signals per host (all its guests together) | 200 per minute (past it: dropped) |
 | `join` attempts per client | 30 per minute (found or not) |
 | rooms on the hub | 5,000 |
@@ -175,6 +175,11 @@ Forwarded as `{"t":"signal","from":"host"|"<gid>","data":<data unchanged>}`.
 
 A *client* is an IPv4 address or an IPv6 /64. Behind a reverse proxy, the client address comes
 from the proxy's header (last entry) only when the proxy is configured as trusted.
+
+A guest's signals are its offer and each ICE candidate, one signal each, so a client should not
+send the candidates the host cannot use: the engine takes UDP candidates with an address and
+drops `.local` (mDNS) and TCP ones. The guest pages leave those out (Firefox on one network: 11
+signals a try instead of 21).
 
 ## Close codes
 
@@ -202,10 +207,16 @@ IPv6. It ignores every other message and does no TURN.
 ## Other endpoints
 
 - `GET /health`: `ok`.
-- `GET /metrics`: Prometheus text, counts only (rooms, guests, connections, hosts, reclaims,
-  joins, signals, dropped host signals, expired rooms and guests, STUN requests, errors by
-  kind). Kept private: localhost only behind Caddy, or a separate private port
-  (`HUB_METRICS_LISTEN`) on Fly.
+- `/ws/` is `/ws`. A request to `/ws` that is not a WebSocket upgrade gets 400, 405 or 426.
+- `GET /robots.txt`: `User-agent: *` / `Disallow: /`.
+- Anything else: 404. The hub's name is public, so scanners and crawlers ask for `/`, `/.env`
+  and the like all day; these are counted by a fixed class of the path (`root`, `favicon`,
+  `robots`, `well_known`, `ws_not_websocket`, `other`) and never logged.
+- `GET /metrics`: Prometheus text, counts only (rooms, guests, connections, rooms opened,
+  reclaimed, closed and expired, joins, signals, dropped host signals, expired guests, STUN
+  requests, errors by kind, refusals by the limit that fired, stray HTTP requests by class).
+  Kept private: localhost only behind Caddy, or a separate private port (`HUB_METRICS_LISTEN`)
+  on Fly.
 
 ## Privacy
 

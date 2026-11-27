@@ -101,8 +101,9 @@ impl Hub {
 
     /// The hub inside another program's tokio runtime (the PS5Upload engine's built-in hub), on a
     /// listener the caller bound (`http_listen` is not used). `extra` routes are served beside
-    /// `/ws` and `/health` (they must not overlap them); `/metrics` is never on this listener,
-    /// only on `metrics_listen` when that is set. Everything else answers 404.
+    /// `/ws`, `/health` and `/robots.txt` (they must not overlap them, and must not set a fallback:
+    /// the hub's counts what nothing serves); `/metrics` is never on this listener, only on
+    /// `metrics_listen` when that is set. Everything else answers 404.
     pub async fn start_on(
         config: Config,
         log: LogSink,

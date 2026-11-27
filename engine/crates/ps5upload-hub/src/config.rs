@@ -103,7 +103,7 @@ pub struct Config {
     pub max_signals_per_guest: u32,
     /// Signals one guest client (an address, see `limits.rs`) may send in one room per window,
     /// all its guests there together, those that left included: joining again does not refill
-    /// it. Room for a few guests from one home.
+    /// it. Room for a few guests from one home (or behind one carrier-grade NAT).
     pub max_signals_per_guest_client: u32,
     /// Signals a host may send per window, to all its guests together. Past it they are
     /// dropped, not forwarded; the host stays.
@@ -162,8 +162,15 @@ impl Default for Config {
             trusted_proxies: Vec::new(),
             client_ip_header: "x-forwarded-for".to_string(),
             max_guests_per_room: 8,
-            max_signals_per_guest: 20,
-            max_signals_per_guest_client: 60,
+            // One try of a guest: its offer, then every ICE candidate its browser finds, one
+            // signal each. Firefox on one network found 20 for the Play Together page as it was
+            // (a data channel, a video and an audio track: a set of candidates for each), so with
+            // the offer it went past the old 20 and was closed before it could connect; a home
+            // with IPv6 or a VPN finds twice as many. The pages now leave out the candidates the
+            // engine cannot use (about half); older pages stay in use.
+            max_signals_per_guest: 60,
+            // Room for a home of three or four, each trying twice in the minute with such a page.
+            max_signals_per_guest_client: 300,
             max_signals_per_host: 200,
             max_joins_per_ip: 30,
             max_rooms: 5_000,

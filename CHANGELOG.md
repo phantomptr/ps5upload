@@ -6,6 +6,12 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Play Together over the internet**
+- **Friends joining from Firefox, a VPN or IPv6 are no longer turned away.** Their browser sends more connection details than the hub allowed per minute, so the hub closed the join and the page said it couldn't reach the hub. The hub now allows a realistic amount for every browser and for several devices behind one home connection, and the join page sends only the details the app can use.
+- The hub answers its address with a trailing slash too, tells search crawlers to stay away, and counts which limit stopped a connection, so problems like this show up straight away.
+
+## 12.6.35
+
 **Files on a phone**
 - **Name and path fields get the full width (#936).** New folder, New file, Rename, Download from a link and Go to path no longer squeeze the text box: on a phone the field takes the width of the card and its buttons sit on their own line, so you can see what you type and the buttons never break mid-word. Tablets and computers look as before.
 

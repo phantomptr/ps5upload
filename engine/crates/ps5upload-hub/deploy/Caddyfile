@@ -11,12 +11,13 @@ hub.phantomptr.com {
 		path /metrics
 		not remote_ip 127.0.0.1 ::1
 	}
-	@hub path /ws /health /metrics
+	@hub path /ws /ws/ /health /metrics /robots.txt
 
 	route {
 		# /metrics only from the server itself.
 		respond @metrics_remote 403
-		# WebSocket upgrades pass through reverse_proxy as they are.
+		# WebSocket upgrades pass through reverse_proxy as they are. Other paths get Caddy's 404
+		# (the hub would count them, but Caddy never passes them on).
 		reverse_proxy @hub 127.0.0.1:8787
 		respond 404
 	}
