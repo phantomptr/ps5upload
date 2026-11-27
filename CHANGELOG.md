@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.41
 
 **Play Together**
 - **Your Play Together switches are kept for next time.** Block PS & Create, "A friend can play as me on Player 1", the number of players and the other host switches are saved, also across restarts, instead of going back to their defaults.
