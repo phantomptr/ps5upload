@@ -28,6 +28,22 @@ export function toggleChosen<T>(chosen: readonly T[], item: T, on: boolean, all:
   return all.every((x) => next.includes(x)) ? [] : next;
 }
 
+/**
+ * Ticks or unticks the user `id` of the console shown (`shown`: its users). The list is the
+ * engine's, for every console, so only `id` changes: other consoles' users stay as they were.
+ * As {@link toggleChosen}: the empty list is every user, and the shown console never ends up
+ * with nobody ticked. Back to "every user" only when the list names no other console's user
+ * (then nobody anywhere was left out). From "every user", unticking one has to list who stays:
+ * the shown console's others (the other consoles' users are not known here).
+ */
+export function toggleUser(chosen: readonly number[], id: number, on: boolean, shown: readonly number[]): number[] {
+  if (chosen.length === 0) return toggleChosen(chosen, id, on, shown);
+  const next = on ? [...new Set([...chosen, id])] : chosen.filter((x) => x !== id);
+  if (!next.some((x) => shown.includes(x))) return [...chosen];
+  const others = next.filter((x) => !shown.includes(x));
+  return others.length === 0 && shown.every((x) => next.includes(x)) ? [] : next;
+}
+
 export const MIN_HOURS = 1;
 export const MAX_HOURS = 168;
 

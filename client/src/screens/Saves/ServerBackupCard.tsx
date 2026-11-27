@@ -20,6 +20,7 @@ import {
   serverIntervalMinutes,
   serverMinutesSupported,
   toggleChosen,
+  toggleUser,
   useServerBackupStore,
 } from "../../state/serverSaveBackup";
 import { useTr } from "../../state/lang";
@@ -247,7 +248,7 @@ export default function ServerBackupCard({
                       key={o.id}
                       label={o.name ?? tr("saves_user_other", { id: userHex(o.id) }, "Other user ({id})")}
                       checked={isChosen(settings.users, o.id >>> 0)}
-                      onChange={(on) => void set({ users: toggleChosen(settings.users, o.id >>> 0, on, userIds) })}
+                      onChange={(on) => void set({ users: toggleUser(settings.users, o.id >>> 0, on, userIds) })}
                     />
                   ))}
                 </fieldset>
