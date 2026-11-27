@@ -859,6 +859,26 @@ pub fn gather(addr: &str, title_id: &str) -> Facts {
             f.kernel_access = Some(true);
         }
     }
+    // On 13.60 the hardware info gives kernel word 0 and "FreeBSD 0.0-prototype"; the helper's
+    // status carries the kernel's own version text (`.../releases/13.60 ...`), so read it there.
+    if f.firmware.is_none() {
+        if let Ok(body) = ps5upload_core::mgmt::call_with(
+            addr,
+            ps5upload_core::mgmt::m::NODE_STATUS,
+            ps5upload_core::mgmt::m::NODE_STATUS.label,
+            b"",
+            Some(ps5upload_ava1::mgmt::STATUS_TIMEOUT),
+        ) {
+            if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
+                if let Some(kernel) = json.get("ps5_kernel").and_then(|v| v.as_str()) {
+                    f.firmware = firmware_from(0, kernel);
+                }
+                if json.get("ucred_elevated").and_then(|v| v.as_bool()) == Some(true) {
+                    f.kernel_access = Some(true);
+                }
+            }
+        }
+    }
     match ps5upload_core::hw::proc_list(addr) {
         Ok(list) if list.ok => {
             f.kernel_access = Some(true);
@@ -1305,6 +1325,14 @@ mod tests {
         assert_eq!(free_space(&f).status, DoctorStatus::Pass);
         f.free_internal = None;
         assert_eq!(free_space(&f).status, DoctorStatus::Unknown);
+    }
+
+    #[test]
+    fn the_status_kernel_text_gives_the_firmware_when_the_hw_word_is_zero() {
+        // What a 13.60 console answers: hw info word 0 and a prototype OS string, status text.
+        assert_eq!(firmware_from(0, "FreeBSD 0.0-prototype"), None);
+        let fw = firmware_from(0, "r229358/releases/13.60 Jul 17 2026 02:16:29").unwrap();
+        assert_eq!(fw, Firmware::new(13, 60));
     }
 
     #[test]
