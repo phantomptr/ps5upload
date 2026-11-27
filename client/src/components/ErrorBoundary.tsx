@@ -12,6 +12,96 @@ interface State {
   componentStack: string;
 }
 
+/** Whatever was thrown, as an Error. React hands a boundary any thrown value; a `null` or
+ *  `undefined` kept as is reads as "no error", so the boundary renders the children again, they
+ *  throw again, and React unmounts the whole tree: the white window this boundary is there to
+ *  prevent. */
+export function toError(thrown: unknown): Error {
+  if (thrown instanceof Error) return thrown;
+  if (typeof thrown === "string") return new Error(thrown);
+  let text: string;
+  try {
+    text = thrown === undefined ? "undefined" : JSON.stringify(thrown) ?? String(thrown);
+  } catch {
+    text = String(thrown);
+  }
+  return new Error(`a non-error value was thrown: ${text}`);
+}
+
+/** Non-hook translator for the class components here: the current language, English when the
+ *  key is absent (the locale may still be loading when something crashes). */
+function trBoundary(key: string, fallback: string): string {
+  const result = translate(useLangStore.getState().lang, key);
+  return result === key ? fallback : result;
+}
+
+interface SectionProps {
+  children: ReactNode;
+  /** What this part is, for the log ("screen /games", "restore card"). */
+  logName: string;
+  /** A change (another screen, another game) clears the error and renders the children again. */
+  resetKey?: unknown;
+}
+
+/**
+ * An error boundary for one part of the window: one screen, or one card on it. A render error
+ * there shows a short message with Try again in its place, and the rest of the app (navigation,
+ * other screens, running transfers) carries on. The root boundary is the last resort and takes
+ * the whole window, which a user reads as the app having crashed (#961: "the PC app went entirely
+ * white and had to be reopened" during a long Restore all).
+ */
+export class SectionErrorBoundary extends Component<SectionProps, { err: Error | null }> {
+  state: { err: Error | null } = { err: null };
+
+  static getDerivedStateFromError(thrown: unknown): { err: Error } {
+    return { err: toError(thrown) };
+  }
+
+  componentDidCatch(thrown: unknown, info: ErrorInfo) {
+    const err = toError(thrown);
+    log.error("react", `${this.props.logName}: ${err.message}`, {
+      stack: err.stack ?? "",
+      componentStack: info.componentStack ?? "",
+    });
+    void import("../lib/crashReporter").then((m) =>
+      m.captureCrashReport(`frontend-error (${this.props.logName}): ${err.message}`),
+    );
+  }
+
+  componentDidUpdate(prev: SectionProps) {
+    if (this.state.err && !Object.is(prev.resetKey, this.props.resetKey)) this.setState({ err: null });
+  }
+
+  render() {
+    const { err } = this.state;
+    if (!err) return this.props.children;
+    return (
+      <div
+        role="alert"
+        data-testid="section-error"
+        className="m-3 rounded-xl border border-[var(--color-bad)] bg-[var(--color-bad-soft)] p-4 text-sm"
+      >
+        <div className="font-semibold text-[var(--color-bad)]">
+          {trBoundary(
+            "errorboundary_section_failed",
+            "This part of the window hit a problem and was set aside. The rest of the app still works.",
+          )}
+        </div>
+        <div className="mt-1 break-words text-xs text-[var(--color-text)]">{err.message}</div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => this.setState({ err: null })}
+            className="chip min-h-9 px-4 text-sm font-medium"
+          >
+            {trBoundary("errorboundary_try_again", "Try again")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
+
 /**
  * Top-level React error boundary. A render-time exception in any
  * descendant lands here instead of unmounting the whole tree and
@@ -30,8 +120,8 @@ export class RootErrorBoundary extends Component<Props, State> {
   /** Unsubscribe handle for the language-store subscription. */
   private unsubLang: (() => void) | null = null;
 
-  static getDerivedStateFromError(err: Error): State {
-    return { err, componentStack: "" };
+  static getDerivedStateFromError(thrown: unknown): State {
+    return { err: toError(thrown), componentStack: "" };
   }
 
   componentDidMount() {
@@ -57,12 +147,10 @@ export class RootErrorBoundary extends Component<Props, State> {
    *  The locale dict may still be lazy-loading when a crash happens;
    *  `translate()` returns the key itself in that case, so we fall
    *  back to English — the right behaviour for an error screen. */
-  private tr = (key: string, fallback: string): string => {
-    const result = translate(useLangStore.getState().lang, key);
-    return result === key ? fallback : result;
-  };
+  private tr = (key: string, fallback: string): string => trBoundary(key, fallback);
 
-  componentDidCatch(err: Error, info: ErrorInfo) {
+  componentDidCatch(thrown: unknown, info: ErrorInfo) {
+    const err = toError(thrown);
     // Send to the in-app log store so the Logs tab shows it. We use
     // log.error rather than console.error: the latter is already
     // captured by installConsoleCapture (main.tsx), but landing it

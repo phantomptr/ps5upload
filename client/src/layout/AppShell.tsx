@@ -19,6 +19,7 @@ import UpdateBanner from "./UpdateBanner";
 import UpdateFinishing from "./UpdateFinishing";
 import { useWebUpdateStore } from "./WebUpdateToast";
 import { Button } from "../components/Button";
+import { SectionErrorBoundary } from "../components/ErrorBoundary";
 import {
   useConnectionFrozen,
   useConnectionStore,
@@ -2098,7 +2099,12 @@ function KeptScreens({ pathname, className }: { pathname: string; className: str
                       : { ...locationContext, location: leftAt }
                   }
                 >
-                  {active ? outlet : node}
+                  {/* A screen that fails to render shows why in its own place; the
+                      navigation and the other screens go on (the root boundary would take
+                      the whole window). */}
+                  <SectionErrorBoundary logName={`screen ${path}`} resetKey={leftAt.key}>
+                    {active ? outlet : node}
+                  </SectionErrorBoundary>
                 </UNSAFE_LocationContext.Provider>
               </div>
             </Activity>
