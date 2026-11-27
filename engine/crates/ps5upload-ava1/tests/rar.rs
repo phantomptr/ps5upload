@@ -273,6 +273,46 @@ async fn a_nonsolid_rar_uploads_and_verifies() {
     assert!(d.join("host/share/dst/empty_dir").is_dir());
 }
 
+/// "Choose files" (#969): only the chosen entries (`=path`) of a solid RAR are sent, and the
+/// plan preview counts the same files.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_solid_rar_sends_only_the_chosen_entries() {
+    let (d, _, pool) = setup("rar-chosen").await;
+    let f = sample(12);
+    write(&d.join("a.rar"), &archive_of(&f, true, &["empty_dir"]));
+    let chosen = vec!["=d1".to_string(), "=d2/f5.bin".to_string()];
+    let layout =
+        ps5upload_core::transfer::rar_layout(&d.join("a.rar"), None, &chosen).expect("layout");
+    let want: Vec<&(String, Vec<u8>)> =
+        f.0.iter()
+            .filter(|(n, _)| n.starts_with("d1/") || n == "d2/f5.bin")
+            .collect();
+    assert_eq!(layout.files.len(), want.len());
+    let mut c = cfg();
+    c.excludes = chosen;
+    let archive = d.join("a.rar");
+    let r = tokio::time::timeout(
+        Duration::from_secs(90),
+        tokio::task::spawn_blocking(move || {
+            upload::upload_rar_in(&pool, &c, [3; 16], "dst", &archive, None)
+        }),
+    )
+    .await
+    .expect("rar upload timed out")
+    .unwrap()
+    .unwrap();
+    assert_eq!(r.files_sent, want.len() as u64);
+    for (n, b) in &want {
+        assert_eq!(
+            &std::fs::read(d.join("host/share/dst").join(n)).unwrap(),
+            b,
+            "{n}"
+        );
+    }
+    assert!(!d.join("host/share/dst/d0").exists());
+    assert!(!d.join("host/share/dst/empty_dir").exists());
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_solid_rar_uploads_and_verifies() {
     let (d, _, pool) = setup("rar-solid").await;

@@ -806,6 +806,60 @@
         ],
         "type": "object"
       },
+      "ArchiveEntries": {
+        "description": "The answer of `/api/archive/entries`.",
+        "properties": {
+          "complete": {
+            "description": "False when there were more rows than [`ROWS_MAX`] (the rest are left out).",
+            "type": "boolean"
+          },
+          "file_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ChooseRow"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "description": "`zip`, `7z`, `rar` or `tar`.",
+            "type": "string"
+          },
+          "total_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "items",
+          "file_count",
+          "total_bytes",
+          "complete"
+        ],
+        "type": "object"
+      },
+      "ArchiveEntriesReq": {
+        "description": "`/api/archive/entries` request.",
+        "properties": {
+          "archive_path": {
+            "type": "string"
+          },
+          "password": {
+            "description": "RAR only.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "archive_path"
+        ],
+        "type": "object"
+      },
       "AttachedImage": {
         "properties": {
           "device": {
@@ -2166,6 +2220,46 @@
         },
         "required": [
           "host"
+        ],
+        "type": "object"
+      },
+      "ChooseRow": {
+        "description": "One row of the chooser.",
+        "properties": {
+          "files": {
+            "description": "Files it stands for (1 for a file or a package).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "`package`, `folder` or `file`.",
+            "type": "string"
+          },
+          "package": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PackageBrief"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "description": "The path inside the archive, as the transfer spells it.",
+            "type": "string"
+          },
+          "size": {
+            "description": "Unpacked bytes (a folder: everything in it).",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "kind",
+          "size",
+          "files"
         ],
         "type": "object"
       },
@@ -10203,6 +10297,35 @@
             "description": "Uploaded by the user as one pack."
           }
         ]
+      },
+      "PackageBrief": {
+        "description": "What a package's header says, when it could be read.",
+        "properties": {
+          "app_ver": {
+            "type": "string"
+          },
+          "category": {
+            "description": "`gd` a game, `gp` an update, `ac` DLC (from param.sfo, else the header's content type).",
+            "type": "string"
+          },
+          "content_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "title_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "title_id",
+          "content_id",
+          "category",
+          "app_ver"
+        ],
+        "type": "object"
       },
       "PairResult": {
         "description": "What a successful pairing leaves us with.",
@@ -18832,6 +18955,57 @@
             "required": false
           },
           "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/archive/entries": {
+      "post": {
+        "description": "POST /api/archive/entries — what a ZIP, 7z, RAR or tar holds, as the rows \"Choose files\"\nticks (#969): each package, each folder that holds no package, each loose file beside a\npackage. Read from the listing alone; a ZIP's packages also have their headers read. The\nticked rows go back as `=path` entries in the transfer's `excludes`.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArchiveEntriesReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveEntries"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "What a ZIP, 7z, RAR or tar holds, as the rows \"Choose files\" ticks (#969): each package, each folder that holds no package, each loose file beside a package",
+        "tags": [
+          "archive"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "struct"
         }
       }
     },
@@ -55201,6 +55375,9 @@
     }
   ],
   "tags": [
+    {
+      "name": "archive"
+    },
     {
       "description": "Cheats and cheat repositories.",
       "name": "cheats"
