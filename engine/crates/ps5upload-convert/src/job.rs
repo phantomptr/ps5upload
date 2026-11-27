@@ -602,6 +602,46 @@ fn is_archive_file(path: &Path) -> bool {
 
 /// Removes what a stopped or failed build of `dest` left: the names the helper also cleans up.
 /// A `.partial` folder only when it carries the build's marker.
+/// Makes every folder and file under `root` (and `root`) 0777, the mode the helper gives
+/// everything it writes (payload/src/main.c, third_party/ava1/c/ava1_internal.h): the PS5's
+/// loader refuses a game whose files lack execute for everyone ("can't start the game",
+/// CE-107750-0), and this program's own writes take whatever mode the ELF loader's umask leaves
+/// (0644 files with the usual 022). Links are left as they are (a chmod follows them). Best
+/// effort: how many entries could not be changed.
+#[cfg(unix)]
+fn open_up(root: &Path) -> u64 {
+    use std::os::unix::fs::PermissionsExt;
+    let mut missed = 0u64;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            missed += 1;
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.permissions().mode() & 0o777 != 0o777
+            && std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o777)).is_err()
+        {
+            missed += 1;
+        }
+        if meta.is_dir() {
+            match std::fs::read_dir(&path) {
+                Ok(entries) => stack.extend(entries.flatten().map(|e| e.path())),
+                Err(_) => missed += 1,
+            }
+        }
+    }
+    missed
+}
+
+/// No modes to set off unix (the converter only runs its tests there).
+#[cfg(not(unix))]
+fn open_up(_root: &Path) -> u64 {
+    0
+}
+
 fn remove_leftovers(dest: &Path) {
     let partial = folder_build::partial_of(dest);
     if partial.is_dir() {
@@ -877,6 +917,17 @@ fn build(
     };
     match built {
         Ok((files, bytes, detail)) => {
+            // A game folder is played from where it was written: its modes must be the ones the
+            // console's loader accepts.
+            if plan.image.is_none() {
+                let missed = open_up(&plan.dest);
+                if missed > 0 {
+                    crate::log(format_args!(
+                        "{}: {missed} entries kept their mode (chmod failed)",
+                        plan.dest.display()
+                    ));
+                }
+            }
             crate::log(format_args!(
                 "built {} in {:.1} s: {detail}",
                 plan.dest.display(),
@@ -1325,8 +1376,66 @@ mod tests {
             assert_eq!(i.title.as_deref(), Some("Test Game"), "{format}");
             assert_eq!(i.data_bytes, crate::inspect(&game).unwrap().data_bytes);
             assert_eq!(names(&dir), ["status.json"], "{format}");
+            #[cfg(unix)]
+            if format == "folder" {
+                assert_eq!(modes_not_0777(&dest), Vec::<String>::new());
+            }
         }
         assert_eq!(names(&out), ["g", "g.exfat", "g.ffpfs", "g.ffpkg"]);
+    }
+
+    /// Every entry under `root` (and `root`) whose mode is not 0777, links aside.
+    #[cfg(unix)]
+    fn modes_not_0777(root: &Path) -> Vec<String> {
+        use std::os::unix::fs::PermissionsExt;
+        let mut out = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(p) = stack.pop() {
+            let meta = std::fs::symlink_metadata(&p).unwrap();
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.permissions().mode() & 0o777 != 0o777 {
+                out.push(format!(
+                    "{} {:o}",
+                    p.display(),
+                    meta.permissions().mode() & 0o777
+                ));
+            }
+            if meta.is_dir() {
+                stack.extend(std::fs::read_dir(&p).unwrap().map(|e| e.unwrap().path()));
+            }
+        }
+        out
+    }
+
+    /// A game folder written with the usual 0644 / 0755 modes comes out 0777 throughout, and a
+    /// link in it is left alone (its target keeps its mode).
+    #[cfg(unix)]
+    #[test]
+    fn open_up_makes_a_game_folder_0777_and_leaves_links() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new("jobopenup");
+        let game = tmp.0.join("g");
+        std::fs::create_dir_all(game.join("sce_sys")).unwrap();
+        std::fs::write(game.join("eboot.bin"), b"x").unwrap();
+        std::fs::write(game.join("sce_sys/param.json"), b"{}").unwrap();
+        let outside = tmp.0.join("outside.txt");
+        std::fs::write(&outside, b"o").unwrap();
+        std::os::unix::fs::symlink(&outside, game.join("link")).unwrap();
+        for (p, mode) in [
+            (game.join("eboot.bin"), 0o644),
+            (game.join("sce_sys/param.json"), 0o600),
+            (outside.clone(), 0o644),
+            (game.join("sce_sys"), 0o755),
+            (game.clone(), 0o755),
+        ] {
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+        assert_eq!(open_up(&game), 0);
+        assert_eq!(modes_not_0777(&game), Vec::<String>::new());
+        let kept = std::fs::metadata(&outside).unwrap().permissions().mode() & 0o777;
+        assert_eq!(kept, 0o644);
     }
 
     /// A `.ffpfsc` holding each image, at each level: done, and it reads back as the game (the
