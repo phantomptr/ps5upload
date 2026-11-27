@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.42
 
 **Docker and the self-hosted web UI**
 - **Go live works from a phone or another computer.** Opening the web UI from a device the engine lets in (`PS5UPLOAD_ALLOW_IP`), Go live said "Can't reach the engine": Docker Desktop makes every visitor look like the computer itself, so the engine refused them. It now lets in the devices the setting lists, as it does for everything else, and stream keys still never leave the engine. Play Together's host controls had the same problem and work now too.
