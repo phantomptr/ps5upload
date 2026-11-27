@@ -62,11 +62,13 @@ static void at(char *buf, size_t cap, const char *path) { snprintf(buf, cap, "%s
 static int g_uninstalls;
 static uint32_t g_uninstall_rc;
 static int g_uninstall_removes_files = 1, g_uninstall_drops_record = 1;
+static int g_uninstall_missing; /* the helper has no Sony uninstall to call: -1, nothing done */
 static void rm_tree(const char *p);
 static int uninstall(const char *id, uint32_t *rc) {
     char p[1024];
     snprintf(p, sizeof p, "%s/mnt/ext1/user/app/%s", root, id);
     g_uninstalls++;
+    if (g_uninstall_missing) return -1;
     *rc = g_uninstall_rc;
     if (g_uninstall_rc == 0) {
         if (g_uninstall_removes_files) rm_tree(p);
@@ -183,6 +185,7 @@ static void fresh(void) {
     g_uninstall_rc = 0;
     g_uninstall_removes_files = 1;
     g_uninstall_drops_record = 1;
+    g_uninstall_missing = 0;
     g_settle_removes[0] = 0;
 }
 
@@ -428,6 +431,40 @@ int main(void) {
         CHECK(rename(q, p) == 0);
     }
     printf("✓ clear refuses with an update or add-on in place, an unreadable database, no copy aside; a refusal is named\n");
+
+    /* No Sony uninstall to call: said as such on every later answer (never "clearing": nothing is
+     * being removed), the wait for the folder to settle kept for what the user removes on the PS5,
+     * and a later clear tries the uninstall again. */
+    fresh();
+    CHECK(run("prepare", ID, 0) > 0 && says("prepared"));
+    put_file(PKG, FAKE, sizeof FAKE, 4000);
+    g_appdb = 1;
+    g_uninstall_missing = 1;
+    CHECK(run("clear", ID, 0) > 0 && says("\"reason\":\"uninstall_unavailable\"") && !says("cleared"));
+    CHECK(g_uninstalls == 1 && has(ASIDE "/app.pkg") && has(REC));
+    CHECK(run("finish", ID, TITLE_RESTORE_ROLLBACK) > 0 && says("\"reason\":\"uninstall_unavailable\""));
+    CHECK(run("finish", ID, 0) > 0 && says("\"reason\":\"uninstall_unavailable\""));
+    CHECK(run("clear", ID, 0) > 0 && says("\"reason\":\"uninstall_unavailable\"") && g_uninstalls == 2);
+    /* the user deletes the failed download on the PS5; the console is still emptying the folder */
+    rm(PKG);
+    g_appdb = 0;
+    put_file("/mnt/ext1/user/app/" ID "/leftover.bin", FAKE, sizeof FAKE, 8);
+    snprintf(g_settle_removes, sizeof g_settle_removes, "/mnt/ext1/user/app/" ID "/leftover.bin");
+    CHECK(run("finish", ID, TITLE_RESTORE_ROLLBACK) > 0 && says("\"reason\":\"uninstall_unavailable\"") &&
+          has(ASIDE "/app.pkg"));
+    CHECK(run("finish", ID, TITLE_RESTORE_ROLLBACK) > 0 && says("\"state\":\"rolled_back\""));
+    CHECK(size_of(PKG) == 4096 && !has(ASIDE));
+    /* and when the uninstall is there again, the next clear runs it */
+    fresh();
+    CHECK(run("prepare", ID, 0) > 0 && says("prepared"));
+    put_file(PKG, FAKE, sizeof FAKE, 4000);
+    g_appdb = 1;
+    g_uninstall_missing = 1;
+    CHECK(run("clear", ID, 0) > 0 && says("\"reason\":\"uninstall_unavailable\""));
+    g_uninstall_missing = 0;
+    CHECK(run("clear", ID, 0) > 0 && says("\"state\":\"rolled_back\"") && says("\"cleared\":true"));
+    CHECK(g_uninstalls == 2 && size_of(PKG) == 4096 && !has(ASIDE));
+    printf("✓ clear with no Sony uninstall says so on every answer, still waits for the folder, and tries again\n");
 
     /* an install the console refused outright left nothing: no uninstall, a plain rollback */
     fresh();
