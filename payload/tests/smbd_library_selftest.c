@@ -517,6 +517,32 @@ int main(void) {
         CHECK(sh.opens == 3);
         CHECK(strstr(g_log, "4 images, 3 read, 1 from the last scan, 0 not read") != NULL);
         CHECK(count_icons("share2-") == 2);
+
+        /* A refusal an older image reader wrote is read once more by this one (it may read it
+         * now); the images that were read stay from the cache whatever reader read them. */
+        j = slurp(share_json);
+        CHECK(j && strstr(j, "\"reader\":1"));
+        if (j) {
+            char *r;
+            FILE *f;
+            while ((r = strstr(j, "\"reader\":1")) != NULL) r[9] = '0';
+            f = fopen(share_json, "wb");
+            CHECK(f != NULL);
+            if (f) {
+                fputs(j, f);
+                fclose(f);
+            }
+            free(j);
+        }
+        sh.opens = 0;
+        memset(&pr, 0, sizeof pr);
+        CHECK(lib_scan(&share, "share2", "Lib", NULL, g_out, NULL, &pr) == 0);
+        CHECK(sh.opens == 2); /* the refused .ffpfsc, and the Latin title read every time */
+        CHECK(strstr(g_log, "4 images, 1 read, 2 from the last scan, 1 not read") != NULL);
+        sh.opens = 0;
+        memset(&pr, 0, sizeof pr);
+        CHECK(lib_scan(&share, "share2", "Lib", NULL, g_out, NULL, &pr) == 0);
+        CHECK(sh.opens == 1); /* the refusal is this reader's now */
     }
 
     /* a bad source id is refused before anything is read */

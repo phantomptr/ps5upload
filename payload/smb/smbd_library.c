@@ -238,7 +238,7 @@ static void put_item(scan_t *s, const char *kind, const char *path, const char *
     sj_kv_str(b, 1, "icon", icon);
     if (meta) {
         sj_kv_str(b, 1, "meta", meta);
-        sj_fmt(b, ",\"mtime\":%llu", (unsigned long long)mtime);
+        sj_fmt(b, ",\"mtime\":%llu,\"reader\":%u", (unsigned long long)mtime, (unsigned)IMG_READER_VERSION);
     }
     sj_raw(b, "}");
     s->nitems++;
@@ -313,9 +313,17 @@ static int cached_icon(const char *o, size_t len) {
     return sj_str(o, len, "icon", icon, sizeof icon) == 1 && icon[0];
 }
 
+/* 1 when a cached refusal came from this image reader (IMG_READER_VERSION). A newer reader may
+ * read what an older one refused (a layout it now takes): such an image is read once more, and the
+ * answer is kept under the new version. A read image is kept whatever reader read it. */
+static int cached_by_this_reader(const char *o, size_t len) {
+    uint64_t v = 0;
+    return sj_u64(o, len, "reader", &v) == 1 && v == IMG_READER_VERSION;
+}
+
 /* The images of this source's last result a rescan may take as they are: read ("read") with
- * its cover, or refused for good (any cause but a failed read or memory), with a size and an
- * mtime. */
+ * its cover, or refused for good (any cause but a failed read or memory) by this reader, with a
+ * size and an mtime. */
 static void load_cache(scan_t *s) {
     char *path = malloc(SMBP_PATH_MAX + 64), *buf = NULL, *ipath = NULL, *tok = NULL;
     FILE *f = NULL;
@@ -347,7 +355,7 @@ static void load_cache(scan_t *s) {
         if (sj_str(o, len, "kind", tok, 64) == 1 && !strcmp(tok, "image") && sj_str(o, len, "path", ipath, SMBP_PATH_MAX) == 1 &&
             sj_u64(o, len, "size", &size) == 1 && sj_u64(o, len, "mtime", &mtime) == 1 && mtime &&
             sj_str(o, len, "meta", tok, 64) == 1 && strcmp(tok, "img_read") != 0 && strcmp(tok, "img_no_memory") != 0 &&
-            (strcmp(tok, "read") != 0 || cached_icon(o, len))) {
+            (strcmp(tok, "read") == 0 ? cached_icon(o, len) : cached_by_this_reader(o, len))) {
             cent_t *c;
             if (s->ncache == cap) {
                 size_t nc = cap ? cap * 2 : 64;
