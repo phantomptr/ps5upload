@@ -7,6 +7,13 @@ What's new in ps5upload, written for humans.
 ## Unreleased
 
 **Play Together**
+- **Your Play Together switches are kept for next time.** Block PS & Create, "A friend can play as me on Player 1", the number of players and the other host switches are saved, also across restarts, instead of going back to their defaults.
+- **Turning the phone sideways goes full screen in a browser**, on the friend's page and the controller page, as it already did in the app. On an Android phone the browser's bars go away; on an iPhone the page folds Safari's bars away as far as iOS allows (for the whole screen there, add the page to the Home Screen).
+- Each PS press a friend makes after picking a user is noted in the log, saying whether it went to the PS5, so "PS does nothing" can be traced.
+
+## 12.6.40
+
+**Play Together**
 - **Full screen on an iPhone or iPad.** iOS browsers can't put a web page in full screen, so the guest page and the controller page hid their Full screen button there. It's back: it fills the page with the game, and the first time it explains how to get the whole screen (add the page to your Home Screen and open it from there; it rejoins the same game).
 
 ## 12.6.39
