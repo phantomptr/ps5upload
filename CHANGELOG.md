@@ -6,6 +6,30 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**TV mode (#976)**
+- **A Remote Play-first screen for TVs.** On Android TV and Google TV the app opens in TV mode: your console as one large card with **Play** (it wakes the console if it's resting) or **Resume**, the essential picture, sound and controller settings, and remote access through Tailscale. Everything works with a TV remote or controller, with large buttons and a clear highlight, and Back goes where you expect. Transfers, installs, files and tools are one press away under **Full app**. Settings › App › General turns TV mode on for any device.
+
+**Files**
+- **Folder sizes, without scanning in the background (#974).** A folder shows its size when it's already known (for example "48.2 GiB · 2 days ago"), from "What takes space?", clean-up scans or an earlier measure. **Measure size** (a folder's menu) and **Measure everything here** measure on request, one folder at a time, pausing while anything else runs on that console; a packed game shows the space it really takes. A size is forgotten when PS5Upload changes something inside the folder. "Keep folder sizes fresh" (off by default) re-measures folders you open, at most once a day.
+- Going back in the second pane of the two-pane view highlights the folder you came from, as the PS5 side already did.
+
+**Games**
+- **"Something wrong?" on the game page** checks the usual reasons a game won't show or start, in order: kstuff for fake packages, the mount layer, the package size limit, missing from the home screen, file permissions and free space. Each says OK, problem or can't tell, with what to do.
+- **Fake packages on firmware 11.61 to 13.60:** the install screen says they need the latest kstuff (fake-package support up to 13.60), and a launch that fails (CE-100022-5) says the same.
+- Game folders made by Convert on the PS5 can be read and started by the console.
+
+**Save backups**
+- Network-share backups run every 10 minutes, 30 minutes, 1 hour, 6 hours or once a day (and after a game closes, as before).
+- The PS5's internal storage can hold an extra copy too; a console reset wipes it, so the computer or network copy stays the safe one.
+
+**Bug reports**
+- The GitHub report no longer claims a zip is attached: the app shows where it saved the zip, with **Show in folder**, and the issue form has a box to drag it into.
+
+**Help**
+- The FAQ covers installing from a laptop over a direct Ethernet cable.
+
+## 12.6.43
+
 **Install from archives**
 - **Choose what to install or unpack from an archive (#969).** When a .zip, .7z, .rar or tar holds several packages or folders (a game, its update and add-ons), "Choose files…" lists what's inside with checkboxes; only what you tick is installed, uploaded or unpacked. Packages inside a .zip show their game, version and type first. Extract on the PS5 (in the app and on the console's own page) can leave out top-level items the same way.
 
