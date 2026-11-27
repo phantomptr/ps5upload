@@ -3795,15 +3795,17 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
 /// loopback name: a re-pointed name, DNS rebinding, carries its own) and the peers
 /// `PS5UPLOAD_ALLOW_IP` admits (the web UI of an engine on a NAS or in Docker, reached from a
 /// browser on the LAN: loopback_guard in lib.rs let only those through, as for every other API).
-fn host_allowed(peer: IpAddr, headers: &HeaderMap) -> bool {
-    !peer.is_loopback()
-        || crate::vinput_api::host_is_local(headers)
-        // A reverse proxy on this computer, under the name its operator listed.
-        || crate::host_guard::host_named_by_operator(headers)
+fn host_allowed(peer: IpAddr, headers: &HeaderMap, allow: &[crate::AllowRule]) -> bool {
+    crate::host_guard::local_or_admitted(peer, headers, allow)
 }
 
 fn guard(peer: &std::net::SocketAddr, headers: &HeaderMap) -> Option<Response> {
-    (!host_allowed(peer.ip(), headers)).then(crate::vinput_api::host_not_local)
+    (!host_allowed(
+        peer.ip(),
+        headers,
+        crate::pkg_install::parse_allow_ips_env(),
+    ))
+    .then(crate::vinput_api::host_not_local)
 }
 
 /// What the host's request says about how guests reach this engine.
@@ -5966,12 +5968,22 @@ mod tests {
         };
         let lo: IpAddr = "127.0.0.1".parse().unwrap();
         let lan: IpAddr = "192.168.1.20".parse().unwrap();
-        assert!(host_allowed(lo, &h("127.0.0.1:19113")));
-        assert!(host_allowed(lo, &h("localhost:19113")));
+        let allow = crate::parse_allow_ips("192.168.1.0/24");
+        assert!(host_allowed(lo, &h("127.0.0.1:19113"), &allow));
+        assert!(host_allowed(lo, &h("localhost:19113"), &allow));
         // a re-pointed name reaching loopback (DNS rebinding) is refused
-        assert!(!host_allowed(lo, &h("evil.example:19113")));
-        // a peer loopback_guard admitted (PS5UPLOAD_ALLOW_IP: the web UI on a NAS)
-        assert!(host_allowed(lan, &h("nas.local:19113")));
+        assert!(!host_allowed(lo, &h("evil.example:19113"), &allow));
+        // a peer PS5UPLOAD_ALLOW_IP admits (the web UI on a NAS)
+        assert!(host_allowed(lan, &h("nas.local:19113"), &allow));
+        // Docker Desktop's host networking: the LAN browser arrives from 127.0.0.1, by the
+        // engine's admitted LAN address
+        assert!(host_allowed(lo, &h("192.168.1.5:19113"), &allow));
+        // a peer it does not admit
+        assert!(!host_allowed(
+            "10.9.9.9".parse().unwrap(),
+            &h("nas.local:19113"),
+            &allow
+        ));
         // and its name is where guests are sent first
         let (port, web) = reach_from(&h("nas.local:19113"));
         assert_eq!(

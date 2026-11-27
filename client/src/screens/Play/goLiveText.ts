@@ -70,6 +70,22 @@ export function problemText(tr: Tr, code: string, fallback: string, site?: strin
       return tr("golive_err_unpack", undefined, "The download could not be unpacked. Try again.");
     case "network":
       return tr("golive_no_engine", undefined, "Can't reach the engine.");
+    // The engine answered, and refused this device: Go live's guard (rp_golive.rs), or the
+    // address guard in front of every route (a plain-text 403 that names the address).
+    case "host_not_local":
+    case "local_only":
+    case "http_403":
+      return tr(
+        "golive_err_not_this_device",
+        undefined,
+        "Go live works only from the computer the engine runs on, or from a device the engine's PS5UPLOAD_ALLOW_IP lets in.",
+      );
+    case "host_not_allowed":
+      return tr(
+        "golive_err_host_name",
+        undefined,
+        "The engine doesn't answer to the name in this page's address. Open the page by the engine's IP address, or set PS5UPLOAD_ALLOW_HOST on the engine to this name.",
+      );
     case "play_ended":
       return tr("golive_err_play_ended", undefined, "Remote Play stopped, so the stream ended.");
     case "no_session":
@@ -90,6 +106,15 @@ export function problemText(tr: Tr, code: string, fallback: string, site?: strin
       return http ? tr("golive_err_http", { status: http[1] }, `The engine refused that (HTTP ${http[1]}). Try again.`) : fallback;
     }
   }
+}
+
+/** Why the panel could not load Go live's status. "Can't reach the engine" is for a request that
+ *  got no answer at all: an engine that answered and refused says why. */
+export function loadErrorText(tr: Tr, code: string): string {
+  if (code === "http_404") {
+    return tr("golive_old_engine", undefined, "This engine can't go live: update PS5Upload on the computer it runs on.");
+  }
+  return problemText(tr, code, tr("golive_err_load_code", { code }, `The engine couldn't open Go live (${code}).`));
 }
 
 /** The run's error when it just failed: it was live a moment ago. A failure seen for the first time

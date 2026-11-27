@@ -1043,13 +1043,20 @@ fn resolve(ids: &[String]) -> Result<Vec<Dest>, (StatusCode, &'static str, Strin
 /// Go live answers this computer (a loopback peer, which must also address it by a loopback
 /// name: a page whose name was re-pointed at 127.0.0.1, DNS rebinding, carries its own and could
 /// otherwise send this computer's screen to its own server) and the peers the LAN guard admits
-/// (`PS5UPLOAD_ALLOW_IP`: the web UI of an engine on a NAS or in Docker). The same rule as
-/// Play Together's host API (join.rs).
+/// (`PS5UPLOAD_ALLOW_IP`: the web UI of an engine on a NAS or in Docker, which already has full
+/// PS5 and file control). The same rule as Play Together's host API (join.rs). Keys stay
+/// write-only either way: only their last four characters are ever sent back.
 fn guard(peer: std::net::IpAddr, headers: &HeaderMap) -> Option<Response> {
-    (peer.is_loopback()
-        && !crate::vinput_api::host_is_local(headers)
-        && !crate::host_guard::host_named_by_operator(headers))
-    .then(crate::vinput_api::host_not_local)
+    guard_with(peer, headers, crate::pkg_install::parse_allow_ips_env())
+}
+
+fn guard_with(
+    peer: std::net::IpAddr,
+    headers: &HeaderMap,
+    allow: &[crate::AllowRule],
+) -> Option<Response> {
+    (!crate::host_guard::local_or_admitted(peer, headers, allow))
+        .then(crate::vinput_api::host_not_local)
 }
 
 /// `POST /api/stream/start`.

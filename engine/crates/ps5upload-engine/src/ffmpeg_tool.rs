@@ -107,7 +107,8 @@ pub(crate) fn this_pin() -> Option<&'static Pin> {
 
 /// The loader a pinned build starts through, where it needs one: the Linux builds link glibc
 /// dynamically. Without it the file unpacks and hashes fine, and then "No such file or directory"
-/// when run: the `FROM scratch` Docker images (they have no libc at all), Alpine.
+/// when run: a `FROM scratch` image with no libc at all, Alpine. Our own Docker images carry the
+/// loader and the few glibc libraries the builds load (engine/Dockerfile's glibc stage).
 fn loader_of(pin: &Pin) -> Option<&'static str> {
     match (pin.os, pin.arch) {
         ("linux", "x86_64") => Some("/lib64/ld-linux-x86-64.so.2"),

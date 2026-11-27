@@ -6,6 +6,13 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Docker and the self-hosted web UI**
+- **Go live works from a phone or another computer.** Opening the web UI from a device the engine lets in (`PS5UPLOAD_ALLOW_IP`), Go live said "Can't reach the engine": Docker Desktop makes every visitor look like the computer itself, so the engine refused them. It now lets in the devices the setting lists, as it does for everything else, and stream keys still never leave the engine. Play Together's host controls had the same problem and work now too.
+- **Go live can run in the Docker image**, on ARM (Apple Silicon, ARM NAS boxes) and x86 alike: the image now carries what the downloaded ffmpeg needs to start, including the certificates for secure stream sites.
+- When Go live is refused, the panel says why instead of "Can't reach the engine".
+
+## 12.6.41
+
 **Play Together**
 - **Your Play Together switches are kept for next time.** Block PS & Create, "A friend can play as me on Player 1", the number of players and the other host switches are saved, also across restarts, instead of going back to their defaults.
 - **Turning the phone sideways goes full screen in a browser**, on the friend's page and the controller page, as it already did in the app. On an Android phone the browser's bars go away; on an iPhone the page folds Safari's bars away as far as iOS allows (for the whole screen there, add the page to the Home Screen).

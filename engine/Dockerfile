@@ -89,6 +89,31 @@ RUN cargo build --locked --release -p ps5upload-engine -p ps5upload-unrar
 # write its state there; its owner is the default runtime user.
 RUN mkdir -p /rootfs/tmp /rootfs-data/data && chmod 1777 /rootfs/tmp /rootfs-data/data
 
+# Go live's ffmpeg (engine/crates/ps5upload-engine/src/ffmpeg_tool.rs) is downloaded at first
+# use, into /data: the pinned BtbN Linux builds, which link glibc dynamically. scratch has no
+# libc, so the download could not run here and Go live said "needs its own ffmpeg". This stage
+# collects only what those builds load from the system (the loader, libc, libm, libdl,
+# libpthread, librt, libgcc_s, and libmvec on x86_64; glibc 2.28 or newer) and the CA bundle
+# their OpenSSL needs for rtmps:// sites. The engine itself is static musl and uses none of it.
+FROM debian:trixie-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0 AS glibc
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && t="$(uname -m)-linux-gnu" \
+ && mkdir -p /rootfs-glibc/lib /rootfs-glibc/etc/ssl/certs \
+ && for f in libc.so.6 libm.so.6 libdl.so.2 libpthread.so.0 librt.so.1 libgcc_s.so.1; do \
+      cp -L "/lib/$t/$f" /rootfs-glibc/lib/; \
+    done \
+ && case "$t" in \
+      aarch64-*) cp -L /lib/ld-linux-aarch64.so.1 /rootfs-glibc/lib/ ;; \
+      x86_64-*) mkdir -p /rootfs-glibc/lib64 && cp -L /lib64/ld-linux-x86-64.so.2 /rootfs-glibc/lib64/ \
+                && cp -L "/lib/$t/libmvec.so.1" /rootfs-glibc/lib/ ;; \
+      *) echo "no pinned ffmpeg build for $t" >&2; exit 1 ;; \
+    esac \
+ && cp -L /etc/ssl/certs/ca-certificates.crt /rootfs-glibc/etc/ssl/certs/ \
+ && mkdir -p /rootfs-glibc/usr/share/doc \
+ && cp -r /usr/share/doc/libc6 /usr/share/doc/libgcc-s1 /rootfs-glibc/usr/share/doc/
+
 FROM scratch
 COPY LICENSE /LICENSE
 COPY --from=builder /build/engine/target/release/ps5upload-engine /ps5upload-engine
@@ -102,6 +127,9 @@ COPY --from=builder /build/engine/target/release/ps5upload-unrar /ps5upload-unra
 # /data/.ps5upload), owned by the runtime user so it is writable.
 COPY --from=builder /rootfs/ /
 COPY --from=builder --chown=65532:65532 /rootfs-data/ /
+# glibc for the downloaded ffmpeg, and the CA bundle (the glibc stage above says why). Its
+# licences are in /usr/share/doc.
+COPY --from=glibc /rootfs-glibc/ /
 ENV HOME=/data TMPDIR=/tmp PS5UPLOAD_DOCKER=1
 # Saved servers (with their encrypted credentials), install history, the
 # artwork cache and the backport library live here. Mount a volume on it so

@@ -88,6 +88,12 @@ if docker logs "$name" 2>&1 | grep -q "Permission denied"; then
 fi
 echo "ok: the engine's home is writable"
 
+# Go live downloads glibc-linked ffmpeg builds: the image carries the loader and libraries they
+# need (the Dockerfiles' glibc stage). Without them the status says supported:false.
+curl -fsS -m 5 "$base/api/stream/status" | grep -q '"supported":true' \
+  || fail "Go live's ffmpeg download can't run in this image (no glibc loader?)"
+echo "ok: Go live's ffmpeg download can run in this image"
+
 if [ "$webui" = "--webui" ]; then
   ctype="$(curl -fsS -m 5 -o /dev/null -w '%{content_type}' "$base/")" || fail "web UI index did not load"
   case "$ctype" in text/html*) ;; *) fail "web UI index served $ctype, not HTML" ;; esac
