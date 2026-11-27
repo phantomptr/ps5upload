@@ -1924,6 +1924,63 @@ pub struct AppUnregisterReq {
     pub registration_only: bool,
 }
 
+/// Restore to home screen (#961): one command for the engine's `/api/ps5/app/restore*` routes.
+/// `op` is `check`, `candidates` or `status` (GET, `addr` and `title_id` in the query), `start`
+/// or `finish` (POST, `req` is the body).
+#[derive(Debug, Deserialize)]
+pub struct AppRestoreReq {
+    pub addr: String,
+    #[serde(default)]
+    pub title_id: Option<String>,
+    #[serde(default)]
+    pub title_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub rollback: bool,
+    #[serde(default)]
+    pub install_ended: bool,
+}
+
+#[tauri::command]
+pub async fn ps5_app_restore(op: String, req: AppRestoreReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let query = |path: &str| {
+        let mut url = format!("{base}{path}?addr={}", urlencoding(&req.addr));
+        if let Some(t) = &req.title_id {
+            url.push_str(&format!("&title_id={}", urlencoding(t)));
+        }
+        url
+    };
+    match op.as_str() {
+        "check" => get_json(&query("/api/ps5/app/restore/check")).await,
+        "candidates" => get_json(&query("/api/ps5/app/restore/candidates")).await,
+        "status" => get_json(&query("/api/ps5/app/restore/status")).await,
+        "start" => {
+            post_json_long(
+                &format!("{base}/api/ps5/app/restore"),
+                &serde_json::json!({
+                    "addr": req.addr,
+                    "title_id": req.title_id,
+                    "title_ids": req.title_ids,
+                }),
+            )
+            .await
+        }
+        "finish" => {
+            post_json(
+                &format!("{base}/api/ps5/app/restore/finish"),
+                &serde_json::json!({
+                    "addr": req.addr,
+                    "title_id": req.title_id,
+                    "rollback": req.rollback,
+                    "install_ended": req.install_ended,
+                }),
+            )
+            .await
+        }
+        other => Err(format!("unknown restore step {other:?}")),
+    }
+}
+
 #[tauri::command]
 pub async fn ps5_app_unregister(req: AppUnregisterReq) -> Result<JsonValue, String> {
     let base = engine::url();

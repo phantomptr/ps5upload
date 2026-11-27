@@ -474,6 +474,7 @@ pub fn run() {
             commands::ps5_app_launch,
             commands::ps5_app_register,
             commands::ps5_app_unregister,
+            commands::ps5_app_restore,
             commands::fpkg_inspect,
             commands::game_inspect,
             commands::game_inspect_image,

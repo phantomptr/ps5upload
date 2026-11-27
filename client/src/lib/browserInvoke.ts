@@ -550,6 +550,42 @@ export async function browserInvoke<T>(
       );
     }
 
+    // Restore to home screen (#961): the same routes the desktop command calls.
+    case "ps5_app_restore": {
+      const op = args["op"] as string;
+      const req = args["req"] as {
+        addr: string;
+        title_id?: string | null;
+        title_ids?: string[] | null;
+        rollback?: boolean;
+        install_ended?: boolean;
+      };
+      const q = `?addr=${uenc(req.addr)}${req.title_id ? `&title_id=${uenc(req.title_id)}` : ""}`;
+      switch (op) {
+        case "check":
+          return getJson<T>(`/api/ps5/app/restore/check${q}`);
+        case "candidates":
+          return getJson<T>(`/api/ps5/app/restore/candidates${q}`);
+        case "status":
+          return getJson<T>(`/api/ps5/app/restore/status${q}`);
+        case "start":
+          return postJson<T>(
+            "/api/ps5/app/restore",
+            { addr: req.addr, title_id: req.title_id ?? null, title_ids: req.title_ids ?? null },
+            /*long=*/ true,
+          );
+        case "finish":
+          return postJson<T>("/api/ps5/app/restore/finish", {
+            addr: req.addr,
+            title_id: req.title_id,
+            rollback: req.rollback === true,
+            install_ended: req.install_ended === true,
+          });
+        default:
+          throw new Error(`unknown restore step ${op}`);
+      }
+    }
+
     case "ps5_app_unregister": {
       // registration_only as the desktop command forwards it: without it the engine runs a
       // full uninstall, and a console-installed game sharing the title id is not protected.
