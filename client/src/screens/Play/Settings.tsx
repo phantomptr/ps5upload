@@ -83,6 +83,37 @@ function KeyRemap({
   );
 }
 
+/** Sharpening and upscaling (Settings › Picture, and TV mode's Play settings). */
+export function EnhanceSetting() {
+  const tr = useTr();
+  const pic = useRemotePlayStore((s) => s.prefs.picture);
+  const setPrefs = useRemotePlayStore((s) => s.setPrefs);
+  return (
+    <div className="space-y-1">
+      <Select
+        label={tr("rp_picture_enhance", undefined, "Sharpening and upscaling")}
+        block={false}
+        className="w-64"
+        value={pic.enhance}
+        onChange={(e) => setPrefs({ picture: { ...pic, enhance: e.target.value as Enhance } })}
+        data-testid="rp-picture-enhance"
+        options={[
+          { value: "off", label: tr("rp_picture_enhance_off", undefined, "Off") },
+          { value: "sharpen", label: tr("rp_picture_enhance_sharpen", undefined, "Sharpen (AMD FidelityFX RCAS)") },
+          { value: "fsr", label: tr("rp_picture_enhance_fsr", undefined, "Upscale to the screen (AMD FSR 1)") },
+        ]}
+      />
+      <p className="text-xs text-[var(--color-muted)]">
+        {tr(
+          "rp_picture_enhance_hint",
+          undefined,
+          "Done on the graphics card, on any GPU. Sharpen makes the picture crisper. Upscale also brings it up to your screen's own resolution: best on a big or 4K screen. Off with Sharp pixels.",
+        )}
+      </p>
+    </div>
+  );
+}
+
 /** Settings › Picture: sharpening and upscaling, colour, a 21:9 crop and sharp pixels
  *  (lib/rpPicture.ts). They apply at once; with all of them off the picture is drawn exactly as
  *  the console sends it. */
@@ -111,28 +142,7 @@ function PictureToolsSetting() {
   return (
     <fieldset className="space-y-2" data-testid="rp-picture">
       <legend className="mb-1 text-sm font-semibold">{tr("rp_picture_tools", undefined, "Picture tools")}</legend>
-      <div className="space-y-1">
-        <Select
-          label={tr("rp_picture_enhance", undefined, "Sharpening and upscaling")}
-          block={false}
-          className="w-64"
-          value={pic.enhance}
-          onChange={(e) => set({ enhance: e.target.value as Enhance })}
-          data-testid="rp-picture-enhance"
-          options={[
-            { value: "off", label: tr("rp_picture_enhance_off", undefined, "Off") },
-            { value: "sharpen", label: tr("rp_picture_enhance_sharpen", undefined, "Sharpen (AMD FidelityFX RCAS)") },
-            { value: "fsr", label: tr("rp_picture_enhance_fsr", undefined, "Upscale to the screen (AMD FSR 1)") },
-          ]}
-        />
-        <p className="text-xs text-[var(--color-muted)]">
-          {tr(
-            "rp_picture_enhance_hint",
-            undefined,
-            "Done on the graphics card, on any GPU. Sharpen makes the picture crisper. Upscale also brings it up to your screen's own resolution: best on a big or 4K screen. Off with Sharp pixels.",
-          )}
-        </p>
-      </div>
+      <EnhanceSetting />
       {pic.enhance !== "off" && slider("sharpen", tr("rp_picture_sharpen", undefined, "Sharpen"), 0)}
       {slider("brightness", tr("rp_picture_brightness", undefined, "Brightness"), -50)}
       {slider("contrast", tr("rp_picture_contrast", undefined, "Contrast"), -50)}
@@ -319,6 +329,131 @@ function DualSenseBlockedNote() {
   );
 }
 
+/** Picture size and frame rate, side by side (Settings › Picture, TV mode's Play settings). */
+export function ResFpsSetting({ running }: { running: boolean }) {
+  const tr = useTr();
+  const res = useRemotePlayStore((s) => s.prefs.res);
+  const fps = useRemotePlayStore((s) => s.prefs.fps);
+  const setPrefs = useRemotePlayStore((s) => s.setPrefs);
+  const later = running ? tr("rp_set_applies_next", undefined, "Applies when you start again") : undefined;
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <Select
+        label={tr("rp_quality", undefined, "Picture")}
+        value={res}
+        hint={later}
+        onChange={(e) => setPrefs({ res: e.target.value as RpPrefs["res"] })}
+        data-testid="rp-res"
+        options={[
+          { value: "1920x1080", label: "1080p" },
+          { value: "1280x720", label: "720p" },
+        ]}
+      />
+      <Select
+        label={tr("rp_fps", undefined, "Frame rate")}
+        value={String(fps)}
+        hint={later}
+        onChange={(e) => setPrefs({ fps: Number(e.target.value) as RpPrefs["fps"] })}
+        data-testid="rp-fps"
+        options={[
+          { value: "60", label: tr("rp_fps_60", undefined, "60 fps (smooth)") },
+          { value: "30", label: tr("rp_fps_30", undefined, "30 fps (light network)") },
+        ]}
+      />
+    </div>
+  );
+}
+
+/** The video bitrate asked of the console, and what it sends while streaming. */
+export function BitrateSetting() {
+  const tr = useTr();
+  const bitrateKbps = useRemotePlayStore((s) => s.prefs.bitrateKbps);
+  const setPrefs = useRemotePlayStore((s) => s.setPrefs);
+  return (
+    <>
+      <Select
+        label={tr("rp_bitrate", undefined, "Bitrate")}
+        value={String(bitrateKbps)}
+        hint={tr(
+          "rp_bitrate_hint",
+          undefined,
+          "Lower uses less network. Going live sends this on as it is: Twitch takes up to 6 Mbps, Kick 8. Applies the next time you start.",
+        )}
+        onChange={(e) => setPrefs({ bitrateKbps: Number(e.target.value) })}
+        data-testid="rp-bitrate"
+        options={RP_BITRATES.map((b) => ({
+          value: String(b),
+          label: b
+            ? `${b / 1000} Mbps`
+            : tr("rp_bitrate_auto", undefined, "Auto (15 Mbps at 1080p)"),
+        }))}
+      />
+      <BitrateNote chosenKbps={bitrateKbps} />
+    </>
+  );
+}
+
+/** The sound buffer and the volume (Settings › Sound, TV mode's Play settings). */
+export function SoundSetting() {
+  const tr = useTr();
+  const audioBufferMs = useRemotePlayStore((s) => s.prefs.audioBufferMs);
+  const volume = useRemotePlayStore((s) => s.prefs.volume);
+  const setPrefs = useRemotePlayStore((s) => s.setPrefs);
+  return (
+    <>
+      <Select
+        label={tr("rp_audio_buffer", undefined, "Sound buffer")}
+        value={String(audioBufferMs)}
+        onChange={(e) => setPrefs({ audioBufferMs: Number(e.target.value) })}
+        data-testid="rp-audio-buffer"
+        options={[
+          { value: "40", label: tr("rp_audio_low", undefined, "Lowest delay (40 ms)") },
+          { value: "60", label: tr("rp_audio_normal", undefined, "Balanced (60 ms)") },
+          { value: "120", label: tr("rp_audio_stable", undefined, "Steady on Wi-Fi (120 ms)") },
+        ]}
+      />
+      <Hint>
+        {tr(
+          "rp_audio_hint",
+          undefined,
+          "Crackles or gaps on a busy network: choose Steady. On a wired network Lowest delay is best.",
+        )}
+      </Hint>
+      <label className="flex flex-col gap-1 text-xs font-medium">
+        {tr("rp_volume", undefined, "Volume")}
+        <input
+          type="range"
+          min={0}
+          max={100}
+          value={Math.round(volume * 100)}
+          onChange={(e) => setPrefs({ volume: Number(e.target.value) / 100, muted: false })}
+          className="accent-[var(--color-accent)]"
+          data-testid="rp-volume"
+        />
+      </label>
+    </>
+  );
+}
+
+/** Controller vibration, and why it can't be when the controller has no way to. */
+export function RumbleSetting() {
+  const tr = useTr();
+  const rumble = useRemotePlayStore((s) => s.prefs.rumble);
+  const setPrefs = useRemotePlayStore((s) => s.setPrefs);
+  return (
+    <Toggle
+      checked={rumble}
+      onChange={(v) => setPrefs({ rumble: v })}
+      label={tr("rp_rumble", undefined, "Controller vibration")}
+      hint={
+        padsCannotVibrate()
+          ? tr("rp_rumble_none", undefined, "This controller can't vibrate here: this app reads it without the browser, which has no way to reach its motors.")
+          : undefined
+      }
+    />
+  );
+}
+
 export function SettingsBody({ tab, running }: { tab: SettingsTab; running: boolean }) {
   const tr = useTr();
   const prefs = useRemotePlayStore((s) => s.prefs);
@@ -335,30 +470,7 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
       <div className="space-y-6">
         <CaptureSetting running={running} />
         <Section>
-          <div className="grid grid-cols-2 gap-3">
-            <Select
-              label={tr("rp_quality", undefined, "Picture")}
-              value={prefs.res}
-              hint={later}
-              onChange={(e) => setPrefs({ res: e.target.value as RpPrefs["res"] })}
-              data-testid="rp-res"
-              options={[
-                { value: "1920x1080", label: "1080p" },
-                { value: "1280x720", label: "720p" },
-              ]}
-            />
-            <Select
-              label={tr("rp_fps", undefined, "Frame rate")}
-              value={String(prefs.fps)}
-              hint={later}
-              onChange={(e) => setPrefs({ fps: num(e.target.value) as RpPrefs["fps"] })}
-              data-testid="rp-fps"
-              options={[
-                { value: "60", label: tr("rp_fps_60", undefined, "60 fps (smooth)") },
-                { value: "30", label: tr("rp_fps_30", undefined, "30 fps (light network)") },
-              ]}
-            />
-          </div>
+          <ResFpsSetting running={running} />
           <Select
             label={tr("rp_fit", undefined, "Picture size")}
             value={prefs.fit}
@@ -402,24 +514,7 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
             ]}
           />
           <HdrNote support={hdr} chosen={prefs.codec === "hdr"} />
-          <Select
-            label={tr("rp_bitrate", undefined, "Bitrate")}
-            value={String(prefs.bitrateKbps)}
-            hint={tr(
-              "rp_bitrate_hint",
-              undefined,
-              "Lower uses less network. Going live sends this on as it is: Twitch takes up to 6 Mbps, Kick 8. Applies the next time you start.",
-            )}
-            onChange={(e) => setPrefs({ bitrateKbps: num(e.target.value) })}
-            data-testid="rp-bitrate"
-            options={RP_BITRATES.map((b) => ({
-              value: String(b),
-              label: b
-                ? `${b / 1000} Mbps`
-                : tr("rp_bitrate_auto", undefined, "Auto (15 Mbps at 1080p)"),
-            }))}
-          />
-          <BitrateNote chosenKbps={prefs.bitrateKbps} />
+          <BitrateSetting />
           <Hint>
             {tr(
               "rp_decoding_hint",
@@ -445,34 +540,7 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
     return (
       <div className="space-y-6">
         <Section>
-          <Select
-            label={tr("rp_audio_buffer", undefined, "Sound buffer")}
-            value={String(prefs.audioBufferMs)}
-            onChange={(e) => setPrefs({ audioBufferMs: num(e.target.value) })}
-            options={[
-              { value: "40", label: tr("rp_audio_low", undefined, "Lowest delay (40 ms)") },
-              { value: "60", label: tr("rp_audio_normal", undefined, "Balanced (60 ms)") },
-              { value: "120", label: tr("rp_audio_stable", undefined, "Steady on Wi-Fi (120 ms)") },
-            ]}
-          />
-          <Hint>
-            {tr(
-              "rp_audio_hint",
-              undefined,
-              "Crackles or gaps on a busy network: choose Steady. On a wired network Lowest delay is best.",
-            )}
-          </Hint>
-          <label className="flex flex-col gap-1 text-xs font-medium">
-            {tr("rp_volume", undefined, "Volume")}
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={Math.round(prefs.volume * 100)}
-              onChange={(e) => setPrefs({ volume: num(e.target.value) / 100, muted: false })}
-              className="accent-[var(--color-accent)]"
-            />
-          </label>
+          <SoundSetting />
         </Section>
         <Section>
           <MicSetting />
@@ -600,16 +668,7 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
           label={tr("rp_capture_pointer", undefined, "Clicking the picture hides the pointer")}
           hint={tr("rp_capture_pointer_hint2", { key: releaseKey }, `${releaseKey} shows it again.`)}
         />
-        <Toggle
-          checked={prefs.rumble}
-          onChange={(v) => setPrefs({ rumble: v })}
-          label={tr("rp_rumble", undefined, "Controller vibration")}
-          hint={
-            padsCannotVibrate()
-              ? tr("rp_rumble_none", undefined, "This controller can't vibrate here: this app reads it without the browser, which has no way to reach its motors.")
-              : undefined
-          }
-        />
+        <RumbleSetting />
         {dualSenseCapable() && (
           <Toggle
             checked={prefs.dualSense}
