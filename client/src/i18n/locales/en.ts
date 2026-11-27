@@ -2869,6 +2869,10 @@ err_unmount_busy:
   "Can't unmount: the game inside this image is currently running on the PS5. Exit it (PS Home → close the game) and try again.",
 err_uninstall_refused:
   "The PS5 refused to uninstall this game ({code}), so it is still installed. Restart the PS5 and try again; if it still refuses, delete it from the PS5's Settings → Storage.",
+err_uninstall_sony_refused:
+  "The PS5 refused to uninstall this game ({code}), so it is still installed. The code comes from the PS5's own uninstall call (sceAppInstUtilAppUnInstall), which shares its error codes with installs: this is not an install problem, and the game's files are fine. Close the game if it is running, restart the PS5 and try again; if it still refuses, delete it from the PS5's Settings → Storage.",
+err_uninstall_unmount_failed:
+  "The game's folder or disk image could not be unmounted, so nothing was uninstalled. Close the game if it is running and try again.",
 err_uninstall_unavailable:
   "This PS5's firmware gives the helper no way to uninstall, and the game is still installed. Delete it from the PS5's Settings → Storage.",
 err_unmount_permission:
@@ -5492,7 +5496,6 @@ cq_opt_pkg: "Package",
 cq_opt_image: "Game image",
 cq_opt_folder: "Folder",
 installed_uninstall_failed: "Couldn't uninstall {name}",
-installed_uninstall_refused: "The PS5 refused to uninstall it ({code}). Close the game if it is running and try again; if it stays, delete it from the PS5's Settings → Storage.",
 installed_hide_failed: "Couldn't hide {name}",
 installed_show_failed: "Couldn't show {name}",
 "fpkg.lz4_saved_nothing": "LZ4 found nothing to compress: this game's files are already compressed by its developer, so the image stays the size of the game. It works as usual.",

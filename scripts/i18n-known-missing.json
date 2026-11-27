@@ -3,6 +3,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -101,6 +103,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -203,6 +207,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -307,6 +313,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -411,6 +419,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -511,6 +521,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -614,6 +626,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -716,6 +730,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -823,6 +839,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -932,6 +950,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -1041,6 +1061,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -1140,6 +1162,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -1241,6 +1265,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -1345,6 +1371,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -1449,6 +1477,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -1552,6 +1582,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -1655,6 +1687,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -1761,6 +1795,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -1866,6 +1902,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
@@ -1965,6 +2003,8 @@
     "missing": [
       "err_launch_not_in_database",
       "err_launch_program_refused",
+      "err_uninstall_sony_refused",
+      "err_uninstall_unmount_failed",
       "fpkg.aboutFake_v3",
       "golive_err_host_name",
       "golive_err_load_code",
