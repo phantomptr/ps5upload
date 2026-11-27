@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import * as storage from "../lib/safeStorage";
-import { DEFAULT_RP_PREFS, LOWEST_AUDIO_BUFFER_MS, audioBufferFor, loadRpPrefs } from "./remotePlay";
+import { DEFAULT_RP_PREFS, LOWEST_AUDIO_BUFFER_MS, audioBufferFor, loadRpPrefs, soundToggle } from "./remotePlay";
 
 describe("audioBufferFor", () => {
   it("is the chosen sound buffer, or the smallest one in low-latency mode", () => {
@@ -72,5 +72,18 @@ describe("loadRpPrefs", () => {
     stored(null);
     expect(loadRpPrefs()).toEqual(DEFAULT_RP_PREFS);
     vi.restoreAllMocks();
+  });
+});
+
+describe("the Mute / Sound on button", () => {
+  it("mutes when sound plays, and brings the sound back when muted", () => {
+    expect(soundToggle({ muted: false, volume: 0.6 })).toEqual({ muted: true });
+    expect(soundToggle({ muted: true, volume: 0.6 })).toEqual({ muted: false, volume: 0.6 });
+  });
+
+  it("at volume 0 (the slider at its end) one press is Sound on, not a second muted state", () => {
+    // The button shows "Sound on" there; flipping only `muted` left it silent for a press.
+    expect(soundToggle({ muted: false, volume: 0 })).toEqual({ muted: false, volume: 1 });
+    expect(soundToggle({ muted: true, volume: 0 })).toEqual({ muted: false, volume: 1 });
   });
 });

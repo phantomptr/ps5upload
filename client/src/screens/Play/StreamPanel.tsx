@@ -53,6 +53,7 @@ import {
 import {
   fetchRunningSession,
   rpInput,
+  soundToggle,
   useRemotePlayStore,
   type RpPrefs,
 } from "../../state/remotePlay";
@@ -1485,7 +1486,7 @@ export function StreamPanel({
                   <BarButton
                     label={muted ? tr("rp_unmute", undefined, "Sound on") : tr("rp_mute", undefined, "Mute")}
                     active={muted}
-                    onClick={() => setPrefs({ muted: !prefs.muted, volume: prefs.volume || 1 })}
+                    onClick={() => setPrefs(soundToggle(prefs))}
                   >
                     {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
                   </BarButton>

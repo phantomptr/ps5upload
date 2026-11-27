@@ -4,7 +4,7 @@ import { Volume2, VolumeX, X } from "lucide-react";
 
 import { Spinner } from "../components";
 import { useTr } from "../state/lang";
-import { useRemotePlayStore } from "../state/remotePlay";
+import { soundToggle, useRemotePlayStore } from "../state/remotePlay";
 import { installAndroidPip, useAndroidPipStore } from "../lib/androidPip";
 import {
   DRAG_SLOP_PX,
@@ -183,7 +183,7 @@ export function RemotePlayMini() {
           {...own}
           onClick={(e) => {
             e.stopPropagation();
-            setPrefs({ muted: !prefs.muted, volume: prefs.volume || 1 });
+            setPrefs(soundToggle(prefs));
           }}
           aria-label={muted ? tr("rp_unmute", undefined, "Sound on") : tr("rp_mute", undefined, "Mute")}
           title={muted ? tr("rp_unmute", undefined, "Sound on") : tr("rp_mute", undefined, "Mute")}
