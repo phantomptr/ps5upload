@@ -121,6 +121,15 @@ export function PackageFitLine({ fit, onMakeImage }: { fit: PackageFit; onMakeIm
           )}
         </div>
       )}
+      {fit.fw550Miss && (
+        <div className="text-[var(--color-muted)]" data-testid="package-fit-older">
+          {tr(
+            "fpkg.sizeOlderFirmware550",
+            { size: vars.used },
+            "At {size} GiB it opens on FW 7.xx and later, but not on FW 5.50 to 6.xx, which open fake packages up to 242.6 GiB.",
+          )}
+        </div>
+      )}
       {index}
     </div>
   );

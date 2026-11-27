@@ -114,6 +114,9 @@ export interface PackageFit {
   fits: boolean;
   /** No console known, and it is past what 7.xx to 12.xx open (256 GiB). */
   olderMiss: boolean;
+  /** No console known, and it is past what 5.50 to 6.xx open (242.55 GiB) but within 256 GiB:
+   *  only that line misses it. */
+  fw550Miss: boolean;
   /** The layout index estimate, when the inspection carries what it needs. */
   layoutIndex: number | null;
 }
@@ -151,6 +154,7 @@ export function packageFit(opts: {
     limit,
     fits,
     olderMiss: basis === "assumed" && fits && opts.size > 256 * GIB,
+    fw550Miss: basis === "assumed" && fits && opts.size > FW550_CAP && opts.size <= 256 * GIB,
     layoutIndex: opts.layoutIndexFixed ? opts.layoutIndexFixed + 8 * Math.ceil(opts.size / 65536) : null,
   };
 }
