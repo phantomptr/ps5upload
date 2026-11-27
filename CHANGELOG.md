@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.37
 
 **Activity**
 - **An upload still going after you closed the page shows as running when you come back (#954).** The upload itself always carried on, but Activity listed it as "Interrupted" next to a second, running copy. It now picks up the same entry.
