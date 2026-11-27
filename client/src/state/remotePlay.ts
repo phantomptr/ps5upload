@@ -22,7 +22,7 @@ import {
   type PasscodeAsk,
 } from "../lib/remotePlayStream";
 import { gamepadsOf } from "../lib/nativePad";
-import { padKind, profileFor } from "../lib/padProfiles";
+import { deadzonesFor, padKind, profileFor } from "../lib/padProfiles";
 import { describePads, padActive, padFromMessage, type PadInput } from "../lib/padFrom";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { discardBody } from "../lib/discardBody";
@@ -356,7 +356,7 @@ function readPad(): PadState {
   // the window in front).
   const pip = !!s.pipWindow && !s.pipWindow.closed;
   const live = !rpInput.mapping && (pip || (s.onScreen && typeof document !== "undefined" && document.hasFocus()));
-  const read = live ? padFromGamepads(rpGamepads(), profileFor) : IDLE_PAD;
+  const read = live ? padFromGamepads(rpGamepads(), profileFor, deadzonesFor) : IDLE_PAD;
   // A DualSense's touchpad, which the Gamepad API never gives (lib/padTouchpad.ts): the same
   // rule as its buttons, and the click is the touchpad button whatever the browser reports.
   const pt = live ? padTouchState() : null;
