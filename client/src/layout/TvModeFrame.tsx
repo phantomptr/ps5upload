@@ -11,16 +11,40 @@ import { canLeaveApp } from "../lib/tvNav";
 import { useTr } from "../state/lang";
 import { isTvRoute, useTvMode, useTvModeStore, useTvModeWanted } from "../state/tvMode";
 
-/** Whether a key press is Back in TV mode's frame: a plain Esc that nothing used, with no dialog
- *  open when it came (that closes on it by itself), and not on the game's picture (Esc is a
- *  button of the game there). */
-export function escapeGoesBack(
-  e: Pick<KeyboardEvent, "key" | "defaultPrevented" | "altKey" | "ctrlKey" | "metaKey" | "shiftKey" | "target">,
-  dialogOpen: boolean,
-): boolean {
+type EscKey = Pick<KeyboardEvent, "key" | "defaultPrevented" | "altKey" | "ctrlKey" | "metaKey" | "shiftKey" | "target">;
+
+/** Inputs that take no typing: Esc on them is Back as anywhere else. */
+const NOT_TYPED = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "color", "file", "image", "hidden"]);
+
+/** A field being typed in (a text box, a text area, an editable element). */
+export function isTextField(target: EventTarget | null): boolean {
+  const el = target as { tagName?: unknown; type?: unknown; isContentEditable?: unknown } | null;
+  if (!el || typeof el.tagName !== "string") return false;
+  if (el.isContentEditable === true) return true;
+  const tag = el.tagName.toUpperCase();
+  if (tag === "TEXTAREA") return true;
+  return tag === "INPUT" && !NOT_TYPED.has(String(el.type || "text").toLowerCase());
+}
+
+/** A plain Esc that nothing used, with no dialog open when it came (that closes on it by itself). */
+function plainEscape(e: EscKey, dialogOpen: boolean): boolean {
   if (e.key !== "Escape" || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return false;
-  if (dialogOpen) return false;
+  return !dialogOpen;
+}
+
+/** Whether a key press is Back in TV mode's frame: a plain Esc that nothing used, with no dialog
+ *  open when it came (that closes on it by itself), not in a field being typed in (it leaves the
+ *  field first, {@link escapeLeavesField}), and not on the game's picture (Esc is a button of the
+ *  game there). */
+export function escapeGoesBack(e: EscKey, dialogOpen: boolean): boolean {
+  if (!plainEscape(e, dialogOpen) || isTextField(e.target)) return false;
   return !(e.target as Element | null)?.closest?.("[data-own-arrows]");
+}
+
+/** Whether Esc only leaves the field being typed in (Join a friend's code, say): what was typed
+ *  stays, the screen stays, and the next Esc is Back. */
+export function escapeLeavesField(e: EscKey, dialogOpen: boolean): boolean {
+  return plainEscape(e, dialogOpen) && isTextField(e.target);
 }
 
 /** Whether the shell shows TV mode's plain frame now. Marks the page for the arrows
@@ -53,7 +77,14 @@ export function useTvFrame(): boolean {
       if (e.key === "Escape" && openModalCount() > 0) dialogKeys.add(e);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (!escapeGoesBack(e, dialogKeys.has(e) || openModalCount() > 0)) return;
+      const dialogOpen = dialogKeys.has(e) || openModalCount() > 0;
+      if (escapeLeavesField(e, dialogOpen)) {
+        // Out of the field, what was typed kept; the next Esc is Back.
+        e.preventDefault();
+        (e.target as HTMLElement).blur?.();
+        return;
+      }
+      if (!escapeGoesBack(e, dialogOpen)) return;
       e.preventDefault();
       // No step of the screen's own: TV mode's home, the screen all others come from.
       if (!takeBackStep() && where.current !== "/tv") navigate("/tv", { replace: true });

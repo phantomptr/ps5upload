@@ -231,6 +231,14 @@ test("on a computer: the switch in Settings, arrows and Esc, and off again", asy
   // Join a friend's game, then Esc is Back: home again.
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("join-a-friend")).toBeVisible();
+  // Esc in a field leaves the field (what was typed stays), not the screen.
+  const code = page.locator('[data-testid="join-code"]:visible');
+  await code.click();
+  await page.keyboard.type("ABCD");
+  await page.keyboard.press("Escape");
+  await expect(code).not.toBeFocused();
+  await expect(code).toHaveValue(/ABCD/i);
+  await expect(page).toHaveURL(/\/play/);
   await page.keyboard.press("Escape");
   await expect(page).toHaveURL(/\/tv$/);
 

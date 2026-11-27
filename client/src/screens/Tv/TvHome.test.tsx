@@ -3,7 +3,7 @@ import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { leaveAfterAsking, tvCardState, tvFocusTarget, tvPrimary } from "./tvCard";
-import { escapeGoesBack } from "../../layout/TvModeFrame";
+import { escapeGoesBack, escapeLeavesField, isTextField } from "../../layout/TvModeFrame";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("../../state/lang", async (orig) => ({
@@ -184,5 +184,38 @@ describe("Back in TV mode", () => {
     expect(escapeGoesBack(key({ shiftKey: true }), false)).toBe(false);
     const onPicture = key({ target: { closest: (s: string) => (s === "[data-own-arrows]" ? {} : null) } as never });
     expect(escapeGoesBack(onPicture, false)).toBe(false);
+  });
+
+  it("Esc in a field being typed in leaves the field, not the screen", () => {
+    const key = (target: unknown, patch: Partial<KeyboardEvent> = {}) =>
+      ({
+        key: "Escape",
+        defaultPrevented: false,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        target: { closest: () => null, ...(target as object) },
+        ...patch,
+      }) as unknown as KeyboardEvent;
+    for (const field of [
+      { tagName: "INPUT", type: "text" },
+      { tagName: "INPUT", type: "" },
+      { tagName: "INPUT", type: "search" },
+      { tagName: "TEXTAREA" },
+      { tagName: "DIV", isContentEditable: true },
+    ]) {
+      expect(isTextField(key(field).target), JSON.stringify(field)).toBe(true);
+      expect(escapeGoesBack(key(field), false)).toBe(false);
+      expect(escapeLeavesField(key(field), false)).toBe(true);
+      // A dialog takes its own Esc; a key something used is left alone.
+      expect(escapeLeavesField(key(field), true)).toBe(false);
+      expect(escapeLeavesField(key(field, { defaultPrevented: true }), false)).toBe(false);
+    }
+    // A checkbox or a button is no field: Esc there is Back.
+    for (const other of [{ tagName: "INPUT", type: "checkbox" }, { tagName: "BUTTON" }]) {
+      expect(escapeLeavesField(key(other), false)).toBe(false);
+      expect(escapeGoesBack(key(other), false)).toBe(true);
+    }
   });
 });
