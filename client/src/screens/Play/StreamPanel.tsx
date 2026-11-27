@@ -8,6 +8,7 @@ import {
   Expand,
   Gamepad,
   Gamepad2,
+  Joystick,
   Keyboard,
   Loader2,
   Lock,
@@ -1522,6 +1523,21 @@ export function StreamPanel({
                 </BarButton>
               )}
               {playing && <KbmBarButton mode={kbm.mode} title={controlsTitle} onCycle={kbm.cycle} captured={kbm.captured} />}
+              {running && pictureHere && !pip && (
+                <BarButton
+                  label={
+                    touchFirst
+                      ? tr("rp_touch_hide", undefined, "Hide the on-screen controller")
+                      : tr("rp_touch_show", undefined, "Show the on-screen controller")
+                  }
+                  active={touchFirst}
+                  // The same setting as Play's Settings › On-screen controller: Always / Never.
+                  onClick={() => setPrefs({ touchControls: touchFirst ? "off" : "on" })}
+                  testId="rp-touch-toggle"
+                >
+                  <Joystick size={16} />
+                </BarButton>
+              )}
               <BarButton
                 label={tr("rp_game_button", undefined, "Game")}
                 active={gameOpen}

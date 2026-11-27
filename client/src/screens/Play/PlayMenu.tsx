@@ -2,6 +2,7 @@ import {
   BarChart3,
   CircleDot,
   Gamepad2,
+  Joystick,
   Minimize,
   Monitor,
   MonitorOff,
@@ -21,6 +22,7 @@ import { useTr } from "../../state/lang";
 import { useRemotePlayStore } from "../../state/remotePlay";
 import { CaptureRow } from "./CaptureControls";
 import { GoLiveBarIcon } from "./GoLivePanel";
+import { useTouchFirst } from "./TouchControls";
 
 /** Volume, on the picture's bar and in the player menu (Settings has it too). Keys and presses
  *  on it never reach the pad. */
@@ -200,6 +202,7 @@ export function PlayMenu({
           />
         )}
         <MicTile />
+        {pictureHere && !pip && <TouchControllerTile />}
         {!!pipKind && pictureHere && (
           <Tile
             label={
@@ -317,5 +320,27 @@ export function PlayMenu({
       </div>
       )}
     </div>
+  );
+}
+
+/** Show or hide the on-screen controller from the stream itself: the same setting as Play's
+ *  Settings › On-screen controller (Always / Never), which was the only way to reach it. */
+function TouchControllerTile() {
+  const tr = useTr();
+  const mode = useRemotePlayStore((s) => s.prefs.touchControls);
+  const setPrefs = useRemotePlayStore((s) => s.setPrefs);
+  const shown = useTouchFirst(mode);
+  return (
+    <Tile
+      label={
+        shown
+          ? tr("rp_touch_hide", undefined, "Hide the on-screen controller")
+          : tr("rp_touch_show", undefined, "Show the on-screen controller")
+      }
+      icon={<Joystick size={18} />}
+      onClick={() => setPrefs({ touchControls: shown ? "off" : "on" })}
+      testId="rp-menu-touch"
+      active={shown}
+    />
   );
 }

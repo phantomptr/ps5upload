@@ -11,6 +11,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -66,10 +70,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -97,6 +99,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -152,10 +158,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -239,7 +243,9 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -279,6 +285,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -334,10 +344,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -371,6 +379,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -426,10 +438,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -459,6 +469,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -514,10 +528,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -550,6 +562,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -605,10 +621,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -640,6 +654,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -695,10 +713,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -735,6 +751,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -790,10 +810,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -832,6 +850,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -887,10 +909,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -929,6 +949,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -984,10 +1008,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -1016,6 +1038,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -1071,10 +1097,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -1105,6 +1129,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -1160,10 +1188,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -1197,6 +1223,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -1252,10 +1282,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -1289,6 +1317,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -1344,10 +1376,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -1380,6 +1410,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -1435,10 +1469,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -1471,6 +1503,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -1526,10 +1562,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -1565,6 +1599,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -1620,10 +1658,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -1658,6 +1694,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -1713,10 +1753,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
@@ -1745,6 +1783,10 @@
       "installed_uninstall_only",
       "installed_uninstall_size_at_least",
       "installed_uninstall_source_kept",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away",
       "payloads_fpkg_ppr_note_v3",
       "pkglib.fpkgsupport.install_kstuff_v2",
       "pkglib.fpkgsupport.install_ppr_v2",
@@ -1800,10 +1842,8 @@
       "restore_where_usb",
       "rp_err_guest_took_user",
       "rp_guest_took_user_restart",
-      "join_not_host_user",
-      "join_not_host_user_unnamed",
-      "join_took_host",
-      "join_took_host_away"
+      "rp_touch_hide",
+      "rp_touch_show"
     ],
     "stale": [],
     "untranslated": [
