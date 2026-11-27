@@ -898,7 +898,9 @@ pub fn gather(addr: &str, title_id: &str) -> Facts {
                 {
                     f.kind = GameKind::Package;
                     f.pkg_size = r.size;
-                    f.pkg_kind = r.kind.clone();
+                    // The helper reads the header only for a title off the home screen; for
+                    // the rest its `kind` is absent or "unknown", so the header is read here.
+                    f.pkg_kind = r.kind.clone().filter(|k| k != "unknown");
                     if f.pkg_kind.is_none() {
                         if let Some(pkg) = &r.pkg {
                             f.pkg_kind = fs_read(addr, pkg, 0, 8)
