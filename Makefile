@@ -1381,6 +1381,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/trophy_fix_selftest.c $(PAYLOAD_DIR)/src/trophy_fix.c $(PAYLOAD_DIR)/src/app_dump_sha256.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-trophy-fix-selftest
 	@echo "✓ trophy files: only the exact old account id is replaced (both byte orders, hashes written again), links never followed, a dry run changes nothing, a backup is kept first and puts the file back"
+	@echo "Running home-screen restore self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-title-restore-selftest \
+		$(PAYLOAD_DIR)/tests/title_restore_selftest.c $(PAYLOAD_DIR)/src/title_restore.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-title-restore-selftest
+	@echo "✓ restore: only a package no database knows is moved aside (same drive, databases backed up first); a failed install puts it back into a free place, a finished one deletes only the copy aside"
 	@echo "Running console clean-up rules self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-cleanup-rules-selftest \

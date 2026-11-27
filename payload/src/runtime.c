@@ -104,6 +104,7 @@
 #include "tailnet_node.h"
 #include "save_owner.h"
 #include "trophy_fix.h"
+#include "title_restore.h"
 #include "game_fps.h"
 #include "ava1_server.h"
 #include "ava1_data.h"
@@ -396,6 +397,9 @@
 /* trophy files that still name an old account id (trophy_fix.c, #853) */
 #define MGMT_FRAME_TROPHY_FIX 374u
 #define MGMT_FRAME_TROPHY_FIX_ACK 375u
+/* an installed package game back on the home screen after Rebuild Database (title_restore.c, #961) */
+#define MGMT_FRAME_TITLE_RESTORE 376u
+#define MGMT_FRAME_TITLE_RESTORE_ACK 377u
 #define MGMT_FRAME_SDK_SCAN 214u
 #define MGMT_FRAME_SDK_SCAN_ACK 215u
 #define MGMT_FRAME_SDK_PATCH 216u
@@ -10167,6 +10171,76 @@ static int handle_trophy_fix(const char *body) {
     return rc;
 }
 
+/* app.restore (title_restore.c, #961). Body {"op":"check"|"prepare"|"finish","title_id":"PPSA01234",
+ * "rollback":b,"install_ended":b}. File operations only (stat, mkdir, a same-device rename checked with
+ * cross_device.h, unlink of our own copy) plus read-only app.db / appinfo.db queries and SQLite backup
+ * copies of both: no Sony call, so no sony_api_lock. The install between prepare and finish is the
+ * engine's (installer daemon). */
+static int restore_appdb_has(const char *id) { return content_db_has_title(id); }
+static int restore_appinfo_has(const char *id) { return content_db_appinfo_has_title(id); }
+static int restore_backup_db(const char *which, const char *dst, char *err, size_t cap) {
+    const char *src = strcmp(which, "app.db") == 0       ? CONTENT_DB_APP
+                      : strcmp(which, "appinfo.db") == 0 ? CONTENT_DB_APPINFO
+                                                         : NULL;
+    if (!src) {
+        snprintf(err, cap, "backup: unknown database");
+        return -1;
+    }
+    return content_db_backup_file(src, dst, err, cap);
+}
+
+#define TITLE_RESTORE_OUT_MAX 4096u
+static int handle_title_restore(const char *body) {
+    char op[16] = {0}, title_id[16] = {0};
+    extract_json_string_field(body, "op", op, sizeof(op));
+    extract_json_string_field(body, "title_id", title_id, sizeof(title_id));
+    int rollback = 0, ended = 0;
+    (void)extract_json_bool_field(body, "rollback", &rollback);
+    (void)extract_json_bool_field(body, "install_ended", &ended);
+    /* The extended drives the mount table shows (/mnt/ext<N>), besides ext0 and ext1. */
+    char vols[TITLE_RESTORE_MAX_VOLUMES][32];
+    const char *extra[TITLE_RESTORE_MAX_VOLUMES];
+    int nextra = 0;
+    {
+        struct statfs *mnts = NULL;
+        int n = mntinfo_snapshot(&mnts);
+        for (int i = 0; i < n && nextra < TITLE_RESTORE_MAX_VOLUMES; i++) {
+            if (!install_guard_is_ext_volume(mnts[i].f_mntonname) || strlen(mnts[i].f_mntonname) >= sizeof vols[0])
+                continue;
+            snprintf(vols[nextra], sizeof vols[nextra], "%s", mnts[i].f_mntonname);
+            extra[nextra] = vols[nextra];
+            nextra++;
+        }
+        free(mnts);
+    }
+    title_restore_env_t env;
+    memset(&env, 0, sizeof env);
+    env.extra_volumes = extra;
+    env.nextra = nextra;
+    env.appdb_has = restore_appdb_has;
+    env.appinfo_has = restore_appinfo_has;
+    env.backup_db = restore_backup_db;
+    char stamp[32];
+    {
+        time_t now = time(NULL);
+        struct tm tmv;
+        if (!gmtime_r(&now, &tmv)) memset(&tmv, 0, sizeof(tmv));
+        strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tmv);
+    }
+    int flags = (rollback ? TITLE_RESTORE_ROLLBACK : 0) | (ended ? TITLE_RESTORE_INSTALL_ENDED : 0);
+    char *out = malloc(TITLE_RESTORE_OUT_MAX);
+    if (!out) {
+        static const char oom[] = "{\"ok\":false,\"err\":\"no_memory\"}";
+        return mgmt_reply(MGMT_FRAME_TITLE_RESTORE_ACK, oom, sizeof(oom) - 1);
+    }
+    int n = title_restore_run(&env, op[0] ? op : "check", title_id, flags, stamp, out, TITLE_RESTORE_OUT_MAX);
+    if (n < 0) n = snprintf(out, TITLE_RESTORE_OUT_MAX, "{\"ok\":false,\"err\":\"reply_too_large\"}");
+    PLOG(PLOG_INFO, PLOG_INSTALL, "[restore] %s %s: %.*s", op[0] ? op : "check", title_id, n > 300 ? 300 : n, out);
+    int rc = mgmt_reply(MGMT_FRAME_TITLE_RESTORE_ACK, out, (uint64_t)n);
+    free(out);
+    return rc;
+}
+
 static int handle_profile_apply_avatar(const char *body) {
     uint32_t uid = (uint32_t)extract_json_uint64_field(body, "uid");
     if (uid == 0) {
@@ -10531,6 +10605,11 @@ static int mgmt_w_trophy_fix(runtime_state_t *st, const char *b, uint64_t l) {
     (void)st;
     (void)l;
     return handle_trophy_fix(b);
+}
+static int mgmt_w_title_restore(runtime_state_t *st, const char *b, uint64_t l) {
+    (void)st;
+    (void)l;
+    return handle_title_restore(b);
 }
 static int mgmt_w_profile_activate(runtime_state_t *st, const char *b, uint64_t l) {
     (void)st;

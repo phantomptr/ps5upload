@@ -593,6 +593,11 @@ value = 200
 name = "METHOD_TROPHY_FIX"
 ty = "u16"
 value = 201
+# An installed package game back on the home screen after Rebuild Database (payload/src/title_restore.c; MGMT_METHODS.md)
+[[const]]
+name = "METHOD_APP_RESTORE"
+ty = "u16"
+value = 202
 [[const]]
 name = "JOB_OP_DELETE"
 ty = "u8"

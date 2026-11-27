@@ -66,6 +66,9 @@
  *   src/webui_files.c     2  dir    text save and upload: .ps5u-<hex>.part beside the target -> target
  *                                   (the device is compared too, same_device_as, failing closed)
  *   src/trophy_fix.c      1  dir    a trophy file fixed or put back: <file>.ps5upload-tmp -> file (same folder)
+ *   src/title_restore.c   2  1 guard (an installed game's app.pkg / patch.pkg moved aside to
+ *                                   <drive>/ps5upload/restore/<id> and back: safe_move, only on
+ *                                   XDEV_SAME and never over an entry, #961), 1 dir (restore.txt: tmp -> final)
  *   ava1/ava1_events.c    1  dir    events.log -> events.log.old
  *   ava1/ava1_apply.c     3  guard  file and folder commit (same_device hook, only a definite 1 renames);
  *                                   held param.json/param.sfo: name.ava-hold -> name, same dir
