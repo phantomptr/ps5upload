@@ -6,8 +6,14 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Games**
+- **Games that vanished from the home screen after Rebuild Database can be put back (#961).** A fake package game still on its drive but no longer on the PS5's home screen now shows **Not on the PS5's home screen** on its page, with **Restore to home screen**; **Restore all** in Games does every such game. The PS5's own installer takes the package back from the drive, so nothing is downloaded. Your database is backed up first, and if the PS5 won't take a game, its files are put back where they were. It needs room for one more copy of the game while it runs.
+- **Pressing Play on such a game no longer unsettles the console.** It used to try harder and harder ways to start a game the PS5 no longer knows, which could restart the PS5's menu. It now stops within seconds and points you to Restore.
+
 **Extract on the console**
-- **Password-protected RAR archives can be extracted on the PS5 (#958).** In Files on the console page and in the app's file screen, Extract now asks for the password of a `.rar` the way it does for `.zip` and `.7z`. This covers new and old RAR archives, multi-part sets, and archives whose file list is hidden behind the password. A wrong password is said plainly and leaves no files behind.
+- **Password-protected RAR archives can be extracted on the PS5 (#958).** In Files on the console page and in the app's file screen, Extract now asks for the password of a `.rar` the way it does for `.zip` and `.7z`. This covers new and old RAR archives, multi-part sets (pick part 1), and archives whose file list is hidden behind the password. A wrong password is said plainly and leaves no files behind.
+
+## 12.6.37
 
 **Activity**
 - **An upload still going after you closed the page shows as running when you come back (#954).** The upload itself always carried on, but Activity listed it as "Interrupted" next to a second, running copy. It now picks up the same entry.
