@@ -7,6 +7,11 @@ What's new in ps5upload, written for humans.
 ## Unreleased
 
 **Play Together**
+- **Full screen on an iPhone or iPad.** iOS browsers can't put a web page in full screen, so the guest page and the controller page hid their Full screen button there. It's back: it fills the page with the game, and the first time it explains how to get the whole screen (add the page to your Home Screen and open it from there; it rejoins the same game).
+
+## 12.6.39
+
+**Play Together**
 - **A friend joining can no longer end your game by taking your PS5 user.** When a friend's controller connected, the PS5 asked who was using it with your user picked, and pressing ✕ moved your user to them, which ended your Remote Play. A friend's plain ✕ is now held back until they move off your user, and their page says not to pick it. If the PS5 still ends your stream that way, the app starts it again by itself.
 
 **Remote Play**
