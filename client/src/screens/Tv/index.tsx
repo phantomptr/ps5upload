@@ -105,7 +105,7 @@ function ConsolePicker({
   const tr = useTr();
   const runtime = useConnectionStore((s) => s.runtimeByHost);
   return (
-    <Modal open={open} onClose={onClose} title={tr("tv_switch_console", undefined, "Switch console")} size="lg">
+    <Modal open={open} onClose={onClose} title={tr("tv_switch_console", undefined, "Switch console")} size="lg" bodyClassName="px-6 py-5">
       <ul className="space-y-3" data-testid="tv-console-list">
         {profiles.map((p) => {
           const rt = runtime[hostOf(p.host)];
@@ -235,7 +235,7 @@ export default function TvHome() {
   return (
     <div
       ref={box}
-      className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6 sm:gap-8 sm:px-10 sm:py-10"
+      className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6 sm:px-10 sm:py-8"
       data-testid="tv-home"
     >
       <header className="flex flex-wrap items-center gap-3">
@@ -249,7 +249,7 @@ export default function TvHome() {
       </header>
 
       <section
-        className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-6 shadow-[var(--shadow-2)] sm:p-10"
+        className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-6 shadow-[var(--shadow-2)] sm:p-8"
         aria-labelledby="tv-console-name"
         data-testid="tv-console"
         data-state={state}
@@ -274,7 +274,7 @@ export default function TvHome() {
           </div>
         </div>
 
-        <div className="mt-8 flex flex-wrap gap-4">
+        <div className="mt-6 flex flex-wrap gap-4">
           {primary === "add" && (
             <TvButton primary icon={<Plus size={26} />} onClick={() => navigate("/connection?add=1")} testId="tv-add">
               {tr("tv_add_console", undefined, "Add your PS5")}
@@ -313,7 +313,10 @@ export default function TvHome() {
         </div>
       </section>
 
-      <section className="flex flex-wrap items-center gap-4" aria-label={tr("pt_title", undefined, "Play Together")}>
+      <section
+        className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-4"
+        aria-label={tr("pt_title", undefined, "Play Together")}
+      >
         <TvButton icon={<LogIn size={24} />} onClick={() => navigate("/play?mode=friend")} testId="tv-join-go">
           {tr("tv_join_button", undefined, "Join Play Together")}
         </TvButton>

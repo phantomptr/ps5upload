@@ -33,7 +33,6 @@ export default function PlayScreen() {
   // TV mode (#976): Play is the game and little else. Back goes to TV mode's home, where Resume
   // brings the stream back; the stream fills the screen as it starts.
   const tv = useTvMode();
-  useScreenBack(tv, () => navigate("/tv", { replace: true }));
   const streaming = useRemotePlayStore(
     (s) => !!s.stream && s.phase !== null && s.phase !== "ended",
   );
@@ -56,6 +55,9 @@ export default function PlayScreen() {
   const [mode, setMode] = useState<PlayMode>(() =>
     joined || joinParam || friendParam ? "friend" : "mine",
   );
+  // Back from the stream: TV mode's home (Resume is there). Not on Join a friend, whose game
+  // takes Back step by step itself (buttons, then full screen) and then leaves by the history.
+  useScreenBack(tv && mode !== "friend", () => navigate("/tv", { replace: true }));
   useEffect(() => {
     if (!friendParam) return;
     setMode("friend");

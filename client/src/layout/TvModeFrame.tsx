@@ -2,7 +2,7 @@
 // or status bar, only the screen. The full app gets a bar back to TV mode while TV mode is
 // wanted on this device.
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { Tv } from "lucide-react";
 
@@ -27,8 +27,13 @@ export function escapeGoesBack(
  *  (lib/tvNav installTvModeNav) and the TV styles (index.css). */
 export function useTvFrame(): boolean {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const on = useTvMode();
   const lean = on && isTvRoute(pathname);
+  const where = useRef(pathname);
+  useEffect(() => {
+    where.current = pathname;
+  });
   useEffect(() => {
     const root = document.documentElement;
     if (lean) root.dataset.tvMode = "1";
@@ -49,7 +54,9 @@ export function useTvFrame(): boolean {
     };
     const onKey = (e: KeyboardEvent) => {
       if (!escapeGoesBack(e, dialogKeys.has(e) || openModalCount() > 0)) return;
-      if (takeBackStep()) e.preventDefault();
+      e.preventDefault();
+      // No step of the screen's own: TV mode's home, the screen all others come from.
+      if (!takeBackStep() && where.current !== "/tv") navigate("/tv", { replace: true });
     };
     window.addEventListener("keydown", onCapture, true);
     window.addEventListener("keydown", onKey);
@@ -57,7 +64,7 @@ export function useTvFrame(): boolean {
       window.removeEventListener("keydown", onCapture, true);
       window.removeEventListener("keydown", onKey);
     };
-  }, [lean]);
+  }, [lean, navigate]);
   return lean;
 }
 

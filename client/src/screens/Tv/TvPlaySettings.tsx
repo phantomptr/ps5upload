@@ -48,6 +48,7 @@ export function TvPlaySettings({
         title={tr("tv_settings_title", undefined, "Play settings")}
         titleIcon={<SlidersHorizontal size={18} aria-hidden />}
         size="lg"
+        bodyClassName="px-6 py-5"
       >
         <div className="space-y-6" data-testid="tv-settings">
           <ResFpsSetting running={running} />
