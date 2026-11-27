@@ -172,6 +172,48 @@ pub(crate) struct Store {
     /// When PS5Upload last wrote where, per console, newest last (in memory, at most
     /// [`MAX_MARKS`]): a size measured from before such a write is not kept ([`Store::put_since`]).
     marks: HashMap<String, VecDeque<(String, u64)>>,
+    /// Snapshots taken for writing, numbered; and the newest one written (shared with the
+    /// [`Pending`] writes, which run after the store's lock is let go).
+    taken: u64,
+    written: Arc<Mutex<u64>>,
+}
+
+/// The sizes as they were when [`Store::take_pending`] ran, to be written after the store's lock
+/// is let go: writing a file under the lock held every route that touches the store (on the
+/// async runtime's threads) for the write.
+pub(crate) struct Pending {
+    path: PathBuf,
+    bytes: Vec<u8>,
+    seq: u64,
+    written: Arc<Mutex<u64>>,
+}
+
+impl Pending {
+    /// Writes it, one write at a time, unless a newer snapshot is already on disk.
+    pub(crate) fn write(self) {
+        let mut written = self.written.lock().unwrap_or_else(|e| e.into_inner());
+        if self.seq <= *written {
+            return;
+        }
+        match write_atomic(&self.path, &self.bytes) {
+            Ok(()) => *written = self.seq,
+            Err(e) => crate::engine_log::record(
+                "warn",
+                format!("folder sizes: cannot write {}: {e}", self.path.display()),
+            ),
+        }
+    }
+}
+
+/// Writes `p` off the async runtime (a blocking thread) when there is one, else here.
+fn write_later(p: Option<Pending>) {
+    let Some(p) = p else { return };
+    match tokio::runtime::Handle::try_current() {
+        Ok(rt) => {
+            rt.spawn_blocking(move || p.write());
+        }
+        Err(_) => p.write(),
+    }
 }
 
 impl Store {
@@ -187,6 +229,8 @@ impl Store {
             rev: 1,
             dirty: false,
             marks: HashMap::new(),
+            taken: 0,
+            written: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -194,22 +238,30 @@ impl Store {
         self.rev
     }
 
-    /// Writes the sizes when anything changed since the last write. Best effort: a size that is
-    /// not kept is measured again some day, nothing worse.
-    pub(crate) fn flush(&mut self) {
+    /// The sizes to write when anything changed since the last snapshot, written by
+    /// [`Pending::write`] once the lock is let go. Best effort: a size that is not kept is
+    /// measured again some day, nothing worse.
+    pub(crate) fn take_pending(&mut self) -> Option<Pending> {
         if !self.dirty {
-            return;
+            return None;
         }
         self.dirty = false;
-        let Some(path) = &self.path else { return };
-        let Ok(bytes) = serde_json::to_vec(&self.doc) else {
-            return;
-        };
-        if let Err(e) = write_atomic(path, &bytes) {
-            crate::engine_log::record(
-                "warn",
-                format!("folder sizes: cannot write {}: {e}", path.display()),
-            );
+        let path = self.path.clone()?;
+        let bytes = serde_json::to_vec(&self.doc).ok()?;
+        self.taken += 1;
+        Some(Pending {
+            path,
+            bytes,
+            seq: self.taken,
+            written: self.written.clone(),
+        })
+    }
+
+    /// [`Store::take_pending`] written at once (the store's own tests).
+    #[cfg(test)]
+    pub(crate) fn flush(&mut self) {
+        if let Some(p) = self.take_pending() {
+            p.write();
         }
     }
 
@@ -446,10 +498,15 @@ pub(crate) fn changed<S: AsRef<str>>(addr: &str, paths: &[S]) {
     if paths.is_empty() {
         return;
     }
-    let mut s = store();
-    if s.changed(&key_of(addr), &paths) {
-        s.flush();
-    }
+    let pending = {
+        let mut s = store();
+        s.changed(&key_of(addr), &paths)
+            .then(|| s.take_pending())
+            .flatten()
+    };
+    // Mostly called on the async runtime, by the routes that write: the file is written on a
+    // blocking thread, never under the lock.
+    write_later(pending);
 }
 
 /// A finished "What takes space?" walk of `root` that started at `started_ms`: its size and its
@@ -481,7 +538,9 @@ pub(crate) fn record_walk(addr: &str, root: &str, w: &disk_usage::Walked, starte
         };
         s.put_since(&key, addr, &path, entry(c), started_ms);
     }
-    s.flush();
+    let pending = s.take_pending();
+    drop(s);
+    write_later(pending);
 }
 
 /// A finished clean-up scan's status: the folders it sized (what they take on the drive).
@@ -536,7 +595,9 @@ pub(crate) fn record_cleanup_scan(addr: &str, status: &Value) {
             at,
         );
     }
-    s.flush();
+    let pending = s.take_pending();
+    drop(s);
+    write_later(pending);
 }
 
 // ─── Queue ──────────────────────────────────────────────────────────────────
@@ -852,7 +913,9 @@ fn keep(item: &Item, found: Measured, started_ms: u64) {
     for (path, e) in found.inside {
         s.put_since(&item.key, &item.addr, &path, e, started_ms);
     }
-    s.flush();
+    let pending = s.take_pending();
+    drop(s);
+    write_later(pending);
 }
 
 /// A transfer, console file operation or install runs on `addr` now: what a walk sees there may
@@ -904,12 +967,15 @@ fn worker(q: &Queue, m: &dyn Measurer) {
         last_tick = std::time::Instant::now();
         let candidates = {
             let mut s = store();
-            s.flush();
-            if crate::settings_api::flag("keep_folder_sizes_fresh") && q.is_idle() {
+            let pending = s.take_pending();
+            let stale = if crate::settings_api::flag("keep_folder_sizes_fresh") && q.is_idle() {
                 s.stale_opened(now_ms())
             } else {
                 Vec::new()
-            }
+            };
+            drop(s);
+            write_later(pending);
+            stale
         };
         if !candidates.is_empty() {
             q.queue_fresh(candidates, now_ms());
@@ -1369,6 +1435,32 @@ mod tests {
         // Another spelling of the same folder is the same folder.
         s.changed("k", &["/data//games/./X".to_string()]);
         assert!(!s.sizes_in("k", "/data").1.contains_key("games"));
+    }
+
+    /// Snapshots are written after the lock is let go, possibly out of order: an older one that
+    /// lands after a newer one is not written over it.
+    #[test]
+    fn an_older_snapshot_never_overwrites_a_newer_one() {
+        let dir = std::env::temp_dir().join(format!("ps5u-fszw-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("state").join("folder-sizes.json");
+        let mut s = Store::load(Some(path.clone()));
+        assert!(s.take_pending().is_none(), "nothing changed");
+        s.put("k", "a", "/data/one", e(1, 1));
+        let older = s.take_pending().unwrap();
+        s.put("k", "a", "/data/two", e(2, 2));
+        let newer = s.take_pending().unwrap();
+        newer.write();
+        older.write();
+        let back = Store::load(Some(path.clone()));
+        let sizes = &back.doc.consoles["k"].sizes;
+        assert!(sizes.contains_key("/data/one") && sizes.contains_key("/data/two"));
+        // And from another thread, the way `changed` writes on the runtime.
+        s.changed("k", &["/data/one".to_string()]);
+        let p = s.take_pending().unwrap();
+        std::thread::spawn(move || p.write()).join().unwrap();
+        let back = Store::load(Some(path.clone()));
+        assert!(!back.doc.consoles["k"].sizes.contains_key("/data/one"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// Writes are remembered for a bounded number of consoles and writes each.
