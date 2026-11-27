@@ -3694,6 +3694,10 @@ async fn ps5_app_unregister(
         }
     }
     let title_for_log = title_id.clone();
+    // Sony's uninstall removes the title's own folder (#974).
+    if looks_like_title_id(&title_id) {
+        folder_sizes::changed(&addr, &[format!("/user/app/{title_id}")]);
+    }
     // Uninstalling changes which artwork exists, so drop this console's
     // cached images now rather than letting them age out — the user would
     // otherwise see a cover for a title they just removed.
@@ -7969,6 +7973,12 @@ async fn health_fix_handler(
             .into_response();
     }
     let paths = req.paths;
+    if matches!(action, ps5upload_core::health::FixAction::CleanJunk) {
+        // What it deletes: those folders' sizes are no longer right (#974).
+        if let Some(p) = &paths {
+            folder_sizes::changed(&addr, p);
+        }
+    }
     let result = tokio::task::spawn_blocking(move || {
         ps5upload_core::health::apply_fix_of(
             &addr,
@@ -12326,6 +12336,10 @@ async fn transfer_download_handler(
                 format!("{trimmed_src} can't be moved off the PS5; copy it instead"),
             )
             .into_response();
+        }
+        if req.remove_source {
+            // A move deletes the console's copy (#974).
+            folder_sizes::changed(&mgmt_addr, &[trimmed_src]);
         }
         return start_ava1_download(
             &state,

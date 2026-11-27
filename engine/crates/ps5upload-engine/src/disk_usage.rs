@@ -152,11 +152,24 @@ struct Shared {
 
 /// `/a/b/` -> `/a/b`; `/` stays.
 pub(crate) fn normalize(path: &str) -> String {
-    let t = path.trim_end_matches('/');
-    if t.is_empty() {
-        "/".to_string()
+    // One spelling per folder: `/data//games/./x/` is `/data/games/x` (Files' folder sizes are
+    // kept, and dropped, by this spelling).
+    let parts: Vec<&str> = path
+        .split('/')
+        .filter(|c| !c.is_empty() && *c != ".")
+        .collect();
+    if parts.is_empty() {
+        return if path.starts_with('/') || path.is_empty() {
+            "/".to_string()
+        } else {
+            ".".to_string()
+        };
+    }
+    let joined = parts.join("/");
+    if path.starts_with('/') {
+        format!("/{joined}")
     } else {
-        t.to_string()
+        joined
     }
 }
 
@@ -637,6 +650,10 @@ pub(crate) async fn start(State(state): State<AppState>, Json(req): Json<StartRe
     let j = job.clone();
     tokio::task::spawn_blocking(move || {
         let root = j.path.clone();
+        // A walk alongside a transfer or install sees its files half written: not kept as
+        // Files' folder sizes (#974).
+        let quiet_start = !crate::folder_sizes::console_busy(&addr);
+        let started_ms = crate::folder_sizes::now_ms();
         let r = walk_console(&addr, &root, &Limits::default(), &j.progress, &|| {
             j.abandoned()
         });
@@ -654,7 +671,9 @@ pub(crate) async fn start(State(state): State<AppState>, Json(req): Json<StartRe
                     took.as_millis(),
                     w.partial.map(|p| format!(" (partial: {p})")).unwrap_or_default(),
                 ));
-                crate::folder_sizes::record_walk(&addr, &root, &w);
+                if quiet_start {
+                    crate::folder_sizes::record_walk(&addr, &root, &w, started_ms);
+                }
                 Outcome::walked(w)
             }
             Err(e) => Outcome::Failed(format!("{e:#}")),
@@ -1048,6 +1067,8 @@ mod tests {
     fn paths_join_and_normalize() {
         assert_eq!(normalize("/data/"), "/data");
         assert_eq!(normalize("/"), "/");
+        assert_eq!(normalize("//"), "/");
+        assert_eq!(normalize("/data//games/./x/"), "/data/games/x");
         assert_eq!(join("/", "data"), "/data");
         assert_eq!(parent_of("/data"), "/");
         assert_eq!(parent_of("/mnt/ext0"), "/mnt");

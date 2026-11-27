@@ -2148,6 +2148,11 @@ pub(crate) async fn install_start_handler(
         shared_link: false,
         shared_any: false,
     };
+    // The install writes the title's folder (#974).
+    let tid = ps5upload_pkg::kind::title_id_of_content_id(&session.content_id);
+    if crate::looks_like_title_id(&tid) {
+        crate::folder_sizes::changed(&session.ps5_mgmt_addr, &[format!("/user/app/{tid}")]);
+    }
 
     // Insert *before* sending the install frame so the HTTP listener
     // is ready to serve when BGFT starts pulling immediately on its end.

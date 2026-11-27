@@ -53,6 +53,11 @@ use crate::{console_addr_or_default, json_err, AppState};
 pub(crate) const MAX_PER_CONSOLE: usize = 2000;
 /// Consoles kept; past it the one with the oldest sizes goes.
 const MAX_CONSOLES: usize = 16;
+/// Writes remembered per console ([`Store::put_since`]).
+const MAX_MARKS: usize = 1000;
+/// A finished clean-up scan's sizes are kept only while it is this fresh: the helper keeps
+/// answering with an old scan until the next one, and its folders may have changed since.
+const CLEANUP_FRESH_MS: u64 = 10 * 60 * 1000;
 /// Opened folders remembered per console, for the fresh sweep.
 const MAX_OPENED: usize = 200;
 /// Folders one request may queue.
@@ -164,6 +169,9 @@ pub(crate) struct Store {
     rev: u64,
     /// Changes not written yet (an opened folder is not worth a write of its own).
     dirty: bool,
+    /// When PS5Upload last wrote where, per console, newest last (in memory, at most
+    /// [`MAX_MARKS`]): a size measured from before such a write is not kept ([`Store::put_since`]).
+    marks: HashMap<String, VecDeque<(String, u64)>>,
 }
 
 impl Store {
@@ -178,6 +186,7 @@ impl Store {
             path,
             rev: 1,
             dirty: false,
+            marks: HashMap::new(),
         }
     }
 
@@ -249,12 +258,26 @@ impl Store {
     /// PS5Upload wrote, deleted or moved `paths`: every size that covers them (the folder itself,
     /// what is inside it, every folder above it) is no longer right. True when one was dropped.
     pub(crate) fn changed(&mut self, key: &str, paths: &[String]) -> bool {
+        let paths: Vec<String> = paths
+            .iter()
+            .filter(|p| valid_path(p))
+            .map(|p| normalize(p))
+            .collect();
+        // Marked even when no size is known yet: a measure running now must not keep one.
+        let at = now_ms();
+        let marks = self.marks.entry(key.to_string()).or_default();
+        for p in &paths {
+            marks.push_back((p.clone(), at));
+        }
+        while marks.len() > MAX_MARKS {
+            marks.pop_front();
+        }
         let Some(c) = self.doc.consoles.get_mut(key) else {
             return false;
         };
         let before = c.sizes.len();
-        for p in paths.iter().filter(|p| valid_path(p)).map(|p| normalize(p)) {
-            c.sizes.retain(|k, _| !within(k, &p) && !within(&p, k));
+        for p in &paths {
+            c.sizes.retain(|k, _| !within(k, p) && !within(p, k));
         }
         let dropped = c.sizes.len() != before;
         if dropped {
@@ -262,6 +285,34 @@ impl Store {
             self.dirty = true;
         }
         dropped
+    }
+
+    /// PS5Upload wrote at or after `since_ms` somewhere `path` covers or that covers it.
+    fn changed_since(&self, key: &str, path: &str, since_ms: u64) -> bool {
+        let path = normalize(path);
+        self.marks.get(key).is_some_and(|m| {
+            m.iter()
+                .rev()
+                .take_while(|(_, at)| *at >= since_ms)
+                .any(|(p, _)| within(p, &path) || within(&path, p))
+        })
+    }
+
+    /// [`Store::put`] for a size measured from `since_ms` on: dropped when PS5Upload wrote there
+    /// since (the size may predate the write, or be half of it). False when dropped.
+    pub(crate) fn put_since(
+        &mut self,
+        key: &str,
+        addr: &str,
+        path: &str,
+        entry: Entry,
+        since_ms: u64,
+    ) -> bool {
+        if self.changed_since(key, path, since_ms) {
+            return false;
+        }
+        self.put(key, addr, path, entry);
+        true
     }
 
     /// `dir`'s own size and its folders' sizes by name.
@@ -389,10 +440,11 @@ pub(crate) fn changed<S: AsRef<str>>(addr: &str, paths: &[S]) {
     }
 }
 
-/// A finished "What takes space?" walk of `root`: its size and its folders' sizes, which it
-/// measured anyway. A cancelled walk is not kept.
-pub(crate) fn record_walk(addr: &str, root: &str, w: &disk_usage::Walked) {
-    if w.partial == Some("cancelled") {
+/// A finished "What takes space?" walk of `root` that started at `started_ms`: its size and its
+/// folders' sizes, which it measured anyway. A cancelled walk is not kept, nor a folder
+/// PS5Upload wrote to while it ran.
+pub(crate) fn record_walk(addr: &str, root: &str, w: &disk_usage::Walked, started_ms: u64) {
+    if w.partial == Some("cancelled") || console_busy(addr) {
         return;
     }
     let at = now_ms();
@@ -408,27 +460,32 @@ pub(crate) fn record_walk(addr: &str, root: &str, w: &disk_usage::Walked) {
         partial: limited || d.skipped > 0,
     };
     let mut s = store();
-    s.put(&key, addr, &root, entry(&w.tree));
+    s.put_since(&key, addr, &root, entry(&w.tree), started_ms);
     for c in w.tree.children.iter().filter(|c| c.note.is_none()) {
         let path = if root == "/" {
             format!("/{}", c.name)
         } else {
             format!("{root}/{}", c.name)
         };
-        s.put(&key, addr, &path, entry(c));
+        s.put_since(&key, addr, &path, entry(c), started_ms);
     }
     s.flush();
 }
 
 /// A finished clean-up scan's status: the folders it sized (what they take on the drive).
 pub(crate) fn record_cleanup_scan(addr: &str, status: &Value) {
-    if status.get("state").and_then(Value::as_str) != Some("done") {
+    if status.get("state").and_then(Value::as_str) != Some("done") || console_busy(addr) {
         return;
     }
     let Some(items) = status.get("items").and_then(Value::as_array) else {
         return;
     };
     let age = status.get("age_ms").and_then(Value::as_u64).unwrap_or(0);
+    if age > CLEANUP_FRESH_MS {
+        // An old scan, read again (the page polls it): what it sized may have changed since,
+        // and a size dropped for a write would come back.
+        return;
+    }
     let at = now_ms().saturating_sub(age);
     let key = key_of(addr);
     let mut s = store();
@@ -452,7 +509,7 @@ pub(crate) fn record_cleanup_scan(addr: &str, status: &Value) {
         if fresher {
             continue;
         }
-        s.put(
+        s.put_since(
             &key,
             addr,
             path,
@@ -464,6 +521,7 @@ pub(crate) fn record_cleanup_scan(addr: &str, status: &Value) {
                 stored: alloc > 0,
                 partial: false,
             },
+            at,
         );
     }
     s.flush();
@@ -699,7 +757,7 @@ impl Queue {
 
     /// Runs `r` with `m`, stopping it when cancelled or when its console gets busy, and keeps
     /// what it found in `store`.
-    fn run_one(&self, r: Running, m: &dyn Measurer, store: &dyn Fn(&Item, Measured)) {
+    fn run_one(&self, r: Running, m: &dyn Measurer, store: &dyn Fn(&Item, Measured, u64)) {
         let done = AtomicBool::new(false);
         let out = std::thread::scope(|s| {
             s.spawn(|| {
@@ -715,17 +773,20 @@ impl Queue {
             done.store(true, Ordering::Relaxed);
             out
         });
+        // A measure that ended as its console got busy may have counted a write half done:
+        // measured again once the console is free, like one that was stopped.
+        let paused = r.paused.load(Ordering::Relaxed);
         // Kept before the slot is freed, so a poll never sees the folder neither measuring nor known.
-        if let Ok(found) = &out {
-            store(&r.item, found.clone());
+        if let (Ok(found), false) = (&out, paused) {
+            store(&r.item, found.clone(), r.started_at_ms);
         }
         let mut g = self.lock();
         g.running = None;
         match out {
-            Ok(_) => {}
-            Err(MeasureError::Stopped) if r.paused.load(Ordering::Relaxed) => {
+            Ok(_) | Err(MeasureError::Stopped) if paused => {
                 g.items.push_front(r.item.clone());
             }
+            Ok(_) => {}
             Err(MeasureError::Stopped) => {}
             Err(MeasureError::Failed(e)) => {
                 crate::engine_log::record(
@@ -771,14 +832,21 @@ impl Queue {
     }
 }
 
-/// What a measure found as kept sizes.
-fn keep(item: &Item, found: Measured) {
+/// What a measure that started at `started_ms` found as kept sizes, but none PS5Upload wrote to
+/// since it started.
+fn keep(item: &Item, found: Measured, started_ms: u64) {
     let mut s = store();
-    s.put(&item.key, &item.addr, &item.path, found.entry);
+    s.put_since(&item.key, &item.addr, &item.path, found.entry, started_ms);
     for (path, e) in found.inside {
-        s.put(&item.key, &item.addr, &path, e);
+        s.put_since(&item.key, &item.addr, &path, e, started_ms);
     }
     s.flush();
+}
+
+/// A transfer, console file operation or install runs on `addr` now: what a walk sees there may
+/// be half written.
+pub(crate) fn console_busy(addr: &str) -> bool {
+    (queue().busy)(addr)
 }
 
 fn queue() -> &'static Arc<Queue> {
@@ -855,10 +923,10 @@ impl Measurer for ConsoleMeasurer {
         let r = std::thread::scope(|s| {
             s.spawn(|| {
                 let _rt = rt.as_ref().map(|h| h.enter());
-                let mut asked = false;
                 while !done.load(Ordering::Relaxed) {
-                    if stop.load(Ordering::Relaxed) && !asked {
-                        asked = true;
+                    // Asked again each round until the job ends: one sent before the helper
+                    // knew the job, or lost, would leave it counting through a transfer.
+                    if stop.load(Ordering::Relaxed) {
                         let _ = ps5upload_core::mgmt::op_cancel(&item.addr, op_id);
                     }
                     if let Ok(Some(Some(p))) = ps5upload_core::mgmt::op_progress(&item.addr, op_id)
@@ -1238,7 +1306,7 @@ mod tests {
             },
             partial: None,
         };
-        record_walk("10.9.8.7", "/data/free-test", &w);
+        record_walk("10.9.8.7", "/data/free-test", &w, now_ms());
         let key = key_of("10.9.8.7");
         let (own, children) = store().sizes_in(&key, "/data/free-test");
         assert_eq!(
@@ -1251,7 +1319,7 @@ mod tests {
             partial: Some("cancelled"),
             ..w
         };
-        record_walk("10.9.8.7", "/data/free-cancelled", &cancelled);
+        record_walk("10.9.8.7", "/data/free-cancelled", &cancelled, now_ms());
         assert!(store().sizes_in(&key, "/data/free-cancelled").0.is_none());
 
         record_cleanup_scan(
@@ -1267,6 +1335,65 @@ mod tests {
         assert_eq!(children.len(), 1, "files are not folder sizes");
         changed("10.9.8.7", &["/data/free-test", "/data/free-clean"]);
         assert!(store().sizes_in(&key, "/data/free-test").1.is_empty());
+    }
+
+    /// A size measured from before PS5Upload wrote inside it (or above it) is not kept, even
+    /// when the write came while no size was known yet; one of a folder elsewhere is.
+    #[test]
+    fn a_size_measured_across_a_write_is_not_kept() {
+        let mut s = Store::load(None);
+        let started = now_ms();
+        s.changed("k", &["/data/games/X/eboot.bin".to_string()]);
+        assert!(!s.put_since("k", "a", "/data/games", e(5, now_ms()), started));
+        assert!(!s.put_since("k", "a", "/data/games/X", e(5, now_ms()), started));
+        // A sibling of what was written is not touched by it.
+        assert!(s.put_since("k", "a", "/data/games/X/sub", e(5, now_ms()), started));
+        assert!(s.put_since("k", "a", "/data/other", e(5, now_ms()), started));
+        assert!(s.sizes_in("k", "/data").1.contains_key("other"));
+        assert!(!s.sizes_in("k", "/data").1.contains_key("games"));
+        // A measure that started after the write keeps its size.
+        std::thread::sleep(Duration::from_millis(2));
+        assert!(s.put_since("k", "a", "/data/games", e(5, now_ms()), now_ms()));
+        // Another spelling of the same folder is the same folder.
+        s.changed("k", &["/data//games/./X".to_string()]);
+        assert!(s.sizes_in("k", "/data").1.get("games").is_none());
+    }
+
+    /// An old clean-up scan read again (the page polls it) gives no sizes: a size dropped for a
+    /// write since would come back.
+    #[test]
+    fn an_old_cleanup_scan_gives_no_sizes() {
+        record_cleanup_scan(
+            "10.9.8.6",
+            &json!({"state": "done", "age_ms": CLEANUP_FRESH_MS + 1, "items": [
+                {"path": "/data/old-clean/X", "is_dir": true, "bytes": 5, "alloc_bytes": 8192},
+            ]}),
+        );
+        assert!(store()
+            .sizes_in(&key_of("10.9.8.6"), "/data/old-clean")
+            .1
+            .is_empty());
+    }
+
+    /// A measure that finished just as its console got busy is measured again, not kept.
+    #[test]
+    fn a_measure_that_ends_as_its_console_gets_busy_is_not_kept() {
+        let busy = Arc::new(AtomicBool::new(false));
+        let b = busy.clone();
+        let q = Queue::new(Box::new(move |_| b.load(Ordering::SeqCst)));
+        q.enqueue(items("a", &["/data/1"]));
+        let r = q.take(Duration::from_millis(10)).unwrap();
+        // The watcher saw the console busy, but the measure came back with a size anyway.
+        r.paused.store(true, Ordering::SeqCst);
+        r.stop.store(true, Ordering::SeqCst);
+        busy.store(true, Ordering::SeqCst);
+        let kept = Mutex::new(Vec::new());
+        q.run_one(r, &Slow::new(0), &|i, _, _| {
+            kept.lock().unwrap().push(i.path.clone())
+        });
+        assert!(kept.lock().unwrap().is_empty());
+        let st = q.state(None, 0, false);
+        assert_eq!(st["queued"][0]["path"], "/data/1", "measured again later");
     }
 
     /// A measurer that takes `ms` per folder, counts how many run at once, and stops when told.
@@ -1325,7 +1452,7 @@ mod tests {
         let until = std::time::Instant::now() + limit;
         while std::time::Instant::now() < until {
             match q.take(Duration::from_millis(20)) {
-                Some(r) => q.run_one(r, m, &|_, _| {}),
+                Some(r) => q.run_one(r, m, &|_, _, _| {}),
                 None if q.is_idle() => return,
                 None => {}
             }
@@ -1367,7 +1494,7 @@ mod tests {
             let (q, m) = (q.clone(), m.clone());
             std::thread::spawn(move || {
                 let r = q.take(Duration::from_millis(10)).unwrap();
-                q.run_one(r, &*m, &|_, _| {});
+                q.run_one(r, &*m, &|_, _, _| {});
             })
         };
         while q.state(None, 0, false)["running"].is_null() {
@@ -1426,7 +1553,7 @@ mod tests {
             let (q, m) = (q.clone(), m.clone());
             std::thread::spawn(move || {
                 let r = q.take(Duration::from_millis(10)).unwrap();
-                q.run_one(r, &*m, &|_, _| {});
+                q.run_one(r, &*m, &|_, _, _| {});
             })
         };
         while q.state(None, 0, false)["running"].is_null() {
@@ -1452,7 +1579,7 @@ mod tests {
             .take(Duration::from_millis(30))
             .expect("the free console's folder");
         assert_eq!(r.item.path, "/x");
-        q.run_one(r, &Slow::new(5), &|_, _| {});
+        q.run_one(r, &Slow::new(5), &|_, _, _| {});
         // The transfer ends: the queue goes on.
         busy.store(false, Ordering::SeqCst);
         let quick = Slow::new(5);
