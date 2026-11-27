@@ -9864,6 +9864,12 @@ restore_where_extended: "extended storage",
 restore_where_internal: "the console's storage",
 restore_where_m2: "the M.2 drive",
 restore_where_usb: "USB extended storage",
+"rp_err_guest_took_user": "Player {n} picked your PS5 user on the TV, so the PS5 ended your stream. Press Start to play again.",
+"rp_guest_took_user_restart": "Player {n} picked your PS5 user on the TV, so the PS5 ended your stream. It starts again in a few seconds.",
+"join_not_host_user": "Move to Quick Play before pressing ✕. Don't pick {user}: that's {host}'s user, and it ends their game.",
+"join_not_host_user_unnamed": "Move to Quick Play before pressing ✕. Don't pick {host}'s PS5 user: it ends their game.",
+"join_took_host": "{host}'s game stopped because their PS5 user was picked on your controller. This time, move to Quick Play first, then press ✕.",
+"join_took_host_away": "{host}'s PS5 user was picked on your controller, which ends their game. When it's back and the TV asks who you are, move to Quick Play first, then press ✕.",
 };
 
 export default en;

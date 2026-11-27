@@ -9496,6 +9496,12 @@ rp_users_add_hint: "Um auch als anderer Benutzer zu spielen, melde dich auf der 
 "two_panes_unverified": "Kopiert, aber das Original bleibt: Die Kopie ließ sich nicht prüfen",
 "two_panes_not_removed": "Kopiert, aber das Original ließ sich nicht löschen",
 backup_restore_partial: "{count} Dateien wiederhergestellt; {missed} konnten nicht wiederhergestellt werden",
+"rp_err_guest_took_user": "Spieler {n} hat am Fernseher deinen PS5-Benutzer gewählt, deshalb hat die PS5 deinen Stream beendet. Drücke Start, um wieder zu spielen.",
+"rp_guest_took_user_restart": "Spieler {n} hat am Fernseher deinen PS5-Benutzer gewählt, deshalb hat die PS5 deinen Stream beendet. Er startet in ein paar Sekunden neu.",
+"join_not_host_user": "Wechsle zu „Schnellspiel“, bevor du ✕ drückst. Wähle nicht {user}: Das ist der Benutzer von {host}, und damit endet dessen Spiel.",
+"join_not_host_user_unnamed": "Wechsle zu „Schnellspiel“, bevor du ✕ drückst. Wähle nicht den PS5-Benutzer von {host}: Damit endet dessen Spiel.",
+"join_took_host": "Das Spiel von {host} wurde beendet, weil dessen PS5-Benutzer auf deinem Controller gewählt wurde. Wechsle diesmal zuerst zu „Schnellspiel“ und drücke dann ✕.",
+"join_took_host_away": "Der PS5-Benutzer von {host} wurde auf deinem Controller gewählt, damit endet dessen Spiel. Wenn es weitergeht und der Fernseher fragt, wer du bist, wechsle zuerst zu „Schnellspiel“ und drücke dann ✕.",
 };
 
 export default de;

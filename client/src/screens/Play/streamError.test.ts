@@ -73,6 +73,11 @@ describe("a session the PS5 handed to something else", () => {
     expect(m).not.toMatch(/Server shutting down/);
   });
 
+  it("names the Play Together player who picked the stream's PS5 user on the TV", () => {
+    const m = streamErrorMessage(tr, { code: "console_ended", detail: "Server shutting down", guestPicked: 3 });
+    expect(m).toBe("Player 3 picked your PS5 user on the TV, so the PS5 ended your stream. Press Start to play again.");
+  });
+
   it("passes any other reason through as the PS5 gave it", () => {
     const m = streamErrorMessage(tr, { code: "console_ended", detail: "Remote Play turned off" });
     expect(m).toBe("The PS5 ended the stream: Remote Play turned off");

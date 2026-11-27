@@ -63,7 +63,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -143,7 +149,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -319,7 +331,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -405,7 +423,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -487,7 +511,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -572,7 +602,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -656,7 +692,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -745,7 +787,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -836,7 +884,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -927,7 +981,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -1008,7 +1068,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -1091,7 +1157,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -1177,7 +1249,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -1263,7 +1341,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -1348,7 +1432,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -1433,7 +1523,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -1521,7 +1617,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -1608,7 +1710,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [
@@ -1689,7 +1797,13 @@
       "restore_where_extended",
       "restore_where_internal",
       "restore_where_m2",
-      "restore_where_usb"
+      "restore_where_usb",
+      "rp_err_guest_took_user",
+      "rp_guest_took_user_restart",
+      "join_not_host_user",
+      "join_not_host_user_unnamed",
+      "join_took_host",
+      "join_took_host_away"
     ],
     "stale": [],
     "untranslated": [

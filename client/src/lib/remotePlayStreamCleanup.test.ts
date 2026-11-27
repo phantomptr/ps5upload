@@ -324,6 +324,20 @@ describe("RemotePlayStream at its end", () => {
     await flush();
   });
 
+  it("names the Play Together player who took the stream's user, when the engine says", async () => {
+    const a = await opened();
+    a.ws.onmessage?.({ data: JSON.stringify({ stage: "ended", reason: "Server shutting down", guest_picked: 2 }) });
+    expect(a.errors).toEqual([{ code: "console_ended", detail: "Server shutting down", guestPicked: 2 }]);
+    a.s.stop();
+    await flush();
+    // Not a player a guest can be: ignored.
+    const b = await opened();
+    b.ws.onmessage?.({ data: JSON.stringify({ stage: "ended", reason: "Server shutting down", guest_picked: 1 }) });
+    expect(b.errors).toEqual([{ code: "console_ended", detail: "Server shutting down" }]);
+    b.s.stop();
+    await flush();
+  });
+
   it("says nothing about a stream the player stopped", async () => {
     const a = await opened();
     a.s.stop();
