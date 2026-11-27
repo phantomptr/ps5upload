@@ -83,6 +83,15 @@ describe("automatic backups: a copy on a PS5 drive", () => {
     expect(html).toMatch(/<option value="\/mnt\/ext1" selected="">\/mnt\/ext1 \(not plugged in\)<\/option>/);
   });
 
+  it("does not call the chosen drive unplugged before the PS5's drives are read", () => {
+    // Loading, no console connected, or the read failed: the drives are not known.
+    for (const p of [{ drives: null }, { drives: null, connected: false }, { drives: null, loadError: "down" }]) {
+      const html = render({ drive: "/mnt/ext0", ...p });
+      expect(html).not.toContain("not plugged in");
+      expect(html).toMatch(/<option value="\/mnt\/ext0" selected="">M.2 drive \(\/mnt\/ext0\)<\/option>/);
+    }
+  });
+
   it("can't be switched on with no drive, and says why", () => {
     const html = render({ drives: [] });
     expect(html).toContain("auto-save-backup-console-none");

@@ -167,7 +167,11 @@ export function ConsoleCopyChoice({
           >
             {!listed && (
               <option value={drive}>
-                {tr("saves_auto_console_drive_missing", { path: drive }, "{path} (not plugged in)")}
+                {/* "Not plugged in" only when the PS5's drives were read and it is not among them:
+                    while they load, or with no console or no answer, it is just the drive chosen. */}
+                {drives
+                  ? tr("saves_auto_console_drive_missing", { path: drive }, "{path} (not plugged in)")
+                  : consoleDriveLabel(drive, tr)}
               </option>
             )}
             {(drives ?? []).map((d) => (
