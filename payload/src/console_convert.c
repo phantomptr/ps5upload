@@ -24,6 +24,7 @@
 #include "ava1_op.h"
 #include "fs_jobs.h"
 #include "proc_identity.h"
+#include "ps5_firmware.h"
 #include "sony_api_lock.h"
 #include "webui_codec.h"
 
@@ -653,8 +654,18 @@ static const char *check_build(const char *json, const char *src, int src_is_dir
     b->pkg_level[0] = 0;
     b->unpack_packs = 0;
     b->leave_out_ampr_emu = 0;
+    b->console_fw[0] = 0;
     if (strcmp(format, "pkg") == 0) {
         uint64_t unpack = 0, leave_out = 0;
+        char kv[256], fw[sizeof b->console_fw];
+        size_t kv_len = sizeof kv - 1;
+        /* This console's firmware, from the kernel build string the STATUS frame reports: the
+         * package is checked against what it opens. Only a version ("13.60") is passed. */
+        if (sysctlbyname("kern.version", kv, &kv_len, NULL, 0) == 0) {
+            kv[kv_len < sizeof kv ? kv_len : sizeof kv - 1] = 0;
+            ps5_firmware_from_kernel(kv, fw, sizeof fw);
+            if (ps5_fw_at(fw, b->console_fw, sizeof b->console_fw) != 1) b->console_fw[0] = 0;
+        }
         /* zstd packs go into an image or a folder; the level is the converter's default when absent. */
         if (b->zstd) return "convert_bad_format";
         if (fsj_json_present(json, "pkg_level") &&

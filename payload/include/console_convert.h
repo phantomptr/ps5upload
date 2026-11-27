@@ -115,12 +115,15 @@ typedef struct {
     char pkg_level[12];       /* with "pkg": stored, fast or balanced */
     int unpack_packs;         /* with "pkg": a game in asset packs goes in as plain files */
     int leave_out_ampr_emu;   /* with "pkg": no libSceAmpr.sprx in the package */
+    char console_fw[16];      /* with "pkg": this console's firmware ("13.60"), the one the
+                               * package's size is checked against; "" when unknown */
 } cc_build_t;
 
 /* request.json for job `id`: {"id","op","path"} and, with `b`, {"dest","format","zstd","verify"}
  * (and, with zstd on, "zstd_level" when a level was chosen and "zstd_runtime" when one is set;
  * with format "ffpfsc", "inner" and "ffpfsc_level" when set; with "pkg", "pkg_level" when set,
- * "unpack_packs":true and "leave_out_ampr_emu":true, each when asked).
+ * "unpack_packs":true and "leave_out_ampr_emu":true, each when asked, and "console_firmware" when
+ * known).
  * Returns the length, or -1 when it does not fit `cap`. */
 int cc_request_json(char *out, size_t cap, const char *id, const char *op, const char *path, const cc_build_t *b);
 

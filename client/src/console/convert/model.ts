@@ -307,6 +307,7 @@ export const CONVERT_CAUSES: Record<string, string> = {
   convert_not_packed: "cw_convert_err_not_packed",
   convert_dest_read_only: "cw_convert_err_dest_read_only",
   convert_too_big_for_drive: "cw_convert_err_too_big_for_drive",
+  convert_too_big_for_firmware: "cw_convert_err_too_big_for_firmware",
   convert_drive_gone: "cw_convert_err_drive_gone",
   convert_build_failed: "cw_convert_err_build_failed",
   convert_source_unreadable: "cw_convert_err_unreadable",

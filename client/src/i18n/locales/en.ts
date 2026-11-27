@@ -1415,6 +1415,7 @@ home_low_space_body: "Clean up finds updates, leftover packages and games you ne
 "cw_convert_err_not_started": "The converter didn't start. Try again.",
 "cw_convert_err_rar": "A .rar can't be converted on the PS5: the RAR decoder's licence doesn't allow it inside the converter. Unpack it in Files first, or convert it on your computer.",
 "cw_convert_err_too_big_for_drive": "The image would be bigger than the 4 GiB a single file can be on that drive. Save it to an exFAT drive or the internal storage, or make a folder instead.",
+"cw_convert_err_too_big_for_firmware": "This package would be bigger than this PS5's firmware opens: it would install but never start. Make a game image instead, or use the original package.",
 "cw_convert_err_unreadable": "Part of the game couldn't be read. Check the drive and try again.",
 "cw_convert_err_unsupported_source": "This isn't a game folder, a game image (.exfat, .ffpkg, .ffpfs, .ffpfsc) or a .zip or .7z archive.",
 "cw_convert_exists": "{name} is already there. Pick another folder, or keep both.",
