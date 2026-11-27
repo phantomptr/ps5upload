@@ -942,6 +942,9 @@ pub(crate) struct Guest {
     /// now down goes through.
     moved: bool,
     cross_down: bool,
+    /// PS down in their last state: each new PS press after the pick is logged, with whether it
+    /// was taken or sent on (a friend's "PS does nothing" report needs that line).
+    ps_down: bool,
     cross_open: bool,
     /// The PS5 ended the host's stream while they picked a user on the TV: most likely they picked
     /// the host's own ([`Party::blame_pick`]). Their page says so from then on.
@@ -1349,6 +1352,7 @@ impl Party {
             settle_until: None,
             moved: false,
             cross_down: false,
+            ps_down: false,
             cross_open: false,
             took_host: false,
             plays_as: None,
@@ -1548,6 +1552,20 @@ impl Party {
     fn saw_input(&mut self, id: u64, buttons: u32, now: Instant) -> Option<String> {
         let block = self.settings.block_system_buttons;
         let g = self.guests.iter_mut().find(|g| g.id == id && g.active())?;
+        let ps = buttons & vpad::button::PS != 0;
+        let new_ps = ps && !g.ps_down;
+        g.ps_down = ps;
+        let ps_line = (new_ps && g.playing).then(|| {
+            format!(
+                "join: Player {} pressed PS: {}",
+                g.player,
+                if block {
+                    "taken (Block PS & Create is on)"
+                } else {
+                    "sent to the PS5"
+                }
+            )
+        });
         let cross = buttons & vpad::button::CROSS != 0;
         let new_press = cross && !g.cross_down;
         g.cross_down = cross;
@@ -1556,7 +1574,7 @@ impl Party {
             && (!g.playing || g.settle_until.is_some_and(|u| now < u));
         if !g.cross_guard {
             g.cross_open = true;
-            return None;
+            return ps_line;
         }
         // Each press goes through or is held back as a whole (a held ✕ never flickers).
         if new_press {
@@ -1567,7 +1585,7 @@ impl Party {
             g.moved = true;
         }
         if g.playing {
-            return None;
+            return ps_line;
         }
         let first_ps = buttons & vpad::button::PS != 0 && !g.ps_pressed;
         if first_ps {
@@ -6130,10 +6148,23 @@ mod tests {
         assert_eq!(p.guest_status(id).unwrap()["status"]["block_system"], true);
         // once in, nothing more to pick
         assert_eq!(p.saw_input(id, 0, t + PICK_SETTLE), None);
-        assert_eq!(p.saw_input(id, ps | cross, t + PICK_SETTLE), None);
+        // Each PS press after the pick says whether it was taken or sent (a held PS once).
+        let line = p
+            .saw_input(id, ps | cross, t + PICK_SETTLE)
+            .expect("PS is logged");
+        assert!(line.contains("Player 2 pressed PS: taken"), "{line}");
+        assert_eq!(
+            p.saw_input(id, ps, t + PICK_SETTLE),
+            None,
+            "held: logged once"
+        );
+        assert_eq!(p.saw_input(id, 0, t + PICK_SETTLE), None);
         assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
         p.settings.block_system_buttons = false;
         assert_eq!(p.strip_mask(id), Some((2, 0)));
+        let line = p.saw_input(id, ps, t + PICK_SETTLE).expect("PS is logged");
+        assert!(line.contains("pressed PS: sent to the PS5"), "{line}");
+        assert_eq!(p.saw_input(id, 0, t + PICK_SETTLE), None);
         p.settings.block_system_buttons = true;
         // a new pad (helper restart) asks who they are again: the old move does not carry over
         p.reopened(2, &OpenResult::Ok);
@@ -6280,11 +6311,11 @@ mod tests {
             .unwrap()
             .pad_made(&OpenResult::Kept, Some(None));
         assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
-        assert_eq!(
-            p.saw_input(id, vpad::button::PS, t + PICK_SETTLE),
-            None,
-            "nothing to pick"
-        );
+        // Nothing to pick: the press is only logged, as taken.
+        assert!(p
+            .saw_input(id, vpad::button::PS, t + PICK_SETTLE)
+            .unwrap()
+            .contains("pressed PS: taken"));
     }
 
     /// A guest who keeps PS down while pressing ✕ on "Who's using this controller?" has picked a
