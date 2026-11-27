@@ -20,7 +20,12 @@ What's new in ps5upload, written for humans.
 - **The Workshop says what it builds:** a fake PS5 package with a plaintext game image, the kind the latest kstuff (fake-package support up to 13.60) and Kraken Mount both take, with the two ways to play it side by side. a53_ppr is only mentioned for firmware up to 11.40, and a game installed with an older kstuff may need installing again.
 - **Converting a game in zstd packs to `.pkg` no longer warns that its ampr_emu.index is stale** when the only differences are the files the conversion itself rewrites.
 
+**Starting games**
+- **A game the PS5 refuses to start no longer restarts the PS5's menu.** After the console refused a launch outright (for example 0x80020016), the helper tried a second way in through the menu, which restarted it and could stop ShadowMount+. It now stops and says what the refusal means.
+- **Packages built in the Workshop write their content id into their fake-signed programs**, as the current signing tool does; they were zeros before.
+
 **Payloads**
+- **kstuff that stays in the kernel is explained.** Newer kstuff builds don't keep a running program, so they never show as running and can't be stopped. When the PS5 reports kernel access but no kstuff program runs, the Payloads page and Send payload say kstuff is probably active, how to check, and that changing it needs a restart.
 - **Your saved Payload Manager payloads stay listed on On your PS5.** A failed second request could hide the list while the count still included it.
 
 ## 12.6.38
