@@ -492,6 +492,18 @@ export default function WorkshopScreen() {
     }
   };
 
+  /** The choices that belong to one game (its language, its packs, its emulator): a new source,
+   *  picked or typed, starts without the last game's. */
+  const resetGameChoices = useCallback(() => {
+    setLanguage("");
+    setLz4On(false);
+    setLz4Profile(null);
+    setUnpackPacks(false);
+    setPkgUnpack(true);
+    setLeaveOutEmu(false);
+    setFreeArchiveFor(null);
+  }, []);
+
   /** A new source: the previous result and its buttons go; ignored while a run is going. */
   const chooseSource = useCallback(
     (path: string) => {
@@ -500,16 +512,10 @@ export default function WorkshopScreen() {
       setDeleteArmed(false);
       setSource(path);
       setPassword("");
-      setLanguage("");
-      setLz4On(false);
-      setLz4Profile(null);
-      setUnpackPacks(false);
-      setPkgUnpack(true);
-      setLeaveOutEmu(false);
-      setFreeArchiveFor(null);
+      resetGameChoices();
       void check(path);
     },
-    [check, reset, setSource, setPassword],
+    [check, reset, setSource, setPassword, resetGameChoices],
   );
 
   /** One game picked, dropped or handed over: checked under ①, or, while a game is being made
@@ -1126,6 +1132,8 @@ export default function WorkshopScreen() {
         setChecking(false);
         setSource(v);
         setPassword("");
+        // Another game, typed instead of picked: not the last game's language, packs or emulator.
+        resetGameChoices();
       }}
       onCheck={() => void check(source)}
       onAdd={(picked) => {
