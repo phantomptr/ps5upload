@@ -28,6 +28,7 @@ import { PlaylistsPanel } from "./PlaylistsPanel";
 import { dropIsOwnedElsewhere } from "./dropZone";
 import { probeVerdict, sendBlockedByRest } from "./probeVerdict";
 import { formatAgo } from "../../lib/formatDate";
+import { isKstuffName, KstuffKernelNote } from "./hub/kstuffKernel";
 
 /**
  * Send tab of the Payloads screen — send any custom ELF (or BIN/JS/
@@ -111,6 +112,7 @@ export default function SendPanel() {
   const host = hostDraft ?? selectedHost;
   const power = useConnectionStore((s) => s.power);
   const helperStatus = useConnectionStore((s) => s.payloadStatus);
+  const ucredElevated = useConnectionStore((s) => s.ucredElevated);
   const asleep = sendBlockedByRest(host, selectedHost, power, helperStatus);
   const [elfPath, setElfPath] = useState<string | null>(null);
   // Mirror of `elfPath` used by the editable text input so the user can
@@ -593,6 +595,13 @@ export default function SendPanel() {
               {tr("sendpayload_send", undefined, "Send")}
             </Button>
           </div>
+
+          {/* Kernel access is reported for the selected console only. */}
+          {host === selectedHost && ucredElevated === true && isKstuffName(elfPath ?? elfPathText) && (
+            <div className="mt-4">
+              <KstuffKernelNote variant="send" />
+            </div>
+          )}
 
           {status.kind === "sent" && (
             <div className="mt-4 flex items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-good)] bg-[var(--color-surface-3)] p-3 text-xs">

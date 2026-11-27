@@ -44,6 +44,7 @@ import { RUNNING_LINK } from "../payloadTabs";
 import { groupCards, matchDetail, originOf, payloadCount, type ListState, type Origin } from "./pmMerge";
 import { usePmView, usePmViewStore } from "./pmViewStore";
 import { runGate } from "./runGate";
+import { KstuffKernelNote, kstuffProbablyInKernel } from "./kstuffKernel";
 import { HushPanel, HushSummary, useHush, useHushActions } from "../../Hush";
 import {
   detectHubCards,
@@ -115,6 +116,7 @@ function OnPs5Body() {
   const navigate = useNavigate();
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
+  const ucredElevated = useConnectionStore((s) => s.ucredElevated);
   const online = payloadStatus === "up";
   const addr = mgmtAddr(host);
   const windowVisible = useDocumentVisible();
@@ -629,6 +631,8 @@ function OnPs5Body() {
           onDismiss={() => setStopError(null)}
         />
       )}
+
+      {procsLoaded && kstuffProbablyInKernel(procs, ucredElevated) && <KstuffKernelNote variant="hub" />}
 
       {loading && cards.length === 0 ? (
         <SkeletonRows rows={3} />
