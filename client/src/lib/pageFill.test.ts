@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
-import { HOME_TIP_KEY, HomeScreenTip, fillWithoutApi, showsFullButton, sidewaysNow, turnStep } from "./pageFill";
+import { HOME_TIP_KEY, HomeScreenTip, fillWithoutApi, padShowsFullButton, showsFullButton, sidewaysNow, turnStep } from "./pageFill";
 
 const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 CriOS/131.0 Mobile/15E148";
 
@@ -40,6 +40,16 @@ describe("Full screen without the Fullscreen API", () => {
     expect(fillWithoutApi()).toBe(false);
     stubPage("Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Firefox/130.0");
     expect(fillWithoutApi()).toBe(false);
+  });
+
+  it("the controller page's Full screen button goes once it has nothing left to do (iPhone)", () => {
+    const store = stubPage(IPHONE);
+    expect(padShowsFullButton(false)).toBe(true);
+    store.set(HOME_TIP_KEY, "1"); // Got it: a press would only scroll the page back up
+    expect(padShowsFullButton(false)).toBe(false);
+    expect(padShowsFullButton(true)).toBe(true);
+    stubPage(IPHONE, true); // from the Home Screen: no bars, no tip
+    expect(padShowsFullButton(false)).toBe(false);
   });
 
   it("the tip says how", () => {
