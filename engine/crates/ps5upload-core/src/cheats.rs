@@ -918,6 +918,77 @@ fn write_cheat_file(
     }
 }
 
+/// The helper's parser limits (payload/src/cheats.c): MAX_MODS_PER_FILE, MAX_MEM_ENTRIES,
+/// MAX_FILE_MEM_ENTRIES, and a location's value field of 255 characters.
+const LOCAL_MAX_MODS: usize = 64;
+const LOCAL_MAX_LOCATIONS: usize = 4096;
+const LOCAL_MAX_FILE_LOCATIONS: usize = 32768;
+/// Bytes per location written to the helper: 240 hex digits fit its 255-character field
+/// (CHEAT_SPLIT_BYTES in payload/include/cheats_plan.h).
+const LOCAL_SPLIT_BYTES: usize = 120;
+
+/// One JSON memory patch as the helper reads it: checked, separators dropped, and a patch longer
+/// than one helper location (a long code cave) cut into consecutive locations at offset, offset+120,
+/// ... An older helper truncated such a value and refused the cheat; this one splits it too.
+fn split_local_patch(patch: &serde_json::Value) -> Result<Vec<serde_json::Value>> {
+    use anyhow::ensure;
+    let text = patch
+        .get("offset")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let digits = text
+        .strip_prefix("0x")
+        .or_else(|| text.strip_prefix("0X"))
+        .unwrap_or(text);
+    ensure!(
+        !digits.is_empty() && digits.len() <= 16,
+        "invalid offset \"{text}\""
+    );
+    let offset = u64::from_str_radix(digits, 16)
+        .map_err(|_| anyhow::anyhow!("invalid offset \"{text}\""))?;
+    let mut values = Vec::new();
+    for field in ["on", "off"] {
+        let text = patch.get(field).and_then(|v| v.as_str()).unwrap_or("");
+        let hex: String = text
+            .chars()
+            .filter(|c| !" ,-:\t\r\n".contains(*c))
+            .collect();
+        ensure!(
+            !hex.is_empty()
+                && hex.len().is_multiple_of(2)
+                && hex.bytes().all(|b| b.is_ascii_hexdigit()),
+            "invalid \"{field}\" bytes"
+        );
+        values.push(hex);
+    }
+    ensure!(
+        values[0].len() == values[1].len(),
+        "\"on\" and \"off\" must be the same length"
+    );
+    if values[0].len() <= LOCAL_SPLIT_BYTES * 2 {
+        let mut p = patch.clone();
+        p["on"] = values[0].clone().into();
+        p["off"] = values[1].clone().into();
+        return Ok(vec![p]);
+    }
+    let step = LOCAL_SPLIT_BYTES * 2;
+    (0..values[0].len())
+        .step_by(step)
+        .map(|at| {
+            let end = (at + step).min(values[0].len());
+            let addr = offset
+                .checked_add((at / 2) as u64)
+                .ok_or_else(|| anyhow::anyhow!("offset {text} runs past the end of memory"))?;
+            let mut p = patch.clone();
+            p["offset"] = format!("0x{addr:X}").into();
+            p["on"] = values[0][at..end].to_string().into();
+            p["off"] = values[1][at..end].to_string().into();
+            Ok(p)
+        })
+        .collect()
+}
+
 /// Validate a local JSON trainer and strip persisted activation before writing it.
 /// Filename selects the title on the helper; an embedded ID must agree.
 pub fn prepare_local_cheat(filename: &str, bytes: &[u8]) -> Result<(String, Vec<u8>)> {
@@ -957,66 +1028,54 @@ pub fn prepare_local_cheat(filename: &str, bytes: &[u8]) -> Result<(String, Vec<
         .and_then(|v| v.as_array_mut())
         .ok_or_else(|| anyhow::anyhow!("JSON trainer needs a mods array"))?;
     ensure!(
-        !mods.is_empty() && mods.len() <= 64,
-        "Trainer must contain 1–64 mods"
+        !mods.is_empty(),
+        "This trainer has no cheats in its mods array"
     );
-    for m in mods {
+    ensure!(
+        mods.len() <= LOCAL_MAX_MODS,
+        "This trainer has {} cheats; the PS5 helper reads at most {LOCAL_MAX_MODS} per file. \
+         Split it into two files, or remove the cheats you do not use",
+        mods.len()
+    );
+    let mut file_locations = 0usize;
+    for (i, m) in mods.iter_mut().enumerate() {
+        let name = m
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         ensure!(
-            m.get("name")
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| !s.is_empty() && s.len() < 128),
-            "Each mod needs a name under 128 bytes"
+            !name.is_empty() && name.len() < 128,
+            "Cheat {} needs a name under 128 bytes",
+            i + 1
         );
         let memory = m
             .get("memory")
             .and_then(|v| v.as_array())
-            .ok_or_else(|| anyhow::anyhow!("Each mod needs a memory array"))?;
-        ensure!(
-            !memory.is_empty() && memory.len() <= 32,
-            "Each mod must contain 1–32 memory patches"
-        );
-        for patch in memory {
-            let offset = patch
-                .get("offset")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .trim();
-            let offset = offset
-                .strip_prefix("0x")
-                .or_else(|| offset.strip_prefix("0X"))
-                .unwrap_or(offset);
-            ensure!(
-                !offset.is_empty() && offset.len() <= 16 && u64::from_str_radix(offset, 16).is_ok(),
-                "Invalid patch offset"
-            );
-            let mut lengths = Vec::new();
-            for field in ["on", "off"] {
-                let text = patch.get(field).and_then(|v| v.as_str()).unwrap_or("");
-                ensure!(text.len() < 256, "Patch bytes exceed helper limit");
-                let hex: String = text
-                    .chars()
-                    .filter(|c| !" , -:\t\r\n".contains(*c))
-                    .collect();
-                ensure!(
-                    !hex.is_empty()
-                        && hex.len().is_multiple_of(2)
-                        && hex.bytes().all(|b| b.is_ascii_hexdigit()),
-                    "Invalid {field} patch bytes"
-                );
-                lengths.push(hex.len());
-            }
-            ensure!(
-                lengths[0] == lengths[1],
-                "On/off patches must be the same length"
+            .ok_or_else(|| anyhow::anyhow!("Cheat \"{name}\" needs a memory array"))?;
+        ensure!(!memory.is_empty(), "Cheat \"{name}\" has no memory patches");
+        let mut locations = Vec::with_capacity(memory.len());
+        for (j, patch) in memory.iter().enumerate() {
+            locations.extend(
+                split_local_patch(patch)
+                    .map_err(|e| anyhow::anyhow!("Cheat \"{name}\", patch {}: {e}", j + 1))?,
             );
         }
-        m["_sonic_enabled"] = false.into();
-        // The helper's scanner uses a bounded temporary buffer for each mod.
         ensure!(
-            serde_json::to_vec(m)?.len() < 8192,
-            "A mod exceeds the helper's parser limit"
+            locations.len() <= LOCAL_MAX_LOCATIONS,
+            "Cheat \"{name}\" writes {} locations; the PS5 helper takes at most \
+             {LOCAL_MAX_LOCATIONS} per cheat",
+            locations.len()
         );
+        file_locations += locations.len();
+        m["memory"] = serde_json::Value::Array(locations);
+        m["_sonic_enabled"] = false.into();
     }
+    ensure!(
+        file_locations <= LOCAL_MAX_FILE_LOCATIONS,
+        "This trainer writes {file_locations} locations in all; the PS5 helper takes at most \
+         {LOCAL_MAX_FILE_LOCATIONS} per file. Split it into two files"
+    );
     let bytes = serde_json::to_vec(&v)?;
     ensure!(
         bytes.len() <= 256 * 1024,
@@ -1327,9 +1386,67 @@ mod tests {
     }
 
     #[test]
-    fn local_import_refuses_patch_strings_that_the_helper_would_truncate() {
-        let src = serde_json::json!({"mods":[{"name":"HP","memory":[{"offset":"A0","on":"90".repeat(128),"off":"80".repeat(128)}]}]});
-        assert!(prepare_local_cheat("PPSA13197.json", &serde_json::to_vec(&src).unwrap()).is_err());
+    fn local_import_splits_long_patches_into_locations_the_helper_takes() {
+        // A 300-byte code cave written spaced ("00 01 ..." = 900 characters): the helper holds
+        // 255 characters per location, so it becomes three consecutive locations.
+        let on: Vec<String> = (0..300).map(|i| format!("{:02X}", i & 0xff)).collect();
+        let src = serde_json::json!({"mods":[{"name":"HP","memory":[
+            {"offset":"0x5CC0A91","on":on.join(" "),"off":"CC ".repeat(300),"section":2},
+            {"offset":"A0","on":"90 90","off":"80 80"}]}]});
+        let (_, bytes) =
+            prepare_local_cheat("PPSA13197.json", &serde_json::to_vec(&src).unwrap()).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let mem = v["mods"][0]["memory"].as_array().unwrap();
+        assert_eq!(mem.len(), 4);
+        let offsets: Vec<&str> = mem.iter().map(|p| p["offset"].as_str().unwrap()).collect();
+        assert_eq!(offsets, ["0x5CC0A91", "0x5CC0B09", "0x5CC0B81", "A0"]);
+        assert_eq!(mem[1]["on"].as_str().unwrap()[..6], *"78797A");
+        assert_eq!(mem[2]["on"].as_str().unwrap().len(), 120);
+        assert_eq!(mem[3]["on"], "9090");
+        for p in &mem[..3] {
+            assert_eq!(p["section"], 2);
+            assert!(p["on"].as_str().unwrap().len() < 256);
+            assert!(p["off"].as_str().unwrap().chars().all(|c| c == 'C'));
+        }
+        let joined: String = mem[..3].iter().map(|p| p["on"].as_str().unwrap()).collect();
+        assert_eq!(joined, on.concat());
+    }
+
+    #[test]
+    fn local_import_takes_a_realistic_table_and_names_the_limit_it_hits() {
+        // ~33 cheats with long patches, like the table from the report.
+        let mods: Vec<_> = (0..33)
+            .map(|i| serde_json::json!({"name": format!("Cheat {i}"), "memory": [
+                {"offset": format!("0x{:X}", 0x1000 + i * 0x400), "on": "90".repeat(200), "off": "CC".repeat(200)}]}))
+            .collect();
+        let src = serde_json::to_vec(&serde_json::json!({"mods": mods})).unwrap();
+        assert!(prepare_local_cheat("PPSA13197.json", &src).is_ok());
+
+        let mods: Vec<_> = (0..65)
+            .map(|i| serde_json::json!({"name": format!("C{i}"), "memory": [{"offset":"A0","on":"90","off":"80"}]}))
+            .collect();
+        let src = serde_json::to_vec(&serde_json::json!({"mods": mods})).unwrap();
+        let e = prepare_local_cheat("PPSA13197.json", &src)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("65 cheats") && e.contains("at most 64"), "{e}");
+
+        let src = br#"{"mods":[{"name":"HP","memory":[{"offset":"A0","on":"9090","off":"80"}]}]}"#;
+        let e = prepare_local_cheat("PPSA13197.json", src)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("Cheat \"HP\", patch 1") && e.contains("same length"),
+            "{e}"
+        );
+        let src = br#"{"mods":[{"name":"HP","memory":[{"offset":"0xFFFFFFFFFFFFFFC0","on":"","off":""}]}]}"#;
+        assert!(prepare_local_cheat("PPSA13197.json", src).is_err());
+        let wraps = serde_json::json!({"mods":[{"name":"HP","memory":[
+            {"offset":"0xFFFFFFFFFFFFFFC0","on":"90".repeat(300),"off":"80".repeat(300)}]}]});
+        let e = prepare_local_cheat("PPSA13197.json", &serde_json::to_vec(&wraps).unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("past the end"), "{e}");
     }
 
     #[test]

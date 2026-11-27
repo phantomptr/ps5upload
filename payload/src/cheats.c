@@ -763,6 +763,30 @@ static const char *json_obj_close(const char *p) {
     return NULL;
 }
 
+/* cheat_loc_split's callback: each piece of a long location as a location of its own. */
+typedef struct {
+    cheat_file_t *cf;
+    cheat_mod_t  *m;
+    int           section;
+    int           absolute;
+} split_ctx_t;
+
+static int mem_add_piece(void *ctx, const char *offset, const char *on, const char *off) {
+    split_ctx_t *sc = (split_ctx_t *)ctx;
+    mem_entry_t *e = mem_next(sc->cf, sc->m);
+    if (!e) { /* more than it can hold: never apply part of a cheat */
+        sc->m->incomplete = 1;
+        return -1;
+    }
+    snprintf(e->offset_str, sizeof e->offset_str, "%s", offset);
+    snprintf(e->on_str, sizeof e->on_str, "%s", on);
+    snprintf(e->off_str, sizeof e->off_str, "%s", off);
+    e->section = sc->section;
+    e->absolute = sc->absolute;
+    sc->m->mem_count++;
+    return 0;
+}
+
 static int parse_json_file(const char *json, size_t json_len,
                            cheat_file_t *cf) {
     (void)json_len;
@@ -826,34 +850,49 @@ static int parse_json_file(const char *json, size_t json_len,
                     if (!mp) break;
                     const char *me_end = mp + 1;
 
+                    /* Whole, however long: a location's values can be a long code cave. */
                     size_t me_len = (size_t)(me_end - me_start);
-                    char me_buf[2048];
-                    if (me_len >= sizeof(me_buf)) {
-                        me_len = sizeof(me_buf) - 1;
-                        m->incomplete = 1;
-                    }
-                    memcpy(me_buf, me_start, me_len);
-                    me_buf[me_len] = '\0';
-
-                    mem_entry_t *e = mem_next(cf, m);
-                    if (!e) { /* more than it can hold: never apply part of a cheat */
+                    char *me_buf = (char *)malloc(me_len * 3 + 3);
+                    if (!me_buf) {
                         m->incomplete = 1;
                         break;
                     }
-                    cj_str(me_buf, "offset", e->offset_str,
-                             sizeof(e->offset_str));
-                    cj_str(me_buf, "on", e->on_str,
-                             sizeof(e->on_str));
-                    cj_str(me_buf, "off", e->off_str,
-                             sizeof(e->off_str));
+                    char *on_buf = me_buf + me_len + 1, *off_buf = on_buf + me_len + 1;
+                    memcpy(me_buf, me_start, me_len);
+                    me_buf[me_len] = '\0';
                     int64_t sv = 0;
-                    if (json_num(me_buf, "section", &sv) == 0)
-                        e->section = (int)sv;
                     int bv = 0;
-                    if (json_bool(me_buf, "absolute", &bv) == 0)
-                        e->absolute = bv;
+                    split_ctx_t sc = {cf, m, 0, 0};
+                    if (json_num(me_buf, "section", &sv) == 0) sc.section = (int)sv;
+                    if (json_bool(me_buf, "absolute", &bv) == 0) sc.absolute = bv;
+                    char offset[32] = "";
+                    cj_str(me_buf, "offset", offset, sizeof offset);
+                    cj_str(me_buf, "on", on_buf, me_len + 1);
+                    cj_str(me_buf, "off", off_buf, me_len + 1);
 
-                    if (e->offset_str[0]) m->mem_count++;
+                    /* Longer than one location holds: consecutive locations, each its own
+                     * piece. Values that cannot be split stay whole and are refused when the
+                     * cheat is applied, as before. */
+                    int pieces = offset[0] ? cheat_loc_split(offset, on_buf, off_buf, mem_add_piece, &sc) : 0;
+                    if (pieces <= 0) {
+                        if (pieces < 0 && m->incomplete) {
+                            free(me_buf);
+                            break;
+                        }
+                        mem_entry_t *e = mem_next(cf, m);
+                        if (!e) { /* more than it can hold: never apply part of a cheat */
+                            m->incomplete = 1;
+                            free(me_buf);
+                            break;
+                        }
+                        snprintf(e->offset_str, sizeof e->offset_str, "%s", offset);
+                        snprintf(e->on_str, sizeof e->on_str, "%s", on_buf);
+                        snprintf(e->off_str, sizeof e->off_str, "%s", off_buf);
+                        e->section = sc.section;
+                        e->absolute = sc.absolute;
+                        if (e->offset_str[0]) m->mem_count++;
+                    }
+                    free(me_buf);
                     mp = me_end;
                 }
             }
@@ -1468,7 +1507,9 @@ static int resolve_mod_locs(pid_t pid, intptr_t base, const cheat_mod_t *mod, ch
         }
         if (strlen(e->on_str) + 1 >= sizeof(e->on_str) ||
             strlen(e->off_str) + 1 >= sizeof(e->off_str)) {
-            if (err) snprintf(err, err_cap, "location %d: value too long for the engine", i + 1);
+            if (err) snprintf(err, err_cap,
+                              "location %d: its bytes are longer than one location takes "
+                              "(255 characters); split it into several locations", i + 1);
             return -1;
         }
         int on_len = cheat_parse_hex(e->on_str, l->on, CHEAT_PLAN_MAX_BYTES);
