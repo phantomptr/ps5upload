@@ -2,6 +2,10 @@
   "ar": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -70,6 +74,10 @@
   "bn": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -142,6 +150,10 @@
   "de": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -216,13 +228,16 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "es": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -291,13 +306,16 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "fa": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -368,6 +386,10 @@
   "fr": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -435,13 +457,16 @@
       "processes_pid",
       "pt_way_internet",
       "queue_console_total",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "hi": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -514,6 +539,10 @@
   "hu": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -585,13 +614,16 @@
       "remote_play",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "id": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -665,13 +697,16 @@
       "search_saved_tooltip",
       "smp_meta_json",
       "status_helper_version",
-      "task_dump",
-      "usb_wizard_payload_filter"
+      "task_dump"
     ]
   },
   "it": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -745,13 +780,16 @@
       "search_saved_tooltip",
       "shortcuts_sec_filesystem",
       "smp_meta_json",
-      "status_helper_version",
-      "usb_wizard_payload_filter"
+      "status_helper_version"
     ]
   },
   "ja": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -821,6 +859,10 @@
   "ko": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -892,6 +934,10 @@
   "pl": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -960,13 +1006,16 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "pt-BR": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -1035,13 +1084,16 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "queue_console_total",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "ru": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -1109,13 +1161,16 @@
       "processes_pid",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "th": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -1189,6 +1244,10 @@
   "tr": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -1259,13 +1318,16 @@
       "remote_play",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "vi": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -1335,13 +1397,16 @@
       "processes_pid",
       "remote_play",
       "smp_meta_json",
-      "task_dump",
-      "usb_wizard_payload_filter"
+      "task_dump"
     ]
   },
   "zh-CN": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -1405,13 +1470,16 @@
       "helper_copy_place_pldmgr",
       "processes_pid",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   },
   "zh-TW": {
     "missing": [
       "err_launch_not_in_database",
+      "fpkg.aboutFake_v3",
+      "payloads_fpkg_ppr_note_v3",
+      "pkglib.fpkgsupport.install_kstuff_v2",
+      "pkglib.fpkgsupport.install_ppr_v2",
       "restore_action",
       "restore_all_action",
       "restore_all_body",
@@ -1475,8 +1543,7 @@
       "helper_copy_place_pldmgr",
       "processes_pid",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "usb_wizard_payload_filter"
+      "smp_meta_json"
     ]
   }
 }

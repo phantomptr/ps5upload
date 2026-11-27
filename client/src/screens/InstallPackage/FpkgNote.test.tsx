@@ -49,7 +49,8 @@ describe("FpkgNote", () => {
     const install = html.slice(html.indexOf('data-testid="fpkg-way-install"'), html.indexOf('data-testid="fpkg-way-mount"'));
     expect(install).toContain("the latest kstuff (with fake-package support up to 13.60)");
     expect(install).toContain("send the latest one with Send payload.");
-    expect(install).toContain("If the console refuses the install, also load a53_ppr_install_fast.elf");
+    expect(install).toContain("Up to firmware 11.40, if the console refuses the install, also load a53_ppr_install_fast.elf");
+    expect(install).toContain("If a game you installed with an older kstuff doesn't start, install it again.");
     expect(install).toContain("drakmor/ppr-patch");
     const mount = html.slice(html.indexOf('data-testid="fpkg-way-mount"'));
     expect(mount).toContain("Choose Copy as a file for the package here");

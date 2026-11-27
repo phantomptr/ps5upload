@@ -1588,9 +1588,9 @@ export default function WorkshopScreen() {
               </p>
               <p>
                 {tr(
-                  "fpkg.aboutFake_v2",
+                  "fpkg.aboutFake_v3",
                   undefined,
-                  "The result is a fake package, so the console needs fake-package support loaded before it will install: kstuff (the build with PS5 fake-package support), a53_ppr_install_fast.elf and shadowmountplus.elf, in that order. Upload & Install says the same next to its install buttons.",
+                "The result is a fake PS5 package with a plaintext game image, the kind the latest kstuff (fake-package support up to 13.60) and Kraken Mount both take. There are two ways to play it: install it with kstuff loaded, or copy it to a folder Kraken Mount scans to mount it. Upload & Install explains both next to its install buttons.",
                 )}
               </p>
               <details>
