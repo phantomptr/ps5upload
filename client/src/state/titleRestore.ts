@@ -92,7 +92,7 @@ export const useTitleRestoreStore = create<TitleRestoreState>((set) => {
         for (const item of items) {
           put(host, item, { title_id: item.titleId, phase: "failed", error: raw });
         }
-        throw new Error(restoreErrorText(raw, items[0].name), { cause: e });
+        throw new Error(restoreErrorText(raw, items[0].name));
       }
       void follow(host, items);
     },

@@ -141,6 +141,8 @@ async fn an_internet_guest_joins_over_webrtc_plays_and_gets_the_picture() {
     let hub_host = crate::join_net::hub_host(&hub.url).unwrap();
     let url = net["url"].as_str().unwrap();
     let (link, lan) = url.split_once("&lan=").unwrap_or((url, ""));
+    // A computer on Tailscale adds its tailnet page after the home one (`&ts=`): not this test's.
+    let lan = lan.split_once("&ts=").map_or(lan, |(home, _)| home);
     assert_eq!(
         link,
         format!(
