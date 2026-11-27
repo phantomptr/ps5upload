@@ -216,8 +216,12 @@ async fn an_internet_guest_joins_over_webrtc_plays_and_gets_the_picture() {
     assert_eq!(got[1], vec![1, 9, 9, 9]);
 
     // Their controller reaches the console.
+    // (While they pick a user ✕ waits for a move, so the user the TV offers first, the host's,
+    // is never picked by a plain ✕: a move, then ✕.)
     use vpad::{app_button as app, button as pad};
-    let _ = g.tx.send(GOut::Binary(frame(1, app::CROSS, &[], None)));
+    let _ = g.tx.send(GOut::Binary(frame(1, app::RIGHT, &[], None)));
+    let _ = g.tx.send(GOut::Binary(frame(2, 0, &[], None)));
+    let _ = g.tx.send(GOut::Binary(frame(3, app::CROSS, &[], None)));
     until("the pad", || {
         f.states()
             .iter()
