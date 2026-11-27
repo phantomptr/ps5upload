@@ -1474,6 +1474,27 @@ the console to reach PSN you'll switch its network back to WiFi /
 router when you're done uploading — or just leave PSN off while you
 transfer (PSN isn't required for any of ps5upload's features).
 
+**Q: Can I install packages from a laptop plugged straight into the PS5?**
+Yes. Everything works over the cable: uploads, Files, and installing packages. Two ways to set
+it up:
+
+- **Same subnet by hand** (Steps 1 to 4 below): fixed addresses on both sides, no internet on
+  the PS5 while it is on the cable.
+- **Let the laptop share its connection**: turn on the computer's own connection sharing for
+  the Ethernet port (Windows: **Control Panel → Network Connections**, the Wi-Fi adapter's
+  **Properties → Sharing → Allow other network users to connect**, choosing the Ethernet
+  adapter; macOS: **System Settings → General →
+  Sharing → Internet Sharing**, sharing Wi-Fi to the Ethernet port; Linux NetworkManager: the
+  wired connection's IPv4 method **Shared to other computers**). Then set the PS5 to **Use a LAN
+  Cable → Easy**. The laptop hands the PS5 an address and the PS5 can reach the internet
+  through it. Read the PS5's address in **Settings → Network → Connection Status** and type it
+  on **Connection**.
+
+Either way the app finds the PS5 by its IP, as on Wi-Fi. **Stream & install** works the other
+way round: the PS5 connects back to the laptop (port 19113) to read the package, so the
+laptop's firewall has to let the PS5 in on the cable's network (on Windows, set that network to
+**Private**; see the firewall notes in Step 2).
+
 ### Step 1 — Cable + addresses
 
 - **Cable:** any Cat5e or better, straight-through. Auto-MDIX on
