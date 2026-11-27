@@ -24,8 +24,9 @@ import { oneLangPerSelector, pageModuleSwap, pageStrings } from "./vite.pagePlug
 import { pageCss } from "./vite.pageCss";
 
 // 768 KiB in 12.1.0, once the page stopped importing the host's whole Remote Play store for rpInput
-// (state/rpInput.ts): kept close, so that does not creep back in.
-const RAW_BUDGET = 800 * 1024;
+// (state/rpInput.ts): kept close, so that does not creep back in. 804 in 12.6.39: the warning not to
+// pick the host's PS5 user took about 2 KiB.
+const RAW_BUDGET = 804 * 1024;
 const OUT = fileURLToPath(new URL("../engine/crates/ps5upload-engine/src/join_page.html", import.meta.url));
 /** The same page on the website (https://ps5upload.phantomptr.com/join/, .github/workflows/
  *  pages.yml), where internet invites open (#room=…&k=…&fp=…&hub=…, join/rtcTransport.ts). */
