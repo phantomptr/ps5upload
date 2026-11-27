@@ -46,6 +46,7 @@ import {
   FIT_ORDER,
   PadButton,
   type PictureFit,
+  type RemotePlayStream,
   type StreamError,
   type StreamStats,
 } from "../../lib/remotePlayStream";
@@ -422,7 +423,11 @@ function FitMenu({
 export function StreamPanel({
   together = false,
   onTogether,
+  tvFull = false,
 }: {
+  /** TV mode (#976): a stream fills the screen as soon as it starts here, and again each time
+   *  this screen is opened while it plays (Resume). */
+  tvFull?: boolean;
   /** Play › Play together is on show: before a stream, its Start and invite; during one, the
    *  Play Together panel with the picture. */
   together?: boolean;
@@ -888,6 +893,25 @@ export function StreamPanel({
   }, [full]);
   // Leaving the screen leaves full screen.
   useEffect(() => () => void setWindowFullscreen(false), []);
+  // TV mode: the stream fills the screen when it starts, and when this screen shows it again
+  // (it is kept while away, still laid out full; leaving gave the window's full screen back).
+  // Once per showing: Leave full screen stays left.
+  const tvFullFor = useRef<RemotePlayStream | null>(null);
+  useEffect(() => {
+    if (!tvFull) return;
+    return () => {
+      tvFullFor.current = null;
+    };
+  }, [tvFull]);
+  useEffect(() => {
+    if (!tvFull || !running || !stream || pip || androidPip || tvFullFor.current === stream) return;
+    tvFullFor.current = stream;
+    if (!full) enterFull();
+    else {
+      void setWindowFullscreen(true);
+      stage.current?.focus();
+    }
+  }, [tvFull, running, stream, full, pip, androidPip, enterFull]);
   // The iOS app: no status bar (the clock) over the picture in full screen, however it started
   // (the button or the phone turned sideways), and back on leaving (#722).
   useEffect(() => {

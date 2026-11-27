@@ -13,8 +13,9 @@ import { FOCUSABLE_SELECTOR, openModalCount } from "./focusTrap";
 
 declare global {
   interface Window {
-    /** MainActivity's bridge, on Android only. */
-    PS5UploadTv?: { isTv(): boolean };
+    /** MainActivity's bridge, on Android only. `leave` puts the app in the background, as
+     *  Back on the first screen does (step 16 of android-postinit-patch.sh). */
+    PS5UploadTv?: { isTv(): boolean; leave?(): void };
   }
 }
 
@@ -147,8 +148,49 @@ export function installArrowNav(w: Window | undefined = typeof window === "undef
   listen(w);
 }
 
+/** Whether TV mode (state/tvMode) has its frame on show: AppShell marks the page. */
+export function tvModeFrameOn(doc: Document | undefined = typeof document === "undefined" ? undefined : document): boolean {
+  return doc?.documentElement.dataset.tvMode === "1";
+}
+
+let modeListening = false;
+
+/**
+ * Once, at start-up, on any device: while TV mode's frame is on show (a phone, a computer or the
+ * web UI with TV mode switched on), the arrows move focus there too, as a TV's remote does. On a
+ * TV the listener above already does it everywhere.
+ */
+export function installTvModeNav(w: Window | undefined = typeof window === "undefined" ? undefined : window): void {
+  if (!w || modeListening) return;
+  modeListening = true;
+  w.addEventListener("keydown", (e) => {
+    const doc = w.document;
+    if (doc.documentElement.dataset.tv === "1" || !tvModeFrameOn(doc)) return;
+    handleTvKey(e, doc);
+  });
+}
+
+/** Whether the app can put itself in the background (the Android app). */
+export function canLeaveApp(w: Window | undefined = typeof window === "undefined" ? undefined : window): boolean {
+  try {
+    return typeof w?.PS5UploadTv?.leave === "function";
+  } catch {
+    return false;
+  }
+}
+
+/** The Android app to the background, as Back on its first screen does. */
+export function leaveApp(w: Window | undefined = typeof window === "undefined" ? undefined : window): void {
+  try {
+    w?.PS5UploadTv?.leave?.();
+  } catch {
+    // An app without it: nothing to do.
+  }
+}
+
 /** Test hook. */
 export function resetTvNavForTest(): void {
   installed = false;
   listening = false;
+  modeListening = false;
 }

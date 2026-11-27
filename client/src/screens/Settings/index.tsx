@@ -107,6 +107,7 @@ import { SettingsBackups } from "./SettingsBackups";
 import { TraySettings } from "./TraySettings";
 import { PlayTogetherSettings } from "./PlayTogetherSettings";
 import { TailscaleSettings } from "./TailscaleSettings";
+import { TvModeSetting } from "./TvModeSetting";
 import { LinuxGraphicsSettings } from "./LinuxGraphicsSettings";
 import { linuxGraphicsPossible } from "../../lib/linuxGraphics";
 import { trayPossible } from "../../state/tray";
@@ -660,6 +661,10 @@ function AppSettingsTab() {
           title={tr("settings_section_text_size", undefined, "Text size")}
         >
           <TextSizePicker />
+        </Section>
+
+        <Section title={tr("tv_mode", undefined, "TV mode")}>
+          <TvModeSetting />
         </Section>
 
         {/* Mobile wording: the keep-awake store drives a screen wake

@@ -10,9 +10,10 @@ import { safeGetItem, safeSetItem } from "./safeStorage";
 const LAST_ROUTE_KEY = "ps5upload.last_route";
 
 /** Never saved, so never reopened: the landing itself, the setup wizard
- *  (re-entered through Settings), and release notes (a place you visit, not
- *  work in). */
-const NOT_SAVED = new Set(["/", "/first-run", "/whats-new"]);
+ *  (re-entered through Settings), release notes (a place you visit, not
+ *  work in), and TV mode's home (TV mode opens on it by itself; the full app
+ *  reopens where it was left). */
+const NOT_SAVED = new Set(["/", "/first-run", "/whats-new", "/tv"]);
 
 export function isSavableRoute(pathname: string): boolean {
   return pathname.startsWith("/") && !pathname.startsWith("//") && !NOT_SAVED.has(pathname);

@@ -14,6 +14,8 @@ import { COMPACT_QUERY, useMedia } from "./immersive";
 import { StreamPanel } from "./StreamPanel";
 import { JoinAFriend } from "./JoinAFriend";
 import { useJoinStore } from "../../state/joinSession";
+import { useTvMode } from "../../state/tvMode";
+import { useScreenBack } from "../../lib/systemBack";
 
 /** Play my PS5 (Remote Play), Play together (host friends on it), Join a friend's game, or
  *  Receive what a friend shared (a Share link). */
@@ -28,6 +30,10 @@ export default function PlayScreen() {
   const tr = useTr();
   const navigate = useNavigate();
   const compact = useMedia(COMPACT_QUERY);
+  // TV mode (#976): Play is the game and little else. Back goes to TV mode's home, where Resume
+  // brings the stream back; the stream fills the screen as it starts.
+  const tv = useTvMode();
+  useScreenBack(tv, () => navigate("/tv", { replace: true }));
   const streaming = useRemotePlayStore(
     (s) => !!s.stream && s.phase !== null && s.phase !== "ended",
   );
@@ -95,7 +101,7 @@ export default function PlayScreen() {
         icon={MonitorPlay}
         title={tr("play_title", undefined, "Play")}
         description={
-          lean
+          lean || tv
             ? undefined
             : tr(
                 "rp_play_description2",
@@ -118,7 +124,7 @@ export default function PlayScreen() {
           </Button>
         }
       />
-      {!lean && (
+      {!lean && !tv && (
         <SegmentedControl
           ariaLabel={tr("play_mode_label", undefined, "What to play")}
           value={mode}
@@ -134,7 +140,7 @@ export default function PlayScreen() {
       {mode === "friend" ? (
         <JoinAFriend pending={pendingJoin} onPendingDone={() => setPendingJoin(null)} />
       ) : (
-        <StreamPanel together={mode === "together"} onTogether={onTogether} />
+        <StreamPanel together={mode === "together"} onTogether={onTogether} tvFull={tv} />
       )}
     </div>
   );

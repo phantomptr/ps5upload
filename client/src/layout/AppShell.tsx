@@ -17,6 +17,7 @@ import ActivityBar from "./ActivityBar";
 import { WhatsNewOnLaunch } from "./UpdateToast";
 import UpdateBanner from "./UpdateBanner";
 import UpdateFinishing from "./UpdateFinishing";
+import { TvModeReturnBar, useTvFrame } from "./TvModeFrame";
 import { useWebUpdateStore } from "./WebUpdateToast";
 import { Button } from "../components/Button";
 import { SectionErrorBoundary } from "../components/ErrorBoundary";
@@ -1825,10 +1826,13 @@ export default function AppShell() {
     }
   }, []);
 
+  // TV mode's own screens (#976): only the screen, no navigation around it (layout/TvModeFrame).
+  const tvFrame = useTvFrame();
+
   return (
     // No fill: the atmosphere is painted on <html> (index.css) and the shell
     // floats on it.
-    <div className="flex h-full flex-col text-[var(--color-text)]">
+    <div className="flex h-full flex-col text-[var(--color-text)]" data-tv-frame={tvFrame ? "" : undefined}>
       {/* v5 global a11y infrastructure — mounted once at shell root. */}
       <SkipNav />
       <LiveRegion />
@@ -1847,29 +1851,33 @@ export default function AppShell() {
           comfortable to tap, and has no arrows (#936, NavigationControls). A screen that shows
           the bell in a header of its own takes this bar's place (`html[data-screen-bar]`,
           index.css). */}
-      <div
-        data-top-bar=""
-        className="h-top-bar flex shrink-0 items-center gap-2.5 pb-2 pt-[calc(var(--safe-top)_+_0.5rem)] phone:pb-0.5 phone:pt-[calc(var(--safe-top)_+_0.125rem)] md:hidden"
-      >
-        <NavigationControls />
-        <AppLogo size={28} />
-        {/* One word that never breaks (on a 320 px phone it wrapped its last letter onto a
-            second line). */}
-        <span className="shrink-0 whitespace-nowrap text-base font-semibold tracking-[-0.02em]">PS5Upload</span>
-        {/* The bell on a phone too: its panel is a full-width sheet there. */}
-        <div className="ms-auto">
-          <NotificationInbox align="right" placement="below" variant="orb" />
+      {!tvFrame && (
+        <div
+          data-top-bar=""
+          className="h-top-bar flex shrink-0 items-center gap-2.5 pb-2 pt-[calc(var(--safe-top)_+_0.5rem)] phone:pb-0.5 phone:pt-[calc(var(--safe-top)_+_0.125rem)] md:hidden"
+        >
+          <NavigationControls />
+          <AppLogo size={28} />
+          {/* One word that never breaks (on a 320 px phone it wrapped its last letter onto a
+              second line). */}
+          <span className="shrink-0 whitespace-nowrap text-base font-semibold tracking-[-0.02em]">PS5Upload</span>
+          {/* The bell on a phone too: its panel is a full-width sheet there. */}
+          <div className="ms-auto">
+            <NotificationInbox align="right" placement="below" variant="orb" />
+          </div>
         </div>
-      </div>
+      )}
       {/* Clear of a column of system icons, as the page is (an iPhone Duo folded, #675). */}
       <div className="shell-safe-x shrink-0">
         <SessionBanner />
-        <RemotePlayBanner />
+        {/* TV mode's home has Resume itself. */}
+        {!tvFrame && <RemotePlayBanner />}
         <MovedConsoleBanner />
         <LinkDropBanner />
         <EngineDownBanner />
         <AndroidLocalNetworkBanner />
         <AndroidStorageAccessBanner />
+        <TvModeReturnBar />
       </div>
 
       {/* Desktop: the sidebar runs to the window edge, the content beside it. */}
@@ -1877,7 +1885,7 @@ export default function AppShell() {
         <div className="flex min-h-0 min-w-0 flex-1">
           {/* Desktop defaults to labeled navigation again. Users who prefer the
               compact v5 rail can collapse it explicitly; that choice persists. */}
-          <Sidebar />
+          {!tvFrame && <Sidebar />}
 
           <main
             id="main"
@@ -1887,6 +1895,7 @@ export default function AppShell() {
             {/* A phone held sideways is short: less room over this row there. */}
             {/* On a phone held sideways, a screen with its own header (Files) takes this row's
                 place: only the console tabs stay (`html[data-screen-bar]`, index.css). */}
+            {!tvFrame && (
             <div
               data-top-row=""
               className="flex min-w-0 items-center gap-3 px-3 md:px-6 md:pt-[calc(var(--safe-top)_+_1rem)] phone:md:pt-[calc(var(--safe-top)_+_0.375rem)]"
@@ -1905,6 +1914,7 @@ export default function AppShell() {
               </div>
               <TopBarActions />
             </div>
+            )}
             {/* One line, only when the person has to act: a failed update install, or a PS5
                 that runs a newer helper than this app (lib/updateNotice). A routine update is a
                 dot on Settings and a row there. Pinned above the scroll area. */}
@@ -1928,12 +1938,12 @@ export default function AppShell() {
           </main>
         </div>
       </div>
-      <ActivityBar />
-      <StatusBar />
+      {!tvFrame && <ActivityBar />}
+      {!tvFrame && <StatusBar />}
       <CommandPalette />
       <ShortcutsOverlay />
       {/* v5 mobile bottom nav — labels stay visible and More is a full route. */}
-      <TabBottomNav />
+      {!tvFrame && <TabBottomNav />}
       {/* v5 Toaster — critical-toast overlay. Mounted last so it
           sits above all other chrome in DOM order. */}
       <Toaster />
