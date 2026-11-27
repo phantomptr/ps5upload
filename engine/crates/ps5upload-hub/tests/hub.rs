@@ -1255,3 +1255,67 @@ async fn the_limit_that_fired_is_counted() {
     assert_eq!(metric(&m, "hub_rooms_closed_total"), 1);
     assert_eq!(metric(&m, "hub_rooms_expired_total"), 0);
 }
+
+/// One home (one IPv4: a family, or a carrier-grade NAT) with three devices joining one Play
+/// Together, each trying twice within the minute (the first try dropped and the page made a new
+/// one), with the page as it was before it asked for one set of candidates: its offer, then 40
+/// candidates (Firefox found 20 on one plain network for the page's data channel, video and
+/// audio; IPv6 or a VPN doubles that). The host answers each try with its answer and 10
+/// candidates. Returns how many times a limit fired.
+async fn family_session(c: Config) -> u64 {
+    let t = start(Config {
+        trusted_proxies: vec!["127.0.0.1".parse::<Cidr>().unwrap()],
+        ..c
+    })
+    .await;
+    let r = room(92);
+    let mut h = host(&t, &r, &secret(92)).await;
+    let home = Some("203.0.113.5");
+    'tries: for _try in 0..2 {
+        for _device in 0..3 {
+            let mut g = connect_with(&t, None, home).await;
+            send(&mut g, json!({"v":1,"t":"join","room":r})).await;
+            if recv(&mut g).await["t"] != "joined" {
+                break 'tries;
+            }
+            let gid = recv(&mut h).await["gid"].as_str().unwrap().to_string();
+            for i in 0..41 {
+                let data = if i == 0 {
+                    json!({"type":"offer","sdp":"v=0"})
+                } else {
+                    json!({"type":"candidate","sdpMid":"0",
+                        "candidate":format!("candidate:{i} 1 udp 1 192.0.2.1 {i} typ host")})
+                };
+                send(&mut g, json!({"t":"signal","to":"host","data":data})).await;
+                if recv(&mut h).await["t"] != "signal" {
+                    // `left`: the guest was refused and closed.
+                    break 'tries;
+                }
+            }
+            for i in 0..11 {
+                send(&mut h, json!({"t":"signal","to":gid,"data":{"i":i}})).await;
+                assert_eq!(recv(&mut g).await["data"]["i"], i);
+            }
+            // Connected: the page leaves the hub.
+            send(&mut g, json!({"t":"leave"})).await;
+            assert_eq!(recv(&mut h).await, json!({"t":"left","gid":gid}));
+        }
+    }
+    let m = &t.hub.shared.metrics;
+    ps5upload_hub::metrics::Limit::ALL
+        .iter()
+        .map(|l| m.limited_by(*l))
+        .sum()
+}
+
+#[tokio::test]
+async fn a_homes_play_together_never_hits_a_limit() {
+    assert_eq!(family_session(cfg()).await, 0);
+    // The limits before (20 per guest, 60 per client) closed the first try of such a page.
+    let before = Config {
+        max_signals_per_guest: 20,
+        max_signals_per_guest_client: 60,
+        ..cfg()
+    };
+    assert!(family_session(before).await > 0);
+}

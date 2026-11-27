@@ -159,8 +159,8 @@ Forwarded as `{"t":"signal","from":"host"|"<gid>","data":<data unchanged>}`.
 | Limit | Default |
 |-------|---------|
 | guests per room | 8 |
-| signals per guest | 20 per minute |
-| signals per guest client in one room (its guests together, joins again included) | 60 per minute |
+| signals per guest | 60 per minute (was 20: one try of a browser that trickles each candidate went past it) |
+| signals per guest client in one room (its guests together, joins again included) | 300 per minute (was 60) |
 | signals per host (all its guests together) | 200 per minute (past it: dropped) |
 | `join` attempts per client | 30 per minute (found or not) |
 | rooms on the hub | 5,000 |
@@ -175,6 +175,11 @@ Forwarded as `{"t":"signal","from":"host"|"<gid>","data":<data unchanged>}`.
 
 A *client* is an IPv4 address or an IPv6 /64. Behind a reverse proxy, the client address comes
 from the proxy's header (last entry) only when the proxy is configured as trusted.
+
+A guest's signals are its offer and each ICE candidate, one signal each, so a client should send
+few: one transport for all its sections (`bundlePolicy: "max-bundle"`), and none of the
+candidates the host cannot use (the engine takes UDP candidates with an address; `.local` and
+TCP ones it drops). The guest pages do both: about 5 signals a try instead of 20 to 40.
 
 ## Close codes
 
