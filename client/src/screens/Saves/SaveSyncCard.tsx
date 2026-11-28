@@ -33,7 +33,9 @@ import {
   consoleName,
   defaultDirection,
   directionsFor,
+  firstCopyOf,
   initialSelection,
+  keptInStep,
   needsFirstStart,
   needsPick,
   otherSide,
@@ -117,6 +119,7 @@ function SyncRowView({
   onExclude,
   auto,
   kept,
+  firstCopy,
 }: {
   row: SyncRow;
   a: string;
@@ -132,6 +135,8 @@ function SyncRowView({
   auto?: ReactNode;
   /** Kept in step: the engine copies it, so it isn't picked by hand. */
   kept?: boolean;
+  /** A PS5 save the other user has none of: the one-time first copy, or why it can't be made. */
+  firstCopy?: ReactNode;
 }) {
   const tr = useTr();
   const game = useSaveGameName(row.title_id).name ?? row.title_id;
@@ -159,7 +164,8 @@ function SyncRowView({
         </div>
       )}
       {reason && <p className="text-xs text-[var(--color-muted)]">{reason}</p>}
-      {first && (
+      {first && firstCopy}
+      {first && !firstCopy && (
         <p className="text-xs text-[var(--color-muted)]">
           {tr(
             "saves_sync_start_first",
@@ -262,6 +268,10 @@ function PairView({ pair, host, onRemoved }: { pair: SyncPair; host: string; onR
   const [autoErrors, setAutoErrors] = useState<Record<string, string | undefined>>({});
   // What an action answered, shown until the next check.
   const [autoNow, setAutoNow] = useState<Record<string, AutoView | null | undefined>>({});
+  const aUser = useUserName(current.a.host, current.a.user_id);
+  const bUser = useUserName(current.b.host, current.b.user_id);
+  const [firstBusy, setFirstBusy] = useState<string | null>(null);
+  const [firstErrors, setFirstErrors] = useState<Record<string, string | undefined>>({});
 
   const check = useCallback(async () => {
     setChecking(true);
@@ -384,6 +394,92 @@ function PairView({ pair, host, onRemoved }: { pair: SyncPair; host: string; onR
     );
   };
 
+  /** The one-time first copy, asked first: it adds a save the user did not make there. */
+  const doFirstCopy = async (r: SyncRow, where: string, user: string) => {
+    const ok = await confirm({
+      title: tr("saves_sync_first_copy_title", { console: where }, "Copy this save to {console}?"),
+      message: tr(
+        "saves_sync_first_copy_body",
+        { console: where, user },
+        "{user} has no save of this game on {console}. It's copied there and made {user}'s. Nothing on {console} is replaced, and the save here stays as it is.",
+      ),
+      confirmLabel: tr("saves_sync_first_copy_go", undefined, "Copy"),
+    });
+    if (!ok) return;
+    setFirstBusy(r.key);
+    setFirstErrors((m) => ({ ...m, [r.key]: undefined }));
+    try {
+      await saveSyncApi.firstCopy(current.id, r.key, keptInStep(current, r.key));
+      await check();
+    } catch (e) {
+      setFirstErrors((m) => ({ ...m, [r.key]: humanizeCaught(e) }));
+    } finally {
+      setFirstBusy(null);
+    }
+  };
+
+  const firstCopyPanel = (r: SyncRow) => {
+    const fc = firstCopyOf(r);
+    if (!fc) return null;
+    const where = fc.to === "a" ? a : b;
+    const user = fc.to === "a" ? aUser : bUser;
+    if (!fc.ok) {
+      const why =
+        fc.code === "old_helper"
+          ? tr(
+              "saves_sync_first_copy_old_helper",
+              { console: where },
+              "The PS5Upload helper on {console} is too old to make a save another user's. Update it there, then check again.",
+            )
+          : fc.code === "no_saved_data"
+            ? tr(
+                "saves_sync_first_copy_no_saved_data",
+                { console: where, user },
+                "{user} has never saved a PS5 game on {console}, so a save can't be added for them yet. Start any PS5 game once as {user} there and save, then check again.",
+              )
+            : fc.code === "no_backup_place"
+              ? tr(
+                  "saves_sync_first_copy_no_backup_place",
+                  undefined,
+                  "Choose a folder or a server for save backups first (Automatic backups): a copy of the save is kept there.",
+                )
+              : tr(
+                  "saves_sync_start_first_user",
+                  { console: where, user },
+                  "Start the game once as {user} on {console} and save, then check again.",
+                );
+      return (
+        <div className="flex flex-col gap-0.5">
+          <p className="text-xs text-[var(--color-muted)]">{why}</p>
+          {!fc.code && fc.why && <p className="text-xs text-[var(--color-muted)]">{fc.why}</p>}
+        </div>
+      );
+    }
+    return (
+      <div className="flex flex-col gap-1" data-testid="save-sync-first-copy">
+        <p className="text-xs text-[var(--color-muted)]">
+          {tr(
+            "saves_sync_first_copy_hint",
+            { console: where, user },
+            "{user} has no save of this game on {console} yet. It can be copied there once and made {user}'s; nothing there is replaced. After that it syncs like the others.",
+          )}
+        </p>
+        <div>
+          <Button
+            variant="secondary"
+            size="sm"
+            loading={firstBusy === r.key}
+            disabled={busy || (firstBusy !== null && firstBusy !== r.key)}
+            onClick={() => void doFirstCopy(r, where, user)}
+          >
+            {tr("saves_sync_first_copy", { console: where, user }, "Copy to {console} ({user} has no save yet)")}
+          </Button>
+        </div>
+        {firstErrors[r.key] && <p className="text-xs text-[var(--color-bad)]">{firstErrors[r.key]}</p>}
+      </div>
+    );
+  };
+
   const count = rows ? applyItems(rows, selected, picks).length : 0;
   return (
     <div className="flex flex-col gap-2 rounded-[var(--radius-field)] border border-[var(--color-border)] p-3" data-testid="save-sync-pair">
@@ -470,6 +566,7 @@ function PairView({ pair, host, onRemoved }: { pair: SyncPair; host: string; onR
                 onExclude={(out) => void exclude(r.key, out)}
                 auto={r.status === "excluded" ? null : autoPanel(r)}
                 kept={autoOf(r, current) !== null}
+                firstCopy={firstCopyPanel(r)}
               />
             ))}
           </ul>

@@ -15,10 +15,12 @@
 //! - **A console off, resting, settling or busy**: the copy waits and is made once it answers
 //!   (and has been up for 90 s). A console is never woken unless the user turned that on for the
 //!   pair, and then at most once in half an hour.
-//! - **Can't sync**: a PS4 save, a PS5 save with none of the game on the other side yet, or a copy
-//!   the helper there can't make safely (#809: images the other user lacks and a helper that can't
-//!   make a save theirs). Said plainly; such a save can't be turned on, and one that fails three
-//!   times in a row stops until Sync now.
+//! - **No save on the other side yet** (a PS5 save): never made there by itself. It waits for the
+//!   user's one-time first copy (`POST /api/save-sync/first-copy`), or for the game's own first
+//!   save there, which is then a pick like any never-synced save.
+//! - **Can't sync**: a PS4 save, or a copy the helper there can't make safely (#809: images the
+//!   other user lacks and a helper that can't make a save theirs). Said plainly; a PS4 save can't
+//!   be turned on, and one that fails three times in a row stops until Sync now.
 //!
 //! When it runs: a game closing on either console (the after-close look of [`crate::save_sync`]),
 //! every minute for a copy waiting on a console, and every 10 minutes for all of them (a game
@@ -26,7 +28,49 @@
 //! around the clock.
 //!
 //! The decisions are pure ([`plan`]); the console work goes through [`Env`], so all of it is
-//! tested without a PS5.
+//! tested without a PS5. What a console's own page shows of it is `save_sync_console`.
+//!
+//! ## The gaps closed in 12.6.46, and why this way
+//!
+//! **A user's first save of a game on the other console.** Options weighed: (a) keep refusing and
+//! ask the user to start the game there first; (b) copy it there by itself as soon as it is turned
+//! on; (c) make it a one-time copy the user asks for, then keep it in step like any other.
+//! The mechanism exists and is measured: Saves › Copy to another console already sends a save to
+//! a user with none of the game as whole images and makes each theirs (`save_copy::copy_to_console`
+//! → `restore_owned`: the helper's `save.owner` writes their account and user id into the save's
+//! param.sfo and adds its row to their save database; on FW 13.60 the game then shows Continue,
+//! and without that step it starts as new, #809). A same-user restore needs no database change
+//! (delete + write the images works in-game), but a brand-new save does: the row is what makes the
+//! console list it, which is why the plain copy path never did it. Chosen: (c). It is the one step
+//! that adds a save the user did not make there, so it is never automatic: the app shows "Copy to
+//! <console> (<user> has no save yet)" with the check made first ([`sync::FirstCopy`]), and keeps
+//! (a)'s words where the copy can't be made: a helper too old for `save.owner`, or a user who has
+//! never saved any PS5 game there (they have no save database, and making one has never been
+//! tried, `save_copy::first_copy_check`). Turned on without the copy, the save waits
+//! ([`AutoReason::NoSave`]) and becomes a pick once the game saves there by itself; it is never
+//! overwritten without one. Not covered: a save whose param.sfo is in a protected block (never
+//! seen on 13.60; the helper's block write is untested on hardware).
+//!
+//! **PS4 saves.** Options: (a) copy the files as they are (backup on one side, restore on the
+//! other); (b) the PS5 path (open decrypted, put the files in the other user's save); (c) leave
+//! them out. Nothing in the app moves a PS4 save to another user or PS5: Copy to another console
+//! refuses it, `restore_owned` refuses a PS4 image (its owner is more than the account and user in
+//! its param.sfo, and its key file `<name>.bin` is the console's), and Move saves from a PS4 is
+//! experimental with mixed reports. (b) has never opened a PS4 image here. Chosen: (c), said
+//! plainly ([`PS4_WORDS`]): a PS4 save is backed up and restored on the same PS5 and user only.
+//!
+//! **The console's own page.** The page talks only to its helper and save sync lives in the
+//! engine, so the engine writes a small status document onto each console through the mesh's
+//! documents and the helper serves it read only (`save_sync_console`). Options weighed: the page
+//! asking the engine directly (it has no address for it, and a PS5 browser can't reach a computer
+//! that is asleep), a new helper store (more code on the console for the same thing). Chosen: the
+//! mesh documents already kept and size-limited on the console, written only when something
+//! changed or every half hour.
+//!
+//! **Testing on one console.** The second user and console can't be made (no create-user on
+//! PS5), so the decisions are tested with fake consoles; on hardware one user is paired with
+//! itself under two addresses of the same console, and the kept base of one side is changed by
+//! hand so the engine sees a one-sided change and runs the real copy end to end.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -80,7 +124,9 @@ pub enum AutoReason {
     Error,
     /// A PS4 save: it can't go to another console.
     Ps4,
-    /// A PS5 save with none of the game for the user on that console yet.
+    /// Waiting: a PS5 save with none of the game for the user on that console yet. It goes there
+    /// once the user asks for the first copy (`detail`: why that can't be made, when it can't),
+    /// or the game makes its own save there (then the user picks which to keep).
     NoSave,
     /// The copy would not be safe (`detail` says why).
     Refused,
@@ -264,11 +310,12 @@ pub fn plan(row: &SyncRow, prev: Option<&AutoView>) -> Plan {
                 };
             }
             match prev {
-                // Still waiting for the same thing.
+                // Still waiting for the same thing. A save waiting for its first save there has no
+                // copy to make, so a console away is never woken for it.
                 Some(p) if p.state == AutoState::Waiting => Plan::Wait {
                     side,
                     reason,
-                    direction: p.direction,
+                    direction: p.direction.filter(|_| p.reason != Some(AutoReason::NoSave)),
                 },
                 None => Plan::Wait {
                     side,
@@ -296,9 +343,12 @@ pub fn plan(row: &SyncRow, prev: Option<&AutoView>) -> Plan {
                     'a'
                 };
                 if row.kind == "ps5" {
-                    Plan::CantSync {
-                        side: Some(missing),
+                    // Never made there by itself: it waits for the user's one-time first copy,
+                    // or for the game's own first save there (then the user picks).
+                    Plan::Wait {
+                        side: missing,
                         reason: AutoReason::NoSave,
+                        direction: None,
                     }
                 } else {
                     // An emulator's save goes into the same place there.
@@ -310,30 +360,15 @@ pub fn plan(row: &SyncRow, prev: Option<&AutoView>) -> Plan {
     }
 }
 
-/// Whether a save may be turned on at all, from a check of it: never a PS4 save, nor a PS5 save
-/// the other user has none of yet. Err: the words for the user.
-pub fn can_turn_on(row: &SyncRow, a: &str, b: &str) -> Result<(), String> {
+/// The words for a PS4 save, which is never kept in step (see the module docs).
+pub const PS4_WORDS: &str = "PS4 saves can't be kept in step: PS5Upload copies a PS4 save only back to the same user on the same PS5 (Restore). Moving one to another user or PS5 isn't supported.";
+
+/// Whether a save may be turned on at all, from a check of it: never a PS4 save. A PS5 save the
+/// other user has none of yet may: it waits for the one-time first copy or the game's own first
+/// save there. Err: the words for the user.
+pub fn can_turn_on(row: &SyncRow) -> Result<(), String> {
     if row.kind == "ps4" || row.reason == Some(SyncReason::Ps4) {
-        return Err(
-            "PS4 saves can't be moved to another console, so this one can't be kept in step."
-                .into(),
-        );
-    }
-    if row.status == SyncStatus::Excluded {
-        return Ok(());
-    }
-    if row.kind == "ps5" && row.reason.is_none() {
-        let missing = match row.status {
-            SyncStatus::OnlyOnA => Some(b),
-            SyncStatus::OnlyOnB => Some(a),
-            _ => None,
-        };
-        if let Some(host) = missing {
-            return Err(format!(
-                "There is no save of {} for the user on {host} yet. Start the game there once and save, then turn this on.",
-                row.title_id
-            ));
-        }
+        return Err(PS4_WORDS.into());
     }
     Ok(())
 }
@@ -465,6 +500,9 @@ pub fn step(
             if reason == AutoReason::Error {
                 v.detail = row.last_error.clone();
             }
+            if reason == AutoReason::NoSave {
+                v.detail = row.first_copy.as_ref().and_then(|f| f.why.clone());
+            }
             maybe_wake(env, pair, &mut v, now);
             v
         }
@@ -579,6 +617,9 @@ fn due(v: Option<&AutoView>, sweep: bool, answered: &dyn Fn(char) -> bool) -> bo
         Some(v) if v.state == AutoState::Waiting => match (v.reason, v.side) {
             // Looked at once the console waited for answers again.
             (Some(AutoReason::Offline), Some(side)) => answered(side),
+            // Waiting for a first save there: the game closing there is looked at anyway (the
+            // after-close look), the rest with the sweep.
+            (Some(AutoReason::NoSave), _) => sweep,
             _ => true,
         },
         Some(_) => sweep,
@@ -813,7 +854,7 @@ pub fn turn_on(
         .into_iter()
         .next()
         .ok_or_else(|| "That save is not on either console.".to_string())?;
-    can_turn_on(&row, &pair.a.host, &pair.b.host)?;
+    can_turn_on(&row)?;
     // A copy has to be safe both ways, so each side is asked where both have the save.
     if row.reason.is_none() && row.a.is_some() && row.b.is_some() {
         for dir in [SyncDirection::AToB, SyncDirection::BToA] {
@@ -843,6 +884,9 @@ pub fn turn_on(
             v.side = Some(side);
             v.reason = Some(reason);
             v.direction = direction;
+            if reason == AutoReason::NoSave {
+                v.detail = row.first_copy.as_ref().and_then(|f| f.why.clone());
+            }
             v
         }
         Plan::CantSync { side, reason } => {
@@ -989,6 +1033,119 @@ pub fn resolve(
         .and_then(|i| i.auto.clone()))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct FirstCopyBody {
+    pub pair: String,
+    pub key: String,
+    /// Keep the save in step from then on (the switch turned on with the copy).
+    #[serde(default)]
+    pub keep_in_step: bool,
+}
+
+/// `POST /api/save-sync/first-copy` `{pair, key, keep_in_step?}`: the one-time first copy of a PS5
+/// save that only one side has, to the other user, made theirs there (see
+/// [`sync::apply_first`]). Refused with the reason when the console there can't make it theirs
+/// or the save is on both sides by now. After it the two are in step, and with `keep_in_step`
+/// kept so.
+pub async fn post_first_copy(Json(b): Json<FirstCopyBody>) -> Response {
+    let Some(pair) = sync::find_pair(&b.pair) else {
+        return sync::no_pair();
+    };
+    let key = b.key.trim().to_string();
+    if key.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "which save?");
+    }
+    let keep = b.keep_in_step;
+    let r = tokio::task::spawn_blocking(move || {
+        with_pair(&pair, |state| {
+            let view = first_copy(
+                &sync::Live,
+                &pair,
+                state,
+                &key,
+                keep,
+                now_ms(),
+                &sync::settle_now,
+            )?;
+            if keep {
+                keep_turned_on(&pair.id, &key)?;
+            }
+            Ok::<_, String>(view)
+        })
+    })
+    .await;
+    match r {
+        Ok(Some(Ok(view))) => Json(json!({ "ok": true, "auto": view })).into_response(),
+        Ok(Some(Err(e))) => json_error(StatusCode::CONFLICT, e),
+        Ok(None) => busy_now(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// The first copy (see [`post_first_copy`]): from the side that has the save. The save as it
+/// stands after, if it is kept in step (or `keep`: from now on).
+pub fn first_copy(
+    env: &dyn Env,
+    pair: &SyncPair,
+    state: &mut State,
+    key: &str,
+    keep: bool,
+    now: u64,
+    settle_from: &dyn Fn(&str) -> bool,
+) -> Result<Option<AutoView>, String> {
+    let rows = check(env, pair, state, now, &|k, _| k == key, settle_from);
+    let row = rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| "That save is not on either console.".to_string())?;
+    let dir = match row.status {
+        SyncStatus::OnlyOnA => SyncDirection::AToB,
+        SyncStatus::OnlyOnB => SyncDirection::BToA,
+        _ if row.reason.is_some() => {
+            // Offline, running, a PS4 save: apply says it in its words.
+            SyncDirection::AToB
+        }
+        _ => {
+            return Err(
+                "Both users have a save of this game now: use Sync instead of a first copy.".into(),
+            )
+        }
+    };
+    if keep {
+        // Turned on with the copy: the copy that follows marks it in step.
+        let slot = state.items.entry(item_key(&pair.id, key)).or_default();
+        if slot.auto.is_none() {
+            let mut v = AutoView::new(AutoState::Waiting, &row, None, now);
+            v.reason = Some(AutoReason::Queued);
+            v.direction = Some(dir);
+            v.side = Some(to_side(dir));
+            slot.auto = Some(v);
+        }
+    }
+    let r = sync::apply_first(env, pair, state, key, dir, now, settle_from);
+    if r.is_err() && keep {
+        // Not turned on by a copy that did not happen (unless it was on before).
+        if !pair.auto.iter().any(|k| k == key) {
+            if let Some(i) = state.items.get_mut(&item_key(&pair.id, key)) {
+                i.auto = None;
+            }
+        }
+    }
+    r?;
+    let (from, to) = sides(pair, dir);
+    crate::log_info!(
+        "save sync: {key} copied for the first time from {} to {} (user {:08x}, who had none) ({})",
+        from.host,
+        to.host,
+        to.user_id,
+        pair.id
+    );
+    Ok(state
+        .items
+        .get(&item_key(&pair.id, key))
+        .and_then(|i| i.auto.clone()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1013,6 +1170,7 @@ mod tests {
             synced_ms: None,
             last_error: None,
             auto: None,
+            first_copy: None,
             a_changed: None,
             b_changed: None,
             apps: vec![K.into()],
@@ -1147,29 +1305,42 @@ mod tests {
                 reason: AutoReason::Ps4
             }
         );
-        assert!(can_turn_on(&ps4, A, B).unwrap_err().contains("PS4"));
-        // A PS5 save the other user has none of: never made there by save sync.
+        assert!(can_turn_on(&ps4).unwrap_err().contains("PS4"));
+        // A PS5 save the other user has none of: never made there by itself. It waits for the
+        // user's first copy, or the game's own first save there.
         assert_eq!(
             plan(&row(SyncStatus::OnlyOnA), None),
-            Plan::CantSync {
-                side: Some('b'),
-                reason: AutoReason::NoSave
+            Plan::Wait {
+                side: 'b',
+                reason: AutoReason::NoSave,
+                direction: None
             }
         );
-        assert!(can_turn_on(&row(SyncStatus::OnlyOnA), A, B)
-            .unwrap_err()
-            .contains(B));
-        assert!(can_turn_on(&row(SyncStatus::OnlyOnB), A, B)
-            .unwrap_err()
-            .contains(A));
+        // The other console going to rest meanwhile is never woken for it: nothing to send yet.
+        let mut no_save = view(AutoState::Waiting);
+        no_save.reason = Some(AutoReason::NoSave);
+        no_save.direction = Some(AToB);
+        assert_eq!(
+            plan(
+                &blocked(SyncReason::Offline, 'b', None, None),
+                Some(&no_save)
+            ),
+            Plan::Wait {
+                side: 'b',
+                reason: AutoReason::Offline,
+                direction: None
+            }
+        );
+        assert!(can_turn_on(&row(SyncStatus::OnlyOnA)).is_ok());
+        assert!(can_turn_on(&row(SyncStatus::OnlyOnB)).is_ok());
         // An emulator's save goes into the same place there.
         let emu = SyncRow {
             kind: "ps2".into(),
             ..row(SyncStatus::OnlyOnB)
         };
         assert_eq!(plan(&emu, None), Plan::Copy(BToA));
-        assert!(can_turn_on(&emu, A, B).is_ok());
-        assert!(can_turn_on(&row(SyncStatus::BothChanged), A, B).is_ok());
+        assert!(can_turn_on(&emu).is_ok());
+        assert!(can_turn_on(&row(SyncStatus::BothChanged)).is_ok());
     }
 
     // ── with fake consoles ───────────────────────────────────────────────
@@ -1445,11 +1616,15 @@ mod tests {
             (AutoState::Waiting, Some(AutoReason::Queued), Some(BToA))
         );
         assert_eq!(f.copies.borrow().len(), 1);
-        // A PS5 save only on one side, and a PS4 save, are refused.
+        // A PS5 save only on one side waits for its first save there; nothing is copied.
         let f = fake(&[K], &[]);
-        assert!(turn_on(&f, &p, &mut State::default(), K, 1, &never)
-            .unwrap_err()
-            .contains("Start the game there once"));
+        let v = turn_on(&f, &p, &mut State::default(), K, 1, &never).unwrap();
+        assert_eq!(
+            (v.state, v.reason, v.side),
+            (AutoState::Waiting, Some(AutoReason::NoSave), Some('b'))
+        );
+        assert!(f.copies.borrow().is_empty());
+        // A PS4 save is refused.
         let f = Fake::default();
         f.with(A, |c| c.saves = vec![save("CUSA01234", 1, "ps4", 10)]);
         f.with(B, |c| c.saves = vec![save("CUSA01234", 2, "ps4", 10)]);
@@ -1458,6 +1633,102 @@ mod tests {
                 .unwrap_err()
                 .contains("PS4")
         );
+    }
+
+    // ── a first save on the other side ──────────────────────────────────
+
+    #[test]
+    fn a_first_copy_makes_the_save_there_once_and_keeps_it_in_step_after() {
+        let f = fake(&[K], &[]);
+        let mut p = pair();
+        let mut st = State::default();
+        // The check says it can be made there.
+        let rows = check(&f, &p, &mut st, 1, &|k, _| k == K, &never);
+        assert_eq!(rows[0].status, SyncStatus::OnlyOnA);
+        assert_eq!(rows[0].first_copy.as_ref().map(|c| c.ok), Some(true));
+        // Sync's own copy never makes it.
+        assert!(apply(&f, &p, &mut st, K, AToB, 2, &never)
+            .unwrap_err()
+            .contains("Start the game once there"));
+        assert!(f.copies.borrow().is_empty());
+        // The first copy, with keeping in step turned on with it.
+        let v = first_copy(&f, &p, &mut st, K, true, 3, &never)
+            .unwrap()
+            .unwrap();
+        assert_eq!(*f.copies.borrow(), vec![format!("{K} {A} -> {B}")]);
+        assert_eq!(
+            (v.state, v.copied_direction),
+            (AutoState::InStep, Some(AToB))
+        );
+        // Both sides' fingerprints are the base now: in step, nothing more to copy.
+        p.auto = vec![K.into()];
+        let s = Settings {
+            pairs: vec![p.clone()],
+        };
+        let mut w = Watch::default();
+        look(&f, &s, &mut st, &mut w, 10);
+        assert_eq!(f.copies.borrow().len(), 1);
+        assert_eq!(auto_of(&st, &p).state, AutoState::InStep);
+        // Played on B afterwards: back to A by itself, like any save kept in step.
+        play(&f, B, &s, &mut st, &mut w, 20);
+        look(&f, &s, &mut st, &mut w, 30);
+        assert_eq!(f.copies.borrow()[1], format!("{K} {B} -> {A}"));
+        // Once both have it, a first copy is refused.
+        assert!(first_copy(&f, &p, &mut st, K, false, 40, &never)
+            .unwrap_err()
+            .contains("Both users"));
+    }
+
+    #[test]
+    fn a_first_copy_the_console_there_cant_make_is_refused_and_said() {
+        let f = fake(&[K], &[]);
+        f.with(B, |c| {
+            c.refuse_first = Some(crate::save_copy::NO_SAVE_DATABASE.into())
+        });
+        let p = pair();
+        let mut st = State::default();
+        let rows = check(&f, &p, &mut st, 1, &|k, _| k == K, &never);
+        let fc = rows[0].first_copy.clone().unwrap();
+        assert!(!fc.ok);
+        assert_eq!(fc.code.as_deref(), Some("no_saved_data"));
+        assert!(fc.why.unwrap().contains("never saved a PS5 game"));
+        let e = first_copy(&f, &p, &mut st, K, true, 2, &never).unwrap_err();
+        assert!(e.contains("never saved a PS5 game"));
+        assert!(f.copies.borrow().is_empty());
+        // Not turned on by a copy that did not happen.
+        assert!(st
+            .items
+            .get(&item_key(&p.id, K))
+            .and_then(|i| i.auto.as_ref())
+            .is_none());
+        // Turned on anyway: it waits, and says why the copy can't be made.
+        let v = turn_on(&f, &p, &mut st, K, 3, &never).unwrap();
+        assert_eq!(v.reason, Some(AutoReason::NoSave));
+        assert!(v.detail.unwrap().contains("never saved a PS5 game"));
+    }
+
+    #[test]
+    fn waiting_for_a_first_save_becomes_a_pick_once_the_game_saves_there() {
+        let f = fake(&[K], &[]);
+        let mut p = pair();
+        p.auto = vec![K.into()];
+        let s = Settings {
+            pairs: vec![p.clone()],
+        };
+        let mut st = State::default();
+        let mut w = Watch::default();
+        turn_on(&f, &p, &mut st, K, 1, &never).unwrap();
+        look(&f, &s, &mut st, &mut w, 10);
+        assert_eq!(auto_of(&st, &p).reason, Some(AutoReason::NoSave));
+        // Not looked at every minute: only with the sweep, or the game closing there.
+        f.with(B, |c| c.saves.push(save(K, 2, "ps5", 5)));
+        look(&f, &s, &mut st, &mut w, 70);
+        assert_eq!(auto_of(&st, &p).reason, Some(AutoReason::NoSave));
+        look(&f, &s, &mut st, &mut w, 10 + SWEEP_MS);
+        let v = auto_of(&st, &p);
+        // Never synced: the user picks which to keep; nothing is overwritten.
+        assert_eq!((v.state, v.first), (AutoState::Conflict, true));
+        assert!(f.copies.borrow().is_empty());
     }
 
     #[test]

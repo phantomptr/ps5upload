@@ -54,9 +54,12 @@ pub(super) fn tools() -> Vec<ToolDef> {
             title: "Saves kept in step between two consoles",
             description: "Each save the user keeps in step automatically between two consoles, \
                           and where it stands: `state` in_step, waiting (for the console in \
-                          `side`, `reason` offline/settling/running/queued/error), conflict (both \
-                          changed: the user picks; `kept` names the backups of both) or \
-                          cant_sync (`reason` ps4/no_save/refused/failed, `detail` in words), \
+                          `side`, `reason` offline/settling/running/queued/error, or no_save: \
+                          no save of the game for the user there yet, until the user's one-time \
+                          first copy or the game's own first save; `detail` says why a first copy \
+                          can't be made), conflict (both changed: the user picks; `kept` names \
+                          the backups of both) or cant_sync (`reason` ps4/refused/failed, \
+                          `detail` in words), \
                           with the last copy (`copied_ms`, `copied_direction`). Nothing here \
                           touches a console.",
             kind: Kind::Read,

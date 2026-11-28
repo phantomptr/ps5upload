@@ -133,6 +133,7 @@ mod save_folders;
 mod save_layout;
 mod save_sync;
 mod save_sync_auto;
+mod save_sync_console;
 mod self_host;
 mod server_out;
 mod settings_api;
@@ -14045,6 +14046,10 @@ fn build_app_and_mcp(
             post(save_sync_auto::post_sync_now),
         )
         .route("/api/save-sync/resolve", post(save_sync_auto::post_resolve))
+        .route(
+            "/api/save-sync/first-copy",
+            post(save_sync_auto::post_first_copy),
+        )
         .route(
             "/api/shared/{name}",
             get(shared_state::get_doc).put(shared_state::put_doc),

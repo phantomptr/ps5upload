@@ -101,6 +101,14 @@ export interface SyncRow {
   last_error: string | null;
   /** Kept in step automatically: where it stood at this check. */
   auto?: AutoView | null;
+  /** A PS5 save on one side only: whether the one-time first copy to the other user can be made,
+   *  and if not, why (engine words). */
+  first_copy?: {
+    ok: boolean;
+    why?: string | null;
+    /** `why` as a code the app words itself; null for anything else. */
+    code?: "old_helper" | "no_saved_data" | "no_backup_place" | null;
+  } | null;
 }
 
 export interface SyncSuggestion {
@@ -192,6 +200,14 @@ export const saveSyncApi = {
       method: "POST",
       timeoutMs: ENGINE_LONG_TIMEOUT_MS,
       body: JSON.stringify({ pair, key, keep }),
+    }),
+  /** The one-time first copy of a PS5 save only one side has, to the other user (made theirs
+   *  there). `keepInStep`: keep it in step from then on. */
+  firstCopy: (pair: string, key: string, keepInStep = false) =>
+    call<{ ok: boolean; auto: AutoView | null }>("/first-copy", {
+      method: "POST",
+      timeoutMs: ENGINE_LONG_TIMEOUT_MS,
+      body: JSON.stringify({ pair, key, keep_in_step: keepInStep }),
     }),
   removePair: (pair: string) =>
     call<{ ok: boolean }>("/pair/remove", { method: "POST", body: JSON.stringify({ pair }) }),

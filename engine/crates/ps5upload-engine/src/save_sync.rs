@@ -214,6 +214,10 @@ pub struct SyncRow {
     pub last_error: Option<String>,
     /// Kept in step automatically: where that stood before this check.
     pub auto: Option<crate::save_sync_auto::AutoView>,
+    /// A PS5 save on one side only: whether the one-time first copy to the other user can be
+    /// made (`POST /api/save-sync/first-copy`), and if not, why.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_copy: Option<FirstCopy>,
     /// Which side changed since the last copy, where it could be read.
     #[serde(skip)]
     pub a_changed: Option<bool>,
@@ -222,6 +226,40 @@ pub struct SyncRow {
     /// The titles whose closing means this save may have changed.
     #[serde(skip)]
     pub apps: Vec<String>,
+}
+
+/// Whether a PS5 save on one side only can be copied to the other user, who has none of the game
+/// yet: once, when the user asks (never by itself). `why`: the words when it can't.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FirstCopy {
+    pub ok: bool,
+    #[serde(default)]
+    pub why: Option<String>,
+    /// `why` as a code the app says in its own words: `old_helper`, `no_saved_data`,
+    /// `no_backup_place`; None for anything else (then `why` is shown).
+    #[serde(default)]
+    pub code: Option<String>,
+}
+
+impl FirstCopy {
+    pub fn of(answer: Result<(), String>) -> Self {
+        let code = answer.as_ref().err().and_then(|w| {
+            if w == crate::save_copy::NO_OWNER_HELPER {
+                Some("old_helper")
+            } else if w == crate::save_copy::NO_SAVE_DATABASE {
+                Some("no_saved_data")
+            } else if w.starts_with("Choose a folder or a server for save backups") {
+                Some("no_backup_place")
+            } else {
+                None
+            }
+        });
+        FirstCopy {
+            ok: answer.is_ok(),
+            code: code.map(str::to_string),
+            why: answer.err(),
+        }
+    }
 }
 
 // ── the console work ────────────────────────────────────────────────────
@@ -254,6 +292,9 @@ pub trait Env {
         src: &SaveEntry,
         dst: Option<&SaveEntry>,
     ) -> Result<(), String>;
+    /// What the one-time first copy of `src` (on `from`) to `to`, a user with no save of the game,
+    /// would refuse, changing nothing (`save_copy::first_copy_check`).
+    fn first_check(&self, from: &SyncSide, to: &SyncSide, src: &SaveEntry) -> Result<(), String>;
     /// Backs up `entry` on `side` (a conflict: both saves are kept); the backup's file name.
     fn keep(&self, side: &SyncSide, entry: &SaveEntry) -> Result<String, String>;
     /// Wakes `host` from rest (only when the user turned that on for the pair).
@@ -322,6 +363,12 @@ impl Env for Live {
         } else {
             there.can_back_up()
         }
+    }
+    fn first_check(&self, _from: &SyncSide, to: &SyncSide, src: &SaveEntry) -> Result<(), String> {
+        if src.kind != "ps5" {
+            return Err("Only a PS5 save can be made another user's.".into());
+        }
+        crate::save_copy::first_copy_check(&crate::save_copy::Live::new(&to.host), to.user_id)
     }
     fn keep(&self, side: &SyncSide, entry: &SaveEntry) -> Result<String, String> {
         use crate::save_copy::Console as _;
@@ -545,6 +592,7 @@ pub fn check(
         }
     }
     let mut rows = Vec::new();
+    let mut first_ok: BTreeMap<char, Result<(), String>> = BTreeMap::new();
     for key in keys {
         let ea = a.saves.as_ref().and_then(|m| m.get(&key));
         let eb = b.saves.as_ref().and_then(|m| m.get(&key));
@@ -570,6 +618,7 @@ pub fn check(
             synced_ms: kept.synced.as_ref().map(|s| s.at_ms),
             last_error: kept.last_error.clone(),
             auto: kept.auto.clone(),
+            first_copy: None,
             a_changed: None,
             b_changed: None,
             apps: apps.clone(),
@@ -652,6 +701,20 @@ pub fn check(
             (None, Some(_)) => SyncStatus::OnlyOnB,
             _ => SyncStatus::Unavailable,
         };
+        // A PS5 save the other user has none of: whether it can be copied there once. Asked once
+        // per console in a check (the answer is about the console and its user, not the game).
+        let one_side = match row.status {
+            SyncStatus::OnlyOnA => Some((&pair.a, &pair.b, ea, 'b')),
+            SyncStatus::OnlyOnB => Some((&pair.b, &pair.a, eb, 'a')),
+            _ => None,
+        };
+        if let (Some((from, to, Some(src), c)), "ps5") = (one_side, row.kind.as_str()) {
+            let answer = first_ok
+                .entry(c)
+                .or_insert_with(|| env.first_check(from, to, src))
+                .clone();
+            row.first_copy = Some(FirstCopy::of(answer));
+        }
         rows.push(row);
     }
     rows
@@ -659,7 +722,8 @@ pub fn check(
 
 /// Copies one save of the pair in `dir`, after checking it again: refused when its state no
 /// longer allows that direction (it changed since the check), a game runs, or a PS5 save has no
-/// save on the other side yet. Both sides' fingerprints are kept after it.
+/// save on the other side yet (that is [`apply_first`]). Both sides' fingerprints are kept after
+/// it.
 pub fn apply(
     env: &dyn Env,
     pair: &SyncPair,
@@ -668,6 +732,37 @@ pub fn apply(
     dir: SyncDirection,
     now: u64,
     settle_from: &dyn Fn(&str) -> bool,
+) -> Result<(), String> {
+    apply_as(env, pair, state, key, dir, now, settle_from, false)
+}
+
+/// The one-time first copy: a PS5 save on one side only goes to the other user, who has none of
+/// the game, made theirs there (`save_copy::copy_to_console` sends it whole, `save.owner`). Only
+/// when the user asks; refused when the save is on both sides by now (check again), or when the
+/// console there can't make it theirs ([`Env::first_check`]). The fingerprints kept after it are
+/// the pair's first sync base, so the save can be kept in step from then on.
+pub fn apply_first(
+    env: &dyn Env,
+    pair: &SyncPair,
+    state: &mut State,
+    key: &str,
+    dir: SyncDirection,
+    now: u64,
+    settle_from: &dyn Fn(&str) -> bool,
+) -> Result<(), String> {
+    apply_as(env, pair, state, key, dir, now, settle_from, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_as(
+    env: &dyn Env,
+    pair: &SyncPair,
+    state: &mut State,
+    key: &str,
+    dir: SyncDirection,
+    now: u64,
+    settle_from: &dyn Fn(&str) -> bool,
+    first: bool,
 ) -> Result<(), String> {
     let rows = check(env, pair, state, now, &|k, _| k == key, settle_from);
     let row = rows
@@ -701,7 +796,27 @@ pub fn apply(
             }
             _ => {}
         }
-        if row.kind == "ps5" && matches!(row.status, SyncStatus::OnlyOnA | SyncStatus::OnlyOnB) {
+        let one_side = matches!(row.status, SyncStatus::OnlyOnA | SyncStatus::OnlyOnB);
+        if first {
+            if row.kind != "ps5" {
+                return Err("Only a PS5 save is copied this way.".to_string());
+            }
+            let from_only = match dir {
+                SyncDirection::AToB => SyncStatus::OnlyOnA,
+                SyncDirection::BToA => SyncStatus::OnlyOnB,
+            };
+            if row.status != from_only {
+                return Err(format!(
+                    "The user on {} has a save of {} now, or this one is gone. Check again.",
+                    to.host, row.title_id
+                ));
+            }
+            if let Some(FirstCopy { ok: false, why, .. }) = &row.first_copy {
+                return Err(why
+                    .clone()
+                    .unwrap_or_else(|| "This save can't be copied there.".into()));
+            }
+        } else if row.kind == "ps5" && one_side {
             return Err(format!(
                 "There is no save of {} on {} yet. Start the game once there and save first.",
                 row.title_id, to.host
@@ -1160,22 +1275,27 @@ pub fn tick() {
         (g.state.clone(), std::mem::take(&mut g.watch))
     };
     let base = state.suggestions.clone();
+    let now = now_ms();
     watch_once(
         &Live,
         &settings,
         &mut state,
         &mut watch,
-        now_ms(),
+        now,
         &local::console_busy,
     );
+    let answered = watch.answered.clone();
     let mut g = lock();
     g.watch = watch;
     for p in &settings.pairs {
         merge_shared(&mut g, state.clone(), &base, &p.id, true);
     }
     persist_state(&g.state);
+    let (settings, state) = (g.settings.clone(), g.state.clone());
     drop(g);
     drop(holds);
+    // The consoles' own pages: where each save kept in step stands there.
+    crate::save_sync_console::publish(&settings, &state, &answered, now);
 }
 
 pub fn spawn() {
@@ -1283,6 +1403,13 @@ pub struct SyncPairRef {
 pub async fn post_remove_pair(Json(b): Json<SyncPairRef>) -> Response {
     let mut g = lock();
     let id = b.pair.trim().to_string();
+    let removed: Vec<String> = g
+        .settings
+        .pairs
+        .iter()
+        .filter(|p| p.id == id)
+        .flat_map(|p| [p.a.host.clone(), p.b.host.clone()])
+        .collect();
     g.settings.pairs.retain(|p| p.id != id);
     let prefix = format!("{id}|");
     g.state.items.retain(|k, _| !k.starts_with(&prefix));
@@ -1291,6 +1418,10 @@ pub async fn post_remove_pair(Json(b): Json<SyncPairRef>) -> Response {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
     persist_state(&g.state);
+    let (settings, state) = (g.settings.clone(), g.state.clone());
+    drop(g);
+    // The consoles' own pages: that pair's games are gone from there too.
+    crate::save_sync_console::after_removal(removed, settings, state);
     Json(json!({ "ok": true })).into_response()
 }
 
@@ -1440,6 +1571,9 @@ pub(crate) mod tests {
         pub(crate) fail_copy: Option<String>,
         /// A wake sent to it brings it back.
         pub(crate) wakes_up: bool,
+        /// What a first copy to this console is refused with (an old helper, a user with no
+        /// saved data there).
+        pub(crate) refuse_first: Option<String>,
     }
 
     #[derive(Default)]
@@ -1511,10 +1645,43 @@ pub(crate) mod tests {
             self.copies
                 .borrow_mut()
                 .push(format!("{} {} -> {}", src.title_id, from.host, to.host));
-            let path = dst.map_or(src.path.clone(), |d| d.path.clone());
+            let path = match dst {
+                Some(d) => d.path.clone(),
+                // None there yet: a PS5 save goes into the user's own folder, an emulator's into
+                // the same place.
+                None => {
+                    let mut e = src.clone();
+                    if src.kind == "ps5" {
+                        e.user_id = to.user_id as i32;
+                        e.path = format!(
+                            "/user/home/{:08x}/savedata_prospero/{}",
+                            to.user_id, src.title_id
+                        );
+                    }
+                    let p = e.path.clone();
+                    self.with(&to.host, |c| c.saves.push(e));
+                    p
+                }
+            };
             // The console rewrites the target: a new fingerprint there.
             self.with(&to.host, |c| *c.version.entry(path).or_default() += 10);
             Ok(())
+        }
+        fn first_check(
+            &self,
+            _from: &SyncSide,
+            to: &SyncSide,
+            _src: &SaveEntry,
+        ) -> Result<(), String> {
+            match self
+                .consoles
+                .borrow()
+                .get(&to.host)
+                .and_then(|c| c.refuse_first.clone())
+            {
+                Some(e) => Err(e),
+                None => Ok(()),
+            }
         }
         fn preflight(
             &self,

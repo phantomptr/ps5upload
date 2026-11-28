@@ -4644,6 +4644,52 @@
         ],
         "type": "object"
       },
+      "FirstCopy": {
+        "description": "Whether a PS5 save on one side only can be copied to the other user, who has none of the game\nyet: once, when the user asks (never by itself). `why`: the words when it can't.",
+        "properties": {
+          "code": {
+            "description": "`why` as a code the app says in its own words: `old_helper`, `no_saved_data`,\n`no_backup_place`; None for anything else (then `why` is shown).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "why": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "why",
+          "code"
+        ],
+        "type": "object"
+      },
+      "FirstCopyBody": {
+        "properties": {
+          "keep_in_step": {
+            "description": "Keep the save in step from then on (the switch turned on with the copy).",
+            "type": "boolean"
+          },
+          "key": {
+            "type": "string"
+          },
+          "pair": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pair",
+          "key"
+        ],
+        "type": "object"
+      },
       "FixAction": {
         "description": "A repair the engine can perform. A closed enum rather than a\ncommand string: the UI asks for a named action, so it cannot ask\nthe engine to run something arbitrary.",
         "enum": [
@@ -16077,6 +16123,17 @@
                 "type": "null"
               }
             ]
+          },
+          "first_copy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FirstCopy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A PS5 save on one side only: whether the one-time first copy to the other user can be\nmade (`POST /api/save-sync/first-copy`), and if not, why."
           },
           "key": {
             "type": "string"
@@ -52524,6 +52581,71 @@
           }
         },
         "summary": "Not now",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-sync/first-copy": {
+      "post": {
+        "description": "`POST /api/save-sync/first-copy` `{pair, key, keep_in_step?}`: the one-time first copy of a PS5\nsave that only one side has, to the other user, made theirs there (see\n[`sync::apply_first`]). Refused with the reason when the console there can't make it theirs\nor the save is on both sides by now. After it the two are in step, and with `keep_in_step`\nkept so.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FirstCopyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "auto": {},
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The one-time first copy of a PS5 save that only one side has, to the other user, made theirs there (see [`sync::apply_first`])",
         "tags": [
           "saves"
         ],
