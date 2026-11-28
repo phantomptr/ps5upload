@@ -48,6 +48,10 @@
 //! kick | playing | settings` (see [`router`]), and `GET /api/join/relay?url=` (an app joining a
 //! friend through its own engine).
 //!
+//! **On the TV:** while a guest asks, the host's console shows a notification too (the helper's
+//! `toast.send`, [`notice_ask`]): the host may be in a game with PS5Upload out of sight. One per
+//! ask, a few a minute at most, best effort.
+//!
 //! **To the helper**, one link thread per console ([`link`]) sends each player's latest state
 //! (coalesced, but a press is never lost: [`link::SlotIo::plan`]), one call in flight, a heartbeat
 //! every [`vpad::HEARTBEAT`], reopens the pads after a helper restart, and polls the rumble and
@@ -3258,6 +3262,87 @@ async fn open_slot(
     r
 }
 
+// ── The TV notice for an ask ────────────────────────────────────────────────────────────────────
+
+/// Notices on one console's screen per minute at most, however many friends ask.
+const NOTICES_PER_MIN: usize = 6;
+/// One address's asks are noticed this far apart at most (a friend asking again and again).
+const NOTICE_GAP_PER_ADDRESS: Duration = Duration::from_secs(30);
+
+/// When notices went out: per console (the last minute's), and per console and asking address.
+#[derive(Default)]
+struct NoticeLimit {
+    consoles: HashMap<String, VecDeque<Instant>>,
+    addresses: HashMap<(String, IpAddr), Instant>,
+}
+
+impl NoticeLimit {
+    /// One more notice on `console` for an ask from `ip`, unless that is too many.
+    fn allow(&mut self, console: &str, ip: IpAddr, now: Instant) -> bool {
+        self.addresses
+            .retain(|_, t| now.saturating_duration_since(*t) < NOTICE_GAP_PER_ADDRESS);
+        if self.addresses.contains_key(&(console.to_string(), ip)) {
+            return false;
+        }
+        self.consoles.retain(|_, q| {
+            recent(q, now);
+            !q.is_empty()
+        });
+        let q = self.consoles.entry(console.to_string()).or_default();
+        if q.len() >= NOTICES_PER_MIN {
+            return false;
+        }
+        q.push_back(now);
+        self.addresses.insert((console.to_string(), ip), now);
+        true
+    }
+}
+
+static NOTICES: Mutex<Option<NoticeLimit>> = Mutex::new(None);
+
+/// The notice's words: who asks, and where to answer. A guest who gave no name is "A friend".
+fn ask_notice_text(name: &str) -> (String, String) {
+    let who = if name.is_empty() { "A friend" } else { name };
+    (
+        format!("{who} wants to join Play Together"),
+        "Answer in PS5Upload or PS5Upload Play".to_string(),
+    )
+}
+
+/// A guest asks to play on `console`: a notification on the console's screen too (the host may
+/// be in a game, with PS5Upload out of sight). Once per ask, within [`NoticeLimit`]; best effort:
+/// it never holds up or fails the ask.
+fn notice_ask(console: &str, name: &str, ip: IpAddr) {
+    let now = Instant::now();
+    let ok = NOTICES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(NoticeLimit::default)
+        .allow(&host_key(console), limit_key(ip), now);
+    if !ok {
+        crate::log_at!(
+            Debug,
+            "together",
+            "join: an ask on {console} is not shown on the TV (too many notices)"
+        );
+        return;
+    }
+    let (title, body) = ask_notice_text(name);
+    let c = console.to_string();
+    let Ok(h) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    h.spawn_blocking(move || {
+        if let Err(e) = link::port_for(&c).toast(&c, &title, &body) {
+            crate::log_at!(
+                Debug,
+                "together",
+                "join: the TV notice for an ask on {c} did not go: {e:#}"
+            );
+        }
+    });
+}
+
 /// A new guest with an invite: checks, asks the host, makes their pad. None when the socket
 /// closed while asking.
 async fn ask<S: GuestSocket>(
@@ -3346,6 +3431,7 @@ async fn ask<S: GuestSocket>(
         with_party(&key, |p| p.pending.retain(|a| a.id != id));
         return None;
     }
+    notice_ask(&console, name, ip);
     let mut gave_up = false;
     let d = tokio::select! {
         // Err: Play Together closed and the asks were dropped with it
@@ -4788,6 +4874,10 @@ pub(crate) mod link {
         fn users(&self, _host: &str) -> Result<Vec<ConsoleUser>> {
             Ok(Vec::new())
         }
+        /// A notification on the console's screen (the helper's `toast.send`).
+        fn toast(&self, _host: &str, _title: &str, _body: &str) -> Result<()> {
+            Ok(())
+        }
     }
 
     struct HelperPort;
@@ -4822,6 +4912,15 @@ pub(crate) mod link {
         }
         fn status(&self, host: &str) -> Result<Option<serde_json::Value>> {
             vpad::status(host)
+        }
+        fn toast(&self, host: &str, title: &str, body: &str) -> Result<()> {
+            let req = ps5upload_core::app_lifecycle::ToastRequest {
+                title: title.to_string(),
+                subtitle: body.to_string(),
+                icon: String::new(),
+                action_url: String::new(),
+            };
+            ps5upload_core::app_lifecycle::toast_send(host, &req).map(|_| ())
         }
     }
 
@@ -6000,6 +6099,35 @@ mod tests {
             code_wrong(lo, t);
         }
         assert!(code_tries_left(lo, t));
+    }
+
+    #[test]
+    fn the_tv_notice_names_the_guest_and_where_to_answer() {
+        let (title, body) = ask_notice_text("Sam");
+        assert_eq!(title, "Sam wants to join Play Together");
+        assert_eq!(body, "Answer in PS5Upload or PS5Upload Play");
+        assert_eq!(
+            ask_notice_text("").0,
+            "A friend wants to join Play Together"
+        );
+    }
+
+    #[test]
+    fn tv_notices_are_one_per_ask_within_limits_per_console_and_address() {
+        let mut l = NoticeLimit::default();
+        let t = Instant::now();
+        let ip = |n: u8| IpAddr::from([192, 0, 2, n]);
+        // The same friend asking again soon: one notice.
+        assert!(l.allow("c1", ip(1), t));
+        assert!(!l.allow("c1", ip(1), t + Duration::from_secs(5)));
+        // …but on another console, or after the gap, again.
+        assert!(l.allow("c2", ip(1), t));
+        assert!(l.allow("c1", ip(1), t + NOTICE_GAP_PER_ADDRESS));
+        // Many friends at once: at most NOTICES_PER_MIN on one console a minute.
+        let mut l = NoticeLimit::default();
+        let shown = (10..30).filter(|n| l.allow("c1", ip(*n), t)).count();
+        assert_eq!(shown, NOTICES_PER_MIN);
+        assert!(l.allow("c1", ip(99), t + Duration::from_secs(61)));
     }
 
     #[test]
@@ -7233,6 +7361,8 @@ mod tests {
         bind_fails: AtomicBool,
         /// every open's seat request, in order
         binds: Mutex<Vec<Option<Bind>>>,
+        /// the notifications shown on the console: (title, body)
+        toasts: Mutex<Vec<(String, String)>>,
     }
 
     impl FakeHelper {
@@ -7315,6 +7445,14 @@ mod tests {
                 bound: bind.map(|_| !self.bind_fails.load(Ordering::Relaxed)),
                 ..Default::default()
             }))
+        }
+        fn toast(&self, _h: &str, title: &str, body: &str) -> anyhow::Result<()> {
+            self.up()?;
+            self.toasts
+                .lock()
+                .unwrap()
+                .push((title.to_string(), body.to_string()));
+            Ok(())
         }
         fn users(&self, _h: &str) -> anyhow::Result<Vec<ConsoleUser>> {
             self.up()?;
@@ -8695,6 +8833,15 @@ mod tests {
         )
         .await;
         assert_eq!(next(&mut sam).await["stage"], "asking");
+        // The console shows the ask too (the host may be in a game).
+        until("the TV notice", || {
+            f.toasts
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(t, _)| t == "Sam wants to join Play Together")
+        })
+        .await;
         allow_next(console, true).await;
         let j = next(&mut sam).await;
         assert_eq!(j["stage"], "joined", "{j}");
