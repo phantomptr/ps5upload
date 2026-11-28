@@ -106,6 +106,7 @@
   "play_codec_main10": "Tu amigo transmite en HDR, que esta app aún no puede mostrar. Puede desactivar HDR en PS5Upload › Jugar.",
   "play_took_host": "La transmisión de tu amigo ha terminado: puede que el usuario elegido en la tele fuera el suyo.",
   "host_connecting": "Conectando con PS5Upload…",
+  "host_from": "Alojada desde %s",
   "host_pair_title": "Vincula esta PS5 con PS5Upload",
   "host_pair_text": "PS5Upload Play necesita tu permiso una vez para poder mostrar y cambiar tu Sala de juego desde aquí.",
   "host_pair_button": "Mostrar un código de vinculación",

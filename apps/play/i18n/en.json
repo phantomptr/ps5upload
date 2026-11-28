@@ -122,6 +122,7 @@
   "play_codec_main10": "Your friend streams in HDR, which this app can't show yet. They can turn HDR off in PS5Upload › Play.",
   "play_took_host": "Your friend's stream ended: the user picked on the TV may have been theirs.",
   "host_connecting": "Connecting to PS5Upload…",
+  "host_from": "Hosted from %s",
   "host_pair_title": "Pair this PS5 with PS5Upload",
   "host_pair_text": "PS5Upload Play needs your OK once before it can show and change your Play Room from here.",
   "host_pair_button": "Show a pairing code",

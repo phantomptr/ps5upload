@@ -106,6 +106,7 @@
   "play_codec_main10": "好友正在以 HDR 串流，此应用暂时无法显示。好友可以在 PS5Upload › 畅玩 中关闭 HDR。",
   "play_took_host": "好友的串流已结束：电视上选的用户可能是好友的用户。",
   "host_connecting": "正在连接 PS5Upload…",
+  "host_from": "由 %s 主持",
   "host_pair_title": "将这台 PS5 与 PS5Upload 配对",
   "host_pair_text": "PS5Upload Play 需要你同意一次，才能在这里显示和更改你的畅玩房间。",
   "host_pair_button": "显示配对代码",

@@ -130,6 +130,7 @@ namespace play::ui
     X(play_codec_main10, "Your friend streams in HDR, which this app can't show yet. They can turn HDR off in PS5Upload › Play.") \
     X(play_took_host, "Your friend's stream ended: the user picked on the TV may have been theirs.")           \
     X(host_connecting, "Connecting to PS5Upload…")                                                              \
+    X(host_from, "Hosted from %s")                                                                              \
     X(host_pair_title, "Pair this PS5 with PS5Upload")                                                          \
     X(host_pair_text, "PS5Upload Play needs your OK once before it can show and change your Play Room from here.") \
     X(host_pair_button, "Show a pairing code")                                                                  \

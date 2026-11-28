@@ -106,6 +106,7 @@
   "play_codec_main10": "A barátod HDR-ben streamel, amit ez az alkalmazás még nem tud megjeleníteni. A HDR-t a PS5Upload › Játék alatt kapcsolhatja ki.",
   "play_took_host": "A barátod streamje véget ért: lehet, hogy a tévén kiválasztott felhasználó az övé volt.",
   "host_connecting": "Kapcsolódás a PS5Uploadhoz…",
+  "host_from": "Gazdagép: %s",
   "host_pair_title": "Párosítsd ezt a PS5-öt a PS5Uploaddal",
   "host_pair_text": "A PS5Upload Playnek egyszer szüksége van a jóváhagyásodra, mielőtt innen megjelenítheti és módosíthatja a Játékszobádat.",
   "host_pair_button": "Párosítókód mutatása",

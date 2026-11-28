@@ -786,8 +786,10 @@ void App::draw_host(Canvas &c, const CompanionView &v) noexcept
     draw_frame(c, tr(S::home_host));
     char buf[400];
     const CompanionDoc &d = v.doc;
+    // Which computer (or phone, or NAS) runs the room: "Hosted from Alex's PC".
     const char *name = d.engine_name[0] ? d.engine_name : engine_name_[0] ? engine_name_ : addr_;
-    c.text(Font::small, kLeft, kTop + 66, name, col::muted);
+    std::snprintf(buf, sizeof buf, tr(S::host_from), name);
+    c.text(Font::small, kLeft, kTop + 66, buf, col::muted);
     // the tabs, top right: L1 [ My room | Remote Play | This PS5 ] R1 (top left in a right-to-left
     // language, where the title sits on the right)
     {

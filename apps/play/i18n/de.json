@@ -106,6 +106,7 @@
   "play_codec_main10": "Dein Freund streamt in HDR, das diese App noch nicht anzeigen kann. Er kann HDR unter PS5Upload › Spielen ausschalten.",
   "play_took_host": "Der Stream deines Freundes ist beendet: Der am Fernseher gewählte Benutzer war vielleicht seiner.",
   "host_connecting": "Verbinde mit PS5Upload…",
+  "host_from": "Gehostet von %s",
   "host_pair_title": "Diese PS5 mit PS5Upload koppeln",
   "host_pair_text": "PS5Upload Play braucht einmal dein OK, bevor es deinen Spieleraum von hier aus zeigen und ändern kann.",
   "host_pair_button": "Kopplungscode zeigen",

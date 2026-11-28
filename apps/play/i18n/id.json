@@ -106,6 +106,7 @@
   "play_codec_main10": "Teman Anda melakukan stream dalam HDR, yang belum bisa ditampilkan aplikasi ini. Dia bisa mematikan HDR di PS5Upload › Main.",
   "play_took_host": "Stream teman Anda berakhir: pengguna yang dipilih di TV mungkin miliknya.",
   "host_connecting": "Menyambung ke PS5Upload…",
+  "host_from": "Di-host dari %s",
   "host_pair_title": "Pasangkan PS5 ini dengan PS5Upload",
   "host_pair_text": "PS5Upload Play butuh persetujuan Anda sekali sebelum bisa menampilkan dan mengubah Ruang Main Anda dari sini.",
   "host_pair_button": "Tampilkan kode pemasangan",

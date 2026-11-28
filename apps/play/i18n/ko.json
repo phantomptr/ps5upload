@@ -106,6 +106,7 @@
   "play_codec_main10": "친구가 HDR로 스트리밍하고 있는데, 이 앱은 아직 HDR을 표시할 수 없어요. 친구가 PS5Upload › 플레이에서 HDR을 끄면 돼요.",
   "play_took_host": "친구의 스트림이 끝났어요. TV에서 고른 사용자가 친구의 사용자였을 수 있어요.",
   "host_connecting": "PS5Upload에 연결 중…",
+  "host_from": "%s에서 호스팅 중",
   "host_pair_title": "이 PS5를 PS5Upload와 페어링",
   "host_pair_text": "PS5Upload Play가 여기서 내 플레이 룸을 보여 주고 바꾸려면 처음 한 번만 허락이 필요해요.",
   "host_pair_button": "페어링 코드 표시",
