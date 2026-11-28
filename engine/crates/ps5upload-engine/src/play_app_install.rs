@@ -693,6 +693,16 @@ fn find(addr: &str) -> anyhow::Result<Found> {
     })
 }
 
+/// The version an install record names (the console page writes `version` in the NN.NNN.NNN
+/// form; `content_version` is the same).
+fn record_version(r: &Value) -> Option<String> {
+    r.get("content_version")
+        .or_else(|| r.get("version"))
+        .and_then(Value::as_str)
+        .filter(|v| is_content_version(v))
+        .map(str::to_string)
+}
+
 /// Our own record of the last install (who registered it), when it is there.
 fn install_record(addr: &str) -> Option<Value> {
     read_small(addr, INSTALL_RECORD)
@@ -887,7 +897,7 @@ fn status_blocking(addr: &str) -> anyhow::Result<Value> {
             "path": found.layout.target,
             "registered": is_registered,
             "registered_by": record.as_ref()
-                .filter(|r| r.get("content_version").and_then(Value::as_str) == Some(cv))
+                .filter(|r| record_version(r).as_deref() == Some(cv.as_str()))
                 .and_then(|r| r.get("registered_by").cloned()),
         })),
         "running": running,
@@ -1069,11 +1079,7 @@ fn install_blocking(
         return Err(store_busy());
     }
     let ours = install_record(addr)
-        .and_then(|r| {
-            r.get("content_version")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
+        .and_then(|r| record_version(&r))
         .is_some_and(|cv| Some(cv) == found.installed);
     if found.managed && !ours && !confirm_store {
         return Err(Refusal::conflict(
@@ -1256,7 +1262,7 @@ fn install_blocking(
         }
     }
     let record = json!({
-        "version": human_version(&info.content_version),
+        "version": info.content_version,
         "content_version": info.content_version,
         "location": l.location,
         "registered_by": registered_by,
@@ -1364,11 +1370,7 @@ fn remove_blocking(addr: &str, delete_data: bool, confirm_store: bool) -> Result
         return Err(store_busy());
     }
     let ours = install_record(addr)
-        .and_then(|r| {
-            r.get("content_version")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
+        .and_then(|r| record_version(&r))
         .is_some_and(|cv| Some(cv) == found.installed);
     if found.managed && !ours && !confirm_store {
         return Err(Refusal::conflict(
