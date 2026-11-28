@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.45
 
 **PS5Upload Minion**
 - **Save backup times show the PS5's own time (#978).** On some consoles the page still showed backup times in UTC (3 hours ahead in Recife). Minion now reads the time zone the way the PS5's own clock does, and falls back to the old way when it can't. If times still look wrong, **Settings › Time zone** lets you pick your UTC offset by hand. Needs the new helper.
