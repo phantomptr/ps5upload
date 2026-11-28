@@ -46,6 +46,9 @@ struct Target {
     replace: Option<bool>,
     #[serde(default)]
     app_version: Option<String>,
+    /// `1`: replace the helper even though friends are playing through Play Together.
+    #[serde(default)]
+    confirm_friends: Option<String>,
 }
 
 impl Target {
@@ -83,6 +86,9 @@ struct SendRequest {
     /// that file cannot be read or is not an ELF (a damaged copy of the app's own helper).
     #[serde(default)]
     bundled: bool,
+    /// Replace the helper even though friends are playing through Play Together.
+    #[serde(default, deserialize_with = "crate::together_guard::de_confirm")]
+    confirm_friends: bool,
     /// A helper send's options (mode, force, replace, app_version).
     #[serde(flatten)]
     opts: SendOpts,
@@ -94,6 +100,9 @@ struct CheckBody {
     /// The file is a ps5upload helper: sending it stops the helper that runs now.
     #[serde(default)]
     helper: bool,
+    /// Go ahead even though friends are playing through Play Together (together_guard.rs).
+    #[serde(default, deserialize_with = "crate::together_guard::de_confirm")]
+    confirm_friends: bool,
 }
 
 pub fn router<S: Clone + Send + Sync + 'static>(installs: PkgInstallStateHandle) -> Router<S> {
@@ -110,7 +119,13 @@ pub fn router<S: Clone + Send + Sync + 'static>(installs: PkgInstallStateHandle)
         )
         .route(
             "/api/payload/send-check",
-            post(move |Json(body): Json<CheckBody>| check(installs.clone(), body)),
+            post(
+                move |headers: HeaderMap,
+                      Query(confirm): Query<crate::together_guard::ConfirmQuery>,
+                      Json(body): Json<CheckBody>| {
+                    check(installs.clone(), headers, confirm, body)
+                },
+            ),
         )
         .route("/api/payload/bundled", axum::routing::get(bundled))
 }
@@ -164,14 +179,20 @@ fn gated_response(result: Result<Result<SentPayload, GateError>, String>) -> Res
     }
 }
 
-/// A helper image to `host`'s loader through the gate (blocking work on its own thread).
+/// A helper image to `host`'s loader through the gate (blocking work on its own thread). With
+/// friends playing through Play Together (the helper runs their controllers): 409
+/// `friends_playing` unless `confirmed` (together_guard.rs).
 async fn send_helper_gated(
     installs: PkgInstallStateHandle,
     host: String,
     label: String,
     image: Vec<u8>,
     opts: SendOpts,
+    confirmed: bool,
 ) -> Response {
+    if let Some(r) = crate::together_guard::check(Some(&host), &HeaderMap::new(), confirmed) {
+        return r;
+    }
     let result = tokio::task::spawn_blocking(move || {
         if let Some(m) = away_refusal(&host) {
             return Err(GateError::Failed(m));
@@ -226,8 +247,14 @@ fn refused(code: &str) -> Response {
 
 /// `POST /api/payload/send-check {host, helper}`: for a send this engine does not make itself (the
 /// desktop app's own socket): 200 once it can go, 409 `{error}` (`pkg_install_busy`, `helper_busy`,
-/// `loader_busy`) when it should not.
-async fn check(installs: PkgInstallStateHandle, body: CheckBody) -> Response {
+/// `loader_busy`) when it should not. A helper with friends playing through Play Together: 409
+/// `friends_playing` unless confirmed (together_guard.rs).
+async fn check(
+    installs: PkgInstallStateHandle,
+    headers: HeaderMap,
+    confirm: crate::together_guard::ConfirmQuery,
+    body: CheckBody,
+) -> Response {
     let host = crate::install::console_id(body.host.trim());
     if host.is_empty() {
         return (
@@ -235,6 +262,15 @@ async fn check(installs: PkgInstallStateHandle, body: CheckBody) -> Response {
             Json(json!({"error":"Choose a console."})),
         )
             .into_response();
+    }
+    if body.helper {
+        if let Some(r) = crate::together_guard::check(
+            Some(&host),
+            &headers,
+            body.confirm_friends || confirm.yes(),
+        ) {
+            return r;
+        }
     }
     if let Some(code) = refusal(&installs, &host, body.helper) {
         return refused(code);
@@ -362,8 +398,13 @@ async fn send(
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.to_ascii_lowercase().contains("json"));
+    let confirmed = crate::together_guard::header_confirms(&headers)
+        || target
+            .confirm_friends
+            .as_deref()
+            .is_some_and(crate::together_guard::says_yes);
     if is_json {
-        return send_json(installs, &bytes).await;
+        return send_json(installs, &bytes, confirmed).await;
     }
     let opts = target.opts();
     let host = target.host.unwrap_or_default().trim().to_string();
@@ -376,7 +417,15 @@ async fn send(
     // running transfer from being cut was skipped.
     let helper = image_is_helper(UPLOAD_LABEL, &bytes) || crate::console_payload::is_helper(&bytes);
     if helper && port == PS5_LOADER_PORT {
-        return send_helper_gated(installs, host, UPLOAD_LABEL.into(), bytes.to_vec(), opts).await;
+        return send_helper_gated(
+            installs,
+            host,
+            UPLOAD_LABEL.into(),
+            bytes.to_vec(),
+            opts,
+            confirmed,
+        )
+        .await;
     }
     if let Some(refused) = send_refused(&installs, &host, port, helper) {
         return refused;
@@ -394,11 +443,12 @@ async fn send(
     sent_response(result)
 }
 
-async fn send_json(installs: PkgInstallStateHandle, body: &[u8]) -> Response {
+async fn send_json(installs: PkgInstallStateHandle, body: &[u8], confirmed: bool) -> Response {
     let req: SendRequest = match serde_json::from_slice(body) {
         Ok(r) => r,
         Err(e) => return bad_request(&format!("bad request: {e}")),
     };
+    let confirmed = confirmed || req.confirm_friends;
     let host = req.host.trim().to_string();
     let port = req.port.unwrap_or(PS5_LOADER_PORT);
     if host.is_empty() || port == 0 {
@@ -410,7 +460,9 @@ async fn send_json(installs: PkgInstallStateHandle, body: &[u8]) -> Response {
         let given = req.path.clone();
         let image = tokio::task::spawn_blocking(move || bundled_or_given(given.as_deref())).await;
         return match image {
-            Ok(Ok((label, image))) => send_helper_gated(installs, host, label, image, opts).await,
+            Ok(Ok((label, image))) => {
+                send_helper_gated(installs, host, label, image, opts, confirmed).await
+            }
             Ok(Err(e)) => (
                 StatusCode::BAD_GATEWAY,
                 Json(json!({ "ok": false, "error": e, "status": e })),
@@ -472,7 +524,7 @@ async fn send_json(installs: PkgInstallStateHandle, body: &[u8]) -> Response {
         let read = path.clone();
         let image = tokio::task::spawn_blocking(move || read_payload_file(&read)).await;
         return match image {
-            Ok(Ok(image)) => send_helper_gated(installs, host, path, image, opts).await,
+            Ok(Ok(image)) => send_helper_gated(installs, host, path, image, opts, confirmed).await,
             Ok(Err(e)) => sent_response(Ok(Err(e))),
             Err(e) => sent_response(Err(e.to_string())),
         };
@@ -587,6 +639,7 @@ mod tests {
             force: None,
             replace: None,
             app_version: None,
+            confirm_friends: None,
         })
     }
 
@@ -777,9 +830,12 @@ mod tests {
         drop(busy);
         let response = check(
             installs.clone(),
+            HeaderMap::new(),
+            Default::default(),
             CheckBody {
                 host: host.into(),
                 helper: false,
+                confirm_friends: false,
             },
         )
         .await;

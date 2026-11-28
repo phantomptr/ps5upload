@@ -55,10 +55,29 @@ fn fetch_latest() -> Result<(String, String), String> {
     Ok((version, m["notes"].as_str().unwrap_or_default().to_string()))
 }
 
+/// The engine never replaces itself: the desktop app installs its own updates, and a container is
+/// pulled again. An update or restart there ends Remote Play and friends' play, so every answer
+/// also says who plays through Play Together now (`friends_playing`: `[{console, friends}]`, empty
+/// when nobody is in), read fresh on each call, for the app to ask "Friends are playing on this
+/// PS5. Update anyway?" first.
 pub(crate) async fn check() -> Json<serde_json::Value> {
+    let mut answer = cached_check().await;
+    answer["friends_playing"] = friends_now();
+    Json(answer)
+}
+
+/// Who plays through Play Together now, on every console.
+fn friends_now() -> serde_json::Value {
+    crate::join::friends_playing_any()
+        .into_iter()
+        .map(|(console, friends)| serde_json::json!({ "console": console, "friends": friends }))
+        .collect()
+}
+
+async fn cached_check() -> serde_json::Value {
     if let Some((at, v)) = CACHE.lock().ok().and_then(|g| g.clone()) {
         if at.elapsed() < CACHE_FOR {
-            return Json(v);
+            return v;
         }
     }
     let current = env!("CARGO_PKG_VERSION");
@@ -75,20 +94,38 @@ pub(crate) async fn check() -> Json<serde_json::Value> {
         }),
         // Not cached: the next page load tries again.
         Err(e) => {
-            return Json(serde_json::json!({
+            return serde_json::json!({
                 "current": current, "available": false, "docker": in_container(), "error": e,
-            }))
+            })
         }
     };
     if let Ok(mut g) = CACHE.lock() {
         *g = Some((Instant::now(), body.clone()));
     }
-    Json(body)
+    body
 }
 
 #[cfg(test)]
 mod tests {
     use super::is_newer;
+
+    #[test]
+    fn the_check_names_friends_playing() {
+        let console = "10.0.94.1";
+        crate::join::test_party_with_guest(console, "Lee");
+        let v = super::friends_now();
+        assert!(v
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["console"] == console && e["friends"] == serde_json::json!(["Lee"])));
+        crate::join::test_close_party(console);
+        assert!(!super::friends_now()
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["console"] == console));
+    }
 
     #[test]
     fn compares_release_versions() {

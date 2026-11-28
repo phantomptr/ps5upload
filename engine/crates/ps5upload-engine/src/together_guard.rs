@@ -31,7 +31,7 @@ pub(crate) const MESSAGE: &str = "Friends are playing on this PS5. Stop anyway?"
 pub(crate) const CODE: &str = "friends_playing";
 
 /// A confirming value: `1`, `true` or `yes` (any case).
-fn says_yes(v: &str) -> bool {
+pub(crate) fn says_yes(v: &str) -> bool {
     matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes")
 }
 

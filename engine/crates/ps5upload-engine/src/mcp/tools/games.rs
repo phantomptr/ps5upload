@@ -58,6 +58,7 @@ pub(super) fn tools() -> Vec<ToolDef> {
                         "type": "string",
                         "description": "The title's id, like PPSA01234 (from games_installed).",
                     },
+                    "confirm_friends": super::confirm_friends(),
                 }),
                 &["console", "title_id"],
             ),
@@ -78,6 +79,7 @@ pub(super) fn tools() -> Vec<ToolDef> {
                         "description": "The running title's id, like PPSA01234 (from \
                                         processes_list).",
                     },
+                    "confirm_friends": super::confirm_friends(),
                 }),
                 &["console", "title_id"],
             ),
@@ -347,6 +349,7 @@ pub(super) fn tools() -> Vec<ToolDef> {
                 json!({
                     "console": console_required(),
                     "pid": whole("The process's id, from processes_list."),
+                    "confirm_friends": super::confirm_friends(),
                 }),
                 &["console", "pid"],
             ),
@@ -438,7 +441,7 @@ async fn launch(ctx: ToolCtx, args: Args) -> ToolResult {
     let answer = ctx
         .post(
             "/api/ps5/app/launch",
-            &json!({ "addr": console, "title_id": title_id }),
+            &super::with_confirm_friends(json!({ "addr": console, "title_id": title_id }), &args),
         )
         .await?;
     Ok(ToolOutput::ok(
@@ -476,6 +479,7 @@ async fn stop(ctx: ToolCtx, args: Args) -> ToolResult {
     let mut refused = None;
     if app_id != 0 {
         let body = json!({ "addr": console, "action": "kill", "app_id": app_id });
+        let body = super::with_confirm_friends(body, &args);
         match ctx.post("/api/ps5/app/lifecycle", &body).await {
             Ok(_) => {
                 return Ok(ToolOutput::ok(
@@ -492,7 +496,7 @@ async fn stop(ctx: ToolCtx, args: Args) -> ToolResult {
         }
     }
     if pid != 0 {
-        let body = json!({ "addr": console, "pid": pid });
+        let body = super::with_confirm_friends(json!({ "addr": console, "pid": pid }), &args);
         ctx.post("/api/ps5/process/kill", &body).await?;
         return Ok(ToolOutput::ok(
             format!("Force-stopped {title_id} on {console} (process {pid})."),
