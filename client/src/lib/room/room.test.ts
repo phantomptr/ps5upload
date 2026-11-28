@@ -477,12 +477,14 @@ describe("knocks", () => {
     const challenge = new Uint8Array(16).fill(3);
     const blob = await seal(pk, "g1", challenge, { pw: "hunter22" });
     expect(blob).toBeTruthy();
-    // The host engine's side: open it.
+    // The host engine's side, as room_seal.rs opens it (its opens_what_the_web_page_seals test
+    // opens a blob this function made): version byte 1, the ephemeral key, nonce, ciphertext.
     const raw = fromB64url(blob!)!;
-    const eph = await subtle.importKey("raw", raw.slice(0, 65), { name: "ECDH", namedCurve: "P-256" }, false, []);
+    expect(raw[0]).toBe(1);
+    const eph = await subtle.importKey("raw", raw.slice(1, 66), { name: "ECDH", namedCurve: "P-256" }, false, []);
     const shared = await subtle.deriveBits({ name: "ECDH", public: eph }, room.privateKey, 256);
     const hk = await subtle.importKey("raw", shared, "HKDF", false, ["deriveKey"]);
-    const info = new Uint8Array([...new TextEncoder().encode("ps5upload room knock v1"), ...raw.slice(0, 65)]);
+    const info = new TextEncoder().encode("ps5upload room knock v1");
     const key = await subtle.deriveKey(
       { name: "HKDF", hash: "SHA-256", salt: challenge, info },
       hk,
@@ -490,10 +492,21 @@ describe("knocks", () => {
       false,
       ["decrypt"],
     );
-    const plain = await subtle.decrypt({ name: "AES-GCM", iv: raw.slice(65, 77), additionalData: new TextEncoder().encode("g1") }, key, raw.slice(77));
-    expect(JSON.parse(new TextDecoder().decode(plain))).toEqual({ pw: "hunter22", gid: "g1", c: b64url(challenge) });
-    // Another gid can't open it.
-    await expect(subtle.decrypt({ name: "AES-GCM", iv: raw.slice(65, 77), additionalData: new TextEncoder().encode("g2") }, key, raw.slice(77))).rejects.toBeTruthy();
+    const plain = await subtle.decrypt({ name: "AES-GCM", iv: raw.slice(66, 78) }, key, raw.slice(78));
+    // The gid and the challenge ride inside (the engine checks both).
+    expect(JSON.parse(new TextDecoder().decode(plain))).toEqual({ secret: "hunter22", gid: "g1", challenge: b64url(challenge) });
+    // A friend pass goes in the same field.
+    const passBlob = fromB64url((await seal(pk, "g1", challenge, { pass: "pass-1234" }))!)!;
+    const eph2 = await subtle.importKey("raw", passBlob.slice(1, 66), { name: "ECDH", namedCurve: "P-256" }, false, []);
+    const shared2 = await subtle.deriveBits({ name: "ECDH", public: eph2 }, room.privateKey, 256);
+    const hk2 = await subtle.importKey("raw", shared2, "HKDF", false, ["deriveKey"]);
+    const key2 = await subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt: challenge, info }, hk2, { name: "AES-GCM", length: 128 }, false, ["decrypt"]);
+    const plain2 = await subtle.decrypt({ name: "AES-GCM", iv: passBlob.slice(66, 78) }, key2, passBlob.slice(78));
+    expect(JSON.parse(new TextDecoder().decode(plain2)).secret).toBe("pass-1234");
+    // A flipped byte fails the tag.
+    const bad = raw.slice(78);
+    bad[bad.length - 1] ^= 1;
+    await expect(subtle.decrypt({ name: "AES-GCM", iv: raw.slice(66, 78) }, key, bad)).rejects.toBeTruthy();
     expect(await seal("short", "g1", challenge, { pw: "x" })).toBeNull();
   });
 });

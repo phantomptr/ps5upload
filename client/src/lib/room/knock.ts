@@ -4,13 +4,14 @@
 // is sealed to the room's public key so only the host engine can read it, over a fresh challenge
 // per guest so a sealed blob can't be replayed.
 //
-// Seal (the engine's room_seal.rs, one format for the page, the apps and the engine):
+// Seal (the engine's room_seal.rs, which opens it, and PS5Upload Play's src/net/seal.cpp: one
+// format for the page, the apps and the engine):
 //   ephemeral P-256 key pair E; shared = ECDH(E, room pk) (the 32-byte x coordinate)
-//   key = HKDF-SHA256(ikm shared, salt = challenge (16 B), info = "ps5upload room knock v1" ‖
-//         E's 65-byte public point) → 16 B
-//   AES-128-GCM, 12-byte random nonce, additional data = the gid (UTF-8)
-//   plaintext = JSON {"pw"?: "...", "pass"?: "...", "gid": "...", "c": "<challenge b64url>"}
-//   blob = base64url(eph public key, uncompressed 65 B ‖ nonce 12 B ‖ ciphertext with tag)
+//   key = HKDF-SHA256(ikm shared, salt = challenge (16 B), info = "ps5upload room knock v1") → 16 B
+//   AES-128-GCM, 12-byte random nonce, no additional data
+//   plaintext = JSON {"secret": "<password, or friend pass>", "gid": "...", "challenge": "<as sent>"}
+//   blob = base64url(0x01 ‖ eph public key, uncompressed 65 B ‖ nonce 12 B ‖ ciphertext with tag)
+// The gid and the challenge inside the sealed text bind it to this guest and this challenge.
 
 import type { Via } from "./room";
 import { ROOM_CAPS, ROOM_PROTO } from "./rooms";
@@ -82,6 +83,8 @@ export interface KnockSecret {
 }
 
 const INFO = new TextEncoder().encode("ps5upload room knock v1");
+/** The blob's first byte: the only version room_seal.rs opens. */
+const SEAL_VERSION = 1;
 
 /** Seals `secret` to the room key `pk` (base64url, uncompressed P-256) for `gid` over the host's
  *  challenge. Null where this browser has no WebCrypto (a plain-http page): the knock then can't
@@ -97,19 +100,17 @@ export async function seal(pk: string, gid: string, challenge: Uint8Array, secre
     const hk = await subtle.importKey("raw", shared, "HKDF", false, ["deriveKey"]);
     const salt = new Uint8Array(challenge);
     const pub = new Uint8Array(await subtle.exportKey("raw", eph.publicKey));
-    const info = new Uint8Array(INFO.length + pub.length);
-    info.set(INFO, 0);
-    info.set(pub, INFO.length);
-    const aes = await subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt, info }, hk, { name: "AES-GCM", length: 128 }, false, ["encrypt"]);
+    const aes = await subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt, info: INFO }, hk, { name: "AES-GCM", length: 128 }, false, ["encrypt"]);
     const nonce = cryptoImpl.getRandomValues(new Uint8Array(12));
-    const body = new TextEncoder().encode(JSON.stringify({ ...secret, gid, c: b64url(challenge) }));
-    const ct = new Uint8Array(
-      await subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: new TextEncoder().encode(gid) }, aes, body),
-    );
-    const out = new Uint8Array(pub.length + nonce.length + ct.length);
-    out.set(pub, 0);
-    out.set(nonce, pub.length);
-    out.set(ct, pub.length + nonce.length);
+    // One secret: the password, or the friend pass of a Play again knock (the host engine knows
+    // which from the knock's `via`).
+    const body = new TextEncoder().encode(JSON.stringify({ secret: secret.pw ?? secret.pass ?? "", gid, challenge: b64url(challenge) }));
+    const ct = new Uint8Array(await subtle.encrypt({ name: "AES-GCM", iv: nonce }, aes, body));
+    const out = new Uint8Array(1 + pub.length + nonce.length + ct.length);
+    out[0] = SEAL_VERSION;
+    out.set(pub, 1);
+    out.set(nonce, 1 + pub.length);
+    out.set(ct, 1 + pub.length + nonce.length);
     return b64url(out);
   } catch {
     return null;

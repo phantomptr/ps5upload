@@ -367,8 +367,12 @@ async fn session(
                 match s("t").as_str() {
                     "hosted" => {
                         if v.get("lobby") != Some(&Value::Bool(true)) || v.get("caps").is_none() {
-                            // A hub from before rooms (self-hosted): invites still work.
+                            // A hub from before rooms (self-hosted): invites still work. It
+                            // opened a plain room for this host; close it for good (`leave`) so
+                            // it does not wait 2 minutes for a reclaim and count toward this
+                            // computer's 8 rooms there.
                             crate::join::room_api::set_listed(Listed::Not("old_hub".into()));
+                            let _ = ws.send(frame(json!({"v": 1, "t": "leave"}))).await;
                             let _ = ws.close(None).await;
                             return End::Again(Some(Duration::from_secs(600)));
                         }
@@ -907,6 +911,60 @@ mod tests {
         assert_eq!(cid_of("lobbyA", "g1").as_deref(), Some("abcdEFGH"));
         forget_guest("lobbyA", "g1");
         assert_eq!(cid_of("lobbyA", "g1"), None);
+    }
+
+    /// A hub from before rooms (12.6.46 and older) ignores `lobby` and opens a plain room: the
+    /// lobby closes that room at once (`leave`, so it neither waits for a reclaim nor counts
+    /// toward the computer's rooms there) and tries again only after 10 minutes.
+    #[tokio::test]
+    async fn an_older_hub_gets_its_room_back_and_a_long_wait() {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let old_hub = tokio::spawn(async move {
+            let (s, _) = l.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(s).await.unwrap();
+            let mut got = Vec::new();
+            while let Some(Ok(m)) = ws.next().await {
+                match m {
+                    WsMsg::Text(t) => {
+                        let v: Value = serde_json::from_str(t.as_str()).unwrap();
+                        if v["t"] == "host" {
+                            // What 12.6.46's hub answers: no `lobby`, no `caps`.
+                            let _ = ws
+                                .send(frame(json!({"t": "hosted", "room": v["room"]})))
+                                .await;
+                        }
+                        got.push(v);
+                    }
+                    WsMsg::Close(_) => break,
+                    _ => {}
+                }
+            }
+            got
+        });
+        let ws = super::super::hub::connect(&format!("ws://{addr}/ws"))
+            .await
+            .unwrap();
+        let (_stop_tx, mut stop) = watch::channel(());
+        let (cmd, _cmd_rx) = mpsc::unbounded_channel();
+        let room = ps5upload_hub::hub::room_for_secret(&"s".repeat(43));
+        let end = tokio::time::timeout(
+            Duration::from_secs(10),
+            session(ws, &room, &"s".repeat(43), &Notify::new(), &mut stop, &cmd),
+        )
+        .await
+        .expect("the lobby gives up on an old hub at once");
+        assert!(
+            matches!(end, End::Again(Some(d)) if d >= Duration::from_secs(600)),
+            "a long wait before the next try"
+        );
+        let got = tokio::time::timeout(Duration::from_secs(5), old_hub)
+            .await
+            .unwrap()
+            .unwrap();
+        let kinds: Vec<&str> = got.iter().map(|v| v["t"].as_str().unwrap_or("")).collect();
+        assert_eq!(kinds, ["host", "leave"], "{got:?}");
+        assert_eq!(got[0]["lobby"], true);
     }
 
     #[test]

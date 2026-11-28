@@ -274,4 +274,35 @@ mod tests {
         assert_eq!(back.public(), pk);
         assert!(back.open(&blob, "gid1", &c).is_some());
     }
+
+    /// Blobs made by the web page's `seal()` (client/src/lib/room/knock.ts; the page, the desktop
+    /// and phone apps all use it): the engine opens them. The page once sealed another way (HKDF
+    /// info with the ephemeral key, the gid as AES-GCM data, `pw`/`c` keys, no version byte), and
+    /// every password or friend-pass knock from it read as a wrong password (found by
+    /// client/e2e/play-rooms-internet.spec.ts). Made with: a room key from WebCrypto (its JWK `d`
+    /// is `RoomKey::from_b64`), challenge bytes 1..=16, gid `Gid-hub-0001`.
+    #[test]
+    fn opens_what_the_web_page_seals() {
+        let k = RoomKey::from_b64("vxyUcwxEfT16cmd4wKjlCMgq__tt3XdgNqeWNgJXH8s").unwrap();
+        assert_eq!(
+            k.public(),
+            "BBnVBGlr_BvaVKVgikmJe81J9CFcIzGK1Midv9009CgTCwvJZWawWr_vDsrBUSnvMQJGAsYignG0w0lOWwVobug"
+        );
+        let c = "AQIDBAUGBwgJCgsMDQ4PEA";
+        let pw = "AQRshr8LIKIHNbCW6eGZaUuK8ebdO_C_FseaUdcTUTWnkTKJRQv0DwoQjQAslo0oHTcvTOZKFo5wl-iul_IMJhQ_SzD77ZRWZwHLsr_k7kWkxWtEfi2ZEg-Qo7DqWtz0Y8oEuY0A2uFnACxnZZTkAT_UCrF9xjnSBFAMUd9b4ByoNJFGEv4SnLDzTvZ-GAz_gicT8lSMEASXe5FGuBTJ6L_lVr6zLfR7bC-Vzg";
+        let pass = "AQSWr5fBgEAUp42Z-VkpgAU_a35HWtQUiIayAtTUA_bwM6NbkYG3ZvtwhxeqVQpNOoZsMs1ngyaDD_iXBgRqOyn9ryNpOtGCt2lJ0oXTbtKv5ajGgfdbbhXNwaAMhnJkYGUacHjacyWFeuksJKPxwIjSYqduwhWGwtZyQYl3gzhl7_SCKxSmOvXtW2Hil179CLGX2jEp0bk7kjxJZl91Ezu2pod8M7FfJHyDEQq1o4ZDEMg";
+        assert_eq!(
+            k.open(pw, "Gid-hub-0001", c),
+            Some(Sealed {
+                secret: "couch42".into()
+            })
+        );
+        assert_eq!(
+            k.open(pass, "Gid-hub-0001", c),
+            Some(Sealed {
+                secret: "friendpass-123".into()
+            })
+        );
+        assert_eq!(k.open(pw, "Gid-hub-0002", c), None);
+    }
 }
