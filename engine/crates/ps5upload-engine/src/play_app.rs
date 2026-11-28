@@ -43,7 +43,11 @@
 //! then stops working for 10 minutes), 409 `app_gone` when the app that asked closed meanwhile),
 //! `POST /api/play/app/unpair {id}`, `GET /api/play/app/paired` (the paired consoles, those
 //! waiting for their code to be typed, and the consoles that moved waiting to be confirmed),
-//! `POST /api/play/app/moved {console_old?, addr, ok}` (the one click for a console that moved).
+//! `POST /api/play/app/moved {console_old?, addr, ok}` (the one click for a console that moved),
+//! `POST /api/play/app/pair_confirm {console}` (pairs the app whose code waits on that console's
+//! TV with one click, exactly as typing the code does: PS5Upload showed the code to compare).
+//! While a code waits, PS5Upload's own feed gets a `play` event `{"pair_waiting": {"console",
+//! "name", "code_display"}}`, and `{"pair_ended": {"console"}}` once it no longer waits.
 //!
 //! **The engine's event feed** gets a `play` event (`{"console", "doc"}`, the status without the
 //! invite's code and link) when the status of a console with Play Together open or the app on it
@@ -545,6 +549,24 @@ impl Pairing {
                 Err(ConfirmErr::Wrong(BAD_CODES_BEFORE_LOCK - self.bad))
             }
         }
+    }
+
+    /// The code waiting on `console`'s TV, confirmed with one click in PS5Upload (it showed the
+    /// code to compare). Err: pairing is locked (`Locked`), or nothing waits there (`Wrong(_)`;
+    /// a click is not a guess and does not count toward the lock).
+    fn take(&mut self, console: &str, now: Instant) -> Result<PendingPair, ConfirmErr> {
+        self.prune(now);
+        if let Some(s) = self.locked_s(now) {
+            return Err(ConfirmErr::Locked(s));
+        }
+        let want = host_key(console);
+        let at = self
+            .pending
+            .iter()
+            .position(|p| p.console == want)
+            .ok_or(ConfirmErr::Wrong(BAD_CODES_BEFORE_LOCK - self.bad))?;
+        self.bad = 0;
+        Ok(self.pending.remove(at))
     }
 
     fn locked_s(&self, now: Instant) -> Option<u64> {
@@ -1329,6 +1351,36 @@ pub async fn pair(
     finish_pair(p).await
 }
 
+#[derive(Deserialize)]
+pub struct PairConfirmBody {
+    /// The console whose TV shows the code (the `pair_waiting` event's `console`).
+    console: String,
+}
+
+/// `POST /api/play/app/pair_confirm {console}`: pairs the app waiting on that console's TV with one
+/// click, exactly as typing its code does (`/api/play/app/pair`): PS5Upload showed the code
+/// (`pair_waiting`, or `waiting` in `/api/play/app/paired`) and the user saw the same one on the
+/// TV. `{ok, id, console, name}`; 404 `not_waiting` when no code waits there (expired, or the app
+/// closed), 429 `locked` with `retry_s`, 409 `app_gone`.
+pub async fn pair_confirm(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Json(b): Json<PairConfirmBody>,
+) -> Response {
+    if let Some(r) = crate::join::host_only(&peer, &headers) {
+        return r;
+    }
+    let now = Instant::now();
+    match with_hub(|h| h.pairing.take(&b.console, now)) {
+        Ok(p) => finish_pair(p).await,
+        Err(ConfirmErr::Locked(s)) => bad(
+            StatusCode::TOO_MANY_REQUESTS,
+            json!({"error": "locked", "retry_s": s}),
+        ),
+        Err(ConfirmErr::Wrong(_)) => bad(StatusCode::NOT_FOUND, json!({"error": "not_waiting"})),
+    }
+}
+
 /// A new pairing for the app on `console` (socket `conn`): saved, with the console's AVA1 key and
 /// the app's install id when known. `(id, token, name)`.
 async fn issue(
@@ -1508,8 +1560,10 @@ pub async fn moved(
 }
 
 /// `GET /api/play/app/paired`: `{apps: [{id, console, name, paired_unix, last_seen_unix,
-/// connected}], waiting: [{console, expires_in_s}], moves: [{id, name, addr_old, addr_new,
-/// expires_in_s}], locked_s}`. Never a token.
+/// connected}], waiting: [{console, name, code_display, expires_in_s}], moves: [{id, name,
+/// addr_old, addr_new, expires_in_s}], locked_s}`. Never a token. A waiting console's code is
+/// listed (this computer's own view) so PS5Upload can ask "Does your TV show KMX-4R7?" and pair
+/// it with one click (`POST /api/play/app/pair_confirm`).
 pub async fn paired(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
@@ -1519,7 +1573,7 @@ pub async fn paired(
     }
     let now = Instant::now();
     let v = tokio::task::spawn_blocking(move || {
-        with_hub(|h| {
+        let mut v = with_hub(|h| {
             h.pairing.prune(now);
             h.prune_moves(now);
             let moves: Vec<Value> = h
@@ -1562,6 +1616,7 @@ pub async fn paired(
                 .map(|p| {
                     json!({
                         "console": p.console,
+                        "code_display": crate::join::code_display(&p.code),
                         "expires_in_s": p.until.saturating_duration_since(now).as_secs(),
                     })
                 })
@@ -1572,7 +1627,18 @@ pub async fn paired(
                 "moves": moves,
                 "locked_s": h.pairing.locked_s(now),
             })
-        })
+        });
+        // The consoles' names, read with the hub let go.
+        if let Some(w) = v["waiting"].as_array_mut() {
+            for e in w {
+                let name = e["console"]
+                    .as_str()
+                    .and_then(crate::consoles_api::console_brief)
+                    .and_then(|(n, _)| n);
+                e["name"] = json!(name);
+            }
+        }
+        v
     })
     .await
     .unwrap_or(Value::Null);
@@ -1586,21 +1652,48 @@ pub async fn paired(
 pub(crate) fn spawn_feed() {
     tokio::spawn(async move {
         let mut last: HashMap<String, Value> = HashMap::new();
+        let mut waiting: HashMap<String, String> = HashMap::new();
         let mut t = tokio::time::interval(Duration::from_secs(1));
         t.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             t.tick().await;
             let r = tokio::task::spawn_blocking(move || {
                 feed_round(&mut last);
-                last
+                waiting_round(&mut waiting, Instant::now());
+                (last, waiting)
             })
             .await;
-            match r {
-                Ok(l) => last = l,
-                Err(_) => last = HashMap::new(),
-            }
+            (last, waiting) = r.unwrap_or_default();
         }
     });
+}
+
+/// One look at the pairing codes on the TVs: PS5Upload's own feed gets `{"pair_waiting":
+/// {"console", "name", "code_display"}}` for a new code (it shows "Does your TV show KMX-4R7?
+/// [Pair]") and `{"pair_ended": {"console"}}` when that code no longer waits (paired, expired, the
+/// app gone, or pairing locked). `last`: by console, the code shown last time.
+fn waiting_round(last: &mut HashMap<String, String>, now: Instant) {
+    let waiting: HashMap<String, String> = with_hub(|h| {
+        h.pairing.prune(now);
+        h.pairing
+            .pending
+            .iter()
+            .map(|p| (p.console.clone(), crate::join::code_display(&p.code)))
+            .collect()
+    });
+    for (c, code) in &waiting {
+        if last.get(c) != Some(code) {
+            let name = crate::consoles_api::console_brief(c).and_then(|(n, _)| n);
+            crate::event_bus::bus().publish_json(
+                "play",
+                &json!({"pair_waiting": {"console": c, "name": name, "code_display": code}}),
+            );
+        }
+    }
+    for c in last.keys().filter(|c| !waiting.contains_key(*c)) {
+        crate::event_bus::bus().publish_json("play", &json!({"pair_ended": {"console": c}}));
+    }
+    *last = waiting;
 }
 
 /// One look: the consoles whose status changed since `last` get a `play` event.
@@ -1640,6 +1733,7 @@ pub(crate) fn router<S: Clone + Send + Sync + 'static>() -> axum::Router<S> {
         .route("/api/play/app/unpair", post(unpair))
         .route("/api/play/app/paired", get(paired))
         .route("/api/play/app/moved", post(moved))
+        .route("/api/play/app/pair_confirm", post(pair_confirm))
 }
 
 #[cfg(test)]

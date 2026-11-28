@@ -679,3 +679,109 @@ async fn a_moved_console_needs_the_same_install_id_and_can_be_refused() {
     assert_eq!(a.console, "192.168.1.50");
     reset(None);
 }
+
+async fn click_pair(console: &str) -> (StatusCode, Value) {
+    let (ci, h) = local();
+    body(
+        pair_confirm(
+            ci,
+            h,
+            Json(PairConfirmBody {
+                console: console.to_string(),
+            }),
+        )
+        .await,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_code_on_the_tv_is_offered_to_ps5upload_and_pairs_with_one_click() {
+    let _turn = TURN.lock().await;
+    reset(None);
+    let url = serve().await;
+    let mut sub = crate::event_bus::bus().subscribe(None);
+    let mut feed = HashMap::new();
+    // Nothing waits: nothing to click.
+    let (st, v) = click_pair("127.0.0.1").await;
+    assert_eq!(
+        (st, v["error"].as_str()),
+        (StatusCode::NOT_FOUND, Some("not_waiting"))
+    );
+    let mut app = connect_hello(&url, json!({"app_id": APP_ID})).await;
+    next_with(&mut app, "doc").await;
+    send(&mut app, json!({"pair": {}})).await;
+    let code = next_with(&mut app, "pairing").await["pairing"]["code"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let shown = crate::join::code_display(&code);
+    // PS5Upload's own feed and list show the code to compare.
+    waiting_round(&mut feed, Instant::now());
+    let ev = next_event(&mut sub, "pair_waiting").await;
+    assert_eq!(ev["pair_waiting"]["console"], "127.0.0.1");
+    assert_eq!(ev["pair_waiting"]["code_display"], shown.as_str());
+    // Told once, not every look.
+    waiting_round(&mut feed, Instant::now());
+    let (ci, h) = local();
+    let (_, list) = body(paired(ci, h).await).await;
+    assert_eq!(list["waiting"][0]["code_display"], shown.as_str(), "{list}");
+    assert!(list["waiting"][0].get("name").is_some());
+    // From another computer: refused, and the code still waits.
+    let lan = ConnectInfo("192.168.1.9:5555".parse().unwrap());
+    let mut lan_h = HeaderMap::new();
+    lan_h.insert("host", "192.168.1.2:3000".parse().unwrap());
+    let r = pair_confirm(
+        lan,
+        lan_h,
+        Json(PairConfirmBody {
+            console: "127.0.0.1".into(),
+        }),
+    )
+    .await;
+    assert!(!r.status().is_success());
+    // One click: paired exactly as typing the code would, install id kept.
+    let (st, v) = click_pair("127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["console"], "127.0.0.1");
+    let got = next_with(&mut app, "paired").await;
+    assert_eq!(got["paired"]["id"], v["id"]);
+    let token = got["paired"]["token"].as_str().unwrap().to_string();
+    let a = with_hub(|h| h.store().check(&token).cloned()).unwrap();
+    assert_eq!(a.app_id.as_deref(), Some(APP_ID));
+    assert_eq!(next_with(&mut app, "doc").await["doc"]["paired"], true);
+    // The code no longer waits: the feed says so, and a second click finds nothing.
+    waiting_round(&mut feed, Instant::now());
+    let ev = next_event(&mut sub, "pair_ended").await;
+    assert_eq!(ev["pair_ended"]["console"], "127.0.0.1");
+    let (st, _) = click_pair("127.0.0.1").await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+    // The code typed by hand still works too.
+    let (_app2, _token2) = paired_app(&url).await;
+    reset(None);
+}
+
+#[test]
+fn a_click_is_not_a_guess_but_a_lock_still_holds() {
+    let mut p = Pairing::default();
+    let t = Instant::now();
+    let (tx, _rx) = mpsc::channel(4);
+    let ip: IpAddr = "192.168.1.50".parse().unwrap();
+    p.request("192.168.1.50", ip, 1, tx, t).unwrap();
+    // Clicking a console with nothing waiting does not count toward the lock.
+    for _ in 0..BAD_CODES_BEFORE_LOCK + 2 {
+        assert!(matches!(
+            p.take("192.168.1.51", t),
+            Err(ConfirmErr::Wrong(_))
+        ));
+    }
+    assert_eq!(p.locked_s(t), None);
+    // Locked by wrong codes typed: a click waits too.
+    for _ in 0..BAD_CODES_BEFORE_LOCK {
+        let _ = p.confirm("ZZZZZZ", t);
+    }
+    assert!(matches!(
+        p.take("192.168.1.50", t),
+        Err(ConfirmErr::Locked(_))
+    ));
+}

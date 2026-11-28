@@ -10649,6 +10649,18 @@
         ],
         "type": "object"
       },
+      "PairConfirmBody": {
+        "properties": {
+          "console": {
+            "description": "The console whose TV shows the code (the `pair_waiting` event's `console`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "console"
+        ],
+        "type": "object"
+      },
       "PairResult": {
         "description": "What a successful pairing leaves us with.",
         "properties": {
@@ -32356,9 +32368,156 @@
         }
       }
     },
+    "/api/play/app/pair_confirm": {
+      "post": {
+        "description": "`POST /api/play/app/pair_confirm {console}`: pairs the app waiting on that console's TV with one\nclick, exactly as typing its code does (`/api/play/app/pair`): PS5Upload showed the code\n(`pair_waiting`, or `waiting` in `/api/play/app/paired`) and the user saw the same one on the\nTV. `{ok, id, console, name}`; 404 `not_waiting` when no code waits there (expired, or the app\nclosed), 429 `locked` with `retry_s`, 409 `app_gone`.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairConfirmBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "console": {},
+                    "id": {},
+                    "name": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "retry_s": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Too many requests"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "play"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [],
+            "in": "body",
+            "name": "console",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/play/app/paired": {
       "get": {
-        "description": "`GET /api/play/app/paired`: `{apps: [{id, console, name, paired_unix, last_seen_unix,\nconnected}], waiting: [{console, expires_in_s}], moves: [{id, name, addr_old, addr_new,\nexpires_in_s}], locked_s}`. Never a token.",
+        "description": "`GET /api/play/app/paired`: `{apps: [{id, console, name, paired_unix, last_seen_unix,\nconnected}], waiting: [{console, name, code_display, expires_in_s}], moves: [{id, name,\naddr_old, addr_new, expires_in_s}], locked_s}`. Never a token. A waiting console's code is\nlisted (this computer's own view) so PS5Upload can ask \"Does your TV show KMX-4R7?\" and pair\nit with one click (`POST /api/play/app/pair_confirm`).",
         "responses": {
           "200": {
             "content": {

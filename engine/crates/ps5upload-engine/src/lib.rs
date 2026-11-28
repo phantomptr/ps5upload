@@ -14486,6 +14486,7 @@ fn build_app_and_mcp(
         .route("/api/play/app/unpair", post(play_app::unpair))
         .route("/api/play/app/paired", get(play_app::paired))
         .route("/api/play/app/moved", post(play_app::moved))
+        .route("/api/play/app/pair_confirm", post(play_app::pair_confirm))
         // PS5Upload Play on a PS5: install, update, remove, open (play_app_install.rs).
         .route("/api/play/app/installed", get(play_app_install::installed))
         .route("/api/play/app/install", post(play_app_install::install))
@@ -15468,6 +15469,7 @@ mod loopback_guard_tests {
             "/api/play/app/unpair",
             "/api/play/app/paired",
             "/api/play/app/moved",
+            "/api/play/app/pair_confirm",
             "/api/play/app/x",
             "/api/play/appx",
             "/api/play",
@@ -15476,6 +15478,11 @@ mod loopback_guard_tests {
         }
         assert!(loopback_allows(&c, ip("127.0.0.1"), "/api/play/app/pair"));
         assert!(loopback_allows(&c, ip("127.0.0.1"), "/api/play/app/moved"));
+        assert!(loopback_allows(
+            &c,
+            ip("127.0.0.1"),
+            "/api/play/app/pair_confirm"
+        ));
     }
 
     #[test]
