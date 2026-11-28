@@ -16,10 +16,15 @@ export function Section({
    *  row. For settings whose body is tall enough (a warning card, a long
    *  description) that half-width would look cramped. */
   full = false,
+  /** A tag after the title ("Experimental"). */
+  badge,
+  testId,
 }: {
   title: string;
   children: React.ReactNode;
   full?: boolean;
+  badge?: React.ReactNode;
+  testId?: string;
 }) {
   return (
     <section
@@ -27,9 +32,11 @@ export function Section({
         "surface-panel !rounded-[var(--radius-card)] flex h-full flex-col p-5 " +
         (full ? "md:col-span-2" : "")
       }
+      data-testid={testId}
     >
-      <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+      <h2 className="mb-3 flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
         {title}
+        {badge}
       </h2>
       {children}
     </section>

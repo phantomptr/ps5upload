@@ -1316,5 +1316,20 @@
   "cw_tour_skip": "Kihagyás",
   "cw_tour_step": "{n} / {total}",
   "cw_update_later": "Később",
-  "cw_update_ready": "A PS5Upload Minion frissült. Töltsd újra az új verzió használatához."
+  "cw_update_ready": "A PS5Upload Minion frissült. Töltsd újra az új verzió használatához.",
+  "cw_usbnet_address": "Cím: {ip}",
+  "cw_usbnet_err_change": "Nem sikerült módosítani az USB-adaptert. Próbáld újra.",
+  "cw_usbnet_experimental": "Kísérleti",
+  "cw_usbnet_note": "A konzol saját hálózata tovább működik.",
+  "cw_usbnet_state_failed": "Az adaptert nem sikerült elindítani – húzd ki, majd dugd vissza",
+  "cw_usbnet_state_no_address": "Várakozás egy címre",
+  "cw_usbnet_state_no_link": "Nincs csatlakoztatott kábel",
+  "cw_usbnet_state_none": "Nincs csatlakoztatott adapter",
+  "cw_usbnet_state_off": "Ki",
+  "cw_usbnet_state_paused": "Szünetel, amíg a PS5 nyugalmi módban van",
+  "cw_usbnet_state_ready": "Csatlakoztatva",
+  "cw_usbnet_state_starting": "Indítás…",
+  "cw_usbnet_state_unsupported": "Ennek az adapternek a chipváltozata még nem támogatott",
+  "cw_usbnet_switch": "USB Ethernet-adapter használata",
+  "cw_usbnet_title": "USB Ethernet-adapter"
 }

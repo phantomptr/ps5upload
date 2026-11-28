@@ -1316,5 +1316,20 @@
   "cw_tour_skip": "略過",
   "cw_tour_step": "{n} / {total}",
   "cw_update_later": "稍後",
-  "cw_update_ready": "PS5Upload Minion 已更新。請重新載入以使用新版本。"
+  "cw_update_ready": "PS5Upload Minion 已更新。請重新載入以使用新版本。",
+  "cw_usbnet_address": "位址：{ip}",
+  "cw_usbnet_err_change": "無法變更 USB 轉接器，請再試一次。",
+  "cw_usbnet_experimental": "實驗性",
+  "cw_usbnet_note": "主機本身的網路照常運作。",
+  "cw_usbnet_state_failed": "無法啟動轉接器，請拔下後重新插入",
+  "cw_usbnet_state_no_address": "正在等待位址",
+  "cw_usbnet_state_no_link": "未連接網路線",
+  "cw_usbnet_state_none": "未插入轉接器",
+  "cw_usbnet_state_off": "關",
+  "cw_usbnet_state_paused": "PS5 休眠期間暫停",
+  "cw_usbnet_state_ready": "已連線",
+  "cw_usbnet_state_starting": "正在啟動…",
+  "cw_usbnet_state_unsupported": "尚不支援此轉接器的晶片版本",
+  "cw_usbnet_switch": "使用 USB 乙太網路轉接器",
+  "cw_usbnet_title": "USB 乙太網路轉接器"
 }

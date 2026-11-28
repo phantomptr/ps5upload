@@ -1316,5 +1316,20 @@
   "cw_tour_skip": "Atla",
   "cw_tour_step": "{n} / {total}",
   "cw_update_later": "Sonra",
-  "cw_update_ready": "PS5Upload Minion güncellendi. Yeni sürümü kullanmak için yeniden yükleyin."
+  "cw_update_ready": "PS5Upload Minion güncellendi. Yeni sürümü kullanmak için yeniden yükleyin.",
+  "cw_usbnet_address": "Adres: {ip}",
+  "cw_usbnet_err_change": "USB adaptörü değiştirilemedi. Yeniden deneyin.",
+  "cw_usbnet_experimental": "Deneysel",
+  "cw_usbnet_note": "Konsolun kendi ağı çalışmaya devam eder.",
+  "cw_usbnet_state_failed": "Adaptör başlatılamadı — çıkarıp yeniden takın",
+  "cw_usbnet_state_no_address": "Adres bekleniyor",
+  "cw_usbnet_state_no_link": "Kablo takılı değil",
+  "cw_usbnet_state_none": "Takılı adaptör yok",
+  "cw_usbnet_state_off": "Kapalı",
+  "cw_usbnet_state_paused": "PS5 dinlenme modundayken duraklatıldı",
+  "cw_usbnet_state_ready": "Bağlı",
+  "cw_usbnet_state_starting": "Başlatılıyor…",
+  "cw_usbnet_state_unsupported": "Bu adaptörün yonga revizyonu henüz desteklenmiyor",
+  "cw_usbnet_switch": "USB Ethernet adaptörü kullan",
+  "cw_usbnet_title": "USB Ethernet adaptörü"
 }

@@ -157,6 +157,7 @@
 #define AVA1_METHOD_PLAY_ROOM 203ULL
 #define AVA1_METHOD_PLAY_GRANT 204ULL
 #define AVA1_METHOD_PADS_LIST 205ULL
+#define AVA1_METHOD_USBNET 206ULL
 #define AVA1_JOB_OP_DELETE 1ULL
 #define AVA1_JOB_OP_CHMOD_R 2ULL
 #define AVA1_JOB_OP_HASH 3ULL
@@ -201,6 +202,9 @@ typedef struct {
     int has_prior_instance;
     const uint8_t *prior_instance;
     uint16_t prior_instance_len;
+    int has_usbnet;
+    const uint8_t *usbnet;
+    uint16_t usbnet_len;
 } ava1_node_status_t;
 
 int ava1_node_status_encode(const ava1_node_status_t *m, ava1_w_t *w);

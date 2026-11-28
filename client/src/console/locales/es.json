@@ -1316,5 +1316,20 @@
   "cw_tour_skip": "Omitir",
   "cw_tour_step": "{n} de {total}",
   "cw_update_later": "Más tarde",
-  "cw_update_ready": "PS5Upload Minion se actualizó. Recarga para usar la nueva versión."
+  "cw_update_ready": "PS5Upload Minion se actualizó. Recarga para usar la nueva versión.",
+  "cw_usbnet_address": "Dirección: {ip}",
+  "cw_usbnet_err_change": "No se pudo cambiar el adaptador USB. Inténtalo de nuevo.",
+  "cw_usbnet_experimental": "Experimental",
+  "cw_usbnet_note": "La red propia de la consola sigue funcionando.",
+  "cw_usbnet_state_failed": "No se pudo iniciar el adaptador: desconéctalo y vuelve a conectarlo",
+  "cw_usbnet_state_no_address": "Esperando una dirección",
+  "cw_usbnet_state_no_link": "No hay ningún cable conectado",
+  "cw_usbnet_state_none": "No hay ningún adaptador conectado",
+  "cw_usbnet_state_off": "Desactivado",
+  "cw_usbnet_state_paused": "En pausa mientras la PS5 está en reposo",
+  "cw_usbnet_state_ready": "Conectado",
+  "cw_usbnet_state_starting": "Iniciando…",
+  "cw_usbnet_state_unsupported": "La revisión del chip de este adaptador aún no es compatible",
+  "cw_usbnet_switch": "Usar un adaptador Ethernet USB",
+  "cw_usbnet_title": "Adaptador Ethernet USB"
 }

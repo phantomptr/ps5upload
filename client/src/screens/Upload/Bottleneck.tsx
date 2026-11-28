@@ -1,4 +1,4 @@
-import { ArrowLeftRight, Laptop, Loader2 } from "lucide-react";
+import { ArrowLeftRight, Cable, Laptop, Loader2, Network } from "lucide-react";
 
 import { useTr } from "../../state/lang";
 import { formatBytes } from "../../lib/format";
@@ -6,6 +6,7 @@ import { formatEtaSeconds } from "../../lib/uploadEta";
 import { useRateEta } from "../../lib/useRateEta";
 import type { BottleneckCause, JobLive } from "../../lib/jobLive";
 import { formatNumber } from "../../lib/formatDate";
+import { linkShort } from "../../lib/linkSpeed";
 
 /** Catalog key and English fallback for each cause (written out so the i18n scripts see them). */
 const CAUSE: Record<BottleneckCause, { key: string; text: string }> = {
@@ -204,6 +205,7 @@ export function JobLiveNotes({ live }: { live: JobLive | undefined }) {
   return (
     <div className="mb-2 flex flex-col gap-0.5">
       <SkippingLine live={live} />
+      <LinkLine live={live} />
       <BottleneckLine cause={live.bottleneck} />
       <SettlingLine live={live} />
       <VerifyingLine live={live} />
@@ -233,6 +235,32 @@ export function RouteLine({ live }: { live: JobLive | undefined }) {
         {live.routeReason && (
           <span className="break-words"> · {live.routeReason}</span>
         )}
+      </span>
+    </div>
+  );
+}
+
+/** Which network a transfer to a console with a USB Ethernet adapter takes: the adapter (with its
+ *  link speed when known) or the console's own network. Nothing for a console without an adapter. */
+export function LinkLine({ live }: { live: JobLive | undefined }) {
+  const tr = useTr();
+  if (!live?.link) return null;
+  if (live.link === "console") {
+    return (
+      <div className="flex items-center gap-1.5 text-xs text-[var(--color-muted)]" data-testid="queue-link">
+        <Network size={12} className="shrink-0" aria-hidden />
+        <span>{tr("queue_link_console", undefined, "Via console network")}</span>
+      </div>
+    );
+  }
+  const speed = linkShort(live.linkMbps);
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-[var(--color-muted)]" data-testid="queue-link">
+      <Cable size={12} className="shrink-0 text-[var(--color-accent)]" aria-hidden />
+      <span>
+        {speed
+          ? tr("queue_link_usb_speed", { speed }, `Via USB ${speed} adapter`)
+          : tr("queue_link_usb", undefined, "Via USB adapter")}
       </span>
     </div>
   );

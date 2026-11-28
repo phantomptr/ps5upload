@@ -1316,5 +1316,20 @@
   "cw_tour_skip": "Lewati",
   "cw_tour_step": "{n} dari {total}",
   "cw_update_later": "Nanti",
-  "cw_update_ready": "PS5Upload Minion telah diperbarui. Muat ulang untuk memakai versi baru."
+  "cw_update_ready": "PS5Upload Minion telah diperbarui. Muat ulang untuk memakai versi baru.",
+  "cw_usbnet_address": "Alamat: {ip}",
+  "cw_usbnet_err_change": "Tidak bisa mengubah adaptor USB. Coba lagi.",
+  "cw_usbnet_experimental": "Eksperimental",
+  "cw_usbnet_note": "Jaringan konsol sendiri tetap berjalan.",
+  "cw_usbnet_state_failed": "Adaptor tidak bisa dimulai — cabut lalu pasang lagi",
+  "cw_usbnet_state_no_address": "Menunggu alamat",
+  "cw_usbnet_state_no_link": "Tidak ada kabel yang terpasang",
+  "cw_usbnet_state_none": "Tidak ada adaptor yang terpasang",
+  "cw_usbnet_state_off": "Mati",
+  "cw_usbnet_state_paused": "Dijeda selama PS5 dalam mode istirahat",
+  "cw_usbnet_state_ready": "Terhubung",
+  "cw_usbnet_state_starting": "Memulai…",
+  "cw_usbnet_state_unsupported": "Revisi chip adaptor ini belum didukung",
+  "cw_usbnet_switch": "Gunakan adaptor Ethernet USB",
+  "cw_usbnet_title": "Adaptor Ethernet USB"
 }

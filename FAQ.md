@@ -1659,6 +1659,27 @@ and every transfer afterwards goes over the direct cable.
 - **Resuming still works.** If you start an upload over the cable and switch to Wi-Fi (a new
   PS5 IP), start the same upload again to the new IP and it continues from what is on the console.
 
+### Faster than gigabit: a USB network adapter on the PS5 (experimental)
+
+**Q: Can I use a USB 2.5G, 5G or 10G network adapter on the PS5 for faster transfers?**
+
+Yes, as an experiment. The adapter needs a Realtek RTL8156B (2.5G), RTL8157 (5G) or RTL8159 (10G)
+chip with Realtek's own USB ID (`0bda:8156`, `0bda:8157`, `0bda:815a`); the first RTL8156 (without
+the B) and gigabit RTL8153 adapters are not supported. Plug it into the PS5, connect it to the same
+network as your computer, and leave the PS5's own network as it is.
+
+- The helper starts the adapter by itself and gets it an address from your router (or a fixed one
+  you set in **Settings › This PS5 › USB Ethernet adapter**, for a switch with no router).
+- Transfers from your computer use the adapter while your computer can reach it, and the PS5's own
+  network otherwise. A transfer shows which: "Via USB 2.5G adapter" or "Via console network".
+- The same Settings card shows the chip, the link speed, the address, the data it carried and
+  errors; Minion's Settings shows it too, with an on/off switch.
+- The PS5 can't use the adapter for anything else (internet, PSN, installs it downloads itself):
+  only PS5Upload's transfers and Minion go through it.
+- Expect less than the link speed: the adapter is driven by a program on the PS5, not by the
+  system, so 10G gives about 3 Gbit/s at best.
+- If it says the adapter didn't start, unplug it and plug it back in. It pauses while the PS5 rests.
+
 ---
 
 # Files and games

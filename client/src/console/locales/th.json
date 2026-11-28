@@ -1316,5 +1316,20 @@
   "cw_tour_skip": "ข้าม",
   "cw_tour_step": "{n} จาก {total}",
   "cw_update_later": "ภายหลัง",
-  "cw_update_ready": "PS5Upload Minion ได้รับการอัปเดตแล้ว โหลดใหม่เพื่อใช้เวอร์ชันใหม่"
+  "cw_update_ready": "PS5Upload Minion ได้รับการอัปเดตแล้ว โหลดใหม่เพื่อใช้เวอร์ชันใหม่",
+  "cw_usbnet_address": "ที่อยู่: {ip}",
+  "cw_usbnet_err_change": "เปลี่ยนอะแดปเตอร์ USB ไม่ได้ ลองอีกครั้ง",
+  "cw_usbnet_experimental": "ทดลอง",
+  "cw_usbnet_note": "เครือข่ายของเครื่องเกมเองยังทำงานตามปกติ",
+  "cw_usbnet_state_failed": "เริ่มอะแดปเตอร์ไม่ได้ ถอดออกแล้วเสียบใหม่",
+  "cw_usbnet_state_no_address": "กำลังรอที่อยู่",
+  "cw_usbnet_state_no_link": "ไม่ได้เสียบสาย",
+  "cw_usbnet_state_none": "ไม่ได้เสียบอะแดปเตอร์",
+  "cw_usbnet_state_off": "ปิด",
+  "cw_usbnet_state_paused": "หยุดชั่วคราวขณะ PS5 อยู่ในโหมดพัก",
+  "cw_usbnet_state_ready": "เชื่อมต่อแล้ว",
+  "cw_usbnet_state_starting": "กำลังเริ่ม…",
+  "cw_usbnet_state_unsupported": "ยังไม่รองรับชิปรุ่นย่อยของอะแดปเตอร์นี้",
+  "cw_usbnet_switch": "ใช้อะแดปเตอร์อีเทอร์เน็ต USB",
+  "cw_usbnet_title": "อะแดปเตอร์อีเทอร์เน็ต USB"
 }

@@ -30,6 +30,9 @@ int tailnet_node_take_down(int *err, char *what, size_t cap) {
     return 1;
 }
 int hw_fan_pinned_threshold(void) { return 0; }
+/* The USB adapter watcher (usbnet.h) follows the same signal. */
+static int g_usb_paused;
+void usbnet_set_paused(int paused) { g_usb_paused = paused; }
 
 static int failures;
 static void check(int ok, const char *label) {
@@ -45,6 +48,7 @@ int main(void) {
     power_phase_note_standby();
     check(power_phase_current() == PP_GOING_DOWN && power_phase_quiet(), "standby request: going down");
     check(g_paused, "standby request: tailnet paused at once");
+    check(g_usb_paused, "standby request: the USB adapter daemon stopped at once");
 
     /* the sony lock held across the standby call shows in the transition line (by eye) */
     pthread_mutex_lock(&sony_api_lock);
@@ -53,6 +57,7 @@ int main(void) {
     check(g_paused, "one healthy probe after the wake: tailnet still paused");
     power_phase_poll(5, 5);
     check(!g_paused && power_phase_quiet(), "two healthy probes: tailnet back, fan/kernel work still held");
+    check(!g_usb_paused, "two healthy probes: the USB adapter may start again (it also waits for the settle minute)");
 
     /* the settle minute runs on the monotonic clock: wait it out for real would take a minute, so
      * check only that a poll right away keeps holding */

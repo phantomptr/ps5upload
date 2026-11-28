@@ -1316,5 +1316,20 @@
   "cw_tour_skip": "スキップ",
   "cw_tour_step": "{n} / {total}",
   "cw_update_later": "後で",
-  "cw_update_ready": "PS5Upload Minion が更新されました。新しいバージョンを使うには再読み込みしてください。"
+  "cw_update_ready": "PS5Upload Minion が更新されました。新しいバージョンを使うには再読み込みしてください。",
+  "cw_usbnet_address": "アドレス: {ip}",
+  "cw_usbnet_err_change": "USB アダプターを変更できませんでした。もう一度お試しください。",
+  "cw_usbnet_experimental": "試験的",
+  "cw_usbnet_note": "本体のネットワークはそのまま使えます。",
+  "cw_usbnet_state_failed": "アダプターを起動できませんでした。いったん抜いて、もう一度差し込んでください",
+  "cw_usbnet_state_no_address": "アドレスを待っています",
+  "cw_usbnet_state_no_link": "ケーブルが接続されていません",
+  "cw_usbnet_state_none": "アダプターが接続されていません",
+  "cw_usbnet_state_off": "オフ",
+  "cw_usbnet_state_paused": "PS5 のレストモード中は一時停止",
+  "cw_usbnet_state_ready": "接続済み",
+  "cw_usbnet_state_starting": "起動中…",
+  "cw_usbnet_state_unsupported": "このアダプターのチップのリビジョンにはまだ対応していません",
+  "cw_usbnet_switch": "USB イーサネットアダプターを使う",
+  "cw_usbnet_title": "USB イーサネットアダプター"
 }

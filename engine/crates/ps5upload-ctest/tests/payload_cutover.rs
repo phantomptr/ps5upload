@@ -108,6 +108,15 @@ fn c_payload_binds_only_9120() {
         "the keyboard & mouse companion must listen on 127.0.0.1 only"
     );
     binders.retain(|p| p != "src/vinput_companion.c" && !p.starts_with("vinput/"));
+    // The USB Ethernet adapter daemon (payload/usbnet/, a process of its own): its control port
+    // is on the console's loopback only, and what it serves on the adapter is lwIP's, never the
+    // kernel's (fwd_lwip.c uses lwip_bind/lwip_listen, which this check does not count).
+    let usbnet = std::fs::read_to_string(payload().join("usbnet/main.c")).unwrap();
+    assert!(
+        usbnet.contains("htonl(INADDR_LOOPBACK)") && !usbnet.contains("INADDR_ANY"),
+        "the USB adapter daemon's control port must be on 127.0.0.1 only"
+    );
+    binders.retain(|p| !p.starts_with("usbnet/"));
     // The SMB daemon listens on the console's loopback only: the helper is its one client.
     let smbd = std::fs::read_to_string(payload().join("smb/smbd_main.c")).unwrap();
     assert!(

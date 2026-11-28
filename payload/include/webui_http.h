@@ -48,4 +48,11 @@ int webui_http_parse_cap(const char *buf, size_t len, webui_req_t *out, uint64_t
 int webui_http_head(char *out, size_t cap, int status, const char *content_type,
                     size_t body_len, const char *extra_headers);
 
+/* A PROXY protocol v1 line at the start of a connection ("PROXY TCP4 <client> <server> <cport>
+ * <sport>\r\n"): the USB adapter daemon's (usbnet_proto.h), which joins LAN clients to Minion over
+ * loopback. The server takes it only from a loopback peer. Returns the line's length with *client
+ * set (host order), 0 when the bytes are not a PROXY line, -1 when they may be one that has not
+ * fully arrived yet, -2 when it is malformed (the connection is dropped). */
+int webui_proxy_line(const char *buf, size_t len, uint32_t *client);
+
 #endif

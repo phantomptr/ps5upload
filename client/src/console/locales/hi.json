@@ -1316,5 +1316,20 @@
   "cw_tour_skip": "छोड़ें",
   "cw_tour_step": "{total} में से {n}",
   "cw_update_later": "बाद में",
-  "cw_update_ready": "PS5Upload Minion अपडेट हो गया है। नया संस्करण इस्तेमाल करने के लिए फिर से लोड करें।"
+  "cw_update_ready": "PS5Upload Minion अपडेट हो गया है। नया संस्करण इस्तेमाल करने के लिए फिर से लोड करें।",
+  "cw_usbnet_address": "पता: {ip}",
+  "cw_usbnet_err_change": "USB अडैप्टर नहीं बदला जा सका। फिर से कोशिश करें।",
+  "cw_usbnet_experimental": "प्रायोगिक",
+  "cw_usbnet_note": "कंसोल का अपना नेटवर्क चलता रहता है।",
+  "cw_usbnet_state_failed": "अडैप्टर शुरू नहीं हो सका — उसे निकालकर फिर से लगाएँ",
+  "cw_usbnet_state_no_address": "पते का इंतज़ार",
+  "cw_usbnet_state_no_link": "कोई केबल नहीं लगी है",
+  "cw_usbnet_state_none": "कोई अडैप्टर नहीं लगा है",
+  "cw_usbnet_state_off": "बंद",
+  "cw_usbnet_state_paused": "PS5 के रेस्ट मोड में रहने तक रुका हुआ",
+  "cw_usbnet_state_ready": "जुड़ा हुआ",
+  "cw_usbnet_state_starting": "शुरू हो रहा है…",
+  "cw_usbnet_state_unsupported": "इस अडैप्टर के चिप संस्करण का अभी समर्थन नहीं है",
+  "cw_usbnet_switch": "USB ईथरनेट अडैप्टर इस्तेमाल करें",
+  "cw_usbnet_title": "USB ईथरनेट अडैप्टर"
 }

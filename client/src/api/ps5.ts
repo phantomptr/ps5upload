@@ -4981,6 +4981,11 @@ export interface JobSnapshot {
    *  computer, and why not direct. Absent until the route is known (and on other jobs). */
   route?: string;
   route_reason?: string;
+  /** A console with a USB Ethernet adapter: the network this transfer takes, "usb" (the
+   *  adapter's own address) or "console" (its own network), and the adapter's link speed in
+   *  Mbit/s. Absent for a console that never reported an adapter (and on older engines). */
+  link?: "usb" | "console";
+  link_mbps?: number;
   /** The final status of a finished job (AVA1: protocol, files, bytes, bottleneck, ...). */
   commit_ack?: { bottleneck?: string } & Record<string, unknown>;
   /** Files actually sent (Done only). */

@@ -211,6 +211,7 @@ methods! {
     (PLAY_ROOM, 203, "PLAY_ROOM"),
     (PLAY_GRANT, 204, "PLAY_GRANT"),
     (PADS_LIST, 205, "PADS_LIST"),
+    (USBNET, 206, "USBNET"),
 }
 
 /// A management call the payload refused.
