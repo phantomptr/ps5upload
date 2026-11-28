@@ -10138,6 +10138,7 @@ backup_restore_partial: "{count} فایل بازگردانی شد؛ {missed} م�
 "room_approval_friends": "کسانی که با آن‌ها بازی کرده‌اید بدون درخواست وارد می‌شوند",
 "room_approval_password": "رمز اجازه می‌دهد بدون درخواست وارد شوند",
 "room_approval_password_needs": "اول یک رمز بگذارید.",
+"room_approval_household": "PS5های خودتان (آن‌هایی که PS5Upload می‌شناسد) بدون درخواست وارد می‌شوند",
 "room_tip_play_app": "دوستتان PS5 دارد؟ می‌تواند با PS5Upload Play بپیوندد.",
 "room_tip_how": "چطور",
 "room_tip_play_app_how": "او PS5Upload Play را روی PS5 خودش نصب می‌کند (از ProsperoStore، یا از PS5Upload روی کامپیوتر خودش: بازی › اتاق بازی)، آن را باز می‌کند و «پیوستن» را انتخاب می‌کند. وقتی اتاقتان برای دوستان یا عمومی باشد آنجا دیده می‌شود، یا او کد QR دعوت شما را با گوشی‌اش اسکن می‌کند و «بازی روی PS5 من» را می‌زند.",

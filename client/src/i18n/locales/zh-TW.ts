@@ -9825,6 +9825,7 @@ backup_restore_partial: "已還原 {count} 個檔案；{missed} 個無法還原"
 "room_approval_friends": "和你玩過的人無需詢問即可加入",
 "room_approval_password": "有密碼的人無需詢問即可加入",
 "room_approval_password_needs": "請先設定密碼。",
+"room_approval_household": "你自己的 PS5（PS5Upload 認得的）無需詢問即可加入",
 "room_tip_play_app": "好友有 PS5？可以用 PS5Upload Play 加入。",
 "room_tip_how": "怎麼做",
 "room_tip_play_app_how": "好友在自己的 PS5 上安裝 PS5Upload Play（從 ProsperoStore，或從他們自己電腦上的 PS5Upload：暢玩 › 暢玩房間），開啟後選擇「加入」。當你的房間設為「好友」或「公開」時會顯示在那裡；或者他們用手機掃描你邀請中的 QR 碼，然後點選「在我的 PS5 上玩」。",

@@ -9869,6 +9869,7 @@ backup_restore_partial: "{count} berkas dipulihkan; {missed} tidak dapat dipulih
 "room_approval_friends": "Orang yang pernah main dengan Anda masuk tanpa bertanya",
 "room_approval_password": "Kata sandi membuat orang masuk tanpa bertanya",
 "room_approval_password_needs": "Atur kata sandi dulu.",
+"room_approval_household": "PS5 milik Anda sendiri (yang dikenal PS5Upload) masuk tanpa bertanya",
 "room_tip_play_app": "Teman punya PS5? Mereka bisa bergabung dengan PS5Upload Play.",
 "room_tip_how": "Caranya",
 "room_tip_play_app_how": "Mereka memasang PS5Upload Play di PS5 mereka (dari ProsperoStore, atau dari PS5Upload di komputer mereka sendiri: Main › Ruang Main), membukanya, lalu memilih Gabung. Ruang Anda muncul di sana jika diatur ke Teman atau Publik, atau mereka memindai kode QR undangan Anda dengan ponsel dan mengetuk Main di PS5 saya.",

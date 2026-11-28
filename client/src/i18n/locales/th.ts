@@ -9867,6 +9867,7 @@ backup_restore_partial: "กู้คืน {count} ไฟล์แล้ว ก
 "room_approval_friends": "คนที่เคยเล่นกับคุณเข้าได้โดยไม่ต้องขอ",
 "room_approval_password": "คนที่มีรหัสผ่านเข้าได้โดยไม่ต้องขอ",
 "room_approval_password_needs": "ตั้งรหัสผ่านก่อน",
+"room_approval_household": "PS5 ของคุณเอง (ที่ PS5Upload รู้จัก) เข้าได้โดยไม่ต้องขอ",
 "room_tip_play_app": "เพื่อนมี PS5 ไหม? เข้าร่วมได้ด้วย PS5Upload Play",
 "room_tip_how": "วิธีการ",
 "room_tip_play_app_how": "เพื่อนติดตั้ง PS5Upload Play บน PS5 ของตัวเอง (จาก ProsperoStore หรือจาก PS5Upload บนคอมพิวเตอร์ของตัวเอง: เล่น › ห้องเล่นเกม) เปิดแอปแล้วเลือก เข้าร่วม ห้องของคุณจะแสดงที่นั่นเมื่อตั้งเป็น เพื่อน หรือ สาธารณะ หรือเพื่อนสแกนคิวอาร์โค้ดในคำเชิญของคุณด้วยโทรศัพท์แล้วแตะ เล่นบน PS5 ของฉัน",

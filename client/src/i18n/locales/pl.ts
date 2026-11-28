@@ -10097,6 +10097,7 @@ backup_restore_partial: "Przywrócone pliki: {count}; nie udało się przywróci
 "room_approval_friends": "Osoby, z którymi grałeś, wchodzą bez pytania",
 "room_approval_password": "Hasło wpuszcza bez pytania",
 "room_approval_password_needs": "Najpierw ustaw hasło.",
+"room_approval_household": "Twoje własne PS5 (te, które zna PS5Upload) wchodzą bez pytania",
 "room_tip_play_app": "Znajomy ma PS5? Może dołączyć przez PS5Upload Play.",
 "room_tip_how": "Jak",
 "room_tip_play_app_how": "Instaluje PS5Upload Play na swojej PS5 (z ProsperoStore albo z PS5Upload na swoim komputerze: Graj › Pokój gry), otwiera aplikację i wybiera Dołącz. Twój pokój pojawi się tam, gdy jest ustawiony na Znajomi lub Publiczny, albo znajomy skanuje telefonem kod QR z twojego zaproszenia i stuka Graj na mojej PS5.",

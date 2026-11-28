@@ -9860,6 +9860,7 @@ backup_restore_partial: "{count}টি ফাইল পুনরুদ্ধা�
 "room_approval_friends": "যারা আপনার সাথে খেলেছে তারা জিজ্ঞেস ছাড়াই ঢুকতে পারে",
 "room_approval_password": "পাসওয়ার্ড দিয়ে জিজ্ঞেস ছাড়াই ঢোকা যায়",
 "room_approval_password_needs": "আগে একটি পাসওয়ার্ড সেট করুন।",
+"room_approval_household": "আপনার নিজের PS5 (যেগুলো PS5Upload চেনে) জিজ্ঞেস ছাড়াই ঢুকতে পারে",
 "room_tip_play_app": "বন্ধুর PS5 আছে? তারা PS5Upload Play দিয়ে যোগ দিতে পারে।",
 "room_tip_how": "কীভাবে",
 "room_tip_play_app_how": "তারা নিজেদের PS5-এ PS5Upload Play ইনস্টল করে (ProsperoStore থেকে, অথবা নিজেদের কম্পিউটারের PS5Upload থেকে: খেলুন › প্লে রুম), সেটি খুলে যোগ দিন বেছে নেয়। আপনার রুম বন্ধুরা বা পাবলিক হলে সেখানে দেখা যায়, অথবা তারা ফোন দিয়ে আপনার আমন্ত্রণের QR কোড স্ক্যান করে আমার PS5-এ খেলুন ট্যাপ করে।",

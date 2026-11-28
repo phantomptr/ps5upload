@@ -9877,6 +9877,7 @@ backup_restore_partial: "{count}개 파일을 복원했습니다. {missed}개는
 "room_approval_friends": "같이 플레이한 적 있는 사람은 묻지 않고 들어와요",
 "room_approval_password": "비밀번호가 있으면 묻지 않고 들어와요",
 "room_approval_password_needs": "먼저 비밀번호를 설정하세요.",
+"room_approval_household": "내 PS5(PS5Upload가 아는 기기)는 묻지 않고 들어와요",
 "room_tip_play_app": "친구에게 PS5가 있나요? PS5Upload Play로 참여할 수 있어요.",
 "room_tip_how": "방법",
 "room_tip_play_app_how": "친구가 자신의 PS5에 PS5Upload Play를 설치하고(ProsperoStore에서, 또는 자기 컴퓨터의 PS5Upload에서: 플레이 › 플레이 룸) 연 다음 참여를 고르면 돼요. 룸이 친구 또는 공개일 때 거기에 보이고, 아니면 친구가 휴대폰으로 초대 QR 코드를 스캔해 ‘내 PS5에서 플레이’를 탭하면 돼요.",

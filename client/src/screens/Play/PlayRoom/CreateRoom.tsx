@@ -5,7 +5,7 @@ import { useConfirm } from "../../../components/ConfirmDialog";
 import { nameProblem } from "../../../lib/room/names";
 import { nameProblemText } from "../../../lib/room/nameText";
 import { ownRegion } from "../../../lib/room/regions";
-import { approvalFor, visibilityDefaults, type RoomBody, type Visibility } from "../../../lib/room/room";
+import { approvalFor, visibilityDefaults, type Approval, type RoomBody, type Visibility } from "../../../lib/room/room";
 import { confirmPublic, publicConfirmed, useRoomDraft } from "../../../state/roomDraft";
 import { useLangStore, useTr } from "../../../state/lang";
 import { ChoiceRow, chatChoices, LanguageSelect, RegionSelect, VisibilityPicker, voiceChoices } from "./roomControls";
@@ -183,9 +183,9 @@ export function ApprovalFields({
   hasPassword,
   onChange,
 }: {
-  approval: { friends: boolean; password: boolean };
+  approval: Approval;
   hasPassword: boolean;
-  onChange: (a: { friends: boolean; password: boolean }) => void;
+  onChange: (a: Approval) => void;
 }) {
   const tr = useTr();
   return (
@@ -202,6 +202,11 @@ export function ApprovalFields({
         onChange={(on) => onChange({ ...approval, password: on })}
         label={tr("room_approval_password", undefined, "The password lets people in without asking")}
         hint={hasPassword ? undefined : tr("room_approval_password_needs", undefined, "Set a password first.")}
+      />
+      <Checkbox
+        checked={approval.household === true}
+        onChange={(on) => onChange({ ...approval, household: on })}
+        label={tr("room_approval_household", undefined, "Your own PS5s (the ones PS5Upload knows) get in without asking")}
       />
     </div>
   );

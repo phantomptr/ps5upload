@@ -11,7 +11,7 @@ import { KnockForm } from "../../../components/RoomsBrowserCore";
 import { readJoinState } from "../playTogetherState";
 import { playerActions } from "./PlayerMenu";
 import { closeQuestion, listedText, RoomHeader } from "./RoomHeader";
-import { createBody } from "./CreateRoom";
+import { ApprovalFields, createBody } from "./CreateRoom";
 import { refusalText } from "./useRoomActions";
 import type { RoomCard } from "../../../lib/room/rooms";
 
@@ -122,6 +122,16 @@ describe("Play Room screens", () => {
       approval: { friends: true, password: true },
     });
     expect(createBody({ approval: { friends: false, password: true } }).approval).toEqual({ friends: false, password: false });
+    expect(createBody({ approval: { friends: true, password: false, household: true } }).approval).toEqual({
+      friends: true,
+      password: false,
+      household: true,
+    });
     expect(refusalText(tr, "size_below_players", 3)).toBe("3 people are in; remove someone first.");
+  });
+
+  it("approvals offer the household switch (engine approval.household)", () => {
+    const out = html(<ApprovalFields approval={{ friends: true, password: false, household: true }} hasPassword={false} onChange={() => {}} />);
+    expect(out).toContain("Your own PS5s (the ones PS5Upload knows) get in without asking");
   });
 });

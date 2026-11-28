@@ -205,6 +205,9 @@ describe("room state", () => {
     expect(r.ready).toEqual({ leftS: 20, ready: [2, 3], all: false });
     expect(readRoom({ ready: { left_s: 3, ready: [2], all: true } }).ready).toEqual({ leftS: 3, ready: [2], all: true });
     expect(r.game).toEqual({ title: "ASTRO BOT", id: "PPSA01234", from: "auto" });
+    // The household switch (engine approval.household): off unless the engine says on.
+    expect(r.approval).toEqual({ friends: false, password: true, household: false });
+    expect(readRoom({ approval: { household: true } }).approval.household).toBe(true);
   });
   it("player and ask facts; `via` lan/internet is not a source", () => {
     expect(readRoomPlayer({ via: "internet" }).source).toBeNull();

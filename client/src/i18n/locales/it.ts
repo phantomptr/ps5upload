@@ -9814,6 +9814,7 @@ backup_restore_partial: "{count} file ripristinati; impossibile ripristinarne {m
 "room_approval_friends": "Chi ha già giocato con te entra senza chiedere",
 "room_approval_password": "La password fa entrare senza chiedere",
 "room_approval_password_needs": "Imposta prima una password.",
+"room_approval_household": "Le tue PS5 (quelle che PS5Upload conosce) entrano senza chiedere",
 "room_tip_play_app": "Il tuo amico ha una PS5? Può entrare con PS5Upload Play.",
 "room_tip_how": "Come",
 "room_tip_play_app_how": "Installa PS5Upload Play sulla sua PS5 (da ProsperoStore, o da PS5Upload sul suo computer: Gioca › Stanza di gioco), lo apre e sceglie Entra. La tua stanza compare lì quando è Amici o Pubblica, oppure scansiona con il telefono il codice QR del tuo invito e tocca Gioca sulla mia PS5.",

@@ -24,6 +24,9 @@ export interface Approval {
   friends: boolean;
   /** The password lets people in without asking (only with a password). */
   password: boolean;
+  /** This household's PS5s (consoles PS5Upload knows) get in without asking. Off by default;
+   * absent in a change: left as it is. */
+  household?: boolean;
 }
 
 export interface RoomGame {
@@ -190,7 +193,7 @@ export function readRoom(v: unknown): RoomInfo {
   const ap = obj(o.approval);
   // `approval` may also come as one word ("ask"), the preview's form.
   const approval: Approval = ap
-    ? { friends: ap.friends !== false, password: ap.password === true }
+    ? { friends: ap.friends !== false, password: ap.password === true, household: ap.household === true }
     : { friends: true, password: false };
   const vk = obj(o.voice_kbps);
   const ps = obj(o.preview_shows);

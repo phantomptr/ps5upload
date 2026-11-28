@@ -10152,6 +10152,7 @@ backup_restore_partial: "{count} fájl visszaállítva; {missed} nem állíthat�
 "room_approval_friends": "Akikkel már játszottál, kérés nélkül bejönnek",
 "room_approval_password": "A jelszóval kérés nélkül be lehet jönni",
 "room_approval_password_needs": "Előbb állíts be jelszót.",
+"room_approval_household": "A saját PS5-eid (amelyeket a PS5Upload ismer) kérés nélkül bejönnek",
 "room_tip_play_app": "A barátodnak van PS5-e? A PS5Upload Playjel csatlakozhat.",
 "room_tip_how": "Hogyan",
 "room_tip_play_app_how": "Telepíti a PS5Upload Playt a PS5-jére (a ProsperoStore-ból vagy a saját gépén futó PS5Uploadból: Játék › Játékszoba), megnyitja, és a Csatlakozást választja. A szobád ott látszik, ha Barátok vagy Nyilvános, vagy a telefonjával beolvassa a meghívód QR-kódját, és a „Játék a saját PS5-ömön” gombra koppint.",

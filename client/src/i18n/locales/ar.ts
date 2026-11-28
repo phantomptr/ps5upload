@@ -9860,6 +9860,7 @@ backup_restore_partial: "الملفات المستعادة: {count}؛ تعذّر
 "room_approval_friends": "من لعبت معهم من قبل يدخلون دون طلب",
 "room_approval_password": "كلمة المرور تُدخل الأشخاص دون طلب",
 "room_approval_password_needs": "عيّن كلمة مرور أولًا.",
+"room_approval_household": "أجهزة PS5 الخاصة بك (التي يعرفها PS5Upload) تدخل دون طلب",
 "room_tip_play_app": "لدى صديقك PS5؟ يمكنه الانضمام عبر PS5Upload Play.",
 "room_tip_how": "كيف",
 "room_tip_play_app_how": "يثبّت PS5Upload Play على PS5 الخاص به (من ProsperoStore، أو من PS5Upload على حاسوبه: العب › غرفة اللعب)، ثم يفتحه ويختار «انضمام». تظهر غرفتك هناك عندما تكون للأصدقاء أو عامة، أو يمسح رمز QR الخاص بدعوتك بهاتفه ويضغط «العب على جهاز PS5 الخاص بي».",

@@ -9814,6 +9814,7 @@ backup_restore_partial: "Восстановлено файлов: {count}; не 
 "room_approval_friends": "Те, с кем вы уже играли, входят без запроса",
 "room_approval_password": "С паролем можно войти без запроса",
 "room_approval_password_needs": "Сначала задайте пароль.",
+"room_approval_household": "Ваши собственные PS5 (которые знает PS5Upload) входят без запроса",
 "room_tip_play_app": "У друга есть PS5? Он может войти через PS5Upload Play.",
 "room_tip_how": "Как",
 "room_tip_play_app_how": "Друг устанавливает PS5Upload Play на свою PS5 (из ProsperoStore или из PS5Upload на своём компьютере: Игра › Игровая комната), открывает его и выбирает «Войти». Ваша комната появится там, если она для друзей или публичная. Или друг сканирует телефоном QR-код вашего приглашения и нажимает «Играть на моей PS5».",

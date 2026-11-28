@@ -9874,6 +9874,7 @@ backup_restore_partial: "{count} Dateien wiederhergestellt; {missed} konnten nic
 "room_approval_friends": "Leute, mit denen du gespielt hast, kommen ohne Fragen rein",
 "room_approval_password": "Mit dem Passwort kommen Leute ohne Fragen rein",
 "room_approval_password_needs": "Leg zuerst ein Passwort fest.",
+"room_approval_household": "Deine eigenen PS5 (die PS5Upload kennt) kommen ohne Fragen rein",
 "room_tip_play_app": "Dein Freund hat eine PS5? Er kann mit PS5Upload Play beitreten.",
 "room_tip_how": "Wie",
 "room_tip_play_app_how": "Er installiert PS5Upload Play auf seiner PS5 (aus dem ProsperoStore oder über PS5Upload auf seinem eigenen Computer: Spielen › Spieleraum), öffnet es und wählt Beitreten. Dein Raum erscheint dort, wenn er auf Freunde oder Öffentlich steht, oder er scannt den QR-Code deiner Einladung mit dem Handy und tippt auf Auf meiner PS5 spielen.",

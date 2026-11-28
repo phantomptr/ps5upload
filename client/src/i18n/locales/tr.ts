@@ -9867,6 +9867,7 @@ backup_restore_partial: "{count} dosya geri yüklendi; {missed} dosya geri yükl
 "room_approval_friends": "Birlikte oynadığın kişiler sormadan girer",
 "room_approval_password": "Şifreyi bilen sormadan girer",
 "room_approval_password_needs": "Önce bir şifre belirle.",
+"room_approval_household": "Kendi PS5'lerin (PS5Upload'ın tanıdıkları) sormadan girer",
 "room_tip_play_app": "Arkadaşının PS5'i mi var? PS5Upload Play ile katılabilir.",
 "room_tip_how": "Nasıl",
 "room_tip_play_app_how": "PS5Upload Play'i kendi PS5'ine kurar (ProsperoStore'dan ya da kendi bilgisayarındaki PS5Upload'dan: Oyna › Oyun Odası), açar ve Katıl'ı seçer. Odan Arkadaşlar veya Herkese açık olduğunda orada görünür; ya da davetindeki QR kodunu telefonuyla tarayıp PS5'imde oyna'ya dokunur.",

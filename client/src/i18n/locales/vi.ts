@@ -9862,6 +9862,7 @@ backup_restore_partial: "Đã khôi phục {count} tệp; không thể khôi ph�
 "room_approval_friends": "Người đã chơi cùng bạn được vào mà không cần hỏi",
 "room_approval_password": "Có mật khẩu thì được vào mà không cần hỏi",
 "room_approval_password_needs": "Hãy đặt mật khẩu trước.",
+"room_approval_household": "Các máy PS5 của chính bạn (những máy PS5Upload biết) được vào mà không cần hỏi",
 "room_tip_play_app": "Bạn bè có PS5? Họ có thể tham gia bằng PS5Upload Play.",
 "room_tip_how": "Cách làm",
 "room_tip_play_app_how": "Họ cài PS5Upload Play trên PS5 của họ (từ ProsperoStore, hoặc từ PS5Upload trên máy tính của họ: Chơi › Phòng chơi), mở ứng dụng và chọn Tham gia. Phòng của bạn hiện ở đó khi đặt là Bạn bè hoặc Công khai, hoặc họ quét mã QR trong lời mời của bạn bằng điện thoại và chạm Chơi trên PS5 của tôi.",

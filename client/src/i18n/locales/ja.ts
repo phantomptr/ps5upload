@@ -9879,6 +9879,7 @@ backup_restore_partial: "{count}個のファイルを復元しました。{misse
 "room_approval_friends": "一緒に遊んだことのある人は確認なしで参加できる",
 "room_approval_password": "パスワードがあれば確認なしで参加できる",
 "room_approval_password_needs": "先にパスワードを設定してください。",
+"room_approval_household": "自分のPS5（PS5Uploadが知っているもの）は確認なしで参加できる",
 "room_tip_play_app": "フレンドが PS5 を持っているなら、PS5Upload Play で参加できます。",
 "room_tip_how": "方法",
 "room_tip_play_app_how": "フレンドが自分の PS5 に PS5Upload Play をインストールし（ProsperoStore から、または自分のコンピューターの PS5Upload の プレイ › プレイルーム から）、開いて「参加」を選びます。ルームが「フレンド」か「公開」ならそこに表示されます。または、招待の QR コードをスマホで読み取って「自分のPS5で遊ぶ」をタップします。",
