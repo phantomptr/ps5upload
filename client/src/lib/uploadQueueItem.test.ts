@@ -46,6 +46,21 @@ describe("a picked source as a queue item", () => {
     expect(arc).toMatchObject({ resolvedDest: "/data/homebrew/G", rarPassword: "pw", strategy: "resume" });
   });
 
+  it("carries the files chosen in an archive, sized by them (#969)", () => {
+    const arc = buildUploadQueueItem(src({ kind: "archive", path: "/dl/G.zip" }), null, {
+      ...opts,
+      archiveOnly: { paths: ["Game/base.pkg", "Extras"], bytes: 1234 },
+    });
+    expect(arc).toMatchObject({ archiveOnly: ["Game/base.pkg", "Extras"], estimatedBytes: 1234, excludes: [".DS_Store"] });
+    // Sent as it is, an archive is one file: nothing inside it is chosen.
+    const asIs = buildUploadQueueItem(src({ kind: "archive", path: "/dl/G.zip" }), null, {
+      ...opts,
+      sendArchiveAsIs: true,
+      archiveOnly: { paths: ["Extras"], bytes: 1 },
+    });
+    expect(asIs.archiveOnly).toBeUndefined();
+  });
+
   it("sends an archive as the file it is when asked (#645)", () => {
     const arc = buildUploadQueueItem(src({ kind: "archive", path: "/dl/y2jb.zip" }), "pw", {
       ...opts,

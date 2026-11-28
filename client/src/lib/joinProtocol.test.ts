@@ -109,7 +109,27 @@ describe("engine messages", () => {
       readServerMessage('{"status":{"player":3,"state":"picking_user","rtt_ms":42,"host":"Ann","block_system":true}}'),
     ).toEqual({
       kind: "status",
-      status: { player: 3, state: "picking_user", rttMs: 42, host: "Ann", blockSystem: true, streamSeat: false, playsAs: null, seatNote: null },
+      status: {
+        player: 3,
+        state: "picking_user",
+        rttMs: 42,
+        host: "Ann",
+        blockSystem: true,
+        streamSeat: false,
+        playsAs: null,
+        seatNote: null,
+        moveFirst: false,
+        hostUser: null,
+        tookHost: false,
+      },
+    });
+    // Picking a user: ✕ waits for a move, the host's own PS5 user is named, and whether the host's
+    // game already ended once while they picked (an engine from before says none of it).
+    expect(
+      readServerMessage('{"status":{"player":2,"state":"picking_user","move_first":true,"host_user":"Pat","took_host":true}}'),
+    ).toMatchObject({ status: { moveFirst: true, hostUser: "Pat", tookHost: true } });
+    expect(readServerMessage('{"status":{"player":2,"host_user":"","took_host":"yes","move_first":1}}')).toMatchObject({
+      status: { moveFirst: false, hostUser: null, tookHost: false },
     });
     // Seated in the profile the host chose ("Guests play as"), or told the TV asks instead.
     expect(readServerMessage('{"status":{"player":2,"state":"playing","plays_as":"Guest 1"}}')).toMatchObject({

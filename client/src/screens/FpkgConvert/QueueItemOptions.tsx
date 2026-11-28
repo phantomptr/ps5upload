@@ -25,7 +25,7 @@ import { useTr } from "../../state/lang";
 import { CompressionTiles } from "./CompressionTiles";
 import { imageDestFor } from "../../lib/imageDest";
 import { ImageDestination } from "./ImageDestination";
-import { FullVerifyOption, ImageChoice, PackagePacks, type UnpackChoice } from "./ImageOptions";
+import { FullVerifyOption, ImageChoice, PackagePacks, type PlainEmulatorChoice, type UnpackChoice } from "./ImageOptions";
 import { FreeArchiveOption } from "./SourceOptions";
 
 type Kind = ConvertBuild["kind"];
@@ -157,6 +157,20 @@ export function pkgUnpackChoice(
   };
 }
 
+/** A waiting package's choice to leave out the AMPR emulator of a game in no packs, as ③ has
+ *  it: only for the game checked under ① when it was added and found to carry one that can go. */
+export function pkgPlainEmulatorChoice(
+  item: ConvertItem,
+  onChange: (change: ConvertItemChange) => void,
+): PlainEmulatorChoice | undefined {
+  const build = item.build?.kind === "pkg" ? item.build : undefined;
+  if (!item.plainAmprEmu || item.packs !== "none" || (item.build && !build)) return undefined;
+  return {
+    on: !!build?.leaveOutAmprEmu,
+    onToggle: (on) => onChange({ build: { kind: "pkg", ...(on ? { leaveOutAmprEmu: true } : {}) } }),
+  };
+}
+
 /** The change for "Save next to its source" on one game: back to the Output folder when off. A
  *  game with no folder here to go next to (on a server or the PS5) stays where it goes. */
 export function changeForBeside(source: string, on: boolean, outputFolder: string): ConvertItemChange {
@@ -254,6 +268,7 @@ export function QueueItemOptions({
           <PackagePacks
             compact
             unpack={pkgUnpackChoice(item, onChange)}
+            plainEmulator={pkgPlainEmulatorChoice(item, onChange)}
             state={item.packs === "none" ? "none" : "unchecked"}
           />
           <div className="flex flex-col gap-1">

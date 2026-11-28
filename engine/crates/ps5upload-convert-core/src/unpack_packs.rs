@@ -41,7 +41,7 @@ use ps5upload_fpkg::ampr_pack::ng;
 use ps5upload_fpkg::source::{SourceFile, SourceTree};
 
 /// What a run of the game wrote: not part of the game, and stale once the index is new.
-const LEFT_OUT: [&str; 3] = ["ampr_commands.bin", "ampr_emu.log", "apr_emu.log"];
+pub(crate) const LEFT_OUT: [&str; 3] = ["ampr_commands.bin", "ampr_emu.log", "apr_emu.log"];
 
 /// The emulator an unpacked game gets when its own has to go: the one Convert's settings
 /// choose, fetched when it is needed.

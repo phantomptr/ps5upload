@@ -216,8 +216,12 @@ async fn an_internet_guest_joins_over_webrtc_plays_and_gets_the_picture() {
     assert_eq!(got[1], vec![1, 9, 9, 9]);
 
     // Their controller reaches the console.
+    // (While they pick a user ✕ waits for a move, so the user the TV offers first, the host's,
+    // is never picked by a plain ✕: a move, then ✕.)
     use vpad::{app_button as app, button as pad};
-    let _ = g.tx.send(GOut::Binary(frame(1, app::CROSS, &[], None)));
+    let _ = g.tx.send(GOut::Binary(frame(1, app::RIGHT, &[], None)));
+    let _ = g.tx.send(GOut::Binary(frame(2, 0, &[], None)));
+    let _ = g.tx.send(GOut::Binary(frame(3, app::CROSS, &[], None)));
     until("the pad", || {
         f.states()
             .iter()
@@ -1246,6 +1250,147 @@ fn invites_work_is_saved_and_an_old_off_reads_as_wifi() {
     std::fs::write(&p, r#"{"invites": "anywhere", "port": 80}"#).unwrap();
     assert_eq!(read_invites(&p), saved(Some(true), None));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two saves at once (two switches flipped together are two requests) never leave a file that
+/// doesn't read: each is written whole, one after the other.
+#[test]
+fn saves_at_once_leave_a_file_that_reads() {
+    let dir = crate::test_tmp::temp_path(format!("ps5u-invites-race-{}", std::process::id()));
+    let p = dir.join(INVITES_FILE);
+    let d = crate::self_host::defaults();
+    let long = Settings {
+        internet_invites: false,
+        port: 41234,
+        stun: vec!["stun.example.net:3478".into(); 8],
+        block_system_buttons: false,
+        ..Settings::default()
+    };
+    let short = Settings {
+        internet_invites: false,
+        ..Settings::default()
+    };
+    std::thread::scope(|s| {
+        for set in [&long, &short] {
+            let p = &p;
+            s.spawn(move || {
+                for _ in 0..200 {
+                    write_invites(p, set, d).unwrap();
+                }
+            });
+        }
+    });
+    let body = std::fs::read(&p).unwrap();
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(&body).is_ok(),
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_eq!(read_invites(&p).anywhere, Some(false));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The host's switches (Block PS & Create, Play as me, the most players, Ask the router, Picture
+/// as video) are kept for the next Play Together and the next run: a round trip, defaults leave
+/// nothing in the file, and a missing, broken or out-of-range file gives the defaults.
+#[test]
+fn host_switches_survive_a_save_and_load() {
+    let dir = crate::test_tmp::temp_path(format!("ps5u-host-switches-{}", std::process::id()));
+    let p = dir.join(INVITES_FILE);
+    let d = crate::self_host::defaults();
+    let load = |p: &std::path::Path| {
+        let mut s = Settings::default();
+        apply_saved(&mut s, read_invites(p));
+        s
+    };
+    // Nothing saved: the defaults (Block PS & Create on, Play as me off).
+    assert_eq!(load(&p), Settings::default());
+
+    let chosen = Settings {
+        block_system_buttons: false,
+        stream_seat: true,
+        max_players: 2,
+        upnp: false,
+        video_track: false,
+        ..Settings::default()
+    };
+    write_invites(&p, &chosen, d).unwrap();
+    assert_eq!(load(&p), chosen);
+    assert_eq!(
+        std::fs::read_dir(&dir).unwrap().count(),
+        1,
+        "written aside and renamed"
+    );
+
+    // Back to the defaults: none of the switches stays in the file.
+    write_invites(&p, &Settings::default(), d).unwrap();
+    let text = std::fs::read_to_string(&p).unwrap();
+    for k in ["block_system_buttons", "stream_seat", "max_players", "upnp", "video_track"] {
+        assert!(!text.contains(k), "{k} left in {text}");
+    }
+    assert_eq!(load(&p), Settings::default());
+
+    // A broken file, or a number of players the settings would refuse: the defaults.
+    std::fs::write(&p, "{\"stream_seat\": tru").unwrap();
+    assert_eq!(load(&p), Settings::default());
+    std::fs::write(&p, r#"{"max_players": 9, "stream_seat": true}"#).unwrap();
+    let s = load(&p);
+    assert_eq!((s.max_players, s.stream_seat), (MAX_GUESTS, true));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two saves at once (two switches flipped together: two requests, or the picked port beside a
+/// change) each write a whole file: the one left is one of them, never a mix that reads as
+/// nothing saved.
+#[test]
+fn saves_at_once_never_leave_a_mixed_file() {
+    let dir = crate::test_tmp::temp_path(format!("ps5u-saves-at-once-{}", std::process::id()));
+    let p = dir.join(INVITES_FILE);
+    let d = crate::self_host::defaults();
+    // A long body and a short one: a short one written over a long one without the truncate
+    // in between leaves the long one's tail.
+    let long = Settings {
+        block_system_buttons: false,
+        stream_seat: true,
+        max_players: 2,
+        upnp: false,
+        video_track: false,
+        port: 40_000,
+        stun: vec!["stun:a.example.com:3478".into(); 8],
+        ..Settings::default()
+    };
+    let short = Settings::default();
+    let valid = [read_invites_text(&long, d), read_invites_text(&short, d)];
+    for _ in 0..200 {
+        std::thread::scope(|sc| {
+            for s in [&long, &short, &long, &short] {
+                let p = &p;
+                sc.spawn(move || {
+                    let _ = write_invites(p, s, d);
+                });
+            }
+        });
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(valid.contains(&text), "a mixed file: {text}");
+    }
+    let left: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n != INVITES_FILE)
+        .collect();
+    assert!(left.is_empty(), "left behind: {left:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// What [`write_invites`] puts in the file for `s`.
+fn read_invites_text(s: &Settings, d: &crate::self_host::Defaults) -> String {
+    let dir = crate::test_tmp::temp_path(format!("ps5u-invites-text-{}", std::process::id()));
+    let p = dir.join(INVITES_FILE);
+    write_invites(&p, s, d).unwrap();
+    let text = std::fs::read_to_string(&p).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    text
 }
 
 /// The hub, the page base and the STUN servers are kept across restarts (#881) while they differ

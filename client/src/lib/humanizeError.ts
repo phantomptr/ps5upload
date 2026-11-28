@@ -53,6 +53,24 @@ export function humanizeCaught(e: unknown): string {
   return humanizePs5Error(caughtText(e));
 }
 
+/** An Uninstall's error, in uninstall words. The PS5's uninstall call
+ *  (sceAppInstUtilAppUnInstall, which the helper makes, and Kraken Mount too) belongs to the same
+ *  installer service as installs and answers with the same 0x80B2xxxx codes, so the shared
+ *  humanizer read a refused uninstall as an install fetch failure and told the user to send the
+ *  helper. Anything not specific to an uninstall still goes through {@link humanizePs5Error}. */
+export function humanizeUninstallError(raw: string): string {
+  // A registration-only removal of a game the PS5 installed itself (#884): already its own words.
+  if (installRefusal(raw)) return humanizePs5Error(raw);
+  if (/uninstall_unavailable/i.test(raw)) return te("err_uninstall_unavailable");
+  if (/unregister_unmount_failed/i.test(raw)) return te("err_uninstall_unmount_failed");
+  const code =
+    /uninstall_refused:(0x[0-9a-f]{8})/i.exec(raw)?.[1] ??
+    /\b0x80B2_?[0-9a-f]{4}\b/i.exec(raw)?.[0]?.replace("_", "");
+  if (code) return te("err_uninstall_sony_refused", { code: `0x${code.slice(2).toUpperCase()}` });
+  if (/uninstall_refused:unknown/i.test(raw)) return te("err_uninstall_refused", { code: "unknown" });
+  return humanizePs5Error(raw);
+}
+
 /** Rewrite a raw engine/payload error string into a single line of
  *  user-facing copy. Unknown strings are returned as-is.
  *
@@ -159,7 +177,7 @@ export function humanizePs5Error(
   // ─── Uninstall the PS5 refused (#476) ──────────────────────────────
   {
     const m = raw.match(/uninstall_refused:(0x[0-9a-f]{8}|unknown)/i);
-    if (m) return te("err_uninstall_refused", { code: m[1] });
+    if (m) return humanizeUninstallError(raw);
   }
   if (/uninstall_unavailable/i.test(raw)) return te("err_uninstall_unavailable");
 
@@ -397,6 +415,11 @@ export function humanizePs5Error(
     if (code === "80940033") {
       return te("err_launch_homebrew_refused");
     }
+    // SCE kernel EINVAL: the console refused to start the program itself. The helper stops here
+    // rather than trying the ShellUI route, which only restarted the system UI for it.
+    if (code === "80020016") {
+      return te("err_launch_program_refused");
+    }
     return te("err_launch_unknown", { code });
   }
 
@@ -580,7 +603,7 @@ export function humanizePs5Error(
   if (/\b0x80B2[0-9A-Fa-f]{4}\b/i.test(raw)) {
     // Other 0x80B2_xxxx — PlayGo errors, not pkg-format errors.
     // Don't blame the file.
-    return te("err_install_80b2_generic");
+    return te("err_install_80b2_generic_v2");
   }
 
   // ─── BGFT init failure (0xE0000001 = BGFT_ERR_LIB_NOT_LOADABLE) ──

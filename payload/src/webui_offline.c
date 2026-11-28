@@ -1,6 +1,7 @@
 /* GET /sw.js and GET /minion.appcache, and retiring an older page's offline copy: see
  * include/webui_offline.h. */
 #include "webui_offline.h"
+#include "webui_tile.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -19,6 +20,25 @@ int webui_offline_find(const char *path, webui_offline_file_t *out) {
         out->ctype = "text/cache-manifest; charset=utf-8";
         out->data = webui_cache_appcache;
         out->len = webui_cache_appcache_len;
+        return 1;
+    }
+    if (strcmp(path, WEBUI_HOME_ICON_PATH) == 0) {
+        /* The icon a phone puts on its Home Screen: the PS5 tile's own icon (square, opaque, 512
+         * px), so the page and the console's tile look the same and the ELF carries no new image. */
+        out->ctype = "image/png";
+        out->data = webui_tile_icon0_png;
+        out->len = webui_tile_icon0_png_len;
+        return 1;
+    }
+    if (strcmp(path, WEBUI_MANIFEST_PATH) == 0) {
+        /* Android's "Add to Home screen" name and icon (iOS reads the page's apple-* tags). */
+        static const char manifest[] =
+            "{\"name\":\"PS5Upload\",\"short_name\":\"PS5Upload\",\"start_url\":\"/\",\"scope\":\"/\","
+            "\"display\":\"standalone\",\"background_color\":\"#141416\",\"theme_color\":\"#141416\","
+            "\"icons\":[{\"src\":\"" WEBUI_HOME_ICON_PATH "\",\"sizes\":\"512x512\",\"type\":\"image/png\"}]}";
+        out->ctype = "application/manifest+json";
+        out->data = (const unsigned char *)manifest;
+        out->len = sizeof manifest - 1;
         return 1;
     }
     return 0;

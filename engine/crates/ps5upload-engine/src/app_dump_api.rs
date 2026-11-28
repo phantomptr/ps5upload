@@ -98,6 +98,7 @@ pub async fn dump(Json(req): Json<DumpReq>) -> Response {
     if !req.dest.starts_with('/') || req.dest.contains("..") {
         return json_err(StatusCode::BAD_REQUEST, "dump_bad_dest").into_response();
     }
+    crate::folder_sizes::changed(&addr, &[&req.dest]);
     let x = ps5upload_core::fs_ops::AppDumpRequest {
         title_id: req.title_id.clone(),
         dest: req.dest,

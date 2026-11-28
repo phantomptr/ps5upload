@@ -380,6 +380,49 @@ fn the_pinned_linux_build_unpacks() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The Docker images are `FROM scratch`. They carry what the pinned Linux builds load from the
+/// system (the Dockerfiles' glibc stage): each arch's loader where `loader_of` looks for it, the
+/// glibc libraries the builds link, and a CA bundle where `system_ca_bundle` finds it. Without
+/// them the status said `supported: false` on x86_64 and arm64 (Apple Silicon, ARM NAS boxes).
+#[test]
+fn the_docker_images_carry_what_the_linux_builds_load() {
+    let engine = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // `readelf -d` of the 2026-09-30 builds' bin/ and lib/, less their own lib/ (glibc 2.28+).
+    const SYSTEM_LIBS: &[&str] = &[
+        "libc.so.6",
+        "libm.so.6",
+        "libdl.so.2",
+        "libpthread.so.0",
+        "librt.so.1",
+        "libgcc_s.so.1",
+        // x86_64 only
+        "libmvec.so.1",
+    ];
+    for file in ["Dockerfile", "Dockerfile.webui"] {
+        let s = std::fs::read_to_string(engine.join(file)).unwrap();
+        assert!(s.contains("COPY --from=glibc /rootfs-glibc/ /"), "{file}");
+        for arch in ["x86_64", "aarch64"] {
+            let loader = Path::new(loader_of(pin_for("linux", arch).unwrap()).unwrap());
+            let name = loader.file_name().unwrap().to_str().unwrap();
+            let dir = loader.parent().unwrap().to_str().unwrap();
+            assert!(
+                s.contains(&format!("{} /rootfs-glibc{dir}/", loader.display())),
+                "{file}: {arch} loader {} ({name})",
+                loader.display()
+            );
+        }
+        for lib in SYSTEM_LIBS {
+            assert!(s.contains(lib), "{file}: {lib}");
+        }
+        let ca = "/etc/ssl/certs/ca-certificates.crt";
+        assert!(CA_BUNDLES.contains(&ca));
+        assert!(
+            s.contains(&format!("{ca} /rootfs-glibc/etc/ssl/certs/")),
+            "{file}"
+        );
+    }
+}
+
 /// rtmps:// (YouTube) needs trusted roots the builds' OpenSSL can't find by itself.
 #[cfg(target_os = "macos")]
 #[test]

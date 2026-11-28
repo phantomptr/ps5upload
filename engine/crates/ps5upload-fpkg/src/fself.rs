@@ -3,8 +3,9 @@
 //! Ported from PS5 Dump Forge (quer3q, GPL-3.0-or-later, with its UnRAR exception). Byte for byte what ampr-emu-ng's
 //! `tools/make_fself.py --ptype fake` writes (its defaults: paid `0x3100000000000002`, ptype 1,
 //! versions 0, no auth info): a header, an entry pair per copied segment (zero digests, then the
-//! segment's bytes), the ELF and program headers, ex-info with the ELF's SHA-256, a zero NPDRM
-//! block, zero meta blocks, footer and signature, then the segments, then any `PT_SCE_VERSION`
+//! segment's bytes), the ELF and program headers, ex-info with the ELF's SHA-256, an NPDRM
+//! block (the package's content id prefix at +0x10 when one is known, as Drakmor's make_fself
+//! `--content-id` writes it since 99d8fe02; zeros otherwise), zero meta blocks, footer and signature, then the segments, then any `PT_SCE_VERSION`
 //! bytes.
 //!
 //! The source is never touched; only what a Convert build reads from it changes. A folder sent to
@@ -43,6 +44,79 @@ const EXTENSIONS: [&str; 5] = ["bin", "elf", "self", "prx", "sprx"];
 const MAX_EXECUTABLES: usize = 4096;
 /// A path index this big is not read.
 const MAX_INDEX: u64 = 64 << 20;
+/// The content id bytes an NPDRM control block holds (make_fself's
+/// `SELF_NPDRM_CONTROL_BLOCK_CONTENT_ID_SIZE`): `UP0000-CUSA00000_00` of a 36-byte id.
+pub const CONTENT_ID_PREFIX: usize = 0x13;
+/// The NPDRM control block (`<H14x19s13s`): type, then the content id at +0x10.
+const NPDRM_BLOCK: usize = 0x30;
+const NPDRM_TYPE: u16 = 3;
+const NPDRM_CONTENT_ID_AT: usize = 0x10;
+/// The extended info before the NPDRM block: paid, program type, versions, the ELF digest.
+const EX_INFO: usize = 0x40;
+
+/// The prefix of `content_id` an NPDRM block holds; `None` for an id shorter than that or not
+/// printable ASCII (make_fself's own check).
+pub fn content_id_prefix(content_id: &str) -> Option<[u8; CONTENT_ID_PREFIX]> {
+    let b = content_id.as_bytes().get(..CONTENT_ID_PREFIX)?;
+    b.iter()
+        .all(|c| (0x21..=0x7E).contains(c))
+        .then(|| b.try_into().ok())
+        .flatten()
+}
+
+/// Where an already fake-signed executable's NPDRM content id sits, from its first bytes
+/// (header size at 0xC); `None` when `head` isn't a fake SELF this tool writes or has no NPDRM
+/// block. The ex-info sits right before the NPDRM block, and its program type must be fake
+/// (1): a Sony-signed SELF has the same header and blocks, and is never touched.
+fn fself_content_id_at(head: &[u8], size: u64) -> Option<usize> {
+    let block = fself_header_size(head, size)?.checked_sub(NPDRM_BLOCK)?;
+    let ptype = u64_at(head, block.checked_sub(EX_INFO)? + 8)?;
+    (ptype == PTYPE_FAKE && u16_at(head, block)? == NPDRM_TYPE)
+        .then_some(block + NPDRM_CONTENT_ID_AT)
+}
+
+/// What a SELF header that may be fake looks like from its first 0x10 bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Header {
+    /// Not a SELF.
+    None,
+    /// The header this tool (and ampr-emu-ng's make_fself) writes: version 0, key type 0x101.
+    Known(usize),
+    /// make_fself's newer header (version 0x10, key type 0x10000101), whose block layout is
+    /// not confirmed here: its content id is left as it is.
+    Unconfirmed,
+}
+
+fn self_header(head: &[u8], size: u64) -> Header {
+    let Some(m) = head.get(..4) else {
+        return Header::None;
+    };
+    if m != magic::SELF_PS4 && m != magic::SELF_PS5 {
+        return Header::None;
+    }
+    let (Some(version), Some(key_type), Some(header_size)) =
+        (head.get(4..8), u32_at(head, 8), u16_at(head, 0xC))
+    else {
+        return Header::None;
+    };
+    let header_size = usize::from(header_size);
+    if header_size < NPDRM_BLOCK + EX_INFO || header_size as u64 > size {
+        return Header::None;
+    }
+    match (version, key_type) {
+        ([0x00, 0x01, 0x01, 0x12], 0x101) => Header::Known(header_size),
+        ([0x10, 0x01, 0x01, 0x12], 0x1000_0101) => Header::Unconfirmed,
+        _ => Header::None,
+    }
+}
+
+/// The header size of a fake SELF in the layout this tool writes; `None` otherwise.
+fn fself_header_size(head: &[u8], size: u64) -> Option<usize> {
+    match self_header(head, size) {
+        Header::Known(n) => Some(n),
+        _ => None,
+    }
+}
 
 /// An executable by extension, a `.bin` only when named `eboot*`: games hold thousands of data
 /// `.bin` files, and a solid archive would be decoded to the last one just to look.
@@ -118,7 +192,12 @@ struct Plan {
 }
 
 /// The SELF of the ELF at `path` (`elf_size` bytes), from its headers only.
-fn plan(tree: &mut dyn SourceTree, path: &str, elf_size: u64) -> std::result::Result<Plan, String> {
+fn plan(
+    tree: &mut dyn SourceTree,
+    path: &str,
+    elf_size: u64,
+    content_id: Option<&[u8; CONTENT_ID_PREFIX]>,
+) -> std::result::Result<Plan, String> {
     let err = |e: Error| e.to_string();
     // The header and (where it fits, as usual) the program headers in one read: a second read
     // right after it would make a remote source fetch a whole read-ahead window.
@@ -239,7 +318,10 @@ fn plan(tree: &mut dyn SourceTree, path: &str, elf_size: u64) -> std::result::Re
         info,
         &[PAID, PTYPE_FAKE, 0, 0].map(u64::to_le_bytes).concat(),
     );
-    put(info + 0x40, &3u16.to_le_bytes());
+    put(info + 0x40, &NPDRM_TYPE.to_le_bytes());
+    if let Some(id) = content_id {
+        put(info + 0x40 + NPDRM_CONTENT_ID_AT, id);
+    }
     let footer = info + 0x70 + 0x50 * n;
     put(footer + 48, &0x10000u32.to_le_bytes());
 
@@ -267,12 +349,21 @@ pub struct Signing {
     pub refused: Vec<(String, String)>,
     /// How many `ampr_emu.index` records it set to the signed sizes.
     pub resized: usize,
+    /// Executables already fake-signed whose NPDRM content id it set to the package's.
+    pub restamped: Vec<String>,
+    /// Executables in make_fself's newer SELF header, whose content id it left as it is: where
+    /// that header keeps it is not confirmed here.
+    pub unconfirmed: Vec<String>,
 }
 
 impl Signing {
     /// One line for a log; `None` when there was nothing to sign.
     pub fn describe(&self) -> Option<String> {
-        if self.signed.is_empty() && self.refused.is_empty() {
+        if self.signed.is_empty()
+            && self.refused.is_empty()
+            && self.restamped.is_empty()
+            && self.unconfirmed.is_empty()
+        {
             return None;
         }
         let mut line = format!("fake-signing {} unsigned executable(s)", self.signed.len());
@@ -292,8 +383,21 @@ impl Signing {
                 self.resized
             ));
         }
+        if !self.restamped.is_empty() {
+            line.push_str(&format!(
+                "; content id set in {} already signed executable(s)",
+                self.restamped.len()
+            ));
+        }
         for (path, why) in &self.refused {
             line.push_str(&format!("; can't sign {path}: {why}, left as it is"));
+        }
+        if !self.unconfirmed.is_empty() {
+            line.push_str(&format!(
+                "; content id left as it is in {} executable(s) in make_fself's newer header: {}",
+                self.unconfirmed.len(),
+                self.unconfirmed[..self.unconfirmed.len().min(10)].join(", ")
+            ));
         }
         Some(line)
     }
@@ -302,7 +406,19 @@ impl Signing {
 /// `tree` with its unsigned PS5 executables read as fake-signed SELFs at their SELF sizes; one
 /// that can't be planned, and every other file, read as they are. The tree unchanged when it
 /// has none.
-pub fn wrap(mut inner: Box<dyn SourceTree>) -> (Box<dyn SourceTree>, Signing) {
+pub fn wrap(inner: Box<dyn SourceTree>) -> (Box<dyn SourceTree>, Signing) {
+    wrap_with(inner, None)
+}
+
+/// [`wrap`] for a package built under `content_id`: its prefix goes into each signed
+/// executable's NPDRM block, and into each already fake-signed one's that says something else
+/// (make_fself's repair with `--content-id`; the rest of that repair, a magic rewrite and a
+/// trailer move, is not done). `None`, or an id without a usable prefix, is [`wrap`].
+pub fn wrap_with(
+    mut inner: Box<dyn SourceTree>,
+    content_id: Option<&str>,
+) -> (Box<dyn SourceTree>, Signing) {
+    let id = content_id.and_then(content_id_prefix);
     let sizes: HashMap<String, u64> = inner
         .files()
         .iter()
@@ -311,16 +427,30 @@ pub fn wrap(mut inner: Box<dyn SourceTree>) -> (Box<dyn SourceTree>, Signing) {
     let mut plans = HashMap::new();
     let mut signing = Signing::default();
     for path in unsigned(inner.as_mut()) {
-        match plan(inner.as_mut(), &path, sizes[&path]) {
+        match plan(inner.as_mut(), &path, sizes[&path], id.as_ref()) {
             Ok(p) => {
                 plans.insert(path, p);
             }
             Err(why) => signing.refused.push((path, why)),
         }
     }
-    if plans.is_empty() {
+    let stamps = match &id {
+        Some(id) => {
+            let (stamps, unconfirmed) = restamps(inner.as_mut(), &plans, id);
+            signing.unconfirmed = unconfirmed;
+            stamps
+        }
+        None => HashMap::new(),
+    };
+    if plans.is_empty() && stamps.is_empty() {
         return (inner, signing);
     }
+    signing.restamped = inner
+        .files()
+        .iter()
+        .filter(|f| stamps.contains_key(&f.path))
+        .map(|f| f.path.clone())
+        .collect();
     let files: Vec<SourceFile> = inner
         .files()
         .iter()
@@ -342,9 +472,52 @@ pub fn wrap(mut inner: Box<dyn SourceTree>) -> (Box<dyn SourceTree>, Signing) {
         inner,
         files,
         plans,
+        stamps,
         index: index.map(|(bytes, _)| bytes),
     };
     (Box::new(tree), signing)
+}
+
+/// The already fake-signed executables (by extension) whose NPDRM content id isn't `id`, with
+/// where it sits; and those in make_fself's newer header, left as they are (see [`Header`]).
+#[allow(clippy::type_complexity)]
+fn restamps(
+    inner: &mut dyn SourceTree,
+    plans: &HashMap<String, Plan>,
+    id: &[u8; CONTENT_ID_PREFIX],
+) -> (HashMap<String, (u64, [u8; CONTENT_ID_PREFIX])>, Vec<String>) {
+    let paths: Vec<(String, u64)> = inner
+        .files()
+        .iter()
+        .filter(|f| f.size >= 0x20 && executable(&f.path) && !plans.contains_key(&f.path))
+        .map(|f| (f.path.clone(), f.size))
+        .take(MAX_EXECUTABLES)
+        .collect();
+    let mut stamps = HashMap::new();
+    let mut unconfirmed = Vec::new();
+    for (path, size) in paths {
+        let Ok(head) = inner.read_range(&path, 0, 0x20) else {
+            continue;
+        };
+        let header_size = match self_header(&head, size) {
+            Header::Known(n) => n,
+            Header::Unconfirmed => {
+                unconfirmed.push(path);
+                continue;
+            }
+            Header::None => continue,
+        };
+        let Ok(head) = inner.read_range(&path, 0, header_size) else {
+            continue;
+        };
+        let Some(at) = fself_content_id_at(&head, size) else {
+            continue;
+        };
+        if head.get(at..at + CONTENT_ID_PREFIX) != Some(&id[..]) {
+            stamps.insert(path, (at as u64, *id));
+        }
+    }
+    (stamps, unconfirmed)
 }
 
 /// `ampr_emu.index` with each record of a signed file that lists its ELF size set to its SELF
@@ -402,10 +575,29 @@ fn digest(tree: &mut dyn SourceTree, path: &str, size: u64) -> Result<[u8; 32]> 
     Ok(hash.finalize().into())
 }
 
+/// `bytes` (read at `offset`) with `id` over the part of it that `at..at + id.len()` covers.
+fn stamp(bytes: &mut [u8], offset: u64, at: u64, id: &[u8]) {
+    let end = offset + bytes.len() as u64;
+    let (s, e) = (offset.max(at), end.min(at + id.len() as u64));
+    if s < e {
+        bytes[(s - offset) as usize..(e - offset) as usize]
+            .copy_from_slice(&id[(s - at) as usize..(e - at) as usize]);
+    }
+}
+
+impl Signed {
+    /// A file whose bytes this tree serves itself rather than the source's.
+    fn special(&self, path: &str) -> bool {
+        self.plans.contains_key(path) || self.stamps.contains_key(path) || path == ampr_index::NAME
+    }
+}
+
 struct Signed {
     inner: Box<dyn SourceTree>,
     files: Vec<SourceFile>,
     plans: HashMap<String, Plan>,
+    /// Already signed executables served with these bytes at this offset (their content id).
+    stamps: HashMap<String, (u64, [u8; CONTENT_ID_PREFIX])>,
     /// `ampr_emu.index` with the signed files' records at their SELF sizes, when it lists any.
     index: Option<Vec<u8>>,
 }
@@ -428,7 +620,13 @@ impl SourceTree for Signed {
                 let size = usize::try_from(p.size).unwrap_or(usize::MAX);
                 self.read_range(path, 0, size)
             }
-            None => self.inner.read(path),
+            None => {
+                let mut bytes = self.inner.read(path)?;
+                if let Some(&(at, id)) = self.stamps.get(path) {
+                    stamp(&mut bytes, 0, at, &id);
+                }
+                Ok(bytes)
+            }
         }
     }
 
@@ -436,6 +634,7 @@ impl SourceTree for Signed {
         let Self {
             inner,
             plans,
+            stamps,
             index,
             ..
         } = self;
@@ -446,7 +645,11 @@ impl SourceTree for Signed {
             return Ok(bytes[start..start.saturating_add(len).min(bytes.len())].to_vec());
         }
         let Some(p) = plans.get_mut(path) else {
-            return inner.read_range(path, offset, len);
+            let mut bytes = inner.read_range(path, offset, len)?;
+            if let Some(&(at, id)) = stamps.get(path) {
+                stamp(&mut bytes, offset, at, &id);
+            }
+            return Ok(bytes);
         };
         let start = offset.min(p.size);
         let end = start.saturating_add(len as u64).min(p.size);
@@ -480,16 +683,12 @@ impl SourceTree for Signed {
         len: usize,
         progress: &mut dyn FnMut(usize) -> bool,
     ) -> Result<Vec<Vec<u8>>> {
-        let plain: Vec<String> = paths
-            .iter()
-            .filter(|p| !self.plans.contains_key(*p) && **p != ampr_index::NAME)
-            .cloned()
-            .collect();
+        let plain: Vec<String> = paths.iter().filter(|p| !self.special(p)).cloned().collect();
         let mut heads = self.inner.read_heads(&plain, len, progress)?.into_iter();
         paths
             .iter()
             .map(|p| {
-                if self.plans.contains_key(p) || p == ampr_index::NAME {
+                if self.special(p) {
                     self.read_range(p, 0, len)
                 } else {
                     heads
@@ -742,6 +941,128 @@ mod tests {
         assert_eq!(
             tree.read_range(ampr_index::NAME, 3, 9).unwrap(),
             served[3..12]
+        );
+    }
+
+    const ID: &str = "UP9999-PPSA99999_00-ABCDEFGHIJKLMNOP";
+
+    /// The NPDRM content id's place in a signed executable: header size minus the 0x30-byte
+    /// block, plus 0x10.
+    fn content_id_at(bytes: &[u8]) -> usize {
+        let at = fself_content_id_at(bytes, bytes.len() as u64).unwrap();
+        let header_size = usize::from(u16_at(bytes, 0xC).unwrap());
+        assert_eq!(at, header_size - 0x30 + 0x10);
+        assert_eq!(u16_at(bytes, header_size - 0x30), Some(3));
+        at
+    }
+
+    #[test]
+    fn the_content_id_prefix_goes_in_the_npdrm_block() {
+        let plain = signed().read("eboot.bin").unwrap();
+        let (mut tree, _) = wrap_with(
+            Files::new(vec![("eboot.bin", elf(ET_SCE_EXEC_ASLR))]),
+            Some(ID),
+        );
+        let stamped = tree.read("eboot.bin").unwrap();
+        let at = content_id_at(&stamped);
+        assert_eq!(&stamped[at..at + 19], b"UP9999-PPSA99999_00");
+        // Only those 19 bytes differ, and a range read agrees.
+        let mut want = plain.clone();
+        want[at..at + 19].copy_from_slice(b"UP9999-PPSA99999_00");
+        assert_eq!(stamped, want);
+        assert_eq!(
+            tree.read_range("eboot.bin", at as u64 - 3, 8).unwrap(),
+            stamped[at - 3..at + 5]
+        );
+    }
+
+    #[test]
+    fn no_content_id_keeps_zeros() {
+        let plain = signed().read("eboot.bin").unwrap();
+        let at = content_id_at(&plain);
+        assert_eq!(plain[at..at + 19], [0; 19]);
+        // An id with no usable prefix signs as before.
+        let (mut tree, _) = wrap_with(
+            Files::new(vec![("eboot.bin", elf(ET_SCE_EXEC_ASLR))]),
+            Some("short"),
+        );
+        assert_eq!(tree.read("eboot.bin").unwrap(), plain);
+        assert_eq!(content_id_prefix("UP0000-CUSA 0000_00-X"), None);
+    }
+
+    /// An executable already fake-signed with another (or no) content id is served with the
+    /// package's, as make_fself's repair writes it; one that already names it is left alone.
+    #[test]
+    fn an_already_signed_executable_gets_the_content_id() {
+        let plain = signed().read("eboot.bin").unwrap();
+        let at = content_id_at(&plain);
+        let mut right = plain.clone();
+        right[at..at + 19].copy_from_slice(b"UP9999-PPSA99999_00");
+        let (mut tree, signing) = wrap_with(
+            Files::new(vec![
+                ("eboot.bin", plain.clone()),
+                ("sce_module/libfoo.prx", right.clone()),
+                ("data/x.dat", vec![9; 0x40]),
+            ]),
+            Some(ID),
+        );
+        assert_eq!(signing.signed, Vec::<String>::new());
+        assert_eq!(signing.restamped, ["eboot.bin"]);
+        assert!(signing.describe().unwrap().contains("content id set in 1"));
+        assert_eq!(tree.files()[0].size, plain.len() as u64);
+        assert_eq!(tree.read("eboot.bin").unwrap(), right);
+        assert_eq!(
+            tree.read_range("eboot.bin", at as u64 + 10, 0x40).unwrap(),
+            right[at + 10..at + 0x4A]
+        );
+        let paths: Vec<String> = ["eboot.bin", "data/x.dat"].map(String::from).into();
+        let heads = tree.read_heads(&paths, at + 19, &mut |_| true).unwrap();
+        assert_eq!(heads[0], right[..at + 19]);
+        assert_eq!(tree.read("sce_module/libfoo.prx").unwrap(), right);
+        // Without an id nothing is touched.
+        let (_, signing) = wrap_with(Files::new(vec![("eboot.bin", plain)]), None);
+        assert_eq!(signing, Signing::default());
+    }
+
+    /// Only a fake SELF (program type 1) gets the package's content id: a Sony-signed one has
+    /// the same header and blocks, and stays byte for byte. make_fself's newer header, whose
+    /// layout isn't confirmed here, is left as it is and named in the log.
+    #[test]
+    fn only_a_fake_self_in_the_known_header_is_restamped() {
+        let plain = signed().read("eboot.bin").unwrap();
+        let at = content_id_at(&plain);
+        let header_size = usize::from(u16_at(&plain, 0xC).unwrap());
+        let ptype_at = header_size - NPDRM_BLOCK - EX_INFO + 8;
+        assert_eq!(u64_at(&plain, ptype_at), Some(PTYPE_FAKE));
+        let mut retail = plain.clone();
+        retail[ptype_at..ptype_at + 8].copy_from_slice(&4u64.to_le_bytes());
+        let mut newer = plain.clone();
+        newer[4] = 0x10;
+        newer[8..12].copy_from_slice(&0x1000_0101u32.to_le_bytes());
+        let (mut tree, signing) = wrap_with(
+            Files::new(vec![
+                ("eboot.bin", retail.clone()),
+                ("sce_module/libnew.prx", newer.clone()),
+                ("sce_module/libfake.prx", plain.clone()),
+            ]),
+            Some(ID),
+        );
+        assert_eq!(signing.restamped, ["sce_module/libfake.prx"]);
+        assert_eq!(signing.unconfirmed, ["sce_module/libnew.prx"]);
+        let line = signing.describe().unwrap();
+        assert!(
+            line.contains("content id left as it is in 1 executable(s) in make_fself's newer header: sce_module/libnew.prx"),
+            "{line}"
+        );
+        assert_eq!(tree.read("eboot.bin").unwrap(), retail);
+        assert_eq!(
+            tree.read_range("eboot.bin", 0, retail.len()).unwrap(),
+            retail
+        );
+        assert_eq!(tree.read("sce_module/libnew.prx").unwrap(), newer);
+        assert_eq!(
+            &tree.read("sce_module/libfake.prx").unwrap()[at..at + 19],
+            b"UP9999-PPSA99999_00"
         );
     }
 }

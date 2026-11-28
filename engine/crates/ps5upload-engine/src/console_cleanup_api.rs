@@ -121,7 +121,13 @@ pub(crate) async fn scan_status(
     Query(q): Query<AddrQuery>,
 ) -> Response {
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
-    run(move || cc::scan_status_marked(&addr, id)).await
+    run(move || {
+        let v = cc::scan_status_marked(&addr, id)?;
+        // The folders it sized show their size in Files (#974).
+        crate::folder_sizes::record_cleanup_scan(&addr, &v);
+        Ok(v)
+    })
+    .await
 }
 
 pub(crate) async fn apply(
@@ -157,7 +163,30 @@ pub(crate) async fn apply(
         req.item_ids.len()
     );
     let ids = req.item_ids;
-    run(move || cc::apply_start_guarded(&addr, id, &ids)).await
+    run(move || {
+        // What it deletes: those folders' sizes (and the ones above them) are no longer right.
+        if let Ok(scan) = cc::scan_status(&addr, id) {
+            crate::folder_sizes::changed(&addr, &cleanup_paths(&scan, &ids));
+        }
+        cc::apply_start_guarded(&addr, id, &ids)
+    })
+    .await
+}
+
+/// The paths of a scan's items `ids`.
+fn cleanup_paths(scan: &serde_json::Value, ids: &[u32]) -> Vec<String> {
+    scan.get("items")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|it| {
+            it.get("id")
+                .and_then(serde_json::Value::as_u64)
+                .is_some_and(|i| ids.iter().any(|x| u64::from(*x) == i))
+        })
+        .filter_map(|it| it.get("path").and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+        .collect()
 }
 
 pub(crate) async fn apply_status(

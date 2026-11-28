@@ -27,6 +27,7 @@ import { useTr } from "../../state/lang";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { NpSignInSection } from "./NpSignInSection";
 import { accountIdToB64, formatAccountId, parseAccountId } from "./accountId";
+import { keepAccountId, sameAccountId } from "./accountIdMemory";
 import { UserInfoBackup } from "./UserInfoBackup";
 import { userDeleteRefusal } from "./userDelete";
 import { userSlots } from "./userSlots";
@@ -34,7 +35,7 @@ import { TrophyRepair } from "./TrophyRepair";
 import { activationTrophyNote, type ActivationTrophyNote } from "./trophyRepairFlow";
 import { RemotePlaySection } from "./RemotePlaySection";
 import { useConnectionStore } from "../../state/connection";
-import { mgmtAddr } from "../../lib/addr";
+import { hostOf, mgmtAddr } from "../../lib/addr";
 import { pickPath } from "../../lib/pickPath";
 import { writeClipboard } from "../../lib/clipboard";
 import { isTauriEnv } from "../../lib/tauriEnv";
@@ -780,6 +781,7 @@ function UserRow({
           addr={addr}
           slot={slot.slot}
           uid={uid}
+          name={slot.name}
           accountId={slot.id}
           onChanged={onChanged}
         />
@@ -840,6 +842,7 @@ function AccountIdLine({
   addr,
   slot,
   uid,
+  name,
   accountId,
   onChanged,
 }: {
@@ -847,6 +850,8 @@ function AccountIdLine({
   slot: number;
   /** The console user this slot goes with, when one does. */
   uid?: number;
+  /** The slot's name (the user's), kept with the ID this app sets. */
+  name?: string;
   accountId: string;
   onChanged: () => void;
 }) {
@@ -890,6 +895,10 @@ function AccountIdLine({
     if (!ok) return;
     setIdBusy(true);
     setError(null);
+    // An earlier change's "Saved" and trophy line are not this one's: a refused write must not
+    // show under them.
+    setSavedOk(false);
+    setTrophyNote(null);
     try {
       // profileActivate writes the id and sets the slot's activated flags —
       // the same path offact uses. Passing an explicit id skips the
@@ -898,6 +907,21 @@ function AccountIdLine({
       // With the user, the engine also gives their trophy files the new id (#853).
       const r = await profileActivate(slot, next, addr, uid ?? null);
       setTrophyNote(activationTrophyNote(r.trophies));
+      // The helper reads the slot back after writing: say so when it holds something else, not
+      // "saved" (#971).
+      if (!sameAccountId(r.id, next)) {
+        setError(
+          tr(
+            "profile.accountId.not_kept",
+            { next, got: formatAccountId(r.id) },
+            `The PS5 did not keep ${next}: the account reads ${formatAccountId(r.id)}. Send the helper again from Connection and try once more.`,
+          ),
+        );
+        onChanged();
+        return;
+      }
+      // Kept on this device: if a restart drops it, Play › Set up offers to put the same one back.
+      if (uid) keepAccountId(hostOf(addr), uid, next, name ?? "");
       setEditingId(false);
       setSavedOk(true);
       onChanged();
@@ -987,10 +1011,11 @@ function AccountIdLine({
       </div>
       {error && <p className="mt-1 text-xs text-[var(--color-bad)]">{error}</p>}
       {savedOk && (
-        <p className="mt-1 text-xs text-[var(--color-good)]">
+        <p className="mt-1 text-xs text-[var(--color-good)]" data-testid="account-id-saved">
           {tr(
-            "profile.reboot_notice",
-            "Restart the PS5 to see this change — avatar and username updates only show on the console after a reboot.",
+            "profile.accountId.saved_kept",
+            undefined,
+            "Saved, and the PS5 reads it back. Restart the PS5 to see it on the console. If the ID is gone after a restart, Play › Set up offers to put the same one back.",
           )}
         </p>
       )}

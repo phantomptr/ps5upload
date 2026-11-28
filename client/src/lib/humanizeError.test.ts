@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { caughtText, humanizeCaught, humanizePs5Error } from "./humanizeError";
+import { caughtText, humanizeCaught, humanizePs5Error, humanizeUninstallError } from "./humanizeError";
 import en from "../i18n/locales/en";
 
 describe("humanizePs5Error", () => {
@@ -255,6 +255,14 @@ describe("humanizePs5Error", () => {
         /corrupted/i,
       );
     });
+    it("80020016 → the console refused the program (kstuff or the package)", () => {
+      const out = humanizePs5Error(
+        "payload rejected APP_LAUNCH: launch_sony_error_0x80020016",
+      );
+      expect(out).toMatch(/refused to start this game's program \(0x80020016\)/);
+      expect(out).toMatch(/kstuff/);
+      expect(out).not.toMatch(/launcher returned/i);
+    });
     it("unknown launcher code falls back to generic 'returned 0xN' copy", () => {
       const out = humanizePs5Error("launch_sony_error_0x80940099");
       expect(out).toMatch(/launcher returned/i);
@@ -496,5 +504,40 @@ describe("humanizeCaught", () => {
   it("gives the sentence for a known code and the text for an unknown one", () => {
     expect(humanizeCaught(new Error("fs_unmount_busy"))).not.toContain("fs_unmount_busy");
     expect(humanizeCaught(new Error("something else"))).toBe("something else");
+  });
+});
+
+describe("humanizeUninstallError", () => {
+  it("says a refused uninstall is a refusal, not an install fetch failure (0x80B2 from Sony's uninstall)", () => {
+    // The desktop showed the PlayGo install text for a refused Uninstall of a game.
+    const helper = humanizeUninstallError("engine HTTP 502: payload rejected APP_UNREGISTER: uninstall_refused:0x80b21b02");
+    expect(helper).toBe(en.err_uninstall_sony_refused.replace("{code}", "0x80B21B02"));
+    expect(helper).toContain("sceAppInstUtilAppUnInstall");
+    expect(helper).not.toBe(en.err_install_80b2_generic_v2);
+    // Kraken Mount's remove answers with Sony's code in its own words.
+    const kraken = humanizeUninstallError(
+      "/api/delete/CUSA00001: Kraken Mount answered HTTP 500 (uninstall failed 0x80B2_1B02)",
+    );
+    expect(kraken).toBe(en.err_uninstall_sony_refused.replace("{code}", "0x80B21B02"));
+    // The shared humanizer agrees for the helper's refusal.
+    expect(humanizePs5Error("uninstall_refused:0x80B21B02")).toBe(helper);
+    // The install path keeps its own wording.
+    expect(humanizePs5Error("install failed 0x80B21B02")).toBe(en.err_install_80b2_generic_v2);
+  });
+
+  it("words the other uninstall failures as uninstall failures", () => {
+    expect(humanizeUninstallError("uninstall_refused:unknown")).toBe(
+      en.err_uninstall_refused.replace("{code}", "unknown"),
+    );
+    expect(humanizeUninstallError("engine HTTP 502: uninstall_unavailable")).toBe(en.err_uninstall_unavailable);
+    expect(humanizeUninstallError("engine HTTP 502: unregister_unmount_failed")).toBe(en.err_uninstall_unmount_failed);
+    // A registration-only removal of a game the PS5 installed itself keeps its own text (#884).
+    const own = humanizeUninstallError("engine HTTP 502: unregister_title_installed:internal");
+    expect(own).toBe(humanizePs5Error("engine HTTP 502: unregister_title_installed:internal"));
+    expect(own).not.toBe("engine HTTP 502: unregister_title_installed:internal");
+    // Anything else goes through the shared humanizer.
+    expect(humanizeUninstallError("connect to 1.2.3.4:9114: Connection refused")).toBe(
+      humanizePs5Error("connect to 1.2.3.4:9114: Connection refused"),
+    );
   });
 });

@@ -13,6 +13,7 @@ use crate::fih_write::{self, FihParams};
 use crate::inner;
 use crate::naps;
 use crate::outer_write;
+use crate::package_limit;
 use crate::pfsimage;
 use crate::plan::{self, Plan};
 use crate::sdk_rules;
@@ -69,6 +70,9 @@ pub struct BuildRequest {
     /// written. Everything after it (the checks, the `ampr_emu.index` made from the files
     /// packaged, the plan) sees only what it gives.
     pub reader: Option<SourceReader>,
+    /// The firmware the package's size is checked against before any work (see
+    /// [`crate::package_limit::check`]): a package the console can't open is refused.
+    pub size_target: crate::package_limit::SizeTarget,
 }
 
 /// The game as the build reads it, made from the source as it was opened, or why it can't be.
@@ -111,6 +115,7 @@ impl BuildRequest {
                 .unwrap_or_default(),
             language: None,
             reader: None,
+            size_target: Default::default(),
         }
     }
 }
@@ -210,6 +215,9 @@ pub struct BuildReport {
     pub verify: crate::verify::Report,
     /// Readiness findings that did not stop the build.
     pub warnings: Vec<String>,
+    /// `naps_pkg_layout.dat`'s length, which the header records as `napsMetadataSize` and the
+    /// console allocates whole to mount the package (see [`crate::package_limit`]).
+    pub layout_index: u64,
 }
 
 /// The stages a build goes through, in order: what a caller shows as a stage list.
@@ -328,8 +336,20 @@ fn build_mode(
         Some(reader) => (reader.0)(opened).map_err(crate::Error::Format)?,
         None => opened,
     };
-    // An unsigned executable would install and then never start: it goes in fake-signed.
-    let (mut tree, signing) = crate::fself::wrap(opened);
+    let mut opened = opened;
+    // An unsigned executable would install and then never start: it goes in fake-signed, its
+    // NPDRM block naming the content id the package is built under (checked again below).
+    let signing_id = request.content_id.clone().or_else(|| {
+        source::read_small(
+            opened.as_mut(),
+            "sce_sys/param.json",
+            source::MAX_PARAM_BYTES,
+        )
+        .ok()
+        .and_then(|p| source::content_id(&p))
+    });
+    let signing_id = signing_id.filter(|id| id.len() == 36 && content_id_is_plain(id));
+    let (mut tree, signing) = crate::fself::wrap_with(opened, signing_id.as_deref());
     if let Some(line) = signing.describe() {
         progress(&line);
     }
@@ -352,12 +372,67 @@ fn build_mode(
             before - files.len()
         ));
     }
+    // A package the console can't open for its size is refused here, before the walk below
+    // reads a byte of the game (on a large game that walk alone takes minutes).
+    let early_param =
+        source::read_small(tree.as_mut(), "sce_sys/param.json", source::MAX_PARAM_BYTES)
+            .unwrap_or_default();
+    let param_sizes = package_limit::param_sizes(&early_param);
+    let required_fw = source::parse_param_json(&early_param)
+        .as_ref()
+        .and_then(firmware_version)
+        .and_then(|v| package_limit::Firmware::parse(&v));
+    let fit_of = |package: u64, estimated: bool| {
+        package_limit::check(
+            package,
+            estimated,
+            request.size_target.target,
+            request.size_target.console,
+            required_fw,
+            &param_sizes,
+        )
+    };
+    let compressing = request.kraken
+        && request.level != crate::kraken::Level::Stored
+        && std::env::var("PS5UPLOAD_FPKG_KRAKEN_STORE").as_deref() != Ok("1");
+    let mut notes: Vec<String> = Vec::new();
+    {
+        let early = plan::build_tree(&files, tree.empty_dirs(), request.kraken)?;
+        let stored = estimate_size(&early)?;
+        let stored = stored + package_limit::container_allowance(stored / BLOCK);
+        let fit = fit_of(stored, false);
+        if let Some(refusal) = fit.refusal {
+            if !compressing {
+                return format_err(refusal);
+            }
+            // Compressed, it may yet fit: a sample of its blocks says how far it shrinks. Only
+            // a clear miss is refused now; the size once compressed is checked again exactly.
+            progress("sampling how far the game compresses, for the size check");
+            let ratio = sampled_ratio(tree.as_mut(), &files, request.level)?;
+            let estimate = (stored as f64 * ratio) as u64;
+            let fit = fit_of(estimate, true);
+            if let (Some(refusal), Some(limit)) = (fit.refusal, fit.limit) {
+                if estimate as f64 > limit.max_package as f64 * 1.03 {
+                    return format_err(refusal);
+                }
+            }
+        }
+        // A package that fits gets its notes (older firmware) once its size is exact, below.
+        if let Some(limit) = fit.limit {
+            progress(&format!(
+                "size check: {} GiB uncompressed, {} GiB the most PS5 firmware {} opens",
+                package_limit::gib(stored),
+                package_limit::gib(limit.max_package),
+                limit.band.describe(),
+            ));
+        }
+    }
     let readiness = source::readiness(tree.as_mut());
     // Only what this package will carry: `tree` is the game as it is packaged, so a game still
     // in packs here keeps its own `ampr_emu.index`, and any other gets one generated below. A
     // stale index that is about to be replaced is no warning.
     let packs_kept = source::packed_kind(tree.as_mut()).ok().flatten().is_some();
-    let warnings: Vec<String> = readiness
+    let mut warnings: Vec<String> = readiness
         .warnings()
         .filter(|c| source::applies::to_output(c.applies_to, packs_kept))
         .map(|c| format!("{}: {}", c.name, c.detail))
@@ -722,6 +797,17 @@ fn build_mode(
             };
             let idle = std::sync::atomic::AtomicBool::new(false);
             let cancel = control.cancel.unwrap_or(&idle);
+            // The package's size once compressed, exactly: the last word on whether it fits.
+            let found = std::cell::RefCell::new(Vec::<String>::new());
+            let size_check = |package: u64, index: u64| -> Result<()> {
+                let fit = fit_of(package, false);
+                if let Some(refusal) = fit.refusal {
+                    return format_err(refusal);
+                }
+                found.borrow_mut().extend(fit.note);
+                found.borrow_mut().extend(package_limit::index_note(index));
+                Ok(())
+            };
             let stream_request = stream::StreamRequest {
                 plan: &plan,
                 passcode: &request.passcode,
@@ -739,13 +825,17 @@ fn build_mode(
                 kraken_spool: request.kraken.then(|| spool_for(&partial)),
                 level: request.level,
                 metadata_codec: request.metadata_codec,
+                size_check: Some(&size_check),
             };
             // A separate spool is only ever scratch, whatever happens to the build.
             let _spool = Leftover(match &stream_request.kraken_spool {
                 Some(stream::KrakenSpool::File(spool)) => Some(spool.clone()),
                 _ => None,
             });
-            stream::write_package(&mut file, &stream_request, &mut read_range, &mut p, cancel)?.size
+            let streamed =
+                stream::write_package(&mut file, &stream_request, &mut read_range, &mut p, cancel)?;
+            notes.extend(found.into_inner());
+            (streamed.size, streamed.layout_index)
         }
         Mode::InMemory => {
             if cancelled() {
@@ -919,9 +1009,17 @@ fn build_mode(
                 out.write_all(&si)?;
                 out.sync_all()?;
             }
-            cnt_offset + cnt.bytes.len() as u64 + si.len() as u64
+            let total = cnt_offset + cnt.bytes.len() as u64 + si.len() as u64;
+            notes.extend(fit_of(total, false).note);
+            notes.extend(package_limit::index_note(naps.len() as u64));
+            (total, naps.len() as u64)
         }
     };
+    let (written, layout_index) = written;
+    for note in notes {
+        progress(&format!("warning: {note}"));
+        warnings.push(note);
+    }
 
     enter(control, Stage::Verify);
     match control.sample {
@@ -970,6 +1068,7 @@ fn build_mode(
         content_id,
         verify: report,
         warnings,
+        layout_index,
     })
 }
 
@@ -1387,6 +1486,14 @@ pub struct Inspection {
     pub ps4_addon_data: Option<bool>,
     /// Inspected with an update merged in: what the merge is.
     pub ps4_merge: Option<crate::ps4_merge::MergeInfo>,
+    /// The add-on space (`acSizeInGib`) and size profile (`appSizeInGib`) the game's
+    /// `param.json` declares, which the console's size check counts
+    /// ([`crate::package_limit`]).
+    pub param_sizes: crate::package_limit::ParamSizes,
+    /// The package's layout index (`napsMetadataSize`) less its 8 bytes per 64 KiB of stored
+    /// image: add those for the package's size to get the whole, an estimate until it is built.
+    /// 0 for a source that isn't a PS5 game.
+    pub layout_index_fixed: u64,
 }
 
 impl Inspection {
@@ -1496,6 +1603,72 @@ fn probe_write_rate(dir: &Path, fill: &[u8]) -> Option<f64> {
     result.ok()
 }
 
+/// `wanted` blocks of the game (fewer for a small one), spread evenly through its files.
+fn sample_blocks(
+    tree: &mut dyn source::SourceTree,
+    files: &[SourceFile],
+    wanted: usize,
+) -> Result<Vec<Vec<u8>>> {
+    let total: u64 = files.iter().map(|f| f.size).sum();
+    let step = (total / wanted.max(1) as u64).max(1);
+    let mut blocks = Vec::new();
+    let (mut at, mut base) = (0u64, 0u64);
+    for f in files.iter().filter(|f| f.size > 0) {
+        while at < base + f.size && blocks.len() < wanted {
+            let offset = at - base;
+            let len = (f.size - offset).min(crate::kraken::BLOCK as u64) as usize;
+            blocks.push(tree.read_range(&f.path, offset, len)?);
+            at += step;
+        }
+        base += f.size;
+    }
+    Ok(blocks)
+}
+
+/// How far `level` shrinks the game, stored bytes over raw, from a sample of its blocks
+/// compressed on every thread the build gets. 1 when there is nothing to sample.
+fn sampled_ratio(
+    tree: &mut dyn source::SourceTree,
+    files: &[SourceFile],
+    level: crate::kraken::Level,
+) -> Result<f64> {
+    let threads = crate::workshop::workshop_threads().max(1);
+    let blocks = sample_blocks(tree, files, ESTIMATE_BLOCKS.max(threads * 4))?;
+    let raw: usize = blocks.iter().map(Vec::len).sum();
+    if raw == 0 {
+        return Ok(1.0);
+    }
+    let per = blocks.len().div_ceil(threads).max(1);
+    let stored: usize = std::thread::scope(|scope| {
+        let workers: Vec<_> = blocks
+            .chunks(per)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|b| {
+                            crate::kraken::encode_block_at(b, level)
+                                .iter()
+                                .map(|h| h.bytes().len())
+                                .sum::<usize>()
+                        })
+                        .sum::<usize>()
+                })
+            })
+            .collect();
+        // A worker that died counts as storing its blocks raw: the safe side for a size check.
+        workers
+            .into_iter()
+            .zip(blocks.chunks(per))
+            .map(|(w, chunk)| {
+                w.join()
+                    .unwrap_or_else(|_| chunk.iter().map(Vec::len).sum())
+            })
+            .sum()
+    });
+    Ok((stored as f64 / raw as f64).min(1.0))
+}
+
 /// Estimated package size and whole build time at each level. The size comes from a sample of
 /// the game's blocks, spread evenly through its files, compressed at every level. The time adds
 /// every stage: compression, bounded by the slower of the encoder (timed on all threads at
@@ -1503,7 +1676,7 @@ fn probe_write_rate(dir: &Path, fill: &[u8]) -> Option<f64> {
 /// the package's write and read-back at the output drive's measured speed (see
 /// [`build_seconds`]). Sizes are kept in level order (a slower level never shows larger).
 pub fn estimate(source_path: &Path, output_dir: Option<&Path>) -> Result<Estimates> {
-    use crate::kraken::{encode_block_at, Level, BLOCK};
+    use crate::kraken::{encode_block_at, Level};
     let mut tree = source::open(source_path)?;
     let files: Vec<SourceFile> = tree
         .files()
@@ -1517,19 +1690,7 @@ pub fn estimate(source_path: &Path, output_dir: Option<&Path>) -> Result<Estimat
     }
     // What the build's pool will get, "use less of this computer" included.
     let threads = crate::workshop::workshop_threads();
-    let wanted = ESTIMATE_BLOCKS.max(threads * 4);
-    let step = (total / wanted as u64).max(1);
-    let mut blocks = Vec::new();
-    let (mut at, mut base) = (0u64, 0u64);
-    for f in &files {
-        while at < base + f.size && blocks.len() < wanted {
-            let offset = at - base;
-            let len = (f.size - offset).min(BLOCK as u64) as usize;
-            blocks.push(tree.read_range(&f.path, offset, len)?);
-            at += step;
-        }
-        base += f.size;
-    }
+    let blocks = sample_blocks(tree.as_mut(), &files, ESTIMATE_BLOCKS.max(threads * 4))?;
     let read_rate = probe_read_rate(tree.as_mut(), &files)?.unwrap_or(f64::INFINITY);
     let raw: usize = blocks.iter().map(Vec::len).sum();
     // Every thread at once, timed by the wall clock: what the build's pool actually gets.
@@ -1627,6 +1788,8 @@ fn licence_only(source_path: &Path, info: &crate::ps4_pkg::Ps4Info) -> Inspectio
         ps4_title_id: Some(info.title_id()),
         ps4_addon_data: Some(false),
         ps4_merge: None,
+        param_sizes: Default::default(),
+        layout_index_fixed: 0,
     }
 }
 
@@ -1728,6 +1891,13 @@ pub fn inspect_with_update(
     } else {
         estimate_size(&plan::build(&files)?)?
     };
+    // The block layout a package build plans, with no stored image: only the image's own digests
+    // are left to add.
+    let layout_index_fixed = if files.is_empty() || ps4_game {
+        0
+    } else {
+        crate::package_limit::layout_index_bytes(&plan::build_with(&files, true)?, 0)
+    };
     let ps4_title_id = ps4_kind.map(|_| match &peeked {
         Some(p) if merge.is_none() => p.title_id(),
         _ => sfo_text("TITLE_ID").unwrap_or_default(),
@@ -1754,5 +1924,7 @@ pub fn inspect_with_update(
         ps4_title_id,
         ps4_addon_data: (ps4_kind == Some(Ps4Kind::Addon)).then_some(true),
         ps4_merge: merge,
+        param_sizes: crate::package_limit::param_sizes(&param),
+        layout_index_fixed,
     })
 }

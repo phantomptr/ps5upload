@@ -455,6 +455,87 @@ static void test_apply_mock(void) {
 
 /* An XML game patch (#527) is one "cheat" with hundreds of locations: past the 32 the JSON/SHN
  * formats hold, still all or nothing, and a failure late in the run puts every earlier one back. */
+typedef struct {
+    int  n, fail_at;
+    char off[8][24];
+    char on[8][2 * CHEAT_SPLIT_BYTES + 1];
+    char orig[8][2 * CHEAT_SPLIT_BYTES + 1];
+} pieces_t;
+
+static int take_piece(void *ctx, const char *offset, const char *on, const char *off) {
+    pieces_t *p = (pieces_t *)ctx;
+    if (p->n == p->fail_at || p->n >= 8) return -1;
+    snprintf(p->off[p->n], sizeof p->off[0], "%s", offset);
+    snprintf(p->on[p->n], sizeof p->on[0], "%s", on);
+    snprintf(p->orig[p->n], sizeof p->orig[0], "%s", off);
+    p->n++;
+    return 0;
+}
+
+/* A JSON table's long code cave (300 bytes, spaced "48 89 ..." = 900 characters) is more than one
+ * parsed location holds; it becomes consecutive locations that each fit and apply. */
+static void test_split_long_location(void) {
+    char on[1024] = "", off[1024] = "";
+    for (int i = 0; i < 300; i++) {
+        char b[4];
+        snprintf(b, sizeof b, "%02X ", i & 0xff);
+        strcat(on, b);
+        strcat(off, "CC ");
+    }
+    pieces_t p = {0, -1, {{0}}, {{0}}, {{0}}};
+    CHECK(cheat_loc_split("0x5CC0A91", on, off, take_piece, &p) == 3);
+    CHECK(p.n == 3);
+    CHECK(strcmp(p.off[0], "0x5CC0A91") == 0);
+    CHECK(strcmp(p.off[1], "0x5CC0B09") == 0); /* + 120 */
+    CHECK(strcmp(p.off[2], "0x5CC0B81") == 0); /* + 240 */
+    CHECK(strlen(p.on[0]) == 240 && strlen(p.on[2]) == 120);
+    CHECK(strncmp(p.on[1], "78797A", 6) == 0); /* byte 120 = 0x78 */
+    uint8_t buf[CHEAT_PLAN_MAX_BYTES];
+    for (int i = 0; i < 3; i++) {
+        CHECK(strlen(p.on[i]) < 256 && strlen(p.orig[i]) < 256);
+        CHECK(cheat_parse_hex(p.on[i], buf, CHEAT_PLAN_MAX_BYTES) == (i < 2 ? 120 : 60));
+        cheat_loc_t l = {0};
+        l.len = cheat_parse_hex(p.orig[i], l.off, CHEAT_PLAN_MAX_BYTES);
+        CHECK(cheat_loc_is_cave(&l));
+    }
+
+    /* Exactly 255 characters (127 bytes and one space) fill the parser's 256-byte field, which the
+     * apply refuses as possibly cut short: that location is split too. */
+    {
+        char on255[300] = "", off255[300] = "";
+        for (int i = 0; i < 127; i++) {
+            strcat(on255, i == 63 ? "90 " : "90");
+            strcat(off255, i == 63 ? "CC " : "CC");
+        }
+        CHECK(strlen(on255) == 255 && strlen(off255) == 255);
+        pieces_t e = {0, -1, {{0}}, {{0}}, {{0}}};
+        CHECK(cheat_loc_split("0x10", on255, off255, take_piece, &e) == 2);
+        CHECK(e.n == 2 && strlen(e.on[0]) == 240 && strlen(e.on[1]) == 14);
+        CHECK(strcmp(e.off[0], "0x10") == 0 && strcmp(e.off[1], "0x88") == 0);
+        /* One character less fits the field and is left as it is. */
+        on255[254] = off255[254] = '\0';
+        CHECK(cheat_loc_split("0x10", on255, off255, take_piece, &e) == 0 && e.n == 2);
+    }
+
+    /* Short locations are left to the caller as they are. */
+    pieces_t q = {0, -1, {{0}}, {{0}}, {{0}}};
+    CHECK(cheat_loc_split("A0", "90 90", "80 80", take_piece, &q) == 0 && q.n == 0);
+
+    /* Cannot be split: lengths differ, a non-hex byte, an offset that is not hex, a refused piece. */
+    char shorter[1024];
+    snprintf(shorter, sizeof shorter, "%s", off);
+    shorter[strlen(shorter) - 3] = '\0';
+    CHECK(cheat_loc_split("A0", on, shorter, take_piece, &q) == -1);
+    char bad[1024];
+    snprintf(bad, sizeof bad, "%s", on);
+    bad[3] = 'Z';
+    CHECK(cheat_loc_split("A0", bad, off, take_piece, &q) == -1);
+    CHECK(cheat_loc_split("nothex", on, off, take_piece, &q) == -1);
+    pieces_t r = {0, 1, {{0}}, {{0}}, {{0}}};
+    CHECK(cheat_loc_split("A0", on, off, take_piece, &r) == -1 && r.n == 1);
+    CHECK(cheat_loc_split("0xFFFFFFFFFFFFFFC0", on, off, take_piece, &q) == -1);
+}
+
 static void test_apply_many(void) {
     static mock_t m;
     enum { N = 300 };
@@ -489,6 +570,7 @@ static void test_apply_many(void) {
 
 int main(void) {
     test_apply_many();
+    test_split_long_location();
     test_parse();
     test_state();
     test_order_max_resources();

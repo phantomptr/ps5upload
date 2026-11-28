@@ -71,6 +71,8 @@ test("one page builds a redacted report of the whole time frame and pre-fills Gi
   expect(b.entries.find((e) => e.path === "report.md")?.text).toContain("signal 11");
 
   // GitHub, then Discord
+  // Post to GitHub waits until the user says they'll drag the zip in (GitHub links can't carry it).
+  await main.getByRole("checkbox", { name: "I'll drag the zip into the issue before I submit it" }).check();
   await main.getByRole("button", { name: "Post to GitHub" }).click();
   await main.getByRole("button", { name: "Post to Discord" }).click();
   // Discord copies the text first, then opens the channel (a page that lost focus cannot write the clipboard).

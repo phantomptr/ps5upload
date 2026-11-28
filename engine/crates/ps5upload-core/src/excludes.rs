@@ -20,6 +20,9 @@
 //!   - Allow-list:           "!*.pkg"          INVERTED: when any `!` pattern is present, a path is
 //!     excluded unless it matches at least one of them (case-insensitively). Lets a caller say
 //!     "only these" with the same grammar; `*.pkg` unpacks only packages from a RAR (#370).
+//!   - Chosen entry:         "=Game/base.pkg"  an allow entry (like `!`) naming one path inside an
+//!     archive exactly as its listing gives it (case kept): that file, everything under it when
+//!     it is a folder, and the folders on the way to it. "Choose files" in an archive (#969).
 //!
 //! We iterate patterns once per path so `contains(...)` with a small Vec
 //! is cheap enough not to need a compiled matcher struct for typical
@@ -64,7 +67,16 @@ pub fn is_excluded(path: &Path, patterns: &[&str]) -> bool {
 
     let mut has_allow = false;
     let mut allowed = false;
+    let mut joined: Option<String> = None;
     for raw in patterns {
+        if let Some(chosen) = raw.strip_prefix('=') {
+            has_allow = true;
+            if !allowed {
+                let rel = joined.get_or_insert_with(|| relative_path(path));
+                allowed = chosen_covers(chosen, rel);
+            }
+            continue;
+        }
         if let Some(allow) = raw.strip_prefix('!') {
             has_allow = true;
             if !allowed {
@@ -86,11 +98,53 @@ pub fn is_excluded(path: &Path, patterns: &[&str]) -> bool {
     has_allow && !allowed
 }
 
+/// True when `patterns` keep only some paths (an allow-list or chosen entries): an archive's
+/// folders that end up holding none of the kept files are then left out, not made empty.
+pub fn picks_some(patterns: &[String]) -> bool {
+    patterns
+        .iter()
+        .any(|p| p.starts_with('!') || p.starts_with('='))
+}
+
+/// Whether a folder of the archive is kept under `patterns` although none of the kept files is
+/// in it: an empty folder inside a chosen one ("=Game" keeps `Game/empty`).
+pub fn keeps_empty_dir(dir: &str, patterns: &[String]) -> bool {
+    patterns.iter().any(|p| p.starts_with('=')) && !is_excluded_strings(Path::new(dir), patterns)
+}
+
 /// Convenience: match against an owned `String` slice (what the UI sends
 /// over IPC/HTTP).
 pub fn is_excluded_strings(path: &Path, patterns: &[String]) -> bool {
     let refs: Vec<&str> = patterns.iter().map(String::as_str).collect();
     is_excluded(path, &refs)
+}
+
+/// `path`'s normal components joined with '/' (no root, no `.`): the form an archive listing
+/// gives a path in.
+fn relative_path(path: &Path) -> String {
+    let mut out = String::new();
+    for c in path.components() {
+        if let std::path::Component::Normal(s) = c {
+            if !out.is_empty() {
+                out.push('/');
+            }
+            out.push_str(&s.to_string_lossy());
+        }
+    }
+    out
+}
+
+/// True when the chosen entry `chosen` keeps `rel`: it is that entry, lies under it, or is a
+/// folder on the way to it.
+fn chosen_covers(chosen: &str, rel: &str) -> bool {
+    let chosen = chosen.trim_matches('/');
+    if chosen.is_empty() || rel.is_empty() {
+        return false;
+    }
+    let under = |long: &str, short: &str| {
+        long.len() > short.len() && long.starts_with(short) && long.as_bytes()[short.len()] == b'/'
+    };
+    rel == chosen || under(rel, chosen) || under(chosen, rel)
 }
 
 fn strip_glob_suffix(s: &str) -> &str {
@@ -227,6 +281,35 @@ mod tests {
         // An ordinary exclude still wins over the allow-list.
         let mixed: &[&str] = &["!*.pkg", "skip"];
         assert!(is_excluded(&p("skip/a.pkg"), mixed));
+    }
+
+    #[test]
+    fn chosen_entries_keep_only_those_paths() {
+        let chosen: &[&str] = &["=Game/base.pkg", "=Extras"];
+        assert!(!is_excluded(&p("Game/base.pkg"), chosen));
+        // A folder on the way to a chosen file is kept (it is made), its other files are not.
+        assert!(!is_excluded(&p("Game"), chosen));
+        assert!(is_excluded(&p("Game/patch.pkg"), chosen));
+        assert!(is_excluded(&p("Game/sub"), chosen));
+        // A chosen folder keeps everything under it.
+        assert!(!is_excluded(&p("Extras/a/b.txt"), chosen));
+        // A name that only starts like a chosen one is not under it.
+        assert!(is_excluded(&p("Extras2/x"), chosen));
+        assert!(is_excluded(&p("Game/base.pkg.bak"), chosen));
+        // Case is kept: an archive can hold both spellings.
+        assert!(is_excluded(&p("game/base.pkg"), chosen));
+        // A leading "./" in the path is not part of the name.
+        assert!(!is_excluded(&p("./Game/base.pkg"), chosen));
+        // An ordinary exclude still wins.
+        let mixed: &[&str] = &["=Extras", ".DS_Store"];
+        assert!(is_excluded(&p("Extras/.DS_Store"), mixed));
+        // Chosen entries and an allow pattern are alternatives.
+        let both: &[&str] = &["=readme.txt", "!*.pkg"];
+        assert!(!is_excluded(&p("a/x.pkg"), both));
+        assert!(!is_excluded(&p("readme.txt"), both));
+        assert!(is_excluded(&p("other.txt"), both));
+        // An empty choice names nothing.
+        assert!(is_excluded(&p("a"), &["="]));
     }
 
     #[test]

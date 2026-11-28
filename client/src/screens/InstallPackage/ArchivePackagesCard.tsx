@@ -11,10 +11,15 @@ import { isTauriEnv } from "../../lib/tauriEnv";
 import { startLinkDownload } from "../../lib/linkDownload";
 import { pickPath } from "../../lib/pickPath";
 import { useLinkInstallPrefs } from "../../state/linkInstallPrefs";
+import type { ArchiveRow } from "../../api/archiveEntries";
+import type { RarPackage } from "../../api/links";
+import { ArchiveRowList, ChoiceSummary } from "../../components/ArchiveChooser";
+import { choiceOf } from "../../lib/archiveChoice";
 import {
   archiveInstallFor,
   archiveLeftoversFor,
   chooseArchive,
+  chooseArchivePackages,
   queuedInstallPaths,
   removeArchiveLeftovers,
   scanArchiveLeftovers,
@@ -332,40 +337,14 @@ export function ArchivePackagesCard({ host }: { host: string }) {
         />
       )}
       {st?.packages && st.packages.length > 0 && (
-        <div className="mt-3">
-          <ul className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mb-2 max-h-40 overflow-auto text-xs">
-            {st.packages.map((p) => (
-              <li
-                key={p.path}
-                className="flex items-center gap-2 px-2.5 py-1.5"
-              >
-                <span
-                  className="min-w-0 flex-1 truncate font-mono"
-                  title={p.path}
-                >
-                  {p.path}
-                </span>
-                <span className="shrink-0 tabular-nums text-[var(--color-muted)]">
-                  {formatBytes(p.size)}
-                </span>
-              </li>
-            ))}
-          </ul>
-          <TargetLine target={st.target} />
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => void runArchiveInstall(host)}
-            disabled={busy || noRoom || removing}
-            data-testid="archive-packages-run"
-          >
-            {tr(
-              "rarpkg.run",
-              { count: st.packages.length },
-              "Unpack and install {count} package(s)",
-            )}
-          </Button>
-        </div>
+        <PackageChoice
+          host={host}
+          packages={st.packages}
+          chosen={st.chosen ?? null}
+          target={st.target}
+          disabled={busy || removing}
+          noRoom={noRoom}
+        />
       )}
       {st?.packages && st.packages.length === 0 && (
         <p className="mt-2 text-xs text-[var(--color-warn)]">
@@ -486,6 +465,86 @@ export function ArchivePackagesCard({ host }: { host: string }) {
       )}
       {confirmDialog}
     </section>
+  );
+}
+
+/** The archive's packages as chooser rows. */
+export function packageRows(packages: readonly RarPackage[]): ArchiveRow[] {
+  return packages.map((p) => ({
+    path: p.path,
+    kind: "package",
+    size: p.size,
+    files: 1,
+    ...(p.info ? { package: p.info } : {}),
+  }));
+}
+
+/** The ticks a choice shows: the chosen packages, or every one. */
+export function packageTicks(packages: readonly RarPackage[], chosen: readonly string[] | null): Set<string> {
+  return new Set(chosen ?? packages.map((p) => p.path));
+}
+
+/** "Choose files" for an install (#969): every package with its tick (all to start with), select
+ *  all / none, where they go, and the run for the ticked ones. */
+export function PackageChoice({
+  host,
+  packages,
+  chosen,
+  target,
+  disabled,
+  noRoom,
+}: {
+  host: string;
+  packages: readonly RarPackage[];
+  chosen: readonly string[] | null;
+  target: ArchiveTarget | null;
+  disabled: boolean;
+  noRoom: boolean;
+}) {
+  const tr = useTr();
+  const rows = packageRows(packages);
+  const ticked = packageTicks(packages, chosen);
+  const choice = choiceOf(rows, ticked);
+  const set = (next: Set<string>) =>
+    void chooseArchivePackages(
+      host,
+      packages.every((p) => next.has(p.path)) ? null : packages.map((p) => p.path).filter((p) => next.has(p)),
+    );
+  return (
+    <div className="mt-3 flex flex-col gap-2" data-testid="archive-packages-choice">
+      {packages.length > 1 && (
+        <ChoiceSummary
+          choice={choice}
+          total={rows.length}
+          disabled={disabled}
+          onAll={() => set(new Set(packages.map((p) => p.path)))}
+          onNone={() => set(new Set())}
+        />
+      )}
+      <ArchiveRowList
+        rows={rows}
+        ticked={ticked}
+        disabled={disabled || packages.length < 2}
+        onToggle={(path, on) => {
+          const next = new Set(ticked);
+          if (on) next.add(path);
+          else next.delete(path);
+          set(next);
+        }}
+      />
+      <TargetLine target={target} />
+      <div>
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={() => void runArchiveInstall(host)}
+          disabled={disabled || noRoom || choice.count === 0}
+          data-testid="archive-packages-run"
+        >
+          {tr("rarpkg.run", { count: choice.count }, "Unpack and install {count} package(s)")}
+        </Button>
+      </div>
+    </div>
   );
 }
 

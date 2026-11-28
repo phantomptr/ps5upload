@@ -166,6 +166,7 @@ pub const JOB_OP_PKG_INSTALL: u8 = 11;
 pub const JOB_OP_ARCHIVE_EXTRACT: u8 = 12;
 pub const JOB_OP_APP_DUMP: u8 = 13;
 pub const JOB_OP_CONSOLE_CONVERT: u8 = 14;
+pub const JOB_OP_TREE_SIZE: u8 = 15;
 pub const ENTRY_LINK: u8 = 2;
 pub const ENTRY_OTHER: u8 = 3;
 pub const ENTRY_UNKNOWN: u8 = 4;

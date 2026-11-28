@@ -33,6 +33,27 @@ int fsj_chmod_rf(const char *path, unsigned mode, int depth, const fsj_hooks_t *
 /* Adds the regular files' bytes to *bytes and the non-directories to *files. 0, -1, -2. */
 int fsj_tree_size(const char *path, uint64_t *bytes, uint64_t *files, int depth, const fsj_hooks_t *h);
 
+/* What a folder holds, for JOB_OP_TREE_SIZE (#974). `bytes`: the regular files' sizes; `alloc`: what
+ * every entry below takes on disk (st_blocks), the folder itself and its sub-folders included, so a
+ * zstd-packed game counts what its packs really take; `files`: the non-directories; `dirs`: the folders
+ * below the root; `skipped`: what was not counted (an unreadable folder, another drive mounted inside,
+ * the trust store, a system tree, past the depth limit). */
+typedef struct {
+    uint64_t bytes, alloc, files, dirs, skipped;
+} fsj_usage_t;
+/* Sums `path`'s tree into *u (zeroed first), never following a link nor leaving the root's device,
+ * and skipping (counting in `skipped`) what it must not or cannot read. 0, -1 when the root itself
+ * cannot be read, -2 cancelled, -3 the root (canonical) is a protected folder or a system tree.
+ * Entries that are the trust store or the SMB store, by any of their names, are skipped.
+ * `h->file` is called per non-directory with its size. */
+int fsj_tree_usage(const char *path, fsj_usage_t *u, const fsj_hooks_t *h);
+
+/* JOB_OP_TREE_SIZE's read rule, set by the helper (ava1_glue.c: fs.read's rule, which refuses the
+ * trust store and anything in it but not a folder above it: the walk skips the store). NULL: the
+ * data plane's may_read, which also refuses every folder above the store (/, /user, /data,
+ * /data/ps5upload), so those could not be sized. */
+extern int (*fsj_size_may_read)(const char *path);
+
 /* The walkers never cross into another device than the root's: a nested mount (a USB drive
  * under a game folder, an image mounted inside it) is skipped, reported through `failed("mount")`
  * and counted as an error, so deleting a tree can never empty a volume mounted below it. */
@@ -50,11 +71,12 @@ int fsj_normalize_path(char *path);
  * `/mnt/usb0`, `/mnt/ext1` (anything under `/mnt` needs three components, anything else two). */
 int fsj_path_is_root(const char *path);
 
-/* Registers AVA1_JOB_OP_DELETE, _CHMOD_R, _HASH and _CRC32 with ava1_op.c. */
+/* Registers AVA1_JOB_OP_DELETE, _CHMOD_R, _HASH, _CRC32, _FFPFSC_UNPACK and _TREE_SIZE with ava1_op.c. */
 void fsj_register_ops(void);
 
 /* The request-body helpers the operations use (the legacy JSON bodies, read as C text):
- * the string at top-level key `key`, unescaped (1 found, 0 absent or too long), and the
+ * the string at top-level key `key`, unescaped (1 found, 0 absent, too long or malformed: `out`
+ * is then "", never a part of the value), and the
  * unsigned integer or boolean at `key` (1 found; `true` is 1). */
 int fsj_json_str(const char *json, const char *key, char *out, size_t cap);
 int fsj_json_present(const char *json, const char *key);

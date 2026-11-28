@@ -140,6 +140,32 @@ pub(crate) fn host_named_by_operator(headers: &HeaderMap) -> bool {
         .is_some_and(|h| host_rules().names(&name_of(h)))
 }
 
+/// The request addressed this engine by an IP address inside `PS5UPLOAD_ALLOW_IP`. Nothing can
+/// re-point an address, so this is no DNS rebinding; and it is how a browser on the LAN or
+/// tailnet reaches an engine behind a forwarder that hides the peer: Docker Desktop's host
+/// networking hands every connection to the container from 127.0.0.1, LAN and tailnet alike.
+fn host_is_admitted_ip(headers: &HeaderMap, allow: &[AllowRule]) -> bool {
+    headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| name_of(h).parse::<IpAddr>().ok())
+        .is_some_and(|ip| crate::allow_rules_contain(allow, ip))
+}
+
+/// The routes that answer this computer and the peers `PS5UPLOAD_ALLOW_IP` admits, and nobody
+/// else (Go live, Play Together's host API). A loopback peer must also address the engine by a
+/// loopback name, a name the operator listed (a reverse proxy here) or an admitted address: a
+/// page whose own name was re-pointed at 127.0.0.1 carries that name. Any other peer must be in
+/// `allow` (loopback_guard checks that too; this does not lean on it).
+pub(crate) fn local_or_admitted(peer: IpAddr, headers: &HeaderMap, allow: &[AllowRule]) -> bool {
+    if !peer.to_canonical().is_loopback() {
+        return crate::allow_rules_contain(allow, peer);
+    }
+    crate::vinput_api::host_is_local(headers)
+        || host_named_by_operator(headers)
+        || host_is_admitted_ip(headers, allow)
+}
+
 /// The refusal: what was refused, and the one setting that changes it.
 fn refused(name: &str) -> Response {
     (

@@ -20,6 +20,9 @@ import {
   hereConflicts,
   listErrorKind,
   namesAt,
+  nothingChosen,
+  withSkipped,
+  ExtractItemsChoice,
   type ExtractChoice,
 } from "./ExtractDialog";
 
@@ -220,5 +223,61 @@ describe("Extract here (#891)", () => {
     html = render("/data", { ...here, parent: "/data" });
     expect(html).toContain('data-testid="fs-extract-here-root"');
     expect(goButton(html)).toContain('disabled=""');
+  });
+});
+
+describe("Choose items (#969)", () => {
+  const base: ExtractChoice = { parent: "/data", folder: "g", merge: false, replace: false, password: "" };
+
+  it("leaves the unticked top-level entries out, over a rename they had", () => {
+    expect(withSkipped(base, [])).toBe(base);
+    expect(withSkipped(base, ["readme.txt"]).top).toEqual([{ from: "readme.txt", to: "" }]);
+    const kept = { ...base, top: [{ from: "Game", to: "Game (2)" }, { from: "a", to: "a (2)" }] };
+    expect(withSkipped(kept, ["Game"]).top).toEqual([
+      { from: "a", to: "a (2)" },
+      { from: "Game", to: "" },
+    ]);
+  });
+
+  it("nothing is left to extract only when every listed item is unticked and none went unlisted", () => {
+    expect(nothingChosen({ top: ["a", "b"], more: false }, new Set(["a", "b"]))).toBe(true);
+    expect(nothingChosen({ top: ["a", "b"], more: false }, new Set(["a"]))).toBe(false);
+    expect(nothingChosen({ top: ["a", "b"], more: true }, new Set(["a", "b"]))).toBe(false);
+    expect(nothingChosen({ top: [], more: false }, new Set())).toBe(false);
+  });
+
+  it("offers the choice, then lists the items with their ticks", () => {
+    const none = renderToStaticMarkup(
+      <ExtractItemsChoice listing={null} loading={false} error={null} skipped={new Set()} canList onLoad={vi.fn()} onSkipped={vi.fn()} />,
+    );
+    expect(none).toContain("Choose items…");
+    expect(none).toContain("Everything is extracted unless you choose.");
+    const listed = renderToStaticMarkup(
+      <ExtractItemsChoice
+        listing={{ top: ["Game", "readme.txt"], dirs: ["Game"], more: false }}
+        loading={false}
+        error={null}
+        skipped={new Set(["readme.txt"])}
+        canList
+        onLoad={vi.fn()}
+        onSkipped={vi.fn()}
+      />,
+    );
+    expect(listed).toContain("1 of 2 items chosen");
+    expect(listed).toContain("readme.txt");
+    expect((listed.match(/checked=""/g) ?? []).length).toBe(1);
+    expect(listed).not.toContain("Choose at least one item");
+    const empty = renderToStaticMarkup(
+      <ExtractItemsChoice
+        listing={{ top: ["a"], dirs: [], more: false }}
+        loading={false}
+        error={null}
+        skipped={new Set(["a"])}
+        canList
+        onLoad={vi.fn()}
+        onSkipped={vi.fn()}
+      />,
+    );
+    expect(empty).toContain("Choose at least one item to extract.");
   });
 });

@@ -150,8 +150,10 @@ async function call<T>(path: string, init?: EngineFetchInit): Promise<T> {
     body = {};
   }
   if (!r.ok) {
+    // The engine's guards in front of every route answer `{"error": <sentence>, "code"}`
+    // (host_guard.rs: a name it doesn't answer to); Go live's own refusals `{"error": <code>}`.
     throw new LiveApiError(
-      typeof body.error === "string" ? body.error : `http_${r.status}`,
+      typeof body.code === "string" ? body.code : typeof body.error === "string" ? body.error : `http_${r.status}`,
       typeof body.message === "string" ? body.message : `HTTP ${r.status}`,
       body,
     );

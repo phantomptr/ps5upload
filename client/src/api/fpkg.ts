@@ -92,13 +92,38 @@ export interface FpkgInspection {
   ps4_addon_data?: boolean | null;
   /** Inspected with an update merged in: what the merge is. */
   ps4_merge?: Ps4Merge | null;
+  /** The add-on space (acSizeInGib) and size profile (appSizeInGib) param.json declares, which
+   *  the console's package size check counts (lib/packageLimit). */
+  param_sizes?: { ac_gib?: number | null; app_gib?: number | null } | null;
+  /** The package's layout index less 8 bytes per 64 KiB of package (an estimate); 0 for a
+   *  source that isn't a PS5 game. */
+  layout_index_fixed?: number;
   /** Present when the game's fakelib holds backport libraries: what "Remove backport
    *  libraries" would leave out of an image or folder, and why it can't when it can't. */
   backport?: BackportInfo | null;
+  /** A PS5 game in no asset packs that carries an AMPR emulator in its fakelib: what a package
+   *  can leave out (`leaveOutAmprEmu` alone), and why not when it can't. */
+  plain_ampr_emu?: PlainAmprEmu | null;
   /** Why this source could not be moved to the Trash after an image or folder is made of it,
    *  whatever is made (it is on a PS5 or a server, or the engine has no Trash); absent when
    *  it could. */
   delete_source_refusal?: string | null;
+}
+
+/** What a plain game carries of an AMPR emulator (the engine's `plain_emulator::PlainEmulator`). */
+export interface PlainAmprEmu {
+  /** Its libSceAmpr.sprx files, by path. */
+  modules: string[];
+  /** What it is: "ampr_emu 0.4.2.1", "an AMPR emulator", … */
+  emulator: string;
+  /** The game imports libSceAmpr: without the emulator, the PS5's own library serves it. */
+  imports_ampr: boolean;
+  /** Why it can't be left out; absent when it can. `not_an_emulator`: its libSceAmpr.sprx may
+   *  be a backport's system library. `pack_files`, `index_lists_missing`: something there is
+   *  read only through the emulator. */
+  refusal?: "not_an_emulator" | "pack_files" | "index_lists_missing" | null;
+  /** With a refusal, the facts behind it (a path, a file the index lists). */
+  detail?: string | null;
 }
 
 /** A game's backport, as the check found it (the engine's `remove_backport::BackportReport`). */
@@ -207,6 +232,9 @@ export interface FpkgBuildRequest {
   /** The package's minimum firmware, like "5.10"; the game's own when absent. A console older
    *  than the package's minimum refuses to install it. */
   firmware?: string;
+  /** The connected console's firmware ("13.60"): without `firmware`, the package's size is
+   *  checked against what this console opens (the engine refuses one it can't). */
+  consoleFirmware?: string;
   /** The PlayGo language the package declares: one code (`de-DE`, …) for that one alone, `all`
    *  for every language; absent, the game's own (only its default when it names none). */
   language?: string;
@@ -223,7 +251,8 @@ export interface FpkgBuildRequest {
   /** With `unpackPacks`: the AMPR emulator choice (a queued game's own; the settings when
    *  absent), as an image or folder build takes it. */
   amprEmu?: { add: boolean; build: AmprEmuBuild };
-  /** With `unpackPacks`: the AMPR emulator is left out of the package. */
+  /** The AMPR emulator is left out of the package: with `unpackPacks` for a packed game, alone
+   *  for a game in no packs whose inspection offers it (`plain_ampr_emu`). */
   leaveOutAmprEmu?: boolean;
 }
 
@@ -272,6 +301,7 @@ export const fpkg = {
       name: req.name,
       compression: req.compression,
       firmware: req.firmware,
+      consoleFirmware: req.consoleFirmware,
       language: req.language,
       fullVerify: req.fullVerify ?? false,
       keepBoth: req.keepBoth ?? false,
@@ -284,7 +314,10 @@ export const fpkg = {
             amprEmuBuild: req.amprEmu?.build ?? useConvertPrefs.getState().amprEmuBuild,
             ...(req.leaveOutAmprEmu ? { leaveOutAmprEmu: true } : {}),
           }
-        : {}),
+        : req.leaveOutAmprEmu
+          ? // A plain game's emulator left out: nothing to unpack, no emulator choice.
+            { leaveOutAmprEmu: true }
+          : {}),
     }),
   /** Unpack a .zip / .7z / .rar into an unpack folder in `outputDir`, as a job; the job's
    *  `dest` is the game found inside. A RAR's password goes with it, never stored. With

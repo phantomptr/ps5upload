@@ -1474,6 +1474,27 @@ the console to reach PSN you'll switch its network back to WiFi /
 router when you're done uploading — or just leave PSN off while you
 transfer (PSN isn't required for any of ps5upload's features).
 
+**Q: Can I install packages from a laptop plugged straight into the PS5?**
+Yes. Everything works over the cable: uploads, Files, and installing packages. Two ways to set
+it up:
+
+- **Same subnet by hand** (Steps 1 to 4 below): fixed addresses on both sides, no internet on
+  the PS5 while it is on the cable.
+- **Let the laptop share its connection**: turn on the computer's own connection sharing for
+  the Ethernet port (Windows: **Control Panel → Network Connections**, the Wi-Fi adapter's
+  **Properties → Sharing → Allow other network users to connect**, choosing the Ethernet
+  adapter; macOS: **System Settings → General →
+  Sharing → Internet Sharing**, sharing Wi-Fi to the Ethernet port; Linux NetworkManager: the
+  wired connection's IPv4 method **Shared to other computers**). Then set the PS5 to **Use a LAN
+  Cable → Easy**. The laptop hands the PS5 an address and the PS5 can reach the internet
+  through it. Read the PS5's address in **Settings → Network → Connection Status** and type it
+  on **Connection**.
+
+Either way the app finds the PS5 by its IP, as on Wi-Fi. **Stream & install** works the other
+way round: the PS5 connects back to the laptop (port 19113) to read the package, so the
+laptop's firewall has to let the PS5 in on the cable's network (on Windows, set that network to
+**Private**; see the firewall notes in Step 2).
+
 ### Step 1 — Cable + addresses
 
 - **Cable:** any Cat5e or better, straight-through. Auto-MDIX on
@@ -1846,6 +1867,23 @@ game or packages is unpacked; anything else (payloads, a jailbreak update such a
 is sent as the file. When it can't tell, nothing is picked and it asks before uploading. Copying
 a file into a folder in **Files** never unpacks it.
 
+**Q: An archive holds several games, updates or DLC. Can I pick only some of them?**
+Yes, like in an archive app. Everything is ticked to start with; untick what you don't want:
+
+- **Upload** (an archive that is unpacked): **Choose files…** under the archive, or on its row in
+  the queue while it waits. Each package is its own row, a folder goes whole, and a package
+  inside a `.zip` also says which game, version and kind (game, update or DLC) it is. Only the
+  ticked items are read out of the archive and sent; the rest is skipped, not unpacked anywhere.
+- **Install packages from an archive**: tick the packages to install. Only those are unpacked to
+  the PS5 and installed, base game first. The other parts of a split package (`Game_0.pkg`,
+  `Game_1.pkg`, …) come along with the first part.
+- **Extract on the PS5** (File system › Extract in the app, or Files › Extract on the console's
+  page): **Choose items…** lists the archive's top-level files and folders; untick any to leave
+  them out.
+
+Works for `.zip`, `.7z`, `.rar` (multi-part too) and tar archives. A password-protected RAR needs
+its password before its files can be listed.
+
 **Q: Does an archive upload need free space on my PC?**
 No. The archive is decompressed and sent at the same time, so you only need room for the archive
 you already have. The `PS5UPLOAD_ARCHIVE_STAGE_MB` and `PS5UPLOAD_ZIP_RAM_THRESHOLD_MB` variables
@@ -2215,6 +2253,27 @@ whose title ID can't be read) are counted in a line under the grid; **Show them*
 with the same actions. To dump an installed game to a drive, open it and use **Dump this game**
 under **On <console>**.
 
+**Q: When I uninstall a game, are its files deleted too?**
+That depends on how the game got onto the PS5:
+
+- **Installed from a package** (a fake package installed with the PS5's installer): Uninstall
+  removes it, files and all, as Settings › Storage does. There is nothing else to choose.
+- **Played from a game folder or a disk image** (`.ffpkg`, `.exfat`, `.ffpfs`) that you added to
+  the home screen: Uninstall asks whether to delete that folder or image too, and shows where it is
+  and how much space it frees. **Uninstall only** (picked to start with) takes the game off the
+  home screen and keeps its files. **Uninstall and delete** deletes them once the game is
+  uninstalled; an image is unmounted first. Saves are kept either way. If the folder or image is
+  already gone, it just uninstalls.
+- It only ever deletes the game's own folder or image: never a drive's top level, a top folder of
+  the internal storage, the PS5's own folders, a folder or image another game on the home screen
+  also uses, or a folder with another game inside. For those you get the plain question.
+- Games that **ShadowMount+** or **Kraken Mount** put on the home screen work as before: Kraken
+  Mount's Remove deletes its package or folder, and a ShadowMount+ image stays where it is.
+
+The same choice is in **Games** on the PS5's own page. Through the API or an agent, read
+`GET /api/ps5/app/uninstall-source` (`games_uninstall_source`) first, then pass its `path` as
+`delete_source` to the uninstall.
+
 **Q: After Rebuild Database my games installed from fake packages are gone from the home screen. Do I have to download them again?**
 No. Rebuild Database (Safe Mode) removes games installed from fake packages from the home screen
 and from Settings › Storage, but their files stay on the drive. With the helper running and
@@ -2444,7 +2503,8 @@ remove it.
 Yes: **Upload & Install → From a Link or an Archive → Install packages from an archive**. Only the `.pkg` files in the
 archive are unpacked, straight to the PS5 (nothing is extracted on your computer), and installed
 one by one: the base game first, then its update, then DLC. If an install fails, the unpacked
-files stay on the PS5 so you can retry.
+files stay on the PS5 so you can retry. To install only some of them, untick the others in the
+list before you start.
 
 - A **multi-part RAR** (`.part1.rar`, `.part2.rar`, …) works: choose the first part and keep the
   others in the same folder.
@@ -3402,6 +3462,23 @@ on the PS5, and **More → Snapshots** lists them to restore later. It is meant 
 state and configuration — before a bulk operation, not as a game backup.
 For save data specifically, use the Save data screen.
 
+**Q: Why does a folder in Files show "—" for its size? Can it show how big a game folder is?**
+A folder's size means counting everything inside it, so Files never does that on its own. It
+shows a size only when it already knows one, with its age (for example "48.2 GiB · 2 days ago");
+otherwise "—". To get one, use **Measure size** on a folder (its ⋮ menu or right-click, also for
+several selected folders) or **Measure everything here** in the ⋯ menu for every folder in the
+one you're in. Folders are measured in the background, one at a time; **Stop measuring** stops
+them, and measuring waits while a transfer or install runs on that PS5. The size is what the
+folder takes on the drive, so a game converted to zstd packs shows its packed size. Sizes the
+app already worked out are reused for free: a **What takes space?** look at a folder, and the
+clean-up scan. A size is dropped when PS5Upload writes, deletes or moves something in that folder;
+a change made another way (on the PS5 itself, another tool) is not seen, which is why each size
+shows how old it is. Sorting by size puts folders with no known size last. This works for the
+PS5's drives (internal, M.2, USB, and shares mounted on the PS5), not for your computer's side.
+**Settings › Files & saves › Keep folder sizes fresh** (off by default) re-measures sizes the app
+already knows, at most once a day, only in folders you open, and only while nothing else runs on
+that PS5.
+
 ---
 
 ## PS5Upload Minion (on the console)
@@ -3492,7 +3569,11 @@ Minion, and shows the address to open.
 The SMB shares kept on the PS5: add them in Minion's **Files → Network shares**, or from the
 PC in **Shared Folders → Shares on the PS5**, which adds, edits and removes them and can copy a server
 you already saved (type the password again: the PS5 keeps its own encrypted copy). Minion
-browses them in Files, and **Games → On Drives & Shares** shows the games on them.
+browses them in Files, and **Games → On Drives & Shares** shows the games on them. A game image
+(`.exfat`, `.ffpkg`, `.ffpfs`) shows the title and cover stored inside it, and copies of one game
+on different shares or under different names are one card. A compressed `.ffpfsc` can't be read
+on the console: it shows the title id from its file name, tagged **Title not read**. A rescan reads
+only the images that are new or changed since the last one.
 
 **Q: Can I convert a game on the PS5 itself, without a computer?**
 Yes: Minion's **Convert** section makes an `.exfat`, `.ffpkg`, `.ffpfs` or a plain folder from a
@@ -3920,7 +4001,8 @@ Say what went wrong and what you were doing, fill in your setup (firmware, other
 **Read them from the console** fills them in), pick **when it happened**, attach screenshots if
 you have them, then press **Create report**. The `.zip` is saved, and **Post to GitHub** or **Post
 to Discord** (the **#bugs-report** channel) opens the place to send it, with the text ready to
-paste; drag the zip in. Both are read. A report with logs is worth ten "it doesn't work"
+paste. The app can't attach the zip for you: drag it in yourself before you submit (on GitHub, into
+the issue's **Bug report zip** box; **Show in folder** finds it). Both are read. A report with logs is worth ten "it doesn't work"
 messages: it usually has the exact error in it.
 
 **Q: What's in the report?**

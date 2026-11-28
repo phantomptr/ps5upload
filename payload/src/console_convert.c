@@ -24,6 +24,7 @@
 #include "ava1_op.h"
 #include "fs_jobs.h"
 #include "proc_identity.h"
+#include "ps5_firmware.h"
 #include "sony_api_lock.h"
 #include "webui_codec.h"
 
@@ -653,19 +654,29 @@ static const char *check_build(const char *json, const char *src, int src_is_dir
     b->pkg_level[0] = 0;
     b->unpack_packs = 0;
     b->leave_out_ampr_emu = 0;
+    b->console_fw[0] = 0;
     if (strcmp(format, "pkg") == 0) {
         uint64_t unpack = 0, leave_out = 0;
+        char kv[256], fw[sizeof b->console_fw];
+        size_t kv_len = sizeof kv - 1;
+        /* This console's firmware, from the kernel build string the STATUS frame reports: the
+         * package is checked against what it opens. Only a version ("13.60") is passed. */
+        if (sysctlbyname("kern.version", kv, &kv_len, NULL, 0) == 0) {
+            kv[kv_len < sizeof kv ? kv_len : sizeof kv - 1] = 0;
+            ps5_firmware_from_kernel(kv, fw, sizeof fw);
+            if (ps5_fw_at(fw, b->console_fw, sizeof b->console_fw) != 1) b->console_fw[0] = 0;
+        }
         /* zstd packs go into an image or a folder; the level is the converter's default when absent. */
         if (b->zstd) return "convert_bad_format";
         if (fsj_json_present(json, "pkg_level") &&
             (!fsj_json_str(json, "pkg_level", b->pkg_level, sizeof b->pkg_level) || !cc_pkg_level_ok(b->pkg_level)))
             return "convert_bad_pkg_level";
-        /* A packed game as plain files, with or without its emulator: both false when absent, and
-         * the emulator is left out only of a game that is unpacked. Whether the game is in packs,
-         * and whether its own emulator can stay, is the converter's to say (it reads the game). */
+        /* A packed game as plain files, with or without its emulator, or a plain game without
+         * its emulator: both false when absent. Whether the game is in packs, whether its own
+         * emulator can stay, and whether a plain game's can go, is the converter's to say (it
+         * reads the game). */
         if ((fsj_json_present(json, "unpack_packs") && !fsj_json_u64(json, "unpack_packs", &unpack)) ||
-            (fsj_json_present(json, "leave_out_ampr_emu") && !fsj_json_u64(json, "leave_out_ampr_emu", &leave_out)) ||
-            (leave_out && !unpack))
+            (fsj_json_present(json, "leave_out_ampr_emu") && !fsj_json_u64(json, "leave_out_ampr_emu", &leave_out)))
             return "convert_bad_unpack";
         b->unpack_packs = unpack != 0;
         b->leave_out_ampr_emu = leave_out != 0;

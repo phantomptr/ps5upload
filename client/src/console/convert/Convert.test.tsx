@@ -19,6 +19,7 @@ const INFO: Inspection = {
   packed: "zstd",
   unpackedBytes: 3_000_000_000,
   unpackKeepsEmulator: true,
+  plainEmulator: null,
   hasEboot: true,
   warnings: [],
   zstdRuntime: "0.4.1",
@@ -152,6 +153,34 @@ describe("Convert", () => {
     const image = html(props({ inspected: stuck }));
     expect(image).not.toContain("data-convert-blocked");
     expect(image).toMatch(/data-action="convert-go"(?![^>]*disabled)/);
+  });
+
+  it("a .pkg of a plain game that carries an AMPR emulator can leave it out, or says why not", () => {
+    const emu = { modules: ["fakelib/libSceAmpr.sprx"], emulator: "ampr_emu 0.4.2.1", importsAmpr: true, refusal: null };
+    const plain = (over: Partial<NonNullable<Inspection["plainEmulator"]>> = {}) =>
+      info({ packed: null, unpackedBytes: null, unpackKeepsEmulator: null, plainEmulator: { ...emu, ...over } });
+    const h = html(pkg({ inspected: plain() }));
+    expect(h).toContain("data-convert-plain-emulator");
+    expect(h).not.toContain("data-convert-unpack");
+    // Off unless turned on; the note names the emulator and the one firmware it was tried on.
+    expect(h).toMatch(/aria-checked="false"[^>]*data-action="convert-leave-out-emulator"/);
+    expect(h).toContain(esc(t("cw_convert_plain_leave_out_note", { emulator: "ampr_emu 0.4.2.1" })));
+    expect(t("cw_convert_plain_leave_out_note", { emulator: "x" })).toContain("5.10");
+    expect(html(pkg({ inspected: plain(), leaveOutEmulator: true }))).toMatch(
+      /aria-checked="true"[^>]*data-action="convert-leave-out-emulator"/,
+    );
+    // A game whose eboot.bin doesn't use it.
+    expect(html(pkg({ inspected: plain({ importsAmpr: false }) }))).toContain(
+      esc(t("cw_convert_plain_leave_out_note_unused", { emulator: "ampr_emu 0.4.2.1" })),
+    );
+    // Not offered: no switch, the reason instead; Convert still builds (the emulator stays).
+    const kept = html(pkg({ inspected: plain({ refusal: "not_an_emulator" }), leaveOutEmulator: true }));
+    expect(kept).not.toContain("convert-leave-out-emulator");
+    expect(kept).toContain('data-convert-plain-emulator="kept"');
+    expect(kept).toContain(esc(t("cw_convert_plain_emu_kept_not_emulator")));
+    expect(kept).toMatch(/data-action="convert-go"(?![^>]*disabled)/);
+    // Nothing of it for another output.
+    expect(html(props({ inspected: plain() }))).not.toContain("data-convert-plain-emulator");
   });
 
   it("the unpack is offered only for a .pkg of a game whose packs the converter read", () => {

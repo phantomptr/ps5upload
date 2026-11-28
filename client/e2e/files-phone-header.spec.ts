@@ -371,6 +371,7 @@ for (const viewport of [
         "Select",
         "What takes space in this folder?",
         "Make a snapshot of this folder",
+        "Measure everything here",
         "Download from a link",
         "What takes space on this drive?",
         "See snapshots",

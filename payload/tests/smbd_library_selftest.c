@@ -2,18 +2,33 @@
  * (smbd_localfs.c) in a temp folder: packages, folder dumps (PS5 param.json, PS4 param.sfo) and
  * images are found with their details and covers; hidden, metadata and too-deep folders, a dump's
  * inside and the skipped folder are not walked; the limits stop the walk and keep what was found;
- * a rescan replaces the old covers; a cancelled scan writes nothing. */
+ * a rescan replaces the old covers; a cancelled scan writes nothing. Disk images are named and
+ * covered by their own sce_sys/param.json and icon0.png (#963), one that cannot be read keeps the
+ * title id in its name and says why, and a rescan reads only an image whose size or mtime changed. */
 #include <dirent.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 
+#include "image_fixtures.h"
 #include "pkg_info.h"
 #include "smbd_fs.h"
 #include "smbd_library.h"
+#include "smbd_log.h"
 #include "smbd_path.h"
+
+/* The daemon's log (smbd_main.c): the last line kept, for the checks. */
+static char g_log[1024];
+void smbd_log(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(g_log, sizeof g_log, fmt, ap);
+    va_end(ap);
+}
 
 static int g_fail;
 #define CHECK(c)                                                         \
@@ -204,6 +219,7 @@ typedef struct {
     xfs_t *local;
     const char *drop; /* a share-relative folder whose opendir answers drop_rc, or NULL */
     int drop_rc;
+    int opens;        /* files opened for reading */
 } share_t;
 
 #define SH(fs) ((share_t *)(fs)->impl)
@@ -230,6 +246,7 @@ static void sh_closedir(xfs_t *fs, void *d) { SH(fs)->local->ops->closedir(SH(fs
 static int sh_open_read(xfs_t *fs, const char *p, void **fh) {
     char a[1024];
     share_abs(p, a, sizeof a);
+    SH(fs)->opens++;
     return SH(fs)->local->ops->open_read(SH(fs)->local, a, fh);
 }
 static long long sh_pread(xfs_t *fs, void *fh, void *b, size_t n, uint64_t off) {
@@ -337,7 +354,7 @@ int main(void) {
     /* a share: its root is "" (saved without a start folder) and is walked all the same; the old
      * loop never ran for an empty root, so such a share scanned to 0 items, "complete" */
     {
-        share_t sh = { &fs, NULL, 0 };
+        share_t sh = { &fs, NULL, 0, 0 };
         xfs_t share = { &k_share_ops, &sh };
         char share_json[700], *before = NULL;
         int icons;
@@ -382,6 +399,150 @@ int main(void) {
         memset(&pr, 0, sizeof pr);
         CHECK(lib_scan(&share, "share1", "", NULL, g_out, NULL, &pr) == XE_ACCESS);
         free(before);
+    }
+
+    /* disk images on a share (#963) */
+    {
+        share_t sh = { &fs, NULL, 0, 0 };
+        xfs_t share = { &k_share_ops, &sh };
+        const char *pj = fx_param_json("PPSA23012", "Call of Duty: Modern Warfare II");
+        char share_json[700], abs[1200], *icon_name = NULL;
+        size_t n;
+        uint8_t *img = fx_exfat((const uint8_t *)pj, strlen(pj), 0, 6000, 1, &n);
+        struct timeval tv[2];
+        put("Lib/PPSA23012.exfat", img, n);
+        put("Lib/copy two/Modern Warfare.exfat", img, n); /* no id in the name: the image's own */
+        put("Lib/PPSA11111.ffpfsc", "not an image at all", 19);
+        free(img);
+        snprintf(share_json, sizeof share_json, "%s/share2.json", g_out);
+        memset(&pr, 0, sizeof pr);
+        g_log[0] = '\0';
+        CHECK(lib_scan(&share, "share2", "Lib", NULL, g_out, NULL, &pr) == 0);
+        CHECK(sh.opens == 3);
+        CHECK(strstr(g_log, "3 images, 2 read, 0 from the last scan, 1 not read") != NULL);
+        j = slurp(share_json);
+        CHECK(j != NULL);
+        if (j) {
+            const char *a = strstr(j, "\"path\":\"Lib/PPSA23012.exfat\""), *b = strstr(j, "\"path\":\"Lib/copy two/Modern Warfare.exfat\"");
+            const char *c = strstr(j, "\"path\":\"Lib/PPSA11111.ffpfsc\"");
+            CHECK(count_items(j) == 3 && a && b && c);
+            if (a && b && c) {
+                CHECK(strstr(a, "\"title\":\"Call of Duty: Modern Warfare II\",\"title_id\":\"PPSA23012\"") == a + strlen("\"path\":\"Lib/PPSA23012.exfat\",\"name\":\"PPSA23012.exfat\",") );
+                CHECK(strstr(b, "\"title_id\":\"PPSA23012\"") && strstr(b, "\"content_id\":\"UP9000-PPSA23012_00-GAME000000000000\""));
+                CHECK(strstr(a, "\"meta\":\"read\",\"mtime\":") && strstr(a, "\"icon\":\"share2-"));
+                /* not readable here: the id from its name, and why */
+                CHECK(strstr(c, "\"title\":\"\",\"title_id\":\"PPSA11111\"") && strstr(c, "\"meta\":\"img_unknown\"") &&
+                      strstr(c, "\"icon\":\"\""));
+                icon_name = strstr(a, "\"icon\":\"") + 8;
+                icon_name = strndup(icon_name, (size_t)(strchr(icon_name, '"') - icon_name));
+            }
+            free(j);
+        }
+        CHECK(count_icons("share2-") == 2);
+
+        /* unchanged: nothing is opened again, titles and covers stay (the covers under new names) */
+        sleep(1);
+        sh.opens = 0;
+        memset(&pr, 0, sizeof pr);
+        CHECK(lib_scan(&share, "share2", "Lib", NULL, g_out, NULL, &pr) == 0);
+        CHECK(sh.opens == 0);
+        CHECK(strstr(g_log, "3 images, 0 read, 3 from the last scan, 0 not read") != NULL);
+        j = slurp(share_json);
+        if (j) {
+            CHECK(strstr(j, "\"title\":\"Call of Duty: Modern Warfare II\"") && strstr(j, "\"meta\":\"img_unknown\"") &&
+                  strstr(j, "\"icon\":\"share2-"));
+            CHECK(icon_name && !strstr(j, icon_name)); /* a new stamp */
+            free(j);
+        }
+        CHECK(count_icons("share2-") == 2);
+
+        /* a changed mtime: that image is read again, the others are not */
+        snprintf(abs, sizeof abs, "%s/Lib/PPSA23012.exfat", g_root);
+        gettimeofday(&tv[0], NULL);
+        tv[0].tv_sec += 100;
+        tv[1] = tv[0];
+        CHECK(utimes(abs, tv) == 0);
+        sh.opens = 0;
+        memset(&pr, 0, sizeof pr);
+        CHECK(lib_scan(&share, "share2", "Lib", NULL, g_out, NULL, &pr) == 0);
+        CHECK(sh.opens == 1);
+        CHECK(strstr(g_log, "3 images, 1 read, 2 from the last scan, 0 not read") != NULL);
+        CHECK(count_icons("share2-") == 2);
+        free(icon_name);
+
+        /* A Latin-1 title (not UTF-8: written back as �, three bytes each) that no longer fits
+         * its field from the cache: read again every scan rather than kept with an empty title. */
+        {
+            const char *k[] = { "CATEGORY", "CONTENT_ID", "TITLE", "TITLE_ID" };
+            char latin[101];
+            const char *v[] = { "gd", "EP4293-CUSA22222_00-GAME000000000000", latin, "CUSA22222" };
+            uint8_t sfo[4096];
+            size_t sl;
+            memset(latin, 0xE9, 100);
+            latin[100] = '\0';
+            sl = build_sfo(sfo, k, v, 4);
+            img = fx_exfat(sfo, sl, 1, 0, 1, &n);
+            put("Lib/Latin.exfat", img, n);
+            free(img);
+        }
+        for (int pass = 0; pass < 2; pass++) {
+            sh.opens = 0;
+            memset(&pr, 0, sizeof pr);
+            CHECK(lib_scan(&share, "share2", "Lib", NULL, g_out, NULL, &pr) == 0);
+            CHECK(sh.opens == 1);
+            CHECK(strstr(g_log, "4 images, 1 read, 3 from the last scan, 0 not read") != NULL);
+            j = slurp(share_json);
+            if (j) {
+                const char *l = strstr(j, "\"path\":\"Lib/Latin.exfat\"");
+                CHECK(l && strstr(l, "\"title\":\"\\ufffd") && strstr(l, "\"title_id\":\"CUSA22222\""));
+                free(j);
+            }
+        }
+
+        /* The covers the cache copies from are gone: that scan lists the images without them, and
+         * the next one reads those images again for their covers instead of keeping none for good. */
+        {
+            char cmd[1200];
+            snprintf(cmd, sizeof cmd, "rm -f '%s'/icons/share2-*", g_out);
+            CHECK(system(cmd) == 0);
+        }
+        CHECK(count_icons("share2-") == 0);
+        sh.opens = 0;
+        memset(&pr, 0, sizeof pr);
+        CHECK(lib_scan(&share, "share2", "Lib", NULL, g_out, NULL, &pr) == 0);
+        CHECK(sh.opens == 1 && count_icons("share2-") == 0);
+        sh.opens = 0;
+        memset(&pr, 0, sizeof pr);
+        CHECK(lib_scan(&share, "share2", "Lib", NULL, g_out, NULL, &pr) == 0);
+        CHECK(sh.opens == 3);
+        CHECK(strstr(g_log, "4 images, 3 read, 1 from the last scan, 0 not read") != NULL);
+        CHECK(count_icons("share2-") == 2);
+
+        /* A refusal an older image reader wrote is read once more by this one (it may read it
+         * now); the images that were read stay from the cache whatever reader read them. */
+        j = slurp(share_json);
+        CHECK(j && strstr(j, "\"reader\":1"));
+        if (j) {
+            char *r;
+            FILE *f;
+            while ((r = strstr(j, "\"reader\":1")) != NULL) r[9] = '0';
+            f = fopen(share_json, "wb");
+            CHECK(f != NULL);
+            if (f) {
+                fputs(j, f);
+                fclose(f);
+            }
+            free(j);
+        }
+        sh.opens = 0;
+        memset(&pr, 0, sizeof pr);
+        CHECK(lib_scan(&share, "share2", "Lib", NULL, g_out, NULL, &pr) == 0);
+        CHECK(sh.opens == 2); /* the refused .ffpfsc, and the Latin title read every time */
+        CHECK(strstr(g_log, "4 images, 1 read, 2 from the last scan, 1 not read") != NULL);
+        sh.opens = 0;
+        memset(&pr, 0, sizeof pr);
+        CHECK(lib_scan(&share, "share2", "Lib", NULL, g_out, NULL, &pr) == 0);
+        CHECK(sh.opens == 1); /* the refusal is this reader's now */
     }
 
     /* a bad source id is refused before anything is read */

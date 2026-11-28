@@ -30,6 +30,8 @@ export function ConfirmDialog({
   danger,
   busy,
   error,
+  altLabel,
+  onAlt,
   onConfirm,
   onCancel,
 }: {
@@ -44,6 +46,9 @@ export function ConfirmDialog({
   busy?: boolean;
   /** Why the last try did not work, shown inside the dialog (it stays open to try again). */
   error?: string | null;
+  /** A second way to say yes (Uninstall and delete), in the warning colour, after the confirm button. */
+  altLabel?: string;
+  onAlt?: () => void;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -90,6 +95,17 @@ export function ConfirmDialog({
           >
             <span>{confirmLabel}</span>
           </button>
+          {altLabel && onAlt ? (
+            <button
+              type="button"
+              className="cw-focusable cw-button is-danger"
+              onClick={() => {
+                if (!busy) onAlt();
+              }}
+            >
+              <span>{altLabel}</span>
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

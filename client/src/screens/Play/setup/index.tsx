@@ -1,8 +1,9 @@
 import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
+import { TvHomeButton } from "../../../layout/TvModeFrame";
 import { Check, ChevronDown, ChevronRight, CircleDot, MonitorPlay, Play as PlayIcon } from "lucide-react";
 
-import { remoteplayEnable } from "../../../api/ps5";
+import { profileActivate, remoteplayEnable } from "../../../api/ps5";
 import { Button, Callout, PageHeader, Toggle } from "../../../components";
 import { mgmtAddr, transferAddr } from "../../../lib/addr";
 import { humanizePs5Error } from "../../../lib/humanizeError";
@@ -13,10 +14,15 @@ import { usePlaySetupMarks } from "../../../state/playSetup";
 import { blockerNames } from "../../../state/rpBlockers";
 import { payloadCardLink } from "../../Payloads/payloadTabs";
 import { NpSignInSection } from "../../Accounts/NpSignInSection";
+import { keptAccountId, keptIdLost, sameAccountId } from "../../Accounts/accountIdMemory";
+import { npBackupTarget } from "../../Accounts/npSignIn";
 import { PairedUsers } from "./PairedUsers";
 import { PinPairForm } from "./PinPairForm";
-import { SETUP_ORDER, userFacts, userWait, type SetupKey, type SetupState } from "./playSetup";
+import { SETUP_ORDER, enableKept, userFacts, userWait, type SetupKey, type SetupState } from "./playSetup";
 import { usePlaySetup } from "./usePlaySetup";
+
+/** A step's failure in the app's own words (shown as it is, not read as a console error). */
+class SetupStepError extends Error {}
 
 /**
  * Play › Set up: from a fresh console to a picture in the app, one step at a time. Each step
@@ -54,7 +60,9 @@ export default function PlaySetupScreen() {
       if (step === "pair") setPinPair(false);
       await s.refresh();
     } catch (e) {
-      setError({ step, text: humanizePs5Error(e instanceof Error ? e.message : String(e)) });
+      // The app's own words go as they are; a console's error is put in words.
+      const text = e instanceof SetupStepError ? e.message : humanizePs5Error(e instanceof Error ? e.message : String(e));
+      setError({ step, text });
       if (step === "pair") setPinPair(true);
     } finally {
       setBusy(null);
@@ -68,6 +76,11 @@ export default function PlaySetupScreen() {
   const showStock = noHelper && !!s.host && !!s.profileId && s.states.pair !== "ok";
   const serviceOff = !!r && r.service_enabled === 0;
   const userWaitNow = userWait(r);
+  // The account ID this app set for the signed-in user, when the console no longer has it.
+  const idTarget = npBackupTarget(s.info);
+  const keptId = idTarget ? keptAccountId(s.host, idTarget.uid) : null;
+  const idNow = idTarget ? (s.info?.slots ?? []).find((x) => x.slot === idTarget.slot)?.id : undefined;
+  const lostId = s.states.account === "todo" && keptIdLost(keptId, idNow) ? keptId : null;
   const steps: Record<SetupKey, { title: string; body: string; act?: ReactNode; always?: ReactNode }> = {
     connect: {
       title: tr("play_setup_connect_title", undefined, "Connect to your PS5"),
@@ -121,9 +134,49 @@ export default function PlaySetupScreen() {
         "Play pairs with an account ID. A user linked to PlayStation Network already has one; an offline user needs one: set it in Accounts (any ID works; write it down, saves made afterwards are tied to it).",
       ),
       act: (
-        <Button size="sm" variant="primary" onClick={() => navigate("/accounts")}>
-          {tr("remotePlay_show_accounts", undefined, "Show accounts")}
-        </Button>
+        <div className="space-y-2">
+          {/* The ID this app set for this user is gone (a restart can drop it, #971): the same
+              one back in one press, read back after. */}
+          {lostId && idTarget && (
+            <Callout tone="warn" title={tr("play_setup_account_lost_title", undefined, "The account ID is gone")}>
+              <div className="space-y-2" data-testid="play-setup-account-lost">
+                <p>
+                  {tr(
+                    "play_setup_account_lost_body",
+                    { id: lostId.id, user: idTarget.username },
+                    `This app set account ID ${lostId.id} for ${idTarget.username}, and the PS5 no longer has it (a restart can drop it). Put the same ID back: saves made under it are tied to it. Then pair again if Play asks.`,
+                  )}
+                </p>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  loading={busy === "account"}
+                  disabled={busy !== null}
+                  onClick={() =>
+                    void run("account", "account", async () => {
+                      const r = await profileActivate(idTarget.slot, lostId.id, addr, idTarget.uid);
+                      if (!sameAccountId(r.id, lostId.id)) {
+                        throw new SetupStepError(
+                          tr(
+                            "play_setup_account_not_kept",
+                            { id: lostId.id },
+                            `The PS5 did not keep ${lostId.id}. Send the helper again from Connection and try once more.`,
+                          ),
+                        );
+                      }
+                    })
+                  }
+                  data-testid="play-setup-account-reapply"
+                >
+                  {tr("play_setup_account_reapply", { id: lostId.id }, `Put ${lostId.id} back`)}
+                </Button>
+              </div>
+            </Callout>
+          )}
+          <Button size="sm" variant="primary" onClick={() => navigate("/accounts")}>
+            {tr("remotePlay_show_accounts", undefined, "Show accounts")}
+          </Button>
+        </div>
       ),
     },
     signin: {
@@ -133,7 +186,19 @@ export default function PlaySetupScreen() {
         undefined,
         "The PS5 only lets a signed-in account stream. Run the offline sign-in here (nothing is sent to Sony), then restart the PS5 and send the helper again: this step ticks by itself once the console is back.",
       ),
-      act: s.connected && addr ? <NpSignInSection addr={addr} info={s.info} /> : undefined,
+      act:
+        s.connected && addr ? (
+          <div className="space-y-2">
+            <p className="text-xs" data-testid="play-setup-signin-restart">
+              {tr(
+                "play_setup_signin_after_restart",
+                undefined,
+                "After the restart, check step 3 again: if the account ID is gone, it offers to put the same one back. Run the sign-in again only if this step is still open after that.",
+              )}
+            </p>
+            <NpSignInSection addr={addr} info={s.info} />
+          </div>
+        ) : undefined,
     },
     service: {
       title: tr("rpg_service_title", undefined, "Turn Remote Play on"),
@@ -148,14 +213,38 @@ export default function PlaySetupScreen() {
           variant="primary"
           disabled={busy !== null}
           onClick={() =>
-            void run("service", "service", async () =>
-              s.setReadiness(await remoteplayEnable(serviceOff ? "service" : "user", transferAddr(s.host))),
-            )
+            void run("service", "service", async () => {
+              const scope = serviceOff ? "service" : "user";
+              const after = await remoteplayEnable(scope, transferAddr(s.host));
+              s.setReadiness(after);
+              // The helper answers with what it reads back: a write that did not take is said,
+              // not shown as done (#971).
+              if (!enableKept(scope, after)) {
+                throw new SetupStepError(
+                  tr(
+                    "play_setup_service_not_kept",
+                    undefined,
+                    "The PS5 did not keep the setting: it still reads as off. Turn on Settings › System › Remote Play › Enable Remote Play on the PS5 itself. If it is greyed out there, the account is not signed in: do step 4 again, restart the PS5, then send the helper again.",
+                  ),
+                );
+              }
+            })
           }
         >
           {serviceOff ? tr("remotePlay_turn_on", undefined, "Turn on") : tr("remotePlay_allow_user", undefined, "Allow")}
         </Button>
       ) : undefined,
+      // The app writes the setting; the console's own switch is what counts, and it stays greyed
+      // out for an account that is not signed in, whatever the setting says (#971).
+      always: (
+        <p className="text-xs" data-testid="play-setup-service-grey">
+          {tr(
+            "play_setup_service_greyed",
+            undefined,
+            "On the PS5, Settings › System › Remote Play must show Enable Remote Play switched on. If it is greyed out or will not switch on, the account is not signed in yet: go back to step 4, run the offline sign-in, restart the PS5 and send the helper again. Then come back here.",
+          )}
+        </p>
+      ),
     },
     rest: {
       title: tr("rpg_rest_title", undefined, "Let the PS5 be woken from rest mode"),
@@ -282,6 +371,7 @@ export default function PlaySetupScreen() {
           undefined,
           "Play streams your PS5 into this app over Remote Play. These steps get a console there once; each one ticks by itself when it's done.",
         )}
+        right={<TvHomeButton />}
       />
       {/* Before anyone pairs a console for nothing: a browser cannot decode video on this page. */}
       {typeof window !== "undefined" && window.isSecureContext === false && (

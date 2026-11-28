@@ -2,7 +2,13 @@ import { create } from "zustand";
 
 import { restoreStart, restoreStatus, type RestoreRun } from "../api/titleRestore";
 import { hostOf } from "../lib/addr";
-import { restoreEnded, restoreErrorText, restoreOutcome } from "../lib/titleRestore";
+import {
+  normalizeRestoreReply,
+  normalizeRestoreRun,
+  restoreEnded,
+  restoreErrorText,
+  restoreOutcome,
+} from "../lib/titleRestore";
 import { pushNotification } from "./notifications";
 import { withConsolePrefix } from "./roster";
 
@@ -54,23 +60,55 @@ export const useTitleRestoreStore = create<TitleRestoreState>((set) => {
     const open = new Map(items.map((i) => [i.titleId.toUpperCase(), i]));
     const until = Date.now() + FOLLOW_MAX_MS;
     let misses = 0;
+    const last = new Map<string, string>();
     while (open.size > 0 && Date.now() < until) {
       await new Promise((r) => setTimeout(r, POLL_MS));
       for (const [id, item] of [...open]) {
+        let run: RestoreRun;
         try {
-          const run = await restoreStatus(host, id);
-          misses = 0;
-          put(host, item, run);
-          if (restoreEnded(run.phase)) {
-            open.delete(id);
-            tell(host, item, run);
-          }
+          // Read defensively: a status the page cannot render must end the run, not the app.
+          run = normalizeRestoreRun(await restoreStatus(host, id), id);
         } catch {
           // The engine restarted or is busy: its runs are gone after a restart, and the game's
           // page then reads where the console stands. Give up after a while.
-          if (++misses > 40) return;
+          if (++misses > 40) {
+            giveUp(host, open);
+            return;
+          }
+          break;
+        }
+        misses = 0;
+        // Only a change is stored: every store write renders the Games list and the game page.
+        const seen = JSON.stringify(run);
+        if (last.get(id) !== seen) {
+          last.set(id, seen);
+          put(host, item, run);
+        }
+        if (!restoreEnded(run.phase)) {
+          // The console restores one game at a time: the ones after this one are still queued,
+          // so asking about them now is a request per game every few seconds for hours.
+          break;
+        }
+        open.delete(id);
+        try {
+          tell(host, item, run);
+        } catch {
+          // The notification is a nicety; following the rest goes on.
         }
       }
+    }
+    if (open.size > 0) giveUp(host, open);
+  }
+
+  /** Stop following: what is still open is shown as pending, so the page reads the console again
+   *  and the Games list does not say "restoring" until the app is reopened. */
+  function giveUp(host: string, open: Map<string, RestoreItem>) {
+    for (const item of open.values()) {
+      put(host, item, {
+        title_id: item.titleId,
+        phase: "pending",
+        error: "this app lost track of the restore; the game's page shows where it stands",
+      });
     }
   }
 
@@ -86,7 +124,12 @@ export const useTitleRestoreStore = create<TitleRestoreState>((set) => {
           host,
           items.map((i) => i.titleId),
         );
-        put(host, items[0], { title_id: items[0].titleId, phase: "installing", job: r.job, prepared: r.prepared });
+        put(host, items[0], {
+          title_id: items[0].titleId,
+          phase: "installing",
+          job: typeof r?.job === "string" ? r.job : undefined,
+          prepared: normalizeRestoreReply(r?.prepared) ?? undefined,
+        });
       } catch (e) {
         const raw = e instanceof Error ? e.message : String(e);
         for (const item of items) {

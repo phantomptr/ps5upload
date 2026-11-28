@@ -3,12 +3,14 @@
 //! cargo run -p ps5upload-fpkg --example fpkg_build -- <source> <output-dir> [--content-id ID]
 
 use ps5upload_fpkg::build::{self, BuildRequest};
+use ps5upload_fpkg::package_limit::Firmware;
 
 fn main() {
     let mut args = std::env::args().skip(1);
     let (Some(source), Some(output_dir)) = (args.next(), args.next()) else {
         eprintln!(
             "usage: fpkg_build <source> <output-dir> [--content-id ID] [--name STEM] [--fw WORD]\n\
+             [--size-fw 9.60] [--console-fw 13.60]\n\
              \n\
              <source> is a game folder, or an .exfat or .ffpkg mount image."
         );
@@ -20,6 +22,13 @@ fn main() {
             "--content-id" => request.content_id = args.next(),
             "--name" => request.file_name = args.next(),
             "--fw" => request.firmware = args.next(),
+            // The firmware the size check is for: the user's target, then the console's.
+            "--size-fw" => {
+                request.size_target.target = args.next().as_deref().and_then(Firmware::parse)
+            }
+            "--console-fw" => {
+                request.size_target.console = args.next().as_deref().and_then(Firmware::parse)
+            }
             other => {
                 eprintln!("unknown argument {other}");
                 std::process::exit(2);

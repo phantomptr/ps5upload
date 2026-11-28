@@ -47,6 +47,16 @@ export interface ConfirmOptions {
   /** Close as a Cancel after this long: a question nobody is there to answer must not hold up
    *  work behind it. */
   cancelAfterMs?: number;
+  /** A choice to make before confirming (radio buttons), the first one picked to start with.
+   *  Asked with `choose`, which resolves to the picked `value`, or null on Cancel. */
+  choices?: ConfirmChoice[];
+}
+
+export interface ConfirmChoice {
+  value: string;
+  label: string;
+  /** A second line under the label. */
+  detail?: string;
 }
 
 interface PendingState extends ConfirmOptions {
@@ -62,10 +72,20 @@ export function confirmInitialFocus(destructive: boolean | undefined): "confirm"
 
 export function useConfirm(): {
   confirm: (opts: ConfirmOptions) => Promise<boolean>;
+  /** `confirm` with `choices`: the picked value, or null on Cancel. */
+  choose: (opts: ConfirmOptions & { choices: ConfirmChoice[] }) => Promise<string | null>;
   dialog: React.ReactNode;
 } {
   const tr = useTr();
   const [pending, setPending] = useState<PendingState | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
+  // What the resolve of a `choose` reads: the state above as of the press.
+  const pickedRef = useRef<string | null>(null);
+  const pick = (v: string) => {
+    pickedRef.current = v;
+    setPicked(v);
+  };
+  const choiceName = useId();
   useScrollLock(!!pending);
   // Stable id pair so aria-labelledby/-describedby on the dialog wire
   // up to the right elements without colliding with other dialogs.
@@ -89,6 +109,12 @@ export function useConfirm(): {
           active instanceof HTMLElement ? active : null;
       }
       setPending({ ...opts, resolve });
+    });
+
+  const choose = (opts: ConfirmOptions & { choices: ConfirmChoice[] }) =>
+    new Promise<string | null>((resolve) => {
+      pick(opts.choices[0]?.value ?? "");
+      void confirm(opts).then((ok) => resolve(ok ? pickedRef.current : null));
     });
 
   const settle = (ok: boolean) => {
@@ -199,6 +225,32 @@ export function useConfirm(): {
             ))}
           </ul>
         )}
+        {pending.choices && pending.choices.length > 0 && (
+          <div role="radiogroup" className="mb-5 flex flex-col gap-2" data-testid="confirm-choices">
+            {pending.choices.map((c) => (
+              <label
+                key={c.value}
+                className="flex cursor-pointer items-start gap-2 rounded-[var(--radius-field)] border border-[var(--color-border)] px-3 py-2 text-sm"
+              >
+                <input
+                  type="radio"
+                  name={choiceName}
+                  value={c.value}
+                  checked={picked === c.value}
+                  onChange={() => pick(c.value)}
+                  className="mt-0.5"
+                  data-testid={`confirm-choice-${c.value}`}
+                />
+                <span className="min-w-0">
+                  <span className="block">{c.label}</span>
+                  {c.detail && (
+                    <span className="block break-all text-xs text-[var(--color-muted)]">{c.detail}</span>
+                  )}
+                </span>
+              </label>
+            ))}
+          </div>
+        )}
         <div className="flex items-center justify-end gap-2">
           <Button
             variant="ghost"
@@ -227,7 +279,7 @@ export function useConfirm(): {
     </div>
   ) : null;
 
-  return { confirm, dialog };
+  return { confirm, choose, dialog };
 }
 
 /* ─────────────────────────────────────────────────────────────────────

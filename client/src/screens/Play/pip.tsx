@@ -23,7 +23,7 @@ import { Square, Undo2, Volume2, VolumeX } from "lucide-react";
 
 import { Spinner } from "../../components";
 import { useTr } from "../../state/lang";
-import { rpInput, useRemotePlayStore, type PipKind } from "../../state/remotePlay";
+import { rpInput, soundToggle, useRemotePlayStore, type PipKind } from "../../state/remotePlay";
 import { isMobile } from "../../lib/platform";
 import { isTauriEnv, safeUnlisten } from "../../lib/tauriEnv";
 import { log } from "../../state/logs";
@@ -468,7 +468,7 @@ function MiniPlayer({ win, onBack }: { win: Window; onBack: () => void }) {
           type="button"
           aria-label={muted ? tr("rp_unmute", undefined, "Sound on") : tr("rp_mute", undefined, "Mute")}
           title={muted ? tr("rp_unmute", undefined, "Sound on") : tr("rp_mute", undefined, "Mute")}
-          onClick={() => setPrefs({ muted: !prefs.muted, volume: prefs.volume || 1 })}
+          onClick={() => setPrefs(soundToggle(prefs))}
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-black/40 text-white hover:bg-white/20"
         >
           {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}

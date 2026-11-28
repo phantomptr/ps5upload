@@ -43,10 +43,24 @@ describe("automatic backups: a copy on a PS5 drive", () => {
     useAutoSaveBackupStore.setState({ settings: null, status: null, error: null });
   });
 
-  it("starts on the M.2 drive, else a USB one", () => {
-    expect(firstConsoleDrive([usb, m2])).toBe("/mnt/ext0");
-    expect(firstConsoleDrive([usb])).toBe("/mnt/usb0");
+  const internal: ConsoleDrive = { path: "/data", kind: "internal", total_bytes: 1, free_bytes: 1 };
+
+  it("starts on the M.2 drive, else a USB one, else the internal storage", () => {
+    expect(firstConsoleDrive([internal, usb, m2])).toBe("/mnt/ext0");
+    expect(firstConsoleDrive([internal, usb])).toBe("/mnt/usb0");
+    expect(firstConsoleDrive([internal])).toBe("/data");
     expect(firstConsoleDrive([])).toBeNull();
+  });
+
+  it("says a reset or a format can wipe the copies, and warns more on the internal storage", () => {
+    const html = render({ drives: [internal, m2] });
+    expect(html).toContain("A console reset wipes the internal storage, and formatting a drive wipes that drive");
+    expect(html).toContain("the copy on a computer or network share is the safer one");
+    expect(html).not.toContain("auto-save-backup-console-internal-warn");
+    const on = render({ drive: "/data", drives: [internal, m2] });
+    expect(on).toMatch(/<option value="\/data" selected="">Internal storage \(\/data\)<\/option>/);
+    expect(on).toContain("auto-save-backup-console-internal-warn");
+    expect(on).toContain("lost if the PS5 is reset");
   });
 
   it("is off with no drive picker until switched on", () => {
@@ -67,6 +81,15 @@ describe("automatic backups: a copy on a PS5 drive", () => {
   it("keeps a chosen drive that is not plugged in, marked so", () => {
     const html = render({ drive: "/mnt/ext1", drives: [usb] });
     expect(html).toMatch(/<option value="\/mnt\/ext1" selected="">\/mnt\/ext1 \(not plugged in\)<\/option>/);
+  });
+
+  it("does not call the chosen drive unplugged before the PS5's drives are read", () => {
+    // Loading, no console connected, or the read failed: the drives are not known.
+    for (const p of [{ drives: null }, { drives: null, connected: false }, { drives: null, loadError: "down" }]) {
+      const html = render({ drive: "/mnt/ext0", ...p });
+      expect(html).not.toContain("not plugged in");
+      expect(html).toMatch(/<option value="\/mnt\/ext0" selected="">M.2 drive \(\/mnt\/ext0\)<\/option>/);
+    }
   });
 
   it("can't be switched on with no drive, and says why", () => {

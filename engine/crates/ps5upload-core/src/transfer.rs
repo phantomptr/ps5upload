@@ -1340,8 +1340,12 @@ mod rar_support {
         }
         // An allow-list ("!*.pkg") picks files out of folders; the folders that hold none
         // of them must not be created on the console as empty shells.
-        if excludes.iter().any(|e| e.starts_with('!')) {
-            dirs.retain(|d: &String| files.iter().any(|(f, _)| f.starts_with(&format!("{d}/"))));
+        // Chosen entries ("=Game") keep an empty folder inside a chosen one, and only that.
+        if crate::excludes::picks_some(excludes) {
+            dirs.retain(|d: &String| {
+                files.iter().any(|(f, _)| f.starts_with(&format!("{d}/")))
+                    || crate::excludes::keeps_empty_dir(d, excludes)
+            });
         }
         if files.iter().any(|(_, s)| rar_size_unknown(*s)) {
             measure_unknown_sizes(&path_str, password, solid, &mut files, watch)?;

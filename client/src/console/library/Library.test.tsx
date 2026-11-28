@@ -75,6 +75,7 @@ const item = (over: Partial<LibItem>): LibItem => ({
   fake: false,
   size: 0,
   icon: "",
+  meta: "",
   ...over,
 });
 
@@ -160,6 +161,31 @@ describe("library grouping (#526)", () => {
     expect(compareVersions("13.60", "13.60")).toBe(0);
   });
 
+  it("names an image by what the console read inside it, and says when it could not (#963)", () => {
+    const scan = parseScan(
+      JSON.stringify({
+        complete: true,
+        items: [
+          { kind: "image", path: "PPSA23012.exfat", name: "PPSA23012.exfat", title: "Call of Duty: Modern Warfare II", title_id: "PPSA23012", meta: "read", mtime: 5 },
+          { kind: "image", path: "b/Modern Warfare.exfat", name: "Modern Warfare.exfat", title: "Call of Duty: Modern Warfare II", title_id: "PPSA23012", meta: "read" },
+          { kind: "image", path: "PPSA11111.ffpfsc", name: "PPSA11111.ffpfsc", title: "", title_id: "PPSA11111", meta: "img_compressed" },
+          { kind: "image", path: "PPSA22222.exfat", name: "PPSA22222.exfat", title: "", title_id: "PPSA22222", meta: "img_damaged" },
+          { kind: "image", path: "old/PPSA33333.exfat", name: "PPSA33333.exfat", title: "", title_id: "PPSA33333", meta: "../x" },
+        ],
+      }),
+    ) as LibScan;
+    expect(scan.items.map((i) => i.meta)).toEqual(["read", "read", "img_compressed", "img_damaged", ""]);
+    const g = groupEntries(entriesOf([{ id: "nas", name: "NAS" }], new Map([["nas", scan]])));
+    // two copies of one game under different file names: one card, its real title
+    expect(g.map((x) => [x.title, x.titleUnread, x.parts.length])).toEqual([
+      ["Call of Duty: Modern Warfare II", "", 2],
+      ["PPSA11111", "img_compressed", 1],
+      ["PPSA22222", "img_damaged", 1],
+      // an older helper never said: no "not read" claim, the id all the same
+      ["PPSA33333", "", 1],
+    ]);
+  });
+
   it("finds a game by title, title id or a part's file name", () => {
     expect(filterGroups(groups, "ppsa01650").length).toBe(1);
     expect(filterGroups(groups, "patch-old").length).toBe(1);
@@ -218,6 +244,18 @@ describe("Library section", () => {
     expect(h.match(/data-lib-key=/g)?.length).toBe(2);
     expect(h).toContain(t("cw_lib_badge_dlc", { n: 1 }));
     expect(h).toContain(t("cw_lib_role_backport"));
+  });
+
+  it("tags a game whose image title was not read, and says why in its detail", () => {
+    const scans = new Map([
+      ["nas", { scanned: 1, complete: true, stopped: null, items: [item({ kind: "image", path: "PPSA11111.ffpfsc", name: "PPSA11111.ffpfsc", title_id: "PPSA11111", meta: "img_compressed" })] }],
+    ]);
+    const sources = [{ id: "nas", name: "NAS" }];
+    const card = html({ sources, scans });
+    expect(card).toContain(">PPSA11111<");
+    expect(card).toContain(t("cw_lib_title_unread"));
+    expect(html({ sources, scans, open: "ps5:PPSA11111" })).toContain(t("cw_lib_unread_compressed").replace("'", "&#x27;"));
+    expect(html()).not.toContain(t("cw_lib_title_unread"));
   });
 
   it("marks a game installed on this console", () => {

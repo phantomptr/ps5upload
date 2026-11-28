@@ -2413,5 +2413,35 @@ describe("an archive on a saved server", () => {
     expect(calls[calls.length - 1]?.[0]).toBe("/tmp/copies/g.zip");
     expect(releaseCopy).toHaveBeenCalledWith("/tmp/copies/g.zip");
   });
+
+  it("sends only the files chosen in the archive, and a new choice is a new job (#969)", async () => {
+    const id = useUploadQueueStore.getState().add({
+      sourceKind: "archive",
+      sourcePath: "/dl/bundle.zip",
+      displayName: "bundle.zip",
+      resolvedDest: "/data/homebrew/bundle",
+      addr: "192.168.1.10:9113",
+      strategy: "overwrite",
+      reconcileMode: "fast",
+      excludes: [".DS_Store"],
+      mountAfterUpload: false,
+      mountReadOnly: true,
+      registerAfterUpload: false,
+      estimatedBytes: 900,
+    });
+    const before = useUploadQueueStore.getState().items[0].txIdHex;
+    expect(useUploadQueueStore.getState().chooseArchiveEntries(id, ["Game/base.pkg", "Extras"], 300)).toBe(true);
+    const row = useUploadQueueStore.getState().items[0];
+    expect(row).toMatchObject({ archiveOnly: ["Game/base.pkg", "Extras"], estimatedBytes: 300 });
+    expect(row.txIdHex).not.toBe(before);
+    const p = useUploadQueueStore.getState().start();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await p;
+    const { startTransferZip } = await import("../api/ps5");
+    const calls = vi.mocked(startTransferZip).mock.calls;
+    expect(calls[calls.length - 1]?.[4]).toEqual([".DS_Store", "=Game/base.pkg", "=Extras"]);
+    // Only a waiting archive row takes a choice.
+    expect(useUploadQueueStore.getState().chooseArchiveEntries(id, null, 0)).toBe(false);
+  });
 });
 

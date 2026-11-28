@@ -33,6 +33,7 @@ enum {
     XRC_E_NOMEM,
     XRC_E_OPEN,
     XRC_E_NOT_RAR,
+    XRC_E_CANCELLED, /* Stop, seen by the scanner or a key derivation (xrc_set_cancel) */
 };
 
 /* One file entry (a FILE header that starts a file), in archive order, as libarchive returns them. */

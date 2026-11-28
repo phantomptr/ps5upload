@@ -9,7 +9,14 @@ vi.mock("zustand", async (orig) => {
 
 import ServerBackupCard from "./ServerBackupCard";
 import { ConsoleCopyChoice } from "./AutoBackupCard";
-import { driveKeep, serverConsoleCopySupported, useServerBackupStore } from "../../state/serverSaveBackup";
+import {
+  driveKeep,
+  serverConsoleCopySupported,
+  serverIntervalChoices,
+  serverIntervalMinutes,
+  serverMinutesSupported,
+  useServerBackupStore,
+} from "../../state/serverSaveBackup";
 import type { ServerBackupSettings } from "../../api/saveBackup";
 
 const base: ServerBackupSettings = {
@@ -81,5 +88,37 @@ describe("network-share backups: a copy on a PS5 drive (#885)", () => {
     expect(html).toContain("Versions to keep on the PS5 drive");
     expect(html).toMatch(/data-testid="server-save-backup-console-keep"[^>]*value="1"|value="1"[^>]*data-testid="server-save-backup-console-keep"/);
     expect(html).toContain("the PS5 drive still gets its copy");
+  });
+});
+
+describe("network-share backups: how often", () => {
+  afterEach(() => useServerBackupStore.setState({ settings: null, status: null, error: null }));
+
+  it("reads the interval in minutes when the engine has them, else in hours", () => {
+    expect(serverMinutesSupported({ every_minutes: 0 })).toBe(true);
+    expect(serverMinutesSupported({})).toBe(false);
+    expect(serverIntervalMinutes({ every_hours: 6, every_minutes: 0 })).toBe(360);
+    expect(serverIntervalMinutes({ every_hours: 6, every_minutes: 30 })).toBe(30);
+    expect(serverIntervalChoices(360)).toEqual([10, 30, 60, 360, 1440]);
+    expect(serverIntervalChoices(180)).toEqual([10, 30, 60, 180, 360, 1440]);
+  });
+
+  it("offers 10 minutes to a day beside After a game is closed", () => {
+    useServerBackupStore.setState({ settings: { ...base, mode: "interval", every_minutes: 0 } });
+    const html = renderToStaticMarkup(<ServerBackupCard owners={[]} />);
+    expect(html).toContain("On a schedule");
+    expect(html).toContain("After a game is closed");
+    for (const label of ["10 min", "30 min", "1 hour", "6 hours", "1 day"]) {
+      expect(html).toContain(`>${label}</option>`);
+    }
+    expect(html).toMatch(/<option value="360" selected="">6 hours<\/option>/);
+    expect(html).not.toContain("Every (hours)");
+  });
+
+  it("keeps the hours box for an engine without minutes", () => {
+    useServerBackupStore.setState({ settings: { ...base, mode: "interval" } });
+    const html = renderToStaticMarkup(<ServerBackupCard owners={[]} />);
+    expect(html).toContain("Every (hours)");
+    expect(html).not.toContain(">10 min</option>");
   });
 });

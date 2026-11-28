@@ -3,6 +3,7 @@ import { CheckCircle2, ChevronDown, Info } from "lucide-react";
 import { PPR_PATCH_REPO } from "../../lib/fpkgPrereqs";
 import { krakenRuns, useMounterFor } from "../../lib/mounter";
 import { openExternalUrl } from "../../lib/openExternalUrl";
+import { fakePackageNeedsLatestKstuff } from "../../lib/ps5Firmware";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
 
@@ -21,6 +22,9 @@ export function FpkgNote({ className = "mb-4" }: { className?: string }) {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const kraken = krakenRuns(useMounterFor(host));
+  // 11.61 to 13.60: said before anything is installed, outside the fold, because a fake package
+  // installed with an older kstuff installs fine and then won't start (CE-100022-5).
+  const newKstuffFw = fakePackageNeedsLatestKstuff(useConnectionStore((s) => s.ps5Kernel));
   const send = tr("payloads_tab_send", "Send payload");
   const copy = tr("upload_pkg_choice_copy", "Copy as a file");
   const column =
@@ -43,6 +47,15 @@ export function FpkgNote({ className = "mb-4" }: { className?: string }) {
               "Install it with kstuff loaded, or mount it with Kraken Mount. PS4 fake packages are installed, and play on any firmware.",
             )}
           </span>
+          {newKstuffFw && (
+            <span data-testid="fpkg-fw-note" className="text-[var(--color-text)]">
+              {tr(
+                "pkglib.fpkgsupport.fw_note",
+                { fw: newKstuffFw },
+                `This PS5 is on firmware ${newKstuffFw}. On firmware 11.61 to 13.60 a fake package needs the latest kstuff (fake-package support up to 13.60); with an older kstuff it installs but won't start.`,
+              )}
+            </span>
+          )}
         </span>
         <ChevronDown
           size={14}
@@ -67,8 +80,8 @@ export function FpkgNote({ className = "mb-4" }: { className?: string }) {
             </div>
             <div>
               {tr(
-                "pkglib.fpkgsupport.install_kstuff",
-                "On firmware 11.61 to 13.60 that has to be the latest kstuff (with fake-package support up to 13.60): with an older kstuff the package installs, but the game doesn't start. Up to 11.60, any kstuff with fake-package support works.",
+                "pkglib.fpkgsupport.install_kstuff_v2",
+                "On firmware 11.61 to 13.60 that has to be the latest kstuff (with fake-package support up to 13.60): with an older kstuff the package installs, but the game doesn't start. Up to 11.60, any kstuff with fake-package support works. If a game you installed with an older kstuff doesn't start, install it again.",
               )}
             </div>
             <div>
@@ -80,8 +93,8 @@ export function FpkgNote({ className = "mb-4" }: { className?: string }) {
             </div>
             <div className="break-words">
               {tr(
-                "pkglib.fpkgsupport.install_ppr",
-                "If the console refuses the install, also load a53_ppr_install_fast.elf, built from the source on GitHub:",
+                "pkglib.fpkgsupport.install_ppr_v2",
+                "Up to firmware 11.40, if the console refuses the install, also load a53_ppr_install_fast.elf, built from the source on GitHub:",
               )}{" "}
               <button
                 type="button"

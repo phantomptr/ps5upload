@@ -165,6 +165,12 @@ export function audioBufferFor(p: Pick<RpPrefs, "lowLatency" | "audioBufferMs">)
   return p.lowLatency ? Math.min(LOWEST_AUDIO_BUFFER_MS, p.audioBufferMs) : p.audioBufferMs;
 }
 
+/** What the Mute / Sound on button changes. It reads muted the way the button shows it (muted, or
+ *  the volume at 0): at volume 0 one press is Sound on, not a "mute" that leaves it silent. */
+export function soundToggle(p: Pick<RpPrefs, "muted" | "volume">): Partial<RpPrefs> {
+  return p.muted || p.volume === 0 ? { muted: false, volume: p.volume || 1 } : { muted: true };
+}
+
 const PREFS_KEY = "ps5upload.rp_prefs.v1";
 
 /** The bitrates Settings › Picture offers (kbit/s; 0 = Auto), highest first. The engine takes
@@ -184,6 +190,25 @@ export function refusedAtBitrate(code: string, askedKbps: number, played: boolea
     askedKbps > AUTO_MAX_KBPS &&
     ["video_refused", "console_ended", "lost", "other"].includes(code)
   );
+}
+
+/** How soon after one automatic start again (a Play Together friend took this stream's user)
+ *  another may come: a second end that quickly is left to the player. */
+export const GUEST_PICK_RESTART_GAP_MS = 3 * 60_000;
+
+/** When the stream to each console last started again by itself after a friend took its user. */
+const guestPickRestarts = new Map<string, number>();
+
+/** A stream that played was ended by the PS5 because a Play Together friend put its PS5 user on
+ *  their controller (the engine names the player, `guestPicked`): it starts again by itself,
+ *  once per GUEST_PICK_RESTART_GAP_MS for that console. `last` is the last such start (ms). */
+export function restartsAfterGuestPick(
+  e: { code: string; guestPicked?: number },
+  played: boolean,
+  last: number | undefined,
+  now: number,
+): boolean {
+  return e.code === "console_ended" && !!e.guestPicked && played && (last === undefined || now - last >= GUEST_PICK_RESTART_GAP_MS);
 }
 
 export function loadRpPrefs(): RpPrefs {
@@ -526,6 +551,24 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
           log.warn("remote-play", `no picture at ${askedKbps} kbit/s (${e.code}: ${e.detail}); starting again at Auto`);
           void import("./rpQuality")
             .then(({ useRpQualityStore }) => useRpQualityStore.getState().startAgain(t, { ...(quality ?? {}), bitrateKbps: 0 }))
+            .catch(() => {});
+          return;
+        }
+        if (restartsAfterGuestPick(e, played, guestPickRestarts.get(t.host), Date.now())) {
+          // A friend's controller took this stream's PS5 user: their pad lets go of it a moment
+          // after (Play Together), and the stream starts again once the PS5 frees its slot.
+          guestPickRestarts.set(t.host, Date.now());
+          pushNotification(
+            "warning",
+            trStatic(
+              "rp_guest_took_user_restart",
+              "Player {n} picked your PS5 user on the TV, so the PS5 ended your stream. It starts again in a few seconds.",
+              { n: String(e.guestPicked) },
+            ),
+          );
+          log.warn("remote-play", `the PS5 ended the stream: Player ${e.guestPicked} took its user on the TV; starting again`);
+          void import("./rpQuality")
+            .then(({ useRpQualityStore }) => useRpQualityStore.getState().startAgain(t, quality ?? {}))
             .catch(() => {});
           return;
         }

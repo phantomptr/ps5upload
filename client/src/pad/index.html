@@ -5,7 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#000000" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <!-- No icon to fetch: the engine refuses /favicon.ico from another device and logs it. -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <!-- A phone's Home Screen: the name and the icon. Real files (iOS skips a data: icon), next to the
+         page on the engine and on the website alike (engine app_icon.rs, site/app-icon/). -->
+    <meta name="apple-mobile-web-app-title" content="PS5Upload" />
+    <link rel="apple-touch-icon" href="../app-icon/apple-touch-icon.png" />
+    <link rel="manifest" href="../app-icon/page.webmanifest" />
+    <!-- No tab icon to fetch: the engine refuses /favicon.ico from another device and logs it. -->
     <link rel="icon" href="data:," />
     <title>PS5Upload controller</title>
   </head>

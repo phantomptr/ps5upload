@@ -30,6 +30,10 @@ export interface RestoreReply {
   patch_size?: number;
   free_volume?: number;
   free_internal?: number;
+  /** What the package's drive / the console's storage need free for the new copy (the console's
+   *  storage: 1.2x the package plus 1 GiB, which its reserve takes as it is written). */
+  need_volume?: number;
+  need_internal?: number;
   install_path?: string;
   patch_aside?: string;
   backup?: string;
@@ -37,6 +41,13 @@ export interface RestoreReply {
   installed_where?: string;
   patch_kept?: string;
   kept?: string;
+  /** clear: the console's unfinished copy of a failed install was removed (Sony's uninstall). */
+  cleared?: boolean;
+  /** clear: Sony's answer to that uninstall (0 accepted). */
+  sony_rc?: number;
+  /** clear refused: the title's update / add-ons in place (the uninstall could take them). */
+  update?: string;
+  addons?: string;
 }
 
 export interface RestoreCandidate {
@@ -64,6 +75,8 @@ export interface RestoreRun {
   install_verdict?: string;
   install_hint?: string;
   error?: string;
+  /** The console's unfinished copy of a failed install was removed before the package went back. */
+  cleared?: boolean;
   /** The install job's status while it runs (metrics.served_bytes / total_bytes). */
   install?: { phase?: string; metrics?: { total_bytes?: number; served_bytes?: number } };
 }
@@ -71,7 +84,13 @@ export interface RestoreRun {
 function call<T>(
   op: "check" | "candidates" | "status" | "start" | "finish",
   host: string,
-  req: { title_id?: string; title_ids?: string[]; rollback?: boolean; install_ended?: boolean },
+  req: {
+    title_id?: string;
+    title_ids?: string[];
+    rollback?: boolean;
+    install_ended?: boolean;
+    clear?: boolean;
+  },
 ): Promise<T> {
   return invoke<T>("ps5_app_restore", { op, req: { addr: mgmtAddr(host), ...req } });
 }
@@ -102,15 +121,17 @@ export function restoreStatus(host: string, titleId: string): Promise<RestoreRun
 }
 
 /** Finish a restore left pending: `installEnded` deletes the copy aside once the game is on the
- *  home screen; `rollback` puts the package back where it was. */
+ *  home screen; `rollback` puts the package back where it was; `clear` (with rollback) first
+ *  removes a failed install the PS5 still lists (its unfinished copy and its queued download). */
 export function restoreFinish(
   host: string,
   titleId: string,
-  opts: { rollback?: boolean; installEnded?: boolean },
+  opts: { rollback?: boolean; installEnded?: boolean; clear?: boolean },
 ): Promise<RestoreReply> {
   return call<RestoreReply>("finish", host, {
     title_id: titleId,
     rollback: opts.rollback === true,
     install_ended: opts.installEnded === true,
+    clear: opts.clear === true,
   });
 }

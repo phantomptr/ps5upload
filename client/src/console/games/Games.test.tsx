@@ -44,6 +44,7 @@ const base = (over: Partial<GamesViewProps> = {}): GamesViewProps => ({
   onToggleHidden: vi.fn(),
   onAsk: vi.fn(),
   onConfirm: vi.fn(),
+  onConfirmDelete: vi.fn(),
   onDismiss: vi.fn(),
   ...over,
 });
@@ -129,6 +130,30 @@ describe("Games section", () => {
     expect(pkg).toContain(t("cw_games_confirm_uninstall_pkg"));
     const reg = html({ ask: { kind: "uninstall", game: game({ origin: "registered" }) } });
     expect(reg).toContain(t("cw_games_confirm_uninstall_registered"));
+  });
+
+  it("a folder or image game: looks at its files, then offers Uninstall only or Uninstall and delete", () => {
+    const folder = game({ origin: "registered", source: "/mnt/usb0/jakx", place: "usb" });
+    // Still looking: no answer can be given yet.
+    const checking = html({ ask: { kind: "uninstall", game: folder } });
+    expect(checking).toContain(t("cw_games_checking_files").replace(/'/g, "&#x27;"));
+    expect(checking).not.toContain(t("cw_games_uninstall_only"));
+    const plan = { kind: "folder" as const, path: "/mnt/usb0/jakx", mountPoint: null, bytes: 2 * 1024 ** 3, partial: false };
+    const asked = html({ ask: { kind: "uninstall", game: folder, source: plan } });
+    expect(asked).toContain(t("cw_games_confirm_uninstall_choose", { path: "/mnt/usb0/jakx (2.00 GiB)" }));
+    expect(asked).toContain(t("cw_games_uninstall_only"));
+    expect(asked).toContain(t("cw_games_uninstall_delete_folder"));
+    // Cancel first (focus starts there), then Uninstall only, then the delete in the warning colour.
+    expect(asked.indexOf(t("cw_games_uninstall_only"))).toBeLessThan(asked.indexOf(t("cw_games_uninstall_delete_folder")));
+    const image = html({
+      ask: { kind: "uninstall", game: folder, source: { ...plan, kind: "image", path: "/data/homebrew/jakx.exfat", partial: true } },
+    });
+    expect(image).toContain(t("cw_games_uninstall_delete_image"));
+    expect(image).toContain(t("cw_games_size_at_least", { size: "2.00 GiB" }));
+    // Its files are gone or not safe to delete: the plain question.
+    const plain = html({ ask: { kind: "uninstall", game: folder, source: null } });
+    expect(plain).toContain(t("cw_games_confirm_uninstall_registered"));
+    expect(plain).not.toContain(t("cw_games_uninstall_delete_folder"));
   });
 
   it("explains launch and uninstall refusals", () => {

@@ -64,6 +64,7 @@ import {
 import { useTr } from "../../state/lang";
 import { SpacePlanner } from "./SpacePlanner";
 import { NotPlayedCard } from "./NotPlayedCard";
+import { HeldSpaceCard } from "./HeldSpaceCard";
 
 
 const SCAN_POLL_MS = 700;
@@ -611,6 +612,7 @@ export default function CleanupScreen() {
               ) : null}
             </>
           ) : null}
+          {payloadStatus === "up" && !planning && host ? <HeldSpaceCard host={host} /> : null}
         </div>
       </ConnectionGate>
       {confirming && scan ? (

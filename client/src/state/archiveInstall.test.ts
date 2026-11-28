@@ -45,6 +45,7 @@ import {
   stopArchiveDownload,
   type ArchiveLinkDeps,
   chooseArchive,
+  chooseArchivePackages,
   clearArchiveInstall,
   runArchiveInstall,
   submitArchivePassword,
@@ -443,5 +444,27 @@ describe("where the packages go, and folders left behind", () => {
     await runArchiveInstall(A);
     expect(mod.installRarPackages).not.toHaveBeenCalled();
     expect(at(A)?.busy).toBe(false);
+  });
+});
+
+describe("Choose files (#969): the size check follows the last choice", () => {
+  it("an older choice's plan answering last does not replace the current one's", async () => {
+    mod.listRarPackages.mockResolvedValue({
+      packages: [
+        { path: "a.pkg", size: 5 },
+        { path: "b.pkg", size: 7 },
+      ],
+    });
+    await chooseArchive(A, "/x/Bundle.zip");
+    const plans: Array<(t: unknown) => void> = [];
+    mod.planArchiveTarget.mockImplementation(() => new Promise((resolve) => plans.push(resolve)));
+    const first = chooseArchivePackages(A, ["a.pkg"]);
+    const second = chooseArchivePackages(A, ["b.pkg"]);
+    // The second (current) choice answers first, then the first one.
+    plans[1]({ dest: "/data/b", already: 0, space: { fits: true } });
+    plans[0]({ dest: "/data/a", already: 0, space: { fits: false } });
+    await Promise.all([first, second]);
+    expect(at(A)?.chosen).toEqual(["b.pkg"]);
+    expect(at(A)?.target).toMatchObject({ dest: "/data/b" });
   });
 });

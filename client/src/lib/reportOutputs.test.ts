@@ -48,12 +48,23 @@ describe("githubIssueUrl", () => {
     const u = githubIssueUrl(form({ whatHappened: "多".repeat(3000) }), Array(500).fill("x".repeat(80)));
     expect(u.length).toBeLessThanOrEqual(GITHUB_URL_MAX);
     const p = new URL(u).searchParams;
-    expect(p.get("logs")).toContain("(truncated — see zip)");
+    expect(p.get("logs")).toContain("(truncated — the bug report zip has all of it)");
   });
 
   it("stays under the limit when the steps and payloads are long too", () => {
     const u = githubIssueUrl(form({ steps: "s".repeat(9000), payloads: "p".repeat(4000), whatHappened: "w".repeat(3000) }), []);
     expect(u.length).toBeLessThanOrEqual(GITHUB_URL_MAX);
+  });
+
+  it("never says a zip is attached: a link can't attach one", () => {
+    const short = new URL(githubIssueUrl(form(), ["18:27 [helper] [fatal] signal 11"])).searchParams;
+    const long = new URL(githubIssueUrl(form(), Array(500).fill("x".repeat(80)))).searchParams;
+    for (const p of [short, long]) {
+      for (const v of p.values()) expect(v).not.toMatch(/attached/i);
+      // The template's zip box is left empty for the drag.
+      expect(p.has("report-zip")).toBe(false);
+    }
+    expect(discordText(form())).not.toMatch(/attached/i);
   });
 
   it("keeps the description whole when cutting the logs is enough", () => {
