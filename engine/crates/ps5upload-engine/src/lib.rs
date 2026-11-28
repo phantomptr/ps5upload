@@ -107,6 +107,7 @@ mod pkg_install;
 mod pkg_name_api;
 mod pkg_sidecar;
 mod play_app;
+mod play_discovery;
 mod pldmgr_api;
 mod profile_image;
 mod ps2_saves;
@@ -13540,6 +13541,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     join::load_invites();
     // PS5Upload Play: a `play` event on the feed when a console's status changes.
     play_app::spawn_feed();
+    // …and a LAN responder so the app finds this engine without the helper (UDP 19261).
+    if let Ok(at) = listener.local_addr() {
+        play_discovery::start(at, cfg.allow_ips.clone());
+    }
     // The built-in hub, only when PS5UPLOAD_HUB_LISTEN asks for it (a listener of its own).
     builtin_hub::start().await;
 

@@ -451,6 +451,7 @@ async fn new_link_revokes_the_old_one_and_internet_invites_off_closes_it() {
             upnp: None,
             port: None,
             video_track: None,
+            play_discovery: None,
         }),
     )
     .await;

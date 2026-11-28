@@ -148,6 +148,12 @@ Anything touching real transfer behaviour still needs hardware — see
   payload commands answer that way. `client/src/api/ps5.ts` has an
   `assertOk()` for action endpoints; status endpoints keep `ok:false` as
   data because there it means "unsupported on this console".
+- **PS5Upload Play finds the engine on UDP 19261.** The app on a PS5 sends a probe
+  (`PS5UPLOAD_PLAY_DISCOVER v1`, padded to 512 bytes) and the engine answers with its name, HTTP
+  port, version and a short id (`play_discovery.rs`). Only home-network sources are answered,
+  never with more bytes than the probe; an engine listening on loopback only runs no responder;
+  Settings › Play Together turns it off (`play_discovery`). Pairing the app is a code typed once
+  into PS5Upload (`/api/play/app`, `play_app.rs`).
 - **One port, one session.** Everything goes to 9120 as AVA1: management
   calls on the session's control connection, bulk data on its lanes.
 - **A stream install has the PS5 fetch the package from the engine.** The

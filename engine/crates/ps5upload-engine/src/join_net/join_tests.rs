@@ -102,6 +102,7 @@ fn settings_body() -> SettingsBody {
         upnp: None,
         port: None,
         video_track: None,
+        play_discovery: None,
     }
 }
 
@@ -1312,6 +1313,7 @@ fn host_switches_survive_a_save_and_load() {
         max_players: 2,
         upnp: false,
         video_track: false,
+        play_discovery: false,
         ..Settings::default()
     };
     write_invites(&p, &chosen, d).unwrap();
@@ -1325,7 +1327,14 @@ fn host_switches_survive_a_save_and_load() {
     // Back to the defaults: none of the switches stays in the file.
     write_invites(&p, &Settings::default(), d).unwrap();
     let text = std::fs::read_to_string(&p).unwrap();
-    for k in ["block_system_buttons", "stream_seat", "max_players", "upnp", "video_track"] {
+    for k in [
+        "block_system_buttons",
+        "stream_seat",
+        "max_players",
+        "upnp",
+        "video_track",
+        "play_discovery",
+    ] {
         assert!(!text.contains(k), "{k} left in {text}");
     }
     assert_eq!(load(&p), Settings::default());

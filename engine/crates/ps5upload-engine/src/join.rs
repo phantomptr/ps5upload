@@ -286,6 +286,10 @@ pub(crate) struct Settings {
     /// data channel.
     #[serde(default = "yes")]
     pub video_track: bool,
+    /// PS5Upload Play may find this engine on the LAN (crate::play_discovery). On unless the host
+    /// turns it off.
+    #[serde(default = "yes")]
+    pub play_discovery: bool,
 }
 
 fn yes() -> bool {
@@ -319,6 +323,7 @@ impl Default for Settings {
             upnp: true,
             port: 0,
             video_track: true,
+            play_discovery: true,
         }
     }
 }
@@ -441,6 +446,8 @@ struct StoredInvites {
     upnp: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     video_track: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    play_discovery: Option<bool>,
 }
 
 /// What the file says, each part checked as the settings check it (None: nothing saved, or
@@ -458,6 +465,7 @@ struct Saved {
     stream_seat: Option<bool>,
     upnp: Option<bool>,
     video_track: Option<bool>,
+    play_discovery: Option<bool>,
 }
 
 /// Each field read on its own: one that doesn't parse (a hand-edited `max_players: 300`) is
@@ -504,6 +512,7 @@ fn read_invites(path: &std::path::Path) -> Saved {
         stream_seat: s.stream_seat,
         upnp: s.upnp,
         video_track: s.video_track,
+        play_discovery: s.play_discovery,
     }
 }
 
@@ -536,6 +545,7 @@ fn write_invites(
         stream_seat: s.stream_seat.then_some(true),
         upnp: (!s.upnp).then_some(false),
         video_track: (!s.video_track).then_some(false),
+        play_discovery: (!s.play_discovery).then_some(false),
     })
     .map_err(|e| e.to_string())?;
     // Written aside, on the disk, and renamed over: a crash mid-write never leaves half a file
@@ -594,6 +604,9 @@ fn apply_saved(s: &mut Settings, saved: Saved) {
     }
     if let Some(v) = saved.video_track {
         s.video_track = v;
+    }
+    if let Some(v) = saved.play_discovery {
+        s.play_discovery = v;
     }
 }
 
@@ -4887,6 +4900,9 @@ pub struct SettingsBody {
     port: Option<u16>,
     #[serde(default)]
     video_track: Option<bool>,
+    /// PS5Upload Play may find this computer on the LAN (UDP 19261, crate::play_discovery).
+    #[serde(default)]
+    play_discovery: Option<bool>,
 }
 
 /// A STUN server as the settings take it: `host:port`, a name or an address, nothing else.
@@ -5000,6 +5016,9 @@ fn apply_body(
     if let Some(v) = b.video_track {
         s.video_track = v;
     }
+    if let Some(v) = b.play_discovery {
+        s.play_discovery = v;
+    }
     Ok(())
 }
 
@@ -5020,7 +5039,8 @@ fn apply_body(
 /// engine may take from `PS5UPLOAD_HUB_URL` and `PS5UPLOAD_PAGE_BASE`; `settings.sources` says
 /// which each is ("custom", "environment" or "default"). `upnp` is whether the
 /// router is asked for a port, `video_track` whether internet guests get the picture as a video
-/// track (new connections; the data channel otherwise).
+/// track (new connections; the data channel otherwise), `play_discovery` whether PS5Upload Play
+/// can find this computer on the LAN (UDP 19261).
 ///
 /// `guest_profiles` with `addr` ("Guests play as" on that console): each guest's player gets the
 /// profile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).
@@ -5117,6 +5137,7 @@ async fn apply_settings(b: SettingsBody) -> Response {
         || b.stream_seat.is_some()
         || b.upnp.is_some()
         || b.video_track.is_some()
+        || b.play_discovery.is_some()
     {
         save_invites(&s);
     }
@@ -9967,6 +9988,7 @@ mod tests {
                     upnp: None,
                     port: None,
                     video_track: None,
+                    play_discovery: None,
                 }),
             )
             .await

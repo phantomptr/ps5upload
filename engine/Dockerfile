@@ -136,6 +136,8 @@ ENV HOME=/data TMPDIR=/tmp PS5UPLOAD_DOCKER=1
 # they survive a container upgrade: `-v ps5upload-data:/data`.
 VOLUME ["/data"]
 EXPOSE 19113
+# PS5Upload Play finds the engine on the LAN (UDP probe; reaches the container with host networking).
+EXPOSE 19261/udp
 # Run as an unprivileged user (65532 = nobody in distroless convention).
 # scratch has no /etc/passwd, so we use a raw numeric UID — the kernel
 # doesn't need a passwd entry to run a process. Port 19113 > 1024 so
