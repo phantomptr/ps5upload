@@ -317,7 +317,7 @@ mod tests {
         assert_eq!(b[0].copied_here, Some(true));
         assert_eq!(b[0].other, "PS5 at 10.0.0.1");
         // An address with a port is the same console.
-        assert_eq!(games_for(&s, &st, "10.0.0.2:9113", &named), b);
+        assert_eq!(games_for(&s, &st, "10.0.0.2:9120", &named), b);
         assert!(games_for(&s, &st, "10.0.0.3", &named).is_empty());
         let text = serde_json::to_string(&b).unwrap();
         assert!(!text.contains("not shown"));
