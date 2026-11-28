@@ -1020,7 +1020,7 @@ export function PlayTogetherPanel({
 
 /** The host's chat as the box shows it. */
 export function hostChatLines(state: JoinHostState): ChatBoxLine[] {
-  return state.room.chatLog.map((l) => ({ n: l.n, from: l.from, mine: l.host, quick: l.quick, text: l.text, times: 1 }));
+  return state.room.chatLog.map((l) => ({ n: l.n, from: l.from, mine: l.host, quick: l.quick, text: l.text, times: l.x }));
 }
 
 /** "Jo · 9C11 · from Rooms · password ✓ · about 70 ms" (design 5). */

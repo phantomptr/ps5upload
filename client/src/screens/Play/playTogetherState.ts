@@ -8,7 +8,7 @@ import type { MeshJoin } from "../../api/mesh";
 import type { GuestState } from "../../lib/joinProtocol";
 import { getEngineUrl } from "../../state/engine";
 import { readTier, slowEnough, tierOfMs, type Tier } from "../../join/routeTier";
-import { readRoom, readRoomAsk, readRoomPlayer, DEFAULT_ROOM, type RoomAsk, type RoomBody, type RoomInfo, type RoomPlayer } from "../../lib/room/room";
+import { readRoom, readRoomAsk, readRoomPlayer, roomApi, DEFAULT_ROOM, type RoomAsk, type RoomBody, type RoomInfo, type RoomPlayer } from "../../lib/room/room";
 
 export interface JoinGuest {
   id: number;
@@ -869,7 +869,13 @@ export const joinApi = {
   open: async (addr: string) => {
     const room = pendingRoom;
     const r = await whole("/api/join/open", addr, room ? { room } : {});
-    if (r.state && pendingRoom === room) pendingRoom = null;
+    if (r.state && pendingRoom === room) {
+      pendingRoom = null;
+      // Chat and voice modes have their own route (join_comms).
+      if (room && (room.chat || room.voice || room.start_muted !== undefined)) {
+        await roomApi.comms(addr, { chat: room.chat, voice: room.voice, start_muted: room.start_muted });
+      }
+    }
     return r;
   },
   close: (addr: string) => whole("/api/join/close", addr),

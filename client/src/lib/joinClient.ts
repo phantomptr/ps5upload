@@ -17,6 +17,11 @@ import {
   readServerMessage,
   RESUME_WINDOW_MS,
   type ByeWhy,
+  type CommsMsg,
+  type CommsRefused,
+  type EngineChatLine,
+  type GuestRoom,
+  type VoiceStateMsg,
   type JoinStatus,
   type NetWhy,
   type TrackMedia,
@@ -33,7 +38,7 @@ export type JoinStage =
   /** The socket dropped; trying again until `deadline` (ms, the client's clock). `hostStopped`:
    *  the host stopped playing, and the guest waits for them to start again. */
   | { kind: "reconnecting"; player: number; attempt: number; deadline: number; hostStopped?: boolean }
-  | { kind: "refused"; why: RefuseWhy }
+  | { kind: "refused"; why: RefuseWhy; triesLeft?: number | null; suggest?: string | null }
   /** `gave_up`: the place was lost (60 s without the host); `lost`: never got in; `left`: Leave;
    *  a NetWhy: an internet invite's connection could not be made (join/rtcTransport). */
   | { kind: "ended"; why: ByeWhy | "gave_up" | "lost" | "left" | NetWhy };
@@ -67,6 +72,19 @@ export interface JoinClientOptions {
   /** The picture's numbers (drawn, dropped, stalls…), sent to the host every STATS_EVERY_PINGS
    *  pings as `{"stats": …}` so the host's panel can say how the picture looks here. */
   readStats?: () => Record<string, unknown> | null;
+  /** More for the hello (Play Rooms: `device`, `proto`, `caps`, a LAN `knock`). */
+  helloExtra?: Record<string, unknown>;
+  /** Play Rooms messages (design 10.2). */
+  onRoom?: (room: GuestRoom) => void;
+  onChat?: (m: EngineChatLine) => void;
+  onChatHistory?: (lines: EngineChatLine[]) => void;
+  onVoiceState?: (m: VoiceStateMsg) => void;
+  onMuted?: (m: { voice: boolean; chat: boolean }) => void;
+  onComms?: (m: CommsMsg) => void;
+  onCommsRefused?: (m: CommsRefused) => void;
+  onReady?: (leftS: number) => void;
+  /** A voice bundle (binary 0x0B). */
+  onVoice?: (data: ArrayBuffer) => void;
   /** Where the resume token is kept (sessionStorage by default; null: nowhere). */
   storage?: JoinStorage | null;
   /** Tests: a fake socket and clock. */
@@ -186,7 +204,7 @@ export class JoinClient {
     ws.onopen = () => {
       if (this.ws !== ws) return;
       this.lastHeard = this.now();
-      const hello: Record<string, string> = { name: this.o.name };
+      const hello: Record<string, unknown> = { ...(this.o.helloExtra ?? {}), name: this.o.name };
       if (this.o.invite) hello.invite = this.o.invite;
       if (this.o.code) hello.code = this.o.code;
       if (this.token) hello.resume = this.token;
@@ -196,7 +214,11 @@ export class JoinClient {
       if (this.ws !== ws) return;
       this.lastHeard = this.now();
       if (typeof e.data !== "string") {
-        if (e.data instanceof ArrayBuffer && this.stage.kind === "joined") this.o.onFrame?.(e.data);
+        if (e.data instanceof ArrayBuffer && this.stage.kind === "joined") {
+          // Voice (kind 7) beside the picture and sound.
+          if (new Uint8Array(e.data, 0, Math.min(1, e.data.byteLength))[0] === 0x0b && this.o.onVoice) this.o.onVoice(e.data);
+          else this.o.onFrame?.(e.data);
+        }
         return;
       }
       this.onText(e.data);
@@ -269,7 +291,37 @@ export class JoinClient {
         // Waiting for the host, the place went with Play Together: they did not play again.
         // (Not when the host came back and needed their stream's controller: that says so.)
         if (this.hostAway && m.why !== "seat_taken") this.finish({ kind: "ended", why: "host_stopped" });
-        else this.finish({ kind: "refused", why: m.why });
+        else
+          this.finish({
+            kind: "refused",
+            why: m.why,
+            ...(m.triesLeft != null ? { triesLeft: m.triesLeft } : {}),
+            ...(m.suggest ? { suggest: m.suggest } : {}),
+          });
+        return;
+      case "room":
+        this.o.onRoom?.(m.room);
+        return;
+      case "chat":
+        this.o.onChat?.(m.line);
+        return;
+      case "chat_history":
+        this.o.onChatHistory?.(m.lines);
+        return;
+      case "comms":
+        this.o.onComms?.(m.comms);
+        return;
+      case "comms_refused":
+        this.o.onCommsRefused?.(m.refused);
+        return;
+      case "voice":
+        this.o.onVoiceState?.(m.voice);
+        return;
+      case "muted":
+        this.o.onMuted?.(m);
+        return;
+      case "ready":
+        this.o.onReady?.(m.leftS);
         return;
       case "bye":
         if (m.why === "host_stopped" && this.token) {
@@ -446,6 +498,25 @@ export class JoinClient {
 
   /** The picture waits for a keyframe (#648): ask the host's engine to get one from the PS5.
    *  The player spaces these out; the engine does too. */
+  /** A text message to the host's engine while joined (chat, mic state, ready); false when it
+   *  couldn't go. */
+  sendJson(m: Record<string, unknown>): boolean {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== this.WS.OPEN || this.stage.kind !== "joined") return false;
+    ws.send(JSON.stringify(m));
+    return true;
+  }
+
+  /** A binary message while joined (voice, kind 6). Pads always go first: voice is only sent when
+   *  the socket has little waiting. */
+  sendBinary(b: Uint8Array<ArrayBuffer>): boolean {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== this.WS.OPEN || this.stage.kind !== "joined") return false;
+    if ((ws.bufferedAmount ?? 0) > 16 * 1024) return false;
+    ws.send(b);
+    return true;
+  }
+
   askKeyframe(): void {
     const ws = this.ws;
     if (ws && ws.readyState === this.WS.OPEN && this.stage.kind === "joined") {

@@ -127,6 +127,25 @@ export function endText(tr: Tr, stage: JoinStage, host: string, internet = false
         );
       case "seat_taken":
         return seatTakenText(tr, host);
+      // Play Rooms (design 8): the same words on every surface.
+      case "locked":
+        return tr("room_no_locked", undefined, "The room isn't taking players right now.");
+      case "host_away":
+        return tr("room_no_host_away", undefined, "Your host isn't there to answer right now.");
+      case "password":
+        return stage.triesLeft != null
+          ? tr("room_no_password_left", { n: stage.triesLeft }, `Wrong password. ${stage.triesLeft} tries left.`)
+          : tr("room_no_password", undefined, "Wrong password.");
+      case "locked_out":
+        return tr("room_no_locked_out", undefined, "Too many tries. Try again in 10 minutes.");
+      case "not_listed":
+        return tr("room_no_closed", undefined, "This room is closed.");
+      case "old":
+        return tr("room_no_old", undefined, "Update to join (needs PS5Upload 13.0.0 or newer).");
+      case "name_taken":
+        return stage.suggest
+          ? tr("room_name_taken_suggest", { name: stage.suggest }, `Someone in this room already has your name. Join as ${stage.suggest}?`)
+          : tr("room_no_name_taken", undefined, "Someone in this room already has that name.");
       default:
         return tr("join_refused_other", { host }, `${host} didn't let you in.`);
     }
@@ -136,7 +155,9 @@ export function endText(tr: Tr, stage: JoinStage, host: string, internet = false
       case "kicked":
         return tr("join_ended_kicked", { host }, `${host} took you out of the game.`);
       case "closed":
-        return tr("join_ended_closed", { host }, `${host} closed Play Together.`);
+        return tr("room_ended_closed", { host }, `${host} closed the room.`);
+      case "removed":
+        return tr("room_ended_removed", { host }, `${host} removed you from the room.`);
       case "host_stopped":
         return tr("join_ended_host_stopped", undefined, "The host stopped playing.");
       case "replaced":
@@ -175,6 +196,63 @@ export function endText(tr: Tr, stage: JoinStage, host: string, internet = false
     }
   }
   return "";
+}
+
+/** A room's refusal that one more try can fix (design 3.5, 4.3): the suggested name, or the
+ *  password typed again. */
+function AgainWith({
+  stage,
+  onAgainWith,
+}: {
+  stage: Extract<JoinStage, { kind: "refused" }>;
+  onAgainWith: (o: { name?: string; password?: string }) => void;
+}) {
+  const tr = useTr();
+  const [pw, setPw] = useState("");
+  if (stage.why === "name_taken" && stage.suggest) {
+    return (
+      <button
+        type="button"
+        onClick={() => onAgainWith({ name: stage.suggest ?? undefined })}
+        className="rounded-full bg-white px-4 py-2 text-sm font-medium text-black"
+        data-testid="join-as-suggested"
+      >
+        {tr("room_join_as", { name: stage.suggest }, `Join as ${stage.suggest}`)}
+      </button>
+    );
+  }
+  if (stage.why === "password") {
+    return (
+      <form
+        className="flex gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (pw.length >= 4) onAgainWith({ password: pw });
+        }}
+      >
+        <input
+          type="password"
+          value={pw}
+          maxLength={64}
+          autoComplete="current-password"
+          onChange={(e) => setPw(e.target.value)}
+          aria-label={tr("room_password", undefined, "Password")}
+          placeholder={tr("room_password", undefined, "Password")}
+          className="rounded-lg border border-white/15 bg-black px-3 py-2 text-sm text-white outline-none focus:border-white/50"
+          data-testid="join-password-again"
+        />
+        <button
+          type="submit"
+          disabled={pw.length < 4}
+          className="rounded-full bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
+          data-testid="join-password-again-go"
+        >
+          {tr("room_ask_again", undefined, "Ask again")}
+        </button>
+      </form>
+    );
+  }
+  return null;
 }
 
 /** A ticking clock while `on` (for countdowns). */
@@ -319,9 +397,11 @@ export function JoinView({
   inApp = false,
   onLeave,
   onAgain,
+  onAgainWith,
   onFullscreen,
   lanUrl = null,
   hubDown = false,
+  roomExtras = null,
 }: {
   session: JoinSession;
   inApp?: boolean;
@@ -334,6 +414,10 @@ export function JoinView({
   onLeave: () => void;
   /** Ask to join again (a new ask, no saved place). */
   onAgain: () => void;
+  /** Play Rooms: ask again with another name (the room's suggestion) or a password typed again. */
+  onAgainWith?: (o: { name?: string; password?: string }) => void;
+  /** Play Rooms: the room strip, chat and voice drawn over the game (RoomOverlay), or null. */
+  roomExtras?: React.ReactNode;
   /** Full screen on or off; the page asks the browser, the app its window. */
   onFullscreen?: (on: boolean) => Promise<void> | void;
 }) {
@@ -661,7 +745,7 @@ export function JoinView({
               ? tr("join_connecting", { host }, `Connecting to ${host}…`)
               : tr("join_waiting", { host }, `Waiting for ${host} to let you in`)
           }
-          body={stage.kind === "asking" ? tr("join_waiting_body", { host }, `${host} sees your name on their screen and taps Allow.`) : undefined}
+          body={stage.kind === "asking" ? tr("room_waiting_body", { host }, `${host} sees your name on their screen and taps Let in.`) : undefined}
           onCancel={leave}
         />
       </div>
@@ -688,6 +772,7 @@ export function JoinView({
         </p>
         {/* The invite service can't be reached: on the host's Wi-Fi, their own page still works. */}
         {lanUrl && stage.why === "no_hub" && <OpenOnWifi href={lanUrl} />}
+        {stage.kind === "refused" && onAgainWith && <AgainWith stage={stage} onAgainWith={onAgainWith} />}
         <div className="flex flex-wrap justify-center gap-2">
           {again && (
             <button
@@ -938,6 +1023,8 @@ export function JoinView({
         data-testid="join-stage-view"
       >
         <div ref={screen} className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center" aria-hidden />
+        {/* Play Rooms: pings, chat and voice over the game (never over the touch controls). */}
+        {live && roomExtras}
 
         {/* The buttons are hidden, and the delay with them: a small reading stays in the corner. */}
         {autoHide && !chrome.shown && !reconnecting && delay != null && (

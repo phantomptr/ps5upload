@@ -693,6 +693,94 @@ describe("the WebRTC transport", () => {
   });
 });
 
+describe("Play Rooms knocks over the hub", () => {
+  let stages: JoinStage[];
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetPrejoin();
+    FakeHub.all = [];
+    FakePC.all = [];
+    stages = [];
+  });
+  afterEach(() => vi.useRealTimers());
+
+  function knocker(secret: { pw?: string } | null, pk: string | null) {
+    const lobby: InternetInvite = { room: ROOM, key: "", fp: "", hub: "127.0.0.1:8787" };
+    const c = new JoinClient({
+      url: "ws://127.0.0.1:8787/ws",
+      invite: null,
+      name: "Jo",
+      readPad: () => ({ ...IDLE_PAD }),
+      onStage: (s) => stages.push(s),
+      storage: new MemStorage(),
+      WebSocketImpl: rtcTransport(lobby, {
+        WebSocketImpl: FakeHub as unknown as typeof WebSocket,
+        PeerConnection: FakePC as unknown as typeof RTCPeerConnection,
+        knock: { hello: { knock: { via: "rooms", name: "Jo", device: "D", client: "web", ver: "13.0.0" } }, secret, pk },
+      }),
+      now: () => Date.now(),
+      raf: () => 0,
+      cancelRaf: () => {},
+    });
+    c.start();
+    return c;
+  }
+
+  it("knocks first, offers only after ok, and shows the wait as asking", async () => {
+    knocker(null, null);
+    await vi.advanceTimersByTimeAsync(0);
+    const hub = FakeHub.all[0];
+    hub.open();
+    hub.say({ t: "joined", gid: "G1" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hub.sent[1]).toEqual({ t: "signal", to: "host", data: { knock: { via: "rooms", name: "Jo", device: "D", client: "web", ver: "13.0.0" } } });
+    expect(hub.signals("offer")).toEqual([]);
+    hub.say({ t: "signal", from: "host", data: { knock: "wait" } });
+    expect(stages[stages.length - 1]).toEqual({ kind: "asking" });
+    // A limit on knocks is waited out quietly, then the knock goes again.
+    hub.say({ t: "error", why: "rate_limited", retry_s: 2 });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(hub.sent.filter((m) => (m.data as { knock?: unknown } | undefined)?.knock && typeof (m.data as { knock: unknown }).knock === "object")).toHaveLength(2);
+    hub.say({ t: "signal", from: "host", data: { knock: "ok" } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hub.signals("offer")).toHaveLength(1);
+  });
+
+  it("a no ends it with the room's reason; a wrong password says how many tries are left", async () => {
+    knocker(null, null);
+    await vi.advanceTimersByTimeAsync(0);
+    const hub = FakeHub.all[0];
+    hub.open();
+    hub.say({ t: "joined", gid: "G1" });
+    await vi.advanceTimersByTimeAsync(0);
+    hub.say({ t: "signal", from: "host", data: { knock: "no", why: "password", tries_left: 4 } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stages[stages.length - 1]).toEqual({ kind: "refused", why: "password", triesLeft: 4 });
+    const tr = ((_k: string, _v: unknown, f: string) => f) as unknown as Parameters<typeof endText>[0];
+    expect(endText(tr, stages[stages.length - 1], "Sam")).toBe("Wrong password. 4 tries left.");
+  });
+
+  it("answers a challenge with the secret sealed to the room key", async () => {
+    const subtle = globalThis.crypto.subtle;
+    const room = (await subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])) as CryptoKeyPair;
+    const raw = new Uint8Array(await subtle.exportKey("raw", room.publicKey));
+    const pk = btoa(String.fromCharCode(...raw)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    vi.useRealTimers();
+    knocker({ pw: "hunter22" }, pk);
+    await new Promise((r) => setTimeout(r, 0));
+    const hub = FakeHub.all[0];
+    hub.open();
+    hub.say({ t: "joined", gid: "G1" });
+    hub.say({ t: "signal", from: "host", data: { knock: "challenge", c: "AAAAAAAAAAAAAAAAAAAAAA" } });
+    for (let i = 0; i < 50 && !hub.sent.some((m) => (m.data as { knock?: unknown } | undefined)?.knock === "sealed"); i++) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    const sealed = hub.sent.find((m) => (m.data as { knock?: unknown } | undefined)?.knock === "sealed");
+    expect(typeof (sealed?.data as { blob?: unknown })?.blob).toBe("string");
+    expect(((sealed?.data as { blob: string }).blob).length).toBeGreaterThan(100);
+  });
+});
+
 describe("the picture as a video track", () => {
   beforeEach(() => {
     vi.useFakeTimers();

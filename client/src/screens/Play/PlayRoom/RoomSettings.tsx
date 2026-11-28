@@ -136,9 +136,9 @@ export function RoomSettings({
             )}
           </div>
           <ApprovalFields approval={room.approval} hasPassword={room.password} onChange={(a) => set({ approval: a })} />
-          <ChoiceRow label={tr("room_chat", undefined, "Chat")} value={room.chat} choices={chatChoices(tr)} onPick={(c) => set({ chat: c })} testId="room-settings-chat" />
-          <ChoiceRow label={tr("room_voice", undefined, "Voice")} value={room.voice} choices={voiceChoices(tr)} onPick={(v) => set({ voice: v })} testId="room-settings-voice" />
-          <Toggle checked={room.startMuted} onChange={(on) => set({ start_muted: on })} label={tr("room_start_muted", undefined, "New players start muted")} />
+          <ChoiceRow label={tr("room_chat", undefined, "Chat")} value={room.chat} choices={chatChoices(tr)} onPick={(c) => void actions.comms({ chat: c })} testId="room-settings-chat" />
+          <ChoiceRow label={tr("room_voice", undefined, "Voice")} value={room.voice} choices={voiceChoices(tr)} onPick={(v) => void actions.comms({ voice: v })} testId="room-settings-voice" />
+          <Toggle checked={room.startMuted} onChange={(on) => void actions.comms({ start_muted: on })} label={tr("room_start_muted", undefined, "New players start muted")} />
           <div className="flex flex-wrap gap-3">
             <LanguageSelect value={room.lang} onChange={(l) => set({ lang: l })} />
             <RegionSelect value={room.region} onChange={(r) => set({ region: r })} />

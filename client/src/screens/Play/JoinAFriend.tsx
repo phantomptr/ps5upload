@@ -17,6 +17,8 @@ import { holdPageStill, lockLandscape, setWindowFullscreen, unlockOrientation } 
 import { useConnectionStore } from "../../state/connection";
 import { deviceName, meshFor, nearbyJoins, useMeshStore } from "../../state/mesh";
 import { ownJoinWs } from "./playTogetherState";
+import { RoomOverlay } from "../../join/RoomOverlay";
+import { useRoomNotice } from "./PlayRoom/RoomNotice";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -114,6 +116,7 @@ export function JoinAFriend({ pending, onPendingDone }: { pending?: string | nul
   const session = useJoinStore((s) => s.session);
   const lastLink = useJoinStore((s) => s.link);
   const { confirm, dialog } = useConfirm();
+  const notice = useRoomNotice();
   const [text, setText] = useState(pending ?? "");
   const [codeText, setCodeText] = useState("");
   // The last name used to join, wherever it was typed.
@@ -262,8 +265,26 @@ export function JoinAFriend({ pending, onPendingDone }: { pending?: string | nul
             useJoinStore.getState().clear();
             if (link) useJoinStore.getState().join(link, session.opts.name);
           }}
+          onAgainWith={(o) => {
+            // A room's refusal one more try can fix: the suggested name, or the password again.
+            const link = lastLink;
+            useJoinStore.getState().clear();
+            if (!link) return;
+            const next = o.password && link.room ? { ...link, room: { ...link.room, password: o.password } } : link;
+            useJoinStore.getState().join(next, o.name ?? session.opts.name);
+          }}
           onFullscreen={appFullscreen}
+          roomExtras={
+            <RoomOverlay
+              link={session.room}
+              ownRttMs={null}
+              ownTier={null}
+              ensureNotice={(what) => notice.ask(what)}
+              onRules={notice.show}
+            />
+          }
         />
+        {notice.dialog}
         {dialog}
       </>
     );

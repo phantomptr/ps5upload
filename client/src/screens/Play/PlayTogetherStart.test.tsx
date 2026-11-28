@@ -32,24 +32,24 @@ const view = (p: Partial<PlayTogetherStartViewProps> = {}) =>
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Play's pages", () => {
-  it("Play my PS5, Play Together, Join a friend, in that order; Play my PS5 first (Receive is on Share)", async () => {
+  it("Play my PS5 and Play Room, in that order; Play my PS5 first (Receive is on Share)", async () => {
     installWindowStub();
     const { default: PlayScreen } = await import("./index");
     const out = html(<PlayScreen />, "/play");
     const radios = [...out.matchAll(/role="radio" aria-checked="(true|false)"[^>]*>(?:<svg[\s\S]*?<\/svg>)?([^<]+)</g)].map((m) => [m[2], m[1]]);
     expect(radios).toEqual([
       ["Play my PS5", "true"],
-      ["Play Together", "false"],
-      ["Join a friend", "false"],
+      ["Play Room", "false"],
     ]);
     expect(out).toContain('data-testid="stream-panel" data-together="false"');
   });
 
-  it("a join link lands on Join a friend", async () => {
+  it("a join link lands on Play Room › Join with a code/link", async () => {
     installWindowStub();
     const { default: PlayScreen } = await import("./index");
     const out = html(<PlayScreen />, `/play?join=${encodeURIComponent("http://10.0.0.5:19113/join#i=00")}`);
-    expect(out).toMatch(/role="radio" aria-checked="true"[^>]*>(?:<svg[\s\S]*?<\/svg>)?Join a friend</);
+    expect(out).toMatch(/role="radio" aria-checked="true"[^>]*>(?:<svg[\s\S]*?<\/svg>)?Play Room</);
+    expect(out).toMatch(/role="radio" aria-checked="true"[^>]*>(?:<svg[\s\S]*?<\/svg>)?Join with a code\/link</);
     expect(out).toContain('data-testid="join-a-friend"');
     expect(out).not.toContain("stream-panel");
   });

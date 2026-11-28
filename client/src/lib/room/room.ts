@@ -8,7 +8,9 @@
 
 import { getEngineUrl } from "../../state/engine";
 import { readTier, type Tier } from "../../join/routeTier";
-import { readChat, readChatMode, type ChatMode } from "./chat";
+import { readChatMode, type ChatMode } from "./chat";
+import { readEngineChatLine } from "../joinProtocol";
+import { NOTICE_VERSION } from "./notice";
 import { readRegion, type Region } from "./regions";
 
 export type Visibility = "private" | "friends" | "public";
@@ -96,8 +98,10 @@ export interface RoomInfo {
 
 /** One line of the room's chat on the host's side (`room.chat_log`). */
 export interface HostChatLine {
-  /** The engine's running number (stable across reads), else the position. */
+  /** The engine's line id (stable across reads). */
   n: number;
+  /** Said this many times in a row (folded). */
+  x: number;
   from: string;
   /** Sent by the host (this computer). */
   host: boolean;
@@ -221,9 +225,8 @@ export function readRoom(v: unknown): RoomInfo {
     openedAt: num(o.opened_at_ms) ?? (num(o.opened_at) != null ? num(o.opened_at)! * 1000 : null),
     known: true,
     chatLog: (Array.isArray(o.chat_log) ? o.chat_log : []).flatMap((l, i) => {
-      const c = readChat(l);
-      const lo = obj(l);
-      return c && lo ? [{ n: num(lo.n) ?? i + 1, from: c.from, host: lo.host === true, quick: c.quick, text: c.text, at: num(lo.at) ?? 0 }] : [];
+      const c = readEngineChatLine(l);
+      return c ? [{ n: c.id || i + 1, x: c.x, from: c.from, host: c.host, quick: c.quick, text: c.text, at: c.t }] : [];
     }),
   };
 }
@@ -255,7 +258,7 @@ export function readRoomPlayer(g: Record<string, unknown>): RoomPlayer {
     tag: str(g.tag),
     muted: { voice: m?.voice === true || g.muted === true, chat: m?.chat === true },
     fromRooms: g.from_rooms === true || source === "rooms",
-    speaking: g.speaking === true,
+    speaking: g.speaking === true || obj(g.voice)?.speaking === true,
     ready: g.ready === true,
     joinedAt: num(g.joined_at_ms) ?? (num(g.joined_at) != null ? num(g.joined_at)! * 1000 : null),
     client: str(g.client_kind),
@@ -313,10 +316,36 @@ export type RoomRefusal =
   | "name"
   | "friends_playing"
   | "not_open"
+  /** Chat and voice (join_comms): the notice first, chat off or quick only, too fast… */
+  | "notice"
+  | "off"
+  | "quick_only"
+  | "slow_down"
+  | "empty"
+  | "too_long"
+  | "bad_quick"
+  | "no_player"
+  | "host"
   | "old_engine"
   | "engine";
 
-const REFUSALS: readonly RoomRefusal[] = ["size_below_players", "public_needs_anywhere", "password_short", "name", "friends_playing", "not_open"];
+const REFUSALS: readonly RoomRefusal[] = [
+  "size_below_players",
+  "public_needs_anywhere",
+  "password_short",
+  "name",
+  "friends_playing",
+  "not_open",
+  "notice",
+  "off",
+  "quick_only",
+  "slow_down",
+  "empty",
+  "too_long",
+  "bad_quick",
+  "no_player",
+  "host",
+];
 
 async function request(method: "GET" | "POST", path: string, body?: object): Promise<{ status: number; json: unknown }> {
   const r = await fetch(`${getEngineUrl()}${path}`, {
@@ -366,10 +395,12 @@ export const roomApi = {
     post("/api/join/mute", { addr, ...m }),
   /** Move a player to another seat (2–4), give Player 1 (1) or take it back ("back"). */
   seat: (addr: string, player: number, to: number | "back") => post("/api/join/seat", { addr, player, to }),
-  /** The host's own chat line. */
-  chat: (addr: string, m: { quick: number } | { text: string }) => post("/api/join/chat", { addr, ...m }),
+  /** Chat and voice modes (API.md "Play Rooms chat and voice": POST /api/join/comms). */
+  comms: (addr: string, m: { chat?: ChatMode; voice?: VoiceMode; start_muted?: boolean }) => post("/api/join/comms", { addr, ...m }),
+  /** The host's own chat line (with the notice this device accepted). */
+  chat: (addr: string, m: { quick: number } | { text: string }) => post("/api/join/chat", { addr, ...m, notice: NOTICE_VERSION }),
   /** The host's own mic on this device. */
-  mic: (addr: string, mic: boolean) => post("/api/join/voice", { addr, mic }),
+  mic: (addr: string, mic: boolean) => post("/api/join/voice", { addr, mic: mic ? "on" : "off", notice: NOTICE_VERSION }),
   ready: (addr: string) => post("/api/join/ready", { addr, start: true }),
   /** Let everyone from one PS5 in at once (a group ask). */
   allowGroup: (addr: string, id: number) => post("/api/join/decide", { addr, id, allow: true, group: true }),

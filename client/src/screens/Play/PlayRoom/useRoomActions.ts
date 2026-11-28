@@ -22,6 +22,24 @@ export function refusalText(tr: Tr, why: RoomRefusal, people = 0): string {
       return tr("room_err_friends_playing", undefined, "Friends are playing. Try again when they're done.");
     case "not_open":
       return tr("room_err_not_open", undefined, "Your room isn't open.");
+    case "notice":
+      return tr("room_refused_notice", undefined, "Accept Rules & responsibility first.");
+    case "off":
+      return tr("room_chat_is_off", undefined, "Chat is off");
+    case "quick_only":
+      return tr("room_refused_quick_only", undefined, "This room takes quick messages only.");
+    case "slow_down":
+      return tr("room_chat_slow", undefined, "Slow down");
+    case "empty":
+      return tr("room_refused_empty", undefined, "Type something first.");
+    case "too_long":
+      return tr("room_refused_too_long", undefined, "That's too long: 140 characters at most.");
+    case "bad_quick":
+      return tr("room_refused_bad_quick", undefined, "The host's PS5Upload doesn't know that quick message.");
+    case "no_player":
+      return tr("room_err_no_player", undefined, "That player isn't in the room any more.");
+    case "host":
+      return tr("room_err_host", undefined, "That's you: the host can't be muted.");
     case "old_engine":
       return tr("room_err_old_engine", undefined, "This needs the PS5Upload engine 13.0.0 or newer.");
     default:
@@ -53,6 +71,7 @@ export function useRoomActions(addr: string, onState: (s: JoinHostState) => void
     mute: (m: { player?: number; voice?: boolean; chat?: boolean; all?: boolean }) => roomApi.mute(addr, m).then(after),
     seat: (player: number, to: number | "back") => roomApi.seat(addr, player, to).then(after),
     chat: (m: { quick: number } | { text: string }) => roomApi.chat(addr, m).then(after),
+    comms: (m: { chat?: "off" | "quick" | "on"; voice?: "off" | "ptt" | "open"; start_muted?: boolean }) => roomApi.comms(addr, m).then(after),
     ready: () => roomApi.ready(addr).then(after),
     allowGroup: (id: number) => roomApi.allowGroup(addr, id).then(after),
   };

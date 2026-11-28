@@ -2,26 +2,27 @@
 // push-to-talk. Pure logic, tested without audio; lib/room/roomVoice.ts wires it to the mic,
 // WebCodecs (encode) and the wasm Opus decoder (decode, with loss concealment).
 //
-// Wire (little-endian, like the pad frames):
-//   guest → engine  [6][seq u16][level u8][Opus 20 ms mono]
-//   engine → guest  [7][n][(speaker u8, seq u16, len u8, Opus) × n]   one bundle per 20 ms tick
-// level: loudness 0–255 (255 = full scale, 0 = silence or below −90 dBFS).
+// Wire (API.md "Play Rooms chat and voice"; sequence numbers big-endian):
+//   client → engine  [0x0A][seq u16][level u8][Opus 20 ms mono (40 ms at 12 kb/s)]
+//   engine → client  [0x0B][n][(sid u8, seq u16, len u8, Opus) × n]   one bundle per tick
+// level: loudness 0–255 (255 = full scale, 0 = silence or below −90 dBFS). sid: the room's speaker
+// id (the host is 0), named in the engine's `voice.people`.
 
-export const VOICE_UP = 6;
-export const VOICE_DOWN = 7;
+export const VOICE_UP = 0x0a;
+export const VOICE_DOWN = 0x0b;
 export const VOICE_RATE = 48000;
 export const VOICE_FRAME_MS = 20;
 export const VOICE_FRAME_SAMPLES = (VOICE_RATE * VOICE_FRAME_MS) / 1000;
 
 /** WebCodecs Opus for speech (design 7A.1b): mono, wideband, 24 kbit/s, DTX + in-band FEC. */
-export function voiceEncoderConfig(kbps: 24 | 12 = 24, lossPct = 0): AudioEncoderConfig {
+export function voiceEncoderConfig(kbps: 24 | 12 = 24, lossPct = 0, frameMs: 20 | 40 = 20): AudioEncoderConfig {
   return {
     codec: "opus",
     sampleRate: VOICE_RATE,
     numberOfChannels: 1,
     bitrate: kbps * 1000,
     opus: {
-      frameDuration: VOICE_FRAME_MS * 1000,
+      frameDuration: frameMs * 1000,
       complexity: 5,
       signal: "voice",
       usedtx: true,
@@ -36,8 +37,8 @@ export function voiceEncoderConfig(kbps: 24 | 12 = 24, lossPct = 0): AudioEncode
 export function voiceUpFrame(seq: number, level: number, opus: Uint8Array): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(4 + opus.length);
   out[0] = VOICE_UP;
-  out[1] = seq & 0xff;
-  out[2] = (seq >> 8) & 0xff;
+  out[1] = (seq >> 8) & 0xff;
+  out[2] = seq & 0xff;
   out[3] = Math.max(0, Math.min(255, Math.round(level)));
   out.set(opus, 4);
   return out;
@@ -59,7 +60,7 @@ export function readVoiceBundle(buf: ArrayBuffer | Uint8Array): VoicePart[] | nu
   for (let i = 0; i < n; i++) {
     if (o + 4 > b.length) return null;
     const speaker = b[o];
-    const seq = b[o + 1] | (b[o + 2] << 8);
+    const seq = (b[o + 1] << 8) | b[o + 2];
     const len = b[o + 3];
     o += 4;
     if (o + len > b.length) return null;
@@ -78,8 +79,8 @@ export function voiceBundle(parts: VoicePart[]): Uint8Array<ArrayBuffer> {
   let o = 2;
   for (const p of parts) {
     out[o] = p.speaker;
-    out[o + 1] = p.seq & 0xff;
-    out[o + 2] = (p.seq >> 8) & 0xff;
+    out[o + 1] = (p.seq >> 8) & 0xff;
+    out[o + 2] = p.seq & 0xff;
     out[o + 3] = p.opus.length;
     out.set(p.opus, o + 4);
     o += 4 + p.opus.length;

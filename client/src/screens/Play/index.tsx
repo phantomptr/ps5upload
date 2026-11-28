@@ -1,4 +1,4 @@
-import { ListChecks, LogIn, MonitorPlay, Users } from "lucide-react";
+import { DoorOpen, LayoutGrid, ListChecks, LogIn, MonitorPlay, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 
@@ -17,10 +17,11 @@ import { useJoinStore } from "../../state/joinSession";
 import { useTvMode } from "../../state/tvMode";
 import { TvHomeButton } from "../../layout/TvModeFrame";
 import { useScreenBack } from "../../lib/systemBack";
+import { RoomsTab } from "./PlayRoom/RoomsTab";
 
-/** Play my PS5 (Remote Play), Play together (host friends on it), Join a friend's game, or
- *  Receive what a friend shared (a Share link). */
-export type PlayMode = "mine" | "together" | "friend";
+/** Play my PS5 (Remote Play), or Play Room: your room (host friends on it), Rooms (find one to
+ *  join), or Join with a code/link (a friend's game). */
+export type PlayMode = "mine" | "together" | "rooms" | "friend";
 
 /**
  * Play (was "Remote Play" before 10.0.0): a console's screen streamed into the app, played with a
@@ -51,19 +52,21 @@ export default function PlayScreen() {
   useEffect(() => {
     if (receiveParam) navigate(`/share?receive=${encodeURIComponent(receiveParam)}`, { replace: true });
   }, [receiveParam, navigate]);
-  // /play?mode=friend: Join a friend, the form empty (the TV's Join Play Together card, #926).
+  // /play?mode=friend: Join a friend, the form empty (the TV's Join Play Together card, #926);
+  // /play?mode=rooms: the Rooms list.
   const friendParam = params.get("mode") === "friend";
+  const roomsParam = params.get("mode") === "rooms";
   const [mode, setMode] = useState<PlayMode>(() =>
-    joined || joinParam || friendParam ? "friend" : "mine",
+    joined || joinParam || friendParam ? "friend" : roomsParam ? "rooms" : "mine",
   );
   // Back from the stream: TV mode's home (Resume is there). Not on Join a friend, whose game
   // takes Back step by step itself (buttons, then full screen) and then leaves by the history.
   useScreenBack(tv && mode !== "friend", () => navigate("/tv", { replace: true }));
   useEffect(() => {
-    if (!friendParam) return;
-    setMode("friend");
+    if (!friendParam && !roomsParam) return;
+    setMode(friendParam ? "friend" : "rooms");
     setParams({}, { replace: true });
-  }, [friendParam, setParams]);
+  }, [friendParam, roomsParam, setParams]);
   // Play together is the same stream as Play my PS5 with its invite panel (StreamPanel stays
   // mounted between the two, so switching never touches the stream). The stream bar's button
   // and the menu switch here and back.
@@ -134,17 +137,31 @@ export default function PlayScreen() {
       {!lean && !tv && (
         <SegmentedControl
           ariaLabel={tr("play_mode_label", undefined, "What to play")}
-          value={mode}
-          onChange={(v) => setMode(v as PlayMode)}
+          value={mode === "mine" ? "mine" : "room"}
+          onChange={(v) => setMode(v === "mine" ? "mine" : joined ? "friend" : "together")}
           segments={[
             { value: "mine", label: tr("play_mode_mine", undefined, "Play my PS5"), icon: MonitorPlay },
             // The stream bar's Play Together button has the same icon.
-            { value: "together", label: tr("pt_title", undefined, "Play Together"), icon: Users },
-            { value: "friend", label: tr("play_mode_friend", undefined, "Join a friend"), icon: LogIn },
+            { value: "room", label: tr("room_title", undefined, "Play Room"), icon: Users },
           ]}
         />
       )}
-      {mode === "friend" ? (
+      {/* Play Room: your room, the Rooms list, or a code/link (design 7.1). */}
+      {!lean && !tv && mode !== "mine" && (
+        <SegmentedControl
+          ariaLabel={tr("room_title", undefined, "Play Room")}
+          value={mode}
+          onChange={(v) => setMode(v as PlayMode)}
+          segments={[
+            { value: "together", label: tr("room_your_room", undefined, "Your room"), icon: DoorOpen },
+            { value: "rooms", label: tr("rooms_title", undefined, "Rooms"), icon: LayoutGrid },
+            { value: "friend", label: tr("rooms_code_link", undefined, "Join with a code/link"), icon: LogIn },
+          ]}
+        />
+      )}
+      {mode === "rooms" ? (
+        <RoomsTab onJoined={() => setMode("friend")} onCode={() => setMode("friend")} onCreate={() => setMode("together")} />
+      ) : mode === "friend" ? (
         <JoinAFriend pending={pendingJoin} onPendingDone={() => setPendingJoin(null)} />
       ) : (
         <StreamPanel together={mode === "together"} onTogether={onTogether} tvFull={tv} />

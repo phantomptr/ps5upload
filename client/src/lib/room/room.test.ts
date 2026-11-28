@@ -354,7 +354,7 @@ describe("preview", () => {
 describe("voice", () => {
   it("frames both ways", () => {
     const up = voiceUpFrame(0x1234, 200, new Uint8Array([9, 8, 7]));
-    expect([...up]).toEqual([6, 0x34, 0x12, 200, 9, 8, 7]);
+    expect([...up]).toEqual([0x0a, 0x12, 0x34, 200, 9, 8, 7]);
     const b = voiceBundle([
       { speaker: 2, seq: 1, opus: new Uint8Array([1, 2]) },
       { speaker: 3, seq: 0xffff, opus: new Uint8Array([3]) },
@@ -365,6 +365,8 @@ describe("voice", () => {
     ]);
     expect(readVoiceBundle(b.subarray(0, b.length - 1))).toBeNull();
     expect(readVoiceBundle(new Uint8Array([3, 0]))).toBeNull();
+    // The engine's bytes as API.md writes them: [0x0B][1][sid 2][seq 0x0102 BE][len 1][0xAA].
+    expect(readVoiceBundle(new Uint8Array([0x0b, 1, 2, 1, 2, 1, 0xaa]))).toEqual([{ speaker: 2, seq: 0x0102, opus: new Uint8Array([0xaa]) }]);
   });
   it("levels", () => {
     expect(levelByte(-Infinity)).toBe(0);
