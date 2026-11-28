@@ -18,6 +18,9 @@ What's new in ps5upload, written for humans.
 - **Fake packages on firmware 11.61 to 13.60:** the install screen says they need the latest kstuff (fake-package support up to 13.60), and a launch that fails (CE-100022-5) says the same.
 - Game folders made by Convert on the PS5 can be read and started by the console.
 
+**Save sync**
+- **Keep a game's save in step between two PS5s.** In Saves › Save sync, turn on "Keep this game's save in step" for a game. After you close it on one PS5, its save is copied to the other, as long as the game isn't running there and that save hasn't changed since the last sync. If both changed, both are backed up and you choose which to keep; nothing is overwritten without asking. A PS5 that's off or resting gets the save when it's back (it's only woken if you turn that on). Each game shows In step, Waiting, Conflict or Can't sync (with the reason), and has **Sync now**. The save that gets replaced is always backed up first. PS4 saves, and a game the other user hasn't saved yet, can't be kept in step.
+
 **Save backups**
 - Network-share backups run every 10 minutes, 30 minutes, 1 hour, 6 hours or once a day (and after a game closes, as before).
 - The PS5's internal storage can hold an extra copy too; a console reset wipes it, so the computer or network copy stays the safe one.

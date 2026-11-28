@@ -1,7 +1,7 @@
 // Save sync (engine save_sync.rs): one user's saves kept the same on two PS5s. Set up a pair,
-// Check now, and send the saves that changed; nothing is copied without the user saying so, and
-// the save that gets replaced is backed up first.
-import { useCallback, useEffect, useState } from "react";
+// Check now, and send the saves that changed, or turn a game on to have it kept in step by the
+// engine (save_sync_auto.rs). The save that gets replaced is always backed up first.
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ArrowLeftRight, RefreshCw, Trash2 } from "lucide-react";
 
 import { Badge, Button, Checkbox, Select } from "../../components";
@@ -9,6 +9,7 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { profileInfo, type ProfileUser } from "../../api/ps5";
 import {
   saveSyncApi,
+  type AutoView,
   type SyncDirection,
   type SyncPair,
   type SyncRow,
@@ -22,8 +23,11 @@ import { useRosterStore } from "../../state/roster";
 import { useTr } from "../../state/lang";
 import { useSaveGameName } from "./gameNames";
 import { userHex } from "./saveUsers";
+import { AutoSyncPanel } from "./SaveSyncAuto";
 import {
   applyItems,
+  autoOf,
+  canTurnOn,
   canKeepInStep,
   canSync,
   consoleName,
@@ -32,6 +36,7 @@ import {
   initialSelection,
   needsFirstStart,
   needsPick,
+  otherSide,
   pickOther,
   sortRows,
   statusTone,
@@ -110,6 +115,8 @@ function SyncRowView({
   onSelect,
   onPick,
   onExclude,
+  auto,
+  kept,
 }: {
   row: SyncRow;
   a: string;
@@ -121,6 +128,10 @@ function SyncRowView({
   onSelect: (on: boolean) => void;
   onPick: (d: SyncDirection | undefined) => void;
   onExclude: (out: boolean) => void;
+  /** Keeping in step: the switch and where it stands. */
+  auto?: ReactNode;
+  /** Kept in step: the engine copies it, so it isn't picked by hand. */
+  kept?: boolean;
 }) {
   const tr = useTr();
   const game = useSaveGameName(row.title_id).name ?? row.title_id;
@@ -165,8 +176,9 @@ function SyncRowView({
       {result?.ok && (
         <p className="text-xs text-[var(--color-good)]">{tr("saves_sync_sent", undefined, "Sent.")}</p>
       )}
+      {auto}
       <div className="flex flex-wrap items-center gap-2">
-        {canSync(row) && (
+        {canSync(row) && !kept && (
           <Checkbox
             checked={selected && direction !== null}
             disabled={busy || direction === null}
@@ -174,7 +186,7 @@ function SyncRowView({
             label={direction ? sendTo(direction) : tr("saves_sync_pick_first", undefined, "Pick which to keep")}
           />
         )}
-        {needsPick(row) && (
+        {needsPick(row) && !kept && (
           <div className="min-w-0 flex-1 basis-[12rem]">
             <Select
               aria-label={tr("saves_sync_pick_label", undefined, "Which save to keep")}
@@ -195,17 +207,39 @@ function SyncRowView({
           </div>
         )}
         <span className="flex-1" />
-        <Button variant="ghost" size="sm" disabled={busy} onClick={() => onExclude(row.status !== "excluded")}>
-          {row.status === "excluded"
-            ? tr("saves_sync_include", undefined, "Include")
-            : tr("saves_sync_leave_out", undefined, "Leave out")}
-        </Button>
+        {!kept && (
+          <Button variant="ghost" size="sm" disabled={busy} onClick={() => onExclude(row.status !== "excluded")}>
+            {row.status === "excluded"
+              ? tr("saves_sync_include", undefined, "Include")
+              : tr("saves_sync_leave_out", undefined, "Leave out")}
+          </Button>
+        )}
       </div>
     </li>
   );
 }
 
-function PairView({ pair, onRemoved }: { pair: SyncPair; onRemoved: () => void }) {
+/** A console user's name, else their id. */
+function useUserName(host: string, uid: number): string {
+  const [name, setName] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    profileInfo(consoleAddr(host))
+      .then((p) => {
+        const u = p.users.find((x) => x.uid >>> 0 === uid >>> 0);
+        if (live && u) setName(userLabel(u));
+      })
+      .catch(() => {
+        // Offline: the id stands in.
+      });
+    return () => {
+      live = false;
+    };
+  }, [host, uid]);
+  return name ?? userHex(uid);
+}
+
+function PairView({ pair, host, onRemoved }: { pair: SyncPair; host: string; onRemoved: () => void }) {
   const tr = useTr();
   const profiles = useRosterStore((s) => s.profiles);
   const [current, setCurrent] = useState(pair);
@@ -219,6 +253,15 @@ function PairView({ pair, onRemoved }: { pair: SyncPair; onRemoved: () => void }
   const { confirm, dialog } = useConfirm();
   const a = consoleName(current.a.host, profiles);
   const b = consoleName(current.b.host, profiles);
+  // "Keep in step on <the other console> (<its user>)", seen from the console shown.
+  const there = otherSide(current, host);
+  const thereSide = there === "a" ? current.a : current.b;
+  const thereName = there === "a" ? a : b;
+  const thereUser = useUserName(thereSide.host, thereSide.user_id);
+  const [autoBusy, setAutoBusy] = useState<string | null>(null);
+  const [autoErrors, setAutoErrors] = useState<Record<string, string | undefined>>({});
+  // What an action answered, shown until the next check.
+  const [autoNow, setAutoNow] = useState<Record<string, AutoView | null | undefined>>({});
 
   const check = useCallback(async () => {
     setChecking(true);
@@ -229,6 +272,7 @@ function PairView({ pair, onRemoved }: { pair: SyncPair; onRemoved: () => void }
       setRows(sortRows(r.rows));
       setSelected(initialSelection(r.rows));
       setPicks({});
+      setAutoNow({});
     } catch (e) {
       setError(humanizeCaught(e));
     } finally {
@@ -293,6 +337,53 @@ function PairView({ pair, onRemoved }: { pair: SyncPair; onRemoved: () => void }
     }
   };
 
+  /** One keep-in-step action on a save: its answer shown at once, the pair reloaded. */
+  const autoAction = async (key: string, run: () => Promise<{ auto: AutoView | null }>) => {
+    setAutoBusy(key);
+    setAutoErrors((e) => ({ ...e, [key]: undefined }));
+    try {
+      const r = await run();
+      setAutoNow((m) => ({ ...m, [key]: r.auto }));
+      setCurrent((await saveSyncApi.view()).pairs.find((p) => p.id === current.id) ?? current);
+    } catch (e) {
+      setAutoErrors((m) => ({ ...m, [key]: humanizeCaught(e) }));
+    } finally {
+      setAutoBusy(null);
+    }
+  };
+
+  const setWake = async (on: boolean) => {
+    try {
+      const r = await saveSyncApi.setPair(current.a, current.b, undefined, on);
+      setCurrent(r.pair);
+    } catch (e) {
+      setError(humanizeCaught(e));
+    }
+  };
+
+  const autoPanel = (r: SyncRow) => {
+    const known = r.key in autoNow ? autoNow[r.key] : undefined;
+    const view = known === undefined ? autoOf(r, current) : known;
+    return (
+      <AutoSyncPanel
+        view={view}
+        canTurnOn={canTurnOn(r)}
+        onLabel={tr(
+          "saves_sync_auto_on",
+          { console: thereName, user: thereUser },
+          "Keep this game's save in step on {console} ({user})",
+        )}
+        a={a}
+        b={b}
+        busy={autoBusy === r.key || busy}
+        error={autoErrors[r.key] ?? null}
+        onToggle={(on) => void autoAction(r.key, () => saveSyncApi.setAuto(current.id, r.key, on))}
+        onSyncNow={() => void autoAction(r.key, () => saveSyncApi.syncNow(current.id, r.key))}
+        onKeep={(side) => void autoAction(r.key, () => saveSyncApi.resolve(current.id, r.key, side))}
+      />
+    );
+  };
+
   const count = rows ? applyItems(rows, selected, picks).length : 0;
   return (
     <div className="flex flex-col gap-2 rounded-[var(--radius-field)] border border-[var(--color-border)] p-3" data-testid="save-sync-pair">
@@ -323,6 +414,17 @@ function PairView({ pair, onRemoved }: { pair: SyncPair; onRemoved: () => void }
         </Button>
       </div>
       {error && <p className="text-xs text-[var(--color-bad)]">{error}</p>}
+      <Checkbox
+        checked={!!current.wake}
+        disabled={busy}
+        onChange={(on) => void setWake(on)}
+        label={tr("saves_sync_auto_wake", undefined, "Wake a resting PS5 to take a waiting save")}
+        hint={tr(
+          "saves_sync_auto_wake_hint",
+          undefined,
+          "Off: a PS5 in rest is never woken, and the save waits until it's back. Waking needs the PS5 paired for Remote Play.",
+        )}
+      />
       {rows && rows.length === 0 && (
         <p className="text-xs text-[var(--color-muted)]">
           {tr("saves_sync_none", undefined, "No saves on either console for these users.")}
@@ -366,6 +468,8 @@ function PairView({ pair, onRemoved }: { pair: SyncPair; onRemoved: () => void }
                   });
                 }}
                 onExclude={(out) => void exclude(r.key, out)}
+                auto={r.status === "excluded" ? null : autoPanel(r)}
+                kept={autoOf(r, current) !== null}
               />
             ))}
           </ul>
@@ -569,14 +673,14 @@ export default function SaveSyncCard({ host }: { host: string }) {
       </header>
       <p className="mb-3 text-xs text-[var(--color-muted)]">
         {tr(
-          "saves_sync_note",
+          "saves_sync_note_auto",
           undefined,
-          "Keep a user's saves the same on two PS5s. Nothing is copied until you say so, and the save that gets replaced is backed up first. After you close a game, the app asks whether to send its save to the other PS5.",
+          "Keep a user's saves the same on two PS5s. Turn on keeping in step for a game, and after you close it its newer save is copied to the other PS5; when both changed, you pick. Other saves are copied only when you say so. The save that gets replaced is always backed up first.",
         )}
       </p>
       <div className="flex flex-col gap-3">
         {mine.map((p) => (
-          <PairView key={p.id} pair={p} onRemoved={() => void load()} />
+          <PairView key={p.id} pair={p} host={host} onRemoved={() => void load()} />
         ))}
         {(mine.length === 0 || setup) && (
           <PairSetup
