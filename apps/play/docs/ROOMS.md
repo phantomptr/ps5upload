@@ -36,7 +36,15 @@ departs from the designs (the Play Rooms design, 2026-11-28, and the integration
   moves the cursor. Ending or loosening actions (close, wider visibility, removing the password,
   approvals on, unlock, PS & Create to friends, a friend on the stream's controller, invites
   anywhere) ask in words first and are only for the stream's PS5 user or the console's owner
-  when the engine names them (`session.user`, `console.owner`).
+  when the engine names them (`session.user`, `console.owner`). An ask from the host's own
+  device says so and △ is "It's me" (Player 1); a Ready check row shows who said ready; a
+  player's menu (△) mutes voice or chat, moves them to a free Player, gives Player 1 (the owner
+  only, never to people from Rooms) or takes it back, and removes them. What PS5Upload refused
+  (one ready check a minute, …) is said under the list for a few seconds.
+- **Ready check as a guest**: the host's "Ready?" shows over the game with the seconds left;
+  "I'm ready" is first in the Room menu and answers for every player of this PS5.
+- **Talking where Create is the game's** (the host lets guests use Create): the mic itself is
+  the talk toggle ("How I talk: While my mic is on"), never a game button.
 - **Notice** (once per version, Settings › Rules & responsibility shows it again), **Thanks &
   Support** (the names from `client/src/data/supporters.json`, bundled; a newer list from a
   nearby engine's `GET /api/support`; Ko-fi and the site's thanks page as QR codes), **How it
