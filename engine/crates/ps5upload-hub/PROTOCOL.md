@@ -247,3 +247,202 @@ host  ← {"t":"left","gid":"G"}
 Who sends the offer is up to the engine and the page; the hub does not care. Once the WebRTC
 connection is up the guest leaves the hub (it would be removed 3 minutes after it joined anyway);
 the host stays for new guests. The media does not depend on the hub.
+
+## Rooms (Play Rooms, additive to v1)
+
+Everything here is additive: `v` stays 1, invite rooms behave exactly as above, and an engine or
+page that never sends the new fields sees no change. A room's own protocol number (`proto`, 2 for
+13.0) travels inside the card and the list; it is not the hub's `v`.
+
+### Lobby rooms
+
+```
+→ {"v":1,"t":"host","room":"<bound room>","secret":"<secret>","lobby":true}
+← {"t":"hosted","room":"<room>","lobby":true,"caps":["ads","cid","knock","preview","status"],
+   "ad_pow":{"n":"<nonce>","bits":18}}
+```
+
+- `room` must be a bound id (`room_for_secret`, ending in `h`), else `bad_room`. Engines make it
+  from a `lobby_secret` kept apart from the invite secret, so a card never carries an invite room.
+- Up to 16 guests at once (invite rooms: 8). The 3-minute guest timeout stays.
+- The host learns each guest's client id in this room: `← {"t":"guest","gid":"…","cid":"<8 base64url>"}`
+  (a keyed hash of the guest's IPv4 or IPv6 /64 and the room, new key on every hub start; other
+  rooms see another `cid`; never the address). Use it for password lockouts and room blocks.
+- `HUB_KNOCKS=off` (or `knocks off` at run time): `{"t":"error","why":"no_lobby"}` and a normal
+  close (1000). Fall back to invite rooms only.
+
+### Cards (host socket of a lobby room)
+
+```
+→ {"t":"ad","ad":{…},"pow":"<answer>"}     create: needs the proof of work
+→ {"t":"ad","ad":{…}}                        update (renews too)
+→ {"t":"ad"}                                 renew only
+← {"t":"ad_ok","until":<unix seconds>}       listed or known until (12 h after create)
+← {"t":"ad_refused","why":"<why>"}           the socket stays open
+→ {"t":"unad"}                               withdraw now
+← {"t":"ad_gone","why":"<why>","ad_pow":{"n":"<new nonce>","bits":18}}
+```
+
+- Proof of work: find any `answer` (at most 64 characters) such that
+  SHA-256(`ps5upload-hub ad` + one zero byte + `n` + `answer`) starts with `bits` zero bits
+  (18 by default: about 260,000 hashes, well under a second). A nonce is spent by its create; the
+  next one comes with `ad_gone`.
+- One card per lobby room and socket. It dies with the socket (`closed`), on `unad`, when the
+  room closes, when not renewed for 150 s (`stale`: renew at least every 2 minutes; any `ad`
+  renews), and 12 h after create (`expired`: create again with the new nonce).
+- `ad_gone` `why`: `unad`, `stale`, `expired`, `off` (rooms switched off), `blocked`, `old`
+  (below `min_proto`).
+- `ad_refused` `why`: `pow`, `name` (room or host name), `game`, `bad` (another field, a card over
+  1 KiB, or a renewal with no card), `old`, `blocked`, `limit` (2 cards per client, 10 creates per
+  client an hour), `busy` (500 cards on the hub, or cut-back mode: new cards wait, none are
+  evicted), `rate` (more than about one update every 10 s; the card stays), `off`, `no_lobby`
+  (an invite room). A refused update keeps the card as it was, except `old` and `blocked`.
+- The card (every field checked; unknown fields ignored, the whole at most 1 KiB):
+
+```json
+{"listed": true, "locked": false, "name": "Couch chaos", "host": "Sam", "tag": "4F2A",
+ "game": {"title": "It Takes Two", "id": "PPSA01234"},
+ "proto": 2, "ver": "13.0.0", "caps": ["web", "ps5app", "preview", "chat", "voice"],
+ "slots": [1, 4], "pw": true, "lang": "en", "region": "eu-west", "pk": "<base64url>"}
+```
+
+| Field | Rule |
+|---|---|
+| `listed` | true: Public (in the list); false: Friends (only `/rooms/status` answers it). Default true |
+| `locked` | true: hidden from the list; `/rooms/status` says `locked`. Default false |
+| `name` | 3–32 characters after cleaning (see Names) |
+| `host` | the host's display name, 1–24 characters, same rules |
+| `tag` | 4 hex digits (the host device's short tag), shown uppercase |
+| `game` | optional; `id` `[A-Z]{4}[0-9]{5}`, `title` 1–64 printable characters, no links or markup |
+| `proto` | 1–999; below the hub's minimum (2): `old` |
+| `ver` | `N.N.N` |
+| `caps` | up to 16 strings `[a-z0-9_]{1,16}` |
+| `slots` | `[in, max]`, max 1–8, in ≤ max (full rooms stay listed) |
+| `pw` | a password is set (the password itself never reaches the hub) |
+| `lang` | one of the 21 app languages (`en`, `pt-BR`, `zh-CN` …) |
+| `region` | one of `na-west na-east central-am south-am eu-west eu-east middle-east africa asia-south asia-east asia-se oceania`; `"auto"` or absent: from the connection's country only; `"hidden"`: none shown |
+| `pk` | the room key (P-256 public key, base64url, 40–100 characters), for sealing knock secrets |
+
+Region shown: the hub looks up the host connection's country once at create (when it has a
+country table), keeps only the coarse region, and drops the address at once; the card's own
+region refines it within the same continent (a US host in Pacific time shows `na-west`). A VPN in
+another continent keeps the country's region: that is where the traffic goes.
+
+Names: invisible characters (zero-width, bidirectional overrides, variation selectors) are
+dropped and spaces collapsed; then only letters and digits of any script, spaces and
+`- _ . , ! ? ' ’ & ( ) # + : * ~` are allowed (no `@`, `/`, emoji or symbols); no links
+(`http`, `www`, `word.tld`, chat services), no invite-code-like tokens (`K7P2Q9`) or long digit
+runs, no repeated-character or punctuation spam, a small multilingual word list, and the
+reserved words (PS5Upload, phantomptr, official, admin, support, moderator, staff).
+
+### Previews (host socket)
+
+```
+← {"t":"preview","pid":"<12 base64url>"}
+→ {"t":"preview","pid":"<same>","data":{…}}      within 3 s, at most 2 KiB
+```
+
+The answer goes to everyone who asked for this room within 10 s. One that holds anything shaped
+like an IP address is refused (viewers get 502). Answer only with what the host chose to show.
+
+### Knocks (lobby rooms)
+
+A lobby guest may send only knock signals until its host lets it in:
+
+- `data` `{"knock":{…}}` starts a knock (forwarded as usual); `{"knock":"sealed",…}` follows a
+  challenge (two at most per knock). The hub never reads inside; before approval `data` is at
+  most 2 KiB (larger: `bad_data`, close).
+- The host lets the guest in with `{"knock":"ok"}` or any signal that is not a knock answer (an
+  offer). `{"knock":"no",…}` ends the knock; `wait` and `challenge` keep it open.
+- Answers to the guest, none of which closes the socket: `{"t":"error","why":"not_approved"}`
+  (a non-knock signal before approval, dropped), `knock_pending` (one open knock per guest),
+  `bad_knock`, `knocks_off`, and `{"t":"error","why":"rate_limited","retry_s":N}`: more than 5
+  knocks from one client in one room (refilled one per 2 minutes), or more than 10 from one
+  client across rooms (one a minute). Wait `retry_s`, then knock again.
+
+### HTTP
+
+CORS: a browser may call these from an allowed origin (`https://ps5upload.phantomptr.com`, the
+app's own pages, and a built-in hub's own origin); the answer then carries
+`access-control-allow-origin` for that origin and `vary: origin`. Any other `Origin`: 403. No
+`Origin` (an app's own client): answered, no CORS headers. No cookies.
+
+- `GET /rooms?sort=&game=&free=1&nopw=1&proto=&lang=&region=&near=1&me=&page=`
+
+  ```json
+  {"you": {"country": "DE", "region": "eu-west"},
+   "proto": {"min": 2, "latest": 2}, "app": {"latest": "13.0.0"},
+   "rooms": [{"room": "<lobby id>", "name": "Couch chaos", "host": "Sam", "tag": "4F2A",
+              "game": {"title": "It Takes Two", "id": "PPSA01234"}, "proto": 2, "ver": "13.0.0",
+              "caps": ["web"], "slots": [1, 4], "pw": true, "lang": "en", "region": "eu-west",
+              "est_ms": 30, "age_s": 120}],
+   "next": 8}
+  ```
+
+  - `sort`: `best` (default: has space, then lowest estimate, then works with `proto`, then
+    newest), `latency`, `game` (title A–Z), `players` (most in), `space` (most free seats),
+    `newest`. Filters: `game` (a title id, exact; or text, part of the title, any case), `free`,
+    `nopw`, `proto` (the viewer's: rooms within 2 protocols), `lang`, `region`, `near` (the
+    viewer's region or a neighbour). `me`: the viewer's own (time-zone) region, refining its
+    country's. Unknown keys are ignored. `page`: the `next` of the previous page.
+  - A page is at most 12 rooms and about 2 KiB (6 rooms in cut-back mode, with `"cutback":true`);
+    at most 480 rooms deep. `you` holds the viewer's country and region when known (never its
+    address); `est_ms` only when both regions are known; `region` only when the host shows one.
+  - Cached for 5 s per query shape and viewer region (30 s in cut-back mode), shared by everyone.
+  - Not listed: Friends cards, locked rooms, cards below `min_proto`, blocked tags.
+  - Switched off: `{"off":true,"proto":{…},"rooms":[],"next":null}` (200).
+- `GET /rooms/status?r=<id>,<id>…` (at most 16 ids; more are ignored): only the ids with a card
+  (listed or not), never addresses:
+  `{"every_s":60,"rooms":{"<id>":{"listed":false,"locked":false,"slots":[1,4],"pw":true,"proto":2,"game":{…},"pk":"…"}}}`.
+  `every_s` is how often to ask again (300 in cut-back mode). The room id is the capability: the
+  host hands its lobby id only to friends (with their friend pass); ids are unguessable.
+- `GET /rooms/<id>/preview`: 200 with the host's preview; 404 `{"why":"no_room"}` (no card);
+  503 `{"why":"off"}` (previews off or cut-back mode: "Details need a direct connection");
+  504 `{"why":"no_answer"}` (the host did not answer in 3 s; shared for 10 s); 502 (the answer was
+  refused). At most one request a room every 10 s reaches its host.
+
+### Limits that leave people alone
+
+Per client (IPv4 address or IPv6 /64), as token buckets: a burst well above what a person does,
+then a steady refill. Past one: HTTP 429 `{"why":"slow_down","retry_s":N}` with `Retry-After`
+(apps wait that long silently and try again). Only a flood that keeps going (30 s or more of
+refusals) gets a temporary block: 2 minutes, doubling on repeats up to 30, forgotten after a clean
+hour; a blocked client gets an empty 429 and the connection closed.
+
+| Request | Burst | Then |
+|---|---|---|
+| `GET /rooms` | 30 | 1 a second |
+| `GET /rooms/status` | 20 | 1 every 3 s |
+| `GET /rooms/<id>/preview` | 10 | 1 every 6 s |
+| knocks, all rooms | 10 | 1 a minute |
+| knocks, one room | 5 | 1 every 2 minutes |
+| WebSocket upgrades | 120 | 2 a second (past it: 429 before the upgrade) |
+| messages on one WebSocket | 100 | 30 a second (past it: `rate_limited`, close) |
+| card updates | 6 | 1 every 10 s |
+| card creates | 10 | 10 an hour |
+
+### Running it
+
+- Kill switches (env at start, and at run time): `HUB_ROOMS` (cards, list, status),
+  `HUB_PREVIEW`, `HUB_KNOCKS`, `HUB_MIN_PROTO`, `HUB_LATEST_PROTO`, `HUB_APP_LATEST`; blocklist
+  `HUB_BLOCKLIST` (`tag 4F2A; ip 203.0.113.0/24; word …`). At run time, without a restart: the
+  same lines in `HUB_CONTROL_FILE` (re-read when it changes) or `POST /admin/control` on the
+  private metrics listener with `authorization: Bearer <HUB_ADMIN_TOKEN>` (deploy/FLY.md).
+- Cut-back mode (automatic past 200 MiB resident or a projected 100 GB a month out; also
+  `cutback on|off|auto`): list cache 30 s, 6 rooms a page, previews through the hub off, friends
+  lookups every 5 minutes, new cards refused (existing ones stay). Past 220 MiB new sockets get
+  503. One log line on each change.
+- Budgets (`config.rs`): `HUB_MAX_ADS` 500, `HUB_MAX_ADS_PER_IP` 2, `HUB_AD_CREATES_PER_HOUR` 10,
+  `HUB_AD_POW_BITS` 18, `HUB_AD_MAX_SECS` 43200, `HUB_AD_RENEW_SECS` 150, `HUB_LOBBY_GUESTS` 16,
+  `HUB_LIST_CACHE_SECS` 5, `HUB_LIST_PAGE_ITEMS` 12, `HUB_LIST_PAGE_BYTES` 2048,
+  `HUB_MEM_CUTBACK_MIB` 200, `HUB_MEM_REFUSE_MIB` 220, `HUB_OUT_BUDGET_GB` 100, `HUB_GEO_FILE`.
+- Metrics (counts only): `hub_lobby_rooms`, `hub_ads_listed`, `hub_ads_friends`,
+  `hub_ads_total{kind}`, `hub_ads_removed_total{why}`, `hub_ads_refused_total{why}`,
+  `hub_rooms_list_total{result}`, `hub_rooms_status_total{result}`, `hub_previews_total{result}`,
+  `hub_knocks_total{result}`, `hub_out_bytes_total{class}`, `hub_out_projected_bytes_month`,
+  `hub_throttled_total{class}`, `hub_clients_blocked`, `hub_temp_blocks_total`, `hub_cutback`,
+  `hub_resident_bytes`, `hub_rooms_list_cache_entries`, `hub_geo_ranges`, `hub_blocklist_tags`,
+  `hub_blocklist_ips`.
+- Privacy: no response holds an address (tests check every one); cards hold only the fields above;
+  logs hold event names and counts (`control`, `cutback`, `geo_file_unreadable`), never a name,
+  tag, room id or address. Client keys and countries live in memory only.
