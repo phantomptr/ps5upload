@@ -227,24 +227,32 @@ def ws_client(port, path):
 
 
 def phone(port, room, data):
-    g = ws_client(port, "/ws")
-    g.send({"v": 1, "t": "join", "room": room})
-    first = g.recv()
-    if first.get("t") != "joined":
+    # A stand-in that does not answer is a failed check below, not the end of the whole run.
+    try:
+        g = ws_client(port, "/ws")
+        g.send({"v": 1, "t": "join", "room": room})
+        first = g.recv()
+        if first.get("t") != "joined":
+            g.close()
+            return first
+        g.send({"v": 1, "t": "signal", "to": "host", "data": data})
+        ans = g.recv()
+        g.send({"t": "leave"})
         g.close()
-        return first
-    g.send({"v": 1, "t": "signal", "to": "host", "data": data})
-    ans = g.recv()
-    g.send({"t": "leave"})
-    g.close()
-    return ans
+        return ans
+    except (OSError, ValueError) as e:
+        return {"t": "phone_failed", "why": repr(e)}
 
 
-p, port, rep = engine("room", "--lifetime", "20")
+# The app is done once the two invites it takes are in (a1 and a3; a2's link isn't one, a4's room
+# isn't open), not after a fixed time: on a busy computer one slow answer from the stand-in used
+# the 8 s it had (the hub's 6 s connect timeout and 2 s before trying again), and the room never
+# opened. --seconds is only the limit now.
+p, port, rep = engine("room", "--lifetime", "60")
 secret = os.path.join(work, "room.txt")
 if os.path.exists(secret):
     os.remove(secret)
-room_cli = subprocess.Popen([cli, "room", f"ws://127.0.0.1:{port}/ws", secret, "--seconds", "8"],
+room_cli = subprocess.Popen([cli, "room", f"ws://127.0.0.1:{port}/ws", secret, "--seconds", "40", "--invites", "2"],
                             stdout=subprocess.PIPE, text=True)
 qr = None
 for line in room_cli.stdout:
@@ -262,7 +270,7 @@ a1 = phone(port, frag.get("ps5"), {"invite": {"link": link, "t": frag.get("t")}}
 a2 = phone(port, frag.get("ps5"), {"invite": {"link": "http://127.0.0.1:1/nope", "t": frag.get("t")}})
 a3 = phone(port, frag.get("ps5"), {"invite": {"link": link, "name": "Host PC"}})
 a4 = phone(port, "A" * 21 + "h", {"invite": {"link": link}})
-rest = room_cli.communicate(timeout=20)[0]
+rest = room_cli.communicate(timeout=60)[0]
 r = finish(p, rep)
 check(a1.get("data") == {"invite_ok": True}, "the app takes a phone's invite")
 check(a2.get("data") == {"invite_ok": False, "why": "link"}, "a link that isn't one is refused")
@@ -272,7 +280,7 @@ check(f"invite key=abcdefgh123 name=Desk routes=1 route=127.0.0.1:{port} path=/a
 check("name=Host PC" in rest and "from_tv=0" in rest and a3.get("data") == {"invite_ok": True},
       "a host's push (no nonce) is marked to ask first")
 check(r["hub_hosts"] and r["hub_hosts"][0]["secret_len"] == 43, "hosted with a 43-character secret")
-check(any(m.get("t") == "leave" for m in r["hub_host_msgs"]), "the room is left when its time is up")
+check(any(m.get("t") == "leave" for m in r["hub_host_msgs"]), "the room is left when the app is done with it")
 sent = [m for m in r["hub_host_msgs"] if m.get("t") == "signal"]
 check(len(sent) == 4 - 1 and all(set(m["data"]) <= {"invite_ok", "why"} for m in sent),
       "the app only ever answers (small messages)")

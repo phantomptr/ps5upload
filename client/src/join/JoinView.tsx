@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Expand, EyeOff, Gamepad2, LogOut, Minimize, MoreHorizontal, RotateCw, Users, Volume2, VolumeX } from "lucide-react";
 
 import type { JoinStage } from "../lib/joinClient";
@@ -516,11 +516,37 @@ export function JoinView({
     return () => window.removeEventListener("resize", update);
   }, []);
 
+  // The window's full screen, one ask at a time. Leaving it is not instant: Back and then OK on a
+  // TV's remote asked for it again while leaving was still under way, the ask was skipped (the
+  // page was still full screen), and the late fullscreenchange of leaving turned the game's full
+  // screen off again (below). An ask waits for the one before it; one with nothing before it goes
+  // at once, inside the key press or tap that a browser wants for full screen.
+  const fsAsks = useRef<{ busy: number; last: Promise<void> }>({ busy: 0, last: Promise.resolve() });
+  const askFullscreen = useCallback(
+    (next: boolean): Promise<void> => {
+      const q = fsAsks.current;
+      const ask = async () => {
+        try {
+          await onFullscreen?.(next);
+        } catch {
+          // Not allowed here: the picture still fills the window.
+        }
+      };
+      const run = (q.busy === 0 ? ask() : q.last.then(ask)).finally(() => {
+        q.busy--;
+      });
+      q.busy++;
+      q.last = run;
+      return run;
+    },
+    [onFullscreen],
+  );
+
   // Leaving the view leaves full screen.
   useEffect(() => {
     if (!full) return;
-    return () => void onFullscreen?.(false);
-  }, [full, onFullscreen]);
+    return () => void askFullscreen(false);
+  }, [full, askFullscreen]);
 
   // A phone in the app turned sideways (or already sideways when the game starts): full screen,
   // as the host's player. Only on a turn: leaving full screen sideways stays left.
@@ -534,12 +560,12 @@ export function JoinView({
     const turn = () => {
       if (!mq.matches || fullNow.current) return;
       setFull(true);
-      void onFullscreen?.(true);
+      void askFullscreen(true);
     };
     turn();
     mq.addEventListener?.("change", turn);
     return () => mq.removeEventListener?.("change", turn);
-  }, [inApp, live, onFullscreen]);
+  }, [inApp, live, askFullscreen]);
 
   // A phone in a browser turned sideways: the page's full layout, and the real full screen where
   // the browser has one (Android Chrome lets the page ask inside the turn itself); upright again
@@ -551,7 +577,7 @@ export function JoinView({
     const next = step === "enter";
     fullNow.current = next;
     setFull(next);
-    void onFullscreen?.(next);
+    void askFullscreen(next);
   });
   useCollapseBars(!inApp && live && full && touch && !hasFullscreenApi());
 
@@ -560,8 +586,8 @@ export function JoinView({
   useEffect(() => {
     if (!inApp || !live || !tvNavActive() || fullNow.current) return;
     setFull(true);
-    void onFullscreen?.(true);
-  }, [inApp, live, onFullscreen]);
+    void askFullscreen(true);
+  }, [inApp, live, askFullscreen]);
 
   // Esc shows the buttons and leaves full screen (the desktop app's window has no Esc of its
   // own; a browser that kept Esc for the page gets it here). A guest's Esc is never the pad's.
@@ -603,10 +629,12 @@ export function JoinView({
 
   // The browser left full screen itself (Esc): back to the picture's place. Not on a touch
   // screen, where Android drops it on a system gesture mid-game and the picture keeps filling.
+  // Not while the page's own ask is under way: that change is the page's (leaving, then asking
+  // again), not the browser's.
   useEffect(() => {
     if (!full || typeof document === "undefined") return;
     const onChange = () => {
-      if (document.fullscreenElement || coarsePointer()) return;
+      if (document.fullscreenElement || coarsePointer() || fsAsks.current.busy > 0) return;
       setFull(false);
     };
     document.addEventListener("fullscreenchange", onChange);
@@ -621,7 +649,7 @@ export function JoinView({
   const guideOpen = live && showsGuide({ player: livePlayer, guided, movedOff, reconnecting }) && !status?.playsAs;
   const setFullscreen = async (next: boolean) => {
     setFull(next);
-    await onFullscreen?.(next);
+    await askFullscreen(next);
   };
   const focusGame = () => game.current?.focus({ preventScroll: true });
   const dismissGuide = () => {

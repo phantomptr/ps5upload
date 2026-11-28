@@ -2,7 +2,7 @@
 //   play-cli discover
 //   play-cli join ADDR PORT [CODE] [--seconds N] [--dump FILE] [--leave-after N]
 //   play-cli companion ADDR PORT [TOKEN] [--pair] [--seconds N] [--invite] [--allow-first]
-//   play-cli room HUB_URL SECRET_FILE [--seconds N]
+//   play-cli room HUB_URL SECRET_FILE [--seconds N] [--invites N]
 //   play-cli handoff HUB_URL SECRET_FILE [--own PORT] [--seconds N]   (an invite from the phone, played)
 //   play-cli again ADDR PORT PASS [--link ROOM,FP,KEY] [--own PORT] [--no-direct] [--seconds N]
 //   play-cli join ... [--via rooms|friends|nearby] [--password PW] [--pk KEY] [--device D] [--name N]
@@ -538,6 +538,8 @@ int discover()
 }
 
 // The waiting room (docs/EASY_JOIN.md) against a hub: play-cli room URL SECRET_FILE [--seconds N]
+// [--invites N]. --invites: done once that many invites came (else at --seconds), so a test waits
+// for what it checks rather than a fixed time a busy computer may not keep to.
 int room(int argc, char **argv)
 {
     if (argc < 4)
@@ -546,9 +548,11 @@ int room(int argc, char **argv)
     r.init(argv[3], argv[2]);
     r.arm();
     const int seconds = arg_int(argc, argv, "--seconds", 20);
+    const int want = arg_int(argc, argv, "--invites", 0);
+    int invites = 0;
     const std::uint64_t t0 = net::now_us();
     int state = -1;
-    while (net::now_us() - t0 < static_cast<std::uint64_t>(seconds) * 1000000)
+    while (net::now_us() - t0 < static_cast<std::uint64_t>(seconds) * 1000000 && (!want || invites < want))
     {
         const auto v = r.view();
         if (v.state != state)
@@ -567,6 +571,7 @@ int room(int argc, char **argv)
                             inv.routes[0].path);
             std::printf(" from_tv=%d internet=%d\n", inv.nonce[0] != 0, inv.internet);
             std::fflush(stdout);
+            ++invites;
         }
         net::sleep_ms(50);
     }
