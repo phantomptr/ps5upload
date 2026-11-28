@@ -51,7 +51,11 @@ void App::easy_init() noexcept
     }
     char secret[160];
     std::snprintf(secret, sizeof secret, "%s/room.txt", platform::data_dir());
+    const Friend *known[Friends::kMax];
+    log("easy: %d remembered hosts; the waiting room on %s", friends_.recent(known, Friends::kMax),
+        hub[0] ? hub : "the public hub");
     room_.init(secret, hub[0] ? hub : nullptr);
+    log("easy: waiting room %s", room_.room()[0] ? "ready to open" : "not available");
 }
 
 void App::save_friends() noexcept

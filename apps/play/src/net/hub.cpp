@@ -191,7 +191,7 @@ bool HubLink::open(const char *url, unsigned timeout_ms) noexcept
     std::uint32_t ip = 0;
     if (!resolve_name(host, &ip))
     {
-        err_ = "dns";
+        err_ = dns_error();
         return false;
     }
     const int fd = dial(ip, port, timeout_ms, &err_);

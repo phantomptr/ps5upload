@@ -45,4 +45,6 @@ class Tls
 bool secure_random(std::uint8_t *out, std::size_t n) noexcept;
 // A name to an IPv4 address (dotted quads too): the console's resolver on the PS5.
 bool resolve_name(const char *host, std::uint32_t *ip_be) noexcept;
+// Why the last resolve_name failed ("dns" and the console's codes), for the log.
+const char *dns_error() noexcept;
 } // namespace play::net

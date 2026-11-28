@@ -198,3 +198,19 @@ for a room); it is not built: the QR is the way in, and the phone page takes a p
 The app's room is one socket of the hub's 2,000 and one room of its 5,000, only while someone
 looks at the home screen; nothing polls. The stand-in end-to-end run (three hand-offs and one
 refusal) moved 10 messages in and 5 out, 738 and 519 bytes.
+
+## Verified (2026-11-27)
+
+* **PS5 Pro, FW 13.60, live hub** (the app installed by hand, launched, then removed): the app
+  resolves hub.phantomptr.com (libSceNet's resolver, with its own memory pool), opens TLS 1.2 with
+  BearSSL against the ISRG roots and the console's clock, and hosts its bound room about 1 s after
+  start; the room id stays the same across runs (`room.txt`). From the Mac, as a phone, over the
+  live hub: a home-network link was answered `invite_ok: true` (its route probed from the PS5) in
+  0.8 s, an unreachable one `invite_ok: false, why: route`, a non-link `why: link`.
+* Found on the Pro and fixed: `sceRandomGetRandomNumber` ends the app (libSceRandom is not loaded
+  for it): random bytes now come from the kernel (`sysctl` kern.arandom). The app's data folder
+  was 0755, so the helper could not delete it (uninstall with data): now 0777.
+* Not on hardware: auto-join from the TV's own QR (its nonce is only on the screen; the stand-in
+  end-to-end run covers it), "Join <host>'s game" and "Play again" (they need an engine with this
+  change on the network: the Mac's firewall holds a test engine off the LAN), and a host's "Send
+  invite" (the engine's hand-off is tested against a real hub in its unit tests).

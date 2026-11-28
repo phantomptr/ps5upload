@@ -35,8 +35,13 @@ bool load_secret(const char *path, char *out, std::size_t cap) noexcept
         }
     }
     std::uint8_t raw[32];
+    log("room: making the room's secret");
     if (!net::secure_random(raw, sizeof raw))
+    {
+        log("room: no random bytes for the secret");
         return false;
+    }
+    log("room: secret made");
     invite::b64url(raw, sizeof raw, out, cap);
     if (path && *path)
     {
@@ -254,7 +259,9 @@ void WaitingRoom::session() noexcept
         {
             hosted = true;
             set(View::ready);
-            log("room: open on the hub");
+            // The room's id is on the TV anyway (the QR code); the secret and the nonce never go
+            // to the log.
+            log("room: open on the hub (room %s)", room_);
         }
         else if (d.str_is(t, "error"))
         {

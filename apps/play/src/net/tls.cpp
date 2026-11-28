@@ -6,6 +6,7 @@
 
 #include <bearssl.h>
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -14,11 +15,15 @@
 #include <time.h>
 
 #ifdef PLAY_PS5
-extern "C" int sceRandomGetRandomNumber(void *buf, std::size_t size);
+extern "C" int sysctl(const int *name, unsigned namelen, void *oldp, std::size_t *oldlenp, const void *newp,
+                      std::size_t newlen);
 extern "C" int sceNetResolverCreate(const char *name, int memid, int flags);
 extern "C" int sceNetResolverStartNtoa(int rid, const char *hostname, std::uint32_t *addr, int timeout, int retry,
                                        int flags);
 extern "C" int sceNetResolverDestroy(int rid);
+extern "C" int sceNetResolverGetError(int rid, int *result);
+extern "C" int sceNetPoolCreate(const char *name, int size, int flags);
+extern "C" int sceNetPoolDestroy(int memid);
 #else
 #include <fcntl.h>
 #include <unistd.h>
@@ -239,10 +244,14 @@ long Tls::read(void *out, std::size_t cap, unsigned timeout_ms) noexcept
 bool secure_random(std::uint8_t *out, std::size_t n) noexcept
 {
 #ifdef PLAY_PS5
+    // The kernel's generator (kern.arandom through libkernel's sysctl). libSceRandom is not loaded
+    // for this app: calling sceRandomGetRandomNumber ended it (seen on the Pro, 13.60).
     while (n)
     {
-        const std::size_t k = n < 64 ? n : 64; // the generator's most per call
-        if (sceRandomGetRandomNumber(out, k) != 0)
+        std::size_t k = n < 256 ? n : 256; // the most one call gives
+        const int mib[2] = {1 /* CTL_KERN */, 37 /* KERN_ARND */};
+        const std::size_t want = k;
+        if (sysctl(mib, 2, out, &k, nullptr, 0) != 0 || k != want)
             return false;
         out += k;
         n -= k;
@@ -265,19 +274,47 @@ bool secure_random(std::uint8_t *out, std::size_t n) noexcept
 #endif
 }
 
+namespace
+{
+char g_dns_error[32] = "dns";
+} // namespace
+
+const char *dns_error() noexcept
+{
+    return g_dns_error;
+}
+
 bool resolve_name(const char *host, std::uint32_t *ip_be) noexcept
 {
     if (resolve(host, ip_be)) // a dotted quad (and, on a computer, any name)
         return true;
 #ifdef PLAY_PS5
-    const int rid = sceNetResolverCreate("play-hub", 0, 0);
-    if (rid < 0)
+    // The console's resolver needs a memory pool of its own (libSceNet).
+    const int pool = sceNetPoolCreate("play-dns", 4 * 1024, 0);
+    if (pool < 0)
+    {
+        std::snprintf(g_dns_error, sizeof g_dns_error, "dns pool %#x", static_cast<unsigned>(pool));
         return false;
+    }
+    const int rid = sceNetResolverCreate("play-dns", pool, 0);
+    if (rid < 0)
+    {
+        std::snprintf(g_dns_error, sizeof g_dns_error, "dns create %#x", static_cast<unsigned>(rid));
+        sceNetPoolDestroy(pool);
+        return false;
+    }
     std::uint32_t a = 0;
     const int r = sceNetResolverStartNtoa(rid, host, &a, 0, 0, 0);
+    int why = 0;
+    if (r < 0)
+        sceNetResolverGetError(rid, &why);
     sceNetResolverDestroy(rid);
+    sceNetPoolDestroy(pool);
     if (r < 0 || !a)
+    {
+        std::snprintf(g_dns_error, sizeof g_dns_error, "dns %#x/%d", static_cast<unsigned>(r), why);
         return false;
+    }
     *ip_be = a;
     return true;
 #else
