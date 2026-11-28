@@ -204,31 +204,31 @@ async fn note_peer(
     next.run(req).await
 }
 
+/// 404 in the API's shape for anything else on the guest port (with or without the web UI
+/// compiled in: the guest port never serves the web UI).
+async fn not_here(req: axum::extract::Request) -> axum::response::Response {
+    crate::api_errors::no_such_route(req.uri().path())
+}
+
 /// The guest port's whole HTTP surface: the two sockets, and 404 for everything else (another
 /// method on those two paths included).
 fn router() -> Router {
     let r = Router::new()
-        .route(
-            "/api/join/ws",
-            get(crate::join::ws).fallback(crate::api_errors::fallback),
-        )
-        .route(
-            "/api/play/app",
-            get(crate::play_app::ws).fallback(crate::api_errors::fallback),
-        )
+        .route("/api/join/ws", get(crate::join::ws).fallback(not_here))
+        .route("/api/play/app", get(crate::play_app::ws).fallback(not_here))
         // Play Rooms' Details before joining, and the real ping on the way a join would use
         // (design 6.4): what the room's host chose to show, echoes only.
         .route(
             "/api/join/preview",
-            get(crate::join::preview).fallback(crate::api_errors::fallback),
+            get(crate::join::preview).fallback(not_here),
         )
         .route(
             "/api/join/probe",
-            get(crate::join_route::probe).fallback(crate::api_errors::fallback),
+            get(crate::join_route::probe).fallback(not_here),
         );
     #[cfg(test)]
     let r = r.route_layer(axum::middleware::from_fn(note_peer));
-    r.fallback(crate::api_errors::fallback)
+    r.fallback(not_here)
         .layer(axum::middleware::from_fn(crate::log_requests))
         .layer(axum::middleware::from_fn(crate::browser_origin_guard))
         // Errors in the API's shape, as on the main listener (no base path: the core reaches this

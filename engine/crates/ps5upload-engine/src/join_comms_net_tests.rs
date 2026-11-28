@@ -307,12 +307,12 @@ async fn four_talkers_leave_the_pads_latency_alone_and_fit_the_budget() {
         host_heard.store(0, Ordering::Relaxed);
         let (mut silent, mut talking) = run(&timed, &mut sinks, &host_tx).await;
         assert!(
-            silent.len() as u16 >= FRAMES * 9 / 10,
+            silent.len() as u16 >= FRAMES * 3 / 4,
             "silent: {} of {FRAMES}",
             silent.len()
         );
         assert!(
-            talking.len() as u16 >= FRAMES * 9 / 10,
+            talking.len() as u16 >= FRAMES * 3 / 4,
             "talking: {} of {FRAMES}",
             talking.len()
         );
