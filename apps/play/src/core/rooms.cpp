@@ -525,10 +525,73 @@ bool parse_room_push(const char *text, std::size_t len, RoomState &st) noexcept
         else if (d.type(m) == json::Type::boolean)
             st.muted_voice = st.muted_chat = d.boolean(m);
     }
+    const int cm = d.get(0, "comms");
+    if (d.type(cm) == json::Type::object)
+    {
+        any = true;
+        st.comms_known = true;
+        st.notice_ver = num_or(d, d.get(cm, "notice"), st.notice_ver);
+        st.accepted = d.boolean(d.get(cm, "accepted"), st.accepted);
+        if (d.type(d.get(cm, "chat")) == json::Type::string)
+            copy(st.chat, sizeof st.chat, d, d.get(cm, "chat"));
+        if (d.type(d.get(cm, "voice")) == json::Type::string)
+            copy(st.voice, sizeof st.voice, d, d.get(cm, "voice"));
+        const int caps = d.get(cm, "caps");
+        if (d.type(caps) == json::Type::array)
+        {
+            st.cap_chat = has_cap(d, caps, "chat");
+            st.cap_voice = has_cap(d, caps, "voice");
+        }
+    }
+    const int rf = d.get(0, "comms_refused");
+    if (d.type(rf) == json::Type::object)
+    {
+        any = true;
+        copy(st.refused_what, sizeof st.refused_what, d, d.get(rf, "what"));
+        copy(st.refused_why, sizeof st.refused_why, d, d.get(rf, "why"));
+        st.retry_ms = num_or(d, d.get(rf, "retry_ms"), 0);
+        if (d.type(d.get(rf, "notice")) == json::Type::number)
+            st.notice_ver = num_or(d, d.get(rf, "notice"), st.notice_ver);
+        ++st.refused_rev;
+    }
     const int v = d.get(0, "voice");
     if (d.type(v) == json::Type::object)
     {
         any = true;
+        st.you_sid = num_or(d, d.get(v, "you"), st.you_sid);
+        if (d.type(d.get(v, "mic")) == json::Type::string)
+            st.mic_on = d.str_is(d.get(v, "mic"), "on");
+        st.ptt = d.boolean(d.get(v, "ptt"), st.ptt);
+        st.stepped = d.boolean(d.get(v, "stepped"), st.stepped);
+        st.kbps = num_or(d, d.get(v, "kbps"), st.kbps);
+        st.frame_ms = num_or(d, d.get(v, "frame_ms"), st.frame_ms);
+        const int pp = d.get(v, "people");
+        if (d.type(pp) == json::Type::array)
+        {
+            st.n_people = 0;
+            for (std::uint32_t i = 0; i < d.count(pp) && st.n_people < 8; ++i)
+            {
+                const int x = d.item(pp, i);
+                auto &o = st.people[st.n_people++];
+                o = RoomState::Person{};
+                o.sid = num_or(d, d.get(x, "sid"), -1);
+                copy(o.name, sizeof o.name, d, d.get(x, "name"));
+                o.player = num_or(d, d.get(x, "player"), 0);
+                o.host = d.boolean(d.get(x, "host"));
+                o.muted = d.boolean(d.get(x, "muted"));
+                o.paused = d.type(d.get(x, "paused")) == json::Type::string || d.boolean(d.get(x, "paused"));
+                o.mic = d.str_is(d.get(x, "mic"), "on") || d.boolean(d.get(x, "mic"));
+            }
+        }
+        const int spk = d.get(v, "speaking");
+        if (d.type(spk) == json::Type::array)
+            for (int i = 0; i < st.n_people; ++i)
+            {
+                bool on = false;
+                for (std::uint32_t k = 0; k < d.count(spk) && !on; ++k)
+                    on = num_or(d, d.item(spk, k), -2) == st.people[i].sid;
+                st.people[i].speaking = on;
+            }
         const int sp = d.get(v, "speaking");
         if (d.type(sp) == json::Type::array)
             for (int i = 0; i < st.n_players; ++i)

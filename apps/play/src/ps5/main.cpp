@@ -10,6 +10,7 @@
 #include "sound.hpp"
 #include "sys.hpp"
 #include "video.hpp"
+#include "voice.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -78,6 +79,10 @@ class Sinks final : public GuestSinks
     {
         return ps5::video::wants_keyframe();
     }
+    void voice(std::uint8_t speaker, std::uint16_t seq, const std::uint8_t *d, std::size_t n) override
+    {
+        ps5::voice_io::packet(speaker, seq, d, n);
+    }
     void stats(char *out, std::size_t cap) override
     {
         const auto v = ps5::video::stats();
@@ -128,10 +133,43 @@ Input input() noexcept
 void stream_pad(Guest *guest) noexcept
 {
     ps5::padio::stream_to(guest);
+    ps5::voice_io::set_guest(guest);
 }
 Chords chords() noexcept
 {
     return ps5::padio::chords();
+}
+Chords chords_peek() noexcept
+{
+    return ps5::padio::chords_peek();
+}
+void pad_to_menu(bool on) noexcept
+{
+    ps5::padio::to_menu(on);
+}
+void ptt_on_create(bool on) noexcept
+{
+    ps5::padio::ptt_on_create(on);
+}
+void voice_allow(const voice::Allow &a) noexcept
+{
+    ps5::voice_io::allow(a);
+}
+MicState mic_state() noexcept
+{
+    return ps5::voice_io::state();
+}
+void voice_volume(int speaker, int percent, bool muted) noexcept
+{
+    ps5::voice_io::volume(speaker, percent, muted);
+}
+void voice_duck(int level) noexcept
+{
+    ps5::voice_io::duck(level);
+}
+std::uint32_t voice_speaking() noexcept
+{
+    return ps5::voice_io::speaking();
 }
 bool video_showing() noexcept
 {
@@ -260,6 +298,7 @@ int main()
     if (sceUserServiceGetUserName(user_id, user_name_buf, sizeof user_name_buf) != 0)
         user_name_buf[0] = 0;
     ps5::padio::open(user_id);
+    ps5::voice_io::init(user_id); // the mic opens only when switched on in a room
     msg_buf[0] = ps5::big_alloc(kMsgCap);
     msg_buf[1] = ps5::big_alloc(kMsgCap);
     auto *ui_px = reinterpret_cast<std::uint32_t *>(ps5::big_alloc(ui::kW * ui::kH * 4));

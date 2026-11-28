@@ -16,7 +16,7 @@ struct Host
     std::uint32_t seen = 0; // order: higher = used more recently
     // The engine's id (its discovery answer's `id`, the helper mesh's `id`): the pairing belongs
     // to the computer, never to an address (integration design P0-1). "" = not known yet.
-    char id[40] = {};
+    char id[72] = {};
 };
 
 struct Settings
@@ -33,6 +33,7 @@ struct Settings
     int notice = 0;          // the responsibility notice's version accepted (0 = never)
     bool welcome_done = false; // the first-run guide was seen
     bool rooms_intro = false;  // "Rooms are open games you can ask to join..." was seen
+    bool public_ok = false;    // the first-time "Make public" confirm was said yes to
     bool talk_open = false;  // open mic instead of push-to-talk (only where the room allows it)
     int duck = 1;            // the game's sound while others talk: 0 off, 1 a little, 2 more
     bool show_chat = true;   // chat lines over the game

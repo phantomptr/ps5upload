@@ -173,6 +173,7 @@ std::size_t Settings::write(char *out, std::size_t cap) const noexcept
     add("notice=%d\n", notice);
     add("welcome=%d\n", welcome_done ? 1 : 0);
     add("rooms_intro=%d\n", rooms_intro ? 1 : 0);
+    add("public_ok=%d\n", public_ok ? 1 : 0);
     add("talk_open=%d\n", talk_open ? 1 : 0);
     add("duck=%d\n", duck);
     add("show_chat=%d\n", show_chat ? 1 : 0);
@@ -236,6 +237,8 @@ void Settings::parse(const char *text, std::size_t len) noexcept
             welcome_done = std::atoi(v) != 0;
         else if (!std::strcmp(k, "rooms_intro"))
             rooms_intro = std::atoi(v) != 0;
+        else if (!std::strcmp(k, "public_ok"))
+            public_ok = std::atoi(v) != 0;
         else if (!std::strcmp(k, "talk_open"))
             talk_open = std::atoi(v) != 0;
         else if (!std::strcmp(k, "duck"))
@@ -311,9 +314,9 @@ void Settings::parse(const char *text, std::size_t len) noexcept
     {
         // addr|port|seen|id: two rows may share an address (two engines over one Tailscale
         // forward), so the row is the one with that address and that `seen`
-        char a[64] = {}, id[40] = {};
+        char a[64] = {}, id[72] = {};
         unsigned port = 0, seen = 0;
-        if (std::sscanf(ids[i], "%63[^|]|%u|%u|%39[^|\n]", a, &port, &seen, id) == 4)
+        if (std::sscanf(ids[i], "%63[^|]|%u|%u|%71[^|\n]", a, &port, &seen, id) == 4)
             for (auto &h : hosts)
                 if (h.addr[0] && h.port == port && h.seen == seen && !std::strcmp(h.addr, a))
                     std::snprintf(h.id, sizeof h.id, "%s", id);

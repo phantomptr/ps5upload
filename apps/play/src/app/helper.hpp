@@ -35,7 +35,22 @@ struct Engine
     bool tailnet = false;
     std::uint16_t port = 0; // 0: not said (the UDP probe, or the default 19113)
     bool preferred = false; // the one the helper says the app should dial
+    char id[72] = {};       // the engine id (13.0.0 helpers): computers are kept by it
 };
+// GET /v1/play/grants (13.0.0, app API 2): a one-time grant an engine left with the helper so this
+// app pairs with it without a code (integration design F1). Each is handed out once.
+struct Grant
+{
+    char engine_id[72] = {};
+    char name[65] = {};
+    char kind[16] = {};
+    char addr[48] = {};
+    std::uint16_t port = 0;
+    char app_ws[48] = {};
+    char grant[72] = {};
+    int expires_s = 0;
+};
+int parse_grants(const char *text, std::size_t len, Grant *out, int cap) noexcept;
 
 bool parse_rp(const char *text, std::size_t len, Rp &out) noexcept;
 bool parse_pin(const char *text, std::size_t len, Pin &out) noexcept;
@@ -50,6 +65,12 @@ bool pin_request(Pin &out, char *err, std::size_t cap) noexcept;
 bool pin_get(Pin &out) noexcept;
 bool pin_cancel() noexcept;
 int mesh(Engine *out, int cap) noexcept;
+// GET /v1/version: the app API's version (2 since 13.0.0), 0 when older, -1 not there.
+int api_version() noexcept;
+int grants(Grant *out, int cap) noexcept;
+// GET /v1/intent: where Minion asked this app to open ("join", "host", "rooms"), taken once;
+// false when none (or an older helper).
+bool intent(char *out, std::size_t cap) noexcept;
 // Opens the helper's forward to a tailnet engine; *local_port is then dialled on 127.0.0.1.
 bool forward(const char *peer, std::uint16_t port, std::uint16_t *local_port, char *err, std::size_t cap) noexcept;
 } // namespace play::helper

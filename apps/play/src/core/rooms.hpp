@@ -183,9 +183,29 @@ struct RoomState
     char voice[8] = {};    // "off" / "ptt" / "open" ("" = the host has no voice)
     bool muted_voice = false, muted_chat = false;
     char paused[8] = {};   // voice paused: "poor" (the connection needs it for the game)
+    // The engine's chat and voice (API.md "Play Rooms chat and voice"): {"comms"} and {"voice"}.
+    bool comms_known = false;
+    int notice_ver = 0;     // the notice version the engine wants accepted
+    bool accepted = false;  // this person's acceptance reached the engine
+    bool cap_chat = false, cap_voice = false;
+    int you_sid = -1;
+    bool mic_on = false, ptt = false, stepped = false;
+    int kbps = 24, frame_ms = 20;
+    struct Person
+    {
+        int sid = -1;
+        char name[40] = {};
+        int player = 0;
+        bool host = false, muted = false, paused = false, mic = false, speaking = false;
+    } people[8];
+    int n_people = 0;
+    // the last refusal ({"comms_refused": {what, why, notice?, retry_ms?}}); rev bumps on each
+    char refused_what[8] = {}, refused_why[16] = {};
+    int retry_ms = 0;
+    std::uint32_t refused_rev = 0;
 };
-// Reads any of {"room": {...}}, {"voice": {...}}, {"muted": {...}} into `st` (the parts a message
-// does not carry stay); false when the message is none of them.
+// Reads any of {"room"}, {"comms"}, {"voice"}, {"muted"}, {"comms_refused"} into `st` (the parts a
+// message does not carry stay); false when the message is none of them.
 bool parse_room_push(const char *text, std::size_t len, RoomState &st) noexcept;
 
 // Names (the design's 3.5): 1-24 characters of letters, digits, spaces and basic punctuation;

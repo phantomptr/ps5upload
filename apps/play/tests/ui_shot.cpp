@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "../src/app/app.hpp"
 #include "../src/app/platform.hpp"
+#include "../src/app/rooms_net.hpp"
 #include "../src/ui/canvas.hpp"
 
 #include <cstdio>
@@ -88,6 +89,20 @@ namespace play::platform
 Input input() noexcept { return {}; }
 void stream_pad(Guest *) noexcept {}
 Chords chords() noexcept { return {}; }
+Chords chords_peek() noexcept { return {}; }
+void pad_to_menu(bool) noexcept {}
+void ptt_on_create(bool) noexcept {}
+void voice_allow(const voice::Allow &) noexcept {}
+MicState mic_state() noexcept
+{
+    MicState m;
+    m.open = true;
+    m.silent = 0;
+    return m;
+}
+void voice_volume(int, int, bool) noexcept {}
+void voice_duck(int) noexcept {}
+std::uint32_t voice_speaking() noexcept { return 0; }
 bool video_showing() noexcept { return false; }
 void present(const std::uint32_t *ui) noexcept { presented = const_cast<std::uint32_t *>(ui); }
 void overlay(const std::uint32_t *, int, int) noexcept {}
@@ -270,5 +285,163 @@ int main(int argc, char **argv)
     f.pin.seconds_left = 271;
     shot("host-helper", App::Screen::host, f);
     shot("settings", App::Screen::settings, f);
+
+    // ---- Play Rooms (docs/ROOMS.md) ----
+    App::Fake r;
+    r.on = true;
+    r.notice_accepted = 1;
+    {
+        // the Join list: a friend's room, a game nearby, public rooms
+        RoomsNet::View &v = r.rooms;
+        v.state = RoomsNet::State::ok;
+        v.n_friends = 1;
+        rooms::Card &fr = v.friends[0];
+        std::snprintf(fr.room, sizeof fr.room, "lobbyF");
+        std::snprintf(fr.name, sizeof fr.name, "Alex's room");
+        std::snprintf(fr.host, sizeof fr.host, "Alex");
+        std::snprintf(fr.tag, sizeof fr.tag, "77B0");
+        std::snprintf(fr.game_title, sizeof fr.game_title, "ASTRO BOT");
+        fr.in = 2, fr.max = 4, fr.proto = 2, fr.est_ms = 28, fr.cap_ps5app = true;
+        const char *names[] = {"Couch chaos", "Sunday racers", "Late night co-op"};
+        const char *hosts[] = {"Sam", "Kai", "Mo"};
+        const char *games[] = {"It Takes Two", "Gran Turismo 7", "Split Fiction"};
+        const int ins[] = {1, 4, 2}, maxes[] = {2, 4, 4}, ests[] = {70, 30, 110};
+        for (int i = 0; i < 3; ++i)
+        {
+            rooms::Card &k = v.list.cards[v.list.n++];
+            std::snprintf(k.room, sizeof k.room, "lobby%d", i);
+            std::snprintf(k.name, sizeof k.name, "%s", names[i]);
+            std::snprintf(k.host, sizeof k.host, "%s", hosts[i]);
+            std::snprintf(k.tag, sizeof k.tag, "%s", i == 0 ? "4F2A" : i == 1 ? "9C11" : "1E3D");
+            std::snprintf(k.game_title, sizeof k.game_title, "%s", games[i]);
+            std::snprintf(k.lang, sizeof k.lang, "%s", i == 1 ? "de" : "en");
+            k.in = ins[i], k.max = maxes[i], k.est_ms = ests[i], k.proto = 2, k.cap_ps5app = true, k.cap_preview = true;
+            k.pw = i == 0;
+            k.group = rooms::Group::pub;
+        }
+        r.found = 1;
+        r.answers[0].ip_be = 0x1456a8c0;
+        std::snprintf(r.answers[0].info.name, sizeof r.answers[0].info.name, "Dad's PC");
+        r.answers[0].info.port = 19113;
+        r.answers[0].info.together = 1;
+        // the focused card's details
+        v.detail = RoomsNet::Detail::ok;
+        std::snprintf(v.detail_key, sizeof v.detail_key, "lobbyF");
+        rooms::Preview &p = v.preview;
+        p.ok = true;
+        std::snprintf(p.host, sizeof p.host, "Alex");
+        std::snprintf(p.tag, sizeof p.tag, "77B0");
+        std::snprintf(p.room_name, sizeof p.room_name, "Alex's room");
+        std::snprintf(p.game_title, sizeof p.game_title, "ASTRO BOT");
+        std::snprintf(p.res, sizeof p.res, "1080p");
+        std::snprintf(p.codec, sizeof p.codec, "hevc");
+        p.fps = 60, p.kbps = 15000, p.playing_min = 42, p.n_players = 2;
+        std::snprintf(p.players[0].name, sizeof p.players[0].name, "Alex");
+        p.players[0].seat = 1;
+        std::snprintf(p.players[0].tier, sizeof p.players[0].tier, "excellent");
+        std::snprintf(p.players[1].name, sizeof p.players[1].name, "Mia");
+        p.players[1].seat = 2;
+        std::snprintf(p.players[1].tier, sizeof p.players[1].tier, "good");
+        v.measured_ms = 28;
+    }
+    shot("rooms", App::Screen::rooms, r);
+    shot("rooms-details", App::Screen::details, r);
+    shot("rooms-filter", App::Screen::filter, r);
+    {
+        App::Fake e = r;
+        e.rooms = RoomsNet::View{};
+        e.rooms.state = RoomsNet::State::unreachable;
+        e.found = 0;
+        shot("rooms-offline", App::Screen::rooms, e);
+    }
+    app.fake_keyboard("Password for Couch chaos", "hunt", true);
+    shot("keyboard", App::Screen::keyboard, r);
+    r.notice_accepted = 0;
+    shot("notice", App::Screen::notice, r);
+    r.notice_accepted = 1;
+    shot("thanks", App::Screen::thanks, r);
+    app.fake_page(1, 0);
+    shot("welcome", App::Screen::welcome, r);
+    shot("help", App::Screen::help, r);
+    // joining a room: a name already there, a wrong password, the real round trip while asking
+    r.guest = GuestView{};
+    r.guest.phase = GuestView::name_taken;
+    std::snprintf(r.guest.suggest, sizeof r.guest.suggest, "Tester (2)");
+    shot("name-taken", App::Screen::joining, r);
+    r.guest.phase = GuestView::refused;
+    std::snprintf(r.guest.why, sizeof r.guest.why, "password");
+    r.guest.tries_left = 4;
+    shot("wrong-password", App::Screen::joining, r);
+    r.guest.phase = GuestView::asking;
+    r.guest.route_rtt_ms = 31;
+    r.guest.tier = 3;
+    shot("asking-ping", App::Screen::joining, r);
+    // in game: chat lines over the picture, the Room menu
+    r.guest = GuestView{};
+    r.guest.phase = GuestView::joined;
+    r.picture = true;
+    rooms::RoomState &rs = r.guest.room;
+    rs.known = true;
+    std::snprintf(rs.name, sizeof rs.name, "Couch chaos");
+    std::snprintf(rs.chat, sizeof rs.chat, "text");
+    std::snprintf(rs.voice, sizeof rs.voice, "ptt");
+    rs.you_rtt = 31, rs.link_rtt = 2;
+    std::snprintf(rs.you_tier, sizeof rs.you_tier, "good");
+    std::snprintf(rs.link_tier, sizeof rs.link_tier, "excellent");
+    rs.n_players = 3;
+    std::snprintf(rs.players[0].name, sizeof rs.players[0].name, "Sam");
+    rs.players[0].id = 1, rs.players[0].speaking = true;
+    std::snprintf(rs.players[1].name, sizeof rs.players[1].name, "Tester");
+    rs.players[1].id = 2, rs.players[1].you = true;
+    std::snprintf(rs.players[2].name, sizeof rs.players[2].name, "Mia");
+    rs.players[2].id = 3;
+    r.guest.chat_unread = 2;
+    r.chat.add("Mia", 2, "", 990000, false);
+    r.chat.add("Sam", 0, "nice jump! see you at example.com", 995000, false);
+    r.mic_on = true;
+    shot("playing-chat", App::Screen::playing, r);
+    r.overlay = true;
+    shot("playing-room-menu", App::Screen::playing, r);
+    r.overlay = false;
+    r.mic_on = false;
+    // the host's My room: a public room, an ask from Rooms with the password right, two players
+    App::Fake h = f;
+    h.helper_present = 1;
+    h.pin = helper::Pin{};
+    CompanionDoc &hd = h.host.doc;
+    hd.room.known = true;
+    std::snprintf(hd.room.name, sizeof hd.room.name, "Sam's room");
+    std::snprintf(hd.room.vis, sizeof hd.room.vis, "public");
+    std::snprintf(hd.room.chat, sizeof hd.room.chat, "quick");
+    std::snprintf(hd.room.voice, sizeof hd.room.voice, "ptt");
+    std::snprintf(hd.room.listed, sizeof hd.room.listed, "listed");
+    std::snprintf(hd.room.game, sizeof hd.room.game, "ASTRO BOT");
+    std::snprintf(hd.room.link_tier, sizeof hd.room.link_tier, "excellent");
+    hd.room.link_rtt = 2;
+    hd.room.size = 4;
+    hd.room.password = true;
+    std::snprintf(hd.asks[0].name, sizeof hd.asks[0].name, "Jo");
+    std::snprintf(hd.asks[0].via, sizeof hd.asks[0].via, "rooms");
+    std::snprintf(hd.asks[0].tag, sizeof hd.asks[0].tag, "9C11");
+    hd.asks[0].password_ok = 1;
+    hd.asks[0].rtt_hint = 70;
+    hd.n_guests = 2;
+    hd.guests[0].id = 3;
+    hd.guests[1] = hd.guests[0];
+    hd.guests[1].id = 4;
+    hd.guests[1].player = 3;
+    hd.guests[1].rtt_ms = 74;
+    std::snprintf(hd.guests[1].name, sizeof hd.guests[1].name, "Lee");
+    std::snprintf(hd.guests[1].tag, sizeof hd.guests[1].tag, "4F2A");
+    std::snprintf(hd.guests[1].tier, sizeof hd.guests[1].tier, "playable");
+    std::snprintf(hd.guests[1].route, sizeof hd.guests[1].route, "internet");
+    hd.guests[1].from_rooms = true;
+    shot("host-room", App::Screen::host, h);
+    app.fake_page(0, 2);
+    shot("host-this-ps5", App::Screen::host, h);
+    app.fake_page(0, 0);
+    app.fake(App::Screen::host, h);
+    app.fake_confirm_close();
+    shot("host-close", App::Screen::confirm, h);
     return 0;
 }

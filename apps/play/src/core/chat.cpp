@@ -243,6 +243,12 @@ bool parse(const char *t, std::size_t len, Incoming &in) noexcept
     if (!d.str(d.get(c, "from"), in.from, sizeof in.from))
         in.from[0] = 0;
     in.system = d.boolean(d.get(c, "system"));
+    if (d.type(d.get(c, "id")) == json::Type::number)
+        in.id = d.integer(d.get(c, "id"));
+    if (d.type(d.get(c, "sid")) == json::Type::number)
+        in.sid = static_cast<int>(d.integer(d.get(c, "sid")));
+    if (d.type(d.get(c, "x")) == json::Type::number)
+        in.x = static_cast<int>(d.integer(d.get(c, "x")));
     const int q = d.get(c, "quick");
     if (d.type(q) == json::Type::number)
     {
@@ -274,12 +280,87 @@ bool Rate::take(std::uint64_t now) noexcept
     return true;
 }
 
+void Log::add_line(const Incoming &in, std::uint64_t now, bool mine) noexcept
+{
+    if (in.id >= 0)
+        for (int i = 0; i < n_; ++i)
+        {
+            Line &l = lines_[(head_ + i) % kLines];
+            if (l.id == in.id)
+            {
+                l.times = in.x > 1 ? in.x : l.times;
+                l.at_us = now;
+                if (!mine)
+                    ++unread_;
+                return;
+            }
+        }
+    Line *l;
+    if (n_ < kLines)
+        l = &lines_[(head_ + n_++) % kLines];
+    else
+    {
+        l = &lines_[head_];
+        head_ = (head_ + 1) % kLines;
+    }
+    *l = Line{};
+    std::snprintf(l->from, sizeof l->from, "%s", in.from);
+    l->quick = in.quick;
+    std::snprintf(l->text, sizeof l->text, "%s", in.text);
+    l->at_us = now;
+    l->mine = mine;
+    l->id = in.id;
+    l->times = in.x > 1 ? in.x : 1;
+    if (!mine)
+        ++unread_;
+}
+
+int parse_history(const char *t, std::size_t len, Log &log, std::uint64_t now) noexcept
+{
+    static json::Token toks[600];
+    json::Doc d(toks, 600);
+    if (!d.parse(t, len) || d.type(0) != json::Type::object)
+        return 0;
+    const int h = d.get(0, "chat_history");
+    int n = 0;
+    for (std::uint32_t i = 0; i < d.count(h); ++i)
+    {
+        const int c = d.item(h, i);
+        Incoming in;
+        if (!d.str(d.get(c, "from"), in.from, sizeof in.from))
+            in.from[0] = 0;
+        if (d.type(d.get(c, "id")) == json::Type::number)
+            in.id = d.integer(d.get(c, "id"));
+        const int q = d.get(c, "quick");
+        if (d.type(q) == json::Type::number)
+            in.quick = d.integer(q) >= 1 && d.integer(q) <= kQuick ? static_cast<int>(d.integer(q)) : 0;
+        else
+        {
+            char raw[4 * kTextMax + 64];
+            if (d.str(d.get(c, "text"), raw, sizeof raw))
+                clean_text(raw, in.text, sizeof in.text, false);
+        }
+        if (!in.quick && !in.text[0])
+            continue;
+        // old lines: no fading toasts for them
+        log.add_line(in, now > kFadeUs ? now - kFadeUs : 0, false);
+        ++n;
+    }
+    log.read_all();
+    return n;
+}
+
 void Log::clear() noexcept
 {
     head_ = n_ = unread_ = 0;
 }
 
 const Line &Log::at(int i) const noexcept
+{
+    return lines_[(head_ + i) % kLines];
+}
+
+Line &Log::at(int i) noexcept
 {
     return lines_[(head_ + i) % kLines];
 }

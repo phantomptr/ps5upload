@@ -140,7 +140,8 @@ int run_guest(Guest &guest, CountSinks &sinks, const char *addr, std::uint16_t p
     const int quick = arg_int(argc, argv, "--quick", 0);
     const char *text = arg_str(argc, argv, "--text");
     int talk = arg_int(argc, argv, "--talk", 0);
-    bool said = false, typed = false;
+    bool said = false, typed = false, notice_sent = false;
+    std::uint32_t refused_seen = 0;
     std::uint64_t said_at = 0;
     std::uint16_t vseq = 0;
     std::uint32_t room_rev = 0;
@@ -170,6 +171,16 @@ int run_guest(Guest &guest, CountSinks &sinks, const char *addr, std::uint16_t p
             std::printf("suggest %s\n", v.suggest);
             std::fflush(stdout);
         }
+        // the notice accepted on this device reaches the engine once (the app does this too)
+        if (v.phase == GuestView::joined && v.room.comms_known && !v.room.accepted && has(argc, argv, "--notice") &&
+            !notice_sent)
+            notice_sent = guest.send_notice(1);
+        if (v.phase == GuestView::joined && v.room.refused_rev != refused_seen)
+        {
+            refused_seen = v.room.refused_rev;
+            std::printf("refused %s %s\n", v.room.refused_what, v.room.refused_why);
+            std::fflush(stdout);
+        }
         if (v.phase == GuestView::joined && v.room.known && room_rev == 0)
         {
             room_rev = 1;
@@ -177,7 +188,7 @@ int run_guest(Guest &guest, CountSinks &sinks, const char *addr, std::uint16_t p
                         v.room.chat, v.room.voice, v.room.you_rtt);
             std::fflush(stdout);
         }
-        if (v.phase == GuestView::joined && !said && v.room.known)
+        if (v.phase == GuestView::joined && !said && v.room.known && (v.room.accepted || !has(argc, argv, "--notice")))
         {
             said = true;
             said_at = net::now_us();
@@ -228,11 +239,14 @@ int run_guest(Guest &guest, CountSinks &sinks, const char *addr, std::uint16_t p
     {
         chat::Log log;
         guest.chat_copy(log);
-        std::printf("chat lines=%d unread=%d note=%s voice_in=%u voice_out=%u speakers=%x tries_left=%d lobby=%s\n",
+        std::printf("chat lines=%d unread=%d note=%s voice_in=%u voice_out=%u speakers=%x tries_left=%d lobby=%s "
+                    "people=%d you=%d kbps=%d mic=%d\n",
                     log.size(), v.chat_unread, v.chat_note[0] ? v.chat_note : "-", sinks.voices, v.voice_out,
-                    sinks.speakers_seen, v.tries_left, v.lobby[0] ? v.lobby : "-");
+                    sinks.speakers_seen, v.tries_left, v.lobby[0] ? v.lobby : "-", v.room.n_people, v.room.you_sid,
+                    v.room.kbps, v.room.mic_on ? 1 : 0);
         for (int i = 0; i < log.size(); ++i)
-            std::printf("chat %s q=%d t=%s mine=%d\n", log.at(i).from, log.at(i).quick, log.at(i).text, log.at(i).mine);
+            std::printf("chat %s q=%d t=%s mine=%d id=%lld\n", log.at(i).from, log.at(i).quick, log.at(i).text,
+                        log.at(i).mine, log.at(i).id);
     }
     std::printf("route way=%s tier=%s switches=%d backups=%d why=%s\n",
                 v.route < 0 ? "none" : route::kind_word(static_cast<route::Kind>(v.route)),
@@ -347,11 +361,15 @@ int companion(int argc, char **argv)
         return 2;
     const char *token = argc > 4 && argv[4][0] != '-' ? argv[4] : "";
     static Companion c(big, sizeof big);
+    c.set_hello(arg_str(argc, argv, "--grant") ? arg_str(argc, argv, "--grant") : "",
+                arg_str(argc, argv, "--app-id") ? arg_str(argc, argv, "--app-id") : "");
     c.start(argv[2], static_cast<std::uint16_t>(std::atoi(argv[3])), token, "13.0.0", on_token, nullptr);
     const int seconds = arg_int(argc, argv, "--seconds", 10);
     const bool want_pair = has(argc, argv, "--pair");
     const bool want_invite = has(argc, argv, "--invite");
     const bool allow_first = has(argc, argv, "--allow-first");
+    const bool room_intents = has(argc, argv, "--room-intents");
+    bool sent_room = false;
     bool asked_pair = false, asked_invite = false;
     std::uint32_t rev = 0;
     int phase = -1;
@@ -359,6 +377,21 @@ int companion(int argc, char **argv)
     while (net::now_us() - t0 < static_cast<std::uint64_t>(seconds) * 1000000)
     {
         const auto v = c.view();
+        if (room_intents && !sent_room && v.phase == CompanionView::paired)
+        {
+            // Play Rooms host controls (the design's 5): visibility, a password, chat and voice
+            // modes, a mute, remove + block, unblock, let a PS5's group in
+            sent_room = true;
+            c.room_set("visibility", "\"public\"");
+            c.room_set("password", "\"hunter22\"");
+            c.room_set("chat", "\"quick\"");
+            c.room_set("voice", "\"ptt\"");
+            c.mute(2, true, false);
+            c.kick_block(2, "room");
+            c.unblock("9C11");
+            c.allow_group(7);
+            c.chat_quick(5);
+        }
         if (v.phase != phase)
         {
             static const char *n[] = {"idle", "connecting", "unpaired", "pairing", "paired", "retrying", "failed"};
@@ -421,6 +454,17 @@ int helper_cmd(int argc, char **argv)
     std::printf("forward_lan %d %s\n", helper::forward("192.168.1.20", 19113, &local, err, sizeof err), err);
     helper::set_port(9);
     std::printf("absent %d\n", helper::rp(rp));
+    // app API 2 (13.0.0): the version, the one-time grants, Minion's intent
+    helper::set_port(static_cast<std::uint16_t>(std::atoi(argv[2])));
+    std::printf("api %d\n", helper::api_version());
+    helper::Grant g[4];
+    const int ng = helper::grants(g, 4);
+    std::printf("grants %d %s %s %.8s\n", ng, ng ? g[0].name : "-", ng ? g[0].engine_id : "-", ng ? g[0].grant : "-");
+    std::printf("grants_again %d\n", helper::grants(g, 4));
+    char what[16];
+    std::printf("intent %d %s\n", helper::intent(what, sizeof what), what);
+    std::printf("intent_again %d\n", helper::intent(what, sizeof what));
+    std::printf("mesh_id %s\n", n ? e[0].id : "-");
     return 0;
 }
 

@@ -106,7 +106,7 @@ const char *why_not(const Allow &a) noexcept
         return "mic_muted";
     if (!a.in_front)
         return "behind";
-    if (a.paused)
+    if (a.paused || a.kbps == 0)
         return "paused";
     // push-to-talk in a PTT-only room or by choice; open mic only where the room allows it
     const bool open = a.mode == Mode::open && !std::strcmp(a.room, "open");

@@ -144,6 +144,9 @@ class Companion
         return running_.load();
     }
     CompanionView view() noexcept;
+    // For the next start(): a one-time grant from the helper (pairs without a code), and this
+    // app's install id (the engine binds the pairing to it: an address change is no re-pair).
+    void set_hello(const char *grant, const char *app_id) noexcept;
 
     // Intents (any thread). Each returns false when the socket is not up.
     bool pair() noexcept;
@@ -177,6 +180,8 @@ class Companion
     char addr_[64] = {};
     std::uint16_t port_ = 0;
     char token_[80] = {};
+    char grant_[72] = {};
+    char app_id_[40] = {};
     char version_[24] = {};
     TokenFn token_fn_ = nullptr;
     void *ctx_ = nullptr;

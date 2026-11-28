@@ -17,7 +17,7 @@ GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 report = {"hellos": [], "pads": [], "keyframes": 0, "pings": 0, "stats": [], "leaves": 0,
           "app_hellos": [], "intents": [], "bad_pads": 0, "connections": 0, "hub_hosts": [], "hub_host_msgs": [],
           "probe_sockets": 0, "probe_checks": [], "bursts": [], "replaced": 0, "bridges": [],
-          "chats": [], "mics": [], "voice_up": [], "knocks": [], "http": []}
+          "chats": [], "mics": [], "voice_up": [], "knocks": [], "http": [], "notices": [], "flags": []}
 T0 = time.monotonic()
 lock = threading.Lock()
 
@@ -265,7 +265,8 @@ def guest(ws, args, state, via=None):
                                       {"id": 3, "name": "Mia", "seat": 3}],
                           "you": {"rtt_ms": 5, "tier": "excellent"}, "host_link": {"rtt_ms": 2, "tier": "excellent"},
                           "chat": "text", "voice": "ptt", "muted": {"voice": False, "chat": False}}})
-        ws.text({"chat": {"from": "Mia", "quick": 3}})
+        # the engine's chat and voice (API.md "Play Rooms chat and voice"): nothing until the notice
+        ws.text({"comms": {"notice": 1, "accepted": False, "chat": "on", "voice": "ptt", "caps": ["chat", "voice"]}})
     timed = bool(h.get("client", {}).get("caps", {}).get("timing")) and not args.old
     stop = threading.Event()
 
@@ -273,8 +274,8 @@ def guest(ws, args, state, via=None):
         try:
             while not stop.is_set():
                 op, data = ws.recv()
-                if op == 2 and data[:1] == b"\x06":
-                    # room voice up: [6][seq u16][level u8][Opus]
+                if op == 2 and data[:1] == b"\x0a":
+                    # room voice up: [0x0A][seq u16][level u8][Opus]
                     if len(data) >= 5:
                         rec("voice_up", {"seq": struct.unpack(">H", data[1:3])[0], "level": data[3], "len": len(data) - 4})
                     continue
@@ -300,12 +301,42 @@ def guest(ws, args, state, via=None):
                     ws.text(pong)
                 if "stats" in m:
                     rec("stats", m["stats"])
+                if "notice" in m:
+                    rec("notices", m["notice"])
+                    comms["accepted"] = True
+                    ws.text({"comms": {"notice": 1, "accepted": True, "chat": "on", "voice": "ptt",
+                                       "caps": ["chat", "voice"]}})
+                    ws.text({"chat_history": [{"id": 1, "sid": 0, "from": "Fake host", "player": 1, "host": True,
+                                               "t": 1, "quick": 1}]})
+                    ws.text({"voice": voice_state()})
+                    ws.text({"chat": {"id": 2, "sid": 3, "from": "Mia", "player": 3, "host": False, "t": 2, "quick": 3}})
+                if "flag" in m:
+                    rec("flags", m["flag"])
                 if "chat" in m:
                     rec("chats", m["chat"])
+                    if not comms["accepted"]:
+                        ws.text({"comms_refused": {"what": "chat", "why": "notice", "notice": 1}})
+                    else:
+                        comms["id"] += 1
+                        line = {"id": comms["id"], "sid": 2, "from": h.get("name", ""), "player": 2, "host": False, "t": 3}
+                        line.update(m["chat"])
+                        ws.text({"chat": line})
                 if "mic" in m:
                     rec("mics", m["mic"])
+                    if m["mic"] in ("on", "off"):
+                        comms["mic"] = m["mic"]
+                        ws.text({"voice": voice_state()})
         except Exception:
             stop.set()
+
+    comms = {"accepted": False, "id": 10, "mic": "off"}
+
+    def voice_state():
+        return {"mode": "ptt", "you": 2, "mic": comms["mic"], "ptt": False, "paused": None, "stepped": False,
+                "kbps": 24, "frame_ms": 20, "speaking": [],
+                "people": [{"sid": 0, "name": "Fake host", "player": 1, "host": True, "muted": False, "paused": None, "mic": "on"},
+                           {"sid": 2, "name": h.get("name", ""), "player": 2, "host": False, "muted": False, "paused": None, "mic": comms["mic"]},
+                           {"sid": 3, "name": "Mia", "player": 3, "host": False, "muted": False, "paused": None, "mic": "on"}]}
 
     threading.Thread(target=reader, daemon=True).start()
     me = object()
@@ -345,10 +376,10 @@ def guest(ws, args, state, via=None):
             if rooms and n % 6 == 0:
                 # room voice down: [9][n][(speaker, seq u16, len, Opus)...], two speakers
                 k = (n // 6) & 0xFFFF
-                ws.send(2, b"\x09\x02" + bytes([1]) + struct.pack(">H", k) + bytes([3]) + b"abc"
+                ws.send(2, b"\x0b\x02" + bytes([0]) + struct.pack(">H", k) + bytes([3]) + b"abc"
                         + bytes([3]) + struct.pack(">H", k) + bytes([2]) + b"de")
                 if n == 60:
-                    ws.text({"voice": {"speaking": [1], "paused": None, "mode": "ptt"}})
+                    ws.text({"voice": {"speaking": [3]}})
             if args.drop_after and not sent_drop and time.monotonic() - t0 > args.drop_after:
                 state["dropped"] = True
                 ws.c.shutdown(socket.SHUT_RDWR)
@@ -411,7 +442,9 @@ def app(ws, args, state):
     kind, hello = ws.recv()
     h = json.loads(hello)["hello"]
     rec("app_hellos", h)
-    good = h.get("token") == "apptok"
+    good = h.get("token") == "apptok" or h.get("grant") == "g" * 64
+    if h.get("grant") == "g" * 64:
+        ws.text({"paired": {"id": "a2", "token": "apptok"}})
     full = {"doc": {"rev": 1, "paired": True,
                     "engine": {"version": "13.0.0", "name": "Fake engine"},
                     "console": {"addr": "127.0.0.1", "name": "Test PS5"},
@@ -456,7 +489,9 @@ def app(ws, args, state):
 
 RP_RAW = {"service_enabled": 0, "has_per_user": 1, "user_enabled": 0, "account_uid": 1, "account_id_raw": 5,
           "account_type": "np"}
-helper_state = {"rp_on": False, "pin": "idle"}
+helper_state = {"rp_on": False, "pin": "idle", "intent": "join",
+                "grants": [{"engine_id": "e1" * 32, "name": "Living room PC", "kind": "desktop", "addr": "127.0.0.1",
+                            "port": 19113, "app_ws": "/api/play/app", "grant": "g" * 64, "expires_s": 290}]}
 
 
 def helper_api(conn, method, path, hdr, rest):
@@ -477,6 +512,13 @@ def helper_api(conn, method, path, hdr, rest):
     on = helper_state["rp_on"]
     rp = {"ready": on, "service_on": on, "user_on": on, "needs_user_permission": True, "signed_in": True,
           "psn_activated": True, "readiness": RP_RAW}
+    if (method, path) == ("GET", "/v1/version"):
+        return answer(200, {"helper": "13.0.0", "api": 2})
+    if path == "/v1/play/grants":
+        g = helper_state.pop("grants", [])
+        return answer(200, {"grants": g})
+    if (method, path) == ("GET", "/v1/intent"):
+        return answer(200, {"intent": helper_state.pop("intent", None)})
     if (method, path) == ("GET", "/v1/rp"):
         return answer(200, rp)
     if (method, path) == ("POST", "/v1/rp/enable"):
@@ -496,7 +538,7 @@ def helper_api(conn, method, path, hdr, rest):
     if (method, path) == ("GET", "/v1/mesh"):
         # As the helper answers: "engine" is the one whose hello said where Play reaches it (on
         # a port of its own here), and it is in "online" too.
-        offered = {"name": "Living room PC", "kind": "desktop", "version": "13.0.0", "addr": "192.168.1.20",
+        offered = {"name": "Living room PC", "kind": "desktop", "version": "13.0.0", "addr": "192.168.1.20", "id": "e1" * 32,
                    "tailnet": False, "port": 19200, "join_ws": "/api/join/ws", "app_ws": "/api/play/app"}
         return answer(200, {"engine": offered, "online": [
             offered,

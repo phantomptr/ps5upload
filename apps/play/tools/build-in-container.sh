@@ -137,7 +137,8 @@ objs=()
 for s in "$root"/src/core/*.cpp "$root"/src/net/*.cpp "$root"/src/ui/*.cpp "$root"/src/ps5/*.cpp \
          "$root"/src/app/app.cpp "$root"/src/app/guest.cpp "$root"/src/app/companion.cpp "$root"/src/app/helper.cpp "$root"/src/app/log.cpp \
          "$root"/src/app/easy.cpp "$root"/src/app/waiting_room.cpp "$root"/src/app/rooms_net.cpp \
-         "$root"/src/app/guest_route.cpp "$root"/src/app/route_pick.cpp "$root"/src/app/route_ui.cpp; do
+         "$root"/src/app/guest_route.cpp "$root"/src/app/route_pick.cpp "$root"/src/app/route_ui.cpp \
+         "$root"/src/app/rooms_ui.cpp "$root"/src/app/room_host.cpp "$root"/src/app/room_overlay.cpp; do
     o="$build/obj/$(basename "$(dirname "$s")")_$(basename "${s%.cpp}").o"
     "${cc[@]}" -std=c++20 "${common[@]}" -c "$s" -o "$o"
     objs+=("$o")
@@ -198,6 +199,9 @@ mkdir -p "$app/assets/i18n"
 cp "$build/assets/i18n/"*.bin "$app/assets/i18n/"
 cp "$root/../../LICENSE" "$app/LICENSE"
 cp "$root/NOTICE.md" "$app/NOTICE.md"
+# Thanks & Support: the supporter names from the one list PS5Upload keeps (a newer list comes
+# from the engine's GET /api/support when connected).
+cp "$root/../../client/src/data/supporters.json" "$app/assets/supporters.json"
 "$tool" self --inspect --file "$app/eboot.bin" | grep -E 'integrity|segments'
 # Imported symbols, for a preflight check against what the console exports.
 llvm-nm -D --undefined-only "$build/llvm-pie.elf" | awk '{print $2}' | sort > "$dist/imports.txt"

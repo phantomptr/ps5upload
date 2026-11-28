@@ -148,6 +148,13 @@ void init() noexcept
 #endif
 }
 
+std::uint64_t wall_seconds() noexcept
+{
+    timespec ts{};
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return static_cast<std::uint64_t>(ts.tv_sec);
+}
+
 std::uint64_t now_us() noexcept
 {
     timespec ts{};

@@ -19,7 +19,8 @@ CORE := src/core/json.cpp src/core/ws.cpp src/core/proto.cpp src/core/jitter.cpp
 NET := src/net/net.cpp src/net/hub.cpp src/net/tls.cpp src/net/seal.cpp src/net/route.cpp src/net/route_probe.cpp \
        src/app/guest.cpp src/app/guest_route.cpp src/app/route_pick.cpp src/app/companion.cpp src/app/helper.cpp \
        src/app/log.cpp src/app/waiting_room.cpp src/app/rooms_net.cpp
-UI := src/app/app.cpp src/app/easy.cpp src/app/route_ui.cpp src/ui/canvas.cpp src/ui/strings.cpp src/ui/i18n.cpp
+UI := src/app/app.cpp src/app/easy.cpp src/app/route_ui.cpp src/app/rooms_ui.cpp src/app/room_host.cpp \
+      src/app/room_overlay.cpp src/ui/canvas.cpp src/ui/strings.cpp src/ui/i18n.cpp
 # TLS for the hub (docs/EASY_JOIN.md): BearSSL and the ISRG roots the helper's tailnet uses.
 BEARSSL := ../../third_party/bearssl
 TLS_INC := -I$(BEARSSL)/inc -I../../tailnet/src

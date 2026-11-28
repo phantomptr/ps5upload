@@ -267,11 +267,15 @@ void Companion::run() noexcept
             continue;
         }
         fails = 0;
-        char hello[256];
+        char hello[400];
         json::Writer w(hello, sizeof hello);
         w.raw("{\"hello\":{");
         if (token_[0])
             w.raw("\"token\":").str(token_).raw(",");
+        else if (grant_[0])
+            w.raw("\"grant\":").str(grant_).raw(",");
+        if (app_id_[0])
+            w.raw("\"app_id\":").str(app_id_).raw(",");
         w.raw("\"v\":").str(version_).raw("}}");
         ws_.send_text(hello);
         app_state(true);
@@ -397,6 +401,12 @@ bool Companion::intent(const char *body) noexcept
     char m[512];
     std::snprintf(m, sizeof m, "{%s,\"req\":%u}", body, req_.fetch_add(1));
     return ws_.send_text(m);
+}
+
+void Companion::set_hello(const char *grant, const char *app_id) noexcept
+{
+    copy(grant_, sizeof grant_, grant);
+    copy(app_id_, sizeof app_id_, app_id);
 }
 
 bool Companion::pair() noexcept

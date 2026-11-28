@@ -318,6 +318,14 @@ bool parse_found(const char *text, std::size_t len, Found &f) noexcept
     copy(f.id, sizeof f.id, d, d.get(0, "id"));
     const double t = d.num(d.get(0, "together"), 0);
     f.together = t > 0 && t < 100 ? static_cast<int>(t) : 0;
+    const int you = d.get(0, "you");
+    if (d.type(you) == json::Type::object)
+    {
+        f.you_known = d.boolean(d.get(you, "known"));
+        f.you_streaming = d.boolean(d.get(you, "streaming"));
+        f.you_paired = d.boolean(d.get(you, "paired"));
+        copy(f.you_name, sizeof f.you_name, d, d.get(you, "name"));
+    }
     return true;
 }
 

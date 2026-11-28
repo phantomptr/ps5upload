@@ -184,6 +184,25 @@ void test_status_preview_push()
     const char *pz = R"({"voice":{"paused":"poor"}})";
     CHECK(rooms::parse_room_push(pz, std::strlen(pz), rs) && !std::strcmp(rs.paused, "poor"));
     CHECK(!rooms::parse_room_push("{\"status\":{}}", 13, rs));
+    // the engine's chat and voice (API.md "Play Rooms chat and voice")
+    rooms::RoomState cs;
+    const char *cm = R"({"comms":{"notice":1,"accepted":false,"chat":"on","voice":"ptt","caps":["chat","voice"]}})";
+    CHECK(rooms::parse_room_push(cm, std::strlen(cm), cs) && cs.comms_known && cs.notice_ver == 1 && !cs.accepted &&
+          !std::strcmp(cs.chat, "on") && !std::strcmp(cs.voice, "ptt") && cs.cap_voice);
+    const char *vs = R"({"voice":{"mode":"ptt","you":2,"mic":"on","ptt":false,"paused":null,"stepped":true,"kbps":12,
+        "frame_ms":40,"speaking":[3],"people":[{"sid":0,"name":"Sam","player":1,"host":true,"muted":false,"paused":null,"mic":"on"},
+        {"sid":3,"name":"Mia","player":3,"host":false,"muted":true,"paused":"poor","mic":"off"}]}})";
+    CHECK(rooms::parse_room_push(vs, std::strlen(vs), cs) && cs.you_sid == 2 && cs.mic_on && cs.stepped && cs.kbps == 12 &&
+          cs.frame_ms == 40 && cs.n_people == 2);
+    CHECK(cs.people[0].host && cs.people[0].mic && !cs.people[0].speaking && cs.people[1].speaking &&
+          cs.people[1].muted && cs.people[1].paused && !cs.people[1].mic);
+    const char *sp = R"({"voice":{"speaking":[0]}})";
+    CHECK(rooms::parse_room_push(sp, std::strlen(sp), cs) && cs.people[0].speaking && !cs.people[1].speaking &&
+          cs.n_people == 2 && cs.kbps == 12);
+    const char *rf = R"({"comms_refused":{"what":"chat","why":"slow_down","retry_ms":2500}})";
+    const std::uint32_t rev = cs.refused_rev;
+    CHECK(rooms::parse_room_push(rf, std::strlen(rf), cs) && cs.refused_rev == rev + 1 &&
+          !std::strcmp(cs.refused_why, "slow_down") && cs.retry_ms == 2500 && !std::strcmp(cs.refused_what, "chat"));
 }
 
 void test_names()
@@ -255,6 +274,17 @@ void test_chat()
     for (int i = 0; i < 60; ++i)
         log.add("x", 0, i % 2 ? "a" : "b", 10000000 + static_cast<std::uint64_t>(i), false);
     CHECK(log.size() == chat::Log::kLines);
+    // the engine's lines: ids, "x" (the same line again replaces it), the history after the notice
+    chat::Log e;
+    const char *h = R"({"chat_history":[{"id":1,"sid":0,"from":"Sam","quick":1},{"id":2,"sid":3,"from":"Mia","text":"hi"}]})";
+    CHECK(chat::parse_history(h, std::strlen(h), e, 20000000) == 2 && e.size() == 2 && e.unread() == 0);
+    CHECK(e.at(1).id == 2 && !std::strcmp(e.at(1).text, "hi"));
+    const chat::Line *recent[3];
+    CHECK(e.recent(recent, 3, 20000000) == 0); // history is not news over the game
+    const char *x = R"({"chat":{"id":2,"sid":3,"from":"Mia","text":"hi","x":3}})";
+    CHECK(chat::parse(x, std::strlen(x), in) && in.id == 2 && in.x == 3 && in.sid == 3);
+    e.add_line(in, 21000000, false);
+    CHECK(e.size() == 2 && e.at(1).times == 3 && e.unread() == 1);
 }
 
 void test_voice()
@@ -264,12 +294,12 @@ void test_voice()
         opus[i] = static_cast<std::uint8_t>(i);
     std::uint8_t f[64];
     CHECK(voice::up_frame(f, sizeof f, 0x1234, 200, opus, 40) == 44);
-    CHECK(f[0] == 6 && f[1] == 0x12 && f[2] == 0x34 && f[3] == 200 && f[4] == 0 && f[43] == 39);
+    CHECK(f[0] == 0x0A && f[1] == 0x12 && f[2] == 0x34 && f[3] == 200 && f[4] == 0 && f[43] == 39);
     CHECK(!voice::up_frame(f, sizeof f, 1, 1, opus, 0));
     std::uint8_t big[300];
     CHECK(!voice::up_frame(big, sizeof big, 1, 1, big, 256));
 
-    std::uint8_t b[] = {9, 2, 1, 0, 7, 3, 0xa, 0xb, 0xc, 3, 0x12, 0x34, 1, 0xd};
+    std::uint8_t b[] = {0x0B, 2, 1, 0, 7, 3, 0xa, 0xb, 0xc, 3, 0x12, 0x34, 1, 0xd};
     voice::Item it[3];
     CHECK(voice::parse_down(b, sizeof b, it, 3) == 2);
     CHECK(it[0].speaker == 1 && it[0].seq == 7 && it[0].len == 3 && it[0].opus[2] == 0xc);
@@ -372,6 +402,18 @@ void test_ptt_chord()
     o = c.update(Chords::kBase | pb::kCreate, 4000);
     o = c.update(Chords::kBase | pb::kCreate, 4000 + Chords::kHoldUs);
     CHECK(o.ps_sent && (o.buttons & pb::kPs) && !(o.buttons & pb::kCreate) && o.talk);
+    // OPTIONS + TOUCHPAD, then △: the Room menu; △ never reaches the game, and no PS press follows
+    Chords m;
+    o = m.update(Chords::kBase, 10000);
+    o = m.update(Chords::kBase | pb::kTriangle, 20000);
+    CHECK(o.room_menu && !(o.buttons & pb::kTriangle) && !(o.buttons & Chords::kBase));
+    o = m.update(Chords::kBase | pb::kTriangle, 30000);
+    CHECK(!o.room_menu); // once per press
+    o = m.update(Chords::kBase, 20000 + Chords::kHoldUs * 2);
+    CHECK(!o.ps_sent && !(o.buttons & pb::kPs));
+    o = m.update(0, 20000 + Chords::kHoldUs * 3);
+    o = m.update(pb::kTriangle, 20000 + Chords::kHoldUs * 3 + 1000);
+    CHECK((o.buttons & pb::kTriangle) && !o.room_menu); // a plain △ is the game's
 }
 
 void test_notice()

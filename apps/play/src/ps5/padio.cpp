@@ -30,6 +30,7 @@ std::atomic<Guest *> guest{nullptr};
 std::atomic<std::uint32_t> want_rumble{0}, want_light{0};
 std::atomic<unsigned> rumble_serial{0}, light_serial{0};
 platform::Chords chord_view;
+std::atomic<bool> menu_has_pad{false}, ptt_create{false};
 std::atomic<unsigned> frames_sent{0};
 
 std::uint32_t sticks_as_dpad(const PadSample &s) noexcept
@@ -144,14 +145,20 @@ void *thread_main(void *) noexcept
         Guest *g = guest.load();
         if (g)
         {
-            if (!front)
+            chords.set_ptt_on_create(ptt_create.load());
+            if (!front || menu_has_pad.load())
             {
                 // The system has the pad: the host sees "nothing pressed" once.
                 if (!sent_neutral && g->send_pad(proto::PadState{}))
                     sent_neutral = true;
                 last_sent = proto::PadState{};
+                // the chords still work in the Room menu (△ closes it from the chord too)
+                const auto out = front ? chords.update(cur.buttons & ~pb::kIntercepted, now) : Chords::Out{};
                 pthread_mutex_lock(&lock);
                 chord_view.ps = chord_view.leave = 0;
+                chord_view.room_menu = chord_view.room_menu || out.room_menu;
+                chord_view.leave_now = chord_view.leave_now || out.leave;
+                chord_view.talk = false;
                 pthread_mutex_unlock(&lock);
             }
             else
@@ -163,6 +170,8 @@ void *thread_main(void *) noexcept
                 chord_view.leave = out.leave_progress;
                 chord_view.ps_sent = chord_view.ps_sent || out.ps_sent;
                 chord_view.leave_now = chord_view.leave_now || out.leave;
+                chord_view.room_menu = chord_view.room_menu || out.room_menu;
+                chord_view.talk = out.talk;
                 pthread_mutex_unlock(&lock);
                 const proto::PadState st = to_state(cur, out.buttons);
                 const bool changed = !proto::same_input(st, last_sent);
@@ -232,8 +241,27 @@ platform::Chords chords() noexcept
     platform::Chords c = chord_view;
     chord_view.ps_sent = false;
     chord_view.leave_now = false;
+    chord_view.room_menu = false;
     pthread_mutex_unlock(&lock);
     return c;
+}
+
+platform::Chords chords_peek() noexcept
+{
+    pthread_mutex_lock(&lock);
+    platform::Chords c = chord_view;
+    pthread_mutex_unlock(&lock);
+    return c;
+}
+
+void to_menu(bool on) noexcept
+{
+    menu_has_pad.store(on);
+}
+
+void ptt_on_create(bool on) noexcept
+{
+    ptt_create.store(on);
 }
 
 void rumble(std::uint8_t left, std::uint8_t right) noexcept

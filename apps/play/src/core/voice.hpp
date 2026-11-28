@@ -8,14 +8,15 @@
 
 namespace play::voice
 {
-// Guest -> engine: [6][seq u16 BE][level u8][Opus, 20 ms mono] (the design's 7A.1).
-constexpr std::uint8_t kUp = 6;
-// Engine -> guest: [9][n][(speaker u8, seq u16 BE, len u8, Opus)...], one bundle per tick.
-// The design names kind 7 for it, but 7 is already the timed video access unit (rp_stream_api
-// KIND_VIDEO_TIMED) on the same socket: docs/ROOMS_DEVIATIONS.md.
-constexpr std::uint8_t kDown = 9;
+// The engine's wire (API.md "Play Rooms chat and voice"):
+// guest -> engine: [0x0A][seq u16 BE][level u8][Opus 1-255 B] (20 ms, 40 ms at 12 kb/s, mono);
+// engine -> guest: [0x0B][n][(sid u8, seq u16 BE, len u8, Opus)...], one bundle per tick.
+// (The design's 6 and 7 were taken: 7 is the timed video access unit on the same socket.)
+constexpr std::uint8_t kUp = 0x0A;
+constexpr std::uint8_t kDown = 0x0B;
 constexpr int kRate = 16000;        // capture and encode (wideband speech)
-constexpr int kFrame = 320;         // 20 ms at 16 kHz
+constexpr int kFrame = 320;         // 20 ms at 16 kHz (40 ms: 640, when the engine says frame_ms 40)
+constexpr int kFrameMax = 640;
 constexpr int kMaxOpus = 255;       // a bundle's length byte
 constexpr int kMaxSpeakers = 3;     // the engine forwards at most 3 to a listener
 constexpr std::uint64_t kHangoverUs = 300000;
@@ -76,6 +77,8 @@ struct Allow
     int silent = 1;           // sceAudioInGetSilentState (0 = live), <0 not open
     bool in_front = true;
     bool paused = false;      // the engine paused voice (Poor connection)
+    int kbps = 24;            // what the engine says to encode at (24 or 12; 0 = paused)
+    int frame_ms = 20;        // 20 or 40
 };
 bool may_send(const Allow &a) noexcept;
 // Why not (for the overlay): "off", "room_off", "muted", "no_mic", "mic_muted", "behind",

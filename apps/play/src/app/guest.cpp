@@ -344,16 +344,52 @@ void Guest::handle_room_text(const char *t, std::size_t n) noexcept
         }
         else
         {
-            chat_.add(in.from, in.quick, in.text, net::now_us(), false);
+            // our own lines come back too (with the engine's id): keep the one already shown
+            const bool mine = in.sid >= 0 && in.sid == view_.room.you_sid;
+            if (mine && in.x <= 1)
+            {
+                for (int i = chat_.size() - 1; i >= 0; --i)
+                    if (chat_.at(i).mine && chat_.at(i).id < 0)
+                    {
+                        chat_.at(i).id = in.id;
+                        break;
+                    }
+            }
+            else
+                chat_.add_line(in, net::now_us(), mine);
             view_.chat_unread = chat_.unread();
             ++view_.chat_rev;
         }
         pthread_mutex_unlock(&lock_);
         return;
     }
+    if (first_key(t, n, "chat_history"))
+    {
+        pthread_mutex_lock(&lock_);
+        chat_.clear();
+        chat::parse_history(t, n, chat_, net::now_us());
+        view_.chat_unread = 0;
+        ++view_.chat_rev;
+        pthread_mutex_unlock(&lock_);
+        return;
+    }
     pthread_mutex_lock(&lock_);
     rooms::parse_room_push(t, n, view_.room);
     pthread_mutex_unlock(&lock_);
+}
+
+bool Guest::send_notice(int version) noexcept
+{
+    char m[48];
+    std::snprintf(m, sizeof m, "{\"notice\":%d}", version);
+    return joined_.load() && ws_.send_text(m);
+}
+
+bool Guest::send_flag(int sid) noexcept
+{
+    char m[48];
+    std::snprintf(m, sizeof m, "{\"flag\":%d}", sid);
+    return joined_.load() && ws_.send_text(m);
 }
 
 bool Guest::seal_and_send(const char *pw) noexcept
@@ -463,7 +499,8 @@ void Guest::chat_read() noexcept
 void Guest::handle_text(const char *t, std::size_t n) noexcept
 {
     route_heard();
-    if (first_key(t, n, "room") || first_key(t, n, "chat") || first_key(t, n, "voice") || first_key(t, n, "muted"))
+    if (first_key(t, n, "room") || first_key(t, n, "chat") || first_key(t, n, "voice") || first_key(t, n, "muted") ||
+        first_key(t, n, "comms") || first_key(t, n, "comms_refused") || first_key(t, n, "chat_history"))
     {
         handle_room_text(t, n);
         return;

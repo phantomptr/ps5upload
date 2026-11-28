@@ -162,9 +162,13 @@ struct Found
 {
     char name[65] = {};
     char version[24] = {};
-    char id[24] = {};
+    char id[72] = {};
     std::uint16_t port = 0;
     int together = 0; // Play Togethers open there with the host playing
+    // The engine's `you` block (integration design F2): this console is one of its own, it is
+    // streaming this console now, and this app is paired with it.
+    bool you_known = false, you_streaming = false, you_paired = false;
+    char you_name[65] = {}; // this console's name there
 };
 bool parse_found(const char *text, std::size_t len, Found &f) noexcept;
 

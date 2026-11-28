@@ -138,6 +138,30 @@ check(enable and enable[0][2] == {"confirm": True}, "turning Remote Play on says
 check("pin 1 waiting 12345678 300" in out and "pin_get 1 waiting" in out and "pin_cancel 1" in out, "Remote Play PIN")
 check("forward 1 9182" in out and "forward_lan 0 not_tailnet_address" in out, "Tailscale forward and its refusal")
 check("absent 0" in out, "no helper: calls fail quietly")
+check("api 2" in out and "grants 1 Living room PC " + "e1" * 32 + " gggggggg" in out and "grants_again 0" in out,
+      "app API 2: a grant is handed out once")
+check("intent 1 join" in out and "intent_again 0" in out, "Minion's intent is taken once")
+check("mesh_id " + "e1" * 32 in out, "mesh entries carry the engine id")
+
+# 8b. The helper's grant pairs without a code; the hello names this app's id.
+p, port, rep = engine("grant", "--lifetime", "10")
+out = run("companion", "127.0.0.1", str(port), "--grant", "g" * 64, "--app-id", "ab" * 16, "--seconds", "2")
+r = finish(p, rep)
+h = r["app_hellos"][0] if r["app_hellos"] else {}
+check(h.get("grant") == "g" * 64 and h.get("app_id") == "ab" * 16 and "token" not in h, "a grant in the hello, no token")
+check("phase paired" in out and "token 127.0.0.1" in out, "paired by the grant: a token kept, no code shown")
+check("pair_code" not in out, "no pairing code needed")
+
+# 8c. Room controls from the TV (docs/ROOMS.md): each as an intent the engine takes.
+p, port, rep = engine("room-host", "--lifetime", "10")
+out = run("companion", "127.0.0.1", str(port), "apptok", "--room-intents", "--seconds", "2")
+r = finish(p, rep)
+it = [{k: v for k, v in i.items() if k != "req"} for i in r["intents"]]
+check({"room": {"visibility": "public"}} in it and {"room": {"password": "hunter22"}} in it
+      and {"room": {"chat": "quick"}} in it and {"room": {"voice": "ptt"}} in it, "room settings")
+check({"mute": {"player": 2, "voice": True, "chat": False}} in it and {"kick": {"player": 2, "block": "room"}} in it
+      and {"unblock": {"tag": "9C11"}} in it, "mute, remove + block, unblock")
+check({"decide": {"ask": 7, "allow": "group"}} in it and {"chat": {"quick": 5}} in it, "let a PS5's group in; a quick message")
 
 # 9. Easy join (docs/EASY_JOIN.md): a pass for Play again, and asking again with it.
 p, port, rep = engine("friend", "--seconds", "3")
@@ -423,22 +447,32 @@ def chat_line(out):
 # R1. A room's knock with a password (sealed to the room key), then chat, voice and the room push.
 p, port, rep = engine("room", "--room-pw", "hunter22", "--seconds", "5", "--lifetime", "15")
 out = run("join", "127.0.0.1", str(port), "--via", "rooms", "--password", "hunter22", "--quick", "3",
-          "--text", "hello https://x.io there", "--talk", "12", "--seconds", "4")
+          "--text", "hello https://x.io there", "--talk", "12", "--notice", "--seconds", "4")
 r = finish(p, rep)
 h = r["hellos"][0] if r["hellos"] else {}
 check(h.get("knock") == {"via": "rooms"} and h.get("device") == "AAECAwQFBgcICQoLDA0ODw" and h.get("proto") == 2
       and "voice" in h.get("caps", []), "a rooms hello: knock, device tag, protocol 2 and features")
 check(r["knocks"] == [{"sealed": True, "ok": True, "gid": ""}], "the password goes sealed and opens on the host")
-check("phase joined" in out and "room name=Couch chaos players=3 chat=text voice=ptt" in out, "the room push is read")
+check("phase joined" in out and "room name=Couch chaos players=3" in out, "the room push is read")
+check(r["notices"] == [1], "the accepted notice reaches the engine once")
 check(r["chats"] == [{"quick": 3}, {"text": "hello https://x.io there"}], "a quick message by id and a typed line")
 check("text now 0" in out and "note=slow" in out, "a second line within 2 s: Slow down, nothing sent")
 check(r["mics"][:1] == ["ptt_down"] and r["mics"][-1:] == ["ptt_up"], "push-to-talk edges")
 check(len(r["voice_up"]) == 12 and all(v["len"] == 40 and v["level"] == 180 for v in r["voice_up"])
       and [v["seq"] for v in r["voice_up"]] == list(range(12)), "voice frames up: [6][seq][level][Opus]")
 cl = chat_line(out)
-check(cl.get("lines") == "3" and cl.get("unread") == "1", "chat: the host's line in, ours kept (unread 1)")
-check(int(cl.get("voice_in", 0)) >= 10 and cl.get("speakers") == "a", "voice bundles from two speakers (1 and 3)")
+check(cl.get("lines") == "4" and cl.get("unread") == "1", "chat: history, Mia's line, ours (echoed, not twice)")
+check("chat Fake host q=1 t= mine=0 id=1" in out and "chat Mia q=3 t= mine=0 id=2" in out
+      and "chat play-cli q=3 t= mine=1 id=11" in out, "lines keep the engine's ids")
+check(cl.get("people") == "3" and cl.get("you") == "2" and cl.get("kbps") == "24", "the voice state: people, you, the pace")
+check(int(cl.get("voice_in", 0)) >= 10 and cl.get("speakers") == "9", "voice bundles from two speakers (host 0 and 3)")
 check(cl.get("lobby") == "lobbyF", "joined names the host's lobby (Your friends' rooms)")
+
+# R1b. Chat before the notice is accepted: the engine refuses with "notice" (the app shows it).
+p, port, rep = engine("room-notice", "--seconds", "4", "--lifetime", "12")
+out = run("join", "127.0.0.1", str(port), "--via", "rooms", "--quick", "2", "--seconds", "3")
+r = finish(p, rep)
+check("refused chat notice" in out and r["notices"] == [], "no notice yet: chat refused, the notice asked for")
 
 # R2. A wrong password: refused with the tries left; no password at all: the app asks for it.
 p, port, rep = engine("room-bad", "--room-pw", "hunter22", "--lifetime", "10")

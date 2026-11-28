@@ -23,6 +23,15 @@ struct Friend
     char room[24] = {};
     char fp[100] = {};
     char key[132] = {};
+    // Play Rooms (docs/ROOMS.md): the host's lobby on the hub (joined gives it: "Alex's room is
+    // open"), the host engine's id (passes follow the computer, not an address), and the round
+    // trips of the last 3 games (a card's "last time N ms").
+    char lobby[24] = {};
+    char id[72] = {};
+    int rtts[3] = {-1, -1, -1};
+    // The median of the kept round trips, -1 none.
+    int last_rtt() const noexcept;
+    void add_rtt(int ms) noexcept;
 };
 
 struct Friends
@@ -35,6 +44,7 @@ struct Friends
     Friend *remember(const char *addr, std::uint16_t port, bool tailnet, const char *path, const char *name,
                      const char *pass) noexcept;
     Friend *find(const char *addr, std::uint16_t port) noexcept;
+    Friend *find_id(const char *id) noexcept;
     // Keeps an internet invite's room, certificate and key with a remembered host; false when a
     // field can't be kept (too long, or holds a '|' or a line break).
     static bool set_link(Friend &f, const char *room, const char *fp, const char *key) noexcept;

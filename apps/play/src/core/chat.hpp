@@ -29,6 +29,9 @@ std::size_t text_message(char *out, std::size_t cap, const char *text) noexcept;
 // ({"chat": {"error": "slow"|"off"|"muted"}}).
 struct Incoming
 {
+    long long id = -1;  // the engine's line id ("x" > 1 replaces the line with this id)
+    int sid = -1;
+    int x = 1;
     char from[40] = {};
     int quick = 0;      // 1-16, 0 for text
     char text[4 * kTextMax + 1] = {};
@@ -36,6 +39,9 @@ struct Incoming
     bool system = false; // the host engine's own line ("Mia flagged Lee" goes to the host only)
 };
 bool parse(const char *json_text, std::size_t len, Incoming &in) noexcept;
+// {"chat_history": [...]}: every line into `log` (read already: history isn't news). Returns how many.
+class Log;
+int parse_history(const char *json_text, std::size_t len, Log &log, std::uint64_t now_us) noexcept;
 
 // What this person may send: 1 message every 2 s and 10 a minute (the engine drops the rest
 // with "Slow down"; the app says it before sending).
@@ -59,6 +65,7 @@ struct Line
     int times = 1; // the same line again, folded ("×3")
     std::uint64_t at_us = 0;
     bool mine = false;
+    long long id = -1;
 };
 
 class Log
@@ -68,12 +75,15 @@ class Log
     void clear() noexcept;
     // A line in (the same as the last one from the same person within 30 s is folded into it).
     void add(const char *from, int quick, const char *text, std::uint64_t now_us, bool mine) noexcept;
+    // A line from the engine: with an id it replaces the same id's line ("x" times), else as add().
+    void add_line(const Incoming &in, std::uint64_t now_us, bool mine) noexcept;
     int size() const noexcept
     {
         return n_;
     }
     // i = 0 is the oldest kept.
     const Line &at(int i) const noexcept;
+    Line &at(int i) noexcept;
     int unread() const noexcept
     {
         return unread_;

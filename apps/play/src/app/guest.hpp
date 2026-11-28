@@ -173,6 +173,9 @@ class Guest
     bool send_voice(std::uint16_t seq, std::uint8_t level, const std::uint8_t *opus, std::size_t len) noexcept;
     // The password for a room that asked for it (phase password): sealed and sent.
     bool send_password(const char *pw) noexcept;
+    // {"notice": n} once the responsibility notice is accepted; {"flag": sid}: "Tell the host".
+    bool send_notice(int version) noexcept;
+    bool send_flag(int sid) noexcept;
     // A copy of the chat (the guest thread adds to it).
     void chat_copy(chat::Log &out) noexcept;
     void chat_read() noexcept;
