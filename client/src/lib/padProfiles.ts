@@ -11,11 +11,13 @@ import { safeGetItem, safeSetItem } from "./safeStorage";
 import {
   guessProfile,
   hatPosition,
+  MAX_STICK_DEADZONE,
   PadButton,
   STANDARD_PROFILE,
   type PadAxis,
   type PadProfile,
   type PadSource,
+  type StickDeadzones,
 } from "./remotePlayStream";
 
 const KEY = "ps5upload.rp_pad_profiles.v1";
@@ -65,6 +67,68 @@ let cache: Record<string, PadProfile> | null = null;
 export function profileFor(g: Gamepad): PadProfile {
   cache ??= loadProfiles();
   return cache[g.id] ?? migratedProfile(cache, g.id) ?? knownProfile(g) ?? guessProfile(g);
+}
+
+const DZ_KEY = "ps5upload.rp_pad_deadzones.v1";
+
+/** A saved dead zone, a number 0 up to MAX_STICK_DEADZONE (0: none). */
+const dzValue = (v: unknown): number =>
+  typeof v === "number" && Number.isFinite(v) ? Math.min(MAX_STICK_DEADZONE, Math.max(0, v)) : 0;
+
+/** Saved stick dead zones by the controller's id, apart from its mapping: a controller in the
+ *  standard layout keeps playing as one, and mapping it again keeps its dead zones. */
+export function loadDeadzones(): Record<string, StickDeadzones> {
+  try {
+    const raw = safeGetItem(DZ_KEY);
+    const v = raw ? (JSON.parse(raw) as unknown) : null;
+    if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+    const out: Record<string, StickDeadzones> = {};
+    for (const [id, e] of Object.entries(v as Record<string, unknown>)) {
+      if (!e || typeof e !== "object") continue;
+      const d = e as Partial<Record<keyof StickDeadzones, unknown>>;
+      const dz = { left: dzValue(d.left), right: dzValue(d.right) };
+      if (dz.left > 0 || dz.right > 0) out[id] = dz;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+let dzCache: Record<string, StickDeadzones> | null = null;
+
+/** A controller's name without the app's ` (app)` (lib/nativePad.ts): the same controller can be
+ *  read by the browser or forwarded by the app, and a worn stick drifts under either name. */
+const plainName = (id: string) => (id.endsWith(" (app)") ? id.slice(0, -" (app)".length) : id).trim().toLowerCase();
+
+/** Save `id`'s dead zones; both at 0 (or null) forgets them. One record per controller: what was
+ *  saved under its other name goes, so a reset under either name really resets. */
+export function saveDeadzones(id: string, dz: StickDeadzones | null): Record<string, StickDeadzones> {
+  const all = loadDeadzones();
+  const left = dzValue(dz?.left);
+  const right = dzValue(dz?.right);
+  const name = plainName(id);
+  for (const k of Object.keys(all)) if (plainName(k) === name) delete all[k];
+  if (left > 0 || right > 0) all[id] = { left, right };
+  safeSetItem(DZ_KEY, JSON.stringify(all));
+  dzCache = all;
+  return all;
+}
+
+/** The dead zones saved for the controller `id` in `all`: under its id, else under the same
+ *  controller's other name; null for none. */
+export function deadzonesById(all: Record<string, StickDeadzones>, id: string): StickDeadzones | null {
+  const own = all[id];
+  if (own) return own;
+  const name = plainName(id);
+  const same = Object.keys(all).find((k) => plainName(k) === name);
+  return same ? all[same] : null;
+}
+
+/** The stick dead zones `g` plays with, or null for the usual small one. */
+export function deadzonesFor(g: Gamepad): StickDeadzones | null {
+  dzCache ??= loadDeadzones();
+  return deadzonesById(dzCache, g.id);
 }
 
 /** How `g` plays now (see PadKind). */

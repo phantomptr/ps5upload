@@ -29,7 +29,8 @@ import { pageCss } from "./vite.pageCss";
 // 807: a phone turned sideways in a browser goes full screen, and Safari's bars fold away.
 // 808: the Home Screen name, icon and manifest tags (engine app_icon.rs).
 // 813: the guest's "nothing moves on that screen?" hint, in every language.
-const RAW_BUDGET = 813 * 1024;
+// 815: a controller's own stick dead zones, which the guest's pad and pad check apply.
+const RAW_BUDGET = 815 * 1024;
 const OUT = fileURLToPath(new URL("../engine/crates/ps5upload-engine/src/join_page.html", import.meta.url));
 /** The same page on the website (https://ps5upload.phantomptr.com/join/, .github/workflows/
  *  pages.yml), where internet invites open (#room=…&k=…&fp=…&hub=…, join/rtcTransport.ts). */
