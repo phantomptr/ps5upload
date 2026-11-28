@@ -1,6 +1,9 @@
 /* The trust store and the saved shares' key, under every name a console gives them: /data is a
  * nullfs mount of /user/data, so a read of /user/data/ps5upload/ava reaches the same files. */
+#include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "path_policy.h"
 
@@ -74,6 +77,21 @@ int main(void) {
     }
     for (i = 0; i < sizeof elsewhere / sizeof elsewhere[0]; i++) {
         check("path_contains_protected", elsewhere[i], path_contains_protected(elsewhere[i]), 0);
+    }
+    /* A walker from above both folders (a folder size) skips each by every name it can meet on
+     * the way: the SMB store and the /user, /original_user names, not only the trust store. */
+    {
+        char *forms = malloc((size_t)PATH_PROTECTED_FORMS * PATH_MAX);
+        int n = forms ? path_protected_all_forms(forms) : 0;
+        check("path_protected_all_forms", "(count)", n >= 6 && n <= PATH_PROTECTED_FORMS, 1);
+        for (i = 0; i < sizeof in / sizeof in[0]; i++)
+            if (!strstr(in[i], "//") && !strstr(in[i], "/./"))
+                check("path_under_any_form", in[i], path_under_any_form(in[i], forms, n), 1);
+        for (i = 0; i < sizeof out / sizeof out[0]; i++)
+            check("path_under_any_form", out[i], path_under_any_form(out[i], forms, n), 0);
+        for (i = 0; i < sizeof ancestors / sizeof ancestors[0]; i++)
+            check("path_under_any_form", ancestors[i], path_under_any_form(ancestors[i], forms, n), 0);
+        free(forms);
     }
     if (failed) return 1;
     printf("path policy: the protected folders under both names\n");

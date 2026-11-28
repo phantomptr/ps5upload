@@ -9,7 +9,7 @@ vi.mock("../../state/remotePlay", async () => {
 import type { LiveCheck, LiveRun, StreamStatus } from "../../lib/goLive";
 import { useGoLiveStore } from "../../state/goLive";
 import { GoLiveChip, GoLivePanel, goLiveAvailable, obsFeedAvailable, ObsFeedView, problemText } from "./GoLivePanel";
-import { removeAfterConfirm, removeConfirmOptions } from "./goLiveText";
+import { loadErrorText, removeAfterConfirm, removeConfirmOptions } from "./goLiveText";
 
 // No DOM here (vitest runs in node): static markup, asserting on what is shown.
 const html = (node: React.ReactNode) => renderToStaticMarkup(<>{node}</>);
@@ -329,6 +329,21 @@ describe("The Stream panel", () => {
     expect(html(<GoLivePanel onClose={() => {}} />)).toContain("This engine can&#x27;t go live");
   });
 
+  it("says what a refusal means, and keeps Can't reach the engine for no answer at all", () => {
+    set({ status: null, loadError: "host_not_local" });
+    let out = html(<GoLivePanel onClose={() => {}} />);
+    expect(out).toContain("Go live works only from the computer the engine runs on, or from a device the engine&#x27;s PS5UPLOAD_ALLOW_IP lets in.");
+    expect(out).not.toContain("reach the engine");
+    set({ status: null, loadError: "host_not_allowed" });
+    expect(html(<GoLivePanel onClose={() => {}} />)).toContain("PS5UPLOAD_ALLOW_HOST");
+    set({ status: null, loadError: "http_500" });
+    out = html(<GoLivePanel onClose={() => {}} />);
+    expect(out).toContain("HTTP 500");
+    expect(out).not.toContain("reach the engine");
+    set({ status: null, loadError: "network" });
+    expect(html(<GoLivePanel onClose={() => {}} />)).toContain("Can&#x27;t reach the engine.");
+  });
+
   it("gives OBS the four steps and whether it reads", () => {
     const out = html(
       <ObsFeedView
@@ -378,9 +393,24 @@ describe("engine error codes", () => {
       "already_live",
       "checksum",
       "download",
+      "host_not_local",
+      "local_only",
+      "host_not_allowed",
+      "http_403",
     ]) {
       expect(problemText(tr, code, "ENGINE ENGLISH", "Twitch"), code).not.toContain("ENGINE ENGLISH");
     }
+  });
+
+  it("maps a load refusal to what it means, never to an unreachable engine", () => {
+    const device = "Go live works only from the computer the engine runs on, or from a device the engine's PS5UPLOAD_ALLOW_IP lets in.";
+    expect(loadErrorText(tr, "host_not_local")).toBe(device);
+    expect(loadErrorText(tr, "local_only")).toBe(device);
+    expect(loadErrorText(tr, "http_403")).toBe(device);
+    expect(loadErrorText(tr, "host_not_allowed")).toContain("PS5UPLOAD_ALLOW_HOST");
+    expect(loadErrorText(tr, "http_404")).toContain("update PS5Upload");
+    expect(loadErrorText(tr, "network")).toBe("Can't reach the engine.");
+    expect(loadErrorText(tr, "brand_new")).toBe("The engine couldn't open Go live (brand_new).");
   });
 
   it("says HTTP errors in words and passes an unknown code's sentence on", () => {

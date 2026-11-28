@@ -91,8 +91,8 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 use ps5upload_core::rp_stream::{
-    run_stream, valid_passcode, Codec, ControllerState, KeyboardEvent, KeyboardInput, MicInput,
-    Passcode, Progress, StreamConfig, StreamSink, CTRL_CLOSED_BEFORE_SESSION_ID,
+    run_stream, valid_passcode, Codec, ControllerState, KeyboardEvent, KeyboardInput, LiveStats,
+    MicInput, Passcode, Progress, StreamConfig, StreamSink, CTRL_CLOSED_BEFORE_SESSION_ID,
     CTRL_NO_SESSION_ID, PASSCODE_CANCELLED, PASSCODE_CONSOLE_GAVE_UP, PASSCODE_TIMEOUT,
     PASSCODE_TOO_MANY, PASSCODE_WAIT,
 };
@@ -110,6 +110,9 @@ const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(60);
 const MAX_KEEP_ALIVE: Duration = Duration::from_secs(600);
 /// A start while the console's last session is finishing: asked to look again this soon.
 const STOPPING_RETRY_S: u64 = 2;
+/// What the PS5 says when it ends a session because the user it plays as went to another
+/// controller: one at the console (#769), or a Play Together guest's pad picking that user.
+const TAKEN_OVER: &str = "Server shutting down";
 /// Pad states waiting for the stream thread.
 const PAD_QUEUE: usize = 256;
 /// Engine → page binary kind: one DualSense haptics frame (rp_stream `StreamSink::haptics`).
@@ -313,7 +316,12 @@ struct Live {
     page_off: AtomicBool,
     /// When a keyframe was last asked for on behalf of a watcher or player.
     guest_key_asked: Mutex<Option<Instant>>,
+    /// Pictures skipped because the page fell behind (`page_skips`): the one that found its
+    /// queue full and each one after it until the next keyframe.
     dropped: AtomicU64,
+    /// The page fell behind and its pictures are being skipped to the next keyframe (not a page
+    /// that just attached and waits for its first one).
+    behind: AtomicBool,
     next_viewer: AtomicU64,
     /// The session was set up for the mic; if not, the mic is ignored.
     mic_enabled: AtomicBool,
@@ -1016,6 +1024,7 @@ impl Live {
             page_off: AtomicBool::new(false),
             guest_key_asked: Mutex::new(None),
             dropped: AtomicU64::new(0),
+            behind: AtomicBool::new(false),
             next_viewer: AtomicU64::new(1),
             mic_enabled: AtomicBool::new(false),
             mic: Default::default(),
@@ -1191,6 +1200,7 @@ impl Live {
                 self.send_ctl(bin(3, &h));
             }
             self.need_key.store(true, Ordering::Relaxed);
+            self.behind.store(false, Ordering::Relaxed);
             self.want_key.store(true, Ordering::Relaxed);
         } else if was_on {
             self.push_pad(PAGE_SOURCE, None);
@@ -1348,6 +1358,7 @@ impl Live {
         }
         if !off {
             self.need_key.store(true, Ordering::Relaxed);
+            self.behind.store(false, Ordering::Relaxed);
             self.want_key.store(true, Ordering::Relaxed);
         }
         let old = self.viewer.lock().ok().and_then(|mut g| {
@@ -1497,9 +1508,13 @@ impl Sink {
         if live.need_key.load(Ordering::Relaxed) {
             if !key {
                 live.want_key.store(true, Ordering::Relaxed);
+                if live.behind.load(Ordering::Relaxed) {
+                    live.dropped.fetch_add(1, Ordering::Relaxed);
+                }
                 return true;
             }
             live.need_key.store(false, Ordering::Relaxed);
+            live.behind.store(false, Ordering::Relaxed);
         }
         let m = if timing {
             bin_timed(t_us, au)
@@ -1509,6 +1524,7 @@ impl Sink {
         if let Err(mpsc::error::TrySendError::Full(_)) = tx.try_send(m) {
             // The page is behind: skip to the next keyframe rather than queue.
             live.dropped.fetch_add(1, Ordering::Relaxed);
+            live.behind.store(true, Ordering::Relaxed);
             live.need_key.store(true, Ordering::Relaxed);
             live.want_key.store(true, Ordering::Relaxed);
         }
@@ -1522,10 +1538,11 @@ impl StreamSink for Sink {
         let v = match p {
             Progress::Waking => serde_json::json!({"stage": "waking", "ms": ms}),
             Progress::Stats(s) => {
+                let st = stats_for_page(&s, self.live.dropped.load(Ordering::Relaxed));
                 if let Ok(mut g) = self.live.stats.lock() {
-                    *g = serde_json::to_value(s).ok();
+                    *g = Some(st.clone());
                 }
-                serde_json::json!({"stage": "stats", "stats": s})
+                serde_json::json!({"stage": "stats", "stats": st})
             }
             Progress::Nonce => serde_json::json!({"stage": "nonce", "ms": ms}),
             Progress::SessionId => serde_json::json!({"stage": "session", "ms": ms}),
@@ -1716,6 +1733,18 @@ fn read_slot_file(p: &std::path::Path) -> std::collections::HashMap<String, u64>
 /// Whether a session that ended with `end` (its last word) had the console's slot, which the
 /// console keeps a while after: one that ended, given the slot (`slot_taken`, not one stopped
 /// during the wake), or one lost mid-stream.
+/// The second's stats for the page, with `page_skips`: pictures the engine skipped (each one,
+/// to the next keyframe) since the start because the page fell behind. Next to `frames` (what the PS5 sent
+/// this second) and the page's own decoded count, it says where a low frame rate comes from: the
+/// console sending few, or this device not keeping up with what arrived (#972).
+fn stats_for_page(s: &LiveStats, page_skips: u64) -> serde_json::Value {
+    let mut v = serde_json::to_value(s).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(o) = v.as_object_mut() {
+        o.insert("page_skips".into(), page_skips.into());
+    }
+    v
+}
+
 fn ended_holding_the_slot(end: &serde_json::Value, slot_taken: bool) -> bool {
     (end["stage"] == "ended" && slot_taken) || end["code"] == "lost"
 }
@@ -2075,6 +2104,10 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
             }),
             Err(e) => slot_held_status(&l.host, &e).unwrap_or_else(|| error_status(&e)),
         };
+        // Before the session is let go below: the guest is marked before Play Together sees the
+        // host gone.
+        let mut end = end;
+        note_guest_pick(&l.host, &mut end);
         // A session that reached the console holds its slot for a while after: remembered, so a
         // start refused meanwhile is told apart from another device's session. Only a session
         // that got as far as the console's slot: an end, or one lost mid-stream (an unreachable
@@ -2114,6 +2147,18 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         crate::fan_boost::session_ended(&l.host);
     });
     live
+}
+
+/// A session `host` ended because the user it played as went to another controller
+/// ([`TAKEN_OVER`]): a Play Together guest who put the host's user on their pad ("Who's using this
+/// controller?") is the likely one ([`crate::join::guest_took_host`]). The end then says which
+/// player (`guest_picked`), and the page starts the stream again.
+fn note_guest_pick(host: &str, end: &mut serde_json::Value) {
+    if end["stage"] == "ended" && end["reason"] == TAKEN_OVER {
+        if let Some(n) = crate::join::guest_took_host(host) {
+            end["guest_picked"] = n.into();
+        }
+    }
 }
 
 /// A panic's message, when it has one.
@@ -2491,6 +2536,19 @@ mod slot_held_tests {
 
     /// A Start stopped while the PS5 was still waking never had its slot: another device's
     /// session found afterwards is "in use", not ours being let go.
+    #[test]
+    fn the_pages_stats_say_how_many_pictures_were_skipped_for_it() {
+        let s = LiveStats {
+            frames: 60,
+            video_bytes: 1000,
+            ..LiveStats::default()
+        };
+        let v = stats_for_page(&s, 7);
+        assert_eq!(v["frames"], 60);
+        assert_eq!(v["video_bytes"], 1000);
+        assert_eq!(v["page_skips"], 7);
+    }
+
     #[test]
     fn a_stop_during_the_wake_is_not_remembered_as_our_session() {
         let ended = serde_json::json!({"stage": "ended", "frames": 0});
@@ -2953,6 +3011,25 @@ mod tests {
         assert!(live.alone_too_long());
         crate::join::test_close_party("10.0.77.1");
         assert!(!crate::join::needs_session("10.0.77.1"));
+    }
+
+    /// "Server shutting down" while a Play Together guest was being asked who is using their pad:
+    /// the end names their player for the page. Any other end, or no guest picking, names nobody.
+    #[test]
+    fn a_takeover_while_a_guest_picks_names_the_guest() {
+        let host = "10.0.77.9";
+        let ended = |reason: &str| serde_json::json!({"stage": "ended", "reason": reason});
+        let mut e = ended(TAKEN_OVER);
+        note_guest_pick(host, &mut e);
+        assert!(e["guest_picked"].is_null(), "no Play Together: nobody");
+        crate::join::test_party_with_picking_guest(host);
+        let mut other = ended("Remote Play ended");
+        note_guest_pick(host, &mut other);
+        assert!(other["guest_picked"].is_null(), "another reason: nobody");
+        let mut e = ended(TAKEN_OVER);
+        note_guest_pick(host, &mut e);
+        assert_eq!(e["guest_picked"], 2);
+        crate::join::test_close_party(host);
     }
 
     #[test]
@@ -3728,6 +3805,8 @@ mod tests {
         let (vt, mut vr, ct, _cr) = page();
         live.attach(vt, ct, false);
         sink.wants_keyframe();
+        // Waiting for its first keyframe is no skip.
+        sink.video(DELTA, false);
         sink.video(KEY, false);
         for _ in 0..VIDEO_QUEUE + 3 {
             sink.video(DELTA, false);
@@ -3738,6 +3817,13 @@ mod tests {
         assert!(kinds(&mut vr).is_empty(), "deltas wait for the keyframe");
         sink.video(KEY, false);
         assert_eq!(kinds(&mut vr).len(), 1);
+        // `page_skips` counts every picture skipped: the four that did not fit (the keyframe and
+        // VIDEO_QUEUE - 1 deltas did; the first of the four finds the queue full, the other three
+        // wait for the keyframe), then the one more delta.
+        assert_eq!(live.dropped.load(Ordering::Relaxed), 5);
+        // Caught up: a delta now goes through and counts nothing.
+        sink.video(DELTA, false);
+        assert_eq!(live.dropped.load(Ordering::Relaxed), 5);
     }
 
     #[test]

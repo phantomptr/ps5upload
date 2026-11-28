@@ -968,6 +968,174 @@ fn estimates_rank_the_levels_and_cover_the_game() {
     assert!(e.fast.seconds <= e.smallest.seconds);
 }
 
+/// A package too big for the console it is for is refused before a byte of the game is read or
+/// written: 300 GiB (a sparse file, so no disk is used) is past what 9.60 opens.
+#[cfg(unix)]
+#[test]
+fn a_package_too_big_for_its_firmware_is_refused_before_any_work() {
+    use ps5upload_fpkg::package_limit::Firmware;
+    let source_dir = TempDir::new("too-big-src");
+    let out = TempDir::new("too-big-out");
+    write_tree(source_dir.path());
+    let huge = std::fs::File::create(source_dir.path().join("data/huge.bin")).unwrap();
+    huge.set_len(300 << 30).unwrap();
+    drop(huge);
+    let mut request = BuildRequest::new(source_dir.path(), out.path());
+    request.level = ps5upload_fpkg::kraken::Level::Stored;
+    request.size_target.target = Firmware::parse("9.60");
+    let started = std::time::Instant::now();
+    let mut lines = Vec::new();
+    let err = build::build(&request, &mut |l| lines.push(l.to_string()))
+        .map(|_| ())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("This package would be 300.5 GiB. PS5 firmware 7.xx to 10.xx can't open a fake package larger than 256 GiB")
+            && err.contains("Keep it as a game image instead"),
+        "{err}"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(60));
+    assert!(
+        !lines.iter().any(|l| l.contains("planning")),
+        "refused before planning: {lines:?}"
+    );
+    assert_eq!(
+        std::fs::read_dir(out.path()).unwrap().count(),
+        0,
+        "nothing written"
+    );
+}
+
+/// The layout index a build reports is the descriptor it wrote, and the plan predicts it.
+#[test]
+fn a_build_reports_its_layout_index() {
+    let source_dir = TempDir::new("index-src");
+    let out = TempDir::new("index-out");
+    write_tree(source_dir.path());
+    for i in 0..300 {
+        let dir = source_dir.path().join(format!("data/many/{}", i % 9));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("f{i}.bin")), vec![i as u8; 100 + i * 37]).unwrap();
+    }
+    let mut request = BuildRequest::new(source_dir.path(), out.path());
+    request.time = Some((1_700_000_000, 0));
+    let report = build::build(&request, &mut |_| {}).unwrap();
+    let naps = outer_file(&report.path, "naps_pkg_layout.dat");
+    assert_eq!(report.layout_index, naps.len() as u64);
+    assert!(report.warnings.iter().all(|w| !w.contains("layout index")));
+    // Predicted from the plan and the stored image's length, which the descriptor records.
+    let image = outer_file(&report.path, "pfs_image.dat");
+    let blocks = ps5upload_fpkg::kraken_image::describe(&naps).unwrap();
+    let files = u64::from_le_bytes(naps[0..8].try_into().unwrap()) & 0xFF_FFFF;
+    let mount = blocks.last().map(|b| b.logical + b.len).unwrap();
+    assert_eq!(
+        ps5upload_fpkg::kraken_image::layout_len(
+            files + 1 - 3,
+            mount,
+            image.len() as u64,
+            blocks.len() as u64
+        ),
+        report.layout_index
+    );
+}
+
+/// A game with a file no compressor shrinks (`size` bytes of a hashed counter, made as it is
+/// read: nothing on disk) beside the real tree.
+struct Incompressible {
+    inner: Box<dyn source::SourceTree>,
+    files: Vec<source::SourceFile>,
+    size: u64,
+}
+
+const NOISE: &str = "data/noise.bin";
+
+/// `len` bytes of noise at `offset`: each 8-byte word from its own index, so any range reads
+/// the same bytes.
+fn noise(offset: u64, len: usize) -> Vec<u8> {
+    let skip = (offset % 8) as usize;
+    let mut out = Vec::with_capacity(len + 16);
+    let mut word = offset / 8;
+    while out.len() < len + skip {
+        let mut x = word.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x2545_F491_4F6C_DD1D;
+        x ^= x >> 31;
+        x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        x ^= x >> 29;
+        out.extend_from_slice(&x.to_le_bytes());
+        word += 1;
+    }
+    out[skip..skip + len].to_vec()
+}
+
+impl source::SourceTree for Incompressible {
+    fn files(&self) -> &[source::SourceFile] {
+        &self.files
+    }
+    fn read(&mut self, path: &str) -> ps5upload_fpkg::Result<Vec<u8>> {
+        assert_ne!(path, NOISE, "the whole noise file is never read");
+        self.inner.read(path)
+    }
+    fn read_range(
+        &mut self,
+        path: &str,
+        offset: u64,
+        len: usize,
+    ) -> ps5upload_fpkg::Result<Vec<u8>> {
+        if path == NOISE {
+            let len = self.size.saturating_sub(offset).min(len as u64) as usize;
+            return Ok(noise(offset, len));
+        }
+        self.inner.read_range(path, offset, len)
+    }
+    fn describe(&self) -> String {
+        "a game with noise".into()
+    }
+}
+
+/// A compressed build whose uncompressed size is past the ceiling is refused before anything
+/// is written when a sample shows it doesn't shrink enough: 300 GiB of noise is past what 9.60
+/// opens, compressed or not.
+#[test]
+fn a_compressed_package_that_wont_shrink_enough_is_refused_before_any_work() {
+    use ps5upload_fpkg::package_limit::Firmware;
+    if std::env::var("PS5UPLOAD_FPKG_KRAKEN_STORE").as_deref() == Ok("1") {
+        return;
+    }
+    let source_dir = TempDir::new("noise-src");
+    let out = TempDir::new("noise-out");
+    write_tree(source_dir.path());
+    let mut request = BuildRequest::new(source_dir.path(), out.path());
+    request.kraken = true;
+    request.level = ps5upload_fpkg::kraken::Level::Fast;
+    request.size_target.target = Firmware::parse("9.60");
+    request.reader = Some(build::SourceReader(std::sync::Arc::new(|inner| {
+        let size = 300u64 << 30;
+        let mut files = inner.files().to_vec();
+        files.push(source::SourceFile {
+            path: NOISE.into(),
+            size,
+        });
+        Ok(Box::new(Incompressible { inner, files, size }) as Box<dyn source::SourceTree>)
+    })));
+    let mut lines = Vec::new();
+    let err = build::build(&request, &mut |l| lines.push(l.to_string()))
+        .map(|_| ())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.starts_with("This package would be about 29")
+            && err.contains(
+                "PS5 firmware 7.xx to 10.xx can't open a fake package larger than 256 GiB"
+            ),
+        "{err}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("sampling how far")),
+        "{lines:?}"
+    );
+    assert!(!lines.iter().any(|l| l.contains("planning")), "{lines:?}");
+    assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
+}
+
 // Test scratch paths removed when the test process exits (engine/test-support/test_tmp.rs).
 #[path = "../../../test-support/test_tmp.rs"]
 mod test_tmp;

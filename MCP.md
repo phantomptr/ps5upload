@@ -26,7 +26,7 @@ More than 120 tools, all of them thin layers over [the engine's API](API.md):
 | Installs | `install_*` | Install a package by the best route, check first, wait for it; read or change a fake package's name before it goes |
 | Convert | `convert_*` | Whether an archive can give its space back while it unpacks; put the AMPR emulator on a console for Convert on the PS5 (a conversion itself goes through `api_request`) |
 | Games | `games_*`, `processes_*`, `saves_*`, `cheats_*` | Installed titles, launch and stop, back up saves, cheats |
-| Hardware | `hw_*`, `power_*`, `notifications_*`, `health_*`, `disk_usage_*`, `cleanup_*`, `shell_run` | Temperatures, rest and wake, health checks and repairs, what fills the drive |
+| Hardware | `hw_*`, `power_*`, `notifications_*`, `health_*`, `disk_usage_*`, `folder_sizes*`, `cleanup_*`, `shell_run` | Temperatures, rest and wake, health checks and repairs, what fills the drive, folder sizes |
 | Payloads | `payloads_*` | Catalogue, the payload sources you added (list, check for a new release, download its file), new-version checks and rollback, send (a file, or a copy already on the computer), store, autoload, Payload Manager sync. Built-in catalogue payloads are never downloaded, and only you can add a source, in the app |
 | Remote Play | `rp_*` | Start and stop a session, see the picture, press buttons, type, answer a passcode; see what the controller sends and how pairing went |
 | Friends and viewers | `together_*`, `golive_*`, `share_*` | Open Play Together and invite; go live; share an app's things with a friend |
@@ -277,7 +277,7 @@ clients let you allow tools one by one, so keep these on "ask".
 | `install_pkg_rename` | Change the name inside a package file on this computer |
 | `convert_ampr_emu_to_console` | Write the AMPR emulator onto the console |
 | `saves_restore` | Replace save data with a backup |
-| `games_unregister` | Remove a title from the console |
+| `games_unregister` | Remove a title from the console, and with `delete_source` the game folder or disk image it plays from |
 | `games_stop`, `processes_kill` | End a game, losing what isn't saved |
 | `power_control` | Rest, reboot or shut down |
 | `shell_run` | Run any command on the console, and read any file there, sign-in keys included |

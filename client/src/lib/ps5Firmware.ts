@@ -1,3 +1,5 @@
+import { trStatic } from "./trStatic";
+
 /**
  * The running console's firmware version, read from its kernel string.
  *
@@ -60,14 +62,11 @@ export function isPs5GameId(id: string | null | undefined): boolean {
  *  supports fake packages on that firmware (kstuff 1.15 or newer). */
 export const LAST_PS5_FAKE_GAME_FIRMWARE_OLD_KSTUFF = "11.60";
 
-/** The console's firmware when a PS5 fake GAME there needs kstuff 1.15 (or newer)
- *  to start: a PS5 game id and a firmware above 11.60, up to LAST_PS5_FAKE_GAME_FIRMWARE. Else
- *  null (also for an unknown firmware). Used to explain a launch that failed. */
-export function ps5FakeGameNeedsNewKstuff(
-  kernel: string | null | undefined,
-  contentOrTitleId: string | null | undefined,
-): string | null {
-  if (!isPs5GameId(contentOrTitleId)) return null;
+/** The console's firmware when a PS5 fake package installed there needs the latest kstuff
+ *  (fake-package support up to 13.60) to start: a firmware above 11.60, up to
+ *  LAST_PS5_FAKE_GAME_FIRMWARE. Else null (also for an unknown firmware). With an older kstuff
+ *  the package installs, but the game does not start (the PS5 shows CE-100022-5). */
+export function fakePackageNeedsLatestKstuff(kernel: string | null | undefined): string | null {
   const fw = parsePS5Firmware(kernel);
   if (!fw) return null;
   const toNum = (v: string) => {
@@ -78,4 +77,29 @@ export function ps5FakeGameNeedsNewKstuff(
   return n > toNum(LAST_PS5_FAKE_GAME_FIRMWARE_OLD_KSTUFF) && n <= toNum(LAST_PS5_FAKE_GAME_FIRMWARE)
     ? fw
     : null;
+}
+
+/** {@link fakePackageNeedsLatestKstuff} for a title: only a PS5 game id. Used to explain a launch
+ *  that failed. */
+export function ps5FakeGameNeedsNewKstuff(
+  kernel: string | null | undefined,
+  contentOrTitleId: string | null | undefined,
+): string | null {
+  if (!isPs5GameId(contentOrTitleId)) return null;
+  return fakePackageNeedsLatestKstuff(kernel);
+}
+
+/** The sentence a failed or unconfirmed launch of a PS5 game adds on a console where a fake
+ *  package needs the latest kstuff; null elsewhere. Install and Kraken Mount side by side. */
+export function fakeGameLaunchHint(
+  kernel: string | null | undefined,
+  contentOrTitleId: string | null | undefined,
+): string | null {
+  const fw = ps5FakeGameNeedsNewKstuff(kernel, contentOrTitleId);
+  if (!fw) return null;
+  return trStatic(
+    "fakegame.fw.launch_kstuff_v4",
+    "If this game was installed from a fake package: on firmware 11.61 to 13.60 (this PS5 has {fw}) a fake package needs the latest kstuff (fake-package support up to 13.60); with an older kstuff it installs but won't start (the PS5 shows CE-100022-5). Load the latest kstuff and press Play again; if it still won't start, install the package again. Or play it by mounting the package with Kraken Mount.",
+    { fw },
+  );
 }

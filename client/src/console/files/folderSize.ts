@@ -47,6 +47,8 @@ export interface WalkDeps {
 export interface WalkOptions {
   cancelled: () => boolean;
   onProgress?: (c: SizeCount) => void;
+  /** Each folder found, with the folder it is in (Uninstall looks for a game inside a game). */
+  onDir?: (parent: string, name: string) => void;
   maxEntries?: number;
   maxMs?: number;
 }
@@ -90,6 +92,7 @@ export async function walkFolder(root: string, opts: WalkOptions, deps: WalkDeps
         c.entries++;
         if (e.kind === "dir") {
           c.folders++;
+          opts.onDir?.(folder, e.name);
           queue.push(joinPath(folder, e.name));
         } else {
           c.files++;

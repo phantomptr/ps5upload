@@ -122,7 +122,7 @@ import { mgmtAddr } from "../../lib/addr";
 import { useImageRetry } from "../../lib/useImageRetry";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { createLimiter } from "../../lib/limitConcurrency";
-import { humanizePs5Error, humanizeCaught } from "../../lib/humanizeError";
+import { humanizePs5Error, humanizeCaught, humanizeUninstallError } from "../../lib/humanizeError";
 import { ConsoleInstallRefusal, installRefusal, registerRefusedText } from "../../lib/consoleInstall";
 import {
   fetchTitleInfo,
@@ -2018,7 +2018,7 @@ function LibraryRowImpl({
     } catch (e) {
       okOutcome = false;
       errMsg = e instanceof Error ? e.message : String(e);
-      const human = humanizePs5Error(errMsg);
+      const human = humanizeUninstallError(errMsg);
       setError(human);
       pushNotification(
         "error",

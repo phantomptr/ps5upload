@@ -231,9 +231,13 @@ static int open_fail(xjob_t *j, int err, const xrar_vols_t *v) {
     case XRC_E_MISSING_VOLUME: return xj_fail(j, "fs_extract_missing_volume: %s", next ? next + 1 : v->next);
     case XRC_E_UNSUPPORTED: return xj_fail(j, "fs_extract_unsupported_method: RAR 1.5/2.0 encryption");
     case XRC_E_NOMEM: return xj_fail(j, "fs_extract_no_memory");
+    case XRC_E_CANCELLED: return xj_failed(j) ? -1 : xj_fail(j, "fs_extract_cancelled");
     default: return 0;
     }
 }
+
+/* xrcrypt's cancel hook (xrc_set_cancel): the job's Stop, for the key derivations and the scanner. */
+static int rar_cancelled(void *arg) { return xj_cancelled((xjob_t *)arg); }
 
 int xrar_extract(xjob_t *j) {
     char **vols = xj_rar_volumes(j->archive);
@@ -255,7 +259,9 @@ int xrar_extract(xjob_t *j) {
     vi.is_set = vi.count > 1 || archive_rar_part(j->archive, &at, &len);
     if (xj_rar_volume_name(j->archive, (unsigned)vi.count, vi.next, sizeof vi.next) != 0) vi.next[0] = 0;
     /* Encrypted (the headers, or the first file's data): read through xrarc. A missing or wrong
-     * password shows here, before anything is made. */
+     * password shows here, before anything is made. Stop reaches the key derivations and the
+     * header scanner through the hook (cleared at out). */
+    xrc_set_cancel(rar_cancelled, j);
     xt = xrarc_open(vols, j->has_password ? j->password : NULL, &err);
     if (!xt) {
         if (open_fail(j, err, &vi) != 0) goto out;
@@ -270,6 +276,7 @@ int xrar_extract(xjob_t *j) {
      * it keeps the per-file check only). */
     if (vi.count && !j->merge && !j->list) {
         uint64_t total = rar_total(j, vols, xt);
+        if (xj_failed(j)) goto out; /* Stop while its headers were read */
         if (total && xs_check_space(j, total) != 0) goto out;
     }
     a = archive_read_new();
@@ -398,6 +405,8 @@ out:
         xrarc_release(xt, ent);
         xrarc_close(xt);
     }
+    xrc_set_cancel(NULL, NULL);
+    xrc_forget(); /* whatever handle was left: no key outlives the extraction */
     xj_free_list(vols);
     if (rc != 0 && !xj_failed(j)) xj_fail(j, "fs_extract_corrupt");
     return rc;

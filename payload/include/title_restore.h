@@ -27,6 +27,13 @@
  *            app.db and the place is still free.
  *            Anything else (the install still running, the database unreadable, the place taken)
  *            keeps every file and says so.
+ *   clear    the install of the copy aside failed after the console took it (#961: stuck at 99.9%,
+ *            the failed download stays in the PS5's queue and blocks every later install). Only
+ *            while the copy aside is there, and no update or add-on of the title is in place (Sony's
+ *            uninstall could take those): the console's own unfinished copy is removed with Sony's
+ *            uninstall (the same as deleting the failed download on the PS5, which also takes it off
+ *            the queue), then the package goes back as a rollback does, once nothing of the title
+ *            is left in any <volume>/user/app/<id> and the folder has stopped changing.
  *
  * Refused, before anything is touched: a title id that is not one, a system app, a title app.db
  * knows (it IS on the home screen: never touched), a title appinfo.db has a record for (the
@@ -34,6 +41,11 @@
  * the same title's app.pkg on two drives, a package whose header says retail-signed, no drive with
  * room for the copy the installer writes, an aside folder on another device, or a database that
  * could not be read ("can't tell" is never "not there").
+ *
+ * Room: the console's own storage loses about 1.2 times what is written plus about 1 GiB
+ * (measured on FW 13.60, both consoles: its reserve grows with every write), USB and M.2 extended
+ * storage exactly what is written. A check that asked the internal drive for the package's size
+ * only let a restore start that the PS5 could then fail near the end, when the reserve ran out.
  *
  * The file operations and the decisions are here; the database answers come through callbacks so
  * the host self-test runs the whole flow on a scratch folder (payload/tests/title_restore_selftest.c). */
@@ -65,7 +77,16 @@ typedef struct {
     int (*backup_db)(const char *which, const char *dst, char *err, size_t errcap);
     /* Free bytes for a writer under `dir` (prefix applied). NULL: statvfs. 0, or -1. */
     int (*free_bytes)(const char *dir, uint64_t *out);
+    /* clear: Sony's uninstall of the title (the console's own unfinished copy, and its entry in
+     * the download queue). 0 when the call ran, with Sony's code in *rc; -1 when it is not
+     * available. NULL: clear refuses ("uninstall_unavailable"). */
+    int (*uninstall)(const char *title_id, uint32_t *rc);
+    /* Wait between two looks at a folder Sony's uninstall may still be emptying. NULL: none. */
+    void (*settle)(void);
 } title_restore_env_t;
+
+/* Bytes the console's own storage needs to take `size` more bytes (see Room above). */
+uint64_t title_restore_internal_need(uint64_t size);
 
 /* finish's flags. INSTALL_ENDED: the caller knows the install of the copy aside has ended (the
  * engine's install job reached its verdict, or the user saw the game start); only then is the copy
@@ -74,7 +95,7 @@ typedef struct {
 #define TITLE_RESTORE_ROLLBACK 1
 #define TITLE_RESTORE_INSTALL_ENDED 2
 
-/* op "check" | "prepare" | "finish" (with `flags`). `stamp` names the backup folder (prepare;
+/* op "check" | "prepare" | "finish" (with `flags`) | "clear". `stamp` names the backup folder (prepare;
  * "20261126-101500"). Writes one JSON object into out and returns its length, or -1 when it did
  * not fit.
  *
@@ -85,7 +106,14 @@ typedef struct {
  *   prepare: prepared (ok:true), else ok:false with err "restore_<check state>" or
  *            restore_backup_failed / restore_move_failed / restore_aside_busy
  *   finish:  restored | rolled_back | nothing_pending (ok:true);
- *            waiting | unsettled (ok:true, files kept; "reason" says why) */
+ *            waiting | unsettled (ok:true, files kept; "reason" says why)
+ *   clear:   rolled_back | nothing_pending, or unsettled with "reason": clearing (Sony is still
+ *            removing its copy: finish with ROLLBACK later), no_copy_aside, update_in_place,
+ *            addons_present, db_unreadable, uninstall_unavailable, uninstall_refused, and the
+ *            rollback's own reasons; "cleared":true and "sony_rc" when the uninstall ran.
+ *            uninstall_unavailable (Sony's uninstall could not be called) is kept in the record:
+ *            finish and a later clear say it too, never "clearing", and still wait for the app
+ *            folders to settle before the package goes back; a later clear tries again. */
 int title_restore_run(const title_restore_env_t *env, const char *op, const char *title_id,
                       int flags, const char *stamp, char *out, size_t cap);
 

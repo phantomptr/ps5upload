@@ -9,6 +9,10 @@
  *
  * The console's zone is used only on the console's own browser, and only while that browser has
  * no zone of its own: a browser that knows its zone is never second-guessed.
+ *
+ * #978: the helper now takes the zone from the console's own clock conversion first (the
+ * registry alone gave UTC on a Slim on 13.60), and Settings › Time zone can set it by hand; either
+ * way it arrives here as `tz_min`.
  */
 import { isPs5Browser } from "./fullscreen";
 import { getLanguage } from "./strings";
@@ -51,4 +55,33 @@ export function formatDateTime(ms: number, lang: string = getLanguage()): string
 /** The date of `ms` for the viewer, in the page's language. */
 export function formatDate(ms: number, lang: string = getLanguage()): string {
   return onViewerClock(ms).toLocaleDateString(lang);
+}
+
+/**
+ * Every offset a real time zone uses, in minutes ahead of UTC (#978: Settings › Time zone steps
+ * through these, so a half- or quarter-hour zone is one step and nobody scrolls past 96 values).
+ */
+export const ZONE_OFFSETS: readonly number[] = [
+  -720, -660, -600, -570, -540, -480, -420, -360, -300, -240, -210, -180, -150, -120, -60, 0, 60, 120, 180, 210, 240,
+  270, 300, 330, 345, 360, 390, 420, 480, 525, 540, 570, 600, 630, 660, 720, 765, 780, 825, 840,
+];
+
+/** The next real offset after `min` (dir 1) or before it (dir -1); the ends stay where they are. */
+export function stepZone(min: number, dir: 1 | -1): number {
+  if (dir > 0) return ZONE_OFFSETS.find((z) => z > min) ?? ZONE_OFFSETS[ZONE_OFFSETS.length - 1];
+  for (let i = ZONE_OFFSETS.length - 1; i >= 0; i--) if (ZONE_OFFSETS[i] < min) return ZONE_OFFSETS[i];
+  return ZONE_OFFSETS[0];
+}
+
+/** -180 → "UTC−03:00", 345 → "UTC+05:45", 0 → "UTC". */
+export function formatZone(min: number): string {
+  if (min === 0) return "UTC";
+  const a = Math.abs(min);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `UTC${min < 0 ? "−" : "+"}${pad(Math.floor(a / 60))}:${pad(a % 60)}`;
+}
+
+/** The time of day `ms` reads in the zone `min` minutes ahead of UTC (hours and minutes). */
+export function timeInZone(ms: number, min: number, lang: string = getLanguage()): string {
+  return new Date(ms + min * 60_000).toLocaleTimeString(lang, { timeZone: "UTC", hour: "2-digit", minute: "2-digit" });
 }

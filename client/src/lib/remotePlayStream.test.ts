@@ -19,7 +19,15 @@ import {
   isPasscode,
   streamRefusal,
   ps5SendMbps,
+  flowLogText,
 } from "./remotePlayStream";
+
+describe("flowLogText (#972)", () => {
+  it("says what the PS5 sent and what was skipped for a slow page", () => {
+    expect(flowLogText(60, 0)).toBe("PS5 sent 60 frames/s, skipped for a slow page 0");
+    expect(flowLogText(null, null)).toBe("PS5 frames ?/s, page skips ?");
+  });
+});
 
 describe("ps5SendMbps", () => {
   it("is the PS5's own target first (bit/s, as a 15000 kbit/s session reported 14563000)", () => {

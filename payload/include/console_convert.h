@@ -21,12 +21,13 @@
  *   [,"format":"exfat"|"ffpkg"|"ffpfs"|"ffpfsc"|"pkg"|"folder"]
  *   [,"inner":"exfat"|"ffpkg"|"ffpfs"][,"ffpfsc_level":"fast"|"balanced"|"smallest"]  (ffpfsc)
  *   [,"pkg_level":"stored"|"fast"|"balanced"]  (pkg: a debug package, written, not installed)
- *   [,"unpack_packs":true[,"leave_out_ampr_emu":true]]  (pkg, of a game in LZ4 or zstd asset packs)
+ *   [,"unpack_packs":true][,"leave_out_ampr_emu":true]  (pkg)
  *   [,"zstd":true[,"zstd_level":1..22]][,"verify":"fast"|"full"]}
  * "inspect" (the default) reads what the source is; the job's result is the converter's answer
  * ({"path","format","size","files","title_id","title",...; for a game in asset packs also
  * "unpacked_bytes" and "unpack_keeps_emulator", and "ampr_emu": the version of the ampr_emu the
- * app put on the console when it is there}) and "zstd_runtime": the version of the
+ * app put on the console when it is there; for a game in no packs that carries an AMPR emulator,
+ * "plain_ampr_emu"}) and "zstd_runtime": the version of the
  * newest zstd runtime on the console (CONVERT_RUNTIME_DIR), or null when there is none, so the page
  * can say a zstd build needs it. "build" writes `dest` in `format`
  * (through `<dest>.partial` beside it, renamed in place at the end). A `dest` that exists is
@@ -42,8 +43,11 @@
  * (CONVERT_RUNTIME_DIR/ampr_emu-<version>/libSceAmpr.sprx, which the converter finds and checks
  * itself), as the desktop app does; with none there it refuses with
  * convert_unpack_needs_emulator, since the console fetches nothing. "leave_out_ampr_emu" (with
- * "unpack_packs" only) leaves every libSceAmpr.sprx out instead. A game that is not in packs is
- * refused with convert_not_packed.
+ * "unpack_packs") leaves every libSceAmpr.sprx out instead. A game that is not in packs is
+ * refused with convert_not_packed. "leave_out_ampr_emu" alone is for a game in no packs: its AMPR
+ * emulator's files are left out of the .pkg (engine/crates/ps5upload-convert-core/src/
+ * plain_emulator.rs), refused by the converter with convert_cant_leave_out_emulator where they
+ * can't go and convert_bad_request for a game that stays in its packs.
  * One job at a time (convert_busy); a build is also refused while a package install or an
  * archive extraction runs (the three would share the drive and the console's memory). */
 #ifndef PS5UPLOAD_CONSOLE_CONVERT_H
@@ -110,13 +114,16 @@ typedef struct {
     char ffpfsc_level[12];    /* with "ffpfsc": fast, balanced or smallest */
     char pkg_level[12];       /* with "pkg": stored, fast or balanced */
     int unpack_packs;         /* with "pkg": a game in asset packs goes in as plain files */
-    int leave_out_ampr_emu;   /* with unpack_packs: no libSceAmpr.sprx in the package */
+    int leave_out_ampr_emu;   /* with "pkg": no libSceAmpr.sprx in the package */
+    char console_fw[16];      /* with "pkg": this console's firmware ("13.60"), the one the
+                               * package's size is checked against; "" when unknown */
 } cc_build_t;
 
 /* request.json for job `id`: {"id","op","path"} and, with `b`, {"dest","format","zstd","verify"}
  * (and, with zstd on, "zstd_level" when a level was chosen and "zstd_runtime" when one is set;
  * with format "ffpfsc", "inner" and "ffpfsc_level" when set; with "pkg", "pkg_level" when set,
- * "unpack_packs":true when asked and, with that, "leave_out_ampr_emu":true when asked).
+ * "unpack_packs":true and "leave_out_ampr_emu":true, each when asked, and "console_firmware" when
+ * known).
  * Returns the length, or -1 when it does not fit `cap`. */
 int cc_request_json(char *out, size_t cap, const char *id, const char *op, const char *path, const cc_build_t *b);
 
@@ -126,8 +133,7 @@ int cc_request_json(char *out, size_t cap, const char *id, const char *op, const
  * "unpack_packs":true and "leave_out_ampr_emu":true (with "pkg").
  * `dest` is the route's, already checked. NULL when written, else the refusal's token: bad_format,
  * bad_verify, bad_zstd, convert_bad_inner, convert_bad_ffpfsc_level, convert_bad_pkg_level,
- * convert_bad_unpack (one of the two is not true or false, or the emulator is left out of a game
- * that stays in its packs), or bad_path when it does not fit `cap`. An absent or "" word is the
+ * convert_bad_unpack (one of the two is not true or false), or bad_path when it does not fit `cap`. An absent or "" word is the
  * converter's default; an absent "unpack_packs" or "leave_out_ampr_emu" is false (a page from
  * before them builds what it always did). */
 const char *cc_start_tail(const char *json, size_t n, const char *dest, char *out, size_t cap);

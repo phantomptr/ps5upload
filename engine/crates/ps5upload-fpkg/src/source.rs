@@ -1106,13 +1106,13 @@ fn ampr_index_verdict(tree: &mut dyn SourceTree, packs: Option<&'static str>) ->
     };
     let on_disk: std::collections::HashMap<String, u64> = expected
         .into_iter()
-        .filter(|(p, _)| !p.eq_ignore_ascii_case(name))
+        .filter(|(p, _)| !p.eq_ignore_ascii_case(name) && read_through_ampr(p))
         .map(|(p, s)| (p.to_ascii_lowercase(), s))
         .collect();
     let mut first: Option<String> = None;
     let (mut gone, mut resized) = (0usize, 0usize);
     let mut seen = std::collections::HashSet::new();
-    for e in &listed {
+    for e in listed.iter().filter(|e| read_through_ampr(&e.path)) {
         let key = e.path.to_ascii_lowercase();
         match on_disk.get(&key) {
             None => {
@@ -1150,6 +1150,30 @@ fn ampr_index_verdict(tree: &mut dyn SourceTree, packs: Option<&'static str>) ->
             ),
         ),
     }
+}
+
+/// Whether the AMPR runtime reads `path` through its `ampr_emu.index` record. The system loads
+/// the executables (eboot.bin, the .sprx/.prx modules) and reads `sce_sys/` itself, and a run's
+/// own logs are no game files: a dump's index lists these as they were in the dump, before the
+/// executables were signed, param.json rewritten and the icons moved into the container, so
+/// their records differ in every converted game and say nothing about whether it plays (a
+/// zstd .ffpkg warned "7 listed missing, 10 sizes differ" and played). The logs are any `.log`
+/// at the game's root, where the emulators write theirs as the game runs (ampr_emu.log, and a
+/// folder that played listed `playlgo.log` at 641 bytes with 770 on disk); a `.log` deeper in the
+/// game is the game's own and still counts.
+fn read_through_ampr(path: &str) -> bool {
+    let p = path.to_ascii_lowercase();
+    let suffix = |s: &str| p.ends_with(s);
+    let root_log = !p.contains('/') && suffix(".log");
+    !(p == "eboot.bin"
+        || root_log
+        || p.starts_with("sce_sys/")
+        || p.starts_with("sce_module/")
+        || suffix(".sprx")
+        || suffix(".prx")
+        || suffix(".self")
+        || suffix(".elf")
+        || p == "ampr_commands.bin")
 }
 
 /// Report readiness for a source tree. Never blocks: the caller decides which findings
@@ -1883,15 +1907,72 @@ mod tests {
         // A finding that holds matters whatever is made.
         assert_eq!(ampr.applies_to, None);
 
-        // A stale one (a file grew after it was made) is reported, never passed unchecked.
+        // The records of what the system loads or reads itself (the executables, sce_sys) are
+        // never served by ampr_emu, and differ in every converted dump (signed executables, a
+        // rewritten param.json, icons in the container): no finding.
         std::fs::write(dir.join("eboot.bin"), [eboot.clone(), vec![0; 16]].concat()).unwrap();
+        let mut dumped = listed.clone();
+        dumped.push(("sce_sys/icon0.png".to_string(), 40_000));
+        dumped.push(("sce_module/libc.prx".to_string(), 1234));
+        std::fs::write(
+            dir.join("ampr_emu.index"),
+            crate::ampr_index::build(&dumped, 0).unwrap(),
+        )
+        .unwrap();
+        let ampr = check(&dir);
+        assert!(ampr.ok, "{}", ampr.detail);
+
+        // Logs the emulators write at the game's root as it runs (Discord: `playlgo.log` listed
+        // at 641 bytes, 770 on disk, beside two unlisted ones) are no game files either.
+        std::fs::write(dir.join("playlgo.log"), [b'x'; 770]).unwrap();
+        std::fs::write(dir.join("ampr_emu.log"), [b'x'; 10]).unwrap();
+        std::fs::write(dir.join("PlayGo.LOG"), [b'x'; 3]).unwrap();
+        let mut logged = dumped.clone();
+        logged.push(("playlgo.log".to_string(), 641));
+        std::fs::write(
+            dir.join("ampr_emu.index"),
+            crate::ampr_index::build(&logged, 0).unwrap(),
+        )
+        .unwrap();
+        let ampr = check(&dir);
+        assert!(ampr.ok, "{}", ampr.detail);
+        // A .log inside the game's own folders is still one of its files.
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        std::fs::write(dir.join("data/story.log"), [1u8; 9]).unwrap();
+        logged.push(("data/story.log".to_string(), 8));
+        std::fs::write(
+            dir.join("ampr_emu.index"),
+            crate::ampr_index::build(&logged, 0).unwrap(),
+        )
+        .unwrap();
+        let ampr = check(&dir);
+        assert!(!ampr.ok, "{}", ampr.detail);
+        assert!(ampr.detail.contains("data/story.log"), "{}", ampr.detail);
+        std::fs::remove_dir_all(dir.join("data")).unwrap();
+        for f in ["playlgo.log", "ampr_emu.log", "PlayGo.LOG"] {
+            std::fs::remove_file(dir.join(f)).unwrap();
+        }
+
+        // A stale one (a game file listed and gone, or resized) is reported, never passed
+        // unchecked.
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        std::fs::write(dir.join("data/table.bin"), [1u8; 32]).unwrap();
+        dumped.push(("data/table.bin".to_string(), 16));
+        dumped.push(("data/gone.bin".to_string(), 5));
+        std::fs::write(
+            dir.join("ampr_emu.index"),
+            crate::ampr_index::build(&dumped, 0).unwrap(),
+        )
+        .unwrap();
         let ampr = check(&dir);
         assert!(!ampr.ok, "{}", ampr.detail);
         assert!(
-            ampr.detail.contains("eboot.bin is listed at 8192 bytes"),
+            ampr.detail
+                .contains("is stale (1 listed missing, 0 unlisted, 1 sizes differ;"),
             "{}",
             ampr.detail
         );
+        std::fs::remove_dir_all(dir.join("data")).unwrap();
         // The game is in no packs: everything made from it gets a fresh index, so the finding
         // is about this folder used as it is and no warning for a package, image or folder.
         assert_eq!(ampr.applies_to, Some(applies::SOURCE_AS_IS));
@@ -1940,6 +2021,20 @@ mod tests {
             crate::ampr_index::build(&l, 0).unwrap()
         };
         std::fs::write(dir.join("ampr_emu.index"), with(1_000_000)).unwrap();
+        let ampr = check(&dir);
+        assert!(ampr.ok, "{}", ampr.detail);
+        // A zstd .ffpkg made from a dump: its index lists the dump's executables and sce_sys
+        // as they were (eboot.bin since signed, icons gone into the container). The runtime
+        // serves the packed files and plays it: no warning for a package that keeps the packs.
+        let mut l = listed.clone();
+        l[0].1 = 4096;
+        l.push(("sce_sys/pic0.png".to_string(), 9));
+        l.push(("data/big.bin".to_string(), 1_000_000));
+        std::fs::write(
+            dir.join("ampr_emu.index"),
+            crate::ampr_index::build(&l, 0).unwrap(),
+        )
+        .unwrap();
         let ampr = check(&dir);
         assert!(ampr.ok, "{}", ampr.detail);
         std::fs::write(dir.join("ampr_emu.index"), with(999)).unwrap();

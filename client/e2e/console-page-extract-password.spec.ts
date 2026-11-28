@@ -70,3 +70,75 @@ test("an extract's password question shows over the open dialog, which stays", a
   expect(await prompt.getAttribute("aria-label")).toBe(promptLabel);
   expect(errors).toEqual([]);
 });
+
+test("Choose items of an archive with a password asks for it, lists with it, and extracts with it", async ({ page }) => {
+  const errors: string[] = [];
+  const extracts: Record<string, unknown>[] = [];
+  await page.addInitScript(() => localStorage.setItem("ps5upload.console.tourSeen", "1"));
+  page.on("pageerror", (e) => errors.push(e.message));
+  const html = readFileSync(resolve(process.cwd(), "dist-console/index.html"), "utf8");
+  // Each job's answer, by job id.
+  const jobs = new Map<string, Record<string, unknown>>();
+  await page.route(`${ORIGIN}/**`, async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/" || url.pathname.endsWith(".html")) return route.fulfill({ contentType: "text/html", body: html });
+    if (!url.pathname.startsWith("/api/")) return route.fulfill({ status: 404, body: "" });
+    const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    const body = (route.request().postDataJSON() ?? {}) as Record<string, unknown>;
+    const done = (job: string, result: unknown) => ({ job, state: "done", bytes_done: 1, bytes_total: 1, message: "", result: JSON.stringify(result) });
+    switch (url.pathname) {
+      case "/api/token":
+        return json({ token: "test" });
+      case "/api/volumes":
+        return json({ volumes: [{ path: "/data", mount_from: "/dev/ssd0.user", fs_type: "exfatfs", total_bytes: 800 * G, free_bytes: 100 * G, writable: true }] });
+      case "/api/fs/list":
+        return json({ entries: [entry("games", "dir"), entry("locked.zip", "file")], path: "/data", truncated: false });
+      case "/api/fs/stat":
+        return json({ error: "not_found" }, 404);
+      case "/api/fs/extract/info":
+        return json({ name: "locked", dest: "/data/locked", size: 1000, volumes: 1, free: 100 * G, exists: false, kind: "zip" });
+      case "/api/fs/extract": {
+        const id = String(jobs.size + 1).padStart(32, "0");
+        if (body.list) {
+          jobs.set(
+            id,
+            body.password === "s3cret"
+              ? done(id, { listed: true, top: "Game/readme.txt", top_dirs: "Game", top_more: false })
+              : { job: id, state: "failed", bytes_done: 0, bytes_total: 0, message: body.password ? "fs_extract_wrong_password" : "fs_extract_password_required" },
+          );
+        } else {
+          extracts.push(body);
+          jobs.set(id, done(id, { path: "/data/locked", files: 1 }));
+        }
+        return json({ job: id });
+      }
+      case "/api/jobs/status":
+        return jobs.has(String(body.job)) ? json(jobs.get(String(body.job))) : json({ error: "gone" }, 404);
+      default:
+        return json({});
+    }
+  });
+  await page.goto(`${ORIGIN}/`);
+  await page.locator('[data-rail-id="files"]').click({ timeout: 20_000 });
+  await page.locator('[data-drive="/data"]').click();
+  await page.locator('[data-entry="locked.zip"] .cw-icon-button').click();
+  await page.locator('[data-sheet="extract"]').click();
+  // Choose items: the archive needs its password first, asked in the dialog.
+  await page.locator('[data-action="extract-choose"]').click();
+  const pw = page.locator("[data-extract-items-password]");
+  await expect(pw).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator('[data-action="extract-choose"]')).toBeDisabled();
+  await pw.fill("nope");
+  await page.locator('[data-action="extract-choose"]').click();
+  await expect(page.locator("[data-extract-items-pw] .cw-field-error")).toBeVisible();
+  await pw.fill("s3cret");
+  await page.locator('[data-action="extract-choose"]').click();
+  await expect(page.locator('[data-extract-item="Game"]')).toBeVisible();
+  // Leave readme.txt out, then Extract: with the password given, and no second question.
+  await page.locator('[data-extract-item="readme.txt"]').click();
+  await page.locator('[data-action="extract-go"]').click();
+  await expect.poll(() => extracts.length).toBe(1);
+  expect(extracts[0]).toMatchObject({ path: "/data/locked.zip", password: "s3cret", top: "readme.txt/" });
+  await expect(page.locator('[role="dialog"] input[type="password"]')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});

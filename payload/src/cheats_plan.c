@@ -58,6 +58,58 @@ int cheat_parse_offset(const char *s, uint64_t *out) {
     return 0;
 }
 
+/* Hex digits of s, separators dropped, into out (NUL-terminated, at least strlen(s)+1). The
+ * digit count, or -1 on a non-hex character. */
+static int hex_compact(const char *s, char *out) {
+    int n = 0;
+    for (const char *p = s; *p; p++) {
+        if (is_sep(*p)) continue;
+        if (hex_val(*p) < 0) return -1;
+        out[n++] = *p;
+    }
+    out[n] = '\0';
+    return n;
+}
+
+static int split_pieces(uint64_t base, const char *a, const char *b, int bytes, cheat_split_cb cb,
+                        void *ctx) {
+    int pieces = 0;
+    for (int at = 0; at < bytes; at += CHEAT_SPLIT_BYTES) {
+        int len = bytes - at < CHEAT_SPLIT_BYTES ? bytes - at : CHEAT_SPLIT_BYTES;
+        uint64_t where = base + (uint64_t)at;
+        if (where < base) return -1;
+        char o[24], pa[2 * CHEAT_SPLIT_BYTES + 1], pb[2 * CHEAT_SPLIT_BYTES + 1];
+        snprintf(o, sizeof o, "0x%llX", (unsigned long long)where);
+        memcpy(pa, a + 2 * at, (size_t)len * 2);
+        memcpy(pb, b + 2 * at, (size_t)len * 2);
+        pa[len * 2] = '\0';
+        pb[len * 2] = '\0';
+        if (cb(ctx, o, pa, pb) != 0) return -1;
+        pieces++;
+    }
+    return pieces;
+}
+
+int cheat_loc_split(const char *offset, const char *on, const char *off, cheat_split_cb cb, void *ctx) {
+    if (!offset || !on || !off || !cb) return -1;
+    /* Fits as it is: the parser's field is 256 bytes, and resolve_mod_locs (cheats.c) refuses a
+     * value that fills all 255 characters of it (it cannot tell it from one cut short), so 255
+     * characters, separators included, already need splitting. */
+    if (strlen(on) < 255 && strlen(off) < 255) return 0;
+    uint64_t base = 0;
+    if (cheat_parse_offset(offset, &base) != 0) return -1;
+    char *a = (char *)malloc(strlen(on) + 1);
+    char *b = (char *)malloc(strlen(off) + 1);
+    int rc = -1;
+    if (a && b) {
+        int na = hex_compact(on, a), nb = hex_compact(off, b);
+        if (na > 0 && na == nb && (na & 1) == 0) rc = split_pieces(base, a, b, na / 2, cb, ctx);
+    }
+    free(a);
+    free(b);
+    return rc;
+}
+
 int cheat_loc_state(const cheat_loc_t *l) {
     size_t n = (size_t)l->len;
     if (memcmp(l->cur, l->on, n) == 0) return CHEAT_LOC_ON;

@@ -60,10 +60,13 @@ export function setupStates(i: SetupInput): Record<SetupKey, SetupState> {
   const connect: SetupState = i.connected ? "ok" : "todo";
   const user = after(connect, r ? userSignedIn(r) : undefined);
   const account = after(user, r ? r.account_id_raw !== 0 && r.account_type === "np" : undefined);
-  // Signed in: np-fake-signin (or PSN) left an online id and its auth file; a console whose
-  // Remote Play service is already on got past this step some other way.
+  // Signed in: np-fake-signin (or PSN) left an online id and its auth file. The service switch
+  // counts only when the account's PSN state can't be read: it is a registry value this app
+  // (Turn on, a PIN for the PS Remote Play app) or anything else can set without the account
+  // being signed in. Ticking this step on it skipped the sign-in, the console's own switch
+  // stayed greyed out and pairing was refused with 80108b03 (#971).
   const npSigned = !!(i.np && i.np.online_id.trim() && i.np.auth_dat);
-  const signin = after(account, r ? npSigned || r.service_enabled !== 0 : undefined);
+  const signin = after(account, r ? (i.np ? npSigned : r.service_enabled !== 0) : undefined);
   const userOn = r && r.has_per_user !== 0 ? r.user_enabled !== 0 : true;
   const service = after(signin, r ? r.service_enabled !== 0 && userOn : undefined);
   // Only for starting Play while the PS5 is in rest mode: someone who turns the console on
@@ -75,6 +78,14 @@ export function setupStates(i: SetupInput): Record<SetupKey, SetupState> {
   const blockers: SetupState = !i.connected || i.blockers == null ? "wait" : i.blockers.length ? "todo" : "ok";
   const play: SetupState = i.played ? "ok" : pair === "ok" ? "todo" : "wait";
   return { connect, user, account, signin, service, rest, pair, blockers, play };
+}
+
+/** Whether the setting "Turn on" (service) or "Allow" (user) wrote reads back as on in the
+ *  helper's answer. The helper re-reads after writing; one that did not take must not look like
+ *  a step done (#971). */
+export function enableKept(scope: "service" | "user", r: RemotePlayReadiness): boolean {
+  if (scope === "service") return r.service_enabled !== 0;
+  return r.has_per_user === 0 || r.user_enabled !== 0;
 }
 
 /** A user is signed in on the console, with an account ID or not. `account_uid` is only the

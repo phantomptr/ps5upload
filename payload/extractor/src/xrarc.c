@@ -308,6 +308,7 @@ static int read_hdr5(xrarc_t *t, size_t *hsize, uint64_t *raw_len) {
         if (rd(t, t->scan_vol, pos, iv, 16) != 0 || rd(t, t->scan_vol, pos + 16, hb, 16) != 0) return -1;
         xrc_aes_init(&aes, t->hkey, 32, iv);
         xrc_aes_dec(&aes, hb, 1);
+        xrc_wipe(&aes, sizeof aes); /* the key schedule: never left on the stack, whatever comes next */
         if (vget(hb, 16, &at, &size) != 0 || size == 0 || size > HDR_MAX - at)
             return fail(t, t->hdr_ok ? XRC_E_CORRUPT : XRC_E_WRONG_PASSWORD);
         *hsize = at + (size_t)size;
@@ -344,6 +345,13 @@ typedef struct {
     size_t type_at; /* the record's type field, in hb */
     size_t data, end;
 } xrec_t;
+
+/* A file's derived keys off the stack, on every way out of scan_file5. */
+static void wipe_keys5(uint8_t key[32], uint8_t hashkey[32], uint8_t check[8]) {
+    xrc_wipe(key, 32);
+    xrc_wipe(hashkey, 32);
+    xrc_wipe(check, 8);
+}
 
 static int scan_file5(xrarc_t *t, size_t hsize, uint64_t raw_len, uint64_t type, uint64_t hflags, size_t at,
                       uint64_t extra_size, uint64_t data_size) {
@@ -425,16 +433,26 @@ static int scan_file5(xrarc_t *t, size_t hsize, uint64_t raw_len, uint64_t type,
         /* Only files: a service header's data (a comment, the quick-open copy of the headers) is
          * skipped by libarchive, and RAR's check value in it does not follow the files' rule. */
         if (t->pw && is_file) {
-            if (xrc_kdf5(t->pw, salt, lg2, key, hashkey, check) != 0) return fail(t, XRC_E_UNSUPPORTED);
+            int k = xrc_kdf5(t->pw, salt, lg2, key, hashkey, check);
+            if (k != 0) {
+                wipe_keys5(key, hashkey, check);
+                return fail(t, k == XRC_KDF_CANCELLED ? XRC_E_CANCELLED : XRC_E_UNSUPPORTED);
+            }
             if ((cflags & 0x01) && q + 12 <= crypt.end && xrc_check5_valid(hb + q)) {
-                if (memcmp(hb + q, check, 8) != 0) return fail(t, XRC_E_WRONG_PASSWORD);
+                if (memcmp(hb + q, check, 8) != 0) {
+                    wipe_keys5(key, hashkey, check);
+                    return fail(t, XRC_E_WRONG_PASSWORD);
+                }
                 t->confirmed = 1;
             }
             if (split_before && t->split_fs) {
                 fs = t->split_fs;
             } else {
                 fs = fs_new(t);
-                if (!fs) return -1;
+                if (!fs) {
+                    wipe_keys5(key, hashkey, check);
+                    return -1;
+                }
                 xrc_aes_init(&fs->aes, key, 32, iv);
             }
         }
@@ -443,6 +461,7 @@ static int scan_file5(xrarc_t *t, size_t hsize, uint64_t raw_len, uint64_t type,
     if (is_file && !split_before) {
         ent = calloc(1, sizeof *ent);
         if (!ent) {
+            wipe_keys5(key, hashkey, check);
             if (fs && fs != t->split_fs && fs->refs == 0) fs_unref(t, (fs->refs = 1, fs));
             return fail(t, XRC_E_NOMEM);
         }
@@ -583,19 +602,39 @@ static int scan5(xrarc_t *t, int *end) {
         return fail(t, XRC_E_CORRUPT);
     if ((hflags & 0x01) && vget(t->hb, hsize, &at, &extra_size)) return fail(t, XRC_E_CORRUPT);
     if ((hflags & 0x02) && vget(t->hb, hsize, &at, &data_size)) return fail(t, XRC_E_CORRUPT);
+    /* The header and its data inside the volume. A data size from the file is a 64-bit number:
+     * one that ran past the end wrapped scan_pos back onto this header, and straddle() / read_cb
+     * then read it again forever (memory growing, Stop never seen). */
+    if (t->scan_pos > t->scan_size || raw_len > t->scan_size - t->scan_pos ||
+        data_size > t->scan_size - t->scan_pos - raw_len)
+        return fail(t, XRC_E_TRUNCATED);
     if (type == 4) {
         /* Encryption header: version, flags, KDF count, salt, [check]. Everything after it is
          * encrypted. */
         uint64_t ver, cflags;
         uint8_t hashkey[32], check[8];
+        /* One per volume, at its start: another one inside the encrypted headers is not an
+         * archive (with the same salt it looped on itself). */
+        if (t->hdr_enc) return fail(t, XRC_E_CORRUPT);
         t->any_enc = 1;
         if (vget(t->hb, hsize, &at, &ver) || vget(t->hb, hsize, &at, &cflags) || at + 17 > hsize)
             return fail(t, XRC_E_CORRUPT);
         if (ver != 0) return fail(t, XRC_E_UNSUPPORTED);
         if (!t->pw) return fail(t, XRC_E_PASSWORD_REQUIRED);
-        if (xrc_kdf5(t->pw, t->hb + at + 1, t->hb[at], t->hkey, hashkey, check) != 0) return fail(t, XRC_E_UNSUPPORTED);
+        {
+            int k = xrc_kdf5(t->pw, t->hb + at + 1, t->hb[at], t->hkey, hashkey, check);
+            if (k != 0) {
+                xrc_wipe(hashkey, sizeof hashkey);
+                xrc_wipe(check, sizeof check);
+                return fail(t, k == XRC_KDF_CANCELLED ? XRC_E_CANCELLED : XRC_E_UNSUPPORTED);
+            }
+        }
         if ((cflags & 0x01) && at + 29 <= hsize && xrc_check5_valid(t->hb + at + 17)) {
-            if (memcmp(t->hb + at + 17, check, 8) != 0) return fail(t, XRC_E_WRONG_PASSWORD);
+            if (memcmp(t->hb + at + 17, check, 8) != 0) {
+                xrc_wipe(hashkey, sizeof hashkey);
+                xrc_wipe(check, sizeof check);
+                return fail(t, XRC_E_WRONG_PASSWORD);
+            }
             t->confirmed = 1;
         }
         xrc_wipe(hashkey, sizeof hashkey);
@@ -630,17 +669,22 @@ static int read_hdr4(xrarc_t *t, size_t *size, uint64_t *raw_len) {
         xrc_aes_t aes;
         size_t enc;
         if (rd(t, t->scan_vol, pos, salt, 8) != 0 || rd(t, t->scan_vol, pos + 8, hb, 16) != 0) return -1;
-        xrc_kdf3(t->pw, salt, key, iv);
+        if (xrc_kdf3(t->pw, salt, key, iv) != 0) return fail(t, XRC_E_CANCELLED); /* key and iv wiped */
         xrc_aes_init(&aes, key, 16, iv);
         xrc_aes_dec(&aes, hb, 1);
+        xrc_wipe(&aes, sizeof aes);
         *size = le16(hb + 5);
-        if (*size < 7) return fail(t, t->hdr_ok ? XRC_E_CORRUPT : XRC_E_WRONG_PASSWORD);
         enc = (*size + 15) & ~(size_t)15;
-        if (rd(t, t->scan_vol, pos + 8, hb, enc) != 0) return -1;
+        if (*size < 7 || rd(t, t->scan_vol, pos + 8, hb, enc) != 0) {
+            xrc_wipe(key, sizeof key);
+            xrc_wipe(iv, sizeof iv);
+            return *size < 7 ? fail(t, t->hdr_ok ? XRC_E_CORRUPT : XRC_E_WRONG_PASSWORD) : -1;
+        }
         xrc_aes_init(&aes, key, 16, iv);
         xrc_aes_dec(&aes, hb, enc / 16);
         xrc_wipe(&aes, sizeof aes);
         xrc_wipe(key, sizeof key);
+        xrc_wipe(iv, sizeof iv);
         if (crc16(hb, *size) != le16(hb)) return fail(t, t->hdr_ok ? XRC_E_CORRUPT : XRC_E_WRONG_PASSWORD);
         t->hdr_ok = 1;
         t->confirmed = 1;
@@ -673,6 +717,9 @@ static int scan4(xrarc_t *t, int *end) {
         }
     }
     data_off = t->scan_pos + raw_len;
+    /* As in scan5: data past the volume's end (a size that wraps data_off) is a cut archive. */
+    if (t->scan_pos > t->scan_size || raw_len > t->scan_size - t->scan_pos || data_size > t->scan_size - data_off)
+        return fail(t, XRC_E_TRUNCATED);
     if (type == 0x73) {
         t->solid = (flags & 0x0008) ? 1 : 0;
         if (flags & 0x0080) {
@@ -707,9 +754,14 @@ static int scan4(xrarc_t *t, int *end) {
             } else {
                 fs = fs_new(t);
                 if (!fs) return -1;
-                xrc_kdf3(t->pw, salt, key, iv);
+                if (xrc_kdf3(t->pw, salt, key, iv) != 0) { /* cancelled: key and iv wiped */
+                    fs->refs = 1;
+                    fs_unref(t, fs);
+                    return fail(t, XRC_E_CANCELLED);
+                }
                 xrc_aes_init(&fs->aes, key, 16, iv);
                 xrc_wipe(key, sizeof key);
+                xrc_wipe(iv, sizeof iv);
             }
         }
         if (!split_before) {
@@ -839,6 +891,9 @@ static int scan_one(xrarc_t *t) {
     int end = 0, r;
     if (t->err) return -1;
     if (t->scan_done) return 0;
+    /* libarchive's RAR 3/4 reader walks a run of non-file blocks inside one call, so the job's own
+     * cancel checks between entries are not reached: each header looks for Stop here. */
+    if (xrc_cancelled()) return fail(t, XRC_E_CANCELLED);
     if (!t->vol_open && open_vol(t) != 0) return -1;
     if (t->scan_pos >= t->scan_size) {
         end = 1;
@@ -989,6 +1044,7 @@ static const char *err_text(int e) {
     case XRC_E_NOMEM: return "out of memory";
     case XRC_E_OPEN: return "read error";
     case XRC_E_NOT_RAR: return "not a RAR archive";
+    case XRC_E_CANCELLED: return "cancelled";
     default: return "damaged";
     }
 }
@@ -1056,10 +1112,18 @@ static la_int64_t skip_cb(struct archive *a, void *ud, la_int64_t req) {
 
 /* ---- the handle ---- */
 
+/* Open handles (xrarc_close forgets the cached keys with the last one). One job per process, one
+ * thread: no lock. */
+static int g_handles;
+
 xrarc_t *xrarc_open(char **vols, const char *password, int *err) {
     xrarc_t *t = calloc(1, sizeof *t);
     *err = XRC_E_NOMEM;
-    if (!t) return NULL;
+    if (!t) {
+        if (g_handles <= 0) xrc_forget();
+        return NULL;
+    }
+    g_handles++;
     xrc_init();
     CrcGenerateTable();
     t->vols = vols;
@@ -1108,6 +1172,12 @@ void xrarc_close(xrarc_t *t) {
     if (t->buf) xrc_wipe(t->buf, BUF_SIZE);
     if (t->hb) xrc_wipe(t->hb, HDR_MAX + 64);
     xrc_wipe(t->hkey, sizeof t->hkey);
+    /* The cached keys derive from the password: gone with the last open handle (rar_total reads
+     * the headers through a second one beside the extraction's, and shares its keys). */
+    if (--g_handles <= 0) {
+        g_handles = 0;
+        xrc_forget();
+    }
     free(t->buf_raw);
     free(t->hb_raw);
     free(t);

@@ -6,6 +6,7 @@ import { t } from "../strings";
 import { freeName } from "../files/paste";
 import {
   bytesToWrite,
+  canLeaveOutPlainEmulator,
   canUnpack,
   CONVERT_CAUSES,
   convertCauseText,
@@ -21,6 +22,7 @@ import {
   outputName,
   parentOf,
   parseInspection,
+  plainEmulatorKeptText,
   resetConvertForTest,
   stageText,
   startBody,
@@ -179,9 +181,10 @@ describe("names and requests", () => {
       verify: "fast",
     });
     expect(startBody({ ...base, unpack: true, leaveOutEmulator: true })).toMatchObject({ unpack_packs: true, leave_out_ampr_emu: true });
-    const packs = startBody({ ...base, unpack: false, leaveOutEmulator: true });
-    expect(packs).not.toHaveProperty("unpack_packs");
-    expect(packs).not.toHaveProperty("leave_out_ampr_emu");
+    // Alone (unpackFor gives it only for a plain game whose emulator can go): it goes alone.
+    const alone = startBody({ ...base, unpack: false, leaveOutEmulator: true });
+    expect(alone).not.toHaveProperty("unpack_packs");
+    expect(alone).toMatchObject({ leave_out_ampr_emu: true });
     const image = startBody({ ...base, format: "exfat", dest: "/data/g.exfat", unpack: true, leaveOutEmulator: true });
     expect(image).not.toHaveProperty("unpack_packs");
     expect(image).not.toHaveProperty("leave_out_ampr_emu");
@@ -222,6 +225,48 @@ describe("names and requests", () => {
 
     expect(packed && bytesToWrite(packed, keep)).toBe(50);
     expect(packed && bytesToWrite(packed, { unpack: false, leaveOutEmulator: false })).toBe(20);
+  });
+
+  it("a plain game's AMPR emulator can be left out of a .pkg only where the converter offers it", () => {
+    const emu = { modules: ["fakelib/libSceAmpr.sprx"], emulator: "ampr_emu 0.4.2.1", imports_ampr: true };
+    const plain = parseInspection({ path: "/g", format: "folder", data_bytes: 20, plain_ampr_emu: emu });
+    expect(plain?.plainEmulator).toEqual({
+      modules: ["fakelib/libSceAmpr.sprx"],
+      emulator: "ampr_emu 0.4.2.1",
+      importsAmpr: true,
+      refusal: null,
+    });
+    expect(canLeaveOutPlainEmulator(plain)).toBe(true);
+    expect(plainEmulatorKeptText(plain)).toBeNull();
+    const on = { unpack: true, leaveOutEmulator: true };
+    // The unpack never applies to it (nothing is packed); the emulator alone, with a .pkg only.
+    expect(unpackFor("pkg", plain, on)).toEqual({ unpack: false, leaveOutEmulator: true });
+    expect(unpackFor("pkg", plain, { unpack: true, leaveOutEmulator: false })).toEqual({ unpack: false, leaveOutEmulator: false });
+    expect(unpackFor("exfat", plain, on)).toEqual({ unpack: false, leaveOutEmulator: false });
+    expect(unpackNeedsEmulator(plain, unpackFor("pkg", plain, on))).toBe(false);
+    if (plain) expect(bytesToWrite(plain, unpackFor("pkg", plain, on))).toBe(20);
+
+    // Not offered: a libSceAmpr.sprx that is not an emulator, pack files, an index of missing
+    // files, a reason this page doesn't know; each says why it stays.
+    for (const [refusal, key] of [
+      ["not_an_emulator", "cw_convert_plain_emu_kept_not_emulator"],
+      ["pack_files", "cw_convert_plain_emu_kept_pack_files"],
+      ["index_lists_missing", "cw_convert_plain_emu_kept_index_missing"],
+      ["something_new", "cw_convert_plain_emu_kept_other"],
+    ]) {
+      const kept = parseInspection({ path: "/g", format: "folder", plain_ampr_emu: { ...emu, refusal } });
+      expect(canLeaveOutPlainEmulator(kept)).toBe(false);
+      expect(unpackFor("pkg", kept, on)).toEqual({ unpack: false, leaveOutEmulator: false });
+      expect(plainEmulatorKeptText(kept)).toBe(t(key));
+    }
+    // A helper from before it, or a malformed answer: nothing offered, nothing said.
+    for (const raw of [undefined, null, "x", { modules: "x", emulator: "e" }]) {
+      const old = parseInspection({ path: "/g", format: "folder", plain_ampr_emu: raw });
+      expect(old?.plainEmulator).toBeNull();
+      expect(unpackFor("pkg", old, on)).toEqual({ unpack: false, leaveOutEmulator: false });
+    }
+    // The converter's refusal reads as a sentence.
+    expect(convertFailureText("convert_cant_leave_out_emulator")).toBe(t("cw_convert_err_cant_leave_out_emulator"));
   });
 
   it("sends the image inside and its compression only with a .ffpfsc", () => {

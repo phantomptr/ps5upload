@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FileArchive, HardDrive, Usb } from "lucide-react";
+import { File as FileIcon, FileArchive, Folder, HardDrive, ListChecks, Usb } from "lucide-react";
 
 import { fsExtractList, fsListDir, volumeForPath, type ExtractListing, type Volume } from "../../api/ps5";
 import { Button, Checkbox, Input, Modal, SegmentedControl } from "../../components";
@@ -95,6 +95,21 @@ export function hereChoice(
   return { ...base, top };
 }
 
+/** "Choose items" (#969): the archive's top-level entries left unticked are left out (an empty
+ *  `to`), over any rename the choice already had for them. */
+export function withSkipped(choice: ExtractChoice, skipped: Iterable<string>): ExtractChoice {
+  const out = new Set(skipped);
+  if (out.size === 0) return choice;
+  const top = (choice.top ?? []).filter((t) => !out.has(t.from));
+  for (const from of out) top.push({ from, to: "" });
+  return { ...choice, top };
+}
+
+/** True when every listed item is unticked and nothing unlisted is left to extract. */
+export function nothingChosen(listing: Pick<ExtractListing, "top" | "more">, skipped: ReadonlySet<string>): boolean {
+  return !listing.more && listing.top.length > 0 && listing.top.every((n) => skipped.has(n));
+}
+
 /** Why a listing failed, as the dialog says it. */
 export function listErrorKind(message: string): "password" | "wrong_password" | "old_helper" | "other" {
   if (message.includes("fs_extract_password_required")) return "password";
@@ -132,6 +147,122 @@ export function extractChoice(
   if (!taken || mode === "new")
     return { parent, folder: taken ? freeFolderName(folder, exists) : folder, merge: false, replace: false, password };
   return { parent, folder, merge: true, replace: mode === "replace", password };
+}
+
+/**
+ * "Choose items" in Extract (#969): the archive's top-level entries, all ticked to start with;
+ * an unticked one is left out. The console's extractor names only the top level, so a folder is
+ * one item with everything in it.
+ */
+export function ExtractItemsChoice({
+  listing,
+  loading,
+  error,
+  skipped,
+  canList,
+  onLoad,
+  onSkipped,
+}: {
+  listing: ExtractListing | null;
+  loading: boolean;
+  error: string | null;
+  skipped: ReadonlySet<string>;
+  canList: boolean;
+  onLoad: () => void;
+  onSkipped: (s: Set<string>) => void;
+}) {
+  const tr = useTr();
+  if (!listing) {
+    if (!canList) return null;
+    return (
+      <div className="flex flex-col gap-1" data-testid="fs-extract-choose">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="secondary"
+            leftIcon={<ListChecks size={14} />}
+            onClick={onLoad}
+            disabled={loading}
+            data-testid="fs-extract-choose-open"
+          >
+            {loading
+              ? tr("fs_extract_here_checking", undefined, "Checking what is in the archive…")
+              : tr("fs_extract_choose_open", undefined, "Choose items…")}
+          </Button>
+          <span className="text-xs text-[var(--color-text-muted)]">
+            {tr("fs_extract_choose_hint", undefined, "Everything is extracted unless you choose.")}
+          </span>
+        </div>
+        {error && (
+          <p role="alert" className="text-xs text-[var(--color-danger,inherit)]" data-testid="fs-extract-choose-error">
+            {error}
+          </p>
+        )}
+      </div>
+    );
+  }
+  const on = listing.top.filter((n) => !skipped.has(n)).length;
+  return (
+    <div className="flex flex-col gap-2" data-testid="fs-extract-choose">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-[var(--color-text-muted)]">
+          {tr("fs_extract_choose_count", { n: on, total: listing.top.length }, "{n} of {total} items chosen")}
+        </span>
+        <span className="flex-1" />
+        <Button size="sm" variant="ghost" onClick={() => onSkipped(new Set())} data-testid="fs-extract-choose-all">
+          {tr("archive_choose_all", undefined, "Select all")}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => onSkipped(new Set(listing.top))}
+          data-testid="fs-extract-choose-none"
+        >
+          {tr("archive_choose_none", undefined, "Select none")}
+        </Button>
+      </div>
+      <ul className="max-h-56 overflow-auto rounded-[var(--radius-card)] border border-[var(--glass-edge)] text-xs">
+        {listing.top.map((n) => {
+          const Icon = listing.dirs.includes(n) ? Folder : FileIcon;
+          return (
+            <li key={n} className="border-b border-[var(--glass-edge)] px-2.5 py-1 last:border-b-0">
+              <Checkbox
+                checked={!skipped.has(n)}
+                onChange={(v) => {
+                  const next = new Set(skipped);
+                  if (v) next.delete(n);
+                  else next.add(n);
+                  onSkipped(next);
+                }}
+                label={
+                  <span className="flex min-w-0 items-center gap-2">
+                    <Icon size={14} className="shrink-0 text-[var(--color-muted)]" aria-hidden />
+                    <span className="min-w-0 truncate font-mono" title={n}>
+                      {n}
+                    </span>
+                  </span>
+                }
+              />
+            </li>
+          );
+        })}
+      </ul>
+      {listing.more && (
+        <p className="text-xs text-[var(--color-text-muted)]">
+          {tr(
+            "fs_extract_choose_more",
+            undefined,
+            "The archive has more items than could be listed; those not shown are extracted.",
+          )}
+        </p>
+      )}
+      {nothingChosen(listing, skipped) && (
+        <p role="alert" className="text-xs text-[var(--color-warn,inherit)]">
+          {tr("fs_extract_choose_none_left", undefined, "Choose at least one item to extract.")}
+        </p>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -197,9 +328,18 @@ export function ExtractDialog({
   const [checking, setChecking] = useState(false);
   const [hereAsk, setHereAsk] = useState<{ listing: ExtractListing; conflicts: string[] } | null>(null);
   const [hereError, setHereError] = useState<string | null>(null);
+  /** "Choose items" (#969): the archive's top-level entries, and those left unticked. */
+  const [items, setItems] = useState<ExtractListing | null>(null);
+  const [itemsLoading, setItemsLoading] = useState(false);
+  const [itemsError, setItemsError] = useState<string | null>(null);
+  const [skipped, setSkipped] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!open) return;
+    setItems(null);
+    setItemsLoading(false);
+    setItemsError(null);
+    setSkipped(new Set());
     setParent(initial?.parent ?? dir);
     setBrowsing(false);
     setWhere(initial?.here ? "here" : "new");
@@ -249,8 +389,34 @@ export function ExtractDialog({
     checking ||
     (asking && password === "") ||
     (!asking && (!existsAt || !!listError)) ||
-    (!asking && here && !hereOk);
+    (!asking && here && !hereOk) ||
+    (!asking && !!items && nothingChosen(items, skipped));
   const target = here ? cleanConsolePath(parent) : extractPath(parent, folder.trim());
+
+  // "Choose items": read the archive's top-level names (in its own folder, which is there).
+  const loadItems = async () => {
+    setItemsLoading(true);
+    setItemsError(null);
+    const read =
+      listTop ?? ((p: string, pw: string) => fsExtractList(addr, extractPath(dir, name), p, { password: pw || undefined }));
+    try {
+      setItems(await read(dir, password));
+      setSkipped(new Set());
+    } catch (e) {
+      const kind = listErrorKind(e instanceof Error ? e.message : String(e));
+      setItemsError(
+        kind === "password"
+          ? tr("fs_extract_choose_password", undefined, "This archive is password-protected. Enter its password, then choose again.")
+          : kind === "wrong_password"
+            ? tr("fs_extract_password_wrong", undefined, "That password is wrong. Enter it again.")
+            : kind === "old_helper"
+              ? tr("fs_extract_choose_old_helper", undefined, "The helper on this PS5 is too old to list the archive. Update the helper to choose items.")
+              : tr("fs_extract_here_list_failed", { error: humanizeCaught(e) }, "Couldn't read what is in the archive: {error}"),
+      );
+    } finally {
+      setItemsLoading(false);
+    }
+  };
   const targetVolume = volumeForPath(volumes, parent);
   const freeBytes = targetVolume ? targetVolume.free_bytes : null;
 
@@ -265,7 +431,7 @@ export function ExtractDialog({
       void checkHere(existsAt);
       return;
     }
-    onConfirm(extractChoice(parent, folder.trim(), mode, existsAt, password), { deleteArchive });
+    onConfirm(withSkipped(extractChoice(parent, folder.trim(), mode, existsAt, password), skipped), { deleteArchive });
   };
 
   // Extract here: the archive's top-level names against the folder's, asked about once, before
@@ -278,9 +444,9 @@ export function ExtractDialog({
       listTop ?? ((p: string, pw: string) => fsExtractList(addr, extractPath(dir, name), p, { password: pw || undefined }));
     try {
       const listing = await read(parent, password);
-      const conflicts = hereConflicts(listing.top, existsNow);
+      const conflicts = hereConflicts(listing.top.filter((n) => !skipped.has(n)), existsNow);
       if (conflicts.length === 0) {
-        onConfirm(hereChoice(parent, listing, [], null, existsNow, password), { deleteArchive });
+        onConfirm(withSkipped(hereChoice(parent, listing, [], null, existsNow, password), skipped), { deleteArchive });
         return;
       }
       setHereAsk({ listing, conflicts });
@@ -303,7 +469,9 @@ export function ExtractDialog({
 
   const settleHere = (policy: HereConflict) => {
     if (!hereAsk || !existsAt) return;
-    onConfirm(hereChoice(parent, hereAsk.listing, hereAsk.conflicts, policy, existsAt, password), { deleteArchive });
+    onConfirm(withSkipped(hereChoice(parent, hereAsk.listing, hereAsk.conflicts, policy, existsAt, password), skipped), {
+      deleteArchive,
+    });
   };
 
   const pick = (p: string) => {
@@ -533,6 +701,20 @@ export function ExtractDialog({
               </div>
             )}
           </>
+        )}
+        {!asking && (
+          <ExtractItemsChoice
+            listing={items}
+            loading={itemsLoading}
+            error={itemsError}
+            skipped={skipped}
+            canList={!!addr || !!listTop}
+            onLoad={() => void loadItems()}
+            onSkipped={(s) => {
+              setSkipped(s);
+              setHereAsk(null);
+            }}
+          />
         )}
         {!asking && extractRoomShort(archiveBytes, freeBytes) && (
           <p role="alert" className="text-[var(--color-warn,inherit)]" data-testid="fs-extract-room">

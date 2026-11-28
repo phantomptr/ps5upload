@@ -7,6 +7,7 @@
  * buffer is on the heap. */
 #include "webui_api.h"
 
+#include <dlfcn.h>
 #include <errno.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -45,6 +46,7 @@
 #include "storage_cleanup.h"
 #include "webui_cheats_store.h"
 #include "webui_codec.h"
+#include "monocypher.h" /* crypto_wipe: a clear the compiler keeps */
 #include "webui_files.h"
 #include "webui_inputlog.h"
 #include "webui_offline.h"
@@ -273,41 +275,164 @@ static void put_str(char *buf, size_t cap, size_t *at, const char *key, const ch
     put_fmt(buf, cap, at, "\"");
 }
 
-/* The console's time zone in minutes ahead of UTC, for /api/status (#928): the PS5's own browser
- * reads UTC whatever zone the console is set to, so the page takes the zone from here.
+/* The console's time zone in minutes ahead of UTC, for /api/status (#928, #978): the PS5's own
+ * browser reads UTC whatever zone the console is set to, so the page takes the zone from here.
  *
- * Two registry reads under sony_api_lock (sceRegMgr is not safe to call concurrently), kept for
- * TZ_KEEP_S: the page asks for the status every 10 s, and the zone changes with a setting or twice
- * a year. A read that failed is tried again after TZ_RETRY_S. The lock is only tried, never waited
- * for: while another Sony call holds it (an install, say) the status keeps the last answer instead
- * of standing still.
+ * Three answers, picked by webui_tz_pick: the Minion setting (Settings -> Time zone), when one is
+ * set; else the console's own conversion of now to local time (sceKernelConvertUtcToLocaltime, the
+ * clock games show), looked up by name so a firmware without it still loads the helper; else the
+ * registry's zone offset and summer-time flag. #978: on a Slim on 13.60 in Recife the page still
+ * showed UTC with the registry alone (it gave 0 or nothing there), so the conversion comes first.
  *
- * 1 with *out set; 0 when the console does not say (the page then shows the browser's own time, as
- * it always did). */
+ * The registry reads run under sony_api_lock (sceRegMgr is not safe to call concurrently), only
+ * tried, never waited for: while another Sony call holds it (an install, say) the status keeps the
+ * last answer instead of standing still. Everything is kept for TZ_KEEP_S (the page asks every
+ * 10 s; the zone changes with a setting or twice a year); a read that gave nothing is tried again
+ * after TZ_RETRY_S. Every value read is in `tz_raw` and in the helper log when it changes. */
 #define TZ_KEEP_S  300
 #define TZ_RETRY_S 30
-static int console_tz_minutes(long *out) {
-    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
-    static time_t read_at;
-    static int have, read_once;
-    static long kept;
-    time_t now = time(NULL);
-    int ok;
-    pthread_mutex_lock(&mu);
-    if ((!read_once || now < read_at || now - read_at >= (have ? TZ_KEEP_S : TZ_RETRY_S)) &&
-        pthread_mutex_trylock(&sony_api_lock) == 0) {
-        int tz = 0, summer = 0, tz_rc, summer_rc;
-        tz_rc = sys_registry_get_int(SCE_KEY_DATE_TIMEZONE_OFFSET, &tz, NULL);
-        summer_rc = sys_registry_get_int(SCE_KEY_DATE_IS_SUMMER_TIME, &summer, NULL);
-        pthread_mutex_unlock(&sony_api_lock);
-        have = webui_tz_minutes(tz_rc == 0, tz, summer_rc == 0, summer, &kept) == 1;
-        read_at = now;
-        read_once = 1;
+
+/* What the console said, as read (for tz_raw and the log). */
+typedef struct {
+    int kern_found, kern_rc, kern_ok;
+    long long kern_local_minus_utc; /* seconds */
+    long kern_min;
+    int gtz_found, gtz_rc, gtz_west, gtz_dst; /* sceKernelGettimezone: diagnosis only */
+    int reg_tried, reg_tz_rc, reg_tz, reg_summer_rc, reg_summer, reg_ok;
+    uint32_t reg_tz_err, reg_summer_err;
+    long reg_min;
+} tz_read_t;
+
+typedef int (*tz_utc_to_local_fn)(time_t utc, time_t *local, void *timesec, void *dst_sec);
+typedef int (*tz_gettimezone_fn)(void *tz);
+
+static pthread_once_t g_tz_once = PTHREAD_ONCE_INIT;
+static tz_utc_to_local_fn g_tz_conv;
+static tz_gettimezone_fn g_tz_gtz;
+
+/* By name, as sys_time.c / sys_registry.c do: a firmware whose libkernel lacks one still loads the
+ * helper, and the page falls back to the registry. */
+static void tz_resolve(void) {
+    g_tz_conv = (tz_utc_to_local_fn)dlsym(RTLD_DEFAULT, "sceKernelConvertUtcToLocaltime");
+    g_tz_gtz = (tz_gettimezone_fn)dlsym(RTLD_DEFAULT, "sceKernelGettimezone");
+}
+
+static void tz_read_kernel(tz_read_t *r) {
+    /* The trailing arguments' layouts differ between descriptions (a 16-byte timesec, a 4- or
+     * 8-byte dst): oversized zeroed buffers, and only `local` is trusted. */
+    unsigned char ts[64], dst[64], tzb[64];
+    time_t now = time(NULL), local = 0;
+    tz_utc_to_local_fn conv;
+    tz_gettimezone_fn gtz;
+    pthread_once(&g_tz_once, tz_resolve);
+    conv = g_tz_conv;
+    gtz = g_tz_gtz;
+    r->kern_found = conv != NULL;
+    if (conv) {
+        memset(ts, 0, sizeof ts);
+        memset(dst, 0, sizeof dst);
+        r->kern_rc = conv(now, &local, ts, dst);
+        r->kern_local_minus_utc = (long long)local - (long long)now;
+        r->kern_ok = r->kern_rc == 0 && webui_tz_kernel_minutes((long long)now, (long long)local, &r->kern_min) == 1;
     }
-    ok = have;
-    if (ok) *out = kept;
-    pthread_mutex_unlock(&mu);
-    return ok;
+    r->gtz_found = gtz != NULL;
+    if (gtz) {
+        memset(tzb, 0, sizeof tzb);
+        r->gtz_rc = gtz(tzb);
+        memcpy(&r->gtz_west, tzb, sizeof r->gtz_west);
+        memcpy(&r->gtz_dst, tzb + sizeof(int), sizeof r->gtz_dst);
+    }
+}
+
+static pthread_mutex_t g_tz_mu = PTHREAD_MUTEX_INITIALIZER;
+static tz_read_t g_tz;  /* the last read */
+static time_t g_tz_at;  /* when */
+static int g_tz_read;   /* read at least once */
+static int g_tz_have;   /* that read gave a zone */
+static char g_tz_logged[320];
+
+static void tz_setting(int *set, int *min); /* with the settings, below */
+
+/* Logs what the console said when it differs from the last line logged (the read repeats every
+ * TZ_KEEP_S; the log stays quiet unless something changed). Caller holds g_tz_mu. */
+static void tz_log(const tz_read_t *r, int src, long min) {
+    char line[sizeof g_tz_logged], zone[48];
+    int k;
+    if (src == WEBUI_TZ_NONE) snprintf(zone, sizeof zone, "unknown");
+    else snprintf(zone, sizeof zone, "%+ld min from the %s", min, webui_tz_src_name(src));
+    k = snprintf(line, sizeof line,
+                     "webui: time zone %s (conversion: %s rc=%d local-utc=%llds; gettimezone: %s "
+                     "rc=%d west=%d dst=%d; registry: %s tz=%d err=0x%x summer=%d err=0x%x)",
+                     zone, r->kern_found ? "found" : "missing", r->kern_rc, r->kern_local_minus_utc,
+                     r->gtz_found ? "found" : "missing", r->gtz_rc, r->gtz_west, r->gtz_dst,
+                     r->reg_tried ? "read" : "busy", r->reg_tz, (unsigned)r->reg_tz_err, r->reg_summer,
+                     (unsigned)r->reg_summer_err);
+    if (k < 0 || strcmp(line, g_tz_logged) == 0) return;
+    memcpy(g_tz_logged, line, sizeof line);
+    fprintf(stderr, "%s\n", line);
+}
+
+/* The page's time zone: a WEBUI_TZ_* source with *out set (WEBUI_TZ_NONE: the console does not
+ * say, and the page shows the browser's own time as it always did), *raw what was read. */
+static int console_tz(long *out, tz_read_t *raw) {
+    time_t now = time(NULL);
+    int set = 0, set_min = 0, src;
+    long auto_min = 0;
+    tz_setting(&set, &set_min);
+    pthread_mutex_lock(&g_tz_mu);
+    if (!g_tz_read || now < g_tz_at || now - g_tz_at >= (g_tz_have ? TZ_KEEP_S : TZ_RETRY_S)) {
+        tz_read_t r;
+        memset(&r, 0, sizeof r);
+        tz_read_kernel(&r);
+        if (pthread_mutex_trylock(&sony_api_lock) == 0) {
+            r.reg_tried = 1;
+            r.reg_tz_rc = sys_registry_get_int(SCE_KEY_DATE_TIMEZONE_OFFSET, &r.reg_tz, &r.reg_tz_err);
+            r.reg_summer_rc = sys_registry_get_int(SCE_KEY_DATE_IS_SUMMER_TIME, &r.reg_summer, &r.reg_summer_err);
+            pthread_mutex_unlock(&sony_api_lock);
+            r.reg_ok = webui_tz_minutes(r.reg_tz_rc == 0, r.reg_tz, r.reg_summer_rc == 0, r.reg_summer, &r.reg_min) == 1;
+        } else if (g_tz.reg_tried) {
+            /* another Sony call holds the lock: the last registry answer stands */
+            r.reg_tried = 1;
+            r.reg_tz_rc = g_tz.reg_tz_rc;
+            r.reg_tz = g_tz.reg_tz;
+            r.reg_tz_err = g_tz.reg_tz_err;
+            r.reg_summer_rc = g_tz.reg_summer_rc;
+            r.reg_summer = g_tz.reg_summer;
+            r.reg_summer_err = g_tz.reg_summer_err;
+            r.reg_ok = g_tz.reg_ok;
+            r.reg_min = g_tz.reg_min;
+        }
+        g_tz = r;
+        g_tz_at = now;
+        g_tz_read = 1;
+        src = webui_tz_pick(0, 0, r.kern_ok, r.kern_min, r.reg_ok, r.reg_min, &auto_min);
+        g_tz_have = src != WEBUI_TZ_NONE;
+        tz_log(&r, src, auto_min);
+    }
+    *raw = g_tz;
+    src = webui_tz_pick(set, set_min, g_tz.kern_ok, g_tz.kern_min, g_tz.reg_ok, g_tz.reg_min, out);
+    pthread_mutex_unlock(&g_tz_mu);
+    return src;
+}
+
+/* `,"tz_min":N|null,"tz_src":"..","tz_raw":{..}` for /api/status: the zone the page uses, where it
+ * came from (webui_tz_src_name) and every value read, for a bug report (#978). */
+static void put_tz(char *j, size_t cap, size_t *at) {
+    tz_read_t r;
+    long min = 0;
+    int set = 0, set_min = 0, src = console_tz(&min, &r);
+    tz_setting(&set, &set_min);
+    if (src != WEBUI_TZ_NONE) put_fmt(j, cap, at, ",\"tz_min\":%ld", min);
+    else put_fmt(j, cap, at, ",\"tz_min\":null");
+    put_fmt(j, cap, at,
+            ",\"tz_src\":\"%s\",\"tz_raw\":{\"conv_found\":%s,\"conv_rc\":%d,\"conv_offset_s\":%lld,"
+            "\"gtz_found\":%s,\"gtz_rc\":%d,\"gtz_west\":%d,\"gtz_dst\":%d,\"reg_read\":%s,\"reg_tz\":%d,"
+            "\"reg_tz_err\":%u,\"reg_summer\":%d,\"reg_summer_err\":%u,",
+            webui_tz_src_name(src), r.kern_found ? "true" : "false", r.kern_rc, r.kern_found ? r.kern_local_minus_utc : 0LL,
+            r.gtz_found ? "true" : "false", r.gtz_rc, r.gtz_west, r.gtz_dst, r.reg_tried ? "true" : "false", r.reg_tz,
+            (unsigned)r.reg_tz_err, r.reg_summer, (unsigned)r.reg_summer_err);
+    if (set) put_fmt(j, cap, at, "\"setting\":%d}", set_min);
+    else put_fmt(j, cap, at, "\"setting\":null}");
 }
 
 /* NODE_STATUS + HW_INFO (model) + HW_TEMPS + PROC_FOCUS, and the console's time zone. Each call is
@@ -317,9 +442,9 @@ static void r_status(const char *b, size_t n, uint8_t *out, int fd) {
     char version[96], firmware[64], model[128], title[16];
     const uint8_t *t;
     size_t ol, tl, at = 0;
-    long soc = 0, cpu = 0, temp = 0, tz_min = 0;
+    long soc = 0, cpu = 0, temp = 0;
     uint32_t app_id = 0;
-    int have_ver = 0, have_model = 0, have_temp = 0, running = 0, have_tz;
+    int have_ver = 0, have_model = 0, have_temp = 0, running = 0;
     (void)b;
     (void)n;
     if (call(AVA1_METHOD_NODE_STATUS, NULL, 0, out, &ol) == AVA1_STATUS_OK) {
@@ -346,7 +471,6 @@ static void r_status(const char *b, size_t n, uint8_t *out, int fd) {
     }
     if (call_text(AVA1_METHOD_PROC_FOCUS, NULL, 0, out, &ol, &t, &tl) == AVA1_STATUS_OK)
         running = webui_focus_running((const char *)t, tl, title, sizeof title, &app_id) == 1;
-    have_tz = console_tz_minutes(&tz_min);
     /* every string is copied out of `out` above: it is the JSON buffer now */
     {
         char *j = (char *)out;
@@ -367,8 +491,8 @@ static void r_status(const char *b, size_t n, uint8_t *out, int fd) {
         } else {
             put_fmt(j, cap, &at, "null");
         }
-        if (have_tz) put_fmt(j, cap, &at, ",\"tz_min\":%ld}", tz_min);
-        else put_fmt(j, cap, &at, ",\"tz_min\":null}");
+        put_tz(j, cap, &at);
+        put_fmt(j, cap, &at, "}");
         send_json(fd, 200, j, at);
     }
 }
@@ -730,7 +854,8 @@ static const char *op_task_kind(int op) {
 static void start_path_job(int fd, uint8_t *out, int op, const char *path, const char *name, const char *tail) {
     char *args;
     uint8_t *req;
-    size_t args_cap = 6 * API_PATH + 6 * 256 + 64, ol;
+    /* The path and name escaped, and the tail as it is (an extract's can be long: #969). */
+    size_t args_cap = 6 * API_PATH + 6 * 256 + 64 + (tail ? strlen(tail) : 0), ol;
     ava1_job_run_t q;
     ava1_w_t w;
     int st, len;
@@ -751,12 +876,17 @@ static void start_path_job(int fd, uint8_t *out, int op, const char *path, const
     q.args_len = len > 0 ? (uint32_t)len : 0;
     ava1_w_init(&w, req, args_cap + 64);
     if (len <= 0 || ava1_job_run_encode(&q, &w) != 0) {
+        /* the tail can hold an archive's password (r_fs_extract wipes its own copy) */
+        crypto_wipe(args, args_cap);
+        crypto_wipe(req, args_cap + 64);
         free(args);
         free(req);
         send_bad(fd, "bad_path");
         return;
     }
     st = call(AVA1_METHOD_JOB_RUN, req, w.len, out, &ol);
+    crypto_wipe(args, args_cap);
+    crypto_wipe(req, args_cap + 64);
     free(args);
     free(req);
     if (st != AVA1_STATUS_OK) {
@@ -889,13 +1019,19 @@ static void r_fs_unpack_info(const char *b, size_t n, uint8_t *out, int fd) {
     send_json(fd, 200, j, at);
 }
 
+/* The extractor's room for top-level renames (XJ_TOP, payload/extractor/src/xjob.h). */
+#define XTOP_MAX (8192u)
+
 /* Extract an archive on the console (ARCHIVE_EXTRACT, run by the extractor payload): {"path", "dest",
- * optional "password", "merge", "replace"}. The job's result: {"path","files","dirs","bytes","skipped",
- * "unsafe","links"}. */
+ * optional "password", "merge", "replace", "list", "top"}. The job's result: {"path","files","dirs",
+ * "bytes","skipped","unsafe","links"}; with "list" (nothing written, `dest` a folder that is there) it
+ * is {"top","top_dirs","top_more","listed":true}. "top" leaves out or renames top-level entries. */
+
 static void r_fs_extract(const char *b, size_t n, uint8_t *out, int fd) {
-    char path[API_PATH], dest[API_PATH], password[XPASS_MAX], *tail;
-    size_t at = 0, cap = 3 * API_PATH + 3 * XPASS_MAX + 64;
-    int merge = 0, replace = 0, rc;
+    char path[API_PATH], dest[API_PATH], password[XPASS_MAX], *tail, *top;
+    /* Every character of the three strings escaped as \u00XX at worst, and the members' names. */
+    size_t cap = 6 * (API_PATH + XPASS_MAX + XTOP_MAX) + 128;
+    int merge = 0, replace = 0, list = 0, rc, rt, len;
     if (need_path(fd, b, n, "path", path, sizeof path) != 0) return;
     if (need_path(fd, b, n, "dest", dest, sizeof dest) != 0) return;
     rc = webui_json_str(b, n, "password", password, sizeof password);
@@ -903,37 +1039,42 @@ static void r_fs_extract(const char *b, size_t n, uint8_t *out, int fd) {
         send_bad(fd, "bad_password");
         return;
     }
-    if (webui_json_bool(b, n, "merge", &merge) < 0 || webui_json_bool(b, n, "replace", &replace) < 0) {
+    if (webui_json_bool(b, n, "merge", &merge) < 0 || webui_json_bool(b, n, "replace", &replace) < 0 ||
+        webui_json_bool(b, n, "list", &list) < 0) {
+        crypto_wipe(password, sizeof password);
         send_bad(fd, "bad_merge");
         return;
     }
+    top = malloc(XTOP_MAX);
     tail = malloc(cap);
-    if (!tail) {
+    if (!top || !tail) {
+        free(top);
+        free(tail);
+        crypto_wipe(password, sizeof password);
         send_error(fd, 500, "out_of_memory", 13);
         return;
     }
-    /* archive_extract.c reads it back with fsj_json_str (\" \\ \uXXXX understood). */
-    at = (size_t)snprintf(tail, cap, ",\"dest\":\"");
-    at += webui_json_escape(tail + at, cap - at, dest, strlen(dest));
-    if (at + 16 < cap) at += (size_t)snprintf(tail + at, cap - at, "\"%s", rc == 1 ? ",\"password\":\"" : "");
-    if (rc == 1 && at < cap) {
-        at += webui_json_escape(tail + at, cap - at, password, strlen(password));
-        if (at + 2 < cap) at += (size_t)snprintf(tail + at, cap - at, "\"");
+    /* "Choose items" and Keep both (#969): top-level entries left out or renamed, "from/to/…". */
+    rt = webui_json_str(b, n, "top", top, XTOP_MAX);
+    if (rt < 0) {
+        free(top);
+        free(tail);
+        crypto_wipe(password, sizeof password);
+        send_bad(fd, "bad_top");
+        return;
     }
-    if (at + 40 < cap)
-        at += (size_t)snprintf(tail + at, cap - at, ",\"merge\":%s,\"replace\":%s", merge ? "true" : "false",
-                               replace ? "true" : "false");
-    else
-        at = cap; /* did not fit */
-    memset(password, 0, sizeof password);
-    if (at >= cap) {
-        memset(tail, 0, cap);
+    /* archive_extract.c reads it back with fsj_json_str (\" \\ \uXXXX understood). */
+    len = webui_extract_tail(tail, cap, dest, rc == 1 ? password : NULL, merge, replace, list,
+                             rt == 1 ? top : NULL);
+    crypto_wipe(password, sizeof password);
+    free(top);
+    if (len < 0) {
         free(tail);
         send_bad(fd, "bad_path");
         return;
     }
     start_path_job(fd, out, AVA1_JOB_OP_ARCHIVE_EXTRACT, path, NULL, tail);
-    memset(tail, 0, cap);
+    crypto_wipe(tail, cap);
     free(tail);
 }
 
@@ -969,7 +1110,9 @@ static void r_fs_extract_info(const char *b, size_t n, uint8_t *out, int fd) {
  * "content_version","master_version","packed","has_eboot","warnings","zstd_runtime"} (the newest
  * zstd runtime on the console, or null: a zstd build is refused without one), and for a game in
  * asset packs "unpacked_bytes" (about its size as plain files) and "unpack_keeps_emulator" (false:
- * a .pkg with "unpack_packs" has to leave the emulator out). */
+ * a .pkg with "unpack_packs" has to leave the emulator out); for a game in no packs that carries
+ * an AMPR emulator, "plain_ampr_emu" (what a .pkg with "leave_out_ampr_emu" alone leaves out, and
+ * its "refusal" when it can't). */
 static void r_convert_inspect(const char *b, size_t n, uint8_t *out, int fd) {
     run_path_job(b, n, out, fd, AVA1_JOB_OP_CONSOLE_CONVERT, ",\"action\":\"inspect\"");
 }
@@ -978,8 +1121,9 @@ static void r_convert_inspect(const char *b, size_t n, uint8_t *out, int fd) {
  * "ffpfs"|"ffpfsc"|"pkg"|"folder", optional "zstd": bool, "zstd_level": 1..22 (sent on only with
  * zstd), "verify": "fast"|"full", "inner": "exfat"|"ffpkg"|"ffpfs" and "ffpfsc_level":
  * "fast"|"balanced"|"smallest" (with "ffpfsc"), "pkg_level": "stored"|"fast"|"balanced",
- * "unpack_packs": bool and, with it, "leave_out_ampr_emu": bool (with "pkg": a game in asset packs
- * as plain files, without its AMPR emulator)}. The job's result: {"path"}. The helper's operation
+ * "unpack_packs": bool and "leave_out_ampr_emu": bool (with "pkg": a game in asset packs as plain
+ * files, and without its AMPR emulator; the second alone, a game in no packs without its
+ * emulator)}. The job's result: {"path"}. The helper's operation
  * checks the paths again
  * (console_convert.c); this route refuses what the page may never name and what is not
  * well-formed (cc_start_tail). */
@@ -1537,22 +1681,26 @@ static void r_apps_launch(const char *b, size_t n, uint8_t *out, int fd) {
     else send_json(fd, 200, "{}", 2);
 }
 
-/* {title_id}: APP_UNREGISTER, the PC app's Uninstall. The helper judges the result itself (#476:
- * unregister_outcome.h): {"sony_uninstall_rc":N,"still_present":false} when the title is gone,
+/* {title_id, registration_only?}: APP_UNREGISTER, the PC app's Uninstall. The helper judges the
+ * result itself (#476: unregister_outcome.h): {"sony_uninstall_rc":N,"still_present":false} when the title is gone,
  * still_present:true when Sony accepted but its folders are still there (a big game takes minutes:
  * the page keeps checking), an error ("uninstall_refused:0x..", "uninstall_unavailable") otherwise.
  * Refused (409 game_running) while that game runs. */
 static void r_apps_uninstall(const char *b, size_t n, uint8_t *out, int fd) {
-    char tid[32], req[64];
+    char tid[32], req[96];
     const uint8_t *t;
     size_t ol, tl;
-    int k, st;
+    int k, st, reg_only = 0;
     if (need_app(fd, b, n, tid, sizeof tid, 1) != 0) return;
     if (game_running(out, tid, 0)) {
         send_error(fd, 409, "game_running", 12);
         return;
     }
-    k = snprintf(req, sizeof req, "{\"title_id\":\"%s\"}", tid);
+    /* "registration_only":true (the page is about to delete the game's folder or image): refused
+     * instead of uninstalled when the console's own installer installed this title id (#884). */
+    if (webui_json_bool(b, n, "registration_only", &reg_only) != 1) reg_only = 0;
+    k = snprintf(req, sizeof req, reg_only ? "{\"title_id\":\"%s\",\"registration_only\":true}" : "{\"title_id\":\"%s\"}",
+                 tid);
     st = call_text(AVA1_METHOD_APP_UNREGISTER, req, (size_t)k, out, &ol, &t, &tl);
     send_text_reply(fd, st, out, ol, t, tl);
 }
@@ -1896,7 +2044,7 @@ static void r_cleanup_cancel(const char *b, size_t n, uint8_t *out, int fd) {
 /* The live settings. g_set_mu is held across a save, so two /api/settings/set calls never write
  * the file at once and memory always matches what is on disk. */
 static pthread_mutex_t g_set_mu = PTHREAD_MUTEX_INITIALIZER;
-static webui_settings_t g_set = { 0, 1, 1, 0 };
+static webui_settings_t g_set = { 0, 1, 1, 0, 0, 0 };
 /* Whether webui.json was on the console when the helper started, or has been saved since: a PC that
  * turned Minion off re-applies that when the file is gone (the folder was wiped), and only then. */
 static int g_saved = 0;
@@ -1904,6 +2052,13 @@ static int g_saved = 0;
  * setting under it, so the last one to run applies the last value saved, whatever order the
  * threads ran in. */
 static pthread_mutex_t g_rebind_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static void tz_setting(int *set, int *min) {
+    pthread_mutex_lock(&g_set_mu);
+    *set = g_set.tz_set;
+    *min = g_set.tz_min;
+    pthread_mutex_unlock(&g_set_mu);
+}
 
 void webui_api_settings_init(const webui_settings_t *s, int saved) {
     pthread_mutex_lock(&g_set_mu);
@@ -1920,19 +2075,33 @@ void webui_api_settings_init(const webui_settings_t *s, int saved) {
 /* `addr`: with LAN access on, the console's address a phone opens ("Continue on your phone"; the
  * page builds http://<addr>:<port>/ from it); "" when off or there is none. Dotted IPv4 only.
  * `enabled`: PS5Upload Minion as a whole (false only in the reply that turns it off: the page
- * stops right after). `start_cheats`: the page opens on Cheats instead of Home (#584). */
+ * stops right after). `start_cheats`: the page opens on Cheats instead of Home (#584).
+ * `tz_min`: the time zone chosen by hand (minutes ahead of UTC), null for Automatic (#978);
+ * `tz_auto` / `tz_auto_src`: what Automatic gives now and from where (null / "none": the console
+ * does not say). */
 static void send_settings(int fd, const webui_settings_t *s) {
-    char json[448], addr[INET_ADDRSTRLEN];
-    int busy, failed, k;
+    char json[640], addr[INET_ADDRSTRLEN], tz[96];
+    int busy, failed, k, auto_src;
+    long ignored = 0, auto_min = 0;
+    tz_read_t raw;
     webui_tile_result_t result;
     webui_tile_state(&busy, &failed, &result);
+    (void)console_tz(&ignored, &raw);
+    auto_src = webui_tz_pick(0, 0, raw.kern_ok, raw.kern_min, raw.reg_ok, raw.reg_min, &auto_min);
+    if (s->tz_set) k = snprintf(tz, sizeof tz, "%d", s->tz_min);
+    else k = snprintf(tz, sizeof tz, "null");
+    if (auto_src != WEBUI_TZ_NONE) k = snprintf(tz + k, sizeof tz - (size_t)k, ",\"tz_auto\":%ld", auto_min);
+    else k = snprintf(tz + k, sizeof tz - (size_t)k, ",\"tz_auto\":null");
+    (void)k;
     if (!s->lan || !webui_lan_addr(addr)) addr[0] = '\0';
     k = snprintf(json, sizeof json,
                  "{\"lan\":%s,\"tile\":%s,\"enabled\":%s,\"start_cheats\":%s,\"tile_busy\":%s,\"tile_failed\":%s,"
-                 "\"tile_result\":\"%s\",\"tile_error\":\"%s\",\"version\":\"%s\",\"addr\":\"%s\"}",
+                 "\"tile_result\":\"%s\",\"tile_error\":\"%s\",\"version\":\"%s\",\"addr\":\"%s\",\"tz_min\":%s,"
+                 "\"tz_auto_src\":\"%s\"}",
                  s->lan ? "true" : "false", s->tile ? "true" : "false", s->enabled ? "true" : "false",
                  s->start_cheats ? "true" : "false", busy ? "true" : "false", failed ? "true" : "false",
-                 webui_tile_result_name(result), webui_tile_last_error(), PS5UPLOAD2_VERSION, addr);
+                 webui_tile_result_name(result), webui_tile_last_error(), PS5UPLOAD2_VERSION, addr, tz,
+                 webui_tz_src_name(auto_src));
     if (k < 0 || (size_t)k >= sizeof json) {
         send_error(fd, 500, "bad_settings_reply", 18);
         return;
@@ -2058,15 +2227,28 @@ static int apply_locked(const webui_settings_t *old, const webui_settings_t *s, 
     return s->enabled != old->enabled;
 }
 
-/* {lan?, tile?, enabled?, start_cheats?}: saved first (the file is the truth at the next start), then answered
+/* {lan?, tile?, enabled?, start_cheats?, tz_min?}: saved first (the file is the truth at the next start), then answered
  * with the new settings, then applied: a `lan` change rebinds the listener on a thread of its own,
  * a `tile` change (or tile:true again) registers or removes the tile on the tile thread, and
  * enabled:false (Settings -> Turn off PS5Upload Minion) removes the tile and then stops this
- * server, after the reply. A failed save changes nothing. */
+ * server, after the reply. tz_min: the page's time zone by hand (minutes ahead of UTC, whole
+ * quarter hours, -720..840), null for Automatic (#978). A failed save changes nothing. */
 static void r_settings_set(const char *b, size_t n, uint8_t *out, int fd) {
     webui_settings_t old, s;
     int lan, tile, enabled, start_cheats, has_lan, has_tile, has_enabled, has_start, server, changed;
+    int has_tz = 0, tz_auto = 0;
+    long long tz = 0;
     (void)out;
+    if (webui_json_null(b, n, "tz_min")) {
+        has_tz = 1;
+        tz_auto = 1;
+    } else {
+        has_tz = webui_json_i64(b, n, "tz_min", &tz);
+        if (has_tz < 0 || (has_tz && !webui_tz_setting_ok((long)tz))) {
+            send_bad(fd, "bad_tz_min");
+            return;
+        }
+    }
     has_lan = webui_json_bool(b, n, "lan", &lan);
     if (has_lan < 0) {
         send_bad(fd, "bad_lan");
@@ -2093,7 +2275,12 @@ static void r_settings_set(const char *b, size_t n, uint8_t *out, int fd) {
     if (has_tile) s.tile = tile;
     if (has_enabled) s.enabled = enabled;
     if (has_start) s.start_cheats = start_cheats;
-    changed = s.lan != old.lan || s.tile != old.tile || s.enabled != old.enabled || s.start_cheats != old.start_cheats;
+    if (has_tz) {
+        s.tz_set = !tz_auto;
+        s.tz_min = tz_auto ? 0 : (int)tz;
+    }
+    changed = s.lan != old.lan || s.tile != old.tile || s.enabled != old.enabled || s.start_cheats != old.start_cheats ||
+              s.tz_set != old.tz_set || s.tz_min != old.tz_min;
     if (changed && webui_settings_save(WEBUI_SETTINGS_PATH, &s) != 0) {
         pthread_mutex_unlock(&g_set_mu);
         send_error(fd, 500, "save_failed", 11);
@@ -2101,6 +2288,10 @@ static void r_settings_set(const char *b, size_t n, uint8_t *out, int fd) {
     }
     g_set = s;
     if (changed) g_saved = 1;
+    if (s.tz_set != old.tz_set || s.tz_min != old.tz_min) {
+        if (s.tz_set) fprintf(stderr, "webui: time zone set by hand to %+d min\n", s.tz_min);
+        else fprintf(stderr, "webui: time zone set to Automatic\n");
+    }
     /* Keep tile requests in saved-setting order, including calls from the paired PC.
      * tile:true also retries a failed ensure; removal runs only on a change. */
     server = apply_locked(&old, &s, has_tile && tile);
@@ -3340,7 +3531,8 @@ static int nudge_old_page(const char *query) {
     return refuse;
 }
 
-/* GET /, GET /api/token, GET /strings/<lang>.json, GET /sw.js, GET /minion.appcache and the retired
+/* GET /, GET /api/token, GET /strings/<lang>.json, GET /sw.js, GET /minion.appcache, the
+ * Home Screen icon and manifest (webui_offline.h), and the retired
  * GET /cache.appcache (410): the server
  * checked Host/Origin but no token (is_api is 0 for all of them). None reaches a helper method, so they stay outside the in-flight RPC
  * gate. The token goes out as JSON with no CORS headers: another site's page cannot read the reply,

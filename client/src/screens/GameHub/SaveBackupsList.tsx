@@ -31,8 +31,11 @@ export function stampLabel(stamp: string, lang?: string): string {
 }
 
 /** A backup in this computer's backup folder, on the network share (#592), or the copy on the
- *  PS5's own M.2 (`ext`) or USB drive (`console`). */
-export type ListedBackup = SaveBackupFile & { server?: boolean; console?: "ext" | "usb" };
+ *  PS5's own internal storage, M.2 (`ext`) or USB drive (`console`). */
+export type ListedBackup = SaveBackupFile & { server?: boolean; console?: ConsoleKind };
+
+/** Which PS5 drive a copy is on. */
+export type ConsoleKind = "internal" | "ext" | "usb";
 
 /** Where a backup is, for its key and for sorting equal stamps: here first, then the server,
  *  then the PS5 drive. */
@@ -45,7 +48,7 @@ export function mergeBackups(
   local: SaveBackupFile[],
   server: SaveBackupFile[],
   onConsole: SaveBackupFile[] = [],
-  consoleKind: "ext" | "usb" = "ext",
+  consoleKind: ConsoleKind = "ext",
 ): ListedBackup[] {
   const all: ListedBackup[] = [
     ...local,
@@ -149,7 +152,7 @@ export function SaveBackupsList({
         local.filter(mine),
         server.filter(mine),
         onConsole.backups.filter(mine),
-        onConsole.kind === "usb" ? "usb" : "ext",
+        onConsole.kind === "usb" || onConsole.kind === "internal" ? onConsole.kind : "ext",
       ),
     );
   }, [readsLocal, target, consoleDrive, addr, titleId, userId, kind, userIds]);
@@ -236,7 +239,9 @@ export function SaveBackupsList({
                 <span className="ms-2 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] text-[var(--color-muted)]" data-testid="save-backup-console">
                   {b.console === "usb"
                     ? tr("save_backup_on_console_usb", undefined, "On the PS5 (USB)")
-                    : tr("save_backup_on_console_ext", undefined, "On the PS5 (M.2)")}
+                    : b.console === "internal"
+                      ? tr("save_backup_on_console_internal", undefined, "On the PS5 (internal storage)")
+                      : tr("save_backup_on_console_ext", undefined, "On the PS5 (M.2)")}
                 </span>
               )}
               {b.tag === "beforerestore" && (

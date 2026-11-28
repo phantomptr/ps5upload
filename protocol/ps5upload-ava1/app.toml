@@ -654,6 +654,10 @@ value = 13
 name = "JOB_OP_CONSOLE_CONVERT" # a game folder or image on the console inspected or converted there (the converter payload)
 ty = "u8"
 value = 14
+[[const]]
+name = "JOB_OP_TREE_SIZE"       # a folder's recursive size on the console: files' bytes and what they take on disk (#974)
+ty = "u8"
+value = 15
 # fs.* entry kinds (FsEntry.kind, FsStat.kind): ENTRY_FILE (0) and ENTRY_DIR (1) above, plus:
 [[const]]
 name = "ENTRY_LINK"       # a symbolic link (not followed)

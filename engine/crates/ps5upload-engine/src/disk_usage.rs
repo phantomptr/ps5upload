@@ -152,11 +152,24 @@ struct Shared {
 
 /// `/a/b/` -> `/a/b`; `/` stays.
 pub(crate) fn normalize(path: &str) -> String {
-    let t = path.trim_end_matches('/');
-    if t.is_empty() {
-        "/".to_string()
+    // One spelling per folder: `/data//games/./x/` is `/data/games/x` (Files' folder sizes are
+    // kept, and dropped, by this spelling).
+    let parts: Vec<&str> = path
+        .split('/')
+        .filter(|c| !c.is_empty() && *c != ".")
+        .collect();
+    if parts.is_empty() {
+        return if path.starts_with('/') || path.is_empty() {
+            "/".to_string()
+        } else {
+            ".".to_string()
+        };
+    }
+    let joined = parts.join("/");
+    if path.starts_with('/') {
+        format!("/{joined}")
     } else {
-        t.to_string()
+        joined
     }
 }
 
@@ -248,12 +261,16 @@ pub(crate) fn walk(
     // The walk usually runs on a blocking thread of the engine's runtime; the listers reach
     // the helper through it, so each worker enters it too.
     let rt = tokio::runtime::Handle::try_current().ok();
+    // A test's console stand-in (set for this thread only) answers the workers too.
+    let scoped = ps5upload_core::mgmt::scoped_now();
     std::thread::scope(|s| {
         for _ in 0..limits.workers.max(1) {
             let rt = rt.clone();
+            let scoped = scoped.clone();
             let (shared, cv) = (&shared, &cv);
             s.spawn(move || {
                 let _rt = rt.as_ref().map(|h| h.enter());
+                let _transport = scoped.map(ps5upload_core::mgmt::scoped_transport);
                 worker(shared, cv, list, skip, limits, progress, cancel, started);
             });
         }
@@ -405,6 +422,47 @@ pub(crate) fn skip_rule(
         }
         None
     }
+}
+
+/// One console folder's whole listing (every page), with the walk's per-page deadline.
+pub(crate) fn list_folder(addr: &str, path: &str) -> anyhow::Result<Vec<DirEntry>> {
+    list_all(|offset| {
+        list_dir_with_timeout(
+            addr,
+            path,
+            ListDirOptions {
+                offset,
+                limit: PAGE,
+            },
+            Some(LIST_TIMEOUT),
+        )
+        .map(|l| (l.entries, l.truncated))
+    })
+}
+
+/// Walks `root` on the console at `addr` (what [`start`] runs; Files' folder sizes run it too,
+/// with one worker, for a helper that cannot count a folder itself).
+pub(crate) fn walk_console(
+    addr: &str,
+    root: &str,
+    limits: &Limits,
+    progress: &Progress,
+    cancel: &(dyn Fn() -> bool + Sync),
+) -> anyhow::Result<Walked> {
+    let root = normalize(root);
+    // Best effort: without the volume list a deeper drive is walked like any folder.
+    let mounts: Vec<String> = ps5upload_core::volumes::list_volumes(addr)
+        .map(|l| {
+            l.volumes
+                .into_iter()
+                .map(|v| normalize(&v.path))
+                .filter(|p| p.starts_with(&format!("{}/", root.trim_end_matches('/'))))
+                .collect()
+        })
+        .unwrap_or_default();
+    let skip = skip_rule(&root, mounts);
+    let list = |p: &str| list_folder(addr, p);
+    walk(&root, &list, &skip, limits, progress, cancel)
 }
 
 // ─── Jobs ───────────────────────────────────────────────────────────────────
@@ -592,39 +650,13 @@ pub(crate) async fn start(State(state): State<AppState>, Json(req): Json<StartRe
     let j = job.clone();
     tokio::task::spawn_blocking(move || {
         let root = j.path.clone();
-        // Best effort: without the volume list a deeper drive is walked like any folder.
-        let mounts: Vec<String> = ps5upload_core::volumes::list_volumes(&addr)
-            .map(|l| {
-                l.volumes
-                    .into_iter()
-                    .map(|v| normalize(&v.path))
-                    .filter(|p| p.starts_with(&format!("{}/", root.trim_end_matches('/'))))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let skip = skip_rule(&root, mounts);
-        let list = |p: &str| {
-            list_all(|offset| {
-                list_dir_with_timeout(
-                    &addr,
-                    p,
-                    ListDirOptions {
-                        offset,
-                        limit: PAGE,
-                    },
-                    Some(LIST_TIMEOUT),
-                )
-                .map(|l| (l.entries, l.truncated))
-            })
-        };
-        let r = walk(
-            &root,
-            &list,
-            &skip,
-            &Limits::default(),
-            &j.progress,
-            &|| j.abandoned(),
-        );
+        // A walk alongside a transfer or install sees its files half written: not kept as
+        // Files' folder sizes (#974).
+        let quiet_start = !crate::folder_sizes::console_busy(&addr);
+        let started_ms = crate::folder_sizes::now_ms();
+        let r = walk_console(&addr, &root, &Limits::default(), &j.progress, &|| {
+            j.abandoned()
+        });
         let took = j.started.elapsed();
         let outcome = match r {
             Ok(w) => {
@@ -639,6 +671,9 @@ pub(crate) async fn start(State(state): State<AppState>, Json(req): Json<StartRe
                     took.as_millis(),
                     w.partial.map(|p| format!(" (partial: {p})")).unwrap_or_default(),
                 ));
+                if quiet_start {
+                    crate::folder_sizes::record_walk(&addr, &root, &w, started_ms);
+                }
                 Outcome::walked(w)
             }
             Err(e) => Outcome::Failed(format!("{e:#}")),
@@ -1032,6 +1067,8 @@ mod tests {
     fn paths_join_and_normalize() {
         assert_eq!(normalize("/data/"), "/data");
         assert_eq!(normalize("/"), "/");
+        assert_eq!(normalize("//"), "/");
+        assert_eq!(normalize("/data//games/./x/"), "/data/games/x");
         assert_eq!(join("/", "data"), "/data");
         assert_eq!(parent_of("/data"), "/");
         assert_eq!(parent_of("/mnt/ext0"), "/mnt");

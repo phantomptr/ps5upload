@@ -1938,6 +1938,9 @@ pub struct AppRestoreReq {
     pub rollback: bool,
     #[serde(default)]
     pub install_ended: bool,
+    /// finish: remove what a failed install left on the console first (Sony's uninstall).
+    #[serde(default)]
+    pub clear: bool,
 }
 
 #[tauri::command]
@@ -1966,13 +1969,15 @@ pub async fn ps5_app_restore(op: String, req: AppRestoreReq) -> Result<JsonValue
             .await
         }
         "finish" => {
-            post_json(
+            // Long: a clear runs Sony's uninstall and waits for it to remove the console's copy.
+            post_json_long(
                 &format!("{base}/api/ps5/app/restore/finish"),
                 &serde_json::json!({
                     "addr": req.addr,
                     "title_id": req.title_id,
                     "rollback": req.rollback,
                     "install_ended": req.install_ended,
+                    "clear": req.clear,
                 }),
             )
             .await
@@ -2438,6 +2443,8 @@ pub async fn fpkg_build(
     name: Option<String>,
     compression: Option<String>,
     firmware: Option<String>,
+    // The connected console's firmware: the package's size is checked against what it opens.
+    console_firmware: Option<String>,
     language: Option<String>,
     // Read everything back to verify; absent means the fast, sampled check.
     full_verify: Option<bool>,
@@ -2464,6 +2471,7 @@ pub async fn fpkg_build(
             "name": name,
             "compression": compression,
             "firmware": firmware,
+            "console_firmware": console_firmware,
             "language": language,
             "full_verify": full_verify.unwrap_or(false),
             "keep_both": keep_both.unwrap_or(false),

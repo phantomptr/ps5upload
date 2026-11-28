@@ -432,6 +432,10 @@ describe("a queued game's asset packs (#905)", () => {
     ).toEqual([{ kind: "unpack" }, { kind: "no-emulator" }, { kind: "language", code: "de-DE" }]);
     expect(queueTags({ ...base, build: { kind: "pkg", unpackPacks: true } })).toEqual([{ kind: "unpack" }]);
     expect(queueTags({ ...base, build: { kind: "pkg", leaveOutAmprEmu: true } })).toEqual([]);
+    // A plain game whose emulator can go (checked under ①): the emulator left out alone.
+    expect(
+      queueTags({ ...base, build: { kind: "pkg", leaveOutAmprEmu: true }, packs: "none", plainAmprEmu: true }),
+    ).toEqual([{ kind: "no-emulator" }]);
   });
 
   it("keeps packs set while waiting through a restart, and the build gets them", async () => {

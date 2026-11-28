@@ -69,7 +69,8 @@
 # 14) System Back goes to the page first, which closes what is open on top. See step (14) below.
 # 15) Storage on Android 7 to 10: the runtime prompt (PS5UploadStorage). See step (15) below.
 # 16) Android TV and Google TV (#897): no touch or phone hardware required, the TV banner, and
-#     PS5UploadTv so the page moves focus with the remote's D-pad. See step (16) below.
+#     PS5UploadTv so the page moves focus with the remote's D-pad (and TV mode's home can put
+#     the app in the background after asking, #976). See step (16) below.
 #
 # A WebView renderer crash is handled in wry's generated RustWebViewClient, which this script
 # cannot patch (it is written during the Rust build): see client/.cargo/config.toml.
@@ -1939,6 +1940,12 @@ src = src.replace(anchor, anchor + '''    // Android TV: D-pad focus in the page
     webView.addJavascriptInterface(object {
       @android.webkit.JavascriptInterface
       fun isTv(): Boolean = tv
+      // TV mode's home asks before Back leaves the app (#976); then the app goes to the
+      // background as Back on the first screen does (step 14), the engine still running.
+      @android.webkit.JavascriptInterface
+      fun leave() {
+        runOnUiThread { moveTaskToBack(true) }
+      }
     }, "PS5UploadTv")
     if (tv) {
       webView.isFocusable = true

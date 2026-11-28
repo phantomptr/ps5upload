@@ -27,7 +27,7 @@ export { GameIcon } from "./GameIcon";
 export { PlatformBadge } from "./PlatformBadge";
 export { Modal } from "./Modal";
 export { ConsoleChip } from "./ConsoleChip";
-export { RootErrorBoundary } from "./ErrorBoundary";
+export { RootErrorBoundary, SectionErrorBoundary } from "./ErrorBoundary";
 export { ProgressBar } from "./ProgressBar";
 export { Skeleton, SkeletonRows } from "./Skeleton";
 export { ShapesLoader } from "./ShapesLoader";

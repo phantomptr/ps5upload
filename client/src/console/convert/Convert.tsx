@@ -10,6 +10,7 @@ import type { SectionContext } from "../sections";
 import { t } from "../strings";
 import {
   bytesToWrite,
+  canLeaveOutPlainEmulator,
   canUnpack,
   converting,
   DEFAULT_PKG_LEVEL,
@@ -31,6 +32,7 @@ import {
   startBody,
   startConvert,
   stopConvert,
+  plainEmulatorKeptText,
   unpackFor,
   unpackNeedsEmulator,
   useConvertRun,
@@ -67,7 +69,8 @@ export interface ConvertViewProps {
   /** With a .pkg: its Kraken level. */
   pkgLevel: PkgLevel;
   /** With a .pkg of a game in asset packs: the package holds the plain files again, and has no
-   *  AMPR emulator (the second only with the first). */
+   *  AMPR emulator (the second only with the first). With a .pkg of a plain game that carries an
+   *  emulator the converter says can go: the second alone. */
   unpack: boolean;
   leaveOutEmulator: boolean;
   verify: Verify;
@@ -298,6 +301,19 @@ export function ConvertView(p: ConvertViewProps) {
                     </p>
                   ) : null}
                 </div>
+              ) : canLeaveOutPlainEmulator(info) ? (
+                <div data-convert-plain-emulator="">
+                  {toggle(applied.leaveOutEmulator, t("cw_convert_leave_out_emu"), "convert-leave-out-emulator", p.onLeaveOutEmulator)}
+                  <p className="cw-dim">
+                    {t(info?.plainEmulator?.importsAmpr ? "cw_convert_plain_leave_out_note" : "cw_convert_plain_leave_out_note_unused", {
+                      emulator: info?.plainEmulator?.emulator ?? "",
+                    })}
+                  </p>
+                </div>
+              ) : plainEmulatorKeptText(info) ? (
+                <p className="cw-dim" data-convert-plain-emulator="kept">
+                  {plainEmulatorKeptText(info)}
+                </p>
               ) : null}
             </div>
           ) : null}

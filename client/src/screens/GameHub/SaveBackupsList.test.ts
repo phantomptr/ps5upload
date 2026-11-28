@@ -26,6 +26,7 @@ describe("backups on the PS5's own drive", () => {
     // The same file here and on the PS5 gets two keys.
     expect(new Set(merged.map((x) => `${backupPlace(x)}:${x.file}`)).size).toBe(3);
     expect(mergeBackups([], [], [b("2026-11-01_000000")])[0].console).toBe("ext");
+    expect(mergeBackups([], [], [b("2026-11-01_000000")], "internal")[0].console).toBe("internal");
   });
 });
 

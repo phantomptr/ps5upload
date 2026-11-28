@@ -18,6 +18,7 @@
 
 #include "xjob.h"
 #include "xreq.h"
+#include "xrcrypt.h"
 
 #ifdef __PROSPERO__
 #include "proc_identity.h"
@@ -107,6 +108,7 @@ int main(int argc, char **argv) {
     job.cancelled = cancelled;
     job.progress = progress;
     if (xreq_read_file(req_path, &job) != 0) {
+        xrc_wipe(job.password, sizeof job.password); /* parsed before a later field was refused */
         unlink(req_path);
         xj_fail(&job, "fs_extract_bad_request");
         xstatus_write(m.status_path, &job, "failed", (long)getpid());
@@ -132,11 +134,11 @@ int main(int argc, char **argv) {
     m.last_status = now_ms();
     if (xstatus_write(m.status_path, &job, "running", (long)getpid()) != 0) {
         fprintf(stderr, "cannot write the status (%s): not extracting\n", strerror(errno));
-        memset(job.password, 0, sizeof job.password);
+        xrc_wipe(job.password, sizeof job.password);
         return 1;
     }
     rc = xj_run(&job);
-    memset(job.password, 0, sizeof job.password);
+    xrc_wipe(job.password, sizeof job.password);
     if (rc != 0 && !job.cause[0]) xj_fail(&job, "fs_extract_corrupt");
     fprintf(stderr, "%s: %llu files, %llu folders, %llu bytes, %llu skipped, %llu unsafe, %llu links%s%s\n",
             rc == 0 ? "done" : "failed", (unsigned long long)job.files, (unsigned long long)job.dirs,

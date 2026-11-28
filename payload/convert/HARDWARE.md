@@ -202,6 +202,25 @@ own). No new import. Not run on a console yet.
 3. Delete the `ampr_emu-0.4.2.1` folder in Files: the page holds Convert again with the sentence
    that names the app's button (run 3e step 1).
 
+## Run 3g: a `.pkg` of a plain game without its AMPR emulator
+
+New: `"leave_out_ampr_emu"` without `"unpack_packs"`, for a game in no packs that carries ampr_emu
+or ampr-emu-ng in `fakelib` (`ps5upload-convert-core` `plain_emulator`). No new import. Not run
+on a console yet; the open question is the game itself, as in run 3e: Spider-Man 2 (a plain
+libSceAmpr dump) played on FW 5.10 from a package without `fakelib/libSceAmpr.sprx`, and nothing
+else has been tried, on 13.60 least of all.
+
+1. A plain libSceAmpr dump with drakmor's ampr_emu in `fakelib` (Spider-Man 2 on the Phat first,
+   then a game on 13.60). Minion, Convert, `.pkg`: "Leave out the AMPR emulator" is there, off,
+   with no "Unpack" switch. Turn it on and convert. Proven when: it ends `ok`; `convert.log` has
+   `leave out the AMPR emulator (ampr_emu 0.4.2.1): left out ... fakelib/libSceAmpr.sprx ...` and
+   `.pkg at Kraken level ... the AMPR emulator left out`; the package has no `libSceAmpr.sprx`, the
+   other fakelib files and a fresh `ampr_emu.index`; it installs, and the game starts and loads a
+   level (the AMPR reads happen there, not at the title screen).
+2. A dump whose `fakelib/libSceAmpr.sprx` is a system library (no `ampr_emu`/`ampr-emu-ng` in it):
+   the page says the emulator stays and why, with no switch; sent by hand with
+   `leave_out_ampr_emu:true` it ends `convert_cant_leave_out_emulator` before anything is written.
+
 ## Run 4: Stop, and a full drive
 
 Start run 3 on a large game and press Stop at about 10 %, then at about 50 %, then during

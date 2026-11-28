@@ -196,3 +196,50 @@ test("a game that is not in packs, or read by an older helper, has no unpack swi
   expect(started[0]).toEqual({ path: GAME, dest: `${GAME}.pkg`, format: "pkg", zstd: false, pkg_level: "fast", verify: "fast" });
   expect(errors).toEqual([]);
 });
+
+test("a plain game that carries an AMPR emulator can leave it out of a .pkg", async ({ page }) => {
+  const errors: string[] = [];
+  const started: unknown[] = [];
+  const emu = { modules: ["fakelib/libSceAmpr.sprx"], emulator: "ampr_emu 0.4.2.1", imports_ampr: true };
+  await openOnGame(
+    page,
+    errors,
+    inspection({ packed: null, unpacked_bytes: undefined, unpack_keeps_emulator: undefined, plain_ampr_emu: emu }),
+    started,
+  );
+  await page.locator('[data-action="convert-format-pkg"]').click();
+  await expect(unpack(page)).toHaveCount(0);
+  await expect(leaveOut(page)).toHaveAttribute("aria-checked", "false");
+  await expect(page.locator("[data-convert-plain-emulator]")).toContainText("carries an AMPR emulator (ampr_emu 0.4.2.1)");
+  await go(page).click();
+  await expect.poll(() => started.length).toBe(1);
+  expect(started[0]).not.toHaveProperty("leave_out_ampr_emu");
+
+  // On: the word goes alone, no unpack with it.
+  await leaveOut(page).click();
+  await expect(leaveOut(page)).toHaveAttribute("aria-checked", "true");
+  await go(page).click();
+  await expect.poll(() => started.length).toBe(2);
+  expect(started[1]).toMatchObject({ format: "pkg", leave_out_ampr_emu: true });
+  expect(started[1]).not.toHaveProperty("unpack_packs");
+  expect(errors).toEqual([]);
+});
+
+test("a plain game whose libSceAmpr.sprx is no emulator keeps it, and says why", async ({ page }) => {
+  const errors: string[] = [];
+  const started: unknown[] = [];
+  const emu = { modules: ["fakelib/libSceAmpr.sprx"], emulator: "x", imports_ampr: true, refusal: "not_an_emulator" };
+  await openOnGame(
+    page,
+    errors,
+    inspection({ packed: null, unpacked_bytes: undefined, unpack_keeps_emulator: undefined, plain_ampr_emu: emu }),
+    started,
+  );
+  await page.locator('[data-action="convert-format-pkg"]').click();
+  await expect(leaveOut(page)).toHaveCount(0);
+  await expect(page.locator('[data-convert-plain-emulator="kept"]')).toContainText("may be a newer system library");
+  await go(page).click();
+  await expect.poll(() => started.length).toBe(1);
+  expect(started[0]).not.toHaveProperty("leave_out_ampr_emu");
+  expect(errors).toEqual([]);
+});

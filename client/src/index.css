@@ -351,6 +351,21 @@ body,
   overflow: hidden;
 }
 
+/* The guest pages' full screen in a phone browser without the Fullscreen API (iPhone;
+ * lib/pageFill useCollapseBars): the page one window and a bit tall, so it can be scrolled down
+ * and Safari can fold its bars away (minimal UI). The game is fixed over the visible window and
+ * keeps every touch, so nothing scrolls under a finger. */
+html[data-collapse-bars],
+html[data-collapse-bars] body {
+  height: auto;
+  overflow: visible;
+}
+html[data-collapse-bars] #root {
+  height: auto;
+  min-height: calc(100vh + 1px);
+  min-height: calc(100lvh + 1px);
+}
+
 /* Nothing may stick out past the page (#856). An absolutely placed element with no placed
  * ancestor (a screen-reader-only label in a sideways-scrolling row of chips, say) is measured
  * from the page itself, so one sitting past the right edge made the document wider than the
@@ -708,6 +723,14 @@ body {
 :root[data-tv="1"] :where(a, button, input, select, textarea, summary, [role="button"], [role="menuitem"], [role="tab"], [tabindex]):focus {
   outline: 3px solid var(--color-accent);
   outline-offset: 3px;
+}
+
+/* TV mode's own screens (#976, layout/TvModeFrame) on any device: the arrows move focus there,
+ * so the same ring, thicker, to read on a TV across the room. The picture keeps its own (the
+ * stage is the game, not a control). */
+:root[data-tv-mode="1"] :where(a, button, input, select, textarea, summary, [role="button"], [role="menuitem"], [role="tab"], [tabindex]:not([data-testid="rp-stage"])):focus {
+  outline: 4px solid var(--color-accent);
+  outline-offset: 4px;
 }
 
 /* Play Together's guest screens (the /join page, the joined game; #926): black, maybe on a TV

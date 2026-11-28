@@ -761,6 +761,13 @@
               "host"
             ]
           },
+          "delete_source": {
+            "description": "Also delete what the title plays from: the `path` `GET /api/ps5/app/uninstall-source`\nnamed (a folder, or a disk image whose mount is taken down first). Refused with 409\nbefore anything is touched when that is no longer what the title plays from\n(`source_changed`), or when a walk of the whole folder, made again here, finds another\ngame in it, a folder it can't read or no end (`source_not_deletable: <reason>`). The\nuninstall is then registration-only, and the path is deleted only once it succeeded:\n`source_deleted`, and `source_error` when it was kept.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "registration_only": {
             "description": "Only take off a folder or image registration (#884): a helper from 12.6.16 on then\nrefuses, before touching anything, a title the console's own installer has installed\n(`unregister_title_installed:<where>`), instead of uninstalling that game. Older helpers\nignore it. Default false: the game page's Uninstall of a package install.",
             "type": "boolean"
@@ -796,6 +803,60 @@
         },
         "required": [
           "item_ids"
+        ],
+        "type": "object"
+      },
+      "ArchiveEntries": {
+        "description": "The answer of `/api/archive/entries`.",
+        "properties": {
+          "complete": {
+            "description": "False when there were more rows than [`ROWS_MAX`] (the rest are left out).",
+            "type": "boolean"
+          },
+          "file_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ChooseRow"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "description": "`zip`, `7z`, `rar` or `tar`.",
+            "type": "string"
+          },
+          "total_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "items",
+          "file_count",
+          "total_bytes",
+          "complete"
+        ],
+        "type": "object"
+      },
+      "ArchiveEntriesReq": {
+        "description": "`/api/archive/entries` request.",
+        "properties": {
+          "archive_path": {
+            "type": "string"
+          },
+          "password": {
+            "description": "RAR only.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "archive_path"
         ],
         "type": "object"
       },
@@ -1357,6 +1418,13 @@
               "null"
             ]
           },
+          "console_firmware": {
+            "description": "The connected console's firmware (`13.60`), when the caller knows one. With no\n`firmware`, the package's size is checked against what this console opens; with neither,\nagainst 13.x's ceiling (see `ps5upload_fpkg::package_limit`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "content_id": {
             "description": "Overrides the content id `param.json` declares.",
             "type": [
@@ -1387,7 +1455,7 @@
             ]
           },
           "leave_out_ampr_emu": {
-            "description": "With `unpack_packs`: leave the AMPR emulator out of the package (every\n`libSceAmpr.sprx` in `fakelib` and `fakelib2`, and a kept `.orig` copy), so the game\nreads its plain files through the console's own libSceAmpr. `add_ampr_emu` and\n`ampr_emu_build` then do nothing. A libSceAmpr game still gets a fresh `ampr_emu.index`.\nOff by default: one backported game played from a package without its emulator on FW\n5.10, which is not every game on every firmware. Refused (400) without `unpack_packs`:\npacks are read only through the emulator.",
+            "description": "Leave the AMPR emulator out of the package (every `libSceAmpr.sprx` in `fakelib` and\n`fakelib2`, and a kept `.orig` copy), so the game reads its plain files through the\nconsole's own libSceAmpr. With `unpack_packs`, for a game in asset packs: `add_ampr_emu`\nand `ampr_emu_build` then do nothing. Without it, for a game that is not in packs and\ncarries an emulator (the inspection's `plain_ampr_emu`): the emulator's other files go\ntoo (our trace marker, `ampr_emu.index`, a run's journal and logs), and every other\nfakelib stays. A libSceAmpr game still gets a fresh `ampr_emu.index`. Off by default:\none backported game played from a package without its emulator on FW 5.10, which is not\nevery game on every firmware. Refused (400) for a game in packs without `unpack_packs`\n(packs are read only through the emulator), and for a plain game where\n`plain_ampr_emu` says why not.",
             "type": "boolean"
           },
           "name": {
@@ -2152,6 +2220,46 @@
         },
         "required": [
           "host"
+        ],
+        "type": "object"
+      },
+      "ChooseRow": {
+        "description": "One row of the chooser.",
+        "properties": {
+          "files": {
+            "description": "Files it stands for (1 for a file or a package).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "`package`, `folder` or `file`.",
+            "type": "string"
+          },
+          "package": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PackageBrief"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "description": "The path inside the archive, as the transfer spells it.",
+            "type": "string"
+          },
+          "size": {
+            "description": "Unpacked bytes (a folder: everything in it).",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "kind",
+          "size",
+          "files"
         ],
         "type": "object"
       },
@@ -3360,6 +3468,41 @@
         ],
         "type": "object"
       },
+      "DoctorCheck": {
+        "description": "One check's verdict. `reason` is a stable code (the app words each one itself; `message` is\nthe English), `params` the values the words use, `fix` what the app can do about it.",
+        "properties": {
+          "fix": {
+            "description": "`fix_permissions` (make the folder 0777), `restore` (Restore to home screen),\n`register` (register the game again), `start_shadowmount` (load ShadowMount+).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DoctorStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "reason",
+          "message"
+        ],
+        "type": "object"
+      },
       "DoctorFacts": {
         "description": "Everything the doctor asks of the engine.",
         "properties": {
@@ -3400,6 +3543,14 @@
           "reply_samples"
         ],
         "type": "object"
+      },
+      "DoctorStatus": {
+        "enum": [
+          "pass",
+          "problem",
+          "unknown"
+        ],
+        "type": "string"
       },
       "DownloadCancelRequest": {
         "properties": {
@@ -3513,7 +3664,7 @@
             "type": "integer"
           },
           "kind": {
-            "description": "`ext` (M.2 / extended storage) or `usb`.",
+            "description": "`internal` (`/data`), `ext` (M.2 / extended storage) or `usb`.",
             "type": "string"
           },
           "path": {
@@ -4595,6 +4746,31 @@
         ],
         "type": "object"
       },
+      "FolderCancelReq": {
+        "properties": {
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "paths": {
+            "description": "The folders to stop; every folder of the console without it.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "FolderCheck": {
         "description": "What a folder choice would mean, for the app to show before anything is made.",
         "properties": {
@@ -4735,6 +4911,35 @@
           "skipped_paths",
           "meta_source"
         ],
+        "type": "object"
+      },
+      "FolderMeasureReq": {
+        "properties": {
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "dir": {
+            "description": "Measure every folder directly in this one (\"Measure everything here\").",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paths": {
+            "description": "Folders to measure.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
         "type": "object"
       },
       "FreeCheckReq": {
@@ -6854,6 +7059,10 @@
                   "string",
                   "null"
                 ]
+              },
+              "plain_ampr_emu": {
+                "description": "Present for a PS5 game that is not in asset packs and carries an AMPR emulator in its\nfakelib: what a package's `leave_out_ampr_emu` would leave out, and why it can't when\nit can't (`refusal`).",
+                "x-rust-type": "crate::plain_emulator::PlainEmulator"
               }
             },
             "required": [
@@ -6909,6 +7118,11 @@
             "minimum": 0,
             "type": "integer"
           },
+          "layout_index_fixed": {
+            "description": "The package's layout index (`napsMetadataSize`) less its 8 bytes per 64 KiB of stored\nimage: add those for the package's size to get the whole, an estimate until it is built.\n0 for a source that isn't a PS5 game.",
+            "minimum": 0,
+            "type": "integer"
+          },
           "output_free": {
             "description": "Bytes free where the output would go; `None` where the platform does not say.",
             "minimum": 0,
@@ -6923,6 +7137,10 @@
               "string",
               "null"
             ]
+          },
+          "param_sizes": {
+            "$ref": "#/components/schemas/ParamSizes",
+            "description": "The add-on space (`acSizeInGib`) and size profile (`appSizeInGib`) the game's\n`param.json` declares, which the console's size check counts\n([`crate::package_limit`])."
           },
           "planned_size": {
             "description": "The package's estimated size (what the free-space check uses).",
@@ -7020,7 +7238,9 @@
           "ps4_kind",
           "ps4_title_id",
           "ps4_addon_data",
-          "ps4_merge"
+          "ps4_merge",
+          "param_sizes",
+          "layout_index_fixed"
         ],
         "type": "object"
       },
@@ -10175,6 +10395,35 @@
           }
         ]
       },
+      "PackageBrief": {
+        "description": "What a package's header says, when it could be read.",
+        "properties": {
+          "app_ver": {
+            "type": "string"
+          },
+          "category": {
+            "description": "`gd` a game, `gp` an update, `ac` DLC (from param.sfo, else the header's content type).",
+            "type": "string"
+          },
+          "content_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "title_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "title_id",
+          "content_id",
+          "category",
+          "app_ver"
+        ],
+        "type": "object"
+      },
       "PairResult": {
         "description": "What a successful pairing leaves us with.",
         "properties": {
@@ -10267,6 +10516,30 @@
         ],
         "type": "object"
       },
+      "ParamSizes": {
+        "description": "What a game's `param.json` reserves: `acSizeInGib` (add-on space) and `appSizeInGib` (the\napplication's size profile). Found wherever they are in the file (`appSizeInGib` sits under\n`kernel` in the games measured).",
+        "properties": {
+          "ac_gib": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "app_gib": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ac_gib",
+          "app_gib"
+        ],
+        "type": "object"
+      },
       "ParseRequest": {
         "properties": {
           "path": {
@@ -10332,7 +10605,7 @@
       "Patch": {
         "properties": {
           "console_drive": {
-            "description": "The PS5 drive that also gets a copy of each backup (`/mnt/ext<N>`, `/mnt/usb<N>`); \"\" for\nnone (#885).",
+            "description": "The PS5 drive that also gets a copy of each backup (`/data`, `/mnt/ext<N>`,\n`/mnt/usb<N>`); \"\" for none (#885).",
             "type": [
               "string",
               "null"
@@ -10354,6 +10627,15 @@
             ]
           },
           "every_hours": {
+            "description": "Hours between interval passes, 1 to 168 (clears `every_minutes`).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "every_minutes": {
+            "description": "Minutes between interval passes, 10 to 10080 (10 min, 30 min, 1 hour, 6 hours, a day…).",
             "minimum": 0,
             "type": [
               "integer",
@@ -12638,6 +12920,10 @@
               "ps5_addr"
             ]
           },
+          "clear": {
+            "description": "Put back after removing what a failed install left on the console (its unfinished copy and\nits download in the PS5's queue) with Sony's uninstall. Only with the copy aside there and\nno update or add-on of the title in place.",
+            "type": "boolean"
+          },
           "install_ended": {
             "description": "The install has ended (the user saw the game on the home screen): the copy aside may go.",
             "type": "boolean"
@@ -12659,6 +12945,13 @@
       "RestoreReply": {
         "description": "What the helper answered. Fields a state does not use are absent.",
         "properties": {
+          "addons": {
+            "description": "clear refused: the title's add-ons on a drive (the uninstall could take them).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "aside": {
             "description": "The folder the package is moved into while it is installed again.",
             "type": [
@@ -12670,6 +12963,13 @@
             "description": "The folder with the copies of app.db and appinfo.db taken before the move.",
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "cleared": {
+            "description": "clear: Sony's uninstall was asked to remove the console's unfinished copy.",
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -12727,6 +13027,22 @@
               "null"
             ]
           },
+          "need_internal": {
+            "description": "What the console's own storage needs free for the new copy.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "need_volume": {
+            "description": "What the package's own drive needs free for the new copy (its size; on the console's\nstorage 1.2x plus 1 GiB, which its reserve takes as it is written).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
           },
@@ -12777,12 +13093,27 @@
               "null"
             ]
           },
+          "sony_rc": {
+            "description": "clear: Sony's answer to that uninstall (0 accepted).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "state": {
             "description": "check: restorable | registered | record_elsewhere | not_installed | pending |\nfolder_registration | ambiguous | retail | no_room | aside_cross_device | db_unreadable |\ninvalid_title | system_title. prepare: prepared. finish: restored | rolled_back |\nnothing_pending | waiting | unsettled.",
             "type": "string"
           },
           "title_id": {
             "type": "string"
+          },
+          "update": {
+            "description": "clear refused: the title's update left in its place (the uninstall could take it).",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "volume": {
             "type": [
@@ -12831,6 +13162,10 @@
         "properties": {
           "addr": {
             "type": "string"
+          },
+          "cleared": {
+            "description": "The console's unfinished copy of a failed install was removed (Sony's uninstall) before\nthe package went back.",
+            "type": "boolean"
           },
           "error": {
             "type": [
@@ -15014,6 +15349,78 @@
         ],
         "type": "object"
       },
+      "SpaceReport": {
+        "properties": {
+          "dirs": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "elapsed_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "files": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "files_bytes": {
+            "description": "What the files and folders on the drive take (allocated blocks).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fs_type": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "skipped": {
+            "description": "Folders not counted (unreadable, another drive mounted inside).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unaccounted_bytes": {
+            "description": "`used_bytes - files_bytes`, never below 0.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "used_bytes": {
+            "description": "`total - free` after the count.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/SpaceVerdict"
+          }
+        },
+        "required": [
+          "path",
+          "fs_type",
+          "total_bytes",
+          "used_bytes",
+          "files_bytes",
+          "files",
+          "dirs",
+          "skipped",
+          "unaccounted_bytes",
+          "verdict",
+          "elapsed_ms"
+        ],
+        "type": "object"
+      },
+      "SpaceVerdict": {
+        "enum": [
+          "clear",
+          "held",
+          "partial",
+          "busy"
+        ],
+        "type": "string"
+      },
       "Specs": {
         "properties": {
           "age_rating": {
@@ -16450,6 +16857,81 @@
         },
         "type": "object"
       },
+      "UninstallPlan": {
+        "allOf": [
+          {
+            "properties": {
+              "bytes": {
+                "description": "What deleting frees (a folder's: everything below it the walk read).",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "offer": {
+                "description": "The Uninstall may ask about deleting `path`.",
+                "type": "boolean"
+              },
+              "reason": {
+                "description": "Why not: `not_registered` (a package install or a system title: Uninstall removes it\nall), `gone`, `shadowmount`, `image_not_mounted`, `image_unknown`, `unsafe_path`,\n`shared_image`, `shared_folder`, `not_a_game`, `holds_other_game`, `unreadable`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "size_partial": {
+                "description": "The folder walk stopped early: `bytes` is at least that much.",
+                "type": "boolean"
+              },
+              "title_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title_id",
+              "offer"
+            ],
+            "type": "object"
+          },
+          {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UninstallSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        ],
+        "description": "The answer of `GET /api/ps5/app/uninstall-source`."
+      },
+      "UninstallSource": {
+        "description": "What a game plays from, which an Uninstall may delete.",
+        "properties": {
+          "kind": {
+            "description": "`folder` or `image`.",
+            "type": "string"
+          },
+          "mount_point": {
+            "description": "An image's mount, unmounted before the image is deleted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The folder, or the image file.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "path"
+        ],
+        "type": "object"
+      },
       "UnlinkReq": {
         "properties": {
           "addr": {
@@ -17840,7 +18322,7 @@
             "type": "array"
           },
           "console_drive": {
-            "description": "The PS5 drive that also gets a copy of each backup (`/mnt/ext<N>`, `/mnt/usb<N>`); \"\" for\nnone.",
+            "description": "The PS5 drive that also gets a copy of each backup (`/data`, `/mnt/ext<N>`,\n`/mnt/usb<N>`); \"\" for none.",
             "type": [
               "string",
               "null"
@@ -17949,6 +18431,27 @@
           "addr",
           "path",
           "file"
+        ],
+        "type": "object"
+      },
+      "engine.space_check.CheckReq": {
+        "properties": {
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
         ],
         "type": "object"
       },
@@ -18651,6 +19154,57 @@
             "required": false
           },
           "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/archive/entries": {
+      "post": {
+        "description": "POST /api/archive/entries — what a ZIP, 7z, RAR or tar holds, as the rows \"Choose files\"\nticks (#969): each package, each folder that holds no package, each loose file beside a\npackage. Read from the listing alone; a ZIP's packages also have their headers read. The\nticked rows go back as `=path` entries in the transfer's `excludes`.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArchiveEntriesReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveEntries"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "What a ZIP, 7z, RAR or tar holds, as the rows \"Choose files\" ticks (#969): each package, each folder that holds no package, each loose file beside a package",
+        "tags": [
+          "archive"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "struct"
         }
       }
     },
@@ -25342,7 +25896,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "console": {
             "aliases": [
               "console",
@@ -25392,7 +25946,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "console": {
             "aliases": [
               "console",
@@ -25449,7 +26003,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "literal"
         }
       }
@@ -25498,7 +26052,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "console": {
             "aliases": [
               "console",
@@ -25555,7 +26109,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "console": {
             "aliases": [
               "console",
@@ -25617,7 +26171,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "console": {
             "aliases": [
               "console",
@@ -25672,7 +26226,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "console": {
             "aliases": [
               "console",
@@ -25748,7 +26302,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "console": {
             "aliases": [
               "console",
@@ -25793,7 +26347,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "websocket",
           "websocket": true
         }
@@ -25801,7 +26355,7 @@
     },
     "/api/join/settings": {
       "post": {
-        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninvites?, internet_invites?, hub_url?, page_base?, stun?, reset?, upnp?, video_track?}`: the host's choices (every\nconsole). Fewer players lets nobody go; it only stops new ones. `stream_seat` off moves a friend\non the stream's controller to a pad of their own. `invites` is \"Invites work\": \"anywhere\" (the\none link, through the hub) or \"wifi\" (the home network's link only; 400 `invites` otherwise),\nthe same choice as `internet_invites` on or off, and the one setting kept across restarts.\n\"wifi\" closes the internet rooms (guests already in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `page_base` where the guest pages are (`https://play.example.com/`: links open\n`<page_base>join/`, `pad/` or `share/`; `http://` only to this computer, no query or fragment;\n400 `page_base` otherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none),\n`reset` a list of `hub_url`, `page_base` and `stun` to put back to the default (an empty\n`hub_url` or `page_base` does the same; 400 `reset` for another name). The hub, page base and\nSTUN servers are kept across restarts while they differ from the default, which a self-hosted\nengine may take from `PS5UPLOAD_HUB_URL` and `PS5UPLOAD_PAGE_BASE`; `settings.sources` says\nwhich each is (\"custom\", \"environment\" or \"default\"). `upnp` is whether the\nrouter is asked for a port, `video_track` whether internet guests get the picture as a video\ntrack (new connections; the data channel otherwise).\n\n`guest_profiles` with `addr` (\"Guests play as\" on that console): each guest's player gets the\nprofile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).\nOnly signed-in profiles can be seated. The host's own profile (the one in front) needs `owner`\ntrue, the host's confirmation that the guest may use its saves and trophies (409\n`owner_confirm` otherwise; `owner_unknown` when the console does not say which one is in front,\nfor any profile newly chosen without `owner`); 400 `addr` without a console, 400 `player`, `user` or `duplicate`\nfor a list that is not one profile per player.",
+        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninvites?, internet_invites?, hub_url?, page_base?, stun?, reset?, upnp?, video_track?}`: the host's choices (every\nconsole). Fewer players lets nobody go; it only stops new ones. `stream_seat` off moves a friend\non the stream's controller to a pad of their own. `invites` is \"Invites work\": \"anywhere\" (the\none link, through the hub) or \"wifi\" (the home network's link only; 400 `invites` otherwise),\nthe same choice as `internet_invites` on or off. Every setting here is kept across restarts\n(and for the next Play Together) except `guest_profiles`.\n\"wifi\" closes the internet rooms (guests already in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `page_base` where the guest pages are (`https://play.example.com/`: links open\n`<page_base>join/`, `pad/` or `share/`; `http://` only to this computer, no query or fragment;\n400 `page_base` otherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none),\n`reset` a list of `hub_url`, `page_base` and `stun` to put back to the default (an empty\n`hub_url` or `page_base` does the same; 400 `reset` for another name). The hub, page base and\nSTUN servers are kept across restarts while they differ from the default, which a self-hosted\nengine may take from `PS5UPLOAD_HUB_URL` and `PS5UPLOAD_PAGE_BASE`; `settings.sources` says\nwhich each is (\"custom\", \"environment\" or \"default\"). `upnp` is whether the\nrouter is asked for a port, `video_track` whether internet guests get the picture as a video\ntrack (new connections; the data channel otherwise).\n\n`guest_profiles` with `addr` (\"Guests play as\" on that console): each guest's player gets the\nprofile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).\nOnly signed-in profiles can be seated. The host's own profile (the one in front) needs `owner`\ntrue, the host's confirmation that the guest may use its saves and trophies (409\n`owner_confirm` otherwise; `owner_unknown` when the console does not say which one is in front,\nfor any profile newly chosen without `owner`); 400 `addr` without a console, 400 `player`, `user` or `duplicate`\nfor a list that is not one profile per player.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -25848,7 +26402,7 @@
           "play-together"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "console": {
             "aliases": [
               "console",
@@ -31801,6 +32355,140 @@
         }
       }
     },
+    "/api/ps5/app/doctor": {
+      "get": {
+        "description": "`GET /api/ps5/app/doctor?addr=&title_id=`: \"Something wrong?\" for one game, read-only. Checks,\nin order, the usual reasons a game does not show or start: `fake_package` (kstuff for a fake\npackage; a hint, since kstuff's version can't be read), `mount_layer` (ShadowMount+ for a disk\nimage, an attached folder for a folder game), `package_size` (a fake package past its\nfirmware's size ceiling), `database` (missing from the PS5's app.db), `permissions` (a game\nfolder's files other users can't read or run) and `free_space` (the console's own storage).\nEach check has `status` `pass`, `problem` or `unknown` (the app can't tell), a `reason` code,\nan English `message`, `params`, and a `fix` the app offers (`fix_permissions`, `restore`,\n`register`, `start_shadowmount`). Also `kind` (`package`, `folder`, `image`, `unknown`),\n`source`, `firmware` and `first_problem` (the first check that found one, else null). It waits\nfor the console 30 s in all: a check it could not finish by then is `unknown` with reason\n`timed_out`.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "x-aliases": [
+              "console",
+              "host",
+              "ps5_addr"
+            ]
+          },
+          {
+            "in": "query",
+            "name": "title_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "checks": {
+                      "items": {
+                        "$ref": "#/components/schemas/DoctorCheck"
+                      },
+                      "type": "array"
+                    },
+                    "firmware": {
+                      "type": "string"
+                    },
+                    "first_problem": {},
+                    "kind": {},
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "source": {},
+                    "title_id": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "ok": {
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "ok": {
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "\"Something wrong?\" for one game, read-only",
+        "tags": [
+          "games"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host",
+              "ps5_addr"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/ps5/app/launch": {
       "post": {
         "requestBody": {
@@ -32298,7 +32986,7 @@
     },
     "/api/ps5/app/restore/finish": {
       "post": {
-        "description": "`POST /api/ps5/app/restore/finish {addr, title_id, rollback, install_ended}`: finish a restore\nleft `pending` (an engine restart, a slow database). With `install_ended` the copy aside is\ndeleted once app.db lists the game and a package is in place; with `rollback` the package and\nupdate go back where they were, only while app.db does not list the game and the place is\nfree; with neither, nothing changes and the answer says where it stands. Refused (409 `busy`)\nwhile an install or a restore runs on that console. The helper's `finish` answer.",
+        "description": "`POST /api/ps5/app/restore/finish {addr, title_id, rollback, install_ended, clear}`: finish a\nrestore left `pending` (an engine restart, a slow database). With `install_ended` the copy aside\nis deleted once app.db lists the game and a package is in place; with `rollback` the package\nand update go back where they were, only while app.db does not list the game and the place is\nfree; with `clear`, what a failed install left (the console's unfinished copy and its download\nin the PS5's queue) is removed with Sony's uninstall first, then the package goes back\n(`cleared`, `sony_rc`; `reason` `clearing` while Sony is still removing it: ask again); with\nnone, nothing changes and the answer says where it stands. Refused (409 `busy`) while an install\nor a restore runs on that console. The helper's answer.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -32439,6 +33127,81 @@
         }
       }
     },
+    "/api/ps5/app/uninstall-source": {
+      "get": {
+        "description": "`GET /api/ps5/app/uninstall-source?addr=&title_id=`: whether Uninstall can also delete the\nfolder or disk image the title plays from, what that is and its size. Read-only. A folder's\nsize is walked (up to 90 s; `size_partial` past that). `offer: false` with a `reason` when\nthere is nothing to delete: a package install (Uninstall removes it all), a system title,\na ShadowMount+ title, a source already gone, or one that is not safe to delete.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          {
+            "in": "query",
+            "name": "title_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UninstallPlan"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Whether Uninstall can also delete the folder or disk image the title plays from, what that is and its size",
+        "tags": [
+          "games"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "struct"
+        }
+      }
+    },
     "/api/ps5/app/unregister": {
       "post": {
         "requestBody": {
@@ -32484,6 +33247,29 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "502": {
             "$ref": "#/components/responses/Error",
@@ -36120,6 +36906,255 @@
             "required": false
           },
           "response_schema": "struct"
+        }
+      }
+    },
+    "/api/ps5/folder-sizes": {
+      "get": {
+        "description": "GET /api/ps5/folder-sizes",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          {
+            "description": "The folder shown: its size and the sizes of the folders directly in it.",
+            "in": "query",
+            "name": "dir",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "children": {},
+                    "dir": {
+                      "type": "string"
+                    },
+                    "queue": {},
+                    "self": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Known sizes of a console folder and the folders in it, with when each was measured",
+        "tags": [
+          "console-files"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/ps5/folder-sizes/cancel": {
+      "post": {
+        "description": "POST /api/ps5/folder-sizes/cancel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderCancelReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Stop measuring folders",
+        "tags": [
+          "console-files"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/ps5/folder-sizes/measure": {
+      "post": {
+        "description": "POST /api/ps5/folder-sizes/measure",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderMeasureReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Queue console folders to be measured in the background",
+        "tags": [
+          "console-files"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/ps5/folder-sizes/queue": {
+      "get": {
+        "description": "GET /api/ps5/folder-sizes/queue",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The folders being measured and waiting",
+        "tags": [
+          "console-files"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "json-unknown"
         }
       }
     },
@@ -45475,6 +46510,78 @@
         }
       }
     },
+    "/api/ps5/space-check": {
+      "post": {
+        "description": "`POST /api/ps5/space-check`: see the module docs.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/engine.space_check.CheckReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpaceReport"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Find space on an M.2 or USB drive that no file uses",
+        "tags": [
+          "health"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "struct"
+        }
+      }
+    },
     "/api/ps5/status": {
       "get": {
         "description": "GET /api/ps5/status?addr=IP:PORT",
@@ -48366,7 +49473,7 @@
     },
     "/api/save-backup/console/drives": {
       "get": {
-        "description": "`GET /api/save-backup/console/drives?addr=` — `{drives: [{path, kind, total_bytes,\nfree_bytes}]}`, the console's M.2 and USB drives a copy of each save backup can go to (never\nthe internal storage).",
+        "description": "`GET /api/save-backup/console/drives?addr=` — `{drives: [{path, kind, total_bytes,\nfree_bytes}]}`, the console's drives a copy of each save backup can go to: its internal\nstorage (`/data`), M.2 and USB drives.",
         "parameters": [
           {
             "in": "query",
@@ -48417,7 +49524,6 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "`{drives: [{path, kind, total_bytes, free_bytes}]}`, the console's M.2 and USB drives a copy of each save backup can go to (never the internal storage)",
         "tags": [
           "saves"
         ],
@@ -52040,7 +53146,7 @@
           "go-live"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "json-unknown"
         }
       }
@@ -52096,7 +53202,7 @@
           "go-live"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "literal"
         }
       },
@@ -52161,7 +53267,7 @@
           "go-live"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "json-unknown"
         }
       }
@@ -52278,7 +53384,7 @@
           "go-live"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "literal"
         }
       }
@@ -52341,7 +53447,7 @@
           "go-live"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "literal"
         }
       }
@@ -52394,7 +53500,7 @@
           "go-live"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "literal"
         }
       }
@@ -52449,7 +53555,7 @@
           "go-live"
         ],
         "x-ps5upload": {
-          "access": "host-checked",
+          "access": "loopback",
           "response_schema": "literal"
         }
       }
@@ -54546,6 +55652,44 @@
         }
       }
     },
+    "/app-icon/{name}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "pages"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
     "/join": {
       "get": {
         "description": "`GET /join`: the guest page.",
@@ -54884,6 +56028,9 @@
     }
   ],
   "tags": [
+    {
+      "name": "archive"
+    },
     {
       "description": "Cheats and cheat repositories.",
       "name": "cheats"

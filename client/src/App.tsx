@@ -16,6 +16,7 @@ import { ConsoleAsks } from "./screens/Connection/consoles/ConsoleAsks";
 import { SaveSyncPrompt } from "./screens/Saves/SaveSyncPrompt";
 import { useRosterStore } from "./state/roster";
 import { isTauriEnv } from "./lib/tauriEnv";
+import { isTvRoute, useTvMode } from "./state/tvMode";
 
 /**
  * Code-splitting strategy:
@@ -70,6 +71,7 @@ const ActivityLogsScreen = lazyWithReload(() => import("./screens/ActivityLogs")
 const BugReportScreen = lazyWithReload(() => import("./screens/BugReport"));
 const ThanksScreen = lazyWithReload(() => import("./screens/Thanks"));
 const McpApiScreen = lazyWithReload(() => import("./screens/McpApi"));
+const TvHomeScreen = lazyWithReload(() => import("./screens/Tv"));
 
 /**
  * Suspense fallback. Deliberately minimal — a spinner would
@@ -90,6 +92,9 @@ function ScreenLoader() {
  */
 function LandingRedirect() {
   const hasConsole = useRosterStore((s) => s.profiles.length > 0);
+  // TV mode (#976) opens on its own home, with or without a console.
+  const tv = useTvMode();
+  if (tv) return <Navigate to="/tv" replace />;
   // A returning user reopens the screen they were last on (never Connection by itself).
   return <Navigate to={landingRoute(hasConsole)} replace />;
 }
@@ -149,13 +154,16 @@ function useConsoleRouteMemory() {
   const host = useConnectionStore((s) => s.host);
   const lastHost = useRef(host);
   const route = location.pathname + location.search;
+  // TV mode's screens are about the console picked there: a switch stays on them, and they are
+  // not where a console was left in the full app.
+  const tvScreen = useTvMode() && isTvRoute(location.pathname);
   useEffect(() => {
     const before = lastHost.current;
     if (host !== before) {
       lastHost.current = host;
       // A switch from one console to another (not the first console set at start).
       // Not from the Consoles page: it shows the console picked, so it stays.
-      if (before && host && !staysOnConsoleSwitch(route)) {
+      if (before && host && !staysOnConsoleSwitch(route) && !tvScreen) {
         const back = recallRoute(host);
         if (back && back !== route) {
           navigate(back);
@@ -163,8 +171,8 @@ function useConsoleRouteMemory() {
         }
       }
     }
-    if (host) rememberRoute(host, route);
-  }, [host, route, navigate]);
+    if (host && !tvScreen) rememberRoute(host, route);
+  }, [host, route, navigate, tvScreen]);
 }
 
 export default function App() {
@@ -238,6 +246,15 @@ function AppRoutes({ location }: { location: Location }) {
          * them back to their last screen. */}
         <Route index element={<LandingRedirect />} />
         <Route path="/home" element={<HomeScreen />} />
+        {/* TV mode's home (#976): the console as one card with Play. */}
+        <Route
+          path="/tv"
+          element={
+            <Suspense fallback={<ScreenLoader />}>
+              <TvHomeScreen />
+            </Suspense>
+          }
+        />
         <Route path="/whats-new" element={<Navigate to="/faq?tab=whats-new" replace />} />
         <Route
           path="/connection"

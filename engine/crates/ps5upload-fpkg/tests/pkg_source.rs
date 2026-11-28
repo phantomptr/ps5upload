@@ -554,6 +554,7 @@ fn packages_with_os_junk_convert_with_the_same_visible_tree() {
             kraken_spool: kraken.then_some(KrakenSpool::InPlace),
             level: Level::Fast,
             metadata_codec: MetaCodec::Stored,
+            size_check: None,
         };
         stream::write_package(
             &mut file,

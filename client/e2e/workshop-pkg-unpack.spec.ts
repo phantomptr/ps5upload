@@ -1,6 +1,7 @@
 // #933: a game in asset packs made into a .pkg. "Unpack the asset packs" is ticked by default,
 // "Leave out the AMPR emulator" sits under it unticked (and goes away when unpacking is off), and
-// both reach the engine's package build. A plain game is offered neither.
+// both reach the engine's package build. A plain game is offered neither, unless it carries an
+// AMPR emulator the check says can go: then leaving it out alone (or why it stays).
 // The packed game's own ampr_emu.index is stale: that is a warning only while the package would
 // keep the packs (and the index with them), not while it unpacks them and gets a fresh one.
 // The two options are findable: first under ③ in a group named "Asset packs and AMPR", with one
@@ -41,6 +42,17 @@ const inspection = (source: string) => ({
       : []),
   ],
   ...(source.endsWith("Packed") ? { packs: "zstd" } : {}),
+  // A plain dump that still carries ampr_emu, and one whose libSceAmpr.sprx is no emulator.
+  ...(source.endsWith("PlainEmu") || source.endsWith("PlainSony")
+    ? {
+        plain_ampr_emu: {
+          modules: ["fakelib/libSceAmpr.sprx"],
+          emulator: "ampr_emu 0.4.2.1",
+          imports_ampr: true,
+          ...(source.endsWith("PlainSony") ? { refusal: "not_an_emulator", detail: "fakelib/libSceAmpr.sprx" } : {}),
+        },
+      }
+    : {}),
 });
 
 /** The engine, as far as this page asks it: a check of each game, and the builds it is sent. */
@@ -133,6 +145,45 @@ test("a packed game's package is unpacked by default and can leave the emulator 
   await main.getByRole("button", { name: "Convert only" }).first().click();
   await expect.poll(() => builds.length).toBe(1);
   expect(builds[0]).toMatchObject({ source: "/games/Packed", unpack_packs: true, leave_out_ampr_emu: true });
+});
+
+test("a plain game that carries an AMPR emulator can leave it out of its package, or says why not", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 1400 });
+  const builds = await engine(page);
+  await page.goto("/workshop");
+  const main = page.getByRole("main");
+  await expect(main.getByText("① Game")).toBeVisible({ timeout: 30_000 });
+  const source = main.locator("#fpkg-source");
+
+  // A libSceAmpr.sprx that is no emulator: no switch, the reason instead.
+  await source.fill("/games/PlainSony");
+  await source.blur();
+  const note = main.getByTestId("pkg-packs-note");
+  await expect(note).toHaveAttribute("data-state", "emulator-kept");
+  await expect(note).toContainText("may be a newer system library that a backport needs");
+  await expect(main.getByTestId("leave-out-plain-ampr-emu")).toHaveCount(0);
+
+  // An emulator that can go: off unless ticked, and nothing to unpack.
+  await source.fill("/games/PlainEmu");
+  await source.blur();
+  const leaveOut = main.getByTestId("leave-out-plain-ampr-emu");
+  await expect(leaveOut).toContainText("carries an AMPR emulator (ampr_emu 0.4.2.1)");
+  await expect(main.getByTestId("unpack-option")).toHaveCount(0);
+  const box = leaveOut.getByRole("checkbox");
+  await expect(box).not.toBeChecked();
+  await box.check();
+  // Another game typed in (not picked): it starts without the last game's tick.
+  await source.fill("/games/OtherPlainEmu");
+  await source.blur();
+  await expect(leaveOut).toContainText("ampr_emu 0.4.2.1");
+  await expect(box).not.toBeChecked();
+  await source.fill("/games/PlainEmu");
+  await source.blur();
+  await box.check();
+  await main.getByRole("button", { name: "Convert only" }).first().click();
+  await expect.poll(() => builds.length).toBe(1);
+  expect(builds[0]).toMatchObject({ source: "/games/PlainEmu", leave_out_ampr_emu: true });
+  expect(builds[0].unpack_packs).toBeFalsy();
 });
 
 test("on a phone the options for a packed game come first under ③, and the queue has them too", async ({ page }) => {

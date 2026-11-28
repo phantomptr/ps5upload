@@ -1,7 +1,7 @@
 import { AlertTriangle, Info } from "lucide-react";
 
 import { Button, Toggle } from "../../components";
-import type { AmprLz4Options, AmprPacksReadiness, FfpfscLevel, ImageFormat, ZstdPacks } from "../../api/fpkg";
+import type { AmprLz4Options, AmprPacksReadiness, FfpfscLevel, ImageFormat, PlainAmprEmu, ZstdPacks } from "../../api/fpkg";
 import {
   DEFAULT_VERIFY_CHUNK_KIB,
   VERIFY_CHUNK_KIB,
@@ -10,7 +10,7 @@ import {
   useConvertPrefs,
   type AmprEmuBuild,
 } from "../../state/convertPrefs";
-import { useTr } from "../../state/lang";
+import { useTr, type Translator } from "../../state/lang";
 
 // The options of a game image (③ Options when "A game image" is what Convert makes): its
 // filesystem, .ffpfsc compression, AMPR LZ4 or zstd asset packs, and how the read-back check
@@ -467,25 +467,112 @@ export function UnpackOption({ unpack, compact }: { unpack: UnpackChoice; compac
   );
 }
 
+/** For a package of a game in no asset packs that carries an AMPR emulator the check says can go:
+ *  leave it out. Off unless turned on. */
+export interface PlainEmulatorChoice {
+  on: boolean;
+  onToggle: (on: boolean) => void;
+  /** What it is ("ampr_emu 0.4.2.1"), for the note; absent in the queue, which has no room. */
+  emulator?: string;
+  /** The game's eboot.bin imports libSceAmpr (the PS5's own library then serves it). */
+  importsAmpr?: boolean;
+}
+
+function PlainEmulatorOption({ choice, compact }: { choice: PlainEmulatorChoice; compact?: boolean }) {
+  const tr = useTr();
+  const emulator = choice.emulator ?? "";
+  return (
+    <label className="flex cursor-pointer items-start gap-2.5 text-xs" data-testid="leave-out-plain-ampr-emu">
+      <input
+        type="checkbox"
+        checked={choice.on}
+        onChange={(e) => choice.onToggle(e.target.checked)}
+        className="checkbox mt-px h-4 w-4 shrink-0"
+      />
+      <span className="min-w-0">
+        <span className="block font-medium text-[var(--color-text)]">
+          {tr("fpkg.leave_out_ampr_emu", undefined, "Leave out the AMPR emulator")}
+        </span>
+        <span className={compact ? "hidden" : "mt-0.5 block leading-relaxed text-[var(--color-muted)]"}>
+          {choice.importsAmpr === false
+            ? tr(
+                "cw_convert_plain_leave_out_note_unused",
+                { emulator },
+                "This game has no asset packs but carries an AMPR emulator ({emulator}) that its eboot.bin doesn't use. On, the package leaves out its libSceAmpr.sprx and the emulator's logs, and keeps the other fakelib files.",
+              )
+            : tr(
+                "cw_convert_plain_leave_out_note",
+                { emulator },
+                "This game has no asset packs but carries an AMPR emulator ({emulator}). On, the package leaves out its libSceAmpr.sprx and the emulator's logs, and keeps the other fakelib files. The game then reads its files through the PS5's own system library. This has been tried with one game, on firmware 5.10. If the game doesn't start, make the package again with this off.",
+              )}
+        </span>
+      </span>
+    </label>
+  );
+}
+
+/** Why a plain game's AMPR emulator stays in its package (the check's `refusal`), in a line;
+ *  null when it can go or the game carries none. */
+export function plainEmulatorKeptText(
+  tr: Translator,
+  found: PlainAmprEmu | null | undefined,
+): string | null {
+  if (!found?.refusal) return null;
+  switch (found.refusal) {
+    case "not_an_emulator":
+      return tr(
+        "cw_convert_plain_emu_kept_not_emulator",
+        undefined,
+        "The AMPR emulator stays: this game's libSceAmpr.sprx isn't an AMPR emulator. It may be a newer system library that a backport needs.",
+      );
+    case "pack_files":
+      return tr(
+        "cw_convert_plain_emu_kept_pack_files",
+        undefined,
+        "The AMPR emulator stays: this game has asset pack files, and only the emulator reads them.",
+      );
+    case "index_lists_missing":
+      return tr(
+        "cw_convert_plain_emu_kept_index_missing",
+        undefined,
+        "The AMPR emulator stays: this game's ampr_emu.index lists files the game doesn't have. They may be in asset packs that only the emulator reads.",
+      );
+    default:
+      return tr("cw_convert_plain_emu_kept_other", undefined, "The AMPR emulator stays: it can't be left out of this game.");
+  }
+}
+
 /** A package's asset-pack choices (#933), in one named place at the top of the options, so
  *  someone looking for "AMPR" or "asset packs" finds them or finds why they aren't there:
  *  - a game in packs (`unpack`): "Unpack the asset packs", and under it "Leave out the AMPR
  *    emulator";
- *  - a game that was checked and is in no packs (`state` "none"): one line saying so;
+ *  - a game in no packs that carries its AMPR emulator ("none-emulator"): "Leave out the AMPR
+ *    emulator" when the check says it can go, else why it stays;
+ *  - a game being checked ("checking"): that the options come when the check is done;
+ *  - a game that was checked and is in no packs (`state` "none"): one line saying so, and when
+ *    it carries an AMPR emulator, "Leave out the AMPR emulator" (`plainEmulator`) or why it
+ *    stays (`plainKept`);
  *  - a game not checked yet ("pending"): one line saying that checking it shows them;
  *  - a waiting game that was never checked ("unchecked", the queue): what happens to it. */
+/** What a package's asset-pack line says when there is nothing to choose: see {@link PackagePacks}. */
+export type PackagePacksState = "pending" | "checking" | "none" | "none-emulator" | "unchecked";
+
 export function PackagePacks({
   unpack,
+  plainEmulator,
+  plainKept,
   state,
   compact,
 }: {
   unpack?: UnpackChoice;
-  state: "pending" | "none" | "unchecked";
+  state: PackagePacksState;
+  plainEmulator?: PlainEmulatorChoice;
+  plainKept?: string | null;
   compact?: boolean;
 }) {
   const tr = useTr();
   const title = tr("fpkg.pkg_packs.title", undefined, "Asset packs and AMPR");
-  if (unpack) {
+  if (unpack || plainEmulator) {
     return (
       <div
         role="group"
@@ -494,13 +581,37 @@ export function PackagePacks({
         data-testid="pkg-packs"
       >
         <div className="text-xs font-medium text-[var(--color-muted)]">{title}</div>
-        <UnpackOption unpack={unpack} compact={compact} />
+        {unpack ? (
+          <UnpackOption unpack={unpack} compact={compact} />
+        ) : plainEmulator ? (
+          <PlainEmulatorOption choice={plainEmulator} compact={compact} />
+        ) : null}
+      </div>
+    );
+  }
+  if ((state === "none" || state === "none-emulator") && plainKept) {
+    return (
+      <div className="text-xs text-[var(--color-muted)]" data-testid="pkg-packs-note" data-state="emulator-kept">
+        <span className="font-medium">{title}</span>
+        <p className="leading-relaxed">{plainKept}</p>
       </div>
     );
   }
   const text =
     state === "none"
       ? tr("fpkg.pkg_packs.none", undefined, "This game has no asset packs, so there is nothing to unpack.")
+      : state === "none-emulator"
+      ? tr(
+          "fpkg.pkg_packs.none_emulator_v2",
+          undefined,
+          "This game has no asset packs, so there is nothing to unpack. Its AMPR emulator (fakelib/libSceAmpr.sprx) goes into the package as it is.",
+        )
+      : state === "checking"
+      ? tr(
+          "fpkg.pkg_packs.checking",
+          undefined,
+          "Checking the game under ①. If it is in asset packs, the options to unpack them and to leave out the AMPR emulator appear here when the check is done.",
+        )
       : state === "unchecked"
         ? tr(
             "fpkg.pkg_packs.unchecked",

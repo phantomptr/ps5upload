@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { cleanupApply, cleanupApplyStatus } from "../api/cleanup";
 import { appUnregister, fsPathPresent } from "../api/ps5";
 import { transferAddr } from "../lib/addr";
+import { humanizeUninstallError } from "../lib/humanizeError";
 import { libraryMoveDeps } from "../lib/libraryMoveDeps";
 import { defaultMoveSubpath, resolveMoveDestination } from "../lib/moveTarget";
 import { runOrder, volumeOfPath, type SpacePlan } from "../lib/spacePlan";
@@ -168,7 +169,7 @@ export async function runSpacePlan(
           const res = await deps.uninstall(c.titleId, c.label);
           put(c.id, res.stillPresent ? { state: "failed", detail: "still_present" } : { state: "done" });
         } catch (e) {
-          put(c.id, { state: "failed", detail: msg(e) });
+          put(c.id, { state: "failed", detail: humanizeUninstallError(msg(e)) });
         }
       } else {
         put(c.id, { state: "skipped" });

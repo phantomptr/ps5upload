@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -49,6 +50,17 @@ static int http_roundtrip(uint16_t port, const char *req, char *resp, size_t cap
     return (int)got;
 }
 
+/* How many of this process's descriptors are open on `path`'s file (same device and inode). */
+static int fds_open_on(const char *path) {
+    struct stat want, st;
+    int count = 0;
+    if (stat(path, &want) != 0) return -1;
+    for (int fd = 0; fd < 1024; fd++) {
+        if (fstat(fd, &st) == 0 && st.st_dev == want.st_dev && st.st_ino == want.st_ino) count++;
+    }
+    return count;
+}
+
 /* Byte count of the body after the "\r\n\r\n" header terminator. */
 static size_t body_len(const char *resp, int total) {
     const char *b = strstr(resp, "\r\n\r\n");
@@ -65,6 +77,7 @@ int main(void) {
     /* rename to .pkg so the daemon-side name policy is realistic */
     char pkgname[128];
     snprintf(pkgname, sizeof(pkgname), "%s.pkg", pkgpath);
+    close(pfd); /* the test's own descriptor would count as the server holding the file */
     rename(pkgpath, pkgname);
     pfd = open(pkgname, O_WRONLY);
     unsigned char buf[1000];
@@ -220,8 +233,41 @@ int main(void) {
     /* union of [0,99] and [50,149] = 150 bytes, not 200 */
     CHECK(inst_loopback_bytes_served(lb) == 150);
 
-    inst_loopback_stop(lb);
+    /* #979: between requests the package is not held open, so deleting it gives its space back
+     * while the job is still serving. */
+    CHECK(fds_open_on(pkgname) == 0);
+
+    /* Replaced by another file under the same name: never served as this job's package. */
+    {
+        char other[200];
+        snprintf(other, sizeof(other), "%s.other", pkgname);
+        int ofd = open(other, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+        CHECK(ofd >= 0);
+        CHECK(write(ofd, buf, sizeof(buf)) == (ssize_t)sizeof(buf));
+        close(ofd);
+        char moved[200];
+        snprintf(moved, sizeof(moved), "%s.moved", pkgname);
+        CHECK(rename(pkgname, moved) == 0);
+        CHECK(rename(other, pkgname) == 0);
+        snprintf(req, sizeof(req),
+            "GET /%s/%s HTTP/1.1\r\nHost: h\r\nRange: bytes=0-3\r\nConnection: close\r\n\r\n",
+            attempt, base);
+        n = http_roundtrip(port, req, resp, sizeof(resp));
+        CHECK(strncmp(resp, "HTTP/1.1 404", 12) == 0);
+        CHECK(body_len(resp, n) == 0);
+        /* The original back: served again. */
+        CHECK(rename(moved, pkgname) == 0);
+        n = http_roundtrip(port, req, resp, sizeof(resp));
+        CHECK(strncmp(resp, "HTTP/1.1 206", 12) == 0);
+        CHECK(body_len(resp, n) == 4);
+    }
+
+    /* Deleted: the next request is refused, not answered from a descriptor kept from before. */
     unlink(pkgname);
+    n = http_roundtrip(port, req, resp, sizeof(resp));
+    CHECK(strncmp(resp, "HTTP/1.1 404", 12) == 0);
+
+    inst_loopback_stop(lb);
     unlink(crcpath);
 
     printf("installer_loopback_selftest: %s\n", failures == 0 ? "ALL PASS" : "FAILED");

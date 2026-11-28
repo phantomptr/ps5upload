@@ -528,9 +528,15 @@ static int app_rpc(uint16_t method, const uint8_t *body, uint32_t body_len, uint
     return mgmt_rpc_dispatch(method, body, body_len, out, cap, out_len);
 }
 
+/* A folder size's read rule, as the helper sets it (ava1_glue.c may_size: fs.read's rule): the
+ * trust store and what is in it refused, a folder above it allowed whatever the data plane's
+ * may_read says (on the console that one refuses every folder above the store). */
+static int t_size_may_read(const char *p) { return !path_in_protected(p) && !strstr(p, "/ps5-denied/"); }
+
 /* The operations a data-layer test server serves: the real fs_jobs.c ones and the stubs. */
 static void app_data_started(void) {
     __atomic_store_n(&g_stub_op_hold, 0, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&fsj_size_may_read, t_size_may_read, __ATOMIC_RELEASE);
     fsj_register_ops();
     (void)mgmt_rpc_install_ops(k_stub_ops, sizeof k_stub_ops / sizeof k_stub_ops[0]);
     __atomic_store_n(&fsj_test_file_delay_us, 0, __ATOMIC_SEQ_CST);

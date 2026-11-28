@@ -20,13 +20,19 @@ void xrc_aes_init(xrc_aes_t *c, const uint8_t *key, unsigned keylen, const uint8
 /* `data` 16-byte aligned, `nblocks` blocks of 16, in place. */
 void xrc_aes_dec(xrc_aes_t *c, uint8_t *data, size_t nblocks);
 
-/* RAR 3/4: the AES-128 key and IV from a password (UTF-8, used as UTF-16LE) and an 8-byte salt
- * (NULL: no salt). 0, or -1 when the password is too long. Results are cached. */
+/* Stop: the key derivations ask `cancelled(arg)` every few thousand rounds and give up with
+ * XRC_KDF_CANCELLED (outputs wiped, nothing cached). NULL: never cancelled. xrc_cancelled() asks it. */
+#define XRC_KDF_CANCELLED (-2)
+void xrc_set_cancel(int (*cancelled)(void *), void *arg);
+int xrc_cancelled(void);
+
+/* RAR 3/4: the AES-128 key and IV from a password (UTF-8, used as UTF-16LE, cut at RAR's 127
+ * characters) and an 8-byte salt (NULL: no salt). 0, or XRC_KDF_CANCELLED. Results are cached. */
 int xrc_kdf3(const char *password, const uint8_t *salt8, uint8_t key[16], uint8_t iv[16]);
 
 /* RAR5: from the password (UTF-8), a 16-byte salt and log2 of the iteration count, the AES-256 key,
- * the key for checksums (`hashkey`) and the 8-byte password check. 0, or -1 (count out of range).
- * Results are cached. */
+ * the key for checksums (`hashkey`) and the 8-byte password check. 0, -1 (count out of range) or
+ * XRC_KDF_CANCELLED. Results are cached. */
 int xrc_kdf5(const char *password, const uint8_t salt[16], unsigned lg2, uint8_t key[32], uint8_t hashkey[32],
              uint8_t check[8]);
 
