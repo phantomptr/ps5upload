@@ -1597,7 +1597,7 @@ test-payload: payload
 		$(PAYLOAD_DIR)/installer/pathsafe.c \
 		$(PAYLOAD_DIR)/installer/jobs.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-installer-loopback-selftest
-	@echo "✓ loopback server ranges, 404s foreign paths and .crc, serves a real sidecar"
+	@echo "✓ loopback server ranges, 404s foreign paths and .crc, serves a real sidecar, holds no package open between requests (#979)"
 	@echo "Running installer hint-table self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/installer \
 		-o $(SELFTEST_DIR)/ps5upload-installer-hints-selftest \
