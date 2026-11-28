@@ -495,6 +495,7 @@ fn read_invites(path: &std::path::Path) -> Saved {
         stream_seat: field(&o, "stream_seat"),
         upnp: field(&o, "upnp"),
         video_track: field(&o, "video_track"),
+        play_discovery: field(&o, "play_discovery"),
     };
     let anywhere = match s.invites.as_deref() {
         Some("anywhere") => Some(true),
@@ -5052,7 +5053,7 @@ fn apply_body(
 pub async fn set_settings(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
-    Json(mut b): Json<SettingsBody>,
+    Json(b): Json<SettingsBody>,
 ) -> Response {
     if let Some(r) = guard(&peer, &headers) {
         return r;
@@ -5088,7 +5089,7 @@ pub(crate) async fn app_settings(
 }
 
 /// [`set_settings`] once the request is checked.
-async fn apply_settings(b: SettingsBody) -> Response {
+async fn apply_settings(mut b: SettingsBody) -> Response {
     let mut seats = None;
     if let Some(v) = b.guest_profiles.take() {
         let Some(addr) = b.addr.clone().filter(|a| !a.trim().is_empty()) else {
