@@ -7,6 +7,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import socket
 import struct
 import threading
@@ -14,7 +15,9 @@ import time
 
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 report = {"hellos": [], "pads": [], "keyframes": 0, "pings": 0, "stats": [], "leaves": 0,
-          "app_hellos": [], "intents": [], "bad_pads": 0, "connections": 0}
+          "app_hellos": [], "intents": [], "bad_pads": 0, "connections": 0,
+          "probe_sockets": 0, "probe_checks": [], "bursts": [], "replaced": 0, "bridges": []}
+T0 = time.monotonic()
 lock = threading.Lock()
 
 
@@ -108,6 +111,8 @@ def guest(ws, args, state):
     h = json.loads(hello)["hello"]
     rec("hellos", h)
     resume = h.get("resume")
+    if resume and state.get("live"):
+        rec("replaced")
     if resume and resume != "tok1":
         ws.text({"stage": "refused", "why": "expired"})
         return
@@ -154,6 +159,8 @@ def guest(ws, args, state):
             stop.set()
 
     threading.Thread(target=reader, daemon=True).start()
+    me = object()
+    state["live"] = me
     vps = bytes([0, 0, 0, 1, 0x40, 1, 0xC, 1])
     ws.send(2, b"\x00" + vps)
     ws.send(2, b"\x03" + bytes([2, 16]) + struct.pack(">II", 48000, 480) + b"\0\0\0\0")
@@ -162,6 +169,10 @@ def guest(ws, args, state):
     sent_drop = state.get("dropped", False)
     try:
         while not stop.is_set() and time.monotonic() - t0 < args.seconds:
+            if state.get("live") is not me:
+                # a newer socket took this guest's seat (a change of way, join.rs "replaced")
+                ws.text({"bye": "replaced"})
+                return
             n += 1
             # a picture every 16 ms: an IDR (type 19) every 60, else TRAIL_R; two sound frames
             nal = 0x26 if n % 60 == 1 else 0x02
@@ -193,6 +204,42 @@ def guest(ws, args, state):
         stop.wait(2)
     except OSError:
         pass
+
+
+def probe(ws, args, state):
+    """join_route.rs: {"p": n} -> {"p": n, "us"}; {"burst": n} -> binary pieces, {"burst_done": n}."""
+    rec("probe_sockets")
+    opened = time.monotonic()
+    while True:
+        op, data = ws.recv()
+        m = json.loads(data)
+        if "p" in m:
+            rec("probe_checks", round(time.monotonic() - T0, 3))
+            ws.text({"p": m["p"], "us": int(time.monotonic() * 1e6)})
+        if "burst" in m:
+            n = min(int(m["burst"]), 512 * 1024) if time.monotonic() - opened < 30 else 0
+            rec("bursts", round(time.monotonic() - opened, 3))
+            sent = 0
+            while sent < n:
+                k = min(16384, n - sent)
+                ws.send(2, bytes(k))
+                sent += k
+            ws.text({"burst_done": n})
+
+
+def bridge(ws, args, state):
+    """join_net/bridge.rs on the guest's own engine: {"bridge": {v, room, fp}} -> "connecting",
+    "open" (or "failed"), then the socket is the host's guest socket (here: this stand-in's)."""
+    op, data = ws.recv()
+    b = json.loads(data).get("bridge", {})
+    rec("bridges", b)
+    ws.text({"bridge": "connecting"})
+    time.sleep(0.2)
+    if args.bridge_fail:
+        ws.text({"bridge": "failed", "why": args.bridge_fail})
+        return
+    ws.text({"bridge": "open", "path": "internet", "rtt_ms": 45})
+    guest(ws, args, state)
 
 
 def app(ws, args, state):
@@ -311,7 +358,10 @@ def serve(conn, args, state):
         hdr = {l.split(":", 1)[0].lower(): l.split(":", 1)[1].strip() for l in lines[1:] if ":" in l}
         if path.startswith("/v1/"):
             return helper_api(conn, lines[0].split(" ")[0], path, hdr, rest)
-        if path not in ("/api/join/ws", "/api/play/app") or hdr.get("upgrade", "").lower() != "websocket":
+        if path == "/api/join/probe" and args.no_probe:
+            conn.sendall(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+            return
+        if path not in ("/api/join/ws", "/api/play/app", "/api/join/probe", "/api/join/bridge") or hdr.get("upgrade", "").lower() != "websocket":
             if path == "/api/version":
                 body = json.dumps({"version": "13.0.0"}).encode()
                 conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
@@ -324,7 +374,7 @@ def serve(conn, args, state):
                      b"Sec-WebSocket-Accept: " + acc + b"\r\n\r\n")
         ws = Ws(conn)
         ws.buf = rest
-        (guest if path == "/api/join/ws" else app)(ws, args, state)
+        {"/api/join/ws": guest, "/api/join/probe": probe, "/api/join/bridge": bridge}.get(path, app)(ws, args, state)
     except (ConnectionError, OSError, ValueError, KeyError, json.JSONDecodeError):
         pass
     finally:
@@ -349,6 +399,61 @@ def discovery(port):
                 s.sendto(body, peer)
 
 
+def proxy(listen, target, delay_ms, hole_after, hole_until):
+    """A way to the engine with its own round trip: each chunk waits delay_ms/2 each way; between
+    hole_after and hole_until seconds (from the start) nothing goes through at all (a black hole:
+    the sockets stay open)."""
+    def pump(src, dst):
+        q = []
+        cv = threading.Condition()
+
+        def writer():
+            while True:
+                with cv:
+                    while not q:
+                        cv.wait()
+                    due, d = q[0]
+                    wait = due - time.monotonic()
+                    if wait > 0:
+                        cv.wait(wait)
+                        continue
+                    q.pop(0)
+                if d is None:
+                    try:
+                        dst.shutdown(socket.SHUT_WR)
+                    except OSError:
+                        pass
+                    return
+                now = time.monotonic() - T0
+                if hole_after and hole_after <= now < (hole_until or 1e9):
+                    continue
+                try:
+                    dst.sendall(d)
+                except OSError:
+                    return
+        threading.Thread(target=writer, daemon=True).start()
+        while True:
+            try:
+                d = src.recv(65536)
+            except OSError:
+                d = b""
+            with cv:
+                q.append((time.monotonic() + delay_ms / 2000.0, d or None))
+                cv.notify()
+            if not d:
+                return
+
+    while True:
+        c, _ = listen.accept()
+        try:
+            e = socket.create_connection(("127.0.0.1", target))
+        except OSError:
+            c.close()
+            continue
+        threading.Thread(target=pump, args=(c, e), daemon=True).start()
+        threading.Thread(target=pump, args=(e, c), daemon=True).start()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=0)
@@ -361,13 +466,29 @@ def main():
     ap.add_argument("--drop-after", type=float, default=0)
     ap.add_argument("--discovery", action="store_true")
     ap.add_argument("--lifetime", type=float, default=20)
+    ap.add_argument("--bridge-fail", help="the stand-in bridge answers failed with this why")
+    ap.add_argument("--no-probe", action="store_true", help="an engine without the checks socket")
+    ap.add_argument("--proxy", action="append", default=[],
+                    help="DELAY_MS[:HOLE_AFTER_S[:HOLE_UNTIL_S]]: another way in, with that round trip")
     args = ap.parse_args()
     srv = socket.socket()
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("127.0.0.1", args.port))
     srv.listen(8)
     port = srv.getsockname()[1]
+    proxies = []
+    for spec in args.proxy:
+        parts = [float(x) for x in spec.split(":")]
+        ls = socket.socket()
+        ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        ls.bind(("127.0.0.1", 0))
+        ls.listen(8)
+        proxies.append(ls.getsockname()[1])
+        threading.Thread(target=proxy, args=(ls, port, parts[0], parts[1] if len(parts) > 1 else 0,
+                                              parts[2] if len(parts) > 2 else 0), daemon=True).start()
     if args.port_file:
+        with open(args.port_file + ".ways", "w") as f:
+            f.write(" ".join(str(x) for x in proxies))
         with open(args.port_file, "w") as f:
             f.write(str(port))
     if args.discovery:
@@ -380,8 +501,10 @@ def main():
             c, _ = srv.accept()
         except socket.timeout:
             with lock:
-                with open(args.report, "w") as f:
+                # whole or not at all: the test may stop this process at any moment
+                with open(args.report + ".tmp", "w") as f:
                     json.dump(report, f)
+                os.replace(args.report + ".tmp", args.report)
             continue
         threading.Thread(target=serve, args=(c, args, state), daemon=True).start()
 

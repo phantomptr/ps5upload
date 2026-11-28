@@ -12,7 +12,6 @@ namespace play
 {
 namespace
 {
-constexpr unsigned kConnectMs = 4000;
 constexpr std::uint64_t kResumeWindowUs = 58ull * 1000000; // the engine keeps a seat 60 s
 constexpr std::uint64_t kPingEveryUs = 2000000;
 
@@ -26,6 +25,7 @@ Guest::Guest(GuestSinks &sinks, std::uint8_t *msg_buf, std::size_t msg_cap) noex
     : sinks_{sinks}, ws_{msg_buf, msg_cap}
 {
     pthread_mutex_init(&lock_, nullptr);
+    pthread_mutex_init(&route_lock_, nullptr);
 }
 
 bool Guest::start(const char *addr, std::uint16_t port, const char *code, const char *name,
@@ -43,6 +43,9 @@ bool Guest::start(const char *addr, std::uint16_t port, const char *code, const 
     stop_ = leave_ = nudge_ = false;
     joined_ = raw_pad_ = false;
     have_offset_ = false;
+    switch_to_ = -1;
+    last_skipped_ = -1;
+    lost_tries_ = 0;
     pthread_mutex_lock(&lock_);
     view_ = GuestView{};
     std::snprintf(view_.engine, sizeof view_.engine, "%s:%u", addr, static_cast<unsigned>(port));
@@ -113,7 +116,7 @@ void *Guest::entry(void *self) noexcept
 bool Guest::connect_and_hello(bool resume) noexcept
 {
     int status = 0;
-    if (!ws_.open(addr_, port_, "/api/join/ws", kConnectMs, &status))
+    if (!route_open(ws_, -1, &status))
     {
         log("guest: connect %s:%u failed: %s (http %d)", addr_, static_cast<unsigned>(port_), ws_.error(), status);
         return false;
@@ -134,6 +137,7 @@ bool Guest::connect_and_hello(bool resume) noexcept
 void Guest::run() noexcept
 {
     set_phase(GuestView::connecting, "");
+    route_pick();
     bool ever_joined = false;
     bool final_state = false;
     while (!final_state)
@@ -156,6 +160,7 @@ void Guest::run() noexcept
                                                                           : "unreachable");
                 break;
             }
+            route_lost("connect");
             if (net::now_us() - dropped_at_ > kResumeWindowUs)
             {
                 set_phase(GuestView::ended, "lost");
@@ -203,16 +208,20 @@ void Guest::run() noexcept
             {
                 last_ping = now;
                 ping_sent_us_ = now;
-                char m[1024];
+                route_sent(static_cast<std::uint32_t>(now / 1000));
+                char m[1400];
                 std::snprintf(m, sizeof m, "{\"ping\":%llu}", static_cast<unsigned long long>(now / 1000));
                 ws_.send_text(m);
                 char st[640];
                 sinks_.stats(st, sizeof st);
-                std::snprintf(m, sizeof m, "{\"stats\":{%s}}", st);
+                char rs[320];
+                route_stats(rs, sizeof rs);
+                std::snprintf(m, sizeof m, "{\"stats\":{%s%s}}", st, rs);
                 ws_.send_text(m);
             }
             if (joined_.load() && sinks_.wants_keyframe() && key_ask_.take(now))
                 ws_.send_text("{\"keyframe\":true}");
+            route_tick(now);
         }
         if (final_state)
             break;
@@ -221,6 +230,7 @@ void Guest::run() noexcept
         {
             sinks_.end();
             dropped_at_ = net::now_us();
+            route_lost("drop");
             set_phase(GuestView::reconnecting, ws_.error());
             continue;
         }
@@ -239,6 +249,7 @@ void Guest::run() noexcept
         set_phase(GuestView::failed, "closed");
         break;
     }
+    route_stop();
     if (joined_.exchange(false))
         sinks_.end();
     ws_.close();
@@ -247,6 +258,7 @@ void Guest::run() noexcept
 
 void Guest::handle_text(const char *t, std::size_t n) noexcept
 {
+    route_heard();
     proto::GuestEvent e;
     if (!proto::parse_guest(t, n, e))
     {
@@ -284,6 +296,7 @@ void Guest::handle_text(const char *t, std::size_t n) noexcept
                   token_[0] && !std::strcmp(e.why, "expired") ? "lost" : e.why);
         break;
     case proto::GuestEvent::status:
+        route_status(t, n);
         pthread_mutex_lock(&lock_);
         view_.player = e.player ? e.player : view_.player;
         view_.rtt_ms = e.rtt_ms;
@@ -311,6 +324,7 @@ void Guest::handle_text(const char *t, std::size_t n) noexcept
     {
         const std::uint64_t now = net::now_us();
         const std::uint64_t sent = static_cast<std::uint64_t>(e.pong_t * 1000.0);
+        route_answer(static_cast<std::uint32_t>(static_cast<std::uint64_t>(e.pong_t)));
         if (sent && now >= sent)
         {
             const std::uint64_t rtt = now - sent;
@@ -335,6 +349,7 @@ void Guest::handle_text(const char *t, std::size_t n) noexcept
 
 void Guest::handle_binary(const std::uint8_t *d, std::size_t n) noexcept
 {
+    route_heard();
     if (n < 1 || !joined_.load())
         return;
     switch (d[0])
@@ -352,6 +367,7 @@ void Guest::handle_binary(const std::uint8_t *d, std::size_t n) noexcept
             for (int k = 0; k < 8; ++k)
                 t = t << 8 | d[1 + k];
             sinks_.video(d + 9, n - 9, t);
+            route_picture(t);
             if (have_offset_)
             {
                 const std::int64_t delay =

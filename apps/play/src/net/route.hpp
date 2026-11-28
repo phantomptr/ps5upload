@@ -93,7 +93,8 @@ class Meter
     // The engine skipped pictures for us (its status' `skipped` went up).
     void behind(std::uint64_t now) noexcept;
     // A short burst at connect: `bytes` in `us` over a way with round trip `rtt_us` (a burst
-    // shorter than 4 round trips says nothing: TCP's slow start would make it look slow).
+    // shorter than 4 round trips says nothing, and one under the stream's rate in fewer than 8
+    // neither: TCP's slow start would make it look slow). Set need_kbps() first.
     void burst(std::uint64_t bytes, std::uint64_t us, std::uint64_t rtt_us) noexcept;
     // What the stream needs, kbit/s (0: not known: no headroom part).
     void need_kbps(unsigned kbps) noexcept

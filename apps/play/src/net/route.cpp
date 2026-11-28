@@ -202,7 +202,12 @@ void Meter::burst(std::uint64_t bytes, std::uint64_t us, std::uint64_t rtt_us) n
 {
     if (!us || us < 4 * rtt_us)
         return;
-    cap_kbps_ = static_cast<unsigned>(bytes * 8000 / us);
+    const unsigned kbps = static_cast<unsigned>(bytes * 8000 / us);
+    // Under the stream's rate after fewer than 8 round trips may still be slow start: it says
+    // nothing either way (over the rate it says enough).
+    if (need_kbps_ && kbps < need_kbps_ && us < 8 * rtt_us)
+        return;
+    cap_kbps_ = kbps;
 }
 
 void Meter::lost_connection(std::uint64_t now) noexcept

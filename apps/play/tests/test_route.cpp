@@ -121,6 +121,14 @@ void test_meter()
     CHECK(b.reading(1).headroom_pct == -1);
     b.burst(256 * 1024, 80000, 2000); // 26 Mbit/s
     CHECK(b.capacity_kbps() == 26214 && b.reading(1).headroom_pct == 174);
+    // under the rate within 8 round trips may be slow start: says nothing; past 8 it counts
+    Meter ss;
+    ss.rtt(20000, 0);
+    ss.need_kbps(15000);
+    ss.burst(256 * 1024, 150000, 20000); // 14 Mbit/s in 7.5 round trips
+    CHECK(ss.reading(1).headroom_pct == -1);
+    ss.burst(256 * 1024, 170000, 20000); // 12 Mbit/s in 8.5
+    CHECK(ss.reading(1).headroom_pct == 82 && ss.tier(1) == Tier::poor);
     // fell behind once: Playable at best for 10 s
     b.behind(2 * S);
     CHECK(b.reading(3 * S).behind == 1 && b.reading(13 * S).behind == 0);

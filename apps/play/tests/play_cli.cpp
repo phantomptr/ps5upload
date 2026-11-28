@@ -9,6 +9,7 @@
 #include "../src/app/guest.hpp"
 #include "../src/app/helper.hpp"
 #include "../src/app/log.hpp"
+#include "../src/app/route_pick.hpp"
 #include "../src/core/proto.hpp"
 
 #include <cstdio>
@@ -121,6 +122,44 @@ int join(int argc, char **argv)
     if (const char *f = arg_str(argc, argv, "--dump"))
         sinks.dump = std::fopen(f, "wb");
     static Guest guest(sinks, big, sizeof big);
+    // --way KIND:PORT (lan, tailscale, internet) on 127.0.0.1, any number: the ways to check and
+    // keep (docs/ROUTES.md); --bridge PORT:ROOM:FP: an internet invite through a stand-in bridge.
+    route::Candidate ways[route::Selector::kMax];
+    int n_ways = 0;
+    for (int i = 1; i + 1 < argc && n_ways < route::Selector::kMax; ++i)
+    {
+        if (!std::strcmp(argv[i], "--way"))
+        {
+            char kind[16] = {};
+            unsigned port = 0;
+            const char *colon = std::strchr(argv[i + 1], ':');
+            if (!colon || colon - argv[i + 1] >= 15)
+                continue;
+            std::memcpy(kind, argv[i + 1], static_cast<std::size_t>(colon - argv[i + 1]));
+            port = static_cast<unsigned>(std::atoi(colon + 1));
+            route::Candidate c;
+            std::snprintf(c.addr, sizeof c.addr, "127.0.0.1");
+            c.port = static_cast<std::uint16_t>(port);
+            c.kind = !std::strcmp(kind, "tailscale") ? route::Kind::tailscale
+                     : !std::strcmp(kind, "internet") ? route::Kind::internet
+                                                       : route::Kind::lan;
+            ways[n_ways++] = c;
+        }
+        else if (!std::strcmp(argv[i], "--bridge"))
+        {
+            char spec[160];
+            std::snprintf(spec, sizeof spec, "%s", argv[i + 1]);
+            char *a = std::strchr(spec, ':');
+            char *b = a ? std::strchr(a + 1, ':') : nullptr;
+            if (!a || !b)
+                continue;
+            *a = *b = 0;
+            if (route_bridge("127.0.0.1", static_cast<std::uint16_t>(std::atoi(spec)), a + 1, b + 1, ways[n_ways]))
+                ++n_ways;
+        }
+    }
+    if (n_ways)
+        guest.set_routes(ways, n_ways);
     guest.start(argv[2], static_cast<std::uint16_t>(std::atoi(argv[3])), code, "play-cli", "13.0.0");
     const int seconds = arg_int(argc, argv, "--seconds", 10);
     const int leave_after = arg_int(argc, argv, "--leave-after", -1);
@@ -157,6 +196,10 @@ int join(int argc, char **argv)
                 v.player, sinks.headers, sinks.pictures, sinks.keyframes, static_cast<unsigned long long>(sinks.bytes),
                 sinks.sounds, sinks.rumbles, sinks.lights, static_cast<unsigned long long>(v.pads_sent), v.rtt_ms,
                 v.delivery_ms);
+    std::printf("route way=%s tier=%s switches=%d backups=%d why=%s\n",
+                v.route < 0 ? "none" : route::kind_word(static_cast<route::Kind>(v.route)),
+                route::tier_word(static_cast<route::Tier>(v.tier)), v.route_switches, v.backups,
+                v.route_why[0] ? v.route_why : "-");
     if (sinks.dump)
         std::fclose(sinks.dump);
     return 0;
