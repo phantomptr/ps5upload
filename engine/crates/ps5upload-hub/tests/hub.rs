@@ -1319,3 +1319,36 @@ async fn a_homes_play_together_never_hits_a_limit() {
     };
     assert!(family_session(before).await > 0);
 }
+
+/// PS5Upload Play joins internet rooms through its own engine (the bridge: no Origin); the hub
+/// counts those joins apart and how long guest sockets stay, so its load per join is known
+/// (apps/play/docs/ROUTES.md, "What the hub costs"). Counts only.
+#[tokio::test]
+async fn joins_from_apps_and_guest_time_are_counted() {
+    let t = start(cfg()).await;
+    let r = room(7);
+    let _h = host(&t, &r, &secret(7)).await;
+    let mut page = connect_with(&t, Some("https://ps5upload.phantomptr.com"), None).await;
+    send(&mut page, json!({"v":1,"t":"join","room":r})).await;
+    assert_eq!(recv(&mut page).await["t"], "joined");
+    let mut bridge = connect_with(&t, None, None).await;
+    send(&mut bridge, json!({"v":1,"t":"join","room":r})).await;
+    assert_eq!(recv(&mut bridge).await["t"], "joined");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    for g in [&mut page, &mut bridge] {
+        send(g, json!({"t":"leave"})).await;
+        assert_eq!(recv_close(g).await, Some(1000));
+    }
+    let mut m = String::new();
+    for _ in 0..50 {
+        m = t.hub.shared.metrics_text();
+        if metric(&m, "hub_guests_left_total") == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(metric(&m, "hub_joins_total"), 2, "{m}");
+    assert_eq!(metric(&m, "hub_joins_app_total"), 1, "{m}");
+    assert_eq!(metric(&m, "hub_guests_left_total"), 2, "{m}");
+    assert!(metric(&m, "hub_guest_connected_ms_total") >= 50, "{m}");
+}
