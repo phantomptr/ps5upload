@@ -5020,6 +5020,10 @@
           "dest": {
             "type": "string"
           },
+          "free": {
+            "description": "Delete the archive as it is unpacked (opt-in; the archive can't be used again). With\n`list`, only how that would go (`free` in the answer).",
+            "type": "boolean"
+          },
           "list": {
             "description": "Only list the archive's top-level names (nothing is written): \"Extract here\" compares\nthem with the folder before it starts (#891).",
             "type": "boolean"
@@ -24632,7 +24636,7 @@
     },
     "/api/fpkg/extract/free-check": {
       "post": {
-        "description": "POST /api/fpkg/extract/free-check — whether an archive can be unpacked with its space given\nback. Asks before `free_archive` on `/api/fpkg/extract`, and says how it would go: `mode` is\n`entries` (a `.zip`: freed file by file), `blocks` (a `.7z` of more than one block: block by\nblock), `parts` (a multi-part `.rar`: part by part) or `end` (anything else: deleted once the\nunpack is finished and checked). `parts` counts the blocks or parts (1 otherwise); `game` is\n`folder` or `image`. `archive_bytes` is the archive's size (every part), `unpacked` what it\nunpacks to, `same_drive` whether it sits on the output folder's drive (only then does its\nfreed space count), `needed` the free bytes the unpack and the build after it need, and\n`free` the output folder's free bytes (null when they could not be read). Changes nothing.\n400 with the plain reason when it can't be done, including too little room.",
+        "description": "POST /api/fpkg/extract/free-check — whether an archive can be unpacked with its space given\nback. Asks before `free_archive` on `/api/fpkg/extract`, and says how it would go: `mode` is\n`entries` (a `.zip`: freed file by file), `blocks` (a `.7z` of more than one block: block by\nblock), `parts` (a multi-part `.rar`: part by part) or `end` (anything else: deleted once the\nunpack is finished and checked). `parts` counts the blocks or parts (1 otherwise); `game` is\n`folder` or `image`. `archive_bytes` is the archive's size (every part), `unpacked` what it\nunpacks to, `same_drive` whether it sits on the output folder's drive (only then does its\nfreed space count), `needed` the free bytes the unpack and the build after it need, `saves`\nhow much less that is than without freeing (0 on another drive), and `free` the output\nfolder's free bytes (null when they could not be read). Changes nothing.\n400 with the plain reason when it can't be done, including too little room.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -24656,6 +24660,10 @@
                     "needed": {},
                     "parts": {},
                     "same_drive": {},
+                    "saves": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
                     "unpacked": {}
                   },
                   "type": "object"
@@ -37635,7 +37643,7 @@
     },
     "/api/ps5/fs/extract": {
       "post": {
-        "description": "POST /api/ps5/fs/extract `{addr, path, dest, password?, merge?, replace?, list?, top?, op_id}`\n— extract an archive on the console into `dest` there (the helper's extractor payload does the\ndecoding). Progress and cancel go through `op-status`/`op-cancel` with the same `op_id`. 200\n`{ok, path, files, dirs, bytes, skipped, unsafe, links}`; 409 when cancelled; 502 with the\nhelper's cause otherwise (`fs_extract_password_required`, `fs_extract_no_space: ...`, ...).\nThe password is never logged.\n\n\"Extract here\" (#891): `list: true` only reads the archive's top-level names and answers\n`{ok, path, listed: true, top: [names], top_dirs: [the folders among them], top_more}` (`dest` is the folder, `merge` false: a\nhelper older than this refuses that folder rather than extract, and `listed` stays absent).\n`top: [{from, to}]` then renames those top-level entries while extracting with `merge`, or\nleaves them out when `to` is empty.",
+        "description": "POST /api/ps5/fs/extract `{addr, path, dest, password?, merge?, replace?, list?, top?, free?, op_id}`\n— extract an archive on the console into `dest` there (the helper's extractor payload does the\ndecoding). Progress and cancel go through `op-status`/`op-cancel` with the same `op_id`. 200\n`{ok, path, files, dirs, bytes, skipped, unsafe, links}`; 409 when cancelled; 502 with the\nhelper's cause otherwise (`fs_extract_password_required`, `fs_extract_no_space: ...`, ...).\nThe password is never logged.\n\n`free: true` deletes the archive as it is unpacked, so the game needs about its own size of\nfree space: a set of parts (`.part1.rar`, `.7z.001`, ...) is checked whole first, then each part\ngoes once everything in it is out and on the drive; anything else goes once the unpack is done.\nThe answer adds `parts_freed`, `bytes_freed`. A failure after a part went is 502\n`fs_extract_partly_freed: <freed> <left> <first part left> | <folder kept> | <cause>`: the\nfolder is kept and the parts left are renamed `.partial-deleted`. With `list`, the answer adds\n`free: {mode: \"parts\"|\"end\"|\"\", parts, archive_bytes, unpacked, peak, same_drive, known, why,\nsaves}` (`saves`: how much less free space it needs than without freeing).\n\n\"Extract here\" (#891): `list: true` only reads the archive's top-level names and answers\n`{ok, path, listed: true, top: [names], top_dirs: [the folders among them], top_more}` (`dest` is the folder, `merge` false: a\nhelper older than this refuses that folder rather than extract, and `listed` stays absent).\n`top: [{from, to}]` then renames those top-level entries while extracting with `merge`, or\nleaves them out when `to` is empty.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -37680,12 +37688,15 @@
                     {
                       "properties": {
                         "bytes": {},
+                        "bytes_freed": {},
                         "dirs": {},
                         "files": {},
+                        "free_not_removed": {},
                         "links": {},
                         "ok": {
                           "type": "boolean"
                         },
+                        "parts_freed": {},
                         "path": {},
                         "skipped": {},
                         "unsafe": {}
@@ -51494,7 +51505,10 @@
                 "schema": {
                   "properties": {
                     "running": {},
-                    "saves": {}
+                    "saves": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
                   },
                   "type": "object"
                 }

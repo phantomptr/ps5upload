@@ -101,6 +101,17 @@ fn room_needed(plan: &free::FreePlan, same_drive: bool) -> u64 {
     unpacking.max(building)
 }
 
+/// How much less free space the job needs on the output drive than unpacking and building
+/// beside the archive the usual way (which keeps the archive to the end): nothing when the
+/// archive is on another drive, where its space comes back there, not here.
+fn saves(plan: &free::FreePlan, same_drive: bool) -> u64 {
+    let usual = plan
+        .unpacked
+        .saturating_mul(2)
+        .saturating_add(plan.unpacked / 100);
+    usual.saturating_sub(room_needed(plan, same_drive))
+}
+
 fn shortfall(free: u64, needed: u64) -> Option<String> {
     let gib = |n: u64| n as f64 / (1u64 << 30) as f64;
     (free < needed).then(|| {
@@ -160,8 +171,9 @@ pub(crate) struct FreeCheckReq {
 /// unpack is finished and checked). `parts` counts the blocks or parts (1 otherwise); `game` is
 /// `folder` or `image`. `archive_bytes` is the archive's size (every part), `unpacked` what it
 /// unpacks to, `same_drive` whether it sits on the output folder's drive (only then does its
-/// freed space count), `needed` the free bytes the unpack and the build after it need, and
-/// `free` the output folder's free bytes (null when they could not be read). Changes nothing.
+/// freed space count), `needed` the free bytes the unpack and the build after it need, `saves`
+/// how much less that is than without freeing (0 on another drive), and `free` the output
+/// folder's free bytes (null when they could not be read). Changes nothing.
 /// 400 with the plain reason when it can't be done, including too little room.
 pub(crate) async fn free_check_handler(Json(req): Json<FreeCheckReq>) -> impl IntoResponse {
     let source = crate::fpkg_api::resolve_engine_path(&req.source);
@@ -185,6 +197,7 @@ pub(crate) async fn free_check_handler(Json(req): Json<FreeCheckReq>) -> impl In
             "unpacked": c.plan.unpacked,
             "same_drive": c.same_drive,
             "needed": c.needed,
+            "saves": saves(&c.plan, c.same_drive),
             "free": c.free,
         }))
         .into_response(),
@@ -399,6 +412,14 @@ mod tests {
         assert_eq!(room_needed(&tight, true), 51 * gib + gib / 2);
         let tight = plan_of(free::FreeMode::End, 99 * gib, 50 * gib, 50 * gib);
         assert_eq!(room_needed(&tight, true), 50 * gib + gib / 2);
+
+        // What it saves against the usual way (the archive kept to the end, 100.5 GiB on its
+        // drive): the archive's 40 GiB here, nothing on another drive.
+        assert_eq!(saves(&zip, true), 40 * gib);
+        assert_eq!(saves(&zip, false), 0);
+        // Freed only at the end: the build after it still gets the archive's room.
+        let end = plan_of(free::FreeMode::End, 40 * gib, 50 * gib, 50 * gib);
+        assert_eq!(saves(&end, true), 40 * gib);
 
         assert!(shortfall(60 * gib, 60 * gib).is_none());
         let why = shortfall(10 * gib, 60 * gib).unwrap();

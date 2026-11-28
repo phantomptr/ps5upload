@@ -107,6 +107,12 @@ pub(super) fn tools() -> Vec<ToolDef> {
                         "Replace files that collide; otherwise they are kept and counted in \
                          `skipped`. Only when the user asked for it.",
                     ),
+                    "free": flag(
+                        "Delete the archive as it is unpacked, so the game needs about its own \
+                         size of free space. A set of parts goes part by part; one file goes \
+                         when it is all out. The archive can't be used again. Only when the user \
+                         asked for it.",
+                    ),
                     "op_id": op_id_argument(OWN_OP_ID),
                     "wait_s": wait_argument(),
                 }),

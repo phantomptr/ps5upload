@@ -271,7 +271,7 @@ clients let you allow tools one by one, so keep these on "ask".
 | Tool | What it can do |
 |---|---|
 | `files_delete`, `files_move`, `files_copy`, `files_write` | Delete or overwrite files on the console |
-| `files_extract` | Unpack over what's already there |
+| `files_extract` | Unpack over what's already there, and with `free` delete the archive as it unpacks |
 | `files_unmount`, `files_eject` | Pull a drive out from under a running game |
 | `upload_file`, `upload_dir`, `upload_archive`, `queue_add` | Overwrite what's at the destination |
 | `install_pkg_rename` | Change the name inside a package file on this computer |

@@ -3074,6 +3074,10 @@ struct FsExtractReq {
     /// Top-level entries to rename (`to`) or leave out (`to` empty or absent) while extracting.
     #[serde(default)]
     top: Vec<FsExtractTop>,
+    /// Delete the archive as it is unpacked (opt-in; the archive can't be used again). With
+    /// `list`, only how that would go (`free` in the answer).
+    #[serde(default)]
+    free: bool,
     #[serde(default)]
     op_id: u64,
 }
@@ -3085,12 +3089,21 @@ struct FsExtractTop {
     to: Option<String>,
 }
 
-/// POST /api/ps5/fs/extract `{addr, path, dest, password?, merge?, replace?, list?, top?, op_id}`
+/// POST /api/ps5/fs/extract `{addr, path, dest, password?, merge?, replace?, list?, top?, free?, op_id}`
 /// — extract an archive on the console into `dest` there (the helper's extractor payload does the
 /// decoding). Progress and cancel go through `op-status`/`op-cancel` with the same `op_id`. 200
 /// `{ok, path, files, dirs, bytes, skipped, unsafe, links}`; 409 when cancelled; 502 with the
 /// helper's cause otherwise (`fs_extract_password_required`, `fs_extract_no_space: ...`, ...).
 /// The password is never logged.
+///
+/// `free: true` deletes the archive as it is unpacked, so the game needs about its own size of
+/// free space: a set of parts (`.part1.rar`, `.7z.001`, ...) is checked whole first, then each part
+/// goes once everything in it is out and on the drive; anything else goes once the unpack is done.
+/// The answer adds `parts_freed`, `bytes_freed`. A failure after a part went is 502
+/// `fs_extract_partly_freed: <freed> <left> <first part left> | <folder kept> | <cause>`: the
+/// folder is kept and the parts left are renamed `.partial-deleted`. With `list`, the answer adds
+/// `free: {mode: "parts"|"end"|"", parts, archive_bytes, unpacked, peak, same_drive, known, why,
+/// saves}` (`saves`: how much less free space it needs than without freeing).
 ///
 /// "Extract here" (#891): `list: true` only reads the archive's top-level names and answers
 /// `{ok, path, listed: true, top: [names], top_dirs: [the folders among them], top_more}` (`dest` is the folder, `merge` false: a
@@ -3131,18 +3144,20 @@ async fn ps5_fs_extract(
         replace: req.replace && !list,
         list,
         top: if list { None } else { top },
+        free_archive: req.free,
     };
     let started = std::time::Instant::now();
     crate::log_at!(
         Info,
         "files",
-        "fs_extract: addr={addr} path={} dest={} merge={} replace={} list={} renames={} password={} op_id={op_id}",
+        "fs_extract: addr={addr} path={} dest={} merge={} replace={} list={} renames={} free={} password={} op_id={op_id}",
         x.path,
         x.dest,
         x.merge,
         x.replace,
         x.list,
         pairs.len(),
+        x.free_archive,
         x.password.is_some()
     );
     let path_for_log = x.path.clone();
@@ -3163,15 +3178,20 @@ async fn ps5_fs_extract(
                 return json_err(StatusCode::NOT_IMPLEMENTED, "fs_extract_list_unsupported")
                     .into_response();
             }
-            Json(serde_json::json!({
+            let mut out = serde_json::json!({
                 "ok": true,
                 "path": done.path,
                 "listed": true,
                 "top": done.top_names(),
                 "top_dirs": done.top_dir_names(),
                 "top_more": done.top_more,
-            }))
-            .into_response()
+            });
+            if let Some(plan) = &done.free {
+                let mut p = serde_json::to_value(plan).unwrap_or_default();
+                p["saves"] = plan.saves().into();
+                out["free"] = p;
+            }
+            Json(out).into_response()
         }
         Ok(done) => {
             crate::log_at!(Info, "files",
@@ -3184,6 +3204,11 @@ async fn ps5_fs_extract(
                 done.links,
                 started.elapsed().as_millis()
             );
+            if done.parts_freed > 0 {
+                crate::log_at!(Info, "files",
+                    "fs_extract: freed {} part(s), {} bytes, of {path_for_log} ({} could not be deleted)",
+                    done.parts_freed, done.bytes_freed, done.free_not_removed);
+            }
             Json(serde_json::json!({
                 "ok": true,
                 "path": done.path,
@@ -3193,6 +3218,9 @@ async fn ps5_fs_extract(
                 "skipped": done.skipped,
                 "unsafe": done.unsafe_entries,
                 "links": done.links,
+                "parts_freed": done.parts_freed,
+                "bytes_freed": done.bytes_freed,
+                "free_not_removed": done.free_not_removed,
             }))
             .into_response()
         }

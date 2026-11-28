@@ -909,7 +909,7 @@ mod rar {
 
     #[test]
     fn a_sets_parts_go_one_by_one_in_order_and_the_files_come_out_the_same() {
-        for prefix in ["rar4-multi.part", "rar5-solid.part"] {
+        for prefix in ["rar4-multi.part"] {
             let tmp = Scratch::new("rar");
             let parts = copy_set(prefix, &tmp.0);
             // What a plain unpack of the same set gives.
@@ -968,6 +968,44 @@ mod rar {
             }));
             nothing_left_beside(&parts[0]);
         }
+    }
+
+    /// A solid set is one stream from its first file to its last: each file is decoded from
+    /// the ones before it, so it is one block across every part, and no part goes until the
+    /// whole unpack is out (and then every one of them does).
+    #[test]
+    fn a_solid_set_keeps_every_part_until_the_end() {
+        let tmp = Scratch::new("rar-solid");
+        let parts = copy_set("rar5-solid.part", &tmp.0);
+        let keep = Scratch::new("rar-solid-keep");
+        let twin = copy_set("rar5-solid.part", &keep.0);
+        plain_unpack(&twin[0], &keep.path("out"));
+        let expect = tree(&keep.path("out"));
+
+        let plan = plan_with(&parts[0], None, ANY).unwrap();
+        assert_eq!(plan.mode, FreeMode::End);
+        assert_eq!(plan.parts, parts);
+        assert_eq!(plan.peak_beside, plan.unpacked);
+        let dest = tmp.path("out");
+        let mut all_there = true;
+        let out = consume(
+            &plan,
+            &dest,
+            None,
+            &mut |_, _| all_there &= parts.iter().all(|p| p.exists()),
+            &no_stop(),
+            &mut || {
+                // The unpack is out: still every part, until this has had its look.
+                assert!(parts.iter().all(|p| p.exists()));
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(all_there, "a part went while the set was unpacking");
+        assert!(out.not_removed.is_empty());
+        assert_eq!(tree(&dest), expect);
+        assert!(parts.iter().all(|p| !p.exists()));
+        nothing_left_beside(&parts[0]);
     }
 
     #[test]
