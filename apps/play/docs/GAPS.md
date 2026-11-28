@@ -26,6 +26,25 @@ TEST-NET), `PS5UPLOAD_DEV_REPLAY_RUMBLE_S` (default 10, 0 off), `PS5UPLOAD_DEV_R
 Nothing in any UI. Recordings: instant replay's `GET /api/ps5/rp/replay`, or
 `scripts/make-psrp1.py` from any clip (an HEVC/H.264 elementary stream with AUDs, Opus sound).
 
+Checked with it on the Pro (FW 13.60, the app driven through the console's own Remote Play
+controller, screens read from instant replay):
+
+- Join by code, the host's allow, play as Player 2 on a stand-in pad, and as Player 1 on the
+  stream's own controller (`SEAT=stream`).
+- Host's PS button: Options + touchpad held 1 s gave the host one PS press of 250 ms, 1.0 s
+  after the hold started; Options and touchpad themselves never reached the host. Leave: L1 + R1
+  + Options + touchpad held 1 s left the session ("leave chord", `bye`).
+- Rumble: every stand-in rumble reached `scePadSetVibration` (result 0, on and off), the light
+  bar `scePadSetLightBar` (0); on the stream's controller too (the game's rumble path).
+- Home screen and back: PS held 1.3 s went to the home screen; the app kept decoding (600
+  pictures per 10 s), sent no pad frames, and the session stayed; opening the title again put it
+  back in front with the same session (no reconnect), pad frames carried on.
+- A dropped socket came back with its token in 14 ms.
+- What the host sees: `client_kind` ps5, `client_app` play, the app's version, `decoder`
+  native, `codec` hevc / hevc.main10, no codec warning, quality "smooth", round trip 2 ms.
+- Not checked: the stand-in helper does not model the console's "Who's using this controller?",
+  so a guest on a stand-in pad is shown "Move to your own user before pressing ✕" the whole time.
+
 ## 2. HDR (HEVC Main10)
 
 Facts: libSceVideodec2 decodes Main10 with the HEVC profile set to 2 (the app already asks for
@@ -49,6 +68,24 @@ reference white, 203 cd/m2; an extended Reinhard curve above it that reaches 1.0
 library is needed at run time (the tables use the app's own exp/log). The app now tells the host
 it can show Main10 (`caps.main10`), so the host no longer gets a warning for it; the stats
 report `codec` says `hevc.main10`.
+
+Measured on the Pro (13.60), the app joining a replayed host on a Mac (1080p60, high-motion test
+clips, 25 Mbit/s HEVC, 20 Mbit/s H.264, through a Docker port relay because the Mac's firewall
+refused the test engine):
+
+| | HEVC Main (SDR) | HEVC Main10 (HDR, tone-mapped) | H.264 High |
+| --- | --- | --- | --- |
+| Decode call, average | 3.7 ms | 4.1 ms | 8.3 ms |
+| Convert to the screen (4 threads), average | 2.6 ms | 5.4 ms | 2.6 ms |
+| Pictures shown per 10 s (steady) | 598-600 of 600 | 599-600 of 600 | 560-590 of 600 |
+
+- Main10 pictures came as `frame_format` 0, pitch 1920 samples (3840 bytes), 10 bits low-aligned;
+  the chroma plane starts after the reported 1080 rows (starting it at 1088 left 8 green rows).
+  The tables take 0.6 ms to make.
+- Between 0 and about 6 pictures a second came more than 25 ms after the one before (each one a
+  repeated vblank, the worst 40-60 ms). The replay host sent on time (0-6 pictures in 10 s more
+  than 4 ms late), and it was the same with the console's own Remote Play stopped, so the
+  unevenness is in delivery (the relay and the network), not in decoding or converting.
 
 ## 3. The app finds its engine without the UDP probe
 
