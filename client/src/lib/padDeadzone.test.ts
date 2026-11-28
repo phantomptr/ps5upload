@@ -110,6 +110,18 @@ describe("saved stick dead zones", () => {
     expect(mod.deadzonesFor(pad([], "DualSense Edge"))).toBeNull();
   });
 
+  it("are one record per controller, so a reset under its other name resets", async () => {
+    installWindowStub();
+    const mod = await import("./padProfiles");
+    mod.saveDeadzones("DualSense (app)", { left: 0.3, right: 0 });
+    expect(mod.deadzonesById(mod.loadDeadzones(), "DualSense")).toEqual({ left: 0.3, right: 0 });
+    mod.saveDeadzones("DualSense", { left: 0.4, right: 0 });
+    expect(mod.loadDeadzones()).toEqual({ DualSense: { left: 0.4, right: 0 } });
+    mod.saveDeadzones("DualSense (app)", null);
+    expect(mod.deadzonesFor(pad([], "DualSense"))).toBeNull();
+    expect(mod.loadDeadzones()).toEqual({});
+  });
+
   it("drop damaged entries and cap the size", async () => {
     const get = vi.spyOn(storage, "safeGetItem").mockReturnValue(
       JSON.stringify({ a: { left: 0.2, right: 5 }, b: "x", c: { left: "y" }, d: { left: -1, right: 0 } }),

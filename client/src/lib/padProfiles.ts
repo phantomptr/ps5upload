@@ -95,33 +95,40 @@ export function loadDeadzones(): Record<string, StickDeadzones> {
   }
 }
 
-/** Save `id`'s dead zones; both at 0 (or null) forgets them. */
-export function saveDeadzones(id: string, dz: StickDeadzones | null): Record<string, StickDeadzones> {
-  const all = loadDeadzones();
-  const left = dzValue(dz?.left);
-  const right = dzValue(dz?.right);
-  if (left > 0 || right > 0) all[id] = { left, right };
-  else delete all[id];
-  safeSetItem(DZ_KEY, JSON.stringify(all));
-  dzCache = all;
-  return all;
-}
-
 let dzCache: Record<string, StickDeadzones> | null = null;
 
 /** A controller's name without the app's ` (app)` (lib/nativePad.ts): the same controller can be
  *  read by the browser or forwarded by the app, and a worn stick drifts under either name. */
 const plainName = (id: string) => (id.endsWith(" (app)") ? id.slice(0, -" (app)".length) : id).trim().toLowerCase();
 
-/** The stick dead zones `g` plays with, or null for the usual small one: saved under its id, else
- *  under the same controller's other name. */
+/** Save `id`'s dead zones; both at 0 (or null) forgets them. One record per controller: what was
+ *  saved under its other name goes, so a reset under either name really resets. */
+export function saveDeadzones(id: string, dz: StickDeadzones | null): Record<string, StickDeadzones> {
+  const all = loadDeadzones();
+  const left = dzValue(dz?.left);
+  const right = dzValue(dz?.right);
+  const name = plainName(id);
+  for (const k of Object.keys(all)) if (plainName(k) === name) delete all[k];
+  if (left > 0 || right > 0) all[id] = { left, right };
+  safeSetItem(DZ_KEY, JSON.stringify(all));
+  dzCache = all;
+  return all;
+}
+
+/** The dead zones saved for the controller `id` in `all`: under its id, else under the same
+ *  controller's other name; null for none. */
+export function deadzonesById(all: Record<string, StickDeadzones>, id: string): StickDeadzones | null {
+  const own = all[id];
+  if (own) return own;
+  const name = plainName(id);
+  const same = Object.keys(all).find((k) => plainName(k) === name);
+  return same ? all[same] : null;
+}
+
+/** The stick dead zones `g` plays with, or null for the usual small one. */
 export function deadzonesFor(g: Gamepad): StickDeadzones | null {
   dzCache ??= loadDeadzones();
-  const own = dzCache[g.id];
-  if (own) return own;
-  const name = plainName(g.id);
-  const same = Object.keys(dzCache).find((k) => plainName(k) === name);
-  return same ? dzCache[same] : null;
+  return deadzonesById(dzCache, g.id);
 }
 
 /** How `g` plays now (see PadKind). */

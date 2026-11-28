@@ -332,7 +332,7 @@ export interface StickDeadzones {
 export const MAX_STICK_DEADZONE = 0.95;
 
 /** The usual dead zone, on each axis: a controller's own zone is never smaller. */
-const USUAL_AXIS_DEADZONE = 0.08;
+export const USUAL_STICK_DEADZONE = 0.08;
 
 /** A stick through a round dead zone `dz` (0-1): inside it reads centered; outside, the rest of
  *  the way is stretched back in the same direction, so the edge is still all the way and a small
@@ -354,14 +354,14 @@ export function padFromGamepads(
   deadzonesOf: (g: Gamepad) => StickDeadzones | null = () => null,
 ): PadState {
   const p = { ...IDLE_PAD };
-  const axis = (v: number) => (Math.abs(v) < USUAL_AXIS_DEADZONE ? 0 : clampAxis(v * 32767));
+  const axis = (v: number) => (Math.abs(v) < USUAL_STICK_DEADZONE ? 0 : clampAxis(v * 32767));
   // Several pads: the stick pushed furthest wins, so a resting pad does not cancel another.
   const pick = (cur: number, v: number) => (Math.abs(v) > Math.abs(cur) ? v : cur);
   const stick = (g: Gamepad, ax: PadAxis | null, ay: PadAxis | null, dz: number): [number, number] => {
     const x = ax ? axisValue(g, ax) : 0;
     const y = ay ? axisValue(g, ay) : 0;
     if (!(dz > 0)) return [axis(x), axis(y)];
-    const [dx, dy] = stickDeadzone(x, y, Math.min(Math.max(dz, USUAL_AXIS_DEADZONE), MAX_STICK_DEADZONE));
+    const [dx, dy] = stickDeadzone(x, y, Math.min(Math.max(dz, USUAL_STICK_DEADZONE), MAX_STICK_DEADZONE));
     return [clampAxis(dx * 32767), clampAxis(dy * 32767)];
   };
   for (const g of pads) {

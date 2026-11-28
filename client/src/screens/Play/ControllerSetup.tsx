@@ -5,6 +5,7 @@ import { Button, Select } from "../../components";
 import {
   addExtra,
   blankProfile,
+  deadzonesById,
   defaultProfileFor,
   detectPress,
   loadDeadzones,
@@ -24,7 +25,14 @@ import { isWeak8BitDo, padName } from "../../lib/padMappings";
 import { EightBitDoHint } from "./PadHint";
 import { gamepadsOf } from "../../lib/nativePad";
 import { setPadForwardReason } from "../../lib/androidPadBridge";
-import { axisValue, MAX_STICK_DEADZONE, PadButton, type PadProfile, type StickDeadzones } from "../../lib/remotePlayStream";
+import {
+  axisValue,
+  MAX_STICK_DEADZONE,
+  PadButton,
+  USUAL_STICK_DEADZONE,
+  type PadProfile,
+  type StickDeadzones,
+} from "../../lib/remotePlayStream";
 import { useTr } from "../../state/lang";
 import { rpInput } from "../../state/remotePlay";
 
@@ -167,7 +175,7 @@ export function ControllerSetup() {
         <ul className="space-y-2">
           {pads.map((p) => {
             const mapped = !!saved[p.id];
-            const dz = savedDz[p.id];
+            const dz = deadzonesById(savedDz, p.id);
             return (
               <li
                 key={`${p.index}-${p.id}`}
@@ -245,7 +253,7 @@ export function ControllerSetup() {
       {mode.kind === "deadzone" && (
         <DeadzoneEditor
           pad={mode.pad}
-          initial={savedDz[mode.pad.id] ?? { left: 0, right: 0 }}
+          initial={deadzonesById(savedDz, mode.pad.id) ?? { left: 0, right: 0 }}
           onCancel={() => setMode({ kind: "idle" })}
           onDone={(dz) => {
             setSavedDz(saveDeadzones(mode.pad.id, dz));
@@ -429,7 +437,8 @@ function DeadzoneEditor({
 
   const row = (which: keyof StickDeadzones, label: string) => {
     const now = reach ? pct(reach[which]) : null;
-    const inside = now !== null && now <= pct(dz[which]);
+    // A zone under the usual one plays as the usual one (remotePlayStream.ts).
+    const inside = now !== null && now <= Math.max(pct(dz[which]), pct(USUAL_STICK_DEADZONE));
     return (
       <div className="space-y-1">
         <label className="flex items-center gap-3 text-xs">
