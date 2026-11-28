@@ -367,9 +367,9 @@ pub(crate) fn default_name(host: &str) -> String {
     format!("{}'s room", head.trim_end())
 }
 
-/// A room name the host typed, cleaned (3–32 characters, the word filter: room_name_rules.rs).
-pub(crate) fn room_name(raw: &str) -> Result<String, crate::room_name_rules::NameError> {
-    crate::room_name_rules::clean_name(raw, 3, 32, &[])
+/// A room name the host typed, cleaned (3–32 characters, the hub's own name rules).
+pub(crate) fn room_name(raw: &str) -> Result<String, ps5upload_hub::names::NameError> {
+    ps5upload_hub::names::clean_name(raw, 3, 32, &[])
 }
 
 /// A guest's name as the room keeps it: printable, 1–24 characters, the same rules as room names;
@@ -380,9 +380,9 @@ pub(crate) fn guest_name(raw: &str) -> String {
     if raw.trim().is_empty() {
         return String::new();
     }
-    match crate::room_name_rules::clean_name(&raw, 1, crate::join_names::NAME_MAX, &[]) {
+    match ps5upload_hub::names::clean_name(&raw, 1, crate::join_names::NAME_MAX, &[]) {
         Ok(n) => n,
-        Err(crate::room_name_rules::NameError::Length) => raw
+        Err(ps5upload_hub::names::NameError::Length) => raw
             .trim()
             .chars()
             .take(crate::join_names::NAME_MAX)

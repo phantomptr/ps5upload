@@ -121,7 +121,6 @@ mod remote;
 mod remote_download;
 mod remote_pkg;
 mod remove_backport;
-mod room_name_rules;
 mod room_seal;
 mod rp_dev_replay;
 mod rp_diag;
