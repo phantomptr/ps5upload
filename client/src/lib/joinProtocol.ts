@@ -285,6 +285,26 @@ export function parseInternetFragment(hash: string): InternetInvite | null {
   return { room, key, fp: fp.toUpperCase(), hub };
 }
 
+/** A PS5 waiting for an invite (PS5Upload Play's QR code on the TV, apps/play/docs/EASY_JOIN.md):
+ *  its hub room, the nonce the TV shows and the hub. */
+export interface Ps5Target {
+  room: string;
+  t: string;
+  hub: string;
+}
+
+/** The PS5 in a QR code's fragment (`#ps5=<room>&t=<nonce>&hub=<host[:port]>`), or null. */
+export function parsePs5Fragment(hash: string): Ps5Target | null {
+  const p = new URLSearchParams(hash.replace(/^#/, ""));
+  const room = p.get("ps5") ?? "";
+  const t = p.get("t") ?? "";
+  const hub = p.get("hub") ?? "";
+  if (!/^[A-Za-z0-9_-]{22}$/.test(room) || !/^[A-Za-z0-9_-]{8,32}$/.test(t)) return null;
+  // The hub as parseInternetFragment takes it.
+  if (!/^([A-Za-z0-9.-]{1,253}|\[[0-9A-Fa-f:.]{2,45}\])(:\d{1,5})?$/.test(hub)) return null;
+  return { room, t, hub };
+}
+
 /** A Play Together link a friend shared: `http://<computer>:<port>/join#i=<key>[&n=<name>]`, or
  *  since 12.1 the one link for everywhere, `https://ps5upload.phantomptr.com/join/#room=…&k=…`
  *  (its `net`, with the host's own page as `lan` when the link names it). */

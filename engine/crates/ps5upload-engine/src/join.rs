@@ -30,6 +30,13 @@
 //!   host the same on the ask and the guest (nobody is refused for it). `raw_pad`: its pad
 //!   frames carry libScePad's button bits; `timing`: its pictures come as kind 7 (with the
 //!   engine's time, as the host's page can ask) and its pongs carry `engine_us`.
+//! * play again ([`crate::join_friends`]): `"remember": true` in the hello gets a friend pass in
+//!   "joined" (`"friend": pass`) once the host lets them in; `"again": pass` later asks the host
+//!   for the console it was for, also with Play Together closed while that console is being played
+//!   (opened for the ask, closed again unless the host lets them in); refused `"friend"` (a pass
+//!   this engine doesn't know), `"slow_down"` (asked again within 20 s) or `"not_playing"`.
+//!   `"inbox": {"room", "hub"}` names the guest app's waiting room on the hub (for the host's
+//!   "Send invite to <friend>'s PS5").
 //! * guest → engine: binary pad frames ([`parse_pad`]), `{"ping": t}` (answered `{"pong": t}`),
 //!   `{"leave": 1}`.
 //! * engine → guest: the session's picture and sound exactly as the watch party gets them (same
@@ -2983,6 +2990,15 @@ struct Hello {
     /// The guest's app ([`ClientInfo`]); read leniently, never a reason to refuse the hello.
     #[serde(default)]
     client: Option<serde_json::Value>,
+    /// Asks for a friend pass once let in (join_friends.rs): "joined" then carries `friend`.
+    #[serde(default)]
+    remember: bool,
+    /// A friend pass: asks to play again (join_friends.rs), also with Play Together closed.
+    #[serde(default)]
+    again: Option<String>,
+    /// The guest app's waiting room on the hub, `{"room", "hub"}` (join_friends.rs).
+    #[serde(default)]
+    inbox: Option<serde_json::Value>,
 }
 
 #[derive(serde::Deserialize)]
@@ -3037,6 +3053,8 @@ enum Entry {
     Key(String),
     Code(String),
     Nearby,
+    /// A friend pass (join_friends.rs): the console it was for.
+    Again(String),
 }
 
 static WRONG_CODES: Mutex<Option<HashMap<IpAddr, VecDeque<Instant>>>> = Mutex::new(None);
@@ -3130,21 +3148,87 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
     let near = socket
         .net()
         .is_none_or(|n| crate::join_net::local_signal::is_home_room(&n.room));
-    let entry = match (hello.invite.as_deref(), hello.code.as_deref()) {
-        (Some(k), _) if !k.is_empty() => Some(Entry::Key(k.to_string())),
-        (_, Some(c)) if !c.trim().is_empty() => Some(Entry::Code(normalize_code(c))),
+    // A friend pass (join_friends.rs) and the app's waiting room: only from a guest on the home
+    // network or Tailscale (the LAN socket), never an internet room's.
+    let inbox = if socket.net().is_none() {
+        crate::join_friends::inbox_from_hello(hello.inbox.as_ref())
+    } else {
+        None
+    };
+    let again = hello
+        .again
+        .as_deref()
+        .filter(|p| !p.is_empty() && socket.net().is_none() && admit.is_none());
+    let mut name = name;
+    let mut again_refused = None;
+    let entry = match (hello.invite.as_deref(), hello.code.as_deref(), again) {
+        (Some(k), ..) if !k.is_empty() => Some(Entry::Key(k.to_string())),
+        (_, Some(c), _) if !c.trim().is_empty() => Some(Entry::Code(normalize_code(c))),
+        (_, _, Some(pass)) => match crate::join_friends::again(pass, inbox.clone(), Instant::now())
+        {
+            Ok(k) => {
+                if name.is_empty() {
+                    name = k.name;
+                }
+                Some(Entry::Again(k.console))
+            }
+            Err(crate::join_friends::AgainErr::SlowDown) => {
+                again_refused = Some("slow_down");
+                None
+            }
+            Err(crate::join_friends::AgainErr::Unknown) => {
+                again_refused = Some("friend");
+                None
+            }
+        },
         // a "Playing nearby" join (the mesh presence): no credential, the host decides
         _ if hello.resume.is_none() && near => Some(Entry::Nearby),
         _ => None,
     };
+    let by_again = matches!(entry, Some(Entry::Again(_)));
     let admit = match admit {
         Some(a) => a,
         None => match entry {
+            Some(Entry::Again(console)) => {
+                // Play Together closed while the console is being played: opened for this ask,
+                // and closed again unless the host lets them in.
+                let opened = with_party(&host_key(&console), |_| ()).is_none()
+                    && session_of(&console).is_some()
+                    && open_party(&console).await.is_ok();
+                if opened {
+                    crate::log_at!(
+                        Info,
+                        "together",
+                        "join: Play Together opened on {console} for a friend who asks again"
+                    );
+                }
+                let r = ask(
+                    &mut socket,
+                    Entry::Again(console.clone()),
+                    &name,
+                    &client,
+                    ip,
+                )
+                .await;
+                if opened
+                    && !matches!(r, Some(Admit::New(..)))
+                    && with_party(&host_key(&console), |p| {
+                        p.guests_in() == 0 && p.pending.is_empty()
+                    })
+                    .unwrap_or(false)
+                {
+                    close_party(&console);
+                }
+                match r {
+                    Some(a) => a,
+                    None => return,
+                }
+            }
             Some(e) => match ask(&mut socket, e, &name, &client, ip).await {
                 Some(a) => a,
                 None => return,
             },
-            None => Admit::Refused("key"),
+            None => Admit::Refused(again_refused.unwrap_or("key")),
         },
     };
     let ms = t0.elapsed().as_millis();
@@ -3175,7 +3259,11 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
             (c, id)
         }
     };
-    play(socket, console, id, ip, client).await;
+    // A guest let in who asked for a pass (and did not come with one) gets one for next time.
+    let friend = (hello.remember && !by_again && socket.net().is_none() && hello.resume.is_none())
+        .then(|| crate::join_friends::issue(&console, &name, inbox))
+        .flatten();
+    play(socket, console, id, ip, client, friend).await;
 }
 
 /// A guest coming back with `token`: None when the socket closed while waiting for the host.
@@ -3508,6 +3596,13 @@ async fn ask<S: GuestSocket>(
         return Some(Admit::Refused("slow_down"));
     }
     let found = with_parties(|m| {
+        if let Entry::Again(console) = &entry {
+            // Not open (and not opened for it: the console isn't being played).
+            return m
+                .get(&host_key(console))
+                .map(|p| (host_key(console), p.console.clone()))
+                .ok_or("not_playing");
+        }
         if m.is_empty() {
             return Err("closed");
         }
@@ -3526,7 +3621,7 @@ async fn ask<S: GuestSocket>(
             .find(|(_, p)| match &entry {
                 Entry::Key(k) => p.key_ok(k, now),
                 Entry::Code(c) => p.code_ok(c, now),
-                Entry::Nearby => false,
+                Entry::Nearby | Entry::Again(_) => false,
             })
             .map(|(k, p)| (k.clone(), p.console.clone()))
             .ok_or("key")
@@ -3908,6 +4003,7 @@ async fn play<S: GuestSocket>(
     id: u64,
     ip: IpAddr,
     client: ClientInfo,
+    friend: Option<String>,
 ) {
     static GEN: AtomicU64 = AtomicU64::new(1);
     let gen = GEN.fetch_add(1, Ordering::Relaxed);
@@ -3964,19 +4060,21 @@ async fn play<S: GuestSocket>(
         Some(f) => (Some(f.video), Some(f.other)),
         None => (None, None),
     };
-    let ended = socket
-        .send(say(serde_json::json!({
-            "stage": "joined", "player": player, "token": token, "hevc": hevc,
-            // The pictures come on the video track (an internet page that offered one), not here.
-            "track": track,
-            // …and the sound on the audio track.
-            "audio": audio,
-            // Their app said it cannot show this session's picture ("hevc", "main10"): it may
-            // stay dark. Nobody is refused for it.
-            "codec_warning": warning,
-        })))
-        .await
-        .is_err();
+    let mut joined = serde_json::json!({
+        "stage": "joined", "player": player, "token": token, "hevc": hevc,
+        // The pictures come on the video track (an internet page that offered one), not here.
+        "track": track,
+        // …and the sound on the audio track.
+        "audio": audio,
+        // Their app said it cannot show this session's picture ("hevc", "main10"): it may
+        // stay dark. Nobody is refused for it.
+        "codec_warning": warning,
+    });
+    // The friend pass the hello asked for ("remember"): their app's "Play again" next time.
+    if let Some(f) = friend {
+        joined["friend"] = serde_json::Value::String(f);
+    }
+    let ended = socket.send(say(joined)).await.is_err();
     let mut tick = tokio::time::interval(STATUS_EVERY);
     let mut left = false;
     let mut pacer = PadPacer::new(Instant::now());
@@ -4344,6 +4442,41 @@ fn state_json(console: &str) -> serde_json::Value {
 /// The consoles with Play Together open.
 pub(crate) fn open_consoles() -> Vec<String> {
     with_parties(|m| m.values().map(|p| p.console.clone()).collect())
+}
+
+/// Play Togethers open here whose host is playing (the discovery answer's `together`).
+pub(crate) fn open_playing_count() -> usize {
+    let open: Vec<(String, bool)> = with_parties(|m| {
+        m.values()
+            .map(|p| (p.console.clone(), p.host_gone.is_none()))
+            .collect()
+    });
+    open.iter()
+        .filter(|(c, here)| *here && session_of(c).is_some())
+        .count()
+}
+
+/// The invite of `addr` as a friend's app is handed it (join_friends.rs): Play Together opened
+/// first when the console is being played. `{"link", "links", "name"}`: the one link to share, the
+/// home network's links (the app tries those directly), this computer's name. None: not playing.
+pub(crate) async fn invite_for_friend(addr: &str) -> Option<serde_json::Value> {
+    open_party(addr).await.ok()?;
+    let r = make_invite(addr, false, false, true);
+    if !r.status().is_success() {
+        return None;
+    }
+    let b = axum::body::to_bytes(r.into_body(), 1 << 20).await.ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&b).ok()?;
+    let link = v["share"]["url"].as_str()?.to_string();
+    let links: Vec<serde_json::Value> = v["urls"]
+        .as_array()
+        .map(|a| a.iter().take(4).cloned().collect())
+        .unwrap_or_default();
+    Some(serde_json::json!({
+        "link": link,
+        "links": links,
+        "name": crate::mesh_api::device_name(),
+    }))
 }
 
 /// Play Together on `console` as PS5Upload Play shows it (play_app.rs): open, the invite, who
@@ -10275,6 +10408,111 @@ mod tests {
     // Internet invites (join_net): the same session over a WebRTC data channel.
     mod internet {
         include!("join_net/join_tests.rs");
+    }
+
+    /// Play again (join_friends.rs): a guest app that asked for a pass gets one, and later asks
+    /// with it, also with Play Together closed; the host still decides every time.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn friends_play_again() {
+        let _turn = PARTY_TESTS.lock().await;
+        *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings::default());
+        let console = "10.77.0.31";
+        let f = Arc::new(FakeHelper::default());
+        set_helper(console, f.clone());
+        let url = serve().await;
+        set_live(console, 1);
+        let open_now = || async {
+            let (ci, h) = local();
+            body(
+                open(
+                    ci,
+                    h,
+                    Json(AddrBody {
+                        addr: console.into(),
+                    }),
+                )
+                .await,
+            )
+            .await
+        };
+        let s = open_now().await;
+        let key = s["invite"]["key"].as_str().unwrap().to_string();
+        assert_eq!(open_playing_count(), 1);
+
+        // Asked for a pass: "joined" carries one.
+        let mut sam = guest(
+            &url,
+            serde_json::json!({"hello": {"invite": key, "name": "Sam", "remember": true}}),
+        )
+        .await;
+        assert_eq!(next(&mut sam).await["stage"], "asking");
+        allow_next(console, true).await;
+        let j = next(&mut sam).await;
+        assert_eq!(j["stage"], "joined", "{j}");
+        let pass = j["friend"].as_str().unwrap().to_string();
+        assert_eq!(pass.len(), 43);
+        sam.send(TMsg::Text(r#"{"leave":1}"#.into())).await.unwrap();
+        drop(sam);
+
+        // Without asking for one: none.
+        let mut kim = guest(
+            &url,
+            serde_json::json!({"hello": {"invite": key, "name": "Kim"}}),
+        )
+        .await;
+        assert_eq!(next(&mut kim).await["stage"], "asking");
+        allow_next(console, true).await;
+        let j = next(&mut kim).await;
+        assert_eq!(j["stage"], "joined", "{j}");
+        assert!(j.get("friend").is_none(), "{j}");
+        kim.send(TMsg::Text(r#"{"leave":1}"#.into())).await.unwrap();
+        drop(kim);
+
+        // The host closes Play Together; Sam asks again with the pass and no name: it opens for
+        // the ask, the host is asked (by Sam's name), and lets them in.
+        close_party(console);
+        assert_eq!(open_playing_count(), 0);
+        let mut sam = guest(&url, serde_json::json!({"hello": {"again": pass}})).await;
+        assert_eq!(next(&mut sam).await["stage"], "asking");
+        let s = host_state(console).await;
+        assert_eq!(s["pending"][0]["name"], "Sam", "{s}");
+        allow_next(console, true).await;
+        let j = next(&mut sam).await;
+        assert_eq!(j["stage"], "joined", "{j}");
+        assert!(j.get("friend").is_none(), "a pass is not given again: {j}");
+        sam.send(TMsg::Text(r#"{"leave":1}"#.into())).await.unwrap();
+        drop(sam);
+
+        // Closed again; this time the host says no: Play Together closes again.
+        close_party(console);
+        tokio::time::sleep(crate::join_friends::AGAIN_GAP).await;
+        let mut sam = guest(&url, serde_json::json!({"hello": {"again": pass}})).await;
+        assert_eq!(next(&mut sam).await["stage"], "asking");
+        // Straight away again from another socket: too soon.
+        let mut quick = guest(&url, serde_json::json!({"hello": {"again": pass}})).await;
+        assert_eq!(next(&mut quick).await["why"], "slow_down");
+        allow_next(console, false).await;
+        assert_eq!(next(&mut sam).await["why"], "denied");
+        until("Play Together closed again", || {
+            with_party(&host_key(console), |_| ()).is_none()
+        })
+        .await;
+
+        // A pass nobody gave.
+        let mut x = guest(
+            &url,
+            serde_json::json!({"hello": {"again": "A".repeat(43)}}),
+        )
+        .await;
+        assert_eq!(next(&mut x).await["why"], "friend");
+
+        // The console isn't being played: nothing to ask.
+        set_live(console, 0);
+        tokio::time::sleep(crate::join_friends::AGAIN_GAP).await;
+        let mut sam = guest(&url, serde_json::json!({"hello": {"again": pass}})).await;
+        assert_eq!(next(&mut sam).await["why"], "not_playing");
+        assert!(with_party(&host_key(console), |_| ()).is_none());
+        let _ = f;
     }
 
     // The phone link over the internet (pad_link.rs on join_net): here for the settings and turns.

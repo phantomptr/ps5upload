@@ -159,6 +159,21 @@
   "set_about": "關於",
   "about_version": "版本 %s",
   "about_music": "音樂：為 PS5Upload Play 創作的原創曲目。",
-  "about_credits": "使用了 JetBrains Mono 和 Noto Sans 字型（SIL OFL 1.1）、Opus（BSD）以及 Project Nayuki 的 QR Code generator 程式庫（MIT）。",
-  "about_license": "PS5Upload Play 是遵循 GNU GPL v3 的自由軟體。"
+  "about_credits": "使用了 JetBrains Mono 和 Noto Sans 字型（SIL OFL 1.1）、Opus（BSD）、BearSSL（MIT）以及 Project Nayuki 的 QR Code generator 程式庫（MIT）。",
+  "about_license": "PS5Upload Play 是遵循 GNU GPL v3 的自由軟體。",
+  "home_nearby": "加入 %s 的遊戲",
+  "home_nearby_sub": "正在這個網路上玩。你的朋友會讓你進來。",
+  "home_again": "再和 %s 一起玩",
+  "home_again_sub": "會請你的朋友讓你進來",
+  "home_invite": "%s 邀請你一起玩",
+  "home_invite_sub": "現在加入。你的朋友會讓你進來。",
+  "phone_title": "邀請在你的手機上？",
+  "phone_text": "用手機掃描這裡，然後點「在我的 PS5 上玩」。",
+  "phone_wait": "正在取得手機碼…",
+  "phone_offline": "手機碼需要連網，這台 PS5 現在連不上。",
+  "phone_again": "手機碼已關閉。按 △ 再次顯示。",
+  "hint_phone": "手機碼",
+  "inv_got": "%s 傳來了邀請。",
+  "inv_unreachable": "這台 PS5 連不上 %s 的遊戲。它需要在同一網路或 Tailscale 上。",
+  "why_friend": "你朋友的 PS5Upload 已經不記得這台 PS5 了。先用代碼加入一次，「再玩一次」就能用了。"
 }

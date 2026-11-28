@@ -9705,6 +9705,25 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "two_panes_unverified": "Tersalin, tetapi aslinya disimpan: salinan tidak bisa diperiksa",
 "two_panes_not_removed": "Tersalin, tetapi aslinya tidak bisa dihapus",
 backup_restore_partial: "{count} berkas dipulihkan; {missed} tidak dapat dipulihkan",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "Main di PS5 saya",
+"join_ps5_play_game": "Mainkan game {host} di PS5 Anda",
+"join_ps5_open_link": "Buka tautan undangan teman Anda di ponsel ini, lalu ketuk \"Main di PS5 saya\" di sana.",
+"join_ps5_scan": "Buka PS5Upload Play di PS5 Anda dan pindai kode di layarnya dengan ponsel ini.",
+"join_ps5_sent": "Terkirim. Lihat TV Anda.",
+"join_ps5_expired": "Kode di TV Anda sudah kedaluwarsa. Tampilkan lagi di PS5Upload Play lalu pindai.",
+"join_ps5_refused": "PS5 Anda tidak bisa menerima undangan itu.",
+"join_ps5_unreachable": "Tidak dapat menjangkau PS5 Anda. Coba lagi.",
+"pt_friends_title": "PS5 teman",
+"pt_friends_last": "Terakhir main {date}",
+"pt_friends_send": "Kirim undangan",
+"pt_friends_sent": "Terkirim. {name} melihatnya di TV.",
+"pt_friends_not_open": "PS5Upload Play sedang tidak terbuka di PS5 {name}.",
+"pt_friends_not_playing": "Mulai main dulu, lalu kirim undangannya.",
+"pt_friends_refused": "PS5 {name} tidak menerima undangan.",
+"pt_friends_hub": "Tidak bisa mengirim. Periksa internet komputer ini lalu coba lagi.",
+"pt_friends_forget_title": "Lupakan PS5 {name}?",
+"pt_friends_forget_body": "PS5 tersebut tidak bisa main lagi bersama Anda atau menerima undangan Anda. Teman Anda tetap bisa bergabung dengan tautan undangan.",
 };
 
 export default id;

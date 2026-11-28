@@ -9,6 +9,7 @@ import { useTr } from "../../state/lang";
 import { RP_BITRATES, useRemotePlayStore } from "../../state/remotePlay";
 import { useRpQualityStore } from "../../state/rpQuality";
 import { PictureHereToggle, PlayOnTvNote } from "./PictureHere";
+import { FriendsPs5s } from "./FriendsPs5s";
 import { QrCode } from "./PhonePads";
 import {
   inviteOn,
@@ -760,6 +761,9 @@ export function PlayTogetherPanel({
           ))}
         </ul>
       )}
+
+      {/* Friends who joined from PS5Upload Play before: an invite to their TV in one click. */}
+      {helperOk && !failed && <FriendsPs5s addr={addr} open={state.open} />}
 
       {helperOk && !failed && peers.connecting.length > 0 && (
         <ul className="space-y-1" data-testid="pt-net-peers">

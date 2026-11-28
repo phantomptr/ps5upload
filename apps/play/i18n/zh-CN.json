@@ -159,6 +159,21 @@
   "set_about": "关于",
   "about_version": "版本 %s",
   "about_music": "音乐：为 PS5Upload Play 创作的原创曲目。",
-  "about_credits": "使用了 JetBrains Mono 和 Noto Sans 字体（SIL OFL 1.1）、Opus（BSD）以及 Project Nayuki 的 QR Code generator 库（MIT）。",
-  "about_license": "PS5Upload Play 是遵循 GNU GPL v3 的自由软件。"
+  "about_credits": "使用了 JetBrains Mono 和 Noto Sans 字体（SIL OFL 1.1）、Opus（BSD）、BearSSL（MIT）以及 Project Nayuki 的 QR Code generator 库（MIT）。",
+  "about_license": "PS5Upload Play 是遵循 GNU GPL v3 的自由软件。",
+  "home_nearby": "加入 %s 的游戏",
+  "home_nearby_sub": "正在这个网络上玩。你的朋友会让你进来。",
+  "home_again": "再和 %s 一起玩",
+  "home_again_sub": "会请你的朋友让你进来",
+  "home_invite": "%s 邀请你一起玩",
+  "home_invite_sub": "现在加入。你的朋友会让你进来。",
+  "phone_title": "邀请在你的手机上？",
+  "phone_text": "用手机扫描这里，然后点“在我的 PS5 上玩”。",
+  "phone_wait": "正在获取手机码…",
+  "phone_offline": "手机码需要连网，这台 PS5 现在连不上。",
+  "phone_again": "手机码已关闭。按 △ 再次显示。",
+  "hint_phone": "手机码",
+  "inv_got": "%s 给你发来了邀请。",
+  "inv_unreachable": "这台 PS5 连不上 %s 的游戏。它需要在同一网络或 Tailscale 上。",
+  "why_friend": "你朋友的 PS5Upload 已经不记得这台 PS5 了。先用代码加入一次，“再玩一次”就能用了。"
 }

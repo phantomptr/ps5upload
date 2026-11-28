@@ -57,6 +57,18 @@ struct ClientCaps
 // `{"hello": {...}}`: exactly one of code / resume / nothing (nearby). name may be empty.
 std::size_t hello(char *out, std::size_t cap, const char *code, const char *resume, const char *name,
                   const ClientCaps &caps) noexcept;
+// Easy join (docs/EASY_JOIN.md): an invite link's key, a friend pass ("Play again"), asking for a
+// pass, and this app's waiting room on the hub (for a host's "Send invite"). Empty: not said.
+struct HelloExtras
+{
+    const char *invite = nullptr;
+    const char *again = nullptr;
+    bool remember = false;
+    const char *inbox_room = nullptr;
+    const char *inbox_hub = nullptr;
+};
+std::size_t hello_ex(char *out, std::size_t cap, const char *code, const char *resume, const char *name,
+                     const ClientCaps &caps, const HelloExtras &extras) noexcept;
 
 enum class Kind : std::uint8_t
 {
@@ -85,6 +97,7 @@ struct GuestEvent
     } type = none;
     char why[24] = {};      // refused / waiting / bye
     char token[80] = {};    // joined
+    char friend_pass[48] = {}; // joined, when the hello asked to be remembered
     int player = 0;         // joined, status
     bool hevc = false;      // joined
     bool caps_known = false; // joined carried codec_warning: the engine read our caps
@@ -129,6 +142,7 @@ struct Found
     char version[24] = {};
     char id[24] = {};
     std::uint16_t port = 0;
+    int together = 0; // Play Togethers open there with the host playing
 };
 bool parse_found(const char *text, std::size_t len, Found &f) noexcept;
 

@@ -159,6 +159,21 @@
   "set_about": "À propos",
   "about_version": "Version %s",
   "about_music": "Musique : un morceau original créé pour PS5Upload Play.",
-  "about_credits": "Utilise les polices JetBrains Mono et Noto Sans (SIL OFL 1.1), Opus (BSD) et la bibliothèque QR Code generator de Project Nayuki (MIT).",
-  "about_license": "PS5Upload Play est un logiciel libre sous licence GNU GPL v3."
+  "about_credits": "Utilise les polices JetBrains Mono et Noto Sans (SIL OFL 1.1), Opus (BSD), BearSSL (MIT) et la bibliothèque QR Code generator de Project Nayuki (MIT).",
+  "about_license": "PS5Upload Play est un logiciel libre sous licence GNU GPL v3.",
+  "home_nearby": "Rejoindre la partie de %s",
+  "home_nearby_sub": "En cours sur ce réseau. Ton ami te laisse entrer.",
+  "home_again": "Rejouer avec %s",
+  "home_again_sub": "Ton ami reçoit la demande pour te laisser entrer",
+  "home_invite": "%s t'invite à jouer",
+  "home_invite_sub": "Rejoindre maintenant. Ton ami te laisse entrer.",
+  "phone_title": "Une invitation sur ton téléphone ?",
+  "phone_text": "Scanne ceci avec ton téléphone, puis touche « Jouer sur ma PS5 ».",
+  "phone_wait": "Préparation du code pour le téléphone…",
+  "phone_offline": "Le code pour le téléphone a besoin d'Internet, et cette PS5 n'y accède pas pour l'instant.",
+  "phone_again": "Le code pour le téléphone est éteint. Appuie sur △ pour le revoir.",
+  "hint_phone": "Code téléphone",
+  "inv_got": "%s t'a envoyé une invitation.",
+  "inv_unreachable": "Cette PS5 n'atteint pas la partie de %s. Elle doit être sur ce réseau ou sur Tailscale.",
+  "why_friend": "Le PS5Upload de ton ami ne se souvient plus de cette PS5. Rejoins une fois avec un code, puis « Rejouer » fonctionnera."
 }

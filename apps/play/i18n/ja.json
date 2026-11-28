@@ -159,6 +159,21 @@
   "set_about": "情報",
   "about_version": "バージョン %s",
   "about_music": "音楽：PS5Upload Play のために作られたオリジナル曲です。",
-  "about_credits": "JetBrains Mono と Noto Sans フォント（SIL OFL 1.1）、Opus（BSD）、Project Nayuki の QR Code generator ライブラリ（MIT）を使用しています。",
-  "about_license": "PS5Upload Play は GNU GPL v3 に基づくフリーソフトウェアです。"
+  "about_credits": "JetBrains Mono と Noto Sans フォント（SIL OFL 1.1）、Opus（BSD）、BearSSL（MIT）、Project Nayuki の QR Code generator ライブラリ（MIT）を使用しています。",
+  "about_license": "PS5Upload Play は GNU GPL v3 に基づくフリーソフトウェアです。",
+  "home_nearby": "%sのゲームに参加",
+  "home_nearby_sub": "このネットワークでプレイ中。フレンドが入室を許可します。",
+  "home_again": "%sともう一度遊ぶ",
+  "home_again_sub": "フレンドに入室の許可を求めます",
+  "home_invite": "%sから遊びのお誘い",
+  "home_invite_sub": "今すぐ参加。フレンドが入室を許可します。",
+  "phone_title": "招待はスマホにありますか？",
+  "phone_text": "スマホでこれを読み取り、「自分のPS5で遊ぶ」をタップしてください。",
+  "phone_wait": "スマホ用コードを準備中…",
+  "phone_offline": "スマホ用コードにはインターネットが必要ですが、このPS5は今つながりません。",
+  "phone_again": "スマホ用コードは止まっています。△でもう一度表示します。",
+  "hint_phone": "スマホ用コード",
+  "inv_got": "%sから招待が届きました。",
+  "inv_unreachable": "このPS5から%sのゲームに届きません。同じネットワークかTailscale上にある必要があります。",
+  "why_friend": "フレンドのPS5UploadがこのPS5を覚えていません。一度コードで参加すれば、「もう一度遊ぶ」が使えます。"
 }

@@ -113,7 +113,7 @@ void *Guest::entry(void *self) noexcept
 bool Guest::connect_and_hello(bool resume) noexcept
 {
     int status = 0;
-    if (!ws_.open(addr_, port_, "/api/join/ws", kConnectMs, &status))
+    if (!ws_.open(addr_, port_, extras_.path[0] ? extras_.path : "/api/join/ws", kConnectMs, &status))
     {
         log("guest: connect %s:%u failed: %s (http %d)", addr_, static_cast<unsigned>(port_), ws_.error(), status);
         return false;
@@ -122,7 +122,13 @@ bool Guest::connect_and_hello(bool resume) noexcept
     // main10: HDR pictures are shown, tone-mapped to SDR (display.cpp, core/hdr.cpp).
     const proto::ClientCaps caps{version_, true, true, true, true};
     // Coming back: the token, and the code too in case the seat is gone but the invite still works.
-    proto::hello(hello, sizeof hello, code_, resume ? token_ : nullptr, name_, caps);
+    proto::HelloExtras x;
+    x.invite = extras_.invite;
+    x.again = extras_.again;
+    x.remember = extras_.remember;
+    x.inbox_room = extras_.inbox_room;
+    x.inbox_hub = extras_.inbox_hub;
+    proto::hello_ex(hello, sizeof hello, code_, resume ? token_ : nullptr, name_, caps, x);
     if (!ws_.send_text(hello))
     {
         ws_.close();
@@ -272,6 +278,8 @@ void Guest::handle_text(const char *t, std::size_t n) noexcept
         view_.player = e.player;
         view_.hevc = e.hevc;
         copy(view_.codec_warning, sizeof view_.codec_warning, e.codec_warning);
+        if (e.friend_pass[0])
+            copy(view_.friend_pass, sizeof view_.friend_pass, e.friend_pass);
         pthread_mutex_unlock(&lock_);
         log("guest: joined as player %d (hevc %d, engine reads caps %d)", e.player, e.hevc, e.caps_known);
         sinks_.begin(e.hevc);

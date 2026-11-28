@@ -83,6 +83,7 @@ mod image_edit_in_place;
 mod inspect;
 mod install;
 mod join;
+mod join_friends;
 mod join_net;
 mod link;
 mod link_drops;
@@ -14463,6 +14464,9 @@ fn build_app_and_mcp(
         .route("/api/join/playing", post(join::playing))
         .route("/api/join/settings", post(join::set_settings))
         .route("/api/join/profiles", get(join::profiles))
+        .route("/api/join/friends", get(join_friends::list))
+        .route("/api/join/friends/forget", post(join_friends::forget_route))
+        .route("/api/join/friends/send", post(join_friends::send))
         .route("/api/play/app", get(play_app::ws))
         .route("/api/play/app/pair", post(play_app::pair))
         .route("/api/play/app/unpair", post(play_app::unpair))

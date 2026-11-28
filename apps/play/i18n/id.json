@@ -159,6 +159,21 @@
   "set_about": "Tentang",
   "about_version": "Versi %s",
   "about_music": "Musik: karya orisinal yang dibuat untuk PS5Upload Play.",
-  "about_credits": "Menggunakan font JetBrains Mono dan Noto Sans (SIL OFL 1.1), Opus (BSD), dan pustaka QR Code generator dari Project Nayuki (MIT).",
-  "about_license": "PS5Upload Play adalah perangkat lunak bebas di bawah GNU GPL v3."
+  "about_credits": "Menggunakan font JetBrains Mono dan Noto Sans (SIL OFL 1.1), Opus (BSD), BearSSL (MIT), dan pustaka QR Code generator dari Project Nayuki (MIT).",
+  "about_license": "PS5Upload Play adalah perangkat lunak bebas di bawah GNU GPL v3.",
+  "home_nearby": "Gabung ke game %s",
+  "home_nearby_sub": "Sedang dimainkan di jaringan ini. Temanmu yang mengizinkan masuk.",
+  "home_again": "Main lagi dengan %s",
+  "home_again_sub": "Temanmu akan diminta mengizinkanmu masuk",
+  "home_invite": "%s mengajakmu bermain",
+  "home_invite_sub": "Gabung sekarang. Temanmu yang mengizinkan masuk.",
+  "phone_title": "Undangan ada di ponselmu?",
+  "phone_text": "Pindai ini dengan ponselmu, lalu ketuk \"Main di PS5 saya\".",
+  "phone_wait": "Menyiapkan kode ponsel…",
+  "phone_offline": "Kode ponsel butuh internet, dan PS5 ini sedang tidak bisa menjangkaunya.",
+  "phone_again": "Kode ponsel mati. Tekan △ untuk menampilkannya lagi.",
+  "hint_phone": "Kode ponsel",
+  "inv_got": "%s mengirimimu undangan.",
+  "inv_unreachable": "PS5 ini tidak bisa menjangkau game %s. Harus di jaringan ini atau di Tailscale.",
+  "why_friend": "PS5Upload temanmu sudah tidak ingat PS5 ini. Gabung sekali dengan kode, lalu \"Main lagi\" berfungsi."
 }

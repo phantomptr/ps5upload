@@ -241,7 +241,11 @@ MediaStats media_stats() noexcept
 
 int main()
 {
-    mkdir(kDir, 0755);
+    // Open to the PS5Upload helper (another user): it removes this folder when the app is
+    // uninstalled with its data. With 0755 it could not (Permission denied on the Pro); a secret
+    // in it stays the app's own by its file mode (room.txt is 0600).
+    mkdir(kDir, 0777);
+    chmod(kDir, 0777);
     char path[160];
     std::snprintf(path, sizeof path, "%s/log.txt", kDir);
     log_open(path);

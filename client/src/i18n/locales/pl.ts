@@ -9933,6 +9933,25 @@ rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim 
 "two_panes_unverified": "Skopiowano, ale oryginał zostaje: nie udało się sprawdzić kopii",
 "two_panes_not_removed": "Skopiowano, ale nie udało się usunąć oryginału",
 backup_restore_partial: "Przywrócone pliki: {count}; nie udało się przywrócić: {missed}",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "Graj na mojej PS5",
+"join_ps5_play_game": "Graj w grę {host} na swojej PS5",
+"join_ps5_open_link": "Otwórz link z zaproszeniem od znajomego na tym telefonie i dotknij tam „Graj na mojej PS5”.",
+"join_ps5_scan": "Otwórz PS5Upload Play na swojej PS5 i zeskanuj tym telefonem kod z ekranu.",
+"join_ps5_sent": "Wysłano. Spójrz na telewizor.",
+"join_ps5_expired": "Kod na telewizorze wygasł. Pokaż go ponownie w PS5Upload Play i zeskanuj.",
+"join_ps5_refused": "Twoja PS5 nie mogła przyjąć tego zaproszenia.",
+"join_ps5_unreachable": "Nie udało się połączyć z Twoją PS5. Spróbuj ponownie.",
+"pt_friends_title": "PS5 znajomych",
+"pt_friends_last": "Ostatnia gra: {date}",
+"pt_friends_send": "Wyślij zaproszenie",
+"pt_friends_sent": "Wysłano. {name} widzi je na telewizorze.",
+"pt_friends_not_open": "PS5Upload Play nie jest teraz otwarte na PS5 {name}.",
+"pt_friends_not_playing": "Najpierw zacznij grać, a potem wyślij zaproszenie.",
+"pt_friends_refused": "PS5 {name} nie przyjęła zaproszenia.",
+"pt_friends_hub": "Nie udało się wysłać. Sprawdź internet na tym komputerze i spróbuj ponownie.",
+"pt_friends_forget_title": "Zapomnieć PS5 {name}?",
+"pt_friends_forget_body": "Ta PS5 nie będzie już mogła ponownie z Tobą grać ani dostawać Twoich zaproszeń. Znajomy nadal może dołączyć przez link z zaproszeniem.",
 };
 
 export default pl;

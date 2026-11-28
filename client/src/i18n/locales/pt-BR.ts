@@ -9711,6 +9711,25 @@ rp_users_add_hint: "Para jogar também como outro usuário, entre com esse usuá
 "two_panes_unverified": "Copiado, mas o original foi mantido: não foi possível conferir a cópia",
 "two_panes_not_removed": "Copiado, mas não foi possível apagar o original",
 backup_restore_partial: "{count} arquivos restaurados; {missed} não puderam ser restaurados",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "Jogar no meu PS5",
+"join_ps5_play_game": "Jogar a partida de {host} no seu PS5",
+"join_ps5_open_link": "Abra o link de convite do seu amigo neste celular e toque em \"Jogar no meu PS5\" lá.",
+"join_ps5_scan": "Abra o PS5Upload Play no seu PS5 e escaneie o código da tela com este celular.",
+"join_ps5_sent": "Enviado. Olhe sua TV.",
+"join_ps5_expired": "O código na sua TV expirou. Mostre-o de novo no PS5Upload Play e escaneie.",
+"join_ps5_refused": "Seu PS5 não conseguiu aceitar esse convite.",
+"join_ps5_unreachable": "Não foi possível alcançar seu PS5. Tente de novo.",
+"pt_friends_title": "PS5 dos amigos",
+"pt_friends_last": "Jogou por último em {date}",
+"pt_friends_send": "Enviar convite",
+"pt_friends_sent": "Enviado. {name} vê na TV.",
+"pt_friends_not_open": "O PS5Upload Play não está aberto no PS5 de {name} agora.",
+"pt_friends_not_playing": "Comece a jogar primeiro e depois envie o convite.",
+"pt_friends_refused": "O PS5 de {name} não aceitou o convite.",
+"pt_friends_hub": "Não foi possível enviar. Verifique a internet deste computador e tente de novo.",
+"pt_friends_forget_title": "Esquecer o PS5 de {name}?",
+"pt_friends_forget_body": "Esse PS5 não poderá mais jogar de novo com você nem receber seus convites. Seu amigo ainda pode entrar com um link de convite.",
 };
 
 export default pt_BR;

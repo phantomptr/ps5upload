@@ -7,6 +7,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import socket
 import struct
 import threading
@@ -14,7 +15,7 @@ import time
 
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 report = {"hellos": [], "pads": [], "keyframes": 0, "pings": 0, "stats": [], "leaves": 0,
-          "app_hellos": [], "intents": [], "bad_pads": 0, "connections": 0}
+          "app_hellos": [], "intents": [], "bad_pads": 0, "connections": 0, "hub_hosts": [], "hub_host_msgs": []}
 lock = threading.Lock()
 
 
@@ -114,10 +115,17 @@ def guest(ws, args, state):
     if args.refuse:
         ws.text({"stage": "refused", "why": args.refuse})
         return
+    # Play again (join_friends.rs): a pass this engine gave, or refused "friend".
+    again = h.get("again")
+    if again and again != "pass1":
+        ws.text({"stage": "refused", "why": "friend"})
+        return
     if not resume:
         ws.text({"stage": "asking"})
         time.sleep(0.2)
     joined = {"stage": "joined", "player": 2, "token": "tok1", "hevc": True, "track": False, "audio": False}
+    if h.get("remember") and not again and not resume:
+        joined["friend"] = "pass1"
     if not args.old:
         joined["codec_warning"] = None
     ws.text(joined)
@@ -299,6 +307,55 @@ def helper_api(conn, method, path, hdr, rest):
     return answer(404, {"error": "not_found"})
 
 
+hub_rooms = {}  # room -> (host ws, {gid: guest ws})
+
+
+def hub(ws, args, state):
+    """A stand-in for the signalling hub's /ws (protocol v1, ps5upload-hub PROTOCOL.md), enough for
+    the app's waiting room: host, join, signal both ways, leave."""
+    _, first = ws.recv()
+    m = json.loads(first)
+    if m.get("t") == "host":
+        room = m["room"]
+        rec("hub_hosts", {"room": room, "secret_len": len(m.get("secret", ""))})
+        with lock:
+            hub_rooms[room] = (ws, {})
+        ws.text({"t": "hosted", "room": room})
+        try:
+            while True:
+                _, data = ws.recv()
+                m = json.loads(data)
+                rec("hub_host_msgs", m)
+                if m.get("t") == "signal":
+                    g = hub_rooms[room][1].get(m.get("to"))
+                    if g:
+                        g.text({"t": "signal", "from": "host", "data": m["data"]})
+                elif m.get("t") == "leave":
+                    break
+        finally:
+            with lock:
+                hub_rooms.pop(room, None)
+        return
+    if m.get("t") == "join":
+        with lock:
+            r = hub_rooms.get(m.get("room"))
+        if not r:
+            ws.text({"t": "error", "why": "no_room"})
+            return
+        gid = "g%d" % (len(r[1]) + 1)
+        r[1][gid] = ws
+        ws.text({"t": "joined", "gid": gid})
+        r[0].text({"t": "guest", "gid": gid})
+        while True:
+            _, data = ws.recv()
+            m = json.loads(data)
+            if m.get("t") == "signal":
+                r[0].text({"t": "signal", "from": gid, "data": m["data"]})
+            elif m.get("t") == "leave":
+                r[0].text({"t": "left", "gid": gid})
+                return
+
+
 def serve(conn, args, state):
     try:
         conn.settimeout(30)
@@ -314,7 +371,7 @@ def serve(conn, args, state):
         hdr = {l.split(":", 1)[0].lower(): l.split(":", 1)[1].strip() for l in lines[1:] if ":" in l}
         if path.startswith("/v1/"):
             return helper_api(conn, lines[0].split(" ")[0], path, hdr, rest)
-        if path not in ("/api/join/ws", "/api/play/app") or hdr.get("upgrade", "").lower() != "websocket":
+        if path not in ("/api/join/ws", "/api/play/app", "/ws") or hdr.get("upgrade", "").lower() != "websocket":
             if path == "/api/version":
                 body = json.dumps({"version": "13.0.0"}).encode()
                 conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
@@ -327,7 +384,7 @@ def serve(conn, args, state):
                      b"Sec-WebSocket-Accept: " + acc + b"\r\n\r\n")
         ws = Ws(conn)
         ws.buf = rest
-        (guest if path == "/api/join/ws" else app)(ws, args, state)
+        (guest if path == "/api/join/ws" else hub if path == "/ws" else app)(ws, args, state)
     except (ConnectionError, OSError, ValueError, KeyError, json.JSONDecodeError):
         pass
     finally:
@@ -347,7 +404,8 @@ def discovery(port):
     while True:
         data, peer = s.recvfrom(2048)
         if data.startswith(b"PS5UPLOAD_PLAY_DISCOVER v1"):
-            body = json.dumps({"name": "Fake engine", "port": port, "version": "13.0.0", "id": "fake1"}).encode()
+            body = json.dumps({"name": "Fake engine", "port": port, "version": "13.0.0", "id": "fake1",
+                               "together": 1}).encode()
             if len(body) <= len(data):
                 s.sendto(body, peer)
 
@@ -383,8 +441,10 @@ def main():
             c, _ = srv.accept()
         except socket.timeout:
             with lock:
-                with open(args.report, "w") as f:
+                # whole or not at all: the test may stop this process mid-write
+                with open(args.report + ".tmp", "w") as f:
                     json.dump(report, f)
+                os.replace(args.report + ".tmp", args.report)
             continue
         threading.Thread(target=serve, args=(c, args, state), daemon=True).start()
 

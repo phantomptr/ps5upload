@@ -1,6 +1,8 @@
 // PS5Upload Play - the app: screens, controller navigation, and the guest and host roles.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "../core/friends.hpp"
+#include "../core/invite.hpp"
 #include "../core/settings.hpp"
 #include "../net/net.hpp"
 #include "../ui/canvas.hpp"
@@ -8,6 +10,7 @@
 #include "companion.hpp"
 #include "helper.hpp"
 #include "guest.hpp"
+#include "waiting_room.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -54,6 +57,7 @@ class App
         int helper_present = -1;
         helper::Rp rp;
         helper::Pin pin;
+        WaitingRoom::View room; // the home screen's phone code
     };
     void fake(Screen s, const Fake &f) noexcept
     {
@@ -191,5 +195,52 @@ class App
     int n_found_ = 0;
     bool disc_done_once_ = false;
     Fake fake_;
+
+    // ---- easy join (easy.cpp, docs/EASY_JOIN.md) ----
+    struct EasyRow
+    {
+        enum Kind : std::uint8_t
+        {
+            invite, // a host sent an invite (the waiting room)
+            nearby, // a game open on this network
+            again,  // a remembered host: "Play again"
+        } kind = nearby;
+        char name[65] = {};
+        char addr[64] = {};
+        std::uint16_t port = 0;
+        const Friend *friend_ = nullptr;
+    };
+    // Where a join goes, as remembered for Play again (not the helper's local forward).
+    struct JoinTarget
+    {
+        char addr[64] = {};
+        std::uint16_t port = 0;
+        bool tailnet = false;
+        char path[80] = {};
+        char name[65] = {};
+    };
+    static constexpr int kEasyRows = 2; // at most, above the home screen's own rows
+    void easy_init() noexcept;
+    void easy_frame(std::uint64_t now) noexcept;
+    int easy_rows(EasyRow *out, int cap) noexcept;
+    bool easy_choose(const EasyRow &r) noexcept;
+    void draw_easy_qr(ui::Canvas &c) noexcept;
+    void draw_easy_row(ui::Canvas &c, int x, int y, int w, int h, bool sel, const EasyRow &r) noexcept;
+    void save_friends() noexcept;
+    JoinExtras default_extras() const noexcept;
+    void start_join_how(const char *code, const JoinExtras &x) noexcept;
+    void join_invite(const invite::Invite &inv) noexcept;
+    void join_again(const Friend &f) noexcept;
+    Friends friends_;
+    WaitingRoom room_;
+    JoinExtras last_extras_;
+    JoinTarget target_;
+    bool friend_saved_ = false;
+    invite::Invite invite_;
+    bool has_invite_ = false;
+    std::uint64_t invite_until_ = 0;
+    bool room_paused_ = false; // the phone code ran its time: △ shows it again
+    int last_room_state_ = -1;
+    bool last_room_expired_ = false;
 };
 } // namespace play

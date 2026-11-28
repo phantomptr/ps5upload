@@ -9703,6 +9703,25 @@ rp_users_add_hint: "หากต้องการเล่นในฐานะ
 "two_panes_unverified": "คัดลอกแล้ว แต่เก็บต้นฉบับไว้: ตรวจสอบสำเนาไม่ได้",
 "two_panes_not_removed": "คัดลอกแล้ว แต่ลบต้นฉบับไม่ได้",
 backup_restore_partial: "กู้คืน {count} ไฟล์แล้ว กู้คืนไม่ได้ {missed} ไฟล์",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "เล่นบน PS5 ของฉัน",
+"join_ps5_play_game": "เล่นเกมของ {host} บน PS5 ของคุณ",
+"join_ps5_open_link": "เปิดลิงก์คำเชิญของเพื่อนบนโทรศัพท์เครื่องนี้ แล้วแตะ \"เล่นบน PS5 ของฉัน\" ที่นั่น",
+"join_ps5_scan": "เปิด PS5Upload Play บน PS5 ของคุณ แล้วใช้โทรศัพท์เครื่องนี้สแกนโค้ดบนหน้าจอ",
+"join_ps5_sent": "ส่งแล้ว ดูที่ทีวีของคุณ",
+"join_ps5_expired": "โค้ดบนทีวีหมดอายุแล้ว แสดงใหม่อีกครั้งใน PS5Upload Play แล้วสแกน",
+"join_ps5_refused": "PS5 ของคุณรับคำเชิญนั้นไม่ได้",
+"join_ps5_unreachable": "ติดต่อ PS5 ของคุณไม่ได้ ลองอีกครั้ง",
+"pt_friends_title": "PS5 ของเพื่อน",
+"pt_friends_last": "เล่นล่าสุด {date}",
+"pt_friends_send": "ส่งคำเชิญ",
+"pt_friends_sent": "ส่งแล้ว {name} จะเห็นบนทีวี",
+"pt_friends_not_open": "ตอนนี้ PS5Upload Play ไม่ได้เปิดอยู่บน PS5 ของ {name}",
+"pt_friends_not_playing": "เริ่มเล่นก่อน แล้วจึงส่งคำเชิญ",
+"pt_friends_refused": "PS5 ของ {name} ไม่รับคำเชิญ",
+"pt_friends_hub": "ส่งไม่ได้ ตรวจสอบอินเทอร์เน็ตของคอมพิวเตอร์เครื่องนี้แล้วลองอีกครั้ง",
+"pt_friends_forget_title": "ลืม PS5 ของ {name} ไหม",
+"pt_friends_forget_body": "PS5 เครื่องนี้จะเล่นกับคุณอีกครั้งหรือรับคำเชิญของคุณไม่ได้อีก แต่ยังเข้าร่วมด้วยลิงก์คำเชิญได้",
 };
 
 export default th;

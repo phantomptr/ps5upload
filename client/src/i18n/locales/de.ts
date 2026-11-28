@@ -9710,6 +9710,25 @@ backup_restore_partial: "{count} Dateien wiederhergestellt; {missed} konnten nic
 "join_not_host_user_unnamed": "Wechsle zu „Schnellspiel“, bevor du ✕ drückst. Wähle nicht den PS5-Benutzer von {host}: Damit endet dessen Spiel.",
 "join_took_host": "Das Spiel von {host} wurde beendet, weil dessen PS5-Benutzer auf deinem Controller gewählt wurde. Wechsle diesmal zuerst zu „Schnellspiel“ und drücke dann ✕.",
 "join_took_host_away": "Der PS5-Benutzer von {host} wurde auf deinem Controller gewählt, damit endet dessen Spiel. Wenn es weitergeht und der Fernseher fragt, wer du bist, wechsle zuerst zu „Schnellspiel“ und drücke dann ✕.",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "Auf meiner PS5 spielen",
+"join_ps5_play_game": "Das Spiel von {host} auf deiner PS5 spielen",
+"join_ps5_open_link": "Öffne den Einladungslink deines Freundes auf diesem Handy und tippe dort auf „Auf meiner PS5 spielen“.",
+"join_ps5_scan": "Öffne PS5Upload Play auf deiner PS5 und scanne mit diesem Handy den Code auf dem Bildschirm.",
+"join_ps5_sent": "Gesendet. Schau auf deinen Fernseher.",
+"join_ps5_expired": "Der Code auf deinem Fernseher ist abgelaufen. Zeige ihn in PS5Upload Play erneut an und scanne ihn.",
+"join_ps5_refused": "Deine PS5 konnte diese Einladung nicht annehmen.",
+"join_ps5_unreachable": "Deine PS5 ist nicht erreichbar. Versuch es noch einmal.",
+"pt_friends_title": "PS5s von Freunden",
+"pt_friends_last": "Zuletzt gespielt: {date}",
+"pt_friends_send": "Einladung senden",
+"pt_friends_sent": "Gesendet. {name} sieht sie auf dem Fernseher.",
+"pt_friends_not_open": "PS5Upload Play ist auf der PS5 von {name} gerade nicht geöffnet.",
+"pt_friends_not_playing": "Starte zuerst das Spiel und sende dann die Einladung.",
+"pt_friends_refused": "Die PS5 von {name} hat die Einladung nicht angenommen.",
+"pt_friends_hub": "Senden fehlgeschlagen. Prüfe die Internetverbindung dieses Computers und versuche es erneut.",
+"pt_friends_forget_title": "PS5 von {name} vergessen?",
+"pt_friends_forget_body": "Diese PS5 kann nicht mehr erneut mit dir spielen und bekommt keine Einladungen mehr von dir. Mit einem Einladungslink kann dein Freund weiterhin beitreten.",
 };
 
 export default de;

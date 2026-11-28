@@ -159,6 +159,21 @@
   "set_about": "درباره",
   "about_version": "نسخهٔ %s",
   "about_music": "موسیقی: قطعه‌ای اصلی که برای PS5Upload Play ساخته شده است.",
-  "about_credits": "از فونت‌های JetBrains Mono و Noto Sans (SIL OFL 1.1)، Opus (BSD) و کتابخانهٔ QR Code generator از Project Nayuki (MIT) استفاده می‌کند.",
-  "about_license": "PS5Upload Play نرم‌افزاری آزاد تحت GNU GPL v3 است."
+  "about_credits": "از فونت‌های JetBrains Mono و Noto Sans (SIL OFL 1.1)، Opus (BSD)، BearSSL (MIT) و کتابخانهٔ QR Code generator از Project Nayuki (MIT) استفاده می‌کند.",
+  "about_license": "PS5Upload Play نرم‌افزاری آزاد تحت GNU GPL v3 است.",
+  "home_nearby": "پیوستن به بازی %s",
+  "home_nearby_sub": "همین حالا روی این شبکه بازی می‌شود. دوستت اجازهٔ ورود می‌دهد.",
+  "home_again": "بازی دوباره با %s",
+  "home_again_sub": "از دوستت خواسته می‌شود اجازهٔ ورود بدهد",
+  "home_invite": "%s تو را به بازی دعوت می‌کند",
+  "home_invite_sub": "همین حالا بپیوند. دوستت اجازهٔ ورود می‌دهد.",
+  "phone_title": "دعوت روی گوشی‌ات است؟",
+  "phone_text": "این را با گوشی‌ات اسکن کن، بعد روی «بازی روی PS5 من» بزن.",
+  "phone_wait": "در حال گرفتن کد گوشی…",
+  "phone_offline": "کد گوشی به اینترنت نیاز دارد و این PS5 الان به آن دسترسی ندارد.",
+  "phone_again": "کد گوشی خاموش است. برای نمایش دوباره △ را بزن.",
+  "hint_phone": "کد گوشی",
+  "inv_got": "%s برایت دعوت فرستاد.",
+  "inv_unreachable": "این PS5 به بازی %s نمی‌رسد. باید روی همین شبکه یا روی Tailscale باشد.",
+  "why_friend": "PS5Upload دوستت دیگر این PS5 را به خاطر ندارد. یک بار با کد بپیوند، بعد «بازی دوباره» کار می‌کند."
 }

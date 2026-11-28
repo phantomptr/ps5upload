@@ -9667,6 +9667,25 @@ backup_restore_partial: "已恢复 {count} 个文件；{missed} 个无法恢复"
 "play_setup_signin_after_restart": "重启后请再看一下第 3 步：如果账号 ID 不见了，它会提供一键放回同一个 ID。放回之后这一步仍未完成时，才需要再运行一次登录。",
 "profile.accountId.not_kept": "PS5 没有保留 {next}：账号读回来是 {got}。请在“连接”中重新发送助手，然后再试一次。",
 "profile.accountId.saved_kept": "已保存，PS5 已读回确认。重启 PS5 后才会在主机上显示。如果重启后 ID 不见了，“设置畅玩”会提供放回同一个 ID 的按钮。",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "在我的 PS5 上玩",
+"join_ps5_play_game": "在你的 PS5 上玩 {host} 的游戏",
+"join_ps5_open_link": "在这部手机上打开好友的邀请链接，然后在那里点按“在我的 PS5 上玩”。",
+"join_ps5_scan": "在 PS5 上打开 PS5Upload Play，用这部手机扫描屏幕上的二维码。",
+"join_ps5_sent": "已发送。请看电视。",
+"join_ps5_expired": "电视上的二维码已过期。请在 PS5Upload Play 中重新显示并扫描。",
+"join_ps5_refused": "你的 PS5 无法接受该邀请。",
+"join_ps5_unreachable": "无法连接你的 PS5。请重试。",
+"pt_friends_title": "好友的 PS5",
+"pt_friends_last": "上次游玩：{date}",
+"pt_friends_send": "发送邀请",
+"pt_friends_sent": "已发送。{name} 会在电视上看到。",
+"pt_friends_not_open": "{name} 的 PS5 上现在没有打开 PS5Upload Play。",
+"pt_friends_not_playing": "请先开始游玩，再发送邀请。",
+"pt_friends_refused": "{name} 的 PS5 没有接受邀请。",
+"pt_friends_hub": "发送失败。请检查这台电脑的网络连接后重试。",
+"pt_friends_forget_title": "忘记 {name} 的 PS5？",
+"pt_friends_forget_body": "这台 PS5 将无法再与你再次游玩，也收不到你的邀请。对方仍可通过邀请链接加入。",
 };
 
 export default zh_CN;

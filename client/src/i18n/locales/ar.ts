@@ -9696,6 +9696,25 @@ rp_users_add_hint: "للعب باسم مستخدم آخر أيضًا، سجّل 
 "two_panes_unverified": "تم النسخ، لكن احتُفظ بالأصل: تعذّر التحقق من النسخة",
 "two_panes_not_removed": "تم النسخ، لكن تعذّر حذف الأصل",
 backup_restore_partial: "الملفات المستعادة: {count}؛ تعذّرت استعادة: {missed}",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "العب على جهاز PS5 الخاص بي",
+"join_ps5_play_game": "العب لعبة {host} على جهاز PS5 الخاص بك",
+"join_ps5_open_link": "افتح رابط دعوة صديقك على هذا الهاتف، ثم اضغط على \"العب على جهاز PS5 الخاص بي\" هناك.",
+"join_ps5_scan": "افتح PS5Upload Play على جهاز PS5 الخاص بك وامسح الرمز الظاهر على شاشته بهذا الهاتف.",
+"join_ps5_sent": "تم الإرسال. انظر إلى التلفاز.",
+"join_ps5_expired": "انتهت صلاحية الرمز على التلفاز. اعرضه مرة أخرى في PS5Upload Play وامسحه.",
+"join_ps5_refused": "لم يتمكن جهاز PS5 الخاص بك من قبول هذه الدعوة.",
+"join_ps5_unreachable": "تعذّر الوصول إلى جهاز PS5 الخاص بك. حاول مرة أخرى.",
+"pt_friends_title": "أجهزة PS5 لدى الأصدقاء",
+"pt_friends_last": "آخر لعب: {date}",
+"pt_friends_send": "إرسال دعوة",
+"pt_friends_sent": "تم الإرسال. سيراها {name} على التلفاز.",
+"pt_friends_not_open": "تطبيق PS5Upload Play غير مفتوح الآن على جهاز PS5 لدى {name}.",
+"pt_friends_not_playing": "ابدأ اللعب أولاً، ثم أرسل الدعوة.",
+"pt_friends_refused": "لم يقبل جهاز PS5 لدى {name} الدعوة.",
+"pt_friends_hub": "تعذّر الإرسال. تحقق من اتصال هذا الكمبيوتر بالإنترنت وحاول مرة أخرى.",
+"pt_friends_forget_title": "هل تريد نسيان جهاز PS5 لدى {name}؟",
+"pt_friends_forget_body": "لن يتمكن هذا الجهاز من اللعب معك مجددًا أو تلقي دعواتك. لا يزال بإمكان صديقك الانضمام برابط دعوة.",
 };
 
 export default ar;

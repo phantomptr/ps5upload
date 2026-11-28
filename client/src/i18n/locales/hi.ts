@@ -9710,6 +9710,25 @@ rp_users_add_hint: "किसी दूसरे उपयोगकर्ता 
 "two_panes_unverified": "कॉपी हो गया, पर मूल रखा गया: कॉपी जाँची नहीं जा सकी",
 "two_panes_not_removed": "कॉपी हो गया, पर मूल मिटाया नहीं जा सका",
 backup_restore_partial: "{count} फ़ाइलें पुनर्स्थापित की गईं; {missed} पुनर्स्थापित नहीं की जा सकीं",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "मेरे PS5 पर खेलें",
+"join_ps5_play_game": "{host} का गेम अपने PS5 पर खेलें",
+"join_ps5_open_link": "अपने दोस्त का आमंत्रण लिंक इस फ़ोन पर खोलें, फिर वहाँ \"मेरे PS5 पर खेलें\" पर टैप करें।",
+"join_ps5_scan": "अपने PS5 पर PS5Upload Play खोलें और उसकी स्क्रीन पर दिख रहा कोड इस फ़ोन से स्कैन करें।",
+"join_ps5_sent": "भेज दिया। अपना टीवी देखें।",
+"join_ps5_expired": "आपके टीवी पर दिख रहा कोड समाप्त हो गया है। उसे PS5Upload Play में फिर से दिखाएँ और स्कैन करें।",
+"join_ps5_refused": "आपका PS5 यह आमंत्रण नहीं ले सका।",
+"join_ps5_unreachable": "आपके PS5 तक नहीं पहुँच सके। फिर से कोशिश करें।",
+"pt_friends_title": "दोस्तों के PS5",
+"pt_friends_last": "आखिरी बार खेला: {date}",
+"pt_friends_send": "आमंत्रण भेजें",
+"pt_friends_sent": "भेज दिया। {name} इसे अपने टीवी पर देखेंगे।",
+"pt_friends_not_open": "{name} के PS5 पर अभी PS5Upload Play खुला नहीं है।",
+"pt_friends_not_playing": "पहले खेलना शुरू करें, फिर आमंत्रण भेजें।",
+"pt_friends_refused": "{name} के PS5 ने आमंत्रण नहीं लिया।",
+"pt_friends_hub": "भेजा नहीं जा सका। इस कंप्यूटर का इंटरनेट जाँचें और फिर से कोशिश करें।",
+"pt_friends_forget_title": "{name} का PS5 भूलें?",
+"pt_friends_forget_body": "यह PS5 अब आपके साथ दोबारा नहीं खेल पाएगा और आपके आमंत्रण नहीं पाएगा। आपका दोस्त आमंत्रण लिंक से फिर भी जुड़ सकता है।",
 };
 
 export default hi;

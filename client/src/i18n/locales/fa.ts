@@ -9974,6 +9974,25 @@ rp_users_add_hint: "برای بازی به‌عنوان کاربری دیگر ن
 "two_panes_unverified": "کپی شد، اما اصل نگه داشته شد: کپی بررسی نشد",
 "two_panes_not_removed": "کپی شد، اما اصل حذف نشد",
 backup_restore_partial: "{count} فایل بازگردانی شد؛ {missed} مورد بازگردانی نشد",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "بازی روی PS5 من",
+"join_ps5_play_game": "بازی {host} را روی PS5 خودتان بازی کنید",
+"join_ps5_open_link": "لینک دعوت دوستتان را روی همین گوشی باز کنید، سپس آنجا روی «بازی روی PS5 من» بزنید.",
+"join_ps5_scan": "PS5Upload Play را روی PS5 خود باز کنید و کد روی صفحه را با همین گوشی اسکن کنید.",
+"join_ps5_sent": "ارسال شد. به تلویزیون نگاه کنید.",
+"join_ps5_expired": "کد روی تلویزیون منقضی شده است. آن را دوباره در PS5Upload Play نمایش دهید و اسکن کنید.",
+"join_ps5_refused": "PS5 شما نتوانست این دعوت را بپذیرد.",
+"join_ps5_unreachable": "دسترسی به PS5 شما ممکن نشد. دوباره تلاش کنید.",
+"pt_friends_title": "PS5 دوستان",
+"pt_friends_last": "آخرین بازی: {date}",
+"pt_friends_send": "ارسال دعوت",
+"pt_friends_sent": "ارسال شد. {name} آن را روی تلویزیونش می‌بیند.",
+"pt_friends_not_open": "PS5Upload Play الان روی PS5 {name} باز نیست.",
+"pt_friends_not_playing": "اول بازی را شروع کنید، بعد دعوت را بفرستید.",
+"pt_friends_refused": "PS5 {name} دعوت را نپذیرفت.",
+"pt_friends_hub": "ارسال نشد. اینترنت این رایانه را بررسی کنید و دوباره تلاش کنید.",
+"pt_friends_forget_title": "PS5 {name} فراموش شود؟",
+"pt_friends_forget_body": "این PS5 دیگر نمی‌تواند دوباره با شما بازی کند یا دعوت‌هایتان را بگیرد. دوستتان همچنان می‌تواند با لینک دعوت بپیوندد.",
 };
 
 export default fa;

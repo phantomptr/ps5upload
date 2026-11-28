@@ -9661,6 +9661,25 @@ backup_restore_partial: "已還原 {count} 個檔案；{missed} 個無法還原"
 "play_setup_signin_after_restart": "重新啟動後請再看一下第 3 步：如果帳號 ID 不見了，它會提供一鍵放回同一個 ID。放回之後這一步仍未完成時，才需要再執行一次登入。",
 "profile.accountId.not_kept": "PS5 沒有保留 {next}：帳號讀回來是 {got}。請在「連線」中重新傳送助手，然後再試一次。",
 "profile.accountId.saved_kept": "已儲存，PS5 已讀回確認。重新啟動 PS5 後才會在主機上顯示。如果重新啟動後 ID 不見了，「設定遊玩」會提供放回同一個 ID 的按鈕。",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "在我的 PS5 上玩",
+"join_ps5_play_game": "在你的 PS5 上玩 {host} 的遊戲",
+"join_ps5_open_link": "在這支手機上開啟好友的邀請連結，然後在那裡點選「在我的 PS5 上玩」。",
+"join_ps5_scan": "在 PS5 上開啟 PS5Upload Play，用這支手機掃描畫面上的 QR 碼。",
+"join_ps5_sent": "已傳送。請看電視。",
+"join_ps5_expired": "電視上的 QR 碼已過期。請在 PS5Upload Play 中重新顯示並掃描。",
+"join_ps5_refused": "你的 PS5 無法接受這個邀請。",
+"join_ps5_unreachable": "無法連線到你的 PS5。請再試一次。",
+"pt_friends_title": "好友的 PS5",
+"pt_friends_last": "上次遊玩：{date}",
+"pt_friends_send": "傳送邀請",
+"pt_friends_sent": "已傳送。{name} 會在電視上看到。",
+"pt_friends_not_open": "{name} 的 PS5 目前沒有開啟 PS5Upload Play。",
+"pt_friends_not_playing": "請先開始遊玩，再傳送邀請。",
+"pt_friends_refused": "{name} 的 PS5 沒有接受邀請。",
+"pt_friends_hub": "無法傳送。請檢查這台電腦的網路連線後再試一次。",
+"pt_friends_forget_title": "要忘記 {name} 的 PS5 嗎？",
+"pt_friends_forget_body": "這台 PS5 將無法再與你再次遊玩，也收不到你的邀請。對方仍可透過邀請連結加入。",
 };
 
 export default zh_TW;

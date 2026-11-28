@@ -10,6 +10,7 @@
 #include "../src/app/helper.hpp"
 #include "../src/app/log.hpp"
 #include "../src/core/proto.hpp"
+#include "../src/app/waiting_room.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -121,6 +122,17 @@ int join(int argc, char **argv)
     if (const char *f = arg_str(argc, argv, "--dump"))
         sinks.dump = std::fopen(f, "wb");
     static Guest guest(sinks, big, sizeof big);
+    // Easy join (docs/EASY_JOIN.md): --invite KEY, --again PASS, --remember, --path P.
+    JoinExtras x;
+    x.remember = has(argc, argv, "--remember");
+    if (const char *k = arg_str(argc, argv, "--invite"))
+        std::snprintf(x.invite, sizeof x.invite, "%s", k);
+    if (const char *p = arg_str(argc, argv, "--again"))
+        std::snprintf(x.again, sizeof x.again, "%s", p);
+    if (const char *p = arg_str(argc, argv, "--path"))
+        std::snprintf(x.path, sizeof x.path, "%s", p);
+    guest.set_extras(x);
+    bool told_friend = false;
     guest.start(argv[2], static_cast<std::uint16_t>(std::atoi(argv[3])), code, "play-cli", "13.0.0");
     const int seconds = arg_int(argc, argv, "--seconds", 10);
     const int leave_after = arg_int(argc, argv, "--leave-after", -1);
@@ -135,6 +147,12 @@ int join(int argc, char **argv)
             std::printf("phase %s %s\n", phase_name(v.phase), v.why);
             std::fflush(stdout);
             last_phase = v.phase;
+        }
+        if (v.friend_pass[0] && !told_friend)
+        {
+            told_friend = true;
+            std::printf("friend %s\n", v.friend_pass);
+            std::fflush(stdout);
         }
         const double t = static_cast<double>(net::now_us() - t0) / 1e6;
         if (v.phase == GuestView::joined)
@@ -265,10 +283,48 @@ int discover()
     {
         char ip[16];
         net::ip_text(a[i].ip_be, ip);
-        std::printf("found %s:%u name=%s version=%s id=%s\n", ip, a[i].info.port, a[i].info.name, a[i].info.version,
-                    a[i].info.id);
+        std::printf("found %s:%u name=%s version=%s id=%s together=%d\n", ip, a[i].info.port, a[i].info.name,
+                    a[i].info.version, a[i].info.id, a[i].info.together);
     }
     std::printf("found %d\n", n);
+    return 0;
+}
+
+// The waiting room (docs/EASY_JOIN.md) against a hub: play-cli room URL SECRET_FILE [--seconds N]
+int room(int argc, char **argv)
+{
+    if (argc < 4)
+        return 2;
+    static WaitingRoom r;
+    r.init(argv[3], argv[2]);
+    r.arm();
+    const int seconds = arg_int(argc, argv, "--seconds", 20);
+    const std::uint64_t t0 = net::now_us();
+    int state = -1;
+    while (net::now_us() - t0 < static_cast<std::uint64_t>(seconds) * 1000000)
+    {
+        const auto v = r.view();
+        if (v.state != state)
+        {
+            static const char *n[] = {"off", "connecting", "ready", "offline"};
+            std::printf("state %s room=%s qr=%s\n", n[v.state], v.room, v.qr);
+            std::fflush(stdout);
+            state = v.state;
+        }
+        invite::Invite inv;
+        while (r.take(inv))
+        {
+            std::printf("invite key=%s name=%s routes=%d", inv.key, inv.name, inv.n_routes);
+            if (inv.n_routes)
+                std::printf(" route=%s:%u path=%s", inv.routes[0].dial_addr, inv.routes[0].dial_port,
+                            inv.routes[0].path);
+            std::printf(" from_tv=%d internet=%d\n", inv.nonce[0] != 0, inv.internet);
+            std::fflush(stdout);
+        }
+        net::sleep_ms(50);
+    }
+    r.stop();
+    std::printf("done\n");
     return 0;
 }
 } // namespace
@@ -285,6 +341,8 @@ int main(int argc, char **argv)
         return discover();
     if (argc >= 2 && !std::strcmp(argv[1], "helper"))
         return helper_cmd(argc, argv);
+    if (argc >= 2 && !std::strcmp(argv[1], "room"))
+        return room(argc, argv);
     std::fprintf(stderr, "usage: play-cli discover | join ADDR PORT [CODE] | companion ADDR PORT [TOKEN] [--pair]\n");
     return 2;
 }
