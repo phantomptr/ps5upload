@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { fpkg, type ArchiveFreeCheck, type BackportInfo } from "../../api/fpkg";
 import { Toggle } from "../../components";
+import { formatBytes } from "../../lib/format";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { archiveErrorText, archiveIsUnpacked } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
@@ -309,6 +310,15 @@ export function FreeArchiveOption({
           {check.mode === "end"
             ? tr("fpkg.free.path_end", { path: source }, "Will be deleted as soon as it is unpacked: {path}")
             : tr("fpkg.free.path", { path: source }, "Will be deleted while it unpacks: {path}")}
+        </div>
+      )}
+      {on && check && (check.saves ?? 0) > 0 && (
+        <div className="text-xs text-[var(--color-muted)]" data-testid="free-archive-saves">
+          {tr(
+            "fpkg.free.saves",
+            { size: formatBytes(check.saves ?? 0) },
+            `About ${formatBytes(check.saves ?? 0)} less free space needed for this game.`,
+          )}
         </div>
       )}
       {on && check?.mode === "end" && (

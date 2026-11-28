@@ -53,6 +53,32 @@ instance of itself.
 On a failure or a stop, the helper removes the destination when this run created it; when merging
 into an existing folder, the files already written stay.
 
+## Freeing the archive as it goes
+
+`"free":true` in the request deletes the archive while it is unpacked, so a game needs about its
+own size of free space instead of the archive's and its own (`src/xfree.h` has the rules):
+
+- a set of parts that are read one after another (`x.part1.rar`… or `x.rar` + `x.r00`… not solid
+  and not encrypted; `x.7z.001`, `x.zip.001`, `x.tar.001`) is freed part by part. The archive is
+  first read through once, whole, writing nothing: damage is found before anything is deleted, and
+  it tells where each unit (a file, or a 7z block) starts. A part goes once every unit with a byte
+  in it is written and flushed (each file `fsync`ed, its folder too). A solid 7z block that spans
+  three parts keeps all three until the whole block is out;
+- anything else (one file, a solid or encrypted RAR set, a single compressed stream) is deleted when
+  everything is out and flushed: no room is saved while it runs.
+
+The room is checked twice: before the long read, refused only when it can't fit even with every
+part given back; after it, against the most the unpack takes at once with the parts going on the
+way, which the read measured. Once a part is gone, only the writes themselves say the drive is full
+(its free space can come back a moment after the delete).
+
+When it stops after a part went (a failure, a Stop), nothing more is deleted, what was written stays,
+and the parts left are renamed `<name>.partial-deleted` in their own folder (never a rename across
+drives): without its first part the set can't be opened again. The status says so (`parts_freed`,
+`parts_left`, `left_first`), and the helper then keeps the folder instead of removing it. A listing
+with `free` reports the plan without decoding anything (`free_mode`, `parts`, `archive_bytes`,
+`unpacked`, `free_peak`, `same_drive`, or `free_why` when it can't be done).
+
 ## Libraries
 
 - 7-Zip 26.05, decoders only (`../third_party/7zip`, LGPL-2.1+): everything but RAR, including
@@ -86,4 +112,7 @@ multi-volume sets (7z, RAR4, RAR5) and a missing volume, passwords (7z with and 
 encryption, zip AES, ZipCrypto, a non-ASCII password), password-protected RAR (RAR 3/4 and RAR5:
 data or headers encrypted, stored, BLAKE2, multi-part, solid multi-part, wrong and missing
 passwords, listing, a missing volume, damage; fixtures from `tests/make_encrypted_rar.py`),
-truncated and damaged archives, out of space before and while writing, conflicts and Stop.
+truncated and damaged archives, out of space before and while writing, conflicts and Stop, and
+freeing the archive as it goes (split 7z with and without solid blocks, zip and tar sets, RAR sets
+solid and not, single archives, damage found first, Stop and a failure half way, the room check).
+`tests/xfree_test.c` checks the freeing schedule on its own.

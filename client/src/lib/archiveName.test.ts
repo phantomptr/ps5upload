@@ -7,6 +7,11 @@ import {
   needsPassword,
   toExtractResult,
   validFolderName,
+  freeNote,
+  freePlanNeeds,
+  freePlanSaves,
+  partlyFreed,
+  toFreePlan,
 } from "./archiveName";
 
 describe("isExtractableArchive", () => {
@@ -84,8 +89,11 @@ describe("extract results and causes", () => {
       skipped: 1,
       unsafe: 0,
       links: 0,
+      partsFreed: 0,
+      bytesFreed: 0,
     });
     expect(toExtractResult(null).files).toBe(0);
+    expect(toExtractResult({ path: "/data/x", parts_freed: 4, bytes_freed: 4000 })).toMatchObject({ partsFreed: 4, bytesFreed: 4000 });
   });
   it("finds the cause token", () => {
     expect(extractCause("fs_extract_no_space: needs 5 bytes, 1 free")).toBe("fs_extract_no_space");
@@ -94,5 +102,73 @@ describe("extract results and causes", () => {
     expect(needsPassword("fs_extract_password_required")).toBe(true);
     expect(needsPassword("fs_extract_wrong_password")).toBe(true);
     expect(needsPassword("fs_extract_rar_encrypted")).toBe(false);
+  });
+});
+
+describe("deleting the archive as it unpacks", () => {
+  const plan = toFreePlan({
+    mode: "parts",
+    parts: 10,
+    archive_bytes: 10_000,
+    unpacked: 12_000,
+    peak: 3_000,
+    same_drive: true,
+    known: true,
+    why: "",
+  })!;
+
+  it("reads the console's plan; an older console answers none", () => {
+    expect(plan).toEqual({
+      mode: "parts",
+      parts: 10,
+      archiveBytes: 10_000,
+      unpacked: 12_000,
+      peak: 3_000,
+      sameDrive: true,
+      known: true,
+      why: "",
+    });
+    expect(toFreePlan(undefined)).toBeNull();
+    expect(toFreePlan({ mode: "weird", parts: -1 })).toMatchObject({ mode: "", parts: 0, known: false });
+  });
+
+  it("saves what it unpacks to less the most it takes at once, only part by part on the same drive", () => {
+    expect(freePlanSaves(plan)).toBe(9_000);
+    expect(freePlanNeeds(plan)).toBe(3_000);
+    expect(freeNote(plan)).toEqual({ kind: "parts", parts: 10, saves: 9_000 });
+    // Another drive: no room made where it unpacks, and it needs all of it there.
+    const other = { ...plan, sameDrive: false };
+    expect(freePlanSaves(other)).toBe(0);
+    expect(freePlanNeeds(other)).toBe(12_000);
+    expect(freeNote(other)).toEqual({ kind: "other_drive" });
+    // At the end only: nothing saved while it runs.
+    const end = { ...plan, mode: "end" as const, peak: 12_000 };
+    expect(freePlanSaves(end)).toBe(0);
+    expect(freeNote(end)).toEqual({ kind: "end" });
+    // Not known (a set whose sizes the listing doesn't give): no figure is made up.
+    const unknown = { ...plan, known: false };
+    expect(freePlanSaves(unknown)).toBe(0);
+    expect(freePlanNeeds(unknown)).toBeNull();
+    expect(freeNote(unknown)).toEqual({ kind: "parts_plain", parts: 10 });
+    expect(freeNote({ ...plan, mode: "", why: "fs_extract_free_refused: x" })).toEqual({ kind: "refused" });
+  });
+
+  it("reads what a stop after parts were deleted left, whatever wraps it", () => {
+    const raw = "ARCHIVE_EXTRACT(/data/g.part1.rar): fs_extract_partly_freed: 3 5 g.part4.rar.partial-deleted | /data/g | fs_extract_no_space: g/a.bin, 0 free";
+    expect(partlyFreed(raw)).toEqual({
+      freed: 3,
+      left: 5,
+      firstLeft: "g.part4.rar.partial-deleted",
+      folder: "/data/g",
+      cause: "fs_extract_no_space: g/a.bin, 0 free",
+    });
+    expect(extractCause(raw)).toBe("fs_extract_partly_freed");
+    expect(partlyFreed("fs_extract_partly_freed: 2 0 - | /data/My Game | fs_extract_cancelled")).toMatchObject({
+      left: 0,
+      firstLeft: "-",
+      folder: "/data/My Game",
+      cause: "fs_extract_cancelled",
+    });
+    expect(partlyFreed("fs_extract_no_space")).toBeNull();
   });
 });

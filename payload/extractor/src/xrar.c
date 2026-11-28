@@ -25,6 +25,7 @@
 #include "archive_blake2.h"
 #include "archive_entry.h"
 #include "archive_name.h"
+#include "xfree.h"
 #include "xrarc.h"
 #include "xrcrypt.h"
 
@@ -222,6 +223,95 @@ static int sum_check(xjob_t *j, xsum_t *s, const xrarc_ent_t *ent, const xrarc_t
     return xj_fail(j, "fs_extract_corrupt: checksum");
 }
 
+/* One pass over a set's entries that writes nothing, for freeing it as it goes (xfree.h): where
+ * each entry starts in the set read as one stream (lo, the bytes consumed before its header) and
+ * what it unpacks to (bytes). With `decode` every file's data is decoded and checked (the check
+ * before the first part is deleted; its bytes count as progress); without, it is skipped (the plan
+ * a listing shows; only a set that is not solid, where a skip decodes nothing). 0, or -1: with the
+ * cause set when decoding, else quietly (the listing still lists). */
+typedef struct {
+    uint64_t *lo, *bytes;
+    size_t n, cap;
+} xrar_walk_t;
+
+static void walk_free(xrar_walk_t *w) {
+    free(w->lo);
+    free(w->bytes);
+    memset(w, 0, sizeof *w);
+}
+
+static int walk_push(xrar_walk_t *w, uint64_t lo, uint64_t bytes) {
+    if (w->n == w->cap) {
+        size_t nc = w->cap ? w->cap * 2 : 256;
+        uint64_t *a = realloc(w->lo, nc * sizeof *a), *b;
+        if (!a) return -1;
+        w->lo = a;
+        b = realloc(w->bytes, nc * sizeof *b);
+        if (!b) return -1;
+        w->bytes = b;
+        w->cap = nc;
+    }
+    w->lo[w->n] = lo;
+    w->bytes[w->n] = bytes;
+    w->n++;
+    return 0;
+}
+
+static int rar_walk(xjob_t *j, char **vols, const xrar_vols_t *vi, int decode, xrar_walk_t *w) {
+    struct archive *a = archive_read_new();
+    struct archive_entry *ae;
+    int rc = -1;
+    memset(w, 0, sizeof *w);
+    if (!a) return decode ? xj_fail(j, "fs_extract_no_memory") : -1;
+    archive_read_support_format_rar(a);
+    archive_read_support_format_rar5(a);
+    if (archive_read_open_filenames(a, (const char **)vols, XRAR_BLOCK) != ARCHIVE_OK) {
+        if (decode) rar_fail(j, a, vi);
+        goto out;
+    }
+    for (;;) {
+        uint64_t at = (uint64_t)archive_filter_bytes(a, -1), size;
+        int r = archive_read_next_header(a, &ae);
+        if (r == ARCHIVE_EOF) break;
+        if (r != ARCHIVE_OK && r != ARCHIVE_WARN) {
+            if (decode) rar_fail(j, a, vi);
+            goto out;
+        }
+        if (decode ? xj_cancelled(j) : (j->cancelled && j->cancelled(j))) goto out;
+        size = kind_of(ae) == XE_FILE && archive_entry_size_is_set(ae) && archive_entry_size(ae) > 0
+                   ? (uint64_t)archive_entry_size(ae)
+                   : 0;
+        if (walk_push(w, at, size) != 0) {
+            if (decode) xj_fail(j, "fs_extract_no_memory");
+            goto out;
+        }
+        if (!decode) {
+            if (archive_read_data_skip(a) != ARCHIVE_OK) goto out;
+            continue;
+        }
+        for (;;) {
+            const void *buf;
+            size_t len;
+            la_int64_t off;
+            r = archive_read_data_block(a, &buf, &len, &off);
+            if (r == ARCHIVE_EOF) break;
+            if (r != ARCHIVE_OK && r != ARCHIVE_WARN) {
+                rar_fail(j, a, vi);
+                goto out;
+            }
+            j->bytes_done = (uint64_t)archive_filter_bytes(a, -1);
+            if (j->progress) j->progress(j, 0);
+            if (xj_cancelled(j)) goto out;
+        }
+    }
+    rc = 0;
+out:
+    archive_read_close(a);
+    archive_read_free(a);
+    if (rc != 0) walk_free(w);
+    return rc;
+}
+
 /* xrarc_open's failures that end the extraction (the rest go to libarchive, which names them). */
 static int open_fail(xjob_t *j, int err, const xrar_vols_t *v) {
     const char *next = strrchr(v->next, '/');
@@ -239,6 +329,60 @@ static int open_fail(xjob_t *j, int err, const xrar_vols_t *v) {
 /* xrcrypt's cancel hook (xrc_set_cancel): the job's Stop, for the key derivations and the scanner. */
 static int rar_cancelled(void *arg) { return xj_cancelled((xjob_t *)arg); }
 
+/* Whether the set is solid: 1, 0, or -1 when that can't be told. */
+static int set_solid(char **vols, const xrarc_t *xt) {
+    unsigned char head[64];
+    size_t n;
+    FILE *f;
+    if (xt) return xrarc_solid(xt);
+    f = fopen(vols[0], "rb");
+    if (!f) return -1;
+    n = fread(head, 1, sizeof head, f);
+    fclose(f);
+    return xrar_solid(head, n);
+}
+
+/* A listing that asked about freeing: how the set would be freed and the room it would take. Never
+ * fails the listing (what can't be freed says why in free_why). */
+static void rar_plan(xjob_t *j, char **vols, unsigned count, const xrar_vols_t *vi, const xrarc_t *xt) {
+    xjob_t *probe = calloc(1, sizeof *probe);
+    xfvols_t fv;
+    xrar_walk_t w;
+    int solid;
+    if (!probe) return;
+    if (xf_load(probe, &fv, vols, count) != 0) {
+        snprintf(j->free_why, sizeof j->free_why, "%s", probe->cause);
+        free(probe);
+        return;
+    }
+    j->parts = fv.count;
+    j->archive_bytes = fv.total;
+    j->same_drive = xf_same_drive(j->archive, j->dest);
+    solid = set_solid(vols, xt);
+    snprintf(j->free_mode, sizeof j->free_mode, "end");
+    if (!xt && solid == 0 && rar_walk(probe, vols, vi, 0, &w) == 0) {
+        uint64_t *need = malloc((w.n ? w.n : 1) * sizeof *need);
+        for (size_t k = 0; k < w.n; k++) j->unpacked += w.bytes[k];
+        j->free_peak = j->unpacked;
+        j->plan_known = 1;
+        if (need && count >= 2 && w.n >= 2) {
+            xf_need(w.lo, w.n, need);
+            snprintf(j->free_mode, sizeof j->free_mode, "parts");
+            if (j->same_drive) j->free_peak = xf_peak(&fv, need, w.bytes, w.n);
+        }
+        free(need);
+        walk_free(&w);
+    } else if (!xt && solid == 0) {
+        /* The headers could not be walked: the listing says what is wrong with it. */
+    } else {
+        /* Solid or encrypted: one stream from the first file to the last, deleted at the end; what
+         * it unpacks to is known only by decoding it all. */
+        j->plan_known = 0;
+    }
+    xf_free_vols(&fv);
+    free(probe);
+}
+
 int xrar_extract(xjob_t *j) {
     char **vols = xj_rar_volumes(j->archive);
     struct archive *a = NULL;
@@ -248,6 +392,14 @@ int xrar_extract(xjob_t *j) {
     xrar_vols_t vi;
     size_t at, len;
     int rc = -1, opened_dest = 0, err;
+    /* Freeing (xfree.h): the parts, and when parts mode, where each entry may start freeing from. */
+    xfvols_t fv;
+    int freeing = 0, fparts = 0;
+    xrar_walk_t walk;
+    uint64_t *need = NULL;
+    size_t entry = 0;
+    memset(&fv, 0, sizeof fv);
+    memset(&walk, 0, sizeof walk);
     if (!vols) return xj_fail(j, "fs_extract_no_memory");
     memset(&vi, 0, sizeof vi);
     for (char **v = vols; *v; v++) {
@@ -272,9 +424,52 @@ int xrar_extract(xjob_t *j) {
         xj_fail(j, "fs_extract_password_required");
         goto out;
     }
+    if (j->free_req && j->list) rar_plan(j, vols, (unsigned)vi.count, &vi, xt);
+    if (j->free_req && !j->list) {
+        int solid;
+        if (xf_load(j, &fv, vols, (unsigned)vi.count) != 0) goto out;
+        freeing = 1;
+        j->durable = 1;
+        j->same_drive = xf_same_drive(j->archive, j->dest);
+        solid = set_solid(vols, xt);
+        /* Part by part only for a set that is not solid and not read through xrarc (which hides
+         * where each part ends): every file then decodes on its own, so a part can go once every
+         * file that starts in it, or before it, is out. Anything else goes at the end. */
+        fparts = vi.count >= 2 && !xt && solid == 0;
+        snprintf(j->free_mode, sizeof j->free_mode, "%s", fparts ? "parts" : "end");
+    }
+    if (fparts) {
+        uint64_t total = rar_total(j, vols, xt);
+        if (xj_failed(j)) goto out;
+        /* Certainly too little room, even with every part given back: said before the long read. */
+        if (total && !j->merge &&
+            (j->same_drive ? (total > fv.total && xs_check_space(j, total - fv.total) != 0) : xs_check_space(j, total) != 0))
+            goto out;
+        /* The check: the set read through once, whole, nothing written. Damage anywhere is found
+         * here, before a part is deleted; it also says where each file starts. */
+        j->checking = 1;
+        j->bytes_total = fv.total * 2;
+        j->bytes_done = 0;
+        if (j->progress) j->progress(j, 1);
+        if (rar_walk(j, vols, &vi, 1, &walk) != 0) goto out;
+        j->checking = 0;
+        need = malloc((walk.n ? walk.n : 1) * sizeof *need);
+        if (!need) {
+            xj_fail(j, "fs_extract_no_memory");
+            goto out;
+        }
+        xf_need(walk.lo, walk.n, need);
+        j->unpacked = 0;
+        for (size_t k = 0; k < walk.n; k++) j->unpacked += walk.bytes[k];
+        j->free_peak = j->same_drive ? xf_peak(&fv, need, walk.bytes, walk.n) : j->unpacked;
+        j->plan_known = 1;
+        /* Exact now: the room the unpack takes at its largest, with the parts given back on the way. */
+        if (!j->merge && xs_check_space(j, j->free_peak) != 0) goto out;
+        j->bytes_done = fv.total;
+    }
     /* All of it has to fit, before the folder is made (a merge may skip files it already has, so
      * it keeps the per-file check only). */
-    if (vi.count && !j->merge && !j->list) {
+    if (vi.count && !j->merge && !j->list && !fparts) {
         uint64_t total = rar_total(j, vols, xt);
         if (xj_failed(j)) goto out; /* Stop while its headers were read */
         if (total && xs_check_space(j, total) != 0) goto out;
@@ -295,6 +490,9 @@ int xrar_extract(xjob_t *j) {
         xsum_t sum;
         xrarc_release(xt, ent);
         ent = NULL;
+        /* Every file before this one is out: the parts nothing from here on reads go. */
+        if (fparts && entry < walk.n && xf_release(j, &fv, xf_before(&fv, need[entry])) != 0) goto out;
+        entry++;
         r = archive_read_next_header(a, &ae);
         if (r == ARCHIVE_EOF && xt && xrarc_error(xt)) {
             /* libarchive takes a failed read where a header starts for the end. */
@@ -348,7 +546,7 @@ int xrar_extract(xjob_t *j) {
                     xrc_fail(j, a, &vi, xt, ent);
                     goto out;
                 }
-                j->bytes_done = (uint64_t)archive_filter_bytes(a, -1);
+                j->bytes_done = (uint64_t)archive_filter_bytes(a, -1) + (fparts ? fv.total : 0);
                 if (j->bytes_done > j->bytes_total) j->bytes_done = j->bytes_total;
                 continue;
             }
@@ -380,7 +578,7 @@ int xrar_extract(xjob_t *j) {
                     goto out;
                 }
                 sum_add(&sum, buf, len);
-                j->bytes_done = (uint64_t)archive_filter_bytes(a, -1);
+                j->bytes_done = (uint64_t)archive_filter_bytes(a, -1) + (fparts ? fv.total : 0);
                 if (j->bytes_done > j->bytes_total) j->bytes_done = j->bytes_total;
             }
             if (sum_check(j, &sum, ent, xt) != 0) {
@@ -396,7 +594,13 @@ int xrar_extract(xjob_t *j) {
     }
     j->bytes_done = j->bytes_total;
     rc = 0;
+    if (freeing && xf_finish(j, &fv) != 0) rc = -1;
 out:
+    if (freeing && rc != 0) xf_abandon(j, &fv);
+    xf_free_vols(&fv);
+    walk_free(&walk);
+    free(need);
+    j->checking = 0;
     if (a) {
         archive_read_close(a);
         archive_read_free(a);

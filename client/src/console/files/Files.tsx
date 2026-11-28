@@ -47,7 +47,7 @@ import { UnpackDialog, unpackCauseText, unpackErrorText } from "./UnpackDialog";
 import { PkgDialog } from "./PkgDialog";
 import { installBusyText, installMessage, installPhaseText, installStoppable, isPayload, isPkg, loadPayload, payloadErrorText, startInstall } from "./pkg";
 import { ExtractDialog, extractCauseText, extractErrorText, type ExtractStart } from "./ExtractDialog";
-import { isExtractableArchive, toExtractResult } from "../../lib/archiveName";
+import { isExtractableArchive, partlyFreed, toExtractResult } from "../../lib/archiveName";
 import { VerifyDialog } from "./VerifyDialog";
 import {
   copyItems,
@@ -530,6 +530,7 @@ export function extractMessage(end: OpEnd | { end: "error"; error: unknown }, me
     if (r.skipped > 0) parts.push(t("cw_files_extract_done_skipped_v2", { n: r.skipped }));
     if (r.unsafe > 0) parts.push(t("cw_files_extract_done_unsafe_v2", { n: r.unsafe }));
     if (r.links > 0) parts.push(t("cw_files_extract_done_links_v2", { n: r.links }));
+    if (r.partsFreed > 0) parts.push(t("cw_files_extract_freed", { size: formatBytes(r.bytesFreed) }));
     return { tone: "info", text: parts.join(" ") };
   }
   if (end.end === "cancelled") return { tone: "info", text: t(merged ? "cw_files_extract_stopped_merge" : "cw_files_extract_stopped") };
@@ -539,6 +540,17 @@ export function extractMessage(end: OpEnd | { end: "error"; error: unknown }, me
     return why ? { tone: "error", text: t("cw_files_extract_failed", { reason: why }) } : null;
   }
   const cause = opCause(end.status);
+  // Stopped after part of the archive was deleted as it unpacked: why, then what is gone and where
+  // everything unpacked so far is.
+  const gone = partlyFreed(end.status?.message ?? "");
+  if (gone) {
+    const inner = gone.cause.replace(/[:\s].*$/, "");
+    const reason =
+      inner === "fs_extract_cancelled"
+        ? t("cw_files_extract_free_stopped")
+        : (extractCauseText(inner) ?? t("cw_files_unpack_failed_generic", { cause: inner || "?" }));
+    return { tone: "error", text: t("cw_files_extract_err_partly_freed", { reason, folder: gone.folder, n: gone.left }) };
+  }
   const why = extractCauseText(cause) ?? t("cw_files_unpack_failed_generic", { cause: cause || "?" });
   return { tone: "error", text: t("cw_files_extract_failed", { reason: why }) };
 }
@@ -1941,6 +1953,8 @@ export function Files({ ctx }: { ctx: SectionContext }) {
         ...(start.replace ? { replace: true } : {}),
         // "Choose items" (#969): the top-level entries left out.
         ...(start.skip && start.skip.length > 0 ? { top: skipTop(start.skip) } : {}),
+        // "Delete the archive as it's unpacked": the helper deletes it, part by part.
+        ...(start.free ? { free: true } : {}),
       };
       const run = startBatch(
         "extract",

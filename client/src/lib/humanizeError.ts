@@ -18,6 +18,7 @@
 import { t } from "../i18n";
 import { useLangStore } from "../state/lang";
 import { isNpxsContentId } from "./npxs";
+import { partlyFreed } from "./archiveName";
 import { trStatic } from "./trStatic";
 import { installRefusal, registerRefusedText, unregisterRefusedText } from "./consoleInstall";
 
@@ -196,12 +197,25 @@ export function humanizePs5Error(
 
   // ─── Extracting an archive on the console (the extractor payload) ────
   {
+    // Stopped after part of the archive was deleted ("Delete the archive as it's unpacked"):
+    // why it stopped, then what is gone and where everything unpacked so far is.
+    const pf = partlyFreed(raw);
+    if (pf) {
+      const why = /^fs_extract_cancelled/.test(pf.cause)
+        ? te("err_extract_free_stopped")
+        : pf.cause
+          ? humanizePs5Error(pf.cause)
+          : "";
+      return te("err_extract_partly_freed", { reason: why || pf.cause || "?", folder: pf.folder, n: pf.left });
+    }
     const m = raw.match(/fs_extract_(\w+)/i);
     if (m) {
       const cause = m[1].toLowerCase();
       switch (cause) {
         case "no_space":
           return te("err_extract_no_space");
+        case "free_refused":
+          return te("err_extract_free_refused");
         case "destination_exists":
           return te("err_extract_exists");
         case "busy":

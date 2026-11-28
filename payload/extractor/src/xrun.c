@@ -13,11 +13,30 @@ const char *xj_kind(const char *archive) {
     return archive_kind(slash ? slash + 1 : archive);
 }
 
+/* Whether the request's top-level renames leave an entry out ("from//": an empty `to`). */
+static int leaves_out(const char *map) {
+    const char *p = map;
+    while (*p) {
+        const char *to = p + strcspn(p, "/");
+        size_t tl;
+        if (*to != '/') return 0;
+        to++;
+        tl = strcspn(to, "/");
+        if (tl == 0) return 1;
+        p = to + tl;
+        if (*p == '/') p++;
+    }
+    return 0;
+}
+
 int xj_run(xjob_t *j) {
     const char *kind = xj_kind(j->archive);
     struct stat st;
     if (stat(j->archive, &st) != 0 || !S_ISREG(st.st_mode)) return xj_fail(j, "fs_extract_open_failed");
     if (!kind) return xj_fail(j, "fs_extract_not_archive");
+    /* What is left out would go with the archive, unseen: freeing only takes all of it. */
+    if (j->free_req && !j->list && leaves_out(j->top_map))
+        return xj_fail(j, "fs_extract_free_refused: some items are left out");
     if (strcmp(kind, "rar") == 0) return xrar_extract(j);
     return x7z_extract(j);
 }

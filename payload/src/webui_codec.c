@@ -615,7 +615,7 @@ fail:
 }
 
 int webui_extract_tail(char *out, size_t cap, const char *dest, const char *password, int merge, int replace,
-                       int list, const char *top) {
+                       int list, const char *top, int free_archive) {
     size_t pos = 0, k;
     if (!cap) return -1;
     out[0] = '\0';
@@ -627,8 +627,8 @@ int webui_extract_tail(char *out, size_t cap, const char *dest, const char *pass
         out[pos++] = ',';
         if (put_jstr(out, cap, &pos, "password", password, strlen(password)) != 0) goto fail;
     }
-    k = (size_t)snprintf(out + pos, cap - pos, ",\"merge\":%s,\"replace\":%s%s", merge ? "true" : "false",
-                         replace ? "true" : "false", list ? ",\"list\":true" : "");
+    k = (size_t)snprintf(out + pos, cap - pos, ",\"merge\":%s,\"replace\":%s%s%s", merge ? "true" : "false",
+                         replace ? "true" : "false", list ? ",\"list\":true" : "", free_archive ? ",\"free\":true" : "");
     if (k >= cap - pos) goto fail;
     pos += k;
     if (top && top[0]) {

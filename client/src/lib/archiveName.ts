@@ -76,6 +76,9 @@ export interface ExtractResult {
   unsafe: number;
   /** Links and special entries, not extracted. */
   links: number;
+  /** "Delete the archive as it's unpacked": parts of it deleted, and their bytes. */
+  partsFreed: number;
+  bytesFreed: number;
 }
 
 /** A job result (any shape) as an ExtractResult; missing numbers are 0. */
@@ -90,7 +93,98 @@ export function toExtractResult(r: unknown): ExtractResult {
     skipped: num(o.skipped),
     unsafe: num(o.unsafe),
     links: num(o.links),
+    partsFreed: num(o.parts_freed),
+    bytesFreed: num(o.bytes_freed),
   };
+}
+
+/** How an archive on the console would be deleted as it is unpacked: the plan a listing with
+ *  `free` answers, from the archive's listing alone. `parts`: each part goes once everything in
+ *  it is out (a set of parts); `end`: the archive goes once the unpack is done (one file, a
+ *  solid or encrypted RAR set, a single compressed stream); "" with `why` when it can't be done. */
+export interface FreePlan {
+  mode: "parts" | "end" | "";
+  parts: number;
+  /** Every part's size together. */
+  archiveBytes: number;
+  /** What it unpacks to (0 when the listing doesn't say). */
+  unpacked: number;
+  /** The most room the unpack takes at once on the archive's drive, with the parts going on the
+   *  way (an estimate; the console measures it before deleting anything). */
+  peak: number;
+  /** The archive is on the drive it is unpacked to: only then does freeing make room there. */
+  sameDrive: boolean;
+  /** `unpacked` and `peak` are known. */
+  known: boolean;
+  /** Why it can't be done ("fs_extract_free_refused: …"), else "". */
+  why: string;
+}
+
+/** A listing's `free` member as a FreePlan; null when the console did not answer one (too old). */
+export function toFreePlan(v: unknown): FreePlan | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) && x > 0 ? x : 0);
+  return {
+    mode: o.mode === "parts" || o.mode === "end" ? o.mode : "",
+    parts: num(o.parts),
+    archiveBytes: num(o.archive_bytes),
+    unpacked: num(o.unpacked),
+    peak: num(o.peak),
+    sameDrive: o.same_drive === true,
+    known: o.known === true,
+    why: typeof o.why === "string" ? o.why : "",
+  };
+}
+
+/** How much less free space the unpack needs on its drive than with the archive kept: what it
+ *  unpacks to, less the most it takes at once. 0 when the archive goes only at the end, is on
+ *  another drive, or the listing doesn't say. */
+export function freePlanSaves(p: FreePlan): number {
+  return p.mode === "parts" && p.known && p.sameDrive ? Math.max(0, p.unpacked - p.peak) : 0;
+}
+
+/** The free space the unpack needs with the archive deleted as it goes, or null when not known. */
+export function freePlanNeeds(p: FreePlan): number | null {
+  if (!p.known) return null;
+  return p.sameDrive ? p.peak : p.unpacked;
+}
+
+/** What the dialog says about a plan, in plain words: freed part by part (with how much less room
+ *  it needs, when known), no room made on this drive (the archive is on another), deleted only at
+ *  the end, or can't be done. */
+export type FreeNote =
+  | { kind: "parts"; parts: number; saves: number }
+  | { kind: "parts_plain"; parts: number }
+  | { kind: "other_drive" }
+  | { kind: "end" }
+  | { kind: "refused" };
+
+export function freeNote(p: FreePlan): FreeNote {
+  if (p.mode === "") return { kind: "refused" };
+  if (!p.sameDrive) return { kind: "other_drive" };
+  if (p.mode === "end") return { kind: "end" };
+  const saves = freePlanSaves(p);
+  return saves > 0 ? { kind: "parts", parts: p.parts, saves } : { kind: "parts_plain", parts: p.parts };
+}
+
+/** An unpack that stopped after part of its archive was deleted, from the console's
+ *  "fs_extract_partly_freed: <parts deleted> <parts left> <first part left> | <folder> | <cause>". */
+export interface PartlyFreed {
+  freed: number;
+  left: number;
+  /** The first part left, renamed to end in .partial-deleted ("-" when none). */
+  firstLeft: string;
+  /** The folder kept with everything unpacked before it stopped. */
+  folder: string;
+  /** Why it stopped: the extractor's own cause (fs_extract_no_space, fs_extract_cancelled, …). */
+  cause: string;
+}
+
+export function partlyFreed(raw: string): PartlyFreed | null {
+  const m = /fs_extract_partly_freed:\s*(\d+)\s+(\d+)\s+(.*?)\s+\|\s+(.*?)\s+\|\s+(.*)$/s.exec(raw);
+  if (!m) return null;
+  return { freed: Number(m[1]), left: Number(m[2]), firstLeft: m[3], folder: m[4], cause: m[5].trim() };
 }
 
 /** The cause token of an extract failure ("fs_extract_no_space: needs …" → "fs_extract_no_space"), or null. */

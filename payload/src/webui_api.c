@@ -903,15 +903,18 @@ static void r_fs_unpack_info(const char *b, size_t n, uint8_t *out, int fd) {
 #define XTOP_MAX (8192u)
 
 /* Extract an archive on the console (ARCHIVE_EXTRACT, run by the extractor payload): {"path", "dest",
- * optional "password", "merge", "replace", "list", "top"}. The job's result: {"path","files","dirs",
- * "bytes","skipped","unsafe","links"}; with "list" (nothing written, `dest` a folder that is there) it
- * is {"top","top_dirs","top_more","listed":true}. "top" leaves out or renames top-level entries. */
+ * optional "password", "merge", "replace", "list", "top", "free"}. The job's result: {"path","files",
+ * "dirs","bytes","skipped","unsafe","links"} (with "free": also "parts_freed","bytes_freed",
+ * "free_not_removed"); with "list" (nothing written, `dest` a folder that is there) it is {"top",
+ * "top_dirs","top_more","listed":true} (with "free": also "free", the plan: see archive_extract.c).
+ * "top" leaves out or renames top-level entries. "free" deletes the archive as it is unpacked
+ * (payload/extractor/src/xfree.h). */
 
 static void r_fs_extract(const char *b, size_t n, uint8_t *out, int fd) {
     char path[API_PATH], dest[API_PATH], password[XPASS_MAX], *tail, *top;
     /* Every character of the three strings escaped as \u00XX at worst, and the members' names. */
     size_t cap = 6 * (API_PATH + XPASS_MAX + XTOP_MAX) + 128;
-    int merge = 0, replace = 0, list = 0, rc, rt, len;
+    int merge = 0, replace = 0, list = 0, free_archive = 0, rc, rt, len;
     if (need_path(fd, b, n, "path", path, sizeof path) != 0) return;
     if (need_path(fd, b, n, "dest", dest, sizeof dest) != 0) return;
     rc = webui_json_str(b, n, "password", password, sizeof password);
@@ -920,7 +923,7 @@ static void r_fs_extract(const char *b, size_t n, uint8_t *out, int fd) {
         return;
     }
     if (webui_json_bool(b, n, "merge", &merge) < 0 || webui_json_bool(b, n, "replace", &replace) < 0 ||
-        webui_json_bool(b, n, "list", &list) < 0) {
+        webui_json_bool(b, n, "list", &list) < 0 || webui_json_bool(b, n, "free", &free_archive) < 0) {
         crypto_wipe(password, sizeof password);
         send_bad(fd, "bad_merge");
         return;
@@ -945,7 +948,7 @@ static void r_fs_extract(const char *b, size_t n, uint8_t *out, int fd) {
     }
     /* archive_extract.c reads it back with fsj_json_str (\" \\ \uXXXX understood). */
     len = webui_extract_tail(tail, cap, dest, rc == 1 ? password : NULL, merge, replace, list,
-                             rt == 1 ? top : NULL);
+                             rt == 1 ? top : NULL, free_archive);
     crypto_wipe(password, sizeof password);
     free(top);
     if (len < 0) {

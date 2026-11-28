@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { formatBytes } from "../../lib/format";
-import { archiveFolderName } from "../../lib/archiveName";
+import { archiveFolderName, freeNote, type FreePlan } from "../../lib/archiveName";
 import { ApiError } from "../api";
 import type { Volume } from "../home/Home";
 import { t } from "../strings";
@@ -12,7 +12,7 @@ import { filesErrorText } from "./Files";
 import { joinPath, volumeOf } from "./move";
 import { freeName, statOrNull } from "./paste";
 import { PathPicker } from "./PathPicker";
-import { checkUnavailable, extractInfo, listArchiveTop, type ExtractInfo, type TopListing } from "./opJob";
+import { checkUnavailable, extractInfo, listArchiveTop, planArchiveFree, type ExtractInfo, type TopListing } from "./opJob";
 
 type Load = { info: ExtractInfo } | { error: string | null; generic: boolean } | null;
 
@@ -23,6 +23,8 @@ export interface ExtractStart {
   replace: boolean;
   /** Delete the archive once every entry came out. */
   deleteAfter?: boolean;
+  /** Delete the archive as it is unpacked: each part goes once everything in it is out. */
+  free?: boolean;
   /** "Choose items" (#969): top-level entries of the archive left out. */
   skip?: string[];
   /** The archive's password, when "Choose items" needed it to list the archive. */
@@ -48,6 +50,8 @@ export function extractCauseText(code: string): string | null {
   switch (c) {
     case "no_space":
       return t("cw_files_extract_err_no_space");
+    case "free_refused":
+      return t("cw_files_extract_err_free_refused");
     case "destination_exists":
       return t("cw_files_err_exists");
     case "busy":
@@ -89,6 +93,29 @@ export function extractCauseText(code: string): string | null {
   return null;
 }
 
+/** What happens to the archive: deleted as it unpacks (never with items left out, which would go
+ *  with it unseen), else deleted once out when asked. */
+export function extractAfter(freeOn: boolean, leftOut: boolean, deleteAfter: boolean): Pick<ExtractStart, "deleteAfter" | "free"> {
+  return freeOn && !leftOut ? { deleteAfter: false, free: true } : { deleteAfter };
+}
+
+/** What "Delete the archive as it's unpacked" does for this archive, in plain words. */
+export function freeNoteText(plan: FreePlan): string {
+  const note = freeNote(plan);
+  switch (note.kind) {
+    case "parts":
+      return t("cw_files_extract_free_parts", { n: note.parts, size: formatBytes(note.saves) });
+    case "parts_plain":
+      return t("cw_files_extract_free_parts_plain", { n: note.parts });
+    case "other_drive":
+      return t("cw_files_extract_free_other_drive");
+    case "end":
+      return t("cw_files_extract_free_end");
+    case "refused":
+      return t("cw_files_extract_err_free_refused");
+  }
+}
+
 /** Why /api/fs/extract/info or /api/fs/extract refused, as a sentence (null: the reload banner says it). */
 export function extractErrorText(err: unknown): string | null {
   if (err instanceof ApiError) {
@@ -128,6 +155,9 @@ export function ExtractDialog({
   listTop = listArchiveTop,
   startItems = null,
   startItemsPw = null,
+  planFree = planArchiveFree,
+  startFree = false,
+  startFreePlan,
 }: {
   dir: string;
   name: string;
@@ -152,6 +182,11 @@ export function ExtractDialog({
   startItems?: TopListing | null;
   /** The archive asked for a password to list it (tests). */
   startItemsPw?: ItemsPassword | null;
+  /** How the archive would be deleted as it unpacks into a folder (tests pass their own). */
+  planFree?: (path: string, dir: string, password?: string) => Promise<FreePlan | null>;
+  /** "Delete the archive as it's unpacked" already on, and what the helper said (tests). */
+  startFree?: boolean;
+  startFreePlan?: FreePlan | null;
 }) {
   // "Choose items" (#969): the archive's top-level entries, and those left unticked.
   const [items, setItems] = useState<TopListing | null>(startItems);
@@ -211,6 +246,11 @@ export function ExtractDialog({
   const [nameError, setNameError] = useState<string | null>(null);
   const [confirmReplace, setConfirmReplace] = useState(confirming);
   const [deleteAfter, setDeleteAfter] = useState(false);
+  // "Delete the archive as it's unpacked": off for every archive, and what the helper said of it.
+  const [freeOn, setFreeOn] = useState(startFree);
+  const [freePlan, setFreePlan] = useState<{ plan: FreePlan | null } | { error: string } | null>(
+    startFreePlan !== undefined ? { plan: startFreePlan } : null,
+  );
   // Where the new folder goes: the archive's folder unless Change… picked another.
   const [parent, setParent] = useState(startParent ?? dir);
   const [picking, setPicking] = useState(false);
@@ -261,6 +301,28 @@ export function ExtractDialog({
   const exists = outName == null && (elsewhere ? otherTaken === true : !!info && info.exists);
   const checking = elsewhere && otherTaken == null;
   const canStart = !busy && !naming && !exists && !checking && !noneChosen && (info != null || generic);
+  // Items left out would go with the archive, unseen: freeing then is not offered.
+  const leftOut = skipped.size > 0;
+  const freeing = freeOn && !leftOut;
+  useEffect(() => {
+    if (!freeing) return;
+    let live = true;
+    setFreePlan(null);
+    planFree(path, parent, listedPw ?? undefined).then(
+      (plan) => {
+        if (live) setFreePlan({ plan });
+      },
+      (e: unknown) => {
+        if (!live) return;
+        const ask = itemsPasswordAsk(e);
+        setFreePlan({ error: ask ? t("cw_files_extract_free_password") : (extractErrorText(e) ?? t("cw_files_err_read")) });
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [freeing, path, parent, listedPw, planFree]);
+  const after = extractAfter(freeOn, leftOut, deleteAfter);
   const otherVolume = elsewhere ? volumeOf(parent, volumes) : null;
   const free = elsewhere ? (otherVolume ? otherVolume.free_bytes : null) : info ? info.free : null;
   useEffect(() => {
@@ -434,14 +496,52 @@ export function ExtractDialog({
       <button
         type="button"
         role="switch"
-        aria-checked={deleteAfter}
+        aria-checked={freeing}
         className="cw-focusable cw-button"
-        data-action="extract-delete-after"
-        onClick={() => setDeleteAfter((v) => !v)}
+        data-action="extract-free"
+        disabled={leftOut}
+        onClick={() => setFreeOn((v) => !v)}
       >
-        <span>{t("cw_files_extract_delete_after")}</span>
-        <span className={`cw-tag${deleteAfter ? " is-on" : ""}`}>{t(deleteAfter ? "cw_settings_on" : "cw_settings_off")}</span>
+        <span>{t("cw_files_extract_free")}</span>
+        <span className={`cw-tag${freeing ? " is-on" : ""}`}>{t(freeing ? "cw_settings_on" : "cw_settings_off")}</span>
       </button>
+      <p className="cw-dim" data-extract-free-hint="">
+        {leftOut ? t("cw_files_extract_free_items") : t("cw_files_extract_free_hint")}
+      </p>
+      {freeing ? (
+        freePlan == null ? (
+          <p className="cw-dim" data-extract-free-note="checking">
+            {t("cw_files_extract_free_checking")}
+          </p>
+        ) : "error" in freePlan ? (
+          <p className="cw-field-error" role="alert" data-extract-free-note="error">
+            {freePlan.error}
+          </p>
+        ) : freePlan.plan == null ? (
+          <p className="cw-field-error" role="alert" data-extract-free-note="old">
+            {t("cw_files_extract_free_old")}
+          </p>
+        ) : (
+          <p
+            className={freeNote(freePlan.plan).kind.startsWith("parts") ? "cw-dim" : "cw-field-error"}
+            data-extract-free-note={freeNote(freePlan.plan).kind}
+          >
+            {freeNoteText(freePlan.plan)}
+          </p>
+        )
+      ) : (
+        <button
+          type="button"
+          role="switch"
+          aria-checked={deleteAfter}
+          className="cw-focusable cw-button"
+          data-action="extract-delete-after"
+          onClick={() => setDeleteAfter((v) => !v)}
+        >
+          <span>{t("cw_files_extract_delete_after")}</span>
+          <span className={`cw-tag${deleteAfter ? " is-on" : ""}`}>{t(deleteAfter ? "cw_settings_on" : "cw_settings_off")}</span>
+        </button>
+      )}
       <div className="cw-dialog-buttons">
         <button type="button" className="cw-focusable cw-button" data-nav-default="" onClick={onCancel}>
           <span>{t("cw_dialog_cancel")}</span>
@@ -456,7 +556,7 @@ export function ExtractDialog({
               className="cw-focusable cw-button"
               data-action="extract-merge"
               disabled={busy}
-              onClick={() => onStart({ dest, merge: true, replace: false, deleteAfter, ...skip })}
+              onClick={() => onStart({ dest, merge: true, replace: false, ...after, ...skip })}
             >
               <span>{t("cw_files_extract_merge")}</span>
             </button>
@@ -476,7 +576,7 @@ export function ExtractDialog({
             className="cw-focusable cw-button is-primary"
             data-action="extract-go"
             disabled={!canStart}
-            onClick={() => onStart({ dest, merge: false, replace: false, deleteAfter, ...skip })}
+            onClick={() => onStart({ dest, merge: false, replace: false, ...after, ...skip })}
           >
             <span>{t("cw_files_extract_go")}</span>
           </button>
@@ -500,7 +600,7 @@ export function ExtractDialog({
           body={t("cw_files_extract_replace_body")}
           confirmLabel={t("cw_files_extract_merge_replace")}
           danger
-          onConfirm={() => onStart({ dest, merge: true, replace: true, deleteAfter, ...skip })}
+          onConfirm={() => onStart({ dest, merge: true, replace: true, ...after, ...skip })}
           onCancel={() => setConfirmReplace(false)}
         />
       ) : null}

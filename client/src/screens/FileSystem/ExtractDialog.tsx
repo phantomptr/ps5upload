@@ -4,7 +4,14 @@ import { File as FileIcon, FileArchive, Folder, HardDrive, ListChecks, Usb } fro
 import { fsExtractList, fsListDir, volumeForPath, type ExtractListing, type Volume } from "../../api/ps5";
 import { Button, Checkbox, Input, Modal, SegmentedControl } from "../../components";
 import { formatBytes } from "../../lib/format";
-import { archiveFolderName, freeFolderName, validFolderName } from "../../lib/archiveName";
+import {
+  archiveFolderName,
+  freeFolderName,
+  freeNote,
+  freePlanNeeds,
+  validFolderName,
+  type FreePlan,
+} from "../../lib/archiveName";
 import { cleanConsolePath, keepBothName } from "../../lib/consolePath";
 import { humanizeCaught } from "../../lib/humanizeError";
 import { useTr } from "../../state/lang";
@@ -33,14 +40,125 @@ export type ExtractWhere = "new" | "here";
 /** What Extract here does with a top-level entry already in the folder. */
 export type HereConflict = "replace" | "keep" | "skip";
 
-/** What to do once the archive is out: delete it (only when everything came out). */
+/** What to do with the archive: delete it once out (only when everything came out), or delete it
+ *  as it is unpacked (`freeArchive`: the console frees each part as it finishes). */
 export interface ExtractAfter {
   deleteArchive: boolean;
+  freeArchive?: boolean;
 }
 
-/** A drive with less room than the archive itself certainly cannot hold what is in it. */
-export function extractRoomShort(archiveBytes: number, freeBytes: number | null | undefined): boolean {
+/** The plan for "Delete the archive as it's unpacked" while it is read: not asked, being read, read
+ *  (null: the helper is too old to say), or the reading failed. */
+type FreeState = { plan: FreePlan | null } | { loading: true } | { error: string } | null;
+
+/** A drive with less room than the archive itself certainly cannot hold what is in it. Not said
+ *  while the archive is deleted as it unpacks on that same drive: its own space comes back then
+ *  (the plan says what it needs instead, {@link freeRoomShort}). */
+export function extractRoomShort(
+  archiveBytes: number,
+  freeBytes: number | null | undefined,
+  freeing: FreePlan | null = null,
+): boolean {
+  if (freeing && freeing.mode !== "" && freeing.sameDrive) return false;
   return typeof freeBytes === "number" && archiveBytes > 0 && freeBytes < archiveBytes;
+}
+
+/** With the archive deleted as it unpacks: the room the unpack needs at most, when the drive has
+ *  less than that; else null. */
+export function freeRoomShort(plan: FreePlan | null, freeBytes: number | null | undefined): number | null {
+  const need = plan && plan.mode !== "" ? freePlanNeeds(plan) : null;
+  return need != null && typeof freeBytes === "number" && freeBytes < need ? need : null;
+}
+
+/** "Delete the archive as it's unpacked", and what the console said about doing that here. */
+export function FreeWhileExtracting({
+  checked,
+  onChange,
+  state,
+  itemsLeftOut,
+}: {
+  checked: boolean;
+  onChange: (on: boolean) => void;
+  state: FreeState;
+  /** "Choose items" leaves some out: those would go with the archive, so it is not offered. */
+  itemsLeftOut: boolean;
+}) {
+  const tr = useTr();
+  const plan = state && "plan" in state ? state.plan : null;
+  const note = plan ? freeNote(plan) : null;
+  return (
+    <div className="flex flex-col gap-1" data-testid="fs-extract-free">
+      <Checkbox
+        checked={checked && !itemsLeftOut}
+        disabled={itemsLeftOut}
+        onChange={onChange}
+        label={tr("fs_extract_free", undefined, "Delete the archive as it's unpacked")}
+        hint={tr(
+          "fs_extract_free_hint",
+          undefined,
+          "Frees space, but the archive can't be used again. The console reads the whole archive once first, so a damaged one is found before anything is deleted. If it stops part way, you keep everything unpacked so far.",
+        )}
+      />
+      {itemsLeftOut && (
+        <p className="text-xs text-[var(--color-text-muted)]" data-testid="fs-extract-free-items">
+          {tr("fs_extract_free_items", undefined, "Not with items left out: they would be deleted with the archive.")}
+        </p>
+      )}
+      {checked && !itemsLeftOut && state && "loading" in state && (
+        <p className="text-xs text-[var(--color-text-muted)]" data-testid="fs-extract-free-checking">
+          {tr("fs_extract_free_checking", undefined, "Checking how this archive can be freed…")}
+        </p>
+      )}
+      {checked && !itemsLeftOut && state && "error" in state && (
+        <p role="alert" className="text-xs text-[var(--color-warn,inherit)]" data-testid="fs-extract-free-error">
+          {state.error}
+        </p>
+      )}
+      {checked && !itemsLeftOut && state && "plan" in state && !plan && (
+        <p role="alert" className="text-xs text-[var(--color-warn,inherit)]" data-testid="fs-extract-free-old">
+          {tr("fs_extract_free_old", undefined, "The helper on this PS5 is too old for this. Update the helper.")}
+        </p>
+      )}
+      {checked && !itemsLeftOut && note && (
+        <p
+          role={note.kind === "refused" ? "alert" : undefined}
+          className={`text-xs ${note.kind === "parts" || note.kind === "parts_plain" ? "text-[var(--color-text-muted)]" : "text-[var(--color-warn,inherit)]"}`}
+          data-testid="fs-extract-free-note"
+          data-kind={note.kind}
+        >
+          {note.kind === "parts"
+            ? tr(
+                "fs_extract_free_parts",
+                { n: note.parts, size: formatBytes(note.saves) },
+                `Frees each of its ${note.parts} parts as soon as everything in it is unpacked: about ${formatBytes(note.saves)} less free space needed.`,
+              )
+            : note.kind === "parts_plain"
+              ? tr(
+                  "fs_extract_free_parts_plain",
+                  { n: note.parts },
+                  `Frees each of its ${note.parts} parts as soon as everything in it is unpacked.`,
+                )
+              : note.kind === "other_drive"
+                ? tr(
+                    "fs_extract_free_other_drive",
+                    undefined,
+                    "The archive is on another drive, so deleting it makes no room on this one. It is still deleted as it unpacks.",
+                  )
+                : note.kind === "end"
+                  ? tr(
+                      "fs_extract_free_end",
+                      undefined,
+                      "This archive can't be freed part by part, so it is deleted once everything is unpacked. Until then it needs room for the archive and what is in it together.",
+                    )
+                  : tr(
+                      "fs_extract_free_refused",
+                      undefined,
+                      "This archive can't be deleted as it unpacks (it has a second name on the drive, or its folder can't be written). Extract it without this option.",
+                    )}
+        </p>
+      )}
+    </div>
+  );
 }
 
 /** `<parent>/<name>` on the console. */
@@ -283,6 +401,7 @@ export function ExtractDialog({
   volumes = [],
   listNames,
   listTop,
+  planFree,
   passwordAsk = null,
   initial = null,
   archiveBytes = 0,
@@ -306,6 +425,9 @@ export function ExtractDialog({
   /** The archive's top-level names, for Extract here (default: read on the console; tests pass
    *  their own). */
   listTop?: (parent: string, password: string) => Promise<ExtractListing>;
+  /** How the archive would be deleted as it unpacks into `parent` (default: asked of the console;
+   *  tests pass their own). Null: the helper is too old to say. */
+  planFree?: (parent: string, password: string) => Promise<FreePlan | null>;
   passwordAsk?: "required" | "wrong" | null;
   /** The choice of the run that needs a password: kept as it was. */
   initial?: ExtractChoice | null;
@@ -319,6 +441,9 @@ export function ExtractDialog({
   const [mode, setMode] = useState<ExtractMode>("new");
   const [password, setPassword] = useState("");
   const [deleteArchive, setDeleteArchive] = useState(false);
+  // "Delete the archive as it's unpacked": off for every new archive, and what the console said.
+  const [freeArchive, setFreeArchive] = useState(false);
+  const [freeState, setFreeState] = useState<FreeState>(null);
   const [parent, setParent] = useState(() => initial?.parent ?? dir);
   const [browsing, setBrowsing] = useState(false);
   const [names, setNames] = useState<string[] | null>(null);
@@ -349,7 +474,11 @@ export function ExtractDialog({
     setFolder(initial?.folder || archiveFolderName(name));
     setMode(initial ? (initial.replace ? "replace" : initial.merge ? "merge" : "new") : "new");
     setPassword("");
-    if (!initial) setDeleteArchive(false);
+    if (!initial) {
+      setDeleteArchive(false);
+      setFreeArchive(false);
+      setFreeState(null);
+    }
   }, [open, name, initial, dir]);
 
   const asking = passwordAsk != null;
@@ -419,11 +548,48 @@ export function ExtractDialog({
   };
   const targetVolume = volumeForPath(volumes, parent);
   const freeBytes = targetVolume ? targetVolume.free_bytes : null;
+  const itemsLeftOut = skipped.size > 0;
+  const freeing = freeArchive && !itemsLeftOut;
+  const freePlan = freeState && "plan" in freeState ? freeState.plan : null;
+
+  // The plan for where it would unpack: asked again when the folder (its drive) changes.
+  useEffect(() => {
+    if (!open || asking || !freeing) return;
+    let live = true;
+    setFreeState({ loading: true });
+    const read =
+      planFree ??
+      ((p: string, pw: string) =>
+        fsExtractList(addr, extractPath(dir, name), p, { password: pw || undefined, free: true }).then((l) => l.free ?? null));
+    read(parent, password).then(
+      (plan) => {
+        if (live) setFreeState({ plan });
+      },
+      (e: unknown) => {
+        if (!live) return;
+        const kind = listErrorKind(e instanceof Error ? e.message : String(e));
+        setFreeState({
+          error:
+            kind === "password" || kind === "wrong_password"
+              ? tr("fs_extract_free_password", undefined, "Enter the archive's password to check how it can be freed.")
+              : kind === "old_helper"
+                ? tr("fs_extract_free_old", undefined, "The helper on this PS5 is too old for this. Update the helper.")
+                : tr("fs_extract_here_list_failed", { error: humanizeCaught(e) }, "Couldn't read what is in the archive: {error}"),
+        });
+      },
+    );
+    return () => {
+      live = false;
+    };
+    // planFree is the default reader or a test's; the password is read when it is turned on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, asking, freeing, parent, addr, dir, name]);
+  const after: ExtractAfter = freeing ? { deleteArchive: false, freeArchive: true } : { deleteArchive };
 
   const confirm = () => {
     if (blocked) return;
     if (asking && initial) {
-      onConfirm({ ...initial, password }, { deleteArchive });
+      onConfirm({ ...initial, password }, after);
       return;
     }
     if (!existsAt) return;
@@ -431,7 +597,7 @@ export function ExtractDialog({
       void checkHere(existsAt);
       return;
     }
-    onConfirm(withSkipped(extractChoice(parent, folder.trim(), mode, existsAt, password), skipped), { deleteArchive });
+    onConfirm(withSkipped(extractChoice(parent, folder.trim(), mode, existsAt, password), skipped), after);
   };
 
   // Extract here: the archive's top-level names against the folder's, asked about once, before
@@ -446,7 +612,7 @@ export function ExtractDialog({
       const listing = await read(parent, password);
       const conflicts = hereConflicts(listing.top.filter((n) => !skipped.has(n)), existsNow);
       if (conflicts.length === 0) {
-        onConfirm(withSkipped(hereChoice(parent, listing, [], null, existsNow, password), skipped), { deleteArchive });
+        onConfirm(withSkipped(hereChoice(parent, listing, [], null, existsNow, password), skipped), after);
         return;
       }
       setHereAsk({ listing, conflicts });
@@ -469,9 +635,7 @@ export function ExtractDialog({
 
   const settleHere = (policy: HereConflict) => {
     if (!hereAsk || !existsAt) return;
-    onConfirm(withSkipped(hereChoice(parent, hereAsk.listing, hereAsk.conflicts, policy, existsAt, password), skipped), {
-      deleteArchive,
-    });
+    onConfirm(withSkipped(hereChoice(parent, hereAsk.listing, hereAsk.conflicts, policy, existsAt, password), skipped), after);
   };
 
   const pick = (p: string) => {
@@ -716,7 +880,7 @@ export function ExtractDialog({
             }}
           />
         )}
-        {!asking && extractRoomShort(archiveBytes, freeBytes) && (
+        {!asking && extractRoomShort(archiveBytes, freeBytes, freeing ? freePlan : null) && (
           <p role="alert" className="text-[var(--color-warn,inherit)]" data-testid="fs-extract-room">
             {tr(
               "fs_extract_room_short_v2",
@@ -725,7 +889,24 @@ export function ExtractDialog({
             )}
           </p>
         )}
+        {!asking && freeing && freeRoomShort(freePlan, freeBytes) != null && (
+          <p role="alert" className="text-[var(--color-warn,inherit)]" data-testid="fs-extract-free-room">
+            {tr(
+              "fs_extract_free_room",
+              { free: formatBytes(freeBytes ?? 0), need: formatBytes(freeRoomShort(freePlan, freeBytes) ?? 0) },
+              `This drive has ${formatBytes(freeBytes ?? 0)} free; unpacking it while deleting the archive needs about ${formatBytes(freeRoomShort(freePlan, freeBytes) ?? 0)}.`,
+            )}
+          </p>
+        )}
         {!asking && (
+          <FreeWhileExtracting
+            checked={freeArchive}
+            onChange={setFreeArchive}
+            state={freeState}
+            itemsLeftOut={itemsLeftOut}
+          />
+        )}
+        {!asking && !freeing && (
           <Checkbox
             checked={deleteArchive}
             onChange={setDeleteArchive}
