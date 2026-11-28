@@ -1440,11 +1440,65 @@ async fn act(kind: &str, b: &Value, console: &str) -> Result<Value, String> {
                 .as_u64()
                 .and_then(|p| u8::try_from(p).ok())
                 .ok_or("player")?;
-            if crate::join::kick_player(console, player) {
+            // Play Rooms: "Don't let them back in this room" / "Block on this computer".
+            let block = match b["block"].as_str() {
+                None | Some("") => None,
+                Some("room") => Some(false),
+                Some("always") => Some(true),
+                Some(_) => return Err("block".into()),
+            };
+            if crate::join::room_api::kick_and_block(console, player, block) {
                 Ok(json!({}))
             } else {
                 Err("no_player".into())
             }
+        }
+        // Play Rooms (My room on the TV): the room's settings and lock, as `POST /api/join/room`.
+        "room" => {
+            let mut set = b.get("set").cloned().unwrap_or_else(|| json!({}));
+            if !set.is_object() {
+                return Err("set".into());
+            }
+            set["addr"] = console.into();
+            let body: crate::join::room_api::RoomBody =
+                serde_json::from_value(set).map_err(|_| "set".to_string())?;
+            tokio::task::spawn_blocking(move || crate::join::room_api::apply_room(&body))
+                .await
+                .map_err(|_| "failed".to_string())?
+                .map_err(|_| "refused".to_string())?;
+            Ok(json!({}))
+        }
+        // The host's mutes (chat and voice, join_comms.rs): one player, or everyone.
+        "mute" => {
+            let target = if b["all"].as_bool().is_some() {
+                crate::join_comms::Target::All
+            } else {
+                crate::join_comms::Target::Player(
+                    b["player"]
+                        .as_u64()
+                        .and_then(|p| u8::try_from(p).ok())
+                        .ok_or("player")?,
+                )
+            };
+            let voice = b["voice"].as_bool().or(b["all"].as_bool());
+            let chat = b["chat"].as_bool();
+            crate::join_comms::mute(console, target, voice, chat).map_err(str::to_string)?;
+            Ok(json!({}))
+        }
+        // Move to Player N, Give Player 1, Take Player 1 back.
+        "seat" => {
+            let player = b["player"]
+                .as_u64()
+                .and_then(|p| u8::try_from(p).ok())
+                .ok_or("player")?;
+            let to = crate::join::room_api::move_seat(console, player, &b["to"])
+                .await
+                .map_err(str::to_string)?;
+            Ok(json!({"player": to}))
+        }
+        "unblock" => {
+            let tag = b["tag"].as_str().ok_or("tag")?;
+            Ok(json!({"ok": crate::join::room_api::unblock_tag(Some(console), tag)}))
         }
         "invite" => {
             match crate::join::open_party(console).await {
@@ -1459,7 +1513,14 @@ async fn act(kind: &str, b: &Value, console: &str) -> Result<Value, String> {
                 .await
                 .map(|_| json!({}))
         }
-        "close" => Ok(json!({"was_open": crate::join::close_party(console)})),
+        "close" => {
+            // With friends in, the app asks first and says so (`confirm_friends: true`).
+            let friends = crate::join::friends_playing(console);
+            if !friends.is_empty() && b["confirm_friends"].as_bool() != Some(true) {
+                return Err("friends_playing".into());
+            }
+            Ok(json!({"was_open": crate::join::close_party(console), "left": friends}))
+        }
         "settings" => {
             let set = b.get("set").and_then(Value::as_object).ok_or("set")?;
             let flag = |k: &str| set.get(k).and_then(Value::as_bool);

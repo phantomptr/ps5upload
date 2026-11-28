@@ -4135,6 +4135,19 @@ async fn ask<S: GuestSocket>(
     // A name nobody else in the room has (design 3.5). An older page or app can't pick another:
     // it plays as the suggestion.
     let mut name = name.to_string();
+    // The same device already asking (a second tab, a retry): told so, not "name taken".
+    let asking = meta.who.tag_sha256.is_some()
+        && with_party(&key, |p| {
+            p.pending
+                .iter()
+                .any(|a| a.meta.who.tag_sha256 == meta.who.tag_sha256)
+        })
+        .unwrap_or(false);
+    if asking {
+        return Some(Admit::RefusedWith(
+            serde_json::json!({"stage": "refused", "why": "already_asking"}),
+        ));
+    }
     let suggestion = with_party(&key, |p| {
         crate::join_names::suggest(&name, taken_names(p).iter().map(String::as_str))
     })
@@ -5232,7 +5245,10 @@ pub(crate) fn app_view(console: &str, secrets: bool) -> serde_json::Value {
             "expires_in_s": expires_in_s,
         })
     });
-    serde_json::json!({
+    // The Play Room (its settings, lock, listing, blocks) and its chat and voice (counts and
+    // modes only, never lines): PS5Upload Play's My room shows and changes them.
+    let room = with_party(&host_key(&c), |p| room_api::room_view(p, now));
+    let mut v = serde_json::json!({
         "open": true,
         "playing": playing,
         "invite": invite,
@@ -5240,7 +5256,14 @@ pub(crate) fn app_view(console: &str, secrets: bool) -> serde_json::Value {
         "guests": guests,
         "settings": settings,
         "max_guests": MAX_GUESTS,
-    })
+        "room": room,
+    });
+    crate::join_comms::extend_state(&c, &mut v);
+    if let Some(r) = v.get_mut("room").and_then(|r| r.as_object_mut()) {
+        // The chat log stays with the host's own views.
+        r.remove("chat_log");
+    }
+    v
 }
 
 #[derive(serde::Deserialize)]
@@ -5580,23 +5603,6 @@ pub struct PlayerBody {
     #[serde(alias = "console", alias = "host")]
     addr: String,
     player: u8,
-}
-
-/// Lets Player `player` on `addr` go (their token stops working). Whether one was in.
-pub(crate) fn kick_player(addr: &str, player: u8) -> bool {
-    let now = Instant::now();
-    let fx = with_party(&host_key(addr), |p| {
-        let id = p
-            .guests
-            .iter()
-            .find(|g| g.active() && g.player == player)
-            .map(|g| g.id)?;
-        Some(p.leave(id, "kicked", now))
-    })
-    .flatten();
-    let ok = fx.is_some();
-    apply(addr, fx.unwrap_or_default());
-    ok
 }
 
 /// Answers ask `id` on `addr` only (PS5Upload Play acts on its own console's Play Together). The
@@ -11161,6 +11167,11 @@ mod tests {
     }
 
     // Internet invites (join_net): the same session over a WebRTC data channel.
+    // Play Rooms (join_room.rs, join_room_api.rs, join_net/lobby.rs).
+    mod rooms {
+        include!("join_room_tests.rs");
+    }
+
     mod internet {
         include!("join_net/join_tests.rs");
     }

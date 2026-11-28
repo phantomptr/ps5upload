@@ -215,6 +215,16 @@ fn router() -> Router {
         .route(
             "/api/play/app",
             get(crate::play_app::ws).fallback(crate::api_errors::fallback),
+        )
+        // Play Rooms' Details before joining, and the real ping on the way a join would use
+        // (design 6.4): what the room's host chose to show, echoes only.
+        .route(
+            "/api/join/preview",
+            get(crate::join::preview).fallback(crate::api_errors::fallback),
+        )
+        .route(
+            "/api/join/probe",
+            get(crate::join_route::probe).fallback(crate::api_errors::fallback),
         );
     #[cfg(test)]
     let r = r.route_layer(axum::middleware::from_fn(note_peer));

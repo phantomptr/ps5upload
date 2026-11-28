@@ -457,17 +457,23 @@ pub async fn unblock(
     if let Some(r) = guard(&peer, &headers) {
         return r;
     }
-    let mut ok = jr::unblock_always(&b.tag);
+    let ok = unblock_tag(b.addr.as_deref(), &b.tag);
+    Json(serde_json::json!({ "ok": ok })).into_response()
+}
+
+/// Unblocks `tag` on this computer and in the room on `addr` (every room when None).
+pub(crate) fn unblock_tag(addr: Option<&str>, tag: &str) -> bool {
+    let mut ok = jr::unblock_always(tag);
     with_parties(|m| {
         for (k, p) in m.iter_mut() {
-            if b.addr.as_deref().is_none_or(|a| host_key(a) == *k) {
+            if addr.is_none_or(|a| host_key(a) == *k) {
                 let n = p.room.blocked.len();
-                p.room.blocked.retain(|x| !jr::tag_is(x, &b.tag));
+                p.room.blocked.retain(|x| !jr::tag_is(x, tag));
                 ok |= p.room.blocked.len() != n;
             }
         }
     });
-    Json(serde_json::json!({ "ok": ok })).into_response()
+    ok
 }
 
 #[derive(serde::Deserialize)]
@@ -718,7 +724,7 @@ fn preview_key(room: Option<&str>) -> Option<String> {
     })
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Default)]
 pub struct PreviewQuery {
     #[serde(default)]
     room: Option<String>,

@@ -40,7 +40,26 @@ pub(super) fn tools() -> Vec<ToolDef> {
                           gives the link when the user asks for one.",
             kind: Kind::Read,
             schema: object(json!({ "console": console_required() }), &["console"]),
-            run: route!(path: "/api/join", done: "Play Together on that console."),
+            run: |ctx, args| Box::pin(status(ctx, args)),
+        },
+        ToolDef {
+            name: "together_room",
+            title: "Play Room",
+            description: "The Play Room on a console (read-only): its name, who can see it \
+                          (`visibility`: private, friends, public), `size`, whether a password \
+                          is set (never the password), approvals, `lock`, the game, whether and \
+                          why it is listed in Rooms (`listed.state`, `listed.why`: internet_off, \
+                          hub, name, busy, limit, old_hub, locked, host_away, …), how many are \
+                          blocked, many wrong passwords lately, the rooms protocol and \
+                          capabilities; each player's seat, how they came (`came`: invite, again, \
+                          nearby, friends, rooms), device tag, tier and round trip, the host's \
+                          mutes; asks waiting with how they came and the password result; chat \
+                          and voice: modes and counts only (lines in the room's log, voice \
+                          kbit/s, who is speaking by seat) — never what anyone said. Use it to \
+                          tell why a room isn't in the Rooms list or why someone can't get in.",
+            kind: Kind::Read,
+            schema: object(json!({ "console": console_required() }), &["console"]),
+            run: |ctx, args| Box::pin(room(ctx, args)),
         },
         ToolDef {
             name: "together_routes",
@@ -336,6 +355,83 @@ fn owner_access_asked(args: &Args) -> Option<&'static str> {
     owner.then_some("owner: true")
 }
 
+/// The room part of `GET /api/join`, with chat and voice as counts only (never a line).
+pub(super) fn room_summary(state: &Value) -> Value {
+    let mut room = state.get("room").cloned().unwrap_or(Value::Null);
+    if let Some(r) = room.as_object_mut() {
+        let lines = r
+            .remove("chat_log")
+            .and_then(|l| l.as_array().map(Vec::len))
+            .unwrap_or(0);
+        r.insert("chat_lines".into(), json!(lines));
+        let blocked = r
+            .remove("blocked")
+            .and_then(|b| b.as_array().map(Vec::len))
+            .unwrap_or(0);
+        r.insert("blocked".into(), json!(blocked));
+    }
+    let guests: Vec<Value> = state["guests"]
+        .as_array()
+        .map(|g| {
+            g.iter()
+                .map(|g| {
+                    json!({
+                        "player": g["player"], "name": g["name"], "state": g["state"],
+                        "came": g["came"], "tag": g["tag"], "from_rooms": g["from_rooms"],
+                        "tier": g["tier"], "rtt_ms": g["rtt_ms"], "route": g["route"],
+                        "muted": g["muted"], "proto": g["proto"],
+                        "voice": g.get("voice").map(|v| json!({
+                            "mic": v["mic"], "speaking": v["speaking"], "paused": v["paused"],
+                            "in_kbps": v["in_kbps"], "out_kbps": v["out_kbps"],
+                        })),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let asks: Vec<Value> = state["pending"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|a| {
+                    json!({"id": a["id"], "name": a["name"], "came": a["came"], "tag": a["tag"],
+                           "password_ok": a["password_ok"], "from_rooms": a["from_rooms"]})
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    json!({"open": state["open"], "room": room, "players": guests, "asks": asks})
+}
+
+/// `GET /api/join` without the room's chat lines (an agent gets counts, never what people said).
+async fn status(ctx: ToolCtx, args: Args) -> ToolResult {
+    let console = args
+        .text("console")
+        .ok_or_else(|| ToolOutput::error("Name the console."))?
+        .to_string();
+    let mut state = ctx.get("/api/join", &[("addr", console)]).await?;
+    if let Some(r) = state.get_mut("room").and_then(Value::as_object_mut) {
+        let lines = r
+            .remove("chat_log")
+            .and_then(|l| l.as_array().map(Vec::len))
+            .unwrap_or(0);
+        r.insert("chat_lines".into(), json!(lines));
+    }
+    Ok(ToolOutput::ok("Play Together on that console.", state))
+}
+
+async fn room(ctx: ToolCtx, args: Args) -> ToolResult {
+    let console = args
+        .text("console")
+        .ok_or_else(|| ToolOutput::error("Name the console."))?
+        .to_string();
+    let state = ctx.get("/api/join", &[("addr", console)]).await?;
+    Ok(ToolOutput::ok(
+        "The Play Room on that console.",
+        room_summary(&state),
+    ))
+}
+
 async fn settings(ctx: ToolCtx, args: Args) -> ToolResult {
     if let Some(what) = owner_access_asked(&args) {
         return Err(ToolOutput::error(format!(
@@ -407,6 +503,20 @@ mod tests {
 
     /// together_invite without `internet` asks for the one link (as Invites work says); with it,
     /// the agent's choice goes as it is.
+    #[test]
+    fn the_room_tool_never_carries_chat_lines() {
+        let state = json!({"open": true,
+            "room": {"name": "Couch", "chat_log": [{"text": "secret"}], "blocked": [{"name": "Lee"}]},
+            "guests": [{"player": 2, "name": "Mia", "came": "rooms", "voice": {"mic": "on"}}],
+            "pending": [{"id": 3, "name": "Jo", "came": "invite", "password_ok": null}]});
+        let v = room_summary(&state);
+        assert!(!v.to_string().contains("secret"), "{v}");
+        assert_eq!(v["room"]["chat_lines"], 1);
+        assert_eq!(v["room"]["blocked"], 1);
+        assert_eq!(v["players"][0]["came"], "rooms");
+        assert_eq!(v["asks"][0]["came"], "invite");
+    }
+
     #[test]
     fn an_invite_follows_invites_work_unless_told() {
         let b = invite_body(&args(json!({"console": "1.2.3.4"})));

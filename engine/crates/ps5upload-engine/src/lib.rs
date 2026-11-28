@@ -15525,6 +15525,7 @@ mod loopback_guard_tests {
         assert!(loopback_allows(&c, ip("192.168.1.30"), "/api/join/ws"));
         assert!(loopback_allows(&c, ip("100.101.2.3"), "/api/join/signal"));
         assert!(loopback_allows(&c, ip("100.101.2.3"), "/api/join/probe"));
+        assert!(loopback_allows(&c, ip("192.168.1.30"), "/api/join/preview"));
         // PS5Upload Play on a PS5 joining an internet room through this engine.
         assert!(loopback_allows(&c, ip("192.168.1.40"), "/api/join/bridge"));
         // The host's side of Play Together stays on this computer.
@@ -15535,6 +15536,10 @@ mod loopback_guard_tests {
             "/api/join/invite",
             "/api/join/decide",
             "/api/join/kick",
+            "/api/join/room",
+            "/api/join/rooms",
+            "/api/join/seat",
+            "/api/join/unblock",
             "/api/join/playing",
             "/api/join/settings",
             "/api/join/comms",
