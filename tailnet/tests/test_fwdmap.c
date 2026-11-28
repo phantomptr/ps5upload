@@ -57,15 +57,22 @@ static void test_serving_node_takes_its_own_replies(void)
 	a.sin_port = htons(lport);
 	a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 	CHECK(connect(fd, (struct sockaddr *)&a, sizeof a) == 0);
-	struct pollfd pf[64];
-	int n = tn_fwd_pollfds(c, pf, 64);
-	for (int i = 0; i < n; i++)
-		tn_fwd_io(c, pf[i].fd, POLLIN, tn_now_ms());
-	/* the dial's pcb: SYN_SENT to the peer's 8080 from an ephemeral port */
+	/* connect() can return before the kernel has queued the connection on the listener (macOS
+	 * finishes the loopback handshake a moment later under load), so wait for the listener to be
+	 * readable, as the node's poll loop does, rather than accepting once blindly. */
 	uint16_t eph = 0;
-	for (struct tcp_pcb *p = tcp_active_pcbs; p; p = p->next)
-		if (p->remote_port == 8080)
-			eph = p->local_port;
+	for (int tries = 0; tries < 200 && !eph; tries++) {
+		struct pollfd pf[64];
+		int n = tn_fwd_pollfds(c, pf, 64);
+		if (poll(pf, (nfds_t)n, 10) > 0)
+			for (int i = 0; i < n; i++)
+				if (pf[i].revents)
+					tn_fwd_io(c, pf[i].fd, pf[i].revents, tn_now_ms());
+		/* the dial's pcb: SYN_SENT to the peer's 8080 from an ephemeral port */
+		for (struct tcp_pcb *p = tcp_active_pcbs; p; p = p->next)
+			if (p->remote_port == 8080)
+				eph = p->local_port;
+	}
 	CHECK(eph != 0);
 	tn_ip_info ip = tcp_seg(PEER, 8080, SELF, eph);
 	CHECK(tn_fwd_tcp_known(c, &ip) == 1);
