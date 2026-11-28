@@ -9943,6 +9943,25 @@ rp_users_add_hint: "Ha másik felhasználóként is játszanál, jelentkezz be a
 "two_panes_unverified": "Átmásolva, de az eredeti megmaradt: a másolatot nem sikerült ellenőrizni",
 "two_panes_not_removed": "Átmásolva, de az eredetit nem sikerült törölni",
 backup_restore_partial: "{count} fájl visszaállítva; {missed} nem állítható vissza",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "Játék a saját PS5-ömön",
+"join_ps5_play_game": "Játssz {host} játékával a PS5-ödön",
+"join_ps5_open_link": "Nyisd meg a barátod meghívólinkjét ezen a telefonon, majd koppints ott a „Játék a saját PS5-ömön” gombra.",
+"join_ps5_scan": "Nyisd meg a PS5Upload Playt a PS5-ödön, és olvasd be ezzel a telefonnal a képernyőn lévő kódot.",
+"join_ps5_sent": "Elküldve. Nézz a tévére.",
+"join_ps5_expired": "A tévén lévő kód lejárt. Jelenítsd meg újra a PS5Upload Playben, és olvasd be.",
+"join_ps5_refused": "A PS5-öd nem tudta fogadni ezt a meghívást.",
+"join_ps5_unreachable": "Nem sikerült elérni a PS5-ödet. Próbáld újra.",
+"pt_friends_title": "Barátok PS5-jei",
+"pt_friends_last": "Utoljára játszott: {date}",
+"pt_friends_send": "Meghívó küldése",
+"pt_friends_sent": "Elküldve. {name} a tévéjén látja.",
+"pt_friends_not_open": "A PS5Upload Play most nincs megnyitva {name} PS5-jén.",
+"pt_friends_not_playing": "Előbb kezdj el játszani, aztán küldd el a meghívót.",
+"pt_friends_refused": "{name} PS5-je nem fogadta a meghívót.",
+"pt_friends_hub": "Nem sikerült elküldeni. Ellenőrizd a számítógép internetkapcsolatát, és próbáld újra.",
+"pt_friends_forget_title": "Elfelejted {name} PS5-jét?",
+"pt_friends_forget_body": "Ez a PS5 többé nem játszhat újra veled, és nem kap tőled meghívót. Meghívólinkkel továbbra is csatlakozhat.",
 };
 
 export default hu;

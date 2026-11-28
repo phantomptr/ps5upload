@@ -11,6 +11,7 @@ import type { JoinTransport } from "./rtcTransport";
 import type { NetPath } from "./netPath";
 import { defaultName, lastName, rememberName } from "./guestName";
 import { OpenOnWifi, useHubDown } from "./OpenOnWifi";
+import { PlayOnPs5 } from "./Ps5Page";
 import { sidewaysNow } from "../lib/pageFill";
 
 export { NAME_KEY, defaultName } from "./guestName";
@@ -167,6 +168,7 @@ export function JoinFlow({
         >
           {tr("join_button", undefined, "Join")}
         </button>
+        {invite && <PlayOnPs5 />}
         {hubDown && lanUrl && <OpenOnWifi href={lanUrl} />}
       </form>
     </div>

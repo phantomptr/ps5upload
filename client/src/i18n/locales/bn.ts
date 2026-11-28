@@ -9651,6 +9651,25 @@ rp_users_add_hint: "অন্য ব্যবহারকারী হিসে�
 "two_panes_unverified": "কপি হয়েছে, কিন্তু মূলটি রাখা হয়েছে: কপিটি যাচাই করা যায়নি",
 "two_panes_not_removed": "কপি হয়েছে, কিন্তু মূলটি মোছা যায়নি",
 backup_restore_partial: "{count}টি ফাইল পুনরুদ্ধার করা হয়েছে; {missed}টি পুনরুদ্ধার করা যায়নি",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "আমার PS5-এ খেলুন",
+"join_ps5_play_game": "{host}-এর গেম আপনার PS5-এ খেলুন",
+"join_ps5_open_link": "আপনার বন্ধুর আমন্ত্রণ লিংক এই ফোনে খুলুন, তারপর সেখানে \"আমার PS5-এ খেলুন\" ট্যাপ করুন।",
+"join_ps5_scan": "আপনার PS5-এ PS5Upload Play খুলুন এবং এর স্ক্রিনের কোডটি এই ফোন দিয়ে স্ক্যান করুন।",
+"join_ps5_sent": "পাঠানো হয়েছে। আপনার টিভির দিকে তাকান।",
+"join_ps5_expired": "আপনার টিভির কোডটির মেয়াদ শেষ। PS5Upload Play-এ আবার দেখিয়ে স্ক্যান করুন।",
+"join_ps5_refused": "আপনার PS5 এই আমন্ত্রণটি নিতে পারেনি।",
+"join_ps5_unreachable": "আপনার PS5-এ পৌঁছানো যায়নি। আবার চেষ্টা করুন।",
+"pt_friends_title": "বন্ধুদের PS5",
+"pt_friends_last": "শেষ খেলা: {date}",
+"pt_friends_send": "আমন্ত্রণ পাঠান",
+"pt_friends_sent": "পাঠানো হয়েছে। {name} এটি তাদের টিভিতে দেখবেন।",
+"pt_friends_not_open": "{name}-এর PS5-এ এখন PS5Upload Play খোলা নেই।",
+"pt_friends_not_playing": "আগে খেলা শুরু করুন, তারপর আমন্ত্রণ পাঠান।",
+"pt_friends_refused": "{name}-এর PS5 আমন্ত্রণটি নেয়নি।",
+"pt_friends_hub": "পাঠানো যায়নি। এই কম্পিউটারের ইন্টারনেট পরীক্ষা করে আবার চেষ্টা করুন।",
+"pt_friends_forget_title": "{name}-এর PS5 ভুলে যাবেন?",
+"pt_friends_forget_body": "এই PS5 আর আপনার সাথে আবার খেলতে বা আপনার আমন্ত্রণ পেতে পারবে না। তবে আমন্ত্রণ লিংক দিয়ে এখনও যোগ দিতে পারবে।",
 };
 
 export default bn;

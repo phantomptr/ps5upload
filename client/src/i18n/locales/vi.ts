@@ -9653,6 +9653,25 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "two_panes_unverified": "Đã sao chép, nhưng giữ lại bản gốc: không kiểm tra được bản sao",
 "two_panes_not_removed": "Đã sao chép, nhưng không xóa được bản gốc",
 backup_restore_partial: "Đã khôi phục {count} tệp; không thể khôi phục {missed} tệp",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "Chơi trên PS5 của tôi",
+"join_ps5_play_game": "Chơi game của {host} trên PS5 của bạn",
+"join_ps5_open_link": "Mở liên kết mời của bạn bè trên điện thoại này, rồi nhấn \"Chơi trên PS5 của tôi\" ở đó.",
+"join_ps5_scan": "Mở PS5Upload Play trên PS5 của bạn và quét mã trên màn hình bằng điện thoại này.",
+"join_ps5_sent": "Đã gửi. Hãy nhìn lên TV.",
+"join_ps5_expired": "Mã trên TV đã hết hạn. Hiện lại mã trong PS5Upload Play rồi quét.",
+"join_ps5_refused": "PS5 của bạn không nhận được lời mời đó.",
+"join_ps5_unreachable": "Không kết nối được với PS5 của bạn. Hãy thử lại.",
+"pt_friends_title": "PS5 của bạn bè",
+"pt_friends_last": "Chơi lần cuối {date}",
+"pt_friends_send": "Gửi lời mời",
+"pt_friends_sent": "Đã gửi. {name} thấy lời mời trên TV.",
+"pt_friends_not_open": "PS5Upload Play hiện không mở trên PS5 của {name}.",
+"pt_friends_not_playing": "Hãy bắt đầu chơi trước, rồi gửi lời mời.",
+"pt_friends_refused": "PS5 của {name} không nhận lời mời.",
+"pt_friends_hub": "Không gửi được. Kiểm tra internet của máy tính này rồi thử lại.",
+"pt_friends_forget_title": "Quên PS5 của {name}?",
+"pt_friends_forget_body": "PS5 đó sẽ không thể chơi lại cùng bạn hay nhận lời mời của bạn nữa. Bạn bè vẫn có thể tham gia bằng liên kết mời.",
 };
 
 export default vi;

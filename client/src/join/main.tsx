@@ -12,7 +12,9 @@ import { hubSocketUrl, parseInternetFragment, prejoinHub, rtcTransport, type Joi
 import { lanPage, lanTarget } from "./lanHint";
 import { hostPath } from "./netPath";
 import { joinTries, raceTransport } from "./pathRace";
-import { fpOf } from "../lib/joinProtocol";
+import { fpOf, parsePs5Fragment } from "../lib/joinProtocol";
+import { freshTarget, saveInvite, saveTarget } from "./ps5Handoff";
+import { Ps5Page } from "./Ps5Page";
 import { installArrowNav } from "../lib/tvNav";
 
 // A TV's remote (#926): the arrows move from button to button, OK presses one.
@@ -20,16 +22,27 @@ installArrowNav();
 
 const hash = new URLSearchParams(location.hash.slice(1));
 const host = hash.get("n")?.trim() || null;
+// "Play on my PS5" (ps5Handoff.ts): the QR code on PS5Upload Play's screen (`#ps5=…`), or an
+// invite page on the home network handing its link over (`#play=<link>`).
+const ps5 = parsePs5Fragment(location.hash);
+const play = hash.get("play");
+const handoff = !!ps5 || play !== null;
+if (ps5) saveTarget(ps5);
+if (play) saveInvite(play);
 // An internet invite (the same page at https://ps5upload.phantomptr.com/join/): peer to peer over
 // WebRTC, introduced by the hub; nothing goes to this page's own origin. On the host's Wi-Fi the
 // connection stays on it (ICE), and a link from a newer host names its page there (`lan`) for
 // when the hub can't be reached ("Open on this Wi-Fi").
-const net = parseInternetFragment(location.hash);
+const net = handoff ? null : parseInternetFragment(location.hash);
+// An invite opened on this phone: offered to the PS5 scanned on it (for 30 minutes).
+if (net || hash.get("i")) saveInvite(location.href);
 // The hub's socket first, before React draws anything: in the room by the time the friend has
 // read the page and typed their name, so Join goes straight to the offer.
 if (net) prejoinHub(net);
 const root = createRoot(document.getElementById("root")!);
-if (net) {
+if (handoff) {
+  root.render(<Ps5Page target={ps5 ?? freshTarget()} />);
+} else if (net) {
   const transport = rtcTransport(net, { video: true, log: (m) => console.info(`[join] ${m}`) });
   const lan = lanPage(location.hash, "join");
   root.render(

@@ -9658,6 +9658,25 @@ rp_users_add_hint: "Başka bir kullanıcıyla da oynamak için PS5'te o kullanı
 "two_panes_unverified": "Kopyalandı ama orijinal tutuldu: kopya denetlenemedi",
 "two_panes_not_removed": "Kopyalandı ama orijinal silinemedi",
 backup_restore_partial: "{count} dosya geri yüklendi; {missed} dosya geri yüklenemedi",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "PS5'imde oyna",
+"join_ps5_play_game": "{host} adlı kişinin oyununu PS5'inde oyna",
+"join_ps5_open_link": "Arkadaşının davet bağlantısını bu telefonda aç, sonra orada \"PS5'imde oyna\"ya dokun.",
+"join_ps5_scan": "PS5'inde PS5Upload Play'i aç ve ekrandaki kodu bu telefonla tara.",
+"join_ps5_sent": "Gönderildi. Televizyonuna bak.",
+"join_ps5_expired": "Televizyondaki kodun süresi doldu. PS5Upload Play'de yeniden göster ve tara.",
+"join_ps5_refused": "PS5'in bu daveti alamadı.",
+"join_ps5_unreachable": "PS5'ine ulaşılamadı. Tekrar dene.",
+"pt_friends_title": "Arkadaşların PS5'leri",
+"pt_friends_last": "Son oynama: {date}",
+"pt_friends_send": "Davet gönder",
+"pt_friends_sent": "Gönderildi. {name} daveti televizyonunda görüyor.",
+"pt_friends_not_open": "PS5Upload Play şu anda {name} adlı kişinin PS5'inde açık değil.",
+"pt_friends_not_playing": "Önce oynamaya başla, sonra daveti gönder.",
+"pt_friends_refused": "{name} adlı kişinin PS5'i daveti almadı.",
+"pt_friends_hub": "Gönderilemedi. Bu bilgisayarın internet bağlantısını kontrol edip tekrar dene.",
+"pt_friends_forget_title": "{name} adlı kişinin PS5'i unutulsun mu?",
+"pt_friends_forget_body": "Bu PS5 artık seninle yeniden oynayamaz ve davetlerini alamaz. Arkadaşın yine de bir davet bağlantısıyla katılabilir.",
 };
 
 export default tr;

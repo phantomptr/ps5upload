@@ -28,7 +28,8 @@ import { pageCss } from "./vite.pageCss";
 // pick the host's PS5 user took about 2 KiB. 806: the iPhone Home Screen tip (no Fullscreen API there).
 // 807: a phone turned sideways in a browser goes full screen, and Safari's bars fold away.
 // 808: the Home Screen name, icon and manifest tags (engine app_icon.rs).
-const RAW_BUDGET = 808 * 1024;
+// 829: "Play on my PS5" (join/ps5Handoff.ts, Ps5Page.tsx): 4 KiB of code, its strings in 21 languages 15.
+const RAW_BUDGET = 829 * 1024;
 const OUT = fileURLToPath(new URL("../engine/crates/ps5upload-engine/src/join_page.html", import.meta.url));
 /** The same page on the website (https://ps5upload.phantomptr.com/join/, .github/workflows/
  *  pages.yml), where internet invites open (#room=…&k=…&fp=…&hub=…, join/rtcTransport.ts). */

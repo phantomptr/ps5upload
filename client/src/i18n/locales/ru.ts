@@ -9604,6 +9604,25 @@ rp_users_add_hint: "Чтобы играть и за другого пользо�
 "two_panes_unverified": "Скопировано, но оригинал оставлен: копию не удалось проверить",
 "two_panes_not_removed": "Скопировано, но оригинал не удалось удалить",
 backup_restore_partial: "Восстановлено файлов: {count}; не удалось восстановить: {missed}",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "Играть на моей PS5",
+"join_ps5_play_game": "Играть в игру {host} на вашей PS5",
+"join_ps5_open_link": "Откройте ссылку-приглашение друга на этом телефоне и нажмите там «Играть на моей PS5».",
+"join_ps5_scan": "Откройте PS5Upload Play на своей PS5 и отсканируйте этим телефоном код на экране.",
+"join_ps5_sent": "Отправлено. Посмотрите на телевизор.",
+"join_ps5_expired": "Срок действия кода на телевизоре истёк. Покажите его снова в PS5Upload Play и отсканируйте.",
+"join_ps5_refused": "Ваша PS5 не смогла принять это приглашение.",
+"join_ps5_unreachable": "Не удалось связаться с вашей PS5. Попробуйте ещё раз.",
+"pt_friends_title": "PS5 друзей",
+"pt_friends_last": "Последняя игра: {date}",
+"pt_friends_send": "Отправить приглашение",
+"pt_friends_sent": "Отправлено. {name} увидит его на телевизоре.",
+"pt_friends_not_open": "PS5Upload Play сейчас не открыт на PS5 {name}.",
+"pt_friends_not_playing": "Сначала начните играть, затем отправьте приглашение.",
+"pt_friends_refused": "PS5 {name} не приняла приглашение.",
+"pt_friends_hub": "Не удалось отправить. Проверьте подключение этого компьютера к интернету и попробуйте ещё раз.",
+"pt_friends_forget_title": "Забыть PS5 {name}?",
+"pt_friends_forget_body": "Эта PS5 больше не сможет снова играть с вами и получать ваши приглашения. Друг по-прежнему может присоединиться по ссылке-приглашению.",
 };
 
 export default ru;

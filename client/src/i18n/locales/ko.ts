@@ -9668,6 +9668,25 @@ rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사�
 "two_panes_unverified": "복사했지만 원본은 남겨 두었습니다: 사본을 확인할 수 없었습니다",
 "two_panes_not_removed": "복사했지만 원본을 지울 수 없었습니다",
 backup_restore_partial: "{count}개 파일을 복원했습니다. {missed}개는 복원하지 못했습니다",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "내 PS5에서 플레이",
+"join_ps5_play_game": "{host} 님의 게임을 내 PS5에서 플레이",
+"join_ps5_open_link": "친구의 초대 링크를 이 휴대폰에서 연 다음, 거기서 '내 PS5에서 플레이'를 탭하세요.",
+"join_ps5_scan": "PS5에서 PS5Upload Play를 열고 화면의 코드를 이 휴대폰으로 스캔하세요.",
+"join_ps5_sent": "보냈어요. TV를 확인하세요.",
+"join_ps5_expired": "TV의 코드가 만료되었어요. PS5Upload Play에서 다시 표시한 뒤 스캔하세요.",
+"join_ps5_refused": "PS5가 이 초대를 받지 못했어요.",
+"join_ps5_unreachable": "PS5에 연결할 수 없어요. 다시 시도하세요.",
+"pt_friends_title": "친구의 PS5",
+"pt_friends_last": "마지막 플레이: {date}",
+"pt_friends_send": "초대 보내기",
+"pt_friends_sent": "보냈어요. {name} 님의 TV에 표시돼요.",
+"pt_friends_not_open": "지금 {name} 님의 PS5에서 PS5Upload Play가 열려 있지 않아요.",
+"pt_friends_not_playing": "먼저 플레이를 시작한 다음 초대를 보내세요.",
+"pt_friends_refused": "{name} 님의 PS5가 초대를 받지 않았어요.",
+"pt_friends_hub": "보내지 못했어요. 이 컴퓨터의 인터넷 연결을 확인하고 다시 시도하세요.",
+"pt_friends_forget_title": "{name} 님의 PS5를 삭제할까요?",
+"pt_friends_forget_body": "이 PS5는 더 이상 나와 다시 플레이하거나 초대를 받을 수 없어요. 초대 링크로는 계속 참여할 수 있어요.",
 };
 
 export default ko;

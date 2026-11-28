@@ -9667,6 +9667,25 @@ rp_users_add_hint: "Pour jouer aussi avec un autre utilisateur, connectez-vous �
 "two_panes_unverified": "Copié, mais l'original est conservé : la copie n'a pas pu être vérifiée",
 "two_panes_not_removed": "Copié, mais l'original n'a pas pu être supprimé",
 backup_restore_partial: "{count} fichiers restaurés ; {missed} n'ont pas pu être restaurés",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "Jouer sur ma PS5",
+"join_ps5_play_game": "Jouer à la partie de {host} sur votre PS5",
+"join_ps5_open_link": "Ouvrez le lien d'invitation de votre ami sur ce téléphone, puis touchez « Jouer sur ma PS5 ».",
+"join_ps5_scan": "Ouvrez PS5Upload Play sur votre PS5 et scannez le code affiché à l'écran avec ce téléphone.",
+"join_ps5_sent": "Envoyé. Regardez votre télé.",
+"join_ps5_expired": "Le code sur votre télé a expiré. Affichez-le de nouveau dans PS5Upload Play et scannez-le.",
+"join_ps5_refused": "Votre PS5 n'a pas pu accepter cette invitation.",
+"join_ps5_unreachable": "Impossible de joindre votre PS5. Réessayez.",
+"pt_friends_title": "PS5 de vos amis",
+"pt_friends_last": "Dernière partie : {date}",
+"pt_friends_send": "Envoyer l'invitation",
+"pt_friends_sent": "Envoyé. {name} la voit sur sa télé.",
+"pt_friends_not_open": "PS5Upload Play n'est pas ouvert sur la PS5 de {name} pour le moment.",
+"pt_friends_not_playing": "Lancez d'abord une partie, puis envoyez l'invitation.",
+"pt_friends_refused": "La PS5 de {name} n'a pas accepté l'invitation.",
+"pt_friends_hub": "Envoi impossible. Vérifiez la connexion Internet de cet ordinateur et réessayez.",
+"pt_friends_forget_title": "Oublier la PS5 de {name} ?",
+"pt_friends_forget_body": "Sa PS5 ne pourra plus rejouer avec vous ni recevoir vos invitations. Votre ami peut toujours rejoindre avec un lien d'invitation.",
 };
 
 export default fr;

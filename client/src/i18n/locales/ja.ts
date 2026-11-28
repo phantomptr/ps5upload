@@ -9670,6 +9670,25 @@ rp_users_add_hint: "別のユーザーでもプレイするには、PS5 でそ�
 "two_panes_unverified": "コピーしましたが、元の項目は残しました：コピーを確認できませんでした",
 "two_panes_not_removed": "コピーしましたが、元の項目を削除できませんでした",
 backup_restore_partial: "{count}個のファイルを復元しました。{missed}個は復元できませんでした",
+// Easy join: Play on my PS5 (join page) and Friends' PS5s (Play Together)
+"join_ps5_play": "自分のPS5で遊ぶ",
+"join_ps5_play_game": "{host}さんのゲームを自分のPS5で遊ぶ",
+"join_ps5_open_link": "フレンドの招待リンクをこのスマホで開き、そこで「自分のPS5で遊ぶ」をタップしてください。",
+"join_ps5_scan": "PS5でPS5Upload Playを開き、画面のコードをこのスマホでスキャンしてください。",
+"join_ps5_sent": "送信しました。テレビを見てください。",
+"join_ps5_expired": "テレビのコードは期限切れです。PS5Upload Playでもう一度表示してスキャンしてください。",
+"join_ps5_refused": "PS5がこの招待を受け取れませんでした。",
+"join_ps5_unreachable": "PS5に接続できませんでした。もう一度お試しください。",
+"pt_friends_title": "フレンドのPS5",
+"pt_friends_last": "最後に遊んだ日: {date}",
+"pt_friends_send": "招待を送る",
+"pt_friends_sent": "送信しました。{name}さんのテレビに表示されます。",
+"pt_friends_not_open": "{name}さんのPS5で今PS5Upload Playが開いていません。",
+"pt_friends_not_playing": "先にプレイを始めてから招待を送ってください。",
+"pt_friends_refused": "{name}さんのPS5が招待を受け取りませんでした。",
+"pt_friends_hub": "送信できませんでした。このコンピューターのインターネット接続を確認して、もう一度お試しください。",
+"pt_friends_forget_title": "{name}さんのPS5を削除しますか？",
+"pt_friends_forget_body": "このPS5はもうあなたと「また遊ぶ」ができず、招待も届きません。招待リンクからは引き続き参加できます。",
 };
 
 export default ja;
