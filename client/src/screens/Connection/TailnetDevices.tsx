@@ -124,7 +124,7 @@ function KindIcon({ kind }: { kind: DeviceKind }) {
   return <Icon size={13} className="shrink-0 text-[var(--color-muted)]" aria-hidden="true" />;
 }
 
-/** One device: its kind, its name (a PS5 by its name in the app: "Pro · yunpengs-ps5pro-ps5u"),
+/** One device: its kind, its name (a PS5 by its name in the app: "Pro · sams-ps5pro-ps5u"),
  *  and a dot with its state. `lead` goes first (the PS5 panel's tick); `action` last. */
 export function DeviceRow({ d, lead, action }: { d: ListedDevice; lead?: ReactNode; action?: ReactNode }) {
   const tr = useTr();

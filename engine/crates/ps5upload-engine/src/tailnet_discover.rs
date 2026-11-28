@@ -638,7 +638,7 @@ mod tests {
         let peers = vec![
             with_os(peer("den-ps5u", [100, 64, 0, 10], true), "ps5"),
             with_os(peer("pixel-9-ps5u", [100, 64, 0, 11], true), "android"),
-            with_os(peer("yunpengs-mbp-ps5u", [100, 64, 0, 12], true), "macOS"),
+            with_os(peer("sams-mbp-ps5u", [100, 64, 0, 12], true), "macOS"),
             // The built-in node has no OS for its peers: probed, and the probe decides.
             peer("galaxy-s24-ps5u", [100, 64, 0, 13], true),
         ];
@@ -658,8 +658,8 @@ mod tests {
 
     #[test]
     fn console_names_are_the_apps_own() {
-        assert!(is_console_name("yunpengs-ps5pro-ps5u"));
-        assert!(is_console_name("yunpengs-ps5fat-ps5u.tail1234.ts.net."));
+        assert!(is_console_name("sams-ps5pro-ps5u"));
+        assert!(is_console_name("sams-ps5fat-ps5u.tail1234.ts.net."));
         assert!(is_console_name("den-ps5u-1"));
         assert!(is_console_name("DEN-PS5U"));
         assert!(!is_console_name("-ps5u"));
@@ -668,7 +668,7 @@ mod tests {
         assert!(!is_console_name("living-room-ps5"));
         assert!(!is_console_name("pixel-9"));
         assert!(!is_console_name(""));
-        assert_eq!(display_name("yunpengs-ps5pro-ps5u"), "yunpengs-ps5pro");
+        assert_eq!(display_name("sams-ps5pro-ps5u"), "sams-ps5pro");
         assert_eq!(display_name("den-ps5u-2.tail1.ts.net."), "den");
         assert_eq!(display_name("pixel-9"), "pixel-9");
     }
@@ -677,14 +677,14 @@ mod tests {
     fn candidates_are_online_console_peers_once_and_never_this_device() {
         let me = Ipv4Addr::new(100, 64, 0, 2);
         let peers = vec![
-            peer("yunpengs-ps5pro-ps5u", [100, 64, 0, 10], true),
-            peer("yunpengs-ps5fat-ps5u", [100, 64, 0, 11], true),
+            peer("sams-ps5pro-ps5u", [100, 64, 0, 10], true),
+            peer("sams-ps5fat-ps5u", [100, 64, 0, 11], true),
             peer("old-ps5u", [100, 64, 0, 12], false),
             peer("pixel-9", [100, 64, 0, 13], true),
             // This device (its own name carries the suffix too).
-            peer("yunpengs-mac-ps5u", [100, 64, 0, 2], true),
+            peer("sams-mac-ps5u", [100, 64, 0, 2], true),
             // The same peer from the system app as well.
-            peer("yunpengs-ps5pro-ps5u", [100, 64, 0, 10], true),
+            peer("sams-ps5pro-ps5u", [100, 64, 0, 10], true),
         ];
         let c = candidates(&peers, false, Some(me));
         let ips: Vec<String> = c.iter().map(|p| p.ip.to_string()).collect();

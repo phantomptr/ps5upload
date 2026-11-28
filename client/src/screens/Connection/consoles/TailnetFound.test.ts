@@ -34,7 +34,7 @@ describe("what a tailnet find is", () => {
   });
 
   it("a computer running PS5Upload: the same", () => {
-    const mac = found({ name: "yunpengs-mbp", tailnet_name: "yunpengs-mbp-ps5u", reachable: false, id: null });
+    const mac = found({ name: "sams-mbp", tailnet_name: "sams-mbp-ps5u", reachable: false, id: null });
     expect(foundKind(found({ ...mac, kind: "device", os: "macOS" }))).toBe("device");
     expect(foundKind(found({ ...mac, kind: undefined }))).toBe("unknown");
   });
@@ -45,7 +45,7 @@ describe("Found on your Tailscale network", () => {
     const offer = toOffer(
       [
         found({ name: "pixel-9", tailnet_ip: "100.64.0.20", reachable: false, id: null, kind: "unknown" }),
-        found({ name: "yunpengs-mbp", tailnet_ip: "100.64.0.21", reachable: false, id: null, kind: "device", os: "macOS" }),
+        found({ name: "sams-mbp", tailnet_ip: "100.64.0.21", reachable: false, id: null, kind: "device", os: "macOS" }),
         found({ name: "pixel-9a", tailnet_ip: "100.64.0.22", reachable: false, id: null, kind: undefined }),
         found({ name: "den", tailnet_ip: "100.64.0.9" }),
       ],
