@@ -503,6 +503,117 @@ async fn a_released_first_players_talk_speaks_as_the_player_still_in() {
     fresh_settings();
 }
 
+/// Unique names (13.0.0 audit): asks that come at once can't both take one name (the name was
+/// checked before the password's PBKDF2 and the seat came after), and a device back without its
+/// token (a reload) gets its own name again, not "Sam (2)".
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn names_stay_unique_at_once_and_a_returning_device_keeps_its_name() {
+    let _turn = PARTY_TESTS.lock().await;
+    fresh_settings();
+    let console = "10.77.0.47";
+    let f = Arc::new(FakeHelper::default());
+    set_helper(console, f.clone());
+    let url = serve().await;
+    set_live(console, 1);
+    let s = open_room(console).await;
+    let key = s["invite"]["key"].as_str().unwrap().to_string();
+    let (code, v) = set_room(
+        console,
+        serde_json::json!({"visibility": "public", "password": "couch42",
+            "approval": {"password": true}}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    // Three "Sam"s knock with the password at the same moment: in without asking, one by name.
+    let knock = |dev: String| {
+        serde_json::json!({"hello": {"name": "Sam", "proto": 2, "device": dev,
+            "knock": {"via": "rooms", "password": "couch42"}}})
+    };
+    let mut socks = Vec::new();
+    for i in 0..3 {
+        let url = url.clone();
+        let hello = knock(format!("devSam-00000047{i}"));
+        socks.push(tokio::spawn(async move {
+            let mut g = guest(&url, hello).await;
+            let v = next_with(&mut g, "stage").await;
+            (g, v)
+        }));
+    }
+    let mut joined = 0;
+    let mut taken = 0;
+    let mut keep = Vec::new();
+    for t in socks {
+        let (g, v) = t.await.unwrap();
+        match v["stage"].as_str() {
+            Some("joined") => joined += 1,
+            Some("refused") if v["why"] == "name_taken" => {
+                assert_eq!(v["suggest"], "Sam (2)", "{v}");
+                taken += 1;
+            }
+            _ => panic!("{v}"),
+        }
+        keep.push(g);
+    }
+    assert_eq!((joined, taken), (1, 2), "one Sam in, the others told the name is taken");
+    let s = host_state(console).await;
+    let sams = s["guests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|g| g["name"] == "Sam")
+        .count();
+    assert_eq!(sams, 1, "{s}");
+    drop(keep);
+
+    // Lee plays, then reloads the page: the socket goes (no leave), the place waits for its token.
+    let dev = "devLee-000000047";
+    let mut lee = guest(
+        &url,
+        serde_json::json!({"hello": {"invite": key, "name": "Lee", "proto": 2, "device": dev}}),
+    )
+    .await;
+    assert_eq!(next(&mut lee).await["stage"], "asking");
+    allow_next(console, true).await;
+    assert_eq!(next_with(&mut lee, "stage").await["stage"], "joined");
+    drop(lee);
+    until("Lee's socket gone", || {
+        with_party(&host_key(console), |p| {
+            p.guests.iter().any(|g| g.active() && g.name == "Lee" && g.conn.is_none())
+        })
+        .unwrap_or(false)
+    })
+    .await;
+    // Back without the token, from the same device: asks as Lee, and is Lee once in.
+    let mut lee = guest(
+        &url,
+        serde_json::json!({"hello": {"invite": key, "name": "Lee", "proto": 2, "device": dev}}),
+    )
+    .await;
+    assert_eq!(next(&mut lee).await["stage"], "asking", "not name_taken");
+    allow_next(console, true).await;
+    assert_eq!(next_with(&mut lee, "stage").await["stage"], "joined");
+    let s = host_state(console).await;
+    let lees: Vec<_> = s["guests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|g| g["name"].as_str().is_some_and(|n| n.starts_with("Lee")))
+        .collect();
+    assert_eq!(lees.len(), 1, "the old place went: {s}");
+    // Someone else (another device) can't take Lee's name.
+    let mut other = guest(
+        &url,
+        serde_json::json!({"hello": {"invite": key, "name": "Lee", "proto": 2,
+            "device": "devOther-0000047"}}),
+    )
+    .await;
+    assert_eq!(next(&mut other).await["why"], "name_taken");
+    drop(lee);
+    test_close_party(console);
+    set_live(console, 0);
+    fresh_settings();
+}
+
 /// The preview: what the host chose to show, never an address, and one per address per 10 s.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_preview_shows_the_room_and_no_address() {

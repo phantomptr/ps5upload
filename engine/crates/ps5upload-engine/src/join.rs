@@ -1556,6 +1556,10 @@ pub(crate) struct Party {
     /// "It's me": the stream's controller is still free for the host's own device (no host page
     /// drives it), as the watch last saw it.
     owner_seat_kept: bool,
+    /// Names held by asks on their way in (by ask id): taken from the moment the name was
+    /// checked until the guest is seated or the ask ends, so two asks can't both take one name
+    /// ([`NameClaim`]).
+    claims: Vec<(u64, String)>,
 }
 
 /// How guests reach this engine.
@@ -1594,6 +1598,7 @@ impl Party {
             room: crate::join_room::RoomRun::new(Instant::now()),
             restarts: 0,
             owner_seat_kept: false,
+            claims: Vec::new(),
         }
     }
 
@@ -4416,18 +4421,44 @@ fn notice_ask(console: &str, name: &str, ip: IpAddr) {
 }
 
 /// The names a new guest's name must not repeat in the room (design 3.5): the host's, everyone
-/// in (the resume window too), everyone asking.
-fn taken_names(p: &Party) -> Vec<String> {
+/// in (the resume window too), everyone asking or on their way in. `me`: the asking device's
+/// tag hash (not another controller of a PS5 in): its own place in the resume window (a reload
+/// without the token) does not hold its name against it ([`returning_from`]).
+fn taken_names(p: &Party, me: Option<&String>) -> Vec<String> {
     let mut v = vec![p.host_name.clone()];
     v.extend(p.front_user.clone());
     v.extend(
         p.guests
             .iter()
-            .filter(|g| g.active())
+            .filter(|g| g.active() && !returning_from(g, me))
             .map(|g| g.name.clone()),
     );
     v.extend(p.pending.iter().map(|a| a.name.clone()));
+    v.extend(p.claims.iter().map(|(_, n)| n.clone()));
     v
+}
+
+/// `g` is the same device's place, away (its socket gone, the resume window running): the device
+/// came back without its token (a reload) and may have its name again.
+fn returning_from(g: &Guest, me: Option<&String>) -> bool {
+    me.is_some()
+        && g.conn.is_none()
+        && g.meta.group.is_none()
+        && g.meta.who.tag_sha256.as_ref() == me
+}
+
+/// A name held by an ask on its way in, from the check until the ask ends (seated, refused or
+/// gone): dropped with it.
+struct NameClaim {
+    key: String,
+    id: u64,
+}
+
+impl Drop for NameClaim {
+    fn drop(&mut self) {
+        let id = self.id;
+        with_party(&self.key, |p| p.claims.retain(|(c, _)| *c != id));
+    }
 }
 
 /// The host's device is away: no host page is attached to the console's Remote Play session (the
@@ -4614,8 +4645,13 @@ async fn ask<S: GuestSocket>(
             serde_json::json!({"stage": "refused", "why": "already_asking"}),
         ));
     }
+    // A device back without its token (a reload) may have its own name again.
+    let me = meta.who.tag_sha256.clone().filter(|_| meta.group.is_none());
     let suggestion = with_party(&key, |p| {
-        crate::join_names::suggest(&name, taken_names(p).iter().map(String::as_str))
+        crate::join_names::suggest(
+            &name,
+            taken_names(p, me.as_ref()).iter().map(String::as_str),
+        )
     })
     .flatten();
     if let Some(s) = suggestion {
@@ -4643,6 +4679,21 @@ async fn ask<S: GuestSocket>(
     let id = next_id();
     let (tx, rx) = oneshot::channel();
     let queued = with_party(&key, |p| {
+        // The name again, under the lock that seats or queues the ask (the check above ran before
+        // the password's): two asks at once can't both take one name. The name is then held
+        // (`claims`) until this ask ends.
+        if let Some(s) = crate::join_names::suggest(
+            &name,
+            taken_names(p, me.as_ref()).iter().map(String::as_str),
+        ) {
+            if rooms_aware {
+                return Err(serde_json::json!({
+                    "stage": "refused", "why": "name_taken", "suggest": s,
+                    "name_taken": {"suggest": s},
+                }));
+            }
+            name = s;
+        }
         let cfg = &p.settings.room;
         let now_room = crate::join_room::RoomNow {
             visibility: cfg.visibility,
@@ -4663,7 +4714,7 @@ async fn ask<S: GuestSocket>(
             household,
             proto: meta.proto,
         };
-        match crate::join_room::gate(&now_room, &asker) {
+        let r = match crate::join_room::gate(&now_room, &asker) {
             // The host let every player from that PS5 in: nobody has to answer, so neither the
             // host being away nor a queue of other asks stops another controller of it (a full
             // room still does).
@@ -4692,9 +4743,18 @@ async fn ask<S: GuestSocket>(
                 });
                 Ok(true)
             }
+        };
+        if r.is_ok() {
+            p.claims.push((id, name.clone()));
         }
+        r
     })
     .unwrap_or_else(|| Err(serde_json::json!({"stage": "refused", "why": "closed"})));
+    // The name stays held until this ask ends (seated, refused, or the guest gone).
+    let _claim = queued.is_ok().then(|| NameClaim {
+        key: key.clone(),
+        id,
+    });
     let asks = match queued {
         Err(v) => {
             crate::log_at!(
@@ -4817,13 +4877,26 @@ async fn seat_guest(key: &str, console: &str, name: &str, meta: Meta, me: bool) 
     let console = console.to_string();
     let stranger = meta.stranger();
     let mut tried = Vec::new();
+    // The same device's place still in its resume window (it came back without its token, a
+    // reload): this new place replaces it, so its name is theirs alone again.
+    let device = meta.who.tag_sha256.clone().filter(|_| meta.group.is_none());
     loop {
         let now = Instant::now();
         let seat_free = !stranger && crate::rp_stream_api::stream_seat_free(&console);
         // "It's me": the host on another device of theirs takes Player 1 whenever nobody on the
         // host's side drives it, whatever "A friend on the stream's controller" says.
         let me_seat = me && !stranger && crate::rp_stream_api::stream_seat_free_for_owner(&console);
+        let mut old_fx = Vec::new();
         let g = with_party(key, |p| {
+            let old: Vec<u64> = p
+                .guests
+                .iter()
+                .filter(|g| g.active() && returning_from(g, device.as_ref()))
+                .map(|g| g.id)
+                .collect();
+            for o in old {
+                old_fx.extend(p.leave(o, "left", now));
+            }
             let player = if me_seat
                 && !p
                     .guests
@@ -4844,6 +4917,14 @@ async fn seat_guest(key: &str, console: &str, name: &str, meta: Meta, me: bool) 
             Some((gid, player, pad_token))
         })
         .flatten();
+        if !old_fx.is_empty() {
+            crate::log_at!(
+                Info,
+                "together",
+                "join: a device came back without its token on {console}: its old place goes"
+            );
+            apply(&console, old_fx);
+        }
         let Some((gid, player, pad_token)) = g else {
             return Admit::Refused("full");
         };
