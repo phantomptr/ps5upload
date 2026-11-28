@@ -81,6 +81,13 @@ struct Allow
     int frame_ms = 20;        // 20 or 40
 };
 bool may_send(const Allow &a) noexcept;
+// Push-to-talk held: Create while it is kept from the game for this guest (then it is the talk
+// button); where the host lets guests use Create it stays the game's, and the Room menu's mic
+// itself is the talk toggle (on = talking). The design's 7A.3.
+inline bool talk_held(bool mic_on, bool create_blocked, bool create_down) noexcept
+{
+    return mic_on && (create_blocked ? create_down : true);
+}
 // Why not (for the overlay): "off", "room_off", "muted", "no_mic", "mic_muted", "behind",
 // "paused", "hold" (push-to-talk not held), "" = sending.
 const char *why_not(const Allow &a) noexcept;

@@ -516,5 +516,9 @@
   "err_nobody": "Ainda não há ninguém na sua sala.",
   "err_ready_running": "Já há uma checagem em andamento.",
   "err_not_own": "Esse pedido não vem do seu próprio aparelho.",
-  "host_said_no": "O PS5Upload não fez isso (%s)."
+  "host_said_no": "O PS5Upload não fez isso (%s).",
+  "talk_latched": "Enquanto meu microfone estiver ligado",
+  "pm_give_p1": "Passar o Jogador 1",
+  "pm_take_p1": "Pegar o Jogador 1 de volta",
+  "pm_move_to": "Mover para Jogador %d"
 }

@@ -170,6 +170,7 @@ class Companion
     bool mute_all(bool on) noexcept;
     bool allow_group(long long ask) noexcept;                        // "Let all from that PS5 in"
     bool its_me(long long ask) noexcept;                             // the host's own device: Player 1
+    bool seat(int player, int to) noexcept;                          // move to `to`; 1 give Player 1; 0 take it back
     bool ready_check() noexcept;                                     // "Ready?" for everyone in
     bool chat_quick(int id, int notice = 0) noexcept;
     bool keep_awake(const char *mode) noexcept;

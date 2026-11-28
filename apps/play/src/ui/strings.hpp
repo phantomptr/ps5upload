@@ -341,6 +341,10 @@ namespace play::ui
     X(ov_how_talk, "How I talk") \
     X(talk_ptt, "Push-to-talk (hold Create)") \
     X(talk_open, "Open mic") \
+    X(talk_latched, "While my mic is on") \
+    X(pm_give_p1, "Give Player 1") \
+    X(pm_take_p1, "Take Player 1 back") \
+    X(pm_move_to, "Move to Player %d") \
     X(ov_duck, "Game sound while others talk") \
     X(duck_off, "Off") \
     X(duck_little, "A little quieter") \

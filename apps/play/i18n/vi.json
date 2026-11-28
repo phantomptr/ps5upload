@@ -516,5 +516,9 @@
   "err_nobody": "Chưa có ai trong phòng của bạn.",
   "err_ready_running": "Một lượt kiểm tra sẵn sàng đang diễn ra.",
   "err_not_own": "Yêu cầu đó không đến từ thiết bị của bạn.",
-  "host_said_no": "PS5Upload đã không làm việc đó (%s)."
+  "host_said_no": "PS5Upload đã không làm việc đó (%s).",
+  "talk_latched": "Khi mic của tôi đang bật",
+  "pm_give_p1": "Nhường Người chơi 1",
+  "pm_take_p1": "Lấy lại Người chơi 1",
+  "pm_move_to": "Chuyển sang Người chơi %d"
 }

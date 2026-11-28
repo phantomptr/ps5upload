@@ -364,6 +364,10 @@ void test_voice()
     a.room = "ptt";
     a.silent = 0;
     CHECK(!std::strcmp(voice::why_not(a), "hold") && !voice::may_send(a));
+    // Create kept from the game: it is the talk button; where the guest may use Create it stays
+    // the game's and the mic itself is the toggle (never a game button)
+    CHECK(!voice::talk_held(true, true, false) && voice::talk_held(true, true, true));
+    CHECK(voice::talk_held(true, false, false) && !voice::talk_held(false, false, true));
     a.talk_held = true;
     CHECK(voice::may_send(a));
     a.in_front = false;

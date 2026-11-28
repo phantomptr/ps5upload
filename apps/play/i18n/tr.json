@@ -516,5 +516,9 @@
   "err_nobody": "Odanda henüz kimse yok.",
   "err_ready_running": "Bir hazır kontrolü zaten sürüyor.",
   "err_not_own": "Bu istek kendi cihazından değil.",
-  "host_said_no": "PS5Upload bunu yapmadı (%s)."
+  "host_said_no": "PS5Upload bunu yapmadı (%s).",
+  "talk_latched": "Mikrofonum açıkken",
+  "pm_give_p1": "1. Oyuncuyu ver",
+  "pm_take_p1": "1. Oyuncuyu geri al",
+  "pm_move_to": "%d. Oyuncu yap"
 }

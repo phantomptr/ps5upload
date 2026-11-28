@@ -516,5 +516,9 @@
   "err_nobody": "Todavía no hay nadie en tu sala.",
   "err_ready_running": "Ya hay una comprobación en marcha.",
   "err_not_own": "Esa solicitud no viene de tu propio dispositivo.",
-  "host_said_no": "PS5Upload no lo hizo (%s)."
+  "host_said_no": "PS5Upload no lo hizo (%s).",
+  "talk_latched": "Mientras mi micro esté activado",
+  "pm_give_p1": "Dar Jugador 1",
+  "pm_take_p1": "Recuperar Jugador 1",
+  "pm_move_to": "Mover a Jugador %d"
 }

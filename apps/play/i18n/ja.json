@@ -516,5 +516,9 @@
   "err_nobody": "まだルームに誰もいません。",
   "err_ready_running": "準備確認はすでに実行中です。",
   "err_not_own": "このリクエストは自分のデバイスからではありません。",
-  "host_said_no": "PS5Upload はそれを行いませんでした（%s）。"
+  "host_said_no": "PS5Upload はそれを行いませんでした（%s）。",
+  "talk_latched": "マイクがオンの間",
+  "pm_give_p1": "プレイヤー1を譲る",
+  "pm_take_p1": "プレイヤー1を取り戻す",
+  "pm_move_to": "プレイヤー%dに移動"
 }

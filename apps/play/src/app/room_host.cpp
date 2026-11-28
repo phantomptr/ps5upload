@@ -552,12 +552,68 @@ void App::input_host(std::uint32_t p) noexcept
 }
 
 // ---- the player menu and the blocked list ----------------------------------------------------
+namespace
+{
+// One row of a player's menu: mute voice, mute chat, seats (give / take back Player 1, move), remove.
+struct MenuItem
+{
+    enum Act : std::uint8_t
+    {
+        mute_voice,
+        mute_chat,
+        give_p1,
+        take_back,
+        move,
+        remove,
+    } act;
+    int to = 0;
+};
+
+int menu_items(const CompanionDoc &d, const CompanionDoc::Guest &g, MenuItem *out, int cap) noexcept
+{
+    int n = 0;
+    auto add = [&](MenuItem::Act a, int to = 0) {
+        if (n < cap)
+            out[n++] = MenuItem{a, to};
+    };
+    add(MenuItem::mute_voice);
+    add(MenuItem::mute_chat);
+    if (g.player == 1)
+        add(MenuItem::take_back);
+    else
+    {
+        // Player 1 is the stream's controller (the host's user): never for people from Rooms,
+        // and only where "A friend on the stream's controller" is on (the engine says why not).
+        bool p1_taken = false;
+        for (int k = 0; k < d.n_guests; ++k)
+            p1_taken = p1_taken || d.guests[k].player == 1;
+        if (!g.from_rooms && d.stream_seat && !p1_taken)
+            add(MenuItem::give_p1);
+        // the free guest seats (Players 2 to the room's size)
+        for (int to = 2; to <= d.max_players + 1 && to <= 4; ++to)
+        {
+            bool taken = false;
+            for (int k = 0; k < d.n_guests; ++k)
+                taken = taken || d.guests[k].player == to;
+            if (!taken)
+                add(MenuItem::move, to);
+        }
+    }
+    add(MenuItem::remove);
+    return n;
+}
+} // namespace
+
 void App::input_menu(std::uint32_t p) noexcept
 {
     const CompanionDoc d = host_view().doc;
     if (p & pad::kCircle)
         return back();
-    const int n = menu_blocked_ ? d.room.n_blocked : 3;
+    MenuItem items[8];
+    const CompanionDoc::Guest *mg = menu_blocked_ ? nullptr : guest_of(d, menu_guest_);
+    if (!menu_blocked_ && !mg)
+        return back(); // they left meanwhile
+    const int n = menu_blocked_ ? d.room.n_blocked : menu_items(d, *mg, items, 8);
     if (!n)
         return back();
     if (p & kUp)
@@ -573,14 +629,27 @@ void App::input_menu(std::uint32_t p) noexcept
         ok(host_->unblock(d.room.blocked[sel_].tag));
         return;
     }
-    const CompanionDoc::Guest *g = guest_of(d, menu_guest_);
-    if (!g)
-        return back(); // they left meanwhile
-    switch (sel_)
+    const CompanionDoc::Guest *g = mg;
+    switch (items[sel_].act)
     {
-    case 0: ok(host_->mute(g->player, !g->muted_voice, g->muted_chat)); break;
-    case 1: ok(host_->mute(g->player, g->muted_voice, !g->muted_chat)); break;
-    default:
+    case MenuItem::mute_voice: ok(host_->mute(g->player, !g->muted_voice, g->muted_chat)); break;
+    case MenuItem::mute_chat: ok(host_->mute(g->player, g->muted_voice, !g->muted_chat)); break;
+    case MenuItem::give_p1:
+        // a friend on the host's user (saves, trophies): the owner only
+        if (!owner_here(d))
+            return host_action_denied(d);
+        ok(host_->seat(g->player, 1));
+        back();
+        break;
+    case MenuItem::take_back:
+        ok(host_->seat(g->player, 0));
+        back();
+        break;
+    case MenuItem::move:
+        ok(host_->seat(g->player, items[sel_].to));
+        back();
+        break;
+    case MenuItem::remove:
     {
         const CompanionDoc::Guest copy = *g;
         back();
@@ -610,10 +679,25 @@ void App::draw_menu(Canvas &c) noexcept
     {
         const CompanionDoc::Guest *g = guest_of(d, menu_guest_);
         draw_frame(c, g && g->name[0] ? g->name : tr(S::host_friend));
-        const bool mv = g && g->muted_voice, mc = g && g->muted_chat;
-        draw_row(c, kLeft, 230, 1100, 90, sel_ == 0, tr(mv ? S::pm_unmute_voice : S::pm_mute_voice), nullptr);
-        draw_row(c, kLeft, 336, 1100, 90, sel_ == 1, tr(mc ? S::pm_unmute_chat : S::pm_mute_chat), nullptr);
-        draw_row(c, kLeft, 442, 1100, 90, sel_ == 2, tr(S::pm_remove), nullptr);
+        if (g)
+        {
+            MenuItem items[8];
+            const int n = menu_items(d, *g, items, 8);
+            for (int i = 0; i < n; ++i)
+            {
+                char t[120];
+                switch (items[i].act)
+                {
+                case MenuItem::mute_voice: std::snprintf(t, sizeof t, "%s", tr(g->muted_voice ? S::pm_unmute_voice : S::pm_mute_voice)); break;
+                case MenuItem::mute_chat: std::snprintf(t, sizeof t, "%s", tr(g->muted_chat ? S::pm_unmute_chat : S::pm_mute_chat)); break;
+                case MenuItem::give_p1: std::snprintf(t, sizeof t, "%s", tr(S::pm_give_p1)); break;
+                case MenuItem::take_back: std::snprintf(t, sizeof t, "%s", tr(S::pm_take_p1)); break;
+                case MenuItem::move: std::snprintf(t, sizeof t, tr(S::pm_move_to), items[i].to); break;
+                case MenuItem::remove: std::snprintf(t, sizeof t, "%s", tr(S::pm_remove)); break;
+                }
+                draw_row(c, kLeft, 230 + i * 96, 1100, 84, sel_ == i, t, nullptr);
+            }
+        }
     }
     const int g[] = {G_CROSS, G_CIRCLE};
     const S l[] = {S::hint_choose, S::hint_back};

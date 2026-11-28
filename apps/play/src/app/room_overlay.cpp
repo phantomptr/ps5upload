@@ -101,7 +101,7 @@ void App::voice_tick(const GuestView &v) noexcept
     // Open mic only with a headset (no echo cancelling on the console), else push-to-talk.
     const platform::MicState ms = fake_.on ? platform::MicState{} : platform::mic_state();
     a.mode = settings_.talk_open && ms.headset ? voice::Mode::open : voice::Mode::ptt;
-    a.talk_held = ptt_create && talk_held_;
+    a.talk_held = voice::talk_held(mic_on_, v.block_system, talk_held_);
     a.room = rs.voice;
     a.host_muted = rs.muted_voice;
     a.paused = rs.paused[0] != 0;
@@ -467,7 +467,7 @@ int App::draw_overlay(Canvas &l, const GuestView &v, std::uint64_t now) noexcept
             voice::Allow a;
             a.mic_on = true;
             a.mode = settings_.talk_open && ms.headset ? voice::Mode::open : voice::Mode::ptt;
-            a.talk_held = ptt_.held();
+            a.talk_held = voice::talk_held(true, v.block_system, ptt_.held());
             a.room = rs.voice;
             a.host_muted = rs.muted_voice;
             a.paused = rs.paused[0] != 0;
@@ -570,7 +570,8 @@ int App::draw_overlay(Canvas &l, const GuestView &v, std::uint64_t now) noexcept
         else if (r == r_mic)
             title = tr(S::ov_mic), value = tr(mic_on_ ? S::on : S::off);
         else if (r == r_talk)
-            title = tr(S::ov_how_talk), value = tr(settings_.talk_open ? S::talk_open : S::talk_ptt);
+            title = tr(S::ov_how_talk),
+            value = tr(settings_.talk_open ? S::talk_open : v.block_system ? S::talk_ptt : S::talk_latched);
         else if (r == r_duck)
             title = tr(S::ov_duck), value = tr(settings_.duck == 0 ? S::duck_off : settings_.duck == 1 ? S::duck_little : S::duck_more);
         else if (r == r_show_chat)

@@ -516,5 +516,9 @@
   "err_nobody": "W Twoim pokoju jeszcze nikogo nie ma.",
   "err_ready_running": "Sprawdzanie gotowości już trwa.",
   "err_not_own": "Ta prośba nie pochodzi z Twojego urządzenia.",
-  "host_said_no": "PS5Upload tego nie zrobił (%s)."
+  "host_said_no": "PS5Upload tego nie zrobił (%s).",
+  "talk_latched": "Gdy mój mikrofon jest włączony",
+  "pm_give_p1": "Oddaj Gracza 1",
+  "pm_take_p1": "Odbierz Gracza 1",
+  "pm_move_to": "Przenieś na Gracza %d"
 }

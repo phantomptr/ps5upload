@@ -516,5 +516,9 @@
   "err_nobody": "Belum ada siapa pun di room-mu.",
   "err_ready_running": "Cek siap sudah berjalan.",
   "err_not_own": "Permintaan itu bukan dari perangkatmu sendiri.",
-  "host_said_no": "PS5Upload tidak melakukannya (%s)."
+  "host_said_no": "PS5Upload tidak melakukannya (%s).",
+  "talk_latched": "Selama mik aktif",
+  "pm_give_p1": "Berikan Pemain 1",
+  "pm_take_p1": "Ambil kembali Pemain 1",
+  "pm_move_to": "Pindah ke Pemain %d"
 }

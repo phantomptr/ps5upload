@@ -477,6 +477,12 @@ int main(int argc, char **argv)
         md.room.ready_left_s = 18, md.room.ready_asked = 2, md.room.ready_n = 1;
         md.guests[1].ready = true;
         shot("host-room-me-ready", App::Screen::host, m);
+        // Lee's menu: mutes, Give Player 1 (a friend on the stream's controller is on), Player 4
+        m.host.doc.stream_seat = true;
+        m.host.doc.guests[1].from_rooms = false;
+        app.fake(App::Screen::menu, m);
+        app.fake_player_menu(4);
+        shot("host-player-menu", App::Screen::menu, m);
     }
     app.fake_page(0, 2);
     shot("host-this-ps5", App::Screen::host, h);

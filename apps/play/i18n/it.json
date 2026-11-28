@@ -516,5 +516,9 @@
   "err_nobody": "Ancora nessuno nella tua stanza.",
   "err_ready_running": "Un controllo pronti è già in corso.",
   "err_not_own": "Questa richiesta non arriva dal tuo dispositivo.",
-  "host_said_no": "PS5Upload non l'ha fatto (%s)."
+  "host_said_no": "PS5Upload non l'ha fatto (%s).",
+  "talk_latched": "Finché il microfono è attivo",
+  "pm_give_p1": "Cedi Giocatore 1",
+  "pm_take_p1": "Riprendi Giocatore 1",
+  "pm_move_to": "Sposta su Giocatore %d"
 }

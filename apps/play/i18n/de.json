@@ -516,5 +516,9 @@
   "err_nobody": "Noch niemand in deinem Raum.",
   "err_ready_running": "Ein Bereitschaftscheck läuft schon.",
   "err_not_own": "Diese Anfrage kommt nicht von deinem eigenen Gerät.",
-  "host_said_no": "PS5Upload hat das nicht gemacht (%s)."
+  "host_said_no": "PS5Upload hat das nicht gemacht (%s).",
+  "talk_latched": "Solange mein Mikro an ist",
+  "pm_give_p1": "Spieler 1 abgeben",
+  "pm_take_p1": "Spieler 1 zurücknehmen",
+  "pm_move_to": "Auf Spieler %d setzen"
 }

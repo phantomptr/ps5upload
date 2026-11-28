@@ -516,5 +516,9 @@
   "err_nobody": "Personne dans votre salle pour l'instant.",
   "err_ready_running": "Un appel « Prêts ? » est déjà en cours.",
   "err_not_own": "Cette demande ne vient pas de votre propre appareil.",
-  "host_said_no": "PS5Upload ne l'a pas fait (%s)."
+  "host_said_no": "PS5Upload ne l'a pas fait (%s).",
+  "talk_latched": "Tant que mon micro est activé",
+  "pm_give_p1": "Donner Joueur 1",
+  "pm_take_p1": "Reprendre Joueur 1",
+  "pm_move_to": "Passer en Joueur %d"
 }

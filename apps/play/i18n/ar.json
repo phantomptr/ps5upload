@@ -516,5 +516,9 @@
   "err_nobody": "لا أحد في غرفتك بعد.",
   "err_ready_running": "فحص الجاهزية يعمل بالفعل.",
   "err_not_own": "هذا الطلب ليس من جهازك أنت.",
-  "host_said_no": "لم ينفّذ PS5Upload ذلك (%s)."
+  "host_said_no": "لم ينفّذ PS5Upload ذلك (%s).",
+  "talk_latched": "ما دام الميكروفون يعمل",
+  "pm_give_p1": "أعطِ اللاعب 1",
+  "pm_take_p1": "استرجع اللاعب 1",
+  "pm_move_to": "انقل إلى اللاعب %d"
 }

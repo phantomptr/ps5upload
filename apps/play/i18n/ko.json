@@ -516,5 +516,9 @@
   "err_nobody": "아직 룸에 아무도 없습니다.",
   "err_ready_running": "준비 확인이 이미 진행 중입니다.",
   "err_not_own": "이 요청은 내 기기에서 온 것이 아닙니다.",
-  "host_said_no": "PS5Upload가 그 작업을 하지 않았습니다 (%s)."
+  "host_said_no": "PS5Upload가 그 작업을 하지 않았습니다 (%s).",
+  "talk_latched": "마이크가 켜져 있는 동안",
+  "pm_give_p1": "플레이어 1 넘겨주기",
+  "pm_take_p1": "플레이어 1 되찾기",
+  "pm_move_to": "플레이어 %d(으)로 이동"
 }

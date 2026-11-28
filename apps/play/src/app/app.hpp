@@ -116,6 +116,13 @@ class App
         welcome_page_ = welcome_page;
         host_tab_ = host_tab;
     }
+    // For screenshots: a player's menu on the host's TV.
+    void fake_player_menu(long long guest) noexcept
+    {
+        menu_guest_ = guest;
+        menu_blocked_ = false;
+        sel_ = 0;
+    }
     void draw(std::uint32_t *ui, std::uint32_t *layer, std::uint64_t now_us, bool *show_ui, int *top,
               int *bottom) noexcept;
 

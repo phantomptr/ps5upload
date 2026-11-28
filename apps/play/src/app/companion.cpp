@@ -522,6 +522,16 @@ bool Companion::its_me(long long ask) noexcept
     return intent(b);
 }
 
+bool Companion::seat(int player, int to) noexcept
+{
+    char b[96];
+    if (to > 0)
+        std::snprintf(b, sizeof b, "\"seat\":{\"player\":%d,\"to\":%d}", player, to);
+    else
+        std::snprintf(b, sizeof b, "\"seat\":{\"player\":%d,\"to\":\"back\"}", player);
+    return intent(b);
+}
+
 bool Companion::ready_check() noexcept
 {
     return intent("\"ready\":{\"start\":true}");

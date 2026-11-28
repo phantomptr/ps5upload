@@ -516,5 +516,9 @@
   "err_nobody": "你的房間裡還沒有人。",
   "err_ready_running": "準備確認已經在進行中。",
   "err_not_own": "這個請求不是來自你自己的裝置。",
-  "host_said_no": "PS5Upload 沒有執行這個操作（%s）。"
+  "host_said_no": "PS5Upload 沒有執行這個操作（%s）。",
+  "talk_latched": "麥克風開著時",
+  "pm_give_p1": "讓出玩家 1",
+  "pm_take_p1": "收回玩家 1",
+  "pm_move_to": "移到玩家 %d"
 }
