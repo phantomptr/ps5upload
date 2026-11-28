@@ -40,7 +40,7 @@ struct Settings
     void parse(const char *text, std::size_t len) noexcept;
 };
 
-// "192.168.1.5:9113" or "192.168.1.5" (default port) into addr and port; false when unusable.
+// "192.168.1.5:19200" or "192.168.1.5" (default port) into addr and port; false when unusable.
 bool split_address(const char *in, char *addr, std::size_t cap, std::uint16_t *port,
                    std::uint16_t default_port) noexcept;
 } // namespace play
